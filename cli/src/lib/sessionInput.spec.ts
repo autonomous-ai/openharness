@@ -1366,18 +1366,21 @@ describe('SessionInputController', () => {
           else if (key === 'C-u' && box.length > 1) box.pop()
           return true
         })
+        const capture = vi.fn(async (_id: string): Promise<string | null> => pane())
         const untypeFirstTask = vi.fn(async (_id: string, _text: string) => true)
+        const retypeFirstTask = vi.fn(async (_id: string, _text: string) => true)
         const onFirstTaskTaken = vi.fn()
         const onError = vi.fn()
         const onDelivery = vi.fn()
         const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
           getSession: () => session('openclaw'),
           validateRuntime: async () => true,
-          inject, injectCommand, sendKey, capture: async () => pane(), onError, onDelivery, onFirstTaskTaken,
-          ...(untypes ? { untypeFirstTask } : {}),
+          inject, injectCommand, sendKey, capture, onError, onDelivery, onFirstTaskTaken,
+          ...(untypes ? { untypeFirstTask, retypeFirstTask } : {}),
           ...(moveGate ? { moveGate } : {}),
         })
-        return Object.assign(fake, { controller, inject, untypeFirstTask, onFirstTaskTaken, onError, onDelivery, session: () => controller.typeCommand('s1', command) })
+        return Object.assign(fake, { controller, inject, sendKey, capture, untypeFirstTask, retypeFirstTask, onFirstTaskTaken, onError, onDelivery,
+          session: () => controller.typeCommand('s1', command) })
       }
 
       it.each([
@@ -1647,19 +1650,135 @@ describe('SessionInputController', () => {
         it.each([
           ['its row does not move it back', true],
           ['nothing can move it back', false],
-        ])('is not cleared when %s: nothing is pressed', async (_, untypes) => {
+        ])('is not cleared when %s: nothing is pressed, and its row is asked again at each window', async (_, untypes) => {
           vi.useFakeTimers()
           const fake = openclaw({ untypes })
           fake.untypeFirstTask.mockResolvedValue(false)
 
           fake.controller.expectFirstTask('s1')
           fake.controller.submitFirstTask('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(30_000)
+          expect(fake.untypeFirstTask).toHaveBeenCalledTimes(untypes ? 3 : 0)
           await vi.advanceTimersByTimeAsync(5 * 60_000)
           expect(fake.keys).toEqual([])
-          expect(fake.untypeFirstTask).toHaveBeenCalledTimes(untypes ? 1 : 0)
+          expect(fake.retypeFirstTask).not.toHaveBeenCalled()
           expect(fake.controller.awaitingConfirmation('s1')).toBe(true)
           expect(fake.controller.firstTaskWaiting('s1')).toBe(true)
           expect(fake.onError).not.toHaveBeenCalled()
+          fake.controller.forget('s1')
+        })
+
+        // Found in review: an untype that threw (one made inside a binding pass's registry transaction does) counted as the
+        // task's one clear, so it was never tried again, and the task failed at its bound in the box.
+        it('is cleared at the next window when its row could not take it back at the first', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          fake.untypeFirstTask.mockRejectedValueOnce(new Error('Cannot acknowledge a close intent inside an uncommitted registry transaction'))
+          const warn = vi.spyOn(console, 'warn')
+
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submitFirstTask('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(10_000)
+          const said = warn.mock.calls.flat().filter((line) => String(line).includes('first task not taken back · Error'))
+          warn.mockRestore()
+          expect(fake.keys).toEqual([])
+          expect(said).toHaveLength(1)
+          await vi.advanceTimersByTimeAsync(10_000)
+          expect(fake.untypeFirstTask).toHaveBeenCalledTimes(2)
+          expect(fake.keys).toEqual(['C-u'])
+          expect(fake.box()).toBe('')
+          expect(fake.controller.awaitingConfirmation('s1')).toBe(false)
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(true)
+          fake.controller.forget('s1')
+        })
+
+        // Found in review: nothing read the box between the saved untype and the first Ctrl+U, so text the person typed
+        // meanwhile was deleted with the task.
+        it('is not cleared from a box the person typed into while its row was written: typed again there, it is awaited', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          fake.untypeFirstTask.mockImplementation(async () => {
+            fake.type('and my own words')
+            return true
+          })
+          const pressed: string[] = []
+          fake.beforeKey = () => { pressed.push(fake.box() ?? '') }
+
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submitFirstTask('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(10_000)
+          expect(pressed).toEqual([])
+          expect(fake.box()).toContain('and my own words')
+          expect(fake.retypeFirstTask.mock.calls).toEqual([['h1', 'Say hello']])
+          expect(fake.controller.awaitingConfirmation('s1')).toBe(true)
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(true)
+          fake.controller.forget('s1')
+        })
+
+        // Found in review: a clear cut short left its row saying the task waits untyped while the box still showed it: the
+        // agent was held for text Harness did not type, and a hand-over once the box emptied would type it a second time.
+        it.each([
+          ['its first Ctrl+U is refused', (fake: ReturnType<typeof openclaw>) => { fake.sendKey.mockResolvedValueOnce(false) }],
+          ['its box cannot be read after the keys', (fake: ReturnType<typeof openclaw>) => {
+            fake.beforeKey = () => { fake.capture.mockResolvedValueOnce(null) }
+          }],
+          ['a turn ends while its row is written', (fake: ReturnType<typeof openclaw>) => {
+            fake.untypeFirstTask.mockImplementationOnce(async () => {
+              fake.controller.onTurnEnded('s1')
+              return true
+            })
+          }],
+        ])('a clear that does not finish, %s, types it again on its row, and it is awaited and never pasted again', async (_, cut) => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          cut(fake)
+
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submitFirstTask('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(10_000)
+          expect(fake.retypeFirstTask.mock.calls).toEqual([['h1', 'Say hello']])
+          expect(fake.retypeFirstTask.mock.invocationCallOrder[0]).toBeGreaterThan(fake.untypeFirstTask.mock.invocationCallOrder[0])
+          expect(fake.controller.awaitingConfirmation('s1')).toBe(true)
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(true)
+          await vi.advanceTimersByTimeAsync(5 * 60_000)
+          expect(fake.typed).toEqual(['Say hello'])
+          expect(fake.onError).not.toHaveBeenCalled()
+          fake.controller.forget('s1')
+        })
+
+        it('taken by its turn while its row is written, it is typed again there and let go', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          fake.untypeFirstTask.mockImplementation(async () => {
+            fake.controller.onTurnStarted('s1', 'Say hello')
+            return true
+          })
+
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submitFirstTask('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(10_000)
+          expect(fake.keys).toEqual([])
+          expect(fake.retypeFirstTask.mock.calls).toEqual([['h1', 'Say hello']])
+          expect(fake.onFirstTaskTaken.mock.calls).toEqual([['s1'], ['s1']])
+          expect(fake.onFirstTaskTaken.mock.invocationCallOrder[1]).toBeGreaterThan(fake.retypeFirstTask.mock.invocationCallOrder[0])
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(false)
+          fake.controller.forget('s1')
+        })
+
+        it('a clear cut short whose row cannot be typed again is left to its row: no key from here', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          fake.sendKey.mockResolvedValueOnce(false)
+          fake.retypeFirstTask.mockResolvedValue(false)
+
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submitFirstTask('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(10_000)
+          expect(fake.controller.awaitingConfirmation('s1')).toBe(false)
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(true)
+          await vi.advanceTimersByTimeAsync(5 * 60_000)
+          expect(fake.keys).toEqual([])
+          expect(fake.typed).toEqual(['Say hello'])
           fake.controller.forget('s1')
         })
 
