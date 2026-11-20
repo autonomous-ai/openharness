@@ -2504,6 +2504,17 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
       expect(logs.filter((line) => line.includes('app filter: picker'))).toEqual(Array(3).fill('[device] app filter: picker'))
     })
 
+    it('a pick that switches nothing says why in fixed words', async () => {
+      const { port } = start({ faults: ['fleet'] })
+      await twoApps(port)
+      expect([host().pickApp('ghostty'), host().pickApp('vscode'), host().pickApp('cursor')]).toEqual(['same', 'switched', 'ignored'])
+      host().pickApp('ghostty', 'notice')
+      expect(logs.filter((line) => line.includes('app filter: pick'))).toEqual([
+        '[device] app filter: picker', '[device] app filter: pick · same', '[device] app filter: picker',
+        '[device] app filter: picker', '[device] app filter: pick · ignored',
+      ])
+    })
+
     it('the settle timer is guarded: a filter that throws is logged and the devices keep running', async () => {
       vi.useFakeTimers()
       const { port } = start({ faults: ['fleet'] })

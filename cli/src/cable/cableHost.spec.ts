@@ -1618,6 +1618,22 @@ describe('the dial that shows one app at a time', () => {
     expect(appSwitched.mock.calls).toEqual([['pick'], ['notice']])
   })
 
+  it('appPickKept is told same or ignored for a pick that switches nothing, and nothing for a switch, tabs or a notice', async () => {
+    const told: string[] = []
+    const over: Partial<CableHostWiring> = { appPicked: () => { told.push('picker') }, appPickKept: (answer) => { told.push(answer) } }
+    const host = setup(five(), over)
+    expect(await shown(host)).toBe('ghostty')
+    expect([host.pickApp('vscode'), host.pickApp('vscode'), host.pickApp('cursor')]).toEqual(['switched', 'same', 'ignored'])
+    expect(host.pickApp('ghostty', 'notice')).toBe('switched')
+    expect(told).toEqual(['picker', 'picker', 'same', 'picker', 'ignored'])
+    // With a window: Harness picked on the tab switches nothing; picked on an app's ring it turns the view to the tab.
+    told.length = 0
+    const windowed = setup(five(), { sessions, ...over })
+    onTab(windowed, ['h1'])
+    expect([windowed.pickApp('harness'), windowed.pickApp('ghostty'), windowed.pickApp('harness')]).toEqual(['ignored', 'switched', 'tabs'])
+    expect(told).toEqual(['picker', 'ignored', 'picker', 'picker'])
+  })
+
   /** The switches, views and brings a host is told, in the order told. */
   function telling(): { told: string[]; over: Partial<CableHostWiring> } {
     const told: string[] = []
