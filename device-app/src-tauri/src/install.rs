@@ -370,7 +370,7 @@ mod tests {
     }
 
     /// A run behind the Install screen; its flag names it in the log only.
-    fn background(line: &'static str) -> Run {
+    fn behind_the_screen(line: &'static str) -> Run {
         Run { line, flag: "--host", place: Place::Background }
     }
 
@@ -760,7 +760,7 @@ mod tests {
     #[test]
     fn the_system_shell_runs_through_sh() {
         let shell = system_shell(std::env::temp_dir());
-        let output = shell.run(&background("printf hi; exit 3"), Duration::from_secs(5), &mut |_| {}).unwrap();
+        let output = shell.run(&behind_the_screen("printf hi; exit 3"), Duration::from_secs(5), &mut |_| {}).unwrap();
         assert_eq!((output.code, output.stdout.as_str()), (Some(3), "hi"));
     }
 
@@ -769,7 +769,9 @@ mod tests {
     fn the_system_shell_hands_its_lines() {
         let mut lines = Vec::new();
         system_shell(std::env::temp_dir())
-            .run(&background(r"printf 'a\nb\n'"), Duration::from_secs(5), &mut |line| lines.push(line.to_string()))
+            .run(&behind_the_screen(r"printf 'a\nb\n'"), Duration::from_secs(5), &mut |line| {
+                lines.push(line.to_string())
+            })
             .unwrap();
         assert_eq!(lines, ["a", "b"]);
     }
@@ -780,7 +782,7 @@ mod tests {
         let mut lines = Vec::new();
         // A bound, not a wait: Windows PowerShell can take seconds to start on a busy runner.
         let output = system_shell(std::env::temp_dir())
-            .run(&background(r#"iex "& { 'hi' }"; exit 7"#), Duration::from_secs(60), &mut |line| {
+            .run(&behind_the_screen(r#"iex "& { 'hi' }"; exit 7"#), Duration::from_secs(60), &mut |line| {
                 lines.push(line.trim_end().to_string())
             })
             .unwrap();
