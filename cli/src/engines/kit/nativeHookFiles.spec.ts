@@ -96,8 +96,40 @@ it.each(routeVerifiers)('$name bounds repeated ancestor metadata reads', ({ capt
   expect(reads).toBeLessThanOrEqual(2)
 })
 
-it.each(routeVerifiers)('$name refuses an original fact missing from the verified fresh snapshot', ({ capture }) => {
+it.each([false, true])('rechecks a complete hook route twice without reconstructing it (alias=%s)', alias => {
+  const { root, file } = fixture(), child = join(root, 'nested'), target = join(child, 'settings.json')
+  mkdirSync(child); writeFileSync(target, 'unchanged')
+  const selected = alias ? file : target
+  if (alias) symlinkSync(target, selected)
+  const observed = inspectHookFile(selected)
+  const walk = vi.spyOn(NativePaths.prototype, 'resolveSync')
+  for (let call = 0; call < 2; call++) {
+    let ancestors = 0, leaves = 0
+    fault.onStat = path => { if (path === root) ancestors++; if (path === target) leaves++ }
+    observed.verify()
+    expect(ancestors).toBe(2)
+    expect(leaves).toBe(3) // Both route passes, then the final selected file-version fence.
+    expect(walk).not.toHaveBeenCalled()
+  }
+})
+
+it('keeps one deadline across both fresh checks of an existing hook route', () => {
   const { root, file } = fixture(); writeFileSync(file, 'unchanged')
+  const observed = inspectHookFile(file)
+  let now = 0, ancestors = 0
+  vi.spyOn(performance, 'now').mockImplementation(() => now)
+  fault.onStat = path => {
+    if (path === file) now = 2_000
+    if (path === root && ++ancestors === 2) now = 4_000
+  }
+  expect(() => observed.verify()).toThrow(/deadline/)
+  expect(ancestors).toBe(2)
+})
+
+it.each(routeVerifiers)('$name refuses an original fact missing from the verified fresh snapshot', ({ name, capture }) => {
+  // Absent routes still reconstruct a fresh snapshot; existing routes check their retained facts directly.
+  const { root, file } = fixture()
+  if (name === 'destination reservation') writeFileSync(file, 'unchanged')
   const observed = capture(file), snapshot = NativePaths.prototype.snapshot
   vi.spyOn(NativePaths.prototype, 'snapshot').mockImplementation(function (this: NativePaths) {
     return snapshot.call(this).filter(fact => fact.path !== root)
@@ -178,15 +210,15 @@ it.each(routeVerifiers.flatMap(verifier => (['target', 'version'] as const).map(
   expect(() => capture(file).verify()).toThrow(IdentityReadUnavailable)
 })
 
-it('keeps the final file-version check after a fresh path walk', () => {
+it('keeps the final file-version check after both fresh route passes', () => {
   const { file } = fixture(); writeFileSync(file, 'before')
-  const observed = inspectHookFile(file), snapshot = NativePaths.prototype.snapshot
-  vi.spyOn(NativePaths.prototype, 'snapshot').mockImplementationOnce(function (this: NativePaths) {
-    const facts = snapshot.call(this)
-    writeFileSync(file, 'peer content')
-    return facts
-  })
+  const observed = inspectHookFile(file)
+  let reads = 0
+  fault.onStat = path => {
+    if (path === file && ++reads === 3) writeFileSync(file, 'peer content')
+  }
   expect(() => observed.verify()).toThrow(/settings file changed/)
+  expect(reads).toBe(3)
   expect(readFileSync(file, 'utf8')).toBe('peer content')
 })
 

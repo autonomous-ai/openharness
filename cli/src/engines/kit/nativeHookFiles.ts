@@ -167,17 +167,25 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
     } finally { closeSync(fd) }
   }
   const retained = facts.filter(fact => fact.identity !== null)
+  const complete = located !== null && retained.length === facts.length
   const knownAliases = new Set(facts.filter(fact => fact.alias).map(fact => fact.path))
   const verify = (directories?: Map<string, BigIntStats>) => {
-    // Another destination in the same preparation may have created a shared
-    // absent directory. New ordinary directories are fine; a newly inserted
-    // alias is not authority to write at a different location.
-    const fresh = new NativePaths(new NativeEvidenceBudget())
-    fresh.resolveSync(file, true, directories)
-    const snapshot = fresh.snapshot()
-    verifyRetainedPathSnapshot(retained, snapshot)
-    if (snapshot.some(fact => fact.alias && !knownAliases.has(fact.path))) {
-      throw new HookPreparationHeld('the settings route gained an unconfirmed alias')
+    if (!directories && complete) {
+      // A complete route needs no reconstruction. Keep both fresh passes: a child
+      // read may reveal a replacement of an ancestor the first pass already saw.
+      const budget = new NativeEvidenceBudget()
+      verifyNativePathFacts(retained, budget)
+      verifyNativePathFacts(retained, budget)
+    } else {
+      // Another destination may have created a shared absent directory. New
+      // ordinary directories are fine; a new alias grants no publication authority.
+      const fresh = new NativePaths(new NativeEvidenceBudget())
+      fresh.resolveSync(file, true, directories)
+      const snapshot = fresh.snapshot()
+      verifyRetainedPathSnapshot(retained, snapshot)
+      if (snapshot.some(fact => fact.alias && !knownAliases.has(fact.path))) {
+        throw new HookPreparationHeld('the settings route gained an unconfirmed alias')
+      }
     }
     let now: BigIntStats | null
     try { now = lstatSync(target, { bigint: true }) } catch (error) { if (!missing(error)) throw error; now = null }

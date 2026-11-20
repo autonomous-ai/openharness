@@ -16,8 +16,7 @@ type Part = { info: BigIntStats | null; target?: string }
 type Location = { path: string; info: BigIntStats } | null
 /** Immutable route facts can cross a service boundary; timestamps matter for aliases, not sibling churn. */
 export type NativePathFact = { path: string; identity: string | null; alias?: { target: string; version: string } }
-export function verifyNativePathFacts(facts: readonly NativePathFact[]): void {
-  const budget = new NativeEvidenceBudget()
+export function verifyNativePathFacts(facts: readonly NativePathFact[], budget = new NativeEvidenceBudget()): void {
   if (!facts.length || facts.length > 256) return nativeUnavailable('the retained route exceeds its limit')
   for (const fact of facts) {
     budget.step()
