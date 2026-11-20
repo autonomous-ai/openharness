@@ -80,7 +80,8 @@ The first Windows and Linux release:
   sign`, which holds them, runs only the Tauri CLI. Both steps share one runner, so this stops a build script that
   reads or prints its environment, not one that leaves something behind for the later step to run. On Linux the
   bundle holds no secret either, as Tauri's AppImage bundler downloads and runs linuxdeploy and its plugins unpinned:
-  `Sign the update`, after it, holds the updater key and runs only the Tauri CLI's signer.
+  `Sign the update`, after it, holds the updater key and runs only the Tauri CLI's signer, on the same runner: the same
+  limit holds.
 - **Windows signs in order** (`sign-windows`): the app's exe with Authenticode through Azure Artifact Signing
   ([Windows code signing](../docs/windows-code-signing.md)), always, since Smart App Control blocks an unsigned
   program; then NSIS packs it, with `--no-binary-patching`, so Tauri writes nothing into the signed exe and it keeps

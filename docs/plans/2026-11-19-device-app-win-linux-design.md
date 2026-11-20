@@ -250,8 +250,10 @@ stdin (`front_line`, `FrontFeed`), never logged. The CLI already maps exe names 
   builder matches `release-desktop.yml`'s runners). No signing beyond minisign.
 - **The same secret discipline as macOS:** compile (build scripts, npm) runs before any secret exists. On macOS the
   bundle step holds `TAURI_SIGNING_PRIVATE_KEY`; on Windows and Linux only a separate `sign-update` step holds it,
-  after the bundle, so no bundler or tool it downloads ever sees the key. On Windows the Tauri CLI the signing job runs
-  is built in a job of its own, before any app code is checked out.
+  after the bundle, so no bundler or tool it downloads has the key in its environment. On Linux that step shares the
+  runner with the bundle, as macOS's steps share theirs, so a tool that leaves something behind for it is not stopped.
+  On Windows the signing job runs on a runner of its own, with a Tauri CLI built in a job of its own before any app
+  code is checked out, and checked against the sha256 that job gives as its output.
 - **Which platforms a release carries:** a temporary `platforms` input on `release-device.yml` and
   `make release-device` (`macos` by default, `all` on Ken's word), so a routine macOS release publishes nothing for
   Windows or Linux and a red Windows/Linux build never blocks it. The pull request of the first Windows/Linux release
