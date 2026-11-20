@@ -1025,6 +1025,13 @@ test('a detach while the attach runs: nothing runs after it', async ($, on) => {
   expect(w.runs).toHaveLength(1)
 })
 
+test('an attach before the session start learns it runs on Windows: told once it does', async ($, on) => {
+  const w = windows(on, { children: EXITS })
+  await attach($)
+  await start($, w)
+  expect(w.runs).toEqual([{ argv: [EXE, ...TELL], init: { timeoutMs: 5_000, cwd: PROFILE } }])
+})
+
 // The app on this session, on another and back within the run: the devices last heard of the other, so it runs again.
 test('left and shown again while an attach that tells runs: it runs once more when it ends', async ($, on) => {
   const w = windows(on, { children: EXITS })
