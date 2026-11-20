@@ -567,6 +567,14 @@ describe('claudeRun', () => {
     expect(Date.now() - started).toBeLessThan(4_000)
   })
 
+  // A claude stuck where even SIGKILL waits never closes: the setup must not wait with it, as orcaHomes' run does not.
+  it('a call past its time ends though claude never closes after the kill', async () => {
+    const kill = vi.fn(() => true)
+    vi.spyOn(childProcess, 'execFile').mockImplementation((() => ({ stdin: { end: () => {} }, kill })) as never)
+    expect(await claudeRunner('/nowhere/claude', {}, 'darwin')(['--version'], 200)).toEqual({ code: null, stdout: '', stderr: '' })
+    expect(kill).toHaveBeenCalledWith('SIGKILL')
+  })
+
   it('is null when no claude is found', () => {
     throwawayPath()
     expect(claudeRun()).toBeNull()
