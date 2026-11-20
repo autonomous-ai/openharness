@@ -81,8 +81,10 @@ scroll, the dial above the hero text.
   - `mobile`: no button; "Open this page on your computer to download the app.";
   - `unknown` and the first render (null, also the server render): the Mac build as the button, so the page works
     without script.
-  - A computer with no build: "Not on Windows yet. Harness Device runs on Mac." (the OS names from the builds) and
-    the builds as links.
+  - A computer the manifest has no build for (owner, 2026-11-20): "Harness Device is macOS-only for now." while every
+    build is a Mac build (today), else "Harness Device isn't on Linux yet."; the Mac download button still shows, and
+    the other builds as links. No button ever points at a build the manifest does not list: Windows and Linux builds
+    appear by themselves once the manifest carries their keys.
   - Button text "Download"; under it "For <build> · version <v>" (plus " · macOS 13 or later" for a Mac build), then
     links to the other builds.
   - With no release (manifest down): the button links `/device/download-macos`, "For Mac · macOS 13 or later", no

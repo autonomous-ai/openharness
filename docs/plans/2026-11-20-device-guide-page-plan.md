@@ -265,9 +265,11 @@ Decisions for the code:
   meta "For Mac · macOS 13 or later", no others. Pick → `<a className={btn} href={pick.url}>` with the template's
   download SVG (`aria-hidden`) and "Download"; meta `For <b>{label}</b> · version {version}` plus ` · macOS 13 or later`
   for a Mac build; then the other builds as links (`label` text). Platform `mobile` → `<p>` "Open this page on your
-  computer to download the app." and every build as a link. Otherwise, when the visitor's OS has no build at all →
-  `<p>` "Not on {OS_NAME of the visitor's OS} yet. Harness Device runs on {OS names of the builds, joined " and "}."
-  and every build as a link (visitor OS: `windows` → Windows, `linux*` → Linux); when it has builds but none fits
+  computer to download the app." and every build as a link. Otherwise, when the visitor's OS has no build at all
+  (owner, 2026-11-20: never a button for a build that does not exist) → `<p>` "Harness Device is macOS-only for now."
+  when every build is a Mac build, else "Harness Device isn't on {OS_NAME of the visitor's OS} yet." (`windows` →
+  Windows, `linux*` → Linux); then the Mac build's button and line exactly as for a Mac visitor (the `macos` pick),
+  then the other builds as links. When the visitor's OS has builds but none fits
   (Linux, CPU unknown, per-CPU builds only) → no button and no sentence, every build as a link (open question 2
   default).
 - `DeviceFiles`: each build is `<li>` with `<a className={k} href={url}>{label}</a><span className={s}>{detail}</span>`;
@@ -296,8 +298,10 @@ Decisions for the code:
   - platform `macos`: link named "Download" with `href` the dmg URL; text "For Mac · Apple silicon and Intel ·
     version 0.1.10 · macOS 13 or later" (`toHaveTextContent` on the block); no other link.
   - platform `null` (first render, server render): the same button and line.
-  - platform `windows`: no "Download" link; text "Not on Windows yet. Harness Device runs on Mac."; one link
-    "Mac · Apple silicon and Intel" to the dmg.
+  - platform `windows`: text "Harness Device is macOS-only for now."; the "Download" link to the dmg with "For Mac ·
+    Apple silicon and Intel · version 0.1.10 · macOS 13 or later"; no other link. The same for `linux`.
+  - platform `linux-x64` with a `device-windows-x64-msi` build added (no Linux build): "Harness Device isn't on Linux
+    yet."; "Download" to the dmg; a link "Windows · x64".
   - platform `mobile`: no "Download" link; "Open this page on your computer to download the app."; the Mac link.
   - platform `linux-x64` with a `device-linux-x64-deb` build added: "Download" goes to the deb; line "For Linux · x64 ·
     version 0.1.10" without "macOS 13"; a link "Mac · Apple silicon and Intel".
