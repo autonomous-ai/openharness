@@ -196,7 +196,7 @@ mod tests {
         exec_line(Path::new(APPIMAGE), Path::new(LAUNCHER)).unwrap()
     }
 
-    /// What the desktop session runs for an `Exec=` value: the string's escape (`\\` is the only one the line holds),
+    /// What a session that reads the entry itself (GLib's way) runs for an `Exec=` value: the string's escape (`\\`),
     /// the field codes (`%%` is the only one), then the arguments, quoted as the Desktop Entry spec quotes them.
     fn argv(value: &str) -> Vec<String> {
         let value = value.replace(r"\\", r"\").replace("%%", "%");
@@ -213,6 +213,107 @@ mod tests {
         args
     }
 
+    /// What GNOME and KDE run under systemd: its xdg-autostart-generator (252 and later) turns the value into a unit's
+    /// `ExecStart=`, which systemd then reads. The generator takes the string's escapes, unquotes the words (a
+    /// backslash keeps the next character), C-unescapes each word, doubles `%` for systemd, and quotes each word that
+    /// needs it with `"`, `\`, `` ` `` and `$` backslashed. `ExecStart=` reads `%%` as `%`, then unquotes the words
+    /// with C escapes, and keeps the backslash of any other (its retry after "Ignoring unknown escape sequences").
+    fn systemd_argv(value: &str) -> Vec<String> {
+        let mut unescaped = String::new();
+        let mut chars = value.chars();
+        while let Some(c) = chars.next() {
+            unescaped.push(match c {
+                '\\' => match chars.next().unwrap() {
+                    's' => ' ',
+                    'n' => '\n',
+                    't' => '\t',
+                    'r' => '\r',
+                    other => other,
+                },
+                c => c,
+            });
+        }
+        let line: Vec<String> = systemd_words(&unescaped, false)
+            .into_iter()
+            .enumerate()
+            .map(|(i, word)| {
+                let word = c_unescaped(&word);
+                let word = if i == 0 { word } else { word.replace("%%", "%").replace('%', "%%") };
+                quoted_for_exec_start(&word)
+            })
+            .collect();
+        systemd_words(&line.join(" ").replace("%%", "%"), true)
+    }
+
+    /// systemd's extract_first_word with EXTRACT_UNQUOTE: `'` and `"` quote, and a backslash takes the next character;
+    /// with `cunescape`, its C escape, or the backslash and the character when it is none.
+    fn systemd_words(text: &str, cunescape: bool) -> Vec<String> {
+        let (mut words, mut word, mut quote, mut started) = (Vec::new(), String::new(), None, false);
+        let mut chars = text.chars();
+        while let Some(c) = chars.next() {
+            match (c, quote) {
+                ('\\', _) => {
+                    let next = chars.next().unwrap();
+                    match c_escape(next) {
+                        Some(decoded) if cunescape => word.push(decoded),
+                        _ if cunescape => word.extend(['\\', next]),
+                        _ => word.push(next),
+                    }
+                    started = true;
+                }
+                (c, Some(open)) if c == open => quote = None,
+                (c, Some(_)) => word.push(c),
+                ('\'' | '"', None) => (quote, started) = (Some(c), true),
+                (' ' | '\t' | '\n' | '\r', None) => {
+                    if std::mem::take(&mut started) {
+                        words.push(std::mem::take(&mut word));
+                    }
+                }
+                (c, None) => {
+                    word.push(c);
+                    started = true;
+                }
+            }
+        }
+        if started {
+            words.push(word);
+        }
+        words
+    }
+
+    /// A C escape systemd decodes.
+    fn c_escape(c: char) -> Option<char> {
+        let decoded = [('a', '\x07'), ('b', '\x08'), ('f', '\x0c'), ('n', '\n'), ('r', '\r'), ('t', '\t')]
+            .into_iter()
+            .chain([('v', '\x0b'), ('\\', '\\'), ('"', '"'), ('\'', '\''), ('s', ' ')])
+            .find(|(escape, _)| *escape == c)?;
+        Some(decoded.1)
+    }
+
+    /// The generator's cunescape on a word: it gives up on the entry at an escape it does not know.
+    fn c_unescaped(word: &str) -> String {
+        let (mut out, mut chars) = (String::new(), word.chars());
+        while let Some(c) = chars.next() {
+            out.push(if c == '\\' {
+                c_escape(chars.next().unwrap()).expect("the generator drops the entry")
+            } else {
+                c
+            });
+        }
+        out
+    }
+
+    /// systemd's shell_maybe_quote: a word with a space, a glob or a shell character goes in `"`, with `"`, `\`, `` ` ``
+    /// and `$` backslashed from the first such character on.
+    fn quoted_for_exec_start(word: &str) -> String {
+        const NEEDS_QUOTES: &str = "\"\\`$*?[]'()<>|&;! \t\n\r";
+        assert!(!word.chars().any(char::is_control), "{word:?}");
+        let Some(at) = word.find(|c: char| NEEDS_QUOTES.contains(c)) else { return word.to_string() };
+        let escaped: String =
+            word[at..].chars().flat_map(|c| ["\"\\`$".contains(c).then_some('\\'), Some(c)]).flatten().collect();
+        format!("\"{}{escaped}\"", &word[..at])
+    }
+
     #[test]
     fn the_entry_is_under_xdg_config_home_only_when_it_is_absolute() {
         let home = Path::new("/home/p");
@@ -227,16 +328,25 @@ mod tests {
     fn the_exec_line_is_one_fixed_text() {
         assert_eq!(
             exec(),
-            r#"/bin/sh -c "[ -x \\"\\$0\\" ] && exec \\"\\$0\\"; exec \\"\\$1\\" start" "/a/H.AppImage" "/h/.local/bin/harness""#
+            r#"/bin/sh -c "[ -x '/a/H.AppImage' ] && exec '/a/H.AppImage'; exec '/h/.local/bin/harness' start""#
         );
     }
 
     #[test]
-    fn a_path_with_a_space_a_percent_a_dollar_a_quote_and_a_backslash_is_quoted() {
-        let appimage = Path::new(r#"/My Apps/100% $HOME "q" \b `x`.AppImage"#);
+    fn a_path_with_a_space_a_percent_or_a_shell_character_is_quoted() {
+        let appimage = Path::new("/My Apps/100% (x) & y; z*.AppImage");
         let line = exec_line(appimage, Path::new("/h/Nguyễn/harness")).unwrap();
-        let quoted = r#" "/My Apps/100%% \\$HOME \\"q\\" \\\\b \\`x\\`.AppImage" "/h/Nguyễn/harness""#;
+        let quoted = r#"exec '/My Apps/100%% (x) & y; z*.AppImage'; exec '/h/Nguyễn/harness' start""#;
         assert!(line.ends_with(quoted), "{line}");
+    }
+
+    #[test]
+    fn a_path_no_quoting_holds_in_both_readings_gets_no_line() {
+        // A quote, `$`, a backtick or a backslash needs a backslash in the value, which systemd's generator keeps.
+        for odd in ["'", "\"", "$", "`", "\\"] {
+            assert_eq!(exec_line(Path::new(&format!("/a/{odd}.AppImage")), Path::new(LAUNCHER)), None, "{odd}");
+            assert_eq!(exec_line(Path::new(APPIMAGE), Path::new(&format!("/h/{odd}/harness"))), None, "{odd}");
+        }
         // A control character cannot be held in one line, nor a path that is not UTF-8 in a UTF-8 file.
         assert_eq!(exec_line(Path::new("/a/new\nline"), Path::new(LAUNCHER)), None);
         assert_eq!(exec_line(Path::new(APPIMAGE), Path::new("/h/a\ttab")), None);
@@ -246,7 +356,7 @@ mod tests {
     #[test]
     fn the_exec_line_starts_the_appimage_and_falls_back_to_the_launcher() {
         let dir = tempfile::tempdir().unwrap();
-        let odd = dir.path().join(r#"My Apps 100% $HOME "q" \b `x`"#);
+        let odd = dir.path().join("My Apps 100% (x) & y; z*");
         fs::create_dir(&odd).unwrap();
         // Linked, not written as scripts (testing::Fake on ETXTBSY). echo says which ran: the AppImage gets no
         // argument, the launcher `start`. Each link is named echo, in a folder of its own: Ubuntu 26.04's coreutils
@@ -256,15 +366,20 @@ mod tests {
             fs::create_dir(link.parent().unwrap()).unwrap();
             std::os::unix::fs::symlink("/bin/echo", link).unwrap();
         }
-        let run = || {
-            let argv = argv(&exec_line(&appimage, &launcher).unwrap());
+        // Both ways a session reads the entry.
+        let run = |reading: fn(&str) -> Vec<String>| {
+            let argv = reading(&exec_line(&appimage, &launcher).unwrap());
             let output = Command::new(&argv[0]).args(&argv[1..]).output().unwrap();
-            assert!(output.status.success(), "{output:?}");
+            assert!(output.status.success(), "{argv:?}: {output:?}");
             String::from_utf8(output.stdout).unwrap()
         };
-        assert_eq!(run(), "\n");
+        for reading in [argv, systemd_argv] {
+            assert_eq!(run(reading), "\n");
+        }
         fs::remove_file(&appimage).unwrap();
-        assert_eq!(run(), "start\n");
+        for reading in [argv, systemd_argv] {
+            assert_eq!(run(reading), "start\n");
+        }
     }
 
     #[test]
