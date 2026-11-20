@@ -479,10 +479,10 @@ Close and Retry. Cancelled or failed, the next launch asks again.
 
 **Menu-bar app offer** (`widgets/device_app_band.dart`,
 `devices/device_app_row.dart`; gallery `device-app`) — shown on macOS 13 or
-later while a dial is plugged in to this computer and the Harness menu-bar app
-is not installed; Linux, Windows, the web and macOS 12 show nothing. The band
-is a window band, last of the device bands, drawn as the others: a 10% amber
-(`AppPalette.warn`) tint over the window, a 28% bottom rule, a 16-point
+later, Windows and Linux while a dial is plugged in to this computer and the
+Harness menu-bar app is not installed; the web and macOS 12 show nothing. The
+band is a window band, last of the device bands, drawn as the others: a 10%
+amber (`AppPalette.warn`) tint over the window, a 28% bottom rule, a 16-point
 `AppIcons.arrowDownToLine` (`triangleAlert` on a failure), body text of at most
 two lines, then the quiet `Not now` first and `Install` last. Both are off
 while it reads `Installing…`. A failure replaces the sentence with its line and
@@ -494,7 +494,9 @@ region, and no row once the app is installed and running. `Not now` on the band
 leaves the row. Installed but not opened, `Retry` and `Open` only open it. The
 copy, exact: the band's `Your dial follows apps and terminal tabs with the
 Harness menu-bar app.`; the row's `Menu-bar app` and `Follows the app and
-terminal tab in front.`; the failure lines `Couldn’t download the app.`,
+terminal tab in front.` On Windows and Linux: the band's `Your dial follows
+apps with the Harness tray app.`; the row's `Tray app` and `Follows the app in
+front.` On every OS, the failure lines `Couldn’t download the app.`,
 `Couldn’t verify the download.`, `Couldn’t install the app.` and `Installed.
 Couldn’t open it.`
 
@@ -513,6 +515,15 @@ Couldn’t open it.`
 │ Follows the app and terminal tab in front.                 │   │ Follows the app and terminal tab in front.    │
 └────────────────────────────────────────────────────────────┘   │ Installed. Couldn’t open it.                  │
                                                                  └───────────────────────────────────────────────┘
+
+Windows and Linux:
+
+ ↓  Your dial follows apps with the Harness tray app.                             Not now  [ Install ]
+
+┌────────────────────────────────────────────────────────────┐
+│ Tray app                                       [ Install ] │
+│ Follows the app in front.                                  │
+└────────────────────────────────────────────────────────────┘
 ```
 
 **Intern 3** (`lib/harness_os/`) — a Harness OS box with no screen, set up and

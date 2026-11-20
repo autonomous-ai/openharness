@@ -92,18 +92,42 @@ class DeviceAppInstallResult {
 /// The first dotted number: Apple documents the words around it as localized.
 final _macVersion = RegExp(r'(\d+)\.\d+');
 
-/// macOS 13 or later, and not a viewer build. Defaults: [defaultTargetPlatform],
-/// [RuntimePlatform.operatingSystemVersion], `kIsWeb || kViewerMode`.
+/// macOS 13 or later, every Windows Desktop runs on (Windows 10 or 11: nothing the app uses needs more) and every
+/// Linux, and not a viewer build. Defaults: [defaultTargetPlatform], [RuntimePlatform.operatingSystemVersion],
+/// `kIsWeb || kViewerMode`.
 bool deviceAppSupported({
   TargetPlatform? platform,
   String? osVersion,
   bool? viewer,
 }) {
   if (viewer ?? (kIsWeb || kViewerMode)) return false;
-  if ((platform ?? defaultTargetPlatform) != TargetPlatform.macOS) return false;
-  final match = _macVersion.firstMatch(
-    osVersion ?? RuntimePlatform.operatingSystemVersion,
-  );
-  // The menu-bar app needs macOS 13; anything that does not read as a macOS version is not offered it.
-  return match != null && int.parse(match.group(1)!) >= 13;
+  switch (platform ?? defaultTargetPlatform) {
+    case TargetPlatform.windows || TargetPlatform.linux:
+      return true;
+    case TargetPlatform.macOS:
+      final match = _macVersion.firstMatch(
+        osVersion ?? RuntimePlatform.operatingSystemVersion,
+      );
+      // The menu-bar app needs macOS 13; anything that does not read as a macOS version is not offered it.
+      return match != null && int.parse(match.group(1)!) >= 13;
+    default:
+      return false;
+  }
 }
+
+/// The band's sentence and the Devices row's title and detail.
+typedef DeviceAppCopy = ({String band, String title, String detail});
+
+/// The words for the app on [platform]: off macOS it lives in the tray, not a menu bar, and follows no terminal tab.
+DeviceAppCopy deviceAppCopy(TargetPlatform platform) =>
+    platform == TargetPlatform.macOS
+    ? (
+        band: 'Your dial follows apps and terminal tabs with the Harness menu-bar app.',
+        title: 'Menu-bar app',
+        detail: 'Follows the app and terminal tab in front.',
+      )
+    : (
+        band: 'Your dial follows apps with the Harness tray app.',
+        title: 'Tray app',
+        detail: 'Follows the app in front.',
+      );

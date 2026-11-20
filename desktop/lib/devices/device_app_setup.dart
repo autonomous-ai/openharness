@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import '../core/local_key_value_store.dart';
 import '../core/runtime_platform.dart';
 import '../core/test_run.dart';
@@ -73,23 +75,71 @@ Future<bool> deviceAppInstallerSignedLikeDesktop(
   return file.valid && file.sameAs(running);
 }
 
-/// The offer with the real lookup, installer and opener. [supported] defaults to
+/// How [platform] finds the app: LaunchServices on macOS; on Windows and Linux its place under [environment] (by
+/// default this process's) and this user's process list. [running] and [exists] stand in for the OS under test.
+@visibleForTesting
+DeviceAppProbe deviceAppProbeFor(
+  TargetPlatform platform, {
+  Map<String, String>? environment,
+  Future<bool> Function()? running,
+  Future<bool> Function(String path)? exists,
+}) => switch (platform) {
+  TargetPlatform.windows => PlaceDeviceAppProbe(
+    place: deviceAppPlace(platform: platform, environment: environment),
+    running: running ?? () => windowsDeviceAppRunning(environment: environment),
+    exists: exists,
+  ),
+  TargetPlatform.linux => PlaceDeviceAppProbe(
+    place: deviceAppPlace(platform: platform, environment: environment),
+    running: running ?? linuxDeviceAppRunning,
+    exists: exists,
+  ),
+  _ => const ChannelDeviceAppProbe(),
+};
+
+/// How [platform] opens the app: `open` on macOS; on Windows and Linux, which have none, it starts the named path,
+/// else its place under [environment] (by default this process's), and fails with neither.
+@visibleForTesting
+DeviceAppOpen deviceAppOpenFor(
+  TargetPlatform platform, {
+  DeviceAppStart start = startDeviceAppDetached,
+  Map<String, String>? environment,
+}) {
+  if (platform != TargetPlatform.windows && platform != TargetPlatform.linux) {
+    return ({String? path}) => openDeviceApp(runDeviceAppTool, path: path);
+  }
+  final place = deviceAppPlace(platform: platform, environment: environment);
+  return ({String? path}) async {
+    final app = path ?? place;
+    return app != null &&
+        await startDeviceApp(app, start: start, environment: environment);
+  };
+}
+
+/// The offer with this OS's lookup, installer and opener. [supported] defaults to
 /// `!kUnderTest && deviceAppSupported()`: under test it shows nothing and never looks.
 DeviceAppOffer deviceAppOfferForThisComputer({
   LocalKeyValueStore? store,
   bool? supported,
 }) {
-  Future<bool> open({String? path}) =>
-      openDeviceApp(runDeviceAppTool, path: path);
+  final platform = defaultTargetPlatform;
+  final open = deviceAppOpenFor(platform);
   final installer = DeviceAppInstaller(
     manifestUrl: deviceAppManifestUrl,
     targetFolders: deviceAppTargetFolders(),
-    verifySignature: deviceAppSignedLikeDesktop,
+    verifySignature: switch (platform) {
+      TargetPlatform.windows => deviceAppInstallerSignedLikeDesktop,
+      // Never asked: an AppImage carries no OS signature. Refused, were it ever asked.
+      TargetPlatform.linux => (_) async => false,
+      _ => deviceAppSignedLikeDesktop,
+    },
     open: open,
+    platform: platform,
+    place: deviceAppPlace(platform: platform),
   );
   return DeviceAppOffer(
     supported: supported ?? (!kUnderTest && deviceAppSupported()),
-    probe: const ChannelDeviceAppProbe(),
+    probe: deviceAppProbeFor(platform),
     install: installer.install,
     open: open,
     store: store,
