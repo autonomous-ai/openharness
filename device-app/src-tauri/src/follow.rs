@@ -6,7 +6,7 @@ use crate::front::{LinuxFront, linux_front};
 use crate::tabs::Out;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// The ChatGPT app's bundle id, the CLI's too: the app that runs Codex threads.
@@ -68,32 +68,19 @@ pub fn runs_program(proc_root: &Path, pid: u32, program: &Path) -> bool {
 /// door there answers `trusted()` with.
 pub struct FollowSwitch {
     on: AtomicBool,
-    changed: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 impl FollowSwitch {
     pub fn new(on: bool) -> Arc<FollowSwitch> {
-        Arc::new(FollowSwitch { on: AtomicBool::new(on), changed: Mutex::default() })
+        Arc::new(FollowSwitch { on: AtomicBool::new(on) })
     }
 
     pub fn on(&self) -> bool {
         self.on.load(Ordering::SeqCst)
     }
 
-    /// Tells the listener only of a change: the rules read `trusted()` again at each call.
     pub fn set(&self, on: bool) {
-        if self.on.swap(on, Ordering::SeqCst) == on {
-            return;
-        }
-        // Called with no lock held: the listener reads the switch.
-        let changed = self.changed.lock().unwrap().clone();
-        if let Some(changed) = changed {
-            changed();
-        }
-    }
-
-    pub fn start(&self, changed: Box<dyn Fn() + Send + Sync>) {
-        *self.changed.lock().unwrap() = Some(Arc::from(changed));
+        self.on.store(on, Ordering::SeqCst);
     }
 }
 
@@ -120,7 +107,8 @@ pub trait AxTrust: Send + Sync {
     fn trusted(&self) -> bool;
     /// macOS's own prompt.
     fn prompt(&self);
-    /// `changed` is called each time the permission may have changed.
+    /// `changed` is called each time macOS may have changed the permission. Off macOS nothing changes it but the
+    /// switch, which the runner reads back.
     fn start(&self, changed: Box<dyn Fn() + Send + Sync>);
     /// Off macOS, Harness's own switch stands for the permission: the person turns following on or off.
     fn switch(&self, _on: bool) {}
@@ -619,27 +607,16 @@ mod tests {
     }
 
     #[test]
-    fn the_switch_starts_as_given_and_tells_each_change_once() {
+    fn the_switch_starts_as_given_and_holds_each_change() {
         assert!(FollowSwitch::new(true).on());
         assert!(!FollowSwitch::new(false).on());
         let switch = FollowSwitch::new(true);
-        // Before start there is no one to tell.
         switch.set(false);
         assert!(!switch.on());
-        switch.set(true);
-        let told = Arc::new(Mutex::new(0));
-        let count = told.clone();
-        switch.start(Box::new(move || *count.lock().unwrap() += 1));
-        switch.set(true);
-        assert_eq!(*told.lock().unwrap(), 0);
         switch.set(false);
         assert!(!switch.on());
-        assert_eq!(*told.lock().unwrap(), 1);
-        switch.set(false);
-        assert_eq!(*told.lock().unwrap(), 1);
         switch.set(true);
         assert!(switch.on());
-        assert_eq!(*told.lock().unwrap(), 2);
     }
 
     #[test]

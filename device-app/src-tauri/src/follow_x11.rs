@@ -124,9 +124,8 @@ impl AxTrust for X11Follow {
 
     fn prompt(&self) {}
 
-    fn start(&self, changed: Box<dyn Fn() + Send + Sync>) {
-        self.switch.start(changed);
-    }
+    /// Nothing to hear: the runner reads the switch back at each click.
+    fn start(&self, _changed: Box<dyn Fn() + Send + Sync>) {}
 
     fn switch(&self, on: bool) {
         self.switch.set(on);
@@ -401,7 +400,8 @@ mod tests {
         assert!(!door.trusted());
         door.switch(true);
         assert!(door.trusted());
-        assert_eq!(told.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // The runner reads the click back: nothing is told.
+        assert_eq!(told.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
     /// Under Xvfb, with no window manager: the test sets the root's `_NET_ACTIVE_WINDOW` itself. Its name holds no

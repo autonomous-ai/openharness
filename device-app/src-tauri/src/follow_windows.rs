@@ -101,9 +101,8 @@ impl AxTrust for WindowsFollow {
     /// Nothing to ask.
     fn prompt(&self) {}
 
-    fn start(&self, changed: Box<dyn Fn() + Send + Sync>) {
-        self.switch.start(changed);
-    }
+    /// Nothing to hear: the runner reads the switch back at each click.
+    fn start(&self, _changed: Box<dyn Fn() + Send + Sync>) {}
 
     fn switch(&self, on: bool) {
         self.switch.set(on);
@@ -484,18 +483,16 @@ mod tests {
         let told = Arc::new(Mutex::new(0));
         let count = told.clone();
         door.start(Box::new(move || *count.lock().unwrap() += 1));
-        // The menu's click.
+        // The menu's click: the runner reads it back, and nothing is told.
         door.switch(false);
         assert!(!switch.on());
         assert!(!door.trusted());
-        assert_eq!(*told.lock().unwrap(), 1);
         // Nothing to ask on Windows.
         door.prompt();
         assert!(!switch.on());
-        assert_eq!(*told.lock().unwrap(), 1);
         door.switch(true);
         assert!(door.trusted());
-        assert_eq!(*told.lock().unwrap(), 2);
+        assert_eq!(*told.lock().unwrap(), 0);
     }
 
     /// What an observation hears, sent to the receiver. The sender goes with the observation's thread: the receiver

@@ -41,9 +41,8 @@ impl AxTrust for HyprlandFollow {
 
     fn prompt(&self) {}
 
-    fn start(&self, changed: Box<dyn Fn() + Send + Sync>) {
-        self.switch.start(changed);
-    }
+    /// Nothing to hear: the runner reads the switch back at each click.
+    fn start(&self, _changed: Box<dyn Fn() + Send + Sync>) {}
 
     fn switch(&self, on: bool) {
         self.switch.set(on);
@@ -376,7 +375,8 @@ mod tests {
         door.prompt();
         door.switch(false);
         assert!(!door.trusted());
-        assert_eq!(changes.load(Ordering::SeqCst), 1);
+        // The runner reads the click back: nothing is told.
+        assert_eq!(changes.load(Ordering::SeqCst), 0);
     }
 
     /// Hears into a channel: it disconnects once the observer's thread has let `heard` go.
