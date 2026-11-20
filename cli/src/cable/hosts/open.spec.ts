@@ -298,7 +298,9 @@ describe('opening an agent outside Harness from the dial', () => {
       { TERM_PROGRAM: 'WarpTerminal' }, { __CFBundleIdentifier: 'org.alacritty' }, { __CFBundleIdentifier: CLAUDE, CLAUDE_CODE_HOST_SESSION_ID: SESSION },
     ]
     for (const hints of appsOnly) {
-      expect(linux.opener.can(target(hints))).toBe(false)
+      // The Claude app's link answers yes at its first look, while xdg-mime is read (appLink.ts): it names none, so the
+      // tap opens nothing.
+      expect(linux.opener.can(target(hints))).toBe(hints === appsOnly[2])
       expect(await linux.opener.open('a4', target(hints))).toBe(false)
     }
     expect(linux.calls).toEqual([
@@ -436,7 +438,8 @@ describe('a tap on a Codex app session', () => {
   it('on Linux a Codex pane opens nothing', async () => {
     const { calls, logs, opener } = recorder({ platform: 'linux' })
     for (const app of [hooked, scanned]) {
-      expect(opener.can(app)).toBe(false)
+      // The first look answers yes while xdg-mime is read (appLink.ts); it names none, so the next answers no.
+      expect(opener.can(app)).toBe(app === hooked)
       expect(await opener.open('a1', app)).toBe(false)
     }
     expect(calls).toEqual([lookup('codex')])

@@ -127,7 +127,8 @@ describe('the Claude app adapter', () => {
   it('canFocus is macOS only; canShow also needs the app in front, asked each time', () => {
     for (const platform of ['linux', 'win32'] as const) {
       const { adapter } = recorder({ platform })
-      expect(adapter.canFocus(pane(SESSION)), platform).toBe(false)
+      // On Linux the first look answers yes while xdg-mime is read: a tap's focus waits for that read (appLink.ts).
+      expect(adapter.canFocus(pane(SESSION)), platform).toBe(platform === 'linux')
       expect(adapter.canShow(pane(SESSION)), platform).toBe(false)
     }
     let front = true
