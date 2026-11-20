@@ -157,6 +157,39 @@ void main() {
     expect(iconIn(data()).readAsBytesSync(), [1, 2, 3]);
   }, skip: Platform.isWindows);
 
+  // Desktop only ever writes Exec=<the place>: an entry that starts a program
+  // by name, or through a wrapper, is someone else's, and the PATH finds it.
+  test(
+    'an entry that starts a program by name stays, at launch and on install',
+    () async {
+      for (final exec in ['harness-device', 'env X=1 harness-device']) {
+        entryFor(exec);
+        iconIn(data())
+          ..createSync(recursive: true)
+          ..writeAsBytesSync(const [9]);
+
+        await forgetGoneDeviceAppLauncher(environment: {'HOME': home});
+        await write(place);
+
+        expect(
+          entryIn(data()).readAsStringSync(),
+          '[Desktop Entry]\nExec=$exec\n',
+          reason: exec,
+        );
+        expect(iconIn(data()).readAsBytesSync(), const [9], reason: exec);
+      }
+    },
+    skip: Platform.isWindows,
+  );
+
+  test('an entry for another AppImage that is gone stays at launch', () async {
+    entryFor('$home/Downloads/Harness-Device-linux-x64.AppImage');
+
+    await forgetGoneDeviceAppLauncher(environment: {'HOME': home});
+
+    expect(entryIn(data()).existsSync(), isTrue);
+  }, skip: Platform.isWindows);
+
   test('no home writes nothing and does not throw', () async {
     await write(place, environment: const {});
     await write(place, environment: const {'HOME': ''});
