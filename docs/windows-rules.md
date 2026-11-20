@@ -203,6 +203,15 @@ Claude Code's plugins on Windows (Claude Code 2.1.328 and 2.1.329, VM, 2026-11-2
   2026-11-20). VS Code holds its output channel's file open, so the gate's scroll cases timed out. To follow such a
   file, read its size (`watchFile`). Test: the real-VS Code gate's scroll and page cases
   (`plugins/harness-device-vscode/gate/realVscode.gate.ts`).
+- **A folder watched by an 8.3 short name aborts the process at its first change.** libuv asserts that each change's
+  long path starts with the folder it watches (`Assertion failed: !_wcsnicmp(filename, dir, dirlen)`,
+  `src\win\fs-event.c`). A console session's TEMP was `C:\Users\HXDIAL~1\AppData\Local\Temp`, and the core, which runs
+  every service on Windows, crashed at its first change; with TEMP in its long form the same run passed (VM,
+  2026-11-20). A watch of a file is never checked so, but chokidar watches the nearest folder of a file not there yet.
+  Every folder watch (`fs.watch`, chokidar) is given its path through `pathToWatch` (`cli/src/lib/pathToWatch.ts`): a
+  path with a `~`, as every short name Windows makes has, is watched by its long name; any other as given. Tests:
+  `cli/src/lib/pathToWatch.spec.ts` and the "on Windows" cases of `watcher/watcher.spec.ts`,
+  `core/engines/liveWatcher.spec.ts`, `cable/hosts/folderWatch.spec.ts`, `dsh/verdict.spec.ts` and `dsh/viewer.spec.ts`.
 
 ## 4. Screens a person sees
 
