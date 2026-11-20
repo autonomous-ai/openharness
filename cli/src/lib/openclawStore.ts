@@ -76,6 +76,19 @@ async function configuredAgentDir(stateDir: string, agentId: string): Promise<st
   }
 }
 
+/** The agent database for `key`, and whether its folder is the TUI's own (`fallback` false) or OpenClaw's default. */
+async function sessionStore(
+  key: string,
+  pane: { pid: number; stateDir?: string | null },
+  openFiles?: (pid: number) => Promise<string[]>,
+): Promise<{ database: string; fallback: boolean } | null> {
+  const agentId = OPENCLAW_KEY.exec(key)?.[1]
+  if (!agentId) return null
+  const held = pane.stateDir || await openclawStateDir(pane.pid, openFiles)
+  const stateDir = held || env.OPENCLAW_STATE_DIR
+  return { database: openclawAgentDb(stateDir, agentId, await configuredAgentDir(stateDir, agentId)), fallback: !held }
+}
+
 /**
  * The agent database that holds `key` (`agent:<agentId>:<key>`): in the state folder its TUI held when bound, else the
  * one the TUI with this pid holds open, else OpenClaw's default. Null for no key.
@@ -85,10 +98,7 @@ export async function openclawSessionDb(
   pane: { pid: number; stateDir?: string | null },
   openFiles?: (pid: number) => Promise<string[]>,
 ): Promise<string | null> {
-  const agentId = OPENCLAW_KEY.exec(key)?.[1]
-  if (!agentId) return null
-  const stateDir = pane.stateDir || (await openclawStateDir(pane.pid, openFiles) ?? env.OPENCLAW_STATE_DIR)
-  return openclawAgentDb(stateDir, agentId, await configuredAgentDir(stateDir, agentId))
+  return (await sessionStore(key, pane, openFiles))?.database ?? null
 }
 
 const USER_ROW_SINCE = `SELECT 1 FROM transcript_events WHERE message_role = 'user' AND created_at > ?
@@ -96,8 +106,9 @@ const USER_ROW_SINCE = `SELECT 1 FROM transcript_events WHERE message_role = 'us
 
 /**
  * Whether `key`'s store holds a user message written after `since`, in any window the key has had: OpenClaw took a
- * task typed into its box. False when the store does not exist yet (no message was ever taken); null for no key or a
- * read that fails, which says nothing either way.
+ * task typed into its box. False when the TUI's own folder has no store yet (no message was ever taken); null for no
+ * key, a read that fails, or a missing store in OpenClaw's default folder, used only because the TUI's folder is
+ * unknown: its real store may be elsewhere.
  */
 export async function openclawUserRowSince(
   key: string,
@@ -105,9 +116,10 @@ export async function openclawUserRowSince(
   since: number,
   openFiles?: (pid: number) => Promise<string[]>,
 ): Promise<boolean | null> {
-  const database = await openclawSessionDb(key, pane, openFiles)
-  if (!database) return null
-  try { await access(database) } catch { return false }
+  const store = await sessionStore(key, pane, openFiles)
+  if (!store) return null
+  const { database, fallback } = store
+  try { await access(database) } catch { return fallback ? null : false }
   const read = await sqliteReadAll(database, USER_ROW_SINCE, [since, key])
   return read.ok ? read.rows.length > 0 : null
 }
