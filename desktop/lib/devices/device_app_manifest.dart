@@ -51,11 +51,13 @@ DeviceAppRelease? parseDeviceAppManifest(
     // Windows 11 on ARM runs an x64 app emulated; an x64 PC never takes arm64.
     TargetPlatform.windows =>
       arm64
-          ? const ['device-windows-arm64', 'device-windows-x64']
-          : const ['device-windows-x64'],
+          ? const ['device-windows-arm64-exe', 'device-windows-x64-exe']
+          : const ['device-windows-x64-exe'],
     // Linux runs no other arch's AppImage.
     TargetPlatform.linux =>
-      arm64 ? const ['device-linux-arm64'] : const ['device-linux-x64'],
+      arm64
+          ? const ['device-linux-arm64-appimage']
+          : const ['device-linux-x64-appimage'],
     _ => const <String>[],
   };
   for (final key in keys) {

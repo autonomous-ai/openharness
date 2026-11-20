@@ -264,8 +264,9 @@ stdin (`front_line`, `FrontFeed`), never logged. The CLI already maps exe names 
   release's files, signed for another version, and every update would fail its signature check.
 - **Manifest** (`device-manifest.py`): a release with `all` carries every platform at one version. `platforms` gains
   `windows-x86_64`, `windows-aarch64`, `linux-x86_64`, `linux-aarch64` (Tauri's keys, each its own file and
-  signature). Desktop-style keys beside the macOS ones: `device-windows-x64`, `device-windows-arm64`,
-  `device-linux-x64`, `device-linux-arm64`, each `{version, url, sha256, size}`. Publish waits for every build; verify
+  signature). Installer keys beside the macOS ones, read by Desktop and the website: `device-windows-x64-exe`,
+  `device-windows-arm64-exe`, `device-linux-x64-appimage`, `device-linux-arm64-appimage`, each
+  `{version, url, sha256, size}`. Publish waits for every build; verify
   downloads each file it names. `test_device_manifest.py` covers the new keys.
 - `release-check.sh` gains per-OS checks (Windows: the signature when signing is on, the version in the exe; Linux: the
   AppImage runs `--version`-free checks: its ELF arch and the updater signature's `version:`).
@@ -289,7 +290,8 @@ macOS, or the release is a partial ship. The same pull request carries both:
   release.
 - **Desktop.** On Windows and Linux, Desktop offers and installs Harness Device the way it does on macOS: the same
   trigger (#4426: a dial is plugged in), the same screens and copy. Only these steps change per OS:
-  - `device_app_manifest.dart` reads the platform's keys (`device-windows-x64`/`-arm64`, `device-linux-x64`/`-arm64`).
+  - `device_app_manifest.dart` reads the platform's keys (`device-windows-x64-exe`/`-arm64-exe`,
+    `device-linux-x64-appimage`/`-arm64-appimage`).
   - `device_app_installer.dart` downloads the file and checks its sha256 and size, then installs it:
     - Windows: runs the NSIS installer silently (`/S`, per user, no admin).
     - Linux: puts the AppImage in place and makes it executable.

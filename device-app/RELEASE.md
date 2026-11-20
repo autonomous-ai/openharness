@@ -144,17 +144,17 @@ manifest:
 The app is universal, so the arm64 pair names the same files as the other pair. A release with `all` adds, each with
 its own file:
 
-| Updater key (`platforms`) | Desktop's key | Website's key | File |
-|---|---|---|---|
-| `windows-x86_64` | `device-windows-x64` | `device-windows-x64-exe` | `Harness-Device-windows-x64-setup.exe` |
-| `windows-aarch64` | `device-windows-arm64` | `device-windows-arm64-exe` | `Harness-Device-windows-arm64-setup.exe` |
-| `linux-x86_64` | `device-linux-x64` | `device-linux-x64-appimage` | `Harness-Device-linux-x64.AppImage` |
-| `linux-aarch64` | `device-linux-arm64` | `device-linux-arm64-appimage` | `Harness-Device-linux-arm64.AppImage` |
+| Updater key (`platforms`) | Installer key | File |
+|---|---|---|
+| `windows-x86_64` | `device-windows-x64-exe` | `Harness-Device-windows-x64-setup.exe` |
+| `windows-aarch64` | `device-windows-arm64-exe` | `Harness-Device-windows-arm64-setup.exe` |
+| `linux-x86_64` | `device-linux-x64-appimage` | `Harness-Device-linux-x64.AppImage` |
+| `linux-aarch64` | `device-linux-arm64-appimage` | `Harness-Device-linux-arm64.AppImage` |
 
 The app reads `platforms` (its updater ignores the rest). The website reads only installer keys,
-`device-<os>[-<arch>]-<package>`: `device-macos-dmg`, `device-macos-arm64-dmg` and the website's keys above. Desktop
-reads `device-macos-arm64`/`device-macos` and Desktop's keys above; on Windows it runs the installer with `/S`, and on
-Linux it puts the AppImage at `~/.local/opt/Harness-Device.AppImage` and lists it in the app list as
+`device-<os>[-<arch>]-<package>`: `device-macos-dmg`, `device-macos-arm64-dmg` and the installer keys above. Desktop
+reads `device-macos-arm64`/`device-macos` and the installer keys above; on Windows it runs the installer with `/S`, and
+on Linux it puts the AppImage at `~/.local/opt/Harness-Device.AppImage` and lists it in the app list as
 `harness-device.desktop`, removed at Desktop's next launch once the AppImage is gone.
 
 ## Keys
