@@ -2594,6 +2594,25 @@ describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
       .toEqual([homes[0], undefined, undefined, undefined, undefined, undefined])
   })
 
+  // NTFS gives the hook no owner to check (secureStateDirectory): a route record is read from inside the profile or the
+  // hook's data folder alone, never from a folder the environment names elsewhere (HARNESS_HOOK_ROUTES_DIR).
+  it.each([['inside its data folder', true], ['outside the profile and its data folder', false]] as const)(
+    'follows a pane\'s route record %s: %s', async (_case, follows) => {
+      const own = windowsData(), release = windowsData()
+      record(own.dataDir, 9, { pipe: `\\\\.\\pipe\\harness-${own.id}`, pid: process.pid })
+      record(release.dataDir, 10, { pipe: `\\\\.\\pipe\\harness-${release.id}`, pid: process.pid })
+      const atOwn = await pipeDaemon(own.socket, own.token)
+      // Where the preload of the hook's own folder dials the release daemon's pipe.
+      const atRelease = await pipeDaemon(join(own.dataDir, `harness-${release.id}`), release.token)
+      const elsewhere = mkdtempSync('/tmp/hkp-')
+      tmpDirs.push(elsewhere)
+      const routes = join(follows ? own.dataDir : elsewhere, 'hook-routes')
+      publishHookRoute(release.dataDir, 10, routes)
+      await run(9, own.dataDir, own.preload, { tmuxPane: '%7', paneOwner: harnessPaneOwner(release.dataDir),
+        env: { NODE_OPTIONS: `--import ${pathToFileURL(own.preload).href}`, HOME: shortHome(), HARNESS_HOOK_ROUTES_DIR: routes } })
+      expect([atRelease.length, atOwn.length]).toEqual(follows ? [1, 0] : [0, 1])
+    })
+
   it('finds the daemon by its record when the hook was given the port it bound, not the one it was configured with', async () => {
     const { dataDir, token, id, socket, preload } = windowsData()
     const tcp = await collect()
