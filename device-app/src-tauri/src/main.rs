@@ -214,6 +214,8 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
         SystemDesktopApp.installed(),
         clock.now(),
         harness_device::update::install_exits_app(),
+        // Only macOS gates reading another app's window title: elsewhere the item is Harness's own switch.
+        !cfg!(target_os = "macos"),
     );
     let looping = handle.clone();
     thread::spawn(move || run_loop(&looping, &log, app, &runner, first, queue));
@@ -441,6 +443,7 @@ fn menu_id(action: MenuAction) -> &'static str {
         MenuAction::ExportLogs => "export_logs",
         MenuAction::FollowChatgpt => "follow_chatgpt",
         MenuAction::FollowSettings => "follow_settings",
+        MenuAction::FollowSwitch => "follow_switch",
     }
 }
 
@@ -460,6 +463,7 @@ fn menu_action(id: &str) -> Option<MenuAction> {
         ExportLogs,
         FollowChatgpt,
         FollowSettings,
+        FollowSwitch,
     ]
     .into_iter()
     .find(|action| menu_id(*action) == id)

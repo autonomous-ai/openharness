@@ -74,6 +74,7 @@ impl App {
         desktop_installed: bool,
         now: u64,
         install_exits_app: bool,
+        follow_switch: bool,
     ) -> (App, Vec<Effect>) {
         let keep = KeepAlive::new();
         let state = AppState {
@@ -86,7 +87,7 @@ impl App {
             app_update: AppUpdate::None,
             cli_version: None,
             logs: LogsExport::Idle,
-            follow: FollowState::default(),
+            follow: FollowState { switch: follow_switch, ..FollowState::default() },
         };
         let mut app = App {
             state,
@@ -302,6 +303,11 @@ impl App {
                     effects.push(Effect::Menu(self.menu.clone()));
                 }
                 MenuAction::FollowSettings => effects.extend([Effect::OpenAxSettings, Effect::Menu(self.menu.clone())]),
+                // The check flipped itself to the new switch, and the door's answer (`Event::Follow`) keeps it there.
+                MenuAction::FollowSwitch => {
+                    self.remember(|saved| saved.follow_off = !saved.follow_off, effects);
+                    effects.push(Effect::FollowSwitch(!self.state.saved.follow_off));
+                }
             },
             Event::Act(action) => self.act(action, effects),
             // Decision 2: closing answers an offer, and never stops what runs.
@@ -335,7 +341,8 @@ impl App {
             }
             // Offered once by itself, remembered once it shows (`show`); the menu's item opens the screen again.
             Event::FollowOffer => {
-                if self.state.saved.asked_follow {
+                // Off macOS there is no screen to offer: the switch is the item's.
+                if self.state.saved.asked_follow || self.state.follow.switch {
                     return;
                 }
                 self.state.follow.waiting = true;

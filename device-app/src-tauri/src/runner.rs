@@ -403,6 +403,13 @@ impl Runner {
             // On the caller's thread: macOS shows its own dialog and does not wait for it.
             Effect::AskAx => shared.doors.follow.prompt(),
             Effect::OpenAxSettings => shared.open(|open| open.url(AX_SETTINGS), "accessibility settings"),
+            // Read back here, not left to the door's notice: the rules stop observing before this returns, so no title
+            // heard after the click is written, and the follow thread drops the observation.
+            Effect::FollowSwitch(on) => {
+                shared.doors.follow.switch(on);
+                let trusted = shared.doors.follow.trusted();
+                shared.chatgpt.tell(|follow| follow.trusted(trusted));
+            }
         }
         None
     }

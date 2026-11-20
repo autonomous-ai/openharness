@@ -68,9 +68,13 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
         ));
     }
     // Checked when Harness may use Accessibility. Each check carries what its click does: the screen while unchecked,
-    // the Accessibility list once checked, where the permission is taken back.
+    // the Accessibility list once checked, where the permission is taken back. Off macOS, the switch either way.
     if state.follow.installed && state.dial.as_ref().is_some_and(|dial| dial.attached) {
-        let action = if state.follow.trusted { MenuAction::FollowSettings } else { MenuAction::FollowChatgpt };
+        let action = match (state.follow.switch, state.follow.trusted) {
+            (true, _) => MenuAction::FollowSwitch,
+            (false, true) => MenuAction::FollowSettings,
+            (false, false) => MenuAction::FollowChatgpt,
+        };
         items.push(MenuItem::Check(action, "Follow ChatGPT".into(), state.follow.trusted));
     }
     match &state.app_update {
@@ -102,7 +106,7 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
 }
 
 /// The screen the window should show next, in the order they chain: install, sign-in, then Follow ChatGPT, which
-/// never covers the two before it.
+/// never covers the two before it, and off macOS, where there is no permission to ask for, is never due.
 pub fn due(state: &AppState) -> Option<Screen> {
     if matches!(state.cli, CliState::Installing | CliState::InstallFailed) {
         return Some(Screen::Install);
@@ -111,7 +115,7 @@ pub fn due(state: &AppState) -> Option<Screen> {
         return Some(Screen::SignIn);
     }
     let follow = state.follow;
-    (follow.waiting && follow.installed && !follow.trusted).then_some(Screen::Follow)
+    (!follow.switch && follow.waiting && follow.installed && !follow.trusted).then_some(Screen::Follow)
 }
 
 /// The menu as one log line: its labels joined by ` | `, without separators. A submenu is its label and its checked
@@ -497,7 +501,7 @@ mod tests {
             let switch_menu = menu(&with(switched(on), notifying(NotifyMode::Full)));
             assert_eq!(switch_menu[4], item, "{on}");
             assert_eq!(switch_menu.len(), macos.len(), "{on}");
-            assert_eq!(follow_items(switch_menu), [item.clone()], "{on}");
+            assert_eq!(follow_items(switch_menu), std::slice::from_ref(&item), "{on}");
             assert_eq!(
                 menu(&with(switched(on), dial(true, Some("0.0.95"))))[1..4],
                 [text("Signed in"), item.clone(), Separator],
