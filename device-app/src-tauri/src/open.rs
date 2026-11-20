@@ -134,7 +134,7 @@ pub(crate) fn start(command: &mut Command, log: Option<&Arc<dyn Log>>) -> io::Re
     std::thread::spawn(move || match (child.wait(), log) {
         (Ok(status), Some(log)) if !status.success() => log.line(&match status.code() {
             Some(code) => format!("open: exit {code}"),
-            None => "open: killed by a signal".to_string(),
+            None => "open: killed".to_string(),
         }),
         _ => {}
     });
