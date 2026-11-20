@@ -7,8 +7,7 @@ use std::os::windows::process::CommandExt;
 use std::process::{Child, Command, ExitStatus};
 use std::ptr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use windows_sys::Win32::Foundation::{INVALID_HANDLE_VALUE, WAIT_TIMEOUT};
+use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
 };
@@ -28,6 +27,10 @@ pub(crate) use crate::stdin_queue::Queue as Stdin;
 /// Never DETACHED_PROCESS: a child with no console at all gives each console program it starts a window of its own.
 pub(crate) const CREATION_FLAGS: u32 = CREATE_NO_WINDOW | CREATE_SUSPENDED;
 
+/// The exit code a group's kill gives what it ends, "KILL" in ASCII: no CLI exits with it, so a child that has it was
+/// ended by its group, and one that exited by itself just before keeps its own.
+const KILLED: u32 = 0x4B49_4C4C;
+
 /// A started child and everything it starts: a job of its own. The job closes with the last clone, and ends what is
 /// still in it then.
 #[derive(Clone)]
@@ -37,8 +40,6 @@ struct Job {
     job: OwnedHandle,
     /// The child's handle, apart from std's, so a wait on it never outlives it, nor its pid another's.
     process: OwnedHandle,
-    /// The group ended the child, which has no code then.
-    killed: AtomicBool,
 }
 
 /// Starts `command` in a job of its own before it runs: suspended, put in the job, then resumed. The job lets a process
@@ -56,7 +57,7 @@ pub(crate) fn spawn(command: &mut Command) -> io::Result<(Child, Group)> {
             return Err(io::Error::last_os_error());
         }
         resume(child.id())?;
-        Ok(Group(Arc::new(Job { job, process, killed: AtomicBool::new(false) })))
+        Ok(Group(Arc::new(Job { job, process })))
     });
     match group {
         Ok(group) => Ok((child, group)),
@@ -149,23 +150,16 @@ impl Group {
         unsafe { WaitForSingleObject(self.0.process.as_raw_handle(), INFINITE) };
     }
 
-    /// Ends the job: the child and everything it started, but what left the job.
+    /// Ends the job: the child and everything it started, but what left the job. A child that has exited by itself
+    /// keeps its code, as an unreaped one does on unix; what it left in the job ends all the same.
     pub(crate) fn kill(&self) {
-        // SAFETY: the handles are open while the group lives.
-        unsafe {
-            // A child that has exited by itself keeps its code, as an unreaped one does on unix; what it left in the
-            // job ends all the same.
-            if WaitForSingleObject(self.0.process.as_raw_handle(), 0) == WAIT_TIMEOUT {
-                self.0.killed.store(true, Ordering::SeqCst);
-            }
-            // The code the job's processes get is never read: `code` answers None.
-            TerminateJobObject(self.0.job.as_raw_handle(), 1);
-        }
+        // SAFETY: the job's handle is open while the group lives.
+        unsafe { TerminateJobObject(self.0.job.as_raw_handle(), KILLED) };
     }
 
     /// The child's exit code; `None`: this group ended it, as a signal does on unix.
     pub(crate) fn code(&self, status: ExitStatus) -> Option<i32> {
-        status.code().filter(|_| !self.0.killed.load(Ordering::SeqCst))
+        status.code().filter(|&code| code as u32 != KILLED)
     }
 }
 
