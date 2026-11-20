@@ -3164,7 +3164,10 @@ export class CableSession {
   }
 
   private async syncSwarmsNow(force: boolean): Promise<void> {
-    const { selected, swarms, tiles } = this.host.listSwarms(this.asItself)
+    // A Pro (members-v1) that says appFilter draws its Tabs cards from `swarms`: asked as itself, they would vanish
+    // whenever an app's ring is shown. It asks as a dial on the window; the ring and focus still ask as itself
+    // (PM, 2026-11-20).
+    const { selected, swarms, tiles } = this.host.listSwarms(this.swarmMembers ? {} : this.asItself)
     const meta = await this.memberMeta(swarms)
     // `panes` belongs in the key as much as `agents` does. Opening a terminal on a tab that holds no
     // agent moves only the tile count, and a key blind to it would swallow that push and leave the
