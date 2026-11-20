@@ -6,12 +6,15 @@
  * - a look (`--dial-read <COMn> --out <file> --serial-bin <exe> [--against <file>]`): the real dial's own `hello`,
  *   read with not one byte written to the port;
  * - the real dial (`--dial <COMn> --speech <text> --first-read <file> --pets-from <dir> --serial-bin <exe> [--port <n>]
- *   [--quit-on <file>]`): a sealed daemon on it, that leaves its settings and its pets as the first look found them.
+ *   [--quit-on <file>]`): a sealed daemon on it, that leaves its settings and its pets as the first look found them;
+ * - a program beside a sealed desk (`--beside <its root> --run <program> [arguments…]`): herdr, the terminal it runs in
+ *   or a stand-in engine, in that desk's homes, never the account's.
  *
  * Exit codes: 1 not on Windows, or the desk failed (it says what); 2 bad arguments, before anything starts; 3 a port is
  * busy; 4 the dial must not be greeted (no hello, or pets the desk would drop); 5 the settings were not restored, or a
  * look found them changed; 6 the dial's pets changed.
  */
+import { spawn } from 'node:child_process'
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { homedir } from 'node:os'
@@ -22,7 +25,7 @@ import WebSocket from 'ws'
 import { LocalClient } from '../../e2e/harness/client.js'
 import { FakeBackend, type FakeMachine } from '../../e2e/harness/fakeBackend.js'
 import type { DialMessage } from '../../e2e/harness/fakeDial.js'
-import { startWindowsDaemon } from '../../e2e/harness/windowsDaemon.js'
+import { besideEnvironment, PROFILE_NAME, startWindowsDaemon } from '../../e2e/harness/windowsDaemon.js'
 import { CableDecoder, CableType } from '../../src/cable/cableFrame.js'
 import { PetStore } from '../../src/cable/pets/store.js'
 import { planPetSync } from '../../src/cable/pets/sync.js'
@@ -32,7 +35,8 @@ import { openLocalWs } from '../../src/lib/localTransport.js'
 const USAGE = `usage:
   desk.mts [--port <n>] [--own-account] [--quit-on <file>]
   desk.mts --dial-read <COMn> --out <file> --serial-bin <harness-serial.exe> [--against <first read>]
-  desk.mts --dial <COMn> --speech <text> --first-read <file> --pets-from <dir> --serial-bin <harness-serial.exe> [--port <n>] [--quit-on <file>]`
+  desk.mts --dial <COMn> --speech <text> --first-read <file> --pets-from <dir> --serial-bin <harness-serial.exe> [--port <n>] [--quit-on <file>]
+  desk.mts --beside <a sealed desk's root> --run <program> [arguments…]`
 
 /** A stop the desk names, with its exit code. */
 class DeskStop extends Error {
@@ -49,9 +53,17 @@ type Mode =
   | { kind: 'stand-in'; port?: number; own: boolean; quitOn?: string }
   | { kind: 'look'; com: string; out: string; against?: string; serialBin: string }
   | { kind: 'real'; com: string; speech: string; firstRead: string; petsFrom: string; serialBin: string; port?: number; quitOn?: string }
+  | { kind: 'beside'; root: string; program: string; args: string[] }
 
 /** [argv] as a mode, every argument checked; nothing is read or started. */
 function modeOf(argv: string[]): Mode {
+  // Everything after the program is the program's own: the desk reads none of it.
+  if (argv[0] === '--beside') {
+    const root = argv[1]
+    if (root === undefined || !win32.isAbsolute(root)) throw new DeskStop(2, '--beside takes the whole path of a sealed desk\'s root')
+    if (argv[2] !== '--run' || !argv[3]) throw new DeskStop(2, '--beside needs --run <program>')
+    return { kind: 'beside', root, program: argv[3], args: argv.slice(4) }
+  }
   const args = new Map<string, string | true>()
   for (let i = 0; i < argv.length; i++) {
     const name = argv[i]!
@@ -448,6 +460,21 @@ async function restoreSettings(watch: LocalClient, first: DialRead): Promise<num
   }
 }
 
+/**
+ * [mode.program] with its arguments as they are, in the homes of the sealed desk whose root is [mode.root]
+ * (besideEnvironment): herdr's server and the panes it starts, the terminal it runs in, a stand-in engine. Its exit
+ * code is the desk's.
+ */
+async function besideMode(mode: Extract<Mode, { kind: 'beside' }>): Promise<number> {
+  // A sealed desk's root holds its profile; the folder of a desk on the account (`--own-account`) does not.
+  if (!existsSync(join(mode.root, PROFILE_NAME))) throw new DeskStop(2, '--beside names no sealed desk\'s root')
+  const child = spawn(mode.program, mode.args, { env: besideEnvironment(mode.root, process.env), stdio: 'inherit' })
+  return new Promise((resolve, reject) => {
+    child.once('error', (error: NodeJS.ErrnoException) => reject(new DeskStop(1, `--run's program did not start (${error.code ?? 'error'})`)))
+    child.once('exit', (code) => resolve(code ?? 1))
+  })
+}
+
 /** The desk ends on [error], saying what stopped it. */
 async function stop(error: unknown): Promise<never> {
   // A daemon that failed to start says its last lines, which can name the dial.
@@ -460,6 +487,7 @@ try {
   const mode = modeOf(process.argv.slice(2))
   if (process.platform !== 'win32') throw new DeskStop(1, 'the desk runs on Windows')
   if (mode.kind === 'look') await end(await lookMode(mode))
+  else if (mode.kind === 'beside') await end(await besideMode(mode))
   else if (mode.kind === 'stand-in') await standInMode(mode)
   else await realMode(mode)
 } catch (error) {

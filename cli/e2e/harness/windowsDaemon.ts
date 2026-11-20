@@ -90,6 +90,32 @@ export function sealedPath(systemRoot: string): string {
   return [win32.join(systemRoot, 'System32'), systemRoot, win32.join(systemRoot, 'System32', 'Wbem'), win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0')].join(';')
 }
 
+/** A sealed root's profile and the folders in it a daemon's programs keep their state in, each named. */
+function sealedHomes(root: string) {
+  const profile = join(root, PROFILE_NAME)
+  return {
+    HOME: profile,
+    USERPROFILE: profile,
+    LOCALAPPDATA: join(profile, 'AppData', 'Local'),
+    APPDATA: join(profile, 'AppData', 'Roaming'),
+    TEMP: join(profile, 't'),
+    TMP: join(profile, 't'),
+    CLAUDE_PROJECTS_DIR: join(profile, '.claude', 'projects'),
+    CODEX_HOME: join(profile, '.codex'),
+  }
+}
+
+/**
+ * What a program a desk starts beside its sealed daemon runs with (herdr, its panes, a stand-in engine in one): the
+ * daemon's homes, Claude Code's named too, and of the account only what a program needs to start (daemonEnvironment),
+ * its PATH among it. Started with the account's profile, herdr put its Codex hook into the owner's ~/.codex (the Dell,
+ * 2026-11-20); with these, what it and its panes set up stays in the root, beside the daemon that finds them there.
+ */
+export function besideEnvironment(root: string, inherited: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const homes = sealedHomes(root)
+  return daemonEnvironment(inherited, { ...homes, CLAUDE_CONFIG_DIR: join(homes.USERPROFILE, '.claude') })
+}
+
 /** How long a close waits for a daemon taskkill was sent to. */
 const KILLED_WAIT_MS = 15_000
 
@@ -128,13 +154,10 @@ export async function startWindowsDaemon(options: WindowsDaemonOptions | RealDia
   const own = 'own' in options ? options.own : undefined
   const root = own ?? mkdtempSync(join(tmpdir(), 'harness-dial-win-'))
   const discard = (): void => { if (!own) rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }) }
-  const profile = own ? process.env.USERPROFILE ?? homedir() : join(root, PROFILE_NAME)
+  const sealed = sealedHomes(root)
+  const profile = own ? process.env.USERPROFILE ?? homedir() : sealed.USERPROFILE
   // Harness's folders are where they are on a person's computer, the profile's `.harness`, unless they are kept in `own`.
   const harnessDir = own ?? join(profile, '.harness')
-  const sealed = {
-    local: join(profile, 'AppData', 'Local'), roaming: join(profile, 'AppData', 'Roaming'), tmp: join(profile, 't'),
-    claudeProjects: join(profile, '.claude', 'projects'), codexHome: join(profile, '.codex'),
-  }
   const dirs = {
     data: join(harnessDir, 'data'), runtime: join(harnessDir, 'runtime'), auth: join(harnessDir, 'auth'),
     dsh: join(harnessDir, 'dsh'), routes: join(harnessDir, 'hook-routes'), devices: join(harnessDir, 'devices'), work: join(root, 'work'),
@@ -156,14 +179,7 @@ export async function startWindowsDaemon(options: WindowsDaemonOptions | RealDia
   const homes: Record<string, string> = own
     ? { HOME: profile, ...Object.fromEntries(ACCOUNT_NAMES.flatMap((name) => process.env[name] ? [[name, process.env[name]!]] : [])), DISABLE_HOOK_INSTALL: 'false' }
     : {
-        HOME: profile,
-        USERPROFILE: profile,
-        LOCALAPPDATA: sealed.local,
-        APPDATA: sealed.roaming,
-        TEMP: sealed.tmp,
-        TMP: sealed.tmp,
-        CLAUDE_PROJECTS_DIR: sealed.claudeProjects,
-        CODEX_HOME: sealed.codexHome,
+        ...sealed,
         DISABLE_HOOK_INSTALL: 'true',
         CLAUDE_PATH: join(missing, 'claude.exe'),
         CODEX_PATH: join(missing, 'codex.exe'),
