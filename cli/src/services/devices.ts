@@ -485,6 +485,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         if (found >= 0) kept = kept.slice(found + 1)
         return found >= 0
       },
+      /** Whether a move made within TAB_ECHO_MS before `at` is not yet seen: the app can still report what it had. */
+      unseen(at: number): boolean { return kept.some((sent) => at - sent.at < TAB_ECHO_MS) },
       clear(): void { kept = [] },
     }
   }
@@ -2097,8 +2099,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const match = codexAppSource?.threadNamed(report.title) ?? 'none'
     if (match === 'none') { log('[device] thread · skipped · no match'); return }
     if (match === 'ambiguous') { log('[device] thread · skipped · ambiguous'); return }
-    // By when the report came, as a tab's: it excuses this report only.
-    if (codexSwitches.echo(match.threadId, report.at)) { log('[device] thread · skipped · echo'); return }
+    // By when the report came, as a tab's: it excuses this report only. While the dial's own switch is not yet seen,
+    // another thread is the window's old title read late: followed, it would take the switch's title for its echo.
+    if (codexSwitches.echo(match.threadId, report.at) || codexSwitches.unseen(report.at)) {
+      log('[device] thread · skipped · echo')
+      return
+    }
     return cable.followLocal(observedAgentId('codex', match.threadId), 'thread')
   }
   /** The empty title, no window or one out of rule, names no thread: it drops what waits. */
