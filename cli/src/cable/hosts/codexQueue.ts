@@ -51,6 +51,10 @@ const APP_CODEX = join('ChatGPT.app', 'Contents', 'Resources', 'codex-cli', 'Cod
 /** The ChatGPT app's Store package on Windows, and its own Codex CLI inside the package's folder. */
 const APP_PACKAGE = 'OpenAI.Codex'
 const PACKAGE_CODEX = join('app', 'resources', 'codex.exe')
+/** How long no package, or a failed ask for it, holds. Each ask is a PowerShell of 1.3 to 1.8 s on the VM
+ *  (docs/plans/2026-11-19-dial-windows-vm-notes.md, "Fixes after Task 37" §2), taken while an app session is listed: an
+ *  app installed later is found within it. */
+const PACKAGE_ASK_MS = 600_000
 
 /** Why a send failed, as the log line names it: codex's exit code; 'no binary' when it is not there or could not
  *  start; 'refused' for a thread id or a text the queue will not run. */
@@ -108,21 +112,26 @@ export function codexQueueDeps(packageFolder: (name: string) => Promise<string |
     if (!last || now - last.at >= BINARY_LOOK_MS) looks.set(which, last = { at: now, path: look() })
     return last.path
   }
-  // The app's codex in its package on Windows, as last asked. Asking starts a PowerShell, so a codex.exe that is there is
-  // never asked for again; one that went (an update moves the package to a folder named for the new version) is asked
-  // for at once, and a package with none or a failed ask once in 30 s, by the look's hold. One ask at a time.
-  let packaged: string | null = null
+  // The app's codex in its package on Windows, in the folder last asked. Asking starts a PowerShell, so a folder that is
+  // there is never asked for again, codex.exe in it or not; one that went (an update moves the package to a folder named
+  // for the new version) is asked for at once. No package, or a failed ask, is asked again after PACKAGE_ASK_MS. One ask
+  // at a time.
+  let folder: string | null = null
+  let noFolderAt: number | null = null
   let asking = false
   const packageCodex = (): string | null => {
-    if (packaged && existsSync(packaged)) return packaged
-    if (!asking) {
+    if (folder !== null && existsSync(folder)) {
+      const codex = join(folder, PACKAGE_CODEX)
+      return binaryOnPath(codex) ? codex : null
+    }
+    if (!asking && (noFolderAt === null || performance.now() - noFolderAt >= PACKAGE_ASK_MS)) {
       asking = true
-      void packageFolder(APP_PACKAGE).catch(() => null).then((folder) => {
+      void packageFolder(APP_PACKAGE).catch(() => null).then((answer) => {
         asking = false
-        const codex = folder === null ? null : join(folder, PACKAGE_CODEX)
-        packaged = codex !== null && binaryOnPath(codex) ? codex : null
+        folder = answer
+        noFolderAt = answer === null ? performance.now() : null
         // The look taken while it was asked found nothing: the next one is fresh.
-        if (packaged) looks.delete('app')
+        if (answer !== null) looks.delete('app')
       })
     }
     return null
