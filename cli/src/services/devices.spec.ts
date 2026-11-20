@@ -377,13 +377,14 @@ function fakeRaise() {
 const noWindowsRaise: WindowsRaise = { app: async () => false, link: async () => false, cursorFolder: async () => false, desktop: async () => false }
 /** Windows' raise a spec drives: what it answers, each bundle it was asked to bring forward and each Desktop start. */
 function fakeWindowsRaise() {
-  const fake: { answer: boolean; apps: string[]; desktops: number; raise: WindowsRaise } = {
+  const fake: { answer: boolean; apps: string[]; links: Array<[string, string | undefined]>; desktops: number; raise: WindowsRaise } = {
     answer: true,
     apps: [],
+    links: [],
     desktops: 0,
     raise: {
       app: async (bundle) => { fake.apps.push(bundle); return fake.answer },
-      link: async () => fake.answer,
+      link: async (url, bundle) => { fake.links.push([url, bundle]); return fake.answer },
       cursorFolder: async () => fake.answer,
       desktop: async () => { fake.desktops++; return fake.answer },
     },
@@ -3127,6 +3128,8 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     const win = { ...orca, platform: 'win32' as const }
     const VSCODE_BUNDLE = 'com.microsoft.VSCode'
     const CURSOR_BUNDLE = 'com.todesktop.230313mzl4w4u92'
+    const CLAUDE_BUNDLE = 'com.anthropic.claudefordesktop'
+    const CODEX_BUNDLE = 'com.openai.codex'
     const raiseLines = () => said().filter((line) => line.startsWith('[device] raise · '))
 
     it('a tap on an agent in VS Code brings VS Code forward', async () => {
@@ -3173,6 +3176,34 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       expect(raiseLines()).toEqual(['[device] raise · window · refused',
         expect.stringMatching(/^\[device\] raise · day \d{4}-\d{2}-\d{2} · window raised 0 refused 1 none 0$/)])
       expect(logs.filter((line) => ['Cursor', 'cursor', CURSOR_BUNDLE, 'e2e'].some((secret) => line.includes(secret)))).toEqual([])
+    })
+
+    // Which app a session is in is the bundle its hook names, on Windows as on macOS: there the hook names the Claude
+    // app's and the ChatGPT app's from what it reads itself (docs/plans/2026-11-19-dial-windows-design.md).
+    it('a Claude Code whose hook names the Claude app is the Claude app\'s: a tap opens its session there', async () => {
+      const SESSION = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+      const windows = fakeWindowsRaise()
+      const { port } = startHere({ orca: win, windowsRaise: windows.raise })
+      port.observed(hook('session-start', { hostHints: { __CFBundleIdentifier: CLAUDE_BUNDLE, CLAUDE_CODE_HOST_SESSION_ID: SESSION } }))
+      attach(port)
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+      expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('claude')
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(windows.links).toEqual([[`claude://code/continue?session=${SESSION}`, CLAUDE_BUNDLE]])
+      expect(orcaRuns).toEqual([])
+    })
+
+    it('a Codex session whose hook names the ChatGPT app is the app\'s: a tap opens its thread there', async () => {
+      const THREAD = '01a1de76-a3b7-7270-b39e-1245893274c1'
+      const windows = fakeWindowsRaise()
+      const { port } = startHere({ orca: win, windowsRaise: windows.raise })
+      port.observed(hook('session-start', { engine: 'codex', sessionId: THREAD, transcriptPath: `/t/${THREAD}.jsonl`,
+        hostHints: { __CFBundleIdentifier: CODEX_BUNDLE } }))
+      attach(port)
+      expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('codex')
+      expect(await host().openAgent(observedAgentId('codex', THREAD))).toBeUndefined()
+      expect(windows.links).toEqual([[`codex://threads/${THREAD}`, CODEX_BUNDLE]])
+      expect(orcaRuns).toEqual([])
     })
 
     it('macOS builds none, and counts no raise', async () => {
@@ -5018,6 +5049,17 @@ describe('codex queue, for Codex outside a pane (docs/specs/2026-11-15-device-co
     expect(codexRuns.map(([file]) => file)).toEqual([APP])
     expect(said()).toEqual(['[device] voice · codex'])
     expect(logs.filter((line) => line.includes(APP))).toEqual([])
+  })
+
+  // On Windows the app's codex.exe is in its Store package (codexQueue.ts), and the hook names the app from the Codex's
+  // own parent chain (docs/plans/2026-11-19-dial-windows-design.md).
+  it('a ChatGPT app session on Windows runs the app\'s own codex', async () => {
+    const PACKAGED = 'C:\\Program Files\\WindowsApps\\OpenAI.Codex_1.0.0.0_x64__abc\\app\\resources\\codex.exe'
+    started({ codex: { ...codex, platform: 'win32', appBinary: () => PACKAGED }, orca: { ...orca, platform: 'win32' } },
+      { hostHints: { __CFBundleIdentifier: 'com.openai.codex' } })
+    expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+    expect(codexRuns.map(([file]) => file)).toEqual([PACKAGED])
+    expect(said()).toEqual(['[device] voice · codex'])
   })
 
   // On macOS a tap opens the app's session by its thread's link (codexApp.ts): f.
