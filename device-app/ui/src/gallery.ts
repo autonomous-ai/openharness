@@ -29,6 +29,7 @@ export const STATES: { name: string; view: View; focused?: true }[] = [
     view: { screen: 'sign_in', phase: 'browser', lines: ['Harness is finishing an update'] },
   },
   { name: 'Sign in · failed', view: { screen: 'sign_in', phase: 'failed', lines: ['Sign-in did not finish.'] } },
+  { name: 'Follow ChatGPT · offer', view: { screen: 'follow', phase: 'offer', lines: [] } },
 ]
 
 // The window's size in tauri.conf.json.

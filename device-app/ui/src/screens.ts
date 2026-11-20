@@ -1,5 +1,5 @@
-// The two screens, Install and Sign in, drawn from one View. Every word is the plan's approved copy. Lines come from
-// outside (a script's output, an error), so they reach the page through textContent only.
+// The three screens, Install, Sign in and Follow ChatGPT, drawn from one View. Every word is the plan's approved copy.
+// Lines come from outside (a script's output, an error), so they reach the page through textContent only.
 import type { Action, Phase, Screen, View } from './api'
 
 type Body =
@@ -46,6 +46,16 @@ const FACES: Partial<Record<`${Screen}.${Phase}`, Face>> = {
   'sign_in.working': { heading: 'Sign in', body: SPINNER, buttons: [CANCEL] },
   'sign_in.browser': { heading: 'Finish in your browser', body: { kind: 'note' }, buttons: [CANCEL] },
   'sign_in.failed': { heading: 'Sign in', body: { kind: 'error' }, buttons: [RETRY] },
+  'follow.offer': {
+    heading: 'Follow ChatGPT',
+    body: {
+      kind: 'sentences',
+      text: [
+        "Your dial moves to the thread you open in ChatGPT. Harness reads only the ChatGPT window's title, while ChatGPT is in front.",
+      ],
+    },
+    buttons: [{ label: 'Not now', action: 'later' }, { label: 'Allow', action: 'allow', primary: true }],
+  },
 }
 
 // The contract's "at most 4": the script's last lines say why it failed.
