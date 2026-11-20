@@ -102,9 +102,13 @@ export function createAgentClosing({
     stop: stopAgent,
     changed: announceSession,
     backgroundCommands,
-    // OpenClaw binds its key at launch, before any task: a key whose store has no user row has nothing to resume.
+    // OpenClaw binds its key at launch, before any task: a key whose store has no user row has nothing to resume. A
+    // record already closed is read by its folder alone: its TUI exited, and its pid may now be another OpenClaw's.
     conversationEmpty: async s => s.engine === 'openclaw' && !!s.sessionId
-      && await openclawUserRowSince(s.sessionId, { pid: s.processIdentity?.pid ?? 0, stateDir: s.openclawStateDir }, 0) === false,
+      && await openclawUserRowSince(s.sessionId, {
+        pid: registry.byAgent(s.agentId) ? s.processIdentity?.pid ?? 0 : 0,
+        stateDir: s.openclawStateDir,
+      }, 0) === false,
     // Not live, not being resumed, and kept as stopped with the conversation the close names: it was closed, and that
     // record says whether a conversation was kept. A record that cannot be read says nothing, and the close is answered
     // as changed, as before.
