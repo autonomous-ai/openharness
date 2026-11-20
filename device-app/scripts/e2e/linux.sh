@@ -596,7 +596,7 @@ if [[ "${GITHUB_ACTIONS:-}" == true && "${RUNNER_ENVIRONMENT:-}" == github-hoste
   logged "install: --host no terminal; run here" && fail "the app finds $terminal and runs install.sh --host in it"
   [[ "$(install_result --host)" == "install: --host exit 0" ]] \
     || fail "install.sh --host, in a terminal, exits 0: the log has $(install_result --host)"
-  ok "install.sh --host runs in a terminal on the display and its host.exit reads 0"
+  ok "install.sh --host runs in a terminal on the display and its host-<n>.exit reads 0"
   WAIT=$((INSTALL_WAIT + WAIT)) waits install_ended --desktop || fail "install.sh --desktop ends"
   [[ "$(install_result --desktop)" == "install: --desktop exit 0" ]] \
     || fail "install.sh --desktop exits 0: the log has $(install_result --desktop)"
