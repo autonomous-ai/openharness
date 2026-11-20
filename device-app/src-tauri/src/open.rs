@@ -39,20 +39,14 @@ pub fn shell_url(url: &str) -> Option<&str> {
     (url.starts_with("https://") && one_word).then_some(url)
 }
 
-/// What shows the zip: selected in Finder (`-R`) and in Explorer; Linux's `xdg-open` cannot select a file, so it
-/// opens its folder.
-pub fn reveal_args(os: &str, zip: &Path) -> (&'static str, Vec<String>) {
+/// What shows the zip: selected in Finder (`-R`); Linux's `xdg-open` cannot select a file, so it opens its folder.
+/// None on Windows, whose shell selects it: `explorer.exe /select,` may open the folder without selecting it.
+pub fn reveal_args(os: &str, zip: &Path) -> Option<(&'static str, Vec<String>)> {
     match os {
-        "macos" => ("/usr/bin/open", vec!["-R".into(), zip.display().to_string()]),
-        "windows" => ("explorer.exe", vec![explorer_select(zip)]),
-        _ => ("xdg-open", vec![zip.parent().unwrap_or(zip).display().to_string()]),
+        "macos" => Some(("/usr/bin/open", vec!["-R".into(), zip.display().to_string()])),
+        "windows" => None,
+        _ => Some(("xdg-open", vec![zip.parent().unwrap_or(zip).display().to_string()])),
     }
-}
-
-/// Explorer's own syntax, which it reads from its command line as written: the path quoted, as it may hold a space.
-/// The quotes hold all of it: Windows forbids `"` in a path, and `logs::parse` keeps none.
-pub fn explorer_select(zip: &Path) -> String {
-    format!(r#"/select,"{}""#, zip.display())
 }
 
 /// What opens the desktop app on macOS, by its bundle id. Elsewhere it is `desktop::desktop_app()`, run with no
@@ -88,22 +82,22 @@ impl Opener for SystemOpener {
 
     #[cfg(not(windows))]
     fn reveal(&self, zip: &Path) -> io::Result<()> {
-        let (program, args) = reveal_args(OS, zip);
+        let (program, args) = reveal_args(OS, zip).ok_or(io::ErrorKind::Unsupported)?;
         start(Command::new(program).args(args), Some(&self.log))
     }
 
-    /// Explorer by its full path: a bare name is looked for in the app's own folder first. It exits 1 when it has
-    /// shown the zip, so how it ends is not logged.
+    /// On a thread of its own: the shell waits for Explorer's window to select the zip in it, and the app has one
+    /// event loop. A failure is the runner's line for it.
     #[cfg(windows)]
     fn reveal(&self, zip: &Path) -> io::Result<()> {
-        use std::os::windows::process::CommandExt;
-        let (program, args) = reveal_args(OS, zip);
-        let root = std::env::var_os("SystemRoot").filter(|root| !root.is_empty()).unwrap_or(r"C:\Windows".into());
-        let mut command = Command::new(Path::new(&root).join(program));
-        for arg in &args {
-            command.raw_arg(arg);
-        }
-        start(&mut command, None)
+        let zip = zip.to_path_buf();
+        let log = self.log.clone();
+        std::thread::spawn(move || {
+            if let Err(error) = shell_select(&zip) {
+                log.line(&format!("logs: could not open: {error}"));
+            }
+        });
+        Ok(())
     }
 
     fn desktop(&self) -> io::Result<()> {
@@ -166,6 +160,37 @@ fn shell_open(url: &str) -> io::Result<()> {
         unsafe { CoUninitialize() };
     }
     opened
+}
+
+/// Explorer showing `zip`'s folder with `zip` selected, in a window already showing that folder if there is one. COM
+/// first, in a single-threaded apartment, as the shell asks.
+#[cfg(windows)]
+fn shell_select(zip: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr;
+    use windows_sys::Win32::System::Com::{
+        COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize,
+    };
+    use windows_sys::Win32::UI::Shell::{ILCreateFromPathW, ILFree, SHOpenFolderAndSelectItems};
+    let path = zip.as_os_str().encode_wide().chain([0]).collect::<Vec<u16>>();
+    // SAFETY: this thread's own apartment, set up before the shell calls; nothing is reserved.
+    let com = unsafe { CoInitializeEx(ptr::null(), (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32) };
+    // SAFETY: the path ends in a NUL and outlives the call.
+    let item = unsafe { ILCreateFromPathW(path.as_ptr()) };
+    // Null: a path the shell cannot name, as one gone since the export.
+    let selected = if item.is_null() {
+        Err(io::ErrorKind::NotFound.into())
+    } else {
+        // SAFETY: `item` is the whole path of one item, which a count of 0 selects in its folder; freed once, after.
+        let done = unsafe { SHOpenFolderAndSelectItems(item, 0, ptr::null(), 0) };
+        unsafe { ILFree(item) };
+        if done >= 0 { Ok(()) } else { Err(io::Error::from_raw_os_error(done)) }
+    };
+    if com >= 0 {
+        // SAFETY: once, for the CoInitializeEx above that succeeded, on the same thread.
+        unsafe { CoUninitialize() };
+    }
+    selected
 }
 
 #[cfg(test)]
