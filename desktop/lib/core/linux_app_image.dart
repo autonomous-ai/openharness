@@ -81,7 +81,8 @@ Future<void> registerAppImageLauncher({
         /* Optional desktop utility. */
       }
     }
-    appLog.info('app', 'registered launcher entry for $appImage');
+    // No path: it holds the person's name.
+    appLog.info('app', 'registered launcher entry');
   } on FileSystemException catch (error) {
     appLog.warn('app', 'could not register a launcher entry: ${error.message}');
   }
