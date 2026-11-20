@@ -178,26 +178,34 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
         })
         .build(handle)?;
     // A desktop with no tray host shows no icon and gives no error: the log says so, once, when none has come within
-    // the wait. Off the main thread, where a bus that is slow to answer would hold the tray.
+    // the wait. Off the main thread, where a bus that is slow to answer would hold the tray; a thread the OS cannot
+    // make costs the check, not the launch.
     #[cfg(target_os = "linux")]
     {
-        let log = log.clone();
-        thread::spawn(move || {
+        let (log, failed) = (log.clone(), log.clone());
+        let spawned = thread::Builder::new().spawn(move || {
             use harness_device::tray_host::{host_there, log_line};
             if let Some(line) = log_line(host_there()) {
                 log.line(line);
             }
         });
+        if spawned.is_err() {
+            failed.line("tray: host not checked (no thread)");
+        }
     }
-    // The app-list entry, off the main thread too: a slow or failing disk neither holds nor fails the launch.
+    // The app-list entry, off the main thread too: a slow or failing disk, or no thread, neither holds nor fails the
+    // launch.
     #[cfg(target_os = "linux")]
     {
-        let log = log.clone();
-        thread::spawn(move || {
+        let (log, failed) = (log.clone(), log.clone());
+        let spawned = thread::Builder::new().spawn(move || {
             if let Some(line) = harness_device::app_list::system() {
                 log.line(&line);
             }
         });
+        if spawned.is_err() {
+            failed.line("app list: not checked (no thread)");
+        }
     }
 
     let (app, first) = App::new(
