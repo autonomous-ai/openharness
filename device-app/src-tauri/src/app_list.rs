@@ -2,8 +2,9 @@
 //!
 //! One entry, `harness-device.desktop`, with three writers: this app at every launch, Desktop's installer and the
 //! one-line installer. They follow one rule, held in tests/fixtures/app-list-entry-vectors.json, which each writer's
-//! tests read: an entry that starts another AppImage still on disk, or a program by name, is left alone; a missing,
-//! stale or broken one is written again.
+//! tests read: an entry that starts another AppImage still on disk, or a program by name, is left alone, and so is this
+//! AppImage's own while the person hid it or while the lines the writers own are right; a missing, stale or broken one
+//! is written again.
 
 use crate::loginitem_linux::appimage;
 use std::ffi::OsStr;
@@ -47,7 +48,7 @@ pub fn exec_value(appimage: &Path) -> Option<String> {
 /// The program the entry's first `Exec=` line starts, unquoted, as Desktop's launcherExecTarget reads it: `%%` as `%`
 /// before the quotes, as GLib reads it; None when it has no such line or an unclosed quote.
 pub fn exec_target(entry: &str) -> Option<String> {
-    let value = entry.lines().find_map(|line| line.strip_prefix("Exec="))?.trim().replace("%%", "%");
+    let value = value(entry, "Exec")?.replace("%%", "%");
     let Some(quoted) = value.strip_prefix('"') else {
         return Some(value.split(' ').next().unwrap_or_default().to_string());
     };
@@ -77,20 +78,39 @@ pub enum Change {
     Leave,
 }
 
-/// The rule. No entry: write. One that starts this AppImage: leave it while it is `wanted`, byte for byte, and the
-/// icon it names is there, else write. One that starts an absolute path that is gone: write. Any other (another
-/// AppImage on disk, a program by name, no `Exec=`) is someone else's: leave.
+/// The rule. No entry: write. One that starts this AppImage is its own, kept as Desktop's registerAppImageLauncher
+/// keeps its own: left while the person hid it, and while the lines the writers own are right, so a person's name or
+/// icon stays; else write. One that starts an absolute path that is gone: write. Any other (another AppImage on disk, a
+/// program by name, no `Exec=`) is someone else's: leave.
 pub fn change(existing: Option<&str>, appimage: &Path, wanted: &str, exists: impl Fn(&Path) -> bool) -> Change {
     let Some(existing) = existing else { return Change::Write };
     let Some(target) = exec_target(existing).map(PathBuf::from) else { return Change::Leave };
-    let icon_there =
-        || wanted.lines().find_map(|line| line.strip_prefix("Icon=")).is_none_or(|icon| exists(Path::new(icon)));
-    let own = target == appimage;
-    if (own && (existing != wanted || !icon_there())) || (!own && target.is_absolute() && !exists(&target)) {
-        Change::Write
+    let write = if target == appimage {
+        !hidden(existing) && !owned_lines_right(existing, wanted, exists)
     } else {
-        Change::Leave
-    }
+        target.is_absolute() && !exists(&target)
+    };
+    if write { Change::Write } else { Change::Leave }
+}
+
+/// Hidden from the app list, as a menu editor hides an entry: the person's choice, which a rewrite would undo.
+fn hidden(entry: &str) -> bool {
+    ["NoDisplay", "Hidden"].iter().any(|key| value(entry, key) == Some("true"))
+}
+
+/// `Exec=` and `StartupWMClass=` are `wanted`'s, and the icon is right: the file `Icon=` names by its path is there, or
+/// `Icon=` names a theme's icon without one, the person's; no `Icon=` is right only when `wanted` has none.
+fn owned_lines_right(existing: &str, wanted: &str, exists: impl Fn(&Path) -> bool) -> bool {
+    let icon_right = match value(existing, "Icon") {
+        Some(icon) => !Path::new(icon).is_absolute() || exists(Path::new(icon)),
+        None => value(wanted, "Icon").is_none(),
+    };
+    icon_right && ["Exec", "StartupWMClass"].iter().all(|key| value(existing, key) == value(wanted, key))
+}
+
+/// The value of the entry's first `<key>=` line, without the spaces around it.
+fn value<'a>(entry: &'a str, key: &str) -> Option<&'a str> {
+    entry.lines().find_map(|line| line.strip_prefix(key)?.strip_prefix('=')).map(str::trim)
 }
 
 /// Brings `<data_home>/applications/harness-device.desktop` to what `change` says for the AppImage APPIMAGE names,

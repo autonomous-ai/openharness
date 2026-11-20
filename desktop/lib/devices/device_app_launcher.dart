@@ -125,10 +125,12 @@ Future<void> writeDeviceAppLauncher(
 
 /// Whether the entry is (re)written, given the one there ([existing], null when
 /// none) and the one this writer would write ([wanted]). An entry whose `Exec=`
-/// starts [appImage] is written again unless it is [wanted] and its icon is
-/// there; one that starts an absolute path no longer on disk is taken over.
-/// Any other (another copy still on disk, a program by name, no `Exec=`) is a
-/// person's or another copy's, and stays.
+/// starts [appImage] is its own, kept as `registerAppImageLauncher` keeps
+/// Desktop's: it stays while the person hid it, and while its `Exec=` and
+/// `StartupWMClass=` are [wanted]'s and its icon is there, so a person's name
+/// or icon stays. One that starts an absolute path no longer on disk is taken
+/// over. Any other (another copy still on disk, a program by name, no `Exec=`)
+/// is a person's or another copy's, and stays.
 @visibleForTesting
 bool deviceAppLauncherChange({
   String? existing,
@@ -140,12 +142,25 @@ bool deviceAppLauncherChange({
   final target = launcherExecTarget(existing);
   if (target == null || !p.posix.isAbsolute(target)) return false;
   if (target != appImage) return !exists(target);
-  if (existing != wanted) return true;
-  final icon = existing
-      .split('\n')
-      .where((line) => line.startsWith('Icon='))
-      .firstOrNull;
-  return icon != null && !exists(icon.substring(5));
+  // Hidden as a menu editor hides an entry: a rewrite would undo it.
+  if ([
+    'NoDisplay',
+    'Hidden',
+  ].any((key) => launcherEntryValue(existing, key) == 'true')) {
+    return false;
+  }
+  // The file Icon= names by its path is there, or Icon= names a theme's icon
+  // without one, the person's; no Icon= is right only when [wanted] has none.
+  final icon = launcherEntryValue(existing, 'Icon');
+  final iconRight = icon == null
+      ? launcherEntryValue(wanted, 'Icon') == null
+      : !p.posix.isAbsolute(icon) || exists(icon);
+  return !iconRight ||
+      ['Exec', 'StartupWMClass'].any(
+        (key) =>
+            launcherEntryValue(existing, key) !=
+            launcherEntryValue(wanted, key),
+      );
 }
 
 String _entryText(String appImage, {String? icon}) =>

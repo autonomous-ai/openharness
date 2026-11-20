@@ -101,20 +101,23 @@ String? launcherDataHome(Map<String, String> environment) {
 /// kept, so an entry an earlier Desktop wrote without doubling one still names
 /// its path.
 String? launcherExecTarget(String entry) {
+  final value = launcherEntryValue(entry, 'Exec')?.replaceAll('%%', '%');
+  if (value == null) return null;
+  if (value.startsWith('"')) {
+    // The closing quote is the first one no backslash escapes.
+    final quoted = RegExp(r'^"((?:[^"\\]|\\.)*)"').firstMatch(value);
+    if (quoted == null) return null;
+    return quoted[1]!.replaceAllMapped(RegExp(r'\\(.)'), (match) => match[1]!);
+  }
+  final space = value.indexOf(' ');
+  return space < 0 ? value : value.substring(0, space);
+}
+
+/// The value of [entry]'s first `<key>=` line, without the spaces around it;
+/// null when it has none.
+String? launcherEntryValue(String entry, String key) {
   for (final line in entry.split('\n')) {
-    if (!line.startsWith('Exec=')) continue;
-    final value = line.substring(5).trim().replaceAll('%%', '%');
-    if (value.startsWith('"')) {
-      // The closing quote is the first one no backslash escapes.
-      final quoted = RegExp(r'^"((?:[^"\\]|\\.)*)"').firstMatch(value);
-      if (quoted == null) return null;
-      return quoted[1]!.replaceAllMapped(
-        RegExp(r'\\(.)'),
-        (match) => match[1]!,
-      );
-    }
-    final space = value.indexOf(' ');
-    return space < 0 ? value : value.substring(0, space);
+    if (line.startsWith('$key=')) return line.substring(key.length + 1).trim();
   }
   return null;
 }
