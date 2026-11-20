@@ -1127,3 +1127,211 @@ What these runs made on the VM was removed afterwards:
 
 `store/` and `plugins/` stay under `C:\work\oh`, beside the synced `cli/`. The key file, the test user, the apps and
 `C:\work\oh` stay.
+
+## Final head
+
+Run 2026-11-20 on the UTM Windows 11 ARM64 VM (build 26200), Node v24.20.0, vitest 4.1.10, Claude Code 2.1.328. The
+first checks ran at e7316662ff; the branch then moved to c305c9291f (the review's fixes), the tree was synced again
+(`vm-sync.sh --cli`, `cli`'s `package-lock.json` unchanged, so no `npm ci`; `cargo build --release --bins` in `pty`),
+and every check whose files changed ran again there. `pty/` did not change between the two, so the Rust and raise
+checks stand at e7316662ff. The test user was signed in at the console (session 1) from the earlier runs; no autologon
+was set. Steps in the desktop ran as one-shot interactive tasks under the test user: through `session-run.ps1`
+(`desktop-e2e.sh run`), or, where PowerShell had to stay unstarted, a task that runs `conhost.exe --headless cmd.exe
+/c …`. Throwaway scripts (never committed) lived in a `vmchk` folder in the test user's profile.
+
+### 1. The real specs, the Rust tests, the e2e
+
+| Check | Head | Where | Result |
+| --- | --- | --- | --- |
+| `listenerPipe`, `claudePlugin`, `inbox`, `hookCaller` `*.windows.real.spec.ts` (`--maxWorkers=1`, `HARNESS_PTY_BIN` the VM's build) | e7316662ff | SSH | 4 files, 7 passed, 5.7 s |
+| the same | c305c9291f | SSH | 4 files, 7 passed, 20 s run |
+| `cargo test --locked --test raise` (the built test program) | e7316662ff | console | 3 passed (`a_link_with_no_handler_is_refused` as its skip: the test user has a `codex` handler), 1.2 s |
+| `cargo test --locked --lib -- raise:: ps::` | e7316662ff | console | 22 passed, 0.18 s |
+| `E2E_BUNDLE=1 npx vitest run --config vitest.e2e.windows.config.ts` | e7316662ff | SSH | `dialWindows.e2e.ts` 4 passed, 34 s |
+| the same, which now also runs `dialWindowsTools.e2e.ts` | c305c9291f | SSH | 2 files, 9 passed, 2 skipped (the two cases that run only off Windows), 71 s |
+
+### 2. The raise rate
+
+`harness-pty raise --exe Code.exe` (the VM's release build), 30 taps in each situation, from a hidden process in the
+test user's session with no foreground rights of its own, as the daemon is. VS Code 1.147.0 (`--disable-extensions
+--new-window` on a throwaway folder) was the target and Notepad the other app. After each tap the run waited 1 s and
+read the window in front (`GetForegroundWindow`, its owner's image) and whether Code was still minimized. A word is
+right when `raised` has Code in front 1 s later, and `refused` has another app there.
+
+| Situation | raised | refused | none | Right | Code in front 1 s later | Time (median / max) |
+| --- | --- | --- | --- | --- | --- | --- |
+| Code already in front | 30 | 0 | 0 | 30/30 | 30 | 36 / 1418 ms (the first) |
+| Code behind Notepad, keys typed into Notepad by the tapping process | 30 | 0 | 0 | 30/30 | 30 | 55 / 78 ms |
+| Code minimized, the same keys | 30 | 0 | 0 | 30/30 | 30, none still minimized | 57 / 96 ms |
+| Code behind Notepad, no keys | 30 | 0 | 0 | 30/30 | 30 | 61 / 105 ms |
+| Code behind Notepad, **another process** typing into it | 0 | 30 | 0 | 30/30 | 0 (Notepad, every time) | 300 / 563 ms |
+| Code minimized, another process typing into Notepad | 30 | 0 | 0 | 30/30 | 30, none still minimized | 51 / 296 ms |
+
+- The word was right on all 180 taps: every `raised` had Code in front 1 s later, and every `refused` had Notepad.
+- Windows refused the raise only while the last input was another process's and Code was behind, not minimized. Keys
+  sent by the tapping process itself count as its own input, so the first four rows are what an idle machine gives.
+  A minimized Code was raised even while another process typed.
+- `refused` took about 300 ms: the settle wait (`SETTLE`, 250 ms) running out.
+
+**`open-link` with no handler** (console, the test user's `claude` handler exported, deleted for the calls and imported
+again, read back the same): `harness-pty open-link claude://harness-test` 5 times: `refused` each time, in 84, 42, 38,
+40 and 33 ms. No new `OpenWith.exe`. `watch-windows.ps1 -Probe` covered the calls: it saw its own probe's two console
+windows (positive control) and nothing else, and no "Pick an app".
+
+### 3. The permission hook under Windows PowerShell 5.1, cold and warm
+
+Git Bash was hidden from the test user alone (a deny entry on Git's `bin` folder and on `bin\bash.exe`, as Task 2 did).
+Claude Code logged `Git Bash not found; BashTool will be unavailable`. No PowerShell ran anywhere on the VM for 10.6
+and 10.7 minutes before each cold run (`tasklist` showed none at the start, and Node did all the timing). No daemon
+ran, so the hook's `harness.exe device claude asked` found none and ended at once.
+
+- **In real Claude Code**: 11 `claude -p` sessions, one after another, with the test key (OpenRouter,
+  `deepseek/deepseek-v4.1-flash`, a throwaway `CLAUDE_CONFIG_DIR`) and the branch's plugin by `--plugin-dir`. Each asked
+  for one Write, which fires `PermissionRequest`. Claude Code's debug log (`--debug-file`) gives the hook's time from
+  `executePermissionRequestHooks` to `finished with status 0 (<ms>)`. The prompt cannot be answered before then.
+  - Cold (the first): **2041 ms**.
+  - Warm (the next 10): 1886, 1668, 1653, 1721, 1855, 1894, 1796, 1714, 1704 and 1650 ms; median **1718 ms**.
+  - Every one ended with status 0. No `blocking (no Git Bash)` line came, and no decision. The `Write tool permission
+    denied` after each is `-p`'s own, since nobody can answer in print mode.
+- **The hook's command alone**: `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "<the
+  hooks.json command>"`, a `PermissionRequest` JSON on stdin, timed in Node from the start to the exit.
+  - Cold: **2317 ms**.
+  - Warm: 1971, 1952, 1904, 1920, 2049, 2353, 2085, 1852, 1828 and 1877 ms; median **1936 ms**.
+  - Every run exited 0 with no output.
+- On this arm64 VM, that leaves 2.6-3.3 s under the hook's 5 s timeout. Task 2's 3-6 s PowerShell starts were not seen
+  again, cold or warm.
+- The debug logs were read in the console session, where the key's file opens: the key appeared in none of them.
+
+The VM stopped answering at 21:21 and was started again by its owner. No one was signed in at the console after the
+start. Autologon was set for the test user (the password on stdin), the VM was restarted, and the test user was signed in
+at 06:26:11 VM time. The four Winlogon values were then removed and read back: `AutoAdminLogon`, `DefaultUserName`,
+`DefaultDomainName` and `DefaultPassword` absent, and `AutoLogonSID` unchanged, as before the run.
+
+### 4. The mod's follower, in real Claude Code
+
+Real interactive Claude Code sessions ran in console windows of the test user's session. Each was started by a `cmd.exe`
+that read the test key into its own environment (`set /p` from the file), with the same model, a throwaway
+`CLAUDE_CONFIG_DIR`, and Harness's environment pointing at a desk (`desk.mjs --own-account --port 18478`, the stand-in
+dial attached). Harness was laid out as install.ps1 lays it out, in `%USERPROFILE%\.harness` (`bin\harness.exe` the VM's
+build, `cli\<v>\cli.js` the branch's bundle, `runtime\current-node`), so the mod found `harness.exe` by its first path.
+The plugin came from the branch's tree: the local marketplace `openharness` (the checkout's
+`.claude-plugin/marketplace.json`) and `claude plugin install harness-device@openharness --scope user`, the command
+Harness runs. Keys were typed into a session's console input (`WriteConsoleInput`), and the process table came from
+`harness-pty ps --json`.
+
+| Step | Result |
+| --- | --- |
+| A session starts | one follower: `harness.exe device claude inbox <session id>` under `claude.exe`, its `node.exe` under it; no token in any argument (checked against the data folder's token files and any long hex) |
+| The desk lists the session | yes, once Harness's own session hooks were in the throwaway config (`host: terminal`) |
+| `say 0 hello from the dial` | the transcript has `hello from the dial` as the person's prompt 0.6 s later, and the screen shows it as "Prompt from the harness-device plugin" |
+| `/reload-plugins` | the follower was replaced: a new `harness.exe` and `node.exe`, the old ones gone, one follower left. A `say` after it reached the session the same way (1.1 s) |
+| The follower's `harness.exe` ended by its pid | its `node.exe` ended, and a new follower was running, 14-18 s later (both seen in the same 3.5 s poll) |
+| `claude plugin disable harness-device@openharness --scope user` | no follower within 3.5 s |
+| `/exit` | no `claude.exe`, `harness.exe` or `node.exe` of the inbox within 1.5 s |
+| Three sessions at once | three followers, one per session |
+| `watch-windows.ps1 -Probe` over the three sessions' start | the probe seen; the three sessions' own console windows (`cmd.exe < conhost.exe`), and no window from `harness.exe`, `node.exe` or anything under `claude.exe` |
+
+- An `taskkill` over SSH of the follower's `harness.exe` was refused ("Access denied"): the SSH logon of the same user
+  cannot end a process of its console session. It was ended from that session.
+- **The numbers**, the desk up and nothing said, 180 s each (not the plan's 10 minutes, to hand the VM on sooner). The
+  VM's own load (the Orca app open in the session, Windows' services) is most of the CPU:
+
+  | Sessions | VM CPU, mean / p95 (every 5 s) | Each follower at the end |
+  | --- | --- | --- |
+  | 3 | 11.4% / 37.8% | `harness.exe` 0.02-0.03 s CPU, 6.1 MB; `node.exe` 1.20-1.91 s CPU (start included), 45-49 MB, after ~295 s |
+  | 1 | 14.2% / 47.4% | `harness.exe` 0.03 s, 6.2 MB; `node.exe` 2.31 s, 26.4 MB, after 547 s |
+  | 0 | 10.3% / 34.7% | none |
+
+  A follower's `node.exe` used about 0.4% of one core over its life, its start included. The pty host's starts in that
+  time were not counted.
+- **Found: the `--own-account` desk drops the caller's `CLAUDE_CONFIG_DIR` and `CODEX_HOME`** (`daemonEnvironment`
+  keeps a fixed list). Its daemon set Harness up in the test user's real `~/.claude` and `~/.codex`, and installed the
+  dial plugin from the GitHub marketplace, so main's plugin (`a59ba98a15ab`) went there, not the branch's. That is why the
+  sessions above used a throwaway config with the branch's plugin installed by hand.
+- **Not done:**
+  - the dial's ring of 10 permission prompts, and the hook under Git Bash. After the restart, OpenRouter's streaming
+    answers from the VM ended in `ECONNRESET` (a GET to `openrouter.ai` answered 200 in 4.7 s). The model never
+    called a tool, so no prompt was asked: two `claude -p` runs each ended after ~193 s with `API Error: Connection
+    dropped (ECONNRESET)`.
+  - `attach` from the Claude app: the app needs a sign-in.
+
+### 5. App detection with no `isApp` forced
+
+Not run. A Codex thread in the ChatGPT app and a session in the Claude app each need a sign-in, which this run never
+does (Task 37 §2).
+
+### 6. herdr off PATH, beside a sealed desk
+
+**The homes stayed untouched; the agent was not listed (fail).**
+
+- A sealed stand-in desk (`deskrun` → `desk.mjs --port 18479`) was started first.
+- Then `desk.mjs --beside <its root> --run <WezTerm's wezterm-gui.exe> --config prefer_egl=true start -- <herdr.exe>`
+  ran, with herdr 0.9.5's standalone x86_64 `herdr.exe` from the test user's `.herdr` folder. The sealed daemon's PATH
+  is Windows' folders alone, so herdr was off its PATH.
+- herdr's server and its pane (`powershell.exe`) ran under WezTerm. herdr's marker, pipe and logs were written in the
+  desk's root (`<root>\<profile>\AppData\Roaming\herdr\herdr.sock`).
+- A `claude.exe` started in the pane (no key, the root's homes) ran under it.
+- The desk's `list` showed **no rows** for 4 minutes, asked every 3 s. The daemon's log has no `herdr` line.
+- WezTerm's window drew white on this run (the VM's GPU); herdr's server and pane ran all the same.
+- The test user's real `~/.claude` and `~/.codex`, file by file (path, size, SHA-256), were the same before and after
+  (`fc`: no differences, 5,902 files).
+- Not looked into (no fix here), for whoever takes it:
+  - the daemon reads `herdrInstalled()` (herdr's folder exists) only at an attach (`devices.ts` ~1816). With `--beside`,
+    herdr can only start after the sealed desk's daemon is up, so the folder never exists at the dial's first attach.
+    Whether the stand-in's re-greeting every 15 s counts as an attach was not checked;
+  - the root's path reaches the daemon in its 8.3 short form (`<profile>` written `C:\Users\<8.3 name>\…`), for the profile's marker check.
+- `tap` and `say` to the pane were therefore not tried.
+- Clean up: herdr and WezTerm were ended by their pids. The desk's `quit` could not remove its root while herdr still
+  ran (`EPERM`), so the root was removed by hand afterwards, with no process of the run left.
+
+### 7. `console.ps1`: quotes and UTF-8
+
+Run in the test user's console session. `console.ps1 -Script c6-inner.ps1 -ArgsJson <json>` was called through
+`-EncodedCommand`, because Windows PowerShell 5.1 strips the `"` inside an argument it passes to a native program. The
+calling script also doubles a `’` inside a single-quoted string, since PowerShell takes `’` as a quote.
+
+| Expected line | Seen |
+| --- | --- |
+| `arg: it's` | yes |
+| `arg: it’s` | yes |
+| `arg: Nguyễn Văn A` | yes |
+| `arg: a "b" & c %PATH% \| d` | yes |
+| `exit 7` (the script's own exit code, passed back) | yes |
+| `Nguyễn Văn A` printed by `node -e "console.log('Nguy\u1ec5n V\u0103n A')"` | **no**: `Nguyá»…n VÄƒn A` |
+
+The arguments travel whole. A program's UTF-8 output is still read in the ANSI page somewhere in the task: the bytes
+come back as Windows-1252 letters. The wrapper sets `[Console]::OutputEncoding` first, and the
+PowerShell's own non-ASCII strings come back right, so the decode of the native program's output is the step to look at.
+
+Over SSH, the VM's test user (a standard user) cannot run `console.ps1` at all: `Get-CimInstance
+Win32_ComputerSystem` is "Access denied" in its SSH logon. It is meant for an owner or administrator's session.
+
+### 8. Small looks
+
+- **The Claude app's `claude.exe --version`** (`AnthropicClaude\app-6.6395.0\claude.exe`, and the Squirrel stub
+  beside it): each printed `6.6395.0` and exited in 0.25-0.26 s, with no window and no process left.
+- **Not looked at:**
+  - the Codex panel's chain to `VSCODE_PID` (it needs Codex's VS Code extension signed in);
+  - Copilot's and Command Code's real hook command lines (each needs a sign-in to run a hook).
+
+### The key, and what was removed
+
+- **The key stays** in the test user's profile: the next VM check uses it and deletes it at its end. No engine run
+  printed it. Claude Code's debug logs were read in the console session, where its file opens, and held it 0 times.
+  No log, screenshot or transcript left the VM.
+- `desktop-e2e.sh cleanup` was not run: the test user is needed for the next check.
+- Removed, by exact path or pid:
+  - the Git Bash deny entries (read back: inherited entries only; Git Bash runs for the test user again);
+  - `%USERPROFILE%\.harness`, `.harness-dial-check`, the `vmchk` folder and this run's screenshots;
+  - `C:\work\oh\.claude-plugin` and `C:\work\vmchk-admin`;
+  - every `vmchk-*` task;
+  - the processes the run started.
+- Nothing listens on 18478 or 18479. Autologon is removed (above).
+- What the `--own-account` desk set up in the real homes:
+  - Most of it was removed by `harness uninstall --yes`, run with the desk's environment: Harness's hooks in
+    `~/.claude`, `~/.codex`, `~/.copilot` and `~/.commandcode`, and the Kilo, Amp, OpenCode and Pi plugins.
+  - The dial plugin and its marketplace were removed with `claude plugin uninstall` and `claude plugin marketplace
+    remove`, and the `dial` skill folders by path.
+  - `~/.codex\config.toml` and `hooks.json` are byte for byte as before the run.
+  - `~/.claude\settings.json` has its first size (1,687 bytes) and the same keys, but another SHA-256 (its JSON was
+    written again).
