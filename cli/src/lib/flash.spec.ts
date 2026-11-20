@@ -166,6 +166,14 @@ describe('harness flash — where it points', () => {
     expect(scriptUrl('darwin')).toMatch(/^https?:\/\/.+\/flash-circle\.sh$/)
     expect(scriptUrl('linux')).toBe(scriptUrl('darwin'))
   })
+
+  // The script would read a relative HARNESS_FLASHER_CACHE against its own folder; the CLI reads it against the home.
+  it.each(['darwin', 'win32'] as const)('hands the script the cache folder the CLI resolved, on %s', async (platform) => {
+    let child: NodeJS.ProcessEnv | undefined
+    const { deps } = harness({ platform, fetchScript: async () => (platform === 'win32' ? '# flash-circle.ps1\n' : SCRIPT), run: async (_path, _args, given) => { child = given; return 0 } })
+    await flashCommand([], { ...deps, environment: { HARNESS_FLASHER_CACHE: 'flasher' } })
+    expect(child?.HARNESS_FLASHER_CACHE).toBe(FLASHER_DIR)
+  })
 })
 
 describe('harness flash — on Windows', () => {
