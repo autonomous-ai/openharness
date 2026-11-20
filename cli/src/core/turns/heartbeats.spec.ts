@@ -167,6 +167,7 @@ describe('turn heartbeats', () => {
     run.set({ turnOpen: false })
     const activity = run.deps.turnActivity as TurnActivity
     activity.observe('s1', 'turn_started')
+    await vi.advanceTimersByTimeAsync(0)
     expect(sentTypes(run.deps)).toEqual(['agent_activity'])
     expect(vi.mocked(run.deps.clients.send).mock.calls[0]![0]).toMatchObject({ type: 'agent_activity', payload: { activity: { state: 'working' } } })
     for (let i = 0; i < 5; i++) { await vi.advanceTimersByTimeAsync(5_000); activity.observe('s1', 'text_delta') }
@@ -189,6 +190,7 @@ describe('turn heartbeats', () => {
     set({ turnOpen: false, activity: { state: 'working', epoch: 'e', revision: 1, validForMs: 30_000 } })
     beats.watchClaim('s1')
     beats.watchClaim('s1')
+    await vi.advanceTimersByTimeAsync(0)
     expect(sentTypes(deps)).toEqual(['agent_activity'])
     await vi.advanceTimersByTimeAsync(5_000)
     expect(sentTypes(deps)).toHaveLength(1)
@@ -235,6 +237,7 @@ describe('turn heartbeats', () => {
     const { deps, beats, set } = setup()
     set({ turnOpen: false, activity: { state: 'working', epoch: 'e', revision: 1, validForMs: 30_000 } })
     beats.watchClaim('s1')
+    await vi.advanceTimersByTimeAsync(0)
     set({ turnOpen: true })
     beats.startHeartbeat('s1')
     expect(sentTypes(deps)).toEqual(['agent_activity'])
@@ -260,6 +263,26 @@ describe('turn heartbeats', () => {
     expect(deps.runtimeActivity.forget).not.toHaveBeenCalled()
     expect(deps.turnActivity.forget).not.toHaveBeenCalled()
     expect(deps.turnActivity.check).not.toHaveBeenCalled()
+  })
+
+  // A read sets the turn's state to where it ends before its events (core/engines/otherStreams.ts, liveSessions.ts), so a
+  // turn that starts and ends in one read started as a claim: one more agent_activity to every window, and a watch, for a
+  // short turn of every engine.
+  it('a turn that starts and ends in one read is no claim: no frame of its own, no watch', async () => {
+    const run = setup({ turnActivity: new TurnActivity({ now: () => Date.now(), probe: async () => 'unknown', drain: async () => {},
+      runtime: () => ({ key: 'k', turnOpen: false }), claimed: (sessionId) => run.beats.watchClaim(sessionId) }) })
+    run.set({ turnOpen: false })
+    const activity = run.deps.turnActivity as TurnActivity
+    // The funnel's order (core/turns/funnel.ts): each event observed, and a turn's start then starts its heartbeat.
+    activity.observe('s1', 'turn_started')
+    run.beats.startHeartbeat('s1')
+    activity.observe('s1', 'turn_ended')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(sentStates(run.deps)).toEqual([])
+    // Its heartbeat tells its end, as every turn's does, and stops.
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(sentStates(run.deps)).toEqual([['agent_activity', 'idle']])
+    expect(run.beats.heartbeats.has('s1')).toBe(false)
   })
 
   // A cancel stops the turn's beat while its check reads the pane; the aborted tool's output then claims work, watched.
