@@ -40,6 +40,28 @@ def full_checkout(test, *paths):
     test.skipTest(message)
 
 
+# A TypeScript import by a relative path: `from './x.js'`, `import './x.js'`, `import('./x.js')`.
+RELATIVE_IMPORT = re.compile(r"""(?:\bfrom\s+|\bimport\s*\(\s*|\bimport\s+)['"](\.{1,2}/[^'"]+)['"]""")
+
+
+def imports_from(root, sources, within):
+    """The sources and every file under the `within` folders they import, through files under those folders alone."""
+    seen, todo = set(), list(sources)
+    while todo:
+        source = todo.pop()
+        if source in seen:
+            continue
+        seen.add(source)
+        for spec in RELATIVE_IMPORT.findall((root / source).read_text()):
+            path = posixpath.normpath(posixpath.join(posixpath.dirname(source), spec))
+            stem = re.sub(r"\.[mc]?js$", "", path)
+            found = next((name for name in (stem + ".ts", stem + ".tsx", stem + ".mts", path, stem + "/index.ts")
+                          if (root / name).is_file()), None)
+            if found and found.startswith(within):
+                todo.append(found)
+    return seen
+
+
 class SelectionTests(unittest.TestCase):
     def test_backend_changes_run_the_integration_shards_and_nothing_else_does(self):
         # Task #2459: the Super Tab integration suite runs in PR CI for backend changes only.
@@ -325,6 +347,17 @@ class SelectionTests(unittest.TestCase):
                 self.assertTrue(planner.linux_e2e_file(path))
                 self.assertEqual(planner.select([path])[0] & {"dial-hosts", "linux-e2e"}, {"linux-e2e"})
 
+    def test_the_code_the_dial_hosts_files_run_runs_them(self):
+        # The daemon runs every host adapter from its bundle, beside what they import (observed.ts finds the hosts), and
+        # the files drive them through the stand-in dial and desk. test_the_dial_host_files_are_the_ones_cli_e2e_leaves_out
+        # walks the imports on a full checkout.
+        for path in ("cli/src/cable/hosts/observed.ts", "cli/src/cable/hosts/adapter.ts", "cli/src/cable/hosts/scannedApp.ts",
+                     "cli/src/cable/hosts/outer.ts", "cli/src/cable/hosts/tmux.ts", "cli/src/cable/hosts/unixSocket.ts",
+                     "cli/src/cable/hosts/socketAttempts.ts", "cli/src/cable/hosts/hostDetect.ts",
+                     "cli/src/cable/hosts/frontApp.ts", "cli/e2e/harness/desk.ts", "cli/e2e/harness/fakeDial.ts"):
+            with self.subTest(path=path):
+                self.assertIn("dial-hosts", planner.select([path])[0])
+
     def test_some_files_never_run_on_linux(self):
         # windows-e2e runs the dial on Windows, diskfull is macOS only, and the agent browser's Podman file runs by hand.
         for path in ("cli/e2e/dialWindows.e2e.ts", "cli/e2e/diskfull.e2e.ts", "cli/e2e/agentBrowserPodman.e2e.ts"):
@@ -363,11 +396,22 @@ class SelectionTests(unittest.TestCase):
         root = REPOSITORY
         source = root / "cli/e2e/harness/dialHosts.ts"
         full_checkout(self, "cli/e2e/harness/dialHosts.ts")
-        listed =re.search(r"export const DIAL_HOST_FILES = \[([^\]]*)\]", source.read_text()).group(1)
+        listed = re.search(r"export const DIAL_HOST_FILES = \[([^\]]*)\]", source.read_text()).group(1)
         self.assertEqual(set(planner.DIAL_HOST_FILES), {"cli/" + name for name in re.findall(r"'([^']+)'", listed)})
         for entry in planner.DIAL_HOST_PATHS:
             with self.subTest(entry=entry):
                 self.assertTrue((root / entry).is_dir() if entry.endswith("/") else (root / entry).is_file())
+        # The code they run: what the files and the adapters (which the daemon runs from its bundle, so no import shows
+        # them) import from the cable and the harness. A change to any of it runs dial-hosts, or, for the harness every
+        # e2e file starts its daemons with, linux-e2e's canary, which imports it.
+        files = sorted(str(path.relative_to(root)) for entry in planner.DIAL_HOST_FILES for path in root.glob(entry))
+        adapters = sorted(str(path.relative_to(root)) for path in (root / "cli/src/cable/hosts").glob("*.ts")
+                          if planner.dial_hosts_path(str(path.relative_to(root))) and ".spec." not in path.name)
+        self.assertTrue(files and adapters)
+        within = ("cli/e2e/harness/", "cli/src/cable/")
+        canary = imports_from(root, [planner.LINUX_E2E_CANARY], within)
+        run = imports_from(root, files + adapters, within) - set(files)
+        self.assertEqual(sorted(path for path in run if not planner.dial_hosts_path(path) and path not in canary), [])
 
     def test_the_planner_and_the_tables_it_scans_with_alone_run_the_cross_read_scan(self):
         # process-checks' checkout is sparse, where the repository-wide scan skips: two undeclared reads slipped in so.
