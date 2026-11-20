@@ -465,21 +465,27 @@ export function createBinding({
       return null
     })
   /**
-   * The agents whose typed first task this daemon awaits, handed over or adopted here: only one an earlier daemon typed is
-   * adopted. Cleared at 256 entries rather than aged: the controller refuses to adopt a task it already awaits.
+   * The agents whose typed first task the input adopted here, agentId → when: one an earlier daemon typed, or one the
+   * input forgot. Cleared at 256 entries rather than aged: an adopted task then counts as one typed here, which its turn
+   * confirms, or the bound fails.
    */
-  const firstTasksAwaited = new Set<string>()
-  const awaitFirstTask = (agentId: string): void => {
-    if (firstTasksAwaited.size >= 256) firstTasksAwaited.clear()
-    firstTasksAwaited.add(agentId)
+  const firstTasksAdopted = new Map<string, number>()
+  /**
+   * Whether OpenClaw's store holds a user row for the agent's key written after [at], and none after [adoptedAt] when
+   * given: a later one is the adopted task's turn's to confirm (core/turns/funnel.ts), as a task typed here is. A store
+   * that cannot say does not.
+   */
+  const storeShowsTaken = async (agent: RegisteredSession, pid: number, at: number, adoptedAt: number | undefined): Promise<boolean> => {
+    const since = (time: number) => openclawUserRowSince(agent.sessionId, { pid, stateDir: agent.openclawStateDir }, time).catch(() => null)
+    return await since(at) === true && (adoptedAt === undefined || await since(adoptedAt) === false)
   }
   /**
    * A typed first task OpenClaw's store shows taken leaves its row once the pass's transaction commits, as `takeFirstTask`
-   * does; then the controller's wait for it ends and the frame is pushed, no longer starting. A removal not made (not
-   * saved, or the mark gone already) confirms nothing: the next pass reads the store again.
+   * does, the mark typed at [at] only; then the controller's wait for it ends and the frame is pushed, no longer starting.
+   * A removal not made (not saved, or the mark gone already) confirms nothing: the next pass reads the store again.
    */
-  const confirmTypedFirstTask = (agent: RegisteredSession): void => {
-    void registry.afterTransaction(() => registry.firstTaskTaken(agent.agentId)).then((taken) => {
+  const confirmTypedFirstTask = (agent: RegisteredSession, at: number): void => {
+    void registry.afterTransaction(() => registry.firstTaskTaken(agent.agentId, at)).then((taken) => {
       if (!taken) return
       input.firstTaskConfirmed(agent.agentId)
       announceSession(agent)
@@ -494,7 +500,6 @@ export function createBinding({
   const handOverFirstTask = (agentId: string): void => {
     // Expected before its row lets it go: the frame reads starting from the one or the other all the way to its turn.
     input.expectFirstTask(agentId)
-    awaitFirstTask(agentId)
     void takeFirstTask(agentId).then((task) => {
       if (!task) return
       console.log(`[agent] ${sid(agentId)} first task handed over`)
@@ -653,22 +658,29 @@ export function createBinding({
       if (!taskWaits) announceStartingEnd(agent)
       const waiting = taskWaits || input.awaitingConfirmation(agent.agentId) || input.waitsForPane(agent.agentId)
       if (agent.sessionId && !waiting && agent.identityHold !== OPENCLAW_STATES.boxHeld && !openclawPaneDue(agent.sessionId)) return
-      // A first task typed before a restart: OpenClaw's store says whether it was taken, though the daemon was down when its
-      // user row landed, so a mark an older daemon left is settled the same, at any age. Until it says so, the controller
-      // awaits it as one typed here (an Enter or a clear, never a paste), asked on every pass until it takes it: a write
-      // under way or an open turn refuses it. The bound below runs from this daemon's first pass.
+      // A first task typed and not confirmed. One the input awaits as typed here is its turn's to confirm: the store, read
+      // before the live reader opens that turn, would end the input's wait with OpenClaw at work, and a message waiting
+      // behind the task would be typed into the run. Any other, typed before a restart or forgotten by the input (its state
+      // folder changed, say), OpenClaw's store settles, though the daemon was down when its user row landed, so a mark an
+      // older daemon left is settled the same, at any age; one adopted, only by a user row from before its adoption. Until
+      // then, the input awaits it as one typed here (an Enter or a clear, never a paste), asked on every pass until it
+      // takes it: a write under way or an open turn refuses it. The bound below runs from this daemon's first pass.
       if (agent.firstTaskTyped) {
         const { text, at } = agent.firstTaskTyped
-        const taken = await openclawUserRowSince(agent.sessionId, { pid: observed.processIdentity.pid, stateDir: agent.openclawStateDir }, at)
-          .catch(() => null)
-        if (!current()) return
-        if (taken) {
-          confirmTypedFirstTask(agent)
-          return
-        }
-        if (!firstTasksAwaited.has(agent.agentId) && input.adoptTypedFirstTask(agent.agentId, text)) {
-          awaitFirstTask(agent.agentId)
-          console.log(`[agent] ${sid(agent.agentId)} first task typed before a restart · awaiting confirmation`)
+        const awaited = input.firstTaskWaiting(agent.agentId)
+        const adoptedAt = awaited ? firstTasksAdopted.get(agent.agentId) : undefined
+        if (!awaited || adoptedAt !== undefined) {
+          const taken = await storeShowsTaken(agent, observed.processIdentity.pid, at, adoptedAt)
+          if (!current()) return
+          if (taken) {
+            confirmTypedFirstTask(agent, at)
+            return
+          }
+          if (!awaited && input.adoptTypedFirstTask(agent.agentId, text)) {
+            if (firstTasksAdopted.size >= 256) firstTasksAdopted.clear()
+            firstTasksAdopted.set(agent.agentId, Date.now())
+            console.log(`[agent] ${sid(agent.agentId)} first task typed earlier · awaiting confirmation`)
+          }
         }
       }
       const revision = agent.sessionId ? activityRevision(agent.sessionId) : undefined
