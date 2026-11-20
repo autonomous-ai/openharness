@@ -16,6 +16,7 @@ import { setAgentSignaller, type AgentSignal } from './processSignals.js'
 import type { ExportSource, StorageEngine } from '../engines/worker/storageProtocol.js'
 import { openclawSessionDb, openclawStateDir } from './openclawStore.js'
 import { nativeHeldFiles, nativeOpenFiles } from './nativeConversation.js'
+import { observeNativeFiles } from '../engines/kit/nativeFileObservation.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { databaseCheckpointEvidence } from './databaseCheckpoint.js'
 
@@ -31,6 +32,8 @@ let record: string
 let store: SessionCheckpointStore
 let duringExport: (() => void) | undefined
 let exportedSource: ExportSource | undefined
+let exportCount: number
+let savedGeneration: { verify(): void } | undefined
 let deps: StopAgentServiceDeps
 let signalled: ReturnType<typeof vi.fn<(pid: number, signal: AgentSignal) => void>>
 const oldEnv = { OPENCODE_DATA_DIR: env.OPENCODE_DATA_DIR, KILO_DATA_DIR: env.KILO_DATA_DIR,
@@ -59,9 +62,18 @@ beforeEach(async () => {
   writeFileSync(record, JSON.stringify({ session_id: row.sessionId, ts: Date.now() / 1_000 }), { mode: 0o600 })
   duringExport = undefined
   exportedSource = undefined
+  exportCount = 0
+  savedGeneration = undefined
   vi.mocked(nativeOpenFiles).mockReset()
   vi.mocked(nativeHeldFiles).mockReset()
-  store = new SessionCheckpointStore(directory, { exportDatabase: async (_s, source, reservation) => {
+  store = new SessionCheckpointStore(directory, { exportDatabase: async (_s, source, reservation, reuse) => {
+    if (reuse) {
+      let unchanged = false
+      try { savedGeneration?.verify(); unchanged = !!savedGeneration && readFileSync(database).equals(readFileSync(reuse.checkpoint.path)) } catch { /* Changed generation needs a fresh export. */ }
+      if (unchanged && reuse.current()) return { unchanged: true }
+    }
+    exportCount++
+    savedGeneration = observeNativeFiles(['', '-wal', '-journal'].map(suffix => ({ path: source.path + suffix, missingOkay: suffix !== '' })))
     const ownership = await reservation.acquire(process.pid), { stage } = ownership
     exportedSource = source
     const bytes = readFileSync(database)
@@ -94,9 +106,41 @@ afterEach(async () => {
 })
 
 const stop = () => createStopAgentService(deps)(row.agentId, {
-  checkpoint: async (s, _phase, databaseProof) => store.save(s, { databaseProof }),
+  checkpoint: async (s, phase, databaseProof) => store.save(s, { databaseProof, afterExit: phase === 'after' }),
 })
 const manifests = () => readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name))
+
+it.each(['opencode', 'kilo', 'hermes', 'devin', 'openclaw'] as const)(
+  'keeps its completed %s checkpoint when confirmed exit leaves the native generation unchanged', async engine => {
+  source(engine)
+  await stop()
+  expect(deps.forgetSession).toHaveBeenCalledOnce()
+  expect(exportCount).toBe(1)
+  const manifest = JSON.parse(readFileSync(join(directory, manifests()[0]), 'utf8'))
+  expect(readFileSync(join(directory, manifest.file), 'utf8')).toBe('original rows')
+})
+
+it.each(['', '-wal', '-journal'])('exports again when exit changes native source%s', async suffix => {
+  if (suffix) writeFileSync(database + suffix, 'original sidecar', { mode: 0o600 })
+  signalled.mockImplementationOnce(() => writeFileSync(database + suffix, 'final flushed rows'))
+  await stop()
+  expect(exportCount).toBe(2)
+  const manifest = JSON.parse(readFileSync(join(directory, manifests()[0]), 'utf8'))
+  expect(readFileSync(join(directory, manifest.file), 'utf8')).toBe(suffix ? 'original rows' : 'final flushed rows')
+})
+
+it.each(['-wal', '-journal'])('exports again when exit creates previously absent %s', async suffix => {
+  signalled.mockImplementationOnce(() => writeFileSync(database + suffix, 'exit flush', { mode: 0o600 }))
+  await stop()
+  expect(exportCount).toBe(2)
+})
+
+it.each(['-wal', '-journal'])('exports again when exit removes previously present %s', async suffix => {
+  writeFileSync(database + suffix, 'before exit', { mode: 0o600 })
+  signalled.mockImplementationOnce(() => rmSync(database + suffix))
+  await stop()
+  expect(exportCount).toBe(2)
+})
 
 it.each(['opencode', 'kilo', 'hermes', 'devin', 'openclaw'] as const)('refuses %s publication when its native store changes during export', async engine => {
   source(engine)
@@ -267,7 +311,7 @@ it.each(['cancel', 'rebind'] as const)('holds Close before saving when %s arrive
     return { tty: '/dev/ttys044', command: 'hermes', path: root, pid: 77 }
   })
   await expect(createStopAgentService(deps)(row.agentId, { current: () => current,
-    checkpoint: async (s, _phase, databaseProof) => store.save(s, { databaseProof }),
+    checkpoint: async (s, phase, databaseProof) => store.save(s, { databaseProof, afterExit: phase === 'after' }),
   })).rejects.toMatchObject({ code: 'STOP_UNCONFIRMED' })
   expect(signalled).not.toHaveBeenCalled()
   expect(await stoppedAgents.get(row.agentId)).toBeNull()
@@ -381,7 +425,7 @@ it.each(['cancel', 'rebind'] as const)('rejects an OpenClaw location arriving af
     return { paths: [join(root, 'state', 'openclaw.sqlite')], verify: vi.fn() }
   })
   await expect(createStopAgentService(deps)(row.agentId, { current: () => current,
-    checkpoint: async (s, _phase, databaseProof) => store.save(s, { databaseProof }),
+    checkpoint: async (s, phase, databaseProof) => store.save(s, { databaseProof, afterExit: phase === 'after' }),
   })).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
   expect(exportedSource).toBeUndefined()
   expect(signalled).not.toHaveBeenCalled()

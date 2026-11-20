@@ -6,6 +6,7 @@ import { backgroundCount, STORAGE_BACKGROUND, STORAGE_BACKGROUND_WAIT_MS, STORAG
   STORAGE_USER_ROW_SINCE, STORAGE_USER_ROW_WAIT_MS, storageTimeRange, storageSession, userRowAnswer,
   STORAGE_IN_FLIGHT, STORAGE_REPLY_BYTES, STORAGE_VERSION, STORAGE_EXPORT, STORAGE_EXPORT_WAIT_MS, STORAGE_ENGINES,
   STORAGE_LIFETIME, storageLifetime, exportReceipt, type ExportStage, type ExportReceipt, type ExportReservation,
+  STORAGE_COMPARE, STORAGE_COMPARE_WAIT_MS, type SavedCheckpoint, type CheckpointReuse, type ExportResult,
   type StorageEngine, type StorageLifetime, type StorageSession, type ExportSource } from '../../engines/worker/storageProtocol.js'
 import { createSnapshotTransport, type SnapshotTransportDeps } from './snapshotTransport.js'
 import { boundedControl } from './controlTransport.js'
@@ -17,6 +18,7 @@ export interface EngineStorageDeps extends SnapshotTransportDeps {
   inline?(session: StorageSession): Promise<number | null>
   inlineUserRowSince?(session: StorageSession, since: number, until: number): Promise<boolean | null>
   inlineExport?(engine: StorageEngine, session: StorageSession, stage: ExportStage, source: ExportSource, current: () => boolean): Promise<ExportReceipt>
+  inlineCompare?(engine: StorageEngine, session: StorageSession, checkpoint: SavedCheckpoint, source: ExportSource, current: () => boolean): Promise<boolean | null>
 }
 export function createEngineStorage(deps: EngineStorageDeps) {
   let pending = 0
@@ -31,10 +33,12 @@ export function createEngineStorage(deps: EngineStorageDeps) {
     capability: 'storage', inFlight: STORAGE_IN_FLIGHT, queued: 0, waitMs: STORAGE_EXPORT_WAIT_MS, replyBytes: STORAGE_REPLY_BYTES })
   const userRows = createSnapshotTransport(deps, { version: STORAGE_VERSION, capabilities: STORAGE_CAPABILITIES,
     capability: 'storage', inFlight: STORAGE_IN_FLIGHT, queued: 0, waitMs: STORAGE_USER_ROW_WAIT_MS, replyBytes: STORAGE_REPLY_BYTES })
+  const comparisons = createSnapshotTransport(deps, { version: STORAGE_VERSION, capabilities: STORAGE_CAPABILITIES,
+    capability: 'storageCompare', inFlight: STORAGE_IN_FLIGHT, queued: 0, waitMs: STORAGE_COMPARE_WAIT_MS, replyBytes: STORAGE_REPLY_BYTES })
   return {
-    connected: (service: string) => { transport.connected(service); exports.connected(service); userRows.connected(service) },
-    disconnected: (service: string) => { transport.disconnected(service); exports.disconnected(service); userRows.disconnected(service) },
-    async exportDatabase(session: RegisteredSession, source: ExportSource, reservation: ExportReservation): Promise<ExportReceipt> {
+    connected: (service: string) => { transport.connected(service); exports.connected(service); userRows.connected(service); comparisons.connected(service) },
+    disconnected: (service: string) => { transport.disconnected(service); exports.disconnected(service); userRows.disconnected(service); comparisons.disconnected(service) },
+    async exportDatabase(session: RegisteredSession, source: ExportSource, reservation: ExportReservation, reuse?: CheckpointReuse): Promise<ExportResult> {
       if (!STORAGE_ENGINES.includes(session.engine as StorageEngine) || !session.sessionId) throw new Error('checkpoint engine unsupported')
       const captured: StorageSession = { sessionId: session.sessionId, hermesHome: session.hermesHome,
         openclawStateDir: session.openclawStateDir, pid: session.processIdentity?.pid ?? 0 }
@@ -44,6 +48,18 @@ export function createEngineStorage(deps: EngineStorageDeps) {
       try {
         const receipt = await boundedControl(admitted(async () => {
           if (!current()) throw new Error('checkpoint unavailable')
+          if (reuse) {
+            let equal: boolean | null = null
+            try {
+              equal = deps.isolated
+                ? await comparisons.read(session.engine, STORAGE_COMPARE, { session: captured, checkpoint: reuse.checkpoint, source }, userRowAnswer) as boolean | null
+                : await boundedControl(Promise.resolve(deps.inlineCompare?.(session.engine as StorageEngine, captured, reuse.checkpoint, source, current) ?? null),
+                  Math.max(0, Math.min(STORAGE_COMPARE_WAIT_MS, deadline - performance.now())), () => new Error('checkpoint comparison unavailable'))
+            } catch (error) { console.error('[engine-others] STORAGE_COMPARE_UNAVAILABLE · ' + errorKind(error)) }
+            if (!current()) throw new Error('checkpoint unavailable')
+            // This callback verifies native authority separately from saved-file availability.
+            if (equal === true && reuse.current()) return { unchanged: true as const }
+          }
           let lifetime: StorageLifetime | undefined
           if (deps.isolated) {
             try { lifetime = await exports.read(session.engine, STORAGE_LIFETIME, {}, storageLifetime) as StorageLifetime }
@@ -70,7 +86,7 @@ export function createEngineStorage(deps: EngineStorageDeps) {
           if (!current()) throw new Error('checkpoint unavailable')
           return exported
         }), Math.max(0, Math.ceil(deadline - performance.now())), () => new Error('checkpoint unavailable'))
-        if (!current() || !exportReceipt(receipt)) throw new Error('checkpoint unavailable')
+        if (!current() || (!('unchanged' in receipt) && !exportReceipt(receipt))) throw new Error('checkpoint unavailable')
         return receipt
       } finally { active = false }
     },

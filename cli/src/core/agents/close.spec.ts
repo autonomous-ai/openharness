@@ -254,17 +254,17 @@ describe('closing agents no window shows', () => {
       const { deps, close } = setup()
       await close.checkpoint(row(), 'before')
       expect(deps.terminals.captureRetained).toHaveBeenCalledWith(row(), { historyLines: 2000 })
-      expect(deps.sessionCheckpoints.save).toHaveBeenCalledWith(row(), { screen: 'scrollback' })
+      expect(deps.sessionCheckpoints.save).toHaveBeenCalledWith(row(), { screen: 'scrollback', afterExit: false })
     })
 
     it('before, with a pane it cannot read, and after: keeps the conversation without a screen', async () => {
       const failing = setup({ terminals: { captureRetained: vi.fn(async () => ({ state: 'failed', reason: 'gone' })) } as never })
       await failing.close.checkpoint(row(), 'before')
-      expect(failing.deps.sessionCheckpoints.save).toHaveBeenCalledWith(row(), { screen: null })
+      expect(failing.deps.sessionCheckpoints.save).toHaveBeenCalledWith(row(), { screen: null, afterExit: false })
       const after = setup()
       await after.close.checkpoint(row(), 'after')
       expect(after.deps.terminals.captureRetained).not.toHaveBeenCalled()
-      expect(after.deps.sessionCheckpoints.save).toHaveBeenCalledWith(row(), { screen: null })
+      expect(after.deps.sessionCheckpoints.save).toHaveBeenCalledWith(row(), { screen: null, afterExit: true })
     })
   })
 

@@ -7,6 +7,10 @@ export const STORAGE_BACKGROUND = 'engine_storage_background'
 export const STORAGE_USER_ROW_SINCE = 'engine_storage_user_row_since'
 export const STORAGE_USER_ROW_WAIT_MS = 5_000
 export const STORAGE_EXPORT = 'engine_storage_export'
+export const STORAGE_COMPARE = 'engine_storage_compare'
+export const STORAGE_COMPARE_WAIT_MS = 2_000
+export const STORAGE_COMPARE_WORK_MS = 1_000
+export const STORAGE_COMPARE_BYTES = 1024 * 1024
 export const STORAGE_LIFETIME = 'engine_storage_lifetime'
 export const STORAGE_IN_FLIGHT = 4
 export const STORAGE_BACKGROUND_WAIT_MS = 2_000
@@ -17,6 +21,9 @@ export const STORAGE_CHUNK_BYTES = 128 * 1024
 export const STORAGE_ENGINES = ['opencode', 'kilo', 'hermes', 'devin', 'openclaw'] as const
 export type StorageEngine = typeof STORAGE_ENGINES[number]
 export interface ExportStage { path: string; key: string }
+export interface SavedCheckpoint extends ExportStage { bytes: number }
+export interface CheckpointReuse { checkpoint: SavedCheckpoint; current(): boolean }
+export type ExportResult = ExportReceipt | { unchanged: true }
 /** Both paths are core-selected: only path is opened; database preserves the legacy JSON metadata spelling. */
 export interface ExportSource { path: string; key: string; database: string }
 export interface ExportReceipt { bytes: number; sha256: string; empty?: true }
@@ -41,6 +48,12 @@ export function exportSource(value: unknown): value is ExportSource {
   const v = value as Record<string, unknown>
   return Object.keys(v).every(k => ['path', 'key', 'database'].includes(k)) && exportStage({ path: v.path, key: v.key })
     && typeof v.database === 'string' && v.database.length > 0 && v.database.length <= 32_768 && !v.database.includes('\0')
+}
+export function savedCheckpoint(value: unknown): value is SavedCheckpoint {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const v = value as Record<string, unknown>
+  return Object.keys(v).every(k => ['path', 'key', 'bytes'].includes(k)) && exportStage({ path: v.path, key: v.key })
+    && Number.isSafeInteger(v.bytes) && (v.bytes as number) > 0 && (v.bytes as number) <= STORAGE_COMPARE_BYTES
 }
 export function exportReceipt(value: unknown): value is ExportReceipt {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false

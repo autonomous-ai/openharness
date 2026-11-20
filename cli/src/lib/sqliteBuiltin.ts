@@ -145,12 +145,13 @@ function read(dbPath, sql, params, busyTimeoutMs) {
   }
 }
 function closeAll() { for (const path of [...handles.keys()]) drop(path) }
-return { read, closeAll, idleWalStore }
+return { read, closeAll, idleWalStore, drop }
 `
 
 interface NativeReader {
   read(dbPath: string, sql: string, params: SqliteParam[], busyTimeoutMs: number): { ok: true; rows: SqliteRow[] } | { ok: false; error: unknown }
   closeAll(): void
+  drop(dbPath: string): void
   idleWalStore(dbPath: string): boolean
 }
 const nativeReader = (Database: DatabaseConstructor | null): NativeReader =>
@@ -166,6 +167,11 @@ export const idleWalStore = (dbPath: string): boolean => plain.idleWalStore(dbPa
 /** Test seam, and for a store that was replaced on disk: forget every open handle. */
 export function closeSqliteHandles(): void {
   for (const reader of readers.values()) reader.closeAll()
+}
+
+/** A post-exit content comparison must not reuse an immutable snapshot on coarse-timestamp filesystems. */
+export function closeSqliteHandle(dbPath: string): void {
+  for (const reader of readers.values()) reader.drop(dbPath)
 }
 
 export function readBuiltin(

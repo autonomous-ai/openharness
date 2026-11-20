@@ -8,11 +8,12 @@ import { engineKeepsTranscriptFile, type RegisteredSession } from './registry.js
 import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { nativeFileKey } from '../engines/kit/nativePaths.js'
+import { observeNativeFiles } from '../engines/kit/nativeFileObservation.js'
 import { atomicWriteJson, readPrivateStateFile, secureStateDirectory } from './secureState.js'
 import { findResumedTranscript } from './sessionRepair.js'
 import { CheckpointStages, type CheckpointStage } from './checkpointStages.js'
 import { databaseCheckpointEvidence, type DatabaseCheckpointProof } from './databaseCheckpoint.js'
-import { STORAGE_EXPORT_WAIT_MS, type ExportReceipt, type ExportReservation, type ExportSource } from '../engines/worker/storageProtocol.js'
+import { STORAGE_EXPORT_WAIT_MS, STORAGE_COMPARE_BYTES, type CheckpointReuse, type ExportResult, type ExportReservation, type ExportSource } from '../engines/worker/storageProtocol.js'
 
 export class SessionCheckpointError extends Error {
   readonly code = 'HISTORY_NOT_SAVED'
@@ -37,7 +38,7 @@ type Checkpoint = {
 }
 
 export interface CheckpointDeps {
-  exportDatabase?(session: RegisteredSession, source: ExportSource, reservation: ExportReservation): Promise<ExportReceipt>
+  exportDatabase?(session: RegisteredSession, source: ExportSource, reservation: ExportReservation, reuse?: CheckpointReuse): Promise<ExportResult>
 }
 export class SessionCheckpointStore {
   private readonly stages: CheckpointStages
@@ -67,7 +68,7 @@ export class SessionCheckpointStore {
     return [...files, ...(existsSync(history) ? [history] : []), manifest]
   }
 
-  async save(s: RegisteredSession, options: { screen?: string | null; current?: () => boolean; databaseProof?: DatabaseCheckpointProof } = {}): Promise<void> {
+  async save(s: RegisteredSession, options: { screen?: string | null; current?: () => boolean; databaseProof?: DatabaseCheckpointProof; afterExit?: boolean } = {}): Promise<void> {
     secureStateDirectory(dirname(this.directory))
     secureStateDirectory(this.directory)
     const key = this.key(s)
@@ -87,9 +88,10 @@ export class SessionCheckpointStore {
     const destination = join(this.directory, file)
     let committed = false
     let previous: Checkpoint | null = null
+    let previousRaw: string | undefined
     try {
       current()
-      try { previous = JSON.parse(readPrivateStateFile(manifest, 16384)) as Checkpoint } catch (e) {
+      try { previousRaw = readPrivateStateFile(manifest, 16384); previous = JSON.parse(previousRaw) as Checkpoint } catch (e) {
         if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
       }
       let source = s.transcriptPath ?? (s.engine === 'pi' && s.sessionId
@@ -172,8 +174,25 @@ export class SessionCheckpointStore {
           return
         }
         if (!this.deps.exportDatabase) throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
-        databaseStageRequested = true
         const deadline = databaseDeadline = performance.now() + STORAGE_EXPORT_WAIT_MS
+        let reuse: CheckpointReuse | undefined
+        if (options.afterExit && previous?.version === 1 && previous.agentId === s.agentId && previous.sessionId === s.sessionId
+          && previous.engine === s.engine && previous.codexHome === (s.codexHome ?? null) && previousFileSafe(previous.file)
+          && previous.file.startsWith(key + '-') && Number.isSafeInteger(previous.bytes) && previous.bytes > 0 && previous.bytes <= STORAGE_COMPARE_BYTES) {
+          try {
+            const history = join(this.directory, previous.file)
+            const saved = observeNativeFiles([{ path: manifest, maxBytes: 16384 }, { path: history }])
+            if (saved.files[0].bytes?.toString() === previousRaw && saved.files[1].key) reuse = {
+              checkpoint: { path: history, key: saved.files[1].key, bytes: previous.bytes },
+              current: () => {
+                // A missing old copy is repairable; lost native authority is not.
+                current()
+                try { saved.verify(); return true } catch { console.error('[checkpoint] SAVED_COPY_CHANGED'); return false }
+              },
+            }
+          } catch { console.error('[checkpoint] SAVED_COPY_UNAVAILABLE') }
+        }
+        current()
         let allocationStarted = false, allocationFinished = false
         let allocationFailure: { error: unknown } | undefined
         const reservation: ExportReservation = {
@@ -184,6 +203,7 @@ export class SessionCheckpointStore {
             if (!allocationActive) throw stageExpired()
             if (allocationStarted) throw new Error('checkpoint reservation already claimed')
             allocationStarted = true
+            databaseStageRequested = true
             try {
               current()
               const acquired = await this.stages.acquire(destination, pid, deadline)
@@ -206,13 +226,21 @@ export class SessionCheckpointStore {
             }
           },
         }
-        const receipt = await this.deps.exportDatabase(s, databaseProof.source, reservation).catch(() => {
+        const exportCheckpoint = (comparison?: CheckpointReuse) => this.deps.exportDatabase!(s, databaseProof!.source!, reservation, comparison).catch(() => {
+          current()
           if (allocationFailure) throw allocationFailure.error
           // The outer timer can win just before a fractional clock deadline.
           // A pending first allocation still needs the stage timeout refusal.
           if (allocationStarted && !allocationFinished) throw stageExpired()
           throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
         })
+        let receipt = await exportCheckpoint(reuse)
+        if ('unchanged' in receipt) {
+          if (reuse?.current()) { saveScreen(); committed = true; return }
+          // A saved file can change after the worker reply. Rebuild under the original deadline.
+          receipt = await exportCheckpoint()
+          if ('unchanged' in receipt) throw new SessionCheckpointError('Could not verify the saved conversation. Its previous checkpoint is kept.')
+        }
         current()
         if (!stage) throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
         await stage.verify(receipt)
@@ -261,7 +289,7 @@ export class SessionCheckpointStore {
     } finally {
       allocationActive = false
       if (stage) await stage.close()
-      else if (!databaseStageRequested) await rm(temporary, { force: true }).catch(() => {})
+      else if (!databaseStageRequested && !committed) await rm(temporary, { force: true }).catch(() => {})
       if (!databaseStageRequested && !committed) await rm(destination, { force: true }).catch(() => {})
     }
   }
