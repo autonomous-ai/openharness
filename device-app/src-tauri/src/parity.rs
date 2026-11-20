@@ -1,6 +1,6 @@
 //! The menu is the same on every OS: the model and the app take no OS. The one refresh that differs, Linux's tick
 //! telling what a click tells elsewhere, is tick.rs's test; main.rs hands `tick::menu_opened` to the tray's click and
-//! `tick::tick` to the timer (`ticked`). Follow ChatGPT, macOS only, comes from the door main.rs hands the runner
+//! `tick::tick` to the timer (`ticked`). Follow ChatGPT comes from the door main.rs hands the runner
 //! (`follow::system`), never from an OS the rules read.
 
 use crate::app::App;
@@ -180,14 +180,12 @@ fn follow_shown(trusted: bool, installed: bool) -> (bool, bool) {
 fn follow_chatgpt_shows_only_with_a_door_that_has_the_chatgpt_app() {
     // macOS's door, the ChatGPT app installed and no permission yet: the item, and the offer's screen.
     assert_eq!(follow_shown(false, true), (true, true));
-    // Windows' and Linux's: no item and no screen, from the same rules.
+    // A desktop with no door (GNOME or KDE on Wayland): no item and no screen, from the same rules.
     assert_eq!(follow_shown(NoFollow.trusted(), NoFollow.installed()), (false, false));
 }
 
 #[cfg(not(target_os = "macos"))]
 #[test]
-fn off_macos_the_binary_hands_the_runner_no_chatgpt_door() {
-    let door = crate::follow::system(std::env::temp_dir());
-    assert!(!door.installed() && !door.trusted());
-    assert!(door.observe(Box::new(|_: crate::follow::Heard| {})).is_none());
+fn off_macos_the_saved_switch_off_leaves_the_door_untrusted() {
+    assert!(!crate::follow::system(std::env::temp_dir(), false).trusted());
 }

@@ -2,6 +2,7 @@
 //! offer the Follow ChatGPT screen. The window's title is private like a tty: it goes on the watch's stdin and nowhere
 //! else, never into the log, an Event, the state file or the window.
 
+use crate::front::{LinuxFront, linux_front};
 use crate::tabs::Out;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -147,13 +148,49 @@ impl AxTrust for NoFollow {
     fn start(&self, _changed: Box<dyn Fn() + Send + Sync>) {}
 }
 
-/// The door this platform has: only macOS has the ChatGPT app to follow.
-pub fn system(#[cfg_attr(not(target_os = "macos"), expect(unused_variables))] home: PathBuf) -> Arc<dyn FollowDoor> {
-    #[cfg(target_os = "macos")]
-    let door = crate::follow_macos::MacFollow::new(home);
-    #[cfg(not(target_os = "macos"))]
-    let door = NoFollow;
-    Arc::new(door)
+/// Which door follows the ChatGPT app's window.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DoorKind {
+    Mac,
+    Windows,
+    /// The session's DISPLAY.
+    X11(String),
+    Sway,
+    Hyprland,
+    None,
+}
+
+/// `linux` is `front::linux_front`'s answer: the window system the front source reads is the one the door reads.
+pub fn door_kind(os: &str, linux: Option<LinuxFront>) -> DoorKind {
+    match (os, linux) {
+        ("macos", _) => DoorKind::Mac,
+        ("windows", _) => DoorKind::Windows,
+        (_, Some(LinuxFront::X11(display))) => DoorKind::X11(display),
+        (_, Some(LinuxFront::Sway)) => DoorKind::Sway,
+        (_, Some(LinuxFront::Hyprland)) => DoorKind::Hyprland,
+        _ => DoorKind::None,
+    }
+}
+
+/// The door this platform and session have. `switch_on` is Harness's saved switch, which gates every door off macOS.
+pub fn system(
+    #[cfg_attr(not(target_os = "macos"), expect(unused_variables))] home: PathBuf,
+    #[cfg_attr(target_os = "macos", expect(unused_variables))] switch_on: bool,
+) -> Arc<dyn FollowDoor> {
+    let linux = cfg!(target_os = "linux").then(|| linux_front(&|name| std::env::var(name).ok()));
+    match door_kind(std::env::consts::OS, linux) {
+        #[cfg(target_os = "macos")]
+        DoorKind::Mac => Arc::new(crate::follow_macos::MacFollow::new(home)),
+        #[cfg(windows)]
+        DoorKind::Windows => Arc::new(crate::follow_windows::WindowsFollow::new(FollowSwitch::new(switch_on))),
+        #[cfg(target_os = "linux")]
+        DoorKind::X11(display) => Arc::new(crate::follow_x11::X11Follow::new(display, FollowSwitch::new(switch_on))),
+        #[cfg(target_os = "linux")]
+        DoorKind::Sway => Arc::new(crate::follow_sway::SwayFollow::new(FollowSwitch::new(switch_on))),
+        #[cfg(target_os = "linux")]
+        DoorKind::Hyprland => Arc::new(crate::follow_hyprland::HyprlandFollow::new(FollowSwitch::new(switch_on))),
+        _ => Arc::new(NoFollow),
+    }
 }
 
 /// What to do with the observation.

@@ -122,7 +122,7 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
         front: front::system(log.clone()),
         tabs: tabs::system(),
         updater: harness_device::update::system(handle),
-        follow: follow::system(paths.home_dir()?),
+        follow: follow::system(paths.home_dir()?, !saved.follow_off),
     };
 
     // A watch or a sign-in hands its events over holding a lock that stopping or cancelling it takes: `send` only
