@@ -220,6 +220,9 @@ export interface SessionInputDeps {
   /** An OpenClaw first task's move on its row from typed back to waiting untyped (lib/registry.ts), made before its box is
    *  cleared: true once it is saved. False, or absent, and nothing is pressed. */
   untypeFirstTask?: (id: string, text: string) => Promise<boolean>
+  /** A turn took the agent's first task ([onTurnStarted]): its row lets the typed task go (lib/registry.ts `firstTaskTaken`).
+   *  Not said for a stop or a forget: OpenClaw's store or the binding pass's bound settles those (core/agents/bind.ts). */
+  onFirstTaskTaken?: (id: string) => void
   /** Clock and timer for the lease wait; real ones by default. */
   now?: () => number
   sleep?: (ms: number) => Promise<void>
@@ -334,6 +337,50 @@ export class SessionInputController {
     this.deps.onWaitChanged?.(id)
   }
 
+  /**
+   * [text] is [id]'s first task an earlier daemon typed and did not see confirmed (its row's `firstTaskTyped`, found by the
+   * binding pass after a restart): it is awaited as if typed now, its window from here, and settles as one typed here
+   * does: an Enter only on a box that holds it, a box whose history did not load cleared ([clearRefused]), never a paste.
+   * False, and nothing changes, while a first task or a message already awaits for [id] or is being typed, or a turn is
+   * open (the task may be that turn, which OpenClaw's store confirms): the caller may ask again on a later pass.
+   */
+  adoptTypedFirstTask(id: string, text: string): boolean {
+    const session = this.controlSession(id)
+    if (!session) return false
+    const state = this.state(id)
+    if (state.firstTask || state.awaitingFingerprint !== null || state.turnOpen || (state.writes && !state.paneWait)) return false
+    state.firstTask = true
+    state.awaitingFingerprint = fingerprint(text)
+    state.awaitingContent = text
+    state.retries = 0
+    state.observes = 0
+    state.ambiguousDispatch = false
+    this.pasted(state, undefined)
+    this.deps.onWaitChanged?.(id)
+    this.armSubmitCheck(id, session, state)
+    return true
+  }
+
+  /**
+   * OpenClaw's store holds the user row of [id]'s first task (core/agents/bind.ts), written with no turn seen here (while
+   * the daemon was down, say): the task was taken. Its wait ends as a turn's would, with no error and no key, and what
+   * waits behind it goes on.
+   */
+  firstTaskConfirmed(id: string): void {
+    const state = this.states.get(id)
+    if (!state?.firstTask) return
+    if (state.timer) clearTimeout(state.timer)
+    state.timer = null
+    state.awaitingFingerprint = null
+    state.awaitingContent = null
+    state.retries = 0
+    state.observes = 0
+    state.ambiguousDispatch = false
+    this.settle(state, 'taken')
+    this.firstTaskEnded(id, state)
+    this.drainOne(id, state)
+  }
+
   private countWait(id: string, by: 1 | -1): void {
     const count = (this.waitingEngine.get(id) ?? 0) + by
     if (count > 0) this.waitingEngine.set(id, count)
@@ -352,7 +399,9 @@ export class SessionInputController {
    * An OpenClaw pane that cannot send the message yet ([OPENCLAW_NOT_READY]) is waited for the same way, up to
    * OPENCLAW_NOT_READY_MAX_MS, and for a first task as long as it waits ([firstTaskEnded]): the binding pass bounds
    * that. It is not read again while a command of the pane's own is typed (`typeCommand`), which the message would run
-   * into in the box. A message typed once already and cleared ([clearRefused]) counts that wait from [firstPaste].
+   * into in the box, nor while a first task an earlier daemon typed awaits its turn ([adoptTypedFirstTask]), which it would
+   * go ahead of once that task's Enter empties the box. A message typed once already and cleared ([clearRefused]) counts
+   * that wait from [firstPaste].
    */
   private async injectWhenLeased(
     state: InputState,
@@ -380,7 +429,7 @@ export class SessionInputController {
       state.paneWait = false
       if (held()) return refused()
       if (!current()) break
-      if (notReady && state.controlLocked) continue
+      if (notReady && (state.controlLocked || state.awaitingFingerprint !== null)) continue
       delivery = await write()
     }
     return delivery
@@ -693,6 +742,8 @@ export class SessionInputController {
     state.settleTimer = null
     state.settling = false
     state.turnOpen = true
+    // The row keeps a typed first task until a turn takes it (lib/registry.ts `firstTaskTyped`): this is that turn.
+    if (state.firstTask) this.deps.onFirstTaskTaken?.(sessionId)
     this.firstTaskEnded(sessionId, state)
     // Cursor does not clear its composer when it accepts a prompt: the submitted text stays on the "→"
     // line for the whole turn and long after it, so the terminal reads as if the question is still

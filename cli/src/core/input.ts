@@ -70,6 +70,9 @@ export interface InputDeps {
   engineStarting?: (engine: string) => Promise<boolean> | null
   /** An agent's frame changed outside the registry (its `waitingFor`): pushed to every window again. */
   sync?: (id: string) => void
+  /** An agent's first task on its row (lib/registry.ts): moved back from typed to waiting untyped before its OpenClaw box
+   *  is cleared (`untypeFirstTask`), and let go once a turn took it (`firstTaskTaken`). */
+  firstTask?: { untype(agentId: string, text: string): Promise<boolean>; taken(agentId: string): void }
 }
 
 /**
@@ -177,11 +180,15 @@ export function sessionInputDeps(
   deps: InputDeps,
   deviceInput: () => Pick<AutonomousDeviceInput, 'legacyWrite'>,
 ): SessionInputDeps {
-  const { resolve, terminal, deliveries, device, clients, agentIdFor, openTurn, emit } = deps
+  const { resolve, terminal, deliveries, device, clients, agentIdFor, openTurn, emit, firstTask } = deps
   const { captureTerminal, validateTerminal, keyTerminalAction } = terminal
   const writeMessage = messageWriter(deps)
   return {
     ...(deps.moveGate ? { moveGate: deps.moveGate } : {}),
+    ...(firstTask ? {
+      untypeFirstTask: (id: string, text: string) => firstTask.untype(id, text),
+      onFirstTaskTaken: (id: string) => firstTask.taken(id),
+    } : {}),
     readScreen: deps.readScreen,
     submission: deps.submission,
     getSession: (id) => resolve(id),
