@@ -566,8 +566,17 @@ mod tests {
         assert!(!registered("OpenAI.NoSuchApp_2p2nqsd0c76g0"));
     }
 
-    /// Under a desktop a person sees (the VM's console session): a window of this test's own, in front, retitled
-    /// twice, with the ChatGPT check pointed at this process.
+    /// The VM's test user has the ChatGPT app's Store package (the spec's Windows checks); a runner has none. Named
+    /// as the live test, so the VM's `--ignored follow_windows_live` runs both.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "needs the ChatGPT app installed for this Windows user"]
+    fn follow_windows_live_installed() {
+        assert!(WindowsFollow::new(FollowSwitch::new(true)).installed());
+    }
+
+    /// Under a desktop a person sees (the VM's console session): two windows of this test's own, retitled and brought
+    /// to the front in turn, with the ChatGPT check pointed at this process.
     #[cfg(windows)]
     #[test]
     #[ignore = "needs a desktop where this process may take the foreground"]
@@ -579,67 +588,81 @@ mod tests {
 
         let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
         let (give, given) = mpsc::channel();
-        // On a thread that pumps its messages, as an app's UI thread does: the observer's reads of its text and the
+        // On a thread that pumps its messages, as an app's UI thread does: the observer's reads of their text and the
         // test's retitles arrive there as messages.
         let pump = thread::spawn(move || {
-            let (class, name) = (wide("STATIC"), wide("Fix login"));
-            // SAFETY: a system class and a title, NUL-terminated; no parent, menu, instance or parameter.
-            let window = unsafe {
-                CreateWindowExW(
-                    0,
-                    class.as_ptr(),
-                    name.as_ptr(),
-                    WS_OVERLAPPEDWINDOW,
-                    CW_USEDEFAULT,
-                    CW_USEDEFAULT,
-                    300,
-                    200,
-                    ptr::null_mut(),
-                    ptr::null_mut(),
-                    ptr::null_mut(),
-                    ptr::null(),
-                )
-            };
-            assert!(!window.is_null(), "{}", std::io::Error::last_os_error());
-            // SAFETY: this thread's own window. Shown twice: a process's first ShowWindow may take its start-up flags
-            // instead of the one asked.
-            let front = unsafe {
-                ShowWindow(window, SW_SHOWNORMAL);
-                ShowWindow(window, SW_SHOWNORMAL);
-                SetForegroundWindow(window) != 0 && GetForegroundWindow() == window
-            };
-            // SAFETY: takes no argument; this thread has a queue, made with its window.
-            let _ = give.send((window as usize, unsafe { GetCurrentThreadId() }, front));
+            let class = wide("STATIC");
+            let windows = ["Fix login", "Second thread"].map(|title| {
+                let name = wide(title);
+                // SAFETY: a system class and a title, NUL-terminated; no parent, menu, instance or parameter.
+                let window = unsafe {
+                    CreateWindowExW(
+                        0,
+                        class.as_ptr(),
+                        name.as_ptr(),
+                        WS_OVERLAPPEDWINDOW,
+                        CW_USEDEFAULT,
+                        CW_USEDEFAULT,
+                        300,
+                        200,
+                        ptr::null_mut(),
+                        ptr::null_mut(),
+                        ptr::null_mut(),
+                        ptr::null(),
+                    )
+                };
+                assert!(!window.is_null(), "{}", std::io::Error::last_os_error());
+                // SAFETY: this thread's own window. Shown twice: a process's first ShowWindow may take its start-up
+                // flags instead of the one asked.
+                unsafe {
+                    ShowWindow(window, SW_SHOWNORMAL);
+                    ShowWindow(window, SW_SHOWNORMAL);
+                }
+                window
+            });
+            let first = windows[0];
+            // SAFETY: this thread's own window.
+            let front = unsafe { SetForegroundWindow(first) != 0 && GetForegroundWindow() == first };
+            // SAFETY: takes no argument; this thread has a queue, made with its windows.
+            let _ = give.send((windows.map(|window| window as usize), unsafe { GetCurrentThreadId() }, front));
             run_messages();
-            // SAFETY: made by this thread, and destroyed once.
-            unsafe { DestroyWindow(window) };
+            for window in windows {
+                // SAFETY: made by this thread, and destroyed once.
+                unsafe { DestroyWindow(window) };
+            }
         });
-        let (window, pump_thread, front) = given.recv().expect("the test's window");
-        let stop_pump = || {
-            // SAFETY: takes no pointer.
-            unsafe { PostThreadMessageW(pump_thread, WM_QUIT, 0, 0) };
-        };
-        if !front {
-            eprintln!("skipped: Windows did not give this test the foreground");
-            stop_pump();
-            pump.join().unwrap();
-            return;
-        }
+        let ([first, second], pump_thread, front) = given.recv().expect("the test's windows");
+        // Run on purpose, on a desktop that allows it: a refusal is this test's failure, not a skip.
+        assert!(front, "Windows did not give this test the foreground");
         let own = std::process::id();
         let (heard, told) = heard_into();
         let observation = observe_with(move |pid| pid == own, heard);
+        let next = || told.recv_timeout(Duration::from_secs(5));
         let titled = |text: &str| -> Result<Heard, RecvTimeoutError> { Ok(Heard::Title(Some(text.into()))) };
-        assert_eq!(told.recv_timeout(Duration::from_secs(5)), titled("Fix login"));
-        for text in ["Plan the trip", "Ship the dial"] {
+        let retitle = |window: usize, text: &str| {
             let name = wide(text);
             // SAFETY: the test's window, alive until its thread quits below; a NUL-terminated title.
             unsafe { SetWindowTextW(window as HWND, name.as_ptr()) };
-            assert_eq!(told.recv_timeout(Duration::from_secs(5)), titled(text));
+        };
+        assert_eq!(next(), titled("Fix login"));
+        for text in ["Plan the trip", "Ship the dial"] {
+            retitle(first, text);
+            assert_eq!(next(), titled(text));
         }
+        // The other window, brought to the front: the foreground hook tells its title.
+        // SAFETY: the test's window; this process has the foreground.
+        let raised = unsafe { SetForegroundWindow(second as HWND) } != 0;
+        assert!(raised, "Windows did not give the second window the foreground");
+        assert_eq!(next(), titled("Second thread"));
+        // The window now behind, retitled, is not heard: the next title is the one in front's.
+        retitle(first, "Behind");
+        retitle(second, "Renamed in front");
+        assert_eq!(next(), titled("Renamed in front"));
         drop(observation);
         // Each title once: nothing more was heard before the thread ended.
         assert_eq!(told.recv_timeout(Duration::from_secs(1)), Err(RecvTimeoutError::Disconnected));
-        stop_pump();
+        // SAFETY: takes no pointer.
+        unsafe { PostThreadMessageW(pump_thread, WM_QUIT, 0, 0) };
         pump.join().unwrap();
     }
 }
