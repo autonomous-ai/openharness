@@ -129,8 +129,10 @@ DEVICE_APP_PATHS = {
                           "device-app/scripts/release-build.sh", "device-app/scripts/release-check.sh",
                           "device-app/scripts/release-setup.sh", "device-app/src-tauri/tauri*.conf.json",
                           "device-app/src-tauri/Cargo.toml", "device-app/src-tauri/Cargo.lock"),
-    # Desktop installs the app: Desktop's half and its test, and the app's install, packaging and instance code.
-    "device-app-desktop": (DEVICE_APP_SETUP, "desktop/lib/devices/",
+    # Desktop installs the app: Desktop's half and its test, the Flutter its jobs set up on each arch, and the app's
+    # install, packaging and instance code.
+    "device-app-desktop": (DEVICE_APP_SETUP, ".github/actions/desktop-flutter/", ".github/actions/desktop-flutter-arm64/",
+                           "desktop/lib/devices/",
                            "desktop/integration_test/device_app_install_windows_linux_native_test.dart",
                            "device-app/src-tauri/src/install.rs", "device-app/src-tauri/src/packaging.rs",
                            "device-app/src-tauri/src/instance.rs", "device-app/src-tauri/tauri*.conf.json"),
