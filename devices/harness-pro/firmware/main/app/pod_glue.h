@@ -151,6 +151,9 @@ int pod_ui_library_page(pod_ui_t *, const pod_library_row_t *rows, int count, in
 pod_out_t pod_ui_library_rows(pod_ui_t *, const pod_library_row_t *rows, int count, uint32_t now_ms);
 
 // A transient one-line notice, 3 s, drawn under the status bar by pod_ui_render.
+// "See it in <App>" (an agent whose app withholds voice) shows shorter, as on the round dial: both the tap here and
+// pro_app.c's voice gate use it.
+#define POD_SEE_IT_MS 2000
 void pod_ui_notice(pod_ui_t *, const char *text, uint32_t now_ms);
 void pod_ui_notice_bad(pod_ui_t *, const char *text, uint32_t now_ms);   // the same, in red (#b3261e): "Update failed"
 

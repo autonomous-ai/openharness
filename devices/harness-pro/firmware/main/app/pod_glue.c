@@ -303,6 +303,11 @@ static pod_out_t talk_fire(pod_ui_t *u, uint32_t now_ms)
     pod_copy_str(id, sizeof id, u->talk_agent);
     const pod_agent_t *ag = pod_model_find(&u->model, id);
     if (!ag || asks_here(&u->model, ag)) return none;
+    if (!(ag->caps & POD_CAP_V)) {   // before offline: the app's limit holds wherever the machine is
+        pod_ui_notice(u, pod_host_see_it(ag->host), now_ms);
+        u->notice_until = now_ms + POD_SEE_IT_MS;
+        return none;
+    }
     if (ag->state == POD_OFFLINE) {
         pod_ui_notice(u, "That machine is offline", now_ms);
         return none;

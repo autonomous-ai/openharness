@@ -699,7 +699,7 @@ static void voice_begin_effect(const char *agent)
         pod_ui_talk_over(&s_pod);
         const uint32_t now = ms();
         pod_ui_notice(&s_pod, why ? why : !s_linked ? "Not connected" : was_open ? "Still sending the last message" : "Can't talk right now", now);
-        if (see_it) s_pod.notice_until = now + 2000;
+        if (see_it) s_pod.notice_until = now + POD_SEE_IT_MS;
         change();
         pro_app_unlock();
     }
