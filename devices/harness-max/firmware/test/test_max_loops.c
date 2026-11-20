@@ -164,19 +164,19 @@ static void test_rail(void)
     CHECK(near565(pixel(peak, 2), 0xFFFFFF) && near565(pixel(b->x + lw / 4, 2), ACCENT));
     CHECK(near565(pixel(peak - lw / 4, 2), mix(0xFFFFFF, ACCENT, .5)));
     CHECK(pixel(peak, RAIL_H) != pixel(peak, 2));   // only the rail
-    // The asking rail at .35 over its glow's top, which breathes .18 to .05 and back over the same second.
+    // The asking rail at .35 over its glow's top, which breathes .25 to .05 and back over the same second.
     render(T0 + 500);
     const unsigned top = ((WAIT >> 16 & 255) * 50 / 1000) << 16 | ((WAIT >> 8 & 255) * 50 / 1000) << 8 |
                          (WAIT & 255) * 50 / 1000;   // .05 of it, rounded down as the glow's mix rounds
     CHECK(near565(pixel(a->x + 40, 2), mix(WAIT, top, .35)));
     CHECK(run_at(K_GRAD, a->x, 0)->fg == ht_rgb(top));
     render(T0 + 1000);
-    CHECK(pixel(a->x + 40, 2) == ht_rgb(WAIT) && run_at(K_GRAD, a->x, 0)->fg == ht_rgb(max_mix(WAIT, GROUND, 18)));
-    render(T0 + 250);   // a quarter round: .115
-    const double g = keyframes(.25, .18, .05, ease_in_out);
+    CHECK(pixel(a->x + 40, 2) == ht_rgb(WAIT) && run_at(K_GRAD, a->x, 0)->fg == ht_rgb(max_mix(WAIT, GROUND, 25)));
+    render(T0 + 250);   // a quarter round: .15
+    const double g = keyframes(.25, .25, .05, ease_in_out);
     CHECK(near565(run_at(K_GRAD, a->x, 0)->fg, mix(WAIT, GROUND, g)));
-    // The working and the resting glows hold still: the working one's .14 (max_glow_pct), the resting one none.
-    CHECK(run_at(K_GRAD, b->x, 0)->fg == ht_rgb(max_mix(ACCENT, GROUND, 14)) && !run_at(K_GRAD, cell_of("c")->x, 0));
+    // The working and the resting glows hold still: the working one's .25 (max_glow_pct), the resting one none.
+    CHECK(run_at(K_GRAD, b->x, 0)->fg == ht_rgb(max_mix(ACCENT, GROUND, 25)) && !run_at(K_GRAD, cell_of("c")->x, 0));
 }
 
 // The pet over the breathing glow keeps the ground it was baked on. The cells' pets play (max_ui_overview.c): a frame

@@ -371,17 +371,18 @@ unsigned max_rail_ink(const max_agent_t *a)
 }
 unsigned max_chip_ink(const max_agent_t *a) { return a->state == MAX_IDLE ? CHIP_IDLE : max_rail_ink(a); }
 
-unsigned max_glow_pct(const max_agent_t *a)
-{
-    // A working or done agent's .14, not the mockup's .08 (owner, 20 Nov): over the black ground .08 did not show.
-    return a->state == MAX_ASKING ? 18 : a->state == MAX_IDLE ? 0 : 14;
-}
+// The glow's top, in %, of any agent not at rest: .25 (owner, 20 Nov: over the black ground the mockup's .08, then
+// .14, did not show); a waiting one's breathes down to .05 and back.
+enum { GLOW_PCT = 25, GLOW_LOW_PCT = 5 };
+
+unsigned max_glow_pct(const max_agent_t *a) { return a->state == MAX_IDLE ? 0 : GLOW_PCT; }
 unsigned max_glow_top(const max_agent_t *a, unsigned under, uint32_t now_ms, bool still)
 {
     const unsigned ink = max_chip_ink(a);
     if (still || a->state != MAX_ASKING) return max_mix(ink, under, max_glow_pct(a));
     // In tenths of a percent, rounded down as max_mix rounds: the loop's start is the glow at rest.
-    const unsigned pm = (unsigned)max_keyframes(max_loop(now_ms, 1000), 180, 50, MAX_EASE_IN_OUT);
+    const unsigned pm =
+        (unsigned)max_keyframes(max_loop(now_ms, 1000), GLOW_PCT * 10, GLOW_LOW_PCT * 10, MAX_EASE_IN_OUT);
     unsigned out = 0;
     for (int sh = 0; sh <= 16; sh += 8)
         out |= ((((ink >> sh) & 0xff) * pm + ((under >> sh) & 0xff) * (1000 - pm)) / 1000) << sh;
