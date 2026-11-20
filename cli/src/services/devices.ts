@@ -1127,6 +1127,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       part.call('dial', () => threadSettled(app))
     },
     appPicked: () => log('[device] app filter: picker'),
+    // A pick that leaves the dial's ring as it was says why in fixed words (PM, 2026-11-20): the answer only, never the app.
+    appPickKept: (answer) => log(`[device] app filter: pick · ${answer}`),
     // A pick on the dial brings its app to the front, on macOS and, through their raise, on Linux and Windows
     // (docs/plans/2026-11-16-dial-pick-brings-app-design.md).
     // A measure: the outcome, never the app; a pick with nothing to bring, or replaced by a later one, ran nothing.
