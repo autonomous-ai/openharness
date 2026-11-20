@@ -1,7 +1,8 @@
 /**
  * A desk for hand checks of the dial on Windows (README.md beside it), in three modes:
  *
- * - a stand-in dial (`[--port <n>] [--sealed] [--quit-on <file>]`): Task 23's daemon and FakeDial, driven from stdin;
+ * - a stand-in dial (`[--port <n>] [--own-account] [--quit-on <file>]`): Task 23's daemon and FakeDial, driven from
+ *   stdin, sealed unless `--own-account` gives it the account it runs as (the VM's test user only);
  * - a look (`--dial-read <COMn> --out <file> --serial-bin <exe> [--against <file>]`): the real dial's own `hello`,
  *   read with not one byte written to the port;
  * - the real dial (`--dial <COMn> --speech <text> --first-read <file> --pets-from <dir> --serial-bin <exe> [--port <n>]
@@ -29,7 +30,7 @@ import { openWindowsPort } from '../../src/cable/windowsSerial.js'
 import { openLocalWs } from '../../src/lib/localTransport.js'
 
 const USAGE = `usage:
-  desk.mts [--port <n>] [--sealed] [--quit-on <file>]
+  desk.mts [--port <n>] [--own-account] [--quit-on <file>]
   desk.mts --dial-read <COMn> --out <file> --serial-bin <harness-serial.exe> [--against <first read>]
   desk.mts --dial <COMn> --speech <text> --first-read <file> --pets-from <dir> --serial-bin <harness-serial.exe> [--port <n>] [--quit-on <file>]`
 
@@ -45,7 +46,7 @@ const ACCOUNT_PORT = 18473
 const SPEECH_MAX = 200
 
 type Mode =
-  | { kind: 'stand-in'; port?: number; sealed: boolean; quitOn?: string }
+  | { kind: 'stand-in'; port?: number; own: boolean; quitOn?: string }
   | { kind: 'look'; com: string; out: string; against?: string; serialBin: string }
   | { kind: 'real'; com: string; speech: string; firstRead: string; petsFrom: string; serialBin: string; port?: number; quitOn?: string }
 
@@ -55,7 +56,7 @@ function modeOf(argv: string[]): Mode {
   for (let i = 0; i < argv.length; i++) {
     const name = argv[i]!
     if (args.has(name)) throw new DeskStop(2, `${name} is given twice`)
-    if (name === '--sealed') { args.set(name, true); continue }
+    if (name === '--own-account') { args.set(name, true); continue }
     if (!VALUED.has(name)) throw new DeskStop(2, name.startsWith('--') ? `${name} is no argument of the desk` : 'an argument that is no flag')
     const value = argv[++i]
     if (value === undefined || value.startsWith('--') || value === '') throw new DeskStop(2, `${name} needs a value`)
@@ -101,8 +102,8 @@ function modeOf(argv: string[]): Mode {
     if (speech.length > SPEECH_MAX) throw new DeskStop(2, `--speech takes at most ${SPEECH_MAX} characters`)
     return { kind: 'real', com: dial, speech, firstRead: need('--first-read'), petsFrom: need('--pets-from'), serialBin: serialBin(), port, quitOn }
   }
-  only(['--port', '--sealed', '--quit-on'])
-  return { kind: 'stand-in', port, sealed: args.has('--sealed'), quitOn }
+  only(['--port', '--own-account', '--quit-on'])
+  return { kind: 'stand-in', port, own: args.has('--own-account'), quitOn }
 }
 
 const say = (line: string): void => { process.stdout.write(`${line}\n`) }
@@ -265,7 +266,7 @@ async function standInMode(mode: Extract<Mode, { kind: 'stand-in' }>): Promise<v
   needEnv('E2E_BUNDLE_PATH', 'the CLI bundle (bundle.mjs puts it beside the bundled desk)')
   needEnv('HARNESS_PTY_BIN', 'a harness-pty.exe')
   if (mode.port !== undefined && await portBusy(mode.port)) throw new DeskStop(3, `port ${mode.port} is busy`)
-  const own = mode.sealed ? undefined : join(process.env.USERPROFILE ?? homedir(), '.harness-dial-check')
+  const own = mode.own ? join(process.env.USERPROFILE ?? homedir(), '.harness-dial-check') : undefined
   // As the firmware greets: one app's agents at a time (`app.pick`), and questions as silent rows.
   const d = await startWindowsDaemon({ port: mode.port, own, capabilities: { appFilter: 'v1', questionTier: 'v1' } })
   say(JSON.stringify({ desk: { dataDir: d.dataDir, port: d.port, root: d.root } }))

@@ -40,14 +40,14 @@ The signed `harness-serial.exe` is then `<that pty folder>\harness-serial.exe`, 
 A desk's first line is `{"desk":{"dataDir":…,"port":…,"root":…}}`, so a shell started for herdr or a hand-run hook can
 name them. It names local paths: it stays on the machine.
 
-- **The stand-in, sealed**: `desk.mjs --sealed [--port <n>] [--quit-on <file>]`. Task 23's daemon, sealed in a
-  throwaway root, on a stand-in dial that greets as the firmware does. stdin takes one command a line: `list` (the
-  rows of the last list), `tap <row>`, `rest <row>` (the dial turns to the row), `say <row> <text>` (the dial sends the
-  text, `turn.send`), `pick <app>` (`app.pick`, a host id), `quit`. Each message the daemon sends the dial is printed
-  as one JSON line, its keepalive pings aside.
-- **The stand-in, the account's own**: the same without `--sealed`. It uses the engines, editors and apps of the account
-  it runs as, and sets their hooks up, with Harness's folders in `%USERPROFILE%\.harness-dial-check`, kept after
-  `quit`. **Only the VM's test user, never a person's own account.**
+- **The stand-in, sealed**: `desk.mjs [--port <n>] [--quit-on <file>]`. Task 23's daemon, sealed in a throwaway
+  root with Windows' own folders alone on its PATH, on a stand-in dial that greets as the firmware does. stdin takes
+  one command a line: `list` (the rows of the last list), `tap <row>`, `rest <row>` (the dial turns to the row),
+  `say <row> <text>` (the dial sends the text, `turn.send`), `pick <app>` (`app.pick`, a host id), `quit`. Each message
+  the daemon sends the dial is printed as one JSON line, its keepalive pings aside.
+- **The stand-in, the account's own**: the same with `--own-account`. It uses the engines, editors and apps of the
+  account it runs as, and sets their hooks up, with Harness's folders in `%USERPROFILE%\.harness-dial-check`, kept
+  after `quit`. **Only the VM's test user, never a person's own account.**
 - **The look**: `desk.mjs --dial-read <COMn> --out <file> --serial-bin <exe> [--against <first read>]`. It opens the
   port with `harness-serial.exe open`, waits up to 20 s for the dial's own `hello` (a dial in a session greets every
   15 s, alone every 2 s), writes not one byte to the port and closes it. It writes `<file>` whole and owner-only:
@@ -116,7 +116,7 @@ Every step through `console.ps1`, in the owner's console session; SSH runs only 
 1. `harness status`: keep `running` or `stopped` and the version, nothing else.
 2. If it runs, `harness stop`. Then the first look, `--dial-read COM3 --out <run>\first-read.json`, must exit 0; exit 3
    means something took `COM3` again (the owner's Harness Desktop may have started its daemon): stop the run.
-3. The desks: the sealed stand-in (`--sealed --port 18479`) and the real dial (`--dial COM3 --speech <text>
+3. The desks: the sealed stand-in (`--port 18479`) and the real dial (`--dial COM3 --speech <text>
    --first-read <run>\first-read.json --pets-from <the owner's pets folder> --port 18478 --quit-on <run>\quit`), each
    with `-NoWait`, then quit through its `--quit-on` file and `-Stop`. A real-dial desk that ends 4, 5 or 6 stops the
    run.
