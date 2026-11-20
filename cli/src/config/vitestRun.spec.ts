@@ -4,11 +4,11 @@
  * others' ancestors.
  */
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { afterEach, expect, inject, it, vi } from 'vitest'
-import { beginRun, createRun, removeRun, RUN_FILE, sweep } from '../__fixtures__/vitestRun.js'
+import { beginRun, createRun, removeRun, RUN_FILE, startNode, sweep } from '../__fixtures__/vitestRun.js'
 
 let base: string | undefined
 afterEach(() => {
@@ -33,6 +33,23 @@ it.skipIf(process.platform === 'win32')('runs each worker in a folder of its own
   expect(tmpdir()).toBe(join(root, process.env.VITEST_POOL_ID!))
   // The run's file names a process that is running: the one running this run.
   expect(() => process.kill(Number(readFileSync(join(root, RUN_FILE), 'utf8')), 0)).not.toThrow()
+})
+
+// macOS checks each new executable file on its first run, one at a time machine-wide: 2.1 s for a fresh copy under load.
+// The run pays it once, for the copy testing/placeNode.ts links into each test.
+it.skipIf(inject('startedNode') === '')('starts one copy of this Node in its folder, for placeNode to link', () => {
+  const node = inject('startedNode')
+  expect(node).toBe(join(inject('runFolder'), 'node', 'bin', basename(process.execPath)))
+  expect(statSync(node).ino).not.toBe(statSync(realpathSync(process.execPath)).ino)
+})
+
+// Homebrew's Node loads libnode from beside the path it runs as (#4395): each test copies its own, as before. A Node that
+// Rosetta runs is refused by name in each test that places one.
+it('starts no Node for a Node with libnode beside it, nor for one that Rosetta runs', () => {
+  const folder = scratch()
+  expect(startNode(folder, undefined, ['/opt/homebrew/Cellar/node/25.2.1/lib/libnode.141.dylib'])).toBe('')
+  expect(startNode(folder, { platform: 'darwin', arch: 'x64', cpu: 'Apple M1 Pro' })).toBe('')
+  expect(readdirSync(folder)).toEqual([])
 })
 
 it('gives every run a new folder, even two runs whose processes have the same id', () => {
