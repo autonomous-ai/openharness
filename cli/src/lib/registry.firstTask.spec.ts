@@ -158,6 +158,47 @@ it('inside a reconcile transaction it is taken only after the commit', async () 
   expect(disk()[0].firstTaskTyped?.text).toBe(TASK)
 })
 
+// The input controller's timers and the turn stream call these, and they can fire while a pass holds its transaction open.
+it('untyping it inside a reconcile transaction waits for the commit', async () => {
+  const { registry, row } = await bound()
+  await registry.takeFirstTask(row.agentId)
+  let untyped: Promise<boolean | string> | undefined
+  await registry.transaction(async () => {
+    untyped = registry.untypeFirstTask(row.agentId, TASK).catch((error: Error) => error.message)
+    // The pass's own bind, queued behind it on the writer: a save that did not wait would have run by now.
+    expect(await registry.register({ engine: 'openclaw', sessionId: SESSION, runtimes, cwd: root })).toBeTruthy()
+    expect(registry.byAgent(row.agentId)?.firstTaskTyped?.text).toBe(TASK)
+  })
+  await expect(untyped).resolves.toBe(true)
+  expect(disk()[0].firstTask).toBe(TASK)
+  expect(disk()[0]).not.toHaveProperty('firstTaskTyped')
+})
+
+it('confirming it inside a reconcile transaction waits for the commit', async () => {
+  const { registry, row } = await bound()
+  await registry.takeFirstTask(row.agentId)
+  let taken: Promise<boolean | string> | undefined
+  await registry.transaction(async () => {
+    taken = registry.firstTaskTaken(row.agentId).catch((error: Error) => error.message)
+    // The pass's own bind, queued behind it on the writer: a save that did not wait would have run by now.
+    expect(await registry.register({ engine: 'openclaw', sessionId: SESSION, runtimes, cwd: root })).toBeTruthy()
+    expect(registry.byAgent(row.agentId)?.firstTaskTyped?.text).toBe(TASK)
+  })
+  await expect(taken).resolves.toBe(true)
+  expect(disk()[0]).not.toHaveProperty('firstTaskTyped')
+})
+
+// A store read is evidence about the mark typed at `at`: a mark typed again since is newer than the read and stays.
+it('confirming a typed task by its moment removes only the mark typed then', async () => {
+  const { registry, row } = await bound()
+  await registry.takeFirstTask(row.agentId)
+  const at = registry.byAgent(row.agentId)!.firstTaskTyped!.at
+  expect(await registry.firstTaskTaken(row.agentId, at - 1)).toBe(false)
+  expect(disk()[0].firstTaskTyped).toEqual({ text: TASK, at })
+  expect(await registry.firstTaskTaken(row.agentId, at)).toBe(true)
+  expect(disk()[0]).not.toHaveProperty('firstTaskTyped')
+})
+
 it('a bind keeps the typed task', async () => {
   const { registry, row } = await bound()
   await registry.takeFirstTask(row.agentId)
