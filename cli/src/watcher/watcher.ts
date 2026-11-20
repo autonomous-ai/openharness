@@ -8,6 +8,7 @@ import { basename, dirname } from 'path'
 import type { LiveStamp } from '../engines/worker/liveProtocol.js'
 import type { AgentEngine } from '../engines/types.js'
 import { errorKind } from '../lib/log.js'
+import { pathToWatch } from '../lib/pathToWatch.js'
 
 export interface WatchedSession {
   sessionId: string
@@ -97,6 +98,8 @@ interface FileState extends WatchedSession {
   /** How many times `setTail` moved the tail: a hold taken before a move cannot put it back. */
   moves: number
   cursorLines: string[]
+  /** The path chokidar was given for it (lib/pathToWatch.ts), none when it could not be watched. */
+  watchedAs: string | undefined
 }
 
 const DEBOUNCE_MS = 40
@@ -105,6 +108,8 @@ export class Watcher extends EventEmitter {
   private watcher: FSWatcher | null = null
   private files = new Map<string, FileState>()
   private bySession = new Map<string, string>()
+  /** Each watched transcript by the path chokidar was given, which names its changes: on Windows its long name. */
+  private watched = new Map<string, string>()
 
   private readonly readChunkBytes: number
   private readonly historyMaxBytes: number
@@ -121,15 +126,16 @@ export class Watcher extends EventEmitter {
   start(): void {
     if (this.watcher) return
     this.watcher = chokidar.watch([], { ignoreInitial: false, alwaysStat: true })
+    const tailed = (watchedAs: string): string => this.watched.get(watchedAs) ?? watchedAs
     this.watcher
-      .on('add', (filePath: string) => this.schedule(filePath))
-      .on('change', (filePath: string) => { this.noteChange(filePath); this.schedule(filePath) })
+      .on('add', (filePath: string) => this.schedule(tailed(filePath)))
+      .on('change', (filePath: string) => { this.noteChange(tailed(filePath)); this.schedule(tailed(filePath)) })
       .on('unlink', (filePath: string) => {
-        const state = this.files.get(filePath)
+        const state = this.files.get(tailed(filePath))
         if (state) state.pending = true // keep registration; a rotate/recreate may follow
       })
       .on('error', (err: unknown) => console.error('[watcher] error:', errorKind(err)))
-    if (this.files.size) this.watcher.add([...this.files.keys()])
+    if (this.watched.size) this.watcher.add([...this.watched.keys()])
   }
 
   /** Attach one trusted transcript. Runtime hydration is handled by cli.ts; the tail starts at EOF, or at
@@ -163,6 +169,9 @@ export class Watcher extends EventEmitter {
     // Two rounds of "the CLI accepted it but the adapter never saw the line" were spent guessing whether
     // this registration had happened at all. Say it once per file, with the offset it starts from.
     console.log(`[watcher] tail ${session.engine} ${session.sessionId.slice(0, 8)} @${offset} · ${session.transcriptPath}`)
+    // By a short name on Windows, the folder chokidar watches for a transcript not there yet would abort the core at
+    // its first change. One that cannot be watched is still read by the reconciliation's pollAll.
+    const watchedAs = pathToWatch(session.transcriptPath)
     this.files.set(session.transcriptPath, {
       ...session,
       stamp: opts.stamp,
@@ -181,9 +190,13 @@ export class Watcher extends EventEmitter {
       settleUnheld: null,
       moves: 0,
       cursorLines,
+      watchedAs,
     })
     this.bySession.set(session.sessionId, session.transcriptPath)
-    this.watcher?.add(session.transcriptPath)
+    if (watchedAs !== undefined) {
+      this.watched.set(watchedAs, session.transcriptPath)
+      this.watcher?.add(watchedAs)
+    }
     if (opts.fromStart || offset < size) this.schedule(session.transcriptPath)
   }
 
@@ -276,7 +289,9 @@ export class Watcher extends EventEmitter {
     // Nothing is left to drain: a drain waiting for a hold here is done.
     state?.settleUnheld?.()
     this.files.delete(filePath)
-    await this.watcher?.unwatch(filePath)
+    if (state?.watchedAs === undefined) return
+    this.watched.delete(state.watchedAs)
+    await this.watcher?.unwatch(state.watchedAs)
   }
 
   async stop(): Promise<void> {
@@ -286,6 +301,7 @@ export class Watcher extends EventEmitter {
     }
     this.files.clear()
     this.bySession.clear()
+    this.watched.clear()
     if (this.watcher) await this.watcher.close()
     this.watcher = null
   }
