@@ -686,9 +686,10 @@ export function createBinding({
       const ready = screen.state === 'ready' || screen.state === 'no-history'
       const streamed = !!agent.sessionId && openclawPaneRead(agent.sessionId, { ready, gatewayLost: screen.gatewayLost, running: screen.running }, captured.value, revision)
       // Text in the box that Harness did not type and does not own blocks a message of Harness's: an Enter would send it
-      // with the person's, and Harness never clears the person's (decision 1). Only they can, so the agent says so.
+      // with the person's, and Harness never clears the person's (decision 1). Only they can, so the agent says so. Told the
+      // pane's state: on one that can send, Harness's message scrolled in its box is what its Enter would send.
       const held = openclawScreenHold(screen, agent, gatewayGoneMs(agent.agentId, screen))
-        ?? (ready && waiting && !!screen.box && !input.ownsBox(agent.agentId, screen.box, screen.boxHidden) ? OPENCLAW_STATES.boxHeld : undefined)
+        ?? (ready && waiting && !!screen.box && !input.ownsBox(agent.agentId, screen.box, screen.boxHidden, screen.state) ? OPENCLAW_STATES.boxHeld : undefined)
       const ours = !agent.identityHold || OPENCLAW_HOLDS.has(agent.identityHold) || isOpenclawLocalStopped(agent.identityHold)
       if (held) {
         // A hold another reason set (the store unreadable, an identity read that failed) is that reason's to clear.
