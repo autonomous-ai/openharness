@@ -40,6 +40,18 @@ it('holds a write deadline the queue arms with 4 s left off the host clock, and 
   await expect(write).rejects.toThrow('write deadline exceeded')
 })
 
+// So a test can wait for its write to be queued, then expire it once.
+it('says how many write deadlines it holds', async () => {
+  const held = deadline.holdRegistryDeadline(DEADLINE_MS)
+  const queue = new RegistryWriteQueue()
+  expect(held.deadlines()).toBe(0)
+  const writes = [queue.run(() => new Promise(() => {})), queue.run(async () => 'queued behind the first')]
+  expect(held.deadlines()).toBe(2)
+  held.expire()
+  expect(held.deadlines()).toBe(0)
+  for (const write of writes) await expect(write).rejects.toThrow('write deadline exceeded')
+})
+
 it('leaves a 5 s timer from outside the registry on the host clock, which a sync does not run', async () => {
   deadline.holdRegistryDeadline(DEADLINE_MS)
   const ran = vi.fn()
