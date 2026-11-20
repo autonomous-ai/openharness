@@ -46,6 +46,9 @@ UPDATES = {
     "linux-x86_64": ("device-linux-x64-appimage", "Harness-Device-linux-x64.AppImage"),
     "linux-aarch64": ("device-linux-arm64-appimage", "Harness-Device-linux-arm64.AppImage"),
 }
+# The one-line Linux installer, which a release of every platform uploads beside the manifest.
+INSTALLER = Path(__file__).resolve().parents[2] / "website" / "scripts" / "device-install.sh"
+INSTALLER_URI = f"{BUCKET}/install.sh"
 PUB_DATE = "2026-11-16T10:00:00Z"
 DMG, ARCHIVE, SIGNATURE = b"dmg bytes", b"archive bytes", "c2lnbmF0dXJl"
 GIT = ["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "-c", "maintenance.auto=false",
@@ -476,6 +479,10 @@ class PublishTests(TempTest):
         self.put("metadata.json", '{"version": "0.1.0"}', generation=7)
         with self.assertRaisesRegex(ValueError, "not greater"):
             self.publish("0.0.9")
+        # Nor does an older release of every platform put back its installer, a rerun of its run included.
+        self.build = make_build(self.root / "all", ALL)
+        with self.assertRaisesRegex(ValueError, "not greater"):
+            self.publish("0.0.9", platforms="all")
         self.assertNotIn("cp", [call[1] for call in self.calls()])
 
     def live_build(self, change=None):
@@ -567,11 +574,26 @@ class PublishTests(TempTest):
                                     platforms="all")
         self.put("metadata.json", json.dumps(live), generation=7)
         written = self.publish("0.1.1", platforms="all")
+        # The one-line installer after the version checks, so an older run never rolls it back, and before the
+        # manifest, so /device never shows the line while its script is missing.
         self.assertEqual(self.steps(), [("describe", LIVE), ("cat", f"{LIVE}#7"), *self.uploads("0.1.1", ALL_FILES),
-                                        ("upload", LIVE)])
+                                        ("upload", INSTALLER_URI), ("upload", LIVE)])
+        # Read fresh every time: the CDN keeps a positive max-age for a month (upload-desktop-install-sh.sh).
+        self.assertIn(["storage", "cp", str(INSTALLER), INSTALLER_URI, "--content-type=text/x-shellscript; charset=utf-8",
+                       "--cache-control=no-cache, no-store, must-revalidate"], self.calls())
+        self.assertEqual(self.stored("install.sh"), INSTALLER.read_bytes())
         self.assertEqual(written, rules.build_manifest("0.1.1", self.build, "Harness Device notes", PUB_DATE, CDN,
                                                        platforms="all"))
         self.assertEqual(json.loads(self.stored("metadata.json")), written)
+
+    def test_an_installer_that_does_not_parse_stops_the_release_before_any_upload(self):
+        self.build = make_build(self.root / "all", ALL)
+        broken = self.root / "device-install.sh"
+        broken.write_text("if then\n")
+        with mock.patch.object(rules, "INSTALLER", broken, create=True):
+            with self.assertRaisesRegex(ValueError, "^device-install.sh does not parse as sh: "):
+                self.publish("0.1.0", platforms="all")
+        self.assertEqual(self.calls(), [])
 
     def test_a_rerun_compares_its_own_platforms(self):
         everything = make_build(self.root / "all", ALL)
