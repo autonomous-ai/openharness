@@ -3720,6 +3720,35 @@ describe('spoken output search purpose', () => {
       }
     })
 
+    it('a later offer of a pack once made room for, into a dial with a free slot, still drops a spare on a memory refusal', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const store = fakeStore({ all: A, engines: {} })
+        const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
+        const drops = () => port.sent.filter((m) => m.t === 'pet.drop').map((m) => m.id)
+        const offers = () => port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)
+        port.say({ ...hello, pets: 1, petIds: F })
+        await vi.advanceTimersByTimeAsync(5)
+        port.say({ t: 'pet.done', id: A })
+        await vi.advanceTimersByTimeAsync(5)
+        // The pet goes and comes back on this link: the second offer has a free slot, so no spare went for it.
+        store.current = { all: null, engines: {} }
+        await session.petsChanged()
+        store.current = { all: A, engines: {} }
+        await session.petsChanged()
+        expect(drops()).toEqual([F[0], A])
+        expect(offers()).toEqual([A, A])
+        port.say({ t: 'pet.error', id: A, reason: 'memory' })
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(drops()).toEqual([F[0], A, F[1]])
+        await vi.advanceTimersByTimeAsync(600)
+        expect(offers()).toEqual([A, A, A])
+        await session.stop()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
     it('a pack newer than the dial reads is never made room for', async () => {
       const store = fakeStore({ all: B, engines: {} })
       packs[B][4] = 2
