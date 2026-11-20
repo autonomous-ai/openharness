@@ -819,16 +819,28 @@ function windowsCommandShell(row) {
 
 /**
  * The hook's own chain in [rows]: its parent's row, then each one's parent's, nearest first, at most 9 (pty/src/ps.rs
- * MAX_ANCESTORS). It ends at a pid no row has, a process gone, and at a pid seen twice. Built from the rows, not taken
- * as listed, so a host that takes no `--ancestors` (0.6.22) and lists every row gives the same chain.
+ * MAX_ANCESTORS). It ends at a pid no row has, a process gone, at a pid seen twice, and at a parent that started after
+ * its child: Windows reuses pids, so that one took the pid of a parent gone, and is none of the hook's. A row the host
+ * could not open has no start to compare, and the chain goes on through it. Built from the rows, not taken as listed,
+ * so a host that takes no `--ancestors` (0.6.22) and lists every row gives the same chain.
  */
 function hookChain(rows) {
   const byPid = new Map(rows.map((row) => [row.pid, row]))
   const chain = []
   for (let row = byPid.get(process.ppid); row && chain.length < 9 && !chain.includes(row); row = byPid.get(row.parentPid)) {
+    const child = chain.at(-1)
+    if (child && startedAfter(row, child)) break
     chain.push(row)
   }
   return chain
+}
+
+/** Whether [row] started after [child], by the FILETIMEs of their start markers (`w:<FILETIME>`, pty/src/ps.rs); never
+ *  for a row the host could not open, which has none. */
+function startedAfter(row, child) {
+  const start = ({ startMarker }) => /^w:\d{1,20}$/.test(startMarker) ? BigInt(startMarker.slice(2)) : null
+  const started = start(row), childStarted = start(child)
+  return started !== null && childStarted !== null && started > childStarted
 }
 
 /** The hook's own chain from the pty host (`ps --json --ancestors <its parent>`), read at most once a run by the first to
@@ -871,7 +883,7 @@ async function windowsHookCallerPid() {
  * (windowsHookChain), so a run starts the host once at most. A host that takes no `--ancestors` (0.6.22) lists every
  * row, which the climb reads the same way; one that refuses it names the hook's parent, as no table does.
  * A process the host lists but cannot open is named, as its command line cannot be read; a shell whose parent is in no
- * row, gone, is named itself.
+ * row, gone, or whose parent's pid a process started since has taken, is named itself.
  */
 async function hookCallerPid(engine) {
   if (process.platform === 'win32') return WINDOWS_SHELL_ENGINES.has(engine) ? windowsHookCallerPid() : process.ppid
