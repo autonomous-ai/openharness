@@ -34,7 +34,7 @@ String? deviceAppPlace({
         (installLocation ??
             (environment == null ? windowsDeviceAppInstallLocation : _none))(),
       );
-      if (registered != null && p.windows.isAbsolute(registered)) {
+      if (registered != null && _fullWindowsPath(registered)) {
         return p.windows.join(registered, deviceAppWindowsExe);
       }
       // Windows reads its environment's names in any case.
@@ -42,7 +42,7 @@ String? deviceAppPlace({
           .where((e) => e.key.toUpperCase() == 'LOCALAPPDATA')
           .map((e) => e.value)
           .firstOrNull;
-      if (local == null || !p.windows.isAbsolute(local)) return null;
+      if (local == null || !_fullWindowsPath(local)) return null;
       return p.windows.join(local, 'Harness Device', deviceAppWindowsExe);
     case TargetPlatform.linux:
       final home = maybeHomeDir(environment: env, isWindows: false);
@@ -54,6 +54,11 @@ String? deviceAppPlace({
 }
 
 String? _none() => null;
+
+/// A path that names its drive or share: `\folder` is on whichever drive
+/// Desktop works in, which `isAbsolute` takes.
+bool _fullWindowsPath(String path) =>
+    p.windows.isAbsolute(path) && !p.windows.isRootRelative(path);
 
 /// [value] without the one pair of quotes around it, as the installer writes
 /// it; null when nothing is left.
