@@ -1,0 +1,60 @@
+# TEMPORARY (fix/openclaw-followups): remove before the merge.
+name: tmp OpenClaw follow-ups
+
+# The OpenClaw goal test and the other engines' end-to-end files on Linux, set up as cli-e2e.yml's
+# e2e job. Runs only on this branch's push; nothing is released, published or deployed.
+on:
+  push:
+    branches: [fix/openclaw-followups]
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: cli
+    env:
+      LANG: C.UTF-8
+      SHELL: /bin/zsh
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.22.2
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - name: Install tmux, the shells the tests launch through, and lsof
+        run: |
+          sudo bash ../scripts/apt-install.sh tmux zsh tcsh dash lsof
+          sudo sysctl -w fs.inotify.max_user_instances=1024 fs.inotify.max_user_watches=524288
+          tmux -V && zsh --version && tcsh --version && command -v dash
+          # As in cli-e2e.yml: zsh's compinit stops every agent's pane at a question while a
+          # completion folder is writable by others.
+          insecure=$(zsh -fc 'autoload -U compaudit && compaudit' 2>/dev/null | grep '^/' | sort -u || true)
+          if [ -n "$insecure" ]; then
+            echo "$insecure" | xargs sudo chown root:root
+            echo "$insecure" | xargs sudo chmod g-w,o-w
+          fi
+          zsh -fc 'autoload -U compaudit && compaudit'
+      - run: npm ci --no-audit --no-fund
+      # identityHoldVisible skips on Linux; it stays listed so the run says so.
+      - name: The OpenClaw goal test and the other engines' files
+        env:
+          E2E_BUNDLE: '1'
+          E2E_ARTIFACTS_DIR: ${{ runner.temp }}/e2e-daemon-logs
+        run: >-
+          npx vitest run --config vitest.e2e.config.ts e2e/openclawShow.e2e.ts e2e/agentClient.e2e.ts
+          e2e/identityHoldVisible.e2e.ts e2e/hermesAdmission.e2e.ts e2e/hermesTerminalRecord.e2e.ts
+          e2e/otherEngines.e2e.ts
+      - name: Preserve the failing tests' daemon logs
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmp-openclaw-followups-daemon-logs
+          path: ${{ runner.temp }}/e2e-daemon-logs/
+          if-no-files-found: ignore
+          retention-days: 7
