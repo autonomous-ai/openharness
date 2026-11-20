@@ -35,8 +35,8 @@ const deskDir = join(out, 'scripts', 'windows-dial-e2e')
 // First: build-bundle.mjs empties the folder it writes.
 execFileSync(process.execPath, ['build-bundle.mjs'], { cwd: cliRoot, env: { ...process.env, BUNDLE_OUT_DIR: deskDir }, stdio: 'inherit' })
 
-// The e2e harness's artifacts.ts registers vitest hooks only under E2E_ARTIFACTS_DIR, and asks vitest nothing otherwise:
-// the desk, which runs outside vitest, gets a vitest that does nothing.
+// The e2e harness's artifacts.ts imports vitest but uses it only once its vitest setup file calls keepArtifacts, which
+// the desk never does: the desk, which runs outside vitest, gets a vitest that does nothing.
 const noVitest = {
   name: 'no-vitest',
   setup(build) {
