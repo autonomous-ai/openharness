@@ -116,8 +116,8 @@ fn nearest((side, rgba): &(usize, Vec<u8>), size: usize) -> Vec<u8> {
 
 /// The Windows and Linux icons are the drawings macOS shows, from `icons/icon.icns`, size for size: its small sizes are
 /// drawn per size, not `icon.png` scaled. A size the icns has no drawing for takes the nearest one that keeps the Pixel
-/// H legible, by nearest neighbour: 24 px is the 16 px solid H (the 32 px dots merge into stripes at 24), and 48 px the
-/// 64 px drawing (the larger ones' dots merge into stripes at 48).
+/// H legible, by nearest neighbour: 24 px and 48 px are the 16 px solid H (the 32 px and 64 px dots merge into stripes
+/// at 24 and 48; 48 is exactly 3x 16, so its edges stay crisp).
 /// Regenerate: write each size as `nearest(icns_drawing(kind), size)` to its PNG, and the ICO's sizes as PNG entries.
 #[test]
 fn the_windows_and_linux_icons_are_the_macos_drawings() {
@@ -135,9 +135,9 @@ fn the_windows_and_linux_icons_are_the_macos_drawings() {
     for entry in (0..count).map(|i| 6 + 16 * i) {
         let size = if ico[entry] == 0 { 256 } else { ico[entry] as usize };
         let kind = match size {
-            16 | 24 => "ic04",
+            16 | 24 | 48 => "ic04",
             32 => "ic05",
-            48 | 64 => "ic12",
+            64 => "ic12",
             _ => "ic08",
         };
         let (len, at) = (u32_at(entry + 8), u32_at(entry + 12));
