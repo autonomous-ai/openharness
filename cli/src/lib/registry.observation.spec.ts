@@ -38,6 +38,9 @@ const fsyncs = () => vi.mocked(fsyncSync).mock.calls.length + asyncSync.mock.cal
 let directory: string
 let file: string
 let registry: typeof Registry
+// Loads the module graph once, before any hook's time limit: cold, it takes seconds on a loaded machine. Each test
+// still imports fresh modules (vi.resetModules), now from the warm transform cache.
+await import('./registry.js')
 const input = {
   agentId: 'observed-agent', engine: 'claude' as const, tmuxPane: '%31', cwd: '/fixture/project',
   processIdentity: { pid: 1031, executable: '/fixture/claude', startMarker: 'fixture-1031' },

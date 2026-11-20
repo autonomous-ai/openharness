@@ -36,6 +36,9 @@ vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original, { 
 vi.mock('./bootId.js', async original => ({ ...await original<object>(),
   currentBootId: () => 'fixture-boot', bootChanged: () => false,
 }))
+// Loads the module graph once, before any hook's time limit: cold, it takes seconds on a loaded machine. Each test
+// still imports fresh modules (vi.resetModules), now from the warm transform cache.
+await import('./registry.js')
 
 const A = 'cost-agent-a', B = 'cost-agent-b'
 const plan = { id: '12345678-1234-1234-1234-123456789012', identity: 'fixture-owner',

@@ -47,6 +47,9 @@ vi.mock('node:fs/promises', async original => {
 vi.mock('./bootId.js', async original => ({ ...await original<object>(),
   currentBootId: () => 'fixture-boot', bootChanged: () => false,
 }))
+// Loads the module graph once, before any hook's time limit: cold, it takes seconds on a loaded machine. Each test
+// still imports fresh modules (vi.resetModules), now from the warm transform cache.
+await import('./registry.js')
 
 const ID = 'names-cost-agent', CHOSEN = 'Chosen name'
 let root = '', registry: typeof Registry | undefined, release: (() => void) | undefined

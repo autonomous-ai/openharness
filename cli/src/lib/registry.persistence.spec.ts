@@ -32,6 +32,9 @@ vi.mock('node:fs/promises', async original => {
     return handle
   } }
 })
+// Loads the module graph once, before any hook's time limit: cold, it takes seconds on a loaded machine. Each test
+// still imports fresh modules (vi.resetModules), now from the warm transform cache.
+await import('./registry.js')
 
 let directory: string
 let registry: typeof Registry

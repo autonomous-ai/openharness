@@ -8,6 +8,9 @@ import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
 vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
+// Loads the module graph once, before any hook's time limit: cold, it takes seconds on a loaded machine. Each test
+// still imports fresh modules (vi.resetModules), now from the warm transform cache.
+await import('./registry.js')
 
 const HOME = '/data/agents/a1/.hermes'
 const id = 'hermes-agent'
