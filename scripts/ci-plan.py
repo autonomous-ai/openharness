@@ -1168,6 +1168,8 @@ def verify(plan, needs, source):
                 run_id=int(os.environ.get("GITHUB_RUN_ID", "0")), run_attempt=int(os.environ.get("GITHUB_RUN_ATTEMPT", "0")))
 
 
+# A changed path the job summary's Markdown may name.
+PLAIN_PATH = re.compile(r"[A-Za-z0-9_./-]+")
 RUN_URL = re.compile(r"https://github\.com/[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*/actions/runs/[1-9][0-9]*")
 
 
@@ -1235,8 +1237,10 @@ def main():
         if e2e and "windows-e2e" in set(record["suites"]) - set(record["reused"]):
             first = next((path for path in record["paths"] if windows_only(path)), None)
             summary.write("\nWindows end to end: " + (
-                "x64 alone.\n" if not e2e["windows_arm64"] else
-                f"x64 and arm64, for the Windows-only `{first}`.\n" if first else "x64 and arm64, run by hand.\n"))
+                "x64 alone.\n" if not e2e["windows_arm64"] else "x64 and arm64, run by hand.\n" if first is None else
+                # The PR names its paths, and git allows backticks and newlines in one.
+                f"x64 and arm64, for the Windows-only `{first}`.\n" if PLAIN_PATH.fullmatch(first) else
+                "x64 and arm64, for a Windows-only file.\n"))
         if e2e and e2e["device_app_builds"]:
             summary.write("\nHarness Device builds: "
                           + ", ".join(f"{build['bundle']} {build['arch']}" for build in e2e["device_app_builds"]) + ".\n")
