@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { MISSING_HELPER, REPLACED_PROGRAM } from '../engines/kit/identityScan.js'
 import { OPENCLAW_STATES } from '../engines/openclaw/contract.js'
-import { agentFrame, agentStarting } from './agentFrame.js'
+import { agentFrame, agentStarting, openclawStartingUntil } from './agentFrame.js'
 import { agentProject } from './agentProject.js'
 import type { RegisteredSession } from './registry.js'
 
@@ -47,6 +47,25 @@ describe('agentStarting', () => {
   })
   it('a bound OpenClaw with no task is not starting', () => {
     expect(agentStarting({ ...unboundOpenclaw, sessionId: 's1' }, false, launched + 1_000)).toBe(false)
+  })
+})
+
+describe('openclawStartingUntil', () => {
+  const launched = Date.parse('2026-11-19T08:00:00.000Z')
+  const unboundOpenclaw = { ...session(null), engine: 'openclaw' as const, sessionId: '', registeredAt: launched }
+
+  it('an unbound OpenClaw starts until a minute after its row', () => {
+    expect(openclawStartingUntil(unboundOpenclaw)).toBe(launched + 60_000)
+  })
+  it('until a minute after its process\'s start when that is later than its row', () => {
+    const row = { ...unboundOpenclaw, processIdentity: { pid: 7, executable: 'openclaw', startMarker: new Date(launched + 30_000).toISOString() } }
+    expect(openclawStartingUntil(row)).toBe(launched + 90_000)
+  })
+  it('a bound OpenClaw has no starting minute', () => {
+    expect(openclawStartingUntil({ ...unboundOpenclaw, sessionId: 's1' })).toBeNull()
+  })
+  it('a Codex has none', () => {
+    expect(openclawStartingUntil({ ...unboundOpenclaw, engine: 'codex' })).toBeNull()
   })
 })
 

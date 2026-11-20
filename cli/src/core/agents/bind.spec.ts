@@ -2676,6 +2676,69 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     })
   })
 
+  // A frame reads `starting` off the clock (lib/agentFrame.ts `agentStarting`): nothing else tells a window it ended.
+  describe('its starting minute', () => {
+    const START = Date.parse('2026-11-19T10:00:00Z')
+    let run: ReturnType<typeof setup>
+    let row: RegisteredSession
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      run = setup({ capturePane: vi.fn(async () => screen('screen-banner')) })
+      row = pane({ registeredAt: START })
+      run.byAgent.set('a1', row)
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+    })
+    const pass = async (second: number): Promise<void> => {
+      vi.setSystemTime(START + second * 1_000)
+      await run.binding.bindObservedAgent(tui())
+    }
+
+    it('an unbound OpenClaw with no task is announced once, by the first pass after its minute', async () => {
+      await pass(59)
+      expect(run.deps.announceSession).not.toHaveBeenCalled()
+      await pass(61)
+      expect(run.deps.announceSession).toHaveBeenCalledOnce()
+      expect(run.deps.announceSession).toHaveBeenCalledWith(row)
+      await pass(66)
+      expect(run.deps.announceSession).toHaveBeenCalledOnce()
+    })
+
+    it('a TUI started again has its own minute announced', async () => {
+      await pass(61)
+      row.processIdentity = { pid: 7715, startMarker: new Date(START + 120_000).toISOString(), executable: 'openclaw' }
+      await pass(179)
+      expect(run.deps.announceSession).toHaveBeenCalledOnce()
+      await pass(181)
+      expect(run.deps.announceSession).toHaveBeenCalledTimes(2)
+    })
+
+    it('one with a first task on its row, or typed and not confirmed, is not announced', async () => {
+      row.firstTask = 'Fix the parser'
+      await pass(61)
+      delete row.firstTask
+      vi.mocked(run.deps.input.firstTaskWaiting).mockReturnValue(true)
+      await pass(66)
+      expect(run.deps.announceSession).not.toHaveBeenCalled()
+    })
+
+    it('a bound one is not announced', async () => {
+      row.sessionId = 'agent:main:plain'
+      await pass(61)
+      expect(run.deps.announceSession).not.toHaveBeenCalled()
+    })
+
+    it('remembers 256 at most: one more starts them over, and an agent is announced again', async () => {
+      await pass(61)
+      for (let i = 0; i < 256; i++) {
+        vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ agentId: `b${i}`, registeredAt: START }))
+        await run.binding.bindObservedAgent(tui())
+      }
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+      await pass(66)
+      expect(vi.mocked(run.deps.announceSession).mock.calls.filter(([agent]) => agent === row)).toHaveLength(2)
+    })
+  })
+
   // A restart resumes the same key, so the pass never binds it again: the TUI process, not the key, says when the
   // folder its agent's store is read from may have changed.
   describe('its state folder', () => {
