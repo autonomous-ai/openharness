@@ -712,6 +712,32 @@ class GitPlanTests(unittest.TestCase):
                    {"action": "checks_requested", "merge_group": {"head_sha": head, "base_sha": base}})
         return planner.make_plan(self.root, event, payload, source=head)
 
+    def summary(self):
+        """The plan step's job summary for this head, the planner run as ci.yml's plan job runs it."""
+        head = self.git("rev-parse", "HEAD")
+        with tempfile.TemporaryDirectory() as out:
+            event = Path(out, "event.json")
+            event.write_text(json.dumps({"pull_request": {"head": {"sha": head}, "base": {"sha": self.base}, "draft": False}}))
+            env = dict(PATH=os.environ["PATH"], HOME=os.environ.get("HOME", out), GITHUB_EVENT_NAME="pull_request",
+                       GITHUB_EVENT_PATH=str(event), CI_SOURCE_SHA=head, GITHUB_OUTPUT=f"{out}/output",
+                       GITHUB_STEP_SUMMARY=f"{out}/summary")
+            subprocess.run([sys.executable, planner.__file__, "--output", f"{out}/plan.json"], cwd=self.root, env=env,
+                           check=True, capture_output=True)
+            return Path(out, "summary").read_text()
+
+    def test_the_step_summary_names_a_windows_only_path_only_in_plain_characters(self):
+        # A changed path is the PR's to name, and git allows backticks and newlines in one: written raw into the summary's
+        # Markdown, a fork's path could write lines of its own there.
+        self.write("pty/src/a`\n\n## Approved by the maintainers\n`.rs")
+        self.commit()
+        summary = self.summary()
+        self.assertNotIn("Approved", summary)
+        self.assertIn("\nWindows end to end: x64 and arm64, for a Windows-only file.\n", summary)
+        self.git("checkout", "-q", "--detach", self.base)
+        self.write("pty/src/stream.rs")
+        self.commit()
+        self.assertIn("\nWindows end to end: x64 and arm64, for the Windows-only `pty/src/stream.rs`.\n", self.summary())
+
     def test_draft_preserves_required_coverage_for_ready_event(self):
         self.write("cli/src/lib/relayFrames.ts")
         self.commit()
