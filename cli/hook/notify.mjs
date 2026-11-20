@@ -157,12 +157,13 @@ function harnessRoots() {
 }
 
 /**
- * A Harness folder override as every process reads it (src/config/envFields.ts homePath): resolved against the home,
- * never the agent's project the hook runs in nor its drive (`\data` and `C:data` on Windows); an unset or empty one as
- * it is.
+ * A Harness folder override as every process reads it (src/config/envFields.ts homePath): an absolute one exactly as
+ * written, any other resolved against the home, never the agent's project the hook runs in nor its drive (`\data` and
+ * `C:data` on Windows); an unset or empty one as it is.
  */
 function homePath(value) {
-  return value ? resolve(homedir(), value) : value
+  if (!value) return value
+  return isAbsolute(value) && !(sep === '\\' && /^[\\/](?![\\/])/.test(value)) ? value : resolve(homedir(), value)
 }
 
 /** A regular file, through a link as the installers' `test -f` looks; a folder, or nothing, is none. */

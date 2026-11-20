@@ -9,7 +9,7 @@
  * every other before the process exits.
  */
 import { homedir } from 'node:os'
-import { resolve } from 'node:path'
+import { isAbsolute, resolve, sep } from 'node:path'
 
 /** Why a variable's value cannot be used; collected per variable, as zod's `fieldErrors` were. */
 export class EnvIssue extends Error {}
@@ -54,11 +54,13 @@ export const url = (accept: (url: URL) => boolean): EnvField<string | undefined>
 // and log in two. So it is relative to the home in every process, as a service started in the home already read
 // it, and none is refused (harness-pm, 2026-11-21: no refusal; home in every process).
 
-/** The value resolved against the home (the folder enterHome enters), never the current folder or drive: an absolute
- *  one names its own folder, a relative one is under the home, and on Windows a root-relative one (`\data`) or a
- *  drive-relative one (`C:data`) is on the home's drive; '' stays ''. */
+/** An absolute value exactly as written: the daemon's socket folder is a hash of the data folder's text
+ *  (lib/localSocket.ts), and Desktop and the Store's clients keep it as given. Any other is resolved against the home
+ *  (the folder enterHome enters), never the current folder or drive: a relative one is under the home, and on Windows a
+ *  root-relative one (`\data`) or a drive-relative one (`C:data`) is on the home's drive. '' stays ''. */
 export function homePath(value: string, home: string = homedir()): string {
-  return value ? resolve(home, value) : value
+  if (!value) return value
+  return isAbsolute(value) && !(sep === '\\' && /^[\\/](?![\\/])/.test(value)) ? value : resolve(home, value)
 }
 
 /** A Harness folder or file override: unset or '' → [fallback], so no override can make the home itself the folder;
