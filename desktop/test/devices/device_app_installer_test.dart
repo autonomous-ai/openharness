@@ -183,6 +183,8 @@ void main() {
   late List<String?> opened;
   late List<String> readOnly;
   late String windowsPlace, linuxPlace;
+  late List<String> launched;
+  late Future<void> Function(String appImage) launcherAnswer;
 
   void makeReadOnly(String folder) {
     _setMode(folder, 0x16d); // 0555
@@ -250,6 +252,8 @@ void main() {
     opens = true;
     opened = [];
     readOnly = [];
+    launched = [];
+    launcherAnswer = (appImage) async {};
     routes = {};
     archive = _bundleArchive();
     publish(archive);
@@ -334,6 +338,11 @@ void main() {
     architecture: architecture,
     tempRoot: tempRoot,
     downloadTimeout: downloadTimeout,
+    // Recorded, never the real one: no case writes under this computer's home.
+    launcher: (appImage) {
+      launched.add(appImage);
+      return launcherAnswer(appImage);
+    },
   );
 
   DeviceAppInstaller onWindows() => installer(
@@ -987,6 +996,67 @@ void main() {
     expect(opened, isEmpty);
     expect(tempRoot.listSync(), isEmpty);
   }, skip: _needsChmod);
+
+  test(
+    'linux: the installed app is put in the app list, before it opens',
+    () async {
+      publishFor(TargetPlatform.linux, _appImage);
+      late List<int> atLaunch;
+      late List<String?> openedAtLaunch;
+      launcherAnswer = (appImage) async {
+        atLaunch = File(appImage).readAsBytesSync();
+        openedAtLaunch = [...opened];
+      };
+
+      final result = await onLinux().install();
+
+      expect(result.failed, isNull);
+      expect(launched, [linuxPlace]);
+      expect(atLaunch, _appImage);
+      expect(openedAtLaunch, isEmpty);
+      expect(opened, [linuxPlace]);
+    },
+    skip: _needsChmod,
+  );
+
+  test('linux: a copy already at the place gets its entry too', () async {
+    publishFor(TargetPlatform.linux, _appImage);
+    File(linuxPlace)
+      ..createSync(recursive: true)
+      ..writeAsBytesSync(const [1, 2, 3]);
+
+    final result = await onLinux().install();
+
+    expect(result.failed, isNull);
+    expect(launched, [linuxPlace]);
+    expect(opened, [linuxPlace]);
+  });
+
+  test('linux: a launcher that throws does not fail the install', () async {
+    publishFor(TargetPlatform.linux, _appImage);
+    launcherAnswer = (appImage) async =>
+        throw const FileSystemException('read-only');
+
+    final result = await onLinux().install();
+
+    expect(result.failed, isNull);
+    expect(result.installedAt, linuxPlace);
+    expect(launched, [linuxPlace]);
+    expect(opened, [linuxPlace]);
+  }, skip: _needsChmod);
+
+  test('windows and macOS write no launcher entry', () async {
+    publishFor(TargetPlatform.windows, _setup);
+    expect((await onWindows().install()).failed, isNull);
+
+    // A bundle already in the first folder: macOS opens it without ditto.
+    publish(archive);
+    Directory(bundleIn(first.path)).createSync();
+    expect((await installer().install()).failed, isNull);
+
+    expect(opened, [windowsPlace, bundleIn(first.path)]);
+    expect(launched, isEmpty);
+  }, skip: Platform.isWindows ? 'needs /usr/bin/tar' : null);
 
   test('no place, no install', () async {
     // flutter test reads as Android, which has no place: the installer's
