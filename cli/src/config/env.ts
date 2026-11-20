@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { harnessPath } from './harnessHome.js'
-import { EnvIssue, flag, matching, maybe, maybeNumber, number, oneOf, parseEnv, text, unlessFalse, url, type EnvField, type EnvOf } from './envFields.js'
+import { EnvIssue, flag, homePath, homeRelative, matching, maybe, maybeNumber, number, oneOf, parseEnv, text, unlessFalse, url, type EnvField, type EnvOf } from './envFields.js'
 import { parseTerminalBackends } from './terminalConfig.js'
 import { adoptComputerId } from '../lib/computerIdentity.js'
 import { openclawDefaultStateDir } from '../engines/openclaw/contract.js'
@@ -73,9 +73,11 @@ function migrateLegacyAdapterState(): void {
   // ADAPTER_COMPUTER_ID) somewhere else if you genuinely want a separate identity.
   // Runs BEFORE the ~/.machine force-move below so that tree can no longer REPLACE an id we already
   // adopted — see lib/computerIdentity.ts for why replacing one is a data-loss bug, not a refresh.
+  // Read before `fields` below: the same home-relative data folder they give (envFields.ts homePath).
+  const customDataDir = homePath(process.env.ADAPTER_DATA_DIR ?? '')
   const adopted = adoptComputerId(computerIdFile, [
-    join(process.env.ADAPTER_DATA_DIR || adapterDataDir, 'computer-id'),
-    join(process.env.ADAPTER_DATA_DIR || adapterDataDir, 'machine-id'),
+    join(customDataDir || adapterDataDir, 'computer-id'),
+    join(customDataDir || adapterDataDir, 'machine-id'),
     join(adapterDataDir, 'computer-id'),
     join(adapterDataDir, 'machine-id'),
     join(homedir(), '.machine', 'cli', 'data', 'computer-id'),
@@ -84,7 +86,7 @@ function migrateLegacyAdapterState(): void {
 
   // Everything past here only applies to the default location. An explicit ADAPTER_DATA_DIR (tests,
   // custom installs) is the caller's business and must not be reshaped underneath them.
-  if (process.env.ADAPTER_DATA_DIR) return
+  if (customDataDir) return
 
   let moved = adopted
 
@@ -222,29 +224,29 @@ const fields = {
   // Claude's hook schema verbatim, so the installed block is shaped exactly like ~/.claude/settings.json.
   DEVIN_CONFIG_PATH: text(join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'devin', 'config.json')),
   // Where the tmux-session registry and daemon-local state are persisted.
-  ADAPTER_DATA_DIR: text(adapterDataDir),
+  ADAPTER_DATA_DIR: homeRelative(adapterDataDir),
   // Logs meant to be READ and sent — the dial's `dial-YYYYMMDD.log` — beside the desktop app's own
   // `app-*.log`/`cli-*.log`, so one directory holds everything a bug report needs. Not the data dir:
   // `harness.log` there is the daemon's console, and `harness reset` wipes it.
-  HARNESS_LOGS_DIR: text(harnessPath('logs')),
+  HARNESS_LOGS_DIR: homeRelative(harnessPath('logs')),
   // The Harness PTY host's `--home` (the `ptyhost` terminal backend, pty/): it writes `run/` (its discovery
   // file and endpoint) and `logs/pty-host-<instance>.log` under it. Product-root state like the logs: the host outlives
   // a daemon restart, and the next daemon finds it here.
-  HARNESS_PTY_DIR: text(harnessPath('pty')),
+  HARNESS_PTY_DIR: homeRelative(harnessPath('pty')),
   // The dials' own product-root state: `pets/` holds the custom pet packs and which pack stands for what.
   // Not daemon data (`harness reset` must not lose a user's pets), and shared by this user's daemons.
-  HARNESS_DEVICES_DIR: text(harnessPath('devices')),
+  HARNESS_DEVICES_DIR: homeRelative(harnessPath('devices')),
   // Where each daemon on this computer records its data folder and port under the tag it puts on its
   // panes, so an engine's hook reaches the daemon that made its pane whichever daemon installed the hook
   // (lib/hookRoutes.ts). Product-root state, shared by every daemon of this user: not in a data folder.
-  HARNESS_HOOK_ROUTES_DIR: text(harnessPath('hook-routes')),
+  HARNESS_HOOK_ROUTES_DIR: homeRelative(harnessPath('hook-routes')),
   // Agent Messages' pane inboxes (messages/inbox.ts): what an engine's messages hook (hook/messages.mjs)
   // reads at a tool call. Product-root state like the hook routes: the hook is installed once per computer,
   // whichever daemon installed it, and a pane's message is its own whichever daemon wrote it.
-  HARNESS_AGENT_MESSAGES_DIR: text(harnessPath('agent-messages')),
+  HARNESS_AGENT_MESSAGES_DIR: homeRelative(harnessPath('agent-messages')),
   // Where domain-specific harnesses are installed (`harness dsh install`): one directory per
   // `<owner>/<name>` plus `installed.json`. Product-root state like the SSO session, not daemon data.
-  DSH_DIR: text(harnessPath('dsh')),
+  DSH_DIR: homeRelative(harnessPath('dsh')),
   // The ref the built-in shelf (`store/*` of the Harness monorepo) installs from, instead of the one
   // its registry entries name (`main`). For trying a store change end to end BEFORE it merges: push
   // the branch, run the daemon with HARNESS_STORE_REF=<branch>, and Get in the store fetches from it.
@@ -260,7 +262,7 @@ const fields = {
   // Setting this is a pin, not a regeneration: it is never written to disk, so unsetting it returns
   // you to the file's id. Any 16-64 hex (dashes allowed, the backend de-dashes).
   ADAPTER_COMPUTER_ID: maybe,
-  ADAPTER_COMPUTER_ID_FILE: text(computerIdFile),
+  ADAPTER_COMPUTER_ID_FILE: homeRelative(computerIdFile),
   // Set to 'true' to skip auto-installing lifecycle hooks for every supported engine.
   DISABLE_HOOK_INSTALL: flag('false'),
   // Install only these engines' hooks (comma-separated, e.g. `claude,codex`); every engine's when unset.
@@ -369,11 +371,11 @@ const fields = {
    *  gives a clean process a turn. ~15 update slots; `0` keeps it up for ever. */
   ADAPTER_SAFE_MODE_MS: number('900000'),
   // Install dir holding the packaged cli.js + notify.mjs that the self-updater swaps in place.
-  ADAPTER_CLI_DIR: text(adapterCliDir),
+  ADAPTER_CLI_DIR: homeRelative(adapterCliDir),
   // Where the managed Node runtime lives. Read (never written) by this process: the hook command
   // lines have to name an interpreter by absolute path, because a hook fires in a shell whose PATH
   // we do not control — see managedNodePath() in lib/nodeRuntime.ts.
-  ADAPTER_RUNTIME_DIR: text(adapterRuntimeDir),
+  ADAPTER_RUNTIME_DIR: homeRelative(adapterRuntimeDir),
   // The runtime manifest — a DIFFERENT document from ADAPTER_UPDATE_URL's: keyed by platform
   // (`darwin-arm64`, `linux-x64`, …) with url/sha256/size/archiveRoot per entry. Deliberately the
   // same URL `install.sh` and Desktop Harness read, so all three land on identical bytes.
@@ -386,7 +388,7 @@ const fields = {
   ADAPTER_GRID_RUNTIME_METADATA_URL: text('https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/runtime/grid/metadata.json'),
   // Where the `harness` launcher lives. Same name (and default) `scripts/install-cli.sh` uses, so a
   // sandboxed install and this process agree on which launcher they are talking about.
-  HARNESS_BIN_DIR: text(adapterBinDir),
+  HARNESS_BIN_DIR: homeRelative(adapterBinDir),
   // ── the dial on the USB cable ──────────────────────────────────────────────────────────────────
   // Set 'true' to leave the serial port alone entirely. The port is exclusive, so this is what a
   // developer flips before running esptool or a serial monitor against the dial.

@@ -8,6 +8,8 @@
  * empty one is kept), and a value that cannot be what its variable must be is an issue, reported with
  * every other before the process exits.
  */
+import { homedir } from 'node:os'
+import { isAbsolute, join } from 'node:path'
 
 /** Why a variable's value cannot be used; collected per variable, as zod's `fieldErrors` were. */
 export class EnvIssue extends Error {}
@@ -44,6 +46,28 @@ export const url = (accept: (url: URL) => boolean): EnvField<string | undefined>
   if (raw === undefined) return undefined
   const value = raw.trim()
   try { return accept(new URL(value)) ? value : undefined } catch { return undefined }
+}
+
+// A relative Harness folder or file override resolved against a different folder in each process: the master
+// against the folder it was started from, the core after `enterHome` against the home, the CLI against the shell's
+// folder. A relative env file could fail every core start, a relative data folder split the pid file, lock, socket
+// and log in two. So it is relative to the home in every process, as a service started in the home already read
+// it, and none is refused (harness-pm, 2026-11-21: no refusal; home in every process).
+
+/** An absolute value as given; a relative one joined to the home (the folder enterHome enters), never the current
+ *  folder; '' stays ''. */
+export function homePath(value: string, home: string = homedir()): string {
+  return !value || isAbsolute(value) ? value : join(home, value)
+}
+
+/** A Harness folder or file override: unset or '' → [fallback], so no override can make the home itself the folder;
+ *  else homePath(raw). */
+export const homeRelative = (fallback: string): EnvField<string> => (raw) => raw ? homePath(raw) : fallback
+
+/** HARNESS_ENV_FILE, else DOTENV_CONFIG_PATH, trimmed, through homePath; null when neither is set. */
+export function envFilePath(env: NodeJS.ProcessEnv, home?: string): string | null {
+  const file = env.HARNESS_ENV_FILE?.trim() || env.DOTENV_CONFIG_PATH?.trim()
+  return file ? homePath(file, home) : null
 }
 
 export type EnvOf<F extends Record<string, EnvField<unknown>>> = { [K in keyof F]: ReturnType<F[K]> }

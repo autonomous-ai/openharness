@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { parseEnv } from 'node:util'
+import { envFilePath } from '../config/envFields.js'
 import { holdsMarker, legacyHarnessHome, xdgRoots } from '../config/harnessHome.js'
 import { harnessPaneOwner } from '../lib/harnessSessionLabel.js'
 import { isBridge } from './bridge.js'
@@ -75,8 +76,8 @@ export async function checkMove(deps: ConditionDeps): Promise<MoveCheck> {
 
 /** The environment the daemon runs with: config/loadEnv.ts reads its file after the move would run, and a name set already wins. */
 export function withEnvFile({ fs, env }: Pick<ConditionDeps, 'fs' | 'env'>): NodeJS.ProcessEnv {
-  const file = env.HARNESS_ENV_FILE?.trim() || env.DOTENV_CONFIG_PATH?.trim()
-  return file ? { ...parseEnv(fs.readFileSync(resolve(file), 'utf8')), ...env } : env
+  const file = envFilePath(env)
+  return file ? { ...parseEnv(fs.readFileSync(file, 'utf8')), ...env } : env
 }
 
 /** A live pid in adapter.pid, a spawn lock whose owner lives, or a socket that answers within a second, asked once each. */
