@@ -228,8 +228,8 @@ pub(crate) fn spawn_lock() -> MutexGuard<'static, ()> {
     SPAWNING.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Runs `command` in its own process group (a job on Windows) to its end, stdin empty. Past `deadline` the whole group is killed and
-/// `timed_out` is true. Each stream keeps its last 256 KiB.
+/// Runs `command` in its own process group (a job on Windows) to its end, stdin empty. Past `deadline` the whole group
+/// is killed and `timed_out` is true. Each stream keeps its last 256 KiB.
 pub fn run(command: Command, deadline: Duration) -> io::Result<Output> {
     run_lines(command, deadline, &mut |_| {})
 }
@@ -429,8 +429,8 @@ impl Child {
     }
 }
 
-/// Kills a child's process group (a job on Windows) from any thread. Its group while the child is unreaped: once reaped, the pid may be
-/// another process's, so a kill then does nothing.
+/// Kills a child's process group (a job on Windows) from any thread. Its group while the child is unreaped: once
+/// reaped, the pid may be another process's, so a kill then does nothing.
 #[derive(Clone)]
 pub struct Killer(Arc<Unreaped>);
 

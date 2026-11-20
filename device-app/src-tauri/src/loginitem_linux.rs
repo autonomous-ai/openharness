@@ -290,8 +290,8 @@ mod tests {
         out
     }
 
-    /// systemd's shell_maybe_quote: a word with a space, a glob or a shell character goes in `"`, with `"`, `\`, `` ` ``
-    /// and `$` backslashed from the first such character on.
+    /// systemd's shell_maybe_quote: a word with a space, a glob or a shell character goes in `"`, with `"`, `\`,
+    /// `` ` `` and `$` backslashed from the first such character on.
     fn quoted_for_exec_start(word: &str) -> String {
         const NEEDS_QUOTES: &str = "\"\\`$*?[]'()<>|&;! \t\n\r";
         assert!(!word.chars().any(char::is_control), "{word:?}");
