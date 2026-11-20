@@ -37,7 +37,8 @@ interface Options {
   xdgDataHome?: string;
   /** What the manifest says of this arch's AppImage, over what the served file is. */
   entry?: { url?: string; sha256?: string; size?: number };
-  metadataUrl?: string;
+  /** More of the script's environment. */
+  env?: Record<string, string>;
   /** A process's command line, made from the place, which runs before the script does. */
   running?: (place: string) => string;
   /** Whether `--appimage-extract` gives the icon. */
@@ -151,16 +152,15 @@ function install(options: Options = {}) {
     STUB_MACHINE: machine,
     STUB_LOG: log,
     STUB_SERVED: served,
-    STUB_MANIFEST_URL: options.metadataUrl ?? DEVICE_MANIFEST_URL,
+    STUB_MANIFEST_URL: DEVICE_MANIFEST_URL,
     STUB_ICON: options.icon === false ? "" : "1",
     STUB_START_FAILS: options.startFails ? "1" : "",
   };
   delete env.XDG_DATA_HOME;
-  delete env.HARNESS_DEVICE_METADATA_URL;
   if (options.xdgDataHome !== undefined) {
     env.XDG_DATA_HOME = options.xdgDataHome.startsWith("/") ? dir + options.xdgDataHome : options.xdgDataHome;
   }
-  if (options.metadataUrl) env.HARNESS_DEVICE_METADATA_URL = options.metadataUrl;
+  Object.assign(env, options.env);
   const placed = join(homeAbsolute, PLACE);
   if (options.running) writeFileSync(join(log, "processes"), `${options.running(placed)}\n`);
   env.STUB_PLACE = placed;
@@ -235,11 +235,12 @@ describe("device-install.sh", () => {
     expect(run.requested).toEqual([DEVICE_MANIFEST_URL, releaseUrl(arch)]);
   });
 
-  it("reads a stand-in manifest when one is named", () => {
-    const run = install({ metadataUrl: "https://cdn.autonomous.ai/e2e/metadata.json" });
+  // A pasted line naming another manifest could pin an older release: only the bucket decides.
+  it("reads only its fixed manifest, whatever the environment names", () => {
+    const run = install({ env: { HARNESS_DEVICE_METADATA_URL: "https://cdn.autonomous.ai/e2e/metadata.json" } });
 
     expect(run.result.status).toBe(0);
-    expect(run.requested[0]).toBe("https://cdn.autonomous.ai/e2e/metadata.json");
+    expect(run.requested[0]).toBe(DEVICE_MANIFEST_URL);
   });
 
   // A stalled CDN would hang the line, and an endless one would fill the disk before the size check.
