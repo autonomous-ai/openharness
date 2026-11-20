@@ -185,6 +185,8 @@ fits_entry() {
 
 if [ -n "$DATA_HOME" ] && [ ! -e "$ENTRY" ] && fits_entry "$DESTINATION$DATA_HOME"; then
   (
+    # Set here, never taken from the environment: it lands in the entry verbatim.
+    ICON_LINE=
     # The image's own icon, the file the app reads under its APPDIR; stdin is the script itself under `| bash`.
     if (cd "$STAGING_DIR" && "$DESTINATION" --appimage-extract "$ICON_MEMBER" >/dev/null 2>&1 </dev/null) \
       && mkdir -p "$DATA_HOME/icons" && put "$ICON" < "$STAGING_DIR/squashfs-root/$ICON_MEMBER"; then
@@ -193,7 +195,7 @@ if [ -n "$DATA_HOME" ] && [ ! -e "$ENTRY" ] && fits_entry "$DESTINATION$DATA_HOM
     mkdir -p "$DATA_HOME/applications" && {
       printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Harness Device' \
         'Comment=The app for your Harness device.' "Exec=$(exec_value "$DESTINATION")"
-      if [ -n "${ICON_LINE:-}" ]; then printf '%s\n' "$ICON_LINE"; fi
+      if [ -n "$ICON_LINE" ]; then printf '%s\n' "$ICON_LINE"; fi
       printf '%s\n' 'Terminal=false' 'Categories=Utility;' 'StartupWMClass=harness-device'
     } | put "$ENTRY"
   ) || true
