@@ -89,7 +89,9 @@ DEPENDS = {
     # Its tools also import the web release scripts; its tests see only the sparse inputs.
     "desktop": ci.SOURCE_INPUTS["desktop"] + ("website/scripts/harness-web-assets.mjs", "website/scripts/precompress.mjs"),
     # Its release tests read both release workflows (test_release_workflow.py, a path built from parts).
-    "device-app": (".github/workflows/release-desktop.yml", ".github/workflows/release-device.yml"),
+    # app_list.rs holds its Linux app-list entry to the vectors every writer of it reads.
+    "device-app": (".github/workflows/release-desktop.yml", ".github/workflows/release-device.yml",
+                   "tests/fixtures/app-list-entry-vectors.json"),
     "mobile": ("backend/src/types/productHealthContract.ts", "backend/src/types/productUsage.ts", "cli/src/",
                "daemons/banner.json", "daemons/frames.json", "daemons/plates.json", "daemons/roster.json", "desktop/",
                "docs/performance/"),
@@ -101,9 +103,11 @@ DEPENDS = {
     # THIRD_PARTY_NOTICES.md: tui/src/main.rs includes ../THIRD_PARTY_NOTICES.md, which names a root file too.
     "tui": ("THIRD_PARTY_NOTICES.md", "cli/package.json", "os/network.py", "os/onboarding.py", "os/root/usr/bin/hn",
             "tests/fixtures/shared-pane-layouts.json"),
+    # device-install.spec.ts holds the one-line installer's app-list entry to the vectors.
     "website": ("backend/src/", "cli/packages/harness-mcp/", "cli/src/agentClient/commands.ts", "cli/src/lib/newCommand.ts",
                 "cli/src/messages/command.ts", "desktop/lib/core/phone_app_links.dart",
-                "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png"),
+                "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png",
+                "tests/fixtures/app-list-entry-vectors.json"),
 }
 
 # Selection. The files each suite reads outside its own directory, as narrow as the scan shows: a PR that changes one
@@ -158,10 +162,14 @@ PR_READS = {
                 "mobile/lib/p2p/terminal_p2p_policy.dart", "mobile/lib/ws/relay_codec.dart",
                 "mobile/lib/ws/terminal_transport_plugin.dart", "mobile/pubspec.lock", "store/",
                 "tests/fixtures/shared-pane-layouts.json",
+                # device_app_launcher_test.dart holds the app-list entry Desktop writes to the vectors.
+                "tests/fixtures/app-list-entry-vectors.json",
                 "website/scripts/harness-web-assets.mjs", "website/scripts/precompress.mjs"),
     # test_release_workflow.py reads its own release workflow and Desktop's runners and signing inputs, through a path
     # built from parts, which the scan cannot see.
-    "device-app": (".github/workflows/release-desktop.yml", ".github/workflows/release-device.yml"),
+    # app_list.rs holds its Linux app-list entry to the vectors every writer of it reads.
+    "device-app": (".github/workflows/release-desktop.yml", ".github/workflows/release-device.yml",
+                   "tests/fixtures/app-list-entry-vectors.json"),
     # The desktop files the phone's tests read: the words and helpers its tests compare; a desktop-only change to one once
     # failed only in a batch, two batches later (River, 2026-11-03). test_ci_plan's
     # test_every_desktop_file_the_phone_tests_read_selects_mobile scans mobile/test and fails on one missing here.
@@ -181,10 +189,12 @@ PR_READS = {
     # THIRD_PARTY_NOTICES.md: tui/src/main.rs includes ../THIRD_PARTY_NOTICES.md, which names a root file too.
     "tui": ("THIRD_PARTY_NOTICES.md", "cli/package.json", "os/network.py", "os/onboarding.py", "os/root/usr/bin/hn",
             "tests/fixtures/shared-pane-layouts.json"),
+    # device-install.spec.ts holds the one-line installer's app-list entry to the vectors.
     # backend/src/lib/: its Hub contract specs import the backend's contract modules, named without an extension.
     "website": ("backend/src/lib/", "cli/packages/harness-mcp/", "cli/src/agentClient/commands.ts", "cli/src/lib/newCommand.ts",
                 "cli/src/messages/command.ts", "desktop/lib/core/phone_app_links.dart",
-                "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png"),
+                "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png",
+                "tests/fixtures/app-list-entry-vectors.json"),
 }
 # Folders inside a suite's own component that its PR jobs never read: the CLI's typecheck and unit
 # tests cover src/ (end to end runs elsewhere). backend/integration is read: backend-integration runs it.
