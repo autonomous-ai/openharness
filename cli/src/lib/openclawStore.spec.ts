@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { env } from '../config/env.js'
 import { builtinSqlite, closeSqliteHandles } from './sqliteBuiltin.js'
 import { openclawStateDir, openclawUserRowSince } from './openclawStore.js'
 
@@ -56,6 +57,26 @@ describe('whether OpenClaw\'s store holds a user row for a key', () => {
   it('holds none when the store does not exist yet', async () => {
     emptyStateDir()
     expect(await openclawUserRowSince('agent:main:plain', pane(), 0)).toBe(false)
+  })
+
+  it('holds none when the folder its TUI holds open has no store yet', async () => {
+    emptyStateDir()
+    const held = async (): Promise<string[]> => [join(stateDir, 'state', 'openclaw.sqlite')]
+    expect(await openclawUserRowSince('agent:main:plain', { pid: 9101 }, 0, held)).toBe(false)
+  })
+
+  it('cannot say when its TUI\'s folder is unknown and OpenClaw\'s default folder has no store', async () => {
+    emptyStateDir()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const unreadable = async (): Promise<string[]> => { throw Object.assign(new Error('no lsof'), { code: 'ENOENT' }) }
+    const fallback = env.OPENCLAW_STATE_DIR
+    env.OPENCLAW_STATE_DIR = stateDir
+    try {
+      expect(await openclawUserRowSince('agent:main:plain', { pid: 0 }, 0)).toBeNull()
+      expect(await openclawUserRowSince('agent:main:plain', { pid: 9102 }, 0, unreadable)).toBeNull()
+    } finally {
+      env.OPENCLAW_STATE_DIR = fallback
+    }
   })
 
   it('cannot say for a file that is not SQLite, or for what is not a key', async () => {
