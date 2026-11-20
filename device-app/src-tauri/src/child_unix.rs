@@ -38,12 +38,6 @@ impl Group {
         unsafe { libc::kill(-self.0, libc::SIGKILL) };
     }
 
-    /// SIGTERM to the child alone, which it may catch to clean up.
-    pub(crate) fn stop(&self) {
-        // SAFETY: kill only sends a signal, to an unreaped child's own pid.
-        unsafe { libc::kill(self.0, libc::SIGTERM) };
-    }
-
     /// The child's exit code; `None`: it was ended by a signal.
     pub(crate) fn code(&self, status: ExitStatus) -> Option<i32> {
         status.code()

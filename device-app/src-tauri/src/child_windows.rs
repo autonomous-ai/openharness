@@ -151,12 +151,6 @@ impl Group {
         }
     }
 
-    /// As `kill`: Windows has no SIGTERM, and a console control event cannot reach a child whose console is not the
-    /// app's.
-    pub(crate) fn stop(&self) {
-        self.kill();
-    }
-
     /// The child's exit code; `None`: this group ended it, as a signal does on unix.
     pub(crate) fn code(&self, status: ExitStatus) -> Option<i32> {
         status.code().filter(|_| !self.0.killed.load(Ordering::SeqCst))

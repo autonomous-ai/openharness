@@ -445,15 +445,6 @@ impl Killer {
         }
     }
 
-    /// SIGTERM to the child alone, which it may catch to clean up (Windows has none: its job ends at once), then
-    /// `kill_after(grace)`.
-    pub fn stop(&self, grace: Duration) {
-        if let Some(group) = &*self.0.group.lock().unwrap() {
-            group.stop();
-        }
-        self.kill_after(grace);
-    }
-
     /// Kills the group unless the child is reaped within `grace`, on a thread of its own: for a child asked to end,
     /// which may not.
     pub fn kill_after(&self, grace: Duration) {
@@ -1659,8 +1650,6 @@ Start-Sleep 600
         #[test]
         fn a_kill_ends_the_child_and_what_it_started() {
             ends_with_what_it_started(|killer| killer.kill());
-            // Windows has no SIGTERM: a stop ends them at once, whatever the grace.
-            ends_with_what_it_started(|killer| killer.stop(Duration::from_secs(600)));
         }
 
         #[test]
