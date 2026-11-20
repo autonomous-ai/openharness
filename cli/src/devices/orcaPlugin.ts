@@ -76,10 +76,11 @@ function meets(version: string, range: string): boolean {
   return app[4] === undefined
 }
 
-/** A path by its real path, or as written when it does not resolve. */
+/** A path by its real path as the system gives it, as Orca's fs/promises.realpath does: where names match without case
+ *  (macOS, Windows), the spelling on disk. As written when it does not resolve. */
 function real(path: string): string {
   try {
-    return realpathSync(path)
+    return realpathSync.native(path)
   } catch {
     return path
   }
