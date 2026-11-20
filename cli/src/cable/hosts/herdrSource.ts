@@ -107,6 +107,8 @@ export class HerdrSource implements HostSource {
   private timer: (() => void) | undefined
   private openedAt: number | undefined
   private said: number | undefined
+  /** The rows the last list dropped for a pane id out of form, as said. */
+  private skipped = 0
   private readonly attempts = new SocketAttempts({
     name: 'herdr',
     socketStamp: () => this.deps.client.socketStamp(),
@@ -267,6 +269,7 @@ export class HerdrSource implements HostSource {
     this.asked.clear()
     // The next list is said again, even with as many agents as before.
     this.said = undefined
+    this.skipped = 0
     if (this.rows.size === 0) return
     this.rows.clear()
     this.emit()
@@ -310,10 +313,15 @@ export class HerdrSource implements HostSource {
     const before = JSON.stringify(this.list())
     const rows = new Map<string, Row>()
     let over = 0
+    let outOfForm = 0
     for (const entry of entries) {
       if (!isObject(entry)) continue
       const { pane_id: pane, agent: kind, agent_status: status } = entry
-      if (typeof pane !== 'string' || !HERDR_PANE.test(pane) || typeof kind !== 'string' || !HERDR_KIND.test(kind)
+      if (typeof pane !== 'string' || !HERDR_PANE.test(pane)) {
+        outOfForm++
+        continue
+      }
+      if (typeof kind !== 'string' || !HERDR_KIND.test(kind)
         || !isStatus(status) || rows.has(pane) || heard?.dropped.has(pane)) continue
       if (rows.size === MAX_AGENTS) {
         over++
@@ -341,6 +349,11 @@ export class HerdrSource implements HostSource {
     if (rows.size !== this.said) {
       this.said = rows.size
       this.deps.log(`[herdr] listed · ${rows.size} agents`)
+    }
+    // A herdr whose ids this form misses would list no agent and say why nowhere else.
+    if (outOfForm !== this.skipped) {
+      this.skipped = outOfForm
+      this.deps.log(`[herdr] skipped · ${outOfForm} pane-id`)
     }
     if (over) this.deps.log(`[herdr] over · ${over} left out`)
     if (JSON.stringify(this.list()) !== before) this.emit()
