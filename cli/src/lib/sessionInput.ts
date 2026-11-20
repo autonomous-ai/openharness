@@ -689,6 +689,7 @@ export class SessionInputController {
       return Promise.resolve()
     }
     this.delivery(sessionId, deliveryId, 'queued')
+    if (state.writes && this.refusedFull(sessionId, state, Buffer.byteLength(content, 'utf8'), deliveryId, said)) return Promise.resolve()
     // One write at a time per agent, in the order the messages arrived. Claude Code and Codex take
     // typing while a turn runs, so a message is not held for the turn — but two pastes into one pane at
     // once interleave: one message's text lands between another's paste and its Enter, and the engine
@@ -700,15 +701,18 @@ export class SessionInputController {
     return this.scheduleWrite(sessionId, content, deliveryId, said)
   }
 
-  /** [firstPaste]: when a message typed again after it was cleared ([clearRefused]) was first pasted. [first]: the agent's
-   *  first task ([submitFirstTask]), which messages wait behind until its write starts. */
+  /**
+   * A message's write, behind the one under way. Counted against the queue's limits by the caller that took it: one
+   * drained from the queue, or held for a cancel, is never refused here, which a queue over its limits by a first task
+   * ([submitFirstTask]) or a message put back ([putBack]) would do, losing one already said to be on its way.
+   * [firstPaste]: when a message typed again after it was cleared ([clearRefused]) was first pasted. [first]: the agent's
+   * first task, which messages wait behind until its write starts.
+   */
   private scheduleWrite(sessionId: string, content: string, deliveryId?: string, receipt?: MessageReceipt, firstPaste?: number, first?: true): Promise<void> {
     const state = this.state(sessionId)
     let pending: HeldInput | undefined
     if (state.writes) {
-      const bytes = Buffer.byteLength(content, 'utf8')
-      if (this.refusedFull(sessionId, state, bytes, deliveryId, receipt)) return Promise.resolve()
-      pending = { deliveryId, receipt, bytes, cancelled: false }
+      pending = { deliveryId, receipt, bytes: Buffer.byteLength(content, 'utf8'), cancelled: false }
       state.held.push(pending)
     }
     const write = (): Promise<void> => {
@@ -1005,10 +1009,11 @@ export class SessionInputController {
     } finally { release() }
   }
 
-  /** Hold one message for the cancel pressing now, counted against the queue's limits and cancellable as queued ones are. */
+  /** Hold one message for the cancel pressing now, cancellable as queued ones are: one sent now counted against the
+   *  queue's limits, and a write whose turn came ([scheduleWrite]) not again. */
   private holdForCancel(sessionId: string, state: InputState, bytes: number, deliveryId: string | undefined,
     receipt: MessageReceipt | undefined, kind: 'writes' | 'sent', go: () => void): void {
-    if (this.refusedFull(sessionId, state, bytes, deliveryId, receipt)) return
+    if (kind === 'sent' && this.refusedFull(sessionId, state, bytes, deliveryId, receipt)) return
     const item: HeldInput = { deliveryId, receipt, bytes, cancelled: false }
     state.held.push(item)
     console.log(`[inject] ${sid(sessionId)} held · a cancel is pressing Ctrl-C · depth=${state.held.length}`)
