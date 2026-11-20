@@ -132,7 +132,28 @@ impl Shell for SystemShell {
 fn background(line: &str) -> Command {
     let mut command = Command::new("/bin/sh");
     command.arg("-c").arg(line);
+    #[cfg(target_os = "linux")]
+    no_terminal(&mut command);
     command
+}
+
+/// Linux: the line gives up the terminal the app was started from, if any. There, sudo would ask from a group that is
+/// not in front, and stop until the deadline; with no terminal it fails at once, and install.sh's own lines say why.
+#[cfg(target_os = "linux")]
+fn no_terminal(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: between fork and exec only open, ioctl and close run, which are async-signal-safe, on a literal path. A
+    // child is never its session's leader, so TIOCNOTTY drops the terminal for it alone.
+    unsafe {
+        command.pre_exec(|| {
+            let tty = libc::open(c"/dev/tty".as_ptr(), libc::O_RDWR | libc::O_NONBLOCK | libc::O_CLOEXEC);
+            if tty >= 0 {
+                libc::ioctl(tty, libc::TIOCNOTTY);
+                libc::close(tty);
+            }
+            Ok(())
+        });
+    }
 }
 
 /// `line` is one argument: std quotes it for CreateProcessW, and no shell parses it again.
