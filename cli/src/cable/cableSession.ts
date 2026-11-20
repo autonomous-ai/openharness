@@ -432,7 +432,7 @@ export interface CableHost {
   /** Pane rows and workspace identity from the same desktop announcement; with no window, `view: 'machine'` when the
    *  rows are this computer's agents instead. Asked with `apps` (a dial that says `appFilter`), the machine view is the
    *  shown app's ring and `apps` the list the dial picks from. */
-  listAgentSnapshot?(opts?: { apps?: boolean }): Promise<{ agents: CableAgent[]; tab: string; total: number; view?: 'machine'; apps?: AppList }>
+  listAgentSnapshot?(opts?: { apps?: boolean; whole?: boolean }): Promise<{ agents: CableAgent[]; tab: string; total: number; view?: 'machine'; apps?: AppList }>
   /** The dial picked an app, or a tapped notice turns it to its agent's app (`notice`). `ignored` on a window's tab;
    *  `tabs` when Harness was picked on an app's ring, and the dials hold the window's tab again. */
   pickApp?(app: string, cause?: 'pick' | 'notice'): AppPick
@@ -787,6 +787,10 @@ export class CableSession {
   /** `hello.board === 'max'`: the Max draws a permission prompt as approve and deny, so its `question` frames say which
    *  one is (permissionMark). No other firmware reads the mark, and each frame carries only what its firmware reads. */
   private markPermissions = false
+  /** `hello.board === 'max'` (owner, 20 Nov): an app's ring is sent whole, never narrowed to what that app has on screen
+   *  (Orca's worktree, cableHost.ts appRing). Its wide screen shows many of the app's agents at once. Every other board
+   *  gets the scope as before. */
+  private wholeRings = false
   private seq = 0
   private resyncAt = 0
   /** From a dial's greeting to its push's walk of the open questions: a question asked meanwhile waits for that walk,
@@ -805,6 +809,7 @@ export class CableSession {
     this.questionTier = false
     this.seqOn = false
     this.markPermissions = false
+    this.wholeRings = false
     this.seq = 0
     this.resyncAt = 0
     this.playerOffset = this.playerRequest = 0
@@ -1457,6 +1462,7 @@ export class CableSession {
         this.questionTier = str('questionTier') === 'v1'
         this.seqOn = isP4Board(str('board'))
         this.markPermissions = str('board') === 'max'
+        this.wholeRings = str('board') === 'max'
         this.seq = 0
         const mac = str('mac') ?? ''
         // Rule 1: every greeting is answered, but only an unfamiliar dial gets the full state.
@@ -2800,7 +2806,7 @@ export class CableSession {
   /** The list this dial is sent: the shown app's ring for a dial that says `appFilter`, the single ring for one that does
    *  not, the tab's while a window holds it. */
   private async agentSnapshot() {
-    return this.host.listAgentSnapshot ? await this.host.listAgentSnapshot(this.asItself) : {
+    return this.host.listAgentSnapshot ? await this.host.listAgentSnapshot(this.wholeRings ? { ...this.asItself, whole: true } : this.asItself) : {
       agents: await this.host.listAgents(), tab: this.host.activeSwarm(this.asItself), total: this.host.agentTotal(),
     }
   }
@@ -3393,6 +3399,8 @@ export class CableSession {
   get wantsStats(): boolean { return this.statsTurn && this.isConnected }
   /** A connected dial that says `appFilter`: only its reads should drive the app filter's choices. */
   get wantsApps(): boolean { return this.appFilter && this.isConnected }
+  /** A connected Harness Max that says `appFilter`: its list of an app's agents is the whole ring (`wholeRings`). */
+  get wantsWholeApps(): boolean { return this.wantsApps && this.wholeRings }
   /** What this dial asks the host as, wherever the answer differs by dial: one that says `appFilter` can hold an app's
    *  ring while a window is open, any other holds the window's tab. */
   private get asItself(): { apps: boolean } { return { apps: this.appFilter } }

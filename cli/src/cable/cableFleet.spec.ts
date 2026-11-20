@@ -1221,6 +1221,24 @@ describe('which apps the dials want', () => {
   })
 })
 
+describe('which dials want an app\'s whole ring', () => {
+  it('wants it while a connected Harness Max says appFilter, and not for a Pro', async () => {
+    const f = fixture()
+    try {
+      f.fleet.start()
+      await vi.waitFor(() => expect(f.ports).toHaveLength(2))
+      expect(f.fleet.wantsWholeApps()).toBe(false)
+      f.ports[0].say({ t: 'hello', product: 'harness', mac: f.ports[0].path, fw: 'fixture', proto: 3, appFilter: 'v1', board: 'max' })
+      f.ports[1].say({ t: 'hello', product: 'harness', mac: f.ports[1].path, fw: 'fixture', proto: 3, appFilter: 'v1', board: 'pro' })
+      await vi.waitFor(() => { for (const p of f.ports) expect(p.sent.some(m => m.t === 'agents.end')).toBe(true) })
+      expect(f.fleet.wantsWholeApps()).toBe(true)
+      await f.ports[0].close()
+      await vi.waitFor(() => expect(f.fleet.wantsWholeApps()).toBe(false))
+      expect(f.fleet.wantsApps()).toBe(true)
+    } finally { await f.fleet.stop() }
+  })
+})
+
 describe('a device over TCP (HARNESS_CABLE_TCP)', () => {
   const BOARD = { host: '127.0.0.1', port: 7000 }
   const PERMISSION = [{ key: 'Approve Bash command: rm -rf build', q: 'Approve Bash command: rm -rf build', options: ['Yes', 'No'], multi: false }]

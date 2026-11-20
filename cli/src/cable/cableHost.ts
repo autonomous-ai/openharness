@@ -887,7 +887,8 @@ export class DaemonCableHost implements CableHost {
     return (await this.listAgentSnapshot()).agents
   }
 
-  async listAgentSnapshot(opts: { apps?: boolean } = {}): Promise<{ agents: CableAgent[]; tab: string; total: number; view?: 'machine'; apps?: AppList }> {
+  /** `whole`: a Harness Max's read: the shown app's ring whole, never narrowed by that app's scope (appRing). */
+  async listAgentSnapshot(opts: { apps?: boolean; whole?: boolean } = {}): Promise<{ agents: CableAgent[]; tab: string; total: number; view?: 'machine'; apps?: AppList }> {
     // One registry read serves a tab read: the view's rule and the tab's list of apps.
     const listed = opts.apps && this.view === 'tabs' ? this.agentsNow() : undefined
     if (listed) this.viewOnTab(listed)
@@ -895,7 +896,7 @@ export class DaemonCableHost implements CableHost {
     const byId = new Map(flat.map((a) => [a.id, a]))
     const registry = this.registry
     if (this.windowOf(opts) === null && registry) {
-      const machine = await this.machineSnapshot(registry, flat, byId, opts.apps === true)
+      const machine = await this.machineSnapshot(registry, flat, byId, opts.apps === true, opts.whole === true)
       // A ring left as Harness or none, with a window open, is the window's tab.
       if (!this.viewOnRing(machine.apps?.shown ?? '')) return machine
     }
@@ -922,8 +923,8 @@ export class DaemonCableHost implements CableHost {
   }
 
   /** The machine list: the registry's agents, bounded by the ring (the 78-agent reconnect above is not repeated); with
-   *  `apps`, by the shown app's ring. */
-  private async machineSnapshot(registry: HostRegistry, flat: CableAgent[], byId: Map<string, CableAgent>, apps: boolean): Promise<{ agents: CableAgent[]; tab: string; total: number; view: 'machine'; apps?: AppList }> {
+   *  `apps`, by the shown app's ring, `whole` or scoped (appRing). */
+  private async machineSnapshot(registry: HostRegistry, flat: CableAgent[], byId: Map<string, CableAgent>, apps: boolean, whole: boolean): Promise<{ agents: CableAgent[]; tab: string; total: number; view: 'machine'; apps?: AppList }> {
     const local = this.localMachine()
     // The engine session bound to each agent, so one that moved into a Harness pane is not listed again as observed.
     const bound = new Map(this.wiring.sessions().map((s) => [s.agentId, s.sessionId]))
@@ -938,7 +939,7 @@ export class DaemonCableHost implements CableHost {
     const list = apps ? this.appList(listed) : undefined
     // The single ring leaves resting rows to the app pages: sixteen recent resting threads would push live idle
     // agents out of its 16 places.
-    const { rows, total } = list ? this.appRing(listed, list.shown) : this.ring.select(listed.filter((a) => !a.resting))
+    const { rows, total } = list ? this.appRing(listed, list.shown, whole) : this.ring.select(listed.filter((a) => !a.resting))
     const agents = rows.map((a): CableAgent => {
       // A Harness agent keeps the row the window would show (its chips too); another app's is drawn from what was heard.
       const row = byId.get(a.id) ?? { id: a.id, name: a.name, engine: a.engine, machineId: local.id, machine: local.name }
@@ -959,9 +960,10 @@ export class DaemonCableHost implements CableHost {
   }
 
   /** The shown app's ring, or its scope's while that app is settled in front: a scope is what that app has on screen,
-   *  which means nothing while the person looks at another app. */
-  private appRing(agents: HostAgent[], app: string): { rows: HostAgent[]; total: number } {
-    const scoped = this.filter.settledApp() === app ? this.scopes.get(app) : undefined
+   *  which means nothing while the person looks at another app. `whole` (a Harness Max, owner 20 Nov: its wide screen
+   *  shows many of an app's agents at once, and a tap on one is meant for that one) is the app's ring in every case. */
+  private appRing(agents: HostAgent[], app: string, whole = false): { rows: HostAgent[]; total: number } {
+    const scoped = !whole && this.filter.settledApp() === app ? this.scopes.get(app) : undefined
     if (!scoped) return this.rings.ring(app)
     return scoped.ring.select(agents.filter((a) => pageOf(a) === app && scoped.scope.inScope(a.id)), this.ranks.get(app))
   }

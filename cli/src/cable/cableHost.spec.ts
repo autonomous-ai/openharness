@@ -1261,6 +1261,22 @@ describe('the dial that shows one app at a time', () => {
       expect(orca.total).toBe(2)
     })
 
+    // A Harness Max (owner, 20 Nov): its wide screen shows many of an app's agents at once, so its read is the whole ring.
+    it('a Harness Max\'s read (whole) is Orca\'s whole ring while the other dials\' read is the scope', async () => {
+      const { host, settle } = settling(mixed())
+      settle('orca')
+      host.setScope('orca', without('o2'))
+      const whole = await host.listAgentSnapshot({ apps: true, whole: true })
+      expect(ids(whole)).toEqual(['o1', 'o2', 'o3'])
+      expect(whole.total).toBe(3)
+      expect(whole.apps?.shown).toBe('orca')
+      const scoped = await host.listAgentSnapshot({ apps: true })
+      expect(ids(scoped)).toEqual(['o1', 'o3'])
+      expect(scoped.total).toBe(2)
+      // Read again after the other's, each still gets its own.
+      expect(ids(await host.listAgentSnapshot({ apps: true, whole: true }))).toEqual(['o1', 'o2', 'o3'])
+    })
+
     it('a dial that does not say appFilter gets the single ring, scope or not', async () => {
       const { host, settle } = settling(mixed())
       settle('orca')

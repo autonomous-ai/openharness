@@ -1457,7 +1457,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  app, which no older dial shows. */
   const listedIds = async (): Promise<Set<string>> => {
     const apps = cable.wantsApps() ? [cableHost.listAgentSnapshot({ apps: true })] : []
-    const lists = await Promise.all([cableHost.listAgentSnapshot(), ...apps])
+    // A Harness Max's list of an app's agents is the whole ring, past the scope the other dials list.
+    const whole = cable.wantsWholeApps() ? [cableHost.listAgentSnapshot({ apps: true, whole: true })] : []
+    const lists = await Promise.all([cableHost.listAgentSnapshot(), ...apps, ...whole])
     return new Set(lists.flatMap((list) => list.agents.map((agent) => agent.id)))
   }
   /** opencode's sessions first listed and not yet found on the dial's lists, each with the cards held for it. opencode

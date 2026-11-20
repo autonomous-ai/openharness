@@ -114,6 +114,8 @@ vi.mock('../cable/cableFleet.js', async (real) => {
     wantsStats() { return this.wants }
     apps = true
     wantsApps() { return this.apps }
+    whole = false
+    wantsWholeApps() { return this.whole }
     petDial = () => ({ supported: false, held: [] as string[], sending: null })
     setSettings = vi.fn(async (id: string, _patch: unknown) => (id === 'usb' ? { ok: true } : { ok: false, error: 'That device is not plugged into this computer.' }))
   }
@@ -8840,6 +8842,29 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
     await live()
     const [{ id }] = await listed()
     await vi.waitFor(() => expect(calls('turnStarted')).toEqual([[id, '', undefined]]))
+  })
+
+  // A Harness Max lists an app's ring whole (cableSession.ts wholeRings), past the scope the other dials list: the build
+  // that holds a session's first cards reads that list too.
+  it('with a Harness Max connected, the build that holds a session\'s first cards reads the whole list too', async () => {
+    const { oc, live } = withOpencode()
+    ;(seen.cable as unknown as { whole: boolean }).whole = true
+    oc.active = { [SES]: { type: 'busy' } }
+    const build = vi.spyOn(host(), 'listAgentSnapshot')
+    await live()
+    const [{ id }] = await listed()
+    await vi.waitFor(() => expect(calls('turnStarted')).toEqual([[id, '', undefined]]))
+    expect(build).toHaveBeenCalledWith({ apps: true, whole: true })
+  })
+
+  it('with no Harness Max connected, that build reads no whole list', async () => {
+    const { oc, live } = withOpencode()
+    oc.active = { [SES]: { type: 'busy' } }
+    const build = vi.spyOn(host(), 'listAgentSnapshot')
+    await live()
+    const [{ id }] = await listed()
+    await vi.waitFor(() => expect(calls('turnStarted')).toEqual([[id, '', undefined]]))
+    expect(build).not.toHaveBeenCalledWith(expect.objectContaining({ whole: true }))
   })
 
   // A build that fails says nothing of the session: its first cards go, and nothing of it is held after.

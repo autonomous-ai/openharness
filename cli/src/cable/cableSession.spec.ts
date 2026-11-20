@@ -5869,6 +5869,21 @@ describe('the app filter', () => {
     } finally { await c.session.stop() }
   })
 
+  // A Harness Max (owner, 20 Nov) asks for an app's ring whole: no app's scope narrows what its wide screen lists.
+  it.each([['a Harness Max', true, { board: 'max' }], ['a Harness Pro', false, { board: 'pro' }], ['a round dial', false, {}]] as const)(
+    '%s asks for the whole ring: %s', async (_, whole, board) => {
+      const { host, asked } = appHost()
+      const c = await connect(host)
+      try {
+        c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', appFilter: 'v1', ...board })
+        await vi.waitFor(() => expect(c.port.types()).toContain('notif.replace'))
+        expect(asked.length).toBeGreaterThan(0)
+        for (const opts of asked) expect(opts).toEqual(whole ? { apps: true, whole: true } : { apps: true })
+        expect(c.session.wantsWholeApps).toBe(whole)
+      } finally { await c.session.stop() }
+      expect(c.session.wantsWholeApps).toBe(false)
+    })
+
   it('wants apps only while a dial that says appFilter is connected', async () => {
     const old = await greeted(appHost().host, false)
     try { expect(old.session.wantsApps).toBe(false) } finally { await old.session.stop() }

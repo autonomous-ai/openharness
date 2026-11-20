@@ -141,6 +141,8 @@ export class CableFleet {
 
   /** Is any connected dial showing one app's ring? */
   wantsApps(): boolean { return [...this.entries.values()].some(e => e.session.wantsApps) }
+  /** A connected Harness Max that says `appFilter`: its list of an app's agents is the whole ring (cableSession.ts `wholeRings`). */
+  wantsWholeApps(): boolean { return [...this.entries.values()].some(e => e.session.wantsWholeApps) }
 
   start(): void {
     if (!this.stopped) return
