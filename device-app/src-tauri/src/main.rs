@@ -398,6 +398,10 @@ fn about_item(handle: &AppHandle, text: &str, credits: Option<&str>) -> tauri::R
         name: Some("Harness".into()),
         version: Some(handle.package_info().version.to_string()),
         comments: credits.map(Into::into),
+        // GTK shows it as the dialog's logo, at its own size, as large as its stock one. Windows' dialog is a message
+        // box with the system's information icon and takes none.
+        #[cfg(target_os = "linux")]
+        icon: Some(tauri::include_image!("icons/128x128.png")),
         ..Default::default()
     };
     Ok(Box::new(PredefinedMenuItem::about(handle, Some(text), Some(metadata))?))

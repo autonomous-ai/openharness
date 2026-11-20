@@ -322,6 +322,7 @@ macOS, or the release is a partial ship. The same pull request carries both:
 | Login item | Run key + Startup Apps toggle | the shared `harnessd.desktop` | one entry with the CLI (dial-linux) |
 | Install halves | one `install.ps1 -Desktop` run | `--host` in a visible terminal, as Desktop | install.ps1 has no host half; tmux on Linux needs `sudo apt` |
 | About | Tauri's About dialog | Tauri's About dialog | macOS's standard panel is AppKit |
+| About icon | the system's information icon | the app icon | muda's About on Windows is a message box, which shows a system icon and takes no app icon |
 | Update install timing | download at once, install waits for the relaunch conditions | as macOS | the updater exits the app when it starts NSIS |
 | Installed name | `Harness Device` (folder, Start Menu, Apps list, Run value) | `Harness Device` AppImage | Desktop already owns `Harness` on Windows |
 
