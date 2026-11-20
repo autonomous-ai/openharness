@@ -279,8 +279,11 @@ impl App {
             Event::Act(action) => self.act(action, effects),
             // Decision 2: closing answers an offer, and never stops what runs.
             Event::WindowClosed => {
+                // Closing Sign in is its Later: the Follow screen waiting behind it shows.
                 if self.showing(Screen::SignIn) {
                     self.remember(|saved| saved.asked_sign_in = true, effects);
+                    self.next(effects);
+                    return;
                 }
                 // Closing the Follow screen is Not now.
                 if self.showing(Screen::Follow) {
@@ -303,12 +306,11 @@ impl App {
                     }
                 }
             }
-            // Offered once by itself; the menu's item opens the screen again.
+            // Offered once by itself, remembered once it shows (`show`); the menu's item opens the screen again.
             Event::FollowOffer => {
                 if self.state.saved.asked_follow {
                     return;
                 }
-                self.remember(|saved| saved.asked_follow = true, effects);
                 self.state.follow.waiting = true;
                 // A window that shows Install or Sign in keeps it: the screen waits until they end.
                 if self.window.is_none()
@@ -568,6 +570,10 @@ impl App {
     }
 
     fn show(&mut self, view: Option<View>, effects: &mut Vec<Effect>) {
+        // The offer counts as made once its screen shows: one the person closed or quit before is offered again.
+        if self.state.follow.waiting && view.as_ref().is_some_and(|shown| shown.screen == Screen::Follow) {
+            self.remember(|saved| saved.asked_follow = true, effects);
+        }
         self.window = view.clone();
         effects.push(Effect::Show(view));
     }
