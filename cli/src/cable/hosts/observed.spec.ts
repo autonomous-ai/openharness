@@ -2007,6 +2007,8 @@ describe('ObservedSource actions', () => {
     src.ingest(ev('session-start', { sessionId, hostHints: { __CFBundleIdentifier: 'com.microsoft.VSCode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' } }))
     const [agent] = src.list()
     expect(src.capabilities(agent).voice).toBe(false)
+    expect(await src.send(agent, 'run the tests')).toMatchObject({ ok: false })
+    expect(actions.toMod).not.toHaveBeenCalled()
     ready.add(sessionId)
     expect(src.capabilities(agent).voice).toBe(true)
     expect(await src.send(agent, 'run the tests')).toEqual({ ok: true })

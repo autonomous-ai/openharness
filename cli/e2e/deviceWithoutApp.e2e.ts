@@ -418,8 +418,10 @@ describe('the device without the app', () => {
       { __CFBundleIdentifier: 'com.microsoft.VSCode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode', ORCA_AGENT_SESSION_ID: '' })
     await panel.hook('SessionStart', { source: 'startup' })
     const listed = await showing(dial, 'the panel session listed', (r) => ids(r).includes(panel.id))
-    // Nothing to type into until its mod polls.
-    expect(String(listed.rows.find((row) => row.id === panel.id)?.caps)).not.toContain('v')
+    // Seen as VS Code's, from its hints alone, with nothing to type into until its mod polls.
+    const first = listed.rows.find((row) => row.id === panel.id)
+    expect(first).toMatchObject({ name: 'in-vscode-panel', engine: 'claude', host: 'vscode', caps: expect.any(String) })
+    expect(first?.caps).not.toContain('v')
     const poll = inboxPoll(d, panel.sessionId)
     await showing(dial, 'voice once its mod polls', (r) => String(r.rows.find((row) => row.id === panel.id)?.caps ?? '').includes('v'))
     const words = 'run the panel tests'
