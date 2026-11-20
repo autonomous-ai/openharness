@@ -5,10 +5,10 @@
  * only while the recorded process is not proven gone: once it is, any account can create a pipe of that name.
  * Outside the core: the core never opens this pipe.
  */
-import { randomBytes } from 'node:crypto'
-import { closeSync, fstatSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, fstatSync, openSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { pidAlive, recordedProcessDead, type HostLiveness } from '../lib/processProof.js'
+import { atomicWriteFile } from '../lib/secureState.js'
 import { isPipePath, readDaemonToken } from '../lib/windows/pipeAuth.js'
 import type { PipeTarget } from '../lib/windows/pipeClient.js'
 
@@ -58,17 +58,10 @@ export function readDevicesRecord(dataDir: string, platform: NodeJS.Platform = p
   return readRecordFile(dataDir, platform)?.record ?? null
 }
 
-/** Written whole, owner only: a temp file beside it, renamed into place. Throws when it cannot. */
+/** Written whole, owner only, as every state file is (atomicWriteFile: on Windows a rename refused for a moment is tried
+ *  again). A cache: each start writes it anew. Throws when it cannot. */
 export function writeDevicesRecord(dataDir: string, record: DevicesRecord): void {
-  const target = devicesRecordPath(dataDir)
-  // A new file (`wx`), so its mode is the one given and nothing already there is written through.
-  const temporary = join(dataDir, `.${DEVICES_RECORD_FILE}.${process.pid}.${randomBytes(6).toString('hex')}`)
-  try {
-    writeFileSync(temporary, `${JSON.stringify({ pipe: record.pipe, pid: record.pid })}\n`, { mode: 0o600, flag: 'wx' })
-    renameSync(temporary, target)
-  } finally {
-    rmSync(temporary, { force: true })
-  }
+  atomicWriteFile(devicesRecordPath(dataDir), `${JSON.stringify({ pipe: record.pipe, pid: record.pid })}\n`, 'cache')
 }
 
 /** Removes the record only while it names [pipe], so a second devices process's record outlives the first's close. */
