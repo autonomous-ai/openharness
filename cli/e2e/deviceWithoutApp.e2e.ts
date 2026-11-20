@@ -14,8 +14,10 @@
  * - Claude Code in a tmux session the person opened (harness/ownTmux.ts) is listed with host tmux, takes the dial's words
  *   through its mod, and a tap moves the person's own tmux client to its pane, never one on a session Harness made;
  * - a ten-minute transcript, 10,000 characters, reaches Claude Code's mod whole in VS Code's terminal, and the dial hears
- *   it was sent.
+ *   it was sent;
+ * - Claude Code in VS Code's extension panel, with no terminal, takes the dial's spoken words through its mod alone.
  */
+import type { ChildProcess } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { join } from 'node:path'
@@ -25,6 +27,7 @@ import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
+import { InOrca } from './harness/inOrca.js'
 import { Outside } from './harness/outsideAgent.js'
 import { controlClient, InOwnTmux, type ControlClient } from './harness/ownTmux.js'
 
@@ -86,9 +89,11 @@ describe('the device without the app', () => {
   let backend: FakeBackend | undefined
   const outside: Outside[] = []
   const clients: ControlClient[] = []
+  const children: ChildProcess[] = []
   afterEach(async () => {
     // Before any session goes: before tmux 3.7 a control client beside a closing session can crash the server.
     for (const client of clients.splice(0)) await client.close()
+    for (const child of children.splice(0)) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
     for (const engine of outside.splice(0)) await engine.close()
     await desk?.close()
     await daemon?.close()
@@ -398,6 +403,38 @@ describe('the device without the app', () => {
     expect(answer).not.toHaveProperty('text')
     expect(await poll).toEqual({ status: 200, body: { text: words } })
     expect(d.log()).not.toContain('word word')
+  })
+
+  it('Claude Code in VS Code\'s extension panel, with no terminal, takes the dial\'s spoken words through its mod alone', async () => {
+    const relay = await FakeBackend.start()
+    backend = relay
+    relay.addMachine(ME)
+    const { d, desk } = await fresh({}, relay)
+    const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
+    await heard(dial, (m) => m.t === 'agents.end', 'the first list')
+    // The panel's own hook, with no pseudo-terminal: the extension's word and the editor's bundle id are all it says, and
+    // Orca's session id is cleared so nothing names an Orca terminal.
+    const panel = new InOrca(d, 'in-vscode-panel', children,
+      { __CFBundleIdentifier: 'com.microsoft.VSCode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode', ORCA_AGENT_SESSION_ID: '' })
+    await panel.hook('SessionStart', { source: 'startup' })
+    const listed = await showing(dial, 'the panel session listed', (r) => ids(r).includes(panel.id))
+    // Seen as VS Code's, from its hints alone, with nothing to type into until its mod polls.
+    const first = listed.rows.find((row) => row.id === panel.id)
+    expect(first).toMatchObject({ name: 'in-vscode-panel', engine: 'claude', host: 'vscode', caps: expect.any(String) })
+    expect(first?.caps).not.toContain('v')
+    const poll = inboxPoll(d, panel.sessionId)
+    await showing(dial, 'voice once its mod polls', (r) => String(r.rows.find((row) => row.id === panel.id)?.caps ?? '').includes('v'))
+    const words = 'run the panel tests'
+    relay.speech = words
+    const since = dial.messages.length
+    dial.send({ t: 'voice.begin', agentId: panel.id, uploadId: 'e2e-panel-1', sr: 16_000, lang: 'en' })
+    dial.audio(Buffer.alloc(3_200, 1))
+    dial.send({ t: 'voice.end', uploadId: 'e2e-panel-1' })
+    const answer = await heard(dial, (m) => (m.t === 'voice.transcript' || m.t === 'voice.error') && m.uploadId === 'e2e-panel-1',
+      'the answer to its words', since)
+    expect(answer).toMatchObject({ t: 'voice.transcript', text: words, agentId: panel.id })
+    expect(await poll).toEqual({ status: 200, body: { text: words } })
+    expect(d.log()).not.toContain(words)
   })
 
   it('a tap on it switches the person\'s tmux client to its pane, never one on a Harness session, and brings no app forward', async () => {
