@@ -52,6 +52,18 @@ it('says how many write deadlines it holds', async () => {
   for (const write of writes) await expect(write).rejects.toThrow('write deadline exceeded')
 })
 
+// Its caller is read off the stack: a spec or tool that keeps stacks short must not leave it holding nothing.
+it('holds a write deadline however few frames a stack keeps', async () => {
+  const held = deadline.holdRegistryDeadline(DEADLINE_MS)
+  const limit = Error.stackTraceLimit
+  Error.stackTraceLimit = 1
+  let write: Promise<unknown>
+  try { write = new RegistryWriteQueue().run(() => new Promise(() => {})) } finally { Error.stackTraceLimit = limit }
+  expect(held.deadlines()).toBe(1)
+  held.expire()
+  await expect(write).rejects.toThrow('write deadline exceeded')
+})
+
 it('leaves a 5 s timer from outside the registry on the host clock, which a sync does not run', async () => {
   deadline.holdRegistryDeadline(DEADLINE_MS)
   const ran = vi.fn()
