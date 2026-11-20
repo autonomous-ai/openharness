@@ -129,8 +129,8 @@ describe('screens', () => {
       "Your dial moves to the thread you open in ChatGPT. Harness reads only the ChatGPT window's title, while ChatGPT is in front.",
     )
     expect(buttons()).toEqual(['Not now', 'Allow'])
-    // Return takes Allow.
-    expect(document.activeElement?.textContent).toBe('Allow')
+    // Return takes Not now: the screen opens by itself.
+    expect(document.activeElement?.textContent).toBe('Not now')
     click('Allow')
     expect(act).toHaveBeenCalledWith('allow')
     click('Not now')
@@ -216,13 +216,13 @@ describe('screens', () => {
     expect(described()).toBe('Add your other computers to your device.')
 
     push(at('follow', 'offer'))
-    expect(document.activeElement?.textContent).toBe('Allow')
+    expect(document.activeElement?.textContent).toBe('Not now')
     expect(described()).toBe(
       "Your dial moves to the thread you open in ChatGPT. Harness reads only the ChatGPT window's title, while ChatGPT is in front.",
     )
   })
 
-  it('the primary button has the focus on every screen that has one, and no other button', async () => {
+  it('the primary button has the focus on every screen that has one but Follow ChatGPT, and no other button', async () => {
     await mount(at('sign_in', 'offer'))
     expect(document.activeElement?.textContent).toBe('Sign in')
 
@@ -234,5 +234,10 @@ describe('screens', () => {
     expect(document.activeElement?.textContent).not.toBe('Cancel')
     push(at('sign_in', 'browser', ['Harness is finishing an update']))
     expect(document.activeElement?.textContent).not.toBe('Cancel')
+
+    // The offer opens by itself as the person switches to ChatGPT: a Return typed for ChatGPT must not press Allow.
+    push(at('follow', 'offer'))
+    expect(document.activeElement?.textContent).toBe('Not now')
+    expect(page().querySelector('.primary')?.textContent).toBe('Allow')
   })
 })
