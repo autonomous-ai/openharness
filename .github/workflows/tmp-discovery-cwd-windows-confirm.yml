@@ -1,0 +1,314 @@
+# Temporary: removed before fix/discovery-cwd-windows-confirm merges. No secrets, no sign-in, nothing signed, published
+# or deployed. It tries to reproduce, on the RELEASED Harness CLI, a Windows report: every agent tab stuck on "Waiting
+# to confirm the native engine process", and "Not confirmed" after a daemon restart. The cause is not proven; each
+# scenario below varies one suspect (a restart, odd PATH entries, a deleted working folder) and records what the
+# daemon logged and what launch state it kept.
+name: tmp discovery cwd windows confirm (temporary)
+
+on:
+  push:
+    branches: [fix/discovery-cwd-windows-confirm]
+
+permissions:
+  contents: read
+
+# One run per branch: a newer push makes the older run's result moot.
+concurrency:
+  group: tmp-discovery-cwd-windows-confirm-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  repro:
+    name: repro (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    steps:
+      # A Node on PATH for npm, on both runners alike (the arm image is not promised one). Harness itself runs on its
+      # own Node, which its installer lays down.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Write the shared helpers
+        run: |
+          $helpers = @'
+          $ErrorActionPreference = 'Continue'
+          $H = Join-Path $env:USERPROFILE '.harness\bin\harness.exe'
+          $Data = Join-Path $env:USERPROFILE '.harness\cli\data'
+          $Log = Join-Path $Data 'harness.log'
+          $Out = Join-Path $env:RUNNER_TEMP 'repro'
+          $Results = Join-Path $Out 'results.csv'
+          New-Item -ItemType Directory -Force -Path $Out | Out-Null
+          # The lines that tell the suspected causes apart.
+          $Pattern = 'process table unavailable|ENGINE_LOOKUP|executable ownership unavailable|create timed out|create ready|create failed|\[restore\]|RESUME_UNCONFIRMED|process.cwd|ENOENT|EPERM'
+          # The harness command first, as the installer's PATH entry gives it to a new terminal. Claude Code's native
+          # build last, so the npm one is the `claude` found and both shapes are on PATH.
+          $env:Path = "$(Split-Path $H);$env:Path"
+          $native = Join-Path $env:USERPROFILE '.local\bin'
+          if (Test-Path -LiteralPath $native) { $env:Path = "$env:Path;$native" }
+
+          function Say([string]$Text) { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $Text; Write-Host $Text }
+
+          function Read-Shared([string]$Path) {
+            # The daemon keeps its files open for writing: read with every sharing flag, never a lock of our own.
+            try {
+              $stream = [IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite, Delete')
+              try { return (New-Object IO.StreamReader($stream)).ReadToEnd() } finally { $stream.Dispose() }
+            } catch { return '' }
+          }
+
+          function Log-Lines { return @((Read-Shared $Log) -split "`r?`n") }
+
+          function Invoke-Harness([string]$Tag, [string[]]$Arguments, [string]$Cwd = $env:USERPROFILE, [int]$Seconds = 120) {
+            # Files for all three streams: the daemon `harness start` leaves running inherits them, and a pipe it held
+            # would keep this step open until the daemon ended. Bounded, so one hung command cannot eat the job.
+            $base = Join-Path $Out $Tag
+            Set-Content -LiteralPath "$base.in" -Value ''
+            $p = Start-Process -FilePath $H -ArgumentList $Arguments -WorkingDirectory $Cwd -NoNewWindow -PassThru `
+              -RedirectStandardInput "$base.in" -RedirectStandardOutput "$base.out" -RedirectStandardError "$base.err"
+            $null = $p.Handle
+            if ($p.WaitForExit($Seconds * 1000)) { $code = $p.ExitCode } else { try { $p.Kill() } catch { }; $code = 'timeout' }
+            $text = ((Read-Shared "$base.out") + "`n" + (Read-Shared "$base.err")).Trim()
+            Write-Host "harness $($Arguments -join ' ') (in $Cwd) -> $code`n$text"
+            return [pscustomobject]@{ Code = $code; Text = $text }
+          }
+
+          function Registry-Rows {
+            # The launch of each agent as the daemon keeps it (registry.json). Only what tells a confirmed launch from
+            # an unconfirmed one is kept: no launch tokens, transcripts or session ids. No launch means ready, as the
+            # daemon's own frames say (lib/agentFrame.ts).
+            try { $rows = @((Read-Shared (Join-Path $Data 'registry.json')) | ConvertFrom-Json) } catch { $rows = @() }
+            return @($rows | Where-Object { $_.agentId } | ForEach-Object {
+              [pscustomobject]@{
+                agentId = $_.agentId; engine = $_.engine; active = $_.active; cwd = $_.cwd
+                launch = $(if ($_.launch) { $_.launch.state } else { 'ready' })
+                error = $_.launch.error; service = $_.launch.service; detail = $_.launch.detail
+                processBound = [bool]$_.processIdentity
+              }
+            })
+          }
+
+          function Dump-Log([string]$Scenario, [int]$From) {
+            $lines = Log-Lines
+            if ($lines.Count -lt $From) { $From = 0 }
+            $hits = @($lines | Select-Object -Skip $From | Where-Object { $_ -match $Pattern })
+            $hits | Set-Content -LiteralPath (Join-Path $Out "log-$Scenario.txt")
+            Say "<details><summary>Scenario ${Scenario}: $($hits.Count) matching log lines (last 150)</summary>`n`n``````text"
+            Say (($hits | Select-Object -Last 150) -join "`n")
+            Say "```````n</details>`n"
+          }
+
+          function Watch-Launches([string]$Scenario, [string[]]$Ids, [switch]$Except, [int]$Seconds, [int]$MinSeconds = 0, [int]$Expected = 2) {
+            # Every 10 s, until each agent's launch is ready or failed, or time is up: `harness ps` as a person reads it,
+            # and the launch state the daemon keeps, which ps does not show. The agents watched are [Ids], or with
+            # -Except every agent but those.
+            $start = Get-Date; $i = 0; $rows = @()
+            do {
+              $i++
+              $null = Invoke-Harness "ps-$Scenario-$i" @('ps', '--json', '--all') -Seconds 60
+              $rows = @(Registry-Rows | Where-Object { ($Ids -contains $_.agentId) -ne [bool]$Except })
+              ConvertTo-Json -InputObject $rows -Depth 4 | Set-Content -LiteralPath (Join-Path $Out "registry-$Scenario-$i.json")
+              $settled = $rows.Count -ge $Expected -and -not @($rows | Where-Object { $_.launch -notin 'ready', 'failed' }).Count
+              $elapsed = ((Get-Date) - $start).TotalSeconds
+              if ($settled -and $elapsed -ge $MinSeconds) { break }
+              Start-Sleep -Seconds 10
+            } while (((Get-Date) - $start).TotalSeconds -lt $Seconds)
+            $seconds = [int]((Get-Date) - $start).TotalSeconds
+            foreach ($engine in 'claude', 'codex') {
+              $agents = @($rows | Where-Object { $_.engine -eq $engine })
+              $confirmed = if (-not $agents.Count) { 'no agent' } elseif (@($agents | Where-Object { $_.launch -ne 'ready' }).Count) { 'no' } else { 'yes' }
+              [pscustomobject]@{
+                Scenario = $Scenario; Engine = $engine; Confirmed = $confirmed; Seconds = $seconds
+                Launch = (@($agents | ForEach-Object { "$($_.launch)$(if ($_.error) { " $($_.error)" })" }) -join ', ')
+                Detail = (@($agents | ForEach-Object { $_.detail } | Where-Object { $_ } | Select-Object -Unique) -join ' / ')
+              } | Export-Csv -LiteralPath $Results -Append -NoTypeInformation
+            }
+            Say "Scenario ${Scenario} after ${seconds}s, launches the daemon keeps:"
+            Say ("``````json`n" + (ConvertTo-Json -InputObject $rows -Depth 4) + "`n``````")
+            $ps = Read-Shared (Join-Path $Out "ps-$Scenario-$i.out")
+            Say ("<details><summary>harness ps --json --all</summary>`n`n``````json`n" + $ps + "`n```````n</details>`n")
+          }
+
+          function New-Agents([string]$Scenario, [string]$Folder) {
+            # A person's `harness new` from the project folder, one Claude Code and one Codex. Signed out, the daemon
+            # serves itself on this computer's id. Neither engine is signed in: each still runs in its pane (a login
+            # or trust screen), which is all the launch's confirmation needs.
+            New-Item -ItemType Directory -Force -Path $Folder | Out-Null
+            $before = @(Registry-Rows | ForEach-Object { $_.agentId })
+            foreach ($engine in 'claude', 'codex') {
+              $r = Invoke-Harness "new-$Scenario-$engine" @('new', $engine, $Folder, '--json') -Cwd $Folder -Seconds 120
+              Say "harness new $engine (scenario $Scenario) -> exit $($r.Code)`n``````text`n$($r.Text)`n``````"
+            }
+            Watch-Launches $Scenario -Ids $before -Except -Seconds 240
+          }
+          '@
+          Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'repro.ps1') -Value $helpers
+
+      - name: Install Claude Code and Codex with npm
+        continue-on-error: true
+        timeout-minutes: 8
+        run: |
+          npm i -g @anthropic-ai/claude-code @openai/codex
+          "## Engines`n" | Add-Content $env:GITHUB_STEP_SUMMARY
+          $found = (where.exe claude codex 2>&1 | Out-String).Trim()
+          # A missing engine is said, not a stop: the summary still shows what npm left.
+          $versions = foreach ($e in 'claude', 'codex') { "${e}: $(try { (& $e --version 2>&1 | Out-String).Trim() } catch { 'not found' })" }
+          "``````text`n$found`n$($versions -join "`n")`n``````" | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      # The other shape a Windows user has: Claude Code's own installer, into %USERPROFILE%\.local\bin.
+      - name: Install Claude Code's native build
+        continue-on-error: true
+        timeout-minutes: 5
+        run: |
+          irm https://claude.ai/install.ps1 | iex
+          . (Join-Path $env:RUNNER_TEMP 'repro.ps1')
+          Say "``````text`nnative: $((where.exe claude 2>&1 | Out-String).Trim())`n``````"
+
+      # The public installer, as a person runs it, without the sign-in task: everything under %USERPROFILE%\.harness,
+      # the command in .harness\bin (put on PATH by the helpers, as a new terminal would have it).
+      - name: Install the released Harness CLI
+        timeout-minutes: 5
+        run: |
+          iex "& { $(irm https://cdn.autonomous.ai/harness/cli/install.ps1) } -NoService"
+          . (Join-Path $env:RUNNER_TEMP 'repro.ps1')
+          $version = (& $H version 2>&1 | Select-Object -First 1 | Out-String).Trim()
+          Say "## Harness`n`nharness version: ``$version`` (data folder ``$Data``, log ``$Log``)"
+          # The version the report came from. Another one still runs every scenario, and is said here.
+          if ($version -notmatch '^v?0\.6\.78$') { Say "**Note: the report is on 0.6.78; this run installed $version.**" }
+
+      - name: 'Scenario A: baseline'
+        continue-on-error: true
+        timeout-minutes: 9
+        run: |
+          . (Join-Path $env:RUNNER_TEMP 'repro.ps1')
+          Say "## Scenario A: baseline, started from the home folder"
+          $from = (Log-Lines).Count
+          $r = Invoke-Harness 'start-A' @('start')
+          Say "harness start -> exit $($r.Code)"
+          New-Agents 'A' 'C:\work\proj-a'
+          Dump-Log 'A' $from
+
+      # Agents outlive the daemon (the terminal host is its own process); the restart restores and re-confirms them.
+      - name: 'Scenario B: daemon restart'
+        continue-on-error: true
+        timeout-minutes: 5
+        run: |
+          . (Join-Path $env:RUNNER_TEMP 'repro.ps1')
+          Say "## Scenario B: harness stop, harness start"
+          $ids = @(Registry-Rows | Where-Object { $_.engine -in 'claude', 'codex' } | ForEach-Object { $_.agentId })
+          $null = Invoke-Harness 'stop-B' @('stop')
+          $from = (Log-Lines).Count
+          $r = Invoke-Harness 'start-B' @('start')
+          Say "harness start -> exit $($r.Code)"
+          # At least 90 s: the rows are ready from scenario A until the restore pass looks at them again.
+          Watch-Launches 'B' -Ids $ids -Seconds 180 -MinSeconds 90 -Expected $ids.Count
+          Dump-Log 'B' $from
+
+      # The suspect in engineBin.ts: one PATH entry whose fs error is not ENOENT, ENOTDIR or EACCES fails the whole
+      # ownership snapshot. Windows maps ERROR_ACCESS_DENIED to EPERM, and odd entries may give EINVAL or UNKNOWN.
+      - name: 'Scenario C: odd PATH entries'
+        continue-on-error: true
+        timeout-minutes: 9
+        run: |
+          . (Join-Path $env:RUNNER_TEMP 'repro.ps1')
+          Say "## Scenario C: daemon PATH with odd entries"
+          $null = Invoke-Harness 'stop-C' @('stop')
+          New-Item -ItemType Directory -Force -Path 'C:\work\denied' | Out-Null
+          icacls 'C:\work\denied' /deny "$($env:USERNAME):(RX)"
+          $odd = @('C:\work\denied', '"C:\Program Files\nodejs"', '%SystemRoot%\system32', '.', 'Q:\tools')
+          # The codes Windows gives for each entry, from the Node the daemon runs on: the evidence for the mapping.
+          $probe = Join-Path $Out 'probe.cjs'
+          @'
+          const fs = require('node:fs'), path = require('node:path')
+          const code = async (fn) => { try { await fn(); return 'ok' } catch (e) { return e.code || e.name } }
+          ;(async () => {
+            for (const raw of JSON.parse(process.env.PROBE_ENTRIES)) {
+              for (const p of new Set([raw, path.resolve(raw)])) {
+                const stat = await code(() => fs.promises.stat(p))
+                const dir = await code(async () => { for await (const _ of await fs.promises.opendir(p)) break })
+                const access = await code(() => fs.promises.access(p, fs.constants.X_OK))
+                const file = await code(() => fs.promises.access(path.join(p, 'claude.exe'), fs.constants.X_OK))
+                console.log(`| \`${p}\` | ${stat} | ${dir} | ${access} | ${file} |`)
+              }
+            }
+          })()
+          '@ | Set-Content -LiteralPath $probe
+          $node = 'node'
+          $pointer = Join-Path $env:USERPROFILE '.harness\runtime\current-node'
+          if (Test-Path -LiteralPath $pointer) { $node = (Get-Content -LiteralPath $pointer -TotalCount 1).Trim() }
+          $env:PROBE_ENTRIES = ConvertTo-Json -Compress -InputObject @($odd + (Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'))
+          Say "Error codes from ``$node`` ($(& $node --version)), in the home folder:`n"
+          Say "| entry | stat | opendir | access X_OK | access entry\claude.exe |`n|---|---|---|---|---|"
+          Push-Location $env:USERPROFILE
+          try { Say ((& $node $probe 2>&1 | Out-String).Trim()) } finally { Pop-Location }
+          Say ''
+          # Only the daemon gets the odd PATH: `harness new` and `harness ps` below run as before.
+          $saved = $env:Path
+          $env:Path = (($odd + $env:Path) -join ';')
+          $from = (Log-Lines).Count
+          try { $r = Invoke-Harness 'start-C' @('start') } finally { $env:Path = $saved }
+          Say "harness start -> exit $($r.Code)"
+          New-Agents 'C' 'C:\work\proj-c'
+          Dump-Log 'C' $from
+
+      # The fix branch's topic: a daemon whose working folder is gone. Windows is expected to refuse the delete while
+      # a process works in the folder; the run records whether it did.
+      - name: 'Scenario D: working folder deleted'
+        continue-on-error: true
+        timeout-minutes: 9
+        run: |
+          . (Join-Path $env:RUNNER_TEMP 'repro.ps1')
+          Say "## Scenario D: daemon started in C:\work\gone, then the folder deleted"
+          $null = Invoke-Harness 'stop-D' @('stop')
+          New-Item -ItemType Directory -Force -Path 'C:\work\gone' | Out-Null
+          $from = (Log-Lines).Count
+          $r = Invoke-Harness 'start-D' @('start') -Cwd 'C:\work\gone'
+          Say "harness start -> exit $($r.Code)"
+          # Another process, as a person deleting the folder in Explorer or a terminal would be.
+          $deleted = pwsh -NoProfile -Command {
+            try { Remove-Item -LiteralPath 'C:\work\gone' -Recurse -Force -ErrorAction Stop; 'Remove-Item: done' }
+            catch { "Remove-Item refused: $($_.Exception.Message)" }
+            if (Test-Path -LiteralPath 'C:\work\gone') { 'the folder is still there' } else { 'the folder is gone' }
+          }
+          Say "``````text`n$(($deleted | Out-String).Trim())`n``````"
+          New-Agents 'D' 'C:\work\proj-d'
+          Dump-Log 'D' $from
+
+      - name: Stop, collect the logs and write the summary
+        if: always()
+        run: |
+          . (Join-Path $env:RUNNER_TEMP 'repro.ps1')
+          if (Test-Path -LiteralPath $H) { $null = Invoke-Harness 'stop-final' @('stop') }
+          # Log files only, from the whole Harness folder: never the sign-in or any other state file.
+          $logs = Join-Path $Out 'logs'
+          New-Item -ItemType Directory -Force -Path $logs | Out-Null
+          $root = Join-Path $env:USERPROFILE '.harness'
+          Get-ChildItem -LiteralPath $root -Recurse -File -Filter '*.log' -ErrorAction SilentlyContinue | ForEach-Object {
+            $name = $_.FullName.Substring($root.Length + 1) -replace '[\\/]', '__'
+            Set-Content -LiteralPath (Join-Path $logs $name) -Value (Read-Shared $_.FullName) -NoNewline
+          }
+          Say "## Result ($env:RUNNER_OS, ${{ matrix.runner }})`n"
+          Say "| scenario | engine | confirmed | launch | detail | seconds |`n|---|---|---|---|---|---|"
+          if (Test-Path -LiteralPath $Results) {
+            Import-Csv -LiteralPath $Results | ForEach-Object {
+              Say "| $($_.Scenario) | $($_.Engine) | $($_.Confirmed) | $($_.Launch) | $($_.Detail) | $($_.Seconds) |"
+            }
+          }
+          Say ''
+          Dump-Log 'all' 0
+
+      - name: Upload the logs and the ps outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: discovery-cwd-windows-confirm-${{ matrix.runner }}
+          path: ${{ runner.temp }}/repro
+          if-no-files-found: warn
