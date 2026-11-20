@@ -5,8 +5,9 @@
 # with a web deploy.
 #
 # Installs the AppImage the device manifest names for this computer's arch, checked by size and sha256, at Desktop's
-# place for it, lists it in the app list when nothing is listed there yet, and starts it. No sudo and no FUSE: the
-# AppImage runs on a runtime that needs no libfuse2, and its icon comes out with --appimage-extract.
+# place for it, lists it in the app list when nothing is listed there yet, and starts it. No sudo and no libfuse2: the
+# AppImage runs on a static runtime, which needs FUSE (fusermount3 and /dev/fuse) but no libfuse2, and its icon comes
+# out with --appimage-extract, which needs no FUSE at all.
 set -eu
 
 # Fixed, with no environment override, as website/src/lib/deviceRelease.ts: only the bucket decides which release a
