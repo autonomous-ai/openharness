@@ -754,28 +754,31 @@ void main() {
       });
     });
 
-    test('ensureRunning does not fall back to a spawn when the daemon goes down mid-wait while $held', () {
-      fakeAsync((async) {
-        var spawnCount = 0;
-        var asked = 0;
-        final discovery = _SupervisionProbe(
-          // Answers once, not ready yet, then goes quiet.
-          readProbe: () async => asked++ == 0
-              ? const LocalCliProbe.notReady('startup scan')
-              : const LocalCliProbe.down('fixture daemon went away'),
-          spawnCommand: () async => spawnCount++,
-          flashing: () => flashing,
-          uninstalling: () => uninstalling,
-          monotonicClock: () => async.elapsed,
-        );
-        LocalCliProbe? result;
-        discovery.ensureRunning().then((probe) => result = probe);
+    test(
+      'ensureRunning does not fall back to a spawn when the daemon goes down mid-wait while $held',
+      () {
+        fakeAsync((async) {
+          var spawnCount = 0;
+          var asked = 0;
+          final discovery = _SupervisionProbe(
+            // Answers once, not ready yet, then goes quiet.
+            readProbe: () async => asked++ == 0
+                ? const LocalCliProbe.notReady('startup scan')
+                : const LocalCliProbe.down('fixture daemon went away'),
+            spawnCommand: () async => spawnCount++,
+            flashing: () => flashing,
+            uninstalling: () => uninstalling,
+            monotonicClock: () => async.elapsed,
+          );
+          LocalCliProbe? result;
+          discovery.ensureRunning().then((probe) => result = probe);
 
-        async.elapse(const Duration(seconds: 1));
-        expect(spawnCount, 0);
-        expect(result?.state, LocalCliProbeState.down);
-      });
-    });
+          async.elapse(const Duration(seconds: 1));
+          expect(spawnCount, 0);
+          expect(result?.state, LocalCliProbeState.down);
+        });
+      },
+    );
   }
 
   test('restart stops waiting for the old daemon to let go once stopTimeout has run out on its clock', () {
