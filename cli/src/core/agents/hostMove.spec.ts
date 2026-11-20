@@ -340,6 +340,31 @@ describe('the move, wired to the core', () => {
       child.kill('SIGKILL')
     }
   })
+
+  // Ctrl-C in the new pane before the engine starts there must not end it. A signal here, as above. It prints nothing,
+  // so this copy says when its listeners are on and when its handler has taken the interrupt: once it has, the pane
+  // lives on. A second signal sent behind it is no order (lib/windows/engineStart.spec.ts).
+  it.skipIf(process.platform === 'win32')('on Windows, the new pane keeps waiting through an interrupt', async () => {
+    const [, flag, script, ...rest] = moveWaitingArgv('win32')
+    const telling = script!.replace('process.on(s,()=>{})', 'process.on(s,()=>process.stdout.write(s+"\\n"))')
+    expect(telling).not.toBe(script)
+    const child = spawn(process.execPath, [flag!, `${telling};process.stdout.write("listening\\n")`, ...rest], { stdio: ['ignore', 'pipe', 'ignore'] })
+    const ended = new Promise<string>((resolve) => child.once('exit', (_code, signal) => resolve(`ended by ${signal}`)))
+    let output = ''
+    const waiting: Array<() => void> = []
+    child.stdout.on('data', (chunk: Buffer) => { output += chunk; for (const wake of waiting.splice(0)) wake() })
+    const said = async (text: string) => {
+      while (!output.includes(text)) await new Promise<void>((resolve) => waiting.push(resolve))
+      return output
+    }
+    try {
+      expect(await Promise.race([said('listening\n'), ended])).toBe('listening\n')
+      child.kill('SIGINT')
+      expect(await Promise.race([said('SIGINT'), ended])).toBe('listening\nSIGINT\n')
+      expect(child.exitCode).toBeNull()
+      expect(child.signalCode).toBeNull()
+    } finally { child.kill('SIGKILL') }
+  })
 })
 
 describe('the move, wired to the core: the paths that do not go through', () => {
