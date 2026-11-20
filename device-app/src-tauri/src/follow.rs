@@ -603,9 +603,14 @@ mod tests {
         };
         link(7, "/usr/lib/chatgpt/ChatGPT");
         link(8, "/usr/local/bin/ChatGPT");
+        // A package upgrade replaced the program while it runs: the kernel marks the link.
+        link(10, "/usr/lib/chatgpt/ChatGPT (deleted)");
+        link(11, "/usr/lib/chatgpt/ChatGPT (deleted) (deleted)");
         assert!(runs_program(proc_root.path(), 7, program));
         assert!(!runs_program(proc_root.path(), 8, program));
         assert!(!runs_program(proc_root.path(), 9, program));
+        assert!(runs_program(proc_root.path(), 10, program));
+        assert!(!runs_program(proc_root.path(), 11, program));
     }
 
     #[test]
