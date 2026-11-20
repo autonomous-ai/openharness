@@ -5,7 +5,7 @@
  */
 import { spawnSync } from 'node:child_process'
 import * as fs from 'node:fs'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, watch, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -439,11 +439,13 @@ describe('the move at a start', () => {
     const firstAsked = new Promise<void>((done) => { asked = done })
     let watching = (): void => {}
     const secondWaits = new Promise<'waits'>((done) => { watching = () => done('waits') })
+    // The fake watch, woken by the test: fs.watch on macOS (FSEvents) starts telling changes some time after it returns,
+    // and may never tell the first start's release, which left the second to its look LOCK_LOOK_MS later.
     const lock = (pid: number, onWatch = (): void => {}): LockDeps => ({
       pid, startTime: (other) => other === SELF || other === OTHER ? 1 : null,
       watch: (folder, onChange) => {
         onWatch()
-        return watch(folder, onChange)
+        return t.lockAs(pid).watch(folder, onChange)
       },
     })
     const first = moveHomeAtStart(argvOf(t, '__harnessd'), {}, t.deps({
@@ -458,7 +460,10 @@ describe('the move at a start', () => {
     const second = moveHomeAtStart(argvOf(t, 'start', '--if-down'), { XDG_STATE_HOME: otherState }, t.deps({ lock: lock(OTHER, watching) }))
     expect(await Promise.race([second.then(() => 'went on'), secondWaits])).toBe('waits')
     answer(false)
-    await Promise.all([first, second])
+    await first
+    // Its release took the lock's folder away: a change beside the lock.
+    t.wake()
+    await second
     expect(readBridge(t.state)).toMatchObject({ oldHome: t.legacy })
     expect(existsSync(otherState)).toBe(false)
   })

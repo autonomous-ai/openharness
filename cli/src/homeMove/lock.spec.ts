@@ -43,7 +43,9 @@ describe('the move lock', () => {
     expect(existsSync(moveLockPath(legacy))).toBe(false)
   })
 
-  it('a second start waits, then sees the lock gone', async () => {
+  // Where the move runs: inotify tells every change made once fs.watch returns. macOS's FSEvents starts telling some
+  // time after it returns, and may never tell this release.
+  it.runIf(process.platform === 'linux')('a second start waits, then sees the lock gone', async () => {
     // The limit never comes: only the watch can wake the second start.
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     const legacy = legacyHome(), order: string[] = []
