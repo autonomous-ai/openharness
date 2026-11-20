@@ -3,7 +3,8 @@
 Hand checks of the dial on Windows (docs/plans/2026-11-19-dial-windows-plan.md, Task 24), on the VM and on the x64 test
 PC (the Dell):
 
-- `desk.mts`: a daemon of the branch on a stand-in dial or on the real one, or a read-only look at the real dial.
+- `desk.mts`: a daemon of the branch on a stand-in dial or on the real one, a read-only look at the real dial, or a
+  program (herdr, a terminal) run beside a sealed desk in its homes.
 - `console.ps1`: runs a script in this account's console session from SSH, which a desk needs to see the screen the
   person sees.
 - `bundle.mjs`: the desk and the CLI it runs, built as plain JavaScript for a machine that runs only signed programs.
@@ -37,8 +38,8 @@ The signed `harness-serial.exe` is then `<that pty folder>\harness-serial.exe`, 
 
 ## The desk's modes
 
-A desk's first line is `{"desk":{"dataDir":…,"port":…,"root":…}}`, so a shell started for herdr or a hand-run hook can
-name them. It names local paths: it stays on the machine.
+A desk's first line is `{"desk":{"dataDir":…,"port":…,"root":…}}`, so a program started beside it or a hand-run hook
+can name them. It names local paths: it stays on the machine.
 
 - **The stand-in, sealed**: `desk.mjs [--port <n>] [--quit-on <file>]`. Task 23's daemon, sealed in a throwaway
   root with Windows' own folders alone on its PATH, on a stand-in dial that greets as the firmware does. stdin takes
@@ -63,6 +64,15 @@ name them. It names local paths: it stays on the machine.
   person's. No stand-in engine runs here: the e2e's starts through a Unix wrapper, and the only way Windows' program
   resolver runs a script engine is an npm shim, a batch file. So the dial's words reach an agent only through herdr or
   another app here; on the VM they are checked with the engines of the test user.
+- **A program beside a sealed desk**: `desk.mjs --beside <that desk's root> --run <program> [arguments…]`, for example
+  `--beside <root> --run <wezterm.exe> start -- <herdr.exe>`. It runs the program, its arguments as they are, in the
+  desk's homes: `USERPROFILE`, `HOME`, `APPDATA`, `LOCALAPPDATA`, `TEMP`, `TMP`, `CODEX_HOME`, `CLAUDE_CONFIG_DIR` and
+  `CLAUDE_PROJECTS_DIR`, each in the root, and of the account only what a program needs to start, its `PATH` among it.
+  What the program starts gets the same: herdr's server and its panes, and a stand-in engine in a pane. herdr sets its
+  agent integrations up in the homes it is given: started with the owner's profile on the Dell, it put its Codex hook
+  into the owner's `~/.codex`. So herdr, the terminal it runs in and anything else that runs beside a desk start only
+  this way. It ends when the program ends, with its exit code. A root with no sealed profile in it (an `--own-account`
+  desk's) is refused (exit 2).
 
 `--quit-on <file>` (both desks): the desk quits once `<file>` exists, checked once a second. A desk in a `console.ps1`
 task has no stdin to type into. `quit` stops the daemon; a sealed desk then deletes its root.
@@ -109,20 +119,28 @@ modes. The unsealed stand-in is for this user only.
 Every step through `console.ps1`, in the owner's console session; SSH runs only what needs no desktop. Ports 18478 and
 18479.
 
-1. The owner quits Harness Desktop for the run: open, it starts its daemon again, which takes `COM3`. Then
+1. Before anything of the run starts, the owner's homes are copied: `%USERPROFILE%\.codex`, `%USERPROFILE%\.claude`
+   and the Harness folders the run may touch (`%USERPROFILE%\.harness\data` and `\devices`), each with
+   `robocopy <folder> <copy>\<its name> /E /COPY:DAT /R:0`, into `<run>\owner-<yyyyMMdd-HHmmss>`, made the owner's alone
+   first (`icacls <copy> /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F"`).
+2. The owner quits Harness Desktop for the run: open, it starts its daemon again, which takes `COM3`. Then
    `harness status`: keep `running` or `stopped` and the version, nothing else.
-2. If it runs, `harness stop`. Then the first look, `--dial-read COM3 --out <run>\first-read.json`, must exit 0; exit 3
+3. If it runs, `harness stop`. Then the first look, `--dial-read COM3 --out <run>\first-read.json`, must exit 0; exit 3
    means something took `COM3` again: stop the run.
-3. The desks: the sealed stand-in (`--port 18479`) and the real dial (`--dial COM3 --speech <text>
-   --first-read <run>\first-read.json --port 18478 --quit-on <run>\quit`), each
-   with `-NoWait`, then quit through its `--quit-on` file and `-Stop`. A real-dial desk that ends 4, 5 or 6 stops the
-   run.
-4. The last look, `--dial-read COM3 --out <run>\last-read.json --against <run>\first-read.json`: `settings: unchanged`
+4. The desks: the sealed stand-in (`--port 18479`) and the real dial (`--dial COM3 --speech <text>
+   --first-read <run>\first-read.json --port 18478 --quit-on <run>\quit`), each with `-NoWait`, then quit through its
+   `--quit-on` file and `-Stop`. A real-dial desk that ends 4, 5 or 6 stops the run. herdr, and the terminal it runs
+   in, start only beside the real-dial desk (`--beside <its root from its first line> --run …`, with `-NoWait`), and
+   are stopped with `-Stop` before that desk quits.
+5. The last look, `--dial-read COM3 --out <run>\last-read.json --against <run>\first-read.json`: `settings: unchanged`
    and `pets: unchanged`.
-5. If the daemon ran in 1: `harness start`, then `harness status` says running at the version kept in 1, and
-   `--dial-read COM3 --out <run>\held.json` exits 3 and writes nothing. A daemon stopped in 1 is left so; the run checks
+6. The owner's homes against the copy of 1, before the owner's daemon starts again: each folder file by file, by name,
+   size and `Get-FileHash`. A file the run changed or removed is put back from the copy, and one it added is removed;
+   the evidence names each by its path inside the home, never its content. Then the copy is deleted.
+7. If the daemon ran in 2: `harness start`, then `harness status` says running at the version kept in 2, and
+   `--dial-read COM3 --out <run>\held.json` exits 3 and writes nothing. A daemon stopped in 2 is left so; the run checks
    only that `COM3` is free. Then the owner opens Harness Desktop again.
-6. Clean up: stop the desks, `harness stop` on each root, delete the roots, the reads and the copied folder.
+8. Clean up: stop the desks, `harness stop` on each root, delete the roots, the reads and the copied bundle.
 
 Nothing with a full serial, the owner's account name or a personal path leaves the Dell: the desks' first lines and the
 reads stay there.
