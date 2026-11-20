@@ -962,6 +962,16 @@ class GitHubEvidence:
 
     def __init__(self, client):
         self.client = client
+        # (commit, run, attempt) -> (run, receipt): a run stands for several suites, each looked up inside one budget.
+        self.gates = {}
+
+    def gate(self, sha_value, run_id, attempt):
+        """A pull request run of the commit and its verified ci/required receipt, read once."""
+        key = (sha_value, run_id, attempt)
+        if key not in self.gates:
+            run = self.pr_run(sha_value, run_id, attempt)
+            self.gates[key] = (run, read_gate(self.client, run)[0])
+        return self.gates[key]
 
     def pr_run(self, sha_value, run_id, attempt):
         run = self.client.api(f"actions/runs/{run_id}")
@@ -986,14 +996,12 @@ class GitHubEvidence:
         if (job.get("id") != latest["id"] or job.get("name") != "ci/required" or job.get("head_sha") != sha_value
                 or job.get("conclusion") != "success" or not positive(job.get("run_id")) or not positive(job.get("run_attempt"))):
             raise ValueError("the ci/required check does not match its job")
-        run = self.pr_run(sha_value, job["run_id"], job["run_attempt"])
-        receipt = read_gate(self.client, run)[0]
+        run, receipt = self.gate(sha_value, job["run_id"], job["run_attempt"])
         return dict(run_id=run["id"], run_attempt=run["run_attempt"], url=run["html_url"], receipt=receipt)
 
     def ran(self, sha_value, run_id, attempt, suite):
         """The tested tree and link of a run that itself ran and passed this suite."""
-        run = self.pr_run(sha_value, run_id, attempt)
-        receipt = read_gate(self.client, run)[0]
+        run, receipt = self.gate(sha_value, run_id, attempt)
         if suite not in receipt["suites"] or suite in receipt.get("reused", {}):
             raise ValueError("the recorded run did not run this suite")
         return dict(tree=receipt["source_tree"], url=run["html_url"])
