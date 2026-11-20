@@ -92,7 +92,8 @@ SUBCOMPONENTS = {"devices/harness-pro/": "pro"}
 # runs its component's unit suite; reuse after Update branch still counts it (DEPENDS).
 # windows-e2e: windows.yml's specs (both of its `$paths` lists, cli/-relative there), each with the module it tests.
 WINDOWS_SPECS = (
-    "cli/src/lib/ptyHostBackend.contract.spec.ts", "cli/src/lib/ptyHost/", "cli/src/lib/windows/",
+    "cli/src/lib/ptyHostBackend.contract.spec.ts", "cli/src/lib/ptyHostBackend.spec.ts",
+    "cli/src/lib/ptyHostBackend.restart.spec.ts", "cli/src/lib/ptyHost/", "cli/src/lib/windows/",
     "cli/src/scripts/windowsCiChecks.spec.ts", "cli/src/lib/uninstall/",
     "cli/src/engines/kit/hookRemoval.spec.ts", "cli/src/engines/kit/windowsHooks.spec.ts",
     "cli/src/engines/kit/windowsFiles.spec.ts", "cli/src/engines/kit/nativePaths.windows.spec.ts",
