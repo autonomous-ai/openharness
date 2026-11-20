@@ -21,14 +21,15 @@ const bridge = (endpoint) => {
   const socket = connect(endpoint)
   socket.once('error', async () => { await write(process.stderr, 'gone\n'); process.exit(4) })
   socket.once('connect', async () => {
+    // Before the wait below: an error with no listener would throw.
     socket.removeAllListeners('error')
+    socket.on('error', () => process.exit(0))
     await write(process.stderr, 'open\n')
     // Either side ending ends the stand-in, once the bytes it carried are written.
     process.stdin.pipe(socket, { end: false })
     process.stdin.on('end', () => socket.end(() => process.exit(0)))
     socket.pipe(process.stdout, { end: false })
     socket.on('end', () => process.stdout.write('', () => process.exit(0)))
-    socket.on('error', () => process.exit(0))
   })
 }
 

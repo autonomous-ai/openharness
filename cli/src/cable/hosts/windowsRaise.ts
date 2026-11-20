@@ -20,12 +20,10 @@ import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 export type RaiseOutcome = 'raised' | 'refused' | 'none'
 
 /**
- * Each app a tap raises, by the bundle a tap names (open.ts BUNDLES), to the program whose process owns its window
- * (docs/plans/2026-11-19-dial-windows-vm-notes.md, Task 1 §5). VS Code and Cursor were seen running. Orca's is the app at
- * its install root, not the CLI `resources\bin\orca.exe`: the helper matches names without case, so the CLI's processes
- * match too and own no visible window, which the helper passes over. WezTerm's, Warp's and Alacritty's are in their
- * installs, not seen running; the Claude and ChatGPT apps were not installed. The VM's console check (the plan's
- * Task 37) confirms those five.
+ * Each app a tap raises, by the bundle a tap names (open.ts BUNDLES), to the program whose process owns its window: each
+ * was seen owning its app's window on the VM (docs/plans/2026-11-19-dial-windows-vm-notes.md, Task 37 §1). The helper
+ * matches names without case, so other processes of the same name match too: Orca's CLI `resources\bin\orca.exe`, the
+ * Claude Code CLI's `claude.exe`, each app's helpers. They own no visible window, and the helper passes them over.
  */
 export const WINDOWS_APPS: Readonly<Record<string, string>> = {
   [APP_BUNDLES.vscode]: 'Code.exe',
