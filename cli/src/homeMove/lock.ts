@@ -1,5 +1,6 @@
 import { linkSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, watch, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { errorKind } from '../lib/log.js'
 
 /**
  * How often a start waiting for another start's move looks again: an owner killed changes nothing beside the lock, and
@@ -102,7 +103,7 @@ function watchBeside(lock: string, deps: LockDeps, wait: LockWait, onChange: () 
   try {
     return deps.watch(dirname(lock), onChange)
   } catch (error) {
-    wait.log(`home move: lock watch ${code(error) ?? 'failed'} · looking every ${LOCK_LOOK_MS / 1000} s`)
+    wait.log(`home move: lock watch ${errorKind(error)} · looking every ${LOCK_LOOK_MS / 1000} s`)
     return { close: () => {} }
   }
 }
