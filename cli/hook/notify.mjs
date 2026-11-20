@@ -561,19 +561,20 @@ function postObserved(port, body) {
  * cap drops: without it a tap still brings the app forward.
  *
  * On Windows no app sets __CFBundleIdentifier, and Cursor and VS Code both set TERM_PROGRAM=vscode: the hook finds the
- * app itself (windowsAppBundle) and sends its bundle id in that hint, never one the environment claims. The first of
+ * app itself (lookUpWindowsApp) and sends its bundle id in that hint, never one the environment claims. The first of
  * three that answers:
  * - VSCODE_GIT_ASKPASS_NODE, which an editor sets in its integrated terminals alone: the editor's own program
  *   (`Code.exe`, `Cursor.exe`). No process is started.
  * - VSCODE_PID, for a session started from Claude Code's extension panel, which runs with the extension host's
- *   environment and has no askpass variable (read on the VM, 2026-11-20): the image name of that pid's own row, the
- *   first of its chain from the pty host (`ps --json --ancestors <pid>`), as the caller's climb reads its own
- *   (hookCallerPid). An image name, never another process's environment. A read pays a pty host start, so the answer
- *   is kept per editor (keepEditor), and a hook whose kept answer matches starts none. The row is found by its pid: a
- *   host that takes no `--ancestors` (0.6.22) lists every row. The key is the pid and the editor's pipe
- *   (VSCODE_IPC_HOOK), not the process's start time: the start time is in the table alone, so checking it would cost
- *   the start the kept answer saves, while the pipe's name is in this hook's own environment and differs between
- *   editors and versions, so a pid another editor reuses misses.
+ *   environment and has no askpass variable (read on the VM, 2026-11-20): the image name of that pid's row in the
+ *   hook's own chain (windowsHookChain), the one read the caller's climb makes too, so a Codex hook in the panel starts
+ *   the pty host once. An image name, never another process's environment. The editor is one of the hook's parents (on
+ *   the VM: two bash.exe, claude.exe and the extension host, then VSCODE_PID's Code.exe), so a pid past the chain's 9
+ *   rows names none. A read pays a pty host start, so the answer is kept per editor (keepEditor), and a hook whose kept
+ *   answer matches starts none. The key is the pid and the editor's pipe (VSCODE_IPC_HOOK), not the process's start
+ *   time: the start time is in the table alone, so checking it would cost the start the kept answer saves, while the
+ *   pipe's name is in this hook's own environment and differs between editors and versions, so a pid another editor
+ *   reuses misses.
  * - ALACRITTY_LOG, the one variable Alacritty sets on Windows (its log file, whose path is never read): Alacritty.
  * WezTerm and Warp need nothing here: WEZTERM_PANE and TERM_PROGRAM name them on Windows too (read from their source).
  */
@@ -590,7 +591,7 @@ const MAX_HINTS = 10
 /** A character the core refuses in a path or hint (core/observedHook.ts): one there is forged. */
 const CONTROL = /[\u0000-\u001f\u007f]/
 
-/** [appBundle] is the app windowsAppBundle found, sent on Windows in place of the environment's __CFBundleIdentifier. */
+/** [appBundle] is the app lookUpWindowsApp found, sent on Windows in place of the environment's __CFBundleIdentifier. */
 function hostHints(appBundle) {
   const hints = {}
   for (const name of HOST_HINTS) {
@@ -629,14 +630,6 @@ function editorBundle(path) {
   return WINDOWS_EDITORS.get(win32.basename(path).toLowerCase())
 }
 
-/** The app's lookup (lookUpWindowsApp), started once a run by the first to ask: beside the climb (CALLER_PID), or the
- *  body. */
-let windowsApp
-function windowsAppBundle() {
-  windowsApp ??= lookUpWindowsApp()
-  return windowsApp
-}
-
 /** On Windows, the bundle id of the app a session outside a pane runs in, from the three inputs HOST_HINTS names, or
  *  undefined. Only the id leaves this process: never a path, a pid or a pipe's name. */
 async function lookUpWindowsApp() {
@@ -648,7 +641,7 @@ async function lookUpWindowsApp() {
     const file = join(paths().dataDir, EDITORS_FILE)
     const kept = ipc && readEditors(file).find((entry) => entry.pid === pid && entry.ipc === ipc)
     if (kept) return kept.app
-    const row = (await readWindowsTable(['--ancestors', String(pid)]))?.find((candidate) => candidate.pid === pid)
+    const row = (await windowsHookChain())?.find((candidate) => candidate.pid === pid)
     const app = row && editorBundle(row.executable)
     // Only an answer the table gave is kept: no row, or no table, is asked again next time.
     if (app && ipc) keepEditor(file, { pid, ipc, app })
@@ -824,18 +817,37 @@ function windowsCommandShell(row) {
   return (image === 'powershell.exe' || image === 'pwsh.exe') && powershellRunsCommand(row.nativeArgv)
 }
 
-/** hookCallerPid on Windows, from the hook's chain in the pty host's table; the hook's parent when there is none. */
-async function windowsHookCallerPid() {
-  const rows = await readWindowsTable(['--ancestors', String(process.ppid)])
-  if (!rows) return process.ppid
+/**
+ * The hook's own chain in [rows]: its parent's row, then each one's parent's, nearest first, at most 9 (pty/src/ps.rs
+ * MAX_ANCESTORS). It ends at a pid no row has, a process gone, and at a pid seen twice. Built from the rows, not taken
+ * as listed, so a host that takes no `--ancestors` (0.6.22) and lists every row gives the same chain.
+ */
+function hookChain(rows) {
   const byPid = new Map(rows.map((row) => [row.pid, row]))
-  let pid = process.ppid
-  for (let step = 0; step < 8; step++) {
-    const shell = byPid.get(pid)
-    if (!shell || !windowsCommandShell(shell) || !byPid.has(shell.parentPid)) break
-    pid = shell.parentPid
+  const chain = []
+  for (let row = byPid.get(process.ppid); row && chain.length < 9 && !chain.includes(row); row = byPid.get(row.parentPid)) {
+    chain.push(row)
   }
-  return pid
+  return chain
+}
+
+/** The hook's own chain from the pty host (`ps --json --ancestors <its parent>`), read at most once a run by the first to
+ *  ask: the caller's climb (windowsHookCallerPid) and the app's lookup (lookUpWindowsApp) share it. Null for a failed
+ *  read. */
+let windowsChain
+function windowsHookChain() {
+  windowsChain ??= readWindowsTable(['--ancestors', String(process.ppid)]).then((rows) => rows && hookChain(rows))
+  return windowsChain
+}
+
+/** hookCallerPid on Windows: past each command shell of the hook's own chain whose parent is in it; the hook's parent
+ *  when there is no chain. */
+async function windowsHookCallerPid() {
+  const chain = await windowsHookChain()
+  if (!chain?.length) return process.ppid
+  let index = 0
+  while (index < 8 && index + 1 < chain.length && windowsCommandShell(chain[index])) index++
+  return chain[index].pid
 }
 
 /**
@@ -853,10 +865,11 @@ async function windowsHookCallerPid() {
  * Windows has the same gap: PowerShell (`-Command`) and cmd (`/c`) stay the hook's parent and exit with it. Windows has
  * no /proc, so the climb reads the pty host's table, the one the core's check reads too (lib/windows/processTable.ts):
  * each row's pid, parent, image name and command line, never an environment. Starting the host costs a process start
- * on the hook's path, so only the engines whose runner is a shell pay it, and it lists the hook's parent and that
- * one's parents alone (`ps --json --ancestors`, at most 9 rows, the 8 steps' worth): reading the whole table added
- * about 58 ms to a hook on a Windows VM. A host that takes no `--ancestors` (0.6.22) lists every row, which the climb
- * reads the same way; one that refuses it names the hook's parent, as no table does.
+ * on the hook's path, so only the engines whose runner is a shell pay it, only for an event the hook tells (hookCaller),
+ * and it lists the hook's parent and that one's parents alone (`ps --json --ancestors`, at most 9 rows, the 8 steps'
+ * worth): reading the whole table added about 58 ms to a hook on a Windows VM. The app's lookup reads the same chain
+ * (windowsHookChain), so a run starts the host once at most. A host that takes no `--ancestors` (0.6.22) lists every
+ * row, which the climb reads the same way; one that refuses it names the hook's parent, as no table does.
  * A process the host lists but cannot open is named, as its command line cannot be read; a shell whose parent is in no
  * row, gone, is named itself.
  */
@@ -872,6 +885,14 @@ async function hookCallerPid(engine) {
     pid = shell.parentPid
   }
   return pid
+}
+
+/** The hook's caller (hookCallerPid), found once a run, by the first to name it: so an event the hook drops climbs
+ *  nothing. A climb that throws (a helper path Node refuses to start) names the parent, as a run with no table does. */
+let caller
+function hookCaller() {
+  caller ??= hookCallerPid(argEngine()).catch(() => process.ppid)
+  return caller
 }
 
 /** The core refuses an event whose title is longer (core/observedHook.ts): the hook cuts it to this instead. */
@@ -900,9 +921,8 @@ function observedTitle(value) {
  * out rather than cost the whole event (core/observedHook.ts), and so are the paths of a body over the 4096 bytes the
  * core reads (hookServer.ts): the transcript's first, as the devices can do without it, then the folder. The title is
  * never dropped: at most 64 characters, it fits beside the hints and ids once both paths are gone, so a body without
- * one always means the session said none. On Windows the app it runs in is looked up (windowsAppBundle) only for an
- * event it tells, so an event it drops starts no pty host for it, unless its hook climbs (hookCallerPid): that lookup
- * starts beside the climb's read, before the event is known.
+ * one always means the session said none. The caller and, on Windows, the app it runs in (lookUpWindowsApp) are found
+ * only for an event it tells, so an event it drops starts no pty host; the two read the one chain (windowsHookChain).
  */
 async function observedBody(engine, event, input) {
   const kind = observedEvent(engine, event, input)
@@ -914,9 +934,9 @@ async function observedBody(engine, event, input) {
     : Array.isArray(input.workspacePaths) ? input.workspacePaths[0]
       : input.cwd || input.workspaceRoot || (engine === 'devin' ? process.cwd() : undefined)
   const body = {
-    engine, sessionId, event: kind, cwd: path(cwd), callerPid: CALLER_PID,
+    engine, sessionId, event: kind, cwd: path(cwd), callerPid: await hookCaller(),
     transcriptPath: path(input.transcript_path || input.transcriptPath),
-    hostHints: hostHints(process.platform === 'win32' ? await windowsAppBundle() : undefined),
+    hostHints: hostHints(process.platform === 'win32' ? await lookUpWindowsApp() : undefined),
   }
   if (relayedPrompt(engine, event, input)) body.relayed = true
   const title = kind === 'session-start' || kind === 'turn-start' ? observedTitle(input.session_title) : undefined
@@ -1065,11 +1085,11 @@ function ptyHostPane(environment = process.env) {
 }
 const PTY_PANE = ptyHostPane()
 
-function terminalHookFields(tmuxPane) {
+async function terminalHookFields(tmuxPane) {
   const runtimeHints = []
   if (tmuxPane) runtimeHints.push({ backend: 'tmux', paneId: tmuxPane })
   else if (PTY_PANE) runtimeHints.push({ backend: 'ptyhost', instance: PTY_PANE.instance, paneId: PTY_PANE.paneId })
-  return { tmuxPane, runtimeHints, callerPid: CALLER_PID }
+  return { tmuxPane, runtimeHints, callerPid: await hookCaller() }
 }
 
 function sleep(ms) {
@@ -1971,7 +1991,7 @@ function writeRegistry(file, sessions, current = () => true) {
 }
 
 /**
- * The editor each panel hook's VSCODE_PID named (windowsAppBundle), kept in the data folder so the next hook of that
+ * The editor each panel hook's VSCODE_PID named (lookUpWindowsApp), kept in the data folder so the next hook of that
  * editor starts no pty host. On Windows alone, and only the hook reads or writes it. At most EDITORS_MAX entries of a
  * pid, the key of the editor's pipe (editorIpcKey) and a bundle id, the newest first: never a path or a pipe's name.
  */
@@ -2397,7 +2417,6 @@ async function main() {
   if (!paneless && event === 'Notification') return
   // Before anything reads the data folder or posts: which daemon this pane is (routeToPaneOwner).
   if (!paneless && await routeToPaneOwner(tmuxPane)) port = argPort()
-  const mutationFields = { engine, ...terminalHookFields(tmuxPane) }
   if (engine === 'cursor' && input.is_background_agent === true) return
   if (engine === 'codex' && isCodexSubagent(input, paths())) return
   // Devin's documented user-level hook locations include ~/.claude.json and ~/.claude/settings.json, so a
@@ -2414,6 +2433,9 @@ async function main() {
     if (body) await postObserved(port, body)
     return
   }
+
+  // After the guards: an event they drop climbs to no caller (hookCaller).
+  const mutationFields = { engine, ...await terminalHookFields(tmuxPane) }
 
   // Grok's hook payload and event records are camelCase, while every Claude-compatible engine above is
   // snake_case. Its Stop hook is deliberately NOT installed: Grok persists that hook_execution before
@@ -2448,7 +2470,7 @@ async function main() {
       sessionId,
       transcriptPath,
       cwd,
-      ...terminalHookFields(tmuxPane),
+      ...await terminalHookFields(tmuxPane),
     }
     const registered = await post(port, '/api/hook/session-start', body)
     if (registered === false) {
@@ -2496,7 +2518,7 @@ async function main() {
       sessionId,
       transcriptPath,
       cwd,
-      ...terminalHookFields(tmuxPane),
+      ...await terminalHookFields(tmuxPane),
       model: modelName(input.modelName),
     }
     const registered = await post(port, '/api/hook/session-start', body)
@@ -2534,7 +2556,7 @@ async function main() {
       ...(grokEventName === 'UserPromptSubmit' && typeof input.prompt === 'string' ? { prompt: boundedPrompt(input.prompt) } : {}),
       transcriptPath,
       cwd,
-      ...terminalHookFields(tmuxPane),
+      ...await terminalHookFields(tmuxPane),
       model: modelName(input.model),
       cliVersion: input.cliVersion || input.version,
     }
@@ -2598,7 +2620,7 @@ async function main() {
       status: input.status,
       transcriptPath: input.transcript_path,
       cwd: Array.isArray(input.workspace_roots) ? input.workspace_roots[0] : input.cwd,
-      ...terminalHookFields(tmuxPane),
+      ...await terminalHookFields(tmuxPane),
       model: modelName(input.model),
       cliVersion: input.cursor_version || input.version,
     }
@@ -2662,7 +2684,7 @@ async function main() {
         status: event === 'StopFailure' ? 'error' : undefined,
         transcriptPath: existsPath(input.transcript_path) ? input.transcript_path : undefined,
         cwd: input.cwd,
-        ...terminalHookFields(tmuxPane),
+        ...await terminalHookFields(tmuxPane),
         title: input.session_title,
         model: modelName(input.model),
         cliVersion: input.cli_version || input.version,
@@ -2701,7 +2723,7 @@ async function main() {
     // Devin's payload carries no cwd; the hook process inherits the session's working directory.
     cwd: Array.isArray(input.workspace_roots) ? input.workspace_roots[0] : (input.cwd || (engine === 'devin' ? process.cwd() : undefined)),
     source: input.source,
-    ...terminalHookFields(tmuxPane),
+    ...await terminalHookFields(tmuxPane),
     title: input.session_title,
     model: modelName(input.model),
     cliVersion: input.cli_version || input.cursor_version || input.version,
@@ -2720,15 +2742,6 @@ async function main() {
   if (held && ok !== true) process.stderr.write('[harness] Hermes admission is held; this delivery could not be confirmed. The current conversation is unchanged.\n')
   if (ok === false && !held) await fallbackRegister(input, engine, tmuxPane)
 }
-
-// Found once, before main(): every post of a run names the same caller. Outside main()'s catch, a climb that throws (a
-// helper path Node refuses to start) names the parent, as a run with no table does. A session outside a pane whose hook
-// climbs looks its app up first (windowsAppBundle), so when both read the pty host, the two reads start together; a
-// lookup that throws is the body's to meet, in main().
-if (process.platform === 'win32' && WINDOWS_SHELL_ENGINES.has(argEngine()) && !process.env.TMUX_PANE && !PTY_PANE) {
-  windowsAppBundle().catch(() => {})
-}
-const CALLER_PID = await hookCallerPid(argEngine()).catch(() => process.ppid)
 
 main()
   .catch(() => {})
