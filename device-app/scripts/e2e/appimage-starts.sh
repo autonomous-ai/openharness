@@ -13,7 +13,7 @@
 #
 # --wm-class starts the Device app unpacked (APPIMAGE_EXTRACT_AND_RUN=1, so FUSE plays no part) with an empty state and
 # the fake CLI signed out, so its first window, Sign in, opens; it prints
-# `note: Harness Device window WM_CLASS = "<instance>", "<class>"`, or a note that no window opened within 60 s.
+# `note: Harness Device WM_CLASS: <instance>, <class>`, or a note that no window opened within 60 s.
 #
 # Everything it starts runs in a session of its own, under a scratch HOME, XDG folders and TMPDIR, and goes with it;
 # the Device app's state is seeded so it installs nothing.
@@ -36,6 +36,7 @@ appimage="$(cd "$(dirname "$1")" && pwd -P)/$(basename "$1")"
 name="$2"
 : "${DISPLAY:?appimage-starts.sh: run it under xvfb-run -a dbus-run-session --}"
 : "${DBUS_SESSION_BUS_ADDRESS:?appimage-starts.sh: run it under xvfb-run -a dbus-run-session --}"
+: "${XAUTHORITY:?appimage-starts.sh: run it under xvfb-run -a dbus-run-session --}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fake_cli="$(dirname "$(dirname "$here")")/src-tauri/tests/fake-harness"
 # With no CLI and an empty state, the app would run the real install lines.
@@ -82,11 +83,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Only this machine's system folders and the scratch ones; APPIMAGE_EXTRACT_AND_RUN is left out.
+# Only this machine's system folders and the scratch ones; APPIMAGE_EXTRACT_AND_RUN is left out. XAUTHORITY is
+# xvfb-run's cookie: without it Xvfb refuses the app ("Authorization required").
 base=(HOME="$work/home" USER="$(id -un)" LOGNAME="$(id -un)" SHELL=/bin/sh LANG=C.UTF-8 TMPDIR="$work/tmp"
   PATH=/usr/local/bin:/usr/bin:/bin
   XDG_CONFIG_HOME="$work/config" XDG_DATA_HOME="$work/data" XDG_CACHE_HOME="$work/cache" XDG_STATE_HOME="$work/state"
-  XDG_RUNTIME_DIR="$work/run" XDG_SESSION_TYPE=x11 DISPLAY="$DISPLAY"
+  XDG_RUNTIME_DIR="$work/run" XDG_SESSION_TYPE=x11 DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY"
   DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" NO_AT_BRIDGE=1)
 
 # In a session of its own, so its whole process group, the runtime's FUSE server in it, ends together.
@@ -114,7 +116,8 @@ if [[ -n "$wm_class" ]]; then
   if waits shown; then
     # A window gone again, or one with no WM_CLASS, prints xprop's own words.
     class="$(xprop -id "$window" WM_CLASS 2>&1 || true)"
-    echo "note: $name window WM_CLASS = ${class#*= }"
+    class="${class#*= }"
+    echo "note: $name WM_CLASS: ${class//\"/}"
   else
     echo "note: $name opened no window within $WAIT s; its first output line: $(head -n 1 "$work/out")"
   fi

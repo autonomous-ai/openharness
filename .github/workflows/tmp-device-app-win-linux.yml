@@ -544,6 +544,13 @@ jobs:
           persist-credentials: false
       # A display (xauth for xvfb-run), a session bus, X clients to find the window and read its class, `file`, jq.
       - run: sudo bash scripts/apt-install.sh xvfb xauth dbus-x11 xdotool x11-utils file jq
+      # What every Ubuntu desktop has and a bare runner lacks, so the probe stands for "a clean Ubuntu desktop without
+      # libfuse2". The Device AppImage bundles GTK and WebKit but, as AppImages do, not the host's graphics and text
+      # stack; a clean 22.04 with the line above still lacks, by ldd of the bundle: libEGL (libegl1), libgbm (libgbm1),
+      # libharfbuzz (libharfbuzz0b), libfribidi (libfribidi0), libwayland-client (libwayland-client0); and WebKit opens
+      # libGLESv2 (libgles2) at run time. None of them brings libfuse2, which No libfuse2 checks.
+      - run: >-
+          sudo bash scripts/apt-install.sh libegl1 libgles2 libgbm1 libharfbuzz0b libfribidi0 libwayland-client0
       - uses: actions/download-artifact@v4
         with:
           name: fuse-device-${{ matrix.arch }}
@@ -634,7 +641,7 @@ jobs:
           before="$(cat "$probe/fusermount3-before" 2>/dev/null || echo unknown)"
           device="$(line '^(ok|FAILED):' device.log)"
           desktop="$(line '^(ok|FAILED):' desktop.log)"
-          wm="$(line '^note: Harness Device (window|opened)' wm-class.log)"
+          wm="$(line '^note: Harness Device (WM_CLASS|opened)' wm-class.log)"
           {
             echo "| runner | libfuse2 gone | fusermount3 before | Device runtime | Desktop runtime | Harness Device | Harness |"
             echo "|---|---|---|---|---|---|---|"
