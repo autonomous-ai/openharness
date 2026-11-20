@@ -23,10 +23,16 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "required command is unavailable: $1"
 }
 
-# https only, through any redirect too; a transfer under 1 KiB/s for a minute ends instead of hanging the line. Each
-# call names its own --max-filesize, so a server that never stops sending cannot fill the disk.
+# download <bytes> <url> <file>: https only, through any redirect too; a transfer under 1 KiB/s for a minute ends
+# instead of hanging the line. At most <bytes>, so a server that never stops sending cannot fill the disk: curl's
+# --max-filesize stops a transfer whose size the server names, and before curl 8.4 (Ubuntu 22.04's 7.81) no other; the
+# file size limit stops the rest. It counts 512-byte blocks, 1 KiB ones in bash: at most twice the bytes there.
 download() {
-  curl -fL --retry 3 --connect-timeout 15 --proto '=https' --proto-redir '=https' --speed-limit 1024 --speed-time 60 "$@"
+  (
+    ulimit -f "$((($1 + 511) / 512))" \
+      && curl -fL --retry 3 --connect-timeout 15 --proto '=https' --proto-redir '=https' --speed-limit 1024 \
+        --speed-time 60 --max-filesize "$1" "$2" -o "$3"
+  )
 }
 
 PLATFORM="$(uname -s)"
@@ -87,7 +93,7 @@ CANDIDATE="$STAGING_DIR/Harness-Device-linux-$RELEASE_ARCH.AppImage"
 
 printf '%s\n' "Fetching the latest Harness Device release…"
 # device-manifest.py's MANIFEST_LIMIT.
-download --max-filesize 1048576 "$METADATA_URL" -o "$METADATA_FILE" \
+download 1048576 "$METADATA_URL" "$METADATA_FILE" \
   || fail "could not download device metadata"
 
 # No jq or python3, which a stock Ubuntu may lack: the manifest is device-manifest.py's json.dump with indent=2, one
@@ -136,7 +142,7 @@ fi
 [ ! -d "$DESTINATION" ] || fail "$DESTINATION is a folder. Move it away, then run this installer again."
 
 printf '%s\n' "Downloading Harness Device ${VERSION}…"
-download --max-filesize "$EXPECTED_SIZE" "$ASSET_URL" -o "$CANDIDATE" \
+download "$EXPECTED_SIZE" "$ASSET_URL" "$CANDIDATE" \
   || fail "could not download Harness Device $VERSION"
 
 ACTUAL_SIZE="$(wc -c < "$CANDIDATE" | tr -d '[:space:]')"

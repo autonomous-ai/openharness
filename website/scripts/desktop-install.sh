@@ -22,11 +22,17 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "required command is unavailable: $1"
 }
 
-# https only, through any redirect too; a transfer under 1 KiB/s for a minute ends instead of
-# hanging the line. Each call names its own --max-filesize, so a server that never stops sending
-# cannot fill the disk.
+# download <bytes> <url> <file>: https only, through any redirect too; a transfer under 1 KiB/s
+# for a minute ends instead of hanging the line. At most <bytes>, so a server that never stops
+# sending cannot fill the disk: curl's --max-filesize stops a transfer whose size the server
+# names, and before curl 8.4 (Ubuntu 22.04's 7.81) no other; the file size limit stops the rest.
+# It counts 512-byte blocks, 1 KiB ones in bash: at most twice the bytes there.
 download() {
-  curl -fL --retry 3 --connect-timeout 15 --proto '=https' --proto-redir '=https' --speed-limit 1024 --speed-time 60 "$@"
+  (
+    ulimit -f "$((($1 + 511) / 512))" \
+      && curl -fL --retry 3 --connect-timeout 15 --proto '=https' --proto-redir '=https' --speed-limit 1024 \
+        --speed-time 60 --max-filesize "$1" "$2" -o "$3"
+  )
 }
 
 # A manifest is a few kilobytes: 1 MiB is far above any.
@@ -82,7 +88,7 @@ if [ "$PLATFORM" = "Darwin" ]; then
   UNPACKED_DIR="$STAGING_DIR/unpacked"
 
   printf '%s\n' "Fetching the latest Harness desktop release…"
-  download --max-filesize "$MANIFEST_LIMIT" "$METADATA_URL" -o "$METADATA_FILE" \
+  download "$MANIFEST_LIMIT" "$METADATA_URL" "$METADATA_FILE" \
     || fail "could not download desktop metadata"
 
   metadata_value() {
@@ -118,7 +124,7 @@ if [ "$PLATFORM" = "Darwin" ]; then
   fi
 
   printf '%s\n' "Downloading Harness ${VERSION}…"
-  download --max-filesize "$EXPECTED_SIZE" "$ASSET_URL" -o "$ARCHIVE_FILE" \
+  download "$EXPECTED_SIZE" "$ASSET_URL" "$ARCHIVE_FILE" \
     || fail "could not download Harness $VERSION"
 
   ACTUAL_SIZE="$(wc -c < "$ARCHIVE_FILE" | tr -d '[:space:]')"
@@ -202,7 +208,7 @@ METADATA_FILE="$STAGING_DIR/metadata.json"
 CANDIDATE="$STAGING_DIR/Harness-linux-$RELEASE_ARCH.AppImage"
 
 printf '%s\n' "Fetching the latest Harness desktop release…"
-download --max-filesize "$MANIFEST_LIMIT" "$METADATA_URL" -o "$METADATA_FILE" \
+download "$MANIFEST_LIMIT" "$METADATA_URL" "$METADATA_FILE" \
   || fail "could not download desktop metadata"
 
 # No `jq`/`plutil` dependency: the manifest is written by our own release script
@@ -250,7 +256,7 @@ fi
 [ ! -d "$DESTINATION" ] || fail "$DESTINATION is a folder. Move it away, then run this installer again."
 
 printf '%s\n' "Downloading Harness ${VERSION}…"
-download --max-filesize "$EXPECTED_SIZE" "$ASSET_URL" -o "$CANDIDATE" \
+download "$EXPECTED_SIZE" "$ASSET_URL" "$CANDIDATE" \
   || fail "could not download Harness $VERSION"
 
 ACTUAL_SIZE="$(wc -c < "$CANDIDATE" | tr -d '[:space:]')"
