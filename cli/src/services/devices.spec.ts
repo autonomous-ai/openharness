@@ -1890,6 +1890,22 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     expect(readers.apps.mock.calls).toEqual([[[77]]])
   })
 
+  // Windows' scan learns no app (scannedApp.ts), so there the agents it found count in the dial's default app (cableHost.ts).
+  it.each([['win32', 'terminal'], ['linux', 'orca']] as const)('on %s two agents the scan found and one hooked in Orca open the dial on %s', async (platform, app) => {
+    vi.useFakeTimers()
+    const { port } = start({ faults: ['fleet'], orca: { ...orca, platform } })
+    for (const [sessionId, pid] of [['sess-8', 78], ['sess-9', 79]] as const) {
+      readers.known.set(sessionId, 'terminal')
+      readers.owners.set(sessionId, { engine: 'codex', pid })
+      readers.rows.set(sessionId, { cwd: '/work/web', transcriptPath: null })
+      readers.working.set(sessionId, false)
+    }
+    port.observed(hook('session-start'))
+    seen.host.watching!(true)
+    await vi.waitFor(async () => expect((await machineList(port)).agents).toHaveLength(3))
+    expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe(app)
+  })
+
   it('a session\'s name is read with the records folders: Claude Code\'s own and each Orca account home\'s', async () => {
     vi.useFakeTimers()
     const orca = mkdtempSync(join(tmpdir(), 'orca-home-'))
