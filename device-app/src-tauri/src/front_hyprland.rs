@@ -199,6 +199,38 @@ mod tests {
     }
 
     #[test]
+    fn the_same_window_again_asks_nothing() {
+        let proc_root = apps();
+        // Hyprland tells the active window again on each change of its title: a shell's prompt, a progress spinner.
+        let same = "activewindowv2>>55d1c0a0\n".repeat(3);
+        let events = format!("{same}activewindowv2>>66e2d1b1\n");
+        let answers = vec![Ok(answer(4242)), Ok(answer(4242)), Ok(answer(4343))];
+        let (stop, told, asked) = run(events.as_bytes(), answers, proc_root.path());
+        assert_eq!((stop, told, asked), (Stop::Ended, vec!["kitty".to_string(), "kitty".into(), "code".into()], 3));
+    }
+
+    #[test]
+    fn no_window_is_told_with_no_ask() {
+        let proc_root = apps();
+        // An empty workspace: no address, or a `,` in place of one.
+        let events = b"activewindowv2>>55d1c0a0\nactivewindowv2>>\nactivewindowv2>>,\nactivewindowv2>>55d1c0a0\n";
+        let answers = vec![Ok(answer(4242)), Ok(answer(4242)), Ok(answer(4242))];
+        let (stop, told, asked) = run(events, answers, proc_root.path());
+        let kitty = || "kitty".to_string();
+        assert_eq!((stop, told, asked), (Stop::Ended, vec![kitty(), kitty(), String::new(), kitty()], 3));
+    }
+
+    #[test]
+    fn a_window_whose_ask_failed_is_asked_again() {
+        let proc_root = apps();
+        let refused = Err(io::Error::from(io::ErrorKind::ConnectionRefused));
+        let answers = vec![Ok(answer(4242)), refused, Ok(answer(4343))];
+        let events = b"activewindowv2>>66e2d1b1\nactivewindowv2>>66e2d1b1\n";
+        let (stop, told, asked) = run(events, answers, proc_root.path());
+        assert_eq!((stop, told, asked), (Stop::Ended, vec!["kitty".to_string(), String::new(), "code".into()], 3));
+    }
+
+    #[test]
     fn no_window_is_the_empty_value() {
         let proc_root = apps();
         // An empty workspace answers `{}`; a pid with no exe (gone, or another person's) names no app either.
