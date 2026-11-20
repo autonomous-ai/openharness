@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 /// The entry's file name: the installer's (install.sh login_entry_file), apart from Desktop's menu entry.
 pub const ENTRY: &str = "harnessd.desktop";
 
-const NOT_AN_APPIMAGE: &str = "Login item not added (not an AppImage).";
-const PATH_NOT_SUPPORTED: &str = "Login item not added (path not supported).";
+const NOT_AN_APPIMAGE: &str = "Login item not set (not an AppImage).";
+const PATH_NOT_SUPPORTED: &str = "Login item not set (path not supported).";
 
 /// `<config>/autostart/harnessd.desktop`: `$XDG_CONFIG_HOME` only when it is absolute, as the XDG spec and the
 /// installer say, else `<home>/.config`.
@@ -122,8 +122,8 @@ fn skipped(first: bool, why: &str) -> Result<bool, String> {
 /// The error's code only, as on macOS and Windows.
 fn failed(error: &io::Error) -> String {
     match error.raw_os_error() {
-        Some(code) => format!("Login item not added (error {code})."),
-        None => format!("Login item not added ({:?}).", error.kind()),
+        Some(code) => format!("Login item not set (error {code})."),
+        None => format!("Login item not set ({:?}).", error.kind()),
     }
 }
 
@@ -441,7 +441,7 @@ mod tests {
 
         let entry = entry_path(Some(dir.path().join("config").as_os_str()), dir.path());
         let launcher = Path::new(LAUNCHER);
-        assert_eq!(apply(&entry, None, launcher, true), Err("Login item not added (not an AppImage).".into()));
+        assert_eq!(apply(&entry, None, launcher, true), Err("Login item not set (not an AppImage).".into()));
         assert_eq!(apply(&entry, None, launcher, false), Ok(false));
         assert!(!entry.exists());
         assert_eq!(apply(&entry, Some(file.as_os_str()), launcher, true), Ok(true));

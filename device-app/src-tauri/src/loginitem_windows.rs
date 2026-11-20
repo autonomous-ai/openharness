@@ -63,7 +63,7 @@ pub fn register_in(keys: &Keys, exe: &Path) -> Result<bool, String> {
 /// The error code only, as on macOS.
 #[cfg(windows)]
 fn failed(code: u32) -> String {
-    format!("Login item not added (error {code}).")
+    format!("Login item not set (error {code}).")
 }
 
 /// Neither is called under `cargo test`: it would make the test binary a login item of the developer's account.

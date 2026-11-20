@@ -48,7 +48,7 @@ impl LoginItem for SystemLoginItem {
         register_from(status, || {
             // The error code only: macOS's description may name the app's path.
             unsafe { service.registerAndReturnError() }
-                .map_err(|error| format!("Login item not added (error {}).", error.code()))
+                .map_err(|error| format!("Login item not set (error {}).", error.code()))
         })
     }
 }
