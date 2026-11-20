@@ -1,8 +1,8 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { HookPreparationHeld, hookPreparationRoutes, inspectHookFile, runHookPreparation, type HookPreparationProof } from './nativeHookFiles.js'
+import { HookPreparationHeld, hookPreparationRoutes, inspectHookFile, runHookPreparation, type HookPreparationAttempt, type HookPreparationProof } from './nativeHookFiles.js'
 
 const effects = vi.hoisted(() => ({ onStat: undefined as ((file: unknown) => void) | undefined }))
 vi.mock('node:fs', async original => {
@@ -45,6 +45,42 @@ function siblings() {
     aliasAncestor: () => { renameSync(shared, displaced); symlinkSync(displaced, shared) },
   }
 }
+
+it.each([1, 2])('checks a dependency once per fence through %i preparation levels', async depth => {
+  const directory = join(root, 'dependency'); mkdirSync(directory)
+  const file = join(directory, 'settings.json'); writeFileSync(file, '{}')
+  const dependency = inspectHookFile(file)
+  const nested = async (level: number, verify: () => void): Promise<void> => {
+    const destination = join(root, `prepared-${level}.json`); writeFileSync(destination, '{}')
+    await runHookPreparation([destination], async attempt => {
+      if (level < depth) { await nested(level + 1, attempt.verify); return }
+      let reads = 0
+      effects.onStat = path => { if (path === directory) reads++ }
+      try {
+        attempt.verify(); expect(reads).toBe(2)
+        reads = 0; attempt.verify(); expect(reads).toBe(2)
+      } finally { effects.onStat = undefined }
+    }, { verify })
+  }
+  await nested(1, dependency.verify)
+})
+
+it.each(['dependency changed', 'owner revoked'] as const)(
+  'refuses effects when %s during destination inspection', async change => {
+  const fixture = siblings(), dependencyFile = join(root, 'dependency.json')
+  writeFileSync(dependencyFile, '{}'); const dependency = inspectHookFile(dependencyFile)
+  let owned = true, effect = false, changed = false
+  await expect(runHookPreparation(fixture.files, async (attempt: HookPreparationAttempt) => {
+    effects.onStat = path => {
+      if (path !== fixture.files[0] || changed) return
+      changed = true
+      if (change === 'dependency changed') appendFileSync(dependencyFile, 'changed during route checks')
+      else owned = false
+    }
+    try { attempt.verify(); effect = true } finally { effects.onStat = undefined }
+  }, { verify: dependency.verify, current: () => owned })).rejects.toThrow(/changed/)
+  expect(changed).toBe(true); expect(effect).toBe(false)
+})
 
 it.each(callers)('$name shares only provisional sibling reads and starts a fresh pass every time', async ({ name, reads }) => {
   const fixture = siblings()

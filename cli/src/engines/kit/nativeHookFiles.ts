@@ -497,11 +497,12 @@ export async function runHookPreparation<T>(files: readonly string[], work: (att
   }
   const observations = new Map<string, (directories?: Map<string, BigIntStats>) => void>()
   const verify = () => {
-    check(); options.verify?.()
+    check()
     verifyRoutes()
     // Share only provisional directory walks; every observation still verifies its final snapshot afresh.
     const directories = new Map<string, BigIntStats>()
     for (const inspect of observations.values()) inspect(directories)
+    // Metadata reads consume no dependency authority. Fence dependencies once after them, even in nested attempts.
     options.verify?.(); check()
   }
   const attempt: HookPreparationAttempt = {
