@@ -3,48 +3,22 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameS
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 vi.mock('./bootId.js', async original => ({ ...await original<object>(), currentBootId: () => 'fixture-boot', bootChanged: () => false }))
 vi.mock('./processLiveness.js', async original => ({ ...await original<object>(),
   processLockIdentity: () => ({ startMarker: 'fixture-start', generationMarker: 'fixture-generation' }), lockOwnerAlive: () => true,
 }))
-// A registry image flush that outlives every real wait from 250 ms up to the 5 s write deadline, as a loaded
-// disk's does: each one still running fires as the sync returns, if not before.
-const slowSync = vi.hoisted(() => ({ due: new Map<unknown, () => void>() }))
-vi.mock('node:fs/promises', async original => {
-  const actual = await original<typeof import('node:fs/promises')>()
-  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
-    const handle = await actual.open(...args), sync = handle.sync.bind(handle)
-    handle.sync = async () => {
-      await sync()
-      if (!(String(args[0]).includes('registry.json.') && String(args[0]).endsWith('.tmp'))) return
-      for (const [timer, fire] of slowSync.due) { slowSync.due.delete(timer); fire() }
-    }
-    return handle
-  } }
-})
-const realTimeout = globalThis.setTimeout, realClear = globalThis.clearTimeout
-function slowTimeout(callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) {
-  if (ms === undefined || ms < 250 || ms > 5_000) return realTimeout(callback, ms, ...args)
-  const timer = realTimeout(() => { slowSync.due.delete(timer); callback(...args) }, ms)
-  slowSync.due.set(timer, () => { realClear(timer); callback(...args) })
-  return timer
-}
-// The registry expires a write after 5 s. No test here means to, so that timer is never scheduled: how fast this
-// machine writes the registry never fails these tests.
-function ownedTimeout(callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) {
-  return ms === 5_000 ? realTimeout(() => {}, 0) : slowTimeout(callback, ms, ...args)
-}
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
+vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
 let root: string, home: string, file: string, registry: typeof import('./registry.js')['registry']
 const ids = ['aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb']
 const header = (id: string) => JSON.stringify({ type: 'session_meta', payload: { id, cwd: root, source: 'cli' } }) + '\n'
 const transcript = (index: number) => join(home, 'sessions', `rollout-${ids[index]}.jsonl`)
 beforeEach(async () => {
-  vi.spyOn(globalThis, 'setTimeout').mockImplementation(ownedTimeout as typeof setTimeout)
-  vi.spyOn(globalThis, 'clearTimeout').mockImplementation(((timer?: Parameters<typeof clearTimeout>[0]) => {
-    slowSync.due.delete(timer); realClear(timer)
-  }) as typeof clearTimeout)
+  // No test here means the write deadline to pass: how fast this machine writes the registry never fails them.
+  deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS)
   root = realpathSync(mkdtempSync(join(tmpdir(), 'registry-binding-'))); home = join(root, 'codex'); file = join(root, 'data', 'registry.json')
   vi.stubEnv('ADAPTER_DATA_DIR', join(root, 'data')); vi.stubEnv('CODEX_HOME', home)
   mkdirSync(join(root, 'data')); mkdirSync(join(home, 'sessions'), { recursive: true })
@@ -59,7 +33,7 @@ beforeEach(async () => {
   registry.load()
   await registry.flush()
 })
-afterEach(async () => { await registry.flush().catch(() => {}); vi.restoreAllMocks(); slowSync.due.clear(); vi.doUnmock('../engines/transcriptBindings.js'); vi.unstubAllEnvs(); vi.resetModules(); rmSync(root, { recursive: true, force: true }) })
+afterEach(async () => { await registry.flush().catch(() => {}); vi.restoreAllMocks(); vi.doUnmock('../engines/transcriptBindings.js'); vi.unstubAllEnvs(); vi.resetModules(); rmSync(root, { recursive: true, force: true }) })
 
 it.each(['', '{', 'wrong-id'])('holds a saved unreadable identity (%s), preserves its bytes, and retries without restarting', async text => {
   const before = readFileSync(file, 'utf8')
