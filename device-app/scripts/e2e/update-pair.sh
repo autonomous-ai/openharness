@@ -19,6 +19,12 @@ die() {
   exit 1
 }
 
+# A release's signing and notarizing never reach these builds: tauri-bundler signs with APPLE_SIGNING_IDENTITY or
+# APPLE_CERTIFICATE and sends the bundle to Apple's notary with APPLE_ID or APPLE_API_KEY. The updater key is this run's.
+for name in $(compgen -e); do
+  case "$name" in APPLE_* | TAURI_SIGNING_*) unset "$name" ;; esac
+done
+
 [[ $# -eq 1 ]] || die "usage: update-pair.sh OUT"
 mkdir -p "$1"
 out="$(cd "$1" && pwd)"
@@ -54,7 +60,15 @@ trap 'rm -rf "$work"' EXIT
 # With no password: the key lives as long as this run.
 cargo tauri signer generate --ci -w "$work/update.key" >/dev/null
 pubkey="$(cat "$work/update.key.pub")"
-signing=(env TAURI_SIGNING_PRIVATE_KEY="$(cat "$work/update.key")" TAURI_SIGNING_PRIVATE_KEY_PASSWORD=)
+key="$(cat "$work/update.key")"
+# Runs its arguments with the updater key in their environment, exported in a subshell: never on a command line, which
+# under Git Bash an env.exe would show for the whole step.
+signed() {
+  (
+    export TAURI_SIGNING_PRIVATE_KEY="$key" TAURI_SIGNING_PRIVATE_KEY_PASSWORD=
+    "$@"
+  )
+}
 
 # The release's own configuration, but for the key and the endpoint, and plain http to reach 127.0.0.1.
 updater="{\"pubkey\":\"$pubkey\",\"endpoints\":[\"$BASE_URL/metadata.json\"],\"dangerousInsecureTransportProtocol\":true}"
@@ -71,11 +85,12 @@ config+="}"
 
 for version in 0.0.1 0.0.2; do
   bash "$scripts/release-build.sh" compile "$version" "$config"
-  if [[ "$os" == windows ]]; then
-    bash "$scripts/release-build.sh" bundle "$version" "$out/$version" "$config"
-    "${signing[@]}" bash "$scripts/release-build.sh" sign-update "$version" "$out/$version"
+  if [[ "$os" == macos ]]; then
+    signed bash "$scripts/release-build.sh" bundle "$version" "$out/$version" "$config"
   else
-    "${signing[@]}" bash "$scripts/release-build.sh" bundle "$version" "$out/$version" "$config"
+    # Windows and Linux bundle with no updater key, as a release does: sign-update writes the update signature.
+    bash "$scripts/release-build.sh" bundle "$version" "$out/$version" "$config"
+    signed bash "$scripts/release-build.sh" sign-update "$version" "$out/$version"
   fi
   bash "$scripts/release-check.sh" "$out/$version" "$version" "$pubkey"
 done
