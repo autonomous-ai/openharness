@@ -301,10 +301,18 @@ export interface RegisteredSession {
   earlierSessionIds?: string[]
   /**
    * The first task its launch carried, for an engine that is handed it by typing rather than in argv (OpenClaw), until
-   * it is typed into the pane. Saved with the row, so a daemon restart before the engine is ready still types it; taken
-   * off durably before it is typed (`takeFirstTask`), so it is typed at most once. Never on the agent's frame.
+   * it is typed into the pane. Saved with the row, so a daemon restart before the engine is ready still types it; moved
+   * durably to `firstTaskTyped` before it is typed (`takeFirstTask`), so it is typed at most once. Never on the agent's
+   * frame.
    */
   firstTask?: string
+  /**
+   * The first task once typed, and when, kept on the row until OpenClaw's store confirms it, the launch fails or the
+   * box is cleared for it (`untypeFirstTask`), so a daemon restarted in between knows it was typed and never pastes it
+   * again. The text tells it from the person's own in the box, and is never on the frame, sent or logged; a row holds
+   * this or `firstTask`, never both.
+   */
+  firstTaskTyped?: { text: string; at: number }
   /**
    * The domain-specific harness this agent was created as (`autonomous/copper`), or null for a plain
    * engine. NOT a second engine: `engine` stays the base (`claude`, `codex`, …) and every normalizer,
@@ -723,20 +731,19 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   // `forkedFrom` is out too, so an invalid one is dropped rather than spread back in as-is.
   // `swarmSkill` is a Swarm role a build before the Swarm was deleted (2026-11-14) saved: dropped, and gone from the file at
   // its next write. Remove it from here on or after 2027-01-14.
-  const { gridLaunch: rawGridLaunch, identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, launchArgs: rawLaunchArgs, browser: rawBrowser, quietTitle: rawQuietTitle, firstTask: rawFirstTask, openclawLocal: rawOpenclawLocal, earlierSessionIds: rawEarlierSessionIds, hermesHomeDerived: _hermesHomeDerived, swarmSkill: _retiredSwarmSkill, ...rest } = row as Partial<RegisteredSession> & { swarmSkill?: unknown }
+  const { gridLaunch: rawGridLaunch, identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, launchArgs: rawLaunchArgs, browser: rawBrowser, quietTitle: rawQuietTitle, firstTask: _firstTask, firstTaskTyped: _firstTaskTyped, openclawLocal: rawOpenclawLocal, earlierSessionIds: rawEarlierSessionIds, hermesHomeDerived: _hermesHomeDerived, swarmSkill: _retiredSwarmSkill, ...rest } = row as Partial<RegisteredSession> & { swarmSkill?: unknown }
   const lastOpenedAt = normalizedOpenedAt(rawOpenedAt)
   // Out of the spread for the same reason: a half-formed record is dropped, never relaunched with.
   const scmLaunch = parseScmLaunchRecord(rawScmLaunch)
   const launchModel = storedLaunchModel(rawLaunchModel)
   const launchArgs = storedLaunchArgs(rawLaunchArgs)
-  const firstTask = storedFirstTask(rawFirstTask)
   const openclawLocal = storedOpenclawLocal(rawOpenclawLocal)
   const earlierSessionIds = earlierSessionKeys(rawEarlierSessionIds)
   return {
     ...rest,
     ...(rawGridLaunch !== undefined ? { gridLaunch: normalizedGridLaunch(rawGridLaunch) } : {}),
     ...(externalResume ? { externalResume } : {}),
-    ...(firstTask ? { firstTask } : {}),
+    ...storedFirstTask(row),
     ...(openclawLocal ? { openclawLocal } : {}),
     ...(earlierSessionIds ? { earlierSessionIds } : {}),
     ...storedHermesHomeDerived(row),
@@ -792,9 +799,15 @@ function storedLaunchArgs(value: unknown): string[] | undefined {
   return Array.isArray(value) && value.length > 0 && value.every(w => typeof w === 'string') ? [...value] : undefined
 }
 
-/** Only a non-empty string is a saved first task; anything else on disk is dropped, never typed into a pane. */
-function storedFirstTask(value: unknown): string | undefined {
-  return typeof value === 'string' && value ? value : undefined
+/**
+ * Only a non-empty string is a saved first task, and a non-empty text with a real moment a typed one; anything else on
+ * disk is dropped, never typed into a pane. A row with both keeps the typed one, so a task typed once is not typed
+ * again.
+ */
+function storedFirstTask(row: { firstTask?: unknown; firstTaskTyped?: unknown }): Pick<RegisteredSession, 'firstTask' | 'firstTaskTyped'> {
+  const { text, at } = row.firstTaskTyped && typeof row.firstTaskTyped === 'object' ? row.firstTaskTyped as Record<string, unknown> : {}
+  if (typeof text === 'string' && text && typeof at === 'number' && Number.isFinite(at) && at > 0) return { firstTaskTyped: { text, at } }
+  return typeof row.firstTask === 'string' && row.firstTask ? { firstTask: row.firstTask } : {}
 }
 
 /** The mark is kept only as `true` beside a home: anything else on disk is dropped, and the home is exported as before. */
@@ -1545,7 +1558,7 @@ class Registry {
           hermesHome: typeof raw?.hermesHome === 'string' && raw.hermesHome ? raw.hermesHome : null,
           ...storedHermesHomeDerived(raw),
           ...(typeof raw?.openclawStateDir === 'string' && raw.openclawStateDir ? { openclawStateDir: raw.openclawStateDir } : {}),
-          ...(storedFirstTask(raw.firstTask) ? { firstTask: storedFirstTask(raw.firstTask) } : {}),
+          ...storedFirstTask(raw),
           ...(storedOpenclawLocal(raw.openclawLocal) ? { openclawLocal: storedOpenclawLocal(raw.openclawLocal) } : {}),
           ...(earlierSessionKeys(raw.earlierSessionIds) ? { earlierSessionIds: earlierSessionKeys(raw.earlierSessionIds) } : {}),
           ...normalizedForkedFrom((raw as { forkedFrom?: unknown }).forkedFrom),
@@ -2509,6 +2522,8 @@ class Registry {
         ...(earlierSessionIds ? { earlierSessionIds } : {}),
         // And the task not yet typed: the bind is what lets it be typed, so dropping it here would lose it every time.
         ...(existing?.firstTask ? { firstTask: existing.firstTask } : {}),
+        // And the one typed and not yet confirmed: dropped here, a daemon restarted next would not know it was typed.
+        ...(existing?.firstTaskTyped ? { firstTaskTyped: existing.firstTaskTyped } : {}),
         dsh: existing?.dsh ?? null,
         dshRuntime: existing?.dshRuntime ?? null,
         agent: existing?.agent ?? null,
@@ -2713,11 +2728,12 @@ class Registry {
     }
     // And its first task: the shell under a new identity would carry a copy beside the archived agent's. A row that stays
     // has had its launch end before the task was typed, and an engine the person starts in its shell is theirs: one they
-    // typed the task into themselves would get it twice.
+    // typed the task into themselves would get it twice. A typed one goes too: nothing confirms it in a shell.
     if (entry.firstTask) {
       delete entry.firstTask
       if (!separateShell) console.log(`[agent] ${sid(original.agentId)} first task dropped · its engine exited before it was typed`)
     }
+    delete entry.firstTaskTyped
     this.clearBinding(entry)
     delete entry.resumeOnly
     delete entry.externalResume
@@ -2904,24 +2920,91 @@ class Registry {
   }
 
   /**
-   * The task is returned only after its removal is durable, to at most one caller. An unbound agent keeps it, as a task is
-   * typed only into a session read, unless its launch failed: nothing types it then (core/agents/bind.ts `failFirstTask`).
+   * The task is returned only after its move to `firstTaskTyped` is durable, to at most one caller. An unbound agent
+   * keeps it, as a task is typed only into a session read, unless its launch failed: nothing types it then
+   * (core/agents/bind.ts `failFirstTask`), so it goes, and a typed one with it, which is never returned.
    */
   async takeFirstTask(agentId: string, authority: RegistryAuthority = {}): Promise<string | null> {
     this.assertOpen()
-    const verify = this.ownerGuard(agentId, authority.current)
+    const verify = this.firstTaskGuard(agentId, authority.current)
     return this.writer.run(async deadline => {
       verify()
       const row = this.agents.get(agentId)
-      const task = row?.firstTask
-      if ((!row?.sessionId && row?.launch?.state !== 'failed') || !task) return null
+      if (!row) return null
+      const task = row.firstTask
       const next = { ...row }
       delete next.firstTask
+      delete next.firstTaskTyped
+      if (row.launch?.state === 'failed') {
+        if (!task && !row.firstTaskTyped) return null
+      } else {
+        if (!row.sessionId || !task) return null
+        next.firstTaskTyped = { text: task, at: Date.now() }
+      }
       const receipt = await this.persist(deadline, true, false, undefined, { agentId, candidate: next, verify })
       // Removal is already durable. A later source-release wait may change the owner; the caller must see the
       // consumed task to report that revoked handoff, rather than mistaking it for a task still on disk.
-      return receipt !== undefined ? task : null
+      if (receipt !== undefined && next.firstTaskTyped) console.log(`[agent] ${sid(agentId)} first task typed`)
+      return receipt !== undefined ? task ?? null : null
     })
+  }
+
+  /** Only the exact task and launch that asked to undo its clear can be marked typed again. */
+  async retypeFirstTask(agentId: string, text: string): Promise<boolean> {
+    this.writer.assertOpen()
+    const verify = this.firstTaskGuard(agentId)
+    return this.afterTransaction(() => this.writer.run(async deadline => {
+      verify()
+      const row = this.agents.get(agentId)
+      if (!row?.sessionId || row.firstTask !== text || row.launch?.state === 'failed') return false
+      const next: RegisteredSession = { ...row, firstTaskTyped: { text, at: Date.now() } }
+      delete next.firstTask
+      const receipt = await this.persist(deadline, true, false, undefined, { agentId, candidate: next, verify })
+      return !!this.committedOwner(agentId, receipt)
+    }))
+  }
+
+  /**
+   * Puts a typed first task back to wait untyped, only while it is [text]: durable before its box is cleared, so a
+   * restart during the clear finds it waiting, typed again only into an empty box. True once that is durable. Called
+   * from the input controller's timers, which can fire mid-pass, so it waits for the pass's transaction to commit.
+   */
+  async untypeFirstTask(agentId: string, text: string): Promise<boolean> {
+    this.writer.assertOpen()
+    const verify = this.firstTaskGuard(agentId)
+    return this.afterTransaction(() => this.writer.run(async deadline => {
+      verify()
+      const row = this.agents.get(agentId)
+      if (!row?.firstTaskTyped || row.firstTaskTyped.text !== text) return false
+      const next: RegisteredSession = { ...row, firstTask: text }
+      delete next.firstTaskTyped
+      const receipt = await this.persist(deadline, true, false, undefined, { agentId, candidate: next, verify })
+      return !!this.committedOwner(agentId, receipt)
+    }))
+  }
+
+  /**
+   * A typed first task leaves the row once its turn is confirmed: true once that is durable, false if it had none. With
+   * [at], only the mark typed then goes: a store read is no evidence about a mark typed again since. Called from the turn
+   * stream, which can fire mid-pass, so it waits for the pass's transaction to commit.
+   */
+  async firstTaskTaken(agentId: string, at?: number, text?: string): Promise<boolean> {
+    this.writer.assertOpen()
+    const verify = this.firstTaskGuard(agentId)
+    return this.afterTransaction(() => this.writer.run(async deadline => {
+      verify()
+      const row = this.agents.get(agentId)
+      if (!row) return false
+      const typed = !!row.firstTaskTyped && (at === undefined || row.firstTaskTyped.at === at)
+        && (text === undefined || row.firstTaskTyped.text === text)
+      const untyped = at === undefined && text !== undefined && row.firstTask === text
+      if (!typed && !untyped) return false
+      const next = { ...row }
+      if (typed) delete next.firstTaskTyped
+      if (untyped) delete next.firstTask
+      const receipt = await this.persist(deadline, true, false, undefined, { agentId, candidate: next, verify })
+      return !!this.committedOwner(agentId, receipt)
+    }))
   }
 
   async setClosePlan(agentId: string, plan: RegisteredSession['closePlan'] | null, authority: RegistryAuthority = {}): Promise<RegisteredSession | null> {
@@ -3335,6 +3418,14 @@ class Registry {
       if (options.exiting) await this.writer.finish(async () => {})
       throw error
     }) : finish()
+  }
+
+  private firstTaskGuard(agentId: string, current?: () => boolean): () => void {
+    const owner = this.ownerGuard(agentId, current), launch = launchIdentity(this.agents.get(agentId))
+    return () => {
+      owner()
+      if (launchIdentity(this.agents.get(agentId)) !== launch) throw new RegistryOwnershipChanged('the first task launch changed before its write')
+    }
   }
 
   private ownerGuard(agentId: string, current?: () => boolean): () => void {

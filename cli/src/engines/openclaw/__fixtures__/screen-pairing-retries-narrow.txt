@@ -1,0 +1,23 @@
+explicit credentials).
+ gateway disconnected: device pairing required (requestId:
+ 3980b428-c7f6-4dba-bb05-11cf07d2c56a) | device approval needed: preview latest
+ request
+ agent main | session harness-3047d4ea-31b1-4617-b04e-1c38b38bbc5b | unknown |
+ deliver:off | tokens ?
+────────────────────────────────────────────────────────────────────────────────
+gateway connect failed: GatewayClientRequestError: device pairing required (requ
+estId: 3980b428-c7f6-4dba-bb05-11cf07d2c56a)────────────────────────────────────
+gateway connect failed: GatewayClientRequestError: device pairing required (requ
+estId: 3980b428-c7f6-4dba-bb05-11cf07d2c56a)
+gateway connect failed: GatewayClientRequestError: device pairing required (requ
+estId: 3980b428-c7f6-4dba-bb05-11cf07d2c56a)
+gateway connect failed: GatewayClientRequestError: device pairing required (requ
+estId: 3980b428-c7f6-4dba-bb05-11cf07d2c56a)
+gateway connect failed: GatewayClientRequestError: device pairing required (requ
+estId: 3980b428-c7f6-4dba-bb05-11cf07d2c56a)
+gateway connect failed: GatewayClientRequestError: device pairing required (requ
+estId: 3980b428-c7f6-4dba-bb05-11cf07d2c56a)
+gateway connect failed: GatewayClientRequestError: device pairing required (requ
+estId: 3980b428-c7f6-4dba-bb05-11cf07d2c56a)
+gateway connect failed: GatewayClientRequestError: device pairing required (requ
+estId: 3980b428-c7f6-4dba-bb05-11cf07d2c56a)

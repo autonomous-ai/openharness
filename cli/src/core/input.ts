@@ -9,7 +9,7 @@
  */
 import type { SessionFailure } from './api.js'
 import { adaptSlashCommand } from '../lib/goalCommand.js'
-import { sid } from '../lib/log.js'
+import { errorKind, sid } from '../lib/log.js'
 import type { LiveEvent } from '../engines/kit/events.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { MoveGate } from '../lib/hostMove/gate.js'
@@ -67,6 +67,14 @@ export interface InputDeps {
   launchRevision?: (agentId: string) => number
   /** An agent's frame changed outside the registry (its `waitingFor`): pushed to every window again. */
   sync?: (id: string) => void
+  /** An agent's first task on its row (lib/registry.ts): moved back from typed to waiting untyped before its OpenClaw box
+   *  is cleared (`untypeFirstTask`), true once saved; typed again when that clear did not empty the box (`retypeFirstTask`),
+   *  true once saved; and let go once a turn took it (`firstTaskTaken`), true once saved. */
+  firstTask?: {
+    untype(agentId: string, text: string): Promise<boolean>
+    retype(agentId: string, text: string): Promise<boolean>
+    taken(agentId: string, text?: string): Promise<boolean>
+  }
 }
 
 /**
@@ -180,11 +188,21 @@ async function readTeamHold(deps: Pick<InputDeps, 'readScreen' | 'shortTurns' | 
 export function sessionInputDeps(
   deps: InputDeps,
 ): SessionInputDeps {
-  const { resolve, terminal, deliveries, clients, agentIdFor, openTurn, emit } = deps
+  const { resolve, terminal, deliveries, clients, agentIdFor, openTurn, emit, firstTask } = deps
   const { captureTerminal, validateTerminal, keyTerminalAction } = terminal
   const writeMessage = messageWriter(deps)
   return {
     ...(deps.moveGate ? { moveGate: deps.moveGate } : {}),
+    ...(firstTask ? {
+      untypeFirstTask: (id: string, text: string) => firstTask.untype(id, text),
+      retypeFirstTask: (id: string, text: string) => firstTask.retype(id, text),
+      // The frame read starting from the row's typed task until now: the windows hear it no longer is. One the row keeps,
+      // OpenClaw's store or the binding pass's bound settles (core/agents/bind.ts).
+      onFirstTaskTaken: (id: string, text?: string) => {
+        void (text === undefined ? firstTask.taken(id) : firstTask.taken(id, text)).then((taken) => { if (taken) deps.sync?.(id) },
+          (error: unknown) => console.error(`[agent] ${sid(id)} first task typed kept · ${errorKind(error)}`))
+      },
+    } : {}),
     readScreen: deps.readScreen,
     submission: deps.submission,
     getSession: (id) => resolve(id),

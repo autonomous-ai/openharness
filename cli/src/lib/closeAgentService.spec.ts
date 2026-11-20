@@ -827,6 +827,39 @@ describe('what a close says of the conversation it kept', () => {
     for (const mode of ['now', 'idle', 'inspect'] as const) expect(await service.request(request(mode))).toEqual(said)
     expect(deps.stop).not.toHaveBeenCalled()
   })
+  // An OpenClaw binds its key at launch, before it takes any task: its store, not the key, says whether a resume would
+  // bring a conversation back (a launch given no task, one whose first task was never taken).
+  describe('an OpenClaw bound to a key its store holds nothing for', () => {
+    const reading = (answer: () => Promise<boolean>) => {
+      const conversationEmpty = vi.fn(answer)
+      service.dispose()
+      service = new CloseAgentService({ ...deps, conversationEmpty })
+      return conversationEmpty
+    }
+    const stores = [
+      ['holds nothing', async (): Promise<boolean> => true, { closed: true, withoutConversation: true }],
+      ['holds a conversation', async (): Promise<boolean> => false, { closed: true }],
+      ['cannot be read', async (): Promise<boolean> => { throw new Error('store unreadable') }, { closed: true }],
+    ] as const
+    beforeEach(() => { Object.assign(row, { engine: 'openclaw', sessionId: 'agent:main:plain' }) })
+
+    it.each(stores)('closed while its store %s, says so', async (_, answer, said) => {
+      const conversationEmpty = reading(answer)
+      stopSaving()
+      expect(await service.request(request('now'))).toEqual(said)
+      expect(conversationEmpty).toHaveBeenCalledWith(expect.objectContaining({ agentId: row.agentId, sessionId: 'agent:main:plain' }))
+    })
+    it.each(stores)('asked again once closed, while its store %s, says so', async (_, answer, said) => {
+      const conversationEmpty = vi.fn(answer)
+      const kept = { ...row }
+      service.dispose()
+      service = new CloseAgentService({ ...deps, conversationEmpty, closedAlready: async () => registry.byAgent(row.agentId) ? null : kept })
+      await removeRegistryAgent(registry, row.agentId)
+      for (const mode of ['now', 'idle', 'inspect'] as const) expect(await service.request(request(mode))).toEqual(said)
+      expect(conversationEmpty).toHaveBeenCalledWith(kept)
+      expect(deps.stop).not.toHaveBeenCalled()
+    })
+  })
 })
 
 describe('background commands', () => {

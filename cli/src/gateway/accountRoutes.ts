@@ -62,6 +62,9 @@ function routeOf(backend: AccountBackend, method: string, target: string, text: 
   // for the door over the daemon's own socket (`asker.door`), never a client of the local WebSocket, whose door takes any
   // process of this account over loopback TCP. Checked here, where the path is read, by the same reading.
   if (method === 'POST' && path === '/api/auth/handoff') return socket ? forward(path, {}) : answer(403, { error: 'FORBIDDEN' })
+  // Set up Intern 3's ticket (backend routes/qrSignIn.ts `issueBoxTicket`): a sign-in this account approved already, which
+  // the Desktop hands a headless box over its setup hotspot. A credential as Add Phone's code is, so behind the same door.
+  if (method === 'POST' && path === '/api/auth/box/ticket') return socket ? forward(path, {}) : answer(403, { error: 'FORBIDDEN' })
   // The window's tab edits (backend routes/desk.ts), which it hears everyone else's as `desk_changed`, and the account's
   // name (`{ name }`, task #2654), which the backend checks and answers as GET does.
   if ((method === 'POST' && path === '/api/desk/ops') || (method === 'PATCH' && path === '/api/auth/me')) return json(INVALID_JSON, (value) => forward(path, value))

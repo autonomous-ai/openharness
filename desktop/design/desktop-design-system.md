@@ -515,6 +515,35 @@ Couldn’t open it.`
                                                                  └───────────────────────────────────────────────┘
 ```
 
+**Intern 3** (`lib/harness_os/`) — a Harness OS box with no screen, set up and
+managed from the Machines picker as the phone does it. Every dialog is one
+task dialog frame (`InternDialogFrame`): a heading, the step's body, a status
+line beside the actions (danger color for a failure), Close always there and a
+click outside ignored, since a setup half done leaves the box waiting.
+- Add machine's row offers `Intern 3` beside `App` and `CLI` (not in a
+  browser, which cannot reach the box). Set up shows its five steps on every
+  step, as the phone does (`InternSteps`): Turn Intern 3 on, Join its Wi-Fi,
+  Its password, Its Wi-Fi, Online; each numbered in a 20-point circle, the
+  current one filled in the accent, a done one a check in the accent, what is
+  to come in the faint color; what each asks under it on the first step only.
+  Set up asks the account for the box's
+  sign-in first, while this computer still has the Internet, then says to pick
+  `Harness-…` in this computer's own Wi-Fi menu: the app never joins a Wi-Fi
+  itself, and cannot see it joined, so a checkbox, `This computer is on
+  “Harness-…”`, holds `Connect` until the person ticks it. Connect asks the
+  box's page at `10.42.0.1` for 30 seconds. Unlock waits the same way. The
+  checkbox is Material's, in the theme's colors, the whole row its target.
+  Then the box's password if
+  its disk is locked, the Wi-Fi it should use and its password, and a wait for
+  it to come online in the account, this computer back on its own Wi-Fi.
+- A machine running Harness OS shows `Intern 3` with its release, its Wi-Fi
+  and `New version` when one waits, and offers `Manage`: a list of Version,
+  Wi-Fi, Password, SSH, GitHub, Computer use and Sign out, as far as its status
+  says it can, each a page of the same dialog with Back.
+- One offline that waits at its disk's password after a restart says so and
+  offers `Unlock`, over its hotspot, with an optional change of Wi-Fi.
+`test/harness_os_*_test.dart` click through each.
+
 **Pickers** — the same frame and header, inset result rows and a quiet footer
 with relevant keyboard hints. Move Pane uses a tab icon, destination name,
 harness count and optional number accelerator. Selection uses the same blue

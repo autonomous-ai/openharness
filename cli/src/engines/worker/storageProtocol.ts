@@ -4,6 +4,8 @@ import type { BackgroundSession } from '../../lib/backgroundCommands.js'
 export const STORAGE_VERSION = 1
 export const STORAGE_CAPABILITIES = 'engine_storage_capabilities'
 export const STORAGE_BACKGROUND = 'engine_storage_background'
+export const STORAGE_USER_ROW_SINCE = 'engine_storage_user_row_since'
+export const STORAGE_USER_ROW_WAIT_MS = 5_000
 export const STORAGE_EXPORT = 'engine_storage_export'
 export const STORAGE_LIFETIME = 'engine_storage_lifetime'
 export const STORAGE_IN_FLIGHT = 4
@@ -61,4 +63,13 @@ export function storageSession(value: unknown): value is StorageSession {
 }
 export function backgroundCount(value: unknown): value is number | null {
   return value === null || (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 1_024)
+}
+
+/** A fixed user-row existence query, never SQL supplied by the caller. */
+export function storageTimeRange(since: unknown, until: unknown): boolean {
+  return Number.isSafeInteger(since) && (since as number) >= 0
+    && Number.isSafeInteger(until) && (until as number) >= (since as number)
+}
+export function userRowAnswer(value: unknown): value is boolean | null {
+  return value === null || typeof value === 'boolean'
 }

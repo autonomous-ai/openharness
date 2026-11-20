@@ -453,6 +453,26 @@ class ApiClient {
     }
   }
 
+  /// A sign-in already approved for this account, for an Intern 3 with no screen to show a QR on:
+  /// `{ticket, expiresIn}` (backend `issueBoxTicket`). Handed to it over its setup hotspot; it
+  /// spends it once it is on the person's Wi-Fi (`harness login --ticket`). A credential, so the
+  /// daemon gives it over its owner-only socket alone, as [phoneSignInCode].
+  Future<String> boxTicket() async {
+    final res = await _dio.post(
+      '/api/auth/box/ticket',
+      data: const <String, Object?>{},
+      options: Options(headers: {'x-adapter-local': '1'}),
+    );
+    // An older CLI does not know the route: its door's 404. The dialog offers its update.
+    if (res.statusCode == 404) throw HarnessTooOldException();
+    final data = unwrapApiResponse(res);
+    final ticket = data is Map ? data['ticket'] : null;
+    if (ticket is! String || ticket.isEmpty) {
+      throw ApiException('Harness did not send a sign-in for Intern 3.');
+    }
+    return ticket;
+  }
+
   // -- the account's device key log (viewer builds: straight to the backend, signed) --
 
   /// `GET /api/device-keys?since=` — the log from [since]; null when there is none to read (an older
@@ -864,6 +884,13 @@ class ApiException implements Exception {
   ApiException(this.message, {this.status});
   @override
   String toString() => message;
+}
+
+/// This computer's Harness predates a route the app asked of it (its door's 404): updating it is
+/// the way on.
+class HarnessTooOldException extends ApiException {
+  HarnessTooOldException()
+    : super('Update Harness on this computer to set up Intern 3.', status: 404);
 }
 
 bool isUnauthorizedError(Object error) =>

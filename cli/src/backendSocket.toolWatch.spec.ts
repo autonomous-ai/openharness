@@ -45,3 +45,26 @@ it('pushes a tool only the state events of the harnesses it named, and stops whe
     await socket.stop()
   }
 })
+
+it('pushes a tool a sync of a harness it named as the harness\'s id alone, and the window the sync whole', async () => {
+  const socket = relaySocket('fixture')
+  const tool: Array<{ type?: unknown }> = []
+  const window: Array<{ type?: unknown; payload?: unknown }> = []
+  socket.registerLocalClient('local:tool', { sendFrame: (frame) => { tool.push(frame); return true }, sendBinary: () => true }, { tool: true })
+  socket.registerLocalClient('local:window', { sendFrame: (frame) => { window.push(frame); return true }, sendBinary: () => true })
+  try {
+    socket.handleLocalFrame('local:tool', { type: 'agents_watch', payload: { requestId: 'w', agentIds: ['a'] } })
+    await vi.waitFor(() => expect(tool).toContainEqual({ type: 'agents_watch_result', payload: { requestId: 'w', ok: true } }))
+    tool.length = 0
+    // lib/sessionSync.ts sends a sync to the windows and the devices alike: the tool is told it once.
+    const sync = { type: 'agent_synced', payload: { agent: { id: 'a', name: 'PRIVATE', starting: true, launch: { state: 'ready' } } } }
+    socket.send(sync)
+    socket.sendCommander(sync)
+    expect(tool).toEqual([{ type: 'agent_synced', agentId: 'a', payload: { agentId: 'a' } }])
+    expect(window).toEqual([sync])
+  } finally {
+    await socket.unregisterLocalClient('local:tool')
+    await socket.unregisterLocalClient('local:window')
+    await socket.stop()
+  }
+})

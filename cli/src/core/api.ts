@@ -1926,6 +1926,8 @@ export const SERVICE_HTTP_ROUTES: readonly ServiceHttpRoute[] = [
   // header, which any process here can send, but the daemon's own socket, where the filesystem said who this is; another
   // account on a shared computer reaches the port, never the socket.
   { ...account(/^\/api\/auth\/handoff$/, ['POST']), door: 'socket' },
+  // Set up Intern 3's ticket, which signs a headless box in to this account: a credential too, behind the same door.
+  { ...account(/^\/api\/auth\/box\/ticket$/, ['POST']), door: 'socket' },
   // The keys, which the gateway holds (gateway/keyRoutes.ts, e2e/keyRoutes.e2e.ts): `harness pair`, `pairings`, `unpair`,
   // `remote-password`, `link connect`'s mutual half, `group`, `devices` and the window's Devices list.
   keys(/^\/api\/pair$/, 'POST', true, PAIR_WAIT_MS),

@@ -299,6 +299,16 @@ describe('a line that follows pushed state events', () => {
     daemon.close()
   })
 
+  it('hears a harness\'s start, failed launch or hold changing, which the daemon pushes as its id alone', async () => {
+    const { push, socket } = line({ ok: true })
+    const daemon = await openDaemon(where, 'm1', () => socket)
+    const heard: unknown[] = []
+    await daemon.watch!(['a'], (agentId, event) => heard.push([agentId, event]))
+    push({ type: 'agent_synced', agentId: 'a', payload: { agentId: 'a' } })
+    expect(heard).toEqual([['a', { type: 'agent_synced', payload: { agentId: 'a' } }]])
+    daemon.close()
+  })
+
   it('hands each pushed event on whole, its type and payload, for a listener that tells them apart', async () => {
     const { push, socket } = line({ ok: true })
     const daemon = await openDaemon(where, 'm1', () => socket)

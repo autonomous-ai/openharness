@@ -51,7 +51,7 @@ describe('the event funnel', () => {
     const { funnel } = setup('openclaw', { input })
     try {
       input.expectFirstTask('a1', 'Fix the parser')
-      input.submit('a1', 'Fix the parser')
+      input.submitFirstTask('a1', 'Fix the parser')
       await vi.waitFor(() => expect(input.awaitingConfirmation('a1')).toBe(true))
       const echo: Event = { type: 'user_message', payload: { content: 'Fix the parser' } }
       funnel('s1', [echo], { replay: true })

@@ -3,6 +3,7 @@ import { errorKind } from '../../lib/log.js'
 import type { BackgroundSession } from '../../lib/backgroundCommands.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { backgroundCount, STORAGE_BACKGROUND, STORAGE_BACKGROUND_WAIT_MS, STORAGE_CAPABILITIES,
+  STORAGE_USER_ROW_SINCE, STORAGE_USER_ROW_WAIT_MS, storageTimeRange, storageSession, userRowAnswer,
   STORAGE_IN_FLIGHT, STORAGE_REPLY_BYTES, STORAGE_VERSION, STORAGE_EXPORT, STORAGE_EXPORT_WAIT_MS, STORAGE_ENGINES,
   STORAGE_LIFETIME, storageLifetime, exportReceipt, type ExportStage, type ExportReceipt, type ExportReservation,
   type StorageEngine, type StorageLifetime, type StorageSession, type ExportSource } from '../../engines/worker/storageProtocol.js'
@@ -14,6 +15,7 @@ export interface EngineStorageDeps extends SnapshotTransportDeps {
   serviceProcess?(service: string, pid: number, waitMs: number): Promise<boolean>
   ready?(engine: string, waitMs: number): Promise<void>
   inline?(session: StorageSession): Promise<number | null>
+  inlineUserRowSince?(session: StorageSession, since: number, until: number): Promise<boolean | null>
   inlineExport?(engine: StorageEngine, session: StorageSession, stage: ExportStage, source: ExportSource, current: () => boolean): Promise<ExportReceipt>
 }
 export function createEngineStorage(deps: EngineStorageDeps) {
@@ -27,9 +29,11 @@ export function createEngineStorage(deps: EngineStorageDeps) {
     capability: 'storage', inFlight: STORAGE_IN_FLIGHT, queued: 0, waitMs: STORAGE_BACKGROUND_WAIT_MS, replyBytes: STORAGE_REPLY_BYTES })
   const exports = createSnapshotTransport(deps, { version: STORAGE_VERSION, capabilities: STORAGE_CAPABILITIES,
     capability: 'storage', inFlight: STORAGE_IN_FLIGHT, queued: 0, waitMs: STORAGE_EXPORT_WAIT_MS, replyBytes: STORAGE_REPLY_BYTES })
+  const userRows = createSnapshotTransport(deps, { version: STORAGE_VERSION, capabilities: STORAGE_CAPABILITIES,
+    capability: 'storage', inFlight: STORAGE_IN_FLIGHT, queued: 0, waitMs: STORAGE_USER_ROW_WAIT_MS, replyBytes: STORAGE_REPLY_BYTES })
   return {
-    connected: (service: string) => { transport.connected(service); exports.connected(service) },
-    disconnected: (service: string) => { transport.disconnected(service); exports.disconnected(service) },
+    connected: (service: string) => { transport.connected(service); exports.connected(service); userRows.connected(service) },
+    disconnected: (service: string) => { transport.disconnected(service); exports.disconnected(service); userRows.disconnected(service) },
     async exportDatabase(session: RegisteredSession, source: ExportSource, reservation: ExportReservation): Promise<ExportReceipt> {
       if (!STORAGE_ENGINES.includes(session.engine as StorageEngine) || !session.sessionId) throw new Error('checkpoint engine unsupported')
       const captured: StorageSession = { sessionId: session.sessionId, hermesHome: session.hermesHome,
@@ -69,6 +73,17 @@ export function createEngineStorage(deps: EngineStorageDeps) {
         if (!current() || !exportReceipt(receipt)) throw new Error('checkpoint unavailable')
         return receipt
       } finally { active = false }
+    },
+    async userRowSince(session: StorageSession, since: number, until = Number.MAX_SAFE_INTEGER): Promise<boolean | null> {
+      if (!storageSession(session) || !storageTimeRange(since, until)) return null
+      const captured: StorageSession = { ...session }
+      try {
+        const answer = deps.isolated
+          ? await admitted(async () => await userRows.read('openclaw', STORAGE_USER_ROW_SINCE, { session: captured, since, until }, userRowAnswer))
+          : await boundedControl(admitted(async () => deps.inlineUserRowSince?.(captured, since, until) ?? null),
+            STORAGE_USER_ROW_WAIT_MS, () => new Error('storage unavailable'))
+        return userRowAnswer(answer) ? answer : null
+      } catch (error) { console.error('[engine-others] STORAGE_USER_ROW_UNAVAILABLE · ' + errorKind(error)); return null }
     },
     async background(session: BackgroundSession): Promise<number | null> {
       if (session.engine !== 'hermes' || !session.sessionId) return null

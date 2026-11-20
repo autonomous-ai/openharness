@@ -185,9 +185,9 @@ async function setup(boundary: 'terminal' | 'store' | 'open' | 'config' | 'none'
     followsLive: id => others.follows(id),
     mirror: { inheritSummary: vi.fn() }, forgetSession: async id => { forget(id) }, clients: { send }, announceSession: vi.fn(),
     stoppedAgents, syncRecapPool: vi.fn(),
-    input: { forget: vi.fn(), awaitingConfirmation: () => false, waitsForPane: () => false, firstTaskWaiting: () => false, typeCommand: async () => false, expectFirstTask: vi.fn() }, submitFirstTask: vi.fn(),
+    input: { forget: vi.fn(), awaitingConfirmation: () => false, waitsForPane: () => false, firstTaskWaiting: () => false, typeCommand: async () => false, expectFirstTask: vi.fn(), ownsBox: () => false, adoptTypedFirstTask: () => false, firstTaskConfirmed: vi.fn() }, submitFirstTask: vi.fn(),
     homes: { copilot: directory, grok: directory, agy: directory }, capturePane: async () => null, activityRevision: () => undefined,
-    openclawPaneRead: () => false, openclawPaneDue: () => false, openclawStateDir: async () => null,
+    openclawPaneRead: () => false, openclawPaneDue: () => false, openclawStateDir: async () => null, openclawUserRowSince: async () => null,
   })
   const observed = { engine: 'hermes' as const, processIdentity: nextProcess, runtimes: resumed.runtimes,
     primaryRuntimeKey: resumed.primaryRuntimeKey, cwd: directory, args: `hermes --resume ${sessionId}`, resumeSessionId: sessionId }

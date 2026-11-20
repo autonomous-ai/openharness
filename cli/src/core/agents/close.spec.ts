@@ -1,11 +1,23 @@
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { readInlineScreen } from '../../testing/inlineScreen.js'
 import { screenFor } from '../../engines/screens.js'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { inspectCloseActivity, type CloseAgentServiceDeps } from '../../lib/closeAgentService.js'
 import { projectDisplayName, type RegisteredSession } from '../../lib/registry.js'
 import { CLOSE_READ_RECONNECT_MS, createAgentClosing, createCloseRequests, type ClosingDeps } from './close.js'
 import * as TAKEOVER from '../../lib/__fixtures__/takeoverScreens.js'
 import { OpenTabProtection } from '../../lib/openTabProtection.js'
+import { builtinSqlite, closeSqliteHandles } from '../../lib/sqliteBuiltin.js'
+import { env } from '../../config/env.js'
+import { openclawUserRows } from '../../engines/others/storageRequests.js'
+import { nativeOpenFiles } from '../../lib/nativeConversation.js'
+
+vi.mock('../../lib/nativeConversation.js', async (real) => ({
+  ...await real<typeof import('../../lib/nativeConversation.js')>(),
+  nativeOpenFiles: vi.fn(async () => []),
+}))
 
 // The real close service, recording what it was built with so its callbacks can be driven directly.
 vi.mock('../../lib/closeAgentService.js', async (real) => {
@@ -34,6 +46,7 @@ function setup(over: Partial<ClosingDeps> = {}, advertised: RegisteredSession[] 
     stopAgent: vi.fn(async () => {}),
     announceSession: vi.fn(),
     engineReady: vi.fn(async () => {}),
+    userRowSince: (session, since) => openclawUserRows(session, since, Number.MAX_SAFE_INTEGER),
     ...over,
   }
   const closing = createAgentClosing(deps)
@@ -92,6 +105,11 @@ describe('closing agents no window shows', () => {
     expect(await close.closedAlready!(asked('kept'))).toBeNull()
     // A core that keeps no stopped agents knows none closed.
     expect(await setup({ registry }).close.closedAlready!(asked('kept'))).toBeNull()
+  })
+
+  it('keeps an unavailable optional user-row reader unknown for an OpenClaw close', async () => {
+    const { close } = setup({ userRowSince: undefined })
+    expect(await close.conversationEmpty!(row({ engine: 'openclaw', sessionId: 'agent:main:plain' }))).toBe(false)
   })
 
   describe('what an agent is doing', () => {
@@ -163,6 +181,55 @@ describe('closing agents no window shows', () => {
         expect(other).toHaveBeenCalledOnce()
         expect(once.deps.engineReady).not.toHaveBeenCalled()
       }
+    })
+  })
+
+  describe('whether the engine\'s own store holds nothing a resume would bring back', () => {
+    // The fixtures' store: one user row, under the key `agent:main:plain`.
+    const fixtures = join(import.meta.dirname, '..', '..', 'engines', 'openclaw', '__fixtures__')
+    let stateDir = ''
+    beforeEach(() => {
+      stateDir = mkdtempSync(join(tmpdir(), 'close-openclaw-'))
+      const database = join(stateDir, 'agents', 'main', 'agent')
+      mkdirSync(database, { recursive: true })
+      const db = new (builtinSqlite()!)(join(database, 'openclaw-agent.sqlite'), { readOnly: false })
+      db.exec(readFileSync(join(fixtures, 'schema.sql'), 'utf8'))
+      db.exec(readFileSync(join(fixtures, 'plain.sql'), 'utf8'))
+      db.close()
+    })
+    afterEach(() => { closeSqliteHandles(); rmSync(stateDir, { recursive: true, force: true }) })
+    const empty = (over: Partial<RegisteredSession>) =>
+      setup().close.conversationEmpty!(row({ engine: 'openclaw', openclawStateDir: stateDir, ...over }))
+
+    it('an OpenClaw whose key has no user row holds nothing', async () => {
+      expect(await empty({ sessionId: 'agent:main:other' })).toBe(true)
+      expect(await empty({ sessionId: 'agent:main:other', processIdentity: { pid: 4321 } as RegisteredSession['processIdentity'] })).toBe(true)
+    })
+
+    it('an OpenClaw whose key has one holds a conversation', async () => {
+      expect(await empty({ sessionId: 'agent:main:plain' })).toBe(false)
+    })
+
+    it('reads a closed OpenClaw by its folder, never by the open files of its pid, which may be another TUI now', async () => {
+      // The closed record's pid is now another OpenClaw, whose folder has no store; the record's own conversation is in
+      // OpenClaw's default folder.
+      const other = mkdtempSync(join(tmpdir(), 'close-openclaw-other-'))
+      vi.mocked(nativeOpenFiles).mockImplementation(async pid => pid === 7777 ? [join(other, 'state', 'openclaw.sqlite')] : [])
+      const fallback = env.OPENCLAW_STATE_DIR
+      env.OPENCLAW_STATE_DIR = stateDir
+      try {
+        const closed = row({ engine: 'openclaw', sessionId: 'agent:main:plain', processIdentity: { pid: 7777 } as RegisteredSession['processIdentity'] })
+        const { close } = setup({ registry: { advertised: vi.fn(() => []), byAgent: vi.fn(() => undefined) } as unknown as ClosingDeps['registry'] })
+        expect(await close.conversationEmpty!(closed)).toBe(false)
+      } finally {
+        env.OPENCLAW_STATE_DIR = fallback
+        rmSync(other, { recursive: true, force: true })
+      }
+    })
+
+    it('says nothing of an OpenClaw with no key, nor of another engine, even beside an empty store', async () => {
+      expect(await empty({ sessionId: '' })).toBe(false)
+      expect(await empty({ engine: 'claude', sessionId: 'agent:main:other' })).toBe(false)
     })
   })
 

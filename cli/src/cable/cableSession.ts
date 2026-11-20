@@ -28,7 +28,7 @@ import { VoiceSegments, realTimer } from './voiceSegments.js'
 import { FirmwareTransfer, otaKeyFor } from './fwPush.js'
 import { PACK_VERSION } from './pets/pack.js'
 import { planPetSync } from './pets/sync.js'
-import type { PetStore } from './pets/store.js'
+import { MAX_PACKS, type PetStore } from './pets/store.js'
 import type { PetDialState } from './pets/sync.js'
 import { SerialLink, findDialPort } from './serial.js'
 import { PortAccessError } from './portAccess.js'
@@ -911,9 +911,17 @@ export class CableSession {
   /** A pet.drop went out on this link: the dial's memory may still be settling, so a memory refusal is retried once. */
   private petDropSent = false
   private petRetried = new Set<string>()
+  /** The pack whose latest offer had a spare pack dropped just before it: a memory refusal of it only needs time, not a second drop. */
+  private petRoomMadeFor: string | null = null
   private petRetryTimers = new Set<ReturnType<typeof setTimeout>>()
   /** Pack ids the dial holds: its hello's petIds, plus each pet.done, minus each pet.drop we sent. */
   private petHeld = new Set<string>()
+  /**
+   * Own packs: those this link sent (pet.done, or a hello that lists the pack in flight) and every held pack the mapping
+   * named at a sync. Only these are dropped once unmapped; any other held pack is another computer's (spare), kept
+   * until the dial needs its slot. In memory per link: PetStore.sweep deletes a replaced pet's files, so disk cannot tell.
+   */
+  private petOwn = new Set<string>()
   /**
    * When each pack's pet.done arrived. A greeting the dial assembled while a pack was still arriving can land after its
    * pet.done and list it as missing — seen 2026-10-08, when both packs went over twice. A pack confirmed this recently
@@ -1278,12 +1286,14 @@ export class CableSession {
     this.clearPetStall()
     this.petsSupported = false
     this.petHeld.clear()
+    this.petOwn.clear()
     this.petDoneAt.clear()
     this.petErrors.clear()
     this.petMapSent = ''
     this.petDialMax = 0
     this.petDropSent = false
     this.petRetried.clear()
+    this.petRoomMadeFor = null
     for (const timer of this.petRetryTimers) clearTimeout(timer)
     this.petRetryTimers.clear()
     // Last, with the ring emptied above: a host that hears it reads a session already closed.
@@ -2066,6 +2076,7 @@ export class CableSession {
           this.clearPetStall()
         }
         this.petHeld.add(id)
+        this.petOwn.add(id)
         this.petDoneAt.set(id, Date.now())
         // The next pack, one at a time.
         await this.syncPets()
@@ -2084,8 +2095,12 @@ export class CableSession {
           this.petTransfer = null
           this.clearPetStall()
         }
-        // A swap near full memory: the pack we dropped may not be freed yet. Once per pack and link, offer again.
-        if ((reason === 'memory' || reason === 'busy') && this.petDropSent && !this.petRetried.has(id)) {
+        // A swap near full memory: the pack we dropped may not be freed yet. Once per pack and link, free another
+        // computer's pack if one is held, and offer again; a later refusal of the same pack drops nothing more. A pack
+        // a spare was just dropped for gets no second drop: the dial frees that memory at its next frame.
+        const tight = reason === 'memory' || reason === 'busy'
+        if (tight && !this.petRetried.has(id) && this.petRoomMadeFor !== id) await this.dropSpare()
+        if (tight && this.petDropSent && !this.petRetried.has(id)) {
           this.petRetried.add(id)
           const timer = setTimeout(() => {
             this.petRetryTimers.delete(timer)
@@ -2237,6 +2252,7 @@ export class CableSession {
     // hello that lists the pack in flight means it was stored and its pet.done went missing.
     const t = this.petTransfer
     if (t && (shrank || this.petHeld.has(t.id))) {
+      if (this.petHeld.has(t.id)) this.petOwn.add(t.id)
       t.xfer.finish(this.petHeld.has(t.id) ? 'stored' : 'dial restarted')
       this.petTransfer = null
       this.clearPetStall()
@@ -2275,7 +2291,9 @@ export class CableSession {
   private async runPetSync(): Promise<void> {
     const store = this.host.pets?.()
     if (!store || !this.petsSupported || !this.link?.isOpen || this.greetedMac === null) return
-    const plan = planPetSync(store.mapping(), [...this.petHeld])
+    const plan = planPetSync(store.mapping(), [...this.petHeld], this.petOwn)
+    // A held pack the mapping names is ours from now on, so it is dropped at once if the pet changes on this link.
+    for (const id of this.petHeld) if (!plan.drop.includes(id) && !plan.spare.includes(id)) this.petOwn.add(id)
     const mapKey = JSON.stringify(plan.map)
     if (mapKey !== this.petMapSent) {
       this.petMapSent = mapKey
@@ -2319,11 +2337,27 @@ export class CableSession {
           (line) => this.log(line.replace('firmware', 'pet')),
         ),
       }
+      // A full dial has no slot for it: free another computer's pack now, never ahead of an offer that may not come.
+      // Set or cleared at every offer, so an earlier offer of the same pack never spares a later one its drop.
+      this.petRoomMadeFor = this.petHeld.size >= MAX_PACKS && (await this.dropSpare()) ? id : null
       // The CRC-32 is the pack's own header field (offset 18), so the dial checks what it received against it.
       this.armPetStall()
       await this.send({ t: 'pet.offer', id, size: pack.length, crc: pack.readUInt32LE(18) })
       return
     }
+  }
+
+  /** Frees one slot on the dial: the first spare pack (another computer's) in the order the dial listed them. True when one went. */
+  private async dropSpare(): Promise<boolean> {
+    const store = this.host.pets?.()
+    if (!store) return false
+    const id = planPetSync(store.mapping(), [...this.petHeld], this.petOwn).spare[0]
+    if (!id) return false
+    this.petHeld.delete(id)
+    this.petDropSent = true
+    this.log(`cable: pet ${id} dropped for room`)
+    await this.send({ t: 'pet.drop', id })
+    return true
   }
 
   private clearPetStall(): void {

@@ -46,15 +46,15 @@ describe('the core API services stand on', () => {
     const keys = [['POST', '/api/pair'], ['GET', '/api/pairs'], ['POST', '/api/revoke'], ['POST', '/api/revoke-all'], ['POST', '/api/remote-password/set'],
       ['POST', '/api/remote-password/clear'], ['GET', '/api/remote-password/status'], ['POST', '/api/link/trust-peer'], ['GET', '/api/group'],
       ['POST', '/api/group/sync'], ['POST', '/api/group/remove'], ['GET', '/api/devices'], ['POST', '/api/devices/remove'],
-      ['POST', '/api/devices/rebaseline'], ['GET', '/api/devices/history'], ['POST', '/api/devices/dismiss'], ['POST', '/api/auth/handoff']] as const
+      ['POST', '/api/devices/rebaseline'], ['GET', '/api/devices/history'], ['POST', '/api/devices/dismiss'], ['POST', '/api/auth/handoff'], ['POST', '/api/auth/box/ticket']] as const
     for (const [method, path] of keys) {
       expect(route(method, path), `${method} ${path}`).toMatchObject({ type: 'gateway_http', unanswered: { status: 503, body: { error: 'GATEWAY_UNAVAILABLE' } } })
       // Each write needs the local header, and so does the device history, a read of the account's whole device story.
       expect(route(method, path)!.writes ?? [], `${method} ${path}`).toEqual(method === 'POST' || path === '/api/devices/history' ? [method] : [])
-      expect(route(method, path)!.door, `${method} ${path}`).toBe(path === '/api/auth/handoff' ? 'socket' : undefined)
+      expect(route(method, path)!.door, `${method} ${path}`).toBe(path === '/api/auth/handoff' || path === '/api/auth/box/ticket' ? 'socket' : undefined)
     }
     // A method the door never took is not taken: the door's 404, as before.
-    for (const [method, path] of [['GET', '/api/pair'], ['POST', '/api/pairs'], ['GET', '/api/auth/handoff'], ['GET', '/api/devices/remove']]) expect(route(method, path), `${method} ${path}`).toBeUndefined()
+    for (const [method, path] of [['GET', '/api/pair'], ['POST', '/api/pairs'], ['GET', '/api/auth/handoff'], ['GET', '/api/auth/box/ticket'], ['GET', '/api/devices/remove']]) expect(route(method, path), `${method} ${path}`).toBeUndefined()
     expect(route('POST', '/api/pair')!.waitMs).toBe(PAIR_WAIT_MS)
     expect(route('GET', '/api/pairs')!.waitMs).toBe(30_000)
   })

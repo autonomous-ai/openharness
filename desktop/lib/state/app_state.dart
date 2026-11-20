@@ -88,6 +88,7 @@ import '../core/test_run.dart';
 import '../core/runtime_platform.dart';
 import '../core/agent_activity.dart';
 import '../core/models.dart';
+import '../harness_os/harness_os.dart';
 import '../core/harness_resources.dart';
 import '../core/machine_resources.dart';
 import '../core/project_folder.dart';
@@ -1274,6 +1275,7 @@ class AppNotifier extends ChangeNotifier {
     _closeOwnerMemories();
     _stopMachineRecovery();
     api.resetAccountCache();
+    harnessOs.resetStatus();
     _sessionExpired = false;
     _machineLoadError = null;
     _resetLoginBrowser();
@@ -12166,6 +12168,42 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// An Intern 3 (Harness OS) computer, managed from here (CLI services/osDevice.ts, its owner
+  /// only): `status`, `update`, `wifi_scan`, `wifi_join`, `password`, `ssh`, `github`… Its own
+  /// code and sentence when it refuses (BUSY, WRONG_PASSWORD…), `{error: 'UNAVAILABLE'}` when it
+  /// does not answer — as it does for a while after `update` and `wifi_join`.
+  Future<Map<String, dynamic>> osDevice(
+    String machineId,
+    Map<String, dynamic> payload, {
+    Duration timeout = const Duration(seconds: 25),
+  }) async {
+    final machine = machineStates[machineId];
+    if (machine == null ||
+        machine.needsLink ||
+        machine.machine.isShared ||
+        machine.machine.isSharedMachine) {
+      return {'error': 'UNAVAILABLE'};
+    }
+    try {
+      return await _conn(
+        machineId,
+      ).request('os_device', payload: payload, timeout: timeout);
+    } on WsRequestFailure catch (failure) {
+      final message = failure.payload['message'] ?? failure.detail;
+      return {
+        'error': failure.code,
+        if (message is String && message.isNotEmpty) 'message': message,
+      };
+    } catch (_) {
+      return {'error': 'UNAVAILABLE'};
+    }
+  }
+
+  late final harnessOs = HarnessOs(
+    request: osDevice,
+    storage: _paneLayout?.storage,
+  )..addListener(notifyListeners);
+
   WsConn _conn(String machineId) {
     if (machineStates[machineId]?.machine.isShared == true) {
       throw StateError('This harness is shared with view-only access.');
@@ -22327,6 +22365,7 @@ class AppNotifier extends ChangeNotifier {
     // Its sweep timer would otherwise outlive the window it was drawing into.
     agentAlerts.dispose();
     agentUnread.dispose();
+    harnessOs.dispose();
     _disposed = true;
     _sharingDiscoveryTimer?.cancel();
     _machinesPushTimer?.cancel();

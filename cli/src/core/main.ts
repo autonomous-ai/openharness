@@ -731,7 +731,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const inlineHistory = inline?.createInlineHistory()
   const lineCounts = inlineHistory ?? new TranscriptIndexes()
   let serviceLinksRef: ServiceLinks | null = null
-  const engineStorage = createEngineStorage({ isolated: othersStorage, inline: inline?.hermesBackground, inlineExport: inline?.exportDatabase,
+  const engineStorage = createEngineStorage({ isolated: othersStorage, inline: inline?.hermesBackground, inlineExport: inline?.exportDatabase, inlineUserRowSince: inline?.openclawUserRows,
     serviceProcess: coreLink.serviceProcess,
     ready: (engine, ms) => engineLinks.ready(engine, ms),
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
@@ -1322,6 +1322,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     nativeActivity: (session) => nativeControls.activity(session),
     withheld: (sessionId) => turnHooksRef?.withheld(sessionId) ?? false,
     atWork: (sessionId) => turnHooksRef?.atWork(sessionId) ?? false,
+    // Declared further down: read when a claim starts, never now.
+    claimed: (sessionId) => turnBeats.watchClaim(sessionId),
   })
   const runtimeActivity = activity.runtimeActivity
   const turnActivity = activity.turnActivity
@@ -1453,6 +1455,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     launchRevision: restoreRevision,
     // Its waitingFor changed: every window gets the agent's frame again.
     sync: (id) => { const session = registry.resolve(id); if (session) syncSession(session) },
+    // A first task typed stays on its row until a turn takes it (core/input.ts). Typed again as the binding pass types it,
+    // once the pass's registry transaction commits (core/agents/bind.ts `takeFirstTask`).
+    firstTask: {
+      untype: (agentId, text) => registry.untypeFirstTask(agentId, text),
+      retype: (agentId, text) => registry.retypeFirstTask(agentId, text),
+      taken: (agentId, text) => registry.firstTaskTaken(agentId, undefined, text),
+    },
     // Claude Code's and Codex's readers start on demand in a process of their own: a message waits for its engine's (26 s at load 40).
     engineStarting: (engine) => isolatedScreen(engine) ? serviceLinksRef?.whenStarting(readerEngine(engine) ? READER_SERVICES[engine] : OTHER_ENGINES_SERVICE) ?? null : null,
   })
@@ -1467,6 +1476,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     firstTaskWaiting: (agentId: string): boolean => input.firstTaskWaiting(agentId),
     typeCommand: (agentId: string, line: string) => input.typeCommand(agentId, line),
     expectFirstTask: (agentId: string, task: string) => input.expectFirstTask(agentId, task),
+    ownsBox: (...args: Parameters<typeof input.ownsBox>) => input.ownsBox(...args),
+    adoptTypedFirstTask: (...args: Parameters<typeof input.adoptTypedFirstTask>) => input.adoptTypedFirstTask(...args),
+    firstTaskConfirmed: (agentId: string) => input.firstTaskConfirmed(agentId),
   }
   // A window that connects while a message waits for its engine reads it off the agent's frame, pushed or listed. A message is
   // sent by an agent's id, or by its session's.
@@ -2046,8 +2058,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     stoppedAgents,
     syncRecapPool,
     input: inputLifecycle,
-    // Retain the first task until the controller confirms the engine took it.
-    submitFirstTask: (agentId, task) => inputs.submitAgent(agentId, task),
+    // The shared writer keeps a first task ahead of later input until its turn is confirmed.
+    submitFirstTask: (agentId, task) => input.submitFirstTask(agentId, task),
     homes: { copilot: env.COPILOT_HOME, grok: env.GROK_HOME, agy: env.AGY_HOME },
     // OpenClaw's session key is on its TUI's footer and nowhere else. The scrollback above the screen keeps its title,
     // the only place a Gateway on another host shows, a while longer into a conversation.
@@ -2063,6 +2075,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     openclawPaneDue: (sessionId) => otherStreams.paneDue(sessionId),
     openclawStateDir: (pid) => openclawStateDir(pid),
+    // A first task typed before a restart is settled by OpenClaw's own store: a user row since it was typed.
+    openclawUserRowSince: (key, pane, since, until) => engineStorage.userRowSince(
+      { sessionId: key, pid: pane.pid, openclawStateDir: pane.stateDir }, since, until),
     followsLive: (sessionId) => otherStreams.follows(sessionId),
     hermesTerminal: createHermesTerminal({
       platform: process.platform,
@@ -2968,6 +2983,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     engineReady: (engine, ms) => engineLinks.ready(engine, ms),
     stoppedAgents,
     backgroundCommands: (s) => backgroundCommands(s, { readHermes: engineStorage.background }),
+    userRowSince: engineStorage.userRowSince,
   })
   backend.closeAgentService = closing.closeAgentService
   backend.closeAgentService.start()

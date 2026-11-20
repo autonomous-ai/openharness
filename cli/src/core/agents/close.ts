@@ -37,6 +37,7 @@ export interface ClosingDeps {
   stoppedAgents?: Pick<StoppedAgentStore, 'get' | 'resumeReservedAt'>
   /** How many background commands an idle agent still runs, as core/main.ts hands it in; absent, none is read. */
   backgroundCommands?: CloseAgentServiceDeps['backgroundCommands']
+  userRowSince?: (session: { sessionId: string; pid: number; openclawStateDir?: string | null }, since: number) => Promise<boolean | null>
 }
 
 /** How long a close waits for an engine worker that restarted under its read, before reading once more. */
@@ -44,7 +45,7 @@ export const CLOSE_READ_RECONNECT_MS = 10_000
 
 export function createAgentClosing({
   readScreen, registry, cleanupTabs, watcher, captureTerminal, sessionTurnState, openQuestions, terminals, sessionCheckpoints,
-  stopAgent, announceSession, engineReady, stoppedAgents, nativeRecoveryReady = () => true, backgroundCommands,
+  stopAgent, announceSession, engineReady, stoppedAgents, nativeRecoveryReady = () => true, backgroundCommands, userRowSince,
 }: ClosingDeps) {
   const ready = (s: RegisteredSession): boolean =>
     !s.identityHold && !s.admissionHold && !s.interpretationHold && nativeRecoveryReady(s)
@@ -102,6 +103,13 @@ export function createAgentClosing({
     stop: stopAgent,
     changed: announceSession,
     backgroundCommands,
+    // OpenClaw binds its key at launch, before any task: a key whose store has no user row has nothing to resume. A
+    // record already closed is read by its folder alone: its TUI exited, and its pid may now be another OpenClaw's.
+    conversationEmpty: async s => s.engine === 'openclaw' && !!s.sessionId
+      && await userRowSince?.({ sessionId: s.sessionId,
+        pid: registry.byAgent(s.agentId) ? s.processIdentity?.pid ?? 0 : 0,
+        openclawStateDir: s.openclawStateDir,
+      }, 0) === false,
     // Not live, not being resumed, and kept as stopped with the conversation the close names: it was closed, and that
     // record says whether a conversation was kept. A record that cannot be read says nothing, and the close is answered
     // as changed, as before.
