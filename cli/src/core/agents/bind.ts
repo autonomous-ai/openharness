@@ -480,17 +480,29 @@ export function createBinding({
     return await since(at) === true && (adoptedAt === undefined || await since(adoptedAt) === false)
   }
   /**
-   * A typed first task OpenClaw's store shows taken leaves its row once the pass's transaction commits, as `takeFirstTask`
-   * does, the mark typed at [at] only; then the controller's wait for it ends and the frame is pushed, no longer starting.
-   * A removal not made (not saved, or the mark gone already) confirms nothing: the next pass reads the store again.
+   * The typed first tasks whose removal failed, agentId → the mark's `at`: said once a mark, as every pass tries again.
+   * Cleared at 256 entries rather than aged: a failure is then said once more.
    */
-  const confirmTypedFirstTask = (agent: RegisteredSession, at: number): void => {
-    void registry.afterTransaction(() => registry.firstTaskTaken(agent.agentId, at)).then((taken) => {
+  const removalsFailed = new Map<string, number>()
+  /**
+   * A typed first task OpenClaw's store shows taken leaves its row, the mark typed at [at] only, once the pass's
+   * transaction commits (the registry waits for it, as for `takeFirstTask`); then the controller's wait for it ends and the
+   * row, as the registry holds it now, is pushed, no longer starting. A removal not made (not saved, or the mark gone
+   * already) confirms nothing: the next pass reads the store again.
+   */
+  const confirmTypedFirstTask = (agentId: string, at: number): void => {
+    void registry.firstTaskTaken(agentId, at).then((taken) => {
       if (!taken) return
-      input.firstTaskConfirmed(agent.agentId)
-      announceSession(agent)
-      console.log(`[agent] ${sid(agent.agentId)} first task confirmed`)
-    }, (error: unknown) => console.error(`[agent] ${sid(agent.agentId)} first task typed kept · ${errorKind(error)}`))
+      input.firstTaskConfirmed(agentId)
+      const row = registry.byAgent(agentId)
+      if (row) announceSession(row)
+      console.log(`[agent] ${sid(agentId)} first task confirmed`)
+    }, (error: unknown) => {
+      if (removalsFailed.get(agentId) === at) return
+      if (removalsFailed.size >= 256) removalsFailed.clear()
+      removalsFailed.set(agentId, at)
+      console.error(`[agent] ${sid(agentId)} first task typed kept · ${errorKind(error)}`)
+    })
   }
   /**
    * Types the agent's first task as the person's own message, under the agent: its turn is confirmed there
@@ -664,19 +676,18 @@ export function createBinding({
       // folder changed, say), OpenClaw's store settles, though the daemon was down when its user row landed, so a mark an
       // older daemon left is settled the same, at any age; one adopted, only by a user row from before its adoption. Until
       // then, the input awaits it as one typed here (an Enter or a clear, never a paste), asked on every pass until it
-      // takes it: a write under way or an open turn refuses it. The bound below runs from this daemon's first pass.
+      // takes it: a write under way or an open turn refuses it. The bound below runs from this daemon's first pass, and never
+      // fails one the store shows taken. The pane is read all the same: a removal that keeps failing stops no hold.
+      let taken = false
       if (agent.firstTaskTyped) {
         const { text, at } = agent.firstTaskTyped
         const awaited = input.firstTaskWaiting(agent.agentId)
         const adoptedAt = awaited ? firstTasksAdopted.get(agent.agentId) : undefined
         if (!awaited || adoptedAt !== undefined) {
-          const taken = await storeShowsTaken(agent, observed.processIdentity.pid, at, adoptedAt)
+          taken = await storeShowsTaken(agent, observed.processIdentity.pid, at, adoptedAt)
           if (!current()) return
-          if (taken) {
-            confirmTypedFirstTask(agent, at)
-            return
-          }
-          if (!awaited && input.adoptTypedFirstTask(agent.agentId, text)) {
+          if (taken) confirmTypedFirstTask(agent.agentId, at)
+          else if (!awaited && input.adoptTypedFirstTask(agent.agentId, text)) {
             if (firstTasksAdopted.size >= 256) firstTasksAdopted.clear()
             firstTasksAdopted.set(agent.agentId, Date.now())
             console.log(`[agent] ${sid(agent.agentId)} first task typed earlier · awaiting confirmation`)
@@ -688,7 +699,7 @@ export function createBinding({
       if (!captured?.value || !current()) return
       const screen = readOpenclawScreen(captured.value)
       // A first task past its bound is failed before anything else is read off the pane: nothing is typed after it.
-      if (taskWaits && firstTaskOverdue(agent, observed.processIdentity, screen)) {
+      if (taskWaits && !taken && firstTaskOverdue(agent, observed.processIdentity, screen)) {
         failFirstTask(agent)
         return
       }
