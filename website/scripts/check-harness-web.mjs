@@ -7,11 +7,20 @@ import { releaseAssetBase } from './harness-web-assets.mjs';
 const base = new URL(process.argv[2] || 'http://127.0.0.1:3000');
 const release = JSON.parse(await readFile(new URL('../harness-web-release.json', import.meta.url), 'utf8'));
 const assetBase = releaseAssetBase(release);
-// The front door is the web app; its old address `/web` sends there, temporarily, query and all.
+// The front door is the Harness Device guide; the old address `/web` follows it, temporarily, query and all.
 const old = await fetch(new URL('/web?machine=fixture-machine&agent=fixture-agent', base), { redirect: 'manual' });
-assert.equal(old.status, 307, '/web must redirect to the web app at /');
+assert.equal(old.status, 307, '/web must redirect to /');
 assert.equal(new URL(old.headers.get('location'), base).href, new URL('/?machine=fixture-machine&agent=fixture-agent', base).href);
-for (const route of ['/', '/?viewer=1&machine=fixture-machine&agent=fixture-agent', '/s/11111111-1111-4111-8111-111111111111', '/auth/callback?code=fixture-code&state=fixture-state', '/callback', '/harness-web']) {
+for (const [route, destination] of [
+  ['/', '/device'],
+  ['/?machine=fixture-machine&agent=fixture-agent', '/device?machine=fixture-machine&agent=fixture-agent'],
+]) {
+  const response = await fetch(new URL(route, base), { redirect: 'manual' });
+  assert.equal(response.status, 307, `${route} must redirect to the device guide`);
+  assert.equal(new URL(response.headers.get('location'), base).href, new URL(destination, base).href, route);
+}
+// `hn view` links (/?viewer=1, tui/src/viewer.rs) and the web app's other entry points serve the web app.
+for (const route of ['/?viewer=1&machine=fixture-machine&agent=fixture-agent', '/s/11111111-1111-4111-8111-111111111111', '/auth/callback?code=fixture-code&state=fixture-state', '/callback', '/harness-web']) {
   const response = await fetch(new URL(route, base));
   assert.equal(response.status, 200, route);
   assert.match(response.headers.get('content-type'), /text\/html/);
