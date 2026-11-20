@@ -3,7 +3,7 @@
  * started outside Harness in Ghostty and VS Code (harness/outsideAgent.ts), a fake dial that greets with the Pro's hello
  * (`board: 'pro'`, `appCards: 'v1'` and the rest), and the daemon's fake `open`.
  * - The welcome names `apps.switch`, `question.tier` and `resync`; every `apps` row carries `working`, a turn counting
- *   1 then 0, and every frame carries the `seq` after the one before it.
+ *   1 then 0, and every `apps` frame carries the `seq` after the frame before it.
  * - `app.pick` turns the ring to that app and brings it.
  * - With a window open, the Pro on an app's ring is still sent the window's `swarms`; a round dial beside it gets none.
  * The helpers are copied from dialAppFilter.e2e.ts: there they are file-local, and importing a test file runs its tests.
