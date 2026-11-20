@@ -2394,7 +2394,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
         openTurn: async () => [],
         emit: vi.fn(),
       })
-      const run = handing(() => ready, { input: inputs.input, submitFirstTask: (agentId, task) => inputs.submitAgent(agentId, task) })
+      const run = handing(() => ready, { input: inputs.input, submitFirstTask: (agentId, task) => inputs.input.submitFirstTask(agentId, task) })
       vi.mocked(run.deps.registry.takeFirstTask).mockResolvedValue(TASK)
       await run.binding.bindObservedAgent(tui())
       await vi.advanceTimersByTimeAsync(1_000)
