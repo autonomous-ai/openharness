@@ -1003,6 +1003,22 @@ describe('harness hardware watch: the selected tab', () => {
     expect(vi.getTimerCount()).toBe(0)
     await stillRunning(run)
   })
+  it('on Windows, where there is no socket and the devices\' record may appear at any time, the stream opens and is retried as on Unix', async () => {
+    // The folder of the test above, with no socket path here either: on Windows the devices' pipe is found by its record.
+    const dataDir = `/${'d'.repeat(120)}`
+    expect(devicesListenerPath(dataDir, 'win32')).toBeNull()
+    const { run, selects, opens } = await streaming({ dataDir, platform: 'win32' })
+    expect(selects).toHaveBeenCalledOnce()
+    for (const [at, ms] of [1_000, 2_000, 4_000].entries()) {
+      opens.at(-1)!.end(false)
+      await vi.advanceTimersByTimeAsync(ms - 1)
+      expect(selects).toHaveBeenCalledTimes(at + 1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(selects).toHaveBeenCalledTimes(at + 2)
+    }
+    for (const { message } of opens) expect(message).toStrictEqual(TABS)
+    await stillRunning(run)
+  })
   it('stdin closing ends the stream and leaves no timer', async () => {
     const { run, opens } = await streaming()
     // A tab told, and its gap under way.
