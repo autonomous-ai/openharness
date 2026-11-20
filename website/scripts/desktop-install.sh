@@ -28,13 +28,28 @@ require_command() {
 # names, and before curl 8.4 (Ubuntu 22.04's 7.81) no other; head stops the rest, one byte past
 # <bytes> to show the body was larger. head writes the file, so the cap binds that write alone,
 # where a file size limit on curl binds all it writes and counts blocks of a size each shell
-# picks. curl writes /dev/stdout by name: a retry after some bytes then fails, unable to rewind
-# the pipe, where `-o -` would send them twice. Its status comes out past the pipe on fd 3.
+# picks. A transport failure starts again from an empty file, 3 tries in all, as curl's --retry
+# cannot rewind a pipe; a body past its size or an HTTP error is no such failure. curl's status
+# comes out past the pipe on fd 3.
 download() {
-  DOWNLOAD_STATUS="$({ { curl -fL --retry 3 --connect-timeout 15 --proto '=https' --proto-redir '=https' \
-    --speed-limit 1024 --speed-time 60 --max-filesize "$1" "$2" -o /dev/stdout 3>&-; echo "$?" >&3; } \
-    | head -c "$(($1 + 1))" > "$3" 3>&-; } 3>&1)"
-  [ "$DOWNLOAD_STATUS" = 0 ] && [ "$(wc -c < "$3" | tr -d '[:space:]')" -le "$1" ]
+  DOWNLOAD_TRY=1
+  while :; do
+    DOWNLOAD_STATUS="$({ if curl -fL --connect-timeout 15 --proto '=https' --proto-redir '=https' --speed-limit 1024 \
+      --speed-time 60 --max-filesize "$1" "$2" 3>&-; then echo 0 >&3; else echo "$?" >&3; fi \
+      | head -c "$(($1 + 1))" > "$3" 3>&-; } 3>&1)"
+    case "$DOWNLOAD_STATUS" in
+      0)
+        [ "$(wc -c < "$3" | tr -d '[:space:]')" -le "$1" ]
+        return
+        ;;
+      # No host, no connection, a cut or stalled transfer, a failed TLS handshake, an empty reply, a failed send or
+      # receive.
+      6 | 7 | 18 | 28 | 35 | 52 | 55 | 56) [ "$DOWNLOAD_TRY" -lt 3 ] || return 1 ;;
+      *) return 1 ;;
+    esac
+    DOWNLOAD_TRY=$((DOWNLOAD_TRY + 1))
+    sleep 2
+  done
 }
 
 # A manifest is a few kilobytes: 1 MiB is far above any.
