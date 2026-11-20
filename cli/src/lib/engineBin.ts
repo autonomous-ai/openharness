@@ -365,12 +365,21 @@ async function candidateNames(directory: string, wanted: Set<string>, wantedKey:
 
 let ownershipFlight: Promise<AgentCommandOwnershipSnapshot> | null = null
 let ownershipFlightKey = ''
+// No process.cwd(): it throws once the start folder is deleted (the firmware flash's worktree), failing every pass.
+// A relative PATH entry still resolves against the working folder at read time.
 const ownershipKey = () => JSON.stringify([process.env.PATH, currentUserShell(), homedir(), env.GROK_HOME,
-  process.platform, process.cwd(), ...PROCESS_ENGINES.map(enginePathOverride)])
+  process.platform, ...PROCESS_ENGINES.map(enginePathOverride)])
+
+const ownershipUnavailable = (error: unknown): Promise<never> => {
+  console.error(`[engine] ${errorKind(error)}: executable ownership unavailable`)
+  return Promise.reject(error)
+}
 
 /** Fresh identities per pass, eight filesystem reads at once, one pass shared by concurrent panes. */
 export function agentCommandOwnershipSnapshotAsync(): Promise<AgentCommandOwnershipSnapshot> {
-  const key = ownershipKey()
+  // Callers chain on the promise: a synchronous throw would escape their catch, and no flight is left set.
+  let key: string
+  try { key = ownershipKey() } catch (error) { return ownershipUnavailable(error) }
   if (ownershipFlight) return key === ownershipFlightKey ? ownershipFlight : Promise.reject(engineFailure('ENGINE_LOOKUP_CHANGED'))
   ownershipFlightKey = key
   let expired = false
@@ -438,10 +447,7 @@ export function agentCommandOwnershipSnapshotAsync(): Promise<AgentCommandOwners
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(() => { expired = true; reject(engineFailure('ENGINE_LOOKUP_TIMEOUT')) }, 10_000)
   })
-  const result = Promise.race([work, deadline]).catch(error => {
-    console.error(`[engine] ${errorKind(error)}: executable ownership unavailable`)
-    throw error
-  })
+  const result = Promise.race([work, deadline]).catch(ownershipUnavailable)
   ownershipFlight = result
   void work.finally(() => {
     clearTimeout(timer)
