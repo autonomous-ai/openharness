@@ -1,6 +1,6 @@
 import { releaseRegistryEngine, removeRegistryAgent } from '../testing/registryFixtures.js'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chmodSync, constants, existsSync, fstatSync, fsync, lstatSync, openSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, constants, existsSync, fstatSync, fsync, fsyncSync, lstatSync, openSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash, randomUUID } from 'node:crypto'
@@ -8,7 +8,7 @@ import type { RegisteredSession } from './registry.js'
 import type { ChildProcess } from 'node:child_process'
 import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 
-vi.mock('node:fs', async original => { const fs = await original<typeof import('node:fs')>(); return { ...fs, openSync: vi.fn(fs.openSync), lstatSync: vi.fn(fs.lstatSync), readFileSync: vi.fn(fs.readFileSync), fsync: vi.fn(fs.fsync) } })
+vi.mock('node:fs', async original => { const fs = await original<typeof import('node:fs')>(); return { ...fs, openSync: vi.fn(fs.openSync), lstatSync: vi.fn(fs.lstatSync), readFileSync: vi.fn(fs.readFileSync), fsync: vi.fn(fs.fsync), fsyncSync: vi.fn(fs.fsyncSync), unlinkSync: vi.fn(fs.unlinkSync) } })
 
 let directory = ''
 // The first import compiles registry.js's whole module graph: seconds on a loaded Mac. Paid once here, it stays out of the
@@ -26,6 +26,8 @@ afterEach(async () => {
   vi.mocked(lstatSync).mockRestore()
   vi.mocked(readFileSync).mockRestore()
   vi.mocked(fsync).mockRestore()
+  vi.mocked(fsyncSync).mockRestore()
+  vi.mocked(unlinkSync).mockRestore()
   const outcomes = await Promise.allSettled([(await import('./registry.js')).registry.flush()])
   outcomes.push(...await Promise.allSettled([closeSessionStorageFixture((await import('./sessionStorage.js')).sessionStorage)]))
   vi.unstubAllEnvs()
@@ -71,6 +73,114 @@ describe('saved catalog reads', () => {
       for (const path of [folder, aside]) expect(real.fstatSync(handles.get(path)!).ino).toBe(real.statSync(path).ino)
       return true
     })
+  })
+
+  it('keeps the platform directory-sync fallback when held sync handles are unavailable', async () => {
+    const { saved, store } = await fixture()
+    await store.save(saved)
+    const secure = await import('./secureState.js')
+    const supported = vi.spyOn(secure, 'directorySyncSupported').mockReturnValue(false)
+    const sync = vi.spyOn(secure, 'syncStateDirectory')
+    try {
+      await store.remove(saved.agentId)
+      expect(sync).toHaveBeenCalledWith(join(directory, 'stopped-agents'), expect.any(Number))
+      expect(await store.get(saved.agentId)).toBeNull()
+    } finally { supported.mockRestore(); sync.mockRestore() }
+  })
+
+  it.skipIf(process.platform === 'win32')('reports an unconfirmed deletion after its owned directory flush fails', async () => {
+    const { saved, store } = await fixture()
+    await store.save(saved)
+    const folder = join(directory, 'stopped-agents'), inode = statSync(folder).ino
+    const real = await vi.importActual<typeof import('node:fs')>('node:fs')
+    const { AtomicWriteUnconfirmed } = await import('./secureState.js')
+    const failure = Object.assign(new Error('fixture directory flush failure'), { code: 'EIO' })
+    vi.mocked(fsyncSync).mockImplementation(fd => {
+      if (real.fstatSync(fd).ino === inode) throw failure
+      real.fsyncSync(fd)
+    })
+    try {
+      const error = await store.remove(saved.agentId).catch(error => error)
+      expect(error).toBeInstanceOf(AtomicWriteUnconfirmed)
+      expect(error.cause).toBe(failure)
+      expect(error.retryable).toBe(false)
+      expect(existsSync(join(folder, `${saved.agentId}.json`))).toBe(false)
+    } finally { vi.mocked(fsyncSync).mockRestore() }
+  })
+
+  it.skipIf(process.platform === 'win32')('settles both owned directory handles and reports the first close failure', async () => {
+    const { saved, store } = await fixture()
+    await store.save(saved)
+    const secure = await import('./secureState.js'), close = secure.closeStateFileDescriptor
+    const folder = join(directory, 'stopped-agents'), aside = join(folder, 'superseded')
+    const real = await vi.importActual<typeof import('node:fs')>('node:fs')
+    const handles = new Map<number, string>(), attempts: number[] = [], settled: number[] = []
+    vi.mocked(openSync).mockImplementation((path, flags, mode) => {
+      const fd = real.openSync(path, flags, mode)
+      if ([folder, aside].includes(String(path))) handles.set(fd, String(path))
+      return fd
+    })
+    const failure = new Error('fixture first directory close failure')
+    const closing = vi.spyOn(secure, 'closeStateFileDescriptor').mockImplementation(fd => {
+      if (handles.has(fd)) attempts.push(fd)
+      close(fd)
+      if (handles.has(fd)) { settled.push(fd); throw settled.length === 1 ? failure : new Error('fixture later close failure') }
+    })
+    try {
+      await expect(store.supersede(saved.agentId)).rejects.toBe(failure)
+      expect(attempts.map(fd => handles.get(fd))).toEqual([aside, folder])
+      expect(settled).toHaveLength(2)
+      expect(settled.map(fd => handles.get(fd))).toEqual([aside, folder])
+      for (const fd of settled) expect(() => real.fstatSync(fd)).toThrow()
+      expect(existsSync(join(aside, `${saved.agentId}.json`))).toBe(true)
+    } finally { closing.mockRestore(); vi.mocked(openSync).mockRestore() }
+  })
+
+  it('retains the archive and reservation when the marker cannot be read before supersede', async () => {
+    const { saved, store } = await fixture()
+    await store.save(saved); store.beginResume(saved.agentId)
+    const folder = join(directory, 'stopped-agents'), marker = join(folder, `${saved.agentId}.resume`)
+    const file = join(folder, `${saved.agentId}.json`), before = readFileSync(file, 'utf8'), reserved = readFileSync(marker, 'utf8')
+    const real = await vi.importActual<typeof import('node:fs')>('node:fs')
+    const failure = Object.assign(new Error('fixture marker read denial'), { code: 'EACCES' })
+    vi.mocked(openSync).mockImplementation((path, flags, mode) => {
+      if (String(path) === marker) throw failure
+      return real.openSync(path, flags, mode)
+    })
+    try {
+      await expect(store.supersede(saved.agentId)).rejects.toBe(failure)
+      expect(readFileSync(file, 'utf8')).toBe(before)
+      expect(readFileSync(marker, 'utf8')).toBe(reserved)
+      expect(existsSync(join(folder, 'superseded', `${saved.agentId}.json`))).toBe(false)
+    } finally { vi.mocked(openSync).mockRestore() }
+  })
+
+  it.each(['ENOENT', 'EACCES'])('preserves the moved archive when reservation removal reports %s', async code => {
+    const { saved, store } = await fixture()
+    await store.save(saved); store.beginResume(saved.agentId)
+    const folder = join(directory, 'stopped-agents'), marker = join(folder, `${saved.agentId}.resume`)
+    const file = join(folder, `${saved.agentId}.json`), before = readFileSync(file, 'utf8')
+    const real = await vi.importActual<typeof import('node:fs')>('node:fs')
+    const { AtomicWriteUnconfirmed } = await import('./secureState.js')
+    const failure = Object.assign(new Error('fixture marker removal failure'), { code })
+    vi.mocked(unlinkSync).mockImplementation(path => {
+      if (String(path) !== marker) return real.unlinkSync(path)
+      if (code === 'ENOENT') real.unlinkSync(path)
+      throw failure
+    })
+    try {
+      if (code === 'ENOENT') await expect(store.supersede(saved.agentId)).resolves.toMatchObject({ agentId: saved.agentId })
+      else {
+        const error = await store.supersede(saved.agentId).catch(error => error)
+        expect(error).toBeInstanceOf(AtomicWriteUnconfirmed)
+        expect(error.cause).toBe(failure)
+        expect(error.retryable).toBe(false)
+      }
+      expect(existsSync(file)).toBe(false)
+      expect(readFileSync(join(folder, 'superseded', `${saved.agentId}.json`), 'utf8')).toBe(before)
+      expect(unlinkSync).toHaveBeenCalledWith(marker)
+      expect(existsSync(marker)).toBe(code !== 'ENOENT')
+    } finally { vi.mocked(unlinkSync).mockRestore() }
   })
 
   it.skipIf(process.platform === 'win32')('checks selected archive authority without temporary directory descriptors', async () => {
