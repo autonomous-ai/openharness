@@ -154,10 +154,10 @@ function Fail([string]$check) {
   throw "FAILED: $check"
 }
 
+$githubHosted = ($env:GITHUB_ACTIONS -eq 'true' -and $env:RUNNER_ENVIRONMENT -eq 'github-hosted')
 # GitHub's hosted Windows Arm runner refuses every foreground change the test makes: there the checks that need one are
 # noted and skipped. Anywhere else a refusal fails, and the Windows ARM VM checks the front on arm64.
-$frontLimited = ($env:GITHUB_ACTIONS -eq 'true' -and $env:RUNNER_ENVIRONMENT -eq 'github-hosted' -and
-  [Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64')
+$frontLimited = ($githubHosted -and [Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64')
 function Front-Refused([string]$what) {
   if (-not $frontLimited) { Fail "the test brings $what to the front (Windows refused every way it tried)" }
   Note "GitHub's hosted Windows Arm runner refuses to bring $what to the front: the check that needs it is skipped here"
@@ -1296,6 +1296,8 @@ namespace E2E {
       return
     }
     if (Wait-For { (Selected-Names $script:explorer) -contains $zipName } 10) { Ok "Explorer shows $zipName selected" }
+    # A hosted runner's Explorer opens the folder with nothing selected, where Windows 11 selects the zip.
+    elseif ($githubHosted) { Note "a GitHub-hosted runner's Explorer selects nothing: the $zipName selection is not checked" }
     else { Miss "Export logs: Explorer selects $zipName; selected: $((Selected-Names $script:explorer) -join ', ')" }
     $window = [IntPtr][long]$script:explorer.HWND
     In-Sight $window 'Explorer'
@@ -1604,7 +1606,7 @@ try {
 
   # --- The install line, seen by a stand-in for Windows PowerShell (a GitHub-hosted runner only)
 
-  if ($env:GITHUB_ACTIONS -eq 'true' -and $env:RUNNER_ENVIRONMENT -eq 'github-hosted') {
+  if ($githubHosted) {
     if (Get-ItemProperty -LiteralPath $ifeoKey -Name 'Debugger' -ErrorAction SilentlyContinue) {
       Fail 'powershell.exe has no Image File Execution Options debugger before the run'
     }
