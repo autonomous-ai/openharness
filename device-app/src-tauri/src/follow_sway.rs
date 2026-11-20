@@ -33,8 +33,8 @@ pub fn observe_with(
     observe_on(move || UnixStream::connect(socket.ok_or(io::ErrorKind::NotFound)?), chatgpt, heard)
 }
 
-/// `listen` on the connection `connect` makes, on a thread of its own, until the handle is dropped. A failed connect
-/// is NoObserver.
+/// `listen` on the connection `connect` makes, on a thread of its own, until the handle is dropped. A failed connect,
+/// or a connection that ends before the drop, is NoObserver once.
 pub fn observe_on(
     connect: impl FnOnce() -> io::Result<UnixStream> + Send + 'static,
     chatgpt: impl Fn(u32) -> bool + Send + 'static,
@@ -43,15 +43,15 @@ pub fn observe_on(
     observe_socket(connect, move |stream, told| listen(stream, &chatgpt, told), heard)
 }
 
-/// The focused ChatGPT window's title now, then at each change, until the connection ends. A refused subscribe is
-/// NoObserver; a connection that ends after it is quiet.
+/// The focused ChatGPT window's title now, then at each change, until the connection ends or sway refuses the
+/// subscription. Either is NoObserver, `observe_socket`'s word.
 pub fn listen(mut stream: impl Read + Write, chatgpt: &dyn Fn(u32) -> bool, told: &dyn Fn(Heard)) {
     // Window events alone: focus that leaves ChatGPT is told by the front source, and the rules stop the observation.
     // Subscribed before the tree is asked for, so a change between the two is not missed.
     let subscribed = stream.write_all(&message(SUBSCRIBE, br#"["window"]"#)).and_then(|()| read_message(&mut stream));
-    let Ok((SUBSCRIBE, answer)) = subscribed else { return told(Heard::NoObserver) };
+    let Ok((SUBSCRIBE, answer)) = subscribed else { return };
     if !serde_json::from_slice::<Value>(&answer).is_ok_and(|answer| answer["success"] == true) {
-        return told(Heard::NoObserver);
+        return;
     }
     if stream.write_all(&message(GET_TREE, b"")).is_err() {
         return;
@@ -275,19 +275,20 @@ mod tests {
         assert_eq!(focused_title(b"no json", &chatgpt), None);
     }
 
+    /// Its NoObserver is the observation's: `a_connection_sway_ends_is_no_observer_once`.
     #[test]
-    fn a_refused_subscribe_is_no_observer() {
+    fn a_refused_subscribe_ends_the_listen_with_no_title() {
         let heard = run(|sway| {
             expect(sway, SUBSCRIBE, r#"["window"]"#);
             send(sway, SUBSCRIBE, r#"{"success":false}"#);
         });
-        assert_eq!(heard, [Heard::NoObserver]);
+        assert_eq!(heard, []);
         // A sway that closes before it answers.
-        assert_eq!(run(|_| {}), [Heard::NoObserver]);
+        assert_eq!(run(|_| {}), []);
     }
 
     #[test]
-    fn a_payload_over_the_cap_or_another_magic_ends_the_observation_quietly() {
+    fn a_payload_over_the_cap_or_another_magic_ends_the_listen_with_no_title() {
         // A tree padded with JSON's own spaces to one byte over the cap: read whole, it would name ChatGPT's window.
         let mut over = tree(&window(CHATGPT_PID, "Fix login", true)).into_bytes();
         over.resize(PAYLOAD_MAX + 1, b' ');

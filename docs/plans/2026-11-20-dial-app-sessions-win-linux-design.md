@@ -234,8 +234,9 @@ Each door implements `ChatgptWindow` and `AxTrust`:
 - **`trusted()`** is the person's switch off macOS: on by default, saved by Harness Device in its state file.
   `prompt()` and `start()` do nothing, since there is no permission and nothing to hear revoked.
 - **`observe(heard)`** starts a push observer only while `ChatgptFollow::observes()` holds. It reports the title once,
-  then on each change, and gives `NoObserver` once when it cannot start. Dropping its box stops it. The title rules are
-  macOS's: over 256 UTF-16 units or holding a control character, it is sent as the empty title.
+  then on each change, and gives `NoObserver` once when it cannot start or its window system ends it. Dropping its box
+  stops it. The title rules are macOS's: over 256 UTF-16 units or holding a control character, it is sent as the
+  empty title.
 
   | Door | How the title is heard and read |
   |---|---|
@@ -309,7 +310,7 @@ Each door implements `ChatgptWindow` and `AxTrust`:
 8. **Identity:** the daemon's and Harness Device's own user. No other login.
 9. **Failure:**
    - A failed or partial read keeps the last good list, as on macOS.
-   - An observer that cannot start logs `no observer` once.
+   - An observer that cannot start, or that its window system ends, logs `no observer` once.
    - Nothing throws into the devices process or Harness Device's runner.
 10. **Platforms:** Windows (x64 and arm64) and Linux (X11, sway, Hyprland; GNOME/KDE Wayland without the follow).
     macOS unchanged.

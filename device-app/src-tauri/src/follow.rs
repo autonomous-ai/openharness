@@ -82,7 +82,7 @@ pub fn runs_program(proc_root: &Path, pid: u32, program: &Path) -> bool {
 pub enum Heard {
     /// The focused window's title; None with no focused window.
     Title(Option<String>),
-    /// The observer could not be made: nothing follows until the next start.
+    /// The observer could not be made, or its window system ended it: nothing follows until the next start.
     NoObserver,
 }
 
@@ -186,7 +186,8 @@ fn kept(socket: &Mutex<Socket>, ends: UnixStream) -> bool {
 }
 
 /// `listen` on the connection `connect` makes, on a thread of its own, until the handle is dropped: sway's and
-/// Hyprland's observation. A failed connect, or no thread, is NoObserver.
+/// Hyprland's observation. A failed connect, no thread, or a `listen` that ends not by the drop (the compositor quit,
+/// or refused) is NoObserver, once.
 #[cfg(unix)]
 pub fn observe_socket(
     connect: impl FnOnce() -> io::Result<UnixStream> + Send + 'static,
@@ -202,8 +203,12 @@ pub fn observe_socket(
         let Ok((ends, stream)) = connect().and_then(|stream| Ok((stream.try_clone()?, stream))) else {
             return told(Heard::NoObserver);
         };
-        if kept(&held, ends) {
-            listen(stream, &*told);
+        if !kept(&held, ends) {
+            return;
+        }
+        listen(stream, &*told);
+        if !held.lock().unwrap().stopped {
+            told(Heard::NoObserver);
         }
     });
     // No thread to observe on: told as an observer not made, where a panic would end the runner's follow thread.

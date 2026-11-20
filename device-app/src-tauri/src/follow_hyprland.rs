@@ -110,8 +110,8 @@ fn observe_instance(
     observe_events(move || UnixStream::connect(events), requests, chatgpt, heard)
 }
 
-/// Follows the events `connect` makes, asking `requests` for the title, on a thread of its own. A failed connect, or no
-/// thread, is NoObserver once.
+/// Follows the events `connect` makes, asking `requests` for the title, on a thread of its own. A failed connect, no
+/// thread, or events that end before the drop, is NoObserver once.
 fn observe_events(
     connect: impl FnOnce() -> io::Result<UnixStream> + Send + 'static,
     requests: PathBuf,
@@ -285,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn the_events_end_ends_quietly_and_a_half_line_is_no_event() {
+    fn the_events_end_ends_the_follow_and_a_half_line_is_no_event() {
         assert_eq!(run(b"activewindowv2>>55d1c0a0", vec![Ok(answer(CHATGPT, "A"))]), (vec![title("A")], 1));
     }
 
