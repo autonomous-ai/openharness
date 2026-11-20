@@ -428,7 +428,10 @@ all platform builds/native checks. A build-only run uses `publish=false`.
 ## Bound checks and preserve the result
 
 `make validate ARGS=".harness/validation-plan.json"` runs an explicit plan, at most
-two checks at once, without installing tools or retrying tests. Create a local plan
+two checks at once, without installing tools or retrying tests. Two `flutter test`
+checks (or desktop test commands) in one folder run one after the other: concurrent
+runs race on flutter_tools' shared shader outputs and can leave shaders unusable for
+the tests. Create a local plan
 with only the checks relevant to the diff, for example:
 
 ```json
