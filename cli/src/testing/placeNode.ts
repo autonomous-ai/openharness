@@ -1,4 +1,6 @@
-import { chmodSync, constants, copyFileSync, existsSync, linkSync, mkdirSync, readdirSync, realpathSync, symlinkSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { chmodSync, constants, copyFileSync, existsSync, linkSync, mkdirSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync } from 'node:fs'
 import { cpus } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { inject } from 'vitest'
@@ -60,8 +62,34 @@ export function copyNode(path: string, runFrom: string[] = [], machine?: Machine
 }
 
 /**
- * This test's Node at [path]: a hard link of the run's Node, the one copy the run made and started once
- * (__fixtures__/vitestRun.ts). macOS checks each new executable file on its first run, one at a time machine-wide, and
+ * One run of [node]. A fresh copy's first start is the slow one, so it is paid once, before any test runs the copy; and
+ * a copy that cannot start fails there, by name. Node puts the copy's standard error in the error's message.
+ */
+export const firstStart = (node: string): void => {
+  execFileSync(node, ['-e', ''], { stdio: ['ignore', 'ignore', 'pipe'], timeout: 60_000 })
+}
+
+/**
+ * The run's Node at [node]: a copy of this Node, started once by [start] under a name of its own beside [node], then
+ * renamed to it, so [node] is never a copy that has not run. Workers that place their first Node at once may each make
+ * one: each rename puts a whole, started copy there, and a link already made keeps the one it linked.
+ */
+function makeRunNode(node: string, start: (node: string) => void): void {
+  const made = `${node}-${randomUUID()}`
+  try {
+    mkdirSync(dirname(node), { recursive: true })
+    copyNode(made)
+    start(made)
+    renameSync(made, node)
+  } catch (error) {
+    rmSync(made, { force: true })
+    throw new Error(`The run's Node, a copy of ${process.execPath}, could not be made at ${node}: ${(error as Error).message}`, { cause: error })
+  }
+}
+
+/**
+ * This test's Node at [path]: a hard link of the run's Node, the one copy the run makes at its first place and starts
+ * once (__fixtures__/vitestRun.ts). macOS checks each new executable file on its first run, one at a time machine-wide, and
  * on arm64 a link of a file that ran is not new, even from another folder: a fresh copy's first start took 2.1 s under
  * load, such a link's 0.05 s. master.spec.ts places seven: on an M2 Max at a load of 38 to 100, its run took a median of
  * 48 s with a copy each and 29 s with links (five runs each, taken in turn, 2026-11-21).
@@ -69,11 +97,15 @@ export function copyNode(path: string, runFrom: string[] = [], machine?: Machine
  * A copy as [copyNode] makes, where the run made none ([started] ''): Homebrew's Node loads libnode from beside the path
  * it runs as, so one file linked into every test would let any test's links name it (#4395, [copyNode]). A Node that
  * Rosetta runs is refused first, by name: it translates a link again as it does a copy. [runFrom] is for a copy, which
- * needs libnode beside it there. [started] is the run's Node; a spec names another.
+ * needs libnode beside it there. [started] is the run's Node and [start] its first run; a spec names others.
  */
-export function placeNode(path: string, runFrom: string[] = [], machine?: Machine, started: string | undefined = inject('startedNode')): void {
+export function placeNode(path: string, runFrom: string[] = [], machine?: Machine, started: string | undefined = inject('startedNode'),
+  start: (node: string) => void = firstStart): void {
   refuseRosettaNode(machine)
-  if (started === undefined) throw new Error('placeNode needs src/__fixtures__/vitestRun.ts as the run\'s globalSetup, which starts the run\'s Node')
+  if (started === undefined) throw new Error('placeNode needs src/__fixtures__/vitestRun.ts as the run\'s globalSetup, which names the run\'s Node')
   if (started === '') copyNode(path, runFrom, machine)
-  else linkSync(started, path)
+  else {
+    if (!existsSync(started)) makeRunNode(started, start)
+    linkSync(started, path)
+  }
 }

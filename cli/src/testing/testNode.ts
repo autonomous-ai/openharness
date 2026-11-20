@@ -13,22 +13,13 @@
  * What it costs: one copy (a clone where the filesystem can) and one first start for each run, about 1.1 to 1.6 s on a
  * Mac (the design's Cost), and one `readdirSync` for each daemon start.
  */
-import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { copyNode, type Machine } from './placeNode.js'
+import { copyNode, firstStart, type Machine } from './placeNode.js'
 
 /** The refusal lists this many programs at most: a developer's Node folder can hold dozens. */
 const NAMED = 5
-
-/**
- * One run of [node]. A fresh copy's first start is the slow one, so the run pays it here once; and a copy that cannot
- * start fails the run before any test. Node puts the copy's standard error in the error's message.
- */
-export const firstStart = (node: string): void => {
-  execFileSync(node, ['-e', ''], { stdio: ['ignore', 'ignore', 'pipe'], timeout: 60_000 })
-}
 
 /** Makes the run's Node, starts it once and names it in E2E_NODE_PATH. Returns the teardown, which removes its folder.
  *  [machine] and [start] are for the spec: this Node's own machine, and one run of the copy. */
