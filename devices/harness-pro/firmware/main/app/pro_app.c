@@ -150,6 +150,7 @@ static void perform(const pod_out_t *o)
     case POD_FX_VOICE_BEGIN: voice_begin_effect(o->agent); break;
     case POD_FX_VOICE_END: voice_end_effect(); break;
     case POD_FX_VOICE_ABORT: pro_voice_end(false); break;
+    case POD_FX_APP_PICK: pro_cable_send_app_pick(o->agent); break;
     case POD_FX_NONE: break;
     }
 }

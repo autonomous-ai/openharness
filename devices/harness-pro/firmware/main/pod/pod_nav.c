@@ -278,6 +278,9 @@ static pod_out_t nav_act(pod_nav_t *n, pod_model_t *m, pod_action_t a, int arg, 
         f->scroll = (int16_t)(m->selected < m->tab_count ? m->selected : pod_home_clamp(n, m, 0));
         n->home_app[0] = 0;
         break;
+    case POD_A_PICK_APP:   // the Mac shows that app's ring; the room opens when the ring lands, not here
+        if (n->depth != 1 || f->view != POD_V_TABS || arg < 0 || arg >= m->app_count || !m->apps[arg].count) break;
+        return out_fx(POD_FX_APP_PICK, m->apps[arg].id);
     case POD_A_NONE:
     case POD_A_BANNER:
         break;

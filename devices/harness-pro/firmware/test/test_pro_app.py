@@ -107,15 +107,16 @@ void pro_display_power(bool on) { (void)on; }
 pro_touch_sample_t pro_touch_poll(int *x, int *y) { (void)x; (void)y; return PRO_TOUCH_NONE; }   // the task body only
 
 static struct {   // what the last contact (or call) made the app send
-    int opens, begins, end_send, end_abort, lib_fail_next;
+    int opens, begins, end_send, end_abort, lib_fail_next, picks;
     bool abort_was_pending;
-    char open_id[ID_MAX];
+    char open_id[ID_MAX], pick_app[CABLE_APP_ID_MAX];
 } R;
 static struct { bool open, pending, waiting, hold_pending, refuse; int lost; char agent[ID_MAX]; } V;
 static struct { int n, offset[64]; uint32_t request[64]; bool ok, supported; } LIB = {.ok = true, .supported = true};
 static struct { int n; ht_scroll_phase_t phase[64]; int dy[64], v[64]; } SC;
 
 bool pro_cable_send_open(const char *id) { CHECK(LOCK_DEPTH == 0); R.opens++; snprintf(R.open_id, sizeof R.open_id, "%s", id); return true; }
+bool pro_cable_send_app_pick(const char *app) { CHECK(LOCK_DEPTH == 0); R.picks++; snprintf(R.pick_app, sizeof R.pick_app, "%s", app); return true; }
 bool pro_cable_send_scroll(pro_scroll_phase_t phase, int dy, int velocity) {
     CHECK(LOCK_DEPTH == 0);
     if (SC.n < 64) { SC.phase[SC.n] = (ht_scroll_phase_t)phase; SC.dy[SC.n] = dy; SC.v[SC.n] = velocity; SC.n++; }

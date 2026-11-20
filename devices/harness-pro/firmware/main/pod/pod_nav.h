@@ -51,10 +51,13 @@ typedef enum {
     POD_A_ENTER_TAB,    // arg: tab index, only from the TABS frame: push the TAB frame and the tab's first agent (AGENT_OPEN). An empty or unknown tab: nothing.
     // The pill's two cells, on Home only (depth 1, while the pill shows). Device-local: no effect. Apps lands on the first app card,
     // Tabs on the window's selected tab (else the first). A tap on the cell already chosen does nothing.
-    POD_A_HOME_TABS, POD_A_HOME_APPS
+    POD_A_HOME_TABS, POD_A_HOME_APPS,
+    POD_A_PICK_APP      // arg: index into model->apps (the hit's id: the app id), on Home only: APP_PICK for a row with agents; the stack stays
 } pod_action_t;
 
-typedef enum { POD_FX_NONE, POD_FX_VOICE_BEGIN, POD_FX_VOICE_END, POD_FX_VOICE_ABORT, POD_FX_AGENT_OPEN } pod_effect_t;
+typedef enum { POD_FX_NONE, POD_FX_VOICE_BEGIN, POD_FX_VOICE_END, POD_FX_VOICE_ABORT, POD_FX_AGENT_OPEN,
+               POD_FX_APP_PICK   // app.pick: agent holds the app id
+} pod_effect_t;
 typedef struct { pod_effect_t fx; char agent[ID_MAX]; } pod_out_t;
 
 void pod_nav_init(pod_nav_t *);

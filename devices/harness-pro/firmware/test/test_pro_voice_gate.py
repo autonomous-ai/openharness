@@ -113,6 +113,7 @@ static void on_wire(const char *what, const char *id) {
     snprintf(CAB.wire + n, sizeof CAB.wire - n, "%s %s;", what, id);
 }
 bool pro_cable_send_open(const char *id) { CHECK(LOCK_DEPTH == 0); (void)id; CAB.opens++; return true; }
+bool pro_cable_send_app_pick(const char *app) { CHECK(LOCK_DEPTH == 0); (void)app; return true; }
 bool pro_cable_send_scroll(pro_scroll_phase_t p, int dy, int v) { CHECK(LOCK_DEPTH == 0); (void)p; (void)dy; (void)v; return true; }
 bool pro_cable_request_library(int offset, uint32_t request) { CHECK(LOCK_DEPTH == 0); (void)offset; (void)request; return true; }
 bool pro_cable_library_supported(void) { return false; }
