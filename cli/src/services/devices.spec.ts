@@ -9678,6 +9678,27 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
       expect(threadLines()).toEqual([])
     })
 
+    it('another thread named while the dial\'s own switch of the last 2 s is unseen is an echo: the old title read late', async () => {
+      const { fake, listener, front, report, live } = following()
+      fake.read = read([thread(), thread({ id: SECOND, name: 'Ship it' })])
+      fake.names = new Map([[THREAD, TITLE], [SECOND, 'Ship it']])
+      await live()
+      await front('orca')
+      // The dial's tap on THREAD brings the app, whose window still shows SECOND.
+      expect(await host().openAgent(ID)).toBeUndefined()
+      await wait(200)
+      expect(listener.front('codex')).toBeUndefined()
+      await wait(FRONT_SETTLE_MS + 300)
+      report('Ship it')
+      await wait(300)
+      report(TITLE)
+      expect(asked()).toEqual([])
+      expect(threadLines()).toEqual(['[device] thread · skipped · echo', '[device] thread · skipped · echo'])
+      // The switch seen, the person opening SECOND moves the dial.
+      report('Ship it')
+      expect(asked()).toEqual([[observedAgentId('codex', SECOND), 'thread']])
+    })
+
     it('a report followed at the settle within 2 s of a dial move is an echo, and one 2 s after it follows', async () => {
       const { listener, front, report, live } = following()
       await live()
