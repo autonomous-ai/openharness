@@ -1483,10 +1483,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     moveGate,
     // Its waitingFor changed: every window gets the agent's frame again.
     sync: (id) => { const session = registry.resolve(id); if (session) syncSession(session) },
-    // A first task typed stays on its row until a turn takes it; one failed removal leaves it to OpenClaw's store to settle.
+    // A first task typed stays on its row until a turn takes it (core/input.ts). Typed again as the binding pass types it,
+    // once the pass's registry transaction commits (core/agents/bind.ts `takeFirstTask`).
     firstTask: {
       untype: (agentId, text) => registry.untypeFirstTask(agentId, text),
-      taken: (agentId) => { void registry.firstTaskTaken(agentId).catch((error) => console.error(`[agent] ${sid(agentId)} first task typed kept · ${errorKind(error)}`)) },
+      retype: (agentId) => registry.afterTransaction(() => registry.takeFirstTask(agentId)),
+      taken: (agentId) => registry.firstTaskTaken(agentId),
     },
     // Claude Code's and Codex's readers start on demand in a process of their own: a message waits for its engine's (26 s at load 40).
     engineStarting: (engine) => isolatedScreen(engine) ? serviceLinksRef?.whenStarting(READER_SERVICES[engine as ReaderEngine]) ?? null : null,
