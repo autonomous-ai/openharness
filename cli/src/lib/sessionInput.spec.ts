@@ -906,14 +906,16 @@ describe('SessionInputController', () => {
 
     // At tmux's default 80x24 the box shows 7 lines (pi-tui's editor: 30% of the rows, at least 5): a long message
     // OpenClaw refused and put back, its cursor at the end, shows its last lines under `↑ 1 more`.
+    const longMessage = 'Read the build log in ci/last-run.txt and find the first test that failed. Explain in two sentences why it '
+      + 'failed, quoting the assertion message exactly as the log prints it. Then open the test file, find the code under '
+      + 'test, and propose the smallest change to the code (not the test) that would make the assertion pass. Do not edit '
+      + 'any file yet: list the change as a unified diff, say which other tests call the same function, and say whether any '
+      + 'of them would change their result. Finish with one line that starts with VERDICT: and names the file you would change.'
+    const scrolled = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'engines', 'openclaw', '__fixtures__', 'screen-box-scrolled.txt'), 'utf8')
+
     it('a long message OpenClaw put back in a box that shows only its end is sent with one Enter', async () => {
       vi.useFakeTimers()
-      const message = 'Read the build log in ci/last-run.txt and find the first test that failed. Explain in two sentences why it '
-        + 'failed, quoting the assertion message exactly as the log prints it. Then open the test file, find the code under '
-        + 'test, and propose the smallest change to the code (not the test) that would make the assertion pass. Do not edit '
-        + 'any file yet: list the change as a unified diff, say which other tests call the same function, and say whether any '
-        + 'of them would change their result. Finish with one line that starts with VERDICT: and names the file you would change.'
-      const scrolled = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'engines', 'openclaw', '__fixtures__', 'screen-box-scrolled.txt'), 'utf8')
+      const message = longMessage
       const { controller, sendKey, onError } = paneController(() => scrolled)
 
       controller.submit('s1', message)
@@ -1217,6 +1219,25 @@ describe('SessionInputController', () => {
 
       // Found in review: the binding pass types `/session` only while a message of Harness's waits on the agent, and a
       // message waiting here, untyped, awaits no confirmation: nothing let its pane send it.
+      // Found in review: read again each second, the wait read false while the pane was read, and the binding pass, which
+      // reads it once a pass, let go of its hold on the person's text and set it again a pass later.
+      it('says it waits for its pane through each read of it, and owns the box only while one could type into it', async () => {
+        vi.useFakeTimers()
+        const { controller, inject } = waitingPane()
+        const write = inject.getMockImplementation()!
+        const during: Array<[boolean, boolean]> = []
+        inject.mockImplementation(async (id, text) => {
+          during.push([controller.waitsForPane('s1'), controller.ownsBox('s1', 'my own words', { above: 0, below: 0 })])
+          return write(id, text)
+        })
+
+        controller.submit('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(3_500)
+        expect(during).toEqual([[false, true], [true, true], [true, true], [true, true]])
+        expect(controller.ownsBox('s1', 'my own words', { above: 0, below: 0 })).toBe(false)
+        controller.forget('s1')
+      })
+
       it('says it waits for its pane while it does, and no more once it is typed or given up', async () => {
         vi.useFakeTimers()
         const { controller, canSend } = waitingPane()
@@ -2008,9 +2029,15 @@ describe('SessionInputController', () => {
           fake.controller.forget('s1')
         })
 
-        it('in an empty box on a ready pane, which sent it, gets no key', async () => {
+        // Found in review: on a pane it could not read it got the blind Enters a message typed here gets, though this daemon
+        // never pasted it and the box may hold the person's draft.
+        it.each([
+          ['in an empty box on a ready pane, which sent it', (_fake: ReturnType<typeof openclaw>) => {}],
+          ['on a pane it cannot read', (fake: ReturnType<typeof openclaw>) => { fake.capture.mockResolvedValue(null) }],
+        ])('%s, gets no key', async (_, pane) => {
           vi.useFakeTimers()
           const fake = openclaw()
+          pane(fake)
 
           expect(fake.controller.adoptTypedFirstTask('s1', 'Say hello')).toBe(true)
           await vi.advanceTimersByTimeAsync(5 * 60_000)
@@ -2219,6 +2246,22 @@ describe('SessionInputController', () => {
         expect(fake.onError).not.toHaveBeenCalled()
         fake.controller.forget('s1')
       })
+    })
+
+    // Found in review: on a pane that can send, Harness's own refused message, scrolled in its box, read as the person's
+    // text, and the agent was held for it until Harness's own Enter sent it.
+    it('owns, on a pane that can send, a box its Enter would send, and on one whose history did not load only the whole message', async () => {
+      const { controller } = paneController(() => scrolled)
+      const shown = readOpenclawScreen(scrolled)
+
+      controller.submit('s1', longMessage)
+      await vi.waitFor(() => expect(controller.awaitingConfirmation('s1')).toBe(true))
+      expect(shown.state).toBe('ready')
+      expect(controller.ownsBox('s1', shown.box, shown.boxHidden, 'ready')).toBe(true)
+      expect(controller.ownsBox('s1', 'my own words', shown.boxHidden, 'ready')).toBe(false)
+      expect(controller.ownsBox('s1', shown.box, shown.boxHidden, 'no-history')).toBe(false)
+      expect(controller.ownsBox('s1', shown.box, shown.boxHidden)).toBe(false)
+      controller.forget('s1')
     })
 
     it('owns the box while it types into it, and while it shows exactly, whole, the message awaiting confirmation', async () => {
