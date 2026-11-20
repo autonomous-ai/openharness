@@ -85,8 +85,9 @@ jobs:
       matrix:
         runner: [ubuntu-22.04, ubuntu-22.04-arm]
     runs-on: ${{ matrix.runner }}
-    # A mirror outage, a cold Tauri CLI and app compile, the AppImage bundle, then the run itself.
-    timeout-minutes: 75
+    # A mirror outage, a cold Tauri CLI and app compile, the AppImage bundle, then the run itself, whose last part runs
+    # the app's two install lines, ten minutes each at most.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
         with:

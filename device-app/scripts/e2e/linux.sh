@@ -8,8 +8,10 @@
 # Prints `ok: <check>` for each check, `note:` for what it saw but does not judge, and stops at the first
 # `FAILED: <check>`, exiting 1. Everything it runs is its own and goes with it: a scratch HOME and XDG folders, its own
 # D-Bus session, Xvfb display, window manager and compositor, a fake xdg-open and a fake desktop app; never an account,
-# a backend or a person's apps. It needs xvfb openbox xdotool xterm sway foot dbus-x11 python3-dbus python3-gi and FUSE
-# for the AppImage (libfuse2); where FUSE is missing, APPIMAGE_EXTRACT_AND_RUN=1 runs it unpacked.
+# a backend or a person's apps. On a GitHub-hosted runner only, a last part runs the app's own install lines: the CDN's
+# install script, sudo for its packages, and the CLI it installs, signed out, with a backend that does not resolve.
+# It needs xvfb openbox xdotool xterm sway foot dbus-x11 python3-dbus python3-gi and FUSE for the AppImage (libfuse2);
+# where FUSE is missing, APPIMAGE_EXTRACT_AND_RUN=1 runs it unpacked.
 set -euo pipefail
 
 # Its own session bus, which ends with it.
@@ -371,6 +373,8 @@ if [[ -n "$update" ]]; then
   echo "0 FAILED"
   exit 0
 fi
+# The install part's environment, which has no fake.
+bare=("${base[@]}")
 base+=(HARNESS_DEVICE_CLI="$fake_cli" FAKE_HARNESS="$fake")
 
 # --- 1, 3, 7, 8, 9: X11, the tray host there, the first run
@@ -560,5 +564,47 @@ stop_app
 [[ ${#broken[@]} -eq 0 ]] \
   || fail "a GTK program xdg-open or the desktop app starts runs in the environment the AppImage hands it: ${broken[*]}"
 ok "a GTK program xdg-open or the desktop app starts runs in the environment the AppImage hands it"
+
+# --- The app's own install lines, from a first run with no CLI and no state (Verification 7): a GitHub-hosted runner
+# only, where sudo asks no password. Elsewhere `install.sh --host` would ask for one in a terminal on the test display,
+# which nobody sees.
+
+# cli.rs INSTALL_DEADLINE, each run's bound, and START_DEADLINE, the start's that follows.
+INSTALL_WAIT=600
+START_WAIT=90
+# The line that says how the run named by its flag ended, once it has.
+install_result() {
+  run_log | grep -m 1 -E "^install: $1 (exit -?[0-9]+|killed|timed out after .*|could not start: .*)$" || true
+}
+install_ended() { [[ -n "$(install_result "$1")" ]]; }
+
+if [[ "${GITHUB_ACTIONS:-}" == true && "${RUNNER_ENVIRONMENT:-}" == github-hosted ]]; then
+  rm -rf "$data" "$config/autostart" "$data_home/applications"
+  base=("${bare[@]}")
+  # terminal.rs CANDIDATES: the first there is the app's.
+  for terminal in x-terminal-emulator gnome-terminal xterm; do
+    PATH="$APP_PATH" command -v "$terminal" >/dev/null && break
+  done
+  note "the terminal: $terminal, $(readlink -f "$(PATH="$APP_PATH" command -v "$terminal")")"
+  # Only the CDN's install script and the public files it downloads are read. The CLI it installs and the daemon its
+  # start runs stay signed out, and are given a backend that does not resolve.
+  launch XDG_SESSION_TYPE=x11 BACKEND_WS_URL=wss://harness-e2e.invalid
+  WAIT=$((INSTALL_WAIT + WAIT)) waits install_ended --host || fail "install.sh --host ends in its terminal"
+  # Without one the app runs the line behind the screen, which would prove nothing of the terminal.
+  logged "install: --host no terminal; run here" && fail "the app finds $terminal and runs install.sh --host in it"
+  [[ "$(install_result --host)" == "install: --host exit 0" ]] \
+    || fail "install.sh --host, in a terminal, exits 0: the log has $(install_result --host)"
+  ok "install.sh --host runs in a terminal on the display and its host.exit reads 0"
+  WAIT=$((INSTALL_WAIT + WAIT)) waits install_ended --desktop || fail "install.sh --desktop ends"
+  [[ "$(install_result --desktop)" == "install: --desktop exit 0" ]] \
+    || fail "install.sh --desktop exits 0: the log has $(install_result --desktop)"
+  ok "install.sh --desktop exits 0"
+  WAIT=$((START_WAIT + WAIT)) waits logged "$MENU" \
+    || fail "with the CLI it installed, the menu reads Plug in your device | Sign in… | Export logs | About | Quit"
+  ok "with the CLI it installed, the menu reads Plug in your device | Sign in… | Export logs | About | Quit"
+  stop_app
+else
+  note "not a GitHub-hosted runner: the app's own install lines are not run here"
+fi
 
 echo "0 FAILED"
