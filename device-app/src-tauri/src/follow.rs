@@ -541,33 +541,33 @@ mod tests {
 
     #[test]
     fn the_mac_door_reads_only_the_focused_windows_title_and_sets_nothing() {
-        // Held on every platform, so Linux CI checks the macOS door too. Comments are cut: they may name what the
-        // code must not do.
+        // Held on every platform, so Linux CI checks the macOS door too. Comment lines are cut: they may name what
+        // the code must not do. A comment after code is kept, and a `//` in a string cuts nothing.
         let code = include_str!("follow_macos.rs")
             .lines()
-            .map(|line| line.split("//").next().unwrap_or_default())
+            .filter(|line| !line.trim_start().starts_with("//"))
             .collect::<Vec<_>>()
             .join("\n");
-        let names: std::collections::BTreeSet<&str> = regex::Regex::new(r#""(AX[A-Za-z]*)""#)
-            .unwrap()
-            .captures_iter(&code)
-            .map(|found| found.get(1).unwrap().as_str())
-            .collect();
-        assert_eq!(names, ["AXFocusedWindow", "AXFocusedWindowChanged", "AXTitle", "AXTitleChanged"].into());
-        // A set attribute (AXManualAccessibility makes ChatGPT build its whole tree) or an action changes the app.
-        for never in [
-            "SetAttributeValue",
-            "set_attribute_value",
-            "PerformAction",
-            "perform_action",
-            "AXManualAccessibility",
-            "AXEnhancedUserInterface",
-        ] {
+        let found = |pattern: &str| -> std::collections::BTreeSet<&str> {
+            let pattern = regex::Regex::new(pattern).unwrap();
+            pattern.captures_iter(&code).map(|found| found.get(1).unwrap().as_str()).collect()
+        };
+        assert_eq!(
+            found(r#""(AX[A-Za-z]*)""#),
+            ["AXFocusedWindow", "AXFocusedWindowChanged", "AXTitle", "AXTitleChanged"].into()
+        );
+        // Every call that sets, acts, posts an event, reads or makes an element, by its binding's name or its C name:
+        // only these. A set attribute (AXManualAccessibility makes ChatGPT build its whole tree), an action or a key
+        // changes the app; another read reads more than the title. perform_block is the run loop's, not
+        // Accessibility's: it queues the observer's stop.
+        assert_eq!(
+            found(r"\b(copy_\w+|set_\w+|perform_\w+|post_\w+|new_\w+|AXUIElement\w+|AXObserver\w+)\b"),
+            ["copy_attribute_value", "new_application", "perform_block", "set_messaging_timeout"].into()
+        );
+        for never in ["AXManualAccessibility", "AXEnhancedUserInterface"] {
             assert!(!code.contains(never), "{never}");
         }
-        for always in ["com.apple.accessibility.api", "set_messaging_timeout("] {
-            assert!(code.contains(always), "{always}");
-        }
+        assert!(code.contains("com.apple.accessibility.api"));
     }
 
     #[test]

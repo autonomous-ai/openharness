@@ -1,6 +1,6 @@
 //! The ChatGPT window on macOS, through Accessibility: only its focused window's title, read and never set. Nothing
 //! polls: an observer on a thread of its own hears when the focused window or its title changes, and reads the title
-//! again. `follow.rs`'s test holds this file to the four Accessibility names it uses.
+//! again. `follow.rs`'s test holds this file to the four Accessibility names and the calls it uses.
 
 use crate::follow::{AxTrust, CHATGPT_BUNDLE, ChatgptWindow, Heard, chatgpt_installed};
 use block2::RcBlock;
