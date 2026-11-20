@@ -432,6 +432,11 @@ class SelectionTests(unittest.TestCase):
         for path in ("scripts/ci-plan.py", "scripts/tests/test_ci_plan.py", "scripts/record-ci-validation.py"):
             with self.subTest(path=path):
                 self.assertEqual(planner.select([path])[0], {"cross-read-scan"})
+        # The CLI's lists the planner's tables mirror (DIAL_HOST_FILES, the CI config's exclude): the job's full-checkout
+        # tests hold the two sides together, so a change to either side runs them.
+        for path in ("cli/e2e/harness/dialHosts.ts", "cli/vitest.e2e.ci.config.ts"):
+            with self.subTest(path=path):
+                self.assertIn("cross-read-scan", planner.select([path])[0])
         for path in ("scripts/local-checks.py", "scripts/tests/test_pr_e2e_jobs.py", ".github/workflows/ci.yml",
                      "cli/src/lib/relayFrames.ts", "desktop/lib/devices/x.dart"):
             with self.subTest(path=path):
