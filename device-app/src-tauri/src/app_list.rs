@@ -152,9 +152,10 @@ pub fn apply(data_home: Option<&Path>, appimage: Option<&AppImage>) -> Option<Re
 }
 
 fn write_entry(data_home: &Path, appimage: &AppImage, exec: &str) -> Result<Change, String> {
-    let icon_bytes = fs::read(appimage.mount.join(ICON_MEMBER)).ok();
+    // Read only when the entry is written: a kept one, at most launches, reads nothing from the image's mount.
+    let member = appimage.mount.join(ICON_MEMBER);
     let icon = data_home.join("icons").join(ICON);
-    let wanted = entry(exec, icon_bytes.as_ref().map(|_| icon.as_path()));
+    let wanted = entry(exec, member.is_file().then_some(icon.as_path()));
     let file = data_home.join("applications").join(ENTRY);
     let existing = match fs::read(&file) {
         Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
@@ -164,11 +165,14 @@ fn write_entry(data_home: &Path, appimage: &AppImage, exec: &str) -> Result<Chan
     if change(existing.as_deref(), &appimage.file, &wanted, Path::is_file) == Change::Leave {
         return Ok(Change::Leave);
     }
-    // The icon first: an entry is never there naming an icon that is not.
+    // The icon first: an entry is never there naming an icon that is not. One that cannot be read leaves the entry
+    // without one, as Desktop's does.
+    let icon_bytes = fs::read(&member).ok();
     if let Some(bytes) = &icon_bytes {
         write(&icon, bytes).map_err(|error| failed(&error))?;
     }
-    write(&file, wanted.as_bytes()).map(|()| Change::Write).map_err(|error| failed(&error))
+    let text = entry(exec, icon_bytes.as_ref().map(|_| icon.as_path()));
+    write(&file, text.as_bytes()).map(|()| Change::Write).map_err(|error| failed(&error))
 }
 
 /// The log line for what `apply` did. A left entry has one too: a check that waits for this run's decision sees it.
