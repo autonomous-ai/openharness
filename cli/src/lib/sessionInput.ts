@@ -77,6 +77,12 @@ const OPENCLAW_PANE_RETRY_MS = 1_000
  * empty box (core/agents/bind.ts). It waits here instead.
  */
 export const OPENCLAW_NOT_READY = 'openclaw_not_ready'
+/**
+ * Why a message waiting for its OpenClaw pane was not typed, nothing written: the agent's first task goes first
+ * ([InputState.firstTaskAhead]), and its hand-over is typed behind the write this message holds. It waits in the queue
+ * behind the task instead.
+ */
+const GAVE_WAY = 'gave_way'
 const CURSOR_TURN_SETTLE_MS = 750
 const SUBMIT_MAX_RETRIES = 2
 /** How long a paste the control lease refused, before a byte was written, waits for the lease, and how
@@ -126,6 +132,8 @@ interface QueuedInput {
   expiresAt: number
   /** The agent's first task ([submitFirstTask]): it goes before every other message, and never expires here. */
   first?: true
+  /** When a message put back here after it was typed ([clearRefused]) was first pasted. */
+  firstPaste?: number
 }
 
 /** A pending message retains capacity until its move, cancel or earlier-write callback is consumed. */
@@ -265,6 +273,11 @@ function leaseRefused(delivery: boolean | TerminalActionResult): boolean {
 function paneNotReady(delivery: boolean | TerminalActionResult): boolean {
   return typeof delivery !== 'boolean' && delivery.state === 'failed' && delivery.dispatch === 'not_started'
     && delivery.reason === OPENCLAW_NOT_READY
+}
+
+/** A write that waited for its pane and gave way to the agent's first task, nothing written ([GAVE_WAY]). */
+function gaveWay(delivery: boolean | TerminalActionResult): boolean {
+  return typeof delivery !== 'boolean' && delivery.state === 'failed' && delivery.reason === GAVE_WAY
 }
 
 /**
@@ -461,7 +474,8 @@ export class SessionInputController {
    * that. It is not read again while a command of the pane's own is typed (`typeCommand`), which the message would run
    * into in the box, nor while a first task an earlier daemon typed awaits its turn ([adoptTypedFirstTask]), which it would
    * go ahead of once that task's Enter empties the box. A message typed once already and cleared ([clearRefused]) counts
-   * that wait from [firstPaste].
+   * that wait from [firstPaste]. While the agent's first task goes first ([InputState.firstTaskAhead]), a message waiting
+   * for its pane gives way ([GAVE_WAY]): the task's write is chained behind this one, so waiting here would hold it.
    */
   private async injectWhenLeased(
     state: InputState,
@@ -489,6 +503,7 @@ export class SessionInputController {
       state.paneWait = false
       if (held()) return refused()
       if (!current()) break
+      if (notReady && state.firstTaskAhead) return { state: 'failed', dispatch: 'not_started', reason: GAVE_WAY }
       if (notReady && (state.controlLocked || state.awaitingFingerprint !== null)) continue
       delivery = await write()
     }
@@ -1077,6 +1092,7 @@ export class SessionInputController {
       ? delivery
       : delivery.state === 'succeeded' || delivery.dispatch === 'possibly_executed'
     if (!current()) { gone(accepted ? 'ambiguous' : 'agent_gone'); return }
+    if (gaveWay(delivery)) { this.putBack(state, { content, receipt, firstPaste }); return }
     if (typeof delivery !== 'boolean' && delivery.state === 'failed' && delivery.dispatch === 'not_started' && delivery.reason === 'held') {
       this.rejectHeldMessage(sessionId, undefined, receipt); return
     }
@@ -1200,6 +1216,12 @@ export class SessionInputController {
       () => !state.cancelled && this.states.get(sessionId) === state, () => this.deps.moveGate?.refused(session.agentId) === true, firstPaste)
       state.writing = false
       if (state.cancelled || this.states.get(sessionId) !== state) return
+      if (gaveWay(delivery)) {
+        // Still on its way, said so already: it is no longer the delivery the pane is typing.
+        state.deliveryId = undefined
+        this.putBack(state, { content, deliveryId, receipt, firstPaste })
+        return
+      }
       if (typeof delivery !== 'boolean' && delivery.state === 'failed' && delivery.dispatch === 'not_started' && delivery.reason === 'held') {
         this.finishDelivery(sessionId, state, 'rejected', 'held'); receipt?.('held'); return
       }
@@ -1499,7 +1521,11 @@ export class SessionInputController {
       return true
     }
     state.awaitingReceipt = undefined
-    void this.scheduleWrite(sessionId, content, deliveryId, awaitingReceipt, pastedAt)
+    state.deliveryId = undefined
+    state.deliveryFingerprint = undefined
+    // Typed again as a drained message is: through the move gate, so never into a pane being replaced.
+    this.putBack(state, { content, deliveryId, receipt: awaitingReceipt, firstPaste: pastedAt })
+    this.drainOne(sessionId, state)
     return true
   }
 
@@ -1659,7 +1685,17 @@ export class SessionInputController {
       return
     }
     // A drained delivery must own the same write chain as a new person's message, through paste and Enter.
-    await this.scheduleWrite(sessionId, next.content, next.deliveryId, next.receipt, undefined, next.first)
+    await this.scheduleWrite(sessionId, next.content, next.deliveryId, next.receipt, next.firstPaste, next.first)
+  }
+
+  /**
+   * A message that was on its way goes back to the head of the queue, behind only a first task waiting there: it was
+   * cleared from its box ([clearRefused]) or gave way to the first task ([GAVE_WAY]). It was said to be on its way
+   * already, and its bound runs from [item.firstPaste] when it was typed before.
+   */
+  private putBack(state: InputState, item: { content: string; deliveryId?: string; receipt?: MessageReceipt; firstPaste?: number }): void {
+    const queued: QueuedInput = { ...item, bytes: Buffer.byteLength(item.content, 'utf8'), expiresAt: Date.now() + ITEM_TTL_MS }
+    state.queue.splice(state.queue[0]?.first ? 1 : 0, 0, queued)
   }
 
   private enqueue(sessionId: string, state: InputState, content: string, deliveryId?: string, receipt?: MessageReceipt): void {
