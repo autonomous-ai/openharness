@@ -20,7 +20,8 @@ die() {
 }
 
 # A release's signing and notarizing never reach these builds: tauri-bundler signs with APPLE_SIGNING_IDENTITY or
-# APPLE_CERTIFICATE and sends the bundle to Apple's notary with APPLE_ID or APPLE_API_KEY. The updater key is this run's.
+# APPLE_CERTIFICATE and sends the bundle to Apple's notary with APPLE_ID or APPLE_API_KEY. The updater key is this
+# run's.
 for name in $(compgen -e); do
   case "$name" in APPLE_* | TAURI_SIGNING_*) unset "$name" ;; esac
 done

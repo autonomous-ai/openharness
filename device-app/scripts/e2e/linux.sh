@@ -551,7 +551,8 @@ sign_in() {
     && WAIT=3 waits grep -Fxqs 'login --json' "$fake/calls.log"
 }
 waits sign_in || fail "the Sign in window's Return starts harness login --json"
-waits grep -Fxqs "https://example.invalid/e2e?state=S" "$work/xdg-open.log" || fail "the sign-in page opens with xdg-open"
+waits grep -Fxqs "https://example.invalid/e2e?state=S" "$work/xdg-open.log" \
+  || fail "the sign-in page opens with xdg-open"
 ok "the sign-in page opens with xdg-open"
 probe xdg-open xdg-open
 
