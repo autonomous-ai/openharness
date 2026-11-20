@@ -138,9 +138,24 @@ void main() {
 
   test('the entry is written whole', () async {
     await write(place);
-    iconIn(data()).deleteSync();
+    // Stale, so the next write writes the entry and its icon again.
+    final older = entryIn(data())
+        .readAsStringSync()
+        .replaceFirst('StartupWMClass=harness-device\n', '');
+    entryIn(data()).writeAsStringSync(older);
+    // A reader that opened them before, as a dock does.
+    final entryReader = entryIn(data()).openSync();
+    final iconReader = iconIn(data()).openSync();
+    addTearDown(entryReader.closeSync);
+    addTearDown(iconReader.closeSync);
+
     await write(place, icon: const [4, 5]);
 
+    // Each a new file renamed over the old one, never the old one written in
+    // place: the reader still has the old one whole.
+    expect(utf8.decode(entryReader.readSync(4096)), older);
+    expect(iconReader.readSync(16), [1, 2, 3]);
+    expect(iconIn(data()).readAsBytesSync(), [4, 5]);
     expect(
       Directory('${data()}/applications')
           .listSync()
@@ -153,7 +168,6 @@ void main() {
           .map((file) => file.uri.pathSegments.last),
       ['harness-device.png'],
     );
-    expect(iconIn(data()).readAsBytesSync(), [4, 5]);
   }, skip: Platform.isWindows);
 
   test('XDG_DATA_HOME is followed', () async {

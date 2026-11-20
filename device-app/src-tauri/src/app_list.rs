@@ -442,8 +442,19 @@ mod tests {
 
     #[test]
     fn the_entry_is_written_whole() {
+        use std::os::unix::fs::MetadataExt;
         let image = an_image();
         assert_eq!(image.apply(), Some(Ok(Change::Write)));
+        // Stale, so the next run writes the entry and its icon again.
+        let older =
+            fs::read_to_string(image.entry_file()).unwrap().replace(&format!("StartupWMClass={WM_CLASS}\n"), "");
+        fs::write(image.entry_file(), older).unwrap();
+        let inode = |file: PathBuf| fs::metadata(file).unwrap().ino();
+        let before = (inode(image.entry_file()), inode(image.icon_file()));
+        assert_eq!(image.apply(), Some(Ok(Change::Write)));
+        // Each a new file renamed over the old one, never the old one written in place: a reader has one whole.
+        assert_ne!(inode(image.entry_file()), before.0);
+        assert_ne!(inode(image.icon_file()), before.1);
         let names = |folder: &Path| -> Vec<String> {
             fs::read_dir(folder).unwrap().map(|file| file.unwrap().file_name().into_string().unwrap()).collect()
         };
