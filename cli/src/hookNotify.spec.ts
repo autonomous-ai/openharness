@@ -175,11 +175,20 @@ function runHook(opts: RunHookOpts): Promise<string> {
     tmpDirs.push(env.TMUX_TMPDIR)
     delete env.MACHINE_ID
     if (opts.launcherId !== null) env.MACHINE_ID = opts.launcherId ?? '11111111-2222-4333-8444-555555555555'
-    /** A `harness-pty` in [binDir] whose `ps --json` lists [table], as the hook's helper on Windows. */
-    const fakePtyHost = (binDir: string, table: { rows: unknown[] }) => {
+    /** A `harness-pty` in [binDir] whose `ps --json` lists [table], as the hook's helper on Windows, and whose
+     *  `ps --json --ancestors <pid>` lists that pid's row and its parents', nearest first, at most 9 (pty/src/ps.rs). */
+    const fakePtyHost = (binDir: string, table: { rows: Array<{ pid: number; parentPid: number }> }) => {
       const quote = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'"
-      const runLog = opts.psRunLog ? `echo ps >> ${quote(opts.psRunLog)}\n` : ''
-      writeExecutable(join(binDir, 'harness-pty'), `#!/bin/sh\n${runLog}[ "$1 $2" = "ps --json" ] || exit 2\nprintf '%s\\n' ${quote(JSON.stringify(table))}\n`)
+      const runLog = opts.psRunLog ? `echo "$*" >> ${quote(opts.psRunLog)}\n` : ''
+      const byPid = new Map(table.rows.map((row) => [row.pid, row]))
+      const chain = (pid: number) => {
+        const rows: typeof table.rows = []
+        for (let row = byPid.get(pid); row && rows.length < 9 && !rows.includes(row); row = byPid.get(row.parentPid)) rows.push(row)
+        return rows
+      }
+      const chains = table.rows.map((row) => `${row.pid}) printf '%s\\n' ${quote(JSON.stringify({ rows: chain(row.pid) }))} ;;\n`).join('')
+      writeExecutable(join(binDir, 'harness-pty'), `#!/bin/sh\n${runLog}if [ "$*" = "ps --json" ]; then printf '%s\\n' ${quote(JSON.stringify(table))}; exit 0; fi
+[ "$1 $2 $3" = "ps --json --ancestors" ] && [ $# = 4 ] || exit 2\ncase "$4" in\n${chains}*) echo '{"rows":[]}' ;;\nesac\n`)
       env.HARNESS_PTY_BIN = join(binDir, 'harness-pty')
     }
     if (opts.processEngine || opts.paneOwner !== undefined || opts.paneSession !== undefined) {
@@ -3386,30 +3395,60 @@ describe('hook notify: a session outside a pane', () => {
       expect(existsSync(log)).toBe(false)
     })
 
-    it.each<[string, string, Record<string, string>, number]>([
-      ['9001', 'Code.exe', { __CFBundleIdentifier: VSCODE }, 1],
-      ['9001', 'Cursor.exe', { __CFBundleIdentifier: CURSOR }, 1],
-      ['9007', 'Code.exe', {}, 1],
-      ['abc', 'Code.exe', {}, 0],
-      ['0', 'Code.exe', {}, 0],
-    ])('from the extension\'s panel, VSCODE_PID %s with %s at 9001 names %j, from %i table', async (pid, editor, named, tables) => {
+    it.each<[string, string, Record<string, string>, string]>([
+      ['9001', 'Code.exe', { __CFBundleIdentifier: VSCODE }, 'ps --json --ancestors 9001\n'],
+      ['9001', 'Cursor.exe', { __CFBundleIdentifier: CURSOR }, 'ps --json --ancestors 9001\n'],
+      ['9007', 'Code.exe', {}, 'ps --json --ancestors 9007\n'],
+      ['abc', 'Code.exe', {}, ''],
+      ['0', 'Code.exe', {}, ''],
+    ])('from the extension\'s panel, VSCODE_PID %s with %s at 9001 names %j, from that pid\'s chain alone: %j', async (pid, editor, named, reads) => {
       const log = runLog()
       expect(await hints({ windowsAncestors: [win('claude.exe'), win(editor)], psRunLog: log, env: { ...panel, VSCODE_PID: pid } }))
         .toEqual({ ...named, ...panel })
-      expect(runs(log)).toBe(tables)
+      expect(existsSync(log) ? readFileSync(log, 'utf8') : '').toBe(reads)
     })
 
     it('from the panel, a helper that fails names no editor', async () => {
       expect(await hints({ env: { ...panel, VSCODE_PID: '9001', HARNESS_PTY_BIN: failingHelper() } })).toEqual(panel)
     })
 
-    it('Codex in the panel: one table names both the editor and the caller', async () => {
-      const log = runLog()
-      const requests = await onWindows({ psRunLog: log, env: { ...noHints, VSCODE_PID: '9002' },
-        windowsAncestors: [powershell, win('codex.exe'), win('Code.exe')] }, false)
+    /** The rows of Codex in the panel: its hook under PowerShell, under codex.exe (9001), under VS Code (9002). */
+    const codexInPanel = () => {
+      const row = (pid: number, parentPid: number, nativeArgv: string[]) =>
+        ({ pid, parentPid, executable: nativeArgv[0], startMarker: `w:${pid}`, args: nativeArgv.join(' '), nativeArgv })
+      return [row(process.pid, 9001, powershell.argv), row(9001, 9002, ['codex.exe']), row(9002, 9003, ['Code.exe'])]
+    }
+    const codexInPanelPosts = async (helper: string) => {
+      const requests = await onWindows({ env: { ...noHints, VSCODE_PID: '9002', HARNESS_PTY_BIN: helper } }, false)
       expect(requests).toEqual([{ url: '/api/hook/observed', body: expect.objectContaining({
         engine: 'codex', callerPid: 9001, hostHints: { __CFBundleIdentifier: VSCODE } }) }])
-      expect(runs(log)).toBe(1)
+    }
+
+    it('Codex in the panel: its own chain and the editor\'s, read together, name the caller and the editor', async () => {
+      const dir = folder('adapter-hook-editor-'), log = join(dir, 'ps-runs'), helper = join(dir, 'harness-pty')
+      const rows = codexInPanel()
+      // The hook's own chain is answered only once the editor's has been asked for: read one after the other, the
+      // climb's read fails, and the hook names the shell.
+      writeExecutable(helper, `#!/bin/sh
+echo "$*" >> '${log}'
+if [ "$*" = "ps --json --ancestors 9002" ]; then printf '%s\\n' '${JSON.stringify({ rows: rows.slice(2) })}'; exit 0; fi
+[ "$*" = "ps --json --ancestors ${process.pid}" ] || exit 2
+tries=0
+until grep -q 'ancestors 9002' '${log}'; do
+  tries=$((tries + 1)); [ $tries -gt 200 ] && exit 1; sleep 0.05
+done
+printf '%s\\n' '${JSON.stringify({ rows })}'
+`)
+      await codexInPanelPosts(helper)
+      expect(readFileSync(log, 'utf8').split('\n').filter(Boolean).sort())
+        .toEqual([`ps --json --ancestors ${process.pid}`, 'ps --json --ancestors 9002'].sort())
+    })
+
+    it('Codex in the panel, with a host that takes no --ancestors and lists the whole table (0.6.22): the same caller and editor', async () => {
+      const helper = join(folder('adapter-hook-editor-'), 'harness-pty')
+      const table = { rows: [{ pid: 4, parentPid: 0, executable: 'System', startMarker: '', args: 'System', nativeArgv: ['System'] }, ...codexInPanel()] }
+      writeExecutable(helper, `#!/bin/sh\n[ "$1 $2" = "ps --json" ] || exit 2\nprintf '%s\\n' '${JSON.stringify(table)}'\n`)
+      await codexInPanelPosts(helper)
     })
 
     it('a Claude Code hook with none of the three names no app and reads no table', async () => {
@@ -3546,13 +3585,13 @@ describe('hook notify: a session outside a pane', () => {
         expect(readFileSync(target, 'utf8')).toBe(keptCursor)
       })
 
-      it('serves only the hint: a Codex hook whose answer is kept still reads the table for its caller', async () => {
+      it('serves only the hint: a Codex hook whose answer is kept still reads its own chain for its caller', async () => {
         const dataDir = data(), log = runLog()
         writeFileSync(kept(dataDir), JSON.stringify({ editors: [{ pid: 9002, ipc: key(IPC), app: CURSOR }] }), { mode: 0o600 })
         const requests = await onWindows({ dataDir, psRunLog: log, env: { ...noHints, VSCODE_PID: '9002', VSCODE_IPC_HOOK: IPC },
           windowsAncestors: [powershell, win('codex.exe'), win('Code.exe')] }, false)
         expect(requests[0].body).toMatchObject({ callerPid: 9001, hostHints: { __CFBundleIdentifier: CURSOR } })
-        expect(runs(log)).toBe(1)
+        expect(readFileSync(log, 'utf8')).toBe(`ps --json --ancestors ${process.pid}\n`)
       })
 
       it.runIf(process.platform !== 'win32')('off Windows none of the three is read, no table either, and no file is read or written', async () => {
@@ -3657,7 +3696,8 @@ describe('hook notify: the caller a hook names', () => {
   })
 
   // Codex and Copilot run a hook through PowerShell, Command Code through cmd, and that shell exits with the hook, as dash's
-  // `sh -c` does on Linux. Windows has no /proc: the climb reads the pty host's table (`harness-pty ps --json`).
+  // `sh -c` does on Linux. Windows has no /proc: the climb reads the hook's chain from the pty host
+  // (`harness-pty ps --json --ancestors`).
   type WindowsAncestor = NonNullable<RunHookOpts['windowsAncestors']>[number]
   const win = (...argv: string[]): WindowsAncestor => ({ executable: argv[0], argv })
   const codexExe = win('codex.exe')
@@ -3728,7 +3768,30 @@ describe('hook notify: the caller a hook names', () => {
     ])
   })
 
-  it('on Windows a Codex pane hook starts the helper once: the climb and the engine\'s lookup share its table', async () => {
+  it('on Windows a Codex hook reads only its own chain: `ps --json --ancestors` of its parent, once', async () => {
+    const runs = psRunLog()
+    expect(await onWindows({ windowsAncestors: [powershell, codexExe], psRunLog: runs })).toEqual([
+      { url: '/api/hook/turn-stop', body: expect.objectContaining({ callerPid: pidAt(1) }) },
+    ])
+    expect(readFileSync(runs, 'utf8')).toBe(`ps --json --ancestors ${process.pid}\n`)
+  })
+
+  it('on Windows a helper that refuses --ancestors (exit 2) names the hook\'s parent', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-caller-'))
+    tmpDirs.push(dir)
+    // Its whole table would take the climb past the shell: the hook reads its chain alone.
+    const shell = ['powershell.exe', '-NoProfile', '-Command', '& x']
+    const table = { rows: [
+      { pid: process.pid, parentPid: 9001, executable: shell[0], startMarker: 'w:1', args: shell.join(' '), nativeArgv: shell },
+      { pid: 9001, parentPid: 9002, executable: 'codex.exe', startMarker: 'w:2', args: 'codex.exe', nativeArgv: ['codex.exe'] },
+    ] }
+    writeExecutable(join(dir, 'harness-pty'), `#!/bin/sh\n[ "$*" = "ps --json" ] || exit 2\nprintf '%s\\n' '${JSON.stringify(table)}'\n`)
+    expect(await onWindows({ env: { HARNESS_PTY_BIN: join(dir, 'harness-pty') } })).toEqual([
+      { url: '/api/hook/turn-stop', body: expect.objectContaining({ callerPid: pidAt(0) }) },
+    ])
+  })
+
+  it('on Windows a Codex pane hook registered offline reads its chain for the climb, and the whole table for the engine', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-caller-'))
     tmpDirs.push(dir)
     const codexHome = join(dir, 'codex'), dataDir = join(dir, 'data'), runs = psRunLog()
@@ -3737,13 +3800,14 @@ describe('hook notify: the caller a hook names', () => {
     mkdirSync(dataDir, { recursive: true, mode: 0o700 })
     writeFileSync(join(dataDir, 'registry.json'), '[]', { mode: 0o600 })
     writeFileSync(transcriptPath, '{}\n')
-    // No daemon: the offline registration reads the table for the engine's process and for the caller's descent.
+    // No daemon: the offline registration reads the table for the engine's process, below the pane's shell and off the
+    // hook's chain, and for the caller's descent.
     await runHook({
       port: 9, tmuxPane: '%8', engine: 'codex', processEngine: 'codex', windowsProcessTable: true, dataDir, codexHome, psRunLog: runs,
       input: { hook_event_name: 'SessionStart', session_id: 'codex-session', transcript_path: transcriptPath, cwd: '/tmp/codex' },
     })
     expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))).toMatchObject([{ sessionId: 'codex-session', engine: 'codex' }])
-    expect(readFileSync(runs, 'utf8')).toBe('ps\n')
+    expect(readFileSync(runs, 'utf8')).toBe(`ps --json --ancestors ${process.pid}\nps --json\n`)
   })
 })
 

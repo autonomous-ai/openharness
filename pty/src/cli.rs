@@ -468,7 +468,25 @@ mod tests {
     #[test]
     fn parses_commands() {
         assert_eq!(parse(&args(&["version"])), Ok(Command::Version));
-        assert_eq!(parse(&args(&["ps", "--json"])), Ok(Command::Ps));
+        assert_eq!(
+            parse(&args(&["ps", "--json"])),
+            Ok(Command::Ps { ancestors: None })
+        );
+        assert_eq!(
+            parse(&args(&["ps", "--json", "--ancestors", "42"])),
+            Ok(Command::Ps {
+                ancestors: Some(42)
+            })
+        );
+        for bad in [
+            &["ps", "--json", "--ancestors", "0"][..],
+            &["ps", "--json", "--ancestors", "x"],
+            &["ps", "--json", "--ancestors"],
+            &["ps", "--json", "--ancestors", "42", "7"],
+            &["ps", "--ancestors", "42"],
+        ] {
+            assert!(parse(&args(bad)).is_err(), "{bad:?}");
+        }
         assert_eq!(
             parse(&args(&["raise", "--pid", "4242"])),
             Ok(Command::Raise {

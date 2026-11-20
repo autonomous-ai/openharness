@@ -408,6 +408,28 @@ mod windows {
         }
 
         #[test]
+        fn ancestors_are_a_process_and_its_parents_nearest_first() {
+            let mut child = std::process::Command::new("ping.exe")
+                .args(["-n", "30", "127.0.0.1"])
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            let rows = ancestors(child.id()).unwrap();
+            assert!(rows.len() >= 2 && rows.len() <= 9, "{rows:?}");
+            assert_eq!(rows[1].pid, std::process::id());
+            for pair in rows.windows(2) {
+                assert_eq!(pair[0].parent_pid, pair[1].pid, "{rows:?}");
+            }
+            // Each row as the whole table has it.
+            assert_eq!(row(&snapshot().unwrap(), child.id()), Some(&rows[0]));
+
+            // An exited process has no chain.
+            child.kill().unwrap();
+            child.wait().unwrap();
+            assert!(ancestors(child.id()).unwrap().is_empty());
+        }
+
+        #[test]
         fn a_scan_is_quick() {
             // The fastest of a few scans: the scan's own cost, not the time the other tests (which
             // start shells in parallel) keep this thread off the CPU.
@@ -423,5 +445,39 @@ mod windows {
             eprintln!("ps: {rows} rows in {took:?}");
             assert!(took < Duration::from_millis(500), "{took:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// A table where each pid in [pids] has the next as its parent; the last one's parent is in no row.
+    fn line(pids: &[u32]) -> HashMap<u32, u32> {
+        pids.windows(2).map(|pair| (pair[0], pair[1])).collect()
+    }
+
+    #[test]
+    fn a_chain_is_a_pid_and_its_parents_nearest_first() {
+        let pids: Vec<u32> = (100..112).collect();
+        let mut table = line(&pids);
+        table.insert(111, 0);
+        assert_eq!(chain(&table, 100, 9), (100..109).collect::<Vec<_>>());
+        assert_eq!(chain(&table, 107, 9), [107, 108, 109, 110, 111]);
+    }
+
+    #[test]
+    fn a_chain_stops_at_a_parent_no_row_has() {
+        assert_eq!(chain(&line(&[5, 6, 7]), 5, 9), [5, 6]);
+        assert!(chain(&line(&[5, 6, 7]), 8, 9).is_empty());
+    }
+
+    #[test]
+    fn a_chain_stops_at_the_first_repeat() {
+        // Windows reuses pids: a pid may be listed as its own grandparent.
+        assert_eq!(chain(&HashMap::from([(1, 2), (2, 1)]), 1, 9), [1, 2]);
+        // The idle process is its own parent.
+        assert_eq!(chain(&HashMap::from([(0, 0)]), 0, 9), [0]);
     }
 }
