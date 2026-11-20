@@ -221,14 +221,18 @@ describe('harness flash — on Windows', () => {
     expect(calls.args).toEqual([['--yes']])
   })
 
-  it('runs Windows PowerShell with the path and arguments untouched and no profile or prompt', () => {
+  it('runs Windows PowerShell from System32 with the path and arguments untouched and no profile or prompt', () => {
     const path = "C:\\Users\\Nguyễn Văn A' & 100%\\.harness\\flasher\\flash-circle.ps1"
     const args = ['--yes', '--port', 'COM3', '--unknown', "x y' & 100%"]
 
-    expect(flasherScript('win32').command(path, args)).toEqual({
-      file: 'powershell.exe',
-      args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path, ...args],
-    })
+    // By its full path: Windows looks for a bare name in the folder `harness flash` runs in before PATH.
+    vi.stubEnv('SystemRoot', 'C:\\Windows')
+    try {
+      expect(flasherScript('win32').command(path, args)).toEqual({
+        file: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+        args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path, ...args],
+      })
+    } finally { vi.unstubAllEnvs() }
     expect(flasherScript('darwin').command('/x/flash-circle.sh', ['--yes'])).toEqual({
       file: 'bash', args: ['/x/flash-circle.sh', '--yes'],
     })

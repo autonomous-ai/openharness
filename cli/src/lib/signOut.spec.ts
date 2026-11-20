@@ -1,9 +1,19 @@
+import { execFileSync } from 'child_process'
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
 import { AUTH_SESSION_FILE } from './authSession.js'
-import { isDesktopApp, REMOVALS_FILE, removalLine, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker } from './signOut.js'
+import {
+  ancestors, isDesktopApp, REMOVALS_FILE, removalLine, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, windowsProcessQuery, type Asker,
+} from './signOut.js'
+import { encodedCommandArgs, withPrelude } from './windows/powershell.js'
+
+// Pass-through, so a case can see what Windows is asked with.
+vi.mock('child_process', async original => {
+  const actual = await original<typeof import('child_process')>()
+  return { ...actual, execFileSync: vi.fn(actual.execFileSync) }
+})
 
 // Pass-through, recording each path written to by name and each rename's target.
 const disk = vi.hoisted(() => ({ events: [] as string[] }))
@@ -70,6 +80,24 @@ describe('who asked for the sign-in to go', () => {
     ['win32', 'C:\\Users\\me\\.harness\\bin\\harness.exe logout', false],
   ] as const)('on %s, %s is the desktop app: %s', (platform, command, expected) => {
     expect(isDesktopApp({ pid: 99_999_999, command }, platform)).toBe(expected)
+  })
+})
+
+describe('the processes above, on Windows', () => {
+  // Windows looks for a bare name in the folder `harness logout` runs in before PATH.
+  it('are read by Windows PowerShell from System32, with the prelude every script here starts with', () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+    vi.stubEnv('SystemRoot', 'C:\\Windows')
+    vi.mocked(execFileSync).mockReturnValueOnce('{"ParentProcessId":0,"CommandLine":"harness logout"}' as never)
+    try {
+      expect(ancestors(1)).toEqual([{ pid: process.ppid, command: 'harness logout' }])
+      expect(execFileSync).toHaveBeenCalledWith('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+        encodedCommandArgs(withPrelude(windowsProcessQuery(process.ppid))), expect.objectContaining({ timeout: 5_000, windowsHide: true }))
+    } finally {
+      Object.defineProperty(process, 'platform', platform)
+      vi.unstubAllEnvs()
+    }
   })
 })
 

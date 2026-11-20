@@ -190,6 +190,20 @@ describe('the default dependencies', { timeout: FAKE_COMMANDS_TIMEOUT_MS }, () =
     expect(COMMAND_TIMEOUT_MS).toBeGreaterThan(STOP_TIMEOUT_S * 1000)
   })
 
+  // Windows looks for a bare name in the folder `harness service install` runs in before PATH.
+  it("run Windows' own schtasks and whoami from System32 on Windows, never from the PATH", () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+    try {
+      const deps = defaultPlatformDeps({ env: { PATH: fake.bin, SystemRoot: 'C:\\Windows' }, uid: 501, home: join(dir, 'home') })
+      expect(deps.run('schtasks', ['/Query']).error).toContain('C:\\Windows\\System32\\schtasks.exe')
+      expect(deps.run('whoami', ['/user']).error).toContain('C:\\Windows\\System32\\whoami.exe')
+      expect(fake.calls()).toEqual([])
+    } finally {
+      Object.defineProperty(process, 'platform', platform)
+    }
+  })
+
   it('run a command with its output unread when asked, its exit status and what it said on stderr kept', () => {
     const deps = defaultPlatformDeps({ env: { PATH: fake.bin }, uid: 501, home: join(dir, 'home') })
     expect(deps.run('launchctl', ['print', 'gui/501'], { stdout: 'ignore' })).toEqual({ status: 0, stdout: '', stderr: '' })
