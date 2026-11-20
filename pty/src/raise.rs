@@ -213,7 +213,8 @@ mod tests {
     }
 
     fn before_tests(source: &str) -> &str {
-        source.split_once("#[cfg(test)]\nmod tests").unwrap().0
+        // The attribute alone: what follows it on the next line depends on the checkout's line ends.
+        source.split_once("#[cfg(test)]").unwrap().0
     }
 
     /// A Windows checkout (Git's autocrlf, as on GitHub's Windows runners) ends lines with CRLF.
