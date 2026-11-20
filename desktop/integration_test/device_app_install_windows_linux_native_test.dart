@@ -276,11 +276,16 @@ void main() {
       final uninstaller = p.join(folder, 'uninstall.exe');
       if (File(uninstaller).existsSync()) {
         // It copies itself away and returns at once: what it removes is
-        // waited for.
+        // waited for, the uninstall entry too, which it deletes after the
+        // folder.
         await Process.start(uninstaller, const [
           '/S',
         ], mode: ProcessStartMode.detached);
-        await _until(() async => !Directory(folder).existsSync());
+        await _until(
+          () async =>
+              !Directory(folder).existsSync() &&
+              windowsDeviceAppInstallLocation() == null,
+        );
       }
     } else {
       for (final signal in const [
