@@ -7069,6 +7069,21 @@ describe('the app filter', () => {
       } finally { await session.stop() }
     })
 
+    it('an appCards dial is sent five fields a row, in the contract\'s order, whatever else the host\'s entry carries', async () => {
+      const { host } = appHost()
+      const snapshot = host.listAgentSnapshot!.bind(host)
+      // `working` first and a field the wire does not name: the Pro parses fixed fields into fixed buffers.
+      host.listAgentSnapshot = async (opts) => {
+        const s = await snapshot(opts)
+        return s.apps ? { ...s, apps: { ...s.apps, apps: s.apps.apps.map((a) => ({ working: a.working, rank: 7, ...a })) } } : s
+      }
+      const { session, port } = await greet(host, { appCards: 'v1' })
+      try {
+        expect(JSON.stringify(port.sent.find((m) => m.t === 'apps'))).toBe(
+          '{"t":"apps","shown":"ghostty","apps":[{"id":"ghostty","name":"Ghostty","count":3,"waiting":0,"working":0},{"id":"vscode","name":"VS Code","count":2,"waiting":1,"working":0}]}')
+      } finally { await session.stop() }
+    })
+
     it('without appCards v1 the apps frame is today\'s, byte for byte, though the host counts working', async () => {
       const today = encoded('{"t":"apps","shown":"ghostty","apps":[{"id":"ghostty","name":"Ghostty","count":3,"waiting":0},{"id":"vscode","name":"VS Code","count":2,"waiting":1}]}')
       for (const fields of [{}, { appCards: 'v2' }, { appCards: true }]) {
