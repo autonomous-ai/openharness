@@ -14,8 +14,8 @@ function siteOrigin(request: NextRequest): SiteOrigin {
 
 /**
  * Keeps a tagged link's `utm_*` and `rid` for the sign-in (lib/signInAttribution.ts). Every page and
- * download route goes through here — /download, a link straight to /desktop/download-macos, the web app
- * at / — and an untagged request passes untouched.
+ * download route goes through here — /download, a link straight to /desktop/download-macos, the device
+ * guide that / redirects to — and an untagged request passes untouched.
  */
 export function proxy(request: NextRequest): NextResponse {
   const response = NextResponse.next()
