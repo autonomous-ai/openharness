@@ -1,9 +1,10 @@
 /**
  * The round dial for tier A, on a loopback port both ends of which are in this process, as cableSession.spec.ts's
  * LoopbackPort is: the devices' real CableFleet finds it through its `discover` and opens it through its `open`, and it
- * speaks the cable protocol with the daemon's own frame codec, greeting as the firmware does with `appFilter: 'v1'`.
- * It keeps what the glass would show with the firmware's carousel model (testing/dialCarousel.ts), and records every
- * frame it hears and every face it shows at the virtual time it happened.
+ * speaks the cable protocol with the daemon's own frame codec, greeting, asking and forgetting as the round dial's
+ * firmware does (devices/harness-device/firmware/main/cable_client.c). It keeps what the glass would show with the
+ * firmware's carousel model (testing/dialCarousel.ts), and records every frame it hears and every face it shows at the
+ * virtual time it happened.
  */
 import type { CableFleetOptions } from '../../../cable/cableFleet.js'
 import { CableDecoder, CableType, encodeCableFrame } from '../../../cable/cableFrame.js'
@@ -12,14 +13,22 @@ import { CAROUSEL_REFRESH_MS, DialCarousel, type DialMessage } from '../../dialC
 import type { Seen } from '../types.js'
 
 const PORT_PATH = '/dev/eval-dial'
-/** The firmware greets every 2 s until it is welcomed. */
-const GREET_EVERY_MS = 2_000
+/** The firmware greets every 2 s until it is welcomed, then every 15 s, a keepalive (`HELLO_ALONE_MS`,
+ *  `HELLO_SESSION_MS`): each next greeting is set as one goes, by whether it was welcomed then. */
+const GREET_ALONE_MS = 2_000
+const GREET_WELCOMED_MS = 15_000
 const VOICE_RATE = 16_000
 /**
- * As the round dial's firmware greets, with no `fw`: a greeting that names one has the daemon read the firmware manifest
- * over the network for an update to offer (cableHost.ts firmwareFor), and tier A reaches no network.
+ * As the round dial's firmware greets (`send_hello`), with no `fw`: a greeting that names one has the daemon read the
+ * firmware manifest over the network for an update to offer (cableHost.ts firmwareFor), and tier A reaches no network.
+ * Its settings are a dial fresh from its box (ui_habitat.c `ui_settings_read`); it holds no pet pack.
  */
-const HELLO: DialMessage = { t: 'hello', product: 'harness', proto: 3, mac: 'e2:e0:00:00:0e:a1', hw: 'eval', appFilter: 'v1' }
+const HELLO: DialMessage = {
+  t: 'hello', product: 'harness', proto: 3, appFilter: 'v1', questionTier: 'v1', hw: 'eval', mac: 'e2:e0:00:00:0e:a1',
+  settings: { brightness: 40, character: 2, face: 466, muted: false, quiet: false, straightTitle: true, focusFace: false,
+    scrollReversed: false, round: true, voiceLang: 'en' },
+  pets: 2, petIds: [],
+}
 
 /** The dial's end of an open port. */
 interface Link { onData(chunk: Buffer): void; onClosed(why: string): void; open: boolean }
@@ -34,7 +43,7 @@ export class LoopbackDial {
   private page = ''
   private plugged = false
   private link: Link | undefined
-  private readonly carousel = new DialCarousel()
+  private carousel = new DialCarousel()
   private uploads = 0
 
   /** `now`: the virtual time each frame and face is recorded at. */
@@ -88,9 +97,13 @@ export class LoopbackDial {
     this.carousel.picked(app)
   }
 
-  /** The cable pulled: the port closes under the daemon, and discovery finds no dial. */
+  /** The cable pulled: the dial, powered by it, goes dark and forgets its tiles, its page and a pick not landed yet; the
+   *  port closes under the daemon, and discovery finds no dial. */
   unplug(): void {
     this.plugged = false
+    this.carousel = new DialCarousel()
+    this.page = ''
+    this.face()
     const link = this.link
     if (!link?.open) return
     link.open = false
@@ -129,13 +142,21 @@ export class LoopbackDial {
   }
 
   private greet(link: Link): void {
-    if (!link.open || this.link !== link || this.welcomed) return
+    if (!link.open || this.link !== link) return
     this.send(HELLO)
-    setTimeout(() => this.greet(link), GREET_EVERY_MS)
+    setTimeout(() => this.greet(link), this.welcomed ? GREET_WELCOMED_MS : GREET_ALONE_MS)
   }
 
   private heard(message: DialMessage): void {
     this.frames.push({ at: this.now(), message })
+    // A link's first welcome is the session coming up: the dial asks for both lists (`session_up`), as a rebooted dial
+    // greets as a keepalive does and is pushed nothing. After the write that carried it, as over the wire.
+    if (message.t === 'welcome' && !this.welcomed) {
+      queueMicrotask(() => {
+        this.send({ t: 'machines.list' })
+        this.send({ t: 'agents.list' })
+      })
+    }
     if (message.t === 'welcome') this.welcomed = true
     if (message.t === 'apps') this.page = typeof message.shown === 'string' ? message.shown : ''
     this.carousel.heard(message)
