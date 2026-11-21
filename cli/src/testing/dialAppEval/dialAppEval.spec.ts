@@ -5,20 +5,22 @@
  * the scenario's model of the machine (tierA/machine.ts), so the devices see the scenario's processes and none of the
  * host's.
  *
- * Nothing real is reached. A fetch, a socket to a backend or a child process fails the case: the devices must start no
- * `claude`, `codex`, `orca`, `open`, `xdg-open` or `ps`, and reach no backend. The homes, the stores and the transcripts
- * are throwaway folders.
+ * Nothing real is reached. The network guard (netGuard.ts) is the one way this spec refuses the network: a connection
+ * to anything but this machine fails, and fails the case it happened in, named by host and port. A child process fails
+ * the case too: the devices must start no `claude`, `codex`, `orca`, `open`, `xdg-open` or `ps`. The homes, the stores
+ * and the transcripts are throwaway folders.
  */
 import { homedir, tmpdir } from 'node:os'
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MAIN, scenariosFor } from './catalog.js'
+import { describeAttempt, guardThisProcess } from './netGuard.js'
 import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from './runner.js'
 import { TierADriver } from './tierA/driver.js'
 import { StepNotBuilt, type Platform, type Seen } from './types.js'
 
 const { machine } = await vi.hoisted(async () => await import('./tierA/machine.js'))
 
-/** What reached past the stand-ins: a fetch, a backend socket or a process started. Each fails the case it happened in. */
+/** The processes started past the stand-ins. Each fails the case it happened in. */
 const reached = vi.hoisted(() => [] as string[])
 /** Every way to start a process, refused and noted. */
 const refused = vi.hoisted(() => async (real: () => Promise<Record<string, unknown>>) => {
@@ -33,23 +35,6 @@ const refused = vi.hoisted(() => async (real: () => Promise<Record<string, unkno
 })
 vi.mock('node:child_process', refused)
 vi.mock('child_process', refused)
-// The backend's sockets (the devices' lane to the owner's other machines) are `ws`'s: refused and noted, as a fetch is.
-vi.mock('ws', async (real) => {
-  const actual = await real<Record<string, unknown>>()
-  class Refused {
-    // The states its callers compare a socket's against.
-    static readonly CONNECTING = 0
-    static readonly OPEN = 1
-    static readonly CLOSING = 2
-    static readonly CLOSED = 3
-    constructor() {
-      reached.push('WebSocket')
-      throw new Error('tier A opens no socket to a backend')
-    }
-  }
-  return { ...actual, default: Refused, WebSocket: Refused }
-})
-
 // The machine's processes, and whether one still runs, from the model. A session's transcript has no stamp there: one
 // waiting on the person stays so until its next hook.
 vi.mock('../../lib/sessionSearch/externals/support.js', async (real) => ({
@@ -129,18 +114,15 @@ const PLATFORMS: readonly Platform[] = ['darwin', 'win32', 'linux']
 /** Every scenario run, in the order run: what the results file holds. */
 const runs: ScenarioRun[] = []
 
-beforeEach(() => {
-  reached.length = 0
-  vi.stubGlobal('fetch', async () => {
-    reached.push('fetch')
-    throw new Error('tier A reaches no network')
-  })
-})
+let guard: ReturnType<typeof guardThisProcess>
+beforeAll(() => { guard = guardThisProcess() })
+beforeEach(() => { reached.length = 0 })
 afterEach(() => {
-  vi.unstubAllGlobals()
+  expect(guard.taken().map(describeAttempt)).toEqual([])
   expect(reached).toEqual([])
 })
 afterAll(() => {
+  guard.uninstall()
   const out = process.env.DIAL_EVAL_OUT
   if (out) writeResults(out, 'spec', collect(runs))
 })
@@ -162,6 +144,11 @@ describe.each(PLATFORMS)('tier A on %s', (platform) => {
 })
 
 describe('tier A', () => {
+  it('reaches no network: a fetch to example.invalid fails and the guard names it', async () => {
+    await expect(fetch('http://example.invalid/')).rejects.toThrow()
+    expect(guard.taken().map(describeAttempt)).toEqual(['node net example.invalid:80'])
+  })
+
   it('C1 twice gives the same frames at the same virtual times', async () => {
     const c1 = MAIN.find((s) => s.id === 'C1')!
     const seen = async (): Promise<Seen> => {
