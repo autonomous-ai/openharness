@@ -85,6 +85,8 @@ const REMOTE_GRACE_MS = 30_000
 /** How the lane says an agent list went unanswered (DeviceLink.rpc). Every other failure of a list the machine
  *  answered during is its answer: a refusal. */
 const LIST_TIMED_OUT = 'agents_list timed out'
+/** Why a turn for a machine whose last request did not come back is refused (`sendTurn`). */
+export const TURN_UNANSWERED = 'the last request to it did not come back'
 
 /** Each other machine's agents, as last read. `asked` throttles the round; `at` ages the answer; `refusedSince` is the
  *  machine's first refusal of a list since its last good one. */
@@ -512,7 +514,7 @@ export class FleetRouter implements FleetRouting {
       if (seen && !seen.ok) {
         const ago = Math.round((Date.now() - seen.at) / 1000)
         this.local.log(`cable: refused a turn for ${agentId.slice(0, 8)} — ${sid(machineId)} last failed ${ago}s ago`)
-        return { ok: false, machine, reason: 'the last request to it did not come back' }
+        return { ok: false, machine, reason: TURN_UNANSWERED }
       }
       this.fleet!.sendTurn(machineId, agentId, text)
       this.spokeTo(agentId)
