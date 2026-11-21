@@ -108,7 +108,8 @@ const RECORDED_SOCKETS: Record<number, string[]> = Object.fromEntries(Object.ent
 /** ps's recorded rows of [pids] alone, as `ps -p` prints them. */
 const recordedTtys = (...pids: number[]): string => RECORDED_HERDR.ttys.split('\n')
   .filter((line) => pids.includes(Number(line.trim().split(/\s+/)[0]))).map((line) => `${line}\n`).join('')
-const ssAsked: Call = { file: SS, args: ['-xn'], timeoutMs: 10_000 }
+/** ss's rows of the sockets bound at a client socket's path alone: the machine's whole table can pass 1 MiB. */
+const ssAsked: Call = { file: SS, args: ['-xn', 'src', '*/herdr-client.sock'], timeoutMs: 10_000 }
 /** The lookup on Linux over [table], with the recorded `ss -xn` and descriptors unless [said] gives others. */
 function onLinux(table: readonly PtyProcess[], said: Said = {}, over: Parameters<typeof lookup>[0] = {}, codes: Array<number | null> = []) {
   return lookup({ platform: 'linux', processes: async () => table, ...over }, codes, { ss: RECORDED_HERDR.ss, sockets: RECORDED_SOCKETS, ...said })
