@@ -37,16 +37,20 @@ describe('failForegroundStart', () => {
     expect(exited.mock.calls).toEqual([[1], [3]])
   })
 
-  // A trust file that cannot be read is the person's to move aside: said by its own name and why, read off the error's
-  // fields, never its message.
-  it('says a trust file that cannot be read by its name and why', async () => {
+  // A trust file that cannot be read is the person's to move aside: said by its own name, why and what to do, read off
+  // the error's fields, never its message.
+  it('says a trust file that cannot be read by its name, why and what to do', async () => {
     const { failForegroundStart } = await daemonState()
     const { StateFileUnreadable } = await import('./secureState.js')
     const said = vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(process, 'exit').mockImplementation(((code: number) => { throw new Error(`exit ${code}`) }) as never)
 
     expect(() => failForegroundStart(new StateFileUnreadable('paired.json', 'not valid JSON'))).toThrow('exit 1')
+    expect(() => failForegroundStart(new StateFileUnreadable('group.json', 'EACCES', true))).toThrow('exit 1')
 
-    expect(said.mock.calls).toEqual([['✗ paired.json cannot be read (not valid JSON)'], ['  harness status shows where it is']])
+    expect(said.mock.calls).toEqual([
+      ['✗ paired.json cannot be read (not valid JSON). Move it aside to start over.'], ['  harness status shows where it is'],
+      ['✗ group.json could not be read (EACCES), so it was not changed.'], ['  harness status shows where it is'],
+    ])
   })
 })
