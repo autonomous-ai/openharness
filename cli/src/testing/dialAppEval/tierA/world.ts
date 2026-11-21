@@ -12,8 +12,10 @@ import { vi } from 'vitest'
 import { chatGptPlaces, claudeStoreRoots } from '../../../cable/hosts/appPlaces.js'
 import { ClaudeAppStore } from '../../../cable/hosts/claudeAppStore.js'
 import { CodexAppThreads } from '../../../cable/hosts/codexAppThreads.js'
+import { windowClasses } from '../../../cable/hosts/frontApp.js'
 import type { HcClient } from '../../../cable/hosts/hcClient.js'
 import type { HerdrClient } from '../../../cable/hosts/herdrClient.js'
+import { createLinuxRaise } from '../../../cable/hosts/linuxRaise.js'
 import type { OpencodeClient } from '../../../cable/hosts/opencodeClient.js'
 import type { OrcaReadDeps, OrcaReads } from '../../../cable/hosts/orca.js'
 import { env } from '../../../config/env.js'
@@ -376,11 +378,21 @@ export class World implements TierAWorld {
       processParents: async () => [...machine.processes.values()].map(({ pid, ppid }) => ({ pid, ppid })),
       claudeFullscreen: async () => false,
       processGroups: async () => undefined,
-      // Linux's and Windows' ways to bring a window forward, as the commands the checks read (checks.ts fronts).
-      raise: platform === 'linux' ? {
-        ready: () => true,
-        raise: async ({ pid, app }) => this.ran(['raise', ...(pid === undefined ? [] : [String(pid)]), ...(app ? [app] : [])]).code === 0,
-      } : undefined,
+      // Linux's and Windows' ways to bring a window forward, as the commands the checks read (checks.ts fronts). On Linux
+      // the real raise (linuxRaise.ts), its ready and its walk of the session's parents, on a desktop that takes a window
+      // by its process (X11, as sway, Hyprland and KDE do): GNOME's raise by the app's class alone is not graded. Its
+      // backend's command is `raise [--pid <pid>]… [--class <class>]…`, the pids nearest first and the classes as
+      // frontApp.ts windowClasses spells them: what the real raise hands every desktop's backend.
+      raise: platform === 'linux' ? createLinuxRaise({
+        find: async () => ({ kind: 'x11', display: ':0' }),
+        backend: () => ({
+          raise: async ({ pids, classes }) => this.ran(['raise', ...pids.flatMap((pid) => ['--pid', String(pid)]),
+            ...classes.flatMap((name) => ['--class', name])]).code === 0,
+        }),
+        processes: async () => [...machine.processes.values()].map(({ pid, ppid }) => ({ pid, ppid })),
+        classes: windowClasses,
+        log: () => {},
+      }) : undefined,
       windowsRaise: platform === 'win32' ? {
         app: async (bundle) => this.ran(['harness-pty', 'raise', bundle]).code === 0,
         link: async (url, bundle) => this.ran(['harness-pty', 'open-link', url, ...(bundle ? [bundle] : [])]).code === 0,
