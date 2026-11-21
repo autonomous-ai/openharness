@@ -75,6 +75,12 @@ describe('the catalog', () => {
     ])
   })
 
+  it('C8 has no tap or swipe, so its open can only be the voice\'s', () => {
+    // A swipe's rest opens the session too: one before the voice would pass the open whatever the voice did. The pick
+    // lands on its only row.
+    expect(byId('C8').steps.filter((s) => s.kind === 'tap' || s.kind === 'swipe')).toEqual([])
+  })
+
   it('C3, CH1, CH2 and XH1 are tier A only, every other scenario (C10, C11, X7, C8, X9, CH3 and XH3 among them) runs in tier B', () => {
     const onlyA = ['C3', 'CH1', 'CH2', 'XH1']
     for (const s of ALL) expect(s.tiers, s.id).toEqual(onlyA.includes(s.id) ? ['a'] : ['a', 'b'])
