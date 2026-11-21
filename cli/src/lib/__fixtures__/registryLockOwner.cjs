@@ -12,15 +12,13 @@ const release = () => {
   } catch {}
 }
 // A caller's write resolves before its lock cleanup finishes, so the lock may still be
-// taken here; wait for its removal as a legacy writer would. The watch alone is not enough:
-// on macOS FSEvents starts its stream asynchronously, so a removal before it is live is never
-// told ("watch before trying" holds for inotify only). A short retry covers that gap.
-const watcher = fs.watch(directory)
+// taken here; poll for its removal as a legacy writer does. No fs.watch: on macOS FSEvents
+// misses a removal before its stream is live, and closing a watch waits for FSEvents, which a
+// loaded machine stalls for seconds (the holder hung with its lock made and no owner in it).
 let retry
 const take = () => {
   try { fs.mkdirSync(lock, { mode: 0o700 }) }
   catch (error) { if (error.code === 'EEXIST') return false; throw error }
-  watcher.close()
   clearInterval(retry)
   const descriptor = fs.openSync(path.join(lock, 'owner.json'), 'wx', 0o600)
   try {
@@ -42,7 +40,6 @@ process.on('SIGTERM', () => {
 })
 // This helper must not outlive a failed test or a parent that never releases it.
 setTimeout(() => { release(); process.exit(2) }, 20_000).unref()
-watcher.on('change', take)
 if (!take()) {
   retry = setInterval(take, 50).unref()
   process.send('waiting')
