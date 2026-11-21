@@ -6,6 +6,7 @@ import 'package:harness/core/config.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/settings/config_store.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/ws/local_cli_discovery.dart';
 
 import 'support/guest_app.dart';
 
@@ -182,4 +183,53 @@ void main() {
     expect(app.isGuest, isTrue);
     app.dispose();
   });
+
+  // `harness uninstall` holds its marker while it removes the CLI: setup runs the CLI and may install it again.
+  testWidgets(
+    'the five-second recheck runs no setup once harness uninstall holds its marker',
+    (tester) async {
+      final review = EnvironmentReadiness(
+        steps: {
+          EnvironmentStep.clipboard: EnvironmentStepStatus.failed,
+          EnvironmentStep.harness: EnvironmentStepStatus.failed,
+          EnvironmentStep.tmux: EnvironmentStepStatus.failed,
+        },
+        phase: EnvironmentSetupPhase.review,
+        plan: _linuxHostPlan,
+      );
+      final waiting = review.copyWith(
+        phase: EnvironmentSetupPhase.waitingForTerminal,
+        mode: EnvironmentSetupMode.automatic,
+        terminalResultPath: '/missing/terminal.exit',
+        terminalSetup: EnvironmentTerminalSetup.linuxHost,
+      );
+      var uninstalling = false;
+      final provisioner = _ScriptedProvisioner([review, waiting]);
+      final app = GuestTestApp(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: ConfigStore(storage: _FakeKeyValueStore()),
+        cliLogin: _FakeCliLogin(),
+        environmentProvisioner: provisioner,
+        localCliDiscovery: LocalCliDiscovery(
+          config: AppConfig.dev,
+          uninstalling: () => uninstalling,
+        ),
+      );
+
+      await app.bootstrap();
+      app.selectEnvironmentSetupMode(EnvironmentSetupMode.automatic);
+      await app.startEnvironmentSetup();
+      expect(app.environmentRecheckPending, isTrue);
+
+      uninstalling = true;
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pump();
+
+      expect(provisioner.installCalls, [false, true]);
+      expect(app.environmentRecheckPending, isFalse);
+      expect(app.status, AppStatus.unauthenticated);
+      app.dispose();
+    },
+  );
 }
