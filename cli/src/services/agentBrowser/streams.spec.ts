@@ -398,14 +398,15 @@ describe('what a browser stream ignores and how it fails', () => {
     expect(stdout.isPaused()).toBe(false)
   })
 
-  it('a viewer message the shaper cannot read closes the stream with reason closed and a line giving its words\' length', () => {
+  it('a viewer message the shaper cannot read closes the stream with reason closed and a line saying which', () => {
     const h = harness()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const streamId = h.open('local:w')
     h.manager.input(streamId, new TextEncoder().encode('RFB 003.008\n'))
     h.manager.input(streamId, Uint8Array.of(1, 1, 99))
     expect(h.closes()).toEqual([['local:w', streamId, 'closed']])
-    expect(warn.mock.calls.flat().join(' ')).toContain(`stream ${streamId.slice(0, 8)} closed: text(34)`)
+    // The shaper's own sentence, with the message's type: never a byte the viewer sent beyond it.
+    expect(warn.mock.calls.flat().join(' ')).toContain(`stream ${streamId.slice(0, 8)} closed: unknown RFB client message type 99`)
   })
 
   it('an exec that exits says how it ended in the log, and its stderr by its size', () => {
@@ -420,6 +421,11 @@ describe('what a browser stream ignores and how it fails', () => {
     h.open('local:w')
     h.children[1].exit(null, 'SIGKILL')
     expect(warn.mock.calls.flat().join(' ')).toContain('exec exited (SIGKILL): stderr 0 B')
+    // Every byte it wrote is counted, however much: none of it is kept.
+    h.open('local:w')
+    for (let chunk = 0; chunk < 3; chunk++) h.children[2].stderr.emit('data', Buffer.alloc(1_500, 0x61))
+    h.children[2].exit(1, null)
+    expect(warn.mock.calls.flat().join(' ')).toContain('exec exited (1): stderr 4500 B')
   })
 
   it('an ack or a close that names no stream changes nothing', () => {
