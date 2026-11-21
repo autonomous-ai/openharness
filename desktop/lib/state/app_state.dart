@@ -6155,9 +6155,10 @@ class AppNotifier extends ChangeNotifier {
 
   /// `harness auth status` for a launch. While `harness uninstall` holds its marker the CLI is being removed: a run
   /// starts it from the files going away, and on Windows holds them so the removal fails. No answer then, as when the
-  /// CLI is missing, so the launch ends on the login screen. A viewer has no local CLI to remove.
+  /// CLI is missing, so the launch ends on the login screen. A dial being flashed holds only the daemon down, so the
+  /// check still runs then. A viewer has no local CLI to remove.
   Future<CliAuthStatus> _checkAuthStatus() async {
-    if (viewer == null && _discovery.spawnHeld()) {
+    if (viewer == null && _discovery.uninstallHeld()) {
       throw CliNotAvailableException('harness uninstall is removing the CLI');
     }
     return cliLogin.checkStatus();
@@ -7015,7 +7016,7 @@ class AppNotifier extends ChangeNotifier {
         // is told it has become a guest (a banner, and the sheet on the next reach for another
         // machine) and the supervisor goes on bringing the daemon back.
         // Not while `harness uninstall` holds its marker: the CLI it would run is being removed (see [_checkAuthStatus]).
-        if (!discovery.spawnHeld()) {
+        if (!discovery.uninstallHeld()) {
           final authStatus = await cliLogin.checkStatus();
           if (!_authWorkCurrent(revision)) return;
           if (!authStatus.loggedIn && signedIn) {
