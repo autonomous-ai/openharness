@@ -1524,6 +1524,11 @@ int main(void) {
         CHECK(ph_home_moves(&N, &M));    // vscode: only asking
         N.stack[0].scroll = POD_HOME_APP0;
 
+        // an older daemon sends no `working`: the row says 0/0 while a5, a ring agent of the app shown, works, so its mark moves
+        static const pod_app_t stale[2] = {{"harness", "Harness", 4, 1, 1}, {"codex", "ChatGPT", 2, 0, 0}};
+        pod_model_apps(&M, stale, 2, "codex");
+        CHECK(ph_home_moves(&N, &M));
+
         // a long name and a Vietnamese one beside the icon: cut between letters with an ellipsis, never under the icon; 34 px for letters 48 lacks
         static pod_app_t named[2] = {{"harness", "Harness", 4, 1, 1}, {"codex", "", 2, 0, 1}};
         memset(named[1].name, 'm', sizeof named[1].name - 1);   // the row's longest: 23 letters
