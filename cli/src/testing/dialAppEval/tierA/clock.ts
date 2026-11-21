@@ -13,8 +13,9 @@ export const EVAL_EPOCH = Date.UTC(2026, 10, 21, 9)
 export const MAX_ADVANCES = 100_000
 /** A world still busy after this long of real time is stuck, not slow: a read of a temp file takes milliseconds. */
 const QUIET_WITHIN_MS = 10_000
-/** A real read under way: the libuv requests `fs` and `fs/promises` hold while one runs. */
-const PENDING_IO: ReadonlySet<string> = new Set(['FSReqCallback', 'FSReqPromise', 'FileHandleCloseReq'])
+/** A real read under way: the libuv requests `fs` and `fs/promises` hold while one runs. A file handle's close, the
+ *  last step of a promise read, is named `CloseReq` there. */
+const PENDING_IO: ReadonlySet<string> = new Set(['FSReqCallback', 'FSReqPromise', 'CloseReq'])
 
 export function installClock(): void {
   vi.useFakeTimers({ now: EVAL_EPOCH, toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'] })
