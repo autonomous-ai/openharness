@@ -1733,6 +1733,19 @@ describe('⌘K, the Wi-Fi device\'s borrowed walk, the voice router and stopping
     expect(logs.join('\n')).not.toContain('mac-mini')
   })
 
+  it('say the fleet\'s own refusals of a send as they are: each is one of its fixed sentences', async () => {
+    const { port } = start()
+    seen.fleet!.answers = { routeSend: () => ({ ok: false, machine: 'mac-mini', reason: 'the last request to it did not come back' }) }
+    await port.routeSend('far', 'go')
+    // A fleet that fails answers with its fallback.
+    seen.fleet!.answers = { routeSend: () => { throw new Error('lost') } }
+    expect(await port.routeSend('far', 'go')).toEqual({ ok: false, machine: '', reason: 'the fleet service is unavailable' })
+    expect(logs).toEqual(expect.arrayContaining([
+      '[route] ⌘K → far · bytes=2 · REFUSED: the last request to it did not come back',
+      '[route] ⌘K → far · bytes=2 · REFUSED: the fleet service is unavailable',
+    ]))
+  })
+
   it('answer a window\'s ⌘K frames as the local WebSocket did: an empty task picks no agent, and nothing is sent without both', async () => {
     const { requests } = start()
     const frame = (name: string, payload: unknown) => requests.devices_ws({ frame: name, payload }, WINDOW, never)
