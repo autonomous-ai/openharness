@@ -20,8 +20,7 @@ import { parentChain, scannedApps, type ProcessName } from './scannedApp.js'
 import { clientTtyForm } from './tabs.js'
 
 const TMUX_PANE_ID = /^%[0-9]{1,9}$/
-/** A process id as the table and the hooks give it; the herdr and Zellij lookups hold their pids to it too
- *  (herdrOuter.ts, zellij.ts). */
+/** A process id as the table and the hooks give it. */
 export const PID = /^[1-9][0-9]{0,9}$/
 /** This adapter's pane: tmux's pane id and the agent's process, `%3:100`, as the hook's event named them, and the app
  *  holding the client that shows its session when one was found, `%3:100:terminal-app`. */
