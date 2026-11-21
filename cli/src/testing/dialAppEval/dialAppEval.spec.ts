@@ -13,7 +13,7 @@
 import { homedir, tmpdir } from 'node:os'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { claudeGhost, claudeSessions, listed, MAIN, scenario, scenariosFor } from './catalog.js'
-import { loadBaseline, tierAVerdict } from './grade.js'
+import { loadBaseline, SKIP_RATCHET_ENV, tierAVerdict } from './grade.js'
 import { describeAttempt } from './netGuard.js'
 import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from './runner.js'
 import { TierADriver } from './tierA/driver.js'
@@ -147,6 +147,7 @@ describe.skipIf(WINDOWS_HOST).each(PLATFORMS)('tier A on %s', (platform) => {
   it.for(scenariosFor('a', platform))('$id', async (scenario) => {
     const run = await runScenario(new TierADriver({ startDevices }), scenario, platform)
     runs.push(run)
+    expect(run.error).toBeUndefined()
     expect(run.wrongSends).toEqual([])
     expect(uncaughtProbes(run)).toEqual([])
   })
@@ -196,7 +197,8 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     for (const part of [tmpdir(), homedir(), '/work/eval-']) expect(written).not.toContain(part)
   })
 
-  it('matches the baseline', () => {
+  // The eval command judges the ratchet itself, over both tiers, and says so for its children (run.ts).
+  it.skipIf(process.env[SKIP_RATCHET_ENV] === '1')('matches the baseline', () => {
     const baseline = loadBaseline()
     expect(baseline).not.toBeNull()
     const verdict = tierAVerdict(collect(runs), baseline!)
