@@ -236,6 +236,21 @@ describe('open', () => {
     expect(front('darwin', ['/usr/bin/open', '-b', 'com.openai.codex'])).toBe(0)
   })
 
+  it('a raise counts only for the session\'s app: on Windows by its bundle or program, on Linux by its app id or window class', () => {
+    const front = (platform: Platform, argv: string[]): number | undefined =>
+      scores(run(open, s, seen(s, [500], { commands: [cmd(600, argv)] }), 'a', platform)).front
+    expect(front('win32', ['C:\\h\\harness-pty.exe', 'raise', 'com.anthropic.claudefordesktop'])).toBe(1)
+    expect(front('win32', ['C:\\h\\harness-pty.exe', 'raise', '--exe', 'Claude.exe'])).toBe(1)
+    expect(front('win32', ['C:\\h\\harness-pty.exe', 'raise', 'com.openai.codex'])).toBe(0)
+    expect(front('win32', ['C:\\h\\harness-pty.exe', 'raise', '--exe', 'Code.exe'])).toBe(0)
+    expect(front('win32', ['C:\\h\\harness-pty.exe', 'raise'])).toBe(0)
+    expect(front('linux', ['raise', '41000', 'claude'])).toBe(1)
+    expect(front('linux', ['raise', 'com.anthropic.Claude'])).toBe(1)
+    expect(front('linux', ['raise', '41000', 'kitty'])).toBe(0)
+    expect(front('linux', ['raise', '41000'])).toBe(0)
+    expect(front('linux', ['raise', 'codex'])).toBe(0)
+  })
+
   it('a command that failed is not the app coming up', () => {
     const refused = run(open, s, seen(s, [500], { commands: [cmd(700, ['/usr/bin/open', '-b', 'com.anthropic.claudefordesktop', link], false)] }))
     expect(scores(refused)).toEqual({ link: 1, front: 0, latency: 0 })
