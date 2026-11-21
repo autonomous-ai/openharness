@@ -135,6 +135,11 @@ function holdMod(world: TierAWorld, key: SessionKey, sessionId: string, mod: Non
   })()
 }
 
+/** Whether the session runs now: started, and not ended since. */
+export function running(world: TierAWorld, key: SessionKey): boolean {
+  return stateOf(world).live.has(key)
+}
+
 /** The session runs: its process and open session in the machine, its start hook, and for Claude the mod's poll. */
 export async function startSession(world: TierAWorld, key: SessionKey): Promise<void> {
   const state = stateOf(world)

@@ -1,16 +1,16 @@
 /**
  * Tier A's fake Claude app and fake ChatGPT app (docs/plans/2026-11-21-dial-app-eval-design.md, "The fake apps react to
  * links"): they watch the commands the devices run, and a moment after one opens a session's link the app shows that
- * session, as the real app does, and says so: the Claude app's mod sends its attach, and the ChatGPT app's window title,
- * which the watch reads only for the app in front and with Accessibility, becomes the thread's Codex name. A session the
- * scenario marks resumable it also starts: its process, its start hook and, for Claude, the mod's open inbox poll
- * (sessions.ts startSession). Installed after the world's own rules, so a link the scenario says fails is answered 1
+ * session, as the real app does, and says so: the Claude app's mod, in a session's running Claude Code, sends its
+ * attach, and the ChatGPT app's window title, which the watch reads only for the app in front and with Accessibility,
+ * becomes the thread's Codex name. A session the scenario marks resumable it first starts: its process, its start hook
+ * and, for Claude, the mod's open inbox poll (sessions.ts startSession). Installed after the world's own rules, so a link the scenario says fails is answered 1
  * there and opens nothing.
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { SessionDef } from '../types.js'
-import { startSession } from './steps/sessions.js'
+import { running, startSession } from './steps/sessions.js'
 import { windowSteps } from './steps/window.js'
 import type { TierAWorld } from './world.js'
 
@@ -33,19 +33,21 @@ function codexName(world: TierAWorld, s: SessionDef): string {
   return names.at(-1)?.thread_name ?? s.title
 }
 
-/** What the app says of the session it shows, then the session resumed when it can be. A word the listener refuses
+/** The session resumed when it can be, and what the app says of the session it shows. A word the listener refuses
  *  leaves the scenario on this platform ungraded: its echo is not the app's. */
 async function show(world: TierAWorld, s: SessionDef): Promise<void> {
+  // A session already running is only shown: startSession starts each once.
+  if (s.resumable) await startSession(world, s.key)
   try {
-    if (s.app === 'claude') await windowSteps.attach(world, { kind: 'attach', session: s.key })
-    else if (world.front === 'chatgpt' && world.scenario.world?.accessibility !== false) {
+    // The mod that says the attach runs in the session's Claude Code (plugins/harness-device): one at rest says nothing.
+    if (s.app === 'claude') {
+      if (running(world, s.key)) await windowSteps.attach(world, { kind: 'attach', session: s.key })
+    } else if (world.front === 'chatgpt' && world.scenario.world?.accessibility !== false) {
       await windowSteps.thread(world, { kind: 'thread', title: codexName(world, s) })
     }
   } catch {
     world.gap(`the devices refused the app's word on ${s.key}`)
   }
-  // A session already running is only shown: startSession starts each once.
-  if (s.resumable) await startSession(world, s.key)
 }
 
 export function installFakeApps(world: TierAWorld): void {
