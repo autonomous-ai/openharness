@@ -557,13 +557,20 @@ void main() {
     final checkout = p.join(root.path, 'checkout');
     for (final args in [
       ['init', checkout],
-      ['-C', checkout, 'remote', 'add', 'origin', 'https://github.com/o/r.git'],
+      [
+        '-C',
+        checkout,
+        'remote',
+        'add',
+        'origin',
+        'https://example.invalid/o/r.git',
+      ],
     ]) {
       expect((await Process.run('git', args)).exitCode, 0);
     }
     expect(
       await RepositoryClone.readCheckoutOrigin(checkout),
-      'https://github.com/o/r.git',
+      'https://example.invalid/o/r.git',
     );
     for (final program in [() => missing, noGit]) {
       expect(

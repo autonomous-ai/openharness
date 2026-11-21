@@ -4,9 +4,14 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import 'git_program.dart';
+
 /// Read-only, bounded source material for a project preview. Never executes
 /// project code, hooks, Markdown images or a Git network operation.
-Future<Map<String, dynamic>> readLocalProjectPreview(String path) async {
+Future<Map<String, dynamic>> readLocalProjectPreview(
+  String path, {
+  String Function() program = gitProgram,
+}) async {
   if (!p.isAbsolute(path) || path.length > 4096 || path.contains('\u0000')) {
     return {'error': 'INVALID_PATH'};
   }
@@ -38,10 +43,10 @@ Future<Map<String, dynamic>> readLocalProjectPreview(String path) async {
     }
     files.sort();
     final git = await Future.wait([
-      _git(path, ['symbolic-ref', '--quiet', '--short', 'HEAD']),
-      _git(path, ['status', '--porcelain=v1', '--untracked-files=no']),
-      _git(path, ['log', '-1', '--format=%s%n%an%n%aI']),
-      _git(path, ['log', '-100', '--format=%an']),
+      _git(program, path, ['symbolic-ref', '--quiet', '--short', 'HEAD']),
+      _git(program, path, ['status', '--porcelain=v1', '--untracked-files=no']),
+      _git(program, path, ['log', '-1', '--format=%s%n%an%n%aI']),
+      _git(program, path, ['log', '-100', '--format=%an']),
     ]);
     final commit = git[2]?.split('\n');
     return {
@@ -70,13 +75,17 @@ Future<Map<String, dynamic>> readLocalProjectPreview(String path) async {
   }
 }
 
-Future<String?> _git(String path, List<String> args) async {
+Future<String?> _git(
+  String Function() program,
+  String path,
+  List<String> args,
+) async {
   Process? process;
   Timer? timer;
   var expired = false;
   try {
     process = await Process.start(
-      'git',
+      program(),
       [
         '--no-optional-locks',
         '-c',
