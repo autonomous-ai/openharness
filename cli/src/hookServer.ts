@@ -496,7 +496,7 @@ export function startHookServer(
       if (!trustedLocal && !isLoopbackRequest(req, hosts)) {
         // At most one line a minute: enough to explain a client that was refused, not a lever for a
         // page to flood the log. The address, Host and Origin are the sender's (a page's URL can name the person's
-        // work), so the address is its length and each header, when sent, a hash that reads the same each time.
+        // work), so the address is its length and each header, when sent, a tag that reads the same while this daemon runs.
         if (Date.now() - lastRefusalLogAt > 60_000) {
           lastRefusalLogAt = Date.now()
           const sent = ([['host', req.headers.host], ['origin', req.headers.origin]] as const)
