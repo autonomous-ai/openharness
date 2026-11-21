@@ -265,17 +265,82 @@ describe('one watch on the nearest existing folder', () => {
     }
   })
 
-  it('a watch that told a change is live, and tells no other for it', () => {
+  // A change told says the stream is live, not what was made before it was: a caller that reads only the entry a change
+  // names (claudeAppSource.ts) would never read that.
+  it('a change told spares no look', () => {
     vi.useFakeTimers()
     const watches = fakeWatches()
     const t = folder()
     const { changes, stop } = told([t])
     try {
       watches.on(t).tell('one')
+      vi.advanceTimersByTime(5_000)
+      expect(changes).toEqual(['one', undefined])
       vi.advanceTimersByTime(60_000)
-      expect(changes).toEqual(['one'])
+      expect(changes).toEqual(['one', undefined])
     } finally {
       stop()
+    }
+  })
+
+  // On macOS every folder the process watches is in one FSEvents stream, which libuv builds anew at each watch's start
+  // and close: a change made meanwhile is told to no watch, one held long before as well.
+  it('a watch looks again once another of the process starts or closes', () => {
+    vi.useFakeTimers()
+    const watches = fakeWatches()
+    const a = folder()
+    const first = told([a])
+    try {
+      vi.advanceTimersByTime(5_000)
+      watches.on(a).tell('x')
+      expect(first.changes).toEqual([undefined, 'x'])
+      const second = told([folder()])
+      vi.advanceTimersByTime(5_000)
+      expect(first.changes).toEqual([undefined, 'x', undefined])
+      expect(second.changes).toEqual([undefined])
+      second.stop()
+      vi.advanceTimersByTime(5_000)
+      expect(first.changes).toEqual([undefined, 'x', undefined, undefined])
+      expect(second.changes).toEqual([undefined])
+    } finally {
+      first.stop()
+    }
+    // With no watch held, nothing is left to look.
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('watches started together look once, 5 s after the last of them', () => {
+    vi.useFakeTimers()
+    fakeWatches()
+    const first = told([folder()])
+    vi.advanceTimersByTime(3_000)
+    const second = told([folder()])
+    try {
+      vi.advanceTimersByTime(2_000)
+      expect([first.changes, second.changes]).toEqual([[], []])
+      vi.advanceTimersByTime(3_000)
+      expect([first.changes, second.changes]).toEqual([[undefined], [undefined]])
+      vi.advanceTimersByTime(60_000)
+      expect([first.changes, second.changes]).toEqual([[undefined], [undefined]])
+    } finally {
+      first.stop()
+      second.stop()
+    }
+  })
+
+  it('a watch stopped in another\'s look is not looked at', () => {
+    vi.useFakeTimers()
+    const watches = fakeWatches()
+    const b = folder()
+    let second: ReturnType<typeof told> | undefined
+    const first = watchNearest([folder()], () => second?.stop())
+    second = told([b])
+    try {
+      vi.advanceTimersByTime(5_000)
+      expect(second.changes).toEqual([])
+      expect(watches.open()).not.toContain(b)
+    } finally {
+      first()
     }
   })
 
