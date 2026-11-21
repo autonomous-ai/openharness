@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Worker } from 'node:worker_threads'
 import { afterEach, describe, expect, it } from 'vitest'
 import { MAIN } from './dialAppEval/catalog.js'
 import type { App, Platform, Scenario } from './dialAppEval/types.js'
@@ -18,6 +19,7 @@ const driver = await import('../../e2e/harness/appEvalDriver.js' as string) as {
 const claude = await import('../../e2e/harness/appEvalClaude.js' as string) as {
   linkedSocket(root: string, code: number | null, stdout: string, stderr: string): string
   typedPrompts(transcript: string): Array<{ at?: number; text: string }>
+  writeWhole(file: string, text: string): void
 }
 
 let dir = ''
@@ -116,4 +118,42 @@ describe("tier B's Claude sessions: the words typed into one", () => {
   it('has no time for a prompt whose row names none', () => {
     expect(claude.typedPrompts(row('user', 'Eval words.'))).toEqual([{ text: 'Eval words.' }])
   })
+})
+
+/**
+ * A reader in a thread of its own, as the fake Claude Code polls for its release file: it spins on file `i` until it
+ * is there and reads it at once. The writer writes file `i` only once the reader spins on it.
+ */
+const READER = `
+const { readFileSync } = require('node:fs')
+const { workerData: { dir, count, turn } } = require('node:worker_threads')
+const at = new Int32Array(turn)
+let empty = 0
+for (let i = 0; i < count; i++) {
+  Atomics.store(at, 0, i + 1)
+  Atomics.notify(at, 0)
+  for (;;) {
+    let text
+    try { text = readFileSync(dir + '/eval-turn-' + i + '.release', 'utf8') } catch { continue }
+    if (text === '') empty++
+    break
+  }
+}
+require('node:worker_threads').parentPort.postMessage(empty)
+`
+
+describe("tier B's Claude sessions: a turn's release file", () => {
+  it('is never seen empty by a reader that looks the moment it is there, so its turn answers with its text', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'tier-b-release-'))
+    const count = 300
+    const turn = new SharedArrayBuffer(4)
+    const at = new Int32Array(turn)
+    const reader = new Worker(READER, { eval: true, workerData: { dir, count, turn } })
+    const empty = new Promise<number>((resolve, reject) => { reader.once('message', resolve); reader.once('error', reject) })
+    for (let i = 0; i < count; i++) {
+      while (Atomics.load(at, 0) !== i + 1) Atomics.wait(at, 0, Atomics.load(at, 0), 1_000)
+      claude.writeWhole(join(dir, `eval-turn-${i}.release`), 'Eval answer one.')
+    }
+    expect(await empty).toBe(0)
+  }, 30_000)
 })
