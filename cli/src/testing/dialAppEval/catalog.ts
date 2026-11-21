@@ -125,7 +125,6 @@ export const MAIN: Scenario[] = [
       { kind: 'hook', session: 'b', event: 'start' },
       ...listed('claude', ['a', 'b']),
       { kind: 'front', app: 'claude' },
-      { kind: 'swipe', session: 'a' },
       { label: 'attach', kind: 'attach', session: 'b' },
     ],
     checks: [{ id: 'focus', kind: 'focus', dim: 'D2', session: 'b', after: 'attach' }],
@@ -178,13 +177,14 @@ export const MAIN: Scenario[] = [
   scenario({
     id: 'C9', app: 'claude', title: 'A new session with no hook yet: a swipe reaches it, and its hook makes the two one row',
     dims: ['D3', 'D1', 'D7'], sessions: [...claudeSessions(['b', 'a']), claudeGhost],
-    // The person turns from the older session to the new one and rests on it past the open's half mark; its hook comes
-    // only after.
+    // The person turns to the older session and rests there as a person does, then turns to the new one and rests on it
+    // past the open's half mark; its hook comes only after.
     steps: [
       { kind: 'front', app: 'claude' },
       { kind: 'claude.write', sessions: ['a', 'b'] },
       ...listed('claude', ['b', 'a']),
       { kind: 'swipe', session: 'a' },
+      { kind: 'wait', ms: 1 * S },
       { label: 'swipe', kind: 'swipe', session: 'b' },
       { kind: 'wait', ms: 3 * S },
       { label: 'hook', kind: 'hook', session: 'b', event: 'start' },
@@ -252,7 +252,6 @@ export const MAIN: Scenario[] = [
       { kind: 'codex.write', sessions: ['t1', 't2'] },
       ...listed('chatgpt', ['t1', 't2']),
       { kind: 'front', app: 'chatgpt' },
-      { kind: 'swipe', session: 't1' },
       { label: 'title', kind: 'thread', title: titleOf('t2') },
     ],
     checks: [{ id: 'focus', kind: 'focus', dim: 'D2', session: 't2', after: 'title' }],
@@ -343,7 +342,6 @@ export const MAIN: Scenario[] = [
       { kind: 'codex.write', sessions: ['t1'] },
       { kind: 'hook', session: 't1', event: 'start' },
       ...listed('chatgpt', ['t1']),
-      { kind: 'swipe', session: 't1' },
       { label: 'voice', kind: 'voice', transcript: 'Eval words for one.', target: 't1' },
     ],
     checks: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 't1', text: 'Eval words for one.', after: 'voice' }],
@@ -369,7 +367,6 @@ export const MAIN: Scenario[] = [
       { kind: 'codex.write', sessions: ['t1', 't2', 't3'] },
       ...listed('chatgpt', ['t1', 't2', 't3']),
       { kind: 'front', app: 'chatgpt' },
-      { kind: 'swipe', session: 't1' },
       { kind: 'thread', title: titleOf('t2') },
       { kind: 'wait', ms: 300 },
       { kind: 'thread', title: titleOf('t1') },
