@@ -1,6 +1,7 @@
 /**
  * The dial eval's network guard (netGuard.cjs). Never a real host: every refused attempt goes to 192.0.2.1 (TEST-NET-1)
- * or example.invalid, so a guard that let one through still reaches nobody.
+ * or a name under .invalid, so a guard that let one through still reaches nobody. The one name with .local has a lookup
+ * that never answers, and the one DNS server asked is a socket of this spec's own.
  */
 import { spawn } from 'node:child_process'
 import dgram from 'node:dgram'
@@ -108,13 +109,18 @@ describe('a host off this machine', () => {
   })
 })
 
-/** A caller's own lookup: 192.0.2.1 for localhost and an address as itself (a dgram socket's bind asks for 0.0.0.0), one
- *  address or all as Node asks, on a later turn as a resolver answers. */
-function answersOff(hostname: string, options: unknown, callback: (...answer: unknown[]) => void): void {
-  const address = hostname === 'localhost' ? OFF : hostname
+/** What a caller's own lookup answers here: 192.0.2.1 for localhost, an address as itself (a dgram socket's bind asks
+ *  for 0.0.0.0). Each answers on a later turn, as a resolver does. */
+const answerFor = (hostname: string): string => hostname === 'localhost' ? OFF : hostname
+const answersOff: net.LookupFunction = (hostname, options, callback) => {
+  const address = answerFor(hostname)
   const family = net.isIP(address)
-  const all = (options as { all?: boolean } | undefined)?.all
-  setImmediate(() => all ? callback(null, [{ address, family }]) : callback(null, address, family))
+  // All of them when Node asks so, as it does for a connect that tries each family.
+  setImmediate(() => options.all ? callback(null, [{ address, family }]) : callback(null, address, family))
+}
+const dgramAnswersOff: NonNullable<dgram.SocketOptions['lookup']> = (hostname, _family, callback) => {
+  const address = answerFor(hostname)
+  setImmediate(() => callback(null, address, net.isIP(address)))
 }
 
 /** What a socket's lookup reported; the socket goes then, so a connect the guard let through gets no further. */
@@ -146,7 +152,7 @@ describe('localhost, where a caller\'s own lookup answers 192.0.2.1', () => {
   })
 
   it('a dgram socket\'s send fails and is recorded by that address', async () => {
-    const socket = dgram.createSocket({ type: 'udp4', lookup: answersOff })
+    const socket = dgram.createSocket({ type: 'udp4', lookup: dgramAnswersOff })
     try {
       const sent = await new Promise<Error | null>((resolve) => socket.send('eval', PORT, 'localhost', resolve))
       expect((sent as NodeJS.ErrnoException | null)?.code).toBe('ENETUNREACH')
@@ -165,8 +171,8 @@ it.each([
 ])('on a machine named %s, a refused %s is recorded and said as <this machine>', async (hostname, host) => {
   const named = vi.spyOn(os, 'hostname').mockReturnValue(hostname)
   // Its lookup never answers, so even a guard that let the name through would ask no resolver for it.
-  const never = (_name: string, _options: unknown, callback: (error: Error) => void) =>
-    setImmediate(callback, Object.assign(new Error('never resolved'), { code: 'ENOTFOUND' }))
+  const never: net.LookupFunction = (_name, _options, callback) =>
+    setImmediate(() => callback(Object.assign(new Error('never resolved'), { code: 'ENOTFOUND' }), ''))
   try {
     const error = await failure(net.connect({ host, port: PORT, lookup: never })) as Error
     expect(error.message).toBe(`the dial eval reaches no network: <this machine>:${PORT}`)
