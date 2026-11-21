@@ -184,6 +184,7 @@ class SelectionTests(unittest.TestCase):
         for path in ("src-tauri/src/appimage_env.rs", "scripts/e2e/linux-install.sh", "scripts/e2e/https-fake-cdn.py"):
             cases["device-app/" + path] = app | {"device-app-install"}
         for path in ("desktop/lib/devices/device_app_installer.dart", "desktop/lib/update/tauri_signature.dart",
+                     "desktop/lib/update/update_signature.dart", "desktop/test/support/tauri_test_signer.dart",
                      "desktop/integration_test/device_app_install_windows_linux_native_test.dart"):
             cases[path] = {"desktop", "device-app-desktop"}
         cases["website/scripts/device-install.sh"] = {"website", "device-app-install"}
