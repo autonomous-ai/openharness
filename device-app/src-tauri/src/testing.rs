@@ -110,22 +110,22 @@ pub fn wait_gone(pid: i32) -> bool {
 mod tests {
     use super::*;
     use crate::cli::{Cli, spawn_lock};
+    use std::io;
     use std::process::{Command, Stdio};
 
     /// The fake program a runner starts; unset, the test is no runner.
     const RUNNER: &str = "FAKE_HARNESS_RUNNER";
 
     /// What the app does with the fake, in a process the test can kill: it starts the watch as the app does, in a
-    /// process group of its own, and stays.
+    /// process group of its own, and stays until its stdin ends. The test holds that pipe, so a runner goes with the
+    /// test however the test ends, and never outlives a killed run itself.
     #[test]
     #[ignore = "run only by a_fake_ends_with_its_parent"]
     fn a_runner_of_the_fake() {
         let Some(program) = env::var_os(RUNNER) else { return };
         // The fake's own folder as home: a kill runs no destructor, so a temp folder of the runner's would stay.
         let _watch = cli_at(Path::new(&program), Arc::default()).spawn(&["hardware", "watch", "--json"]).unwrap();
-        loop {
-            thread::park();
-        }
+        io::copy(&mut io::stdin(), &mut io::sink()).unwrap();
     }
 
     /// A killed `cargo test` never reaches the fake, in a group of its own: the fake must see for itself that the
@@ -141,7 +141,7 @@ mod tests {
             Command::new(env::current_exe().unwrap())
                 .args(["--exact", "testing::tests::a_runner_of_the_fake", "--ignored"])
                 .env(RUNNER, fake.program())
-                .stdin(Stdio::null())
+                .stdin(Stdio::piped())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
