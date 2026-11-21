@@ -11,7 +11,8 @@
 #   -NoWait: prints the task's name and returns; the log grows as the script writes, to be read over SSH.
 #   -Stop <name>: waits up to 90 s for that task to end (a desk's quit restores the dial's settings, stops its daemon and
 #     looks at the dial once more), then ends what is left, prints its log and `exit <code>`, and deletes it all.
-# -ArgsJson is a JSON array of strings, passed to the script as its arguments. Exit 3: this account has no console session.
+# -ArgsJson is a JSON array of strings, passed to the script as its arguments. Exit 3: this account has no console session;
+# exit 4: this Windows has no quser.exe to find it with (Windows Home).
 param(
   [string]$Script,
   [string]$ArgsJson = '[]',
@@ -84,17 +85,17 @@ catch { Write-Output 'console.ps1: -ArgsJson takes a JSON array of strings'; exi
 # each account without its domain. It says "No User exists" on stderr, exit 1, when nobody is signed in: no console
 # session either. The person's name is never printed.
 $user = $me.Name.Split('\')[-1]
-$sessions = & { $ErrorActionPreference = 'Continue'; & (Join-Path $system 'quser.exe') 2>$null }
+$quser = Join-Path $system 'quser.exe'
+# Windows Home has none: say so, not that nobody is signed in.
+if (-not (Test-Path -LiteralPath $quser -PathType Leaf)) { Write-Output "console.ps1: this Windows has no $quser to find the console session with"; exit 4 }
+$sessions = & { $ErrorActionPreference = 'Continue'; & $quser 2>$null }
 # A row: '>' on the session quser runs in, else a space, the account, the session's name, its id.
 if (-not (@($sessions) -match ('^.' + [regex]::Escape($user) + '\s+console\s+\d'))) { Write-Output 'this account has no console session'; exit 3 }
 
 $name = 'harness-dial-check-' + [guid]::NewGuid().ToString('N')
 $files = Files $name
-# The script and its arguments are data the wrapper reads, never text in its code: a quote of any kind (straight,
-# curly, double) in a path or an argument cannot end a string there.
-[IO.File]::WriteAllText($files.call, (ConvertTo-Json -Compress -InputObject @{ script = $path; args = $words }), $utf8)
 # The same for every task: it finds its files beside itself, by its own name.
-@'
+$wrapper = @'
 $ErrorActionPreference = 'Continue'
 $global:LASTEXITCODE = 0
 $code = 0
@@ -124,7 +125,7 @@ try {
 # Whole: a reader never finds the file empty.
 [IO.File]::WriteAllText("$base.done.tmp", "$code")
 [IO.File]::Move("$base.done.tmp", "$base.done")
-'@ | Set-Content -LiteralPath $files.wrapper -Encoding utf8
+'@
 
 $shell = Join-Path $system 'WindowsPowerShell\v1.0\powershell.exe'
 $task = $service.NewTask(0)
@@ -137,11 +138,16 @@ $task.Settings.ExecutionTimeLimit = [Xml.XmlConvert]::ToString($limit)
 $task.Settings.DisallowStartIfOnBatteries = $false
 $task.Settings.StopIfGoingOnBatteries = $false
 $task.Settings.MultipleInstances = 2 # TASK_INSTANCES_IGNORE_NEW
-# TASK_CREATE, under this account with TASK_LOGON_INTERACTIVE_TOKEN: no password, it runs only in the session signed in.
-$tasks.RegisterTaskDefinition($name, $task, 2, $me.Name, $null, 3) | Out-Null
 $keep = $false
 $code = 124
+# Opened before the first file is written: a registration the Task Scheduler refuses still deletes them.
 try {
+  # The script and its arguments are data the wrapper reads, never text in its code: a quote of any kind (straight,
+  # curly, double) in a path or an argument cannot end a string there.
+  [IO.File]::WriteAllText($files.call, (ConvertTo-Json -Compress -InputObject @{ script = $path; args = $words }), $utf8)
+  $wrapper | Set-Content -LiteralPath $files.wrapper -Encoding utf8
+  # TASK_CREATE, under this account with TASK_LOGON_INTERACTIVE_TOKEN: no password, it runs only in the session signed in.
+  $tasks.RegisterTaskDefinition($name, $task, 2, $me.Name, $null, 3) | Out-Null
   $tasks.GetTask($name).Run($null) | Out-Null
   if ($NoWait) { $keep = $true; Write-Output $name; $code = 0; return }
   $deadline = (Get-Date).AddSeconds($TimeoutSec)
