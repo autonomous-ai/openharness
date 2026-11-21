@@ -3207,8 +3207,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // (`restartDaemonForIdentity`), so nothing here has to watch for one arriving.
   if (session) {
     backend.connect()
-    const dialed = backendName(env.BACKEND_WS_URL)
-    console.log(`[cli] dialing ${dialed} · watching registered sessions for ${ENGINES.length} engines`)
+    console.log(`[cli] dialing ${backendName(env.BACKEND_WS_URL)} · watching registered sessions for ${ENGINES.length} engines`)
   } else {
     backend.serveThisComputerOnly()
     console.log(`[cli] not signed in — serving this computer only · watching registered sessions for ${ENGINES.length} engines`)

@@ -194,8 +194,7 @@ export class UpstreamLink {
     ws.on('open', () => {
       this.openedAt = Date.now()
       // `harness start` waits for the marker (lib/daemonLaunch.ts); the URL names this computer's hostname.
-      const backend = backendName(this.url)
-      console.log(`[backend] connected · ${backend}`)
+      console.log(`[backend] connected · ${backendName(this.url)}`)
       this.events.status(true)
       this.drainQueue()
       this.events.up()

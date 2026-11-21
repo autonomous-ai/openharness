@@ -27,9 +27,11 @@
  * forwarder's: a plain parameter handed on bare by a function whose callers are checked where they call it, one bound
  * to a logger's name (`log: (line) => …`, `deps.log ?? (…)`) or a function of the file's own. And when it prints whole
  * a property of a local given a function of the file's own's result (awaited or not) or an object literal, and the
- * value there is found by the rules above. A `.length` or a `.size`, a type test, a comparison, and what `errorKind`,
- * `codeOrLength`, `hashOf`, `sid`, `serialPortName` (the one way a serial port's name is logged), `Number`, `Boolean`
- * and `Buffer.byteLength` return carry no words. What a function of the file's own logs of a parameter (a function, a
+ * value there is found by the rules above. A `.length` or a `.size`, a type test, a comparison, and what these
+ * return carry no words: `errorKind`, `codeOrLength`, `hashOf` and `sid` (lib/log.ts), `serialPortName`
+ * (cable/serial.ts, the one way a serial port's name is logged) and `backendName` (config/env.ts, which backend a URL
+ * names, in fixed words), each imported from its module under its own name or called in that module; and Node's
+ * `Number`, `Boolean` and `Buffer.byteLength` where the file declares no such name. What a function of the file's own logs of a parameter (a function, a
  * `const` one, a method called on `this`), and what a `writeSync` writes, are found the same way, but for the catch
  * they run in.
  *
@@ -46,7 +48,7 @@
  * behaviour test (docs/plans/2026-11-21-log-no-stored-strings-plan.md).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, posix } from 'node:path'
 import typescript from 'typescript'
 import { expect, it } from 'vitest'
 
@@ -410,15 +412,34 @@ const contentNamed = (name: string, hand: Hand): string | undefined =>
   hand.locals ? CONTENT_NAMES.find(([, pattern]) => pattern.test(name))?.[0] : undefined
 
 /**
- * The calls whose value carries no words: a kind, a code or a length, a hash, a short id, a serial port's name (the one
- * function that passes it, cable/serial.ts), a number, a boolean and a byte count.
+ * The functions whose value carries no words, each by the module that holds it (from cli/src): a kind, a code or a
+ * length, a hash, a short id, a serial port's name (the one function that passes it), and which backend a URL names, in
+ * fixed words. Trusted by its name, any function so named would be: a local `sid` that slices a path.
  */
-const SAFE_CALLS = ['errorKind', 'codeOrLength', 'hashOf', 'sid', 'serialPortName', 'Number', 'Boolean', 'Buffer.byteLength']
+const SAFE_HELPERS: ReadonlyMap<string, string> = new Map([
+  ['errorKind', 'lib/log'], ['codeOrLength', 'lib/log'], ['hashOf', 'lib/log'], ['sid', 'lib/log'],
+  ['serialPortName', 'cable/serial'], ['backendName', 'config/env'],
+])
 
+/** Whether [name], called, is its safe helper: imported from the helper's module as itself, or that module's own. */
+const isHelper = (name: ts.Identifier): boolean => {
+  const home = SAFE_HELPERS.get(name.text)
+  const declaration = home ? declarationOf(name) : undefined
+  if (!home || !declaration) return false
+  const file = name.getSourceFile().fileName
+  if (ts.isFunctionDeclaration(declaration)) return file.replace(/\.ts$/, '') === home
+  const bindings = ts.isImportDeclaration(declaration) ? declaration.importClause?.namedBindings : undefined
+  return !!bindings && ts.isNamedImports(bindings) && ts.isStringLiteral(declaration.moduleSpecifier)
+    && posix.join(posix.dirname(file), declaration.moduleSpecifier.text).replace(/\.[jt]s$/, '') === home
+    && bindings.elements.some((element) => element.name.text === name.text && (element.propertyName ?? element.name).text === name.text)
+}
+
+/** A safe helper's call, or Node's own `Number`, `Boolean` or `Buffer.byteLength` where the file declares no such name. */
 const isSafe = (call: ts.CallExpression): boolean => {
   const callee = unwrap(call.expression)
-  return SAFE_CALLS.includes(ts.isIdentifier(callee) ? callee.text
-    : ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) ? `${callee.expression.text}.${callee.name.text}` : '')
+  if (ts.isIdentifier(callee)) return ['Number', 'Boolean'].includes(callee.text) ? !declarationOf(callee) : isHelper(callee)
+  return ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && callee.expression.text === 'Buffer'
+    && callee.name.text === 'byteLength' && !declarationOf(callee.expression)
 }
 
 /** A module of Node's own by its default or namespace name (`path` of `import path from 'node:path'`). */
