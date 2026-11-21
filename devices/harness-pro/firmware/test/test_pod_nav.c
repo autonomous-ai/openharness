@@ -1259,6 +1259,56 @@ static void nav_test_app_ring_goes(void) {
     pod_nav_sync(&N, &M);
     CHECK(N.depth == 1 && !N.home_apps && top()->scroll == 0);
 }
+// Up from a tab's room shows Tabs on that tab, whatever Home listed: the mirror of an app's room landing on Apps.
+static void nav_test_tab_room_up_from_apps(void) {
+    fresh_apps();
+    act(POD_A_HOME_APPS, 0, 0);
+    act(POD_A_SCROLL, 1, 0);   // Apps, on VS Code
+    pod_nav_follow(&N, &M, "a1", 0);   // the Mac focuses a1 in Build
+    act(POD_A_TABS, 0, 0);
+    CHECK(N.depth == 1 && !N.home_apps && top()->scroll == 0 && !N.home_app[0]);
+    pod_nav_sync(&N, &M);
+    CHECK(!pod_home_apps(&N, &M) && top()->scroll == 0);
+    act(POD_A_HOME_APPS, 0, 0);
+    pod_nav_follow(&N, &M, "a4", 0);   // Docs
+    act(POD_A_BACK, 0, 0);
+    pod_nav_sync(&N, &M);
+    CHECK(N.depth == 1 && !pod_home_apps(&N, &M) && top()->scroll == 1 && !N.home_app[0]);
+}
+// The window's selected tab moves the room: Home goes to that tab and lists Tabs.
+static void nav_test_follow_tab_room_from_apps(void) {
+    fresh_apps();
+    act(POD_A_HOME_APPS, 0, 0);
+    act(POD_A_SCROLL, 1, 0);
+    pod_nav_follow(&N, &M, "a1", 0);
+    M.selected = 1;   // a1 is not in Docs: the room moves to a4
+    CHECK(pod_nav_follow_tab(&N, &M) && !strcmp(top()->agent, "a4"));
+    pod_nav_sync(&N, &M);
+    CHECK(!N.home_apps && N.stack[0].scroll == 1 && !N.home_app[0]);
+    fresh_apps();
+    static const char *x[] = {"a1", "a2", "a3"}, *y[] = {"a4", "a1"};   // a1 in both tabs
+    const char *const *ids[2] = {x, y};
+    uint8_t cnt[2] = {3, 2};
+    cable_swarm_t it[2] = {{"s1", "Build", 3, 3}, {"s2", "Docs", 2, 2}};
+    pod_model_swarms(&M, it, ids, cnt, 2, "s1", NULL, 0);
+    act(POD_A_HOME_APPS, 0, 0);
+    act(POD_A_SCROLL, 1, 0);
+    pod_nav_follow(&N, &M, "a1", 0);
+    M.selected = 1;   // the same agent, now in Docs
+    CHECK(pod_nav_follow_tab(&N, &M) && !strcmp(top()->agent, "a1") && top()->tab == 1);
+    pod_nav_sync(&N, &M);
+    CHECK(!N.home_apps && N.stack[0].scroll == 1 && !N.home_app[0]);
+}
+// The ring goes while the Inbox is open over an app's room: Home lands on the app's card, as with no Inbox.
+static void nav_test_app_ring_goes_under_inbox(void) {
+    ring();
+    pod_nav_follow(&N, &M, "a5", 0);
+    act(POD_A_INBOX, 0, 0);
+    CHECK(N.depth == 4);
+    pod_model_apps(&M, k_apps, 3, "harness");
+    pod_nav_sync(&N, &M);
+    CHECK(N.depth == 1 && N.home_apps && top()->scroll == 32 && !strcmp(N.home_app, "codex"));
+}
 static void nav_test_app_room_survives_window_change(void) {
     ring();
     pod_nav_follow(&N, &M, "a5", 0);
@@ -1340,6 +1390,9 @@ int main(void) {
     nav_test_app_room_up_to_its_card();
     nav_test_app_ring_goes();
     nav_test_app_room_survives_window_change();
+    nav_test_tab_room_up_from_apps();
+    nav_test_follow_tab_room_from_apps();
+    nav_test_app_ring_goes_under_inbox();
     nav_test_one_list_choice();
     nav_test_pick_shown_app_opens();
     nav_test_working_card_room();
