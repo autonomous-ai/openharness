@@ -462,6 +462,8 @@ export class TierBDriver implements EvalDriver {
 
   now(): number { return this.need().now() }
   seen(): Seen { return this.need().seen() }
+  /** The last scenario's world, kept after its stop: for a test that reads what its daemon did. */
+  lastWorld(): TierBWorld { return this.need() }
   gaps(): string[] { return [...this.need().gaps] }
 
   async stop(): Promise<void> {

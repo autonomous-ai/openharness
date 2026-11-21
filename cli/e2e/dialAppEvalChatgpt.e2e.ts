@@ -19,6 +19,7 @@ import { chatgptSteps } from './harness/appEvalChatgpt.js'
 import { TierBDriver } from './harness/appEvalDriver.js'
 
 const WIN32 = process.platform === 'win32'
+const DARWIN = process.platform === 'darwin'
 const HOST = process.platform as Platform
 const SCENARIOS = WIN32 ? [] : scenariosFor('b', HOST).filter((s) => s.app === 'chatgpt' && !s.heldOut)
 
@@ -29,6 +30,20 @@ describe.skipIf(WIN32)('the dial eval, tier B: the ChatGPT app', () => {
   afterAll(async () => {
     await driver?.close()
     if (process.env.DIAL_EVAL_OUT) writeResults(process.env.DIAL_EVAL_OUT, 'chatgpt', collect(runs))
+  })
+
+  /** The thread reports the devices had from the watch, each by what they made of it: on a daemon of its own, the
+   *  scenario's alone. */
+  const threadLines = (): string[] => driver.lastWorld().d.log().split('\n').filter((line) => line.includes('[device] thread ·'))
+
+  it("the fake ChatGPT app's window shows the thread its link opened, and Harness Device reads its title", async () => {
+    await runScenario(driver, { ...SCENARIOS.find((s) => s.id === 'X4')!, fresh: true }, HOST)
+    expect(threadLines()).not.toEqual([])
+  })
+
+  it.runIf(DARWIN)('with no Accessibility (X3) no title comes, though a link opened a thread', async () => {
+    await runScenario(driver, { ...SCENARIOS.find((s) => s.id === 'X3')!, fresh: true }, HOST)
+    expect(threadLines()).toEqual([])
   })
 
   it.for(SCENARIOS)('$id: $title', async (scenario) => {

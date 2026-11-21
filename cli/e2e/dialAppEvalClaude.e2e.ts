@@ -48,6 +48,12 @@ describe.skipIf(WIN32)('the dial eval, tier B: the Claude app', () => {
     expect(driver.networkReached()).toEqual([])
   })
 
+  it('the fake Claude app attaches the session it resumes from its link, as the mod does for the session the app shows', async () => {
+    await runScenario(driver, { ...SCENARIOS.find((s) => s.id === 'C8')!, fresh: true }, HOST)
+    // Its own daemon, so its log is this scenario's alone.
+    expect(driver.lastWorld().d.log().split('\n').filter((line) => line.includes('[device] attach ·'))).not.toEqual([])
+  })
+
   it.for(SCENARIOS)('$id: $title', async (scenario) => {
     const began = Date.now()
     const run = await runScenario(driver, scenario, HOST)
