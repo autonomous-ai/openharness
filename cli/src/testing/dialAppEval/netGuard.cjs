@@ -51,11 +51,21 @@ function socketTarget(args) {
   return { host: typeof args[1] === 'string' ? args[1] : undefined, port: first }
 }
 
+/** What sends fetch and http through the env's proxy, when it is on: a proxy on this machine passes every check here and
+ *  carries the request off it. */
+function envProxy() {
+  if (process.env.NODE_USE_ENV_PROXY === '1') return 'NODE_USE_ENV_PROXY=1'
+  const flags = [...process.execArgv, ...(process.env.NODE_OPTIONS || '').split(/\s+/)]
+  return flags.includes('--use-env-proxy') ? '--use-env-proxy' : null
+}
+
 let installed = false
 
 /** Puts the guard on every entry point, telling `record` of each refused attempt; returns what takes it off again. */
 function install(record) {
   if (installed) throw new Error('the network guard is already installed')
+  const proxy = envProxy()
+  if (proxy) throw new Error(`the network guard cannot hold under ${proxy}: a proxy would carry requests off this machine`)
   installed = true
   const refusal = (api, host, port, code) => {
     const attempt = { api, host: String(host), port: portOf(port), pid: process.pid, process: processName() }
