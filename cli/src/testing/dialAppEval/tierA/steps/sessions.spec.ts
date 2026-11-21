@@ -138,6 +138,22 @@ describe("tier A's live sessions", () => {
     expect(await read('codex', stop(t1.id)!.transcriptPath!, w.world.folders.codexSessions)).toBe('Eval codex answer.')
   })
 
+  it("turn-start writes the person's line, so a turn's last answer is that turn's alone", async () => {
+    const w = fakeWorld('darwin')
+    for (const key of ['a', 't1']) {
+      await w.hook(key, 'start')
+      await w.hook(key, 'turn-start')
+      await w.hook(key, 'turn-stop', { lastAnswer: 'Eval answer one.' })
+      // A second turn that ends with no answer of its own.
+      await w.hook(key, 'turn-start')
+      await w.hook(key, 'turn-stop')
+    }
+    const read = (engine: 'claude' | 'codex', sessionId: string, root: string) =>
+      readLastAnswer(engine, machine.owners.get(sessionId)!.transcriptPath!, { roots: [root], maxBytes: 262_144, deadlineMs: 1_000 })
+    expect(await read('claude', a.id, w.world.folders.claudeProjects)).toBeUndefined()
+    expect(await read('codex', t1.id, w.world.folders.codexSessions)).toBeUndefined()
+  })
+
   it('needs-input tells the devices, and a permission in the Claude app is also the mod\'s asked', async () => {
     const w = fakeWorld('darwin')
     await w.hook('a', 'start')
