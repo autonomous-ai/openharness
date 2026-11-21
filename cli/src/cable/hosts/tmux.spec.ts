@@ -596,7 +596,7 @@ describe('the outer place of an agent in the person\'s tmux', () => {
 })
 
 /** tmux where the core found it, off the process's PATH: the master's PATH may hold no tmux. */
-const ADOPTED = async (): Promise<TmuxPathOutcome> => ({ state: 'adopted', path: '/x/bin/tmux', from: '/x/bin' })
+const ADOPTED = async (): Promise<TmuxPathOutcome> => ({ state: 'adopted', path: '/x/bin/tmux', from: 'login shell' })
 const atPath = (call: Call): Call => ({ ...call, file: '/x/bin/tmux' })
 
 describe('tmux as the core finds it', () => {
@@ -631,7 +631,7 @@ describe('tmux as the core finds it', () => {
     const first = outer(NESTED, 100)
     const second = outer({ TMUX_PANE: '%4' }, 100)
     const shown = adapter.show!(WITH_APP, 'a1')
-    settle({ state: 'adopted', path: '/x/bin/tmux', from: '/x/bin' })
+    settle({ state: 'adopted', path: '/x/bin/tmux', from: 'login shell' })
     await Promise.all([first, second, shown, adapter.focus({ adapter: 'tmux', id: '%3:100' })])
     expect(finds).toBe(1)
   })

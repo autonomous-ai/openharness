@@ -22,7 +22,7 @@ vi.mock('../../lib/tmuxOnPath.js', async (real) => ({
 const FAKE_ZELLIJ = '/fake/bin/zellij'
 const { env, listPanes, focusPaneId, writeChars, sendKeys, missingPane, missingSession, listClients } = RECORDED_ZELLIJ
 /** zellij where the core's lookup found it, off the devices' PATH. */
-const FOUND = async (): Promise<TmuxPathOutcome> => ({ state: 'adopted', path: FAKE_ZELLIJ, from: '/fake/bin' })
+const FOUND = async (): Promise<TmuxPathOutcome> => ({ state: 'adopted', path: FAKE_ZELLIJ, from: 'login shell' })
 const ABSENT = async (): Promise<TmuxPathOutcome> => ({ state: 'absent', reason: 'zellij was not found' })
 
 interface Call { file: string; args: readonly string[]; timeoutMs: number }
@@ -314,7 +314,7 @@ describe('zellij as the core finds tmux', () => {
     const { env: where } = home()
     shell.answer = '/home/u/.cargo/bin/zellij'
     const zellij = zellijFinder(where)
-    const adopted = { state: 'adopted', path: '/home/u/.cargo/bin/zellij', from: '/home/u/.cargo/bin' }
+    const adopted = { state: 'adopted', path: '/home/u/.cargo/bin/zellij', from: 'login shell' }
     expect(await zellij()).toEqual(adopted)
     expect(await zellij()).toEqual(adopted)
     expect(shell.asked).toEqual(['zellij'])
@@ -337,7 +337,7 @@ describe('zellij as the core finds tmux', () => {
     expect((await zellij()).state).toBe('absent')
     expect(shell.asked).toEqual(['zellij'])
     const path = install(where.HARNESS_BIN_DIR)
-    const adopted = { state: 'adopted', path, from: where.HARNESS_BIN_DIR }
+    const adopted = { state: 'adopted', path, from: 'standard install location' }
     expect(await zellij()).toEqual(adopted)
     expect(shell.asked).toEqual(['zellij', 'zellij'])
     // Found, it holds.

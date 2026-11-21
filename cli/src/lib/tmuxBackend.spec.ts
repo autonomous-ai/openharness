@@ -1006,14 +1006,14 @@ exit 0
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     try {
       const backend = new TmuxBackend(undefined, () => 'daemon-a', () => {}, undefined,
-        { ensureOnPath: async () => ({ state: 'adopted', path: '/opt/tmux/bin/tmux', from: '/opt/tmux/bin' }) })
+        { ensureOnPath: async () => ({ state: 'adopted', path: '/opt/tmux/bin/tmux', from: 'login shell' }) })
       expect(await backend.prepare({ ownedPanes: new Map([['%7', 'claude']]) })).toEqual({ state: 'ready' })
       const commands = readFileSync(calls, 'utf8').trim().split('\n').map((call) => call.split(' '))
       const first = (command: string) => commands.findIndex(([word]) => word === command)
       expect(first('show-environment')).toBe(-1)
       const names = serverVariablesToUnset()
       expect(log.mock.calls.map(([line]) => line)).toEqual([
-        '[tmux] not on the daemon PATH · adopted tmux',
+        '[tmux] not on the daemon PATH · adopted tmux from the login shell',
         expect.stringMatching(/^\[terminal\] renamed tmux session claude-1790000000000 → harness-claude-\d+-[0-9a-f-]+ \(pane %7\) · named by a build before the harness- prefix$/),
         `[terminal] tmux: unset ${names.length} harnessd and agent session names in the environment new panes start with`,
         // The renamed session is still `claude-…` in this fake, so the inventory whitelists none of it.
