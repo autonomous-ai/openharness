@@ -13,6 +13,7 @@ import { env } from '../config/env.js'
 import { hasAuthSession } from './authSession.js'
 import { readOrMintComputerId } from './computerIdentity.js'
 import { savedDaemonPort } from './daemonRecord.js'
+import { errorKind } from './log.js'
 import { atomicWriteFile, probeState, StateFileUnreadable } from './secureState.js'
 
 export const PID_FILE = join(env.ADAPTER_DATA_DIR, 'adapter.pid')
@@ -121,9 +122,13 @@ export function removePidFileIf(pid: number | undefined, deps: { readPid: () => 
   return true
 }
 
-/** How a command fails: say why, let go of the pid file if it is this process's, and exit. Commands alone fail
- *  this way, on the terminal of the person who ran one; a core logs a failed start's kind itself, also one a command
- *  runs in its own process (core/main.ts `runCoreInForeground`). */
+/** What a failed start says when another daemon serves its data folder, in fixed words: the error's own words name
+ *  the socket's path. The core's (core/main.ts `failStart`) and a command's say the same. */
+export const SERVED_ELSEWHERE = ' · another Harness daemon serves this data folder'
+
+/** How a command fails: say why, let go of the pid file if it is this process's, and exit. `harness start
+ *  --foreground` fails this way too, and under launchd and systemd what it prints is the daemon's log, which Export
+ *  logs sends: so an error says its kind, never its words, its stack or a path. */
 export const onError = (err: unknown, code = 1): never => {
   // A trust file that cannot be read is the person's to move aside, not a fault in Harness: no stack, and the
   // file's full path is in `harness status`, kept out of the error itself.
@@ -131,7 +136,8 @@ export const onError = (err: unknown, code = 1): never => {
     console.error(`✗ ${err.message}`)
     console.error('  harness status shows where it is')
   } else {
-    console.error('Failed to start adapter:', err)
+    const why = (err as { code?: unknown } | null | undefined)?.code === 'EADDRINUSE' ? SERVED_ELSEWHERE : ''
+    console.error(`Failed to start adapter: ${errorKind(err)}${why}`)
   }
   // A pid file left naming a process that is gone, the next `harness start` would refuse on. Only ours, though.
   removePidFileIf(process.pid)

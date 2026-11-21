@@ -64,7 +64,7 @@ import { engineSessionTitle } from '../lib/sessionTitle.js'
 import { machineNames } from '../lib/machineNames.js'
 import { engineHooks as engineHookFacets } from '../engines/hooks.js'
 import type { LiveFor } from '../engines/facets/live.js'
-import { DAEMON_LOG_FILE, PID_FILE, daemonPort, isAlive, readPid, removePidFileIf, LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel, writePidFile } from '../lib/daemonState.js'
+import { DAEMON_LOG_FILE, PID_FILE, daemonPort, isAlive, readPid, removePidFileIf, LEGACY_LOG_FILE, MACHINE_NAME_FILE, SERVED_ELSEWHERE, tildify, computerId, thisDeviceLabel, writePidFile } from '../lib/daemonState.js'
 import { atomicWriteFile } from '../lib/secureState.js'
 import { clearSafeModeMarker, safeModeDisposition, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker } from '../lib/daemonSafeMode.js'
 import { awakeTimeout } from '../lib/sleepAware.js'
@@ -3435,9 +3435,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
  * `harness start` would refuse on.
  */
 const failStart = (err: unknown, code: number): never => {
-  // The one a person meets starting by hand (`harness start -f`, `harness login`) says why, in fixed words: its own
-  // words name the socket's path.
-  const why = (err as { code?: unknown } | null | undefined)?.code === 'EADDRINUSE' ? ' · another Harness daemon serves this data folder' : ''
+  // The one a person meets starting by hand (`harness start -f`, `harness login`) says why, in fixed words.
+  const why = (err as { code?: unknown } | null | undefined)?.code === 'EADDRINUSE' ? SERVED_ELSEWHERE : ''
   console.error(`Failed to start adapter: ${errorKind(err)}${why}`)
   removePidFileIf(process.pid)
   process.exit(code)
@@ -3554,6 +3553,7 @@ export function runCoreInForeground(session: AuthSession | null, scriptPath: str
   holdHarnessdEnv()
   dropAgentSessionEnv()
   SCRIPT_PATH = scriptPath
-  // Never the command's `onError`, which prints the error whole: this process is the daemon, and that is its log.
+  // The core's own `failStart`, whose line the log guard reads, not the command's `onError`: this process is the
+  // daemon, and what it prints is its log.
   return runForeground(session).catch((err: unknown) => failStart(err, 1))
 }
