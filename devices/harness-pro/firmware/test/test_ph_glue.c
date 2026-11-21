@@ -1687,6 +1687,16 @@ static void ring_and_its_focus(void) {
     CHECK(o.fx == POD_FX_NONE && U.nav.depth == 1);
     o = ring_roster();
     CHECK(o.fx == POD_FX_NONE && U.nav.depth == 3 && !strcmp(top()->agent, "a6") && top()->tab == POD_TAB_APP && !U.landing[0]);
+    // The Mac's focus that follows the pick is no echo of the tap, whether it comes before the ring or after it lands.
+    pick_codex();
+    pod_ui_focus(&U, "a6", 2050 + 100);
+    ring_lands(2050 + 200);
+    CHECK(U.nav.depth == 3 && !strcmp(top()->agent, "a6") && top()->tab == POD_TAB_APP && !U.landing[0]);
+    pick_codex();
+    ring_lands(2050 + 200);
+    CHECK(U.nav.depth == 3 && !strcmp(top()->agent, "a5"));
+    pod_ui_focus(&U, "a6", 2050 + 300);
+    CHECK(U.nav.depth == 3 && !strcmp(top()->agent, "a6") && top()->tab == POD_TAB_APP);
 }
 
 static void pick_of_shown_app_opens_at_once(void) {
@@ -1695,6 +1705,8 @@ static void pick_of_shown_app_opens_at_once(void) {
     const pod_hit_t h = codex_card();
     pod_out_t o = tap_hit(&h, 2000);
     CHECK(o.fx == POD_FX_APP_PICK && !strcmp(o.agent, "codex") && U.nav.depth == 3 && !strcmp(top()->agent, "a5") && !U.landing[0]);
+    pod_ui_focus(&U, "a6", 2050 + 300);   // the Mac's focus that follows the pick: no echo of the tap
+    CHECK(U.nav.depth == 3 && !strcmp(top()->agent, "a6") && top()->tab == POD_TAB_APP);
 }
 
 // From a pick whose tap lifts at 2050, each of these alone ends the wait: the ring arriving next opens nothing.
