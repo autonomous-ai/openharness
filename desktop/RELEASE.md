@@ -230,10 +230,10 @@ does not apply here. **Re-check on every Flutter bump**: the engine reads `FLTEn
 
 ## Publishing by hand
 
-`scripts/publish-macos-variant.sh` (one macOS build per run) and `scripts/upload-desktop-linux.sh` are
-the publishing steps. The macOS one builds and pins the renderer, then hands the bundle to
-`scripts/upload-desktop.sh --no-build`, which does everything after the build exactly as it always has.
-CI runs them with the version taken from the tag, and they are also reachable directly when CI cannot be:
+`scripts/publish-macos-variant.sh` (one macOS build per run) is the macOS publishing step. It builds and pins the
+renderer, then hands the bundle to `scripts/upload-desktop.sh --no-build`, which does everything after the build
+exactly as it always has. CI runs it with the version taken from the tag, and it is also reachable directly when CI
+cannot be:
 
 ```bash
 make upload-desktop VERSION=1.3.0                          # both macOS builds, Intel first
@@ -241,8 +241,10 @@ make upload-desktop VERSION=1.3.0 ARGS="--no-notarize"     # the same, Developer
 bash scripts/publish-macos-variant.sh intel 1.3.0          # one macOS build
 bash scripts/publish-macos-variant.sh apple-silicon 1.3.0
 bash scripts/publish-macos-variant.sh intel 1.3.0 --build-only   # build + pin the renderer, publish nothing
-make upload-desktop-linux ARCH=arm64                       # per Linux architecture
 ```
+
+**Linux has no by-hand path.** Its AppImages must be signed with a key no person holds, so Linux releases go through
+`release-desktop.yml` alone ("Linux" below).
 
 **macOS takes an explicit version.** Two runs have to publish one version, and `upload-desktop.sh`'s own
 auto-bump reads the manifest — the second run would see the first one's upload and bump again.
@@ -252,8 +254,8 @@ back on every Intel Mac. Go through `publish-macos-variant.sh`.
 
 **These create no git tag**, so the repo stops reflecting what is published — one tag, `v1.0.52`, once
 sat nine releases behind a manifest already serving `1.0.61`. Prefer `make release-desktop`; if you do publish
-by hand, cut a `make release-desktop` afterwards to bring the tag back in line, and remember it only publishes
-the platform you ran it on.
+by hand, cut a `make release-desktop` afterwards to bring the tag back in line, and remember it publishes
+macOS alone.
 
 For one macOS build, `publish-macos-variant.sh`:
 
@@ -402,8 +404,10 @@ which doesn't reliably pick up the quarantine flag in the first place).
    `app/<version>/harness-desktop.cat` signed like the running `harness-desktop.exe` (subject and Artifact Signing
    identity), and that catalog matching every file in the folder, `data/app.so` included. Otherwise the banner says
    it is not signed by the running app's publisher and the current version stays. The manifest can only pick among
-   builds we signed. A running app that is itself unsigned (a local or staging build) keeps the sha256 check alone;
-   Linux AppImages are unsigned, so Linux does too. Rotating keys: a new Developer ID certificate or a renewed
+   builds we signed. A running app that is itself unsigned (a local or staging build) keeps the sha256 check alone.
+   Linux checks every build, local ones too, and before anything is staged: the AppImage must carry Harness's Tauri
+   signature for that file and version, made with the key pinned in the app (`lib/update/tauri_signature.dart`,
+   "Linux" below). Rotating keys: a new Developer ID certificate or a renewed
    Artifact Signing certificate changes neither the team nor the identity, so nothing is needed. A new team or a new
    identity validation needs one bridge release, signed the old way, whose rule also accepts the new signer.
 5. Checks on launch (including the sign-in screen) and every minute. When a newer build exists,
@@ -492,24 +496,32 @@ running app back.
 
 ## Linux
 
-`scripts/upload-desktop-linux.sh` publishes architecture-specific Linux ARM64 and x64 releases to the
-**same** `metadata.json` as macOS. `release-desktop.yml` runs it on both a `ubuntu-22.04` and a
-`ubuntu-22.04-arm` runner — the oldest Ubuntu supported, because the bundle links the build host's
-GLib and glibc and a 24.04 build will not start on 22.04 — so one `make release-desktop` covers every build — which is also why the nine
-`desktop-*` keys only stay on one version when the release goes through CI. Run by hand
-(`make upload-desktop-linux ARCH=arm64`) it moves one key and leaves the others behind. `amd64` and
-`x86_64` are accepted aliases for `x64`; `aarch64` is accepted as an alias for `arm64`.
+Linux ARM64 and x64 publish to the **same** `metadata.json` as macOS, from three jobs of `release-desktop.yml`, so no
+job that runs build code holds the bucket write or the signing key:
 
-With no `ARCH`, the command detects the host architecture. A build must run on a matching
-Ubuntu/Linux host because Flutter Linux desktop builds use the host architecture. `--no-build` can
-package and upload an already-built bundle for the selected architecture. `APPIMAGETOOL` must point
-at an executable `appimagetool-<x86_64|aarch64>.AppImage` — `release-desktop.yml` downloads a pinned one per
-matrix job; running by hand, fetch one yourself from the
-[AppImage/appimagetool releases](https://github.com/AppImage/appimagetool/releases).
+1. **`build-linux`**, one per architecture, runs `scripts/package-desktop-linux.sh <X.Y.Z>`: `flutter build linux`,
+   the AppDir and a pinned `appimagetool`, writing `Harness-linux-<x64|arm64>.AppImage` and its `.sha256`. Build code
+   (pub packages, CMake, appimagetool) runs here, so it holds no secret, no GCP and no `id-token`. Flutter cannot
+   cross-compile, so each architecture builds on its own host, `ubuntu-22.04` and `ubuntu-22.04-arm`: the oldest Ubuntu
+   supported, because the bundle links the build host's GLib and glibc and a 24.04 build will not start on 22.04.
+2. **`sign-linux`**, one job for both, checks each AppImage against its `.sha256` and signs it with Harness Device's
+   Tauri key (`scripts/sign-desktop-linux.sh`). It runs nothing but minisign 0.12, pinned by its sha256
+   (`device-app/scripts/release-setup.sh minisign`), and its checkout holds nothing that builds. The key reaches
+   minisign as a 0600 file the script deletes, its password on stdin. The next step,
+   `scripts/verify-desktop-release.py --signed`, checks both signatures against the key the apps pin
+   (`device-app/src-tauri/tauri.conf.json`), so a wrong key stops the release here. The job passes on the two `.sig`
+   files (Tauri's form: the `.minisig` text base64-encoded on one line) as `desktop-linux-signatures`.
+3. **`upload-linux`** holds the bucket write and no key. `scripts/upload-desktop-linux.sh <X.Y.Z> <folder>` checks the
+   sums and that each `.sig` is one line of base64, uploads both AppImages create-only and writes their parts, each
+   with its `signature`, for `publish` to merge.
 
-**No signing/notarization step** — there is no Linux equivalent of Apple's Developer ID/notarization,
-and none is needed: the trust boundary is the same sha256-verified manifest entry `DesktopUpdater`
-already checks on every platform.
+The trusted comment is `timestamp:<unix>`, `file:Harness-linux-<arch>.AppImage` and `desktop-version:<X.Y.Z>`,
+tab-separated; the app matches the file and version fields whole. It has no `version:` field: Harness Device's
+updater trusts the same key and reads only `version:`, so a Desktop AppImage must never pass as a Device update. The
+release refuses a Desktop signature that carries one. Publish, promotion and the public download check verify every
+Linux signature again.
+
+One `make release-desktop` covers every build, which is also why the nine `desktop-*` keys stay on one version.
 
 The Linux viewer uses the host's WebKitGTK 4.1 runtime (`libwebkit2gtk-4.1-0`). The AppImage
 contains Harness and its Flutter bundle, but does not bundle WebKitGTK. The Linux plugin is loaded
@@ -545,7 +557,7 @@ including pane menus, the agent picker and resize help. All native viewers are
 hidden for that interval because a popup may cross pane boundaries; their controllers
 retain the loaded pages. Dismissal restores them without navigation or reload.
 
-**Packaged as a single-file AppImage**, not a tarball. The script stages an AppDir
+**Packaged as a single-file AppImage**, not a tarball. `package-desktop-linux.sh` stages an AppDir
 (`usr/bin/` = the Flutter `bundle/` verbatim, plus a hand-written `harness.desktop` and the
 `harness.png` icon CMake already installs at the bundle root) and hands it to `appimagetool` with
 `--appimage-extract-and-run`, so packaging needs no FUSE on the build host. `AppRun` is a plain
@@ -554,7 +566,7 @@ symlink to `usr/bin/harness` — the Flutter runner locates its own `lib/`/`data
 launch it.
 
 **No Info.plist-style version stamp.** `flutter build linux` has nowhere to stamp a version the way
-Xcode does into `Info.plist`, so the release script writes a plain `version.txt` into the built
+Xcode does into `Info.plist`, so `package-desktop-linux.sh` writes a plain `version.txt` into the built
 bundle (`build/linux/<arm64|x64>/release/bundle/version.txt`, which ends up at `usr/bin/version.txt`
 inside the AppDir) and asserts it before packaging. `lib/core/app_version.dart` (what Settings ▸
 About shows) reads this file back on Linux, falling through to `PackageInfo.fromPlatform()` (which
@@ -562,8 +574,8 @@ would otherwise just return `pubspec.yaml`'s never-bumped placeholder) everywher
 works unchanged for a *running* AppImage, since the AppImage runtime mounts the whole AppDir at a
 temporary path and the app resolves `version.txt` relative to its own (mounted) executable exactly
 as it did inside the old tarball. `lib/update/desktop_updater.dart`'s `downloadAndStage()` does
-**not** re-verify this against the manifest for Linux — sha256 already authenticates the entire
-single-file download, so there's nothing left inside it to disagree with the hash.
+**not** re-verify this against the manifest for Linux — the signature names the version and covers the entire
+single-file download, so there's nothing left inside it to disagree with.
 
 ### GCS layout
 
@@ -579,7 +591,8 @@ gs://s3-autonomous-upgrade-3/harness/desktop/<version>/Harness-linux-arm64.AppIm
     "version": "1.2.4",
     "url": "https://cdn.autonomous.ai/harness/desktop/1.2.4/Harness-linux-x64.AppImage",
     "sha256": "<64 hex>",
-    "size": 41230011
+    "size": 41230011,
+    "signature": "<the .minisig, base64 on one line>"
   }
 }
 ```
@@ -590,9 +603,14 @@ Same shape as macOS (see above), with the platform-specific pieces:
 
 1. `DesktopUpdater` reads the `desktop-linux-arm64` or `desktop-linux-x64` manifest entry for its
    runtime architecture instead of `desktop-macos`.
-2. The download IS the artifact — a single `.AppImage` file, made executable after its sha256
-   verifies, with nothing to unpack.
-3. On restart, the detached helper resolves the running AppImage's own path from the `APPIMAGE`
+2. After the size and sha256, and before anything is written, the download must carry Harness's Tauri signature
+   (`lib/update/tauri_signature.dart`): made with the key pinned in the app, never read from a manifest, for
+   `file:Harness-linux-<arch>.AppImage` and `desktop-version:<the entry's version>`. The sha256 alone proves nothing:
+   the manifest that names it sits in the same bucket. A refusal logs `update: signature refused (<reason>)` and the
+   banner reads "Could not install Harness X: it is not signed by Harness, so it may not be genuine. You are still on
+   your current version."
+3. The download IS the artifact — a single `.AppImage` file, made executable once it verifies, with nothing to unpack.
+4. On restart, the detached helper resolves the running AppImage's own path from the `APPIMAGE`
    environment variable (set by the AppImage runtime on launch — the process itself runs from a
    temporary FUSE mount, not from that path), `mv`s it to a `.prev` backup, `mv`s the staged file
    into its place, then execs that same path directly (there's no `open -n`/LaunchServices
@@ -602,7 +620,16 @@ Same shape as macOS (see above), with the platform-specific pieces:
 ### Rolling out safely / rollback
 
 Same conventions as macOS — publish to a scratch `METADATA_PATH` first, and roll back only by
-publishing a newer version containing the older code (see above).
+publishing a newer version containing the older code (see above). A scratch manifest can offer a Linux app only an
+AppImage the release signed: a local build carries no signature it accepts.
+
+**Rollout order.** A Linux app that checks signatures refuses an unsigned update, so the first release with signed
+Linux entries comes no later than the first build that checks: they are one release, the first after the check
+merged. Apps from before it take it on its sha256 alone, as before, and check every update after it.
+
+The first Desktop release after a change to the publication checks (`scripts/check-desktop-*-gcs.py`, which run
+publish and promotion against disposable objects) runs `release-desktop.yml` with `test_publication=true` before the
+real one: that run is the checks' only real test, and it writes to the release bucket, so a branch never runs it.
 
 ## Windows
 

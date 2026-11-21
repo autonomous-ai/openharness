@@ -192,7 +192,9 @@ Repository secrets, by name:
 
 The updater key pair is made with `cargo tauri signer generate -w ~/.tauri/harness-device.key`. Its public half is
 `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`. Keep the private key safe beyond the secret too: losing it
-means installed apps can never update again.
+means installed apps can never update again. The same key signs Desktop's Linux AppImages (`release-desktop.yml`'s
+`sign-linux`), and Desktop pins its public half too (`desktop/lib/update/tauri_signature.dart`, held equal to
+`tauri.conf.json` by its test), so a new key is a release of both apps.
 
 ## When it fails
 

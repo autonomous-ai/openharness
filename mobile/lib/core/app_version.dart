@@ -8,7 +8,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 /// there is nowhere inside a Linux build for the release version to live, so
 /// [PackageInfo.fromPlatform] would just return `pubspec.yaml`'s placeholder
 /// (`1.0.0+1`, deliberately never bumped — see RELEASE.md). The Linux release
-/// script (`scripts/upload-desktop-linux.sh`) instead writes a plain
+/// script (`desktop/scripts/package-desktop-linux.sh`) instead writes a plain
 /// `version.txt` next to the built executable; this reads that back when it
 /// exists and falls through to [PackageInfo] everywhere else — macOS,
 /// Windows, or a Linux dev build with no packaged `version.txt`.

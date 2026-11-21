@@ -8,7 +8,7 @@ Harness Desktop — a Flutter app that lists Harness machines and attaches xterm
 agents running on them. **macOS and Linux (Ubuntu) are both real, released targets** — first-run
 provisioning (`lib/bootstrap/environment_provisioner.dart`), self-update
 (`lib/update/desktop_updater.dart`), and packaging (`scripts/upload-desktop.sh` /
-`scripts/upload-desktop-linux.sh`, see RELEASE.md) all branch per-OS internally rather than being
+`scripts/package-desktop-linux.sh`, see RELEASE.md) all branch per-OS internally rather than being
 separate code paths.
 
 Windows is a local desktop too, not a viewer (`lib/core/viewer_mode.dart`): `homeDir()`
@@ -120,8 +120,8 @@ make terminal-local-e2e
 make terminal-prod-e2e       # opt-in, refuses without PROD_TERMINAL_E2E=1 + release evidence vars
 ```
 
-Release (`make release-desktop` from the repo root, which tags `vX.Y.Z_desktop` and lets CI build; `make upload-desktop VERSION=…` and
-`make upload-desktop-linux` are the by-hand escape hatches, the latter on an Ubuntu host only) is
+Release (`make release-desktop` from the repo root, which tags `vX.Y.Z_desktop` and lets CI build; `make upload-desktop VERSION=…` is the macOS
+by-hand escape hatch; Linux has none, since only `release-desktop.yml` holds the key that signs it) is
 documented in RELEASE.md. **macOS ships TWO builds of one universal app**, differing only in
 `FLTEnableImpeller`: Intel on Skia under the old `desktop-macos` key (which every older install and the
 website download also read), Apple Silicon on Impeller under `desktop-macos-arm64`, both built by
@@ -916,10 +916,11 @@ add a kind there, not at the call site.
 - The app has no flash UI: the dial is flashed with `harness flash`. `SerialPortLease` sees that
   flash's lease file and pauses daemon supervision so `harness start` cannot steal the port mid-write.
 - `lib/update/desktop_updater.dart` self-updates from the GCS manifest (sha256-verified, strictly
-  newer only, and on macOS and Windows signed by the running app's own publisher:
-  `lib/update/update_signature.dart`, RELEASE.md "How a running app self-updates"). Its keys must match what writes the manifest — `_otaKeyMacOS`/`_otaKeyMacOSArm64` the
-  variant table in `scripts/publish-macos-variant.sh`, `desktop-linux-<arch>` the `OTA_KEY` in
-  `scripts/upload-desktop-linux.sh`. An Intel Mac reads only `desktop-macos` (the Skia build); Apple
+  newer only, on macOS and Windows signed by the running app's own publisher:
+  `lib/update/update_signature.dart`, and on Linux carrying Harness's Tauri signature for that file and version,
+  checked against the key pinned in `lib/update/tauri_signature.dart`; RELEASE.md "How a running app self-updates"). Its keys must match what writes the manifest — `_otaKeyMacOS`/`_otaKeyMacOSArm64` the
+  variant table in `scripts/publish-macos-variant.sh`, `desktop-linux-<arch>` the parts
+  `scripts/upload-desktop-linux.sh` writes. An Intel Mac reads only `desktop-macos` (the Skia build); Apple
   Silicon takes the newer of `desktop-macos-arm64` and `desktop-macos`, arm64 winning a tie.
 
 ## Testing conventions
