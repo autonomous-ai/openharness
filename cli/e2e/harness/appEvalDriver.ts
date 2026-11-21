@@ -383,12 +383,16 @@ class World implements TierBWorld {
       deliveries: from0(this.deliveries), steps: from0(this.steps), ...(this.cost ? { cost: this.cost } : {}) }
   }
 
-  /** The last read, and every child ended. */
+  /** The last read, and every child ended: one that fails to end is thrown once the others are. */
   async close(): Promise<void> {
     clearInterval(this.refreshing)
     this.read()
     this.closed = true
-    for (const child of this.children) await end(child)
+    let failed: { error: unknown } | undefined
+    for (const child of this.children) {
+      try { await end(child) } catch (error) { failed ??= { error } }
+    }
+    if (failed) throw failed.error
   }
 
   /** The face, recorded when it changed. */
@@ -530,8 +534,12 @@ export class TierBDriver implements EvalDriver {
     const costEnd = this.costEnd
     this.costEnd = undefined
     try {
-      await world?.close()
-      if (world && costEnd) world.cost = await costEnd()
+      try {
+        await world?.close()
+      } finally {
+        // Ended whatever the close did: a measurement left running fails the next scenario's start.
+        if (world && costEnd) world.cost = await costEnd()
+      }
     } finally {
       if (this.rig) this.collect(this.rig)
       if (!this.ready && this.rig) await this.closeRig()
