@@ -884,7 +884,7 @@ void main() {
           'http://127.0.0.1:${server.port}/install.ps1?a=1&b=2;tail=(ok)';
       expect(isTrustedInstallScriptUrl(url), isTrue);
       final installed = await Process.run(
-        windowsPowerShellPath(Platform.environment),
+        windowsPowerShellPath(),
         [
           '-NoProfile',
           '-NonInteractive',
