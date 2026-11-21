@@ -1,8 +1,9 @@
 /**
  * `harness hooks hermes`: the entries Harness adds to each Hermes home with a config, for one whose own `hooks:`
  * mapping Harness leaves alone (kit/nativeHookYaml.ts). They name the managed Node, notify.mjs and the person's
- * folders, so they are printed on the person's own terminal and the daemon's log only names this command. Hermes is
- * the one engine: Harness writes every other engine's hooks itself.
+ * folders, so they are printed on the person's own terminal and the daemon's log only names this command. They are built
+ * from this shell's environment, as the daemon builds its own from its: a daemon started with another one installs other
+ * entries. Hermes is the one engine: Harness writes every other engine's hooks itself.
  */
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'

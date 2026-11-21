@@ -212,7 +212,7 @@ describe('CLI login/start command contract', () => {
 
     expect(result.status).toBe(0)
     expect(result.stdout.split('\n').filter((line) => line.includes('harness hooks')))
-      .toEqual(['  harness hooks hermes         the hook entries to add by hand to a Hermes config.yaml with its own hooks:'])
+      .toEqual(['  harness hooks hermes         the hook entries to add by hand to a Hermes config.yaml that has its own `hooks:`'])
   }, ONE_RUN_TEST_MS)
 
   it('returns a nonzero status for an unknown command', async () => {
