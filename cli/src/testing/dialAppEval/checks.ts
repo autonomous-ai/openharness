@@ -167,11 +167,14 @@ function focusParts(check: CheckOf<'focus'>, world: World, w: Window | undefined
   const id = agentIdOf(world.session(check.session))
   const faces = w ? world.seen.faces.filter((f) => f.at < w.to) : []
   const after = w ? faces.filter((f) => f.at >= w.from) : []
-  const evidence = bounded(after.map((f) => `face at ${f.at}: ${world.keyOf(f.active)}`))
+  // The face as the window opens, then each one in it.
+  const start = w ? faces.filter((f) => f.at < w.from).at(-1) : undefined
+  const evidence = bounded([...(start ? [start] : []), ...after].map((f) => `face at ${f.at}: ${world.keyOf(f.active)}`))
   const last = faces.at(-1)
-  if (last && after.length === 0) evidence.push(`face at ${last.at}: ${world.keyOf(last.active)}`)
-  const landing = after.findIndex((f) => f.active === id)
-  const latency = landing >= 0 && w ? after[landing]!.at - w.from : null
+  // A face on the session as the window opens has landed at its start: what it does from then on is judged.
+  const already = start?.active === id
+  const landing = already ? 0 : after.findIndex((f) => f.active === id)
+  const latency = !w || landing < 0 ? null : already ? 0 : after[landing]!.at - w.from
   const parts: Part[] = [
     { part: 'lands', score: last?.active === id ? 1 : 0, timed: false, evidence },
     { part: 'latency', score: graded(latency, THRESHOLDS.follow), timed: true, ms: latency, evidence },
