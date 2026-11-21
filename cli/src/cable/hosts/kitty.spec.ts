@@ -409,12 +409,15 @@ const KITTY_TABLE: ProcessName[] = [
   { pid: 1432, ppid: 1431, executable: 'herdr' },
 ]
 const CLIENT = 1432
+/** The terminal each of KITTY_TABLE's processes runs on (readTtyName): kitty's own window's, and none for kitty. */
+const KITTY_TTYS: ReadonlyMap<number, string> = new Map([[1430, '/dev/pts/0'], [1431, '/dev/pts/0'], [1432, '/dev/pts/0']])
 /** The pid kitty matches a window by: the window's own process alone (focusWindowPid, focusWindowPidDescendant). */
 const WINDOW_PROCESS = focusWindowPid.args.at(-1)!
 
 /** kitty's tab adapter, with a runner that answers as the recorded kitty did: `focus-window --match pid:` finds a window
  *  on a socket in form only by its own process; [table] is the machine's processes, and kitty is in front. */
-function tabRecorder(over: Partial<KittyDeps> = {}, table: () => Promise<readonly ProcessName[]> = async () => KITTY_TABLE) {
+function tabRecorder(over: Partial<KittyDeps> = {}, table: () => Promise<readonly ProcessName[]> = async () => KITTY_TABLE,
+  ttys: ReadonlyMap<number, string> = KITTY_TTYS) {
   const calls: Call[] = []
   const owners: string[] = []
   let front: string | undefined = 'kitty'
@@ -435,6 +438,7 @@ function tabRecorder(over: Partial<KittyDeps> = {}, table: () => Promise<readonl
     ...over,
     front: () => front,
     processes: () => { reads++; return table() },
+    tty: async (pid: number) => ttys.get(pid),
   })
   return { calls, owners, adapter, reads: () => reads, toFront: (app: string | undefined) => { front = app } }
 }
@@ -504,6 +508,26 @@ describe("kitty's tab of an outer place", () => {
       KITTY_TABLE.map((p) => (p.executable === 'kitty' ? { ...p, executable: '/Applications/kitty.app/Contents/MacOS/kitty' } : p)))
     expect(await mac.adapter.show(CLIENT_TAB, 'agent-1')).toBe('ok')
     expect(mac.calls).toEqual([ran(focusWindowPid.args)])
+  })
+
+  // A terminal kitty does not list (xterm, Alacritty) opened from a kitty window leaves kitty the nearest app among the
+  // client's parents, but kitty did not make the client's terminal: focusing the window that started it raises a
+  // window the agent is not in.
+  it('a client in a terminal started from a kitty window: no kitty window is focused', async () => {
+    const table: ProcessName[] = [
+      { pid: 1, ppid: 0, executable: 'init' },
+      { pid: 1420, ppid: 1, executable: 'kitty' },
+      { pid: 1430, ppid: 1420, executable: 'sh' },
+      { pid: 1440, ppid: 1430, executable: 'xterm' },
+      { pid: 1450, ppid: 1440, executable: 'sh' },
+      { pid: 1460, ppid: 1450, executable: 'herdr' },
+    ]
+    const ttys = new Map([[1430, '/dev/pts/0'], [1440, '/dev/pts/0'], [1450, '/dev/pts/1'], [1460, '/dev/pts/1']])
+    const { calls, adapter } = tabRecorder({}, async () => table, ttys)
+    const client = tab(`1460@${env.KITTY_LISTEN_ON}`)
+    expect(await adapter.show(client, 'agent-1')).toBe('failed')
+    expect(await adapter.focus(client)).toBe(false)
+    expect(calls).toEqual([])
   })
 
   it("no kitty among the client's parents: nothing runs", async () => {
