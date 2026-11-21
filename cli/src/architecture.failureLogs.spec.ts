@@ -718,6 +718,10 @@ it.each([
   "import { sid } from './agentIds.js'; console.log(`[x] ${sid(transcriptPath)}`)",
   "import { codeOrLength as sid } from './lib/log.js'; import { preview as hashOf } from './lib/log.js'; console.log(`[x] ${hashOf(message)}`)",
   "const Number = (value: unknown) => value; console.log(`[x] ${Number(stderr)}`)",
+  // Node's error fields: a command line, a child's arguments, a path.
+  "try { execSync(line) } catch (error) { console.warn(`[x] exited · ${(error as { cmd?: string }).cmd}`) }",
+  "proc.on('error', (err) => log(`[x] not started · ${err.spawnargs.join(' ')}`))",
+  "try { renameSync(from, to) } catch (error) { console.warn(`[x] not moved to ${(error as { dest?: string }).dest}`) }",
 ])('finds %s', (code) => expect(failureLogs(code)).not.toEqual([]))
 
 /** The safe helpers, imported as the daemon's files import them: each is trusted from its own module alone. */
