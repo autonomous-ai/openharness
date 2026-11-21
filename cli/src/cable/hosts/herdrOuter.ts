@@ -6,10 +6,10 @@
  * client is found as a herdr process connected to the server's client socket.
  *
  * Only what that needs is read: process names and parents (the table), the terminals of the caller and its parents up to
- * the server, the unix-socket rows lsof gives for herdr's own processes (macOS) or Linux's socket table (ss) with the
- * socket links among herdr's own processes' descriptors, their ttys (ps), and a tty's access time (stat), which moves
- * when the person types into it. Never another process's environment or argv: those hold secrets. Every value read is
- * outside text, held to its form, and lsof, ss and ps run with no shell.
+ * the server, the unix-socket rows lsof gives for herdr's own processes (macOS) or ss's rows of the sockets bound at a
+ * client socket's path (Linux) with the socket links among herdr's own processes' descriptors, their ttys (ps), and a
+ * tty's access time (stat), which moves when the person types into it. Never another process's environment or argv:
+ * those hold secrets. Every value read is outside text, held to its form, and lsof, ss and ps run with no shell.
  */
 import { opendir, readlink, stat } from 'node:fs/promises'
 import { HERDR_PANE } from './herdrClient.js'
@@ -36,6 +36,10 @@ const SOCKET_LINK = /^socket:\[([0-9]{1,20})\]$/
 /** One `ss -xn` row of a connected unix stream socket: its local address (a bound path, which may hold spaces, or `*`)
  *  and inode, its peer's address (ss names no peer's path: `*`) and inode, then an empty Process column. */
 const SS_ROW = /^u_str\s+ESTAB\s+[0-9]+\s+[0-9]+\s+(\S.*?)\s+([0-9]{1,20})\s+\*\s+([0-9]{1,20})\s*$/
+/** ss's rows of the sockets bound at a path ending in the client socket's, by ss's own filter (ss(8): a unix path
+ *  pattern): the machine's whole table can pass Node's 1 MiB of output on a busy desktop (8,000 rows read 800 KB on
+ *  Ubuntu 24.04), and the server's accepted connections are the only rows read. */
+const SS_ARGS = ['-xn', 'src', `*${CLIENT_SOCKET}`]
 
 export interface HerdrOuterDeps {
   run: OrcaDeps['run']
@@ -129,7 +133,7 @@ function connectedOf(stdout: string, server: number, asked: ReadonlySet<number>)
   return new Set(peers.filter(([, peer]) => serving.has(peer)).map(([client]) => client))
 }
 
-/** The peers' inodes of the connections the server accepted on its client socket: the `ss -xn` rows whose local path
+/** The peers' inodes of the connections the server accepted on its client socket: the `ss` rows whose local path
  *  ends in …/herdr-client.sock and whose local inode is one of the server's ([served]). A client's own socket is
  *  unnamed, and a named session's server accepts on a socket of its own. A row out of form is passed over. */
 function acceptedPeers(stdout: string, served: ReadonlySet<string>): Set<string> {
@@ -188,14 +192,15 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
     return sockets === undefined ? undefined : connectedOf(sockets, server, new Set(others))
   }
 
-  /** Linux: which of [others] hold the peer of a connection the server accepted on its client socket, from `ss -xn` and
-   *  the socket inodes of herdr's own processes' descriptors: `ss -p` would read every process of the account. A process
-   *  whose descriptors cannot be read is left out. Nothing when ss or the server's descriptors could not be read. */
+  /** Linux: which of [others] hold the peer of a connection the server accepted on its client socket, from ss's rows at
+   *  that path (SS_ARGS) and the socket inodes of herdr's own processes' descriptors: `ss -p` would read every process of
+   *  the account. A process whose descriptors cannot be read is left out. Nothing when ss or the server's descriptors
+   *  could not be read. */
   async function ssClients(server: number, others: readonly number[]): Promise<Set<number> | undefined> {
     const ss = deps.onPath('ss')
     if (!ss) return undefined
     const [rows, served, held] = await Promise.all([
-      output(deps.run, ss, ['-xn']), deps.sockets(server), Promise.all(others.map((pid) => deps.sockets(pid))),
+      output(deps.run, ss, SS_ARGS), deps.sockets(server), Promise.all(others.map((pid) => deps.sockets(pid))),
     ])
     if (rows === undefined || served === undefined) return undefined
     const peers = acceptedPeers(rows, new Set(served))
