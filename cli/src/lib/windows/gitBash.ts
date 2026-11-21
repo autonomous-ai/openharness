@@ -34,19 +34,29 @@ export function findGitBash({ env = process.env, isFile = fileExists }: GitBashS
     // Scoop's git.exe on PATH is a shim in <root>\shims; the git it starts, and its bash, are in <root>\apps\git\current.
     candidates.push(win32.resolve(dir, '..', SCOOP_GIT_BASH))
   }
-  // Then where its installer puts it: for everyone, or for this user alone (no administrator rights).
-  for (const root of [env.ProgramFiles, env.ProgramW6432, env['ProgramFiles(x86)']]) {
-    if (root) candidates.push(win32.join(root, 'Git', 'bin', 'bash.exe'))
-  }
-  if (env.LOCALAPPDATA) candidates.push(win32.join(env.LOCALAPPDATA, 'Programs', 'Git', 'bin', 'bash.exe'))
-  // And where Scoop installs it: its root for this user (SCOOP, else ~\scoop), then its root for everyone.
-  const scoopRoots = [env.SCOOP, env.USERPROFILE && win32.join(env.USERPROFILE, 'scoop'), env.SCOOP_GLOBAL, env.ProgramData && win32.join(env.ProgramData, 'scoop')]
-  for (const root of scoopRoots) {
-    if (root) candidates.push(win32.join(root, SCOOP_GIT_BASH))
-  }
+  // Then where its installer puts it, then where Scoop does.
+  for (const root of gitForWindowsRoots(env)) candidates.push(win32.join(root, 'bin', 'bash.exe'))
+  for (const root of scoopRoots(env)) candidates.push(win32.join(root, SCOOP_GIT_BASH))
   return candidates.find((candidate) => isFile(candidate)) ?? null
 }
 
-function fileExists(path: string): boolean {
+/** The Program Files folders: this process's, the 64-bit one (another folder to a 32-bit process), and the 32-bit one. */
+export function programFilesRoots(env: NodeJS.ProcessEnv): string[] {
+  return [env.ProgramFiles, env.ProgramW6432, env['ProgramFiles(x86)']].filter((root): root is string => !!root)
+}
+
+/** Where Git for Windows' installer puts it: for everyone, or for this user alone (no administrator rights). */
+export function gitForWindowsRoots(env: NodeJS.ProcessEnv): string[] {
+  const user = env.LOCALAPPDATA ? [win32.join(env.LOCALAPPDATA, 'Programs', 'Git')] : []
+  return [...programFilesRoots(env).map((root) => win32.join(root, 'Git')), ...user]
+}
+
+/** Scoop's roots: its root for this user (SCOOP, else ~\scoop), then its root for everyone. */
+export function scoopRoots(env: NodeJS.ProcessEnv): string[] {
+  return [env.SCOOP, env.USERPROFILE && win32.join(env.USERPROFILE, 'scoop'), env.SCOOP_GLOBAL, env.ProgramData && win32.join(env.ProgramData, 'scoop')]
+    .filter((root): root is string => !!root)
+}
+
+export function fileExists(path: string): boolean {
   try { return statSync(path).isFile() } catch { return false }
 }
