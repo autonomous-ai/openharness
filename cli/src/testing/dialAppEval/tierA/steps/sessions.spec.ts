@@ -30,7 +30,7 @@ const scenario: Scenario = {
 function fakeWorld(platform: Platform) {
   const root = mkdtempSync(join(tmpdir(), 'dial-eval-sessions-'))
   roots.push(root)
-  machine.reset(platform)
+  machine.reset()
   const told: ObservedEvent[] = []
   const polls: Array<{ poll: InboxPoll; answer(a: InboxAnswer): void; open: boolean }> = []
   const gone: string[] = []

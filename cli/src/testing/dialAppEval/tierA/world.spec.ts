@@ -140,7 +140,7 @@ describe("tier A's world records every send, failing closed", () => {
 
 describe("tier A's Linux raise", () => {
   it('is the real raise on a desktop that takes a process: each raise records the pids and classes it is handed', async () => {
-    machine.reset('linux')
+    machine.reset()
     const { world, deps } = worldOn('linux')
     // A session's Claude Code in a terminal of its own: the raise walks from the session to the terminal.
     machine.start({ pid: 40_000, ppid: 1, executable: 'ghostty' })

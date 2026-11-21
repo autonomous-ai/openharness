@@ -45,7 +45,7 @@ export class TierADriver implements EvalDriver {
 
   async start(scenario: Scenario, platform: Platform): Promise<void> {
     installClock()
-    machine.reset(platform)
+    machine.reset()
     this.steps = []
     this.next = 0
     const world = this.world = new World(scenario, platform, this.deps.startDevices)

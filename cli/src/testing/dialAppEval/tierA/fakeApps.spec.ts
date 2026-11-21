@@ -50,7 +50,7 @@ function opener(platform: Platform, link: string, bundle: string): string[] {
 function fakeWorld(platform: Platform, more: { front?: App | 'other'; of?: Scenario } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'dial-eval-apps-'))
   roots.push(root)
-  machine.reset(platform)
+  machine.reset()
   const told: ObservedEvent[] = []
   const polls: InboxPoll[] = []
   const shown = { attached: [] as string[], titles: [] as string[] }

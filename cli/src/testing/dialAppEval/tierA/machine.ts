@@ -6,16 +6,13 @@
  *
  * It imports nothing at run time from src/: vi.hoisted loads it before the mocks that read it are in place.
  */
-import type { Platform } from '../types.js'
-
 export interface LiveProcess { pid: number; ppid: number; executable: string; tty?: string; app?: string }
 
 export interface MachineModel {
-  platform: Platform
   processes: Map<number, LiveProcess>
   /** An app's bundle id by the path of its bundle, as its Info.plist would give it. */
   bundleIds: Map<string, string>
-  reset(platform: Platform): void
+  reset(): void
   start(p: LiveProcess): void
   /** The process ends, and the sessions it had open with it. */
   end(pid: number): void
@@ -24,12 +21,10 @@ export interface MachineModel {
 }
 
 export const machine: MachineModel = {
-  platform: 'darwin',
   processes: new Map(),
   bundleIds: new Map(),
   owners: new Map(),
-  reset(platform) {
-    this.platform = platform
+  reset() {
     this.processes.clear()
     this.bundleIds.clear()
     this.owners.clear()
