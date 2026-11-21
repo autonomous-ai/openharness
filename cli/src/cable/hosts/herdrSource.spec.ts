@@ -46,7 +46,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     const client = herdrClient()
     const adapter = createHerdrAdapter({
       run: async () => ({ code: 0, stdout: '' }), onPath: () => null, exists: () => false, platform: process.platform, client,
-      front: () => undefined,
+      front: () => undefined, log: () => {},
     })
     let mono = 0
     let wall = WALL
@@ -69,6 +69,8 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
         return () => { watchers.delete(changed) }
       },
       prompt,
+      // No hooked agent holds a herdr pane.
+      held: () => false,
       focus,
       after: (ms, run) => {
         const timer = { at: mono + ms, ms, run }

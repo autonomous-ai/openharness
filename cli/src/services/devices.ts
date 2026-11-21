@@ -428,7 +428,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** Where herdr's socket is, from the daemon's own environment: the client reads it, and the herdr source watches for it. */
   const herdrAt = herdrClientDeps()
   const herdrClient = deps.herdr ?? createHerdrClient(herdrAt)
-  const herdrAdapter = createHerdrAdapter({ ...apps, client: herdrClient, front: () => cableHost.latestFront() })
+  const herdrAdapter = createHerdrAdapter({ ...apps, client: herdrClient, front: () => cableHost.latestFront(), log })
   /** `HARNESS_OPEN_BIN`: the end-to-end tests' fake `open`, run for each `open -b` (cable/hosts/open.ts). */
   const openBin = process.env.HARNESS_OPEN_BIN
   /** Where the ChatGPT app is looked for. `HARNESS_APPLICATIONS_DIR`, an absolute path alone, stands in for
@@ -740,6 +740,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     client: herdrClient,
     watch: (changed) => watchSocket(herdrAt, changed),
     prompt: herdrAdapter.prompt,
+    held: (paneKey, asker) => observed.holds(paneKey, asker),
     // The command a hooked agent's tap runs (Q6): the dial's move is noted as every tap's is. Only a shown pane is true:
     // herdr's adapter never refuses one, though the noted copy is typed as any adapter's.
     focus: async (paneId) => (await herdrNoted.focus({ adapter: herdrAdapter.id, id: paneId })) === true,

@@ -76,11 +76,13 @@ function recorder(over: Partial<Over> = {}, codes: Array<number | null> = [], mo
 
 /** The adapters whose pane a tap takes, in the order the observed source keeps them: each reads the hints alone. */
 const inert: OrcaDeps = { run: async () => ({ code: 0, stdout: '' }), onPath: () => null, exists: () => false, platform: 'darwin' }
-const tapped = [createHerdrAdapter({ ...inert, client: herdrClient, front: () => undefined }), createWeztermAdapter(inert), createOrcaAdapter(inert), createClaudeAppAdapter({ ...inert, inFront: () => true })]
+const tapped = [createHerdrAdapter({ ...inert, client: herdrClient, front: () => undefined, log: () => {} }), createWeztermAdapter(inert), createOrcaAdapter(inert), createClaudeAppAdapter({ ...inert, inFront: () => true })]
 
-/** What an agent's hook hints let a tap open, as the observed source reads them. */
+/** What an agent's hook hints let a tap open, as the observed source reads them: a herdr pane or an Orca terminal its
+ *  hints name is the one herdr or Orca's terminal host made its terminal in. */
 const target = (hints: Record<string, string>): OpenTarget => {
-  const place = { host: detectHost(hints), app: detectApp(hints), hints }
+  const ptyOwner = hints.HERDR_PANE_ID !== undefined ? 'herdr' : hints.ORCA_TERMINAL_HANDLE !== undefined ? 'orca' : undefined
+  const place = { host: detectHost(hints), app: detectApp(hints), hints, ptyOwner }
   return { bundle: bundleOf(place.host, hints), pane: tapped.map((adapter) => adapter.paneOf(place)).find((pane) => pane) }
 }
 const run = (file: string, ...args: string[]): Call => ({ file, args, timeoutMs: 10_000 })

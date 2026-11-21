@@ -12,7 +12,7 @@ import { orcaBinary } from '../../devices/orcaHomes.js'
 import { resolveBinaryOnPath } from '../../lib/binaryOnPath.js'
 import { windowsProgram } from '../../lib/windows/program.js'
 import { endProcessTree, processTreeKillDeps } from '../../lib/windows/treeKill.js'
-import type { HostAdapter } from './adapter.js'
+import { type HostAdapter, oncePerCaller } from './adapter.js'
 import { APP_BUNDLES } from './hostDetect.js'
 import { observedTitle } from './observedTitle.js'
 import type { PaneSwitch } from './types.js'
@@ -35,6 +35,8 @@ export const CONTROL = /\p{Cc}/gu
 // terminal, not where the agent is: words typed there land in whichever pane it shows, another agent's or a shell's. So
 // an agent in one has no Orca pane: no words, no rest, no tap through Orca.
 const MULTIPLEXERS: ReadonlySet<string> = new Set(['herdr', 'rex', 'zellij', 'tmux'])
+// A terminal Orca's terminal host did not make the agent's terminal for: it only holds the agent.
+const HELD = 'held:'
 
 export interface OrcaDeps {
   /** Its stdout too: tmux's answer is what it printed (tmux.ts). */
@@ -214,6 +216,8 @@ function createOrcaActions(deps: OrcaDeps, worktrees: OrcaWorktrees): { send(han
 /** An Orca terminal, by its handle: words are typed there, and a rest or a tap switches to it before Orca comes forward. */
 export function createOrcaAdapter(deps: OrcaDeps, worktrees: OrcaWorktrees = NO_WORKTREES): HostAdapter & Required<Pick<HostAdapter, 'show' | 'type'>> {
   const orca = createOrcaActions(deps, worktrees)
+  // An Orca release that renames its terminal host would leave every Orca terminal held: the log shows it.
+  const sayHeld = oncePerCaller((line) => worktrees.log(line), '[device] orca · held')
   return {
     id: 'orca',
     tap: 'before',
@@ -221,11 +225,18 @@ export function createOrcaAdapter(deps: OrcaDeps, worktrees: OrcaWorktrees = NO_
     paneOf: (place) => {
       if (MULTIPLEXERS.has(place.host)) return undefined
       const handle = place.hints.ORCA_TERMINAL_HANDLE
-      return handle && ORCA_HANDLE.test(handle) ? { adapter: 'orca', id: handle } : undefined
+      if (!handle || !ORCA_HANDLE.test(handle)) return undefined
+      // VS Code from `code .`, a terminal or an editor started in an Orca terminal keeps its handle, and words typed by it
+      // land at that terminal's prompt: only a terminal Orca's terminal host made the agent's terminal for takes words.
+      // Any other only switches. Windows reads no maker (no `ps`): there the handle stays the agent's.
+      if (deps.platform === 'win32' || place.ptyOwner === 'orca') return { adapter: 'orca', id: handle }
+      if (place.ptyOwner !== undefined) sayHeld(place.pid)
+      return { adapter: 'orca', id: `${HELD}${handle}`, held: true }
     },
-    // `orca terminal switch` runs on every platform.
+    // `orca terminal switch` runs on every platform. A held terminal's handle is out of ORCA_HANDLE's form, so a rest and
+    // the words refuse it.
     canFocus: () => true,
-    focus: async (pane) => (await orca.switchTo(pane.id)) === 'ok',
+    focus: async (pane) => (await orca.switchTo(pane.id.startsWith(HELD) ? pane.id.slice(HELD.length) : pane.id)) === 'ok',
     show: (pane) => orca.switchTo(pane.id),
     type: (pane, text) => orca.send(pane.id, text),
   }

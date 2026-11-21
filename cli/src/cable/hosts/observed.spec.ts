@@ -1431,14 +1431,18 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
   const ran = vi.fn(async (_file: string, args: string[], _timeoutMs: number) =>
     ({ code: 0, stdout: args[0] === 'display-message' ? '100|work|\n' : '' }))
   const deps: OrcaDeps = { run: ran, onPath: (name) => `/fake/bin/${name}`, exists: () => false, platform }
-  const orca = createOrcaAdapter(deps)
+  // Its agents run on the terminal their Orca terminal's or herdr pane's host made, as a read of their caller's maker
+  // would find: one a test reads itself keeps what its read said.
+  const madeBy = <A extends HostAdapter>(adapter: A, host: string): A =>
+    ({ ...adapter, paneOf: (place: Place) => adapter.paneOf(place.ptyOwner === undefined ? { ...place, ptyOwner: host } : place) })
+  const orca = madeBy(createOrcaAdapter(deps), 'orca')
   const claude = createClaudeAppAdapter({ ...deps, inFront: () => fake.claudeInFront() })
   const adapters: HostAdapter[] = [
-    createHerdrAdapter({ ...deps, client: {
+    madeBy(createHerdrAdapter({ ...deps, log: () => {}, client: {
       prompt: (pane, kind, text) => fake.herdrPrompt(pane, kind, text),
       socketStamp: () => fake.herdrStamp(),
       binary: () => undefined,
-    }, front: () => undefined }),
+    }, front: () => undefined }), 'herdr'),
     createTmuxAdapter({ run: ran, tmux: async () => ({ state: 'present' }), processes: async () => [{ pid: 100, ppid: 1, executable: 'claude' }],
       log: () => {}, front: () => fake.tmuxFront() }),
     // As devices.ts takes it where the hook's addresses are hc's own session's.
@@ -3307,7 +3311,7 @@ describe('ObservedSource and an Orca terminal or a herdr pane that only holds th
     expect(s.src.capabilities(s.agent())).toMatchObject({ voice: false, focus: true })
     expect(await s.src.send(s.agent(), 'next')).toMatchObject({ ok: false })
     s.clock.t += 9_999
-    s.src.ingest(s.ev('turn-start', { hostHints: ORCA }))
+    s.src.ingest(s.ev('turn-stop', { hostHints: ORCA }))
     expect(s.ptyOwner).toHaveBeenCalledTimes(1)
     s.clock.t += 1
     s.src.ingest(s.ev('turn-stop', { hostHints: ORCA }))

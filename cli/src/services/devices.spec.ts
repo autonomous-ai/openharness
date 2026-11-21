@@ -277,6 +277,24 @@ vi.mock('../cable/hosts/folderWatch.js', () => ({
 
 const { startDevices } = await import('./devices.js')
 
+type ProcessRow = { pid: number; ppid: number; tty?: string; executable: string }
+/** The hook's caller (4242) in a shell on a pseudo-terminal that [maker] made, a process on no terminal: whose pane
+ *  takes its words (scannedApp.ts ptyMaker). [above] are the processes on [maker]'s own terminal, outermost last. */
+function madeBy(maker: string, above: ProcessRow[] = []): void {
+  readers.processes.mockResolvedValue([{ pid: 4242, ppid: 4000, tty: 'pts/5', executable: 'claude' },
+    { pid: 4000, ppid: 3900, tty: 'pts/5', executable: 'zsh' },
+    { pid: 3900, ppid: above[0]?.pid ?? 1, ...(above.length ? { tty: 'pts/2' } : {}), executable: maker }, ...above])
+}
+/** Orca's terminal host (`orca-agents`) made the terminal of each caller the Orca describes' hooks name (4240 + n), each
+ *  its own. */
+const ORCA_CALLERS: ProcessRow[] = [{ pid: 3900, ppid: 1, executable: 'orca-agents' },
+  ...Array.from({ length: 16 }, (_, n) => ({ pid: 4241 + n, ppid: 3900, tty: `pts/${n + 1}`, executable: 'claude' }))]
+/** Lets the read of a hook's caller's terminal's maker land, on real timers. */
+const landed = () => new Promise((done) => setImmediate(done))
+/** herdr's client lookup on macOS for the caller madeBy('herdr') gives (herdrOuter.ts): its one run asks the server's
+ *  tty, which the spec's runs answer with nothing, so no client is found. */
+const HERDR_SERVER_TTY: [string, string[], number] = ['/bin/ps', ['-o', 'pid=,tty=', '-p', '3900'], 10_000]
+
 /** What the devices ran (`orca`, and on macOS `open`): recorded, so no spec types into, switches or brings forward the
  *  developer's own apps. */
 const orcaRuns: Array<[string, string[], number]> = []
@@ -3034,9 +3052,11 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   })
 
   it('an agent with an Orca handle lists v and f; its transcript runs orca terminal send, its tap orca terminal switch', async () => {
+    madeBy('orca-agents')
     const { port } = startHere()
     port.observed(hook('session-start', { engine: 'codex', sessionId: 'cx-1', hostHints: { ORCA_TERMINAL_HANDLE: HANDLE } }))
     attach(port)
+    await landed()
     expect(await listed()).toEqual([{ id: CODEX, name: 'api', caps: 'svf' }])
     expect(await host().sendTurn(CODEX, 'run the tests')).toEqual({ ok: true })
     expect(await host().openAgent(CODEX)).toBeUndefined()
@@ -3381,7 +3401,8 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   // The order the panes are asked in: a tmux server keeps the environment it started in, so in its pane WezTerm's and
   // Orca's values name the terminal the server began in.
   it('a tap takes herdr\'s pane before tmux\'s, and tmux\'s before WezTerm\'s and Orca\'s', async () => {
-    readers.processes.mockResolvedValue([{ pid: 4242, ppid: 4000, executable: 'claude' }, { pid: 4000, ppid: 1, executable: 'zsh' }])
+    // herdr inside tmux: herdr's server made the agent's terminal.
+    madeBy('herdr')
     const { port } = startHere({ orca: { ...mac, run: async (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
       return { code: 0, stdout: args[0] === 'display-message' ? '4000|work|\n' : args[0] === 'list-clients' ? '1794700050|5004|/dev/ttys004||work\n' : '' }
@@ -3394,10 +3415,11 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(await host().openAgent(ID)).toBeUndefined()
     expect(orcaRuns.map(([, args]) => args[0])).toEqual(['display-message', 'list-clients', 'display-message', 'list-clients', 'switch-client', '-b'])
     orcaRuns.length = 0
-    // The same pane and caller asked again within 5 s: the lookup's last answer, with no run.
+    // The same pane and caller asked again within 5 s: the lookup's last answer, with no run. herdr's client lookup asks
+    // its server's tty once, as it runs beside the tap.
     port.observed(hook('session-start', { hostHints: { HERDR_PANE_ID: 'w1:p2', TMUX_PANE: '%3', ...around } }))
     expect(await host().openAgent(ID)).toBeUndefined()
-    expect(orcaRuns.map(([, args]) => args.slice(0, 2))).toEqual([['agent', 'focus'], ['-b', 'dev.warp.Warp-Stable']])
+    expect(orcaRuns.filter(([file]) => file !== '/bin/ps').map(([, args]) => args.slice(0, 2))).toEqual([['agent', 'focus'], ['-b', 'dev.warp.Warp-Stable']])
   })
 
   // Diego's Mac (2026-11-19): Claude Code in a pane of the tmux server the daemon started, so no bundle id, attached from
@@ -3435,9 +3457,10 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   // The lookup's own runs are this spec's; its walk is herdrOuter.spec.ts's.
   describe('an agent in the person\'s herdr, attached from a Terminal tab', () => {
     const terminal = join(homedir(), 'Applications', 'Terminal.app')
-    /** The agent under herdr's server, and herdr's client in its Terminal tab, under the home the devices read apps in. */
+    /** The agent under herdr's server, on the pane's terminal the server made, and herdr's client in its Terminal tab,
+     *  under the home the devices read apps in. */
     const inHerdr = [
-      { pid: 4242, ppid: 4000, executable: 'claude' }, { pid: 4000, ppid: 3900, executable: 'zsh' },
+      { pid: 4242, ppid: 4000, tty: 'ttys030', executable: 'claude' }, { pid: 4000, ppid: 3900, tty: 'ttys030', executable: 'zsh' },
       { pid: 3900, ppid: 1, executable: '/opt/homebrew/bin/herdr' },
       { pid: 4300, ppid: 4298, executable: 'herdr' }, { pid: 4298, ppid: 1, executable: join(terminal, 'Contents', 'MacOS', 'Terminal') },
     ]
@@ -3508,7 +3531,11 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
       expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual(expect.objectContaining({ id: 'terminal-app', count: 1 }))
       port.observed(hook('session-start', { sessionId: 'sess-2', callerPid: 5242, hostHints: { HERDR_PANE_ID: 'w1:p2', TMUX_PANE: '%3' } }))
-      await vi.waitFor(() => expect(said()).toEqual(['[device] herdr client · found', '[device] herdr client · none', '[device] tmux client · found']))
+      // No herdr made its terminal: the herdr pane its hints name only holds it, said once.
+      const held = '[device] herdr · held'
+      await vi.waitFor(() => expect(said().filter((line) => line !== held))
+        .toEqual(['[device] herdr client · found', '[device] herdr client · none', '[device] tmux client · found']))
+      expect(said().filter((line) => line === held)).toEqual([held])
       expect(orcaRuns.filter(([file]) => file === 'tmux').map(([, args]) => args[0])).toEqual(['display-message', 'list-clients'])
       await vi.waitFor(async () => expect((await host().listAgentSnapshot({ apps: true })).apps?.apps)
         .toContainEqual(expect.objectContaining({ id: 'terminal-app', count: 2 })))
@@ -3546,13 +3573,6 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     const voice = () => said().filter((line) => line.startsWith('[device] voice'))
     /** No other adapter was reached: herdr's and Herdr's sockets, Codex's queue. */
     const noOther = () => expect([herdrCalls, hcCalls, codexRuns]).toEqual([[], [], []])
-    /** The hook's caller (4242) in a shell on a pseudo-terminal that [maker] made, a process on no terminal: whose pane
-     *  takes its words. [above] are the processes on [maker]'s own terminal, outermost last. */
-    const madeBy = (maker: string, above: Array<{ pid: number; ppid: number; tty?: string; executable: string }> = []) => {
-      readers.processes.mockResolvedValue([{ pid: 4242, ppid: 4000, tty: 'pts/5', executable: 'claude' },
-        { pid: 4000, ppid: 3900, tty: 'pts/5', executable: 'zsh' },
-        { pid: 3900, ppid: above[0]?.pid ?? 1, ...(above.length ? { tty: 'pts/2' } : {}), executable: maker }, ...above])
-    }
     /** What a hook's reads of the process table found has landed. */
     const settled = () => new Promise<void>((resolve) => { setImmediate(resolve) })
 
@@ -3764,7 +3784,8 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
 
     it('an agent in an Orca terminal, Orca started from a kitty window, takes the words through Orca, which made its terminal', async () => {
       const kitty = await kittyAt()
-      madeBy('orca')
+      // Orca's terminal host, as Linux's ps names it.
+      madeBy('orca-agents')
       const { port } = startHere()
       port.observed(hook('session-start', { hostHints: { ...kitty, ORCA_TERMINAL_HANDLE: HANDLE } }))
       attach(port)
@@ -3806,18 +3827,20 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
 
   // A swipe that rests on an agent in an Orca terminal shows its pane, and Orca stays where it is.
   const switched: [string, string[], number] = ['/opt/orca/bin/orca', ['terminal', 'switch', '--terminal', HANDLE, '--json'], 10_000]
-  /** The Codex agent in an Orca terminal, its dial on the cable. */
-  const inOrca = (over: Parameters<typeof start>[0] = {}) => {
+  /** The Codex agent in an Orca terminal, its dial on the cable, once the read of its terminal's maker landed. */
+  const inOrca = async (over: Parameters<typeof start>[0] = {}) => {
+    madeBy('orca-agents')
     const started = startHere(over)
     started.port.observed(hook('session-start', { engine: 'codex', sessionId: 'cx-1',
       hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1', ORCA_TERMINAL_HANDLE: HANDLE } }))
     attach(started.port)
+    await landed()
     return started
   }
   const swiped = (outcome: string) => vi.waitFor(() => expect(said()).toContain(`[device] swipe · ${outcome}`))
 
   it('a rest on an Orca agent runs orca terminal switch once and no open -b, on macOS too', async () => {
-    inOrca({ orca: mac })
+    await inOrca({ orca: mac })
     expect(host().swipeSwitches(CODEX)).toBe(true)
     host().swipeEnded(CODEX, 'rest')
     await swiped('ok')
@@ -3826,7 +3849,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   })
 
   it('a switch that fails is one line with no handle, and the dial is sent nothing', async () => {
-    inOrca({ orca: { ...orca, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: 1, stdout: '' } } } })
+    await inOrca({ orca: { ...orca, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: 1, stdout: '' } } } })
     const sent = seen.cable.calls.length
     host().swipeEnded(CODEX, 'rest')
     await swiped('failed')
@@ -3837,7 +3860,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
 
   it('a rest while a command runs on that terminal is dropped: busy', async () => {
     let typed = () => {}
-    inOrca({ orca: { ...orca, run: (file, args, timeoutMs) => {
+    await inOrca({ orca: { ...orca, run: (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
       return new Promise((done) => { typed = () => done({ code: 0, stdout: '' }) })
     } } })
@@ -3853,7 +3876,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   // The rest's switch still runs when the tap comes, 0.4 to 1 s after it: the tap is that switch's, not a refusal.
   it('a tap right after a rest opens with the rest\'s switch, on Linux too: no "did not open"', async () => {
     let shown = () => {}
-    inOrca({ orca: { ...orca, run: (file, args, timeoutMs) => {
+    await inOrca({ orca: { ...orca, run: (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
       return new Promise((done) => { shown = () => done({ code: 0, stdout: '' }) })
     } } })
@@ -3866,8 +3889,8 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(orcaRuns).toEqual([switched])
   })
 
-  it('a superseded rest is counted and runs nothing', () => {
-    inOrca()
+  it('a superseded rest is counted and runs nothing', async () => {
+    await inOrca()
     host().swipeEnded(CODEX, 'superseded')
     expect(said()).toEqual(['[device] swipe · superseded'])
     expect(orcaRuns).toEqual([])
@@ -3888,7 +3911,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   })
 
   it('a tap still switches and, on macOS, brings Orca forward', async () => {
-    inOrca({ orca: mac })
+    await inOrca({ orca: mac })
     expect(await host().openAgent(CODEX)).toBeUndefined()
     expect(orcaRuns).toEqual([switched, ['/usr/bin/open', ['-b', 'com.stablyai.orca'], 10_000]])
   })
@@ -4791,7 +4814,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
 
   it('no swipe line carries a handle, a session or an agent', async () => {
     const codes = [0, 1]
-    inOrca({ orca: { ...orca, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: codes.shift() ?? 0, stdout: '' } } } })
+    await inOrca({ orca: { ...orca, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: codes.shift() ?? 0, stdout: '' } } } })
     host().swipeEnded(CODEX, 'rest')
     await swiped('ok')
     host().swipeEnded(CODEX, 'rest')
@@ -4938,10 +4961,12 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   // types into the agent's own, while the daemon finds it (one started by launchd or systemd may not have the shell's
   // XDG_CONFIG_HOME), and with none the agent takes no words.
   it('a hooked agent in a herdr pane inside Orca takes the dial\'s words through herdr\'s socket, and none through Orca with no socket', async () => {
+    madeBy('herdr')
     let stamp: string | undefined
     const { port } = startHere({ orca: mac, herdr: { ...herdr, socketStamp: () => stamp } })
     port.observed(hook('turn-stop', { hostHints: { HERDR_PANE_ID: 'w1:p2', ORCA_TERMINAL_HANDLE: HANDLE } }))
     attach(port)
+    await landed()
     expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
     expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
     expect(said().at(-1)).toBe('[device] voice · no-answer')
@@ -4949,12 +4974,15 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
     expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
     expect(herdrCalls).toEqual([['prompt', 'w1:p2', 'claude', 'run the tests']])
-    expect(orcaRuns).toEqual([])
+    // No Orca command: herdr's client lookup alone.
+    expect(orcaRuns).toEqual([HERDR_SERVER_TTY])
     expect(said().at(-1)).toBe('[device] voice · herdr')
   })
 
   it('a rest on an agent with an Orca handle inside Terminal runs the Orca switch, and writes no select', async () => {
+    madeBy('Orca Agents')
     const { listener } = await inTab({}, { ORCA_TERMINAL_HANDLE: HANDLE })
+    await landed()
     const stream = listener.tabs()
     expect(host().swipeSwitches(ID)).toBe(true)
     host().swipeEnded(ID, 'rest')
@@ -4964,9 +4992,11 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   })
 
   it('no log line or backend request carries the command, a prompt\'s summary, a path, the transcript, a session id or a handle', async () => {
+    madeBy('orca-agents')
     const { core, port } = startHere()
     port.observed(hook('session-start', { engine: 'codex', sessionId: 'cx-1', hostHints: { ORCA_TERMINAL_HANDLE: HANDLE } }))
     attach(port)
+    await landed()
     await host().sendTurn(CODEX, 'run the tests')
     await host().openAgent(CODEX)
     // Working, Codex may show an approval no hook tells of: the words are not typed there, nor while it waits on a prompt.
@@ -5158,14 +5188,18 @@ describe('codex queue, for Codex outside a pane (docs/specs/2026-11-15-device-co
 
   // It may have queued: typed too, the words would run twice.
   it('a queue that times out is said once, and nothing is typed', async () => {
+    madeBy('orca-agents')
     started({ codex: ending('unknown') }, { hostHints: { ORCA_TERMINAL_HANDLE: HANDLE } })
+    await landed()
     expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
     expect(said()).toEqual(['[device] voice · codex-timeout'])
     expect(orcaRuns).toEqual([])
   })
 
   it('no log line carries the thread id, the words, the transcript\'s path or the Codex home', async () => {
+    madeBy('orca-agents')
     started({ codex: ending(0, 1, 'not-started', 'unknown') }, { hostHints: { ORCA_TERMINAL_HANDLE: HANDLE } })
+    await landed()
     for (let i = 0; i < 4; i++) await host().sendTurn(ID, 'run the tests')
     expect(said()).toEqual(['[device] voice · codex', '[device] voice · codex-failed (exit 1 · path)', '[device] voice · orca',
       '[device] voice · codex-failed (no binary · path)', '[device] voice · orca', '[device] voice · codex-timeout'])
@@ -5226,6 +5260,7 @@ describe('a person\'s prompt in the app in front turns the dial (docs/specs/2026
   })
 
   it('the turn of a prompt the dial delivered asks nothing, by the mod and by Orca, and the next prompt asks again', async () => {
+    madeBy('orca-agents')
     const { port } = await dialWith('orca')
     await spokenByMod(port)
     port.observed(hook('turn-start'))
@@ -5236,6 +5271,8 @@ describe('a person\'s prompt in the app in front turns the dial (docs/specs/2026
     // Codex has no mod: the dial's words are typed into its Orca terminal.
     const codex = { engine: 'codex' as const, sessionId: 'cx-1' }
     port.observed(hook('session-start', codex))
+    // The read of its terminal's maker lands.
+    await vi.advanceTimersByTimeAsync(0)
     expect(await host().sendTurn(CODEX, 'run the tests')).toEqual({ ok: true })
     expect(orcaRuns.map(([, args]) => args.slice(0, 2))).toEqual([['terminal', 'send']])
     port.observed(hook('turn-start', codex))
@@ -5375,6 +5412,8 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
   const HANDLE = 'term_0123abcd-0000-4000-8000-0123456789ab'
   const switched: [string, string[], number] = ['/opt/orca/bin/orca', ['terminal', 'switch', '--terminal', HANDLE, '--json'], 10_000]
   const host = () => seen.dial as unknown as DaemonCableHost
+  // The agent listed in Orca runs on a terminal Orca's terminal host made.
+  beforeEach(() => { madeBy('Orca Agents') })
   /** The fake timers' clock is the devices' too: the settle and the 2 s move together. */
   const wait = (ms: number) => vi.advanceTimersByTimeAsync(ms)
   /** A dial on the cable with no window, on macOS, the Claude app's two sessions listed, and `app` settled in front when
@@ -5503,6 +5542,8 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
   it('an attach within 2 s of the dial showing an Orca terminal is followed', async () => {
     const { port, attach } = await dialWith('claude')
     port.observed(hook('session-start', { sessionId: IN_ORCA, hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1', ORCA_TERMINAL_HANDLE: HANDLE } }))
+    // The read of its terminal's maker lands.
+    await wait(0)
     await rest(observedAgentId('claude', IN_ORCA))
     expect(orcaRuns).toEqual([switched])
     attach(SESSION)
@@ -5588,6 +5629,8 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
   const elsewhere: ReadonlyArray<[string, (dial: Dial) => Promise<{ id: string; ran(): void }>]> = [
     ['an Orca terminal', async ({ port }) => {
       port.observed(hook('session-start', { sessionId: IN_ORCA, hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1', ORCA_TERMINAL_HANDLE: HANDLE } }))
+      // The read of its terminal's maker lands.
+      await wait(0)
       return { id: observedAgentId('claude', IN_ORCA), ran: () => expect(orcaRuns).toEqual([switched]) }
     }],
     ['a Terminal tab', async ({ port, listener }) => {
@@ -5838,6 +5881,8 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     hostHints: { __CFBundleIdentifier: 'com.anthropic.claudefordesktop', CLAUDE_CODE_HOST_SESSION_ID: LOCAL } }
   /** An agent in a WezTerm pane, which a tap brings forward and no rest shows. */
   const inWezterm: ObservedHookEvent = { ...hook(7), sessionId: 'sess-wezterm', hostHints: { TERM_PROGRAM: 'WezTerm', WEZTERM_PANE: '3' } }
+  // The agent in an Orca terminal runs on a terminal Orca's terminal host made.
+  beforeEach(() => { readers.processes.mockResolvedValue(ORCA_CALLERS) })
   let clock = 0
   /** A dial on the cable with no window, on macOS, `agents` agents in Terminal tabs with their ttys read, a watch's stream
    *  open, no app settled in front, and the devices' monotonic clock at 0. `report` is a tab line through the listener's
@@ -6032,6 +6077,8 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
       const { port, listener, report, stream } = await dialWith()
       port.observed(inOrca)
       port.observed(inClaude)
+      // The read of its terminal's maker lands.
+      await vi.advanceTimersByTimeAsync(0)
       expect(listener.front('terminal-app')).toBeUndefined()
       report('terminal-app', TTY)
       clock = 800
@@ -6050,6 +6097,8 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
       return { code: 1, stdout: '' }
     })
     port.observed(inOrca)
+    // The read of its terminal's maker lands.
+    await vi.advanceTimersByTimeAsync(0)
     expect(listener.front('terminal-app')).toBeUndefined()
     report('terminal-app', TTY)
     clock = 800
@@ -6272,7 +6321,11 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
   const attach = (port: DevicesPort) => { seen.host.watching!(true); port.swarms(null) }
   const listed = async () => (await host().listAgentSnapshot()).agents.map(({ id, name, caps }) => ({ id, name, caps }))
   const said = () => logs.filter((line) => line.startsWith('[device] '))
-  beforeEach(() => { vi.useFakeTimers() })
+  beforeEach(() => {
+    vi.useFakeTimers()
+    // The hook's agent runs on a terminal herdr's server made.
+    madeBy('herdr')
+  })
 
   /**
    * The devices with a herdr the test drives, the dial not attached yet. Its socket is there (`stamp`). Each subscription
@@ -6398,6 +6451,8 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
   it('a hooked agent in a herdr pane is one row, its hook\'s, and gets each card once', async () => {
     const { port, live, status } = withHerdr()
     port.observed(hook('session-start'))
+    // The read of its terminal's maker lands.
+    await vi.advanceTimersByTimeAsync(0)
     await live()
     expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
     port.observed(hook('turn-start'))
@@ -6415,11 +6470,14 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
     status('working')
     expect(calls('turnStarted')).toEqual([[was, '', undefined]])
     port.observed(hook('session-start'))
+    // The read of its terminal's maker lands.
+    await vi.advanceTimersByTimeAsync(0)
     expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
     expect(await host().activityText(was)).toBeNull()
     expect(await host().sendTurn(was, 'hi')).toEqual({ ok: false, machine: expect.any(String), reason: 'it runs outside Harness' })
     expect(await host().openAgent(was)).toBeUndefined()
-    expect(orcaRuns).toEqual([])
+    // The old id's tap ran nothing: herdr's client lookup for the hook alone.
+    expect(orcaRuns).toEqual([HERDR_SERVER_TTY])
     expect(core.agents.activityText).not.toHaveBeenCalledWith(was)
     expect(core.turns.send).not.toHaveBeenCalled()
   })
@@ -6594,6 +6652,8 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
   it('a herdr part that throws costs the dial nothing', async () => {
     const { port, herdr } = withHerdr({ faults: ['herdr'] })
     port.observed(hook('session-start'))
+    // The read of its terminal's maker lands.
+    await vi.advanceTimersByTimeAsync(0)
     attach(port)
     expect(herdr.subs).toEqual([])
     expect(logs).toContain('[devices] herdr failed · Error')
@@ -10675,28 +10735,32 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   const inGhostty = (n: number) => hook(n, { sessionId: `g-${n}`, hostHints: { TERM_PROGRAM: 'ghostty' } })
   const ghostty = (n: number) => observedAgentId('claude', `g-${n}`)
   const host = () => seen.dial as unknown as DaemonCableHost
+  beforeEach(() => { readers.processes.mockResolvedValue(ORCA_CALLERS) })
   /** The devices on Orca's reads the spec lands, `n` sessions in Orca listed, no window, no dial yet. The timers are
    *  held, as a turn's end reads its answer on one; `setImmediate` is left to let a landing run. */
-  const withOrca = (n: number, over: Parameters<typeof start>[0] = {}) => {
+  const withOrca = async (n: number, over: Parameters<typeof start>[0] = {}) => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
     const fake = fakeOrcaReads()
     const started = start({ orcaReads: fake.reads, ...over, faults: ['fleet', ...over.faults ?? []] })
     for (let i = 1; i <= n; i++) started.port.observed(hook(i))
+    // The reads of their terminals' maker land.
+    await settled()
     started.port.swarms(null)
     return { ...started, fake }
   }
   /** The same, and a dial attached. */
-  const dialWith = (n: number, over: Parameters<typeof start>[0] = {}) => {
-    const started = withOrca(n, over)
+  const dialWith = async (n: number, over: Parameters<typeof start>[0] = {}) => {
+    const started = await withOrca(n, over)
     seen.host.watching!(true)
     return started
   }
   /** Lets what a landing sets off run. */
   const settled = () => new Promise((resolve) => setImmediate(resolve))
   /** The latest read lands with these tabs, these terminals an agent runs in, and these terminals' worktrees: a handle
-   *  alone is one in a tab with no title. */
+   *  alone is one in a tab with no title. The reads of the hooked callers' makers land first. */
   const land = async (fake: ReturnType<typeof fakeOrcaReads>, tabs: Array<string | { handle: string; title?: string; renamed?: true }> | null,
     terminals: OrcaTerminal[] = [], worktrees: ReadonlyMap<string, string> = new Map()) => {
+    await settled()
     const read = fake.orders.at(-1)
     expect(read, 'a read asked').toBeTypeOf('function')
     read!(tabs && { tabs: tabs.map((tab) => typeof tab === 'string' ? { handle: tab } : tab), terminals, worktrees })
@@ -10723,7 +10787,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   const orderLines = () => logs.filter((line) => line.startsWith('[device] orca order'))
 
   it('with a dial attached, an agent entering Orca\'s ring asks for one read, and its landing puts the ring in tab order', async () => {
-    const { fake } = dialWith(3)
+    const { fake } = await dialWith(3)
     expect(fake.orders).toHaveLength(1)
     expect(await ring()).toEqual([agent(1), agent(2), agent(3)])
     await land(fake, [H(3), H(1), H(2)])
@@ -10732,7 +10796,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   })
 
   it('a change during a read asks for one more after it lands, never two at once', async () => {
-    const { port, fake } = dialWith(1)
+    const { port, fake } = await dialWith(1)
     port.observed(hook(2))
     port.observed(hook(3))
     expect(fake.orders).toHaveLength(1)
@@ -10744,7 +10808,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   })
 
   it('the same members ask for nothing: a turn, a prompt, a state change', async () => {
-    const { port, fake } = dialWith(2)
+    const { port, fake } = await dialWith(2)
     await land(fake, [H(1), H(2)])
     port.observed(hook(1, { event: 'turn-start' }))
     port.observed(hook(1, { event: 'needs-input' }))
@@ -10755,7 +10819,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   })
 
   it('an agent leaving Orca\'s ring asks for one read', async () => {
-    const { port, fake } = dialWith(2)
+    const { port, fake } = await dialWith(2)
     await land(fake, [H(2), H(1)])
     expect(await ring()).toEqual([agent(2), agent(1)])
     // Resumed in Ghostty.
@@ -10766,7 +10830,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   })
 
   it('a failed read keeps the ring as it was and says so; the next change asks again', async () => {
-    const { port, fake } = dialWith(2)
+    const { port, fake } = await dialWith(2)
     await land(fake, [H(2), H(1)])
     expect(await ring()).toEqual([agent(2), agent(1)])
     port.observed(hook(3))
@@ -10779,7 +10843,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   })
 
   it('an Orca agent the attach scan found asks for one more read when its first hook gives its pane, and takes its tab\'s place', async () => {
-    const { port, fake } = withOrca(0)
+    const { port, fake } = await withOrca(0)
     port.observed(hook(2))
     // Running in Orca before the dial came, as its parent processes say: no pane until its first hook.
     readers.known.set('sess-1', 'terminal')
@@ -10794,6 +10858,8 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
     expect(fake.orders).toHaveLength(2)
     expect(await ring()).toEqual([agent(2), agent(1)])
     port.observed(hook(1))
+    // Its pane, once the read of its terminal's maker landed.
+    await settled()
     expect(fake.orders).toHaveLength(3)
     await land(fake, [H(1), H(2)])
     expect(fake.orders).toHaveLength(3)
@@ -10805,7 +10871,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   const diego = [{ handle: H(1), title: 'Terminal 3' }, { handle: H(2), title: 'Skill từ SKILL.md' }, { handle: H(3), title: 'PM', renamed: true as const }]
 
   it('Diego\'s layout: the agent the scan found takes its tab\'s place and name by elimination, and the renamed tab names PM', async () => {
-    const { port, fake } = withOrca(0)
+    const { port, fake } = await withOrca(0)
     port.observed(hook(3, { title: 'harness root' }))
     scanned(2)
     seen.host.watching!(true)
@@ -10826,7 +10892,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
     { handle: H(4), title: 'PM', renamed: true as const }]
   /** Diego's four tabs, read: Skill (agent 3) placed at its terminal by elimination. */
   const diegoPlaced = async (over: Parameters<typeof start>[0] = {}, worktrees: ReadonlyMap<string, string> = new Map()) => {
-    const { port, fake } = withOrca(0, over)
+    const { port, fake } = await withOrca(0, over)
     port.observed(hook(2))
     port.observed(hook(4))
     scanned(3)
@@ -10881,7 +10947,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   })
 
   it('an ambiguous placement switches nothing and, on macOS, brings nothing forward', async () => {
-    const { port, fake } = withOrca(0, { orca: { ...orca, platform: 'darwin' } })
+    const { port, fake } = await withOrca(0, { orca: { ...orca, platform: 'darwin' } })
     port.observed(hook(3))
     scanned(1, 2)
     seen.host.watching!(true)
@@ -10902,7 +10968,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
     ['/opt/orca/bin/orca', ['worktree', 'activate', '--worktree', `id:${worktreeId}`, '--json'], 10_000]
 
   it('after a read, a rest and a tap on an Orca agent activate its worktree, then switch to its terminal', async () => {
-    const { fake } = dialWith(2)
+    const { fake } = await dialWith(2)
     await land(fake, [H(1), H(2)], [], new Map([[H(1), WT]]))
     host().swipeEnded(agent(1), 'rest')
     await vi.waitFor(() => expect(orcaRuns).toEqual([activateIn(WT), switchTo(1)]))
@@ -10915,7 +10981,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   })
 
   it('each read replaces the worktrees: one the latest read did not give is a switch alone', async () => {
-    const { port, fake } = dialWith(2)
+    const { port, fake } = await dialWith(2)
     await land(fake, [H(1), H(2)], [], new Map([[H(1), WT]]))
     port.observed(hook(3))
     await land(fake, [H(1), H(2), H(3)], [], new Map([[H(2), WT]]))
@@ -10930,7 +10996,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
       orcaRuns.push([file, args, timeoutMs])
       return { code: args[0] === 'worktree' ? 1 : 0, stdout: '' }
     } }
-    const { fake } = dialWith(1, { orca: refusing })
+    const { fake } = await dialWith(1, { orca: refusing })
     await land(fake, [H(1)], [], new Map([[H(1), WT]]))
     host().swipeEnded(agent(1), 'rest')
     await vi.waitFor(() => expect(logs).toContain('[device] swipe · ok'))
@@ -10949,12 +11015,14 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
     const { port } = await diegoPlaced()
     // Its own terminal is another than the one it was placed at, and the read its hook asks for has not landed.
     port.observed(hook(3, { hostHints: { ...hook(3).hostHints, ORCA_TERMINAL_HANDLE: H(5) } }))
+    // The read of its terminal's maker landed.
+    await settled()
     host().swipeEnded(agent(3), 'rest')
     await vi.waitFor(() => expect(orcaRuns).toEqual([switchTo(5)]))
   })
 
   it('two agents with no pane in one folder place neither', async () => {
-    const { port, fake } = withOrca(0)
+    const { port, fake } = await withOrca(0)
     port.observed(hook(3))
     scanned(1, 2)
     seen.host.watching!(true)
@@ -10966,7 +11034,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   })
 
   it('two agents with no pane and one terminal no agent holds place neither', async () => {
-    const { port, fake } = withOrca(0)
+    const { port, fake } = await withOrca(0)
     port.observed(hook(3))
     scanned(1, 2)
     seen.host.watching!(true)
@@ -10979,7 +11047,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   })
 
   it('two terminals no agent holds place neither', async () => {
-    const { fake } = withOrca(0)
+    const { fake } = await withOrca(0)
     scanned(1)
     seen.host.watching!(true)
     await settled()
@@ -10989,7 +11057,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   })
 
   it('an agent with no folder is placed nowhere', async () => {
-    const { port, fake } = dialWith(1)
+    const { port, fake } = await dialWith(1)
     // In tmux inside Orca, so no Orca pane, and its hook said no folder.
     port.observed(hook(2, { cwd: undefined, hostHints: { TMUX_PANE: '%3', ORCA_TERMINAL_HANDLE: H(2), __CFBundleIdentifier: 'com.stablyai.orca' } }))
     await land(fake, [{ handle: H(2), title: 'Two' }, H(1)], [claudeIn(1), claudeIn(2)])
@@ -10998,7 +11066,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   })
 
   it('an agent no layout names, and one in tmux inside Orca, come after the ranked, in ring order', async () => {
-    const { port, fake } = dialWith(1)
+    const { port, fake } = await dialWith(1)
     // Its handle names the terminal tmux started in, not its pane: it has no Orca pane, listed or not.
     port.observed(hook(2, { hostHints: { TMUX_PANE: '%3', ORCA_TERMINAL_HANDLE: H(2), __CFBundleIdentifier: 'com.stablyai.orca' } }))
     port.observed(hook(3))
@@ -11008,7 +11076,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   })
 
   it('only Orca\'s ring: the single ring and another app\'s ring keep first-entry order', async () => {
-    const { port, fake } = dialWith(1)
+    const { port, fake } = await dialWith(1)
     port.observed(inGhostty(1))
     port.observed(hook(2))
     port.observed(inGhostty(2))
@@ -11021,7 +11089,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   })
 
   it('the agent the dial shows is still in the ring after the reorder, and nothing is asked of the dial or of Orca', async () => {
-    const { fake } = dialWith(3)
+    const { fake } = await dialWith(3)
     expect(await ring()).toEqual([agent(1), agent(2), agent(3)])
     turnTo(agent(1))
     const asked = () => ({ local: calls('followLocal'), app: calls('followApp'), pushed: calls('syncAgents').length, runs: [...orcaRuns] })
@@ -11033,7 +11101,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   })
 
   it('with no dial attached nothing is read; attaching asks for one; detaching and attaching again asks again', async () => {
-    const { port, fake } = withOrca(2)
+    const { port, fake } = await withOrca(2)
     expect(fake.orders).toEqual([])
     seen.host.watching!(true)
     expect(fake.orders).toHaveLength(1)
@@ -11046,7 +11114,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   })
 
   it('a read that lands after the dial detached changes nothing and asks for no other', async () => {
-    const { port, fake } = dialWith(2)
+    const { port, fake } = await dialWith(2)
     expect(await ring()).toEqual([agent(1), agent(2)])
     // A change during the read, noted, and forgotten with the dial.
     port.observed(hook(3))
@@ -11058,7 +11126,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   })
 
   it('a dial that detaches and attaches again during a read: that read lands on nothing, and the one the attach asks for follows it', async () => {
-    const { fake } = dialWith(2)
+    const { fake } = await dialWith(2)
     seen.host.watching!(false)
     seen.host.watching!(true)
     // Never two at once: the attach's read waits for the one under way.
@@ -11071,8 +11139,8 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
     expect(orderLines()).toEqual(['[device] orca order · read'])
   })
 
-  it('no Orca agent: nothing is read', () => {
-    const { port, fake } = dialWith(0)
+  it('no Orca agent: nothing is read', async () => {
+    const { port, fake } = await dialWith(0)
     port.observed(inGhostty(1))
     expect(fake.orders).toEqual([])
     // The first that comes asks.
@@ -11080,16 +11148,16 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
     expect(fake.orders).toHaveLength(1)
   })
 
-  it('HARNESS_DEVICE_OBSERVED=off: nothing is read', () => {
+  it('HARNESS_DEVICE_OBSERVED=off: nothing is read', async () => {
     const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
     switched.HARNESS_DEVICE_OBSERVED = false
     onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
-    const { fake } = dialWith(2)
+    const { fake } = await dialWith(2)
     expect(fake.orders).toEqual([])
   })
 
   it('an orca part that throws costs the dial nothing', async () => {
-    const { fake } = dialWith(2, { faults: ['orca'] })
+    const { fake } = await dialWith(2, { faults: ['orca'] })
     expect(await ring()).toEqual([agent(1), agent(2)])
     expect(fake.orders).toEqual([])
     expect(logs).toContain('[devices] orca failed · Error')
@@ -11099,7 +11167,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
     const fake = fakeOrcaReads()
     const { orcaTabs } = fake.reads
     let asks = 0
-    const { port } = dialWith(1, { orcaReads: { ...fake.reads, orcaTabs: () => { if (++asks === 1) throw new Error('made up'); return orcaTabs() } } })
+    const { port } = await dialWith(1, { orcaReads: { ...fake.reads, orcaTabs: () => { if (++asks === 1) throw new Error('made up'); return orcaTabs() } } })
     expect(asks).toBe(1)
     expect(fake.orders).toEqual([])
     port.observed(hook(2))
@@ -11115,6 +11183,8 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
       logsDir: join(dataDir, 'logs'), cableDisabled: true, faults: new Set(['fleet']), log: (line) => { logs.push(line) }, onExit: vi.fn(), orca, codex, herdr,
     })
     ports.devices!.observed(hook(1))
+    // The read of its terminal's maker landed.
+    await settled()
     seen.host.watching!(true)
     await settled()
     expect(orcaRuns).toEqual([['/opt/orca/bin/orca', ['terminal', 'list', '--json', '--include-visual-layouts'], 10_000]])
@@ -11123,7 +11193,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   })
 
   it('after a read, an Orca agent with no name of its own is called by its tab, and the dial\'s list says it', async () => {
-    const { fake } = dialWith(3)
+    const { fake } = await dialWith(3)
     // Its folder's name until then.
     expect(await names()).toEqual({ orca: ['api', 'api', 'api'], single: ['api', 'api', 'api'] })
     await land(fake, [{ handle: H(2), title: 'Dev' }, { handle: H(1), title: 'PM' }, H(3)])
@@ -11132,7 +11202,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   })
 
   it('a session the person named keeps its name', async () => {
-    const { port, fake } = withOrca(0)
+    const { port, fake } = await withOrca(0)
     port.observed(hook(1, { title: 'Mine' }))
     port.observed(hook(2))
     seen.host.watching!(true)
@@ -11141,7 +11211,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   })
 
   it('a later read with another title renames it', async () => {
-    const { port, fake } = dialWith(1)
+    const { port, fake } = await dialWith(1)
     await land(fake, [{ handle: H(1), title: 'PM' }])
     expect((await names()).orca).toEqual(['PM'])
     port.observed(hook(2))
@@ -11154,7 +11224,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   })
 
   it('a failed read renames nobody', async () => {
-    const { port, fake } = dialWith(1)
+    const { port, fake } = await dialWith(1)
     await land(fake, [{ handle: H(1), title: 'PM' }])
     port.observed(hook(2))
     await land(fake, null)
@@ -11162,7 +11232,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   })
 
   it('no log line holds a title', async () => {
-    const { port, fake } = dialWith(1)
+    const { port, fake } = await dialWith(1)
     await land(fake, [{ handle: H(1), title: 'Secret tab' }])
     port.observed(hook(2))
     await land(fake, [{ handle: H(1), title: 'Other secret' }, { handle: H(2), title: 'Third secret' }])
@@ -11174,7 +11244,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
 
   it('a tab-named agent\'s turn end, with a dial linked, logs no title: the tier\'s tally is a measure', async () => {
     readers.answer.mockResolvedValue('Shipped.')
-    const { port, fake } = dialWith(1, { decideTier: null })
+    const { port, fake } = await dialWith(1, { decideTier: null })
     await land(fake, [{ handle: H(1), title: 'Secret tab' }])
     port.observed(hook(1, { event: 'turn-start' }))
     port.observed(hook(1, { event: 'turn-stop' }))
@@ -11185,7 +11255,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   })
 
   it('no line holds a handle or an agent', async () => {
-    const { port, fake } = dialWith(2)
+    const { port, fake } = await dialWith(2)
     await land(fake, [H(1), H(2)])
     port.observed(hook(3))
     await land(fake, null)
@@ -11205,10 +11275,13 @@ describe('Orca\'s ring is the worktree on screen (docs/plans/2026-11-18-dial-orc
   })
   const agent = (n: number) => observedAgentId('claude', `sess-${n}`)
   const host = () => seen.dial as unknown as DaemonCableHost
+  beforeEach(() => { readers.processes.mockResolvedValue(ORCA_CALLERS) })
   /** Lets what a landing sets off run. */
   const settled = () => new Promise((resolve) => setImmediate(resolve))
-  /** The latest read lands with these tabs, each a handle in a tab with no title, and these terminals an agent runs in. */
+  /** The latest read lands with these tabs, each a handle in a tab with no title, and these terminals an agent runs in.
+   *  The reads of the hooked callers' makers land first. */
   const land = async (fake: ReturnType<typeof fakeOrcaReads>, tabs: string[], terminals: OrcaTerminal[] = []) => {
+    await settled()
     const read = fake.orders.at(-1)
     expect(read, 'a read asked').toBeTypeOf('function')
     read!({ tabs: tabs.map((handle) => ({ handle })), terminals, worktrees: new Map() })
@@ -11231,12 +11304,14 @@ describe('Orca\'s ring is the worktree on screen (docs/plans/2026-11-18-dial-orc
   /** The devices on Orca's reads the spec lands, `n` sessions in Orca listed, no window, no dial, no stream and nothing
    *  settled in front yet. `settle` keeps an app in front for the settle, as `harness hardware watch` tells it. The timers
    *  are held; `setImmediate` is left to let a landing run. */
-  const withOrca = (n: number, over: Parameters<typeof start>[0] = {}) => {
+  const withOrca = async (n: number, over: Parameters<typeof start>[0] = {}) => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
     const listener = fakeListener()
     const fake = fakeOrcaReads()
     const started = start({ orcaReads: fake.reads, listen: listener.listen, ...over, faults: ['fleet', ...over.faults ?? []] })
     for (let i = 1; i <= n; i++) started.port.observed(hook(i))
+    // The reads of their terminals' maker land.
+    await settled()
     started.port.swarms(null)
     const settle = async (app: string) => {
       expect(listener.front(app)).toBeUndefined()
@@ -11247,7 +11322,7 @@ describe('Orca\'s ring is the worktree on screen (docs/plans/2026-11-18-dial-orc
   }
   /** Scoped: a dial attached, these tabs landed, the plugin's dial stream open, and Orca settled in front. */
   const scoped = async (n: number, tabs: string[]) => {
-    const started = withOrca(n)
+    const started = await withOrca(n)
     seen.host.watching!(true)
     await land(started.fake, tabs)
     const stream = started.listener.dial()
@@ -11267,7 +11342,7 @@ describe('Orca\'s ring is the worktree on screen (docs/plans/2026-11-18-dial-orc
 
   it('an agent placed by elimination is on screen when its terminal is', async () => {
     // Diego's four tabs: a shell, two hooked agents, and the idle agent the attach scan found, with no pane.
-    const { port, fake, listener, settle } = withOrca(0)
+    const { port, fake, listener, settle } = await withOrca(0)
     port.observed(hook(2))
     port.observed(hook(4))
     scanned(3)
@@ -11292,7 +11367,7 @@ describe('Orca\'s ring is the worktree on screen (docs/plans/2026-11-18-dial-orc
       { pid: 4242, ppid: 4020, tty: 'pts/2', executable: 'claude' }, { pid: 4020, ppid: 4000, tty: 'pts/2', executable: 'bash' },
       { pid: 4000, ppid: 1, executable: '/opt/Orca/orca-agents' },
     ])
-    const { port, fake, listener, settle } = withOrca(0)
+    const { port, fake, listener, settle } = await withOrca(0)
     port.observed(hook(1, { cwd: '/work/web' }))
     port.observed(hook(2))
     scanned(3)
@@ -11327,6 +11402,8 @@ describe('Orca\'s ring is the worktree on screen (docs/plans/2026-11-18-dial-orc
     expect(await ring()).toEqual([agent(1)])
     // A tab opened in the worktree on screen, then an agent started in it: Orca named its terminal before its hook did.
     port.observed(hook(4))
+    // The read of its terminal's maker landed.
+    await settled()
     expect(await ring()).toEqual([agent(1), agent(4)])
     // Resumed in a terminal of another worktree.
     port.observed(hook(1, { hostHints: { ...hook(1).hostHints, ORCA_TERMINAL_HANDLE: H(7) } }))
@@ -11370,7 +11447,7 @@ describe('Orca\'s ring is the worktree on screen (docs/plans/2026-11-18-dial-orc
   })
 
   it('with no dial stream open an orcaFront is refused and nothing is kept', async () => {
-    const { fake, listener, settle } = withOrca(3)
+    const { fake, listener, settle } = await withOrca(3)
     seen.host.watching!(true)
     await land(fake, [H(1), H(2), H(3)])
     await settle('orca')
@@ -11391,7 +11468,7 @@ describe('Orca\'s ring is the worktree on screen (docs/plans/2026-11-18-dial-orc
   })
 
   it('Orca not in front, and a dial stream held with nothing sent, leave the whole ring', async () => {
-    const { fake, listener, settle } = withOrca(3)
+    const { fake, listener, settle } = await withOrca(3)
     seen.host.watching!(true)
     await land(fake, [H(3), H(1), H(2)])
     const whole = [agent(3), agent(1), agent(2)]
@@ -11409,11 +11486,11 @@ describe('Orca\'s ring is the worktree on screen (docs/plans/2026-11-18-dial-orc
     expect(await ring()).toEqual([agent(1)])
   })
 
-  it('with the observed agents switched off an orcaFront is taken and puts nobody in scope', () => {
+  it('with the observed agents switched off an orcaFront is taken and puts nobody in scope', async () => {
     const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
     switched.HARNESS_DEVICE_OBSERVED = false
     onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
-    const { listener } = withOrca(0)
+    const { listener } = await withOrca(0)
     const setScope = vi.spyOn(host(), 'setScope')
     listener.dial()
     expect(listener.orcaFront([H(1)])).toBeUndefined()
@@ -11424,8 +11501,8 @@ describe('Orca\'s ring is the worktree on screen (docs/plans/2026-11-18-dial-orc
     expect(scope?.inScope(agent(1))).toBe(false)
   })
 
-  it('a fault in the orca part costs the listener and the stream nothing', () => {
-    const { listener } = withOrca(0, { faults: ['orca'] })
+  it('a fault in the orca part costs the listener and the stream nothing', async () => {
+    const { listener } = await withOrca(0, { faults: ['orca'] })
     const stream = listener.dial()
     expect(logs).not.toContain('[devices] orca failed · Error')
     expect(listener.orcaFront([H(1)])).toBeUndefined()
@@ -11445,6 +11522,7 @@ describe('the dial follows the pane focused in Orca (docs/plans/2026-11-16-dial-
   })
   const agent = (n: number) => observedAgentId('claude', `sess-${n}`)
   const host = () => seen.dial as unknown as DaemonCableHost
+  beforeEach(() => { readers.processes.mockResolvedValue(ORCA_CALLERS) })
   let clock = 0
   /** Lets what a landing sets off run. */
   const settled = () => new Promise((resolve) => setImmediate(resolve))
@@ -11460,6 +11538,8 @@ describe('the dial follows the pane focused in Orca (docs/plans/2026-11-16-dial-
     const started = start({ faults: ['fleet', ...over.faults ?? []], listen: listener.listen, now: () => clock, orcaReads: fake.reads,
       ...over.orca ? { orca: over.orca } : {} })
     for (let n = 1; n <= (over.agents ?? 2); n++) started.port.observed(hook(n))
+    // The reads of their terminals' maker land.
+    await settled()
     if (over.attached !== false) seen.host.watching!(true)
     started.port.swarms(null)
     const settle = async (app: string) => {

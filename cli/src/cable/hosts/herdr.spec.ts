@@ -28,12 +28,14 @@ function recorder(over: Partial<HerdrAdapterDeps> = {}, codes: Array<number | nu
     platform: 'darwin',
     client,
     front: () => 'terminal-app',
+    log: () => {},
     ...over,
   }
   return { calls, prompt, socketStamp, adapter: createHerdrAdapter(deps) }
 }
 
-const place = (hints: Record<string, string>): Place => ({ host: 'herdr', app: 'herdr', hints })
+/** An agent at these hints, on a terminal herdr made. */
+const place = (hints: Record<string, string>): Place => ({ host: 'herdr', app: 'herdr', hints, ptyOwner: 'herdr' })
 const pane = (id: string) => ({ adapter: 'herdr', id })
 const focusCall = (id: string): Call => ({ file: FAKE_PATH_HERDR, args: ['agent', 'focus', id], timeoutMs: 10_000 })
 /** Lets every step already able to run take place. */
