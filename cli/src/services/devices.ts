@@ -718,7 +718,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // tmux is the nearer host, and keeps tmux's answer when herdr's finds no app. Zellij's last: a Zellij server started
   // in a tmux pane gives its panes that pane's TMUX_PANE, where tmux's finds no app.
   firstOuter(createHerdrOuter({ ...outerDeps, atime: ttyAtime, tty: readTtyName, onPath: apps.onPath, sockets: procSockets }),
-    firstOuter(createTmuxOuter({ ...outerDeps, tmux: tmuxAt }), createZellijOuter({ ...outerDeps, zellij: zellijAt, tty: readTtyName }))),
+    firstOuter(createTmuxOuter({ ...outerDeps, tmux: tmuxAt, tty: readTtyName }),
+      createZellijOuter({ ...outerDeps, zellij: zellijAt, tty: readTtyName }))),
   // Windows has no `ps`: there no terminal's pane is read as the agent's own, and none takes its words.
   apps.platform === 'win32' ? undefined : async (pid) => readPtyOwner(pid, await readProcessNames(), readTtyName)) : null
   // Orca is asked only for the parts that use its homes, the first time as the devices start: the start pass waits for

@@ -289,6 +289,9 @@ function madeBy(maker: string, above: ProcessRow[] = []): void {
  *  its own. */
 const ORCA_CALLERS: ProcessRow[] = [{ pid: 3900, ppid: 1, executable: 'orca-agents' },
   ...Array.from({ length: 16 }, (_, n) => ({ pid: 4241 + n, ppid: 3900, tty: `pts/${n + 1}`, executable: 'claude' }))]
+/** The hook's caller (4242) in the shell (4000) of a pane of the person's tmux, whose server made their terminal. */
+const IN_TMUX: ProcessRow[] = [{ pid: 4242, ppid: 4000, tty: 'pts/5', executable: 'claude' },
+  { pid: 4000, ppid: 3900, tty: 'pts/5', executable: 'zsh' }, { pid: 3900, ppid: 1, executable: 'tmux' }]
 /** Lets the read of a hook's caller's terminal's maker land, on real timers. */
 const landed = () => new Promise((done) => setImmediate(done))
 /** herdr's client lookup on macOS for the caller madeBy('herdr') gives (herdrOuter.ts): its one run asks the server's
@@ -3370,7 +3373,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   })
 
   it('an agent in the person\'s own tmux lists f, and its tap checks the pane\'s process, then switches the person\'s client', async () => {
-    readers.processes.mockResolvedValue([{ pid: 4242, ppid: 4000, executable: 'claude' }, { pid: 4000, ppid: 1, executable: 'zsh' }])
+    madeBy('tmux')
     // The client lookup's, then the tap's.
     const says = ['4000|work|\n', '4000|work|\n', '9999|work|\n']
     // A Harness terminal used last, and the person's own client: neither's process is in the table, so the lookup finds
@@ -3410,10 +3413,10 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     const around = { WEZTERM_PANE: '7', ORCA_TERMINAL_HANDLE: HANDLE, __CFBundleIdentifier: 'dev.warp.Warp-Stable' }
     port.observed(hook('session-start', { hostHints: { TMUX_PANE: '%3', ...around } }))
     attach(port)
-    // The client lookup first: its list names no client, so the tap switches one.
+    // The client lookup first: tmux made no terminal of the agent's, so it lists no client, and the tap switches one.
     await vi.waitFor(() => expect(said()).toEqual(['[device] tmux client · none']))
     expect(await host().openAgent(ID)).toBeUndefined()
-    expect(orcaRuns.map(([, args]) => args[0])).toEqual(['display-message', 'list-clients', 'display-message', 'list-clients', 'switch-client', '-b'])
+    expect(orcaRuns.map(([, args]) => args[0])).toEqual(['display-message', 'display-message', 'list-clients', 'switch-client', '-b'])
     orcaRuns.length = 0
     // The same pane and caller asked again within 5 s: the lookup's last answer, with no run. herdr's client lookup asks
     // its server's tty once, as it runs beside the tap.
@@ -3427,7 +3430,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   it('an agent in the person\'s tmux is on the page of the app that holds its client, and a rest selects its tab, then its pane', async () => {
     const terminal = join(homedir(), 'Applications', 'Terminal.app')
     readers.processes.mockResolvedValue([
-      { pid: 4242, ppid: 4000, executable: 'claude' }, { pid: 4000, ppid: 1, executable: 'zsh' },
+      ...IN_TMUX,
       // The client, in its Terminal tab: under the home the devices read apps in.
       { pid: 4300, ppid: 4298, executable: 'tmux' }, { pid: 4298, ppid: 1, executable: join(terminal, 'Contents', 'MacOS', 'Terminal') },
     ])
@@ -3457,7 +3460,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   // (wezterm.ts createWeztermTabAdapter). The list's own forms are wezterm.spec.ts's.
   it('an agent in the person\'s tmux whose client is in a WezTerm pane: a rest with WezTerm in front lists WezTerm\'s panes, activates the client\'s, then selects the tmux pane', async () => {
     readers.processes.mockResolvedValue([
-      { pid: 4242, ppid: 4000, executable: 'claude' }, { pid: 4000, ppid: 1, executable: 'zsh' },
+      ...IN_TMUX,
       // The client, in its WezTerm pane's shell.
       { pid: 4300, ppid: 4299, executable: 'tmux' }, { pid: 4299, ppid: 4298, executable: 'zsh' },
       { pid: 4298, ppid: 1, executable: 'wezterm-gui' },
@@ -3501,7 +3504,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   // the client's terminal (kitty.ts createKittyTabAdapter). Its walk is kitty.spec.ts's.
   it('an agent in the person\'s tmux whose client is in a kitty window: a rest with kitty in front focuses the client\'s window, then selects the tmux pane', async () => {
     readers.processes.mockResolvedValue([
-      { pid: 4242, ppid: 4000, executable: 'claude' }, { pid: 4000, ppid: 1, executable: 'zsh' },
+      ...IN_TMUX,
       // The client, in its kitty window's shell, on the terminal kitty made.
       { pid: 4300, ppid: 4299, tty: 'pts/4', executable: 'tmux' }, { pid: 4299, ppid: 4298, tty: 'pts/4', executable: 'bash' },
       { pid: 4298, ppid: 1, executable: 'kitty' },
@@ -3602,8 +3605,8 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     it('herdr\'s lookup is asked first, and tmux\'s only when herdr\'s found no app', async () => {
       // A second agent in a pane of the person's tmux, with no herdr among its parents; tmux's client in a Terminal tab.
       readers.processes.mockResolvedValue([...inHerdr,
-        { pid: 5242, ppid: 5000, executable: 'claude' }, { pid: 5000, ppid: 1, executable: 'zsh' },
-        { pid: 4400, ppid: 4298, executable: 'tmux' }])
+        { pid: 5242, ppid: 5000, tty: 'ttys031', executable: 'claude' }, { pid: 5000, ppid: 4500, tty: 'ttys031', executable: 'zsh' },
+        { pid: 4500, ppid: 1, executable: 'tmux' }, { pid: 4400, ppid: 4298, executable: 'tmux' }])
       const { port } = startHere({ orca: onMac })
       port.observed(hook('session-start', { hostHints: { HERDR_PANE_ID: 'w1:p2', TMUX_PANE: '%3' } }))
       attach(port)

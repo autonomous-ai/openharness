@@ -362,7 +362,7 @@ describe('a tap on an agent in the person\'s own tmux pane (docs/specs/2026-11-1
 
 /** The client's processes: tmux's client (4300) under a pseudo-terminal helper (4299), under Terminal in the person's
  *  Applications folder. */
-const CLIENT_CHAIN = [
+const CLIENT_CHAIN: PtyProcess[] = [
   { pid: 4300, ppid: 4299, executable: 'tmux' },
   { pid: 4299, ppid: 4298, executable: '/usr/bin/python3' },
   { pid: 4298, ppid: 1, executable: '/Users/u/Applications/Terminal.app/Contents/MacOS/Terminal' },
