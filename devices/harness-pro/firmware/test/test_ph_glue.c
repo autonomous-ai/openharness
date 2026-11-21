@@ -1718,6 +1718,17 @@ static void landing_ends(void) {
     ring_lands(2300);
     CHECK(U.nav.depth == 1);
     pick_codex();
+    pod_ui_navigated(&U);   // the side button
+    CHECK(!U.landing[0]);
+    ring_lands(2300);
+    CHECK(U.nav.depth == 1);
+    pick_codex();   // a press after the room opened: the focus that follows waits out the tap's quiet, as after any move of theirs
+    ring_lands(2050 + 200);
+    pod_ui_navigated(&U);
+    act(POD_A_BACK, 0);
+    pod_ui_focus(&U, "a6", 2050 + 300);
+    CHECK(U.nav.depth == 1);
+    pick_codex();
     pod_ui_link(&U, false);
     CHECK(!U.landing[0]);
     ring_lands(2300);
