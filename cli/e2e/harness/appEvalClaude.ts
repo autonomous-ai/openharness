@@ -123,7 +123,7 @@ function appOf(world: TierBWorld): FakeApp {
 function follow(world: TierBWorld, app: FakeApp, run: OpenRun): void {
   if (app.closed || !run.ok) return
   const s = world.scenario.sessions.find((one) => one.app === 'claude' && one.resumable && !one.ghost && run.argv.includes(linkOf(one)))
-  if (s) void start(world, app, s.key).then(() => attach(world, s.key))
+  if (s) start(world, app, s.key).then(() => attach(world, s.key)).catch((error: unknown) => world.fail(error))
 }
 
 /** The session's Claude Code, its start hook run, and the mod's poll held. */

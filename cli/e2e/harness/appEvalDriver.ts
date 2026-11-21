@@ -76,6 +76,8 @@ export interface TierBWorld {
   readonly front: App | 'other'
   /** A mod poll for the Claude session [sessionId] closed now. */
   modPolled(sessionId: string): void
+  /** What a fake app did on its own failed: the scenario fails with it at its next step, wait or stop. */
+  fail(error: unknown): void
   /** A title of the ChatGPT app's window, as Harness Device reads it: a line on the watch. */
   title(text: string): void
   /** Ended at stop. */
@@ -271,6 +273,8 @@ class World implements TierBWorld {
   private readonly openers: Array<(run: OpenRun) => void> = []
   /** Stopped: what a fake app says after it reaches no watch. */
   private closed = false
+  /** The first failure a fake app had, not yet thrown. */
+  private failure: { error: unknown } | undefined
   private readonly refreshing: ReturnType<typeof setInterval>
 
   constructor(private readonly rig: Rig, readonly scenario: Scenario, readonly platform: Platform) {
@@ -297,6 +301,14 @@ class World implements TierBWorld {
   gap(reason: string): void { this.gaps.push(reason) }
   onOpen(listener: (run: OpenRun) => void): void { this.openers.push(listener) }
   modPolled(sessionId: string): void { this.rig.polled.set(sessionId, Date.now()) }
+  fail(error: unknown): void { this.failure ??= { error } }
+  get failing(): boolean { return this.failure !== undefined }
+  /** Throws a fake app's failure, once. */
+  raise(): void {
+    const failure = this.failure
+    this.failure = undefined
+    if (failure) throw failure.error
+  }
   title(text: string): void { this.tell({ thread: text }) }
 
   async plug(): Promise<void> {
@@ -482,6 +494,7 @@ export class TierBDriver implements EvalDriver {
 
   async step(step: Run): Promise<void> {
     const world = this.need()
+    world.raise()
     const index = world.scenario.steps.indexOf(step, this.next)
     if (index < 0) throw new Error(`${world.scenario.id}: a ${step.kind} step that is not its next`)
     this.next = index + 1
@@ -498,10 +511,12 @@ export class TierBDriver implements EvalDriver {
     const world = this.need()
     if (!until) {
       await new Promise((done) => setTimeout(done, ms))
+      world.raise()
       return
     }
     const deadline = Date.now() + ms
-    while (!until() && Date.now() < deadline) await world.nextRead()
+    while (!until() && Date.now() < deadline && !world.failing) await world.nextRead()
+    world.raise()
   }
 
   /** What the scenario saw; nothing for one refused before its world began, which the runner still reads. */
@@ -521,6 +536,7 @@ export class TierBDriver implements EvalDriver {
       if (this.rig) this.collect(this.rig)
       if (!this.ready && this.rig) await this.closeRig()
     }
+    world?.raise()
   }
 
   /** The current daemon's guard file. */
