@@ -52,7 +52,7 @@ export function writeReport(dir: string, report: Report): { json: string; md: st
 }
 
 function scoreRow(app: App, s: AppScores): string[] {
-  return [APP_NAMES[app], ...DIMENSIONS.map((d) => num(s.dims[d], 100)), num(s.score), `left out: ${s.leftOut}`]
+  return [APP_NAMES[app], ...DIMENSIONS.map((d) => num(s.dims[d])), num(s.score), `left out: ${s.leftOut}`]
 }
 
 function subsetRows(r: Report): string[][] {
@@ -90,8 +90,8 @@ function sections(r: Report): Array<[string, string[]]> {
   return all.filter(([, body]) => body.length > 0)
 }
 
-function num(n: number | null, scale = 1): string {
-  return n === null ? '—' : String(Math.round(n * scale * 10) / 10)
+function num(n: number | null): string {
+  return n === null ? '—' : String(Math.round(n * 10) / 10)
 }
 
 function columns(cells: string[]): string {
