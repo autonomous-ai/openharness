@@ -113,14 +113,16 @@ on `device-app/scripts/release-setup.sh`, so a pull request's first run can comp
 `device-app-build` and `device-app-update` start together and both miss the cache, and `ci.yml` never runs on `main`,
 so no `main` run fills it.
 
-`cross-read-scan` is no end-to-end suite: a change to `scripts/ci-plan.py`, `scripts/tests/test_ci_plan.py`,
-`scripts/record-ci-validation.py` (the desktop's inputs the planner's tables take) or the CLI lists those tables copy
-(`cli/e2e/harness/dialHosts.ts`, `cli/vitest.e2e.ci.config.ts`) selects it. It runs the four `test_ci_plan.py` tests
-that need every file, the repository-wide cross-read scan among them, on a full checkout with
+`cross-read-scan` is no end-to-end suite: it runs on every PR that changes a component (a file one of the first table's
+suites runs as its own: `cli/`, `desktop/`, `backend/`, `devices/` and the other folders there), and on a change to
+`scripts/ci-plan.py`, `scripts/tests/test_ci_plan.py`, `scripts/record-ci-validation.py` (the desktop's inputs the
+planner's tables take) or the CLI lists those tables copy (`cli/e2e/harness/dialHosts.ts`,
+`cli/vitest.e2e.ci.config.ts`). Docs, workflows and other scripts alone do not select it. It runs the four
+`test_ci_plan.py` tests that need every file, the repository-wide cross-read scan among them, on a full checkout with
 `CROSS_READ_SCAN_REQUIRED=1`: a skipped test fails, and so does a run of other than those 4 tests. `process-checks`'
-sparse checkout skips them. The scan takes about 20 s locally; its CI time is not yet measured. It guards the
-planner's own tables: an undeclared read that an ordinary component PR adds is found only by the next PR that selects
-the scan, or by `make merge-pr`'s reuse check.
+sparse checkout skips them. The scan takes about 20 s locally and about 0.5 runner-minutes on CI. A string the scan
+reads as an undeclared path blocks the PR until it is declared in `PR_READS` or `DEPENDS`, or added to `NOT_READS` with
+its reason when it is no read.
 
 `plan` (actionlint and suite selection), `process-checks` and `ci/required` always
 run (after **Update branch**, untouched components reuse their earlier result: see

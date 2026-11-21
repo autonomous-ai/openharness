@@ -72,7 +72,7 @@ class SelectionTests(unittest.TestCase):
     def test_backend_changes_run_the_integration_shards_and_nothing_else_does(self):
         # Task #2459: the Super Tab integration suite runs in PR CI for backend changes only.
         self.assertEqual(planner.JOBS["backend"], {"backend-desk", "backend-integration"})
-        self.assertEqual(planner.select(["backend/integration/superTabs.test.ts"])[0], {"backend"})
+        self.assertEqual(planner.select(["backend/integration/superTabs.test.ts"])[0], {"backend", "cross-read-scan"})
         others = set().union(*(jobs for suite, jobs in planner.JOBS.items() if suite != "backend"))
         self.assertNotIn("backend-integration", others)
         self.assertNotIn("backend", planner.NOT_READ)
@@ -82,8 +82,8 @@ class SelectionTests(unittest.TestCase):
         # batches later (River, 2026-11-03).
         for path in ["desktop/lib/widgets/engine_identity.dart", "desktop/test/support/real_fonts.dart"]:
             with self.subTest(path=path):
-                self.assertEqual(planner.select([path])[0], {"desktop", "mobile"})
-        self.assertEqual(planner.select(["desktop/lib/main.dart"])[0], {"desktop"})
+                self.assertEqual(planner.select([path])[0], {"cross-read-scan", "desktop", "mobile"})
+        self.assertEqual(planner.select(["desktop/lib/main.dart"])[0], {"cross-read-scan", "desktop"})
 
     def test_a_desktop_change_on_main_keeps_backends_result_only_when_backend_reads_none_of_it(self):
         # Task #4511: a backend test reads only the desktop files it declares; declaring more reran backend after every
@@ -155,10 +155,10 @@ class SelectionTests(unittest.TestCase):
 
     def test_the_device_app_runs_its_own_suite_and_its_end_to_end_suites(self):
         for path, expected in {
-            "device-app/src-tauri/src/keepalive.rs": {"device-app", "device-app-e2e"},
-            "device-app/src-tauri/Cargo.lock": {"device-app", "device-app-e2e", "device-app-update"},
-            "device-app/ui/package-lock.json": {"device-app", "device-app-e2e"},
-            "device-app/AGENTS.md": {"device-app"},
+            "device-app/src-tauri/src/keepalive.rs": {"cross-read-scan", "device-app", "device-app-e2e"},
+            "device-app/src-tauri/Cargo.lock": {"cross-read-scan", "device-app", "device-app-e2e", "device-app-update"},
+            "device-app/ui/package-lock.json": {"cross-read-scan", "device-app", "device-app-e2e"},
+            "device-app/AGENTS.md": {"cross-read-scan", "device-app"},
         }.items():
             with self.subTest(path=path):
                 self.assertEqual(planner.select([path])[0], expected)
@@ -172,7 +172,7 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(planner.JOBS["windows-e2e"], {"windows-e2e"})
 
     def test_each_device_app_job_runs_on_its_own_paths(self):
-        app = {"device-app", "device-app-e2e"}
+        app = {"cross-read-scan", "device-app", "device-app-e2e"}
         cases = {"device-app/src-tauri/src/keepalive.rs": app, "device-app/scripts/e2e/macos.sh": app}
         # The updater, the pair of builds, each driver's update path, how a release builds, and the app's dependencies.
         for path in ("src-tauri/src/update.rs", "scripts/e2e/update-pair.sh", "scripts/e2e/linux.sh",
@@ -191,11 +191,11 @@ class SelectionTests(unittest.TestCase):
         for path in ("desktop/lib/devices/device_app_installer.dart", "desktop/lib/update/tauri_signature.dart",
                      "desktop/lib/update/update_signature.dart", "desktop/test/support/tauri_test_signer.dart",
                      "desktop/integration_test/device_app_install_windows_linux_native_test.dart"):
-            cases[path] = {"desktop", "device-app-desktop"}
-        cases["website/scripts/device-install.sh"] = {"website", "device-app-install"}
+            cases[path] = {"cross-read-scan", "desktop", "device-app-desktop"}
+        cases["website/scripts/device-install.sh"] = {"cross-read-scan", "website", "device-app-install"}
         # The docs and the release scripts' Python tests run no Device job: device-app-checks runs those tests.
         for path in ("device-app/AGENTS.md", "device-app/RELEASE.md", "device-app/scripts/test_release_build.py"):
-            cases[path] = {"device-app"}
+            cases[path] = {"cross-read-scan", "device-app"}
         for path, expected in cases.items():
             with self.subTest(path=path):
                 self.assertEqual(planner.select([path])[0], expected)
@@ -598,7 +598,7 @@ class SelectionTests(unittest.TestCase):
                      "plugins/harness-device-vscode/gate/realVscode.gate.ts"):
             with self.subTest(path=path):
                 self.assertEqual(planner.owners(path), {"cli"})
-                self.assertEqual(planner.select([path])[0], {"cli", "windows-e2e"})
+                self.assertEqual(planner.select([path])[0], {"cli", "cross-read-scan", "windows-e2e"})
                 self.assertTrue(planner.reads("cli", path))
                 self.assertIsNone(planner.shared_input(path))
         # A folder whose name only starts the same is not the extension's: it stays outside every component's suite.
@@ -612,7 +612,7 @@ class SelectionTests(unittest.TestCase):
         for path in ("plugins/harness-device-orca/src/dial.ts", "plugins/harness-device-orca/orca-plugin.json"):
             with self.subTest(path=path):
                 self.assertEqual(planner.owners(path), {"cli"})
-                self.assertEqual(planner.select([path])[0], {"cli", "windows-e2e"})
+                self.assertEqual(planner.select([path])[0], {"cli", "cross-read-scan", "windows-e2e"})
                 self.assertTrue(planner.reads("cli", path))
                 self.assertIsNone(planner.shared_input(path))
         # A folder whose name only starts the same is not the plugin's.
@@ -622,7 +622,7 @@ class SelectionTests(unittest.TestCase):
         # installer/'s model and steps are plain Rust that tests on Linux; pty-checks runs them (installer spec §4.1).
         for path in ("installer/src/model.rs", "installer/tests/entry-vectors.json", "installer/Cargo.lock"):
             with self.subTest(path=path):
-                self.assertEqual(planner.select([path])[0], {"pty"})
+                self.assertEqual(planner.select([path])[0], {"cross-read-scan", "pty"})
 
     def test_the_pipe_auth_vectors_also_select_the_desktop_suite(self):
         # desktop/test/windows_pipe_auth_test.dart reads them from cli/: a new vector runs both halves.
@@ -634,7 +634,7 @@ class SelectionTests(unittest.TestCase):
         # so a bad split cannot merge on process checks alone.
         for path in ("scripts/test-desktop.py", "scripts/desktop-test-durations.json"):
             with self.subTest(path=path):
-                self.assertEqual(planner.select([path])[0], {"desktop"})
+                self.assertEqual(planner.select([path])[0], {"cross-read-scan", "desktop"})
         self.assertEqual(planner.select(["scripts/desktop-test-durations.py"])[0], set())
 
     def test_the_shared_terminal_crate_selects_both_the_pty_host_and_the_tui(self):
@@ -643,16 +643,18 @@ class SelectionTests(unittest.TestCase):
         for path in ("term/src/capture.rs", "term/Cargo.toml"):
             with self.subTest(path=path):
                 self.assertEqual(planner.owners(path), {"pty", "tui"})
-                self.assertEqual(planner.select([path])[0], {"os", "pty", "tui", "windows-e2e"})
+                self.assertEqual(planner.select([path])[0], {"cross-read-scan", "os", "pty", "tui", "windows-e2e"})
 
     def test_a_file_another_suite_reads_selects_that_suite(self):
         # #4033 changed the CLI's engineLaunch.ts, which Desktop's and the phone's first-task tests read; its CI ran the
         # CLI's suite only, and main's Desktop CI went red until #4035. companions and pty import the CLI's code.
-        self.assertEqual(planner.select(["cli/src/lib/engineLaunch.ts"])[0], {"cli", "companions", "desktop", "mobile", "pty"})
-        self.assertEqual(planner.select(["cli/src/lib/tmuxBackend.ts"])[0], {"cli", "companions", "pty"})
+        self.assertEqual(planner.select(["cli/src/lib/engineLaunch.ts"])[0],
+                         {"cli", "companions", "cross-read-scan", "desktop", "mobile", "pty"})
+        self.assertEqual(planner.select(["cli/src/lib/tmuxBackend.ts"])[0], {"cli", "companions", "cross-read-scan", "pty"})
         # A desktop file only the desktop reads runs the desktop alone; one the phone's tests read runs both.
-        self.assertEqual(planner.select(["desktop/lib/widgets/pane_grid.dart"])[0], {"desktop"})
-        self.assertEqual(planner.select(["desktop/lib/widgets/engine_identity.dart"])[0], {"desktop", "mobile"})
+        self.assertEqual(planner.select(["desktop/lib/widgets/pane_grid.dart"])[0], {"cross-read-scan", "desktop"})
+        self.assertEqual(planner.select(["desktop/lib/widgets/engine_identity.dart"])[0],
+                         {"cross-read-scan", "desktop", "mobile"})
         # Desktop's and the CLI's tests read the Store's agents and branding, which no component owns.
         self.assertEqual(planner.select(["store/agents/blender/store.json"])[0], {"cli", "desktop"})
 
@@ -660,7 +662,8 @@ class SelectionTests(unittest.TestCase):
         # Every writer of Harness Device's Linux app-list entry holds its bytes and rule to one shared file: the app,
         # Desktop and the website's one-line installer. The CLI owns tests/ and the backend reads tests/fixtures/.
         path = "tests/fixtures/app-list-entry-vectors.json"
-        self.assertEqual(planner.select([path])[0], {"backend", "cli", "desktop", "device-app", "website"})
+        self.assertEqual(planner.select([path])[0],
+                         {"backend", "cli", "cross-read-scan", "desktop", "device-app", "website"})
         for suite in ("desktop", "device-app", "website"):
             with self.subTest(suite=suite):
                 self.assertTrue(planner.reads(suite, path))
@@ -809,7 +812,7 @@ class GitPlanTests(unittest.TestCase):
         self.commit()
         plan = self.plan()
         self.assertEqual(len(plan["paths"]), 351)
-        self.assertEqual(plan["suites"], ["website"])
+        self.assertEqual(plan["suites"], ["cross-read-scan", "website"])
 
     def test_sparse_checkout_keeps_complete_component_selection(self):
         self.write("cli/src/changed.ts")
@@ -820,7 +823,7 @@ class GitPlanTests(unittest.TestCase):
         self.assertFalse((self.root / "cli/src/changed.ts").exists())
         plan = self.plan()
         self.assertEqual(plan["paths"], ["cli/src/changed.ts", "desktop/lib/changed.dart", "scripts/planner.py"])
-        self.assertEqual(plan["suites"], ["cli", "companions", "desktop", "pty"])
+        self.assertEqual(plan["suites"], ["cli", "companions", "cross-read-scan", "desktop", "pty"])
 
     def test_rename_selects_old_and_new_components(self):
         self.write("website/source.txt")
@@ -828,7 +831,7 @@ class GitPlanTests(unittest.TestCase):
         self.write("os/moved.txt")
         (self.root / "website/source.txt").unlink()
         self.commit()
-        self.assertEqual(set(self.plan()["suites"]), {"os", "website"})
+        self.assertEqual(set(self.plan()["suites"]), {"cross-read-scan", "os", "website"})
 
     def test_pr_uses_merge_base_without_claiming_unrelated_main_changes(self):
         self.write("os/new.txt")
@@ -836,7 +839,7 @@ class GitPlanTests(unittest.TestCase):
         self.git("checkout", "--detach", self.base)
         self.write("website/new.txt")
         self.commit()
-        self.assertEqual(self.plan(base=main)["suites"], ["website"])
+        self.assertEqual(self.plan(base=main)["suites"], ["cross-read-scan", "website"])
 
     def test_group_records_every_change_but_reruns_only_process_checks(self):
         self.write("website/new.txt")
@@ -1240,8 +1243,8 @@ class ReuseTests(ReuseFixture):
     def test_an_unrelated_main_change_reuses_the_passed_heads_result(self):
         passed, main, head = self.scenario(["mobile/lib/app.dart"], ["backend/src/app.ts"])
         plan = self.plan(head, main)
-        self.assertEqual(plan["suites"], ["mobile"])
-        self.assertEqual(plan["required_jobs"], ["process-checks"])
+        self.assertEqual(plan["suites"], ["cross-read-scan", "mobile"])
+        self.assertEqual(plan["required_jobs"], ["cross-read-scan", "process-checks"])
         reused = plan["reused"]["mobile"]
         self.assertEqual(reused["origin_sha"], passed)
         self.assertEqual(reused["origin_tree"], self.git("rev-parse", f"{passed}^{{tree}}"))
@@ -1258,9 +1261,10 @@ class ReuseTests(ReuseFixture):
     def test_a_related_main_change_reruns_only_that_component(self):
         _, main, head = self.scenario(["mobile/lib/app.dart", "backend/src/app.ts"], ["backend/src/other.ts"])
         plan = self.plan(head, main)
-        self.assertEqual(plan["suites"], ["backend", "mobile"])
+        self.assertEqual(plan["suites"], ["backend", "cross-read-scan", "mobile"])
         self.assertEqual(list(plan["reused"]), ["mobile"])
-        self.assertEqual(plan["required_jobs"], sorted({"process-checks"} | planner.JOBS["backend"]))
+        self.assertEqual(plan["required_jobs"],
+                         sorted({"process-checks"} | planner.JOBS["backend"] | planner.JOBS["cross-read-scan"]))
         self.assertIn("backend/src/other.ts", plan["reuse"]["rerun"]["backend"])
 
     def test_tests_outside_the_pr_suite_do_not_rerun_it(self):
@@ -1275,16 +1279,18 @@ class ReuseTests(ReuseFixture):
         plan = self.plan(head, main)
         self.assertEqual(plan["reused"], {})
         self.assertIn("backend/integration/teams.test.ts", plan["reuse"]["rerun"]["backend"])
-        self.assertEqual(plan["required_jobs"], sorted({"process-checks", "backend-desk", "backend-integration"}))
+        self.assertEqual(plan["required_jobs"],
+                         sorted({"process-checks", "backend-desk", "backend-integration", "cross-read-scan"}))
 
     def test_the_os_suite_reruns_when_main_changes_the_dial_ids_it_checks(self):
         # os/tests/test_lock_and_screenshot.py reads cli/src/cable/serial.ts from the repository root.
         _, main, head = self.scenario(["os/root/usr/lib/udev/rules.d/70-harness-device.rules"], ["cli/src/cable/serial.ts"])
         plan = self.plan(head, main)
-        self.assertEqual(plan["suites"], ["os"])
+        self.assertEqual(plan["suites"], ["cross-read-scan", "os"])
         self.assertEqual(plan["reused"], {})
         self.assertIn("cli/src/cable/serial.ts", plan["reuse"]["rerun"]["os"])
-        self.assertEqual(plan["required_jobs"], sorted({"process-checks"} | planner.JOBS["os"]))
+        self.assertEqual(plan["required_jobs"],
+                         sorted({"process-checks"} | planner.JOBS["os"] | planner.JOBS["cross-read-scan"]))
 
     def test_a_file_another_component_reads_reruns_the_reader(self):
         # mobile's measurement tests read the backend's product usage types.
@@ -1292,7 +1298,8 @@ class ReuseTests(ReuseFixture):
         plan = self.plan(head, main)
         self.assertEqual(plan["reused"], {})
         self.assertIn("backend/src/types/productUsage.ts", plan["reuse"]["rerun"]["mobile"])
-        self.assertEqual(plan["required_jobs"], sorted({"process-checks"} | planner.JOBS["mobile"]))
+        self.assertEqual(plan["required_jobs"],
+                         sorted({"process-checks"} | planner.JOBS["mobile"] | planner.JOBS["cross-read-scan"]))
 
     def test_shared_inputs_on_main_rerun_every_component(self):
         passed = self.branch(self.base, ["mobile/lib/app.dart", "desktop/lib/a.dart"], "pr")
@@ -1304,7 +1311,7 @@ class ReuseTests(ReuseFixture):
                 main = self.branch(self.base, [path], f"main-{index}")
                 plan = self.plan(self.update(passed, main), main)
                 self.assertRerunsAll(plan, path)
-                self.assertEqual(plan["suites"], ["desktop", "mobile"])
+                self.assertEqual(plan["suites"], ["cross-read-scan", "desktop", "mobile"])
 
     def test_a_pr_that_edits_the_planner_or_workflows_never_reuses(self):
         main = self.branch(self.base, ["backend/src/app.ts"], "main")
@@ -1416,11 +1423,11 @@ class ReuseTests(ReuseFixture):
         # four packages, and the reused suites' jobs (device-app-linux among them) must skip.
         _, main, head = self.scenario(["device-app/src-tauri/tauri.linux.conf.json"], ["desktop/lib/devices/x.dart"])
         plan = self.plan(head, main)
-        self.assertEqual(plan["suites"], ["device-app", "device-app-desktop", "device-app-e2e", "device-app-install",
-                                          "device-app-update"])
+        self.assertEqual(plan["suites"], ["cross-read-scan", "device-app", "device-app-desktop", "device-app-e2e",
+                                          "device-app-install", "device-app-update"])
         self.assertEqual(sorted(plan["reused"]), ["device-app", "device-app-e2e", "device-app-install", "device-app-update"])
         self.assertEqual(plan["e2e"]["device_app_builds"], FOUR_BUILDS)
-        self.assertEqual(plan["required_jobs"], ["device-app-desktop", "process-checks"])
+        self.assertEqual(plan["required_jobs"], ["cross-read-scan", "device-app-desktop", "process-checks"])
 
     def test_draft_and_merge_group_plans_never_reuse(self):
         _, main, head = self.scenario(["mobile/lib/app.dart"], ["backend/src/app.ts"])
@@ -1453,8 +1460,8 @@ class BatchReuseTests(ReuseFixture):
         main = self.branch(self.base, ["docs/guide.md"], "main")
         head = self.batch(main, [phone, api])
         plan = self.plan(head, main)
-        self.assertEqual(plan["suites"], ["backend", "mobile"])
-        self.assertEqual(plan["required_jobs"], ["process-checks"])
+        self.assertEqual(plan["suites"], ["backend", "cross-read-scan", "mobile"])
+        self.assertEqual(plan["required_jobs"], ["cross-read-scan", "process-checks"])
         self.assertEqual((plan["reused"]["mobile"]["origin_sha"], plan["reused"]["mobile"]["run_id"]), (phone, 21))
         self.assertEqual((plan["reused"]["backend"]["origin_sha"], plan["reused"]["backend"]["run_id"]), (api, 22))
         self.assertEqual(plan["reused"]["mobile"]["origin_tree"], self.git("rev-parse", f"{phone}^{{tree}}"))
@@ -1502,7 +1509,8 @@ class BatchReuseTests(ReuseFixture):
         self.evidence.failure = RuntimeError("GitHub lookup failed (1): api")
         plan = self.plan(head, self.base)
         self.assertEqual(plan["reused"], {})
-        self.assertEqual(plan["required_jobs"], sorted({"process-checks"} | planner.JOBS["backend"] | planner.JOBS["mobile"]))
+        self.assertEqual(plan["required_jobs"], sorted({"process-checks"} | planner.JOBS["backend"] | planner.JOBS["mobile"]
+                                                       | planner.JOBS["cross-read-scan"]))
 
     def test_the_pr_body_is_never_read(self):
         phone = self.member("phone", ["mobile/lib/app.dart"], 21)
