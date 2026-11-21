@@ -71,6 +71,24 @@ void main() {
       }
     });
 
+    // Any member of Users can make %ProgramData%\scoop, so a shim there is anyone's.
+    test("never runs a git from Scoop's root for everyone", () {
+      final git = GitProgram(
+        isWindows: true,
+        environment: {
+          'PATH': r'C:\Windows\System32',
+          'SCOOP_GLOBAL': r'D:\scoop-global',
+          'ProgramData': r'C:\ProgramData',
+        },
+        isFile: {
+          r'D:\scoop-global\shims\git.exe',
+          r'C:\ProgramData\scoop\shims\git.exe',
+        }.contains,
+      );
+
+      expect(git.resolve, throwsA(isA<ProcessException>()));
+    });
+
     test('PATH comes before the install folders', () {
       final git = GitProgram(
         isWindows: true,
