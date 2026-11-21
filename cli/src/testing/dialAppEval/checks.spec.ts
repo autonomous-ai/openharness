@@ -286,11 +286,17 @@ describe('open', () => {
 
   it('the evidence names the tap or swipe it saw, so an input that opened nothing fails with it', () => {
     const x = scenario([{ kind: 'swipe', session: 'b', label: 'go' }])
-    const results = run(open, x, seen(x, [500]))
+    const results = run(open, x, seen(x, [500], { frames: [frame(600, { t: 'focus', id: id(B) })] }))
     expect(scores(results)).toEqual({ link: 0, front: 0, latency: 0 })
     for (const r of results) expect(r.evidence).toEqual(['swipe on b at 500', 'no command'])
     const opened = run(open, s, seen(s, [500], { commands: [cmd(700, ['/usr/bin/open', '-b', 'com.anthropic.claudefordesktop', link])] }))
     expect(opened[0]!.evidence).toEqual(['tap on a at 500', 'command at 700: link front'])
+  })
+
+  it('an input with no command or frame seen in its window says nothing: a recorder that saw nothing catches no probe', () => {
+    const x = scenario([{ kind: 'swipe', session: 'b', label: 'go' }])
+    const results = run(open, x, seen(x, [500], { frames: [frame(400, { t: 'focus', id: id(B) })] }))
+    expect(results.map((r) => [r.score, r.evidence])).toEqual([[0, []], [0, []], [0, []]])
   })
 
   it('latency 3001 ms scores 0, and link: false has no link part', () => {
