@@ -641,7 +641,7 @@ describe('installing every engine\'s hooks', () => {
     const installed = await installEngineHooks(4242, { environment: {} })
     await vi.advanceTimersByTimeAsync(0)
     try {
-      expect(console.warn).toHaveBeenCalledWith('[hooks] home adoption held · Claude Code hook preparation is unavailable')
+      expect(console.warn).toHaveBeenCalledWith('[hooks] home adoption held · Error')
       expect(engineHooks.claude.installIn).toHaveBeenCalledTimes(1)
       await vi.advanceTimersByTimeAsync(1_000)
       expect(engineHooks.claude.installIn).toHaveBeenCalledTimes(2)
@@ -742,7 +742,7 @@ describe('installing every engine\'s hooks', () => {
     const installed = await installEngineHooks(4242, { environment: {} })
     await vi.advanceTimersByTimeAsync(0)
     try {
-      expect(console.warn).toHaveBeenCalledWith('[hooks] home adoption held · fixture durability unavailable')
+      expect(console.warn).toHaveBeenCalledWith('[hooks] home adoption held · Error')
       for (const install of installs) expect(install).toHaveBeenCalledWith(...startupArgs(install))
       const log = vi.spyOn(console, 'log').mockImplementation(() => {})
       await vi.advanceTimersByTimeAsync(1_000)

@@ -37,7 +37,7 @@ it('returns while storage is unavailable, reports its reason once, and retries u
   }) })
   c.submit({ CODEX_HOME: '/requested' })
   expect(c.deps.install).not.toHaveBeenCalled()
-  expect(vi.mocked(c.deps.held).mock.calls).toEqual([['durability unavailable']])
+  expect(vi.mocked(c.deps.held).mock.calls).toEqual([['Error']])
   c.submit({ CODEX_HOME: '/requested' })
   expect(vi.getTimerCount()).toBe(1)
   await vi.advanceTimersByTimeAsync(1_000)
@@ -45,7 +45,7 @@ it('returns while storage is unavailable, reports its reason once, and retries u
   readable = true
   await vi.advanceTimersByTimeAsync(1_000)
   expect(c.deps.install).toHaveBeenCalledWith('claude', '/saved')
-  expect(c.deps.held).toHaveBeenLastCalledWith('durability unavailable')
+  expect(c.deps.held).toHaveBeenLastCalledWith('Error')
   writable = true
   await vi.advanceTimersByTimeAsync(1_000)
   expect(c.deps.install).toHaveBeenLastCalledWith('codex', '/requested')
@@ -62,7 +62,7 @@ it('retains only declared home variables and snapshots them before retry', async
   environment.CODEX_HOME = '/changed'
   await vi.advanceTimersByTimeAsync(1_000)
   expect(confirm.mock.calls).toEqual([[{ CLAUDE_CONFIG_DIR: '/c', CODEX_HOME: '/d' }], [{ CLAUDE_CONFIG_DIR: '/c', CODEX_HOME: '/d' }]])
-  expect(vi.mocked(c.deps.held).mock.calls).toEqual([['held'], [null]])
+  expect(vi.mocked(c.deps.held).mock.calls).toEqual([['string'], [null]])
 })
 
 it('retains hook installation independently of adoption, without blocking another home', async () => {
@@ -70,11 +70,18 @@ it('retains hook installation independently of adoption, without blocking anothe
   const c = setup({ confirm: vi.fn(() => ({ claude: '/c', codex: '/d' })), install })
   c.submit({})
   expect(install.mock.calls).toEqual([['claude', '/c'], ['codex', '/d']])
-  expect(c.deps.held).toHaveBeenCalledWith('settings unavailable')
+  expect(c.deps.held).toHaveBeenCalledWith('Error')
   await vi.advanceTimersByTimeAsync(1_000)
   expect(c.deps.confirm).toHaveBeenCalledTimes(1)
   expect(install.mock.calls).toEqual([['claude', '/c'], ['codex', '/d'], ['claude', '/c']])
   expect(c.deps.held).toHaveBeenLastCalledWith(null)
+})
+
+// A hold reaches the daemon's log (core/engines/hooks.ts), which Export logs sends: an error's words can name a home.
+it('a hold names a failure by its kind', () => {
+  const c = setup({ confirm: vi.fn(() => ({ claude: '/c', codex: null })), install: vi.fn(() => { throw new Error('/Users/sentinel') }) })
+  c.submit({})
+  expect(vi.mocked(c.deps.held).mock.calls).toEqual([['Error']])
 })
 
 it('installs a peer home recovered while confirming a later request', () => {
@@ -112,7 +119,7 @@ it('keeps an asynchronous install pending, lets a sibling complete, and acknowle
   expect(install).toHaveBeenCalledTimes(2)
   reject(new Error('disk unavailable'))
   await vi.advanceTimersByTimeAsync(0)
-  expect(c.deps.held).toHaveBeenLastCalledWith('disk unavailable')
+  expect(c.deps.held).toHaveBeenLastCalledWith('Error')
   await vi.advanceTimersByTimeAsync(1_000)
   expect(install.mock.calls).toEqual([['claude', '/slow'], ['codex', '/ready'], ['claude', '/slow']])
   expect(c.deps.held).toHaveBeenLastCalledWith(null)
