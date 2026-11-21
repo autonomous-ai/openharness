@@ -1722,7 +1722,8 @@ console.log(process.execPath.includes('node-v24.') ? (named.includes('node-v24.'
     try {
       await vi.waitFor(() => expect(refused.mock.calls.flat().join('\n')).toContain('failed its canary'), { timeout: 10_000 })
     } finally { poller.stop() }
-    expect(refused.mock.calls.flat().join('\n')).toContain('failed its canary (it says it is on 24, current-node untouched)')
+    // The log says a canary's line that is not a version by its length alone: the three answers' lengths differ.
+    expect(refused.mock.calls.flat().join('\n')).toContain(`failed its canary (it says it is text(${'on 24, current-node untouched'.length}))`)
     // A refused build is tried again 40 ms on, so another check may have begun before the stop: none staged.
     expect([...new Set(events)]).toEqual([`ensure on ${v22}`])
     expect(managedNodePath()).toBe(v22)

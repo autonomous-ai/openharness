@@ -302,6 +302,9 @@ function readVersionAnswer(line: string): { version: string; ptyProtocol: number
   return { version: line, ptyProtocol: PLAIN_VERSION_PTY_PROTOCOL }
 }
 
+/** What a version a canary says looks like, to be said in the log as it is. */
+const VERSION_SHAPE = /^\d+\.\d+\.\d+[\w.+-]*$/
+
 /** How long the canary may take to answer. */
 export const CANARY_TIMEOUT_MS = 15_000
 /** How long a canary that outlived its deadline has between SIGTERM and SIGKILL. */
@@ -367,7 +370,11 @@ export async function runCanary(
     if (r.failure !== null) return { ok: false, problem: 'failed', ended: r.failure }
     const lines = r.stdout.trim().split('\n')
     const said = readVersionAnswer(lines[lines.length - 1].trim())
-    if (version !== undefined && said.version !== version) return { ok: false, problem: 'wrong-version', ended: `it says it is ${said.version || 'nothing'}` }
+    if (version !== undefined && said.version !== version) {
+      // Not JSON, the version is the build's whole last line of output, which can name the person's folders.
+      const shown = !said.version ? 'nothing' : VERSION_SHAPE.test(said.version) ? said.version : `text(${said.version.length})`
+      return { ok: false, problem: 'wrong-version', ended: `it says it is ${shown}` }
+    }
     return { ok: true, ptyProtocol: said.ptyProtocol }
   } finally {
     try { rmSync(tmpDir, { recursive: true, force: true }) } catch { /* ignore */ }
