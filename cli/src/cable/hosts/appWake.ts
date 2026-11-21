@@ -44,8 +44,8 @@ export interface AppWakeDeps {
 type Word = 'too long' | 'open failed' | 'timeout' | 'ended' | 'busy' | 'stopped' | 'refused' | 'sent'
 
 export class AppWake {
-  /** The wake under way, opening, waiting or delivering: whose words, and its stop. */
-  private running: { name: string; stop(): void } | undefined
+  /** The wake under way, opening, waiting or delivering: whose words, whether it still waits for a session, its stop. */
+  private running: { name: string; waitsFor(sessionId: string): boolean; stop(): void } | undefined
 
   constructor(private readonly deps: AppWakeDeps) {}
 
@@ -94,6 +94,7 @@ export class AppWake {
       }
       this.running = {
         name: target.name,
+        waitsFor: (sessionId) => phase === 'waiting' && sessionId === target.sessionId,
         stop: () => {
           if (phase === 'waiting') fail('stopped', `${target.name} did not answer.`)
         },
@@ -116,6 +117,16 @@ export class AppWake {
         check()
       })
     })
+  }
+
+  /**
+   * Whether a wake still opens or waits for that Claude Code session, its words not handed on. Its copy can be listed
+   * meanwhile, and the dial's next words then take the copy's own path: a mod the inbox counts ready (a poll held while
+   * the link runs, or the last run's, 35 s) would hand them the first poll, ahead of these. They are refused instead
+   * (Decision 3). Its own words ask this as they go, once it no longer waits.
+   */
+  waitsFor(sessionId: string): boolean {
+    return this.running?.waitsFor(sessionId) ?? false
   }
 
   /** The dial detached: a wake opening or waiting answers stopped; one delivering keeps its send's answer. */

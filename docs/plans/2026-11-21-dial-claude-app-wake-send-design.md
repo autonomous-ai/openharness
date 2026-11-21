@@ -106,8 +106,10 @@ bound.
 (`registry.ts`), so the dial's later words go to the observed copy's own path, not the wake: before its mod's first
 poll that copy has no voice and the dial says what it says today for such an agent (`This agent is in Claude. Talking
 to it from the device comes in an update.`); after it, they are delivered behind the first (the inbox holds one at a
-time and answers `<name> has not taken your last words yet.` for one more). Both paths reach the same session, the
-first words first.
+time and answers `<name> has not taken your last words yet.` for one more). While the wake still waits, the copy's mod
+can already count as ready (a poll held while the link runs, or its last run's poll, which `Inbox.ready()` keeps for
+35 s): its path then refuses those words with that same line (`AppWake.waitsFor`), so they never take the first poll.
+Both paths reach the same session, the first words first.
 
 **Failure** answers `{ ok: false, reason }`, which the dial shows as its voice error (and the draft screen as its
 error). Each says one fixed line in the log and counts one fixed word with the devices' `count` (voiced) measure; no
