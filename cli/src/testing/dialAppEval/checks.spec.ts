@@ -271,6 +271,18 @@ describe('state', () => {
     expect(scores(run(state('working'), s2, seen(s2, [50, 650], { frames }))).shown).toBe(1)
   })
 
+  it('an open question holds the row at needs-you through turn cards, until its close, the turn\'s end or a summary', () => {
+    const s2 = scenario([write, { kind: 'hook', session: 'a', event: 'needs-input', label: 'go' }])
+    const asked = [frame(600, { t: 'question', agentId: id(A), id: 'q' }), frame(600, { t: 'turn.started', agentId: id(A), text: '' })]
+    const shown = (frames: Seen['frames'], want: 'working' | 'needs-you' | 'done'): number | undefined =>
+      scores(run(state(want), s2, seen(s2, [50, 600], { frames: [...asked, ...frames] }))).shown
+    // The list lands after both cards: the row it shows is still asking.
+    expect(shown(list(900, 'claude', [A, B, C]), 'needs-you')).toBe(1)
+    expect(shown([frame(800, { t: 'question.close', agentId: id(A), id: 'q' }), ...list(900, 'claude', [A, B, C])], 'working')).toBe(1)
+    expect(shown([frame(800, { t: 'turn.done', agentId: id(A) }), ...list(900, 'claude', [A, B, C])], 'done')).toBe(1)
+    expect(shown([frame(800, { t: 'summary', agentId: id(A), recap: '', text: '' }), ...list(900, 'claude', [A, B, C])], 'done')).toBe(1)
+  })
+
   it('a probe on a ghost session fails with the state changes observed in the window', () => {
     const probe = state('working', 'ghost')
     const frames = [...ring, frame(300, { t: 'turn.started', agentId: id(B), text: '' }), frame(800, { t: 'turn.started', agentId: id(A), text: '' })]
