@@ -1281,16 +1281,19 @@ static void nav_test_tab_room_up_from_apps(void) {
     pod_nav_sync(&N, &M);
     CHECK(N.depth == 1 && !pod_home_apps(&N, &M) && top()->scroll == 1 && !N.home_app[0]);
 }
-// The window's selected tab moves the room: Home goes to that tab and lists Tabs.
+// The window's selected tab moves the room while Home lists apps: Home stays on its card (follow_tab moves Home only
+// while it lists tabs), and up from the room shows Tabs on that tab.
 static void nav_test_follow_tab_room_from_apps(void) {
     fresh_apps();
     act(POD_A_HOME_APPS, 0, 0);
-    act(POD_A_SCROLL, 1, 0);
+    act(POD_A_SCROLL, 1, 0);   // Apps, on VS Code
     pod_nav_follow(&N, &M, "a1", 0);
     M.selected = 1;   // a1 is not in Docs: the room moves to a4
     CHECK(pod_nav_follow_tab(&N, &M) && !strcmp(top()->agent, "a4"));
     pod_nav_sync(&N, &M);
-    CHECK(!N.home_apps && N.stack[0].scroll == 1 && !N.home_app[0]);
+    CHECK(N.home_apps && N.stack[0].scroll == 33 && !strcmp(N.home_app, "vscode"));
+    act(POD_A_TABS, 0, 0);
+    CHECK(N.depth == 1 && !N.home_apps && top()->scroll == 1 && !N.home_app[0]);
     fresh_apps();
     static const char *x[] = {"a1", "a2", "a3"}, *y[] = {"a4", "a1"};   // a1 in both tabs
     const char *const *ids[2] = {x, y};
@@ -1303,7 +1306,25 @@ static void nav_test_follow_tab_room_from_apps(void) {
     M.selected = 1;   // the same agent, now in Docs
     CHECK(pod_nav_follow_tab(&N, &M) && !strcmp(top()->agent, "a1") && top()->tab == 1);
     pod_nav_sync(&N, &M);
-    CHECK(!N.home_apps && N.stack[0].scroll == 1 && !N.home_app[0]);
+    CHECK(N.home_apps && N.stack[0].scroll == 33 && !strcmp(N.home_app, "vscode"));
+    act(POD_A_BACK, 0, 0);
+    CHECK(N.depth == 1 && !N.home_apps && top()->scroll == 1 && !N.home_app[0]);
+    // The room opened from the Inbox over Home on Apps: back through the Inbox lands where the person left Home.
+    pod_model_swarms(&M, it, ids, cnt, 2, "s1", NULL, 0);
+    act(POD_A_HOME_APPS, 0, 0);
+    act(POD_A_SCROLL, 1, 0);
+    pod_model_unread_append(&M, "a1", "Alpha", "", "more", 100);
+    act(POD_A_INBOX, 0, 0);
+    act(POD_A_OPEN_NOTIF, 0, 0);
+    CHECK(N.depth == 3 && !strcmp(top()->agent, "a1") && top()->tab == 0);
+    M.selected = 1;
+    CHECK(pod_nav_follow_tab(&N, &M) && top()->tab == 1);
+    pod_nav_sync(&N, &M);
+    act(POD_A_BACK, 0, 0);
+    CHECK(N.depth == 2 && top()->view == POD_V_INBOX);
+    act(POD_A_BACK, 0, 0);
+    pod_nav_sync(&N, &M);
+    CHECK(N.depth == 1 && N.home_apps && top()->scroll == 33 && !strcmp(N.home_app, "vscode"));
 }
 // The ring goes while the Inbox is open over an app's room: Home lands on the app's card, as with no Inbox.
 static void nav_test_app_ring_goes_under_inbox(void) {
