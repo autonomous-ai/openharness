@@ -82,9 +82,10 @@ ALSO.update({"plugins/harness-device-orca/": "cli"})
 # test_ci_plan's repository-wide scan and its other full-checkout tests skip in process-checks' sparse checkout, where
 # two undeclared reads slipped in: their own job runs them on a full checkout. They run for a change to the planner, its
 # test, the tables it reads (DEPENDS takes the desktop's from record-ci-validation.py) and the CLI's lists its tables
-# copy (dialHosts.ts's DIAL_HOST_FILES, the CI config's exclude), and select() adds them for any component change: an
-# undeclared read an ordinary component pull request added was found only by the next planner pull request or make
-# merge-pr's reuse check, and the scan costs about 0.5 runner-minutes (measured in #4526).
+# copy (dialHosts.ts's DIAL_HOST_FILES, the CI config's exclude), and select() adds them for any change to a file a
+# component or an end-to-end suite runs as its own: an undeclared read an ordinary component pull request added was
+# found only by the next planner pull request or make merge-pr's reuse check, and the scan costs about 0.5
+# runner-minutes (measured in #4526).
 ALSO.update({path: "cross-read-scan" for path in ("scripts/ci-plan.py", "scripts/tests/test_ci_plan.py",
                                                   "scripts/record-ci-validation.py", "cli/e2e/harness/dialHosts.ts",
                                                   "cli/vitest.e2e.ci.config.ts")})
@@ -513,9 +514,10 @@ def owns(suite, path):
 
 def select(paths, present=None):
     """Each changed path runs its owners' suites, the end-to-end suites whose own paths include it, and every suite
-    that declares reading it (PR_READS); a component's path runs the cross-read scan too. linux-e2e runs an e2e file
-    only when the diff leaves it in the tree (present: the paths it adds or modifies; None, all of them), its canary
-    for any change to what it runs for, and the Orca files for any change to what they cover."""
+    that declares reading it (PR_READS); a path a suite owns, a component or an end-to-end one, runs the cross-read
+    scan too. linux-e2e runs an e2e file only when the diff leaves it in the tree (present: the paths it adds or
+    modifies; None, all of them), its canary for any change to what it runs for, and the Orca files for any change to
+    what they cover."""
     selected, reasons = set(), {}
     for path in paths:
         if not isinstance(path, str) or not path or path.startswith("/") or ".." in path.split("/"):
@@ -523,7 +525,7 @@ def select(paths, present=None):
         own = owners(path)
         scopes = own | e2e_owners(path) | {
             suite for suite, entries in PR_READS.items() if any(covers(entry, path) for entry in entries)}
-        if own - {"cross-read-scan"}:
+        if (own | e2e_owners(path)) - {"cross-read-scan"}:
             scopes.add("cross-read-scan")
         if present is not None and path not in present and not (linux_e2e_canary_path(path)
                                                                  or linux_e2e_orca_path(path)):

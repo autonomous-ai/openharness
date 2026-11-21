@@ -212,7 +212,8 @@ class SelectionTests(unittest.TestCase):
 
         self.assertEqual(users("device-app-setup"), {"device-app-e2e", "device-app-update", "device-app-desktop",
                                                      "device-app-install"})
-        self.assertEqual(planner.select([".github/actions/device-app-setup/action.yml"])[0], users("device-app-setup"))
+        self.assertEqual(planner.select([".github/actions/device-app-setup/action.yml"])[0],
+                         users("device-app-setup") | {"cross-read-scan"})
         # Every end-to-end suite runs on a change to an action its jobs use (desktop-tests' Flutter action is shared).
         actions = sorted(set(re.findall(r"uses: \./\.github/actions/([\w-]+)\n", workflow)))
         self.assertLessEqual({"desktop-flutter", "desktop-flutter-arm64", "cli-e2e-setup"}, set(actions))
@@ -609,7 +610,7 @@ class SelectionTests(unittest.TestCase):
         # A folder whose name only starts the same is not the extension's: it stays outside every component's suite.
         look_alike = "plugins/harness-device-vscode-x/a.ts"
         self.assertEqual(planner.owners(look_alike), set())
-        self.assertEqual(planner.select([look_alike])[0], {"windows-e2e"})
+        self.assertEqual(planner.select([look_alike])[0], {"cross-read-scan", "windows-e2e"})
         self.assertIsNotNone(planner.shared_input(look_alike))
 
     def test_the_orca_plugin_belongs_to_the_cli_suite(self):
@@ -621,7 +622,7 @@ class SelectionTests(unittest.TestCase):
                 self.assertTrue(planner.reads("cli", path))
                 self.assertIsNone(planner.shared_input(path))
         # A folder whose name only starts the same is not the plugin's.
-        self.assertEqual(planner.select(["plugins/harness-device-orca-x/a.ts"])[0], {"windows-e2e"})
+        self.assertEqual(planner.select(["plugins/harness-device-orca-x/a.ts"])[0], {"cross-read-scan", "windows-e2e"})
 
     def test_the_windows_installer_selects_the_pty_suite(self):
         # installer/'s model and steps are plain Rust that tests on Linux; pty-checks runs them (installer spec §4.1).
