@@ -140,6 +140,18 @@ function emptied(dir: string): void {
     if (!entry.isDirectory()) rmSync(join(entry.parentPath, entry.name), { force: true })
   }
 }
+/**
+ * What tier B leaves out of [scenario] on [platform]. On Linux a tap whose link failed brings its app by the raise
+ * (cable/hosts/open.ts, linuxRaise.ts), which no fake records, so an open check of an app whose links fail is left out
+ * there: it would fail on a raise that ran.
+ */
+export function tierBGaps(scenario: Scenario, platform: Platform): string[] {
+  const failing = scenario.world?.linkFails ?? []
+  const raised = platform === 'linux' && scenario.checks.some((c) => c.kind === 'open'
+    && failing.includes(scenario.sessions.find((s) => s.key === c.session)!.app))
+  return raised ? ["a failed link's app comes by Linux's raise, which tier B does not record"] : []
+}
+
 /** The rows of the last whole list the dial was sent, or undefined before one. */
 function lastList(messages: readonly DialMessage[]): DialMessage[] | undefined {
   let last: DialMessage[] | undefined
@@ -395,6 +407,7 @@ export class TierBDriver implements EvalDriver {
     if (this.rig) await this.reset(this.rig)
     const rig = this.rig ??= await openRig()
     const world = this.world = new World(rig, scenario, platform)
+    for (const reason of tierBGaps(scenario, platform)) world.gap(reason)
     linksFail(rig.d.env.HARNESS_OPEN_BIN!, scenario.world?.linkFails ?? [])
     const front = scenario.world?.front ?? scenario.app
     await GENERIC.front(world, { kind: 'front', app: front })
