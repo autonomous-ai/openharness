@@ -14,7 +14,11 @@ import 'package:harness/core/posix_file_mode.dart';
 import 'package:harness/devices/device_app.dart';
 import 'package:harness/devices/device_app_installer.dart';
 import 'package:harness/devices/device_app_manifest.dart';
+import 'package:harness/logging/app_log.dart';
+import 'package:harness/update/tauri_signature.dart';
 import 'package:path/path.dart' as p;
+
+import '../support/tauri_test_signer.dart';
 
 /// The installer against a loopback server, temporary folders, a recording
 /// signature check and a recording opener: nothing here installs on, or opens
@@ -43,6 +47,20 @@ final String? _needsChmod = Platform.isWindows
     : null;
 
 typedef _Handler = void Function(HttpRequest request);
+
+/// Every line logged: its level, category, message and error.
+class _RecordedLog implements AppLog {
+  final lines = <(AppLogLevel, String, String, Object?)>[];
+
+  @override
+  void record(
+    AppLogLevel level,
+    String category,
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) => lines.add((level, category, message, error));
+}
 
 /// chmod(2) from this process, macOS only (`mode_t` is 16 bits there).
 /// Starting `chmod` for it would fork this process once more each time, and
@@ -187,6 +205,26 @@ void main() {
   late List<String> launched;
   late Future<void> Function(String appImage) launcherAnswer;
 
+  /// The Device release's Tauri key, as far as these installers know: made
+  /// for the run.
+  late TauriTestSigner signer;
+
+  /// [_appImage]'s signature, as the Device release signs its x64 AppImage.
+  late String appImageSignature;
+
+  Future<String> signAppImage(
+    List<int> bytes, {
+    String version = '0.0.0',
+  }) async => signer.sign(
+    await blake2b512OfBytes(bytes),
+    'timestamp:1\tfile:Harness-Device-linux-x64.AppImage\tversion:$version',
+  );
+
+  setUpAll(() async {
+    signer = await TauriTestSigner.generate();
+    appImageSignature = await signAppImage(_appImage);
+  });
+
   void makeReadOnly(String folder) {
     _setMode(folder, 0x16d); // 0555
     readOnly.add(folder);
@@ -213,13 +251,32 @@ void main() {
     serveManifest({'device-macos': _entry(bytes)});
   }
 
-  /// Serves [bytes] as [platform]'s package under its x64 key.
+  /// The Linux x64 manifest: [entry], and Tauri's entry for [url] (by default
+  /// [entry]'s) with [signature] (by default [appImageSignature]).
+  Map<String, Object?> linuxManifest(
+    Map<String, Object?> entry, {
+    String? url,
+    String? signature,
+  }) => {
+    'device-linux-x64-appimage': entry,
+    'platforms': {
+      'linux-x86_64': {
+        'url': url ?? entry['url'],
+        'signature': signature ?? appImageSignature,
+      },
+    },
+  };
+
+  /// Serves [bytes] as [platform]'s package under its x64 key. Linux's is
+  /// signed as [_appImage]: other bytes are a package changed after signing.
   void publishFor(TargetPlatform platform, List<int> bytes) {
-    final (key, path) = platform == TargetPlatform.windows
-        ? ('device-windows-x64-exe', _setupPath)
-        : ('device-linux-x64-appimage', _appImagePath);
+    final windows = platform == TargetPlatform.windows;
+    final path = windows ? _setupPath : _appImagePath;
     routes[path] = _respond(200, bytes);
-    serveManifest({key: _entry(bytes, path: path)});
+    final entry = _entry(bytes, path: path);
+    serveManifest(
+      windows ? {'device-windows-x64-exe': entry} : linuxManifest(entry),
+    );
   }
 
   /// What the fake Windows installer does by default: puts the app at its place.
@@ -344,6 +401,7 @@ void main() {
       launched.add(appImage);
       return launcherAnswer(appImage);
     },
+    tauriPublicKey: signer.publicKey,
   );
 
   DeviceAppInstaller onWindows() => installer(
@@ -369,6 +427,19 @@ void main() {
 
   Future<DeviceAppInstallStep?> failedStep() async =>
       (await installer().install()).failed;
+
+  /// The Linux install, refused at its signature before anything reached the
+  /// place or ran.
+  Future<void> expectSignatureRefused() async {
+    final result = await onLinux().install();
+    expect(result.failed, DeviceAppInstallStep.signature);
+    expect(result.installedAt, isNull);
+    expect(namesIn(p.dirname(linuxPlace)), isEmpty);
+    expect(calls, isEmpty);
+    expect(launched, isEmpty);
+    expect(opened, isEmpty);
+    expect(tempRoot.listSync(), isEmpty);
+  }
 
   test(
     'a manifest that cannot be read fails at manifest and fetches nothing else',
@@ -963,36 +1034,104 @@ void main() {
     },
   );
 
-  test('linux: the AppImage lands executable at its place and opens', () async {
+  test(
+    'linux: a signed AppImage lands executable at its place and opens',
+    () async {
+      publishFor(TargetPlatform.linux, _appImage);
+
+      final result = await onLinux().install();
+
+      expect(result.failed, isNull);
+      expect(result.installedAt, linuxPlace);
+      // The OS signature check is macOS's and Windows': Linux's is Tauri's.
+      expect(signed, isEmpty);
+      expect(File(linuxPlace).readAsBytesSync(), _appImage);
+      expect(File(linuxPlace).statSync().mode & 0x1ff, 0x1ed); // 0755
+      expect(namesIn(p.dirname(linuxPlace)), [deviceAppImageName]);
+      final [chmod] = calls;
+      expect(chmod.take(2), ['/bin/chmod', '0755']);
+      expect(p.dirname(chmod[2]), p.dirname(linuxPlace));
+      expect(
+        p.basename(chmod[2]),
+        matches(RegExp(r'^\.Harness-Device\.AppImage\.[0-9a-f]{16}\.partial$')),
+      );
+      expect(opened, [linuxPlace]);
+      expect(tempRoot.listSync(), isEmpty);
+    },
+    skip: _needsChmod,
+  );
+
+  test('linux: an AppImage changed after signing, its sha256 in the manifest, '
+      'fails at signature', () async {
+    publishFor(TargetPlatform.linux, [..._appImage]..[0] ^= 0xff);
+
+    await expectSignatureRefused();
+  });
+
+  test(
+    'linux: a platforms url naming another file fails at signature',
+    () async {
+      publishFor(TargetPlatform.linux, _appImage);
+      serveManifest(
+        linuxManifest(
+          _entry(_appImage, path: _appImagePath),
+          url: 'https://cdn.autonomous.ai/harness/device/0.0.1/Harness-Device-linux-x64.AppImage',
+        ),
+      );
+
+      await expectSignatureRefused();
+    },
+  );
+
+  test('linux: no signature fails at signature', () async {
     publishFor(TargetPlatform.linux, _appImage);
+    serveManifest({
+      'device-linux-x64-appimage': _entry(_appImage, path: _appImagePath),
+    });
 
-    final result = await onLinux().install();
+    await expectSignatureRefused();
+  });
 
-    expect(result.failed, isNull);
-    expect(result.installedAt, linuxPlace);
-    expect(File(linuxPlace).readAsBytesSync(), _appImage);
-    expect(File(linuxPlace).statSync().mode & 0x1ff, 0x1ed); // 0755
-    expect(namesIn(p.dirname(linuxPlace)), [deviceAppImageName]);
-    final [chmod] = calls;
-    expect(chmod.take(2), ['/bin/chmod', '0755']);
-    expect(p.dirname(chmod[2]), p.dirname(linuxPlace));
-    expect(
-      p.basename(chmod[2]),
-      matches(RegExp(r'^\.Harness-Device\.AppImage\.[0-9a-f]{16}\.partial$')),
+  test('linux: a signature for another version fails at signature', () async {
+    publishFor(TargetPlatform.linux, _appImage);
+    serveManifest(
+      linuxManifest(
+        _entry(_appImage, path: _appImagePath),
+        signature: await signAppImage(_appImage, version: '0.0.1'),
+      ),
     );
-    expect(opened, [linuxPlace]);
-    expect(tempRoot.listSync(), isEmpty);
-  }, skip: _needsChmod);
 
-  test('linux: no signature step runs', () async {
+    await expectSignatureRefused();
+  });
+
+  // The signature names a version: with none to hold it to, it proves nothing.
+  test('linux: an entry with no version fails at signature', () async {
     publishFor(TargetPlatform.linux, _appImage);
-    signatureAnswer = () async => false;
+    serveManifest(
+      linuxManifest(_entry(_appImage, path: _appImagePath)..remove('version')),
+    );
 
-    final result = await onLinux().install();
+    await expectSignatureRefused();
+  });
 
-    expect(result.failed, isNull);
-    expect(signed, isEmpty);
-  }, skip: _needsChmod);
+  test('linux: a refusal logs one line with its reason and no path', () async {
+    final previous = appLog;
+    final log = _RecordedLog();
+    appLog = log;
+    addTearDown(() => appLog = previous);
+    publishFor(TargetPlatform.linux, [..._appImage]..[0] ^= 0xff);
+
+    await onLinux().install();
+
+    expect(log.lines, [
+      (
+        AppLogLevel.warn,
+        'devices',
+        'device app signature refused (file)',
+        null,
+      ),
+    ]);
+  });
 
   test('linux: a copy already at the place is kept', () async {
     publishFor(TargetPlatform.linux, _appImage);
