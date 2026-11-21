@@ -70,8 +70,9 @@ DeviceAppRelease? parseDeviceAppManifest(
           : const ['device-linux-x64-appimage'],
     _ => const <String>[],
   };
-  // Desktop's Linux entry carries no signature: Tauri's entry for this arch
-  // does, beside the url of the file it signed.
+  // The Desktop-shaped `device-linux-<arch>-appimage` entry carries no
+  // signature: Tauri's `platforms` entry for this arch does, beside the url of
+  // the file it signed.
   final platforms = manifest['platforms'];
   final tauri = platform == TargetPlatform.linux && platforms is Map
       ? platforms[arm64 ? 'linux-aarch64' : 'linux-x86_64']
