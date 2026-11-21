@@ -52,8 +52,13 @@ command line, Bash, GitHub Actions YAML, minisign 0.12.
   for Desktop, `Harness-Device-linux-<x64|arm64>.AppImage` for the Device (checked on 2026-11-21: `cargo tauri signer
   sign --app-version 0.0.3` on that file name writes `file:Harness-Device-linux-x64.AppImage\tversion:0.0.3`).
 - **Jobs.** `build-linux` stays the x64/arm64 matrix; `sign-linux` and `upload-linux` are one job each for both arches,
-  as `sign-windows` and `upload-windows` are. `build-linux` and `sign-linux` set job-level `permissions: contents:
-  read`: the workflow's `id-token: write` would otherwise let their code mint the token the GCP federation accepts.
+  as `sign-windows` and `upload-windows` are. `build-linux`, `sign-linux` and `build-windows` set job-level
+  `permissions: contents: read`: the workflow's `id-token: write` would otherwise let their code mint the token the GCP
+  federation accepts. `build-macos` (build, Apple keychain and GCP upload in one step) does not change: the pull
+  request names it as a follow-up.
+- **The verifier selects the Device install end to end.** `desktop/lib/update/tauri_signature.dart` joins
+  `DEVICE_APP_PATHS["device-app-desktop"]` in `scripts/ci-plan.py`, so a change to it alone runs Desktop's Device
+  install on CI.
 - **Scripts.** `desktop/scripts/package-desktop-linux.sh` (build and package, no credential),
   `desktop/scripts/sign-desktop-linux.sh` (minisign only) and `desktop/scripts/upload-desktop-linux.sh` (rewritten:
   upload and parts, in `upload-desktop-windows.sh`'s shape). The upload keeps the line `gcs_cp "$OUTPUT"
@@ -113,32 +118,37 @@ command line, Bash, GitHub Actions YAML, minisign 0.12.
 
 ---
 
-### Task 1: `tauri.conf.json` reaches the process and Desktop checkouts and selects Desktop
+### Task 1: `tauri.conf.json` reaches the process and Desktop checkouts and selects Desktop; the verifier selects the Device install
 
 Effort: high. Depends on: nothing.
 
 **Files:**
 - Modify: `scripts/record-ci-validation.py` (`SOURCE_INPUTS["process"]`, `SOURCE_INPUTS["desktop"]`),
-  `scripts/ci-plan.py` (`PR_READS["desktop"]`), `.github/workflows/ci.yml` (`process-checks` and `desktop-tests`
-  sparse checkouts)
+  `scripts/ci-plan.py` (`PR_READS["desktop"]`, `DEVICE_APP_PATHS["device-app-desktop"]`), `.github/workflows/ci.yml`
+  (`process-checks` and `desktop-tests` sparse checkouts)
 - Test: `scripts/tests/test_ci_plan.py`, `scripts/tests/test_ci_source_inputs.py`
 
 **Interfaces:**
 - Produces: `device-app/src-tauri/tauri.conf.json` present in both sparse checkouts (Task 2's Desktop test and Task 6's
-  Python tests read it there); a change to it selects `desktop`.
+  Python tests read it there); a change to it selects `desktop`; a change to `desktop/lib/update/tauri_signature.dart`
+  selects `desktop` and `device-app-desktop`.
 
 - [ ] **Step 1: Write the failing tests.** In `test_each_device_app_job_runs_on_its_own_paths`, the
   `tauri.conf.json` case alone becomes `app | {"device-app-update", "device-app-desktop", "device-app-install",
-  "desktop"}` (`tauri.linux.conf.json` and `tauri.windows.conf.json` unchanged). In `test_ci_source_inputs.py`, add
+  "desktop"}` (`tauri.linux.conf.json` and `tauri.windows.conf.json` unchanged), and
+  `desktop/lib/update/tauri_signature.dart` joins the loop whose paths expect `{"desktop", "device-app-desktop"}`
+  (beside `device_app_installer.dart`). In `test_ci_source_inputs.py`, add
   `device-app/src-tauri/tauri.conf.json` to `setUp`'s files and assert it exists after `self.sparse(...)` in both the
   process and the desktop checkout tests.
 - [ ] **Step 2: Run them to see them fail.** `python3 -m unittest scripts/tests/test_ci_plan.py
   scripts/tests/test_ci_source_inputs.py` (with `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=maintenance.auto
-  GIT_CONFIG_VALUE_0=false`). Expected: the two changed cases FAIL.
+  GIT_CONFIG_VALUE_0=false`). Expected: the three changed cases FAIL.
 - [ ] **Step 3: Commit the red tests** (`CI: tauri.conf.json is a Desktop and process input, red`).
 - [ ] **Step 4: Implement.** Add the path to both `SOURCE_INPUTS` entries, to `PR_READS["desktop"]` with the comment
   `# tauri_signature_test.dart holds Desktop's pinned update key to the Device app's.`, and `/device-app/src-tauri/tauri.conf.json`
-  to both sparse lists in `ci.yml`.
+  to both sparse lists in `ci.yml`. Add `"desktop/lib/update/tauri_signature.dart"` to
+  `DEVICE_APP_PATHS["device-app-desktop"]` after `"desktop/lib/devices/"`; its comment gains "the signature check it
+  runs on Linux".
 - [ ] **Step 5: Run the two files again.** Expected: PASS.
 - [ ] **Step 6: Commit** (`CI: the Device app's update key reaches Desktop's and the release scripts' tests`).
 
@@ -537,6 +547,8 @@ Effort: xhigh. Depends on: Task 6, Task 8, Task 9.
     `gcloud`.
   - `upload-linux holds GCP and no key` — `needs: [version, build-linux, sign-linux]`; the GCP auth step;
     `upload-desktop-linux.sh "$VERSION"`; no `TAURI_SIGNING`.
+  - `build-windows runs build code with no token` — its `permissions:` is `contents: read` alone; no `secrets.`,
+    `google-github-actions/auth` or `setup-gcloud`.
   - `no other job names the signing key`.
   - `publish, candidate and cleanup wait for the Linux upload` — `publish` and `candidate` require
     `needs.upload-linux.result == 'success'` where they required `build-linux`'s; `cleanup`'s `needs` hold `sign-linux`
@@ -550,7 +562,9 @@ Effort: xhigh. Depends on: Task 6, Task 8, Task 9.
 - [ ] **Step 4: Change the workflow and the candidate contract.** `build-linux` loses the GCP steps and its upload
   environment; `sign-linux` and `upload-linux` as the tests say (`runs-on: ubuntu-latest`, `timeout-minutes` 10 and
   15, `actions/download-artifact@v4` `pattern: desktop-linux-*` `merge-multiple: true`, the signatures uploaded with
-  `overwrite: true`). The header comment describes the Linux jobs. Validate: `GOTOOLCHAIN=go1.26.8 go run
+  `overwrite: true`). `build-windows` gains job-level `permissions: contents: read` with a one-line comment (its build
+  code must not mint the GCP token); `build-macos` does not change. The header comment describes the Linux jobs.
+  Validate: `GOTOOLCHAIN=go1.26.8 go run
   github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/release-desktop.yml`.
 - [ ] **Step 5: Run the Step 2 command, and `python3 -m unittest discover -s device-app/scripts -p
   'test_release_workflow.py'`.** Expected: PASS.
@@ -570,8 +584,10 @@ One commit.
   `release-desktop.yml` alone (signing needs a key no person holds). Self-update step 4: Linux checks the AppImage's
   Tauri signature against the key pinned in the app. "Linux": `build-linux` → `sign-linux` → `upload-linux`, what each
   holds and runs, the trusted comment and why it has no `version:` field; no "No signing step" paragraph; the GCS layout
-  example gains `signature`; "How a running Linux app self-updates" gains the signature step and its sentence; the
-  rollout order (the first signed release before a build that requires one).
+  example gains `signature`; "How a running Linux app self-updates" gains the signature step and its sentence;
+  "Rolling out safely / rollback" (Linux) gains the rollout order (the first signed release before a build that
+  requires one) and that the first Desktop release after this change runs `release-desktop.yml` with
+  `test_publication=true` before the real one, since it is the first real run of the changed publication checks.
 - [ ] **Step 2: The rest.** `desktop/Makefile`: no `upload-desktop-linux` target or `.PHONY` entry; `Makefile`'s
   release comment drops it; `desktop/README.md` drops its three lines; `desktop/CLAUDE.md` names
   `package-desktop-linux.sh` for packaging, drops the Linux by-hand hatch, and says the updater checks Linux's Tauri
@@ -595,8 +611,9 @@ once, already done) and minisign's pinned GitHub release.
    `test_desktop_publication`, `test_desktop_release_candidate`, `test_desktop_linux_signing`,
    `test_desktop_linux_packaging`, `test_desktop_release_workflow`) and on `device-app/scripts/test_release_workflow.py`;
    actionlint on `release-desktop.yml` and `ci.yml` (Task 10's command). All pass; full suites run on CI. Then the required local
-   receipts once: `python3 scripts/local-checks.py --run` at the final head, its output pasted into the PR body before
-   the push that marks it ready (see open question 2).
+   receipts once: `python3 scripts/local-checks.py --run` at the final head, its output pasted into the PR body as it
+   is, before the push that marks it ready. It maps none of this branch's paths today; no extra `make desktop-test`
+   (no macOS-only code changes).
 2. **The signing script on Linux, local, in Podman** (arm64 natively; x64 with `--platform linux/amd64` if the Podman
    machine emulates it). On the Mac, in the session scratchpad: `cargo tauri signer generate --ci -p pw -w
    throwaway.key`, two 1 MiB random files named `Harness-linux-x64.AppImage` and `Harness-linux-arm64.AppImage` and
@@ -616,24 +633,18 @@ once, already done) and minisign's pinned GitHub release.
    and `windows-11-arm`, unchanged). Seen in the Linux legs: the signed install passes, `a package changed after
    signing … fails at the signature` passes, and `signature check: 100 MB in <n> ms`. `ci/required` green. To run it
    again by hand: **Actions → CI → Run workflow**, `scope=device-app-desktop`. No new workflow.
-4. **The release workflow on GitHub: not run.** A `--prepare` run writes candidates to the release bucket, and the
-   publication check writes disposable objects there (open question 1). Its jobs are held by Task 10's tests, its
-   scripts by Tasks 6–9's and by check 2. The first real signed release is the next Desktop release, when Ken asks; the
-   PR states the rollout order.
+4. **The release workflow on GitHub: not run on this branch**, `test_publication=true` included: a `--prepare` run
+   writes candidates to the release bucket, and the publication checks write disposable objects there. Its jobs are
+   held by Task 10's tests, its scripts by Tasks 6–9's and by check 2. The first real signed release is the next
+   Desktop release, when Ken asks. The PR body says: the first Desktop release after this merges runs
+   `release-desktop.yml` with `test_publication=true` before the real one (the only real run of the changed
+   `check-desktop-*-gcs.py` scripts), and states the rollout order (Task 11 writes both into `desktop/RELEASE.md`).
 5. **Numbers for the PR body.** From check 3's two Linux legs: the 100 MB BLAKE2b-512 + Ed25519 time on x64 and arm64
    (debug runner); before, 0 ms (no check).
+6. **Two independent security reviews** (docs/validation-and-release.md), since `scripts/ci-plan.py` and
+   `scripts/record-ci-validation.py` change: phase 4's final review, and a second fresh reviewer on those two files'
+   change. No task.
+7. **Follow-up the PR names.** `build-macos` still builds, uses the Apple keychain and uploads to GCP in one step
+   under the workflow's `id-token: write`; splitting it is out of this change.
 
 No check needs the user's own login or eye.
-
-## Open questions
-
-1. `release-desktop.yml` with `test_publication=true` runs the two changed `check-desktop-*-gcs.py` scripts for real,
-   but writes and then deletes disposable objects under `harness/desktop/.publication-check/` and
-   `.candidate-check/` in the production release bucket. Run it once on this branch, or leave those two scripts to
-   their next run (the plan does not run it)?
-2. The spec asks for the macOS Desktop receipt (`desktop_updater.dart` holds macOS code), but `scripts/local-checks.py
-   --list` maps none of this branch's paths to a check today (`desktop-macos` covers only `desktop/macos/*`,
-   `lib/*/mac_*.dart`, `lib/*/macos*.dart`, the pubspec files), so `--run` runs nothing. Run `make desktop-test` on the
-   Mac anyway and paste its result as evidence, or keep to `--run`'s empty set?
-3. Should `desktop/lib/update/tauri_signature.dart` join `device-app-desktop`'s path list in `scripts/ci-plan.py`, so a
-   later change to the verifier alone runs Desktop's Device install end to end? The spec names only `PR_READS`.
