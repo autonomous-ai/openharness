@@ -7,18 +7,27 @@ import { releaseAssetBase } from './harness-web-assets.mjs';
 const base = new URL(process.argv[2] || 'http://127.0.0.1:3000');
 const release = JSON.parse(await readFile(new URL('../harness-web-release.json', import.meta.url), 'utf8'));
 const assetBase = releaseAssetBase(release);
-// The front door is the Harness Device guide; the old address `/web` follows it, temporarily, query and all.
+// The home page and the device guide go to autonomous.ai's Meet Harness page, temporarily, query and all;
+// the old address `/web` follows the home page.
 const old = await fetch(new URL('/web?machine=fixture-machine&agent=fixture-agent', base), { redirect: 'manual' });
 assert.equal(old.status, 307, '/web must redirect to /');
 assert.equal(new URL(old.headers.get('location'), base).href, new URL('/?machine=fixture-machine&agent=fixture-agent', base).href);
+const meetHarness = 'https://www.autonomous.ai/meet-harness';
 for (const [route, destination] of [
-  ['/', '/device'],
-  ['/?machine=fixture-machine&agent=fixture-agent', '/device?machine=fixture-machine&agent=fixture-agent'],
+  ['/', meetHarness],
+  ['/?machine=fixture-machine&agent=fixture-agent', `${meetHarness}?machine=fixture-machine&agent=fixture-agent`],
+  ['/device', meetHarness],
+  ['/device?utm_source=qr', `${meetHarness}?utm_source=qr`],
 ]) {
   const response = await fetch(new URL(route, base), { redirect: 'manual' });
-  assert.equal(response.status, 307, `${route} must redirect to the device guide`);
-  assert.equal(new URL(response.headers.get('location'), base).href, new URL(destination, base).href, route);
+  assert.equal(response.status, 307, `${route} must redirect to the Meet Harness page`);
+  assert.equal(response.headers.get('location'), destination, route);
 }
+// Only the guide page moved; its download links stay here. Where they lead depends on the release manifest
+// being reachable, so the check is only that they do not follow the guide page.
+const deviceDownload = await fetch(new URL('/device/download-macos', base), { redirect: 'manual' });
+assert.notEqual(deviceDownload.status, 307, '/device/download-macos must not follow the guide page');
+assert.ok(!(deviceDownload.headers.get('location') ?? '').includes('meet-harness'), '/device/download-macos must not go to Meet Harness');
 // `hn view` links (/?viewer=1, tui/src/viewer.rs) and the web app's other entry points serve the web app.
 for (const route of ['/?viewer=1&machine=fixture-machine&agent=fixture-agent', '/s/11111111-1111-4111-8111-111111111111', '/auth/callback?code=fixture-code&state=fixture-state', '/callback', '/harness-web']) {
   const response = await fetch(new URL(route, base));
@@ -92,12 +101,12 @@ for (const route of [`${assetBase}main.dart.js`, `${assetBase}canvaskit/chromium
 const published = await (await fetch(new URL('/harness-web/release.json', base))).json();
 assert.equal(published.version, release.version);
 assert.equal(published.sourceCommit, release.sourceCommit);
-for (const route of ['/download', '/device', '/pair']) {
+for (const route of ['/download', '/pair']) {
   const response = await fetch(new URL(route, base), { redirect: 'manual' });
   assert.equal(response.status, 200, route);
   assert.match(await response.text(), /Harness/);
 }
-// The Harness Device guide replaced the desktop download page.
+// The Harness Device guide replaced the desktop download page; /device sends it on.
 const desktop = await fetch(new URL('/desktop', base), { redirect: 'manual' });
 assert.equal(desktop.status, 308, '/desktop must redirect to /device');
 assert.equal(new URL(desktop.headers.get('location'), base).href, new URL('/device', base).href);
@@ -110,4 +119,4 @@ for (const [route, destination] of [
   assert.equal(response.status, 308);
   assert.equal(response.headers.get('location'), destination);
 }
-console.log(`Harness Web ${release.version}: entry, shared-agent links, callback, assets, download, device guide and phone setup pages, the /desktop redirect and installer redirects passed.`);
+console.log(`Harness Web ${release.version}: entry, shared-agent links, callback, assets, download and phone setup pages, the home page and /device redirects to Meet Harness, the /desktop redirect and installer redirects passed.`);

@@ -59,13 +59,17 @@ module.exports = {
         destination: 'https://harness.autonomous.ai/:path*',
         permanent: true,
       })),
-      // The home page is the Harness Device guide (owner, 2026-11-20); temporary, so no browser keeps it.
+      // The home page and the device guide moved to autonomous.ai's Meet Harness page (owner, 2026-11-21);
+      // temporary, so it can change again and no browser keeps it. Next passes the query (a QR's utm_*) on.
       // A viewer link (/?viewer=1) stays on the web app: see the '/' rewrite below.
-      { source: '/', missing: [{ type: 'query', key: 'viewer' }], destination: '/device', permanent: false },
+      { source: '/', missing: [{ type: 'query', key: 'viewer' }], destination: 'https://www.autonomous.ai/meet-harness', permanent: false },
+      // The guide page only: its /device/download-* routes and the /device/install.sh rewrite stay here.
+      { source: '/device', destination: 'https://www.autonomous.ai/meet-harness', permanent: false },
       // Old /web links follow the home page, query and all; temporary, so no browser keeps it.
       { source: '/web', destination: '/', permanent: false },
       { source: '/install', destination: '/download', permanent: true },
       // The Harness Device guide replaced the desktop download page (owner, 2026-11-20); /desktop/download/* stays.
+      // Still to /device, which sends it on: browsers keep this permanent hop, so it never names an outside URL.
       { source: '/desktop', destination: '/device', permanent: true },
       { source: '/explore', destination: '/hub', permanent: true },
       { source: '/explore/:id', destination: '/hub/:id', permanent: true },
@@ -108,7 +112,7 @@ module.exports = {
         { source: '/explore/:id/snapshot', destination: '/hub/:id/snapshot' },
         { source: '/explore/:id/download', destination: '/hub/:id/download' },
         // Harness Device's one line on Linux, served from the CDN in place: no /device/... path redirects, so the
-        // home page's redirect to /device reaches no other page. Before the files, so no /device route can take it;
+        // /device page's redirect reaches no other page. Before the files, so no /device route can take it;
         // the CDN's headers, its content type among them, pass through. release-device.yml uploads
         // scripts/device-install.sh there with every release that carries Linux.
         { source: '/device/install.sh', destination: 'https://cdn.autonomous.ai/harness/device/install.sh' },
