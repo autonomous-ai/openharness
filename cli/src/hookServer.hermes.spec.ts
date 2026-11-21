@@ -116,7 +116,9 @@ async function fixture(options: { waitOnResolution?: number; sharedGateway?: boo
     return body
   }
   const current = () => registry.byAgent(agent.agentId)!
-  return { home, store, policy, hook, current, registered, admissionHeld, logs, markDeleted, resume: () => resume(), flush: () => registry.flush(),
+  // A hold's sentence reaches the core (and the person), never the log, which gives its length alone.
+  const held = (words: string) => admissionHeld.mock.calls.some(([, reason]) => reason?.includes(words) ?? false)
+  return { home, store, policy, hook, current, registered, admissionHeld, held, logs, markDeleted, resume: () => resume(), flush: () => registry.flush(),
     knownHome: (home: string) => registry.setHermesHome(agent.agentId, home),
     seed: (sessionId: string) => registry.register({ engine: 'hermes', sessionId, tmuxPane: '%1', cwd: root, processIdentity }),
   }
@@ -142,7 +144,7 @@ it('holds a local session until Hermes stamps its creator, then binds the CLI\'s
   const own = local(4)
   f.store(f.home, [[own, 'local', 'unknown']])
   await f.hook(own)
-  await vi.waitFor(() => expect(f.logs.some(line => line.includes('held · Waiting for the Hermes session creator to be recorded'))).toBe(true))
+  await vi.waitFor(() => expect(f.held('Waiting for the Hermes session creator to be recorded')).toBe(true))
   expect(f.current().sessionId).toBe('')
   f.store(f.home, [[own, 'local', 'cli']])
   await vi.waitFor(() => expect(f.current().sessionId).toBe(own), { timeout: 4_000 })
@@ -196,7 +198,7 @@ it('holds when the known home changes during source inspection instead of publis
     f.knownHome(other)
   }
   await f.hook(own)
-  await vi.waitFor(() => expect(f.logs.some(line => line.includes('fresh evidence after the binding changed'))).toBe(true))
+  await vi.waitFor(() => expect(f.held('fresh evidence after the binding changed')).toBe(true))
   expect(f.current()).toMatchObject({ sessionId: '', hermesHome: other })
   expect(f.registered).not.toHaveBeenCalled()
 })
@@ -211,7 +213,7 @@ it('holds an unreadable store without binding and retries after the store recove
   writeFileSync(join(f.home, 'state.db'), 'not SQLite')
   const wanted = '20261009_120000_aaaaaa'
   await f.hook(wanted)
-  await vi.waitFor(() => expect(f.logs.some(line => line.includes('held · Hermes session source is unavailable')), f.logs.join('\n')).toBe(true))
+  await vi.waitFor(() => expect(f.held('Hermes session source is unavailable'), f.logs.join('\n')).toBe(true))
   expect(f.current().sessionId).toBe(previous)
   expect(f.current().hermesHome).toBeNull()
   expect(f.registered).not.toHaveBeenCalled()
@@ -225,7 +227,7 @@ it.each(['\0tool', 'cli\0tool', 'x'.repeat(129)])('holds a malformed original so
   const own = '20261009_120000_aabbcc'
   f.store(f.home, [[own, source]])
   await f.hook(own)
-  await vi.waitFor(() => expect(f.logs.some(line => line.includes('held · Hermes session source is unavailable'))).toBe(true))
+  await vi.waitFor(() => expect(f.held('Hermes session source is unavailable')).toBe(true))
   expect(f.current().sessionId).toBe('')
   expect(f.registered).not.toHaveBeenCalled()
 })
@@ -238,13 +240,13 @@ it('includes the known custom home and cannot authorize its hook from a differen
   f.store(f.home, [[own, 'cli']])
   mkdirSync(custom); writeFileSync(join(custom, 'state.db'), 'unreadable custom store')
   await f.hook(own)
-  await vi.waitFor(() => expect(f.logs.some(line => line.includes('held · Hermes session source is unavailable'))).toBe(true))
+  await vi.waitFor(() => expect(f.held('Hermes session source is unavailable')).toBe(true))
   expect(f.current().sessionId).toBe('')
   f.store(custom, [])
-  await vi.waitFor(() => expect(f.logs.some(line => line.includes('source in its known home'))).toBe(true), { timeout: 4_000 })
+  await vi.waitFor(() => expect(f.held('source in its known home')).toBe(true), { timeout: 4_000 })
   expect(f.registered).not.toHaveBeenCalled()
   f.store(custom, [[own, 'tool']])
-  await vi.waitFor(() => expect(f.logs.some(line => line.includes('ambiguous across homes'))).toBe(true), { timeout: 4_000 })
+  await vi.waitFor(() => expect(f.held('ambiguous across homes')).toBe(true), { timeout: 4_000 })
   expect(f.current().sessionId).toBe('')
   f.store(f.home, [])
   await vi.waitFor(() => expect(f.logs.some(line => line.includes('ignored · hermes_subagent'))).toBe(true), { timeout: 4_000 })
@@ -258,7 +260,7 @@ it('holds incomplete source pools, then rejects a proven delegated session after
   const child = '20261009_120000_bbbbbb'
   f.store(join(f.home, 'profiles', 'work'), [[child, 'tool']])
   await f.hook(child)
-  await vi.waitFor(() => expect(f.logs.some(line => line.includes('held · Hermes session source is unavailable'))).toBe(true))
+  await vi.waitFor(() => expect(f.held('Hermes session source is unavailable')).toBe(true))
   expect(f.current().sessionId).toBe('')
   expect(f.registered).not.toHaveBeenCalled()
   f.store(f.home, [])
@@ -271,7 +273,7 @@ it('keeps a missing source row pending and replaces an older pending hook', asyn
   f.store(f.home, [])
   const old = '20261009_120000_cccccc', newer = '20261009_120000_dddddd'
   await f.hook(old)
-  await vi.waitFor(() => expect(f.logs.some(line => line.includes('held · Waiting for the Hermes session source record'))).toBe(true))
+  await vi.waitFor(() => expect(f.held('Waiting for the Hermes session source record')).toBe(true))
   expect(f.current().sessionId).toBe('')
   f.store(f.home, [[old, 'cli'], [newer, 'cli']])
   await f.hook(newer)
@@ -303,7 +305,7 @@ it('recovers an equal-time parent after its child has already been held', async 
   await vi.waitFor(() => expect(f.logs.some(line => line.includes('held ·'))).toBe(true))
   f.store(f.home, [[parent, 'cli']])
   await f.hook(parent, 200, 1000)
-  await vi.waitFor(() => expect(f.logs.some(line => line.includes('unambiguous native hook order'))).toBe(true))
+  await vi.waitFor(() => expect(f.held('unambiguous native hook order')).toBe(true))
   f.store(f.home, [[parent, 'cli'], [child, 'tool']])
   await vi.waitFor(() => expect(f.current().sessionId).toBe(parent), { timeout: 4_000 })
   expect(f.registered).toHaveBeenCalledOnce()
@@ -317,12 +319,12 @@ it.each(['lstat', 'opendir'] as const)('holds incomplete %s evidence, then disco
   f.store(first, [[wanted, 'cli']]); f.store(second, [[wanted, 'cli']])
   failures.set(operation === 'lstat' ? `lstat:${join(first, 'state.db')}` : `opendir:${join(f.home, 'profiles')}`, 'EACCES')
   await f.hook(wanted)
-  await vi.waitFor(() => expect(f.logs.some(line => line.includes('held · Hermes session source is unavailable'))).toBe(true))
+  await vi.waitFor(() => expect(f.held('Hermes session source is unavailable')).toBe(true))
   expect(f.current().sessionId).toBe('')
   expect(f.current().hermesHome).toBeNull()
   expect(f.registered).not.toHaveBeenCalled()
   failures.clear()
-  await vi.waitFor(() => expect(f.logs.some(line => line.includes('ambiguous across homes'))).toBe(true), { timeout: 4_000 })
+  await vi.waitFor(() => expect(f.held('ambiguous across homes')).toBe(true), { timeout: 4_000 })
   expect(f.current().sessionId).toBe('')
   f.store(second, [])
   await vi.waitFor(() => expect(f.current().sessionId).toBe(wanted), { timeout: 4_000 })
@@ -364,7 +366,7 @@ it.each([false, true])('reports capacity backpressure without claiming the extra
   if (waits) {
     expect(await f.hook('20261009_120000_ffffff', 202)).toMatchObject({ pending: false, retry: true })
     f.resume()
-    await vi.waitFor(() => expect(f.logs.some(line => line.includes('this hook was not queued'))).toBe(true))
+    await vi.waitFor(() => expect(f.logs.some(line => line.includes('held · HOOK_ADMISSION_BUSY'))).toBe(true))
   } else expect(await f.hook('20261009_120000_ffffff', 429)).toEqual({
       pending: false, error: 'HOOK_ADMISSION_BUSY', detail: expect.stringContaining('was not queued'),
     })
@@ -378,7 +380,7 @@ it('cannot let the first default-home answer hide unavailable or conflicting pro
   f.store(f.home, [[own, 'cli']])
   failures.set(`opendir:${join(f.home, 'profiles')}`, 'EACCES')
   await f.hook(own)
-  await vi.waitFor(() => expect(f.logs.some(line => line.includes('held · Hermes session source is unavailable'))).toBe(true))
+  await vi.waitFor(() => expect(f.held('Hermes session source is unavailable')).toBe(true))
   expect(f.current().sessionId).toBe('')
   expect(f.registered).not.toHaveBeenCalled()
   failures.clear()
