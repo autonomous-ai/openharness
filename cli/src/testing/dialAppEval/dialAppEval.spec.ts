@@ -9,10 +9,12 @@
  * `claude`, `codex`, `orca`, `open`, `xdg-open` or `ps`, and reach no backend. The homes, the stores and the transcripts
  * are throwaway folders.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { MAIN } from './catalog.js'
+import { homedir, tmpdir } from 'node:os'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { MAIN, scenariosFor } from './catalog.js'
+import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from './runner.js'
 import { TierADriver } from './tierA/driver.js'
-import { agentIdOf, type Platform, type Scenario, type Seen } from './types.js'
+import { StepNotBuilt, type Platform, type Seen } from './types.js'
 
 const { machine } = await vi.hoisted(async () => await import('./tierA/machine.js'))
 
@@ -124,8 +126,8 @@ vi.mock('../../devices/orcaHomes.js', async (real) => ({
 const { startDevices } = await import('../../services/devices.js')
 
 const PLATFORMS: readonly Platform[] = ['darwin', 'win32', 'linux']
-/** Past the largest half threshold (5 s), as the runner settles after the last step. */
-const SETTLE_END_MS = 6_000
+/** Every scenario run, in the order run: what the results file holds. */
+const runs: ScenarioRun[] = []
 
 beforeEach(() => {
   reached.length = 0
@@ -138,59 +140,45 @@ afterEach(() => {
   vi.unstubAllGlobals()
   expect(reached).toEqual([])
 })
+afterAll(() => {
+  const out = process.env.DIAL_EVAL_OUT
+  if (out) writeResults(out, 'spec', collect(runs))
+})
 
-const scenario = (id: string): Scenario => {
-  const found = MAIN.find((s) => s.id === id)
-  if (!found) throw new Error(`the catalog has no ${id}`)
-  return found
-}
-
-/** A scenario through the driver directly: its steps in order, then the world settled past the last. */
-async function run(s: Scenario, platform: Platform): Promise<Seen> {
-  const driver = new TierADriver({ startDevices })
-  try {
-    await driver.start(s, platform)
-    for (const step of s.steps) {
-      if (step.kind === 'wait') await driver.settle(step.ms)
-      else await driver.step(step)
+describe.each(PLATFORMS)('tier A on %s', (platform) => {
+  it.for(scenariosFor('a', platform))('$id', async (scenario, { skip }) => {
+    let run: ScenarioRun
+    try {
+      run = await runScenario(new TierADriver({ startDevices }), scenario, platform)
+    } catch (error) {
+      // A step family not built yet (Task 22 removes this skip).
+      if (error instanceof StepNotBuilt) return skip(error.message)
+      throw error
     }
-    await driver.settle(SETTLE_END_MS)
-  } finally {
-    await driver.stop()
-  }
-  return driver.seen()
-}
-
-/** The rows of the last whole list (`agents.begin` to `agents.end`) the dial got while its page was `page`. */
-function lastList(seen: Seen, page: string): Array<{ id: unknown; name: unknown }> | undefined {
-  let shown = ''
-  let rows: Array<{ id: unknown; name: unknown }> | undefined
-  let last: typeof rows
-  for (const { message } of seen.frames) {
-    if (message.t === 'apps') shown = typeof message.shown === 'string' ? message.shown : ''
-    else if (message.t === 'agents.begin') rows = []
-    else if (message.t === 'agent' && rows) rows.push({ id: message.id, name: message.name })
-    else if (message.t === 'agents.end' && rows) {
-      if (shown === page) last = rows
-      rows = undefined
-    }
-  }
-  return last
-}
+    runs.push(run)
+    expect(run.wrongSends).toEqual([])
+    expect(uncaughtProbes(run)).toEqual([])
+  })
+})
 
 describe('tier A', () => {
-  it.each(PLATFORMS)("C1 on %s: the Claude page's last whole list is the five sessions, newest first, by their titles", async (platform) => {
-    const c1 = scenario('C1')
-    const seen = await run(c1, platform)
-    const five = ['a', 'b', 'c', 'd', 'e'].map((key) => c1.sessions.find((s) => s.key === key)!)
-    expect(five.map((s) => s.title)).toEqual(['Eval Alpha', 'Eval Bravo', 'Eval Charlie', 'Eval Delta', 'Eval Echo'])
-    expect(lastList(seen, 'claude')).toEqual(five.map((s) => ({ id: agentIdOf(s), name: s.title })))
-  })
-
   it('C1 twice gives the same frames at the same virtual times', async () => {
-    const first = await run(scenario('C1'), 'darwin')
-    const second = await run(scenario('C1'), 'darwin')
+    const c1 = MAIN.find((s) => s.id === 'C1')!
+    const seen = async (): Promise<Seen> => {
+      const driver = new TierADriver({ startDevices })
+      await runScenario(driver, c1, 'darwin')
+      return driver.seen()
+    }
+    const first = await seen()
+    const second = await seen()
     expect(first.frames.length).toBeGreaterThan(0)
     expect(second.frames).toEqual(first.frames)
+  })
+
+  // The baseline is written on a Mac and checked on Linux: a result naming this host's folders would differ there.
+  it('no result carries an absolute path', () => {
+    expect(runs.length).toBeGreaterThan(0)
+    const written = JSON.stringify(collect(runs))
+    for (const part of [tmpdir(), homedir(), '/work/eval-']) expect(written).not.toContain(part)
   })
 })
