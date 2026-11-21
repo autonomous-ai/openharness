@@ -669,6 +669,15 @@ it.each([
   // A callback handed to a library: its callers are not the file's to check.
   "child.stderr.on('data', (output) => console.log(output))",
   "run().then((output) => console.log(output))",
+  "console.log(`[x] data in ${env.ADAPTER_DATA_DIR}`)",
+  "console.log(`[x] pid in ${PID_FILE}`)",
+  "log(`[x] opened ${workspace}`)",
+  "log(`[x] moved to ${agent.projectWorkspace}`)",
+  "import { stateDir } from './paths.js'; console.log(`[x] state in ${stateDir}`)",
+  "import stateFile from './paths.js'; console.log(`[x] state in ${stateFile}`)",
+  "console.log(`[x] paired with ${machineName}`)",
+  "log(`[x] shared by ${share.machine}`)",
+  "log(`[x] shared by ${peerMachineName}`)",
 ])('finds %s', (code) => expect(failureLogs(code)).not.toEqual([]))
 
 it.each([
@@ -712,6 +721,7 @@ it.each([
   "const log = deps.log ?? ((message: string) => console.log(message))",
   "class Viewer { private say(message: string) { console.log(message) } }",
   "import path from 'node:path'; console.log(`[x] ${path.sep}`)",
+  "import * as path from 'node:path'; console.log(`[x] a ${path.extname(name)} file`)",
   "function run() { const r = probe(); log(`[x] ${r.reason}`) } function probe() { return { ok: false, reason: 'busy' } }",
   "function openOf(p: unknown) { return { session: { engine: 'codex', transcriptPath: p } } } const ask = openOf(payload); console.warn(`[engine ${ask.session.engine}] LIVE_OPEN_FAILED`)",
   "console.warn(`[x] ${Boolean(err.reason) ? 'not a lock this CLI made' : 'held'}`)",
