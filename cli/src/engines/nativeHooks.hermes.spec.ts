@@ -110,12 +110,19 @@ it('a removal names its file by a hash, never its path', async () => {
   expect(logs).toEqual([`[hooks] removed Harness's Hermes hooks → ${hashOf(config)}`])
 })
 
-// The disk's error names the file it could not write: the line says how long the reason is, never its words.
+// The disk's error names the file it could not write: the line says the error's kind, never its words.
 it.skipIf(process.getuid?.() === 0)('a removal that failed names its file by a hash, and neither its path nor the error\'s words', async () => {
   vi.mocked(hermesKeepsRecord).mockResolvedValue(true); writeFileSync(config, WITH_BLOCK); chmodSync(home, 0o555)
   expect(await installHermesHooks(18473)).toBe(true)
   expect(warns.join('\n')).not.toContain('sentinel')
-  expect(warns).toEqual([expect.stringMatching(new RegExp(`^\\[hooks\\] could not remove Harness's Hermes hooks from ${hashOf(config)} · text\\(\\d+\\)$`))])
+  expect(warns).toEqual([`[hooks] could not remove Harness's Hermes hooks from ${hashOf(config)} · EACCES`])
+})
+
+// A hold is fixed words that say what keeps the file as it is.
+it('a removal held says what holds it', async () => {
+  vi.mocked(hermesKeepsRecord).mockResolvedValue(true); writeFileSync(config, '- a list, not a mapping\n')
+  expect(await installHermesHooks(18473)).toBe(true)
+  expect(warns).toEqual([`[hooks] could not remove Harness's Hermes hooks from ${hashOf(config)} · the YAML configuration is not a complete mapping`])
 })
 
 it('leaves a home whose config or approvals list is a link, and says so once', async () => {
