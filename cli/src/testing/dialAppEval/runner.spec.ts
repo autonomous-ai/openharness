@@ -106,12 +106,12 @@ const parts = (run: ScenarioRun, which: 'results' | 'probes' = 'results'): Recor
   Object.fromEntries(run[which].map((r) => [r.check, r.score]))
 
 it('steps run in order and labels are timed', async () => {
-  const s = scenario([write, { kind: 'wait', ms: 500 }, tap], [ring(['a', 'b']), ring(['a', 'b'], { id: 'late', after: 'tap' })])
+  const s = scenario([write, { kind: 'wait', ms: 500 }, tap], [ring(['a', 'b']), ring(['a', 'b'], { id: 'late', at: 'write' })])
   const driver = new Scripted({ onStep: (d, step) => { if (step.kind === 'claude.write') d.frames.push(...list(d.now(), [A, B])) } })
   const run = await runScenario(driver, s, 'linux')
   expect(driver.calls).toEqual(['start S1 linux', 'claude.write at 0', 'settle 500 until 500', 'tap at 500',
     `settle ${SETTLE_END_MS} until ${500 + SETTLE_END_MS}`, 'stop'])
-  // The list came at the write, before the tap: a check from the tap on sees none.
+  // The list came at the write: a check that ends at the write sees none.
   expect(parts(run)['ring.recall']).toBe(1)
   expect(parts(run)['late.recall']).toBe(0)
 })
