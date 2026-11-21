@@ -3,6 +3,7 @@ import { installDsh, resolveInstallSource } from './install.js'
 import { updateDsh } from './update.js'
 import { catalogEntry, refreshDshRegistry } from './catalog.js'
 import { DSH_SHELL_UNAVAILABLE, dshShellAvailable } from './shell.js'
+import { codeOrLength, hashOf } from '../lib/log.js'
 
 export const mutateDsh = async ({ id, url, ref, update }: { id?: string; url?: string; ref?: string; update?: boolean }, progress: (p: import('./install.js').DshInstallProgress) => void): Promise<{ ok: true; id: string } | { ok: false; error: string; detail: string }> => {
   const catalog = new Map((await refreshDshRegistry(update || (!!id && !catalogEntry(id)))).map(entry => [entry.id, entry]))
@@ -54,10 +55,10 @@ export const mutateDsh = async ({ id, url, ref, update }: { id?: string; url?: s
   try {
     const result = update ? await updateDsh({ ...options, id: id! }) : await installDsh(options)
     if (!result.ok) {
-      console.warn(`[dsh] ${update ? 'update' : 'install'} of ${id ?? url} failed · ${result.error} · ${result.detail}`)
+      console.warn(`[dsh] ${update ? 'update' : 'install'} of ${id ?? hashOf(url!)} failed · ${codeOrLength(result.error)}`)
       return { ok: false, error: result.error, detail: result.detail }
     }
-    console.log(`[dsh] ${update ? 'updated' : 'installed'} ${result.installed.id} at ${result.installed.dir}`)
+    console.log(`[dsh] ${update ? 'updated' : 'installed'} ${result.installed.id}`)
     return { ok: true, id: result.installed.id }
   } finally {
     if (timer) clearTimeout(timer)

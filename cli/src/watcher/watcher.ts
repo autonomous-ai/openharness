@@ -168,7 +168,7 @@ export class Watcher extends EventEmitter {
     }
     // Two rounds of "the CLI accepted it but the adapter never saw the line" were spent guessing whether
     // this registration had happened at all. Say it once per file, with the offset it starts from.
-    console.log(`[watcher] tail ${session.engine} ${session.sessionId.slice(0, 8)} @${offset} · ${session.transcriptPath}`)
+    console.log(`[watcher] tail ${session.engine} ${session.sessionId.slice(0, 8)} @${offset}`)
     // By a short name on Windows, the folder chokidar watches for a transcript not there yet would abort the core at
     // its first change. One that cannot be watched is still read by the reconciliation's pollAll.
     const watchedAs = pathToWatch(session.transcriptPath)

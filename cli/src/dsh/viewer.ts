@@ -26,7 +26,7 @@ import { isViewerPackage } from './manifest.js'
 import { resolveDshCommand } from './materialize.js'
 import { isShellNoise, killProcessGroup, spawnDshCommand } from './shell.js'
 import type { ViewerLedger } from './viewerLedger.js'
-import { errorKind } from '../lib/log.js'
+import { codeOrLength, errorKind } from '../lib/log.js'
 import { pathToWatch } from '../lib/pathToWatch.js'
 import { viewerTarget } from '../lib/viewerWire.js'
 
@@ -205,7 +205,7 @@ export class DshViewerManager {
     if (!dsh.manifest.viewer) return
     const resolved = resolveViewer(dsh, this.deps.lookup)
     if (!resolved.ok) {
-      this.log(`[dsh] ${resolved.error} · agent ${agentId.slice(0, 8)} has no viewer pane`)
+      this.log(`[dsh] ${codeOrLength(resolved.error)} · agent ${agentId.slice(0, 8)} has no viewer pane`)
       return
     }
     const viewer = resolved.viewer

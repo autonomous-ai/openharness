@@ -31,7 +31,7 @@ import {
 } from './deviceLogStore.js'
 import { devLogHistory, type DevLogHistoryRow } from './deviceHistory.js'
 import { b64d, fingerprint, verify } from './core.js'
-import { errorKind } from '../log.js'
+import { codeOrLength, errorKind } from '../log.js'
 import { StateFileUnreadable } from '../secureState.js'
 
 export interface DeviceLogFetched { acct: string; head: DevLogHead; entries: unknown[] }
@@ -300,7 +300,7 @@ export class DeviceLogSyncer {
         if ('head' in answer && !('error' in answer)) { this.registerError = null; await this.refresh(); return }
         if (answer.error !== 'STALE_HEAD') {
           this.registerError = answer.error
-          this.deps.log?.(`[devlog] register refused: ${answer.error}`)
+          this.deps.log?.(`[devlog] register refused: ${codeOrLength(answer.error)}`)
           this.deps.changed?.()
           return
         }
@@ -996,10 +996,10 @@ export class DeviceLogSyncer {
         const r = await this.remove(m.pub)
         // Already out of the log (another machine's sweep, a person's own removal): nothing to do.
         if (!r.ok && r.error === 'NOT_IN_LOG') continue
-        if (!r.ok) { this.deps.log?.(`[devlog] could not remove unused device ${m.label || '(no name)'} (${fp(m.pub)}): ${r.detail ?? r.error}`); return }
+        if (!r.ok) { this.deps.log?.(`[devlog] could not remove unused device ${fp(m.pub)}: ${codeOrLength(r.error)}`); return }
         const t = usedAt(m)
         const when = t !== null ? `last used ${day(t)}` : `not used since ${day(got.since!)}`
-        this.deps.log?.(`[devlog] removed unused device ${m.label || '(no name)'} (${fp(m.pub)}), ${when}`)
+        this.deps.log?.(`[devlog] removed unused device ${fp(m.pub)}, ${when}`)
       }
     } catch (err) {
       this.deps.log?.(`[devlog] sweep failed: ${errorKind(err)}`)

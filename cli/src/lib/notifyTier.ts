@@ -27,11 +27,11 @@ export const localDay = (at: number): string => new Date(at).toLocaleDateString(
 
 /** Logs one decision line and the day's running count per tier, so the volume can be read from the log (no storage). A
  *  measure: never the agent's name, which can be a folder's, a session's or a tab's title. */
-export function createTally(log: (line: string) => void, now: () => number = Date.now): (tier: Tier, by: string, detail: string, ms: number) => void {
+export function createTally(log: (line: string) => void, now: () => number = Date.now): (tier: Tier, by: string, rule: string, ms: number) => void {
   let day = ''
   const counts: Record<Tier, number> = { alert: 0, list: 0, silent: 0 }
-  return (tier, by, detail, ms) => {
-    log(`notify · ${tier} · ${by} · ${detail} · ${ms}ms`)
+  return (tier, by, rule, ms) => {
+    log(`notify · ${tier} · ${by} · ${rule} · ${ms}ms`)
     const today = localDay(now())
     if (today !== day) { day = today; counts.alert = counts.list = counts.silent = 0 }
     counts[tier]++
