@@ -17,6 +17,10 @@ const EXE_APPS: Readonly<Record<string, string>> = {
   chatgpt: 'codex',
   // WezTerm's CFBundleExecutable.
   'wezterm-gui': 'wezterm',
+  // WezTerm's mux server, the parent of a mux-domain pane's shell on Linux, where its comm names no app: whole, and as
+  // the kernel cuts it to 15 bytes (cli/src/testing/recordedWezterm.ts, muxServerComm).
+  'wezterm-mux-server': 'wezterm',
+  'wezterm-mux-ser': 'wezterm',
   kitty: 'kitty',
   ghostty: 'ghostty',
   // Harness Desktop's Linux binary (desktop/linux/CMakeLists.txt, BINARY_NAME).
