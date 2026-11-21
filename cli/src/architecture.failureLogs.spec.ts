@@ -637,6 +637,8 @@ it.each([
   "console.log(rule.messages.installed.replace('{file}', () => rule.file))",
   "console.log(`[x] ${items.map((i) => i.path).join(', ')}`)",
   "log(`[x] ${problems.map(function (problem) { return problem.message }).join(' · ')}`)",
+  "console.log(`[x] done${ok && result.detail}`)",
+  "log(`[x] exited ${code} ${verbose && stderr}`)",
 ])('finds %s', (code) => expect(failureLogs(code)).not.toEqual([]))
 
 it.each([
