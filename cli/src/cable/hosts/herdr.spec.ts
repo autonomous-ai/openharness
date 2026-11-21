@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Place } from './adapter.js'
 import type { HerdrPrompt } from './herdrClient.js'
 import { createHerdrAdapter, type HerdrAdapterDeps } from './herdr.js'
-import { ptyOwner } from './scannedApp.js'
+import { ptyMaker } from './scannedApp.js'
 
 const FAKE_PATH_HERDR = '/fake/bin/herdr'
 
@@ -301,7 +301,7 @@ describe('the herdr adapter', () => {
         { pid: 70, ppid: 1, tty: 'pts/0', executable: 'bash' },
       ]
       const { adapter } = logged('linux')
-      expect(adapter.paneOf(madeBy(ptyOwner(100, rows)))).toEqual(pane('w1:p2'))
+      expect(adapter.paneOf(madeBy(ptyMaker(100, rows)?.host))).toEqual(pane('w1:p2'))
     })
   })
 

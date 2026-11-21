@@ -36,7 +36,7 @@ export interface Place {
   /** The app and tab of the terminal holding the multiplexer's client the agent runs in, from observed.ts; only the tmux,
    *  herdr and tabs adapters read it. */
   outer?: Outer
-  /** The host that made the pseudo-terminal its caller runs on (scannedApp.ts ptyOwner, observed.ts): a terminal's or a
+  /** The host that made the pseudo-terminal its caller runs on (scannedApp.ts readPtyOwner, observed.ts): a terminal's or a
    *  multiplexer's pane is the agent's own only when that host's, and takes words only then. A hint names the pane a
    *  program was started in, which a terminal, an editor or a multiplexer started there inherits. Undefined while not
    *  read; null once read, when no host the dial types into made it. */

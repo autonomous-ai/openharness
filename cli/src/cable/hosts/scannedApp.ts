@@ -1,6 +1,6 @@
 // Which app a session the open scan found runs in, from its parent processes' executables alone
 // (docs/specs/2026-11-14-dial-app-filter.md, "The scan learns the app where that is cheap"), and which host made the
-// pseudo-terminal a hook's caller runs on (ptyOwner). Nothing else of a process is read but the terminal it runs on: its
+// pseudo-terminal a hook's caller runs on (ptyMaker). Nothing else of a process is read but the terminal it runs on: its
 // environment holds secrets, and its name is outside text (a process can write a prompt there), so a name is matched
 // against the tables and dropped, never kept, logged or sent.
 
@@ -153,7 +153,7 @@ function nearestApp(bundles: readonly string[], ids: ReadonlyMap<string, string 
 /** A process and up to WALK_PARENTS of its parents, nearest first, from one read of the table: a pid the table does not
  *  hold starts none. A parent that started after its child ends it: Windows hands a freed pid to the next process and
  *  never reparents, so that is another process on the old pid (lib/callerPane.ts). The open scan reads their names, a
- *  tap on a tmux pane their ids (tmux.ts), ptyOwner their terminals, and the VS Code match their pids. */
+ *  tap on a tmux pane their ids (tmux.ts), ptyMaker their terminals, and the VS Code match their pids. */
 export function parentChain<P extends Pick<ProcessName, 'pid' | 'ppid'> & { startMarker?: string }>(pid: number, table: ReadonlyMap<number, P>): P[] {
   const chain: P[] = []
   const passed = new Set<number>()
@@ -212,11 +212,6 @@ export function ptyMaker(pid: number, rows: readonly PtyProcess[]): PtyMaker | u
   if (!maker) return undefined
   const name = basename(maker.executable)
   return Object.hasOwn(PTY_HOSTS, name) ? { pid: maker.pid, host: PTY_HOSTS[name] } : { pid: maker.pid }
-}
-
-/** The host that made the pseudo-terminal a process runs on (ptyMaker); none when that is no host the dial types into. */
-export function ptyOwner(pid: number, rows: readonly PtyProcess[]): string | undefined {
-  return ptyMaker(pid, rows)?.host
 }
 
 /** ptyMaker over [rows], which hold no terminal: the caller's and its parents' are read one at a time ([tty],

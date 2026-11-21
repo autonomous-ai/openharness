@@ -11,7 +11,7 @@ import { RECORDED_HERDR } from '../../testing/recordedHerdr.js'
 import { RECORDED_ORCA } from '../../testing/recordedOrca.js'
 import { ObservedSource, type ObservedDeps } from './observed.js'
 import {
-  appRoots, learnApps, parseProcessNames, ptyMaker, ptyOwner, readBundleId, readProcessNames, readPtyMaker, readPtyOwner,
+  appRoots, learnApps, parseProcessNames, ptyMaker, readBundleId, readProcessNames, readPtyMaker, readPtyOwner,
   readTtyName, scannedApps,
   WALK_PARENTS, type ProcessName, type PtyProcess, type ScannedAppDeps,
 } from './scannedApp.js'
@@ -290,19 +290,19 @@ describe('the host that owns a process\'s terminal', () => {
     // An agent in Zellij's pane, whose server has no terminal; Zellij's client runs in kitty's window.
     const zellij = table([[100, 50, 'claude', 'pts/2'], [50, 29, 'bash', 'pts/2'], [29, 1, 'zellij'],
       [103, 21, 'zellij', 'pts/1'], [21, 20, 'bash', 'pts/1'], [20, 1, 'kitty']])
-    expect(ptyOwner(100, zellij)).toBe('zellij')
+    expect(ptyMaker(100, zellij)?.host).toBe('zellij')
     // kitty started from a Zellij pane: its window's terminal is kitty's, kitty itself on the pane's.
     const kitty = table([[400, 399, 'claude', 'pts/7'], [399, 398, 'zsh', 'pts/7'], [398, 50, 'kitty', 'pts/2'],
       [50, 29, 'bash', 'pts/2'], [29, 1, 'zellij']])
-    expect(ptyOwner(400, kitty)).toBe('kitty')
+    expect(ptyMaker(400, kitty)?.host).toBe('kitty')
     // tmux inside a Zellij pane: tmux's server, which has no terminal, made the agent's.
     const tmux = table([[500, 499, 'claude', 'pts/4'], [499, 498, 'bash', 'pts/4'], [498, 1, 'tmux: server'],
       [497, 50, 'tmux: client', 'pts/2'], [50, 29, 'bash', 'pts/2'], [29, 1, 'zellij']])
-    expect(ptyOwner(500, tmux)).toBe('tmux')
+    expect(ptyMaker(500, tmux)?.host).toBe('tmux')
   })
 
   it('names WezTerm\'s GUI and mux server, kitty, Zellij and tmux, by Linux\'s names and by macOS\'s paths', () => {
-    const owned = (owner: string) => ptyOwner(10, table([[10, 9, 'claude', 'pts/3'], [9, 8, '-zsh', 'pts/3'], [8, 1, owner]]))
+    const owned = (owner: string) => ptyMaker(10, table([[10, 9, 'claude', 'pts/3'], [9, 8, '-zsh', 'pts/3'], [8, 1, owner]]))?.host
     expect(['wezterm-gui', 'wezterm-mux-ser', 'wezterm-mux-server', '/Applications/WezTerm.app/Contents/MacOS/wezterm-gui',
       'kitty', '/Applications/kitty.app/Contents/MacOS/kitty', 'zellij', '/opt/homebrew/bin/zellij',
       'tmux: server', '/opt/homebrew/bin/tmux'].map(owned))
@@ -314,21 +314,21 @@ describe('the host that owns a process\'s terminal', () => {
   })
 
   // Every Orca mode recorded, the record walked so that a mode added to it is tested too.
-  it('ptyOwner over each recorded Orca chain is orca', () => {
+  it('ptyMaker over each recorded Orca chain is orca\'s', () => {
     // macOS's chain has no pids: each step's parent is the next, the terminal host's launchd.
     const macos = RECORDED_ORCA.macos.chain.map(({ comm, tty }, i, all): PtyProcess =>
       ({ pid: 10 + i, ppid: i + 1 < all.length ? 11 + i : 1, executable: comm, ...(tty === null ? {} : { tty }) }))
-    expect(ptyOwner(10, macos)).toBe('orca')
+    expect(ptyMaker(10, macos)?.host).toBe('orca')
     for (const [mode, { chain }] of Object.entries(RECORDED_ORCA.linux)) {
       const rows = chain.map(({ pid, ppid, tty, comm }): PtyProcess => ({ pid, ppid, executable: comm, ...(tty === null ? {} : { tty }) }))
-      expect(ptyOwner(chain[0].pid, rows), mode).toBe('orca')
+      expect(ptyMaker(chain[0].pid, rows)?.host, mode).toBe('orca')
     }
   })
 
   it('a renamed terminal host (a made-up name) is no host', () => {
     // Orca's Linux daemon whose rename failed keeps its binary's name (RECORDED_ORCA.notCovered): never a host.
     for (const name of ['node', 'orca-agents-x', 'Orca Agent', '/opt/Orca/orca-helper']) {
-      expect(ptyOwner(10, table([[10, 9, 'claude', 'pts/3'], [9, 8, 'bash', 'pts/3'], [8, 1, name]])), name).toBeUndefined()
+      expect(ptyMaker(10, table([[10, 9, 'claude', 'pts/3'], [9, 8, 'bash', 'pts/3'], [8, 1, name]]))?.host, name).toBeUndefined()
     }
   })
 
@@ -336,23 +336,23 @@ describe('the host that owns a process\'s terminal', () => {
   it('a terminal started from a host\'s pane is not that host\'s', () => {
     const rows = table([[900, 899, 'codex', 'pts/9'], [899, 800, 'bash', 'pts/9'], [800, 700, 'code'],
       [700, 600, 'code', 'pts/5'], [600, 590, 'zsh', 'pts/5'], [590, 1, 'wezterm-gui']])
-    expect(ptyOwner(900, rows)).toBeUndefined()
+    expect(ptyMaker(900, rows)?.host).toBeUndefined()
   })
 
   it('none for a process on no terminal, one the table does not hold, or a walk that ends on its terminal', () => {
-    expect(ptyOwner(29, table([[29, 1, 'zellij']]))).toBeUndefined()
-    expect(ptyOwner(100, table([[29, 1, 'zellij']]))).toBeUndefined()
+    expect(ptyMaker(29, table([[29, 1, 'zellij']]))?.host).toBeUndefined()
+    expect(ptyMaker(100, table([[29, 1, 'zellij']]))?.host).toBeUndefined()
     // Its terminal's maker is not in the table, or is init: the walk ends with no owner.
-    expect(ptyOwner(100, table([[100, 50, 'claude', 'pts/2'], [50, 29, 'bash', 'pts/2']]))).toBeUndefined()
-    expect(ptyOwner(100, table([[100, 1, 'claude', 'pts/2']]))).toBeUndefined()
+    expect(ptyMaker(100, table([[100, 50, 'claude', 'pts/2'], [50, 29, 'bash', 'pts/2']]))?.host).toBeUndefined()
+    expect(ptyMaker(100, table([[100, 1, 'claude', 'pts/2']]))?.host).toBeUndefined()
   })
 
   it('walks no further than the scan does', () => {
     // The agent under WALK_PARENTS shells on its own terminal: kitty is one past the walk's end.
     const shells = Array.from({ length: WALK_PARENTS }, (_, i): [number, number, string, string] => [101 + i, 102 + i, 'sh', 'pts/1'])
     const rows = table([[100, 101, 'claude', 'pts/1'], ...shells, [101 + WALK_PARENTS, 1, 'kitty']])
-    expect(ptyOwner(100, rows)).toBeUndefined()
-    expect(ptyOwner(101, rows)).toBe('kitty')
+    expect(ptyMaker(100, rows)?.host).toBeUndefined()
+    expect(ptyMaker(101, rows)?.host).toBe('kitty')
   })
 })
 
@@ -367,7 +367,7 @@ describe('the host that owns a process\'s terminal, read', () => {
     })
     return { exec, tty: (pid: number) => readTtyName(pid, exec), read: () => exec.mock.calls.map(([, args]) => Number(args[3])) }
   }
-  // An agent in Zellij's pane, and Zellij's client in kitty's window: as `ptyOwner` was given them with their terminals.
+  // An agent in Zellij's pane, and Zellij's client in kitty's window: as `ptyMaker` was given them with their terminals.
   const ROWS = table([[100, 50, 'claude'], [50, 29, 'bash'], [29, 1, 'zellij'], [103, 21, 'zellij'], [21, 20, 'bash'], [20, 1, 'kitty']])
   const LINUX = { 100: 'pts/2', 50: 'pts/2', 29: '?', 103: 'pts/1', 21: 'pts/1', 20: '?' }
 
@@ -378,7 +378,7 @@ describe('the host that owns a process\'s terminal, read', () => {
     expect(at.exec.mock.calls[0]).toEqual(['ps', ['-o', 'tty=', '-p', '100'], { timeout: 1_000, maxBuffer: 256 }])
   })
 
-  it('answers as ptyOwner does over the same terminals, macOS\'s names too', async () => {
+  it('answers as ptyMaker does over the same terminals, macOS\'s names too', async () => {
     const mac = { 400: 'ttys007', 399: 'ttys007', 398: 'ttys002', 50: 'ttys002', 29: '??' }
     const rows = table([[400, 399, 'claude'], [399, 398, 'zsh'], [398, 50, '/Applications/kitty.app/Contents/MacOS/kitty'],
       [50, 29, 'bash'], [29, 1, '/opt/homebrew/bin/zellij']])
@@ -443,7 +443,6 @@ describe('the process that made a pseudo-terminal', () => {
   it('a maker no table lists: its pid and no host', () => {
     // herdr's client A, on the pty the stand-in terminal made.
     expect(ptyMaker(HERDR.clientA, recorded())).toEqual({ pid: HERDR.terminalA })
-    expect(ptyOwner(HERDR.clientA, recorded())).toBeUndefined()
   })
 
   it('a process on no terminal, or a walk that ends first: undefined', () => {
@@ -464,7 +463,6 @@ describe('the process that made a pseudo-terminal', () => {
   it('macOS: herdr by its path\'s last part', () => {
     const rows = table([[400, 399, 'claude', 'ttys007'], [399, 398, '-zsh', 'ttys007'], [398, 1, '/Users/u/.local/bin/herdr']])
     expect(ptyMaker(400, rows)).toEqual({ pid: 398, host: 'herdr' })
-    expect(ptyOwner(400, rows)).toBe('herdr')
   })
 })
 
