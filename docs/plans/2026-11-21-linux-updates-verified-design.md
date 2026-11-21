@@ -183,8 +183,11 @@ writes disposable objects to the release bucket, so this branch never runs it.
 - The Device manifest's Linux entry (`device-linux-<arch>-appimage`, Desktop's shape) carries no signature; the
   Tauri signature of the same file is in `platforms.linux-<x86_64|aarch64>.signature`, beside its `url`. The installer
   reads that signature, and refuses unless that `platforms` entry's `url` is the entry's `url` (both name the same
-  file). No change to `device-manifest.py` or the Device release: the signature has shipped since the Device's first
-  Linux release.
+  file). No change to `device-manifest.py` or the Device release: every Device release that carries Linux writes that
+  signature (the first is planned for 2026-11-23; the live manifest has no Linux entries yet, so Part 3 first meets a
+  real Device signature then). `release-build.sh` renames each AppImage before `sign-update` signs it, so the comment's
+  `file:` is the published name; making the Device's `release-check.sh` also require that field is a follow-up the pull
+  request names, not this branch (it would select the Device suites for a guard).
 - `DeviceAppInstaller.install()`, Linux: after the checksum step, a `signature` step verifies the downloaded file with
   the shared verifier (`file:` and `version:` per the table), before the AppImage is placed. A failure is
   `DeviceAppInstallStep.signature`, whose row already reads "Couldn’t verify the download."
