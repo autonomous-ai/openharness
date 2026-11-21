@@ -21,7 +21,9 @@
  * found, too, when it prints whole, as an identifier or a property read's last name, a name of any value that holds
  * content: process output (`stderr`, `stdout`, `output`, `…Stderr`, `…Stdout`, `…Output`), free text (`detail`,
  * `details`, `message`, `…Detail`, `…Message`), a path or URL (`path`, `cwd`, `dir`, `folder`, `file`, `home`, `url`,
- * `…Path`, `…Cwd`, `…Dir`, `…Folder`, `…File`, `…Home`, `…Url`, `…URL`); but not a name an `import` binds, nor a
+ * `workspace`, `…Path`, `…Cwd`, `…Dir`, `…Folder`, `…File`, `…Home`, `…Url`, `…URL`, `…Workspace`, and constants
+ * `…_PATH`, `…_DIR`, `…_FOLDER`, `…_FILE`, `…_HOME`, `…_URL`), a machine's name (`machine`, `machineName`,
+ * `…MachineName`); but not a module of Node's own by its default or namespace name (`path` of `node:path`), nor a
  * forwarder's: a plain parameter handed on bare by a function whose callers are checked where they call it, one bound
  * to a logger's name (`log: (line) => …`, `deps.log ?? (…)`) or a function of the file's own. And when it prints whole
  * a property of a local given a function of the file's own's result (awaited or not) or an object literal, and the
@@ -35,11 +37,13 @@
  * it; a local whose value is content of a name the rules read (`const shown = basename(file)`), never followed; what a
  * function of the file's own returns, but at a property of a local given it; a local destructured from an error or a
  * result; an error's or a value's words read by element access (`error['message']`); an `AggregateError`'s `.errors`;
- * a catch with a binding that logs without the word "fail"; a name the rules do not read (`reason`, `why`, `label`, a
- * string `error`: a syntactic rule cannot tell a literal union's fixed words from free text); a hold's sentence
- * (`HookPreparationHeld`'s `hold`), which no rule reads and `architecture.hookHolds.spec.ts` keeps to string literals;
- * and a value built in one file and logged in another (a hold's reason, a peer's answer, a probe's result, a stream's
- * close reason), each fixed at its sink with a behaviour test (docs/plans/2026-11-21-log-no-stored-strings-plan.md).
+ * a catch with a binding that logs without the word "fail"; a name the rules do not read (`reason`, `why`, a string
+ * `error`: a syntactic rule cannot tell a literal union's fixed words from free text; `label`, which on the tree names
+ * engines, runtimes and tallies in fixed words); a path read from a call (`process.cwd()`, `os.homedir()`, `tmpdir()`)
+ * or from the environment's own `HOME` or `PATH`; a hold's sentence (`HookPreparationHeld`'s `hold`), which no rule
+ * reads and `architecture.hookHolds.spec.ts` keeps to string literals; and a value built in one file and logged in
+ * another (a hold's reason, a peer's answer, a probe's result, a stream's close reason), each fixed at its sink with a
+ * behaviour test (docs/plans/2026-11-21-log-no-stored-strings-plan.md).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -55,6 +59,7 @@ const SRC = __dirname
 /** What a command prints on the terminal of the person who ran it, not in a log: these files print only that. */
 const TERMINAL = [
   'cli.ts', // the commands; a core run here fails in core/main.ts, its other lines that reach a log keep the rule by hand
+  'config/startHome.ts', // before a command runs, from cli.ts alone: the folder a HOME that is not the account's gets
   'remoteCommand.ts', // harness remote
   'shellLaunch.ts', // harness shell-launch, in the pane it starts
   'devices/client.ts', // harness hardware
@@ -392,11 +397,12 @@ const shown = (node: ts.Node): string => node.getText().replace(/\s+/g, ' ')
 /** An error's fields that hold its words: what it says and where, what it stored, what a process printed, a path. */
 const ERROR_WORDS = ['message', 'stack', 'reason', 'detail', 'stderr', 'stdout', 'path']
 
-/** Names that hold content, of any value: what a process printed, free text, and where a person's things are. */
+/** Names that hold content, of any value: what a process printed, free text, where a person's things are, and a name a person chose. */
 const CONTENT_NAMES: ReadonlyArray<readonly [string, RegExp]> = [
   ['process output', /^(stderr|stdout|output)$|(Stderr|Stdout|Output)$/],
   ['free text', /^(detail|details|message)$|(Detail|Message)$/],
-  ['a path or URL', /^(path|cwd|dir|folder|file|home|url)$|(Path|Cwd|Dir|Folder|File|Home|Url|URL)$/],
+  ['a path or URL', /^(path|cwd|dir|folder|file|home|url|workspace)$|(Path|Cwd|Dir|Folder|File|Home|Url|URL|Workspace)$|_(PATH|DIR|FOLDER|FILE|HOME|URL)$/],
+  ["a machine's name", /^(machine|machineName)$|MachineName$/],
 ]
 
 /** What a name of the log call's own says it holds, when it is content. */
@@ -413,6 +419,14 @@ const isSafe = (call: ts.CallExpression): boolean => {
   const callee = unwrap(call.expression)
   return SAFE_CALLS.includes(ts.isIdentifier(callee) ? callee.text
     : ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) ? `${callee.expression.text}.${callee.name.text}` : '')
+}
+
+/** A module of Node's own by its default or namespace name (`path` of `import path from 'node:path'`). */
+const isNodeModule = (identifier: ts.Identifier, declaration: ts.Node | undefined): boolean => {
+  if (!declaration || !ts.isImportDeclaration(declaration) || !declaration.importClause) return false
+  const { name, namedBindings } = declaration.importClause
+  return ts.isStringLiteral(declaration.moduleSpecifier) && declaration.moduleSpecifier.text.startsWith('node:')
+    && (name?.text === identifier.text || (!!namedBindings && ts.isNamespaceImport(namedBindings) && namedBindings.name.text === identifier.text))
 }
 
 const firstPrinted = (parts: readonly ts.Node[], whole: boolean, hand: Hand): string | undefined => {
@@ -438,11 +452,10 @@ function printed(node: ts.Node, whole: boolean, hand: Hand): string | undefined 
     if (!whole) return undefined
     const name = nameOf(inner, hand)
     if (name) return name === 'error' ? `an error, ${inner.text}` : `a local made from an error, ${inner.text}`
-    // A forwarder's parameter is checked where its callers hand it on, and an imported name is a module's (`path`).
+    // A forwarder's parameter is checked where its callers hand it on, and a module of Node's own is no path (`path`).
     const content = contentNamed(inner.text, hand)
     if (!content || hand.passed?.has(inner)) return undefined
-    const declaration = declarationOf(inner)
-    return declaration && ts.isImportDeclaration(declaration) ? undefined : `${content}, ${inner.text}`
+    return isNodeModule(inner, declarationOf(inner)) ? undefined : `${content}, ${inner.text}`
   }
   if (ts.isExpression(inner) && whole && isError(inner, hand)) return `an error, ${shown(inner)}`
   const first = (parts: readonly ts.Node[], partsWhole: boolean): string | undefined => firstPrinted(parts, partsWhole, hand)
