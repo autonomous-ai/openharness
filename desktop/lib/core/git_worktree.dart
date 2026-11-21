@@ -8,7 +8,7 @@ import 'dart:math';
 
 import 'package:path/path.dart' as p;
 
-import 'git_program.dart';
+import 'program_path.dart';
 import 'repository_clone.dart';
 
 class GitBranch {

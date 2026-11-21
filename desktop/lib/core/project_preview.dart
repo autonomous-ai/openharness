@@ -4,7 +4,7 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
-import 'git_program.dart';
+import 'program_path.dart';
 
 /// Read-only, bounded source material for a project preview. Never executes
 /// project code, hooks, Markdown images or a Git network operation.

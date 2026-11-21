@@ -2,10 +2,10 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
-import '../core/git_program.dart';
 import '../core/harness_home.dart';
 import '../core/hidden_process.dart';
 import '../core/home_dir.dart';
+import '../core/program_path.dart';
 import '../core/runtime_platform.dart';
 import '../core/test_run.dart';
 
@@ -54,11 +54,11 @@ class WindowsGitSetup {
   }
 
   /// Where the CLI looks (cli lib/windows/gitBash.ts): the git Desktop runs
-  /// ([GitProgram], which never takes one by a relative PATH entry), then Git
-  /// for Windows' bash where its installer puts it.
+  /// ([ProgramPath.git], which never takes one by a relative PATH entry), then
+  /// Git for Windows' bash where its installer puts it.
   bool get gitIsThere {
     try {
-      GitProgram(
+      ProgramPath.git(
         environment: _environment,
         isWindows: true,
         isProgram: _isFile,

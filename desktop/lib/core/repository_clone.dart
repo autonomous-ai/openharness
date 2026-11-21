@@ -4,8 +4,8 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
-import 'git_program.dart';
 import 'github_repository.dart';
+import 'program_path.dart';
 import 'ssh_hosts.dart';
 
 export 'github_repository.dart';
