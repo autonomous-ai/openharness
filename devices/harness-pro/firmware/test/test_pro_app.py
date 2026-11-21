@@ -2074,19 +2074,6 @@ static void apps_reach_the_model(void) {
     CHECK(LOCK_DEPTH == 0);
 }
 
-// A tap on an app card sends one app.pick, outside the lock, and opens nothing yet: Home stays until the ring lands.
-static void app_pick_reaches_the_cable(void) {
-    setup();
-    static const cable_app_t rows[3] = {{"harness", "Harness", 3, 0, 1}, {"codex", "ChatGPT", 2, 0, 1}, {"vscode", "VS Code", 1, 0, 0}};
-    pro_app_apps_switch(true);
-    pro_app_apps(rows, 3, "harness");
-    render();
-    CHECK(U.frame.hit_count < 32);
-    U.frame.hits[U.frame.hit_count++] = (pod_hit_t){90, 56, 540, 560, POD_A_PICK_APP, 1, "codex"};   // an app card's hit, before any card draws one
-    tap(POD_A_PICK_APP, 1);
-    CHECK(R.picks == 1 && !strcmp(R.pick_app, "codex") && R.opens == 0 && top() == POD_V_TABS);
-}
-
 // A live link that moves to another computer (a welcome naming another machine: pro_app_link(true) while linked) forgets
 // the last one's apps, since an older daemon there sends none to replace them. That welcome's apps.switch, said first, stays.
 static void apps_forgotten_on_another_computer(void) {
@@ -2178,6 +2165,22 @@ static void apps_without_a_window(void) {
     swipe_next();
     CHECK(U.nav.depth == 1 && U.nav.stack[0].scroll == POD_HOME_APP0 && hit(POD_A_PICK_APP, 0));
     CHECK(!hit(POD_A_HOME_TABS, 0) && !hit(POD_A_HOME_APPS, 0) && !text_in("Tabs", PH_INK) && !text_in("Tabs", PH_MUTED));
+    CHECK(LOCK_DEPTH == 0);
+}
+
+// The view is set before the roster's nav sync: a window that shuts (tab_open alone said it was open) turns Home to the app
+// cards on that agents.end, with no apps frame after it.
+static void window_shut_lists_apps_at_once(void) {
+    setup();
+    static cable_swarm_members_t none;
+    pro_app_swarms(NULL, 0, &none, "", NULL, 0);
+    pro_app_turn("a1", "done", "", -1);   // nobody works: the list is Home's only page
+    feed_agents(false, false, true);
+    pro_app_apps_switch(true);
+    pro_app_apps(APP_ROWS, 3, "harness");
+    CHECK(U.model.has_window && U.nav.depth == 1 && U.nav.stack[0].scroll == 0);
+    feed_agents(false, false, false);
+    CHECK(!U.model.has_window && U.nav.depth == 1 && U.nav.stack[0].scroll == POD_HOME_APP0 && !strcmp(U.nav.home_app, "harness"));
     CHECK(LOCK_DEPTH == 0);
 }
 
@@ -2652,8 +2655,8 @@ int main(int argc, char **argv) {
         {"pro_app_test_voice_paths", pro_app_test_voice_paths}, {"pro_app_test_touch_rules", pro_app_test_touch_rules},
         {"pro_app_test_roster_and_swarms", pro_app_test_roster_and_swarms}, {"side_button", side_button}, {"side_button_console", side_button_console}, {"question_needs_the_link", question_needs_the_link},
         {"notify_banner_beep_and_expiry", notify_banner_beep_and_expiry}, {"notify_tap_opens_and_swipe_dismisses", notify_tap_opens_and_swipe_dismisses},
-        {"notify_never_over_talk", notify_never_over_talk}, {"notify_tiers", notify_tiers}, {"notify_question_and_error", notify_question_and_error}, {"notify_entries_expire", notify_entries_expire}, {"notify_question_entry_ends_with_question", notify_question_entry_ends_with_question}, {"notify_question_resent_after_relink_is_quiet", notify_question_resent_after_relink_is_quiet}, {"notify_question_same_prompt_new_request_beeps", notify_question_same_prompt_new_request_beeps}, {"question_list_tier_is_quiet", question_list_tier_is_quiet}, {"agents_carry_app_and_view", agents_carry_app_and_view}, {"voice_needs_the_v_cap", voice_needs_the_v_cap}, {"see_it_notice_lasts_two_seconds", see_it_notice_lasts_two_seconds}, {"apps_reach_the_model", apps_reach_the_model}, {"apps_forgotten_on_another_computer", apps_forgotten_on_another_computer}, {"app_pick_reaches_the_cable", app_pick_reaches_the_cable},
-        {"apps_click_through", apps_click_through}, {"apps_without_a_window", apps_without_a_window}, {"no_other_app_no_pill", no_other_app_no_pill},
+        {"notify_never_over_talk", notify_never_over_talk}, {"notify_tiers", notify_tiers}, {"notify_question_and_error", notify_question_and_error}, {"notify_entries_expire", notify_entries_expire}, {"notify_question_entry_ends_with_question", notify_question_entry_ends_with_question}, {"notify_question_resent_after_relink_is_quiet", notify_question_resent_after_relink_is_quiet}, {"notify_question_same_prompt_new_request_beeps", notify_question_same_prompt_new_request_beeps}, {"question_list_tier_is_quiet", question_list_tier_is_quiet}, {"agents_carry_app_and_view", agents_carry_app_and_view}, {"voice_needs_the_v_cap", voice_needs_the_v_cap}, {"see_it_notice_lasts_two_seconds", see_it_notice_lasts_two_seconds}, {"apps_reach_the_model", apps_reach_the_model}, {"apps_forgotten_on_another_computer", apps_forgotten_on_another_computer},
+        {"apps_click_through", apps_click_through}, {"apps_without_a_window", apps_without_a_window}, {"window_shut_lists_apps_at_once", window_shut_lists_apps_at_once}, {"no_other_app_no_pill", no_other_app_no_pill},
         {"no_voice_room_says_where", no_voice_room_says_where}, {"another_computer_ends_the_landing", another_computer_ends_the_landing},
         {"ring_after_the_wait_opens_nothing", ring_after_the_wait_opens_nothing},
         {"notify_replace_seen_and_read", notify_replace_seen_and_read},

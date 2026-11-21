@@ -1809,11 +1809,11 @@ static void roster_rows_carry_host_and_caps(void) {
 
 static void apps_switch_off_turns_home_to_tabs(void) {
     fresh_apps();
-    U.model.selected = 1;
+    U.model.selected = 0;   // the first tab, not the last one the clamp from the app pages would reach anyway
     act(POD_A_HOME_APPS, 0);
     CHECK(U.nav.home_apps && top()->scroll == POD_HOME_APP0);
     pod_out_t o = pod_ui_apps_switch(&U, false);   // in this call: Home lists the tabs, on the selected one
-    CHECK(o.fx == POD_FX_NONE && !U.nav.home_apps && top()->scroll == 1);
+    CHECK(o.fx == POD_FX_NONE && !U.nav.home_apps && top()->scroll == 0);
 }
 
 
