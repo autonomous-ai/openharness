@@ -56,6 +56,12 @@ describe('the catalog', () => {
     expect(byId('X3').checks.find((c) => c.kind === 'still')).toMatchObject({ after: 'front', at: 'tap' })
   })
 
+  it('X3\'s ring check reads the ring the dial holds when its still window ends, though the whole list came before front', () => {
+    const ringKept = byId('X3').checks.find((c) => c.id === 'ringKept')!
+    expect(ringKept.after).toBeUndefined()
+    expect(ringKept.at).toBe('tap')
+  })
+
   it('C9 swipes from the older a to the new b, which has no hook yet, rests on it, and then b\'s hook arrives', () => {
     const c9 = byId('C9')
     expect(c9.sessions.filter((s) => !s.ghost).map((s) => [s.key, s.ageMs])).toEqual([['b', 60_000], ['a', 120_000]])
