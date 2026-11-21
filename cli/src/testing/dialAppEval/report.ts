@@ -58,7 +58,9 @@ function scoreRow(app: App, s: AppScores): string[] {
 }
 
 function subsetRows(r: Report): string[][] {
-  const subsets: Array<[string, Record<App, AppScores>]> = [...Object.entries(r.byTier), ...Object.entries(r.byPlatform)]
+  // byPlatform names the tiers that ran: one that did not has no row of dashes.
+  const ran = Object.entries(r.byTier).filter(([tier]) => Object.keys(r.byPlatform).some((key) => key.startsWith(`${tier}/`)))
+  const subsets: Array<[string, Record<App, AppScores>]> = [...ran, ...Object.entries(r.byPlatform)]
   return subsets.flatMap(([run, apps]) =>
     APPS.map((app) => [run, APP_NAMES[app], num(apps[app].score), `left out: ${apps[app].leftOut}`]))
 }
