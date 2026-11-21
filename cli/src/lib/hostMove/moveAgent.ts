@@ -280,7 +280,7 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
     // The old pane's engine runs again before the gate opens, so held input reaches a live engine. When it does not
     // come back, the input still goes to the old pane, as it does after a failed restart.
     const relaunched = await bounded(() => deps.relaunchOld(session), MOVE_RELAUNCH_TIMEOUT_MS, 'the relaunch in the old pane')
-    if (!relaunched.done) log(`[terminal] move ${agentId}: the relaunch in the old pane did not finish (${codeOrLength(relaunched.reason)})`)
+    if (!relaunched.done) log(`[terminal] move ${agentId}: the relaunch in the old pane did not complete (${codeOrLength(relaunched.reason)})`)
     return notMoved(relaunched.done && relaunched.value)
   }
 
@@ -377,7 +377,7 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
     }
     created = null
     const streams = await bounded(() => deps.retarget(agentId, newPane), MOVE_STEP_TIMEOUT_MS, 'moving open streams')
-    if (!streams.done) log(`[terminal] move ${agentId}: moving open streams did not finish (${codeOrLength(streams.reason)})`)
+    if (!streams.done) log(`[terminal] move ${agentId}: moving open streams did not complete (${codeOrLength(streams.reason)})`)
     if (!deps.current()) return await recover(CANCELLED)
     const released = await bounded(() => deps.releaseHold(newPane), MOVE_STEP_TIMEOUT_MS, 'releasing the new pane')
     if (!released.done) return await recover('the confirmed destination remains held')
