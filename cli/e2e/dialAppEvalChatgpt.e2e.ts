@@ -1,0 +1,60 @@
+/**
+ * Tier B of the dial eval for the ChatGPT app (docs/plans/2026-11-21-dial-app-eval-design.md, "Tier B"): each main
+ * scenario of the catalog that runs in tier B, on the real daemon and devices process, through the tier B driver
+ * (harness/appEvalDriver.ts) and the ChatGPT app's steps (harness/appEvalChatgpt.ts). X3 is macOS's alone.
+ *
+ * macOS and Linux. Every daemon has a throwaway home, its open, its home and the apps' stores checked inside its root
+ * before it starts, the harness's recording `open` (HARNESS_OPEN_BIN) and the fake backend only. The Codex home is a
+ * fixture in that home (src/testing/codexAppFixture.ts), the ChatGPT app a fake in its root, and its own Codex CLI a fake
+ * that notes each queue call: the real ChatGPT app, `~/.codex` and this computer's daemon are never touched. The network
+ * guard runs in this process and in every process of each daemon: a connection to anything but this machine fails the
+ * scenario, by host and port.
+ */
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { scenariosFor } from '../src/testing/dialAppEval/catalog.js'
+import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from '../src/testing/dialAppEval/runner.js'
+import { StepNotBuilt, type Platform } from '../src/testing/dialAppEval/types.js'
+import { chatgptSteps } from './harness/appEvalChatgpt.js'
+import { TierBDriver } from './harness/appEvalDriver.js'
+
+const WIN32 = process.platform === 'win32'
+const HOST = process.platform as Platform
+const SCENARIOS = WIN32 ? [] : scenariosFor('b', HOST).filter((s) => s.app === 'chatgpt' && !s.heldOut)
+
+describe.skipIf(WIN32)('the dial eval, tier B: the ChatGPT app', () => {
+  let driver: TierBDriver
+  const runs: ScenarioRun[] = []
+  const skipped: string[] = []
+  beforeAll(() => { driver = new TierBDriver(chatgptSteps) })
+  afterAll(async () => {
+    await driver?.close()
+    if (process.env.DIAL_EVAL_OUT) writeResults(process.env.DIAL_EVAL_OUT, 'chatgpt', collect(runs))
+  })
+
+  it.for(SCENARIOS)('$id: $title', async (scenario, { skip }) => {
+    const began = Date.now()
+    let run: ScenarioRun | undefined
+    let notBuilt: StepNotBuilt | undefined
+    try {
+      run = await runScenario(driver, scenario, HOST)
+    } catch (error) {
+      if (!(error instanceof StepNotBuilt)) throw error
+      notBuilt = error
+    }
+    console.log(`[dial eval] ${scenario.id}: ${Date.now() - began} ms${notBuilt ? `, skipped: ${notBuilt.message}` : ''}`)
+    // Also for a skipped one: a step before the one not built may have reached out.
+    expect(driver.networkReached()).toEqual([])
+    if (!run) {
+      skipped.push(scenario.id)
+      return skip(notBuilt!.message)
+    }
+    runs.push(run)
+    expect(run.wrongSends).toEqual([])
+    expect(uncaughtProbes(run)).toEqual([])
+  })
+
+  it('ran every ChatGPT scenario of tier B', () => {
+    expect(skipped).toEqual([])
+    expect(runs.map((r) => r.scenario)).toEqual(SCENARIOS.map((s) => s.id))
+  })
+})
