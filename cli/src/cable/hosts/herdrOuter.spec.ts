@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { createHerdrOuter, HERDR_CLIENTS_A_LOOKUP, SKIPPED_IDS_KEPT, ttyAtime, type HerdrOuterDeps } from './herdrOuter.js'
+import type { PtyProcess } from './scannedApp.js'
 
 interface Call { file: string; args: string[]; timeoutMs: number }
 /** What the fake lsof and ps print, and each tty's access time. */
@@ -14,15 +15,18 @@ const CONFIG = '/Users/u/.config/herdr'
 const TERMINAL = '/Users/u/Applications/Terminal.app/Contents/MacOS/Terminal'
 const HERDR = '/opt/homebrew/bin/herdr'
 const PANE = { HERDR_PANE_ID: 'w1:p2' }
-/** The agent (100) in a pane of a detached server (80); a client (4300) in a Terminal tab. */
-const TABLE = [
-  { pid: 100, ppid: 90, executable: 'claude' }, { pid: 90, ppid: 80, executable: '/bin/zsh' },
+/** The agent (100) on a pty of a detached server's (80), which runs on none; a client (4300) in a Terminal tab. Each
+ *  process's terminal is what the lookup's `tty` reads. */
+const TABLE: PtyProcess[] = [
+  { pid: 100, ppid: 90, tty: 'ttys010', executable: 'claude' }, { pid: 90, ppid: 80, tty: 'ttys010', executable: '/bin/zsh' },
   { pid: 80, ppid: 1, executable: HERDR },
-  { pid: 4300, ppid: 4299, executable: HERDR }, { pid: 4299, ppid: 4298, executable: '-zsh' },
+  { pid: 4300, ppid: 4299, tty: 'ttys004', executable: HERDR }, { pid: 4299, ppid: 4298, tty: 'ttys004', executable: '-zsh' },
   { pid: 4298, ppid: 1, executable: TERMINAL },
 ]
 /** A second client (4310), in another Terminal tab. */
-const SECOND = [{ pid: 4310, ppid: 4309, executable: HERDR }, { pid: 4309, ppid: 4298, executable: '-zsh' }]
+const SECOND: PtyProcess[] = [
+  { pid: 4310, ppid: 4309, tty: 'ttys007', executable: HERDR }, { pid: 4309, ppid: 4298, tty: 'ttys007', executable: '-zsh' },
+]
 
 /** lsof -F pdn rows: per pid, its descriptors' `d` and `n`, each with an `f` line before it as lsof prints. */
 const sockets = (rows: Record<number, Array<[d: string, n: string]>>): string => Object.entries(rows)
@@ -40,12 +44,18 @@ const none = ['[device] herdr client · none']
 const notRead = (why: 'processes' | 'sockets' | 'ttys' | 'app') => [`[device] herdr client · not read · ${why}`]
 
 /** A recording runner that runs nothing, so no spec reads a process of this machine's: each call answers the next of
- *  [codes], then exit 0, lsof and ps print what [said] gives them, and a tty's access time is [said]'s. */
-function lookup(over: Partial<HerdrOuterDeps> = {}, codes: Array<number | null> = [], said: Said = {}) {
+ *  [codes], then exit 0, lsof and ps print what [said] gives them, a tty's access time is [said]'s, and a process's
+ *  terminal is the one the table gives it. */
+function lookup(
+  over: Partial<Omit<HerdrOuterDeps, 'processes'>> & { processes?: () => Promise<readonly PtyProcess[]> } = {},
+  codes: Array<number | null> = [], said: Said = {},
+) {
   const calls: Call[] = []
   const logs: string[] = []
   const stats: string[] = []
+  const ttys: number[] = []
   const clock = { t: 1_000_000 }
+  const table = over.processes ?? (async () => TABLE)
   let reads = 0
   const outer = createHerdrOuter({
     run: async (file, args, timeoutMs) => {
@@ -53,7 +63,7 @@ function lookup(over: Partial<HerdrOuterDeps> = {}, codes: Array<number | null> 
       const stdout = file === LSOF ? said.lsof ?? '' : file === PS ? said.ps ?? '' : ''
       return { code: codes.length ? codes.shift()! : 0, stdout }
     },
-    processes: async () => { reads++; return TABLE },
+    tty: async (pid) => { ttys.push(pid); return (await table()).find((p) => p.pid === pid)?.tty },
     log: (line) => { logs.push(line) },
     now: () => clock.t,
     platform: 'darwin',
@@ -61,8 +71,9 @@ function lookup(over: Partial<HerdrOuterDeps> = {}, codes: Array<number | null> 
     bundleId: async (bundle) => (bundle === '/Users/u/Applications/Terminal.app' ? 'com.apple.Terminal' : undefined),
     atime: async (tty) => { stats.push(tty); return said.atime?.[tty] },
     ...over,
+    processes: async () => { reads++; return table() },
   })
-  return { calls, logs, stats, clock, reads: () => reads, outer }
+  return { calls, logs, stats, ttys, clock, reads: () => reads, outer }
 }
 
 describe('the outer place of an agent in the person\'s herdr', () => {
@@ -120,6 +131,37 @@ describe('the outer place of an agent in the person\'s herdr', () => {
     const off = lookup({ platform: 'linux' }, [], ONE)
     off.outer({ HERDR_PANE_ID: 'w1:pI' }, 100)
     expect(off.logs).toEqual([])
+  })
+
+  // One table read, then the caller's terminal and its parents' up to the server, which runs on none.
+  it('the server is the herdr that made the caller\'s terminal', async () => {
+    const { calls, logs, reads, ttys, outer } = lookup({}, [], ONE)
+    expect(await outer(PANE, 100)).toEqual(IN_TERMINAL)
+    expect(ttys).toEqual([100, 90, 80])
+    expect(calls).toEqual([lsofAsked('80,4300'), psAsked('4300')])
+    expect(reads()).toBe(1)
+    expect(logs).toEqual(found)
+  })
+
+  // On Linux every program started from a pane is its child: the herdr server is among a WezTerm's parents, and the
+  // WezTerm's agents are no herdr client's.
+  it('a terminal started from a herdr pane (made by WezTerm, a herdr among its parents): {} and no socket or tty command runs', async () => {
+    const processes = async () => [
+      ...TABLE, { pid: 300, ppid: 90, tty: 'ttys010', executable: '/Applications/WezTerm.app/Contents/MacOS/wezterm-gui' },
+      { pid: 301, ppid: 300, tty: 'ttys020', executable: '-zsh' }, { pid: 302, ppid: 301, tty: 'ttys020', executable: 'claude' },
+    ]
+    const { calls, logs, ttys, outer } = lookup({ processes }, [], ONE)
+    expect(await outer(PANE, 302)).toEqual({})
+    expect(ttys).toEqual([302, 301, 300])
+    expect(calls).toEqual([])
+    expect(logs).toEqual(none)
+  })
+
+  it('a terminal that cannot be read: not read · processes', async () => {
+    const { calls, logs, outer } = lookup({ tty: async () => { throw new Error('tty not read') } }, [], ONE)
+    expect(await outer(PANE, 100)).toEqual({})
+    expect(calls).toEqual([])
+    expect(logs).toEqual(notRead('processes'))
   })
 
   it('no herdr in the caller\'s parents: {} and nothing runs', async () => {
@@ -252,14 +294,17 @@ describe('the outer place of an agent in the person\'s herdr', () => {
     expect(logs).toEqual(none)
   })
 
-  it('--no-session: the server is the client, on its tab\'s tty', async () => {
+  // herdr before 0.9.0 (#4500's macOS tests ran 0.8.0): `--no-session` ran the panes under the client itself, on ptys
+  // it made, from its tab's. 0.9.0 removed it (RECORDED_HERDR.noSession), so this table is made up.
+  it('--no-session: the client that made the panes\' terminals', async () => {
     const processes = async () => [
-      { pid: 100, ppid: 90, executable: 'claude' }, { pid: 90, ppid: 80, executable: '/bin/zsh' },
-      { pid: 80, ppid: 79, executable: HERDR }, { pid: 79, ppid: 4298, executable: '-zsh' },
+      { pid: 100, ppid: 90, tty: 'ttys011', executable: 'claude' }, { pid: 90, ppid: 80, tty: 'ttys011', executable: '/bin/zsh' },
+      { pid: 80, ppid: 79, tty: 'ttys005', executable: HERDR }, { pid: 79, ppid: 4298, tty: 'ttys005', executable: '-zsh' },
       { pid: 4298, ppid: 1, executable: TERMINAL },
     ]
-    const { calls, logs, outer } = lookup({ processes }, [], { ps: '80 ttys005\n' })
+    const { calls, logs, ttys, outer } = lookup({ processes }, [], { ps: '80 ttys005\n' })
     expect(await outer(PANE, 100)).toEqual({ app: 'terminal-app', tty: '/dev/ttys005' })
+    expect(ttys).toEqual([100, 90, 80])
     expect(calls).toEqual([psAsked('80')])
     expect(logs).toEqual(found)
   })
