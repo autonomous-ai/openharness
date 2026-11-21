@@ -4,7 +4,7 @@ import type { ClaudeStoreRoot } from './appPlaces.js'
 import { observedAgentId } from './observed.js'
 import { ClaudeAppSource, type ClaudeAppSourceDeps } from './claudeAppSource.js'
 import type { ClaudeAppSession, StoreFolders, StoreRead } from './claudeAppStore.js'
-import { capsLetters, type HostAgent, type PaneSwitch } from './types.js'
+import { capsLetters, type HostAgent, type PaneSwitch, type SendResult } from './types.js'
 
 const ROOT = '/h/Library/Application Support/Claude/claude-code-sessions'
 const ACCOUNT = join(ROOT, 'acc')
@@ -95,6 +95,8 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
     const focus = vi.fn(async (_localId: string, _agentId: string) => true)
     const canShow = vi.fn((_localId: string) => true)
     const show = vi.fn(async (_localId: string, _agentId: string): Promise<PaneSwitch> => 'ok')
+    const canLink = vi.fn((_localId: string) => true)
+    const wake = { send: vi.fn(async (): Promise<SendResult> => ({ ok: true })), stop: vi.fn() }
     /** What the store answers when the test does not say: the one session, in one org folder. */
     const answers: { folders: StoreFolders | undefined; read: StoreRead } = { folders: FOLDERS, read: read([session()]) }
     const deps: ClaudeAppSourceDeps = {
@@ -119,6 +121,8 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
       focus,
       canShow,
       show,
+      canLink,
+      wake,
       monotonic: () => clock.mono,
       log: (line) => {
         log.push(line)
@@ -133,7 +137,7 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
       await turn()
     }
     return {
-      source, answers, watches, timers, clock, log, focus, canShow, show,
+      source, answers, watches, timers, clock, log, focus, canShow, show, canLink, wake,
       get changes() { return changes },
       /** The store's calls, in order. */
       calls: () => calls.map(({ name }) => name),
@@ -217,11 +221,47 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
       expect(names(s)).toEqual(['api', 'api', 'api', 'api', 'x'.repeat(64), 'claude'])
     })
 
-    it('it has status and a tap, no voice and no answer, and takes no words', async () => {
+    it('voice exactly where its link opens, asked by the row\'s local id; another agent has none', async () => {
       const s = await started()
-      expect(capsLetters(s.source.capabilities())).toBe('sf')
-      expect('send' in s.source).toBe(false)
+      const [agent] = s.source.list()
+      expect(capsLetters(s.source.capabilities(agent!))).toBe('svf')
+      s.canLink.mockReturnValue(false)
+      expect(capsLetters(s.source.capabilities(agent!))).toBe('sf')
+      expect(s.canLink.mock.calls).toEqual([[LOCAL], [LOCAL]])
+      const stranger: HostAgent = { ...agent!, id: observedAgentId('claude', nth(1).sessionId) }
+      s.canLink.mockReturnValue(true)
+      expect(capsLetters(s.source.capabilities(stranger))).toBe('sf')
+      expect(s.canLink).toHaveBeenCalledTimes(2)
       expect('markSeen' in s.source).toBe(false)
+    })
+
+    it('its words go to the wake with the row\'s values as they arrive, and the wake\'s answer is its answer', async () => {
+      const s = await started()
+      const [agent] = s.source.list()
+      s.answers.read = read([session({ title: 'Ship it' })])
+      await after(s, () => s.fire(ORG, fileOf(session())))
+      expect(await s.source.send(agent!, 'run the tests')).toEqual({ ok: true })
+      expect(s.wake.send.mock.calls).toEqual([[{ localId: LOCAL, sessionId: SESSION, agentId: ID, name: 'Ship it' }, 'run the tests']])
+      s.wake.send.mockResolvedValueOnce({ ok: false, reason: 'x' })
+      expect(await s.source.send(agent!, 'and lint')).toEqual({ ok: false, reason: 'x' })
+    })
+
+    it('words for a row no longer listed: did not answer, nothing opened', async () => {
+      const s = await started()
+      const [agent] = s.source.list()
+      s.answers.read = read([])
+      await after(s, () => s.fire(ORG, fileOf(session())))
+      expect(await s.source.send(agent!, 'run the tests')).toEqual({ ok: false, reason: 'Fix the build did not answer.' })
+      expect(s.wake.send).not.toHaveBeenCalled()
+      expect(s.focus).not.toHaveBeenCalled()
+    })
+
+    it('stop() stops the wake once', async () => {
+      const s = await started()
+      s.source.stop()
+      expect(s.wake.stop).toHaveBeenCalledTimes(1)
+      s.source.stop()
+      expect(s.wake.stop).toHaveBeenCalledTimes(1)
     })
 
     it('a tap, a rest and its look go to the session\'s local id', async () => {

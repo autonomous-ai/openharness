@@ -9454,12 +9454,12 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
     return { ...started, fake, listener, front, attached, live, changed }
   }
 
-  it('on macOS with a dial attached its sessions are listed sf, idle, on the Claude app\'s page; detached, the source stops, its watches close and the reader forgets', async () => {
+  it('on macOS with a dial attached its sessions are listed svf, idle, on the Claude app\'s page; detached, the source stops, its watches close and the reader forgets', async () => {
     const { fake, live } = withStore()
     // No dial: the store is not read.
     expect(fake.calls).toEqual([])
     await live()
-    expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'sf' }])
+    expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'svf' }])
     expect(host().hostOf(ID)).toBe('claude')
     expect(host().appOf(ID)).toBe('claude')
     // Idle: no turn is told.
@@ -9523,8 +9523,8 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
     const before = fake.calls.length
     fake.sessions = [session({ localId: LOCAL_SECOND, sessionId: SECOND, title: 'Ship it', lastActivityAt: 2 }), session()]
     await changed(ORG_DIR, `${LOCAL_SECOND}.json`)
-    expect(await listed()).toEqual(expect.arrayContaining([{ id: ID, name: 'Fix the build', caps: 'sf' },
-      { id: observedAgentId('claude', SECOND), name: 'Ship it', caps: 'sf' }]))
+    expect(await listed()).toEqual(expect.arrayContaining([{ id: ID, name: 'Fix the build', caps: 'svf' },
+      { id: observedAgentId('claude', SECOND), name: 'Ship it', caps: 'svf' }]))
     expect(await listed()).toHaveLength(2)
     expect(fake.calls.slice(before)).toEqual([['touch', ORG_DIR, `${LOCAL_SECOND}.json`], ['read']])
   })
@@ -9580,12 +9580,12 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
     // The hook's: named by its folder, as its record gives no name.
     expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
     port.observed(hook('session-end'))
-    expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'sf' }])
+    expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'svf' }])
     expect(await host().openAgent(ID)).toBeUndefined()
     expect(orcaRuns).toEqual([continued(LOCAL)])
     // The observed source's tick drops its ended copy: the store's row stays.
     await wait(40_000)
-    expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'sf' }])
+    expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'svf' }])
   })
 
   it('a session the app resumes after its turn was told done is told no second done', async () => {
@@ -9598,7 +9598,7 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
     expect(calls('turnDone')).toHaveLength(1)
     // The app ends its process, and the store's row has its place until the app resumes it, inside the ended copy's 10 s.
     port.observed(hook('session-end'))
-    expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'sf' }])
+    expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'svf' }])
     port.observed(hook('session-start'))
     await flush()
     expect(calls('turnDone')).toHaveLength(1)
@@ -9625,7 +9625,7 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
     expect((await host().listAgentSnapshot()).agents.map(({ id }) => id)).toEqual([ID])
     expect(host().appOf(ID)).toBe('ghostty')
     port.observed(hook('session-end', ghostty))
-    expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'sf' }])
+    expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'svf' }])
     expect(host().appOf(ID)).toBe('claude')
   })
 
@@ -9690,7 +9690,126 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
     const { port } = start({ faults: ['fleet'], orca: { ...orca, platform: 'darwin' }, tty: async () => undefined })
     attach(port)
     await vi.waitFor(() => expect(logs).toContain('[claude-app] listed · 1 sessions'))
-    expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'sf' }])
+    expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'svf' }])
+  })
+
+  describe('words to a resting row (docs/plans/2026-11-21-dial-claude-app-wake-send-design.md)', () => {
+    /** A poll of the mod's: `{ text }` only for the session that took the words, `{}` once its hold ran out. */
+    const poll = (port: DevicesPort, pollId: string, sessionId: string) => port.inboxPoll({ pollId, sessionId })
+    /** The dial's refusal, as the cable host answers a source's. */
+    const refused = (reason: string) => ({ ok: false, machine: '', reason, message: reason })
+
+    it('voice to a resting row runs one continue link and reaches that session alone, once its process is listed and its mod polls', async () => {
+      const { port, live } = withStore()
+      await live()
+      const second = poll(port, 'p0', SECOND)
+      const sent = host().sendTurn(ID, 'run the tests')
+      await flush()
+      expect(orcaRuns).toEqual([continued(LOCAL)])
+      port.observed(hook('session-start'))
+      expect(await poll(port, 'p1', SESSION)).toEqual({ text: 'run the tests' })
+      expect(await sent).toEqual({ ok: true })
+      await wait(25_000)
+      expect(await second).toEqual({})
+      expect(logs).toContain('[device] voice · wake-sent')
+      expect(logs.filter((line) => /^\[claude-app\] wake · sent · \d+ ms$/.test(line))).toHaveLength(1)
+      expect(logs.filter((line) => [LOCAL, SESSION, 'run the tests'].some((word) => line.includes(word)))).toEqual([])
+    })
+
+    it('words while it opens are refused in plain words; once its copy is live they go its own path, after the first', async () => {
+      const { port, live } = withStore()
+      await live()
+      const first = host().sendTurn(ID, 'first')
+      expect(await host().sendTurn(ID, 'second')).toEqual(refused('Still opening Fix the build. Try again in a moment.'))
+      await flush()
+      port.observed(hook('session-start'))
+      // The hooked copy holds the row, with no voice until its mod polls.
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+      expect(await poll(port, 'p1', SESSION)).toEqual({ text: 'first' })
+      expect(await first).toEqual({ ok: true })
+      const third = host().sendTurn(ID, 'third')
+      expect(await poll(port, 'p2', SESSION)).toEqual({ text: 'third' })
+      expect(await third).toEqual({ ok: true })
+      expect(orcaRuns).toEqual([continued(LOCAL)])
+    })
+
+    // Review Focus 2: two opens of one link do no harm.
+    it('a tap while it opens runs the link again and the words still go once', async () => {
+      const { port, live } = withStore()
+      await live()
+      const sent = host().sendTurn(ID, 'run the tests')
+      await flush()
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(orcaRuns).toEqual([continued(LOCAL), continued(LOCAL)])
+      port.observed(hook('session-start'))
+      expect(await poll(port, 'p1', SESSION)).toEqual({ text: 'run the tests' })
+      expect(await sent).toEqual({ ok: true })
+      const next = poll(port, 'p2', SESSION)
+      await wait(25_000)
+      expect(await next).toEqual({})
+    })
+
+    it('a link that fails opens nothing more: no fallback, and the dial is told it did not open', async () => {
+      const { fake, live } = withStore()
+      await live()
+      fake.failing = 1
+      expect(await host().sendTurn(ID, 'run the tests')).toEqual(refused('Fix the build did not open in Claude.'))
+      expect(orcaRuns).toEqual([continued(LOCAL)])
+      expect(logs).toEqual(expect.arrayContaining(['[claude-app] wake · open failed', '[device] voice · wake-open-failed']))
+    })
+
+    it('30 s with no process: the dial is told it did not open, and the log says why', async () => {
+      const { live } = withStore()
+      await live()
+      let answered = false
+      const sent = Promise.resolve(host().sendTurn(ID, 'run the tests')).finally(() => { answered = true })
+      await wait(29_999)
+      expect(answered).toBe(false)
+      await wait(1)
+      expect(await sent).toEqual(refused('Fix the build did not open in Claude. Try again.'))
+      expect(logs).toEqual(expect.arrayContaining(['[claude-app] wake · timeout', '[device] voice · wake-timeout']))
+    })
+
+    it.each([['names an app', 'claude-desktop.desktop\n', 'svf'], ['names none', '', 'sf']])('on Linux the row takes voice once xdg-mime %s', async (_, answer, caps) => {
+      const run = async (file: string, args: string[], timeoutMs: number) => {
+        orcaRuns.push([file, args, timeoutMs])
+        return { code: 0, stdout: file === '/usr/bin/xdg-mime' ? answer : '' }
+      }
+      const { live } = withStore({ orca: { ...orca, platform: 'linux', onPath: (name: string) => `/usr/bin/${name}`, run } })
+      await live()
+      // The first look starts xdg-mime's read, and offers no voice before its answer.
+      expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'sf' }])
+      await flush()
+      expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps }])
+    })
+
+    it('on Windows the words\' link goes through the Windows raise, and the words reach the session', async () => {
+      const windows = fakeWindowsRaise()
+      const { port, live } = withStore({ orca: { ...orca, platform: 'win32' }, windowsRaise: windows.raise })
+      await live()
+      expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'svf' }])
+      const sent = host().sendTurn(ID, 'run the tests')
+      await flush()
+      expect(windows.links).toEqual([[`claude://code/continue?session=${LOCAL}`, BUNDLE]])
+      expect(orcaRuns).toEqual([])
+      port.observed(hook('session-start'))
+      expect(await poll(port, 'p1', SESSION)).toEqual({ text: 'run the tests' })
+      expect(await sent).toEqual({ ok: true })
+    })
+
+    it('detached while it opens: did not answer, and nothing reaches the session', async () => {
+      const { port, live } = withStore()
+      await live()
+      const sent = host().sendTurn(ID, 'run the tests')
+      await flush()
+      seen.host.watching!(false)
+      expect(await sent).toEqual(refused('Fix the build did not answer.'))
+      expect(logs).toEqual(expect.arrayContaining(['[claude-app] wake · stopped', '[device] voice · wake-stopped']))
+      port.observed(hook('session-start'))
+      const next = poll(port, 'p1', SESSION)
+      await wait(25_000)
+      expect(await next).toEqual({})
+    })
   })
 })
 
