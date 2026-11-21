@@ -26,13 +26,13 @@ function checkKeys(check: Check): SessionKey[] {
 }
 
 describe('the catalog', () => {
-  it('the ids are C1-C11, X1-X11 and the six held out, 6 of 28', () => {
-    const range = (prefix: string) => Array.from({ length: 11 }, (_, i) => `${prefix}${i + 1}`)
-    expect(MAIN.map((s) => s.id)).toEqual([...range('C'), ...range('X')])
+  it('the ids are C1-C12, X1-X11 and the six held out, 6 of 29', () => {
+    const range = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => `${prefix}${i + 1}`)
+    expect(MAIN.map((s) => s.id)).toEqual([...range('C', 12), ...range('X', 11)])
     expect(HELD_OUT.map((s) => s.id)).toEqual(['CH1', 'CH2', 'CH3', 'XH1', 'XH2', 'XH3'])
     expect(MAIN.every((s) => !s.heldOut)).toBe(true)
     expect(HELD_OUT.every((s) => s.heldOut)).toBe(true)
-    expect(ALL).toHaveLength(28)
+    expect(ALL).toHaveLength(29)
   })
 
   it('each scenario\'s checks cover exactly its dims', () => {
@@ -137,6 +137,13 @@ describe('the catalog', () => {
         expect(started || resumable, `${s.id} voice ${step.target}`).toBe(true)
       }
     }
+  })
+
+  it('C12 speaks to a running, idle Claude app session with no input first: the words reach it, once', () => {
+    const c12 = byId('C12')
+    expect([c12.app, c12.dims]).toEqual(['claude', ['D5', 'D8']])
+    expect(c12.steps.filter((s) => s.kind !== 'wait').map((s) => s.kind)).toEqual(['claude.write', 'hook', 'voice'])
+    expect(c12.checks.find((c) => c.kind === 'voice')).toMatchObject({ session: 'a', after: 'voice' })
   })
 
   it('C8 has no tap or swipe, so its open can only be the voice\'s', () => {
