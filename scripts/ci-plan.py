@@ -175,8 +175,9 @@ DIAL_HOST_FILES = ("cli/e2e/dialHost*.e2e.ts", "cli/e2e/deviceHerdr.e2e.ts")
 DIAL_HOST_PATHS = (
     "cli/e2e/harness/dialHosts.ts", "cli/vitest.e2e.dialHosts.config.ts", "cli/src/cable/hosts/",
     *(f"cli/src/cable/{name}.ts" for name in ("cableFrame", "portAccess", "roundGlyphs")),
-    *(f"cli/e2e/harness/{name}.ts" for name in ("desk", "fakeBackend", "fakeDial", "herdrServer", "kittyWindow",
-                                                 "outsideAgent", "swayDesk", "weztermMux", "x11Desk", "zellijSession")),
+    *(f"cli/e2e/harness/{name}.ts" for name in ("desk", "fakeBackend", "fakeDial", "fakeOrca", "herdrServer", "inOrca",
+                                                 "kittyWindow", "orcaHost", "outsideAgent", "swayDesk", "weztermMux",
+                                                 "x11Desk", "zellijSession")),
     ".github/workflows/cli-e2e-dial-hosts.yml", ".github/actions/cli-e2e-setup/",
 )
 # The names linux-e2e passes on: they reach the jobs' shells through env, and Vitest as file filters, so plain names only.

@@ -5,16 +5,20 @@ import { join } from 'node:path'
 import { expect } from 'vitest'
 import { observedAgentId } from '../../src/cable/hosts/observed.js'
 import { CLI_ROOT, type IsolatedDaemon, until } from './daemon.js'
+import { orcaTerminal, type OrcaTerminal } from './orcaHost.js'
 
 /** Orca's names for the terminal, as its hook reads them; its secrets sit beside them and must never leave the hook. */
 export const IN_ORCA = { ORCA_AGENT_SESSION_ID: 'e2e-orca-session', ORCA_PAIRING_CODE: 'pairing-e2e-4f1e', ORCA_AGENT_SESSION_SPAWN_TOKEN: 'spawn-e2e-8b2d' }
 
 /** Claude Code in an Orca terminal, outside Harness: no tmux pane, no Harness pane, and Orca's own variables. [hints] are
  *  the session's own beside them, as its hook reads them: an Orca terminal's handle, or another app's names
- *  (`WEZTERM_PANE`, which the hook reads before Orca's). */
+ *  (`WEZTERM_PANE`, which the hook reads before Orca's). With a handle its hooks run in a terminal of Orca's host
+ *  stand-in (orcaHost.ts), as the devices take an Orca pane as the agent's own only on a pty that host made. */
 export class InOrca {
   readonly sessionId = randomUUID()
   readonly cwd: string
+  /** Started at the first run; its host ends with the test's children. */
+  private terminal?: Promise<OrcaTerminal>
   constructor(private readonly d: IsolatedDaemon, folder: string, private readonly children: ChildProcess[],
     private readonly hints: Record<string, string> = {}) {
     this.cwd = join(d.projectsDir, folder)
@@ -29,6 +33,11 @@ export class InOrca {
   }
 
   private run(file: string, args: string[], input: Record<string, unknown>, cwd = this.cwd): Promise<{ stdout: string; stderr: string; code: number | null; ms: number }> {
+    const stdin = JSON.stringify({ session_id: this.sessionId, cwd: this.cwd, ...input })
+    if (this.hints.ORCA_TERMINAL_HANDLE !== undefined) {
+      this.terminal ??= orcaTerminal(this.d, this.children)
+      return this.terminal.then((terminal) => terminal.run(file, args, this.env(), stdin, cwd))
+    }
     const started = Date.now()
     const child = spawn(file, args, { cwd, env: this.env(), stdio: ['pipe', 'pipe', 'pipe'] })
     this.children.push(child)
@@ -37,7 +46,7 @@ export class InOrca {
     child.stderr!.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8') })
     const done = new Promise<{ stdout: string; stderr: string; code: number | null; ms: number }>((resolve) =>
       child.once('exit', (code) => resolve({ stdout, stderr, code, ms: Date.now() - started })))
-    child.stdin!.end(JSON.stringify({ session_id: this.sessionId, cwd: this.cwd, ...input }))
+    child.stdin!.end(stdin)
     return done
   }
 
