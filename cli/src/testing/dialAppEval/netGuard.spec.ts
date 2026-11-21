@@ -411,13 +411,13 @@ describe('the preload', () => {
 
   it('netGuardEnv keeps the NODE_OPTIONS it is given', async () => {
     const file = join(folder(), 'net.jsonl')
-    const env = netGuardEnv(file, '--max-old-space-size=123')
+    // An option the child reads back exactly: a heap limit also counts the young generation, whose size differs by
+    // Node version (over 200 MiB under --max-old-space-size=123 on Node 24 and 26).
+    const env = netGuardEnv(file, '--stack-trace-limit=7')
     expect(env[NET_GUARD_FILE_ENV]).toBe(file)
-    expect(env.NODE_OPTIONS.endsWith(' --max-old-space-size=123')).toBe(true)
-    const { pid, stdout } = await child('__run', env, `
-      console.log(require('node:v8').getHeapStatistics().heap_size_limit <= 200 * 1024 * 1024)
-    `)
-    expect(stdout.trim()).toBe('true')
+    expect(env.NODE_OPTIONS.endsWith(' --stack-trace-limit=7')).toBe(true)
+    const { pid, stdout } = await child('__run', env, 'console.log(Error.stackTraceLimit)')
+    expect(stdout.trim()).toBe('7')
     expect(readNetGuard(file).loaded).toEqual([{ pid, process: 'core' }])
   })
 
