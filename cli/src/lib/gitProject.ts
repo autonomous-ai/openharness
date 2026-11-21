@@ -393,7 +393,8 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
     // Harness made this branch: its cleanup may remove it, and a made-up name gives way to the session's.
     if (!existing) {
       await git(source, ['config', `branch.${branch}.${HARNESS_BRANCH_KEY}`, placeholder ? 'placeholder' : 'created']).catch((error: unknown) => {
-        console.error(`[worktree] could not mark ${branch} as Harness's, so it is not renamed after its session: ${errorKind(error)}`)
+        // Not the branch: a person can name it.
+        console.error(`[worktree] could not mark its branch as Harness's, so it is not renamed after its session: ${errorKind(error)}`)
       })
     }
     return destination
