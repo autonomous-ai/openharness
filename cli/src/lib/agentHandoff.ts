@@ -53,6 +53,7 @@ import { omitLongRuns, readSessionTurns, SessionTurnsError, type TurnSource } fr
 import type { IndexedTurn } from './sessionSearch/turns.js'
 import { isSubagentTranscript } from './subagentTranscript.js'
 import { changedFiles } from './handoffChangedFiles.js'
+import { gitPath } from './gitOnPath.js'
 export { isSubagentTranscript } from './subagentTranscript.js'
 
 export const HANDOFF_DIR = '.harness/handoff'
@@ -204,11 +205,11 @@ export function secureText(text: string): string {
 const execFileAsync = promisify(execFile)
 
 /** Read-only git, hygiene as `memory/project.ts`: no `GIT_*`, no optional locks, no fsmonitor, 2 s then SIGKILL. */
-async function runGit(git: string, cwd: string, args: string[], timeoutMs = GIT_TIMEOUT_MS): Promise<string> {
+async function runGit(git: string | undefined, cwd: string, args: string[], timeoutMs = GIT_TIMEOUT_MS): Promise<string> {
   const env: NodeJS.ProcessEnv = { ...process.env }
   for (const key of Object.keys(env)) if (key.startsWith('GIT_')) delete env[key]
   Object.assign(env, { GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', GCM_INTERACTIVE: 'Never', LC_ALL: 'C' })
-  const { stdout } = await execFileAsync(git, ['--no-pager', '--no-optional-locks', '-c', 'core.fsmonitor=false', '-C', cwd, ...args], {
+  const { stdout } = await execFileAsync(git ?? await gitPath(), ['--no-pager', '--no-optional-locks', '-c', 'core.fsmonitor=false', '-C', cwd, ...args], {
     env, encoding: 'utf8', timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 1_000_000,
   })
   return stdout
@@ -235,7 +236,7 @@ function dotGitAbove(dir: string): boolean {
  * (a timeout, a missing git, a repo git refuses to open, a broken `.git`) is `unknown`, so the caller
  * writes nothing rather than a file git might then list.
  */
-export async function repoState(cwd: string, git = 'git', timeoutMs?: number): Promise<RepoState> {
+export async function repoState(cwd: string, git?: string, timeoutMs?: number): Promise<RepoState> {
   // No `.git` anywhere above is the one case git is not needed for, and on a Mac without the Command
   // Line Tools running it there opens Apple's install dialog (gitProject's insideGitCheckout).
   if (!dotGitAbove(cwd)) return 'none'
@@ -249,7 +250,7 @@ export async function repoState(cwd: string, git = 'git', timeoutMs?: number): P
 }
 
 /** `.git/info/exclude` as `git rev-parse --git-path` says, run the way `repoState` runs git (same environment). */
-export async function excludePathOf(cwd: string, git: string, timeoutMs?: number): Promise<string | null> {
+export async function excludePathOf(cwd: string, git?: string, timeoutMs?: number): Promise<string | null> {
   try {
     const path = (await runGit(git, cwd, ['rev-parse', '--git-path', 'info/exclude'], timeoutMs)).trim()
     return path ? resolve(cwd, path) : null
@@ -276,7 +277,7 @@ function listOf(output: string): { lines: string[]; more: number } {
 }
 
 /** Branch, HEAD, what changed and what was committed since `since` (epoch ms). Each field alone may be missing. */
-export async function gitSnapshot(cwd: string, since: number, git = 'git', alive: () => boolean = () => true, timeoutMs?: number): Promise<GitSnapshot> {
+export async function gitSnapshot(cwd: string, since: number, git?: string, alive: () => boolean = () => true, timeoutMs?: number): Promise<GitSnapshot> {
   const run = (args: string[]) => runGit(git, cwd, args, timeoutMs).catch(() => null)
   const [branch, head, status] = await Promise.all([
     run(['rev-parse', '--abbrev-ref', 'HEAD']),
@@ -578,7 +579,7 @@ export interface HandoffDeps {
   findTranscript?(engine: AgentEngine, sessionId: string, opts: { codexHome?: string }): Promise<string | null>
   /** May this path be read as `engine`'s transcript? Default: an absolute path to a plain file. */
   transcriptOk?(engine: AgentEngine, path: string, codexHome: string | null): Read<boolean>
-  /** The git binary. Default `git`. */
+  /** The git binary. Default: gitPath()'s. */
   git?: string
   /** Limit for each git command, ms. Default 2 s. */
   gitTimeoutMs?: number
@@ -642,7 +643,7 @@ function withDeadline<T>(deps: HandoffDeps, work: (expired: () => boolean) => Pr
 }
 
 async function prepare(deps: HandoffDeps, session: RegisteredSession, cwd: string, req: HandoffRequest, expired: () => boolean): Promise<HandoffResult> {
-  const git = deps.git ?? 'git'
+  const git = deps.git
   const now = deps.now ?? Date.now
   const deadline = now() + (deps.deadlineMs ?? HANDOFF_DEADLINE_MS)
   const base = handoffBaseName(session.agentId, req.changeId)

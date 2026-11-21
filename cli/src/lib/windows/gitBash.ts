@@ -28,7 +28,8 @@ export function findGitBash({ env = process.env, isFile = fileExists }: GitBashS
   const candidates: string[] = []
   // The git on PATH first, as the person's own terminal would run it. Git for Windows puts it in <root>\cmd (the
   // installer's default), <root>\bin or <root>\mingw64\bin; its bash is <root>\bin\bash.exe in each.
-  for (const dir of (env.PATH ?? '').split(';').filter(Boolean)) {
+  // A relative entry names a folder of whatever folder the daemon runs in, which someone else's repository may fill.
+  for (const dir of (env.PATH ?? '').split(';').filter(fixedFolder)) {
     if (!isFile(win32.join(dir, 'git.exe'))) continue
     candidates.push(win32.resolve(dir, '..', 'bin', 'bash.exe'), win32.resolve(dir, '..', '..', 'bin', 'bash.exe'))
     // Scoop's git.exe on PATH is a shim in <root>\shims; the git it starts, and its bash, are in <root>\apps\git\current.
@@ -55,6 +56,12 @@ export function gitForWindowsRoots(env: NodeJS.ProcessEnv): string[] {
 export function scoopRoots(env: NodeJS.ProcessEnv): string[] {
   return [env.SCOOP, env.USERPROFILE && win32.join(env.USERPROFILE, 'scoop'), env.SCOOP_GLOBAL, env.ProgramData && win32.join(env.ProgramData, 'scoop')]
     .filter((root): root is string => !!root)
+}
+
+/** A folder that is the same whatever folder a program runs in: a drive's (C:\…) or a share's (\\server\…). Any other
+ *  is looked up from the working folder, `\tools` included (from its drive). */
+export function fixedFolder(folder: string): boolean {
+  return /^(?:[A-Za-z]:\\|\\\\[^\\])/.test(win32.normalize(folder))
 }
 
 export function fileExists(path: string): boolean {

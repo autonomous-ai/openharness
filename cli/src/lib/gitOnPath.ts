@@ -9,7 +9,7 @@
 import { isAbsolute, win32 } from 'node:path'
 import { resolveBinaryOnPath } from './binaryOnPath.js'
 import { resolveViaLoginShell } from './tmuxOnPath.js'
-import { fileExists, gitForWindowsRoots, programFilesRoots, scoopRoots } from './windows/gitBash.js'
+import { fileExists, fixedFolder, gitForWindowsRoots, programFilesRoots, scoopRoots } from './windows/gitBash.js'
 
 export type Program = 'git' | 'gh'
 
@@ -46,12 +46,6 @@ async function findProgram(name: Program, search: ProgramSearch, installFolders:
   // The .exe alone: a .cmd runs only through cmd.exe.
   const folders = [...(env.PATH ?? '').split(';'), ...installFolders(env)].filter(fixedFolder)
   return folders.map((folder) => win32.join(folder, `${name}.exe`)).find((path) => isFile(path)) ?? null
-}
-
-/** A folder that is the same whatever folder a program runs in: a drive's (C:\…) or a share's (\\server\…). Any other
- *  is looked up from the working folder, `\tools` included (from its drive). */
-function fixedFolder(folder: string): boolean {
-  return /^(?:[A-Za-z]:\\|\\\\[^\\])/.test(win32.normalize(folder))
 }
 
 /** A path found is kept for the process; a miss asks again next time, as git may be installed while the daemon runs;

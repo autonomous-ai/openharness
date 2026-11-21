@@ -15,6 +15,14 @@ import { parseProjectFolder, type GitProjectFolder } from './projectFolder.js'
 import { engineSessionTitle, namingTitle } from './sessionTitle.js'
 import { writeExecutable } from '../testing/executableFixture.js'
 
+// gitPath keeps the git it finds for the process, and asks the login shell when PATH has none; these tests change PATH
+// between runs, so each run looks on PATH alone, again. The git is this computer's, even where a test stubs the platform.
+vi.mock('./gitOnPath.js', async (original) => {
+  const real = await original<typeof import('./gitOnPath.js')>()
+  const platform = process.platform
+  return { ...real, gitPath: () => real.createProgramPath('git', () => real.findGit({ platform, loginShell: async () => null }))() }
+})
+
 const exec = promisify(execFile)
 // Real Git, several worktrees a test: slower than the default 5s under a full, parallel run.
 describe('launch Git preparation', { timeout: 30_000 }, () => {
