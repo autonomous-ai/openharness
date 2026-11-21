@@ -123,21 +123,32 @@ export function removePidFileIf(pid: number | undefined, deps: { readPid: () => 
 }
 
 /** What a failed start says when another daemon serves its data folder, in fixed words: the error's own words name
- *  the socket's path. The core's (core/main.ts `failStart`) and a command's say the same. */
+ *  the socket's path. The core's (core/main.ts `failStart`) and a foreground start's say the same. */
 export const SERVED_ELSEWHERE = ' · another Harness daemon serves this data folder'
 
-/** How a command fails: say why, let go of the pid file if it is this process's, and exit. `harness start
- *  --foreground` fails this way too, and under launchd and systemd what it prints is the daemon's log, which Export
- *  logs sends: so an error says its kind, never its words, its stack or a path. */
-export const onError = (err: unknown, code = 1): never => {
+/** How a command fails: say why, let go of the pid file if it is this process's, and exit. Commands alone fail
+ *  this way, on the terminal of the person who ran one; a daemon's start fails through [failForegroundStart], and a
+ *  core logs a failed start's kind itself, also one a command runs in its own process (core/main.ts
+ *  `runCoreInForeground`). */
+export const onError = (err: unknown, code = 1): never =>
+  exitSaying(err, code, () => console.error('Failed to start adapter:', err))
+
+/** How `harness start --foreground` fails: launchd and systemd run it, and what it prints is then the daemon's log,
+ *  which Export logs sends. So an error says its kind, never its words, its stack or a path, as the core's does. */
+export const failForegroundStart = (err: unknown, code = 1): never =>
+  exitSaying(err, code, () => {
+    const why = (err as { code?: unknown } | null | undefined)?.code === 'EADDRINUSE' ? SERVED_ELSEWHERE : ''
+    console.error(`Failed to start adapter: ${errorKind(err)}${why}`)
+  })
+
+function exitSaying(err: unknown, code: number, sayFault: () => void): never {
   // A trust file that cannot be read is the person's to move aside, not a fault in Harness: no stack, and the
   // file's full path is in `harness status`, kept out of the error itself.
   if (err instanceof StateFileUnreadable) {
     console.error(`✗ ${err.message}`)
     console.error('  harness status shows where it is')
   } else {
-    const why = (err as { code?: unknown } | null | undefined)?.code === 'EADDRINUSE' ? SERVED_ELSEWHERE : ''
-    console.error(`Failed to start adapter: ${errorKind(err)}${why}`)
+    sayFault()
   }
   // A pid file left naming a process that is gone, the next `harness start` would refuse on. Only ours, though.
   removePidFileIf(process.pid)

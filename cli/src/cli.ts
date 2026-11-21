@@ -32,7 +32,7 @@ import { runCoreInForeground } from './core/main.js'
 import { startCoreProcess } from './coreProcess.js'
 import { backendHttpBase } from './lib/backendHttpBase.js'
 import { GRID_MINT_TIMEOUT_MS, requestJson, postJson, controlPlaneAuth } from './lib/controlPlane.js'
-import { LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel, DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, daemonPort, isAlive, onError, readPid } from './lib/daemonState.js'
+import { LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel, DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, daemonPort, failForegroundStart, isAlive, onError, readPid } from './lib/daemonState.js'
 import { daemonUnreachableText, sandboxed, startRefusalText } from './lib/unreachable.js'
 import { BIND_WAIT_MS, connectFailure, daemonSpawnOptions, defaultLaunchDeps, waitForBind } from './lib/daemonLaunch.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
@@ -2914,7 +2914,8 @@ switch (cmd) {
     // the environment) records every frame to/from a paired Autonomous device — see lib/autonomous-device/dump.ts.
     const dump = flags.find((f) => f === '--device-dump' || f.startsWith('--device-dump='))
     if (dump) process.env.HARNESS_DEVICE_DUMP = dump === '--device-dump' ? '1' : resolve(dump.slice('--device-dump='.length))
-    startCommand(foreground, repair, flags.includes('--if-down'), flags.includes(AT_LOGON_FLAG), flags.includes('--restart')).catch(onError)
+    startCommand(foreground, repair, flags.includes('--if-down'), flags.includes(AT_LOGON_FLAG), flags.includes('--restart'))
+      .catch(foreground ? failForegroundStart : onError)
     break
   }
   case 'join':
