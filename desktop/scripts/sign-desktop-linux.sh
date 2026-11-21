@@ -25,6 +25,10 @@ if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || [ -z "${TAURI_SIGNING_PRIVATE_KEY_
   echo "error: TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD are required; nothing was signed." >&2
   exit 2
 fi
+# Unexported copies, so no tool this starts, minisign included, finds the key or the password in its environment.
+signing_key="$TAURI_SIGNING_PRIVATE_KEY"
+signing_password="$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 
 NAMES=(Harness-linux-x64.AppImage Harness-linux-arm64.AppImage)
 # Every file is checked before any is signed. The sums are compared whole, so they must name this file:
@@ -43,11 +47,11 @@ done
 WORK="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/sign-desktop-linux.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 # printf is a builtin, so no process's argv holds the key or the password.
-(umask 077 && printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" | base64 --decode >"$WORK/secret.key")
+(umask 077 && printf '%s' "$signing_key" | base64 --decode >"$WORK/secret.key")
 for name in "${NAMES[@]}"; do
   # No version: field: Harness Device's updater reads that one, and must never accept a Desktop AppImage.
   printf -v comment 'timestamp:%s\tfile:%s\tdesktop-version:%s' "$(date +%s)" "$name" "$VERSION"
-  printf '%s\n' "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" |
+  printf '%s\n' "$signing_password" |
     minisign -S -s "$WORK/secret.key" -m "$DIR/$name" -x "$WORK/$name.minisig" -t "$comment"
 done
 # Both signed before either is written, so a failure leaves the folder as it was.
