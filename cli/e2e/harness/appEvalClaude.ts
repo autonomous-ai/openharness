@@ -154,6 +154,7 @@ async function holdMod(world: TierBWorld, key: SessionKey, sessionId: string, si
     const asked = Date.now()
     let answer: Awaited<ReturnType<typeof inboxPoll>> | undefined
     try { answer = await inboxPoll(world.d, sessionId, signal) } catch { /* aborted, or the daemon is between answers */ }
+    world.modPolled(sessionId)
     const text = (answer?.body as { text?: unknown } | null | undefined)?.text
     if (answer?.status === 200 && typeof text === 'string' && text !== '') world.deliver({ path: 'mod', target: key, text })
     const wait = answer?.status === 503 ? OFF_RETRY_MS : Date.now() - asked < HELD_MS ? HELD_MS : 0

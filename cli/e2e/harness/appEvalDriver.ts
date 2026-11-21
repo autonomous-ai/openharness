@@ -16,7 +16,7 @@
  * (appEvalCost.ts).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative } from 'node:path'
 import { chatGptPlaces, claudeStoreRoots } from '../../src/cable/hosts/appPlaces.js'
@@ -53,6 +53,9 @@ const VOICE_PCM = Buffer.alloc(3_200, 1)
 /** For the dial to be found, welcomed and shown its list: the fleet looks every 2 s, the dial greets every 2 s. */
 const START_WITHIN_MS = 45_000
 const CHILD_END_MS = 5_000
+/** The devices take a Claude session whose mod poll closed this long ago for one whose next poll is coming
+ *  (cable/hosts/inbox.ts READY_MS, 35 s), and a second more for the two clocks. */
+const MOD_READY_MS = 36_000
 /** What a scenario refused before its world began saw. */
 const NOTHING_SEEN: Seen = { frames: [], faces: [], commands: [], deliveries: [], steps: [] }
 // How the real CLI is started: the run's bundle when there is one (E2E_BUNDLE), as the daemon runs.
@@ -71,6 +74,8 @@ export interface TierBWorld {
   onOpen(listener: (run: OpenRun) => void): void
   /** The app in front, as the watch was last told. */
   readonly front: App | 'other'
+  /** A mod poll for the Claude session [sessionId] closed now. */
+  modPolled(sessionId: string): void
   /** A title of the ChatGPT app's window, as Harness Device reads it: a line on the watch. */
   title(text: string): void
   /** Ended at stop. */
@@ -95,6 +100,8 @@ interface Rig {
   guard: string
   /** How many of its attempts were handed on. */
   given: number
+  /** When each Claude session's last mod poll closed, by its id: the devices still count it ready for a while. */
+  polled: Map<string, number>
 }
 
 /** The ChatGPT app's bundle as the devices read it (`plutil`): its id and nothing else of the app. */
@@ -146,6 +153,7 @@ export function openRuns(runs: string, platform: Platform): OpenRun[] {
 }
 /** The files in [dir] and below gone, its folders kept: the daemon's watches on them stay. */
 function emptied(dir: string): void {
+  if (!existsSync(dir)) return
   for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
     if (!entry.isDirectory()) rmSync(join(entry.parentPath, entry.name), { force: true })
   }
@@ -230,7 +238,7 @@ async function openRig(guard: string): Promise<Rig> {
     await d.start()
     // An engine started by hand reads its hooks once, as it starts: they are in before any scenario starts one.
     await d.hooksInstalled(['claude', 'codex'])
-    return { d, desk: new Desk(dials), backend, runs, guard, given: 0 }
+    return { d, desk: new Desk(dials), backend, runs, guard, given: 0, polled: new Map() }
   } catch (error) {
     await d?.close().catch(() => {})
     await backend.close()
@@ -288,6 +296,7 @@ class World implements TierBWorld {
   deliver(d: Omit<Delivery, 'at'>, at = Date.now()): void { this.deliveries.push({ at, ...d }) }
   gap(reason: string): void { this.gaps.push(reason) }
   onOpen(listener: (run: OpenRun) => void): void { this.openers.push(listener) }
+  modPolled(sessionId: string): void { this.rig.polled.set(sessionId, Date.now()) }
   title(text: string): void { this.tell({ thread: text }) }
 
   async plug(): Promise<void> {
@@ -435,7 +444,12 @@ export class TierBDriver implements EvalDriver {
     const gaps = tierBGaps(scenario, platform)
     this.ready = false
     this.next = 0
-    if (this.rig && scenario.fresh) await this.closeRig()
+    // The scenario's ids are the catalog's, shared with those before it: a voice to a session whose poll the devices still
+    // count could reach it by an earlier scenario's poll, so such a scenario has a daemon of its own.
+    const polled = this.rig?.polled
+    const counted = polled !== undefined && scenario.steps.some((s) => s.kind === 'voice')
+      && scenario.sessions.some((s) => Date.now() - (polled.get(s.id) ?? -Infinity) < MOD_READY_MS)
+    if (this.rig && (scenario.fresh || counted)) await this.closeRig()
     if (this.rig) await this.reset(this.rig)
     const rig = this.rig ??= await openRig(join(this.own, `net-guard-${++this.daemons}.jsonl`))
     const world = this.world = new World(rig, scenario, platform)
@@ -541,6 +555,10 @@ export class TierBDriver implements EvalDriver {
     const home = rig.d.env.HOME!
     emptied(claudeStoreRoots(process.platform, rig.d.env, home)[0]!.root)
     emptied(join(home, '.codex'))
+    // Every session's transcript and rollout too: the ids are the catalog's, so a later scenario's session goes on in the
+    // same file, and a recap could pass on an earlier scenario's answer.
+    emptied(rig.d.env.CLAUDE_PROJECTS_DIR!)
+    emptied(join(rig.d.env.CODEX_HOME!, 'sessions'))
     rig.backend.speech = null
     await rig.desk.unplug(SERIAL)
   }
