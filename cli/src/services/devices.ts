@@ -50,7 +50,7 @@ import { createHerdrAppAdapter } from '../cable/hosts/herdrApp.js'
 import { createHerdrClient, herdrClientDeps, type HerdrClient } from '../cable/hosts/herdrClient.js'
 import { createHerdrOuter, procSockets, ttyAtime } from '../cable/hosts/herdrOuter.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
-import { createKittyAdapter, kittyFinder } from '../cable/hosts/kitty.js'
+import { createKittyAdapter, createKittyTabAdapter, kittyFinder } from '../cable/hosts/kitty.js'
 import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
 import { systemLinuxRaise, type LinuxRaise } from '../cable/hosts/linuxRaise.js'
@@ -72,7 +72,7 @@ import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
 import { createVscodeAdapter, termPid } from '../cable/hosts/vscode.js'
 import { readForeground, readProcessParents, vscodeStreams, type VscodeTerminalsDeps } from '../cable/hosts/vscodeTerminals.js'
-import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
+import { createWeztermAdapter, createWeztermTabAdapter } from '../cable/hosts/wezterm.js'
 import { createZellijAdapter, createZellijOuter, zellijFinder } from '../cable/hosts/zellij.js'
 import { createEngineTally } from '../cable/engineTally.js'
 import { createVscodeExtensionSetup } from '../cable/vscodeExtensionSetup.js'
@@ -575,10 +575,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const tmuxAt = tmuxFinder()
   const zellijAt = zellijFinder()
   const tmux = noting(createTmuxAdapter({ run: apps.run, tmux: tmuxAt, processes: readProcessNames, log, front: () => cableHost.latestFront() }))
+  // One lookup of kitty, for its windows and for the tab holding a multiplexer's client.
+  const kittyDeps = { run: apps.run, kitty: kittyFinder(), platform: apps.platform, log, uid: process.getuid?.() ?? -1, socketOwner }
   const orca = createOrcaAdapter(apps, { worktreeOf: (handle) => orcaWorktrees.get(handle), log, switching: (handle) => orcaSwitches.note(handle) })
   const adapters: readonly HostAdapter[] = [herdrNoted, noting(createZellijAdapter({ run: apps.run, zellij: zellijAt, platform: apps.platform })),
     tmux, herdrAppNoted, cmuxAppNoted, ...[
-    createKittyAdapter({ run: apps.run, kitty: kittyFinder(), platform: apps.platform, log, uid: process.getuid?.() ?? -1, socketOwner }),
+    createKittyAdapter(kittyDeps),
     createWeztermAdapter(apps),
     // A rest's or a tap's switch: Orca's focus line for that pane, a moment later, is the dial's own echo.
     { ...orca,
@@ -590,6 +592,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     createVscodeAdapter('cursor', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'cursor', terminals: vscode, raise: raise && ((window) => raise.raise(window)), windows }),
     // After Cursor's terminals and tabs: whatever agent in Cursor they do not reach opens its folder's window.
     createCursorFolderAdapter({ run: apps.run, platform: apps.platform, bin: openBin, isFolder, cli: () => cursorFolderCli(cursorExtension), windows }),
+    // The WezTerm pane and the kitty window holding a multiplexer's client, as the tabs adapter's tab of Terminal,
+    // iTerm2 and Ghostty.
+    createWeztermTabAdapter({ ...apps, front: () => cableHost.latestFront() }),
+    createKittyTabAdapter({ ...kittyDeps, front: () => cableHost.latestFront(), processes: readProcessNames }),
     createTabsAdapter({
       isOpen: () => tabs.isOpen(),
       select: (tab, raise) => {
