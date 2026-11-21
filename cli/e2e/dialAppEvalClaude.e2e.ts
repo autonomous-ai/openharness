@@ -178,6 +178,16 @@ describe.skipIf(WIN32)('the dial eval, tier B: the Claude app', () => {
     expect(driver.lastWorld().d.log().split('\n').filter((line) => line.includes('[device] attach ·'))).not.toEqual([])
   })
 
+  it('the fake Claude app attaches a running session its link opened, as its mod runs in that session', async () => {
+    // C12's running session, not one the app resumes, tapped.
+    const c12 = SCENARIOS.find((s) => s.id === 'C12')!
+    const steps = [{ kind: 'claude.write' as const, sessions: ['a'] }, { kind: 'hook' as const, session: 'a', event: 'start' as const },
+      ...listed('claude', ['a']), { kind: 'tap' as const, session: 'a' }]
+    await runScenario(driver, { ...c12, steps, fresh: true }, HOST)
+    // Its own daemon, so its log is this scenario's alone.
+    expect(driver.lastWorld().d.log().split('\n').filter((line) => line.includes('[device] attach ·'))).not.toEqual([])
+  })
+
   it('the dial unplugged shows nothing, and its glass starts afresh when plugged in again', async () => {
     await runScenario(driver, SCENARIOS.find((s) => s.id === 'C11')!, HOST)
     const { steps, faces } = driver.seen()
