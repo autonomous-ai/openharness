@@ -99,7 +99,8 @@ fires. `'dropped'` mixes two causes: over the per-session rate (20/s) or the cou
   - `[devices] a paneless hook event was refused; more are counted once a minute`
   - `[devices] a paneless hook event was dropped: over 20 a second for its session; more are counted once a minute`
   - `[devices] a paneless hook event was dropped: no devices process; more are counted once a minute`
-  - `[devices] paneless hook events in the last minute: 1 refused, 7 over the rate, 3 with no devices process`
+  - `[devices] paneless hook events in the last minute: 1 refused, 7 over the rate, 3 with no devices process, 0 handled
+    without a line`
 - Same helper, same cause: `deviceHookCalls.ts:76-77` (`dial hook calls … refused, … over the bound`) uses it and
   becomes leading-edge too.
 - Red: `cli/src/core/observedHook.spec.ts:212` (today expects no log before 60 s, `:223`) expects the at-drop line at
@@ -109,7 +110,8 @@ fires. `'dropped'` mixes two causes: over the per-session rate (20/s) or the cou
 observed post (the route logs nothing) and one tmux reconcile pass (interval 5 s in e2e, `e2e/harness/daemon.ts:546`).
 - Product: `observedHook.onObserved` logs one line per handled event, no ids or paths, following `[hooks] … tool-start`
   (`hookServer.ts:991`): `[hooks] paneless <engine> <event> · forwarded | over the rate | no devices`. Bounded by the
-  rate limit (at most 20/s per session); under the limit's refusal the item 3 lines speak instead.
+  rate limit (at most 20/s per session) and by its own, at most 20 lines a second across sessions, the rest counted in
+  item 3's minute line (`N handled without a line`); under the limit's refusal the item 3 lines speak instead.
 - Test: take `from = d.log().length`, wait for the `[hooks] paneless … turn-start` line after `from`, then wait for
   two more reconcile passes (item 10's `discoveryPasses`), then assert no row.
 - Red: `observedHook.spec.ts` asserts the forwarded line, and that it holds no session id or path.
