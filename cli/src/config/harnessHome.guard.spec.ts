@@ -5,9 +5,10 @@
  * pattern that matches a home path, and the module's HARNESS_HOME_NAME used elsewhere. A project's or workspace's
  * `.harness/` and `.harness-<name>` files are not the home.
  */
-import { readdirSync, readFileSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { sourceFiles } from '../testing/sourceFiles.js'
 
 const SRC = join(__dirname, '..')
 const HOOK = join(SRC, '..', 'hook')
@@ -91,22 +92,11 @@ const allowed = (hit: Hit): boolean => ALLOWED.some((entry) => entry.files.inclu
 
 /** Every hit in cli/src and cli/hook but tests, fixtures, generated code and the module itself. */
 function treeHits(): Hit[] {
-  const hits: Hit[] = []
-  const walk = (dir: string, name: (path: string) => string): void => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const path = join(dir, entry.name)
-      if (entry.isDirectory()) {
-        if (entry.name !== '__fixtures__' && entry.name !== 'generated') walk(path, name)
-        continue
-      }
-      const file = name(path)
-      if (!/\.(?:ts|mjs|js|cjs|sh)$/.test(file) || /\.(?:spec|test)\.ts$/.test(file) || file === 'config/harnessHome.ts') continue
-      hits.push(...hitsIn(file, readFileSync(path, 'utf8')))
-    }
-  }
-  walk(SRC, (path) => relative(SRC, path).replaceAll('\\', '/'))
-  walk(HOOK, (path) => `hook/${relative(HOOK, path).replaceAll('\\', '/')}`)
-  return hits
+  return ([[SRC, ''], [HOOK, 'hook/']] as const).flatMap(([root, prefix]) => sourceFiles(root)
+    .filter((file) => !file.split('/').slice(0, -1).some((folder) => folder === '__fixtures__' || folder === 'generated'))
+    .map((file) => [prefix + file, join(root, file)] as const)
+    .filter(([file]) => /\.(?:ts|mjs|js|cjs|sh)$/.test(file) && !/\.(?:spec|test)\.ts$/.test(file) && file !== 'config/harnessHome.ts')
+    .flatMap(([file, path]) => hitsIn(file, readFileSync(path, 'utf8'))))
 }
 
 describe('no hand-built home .harness path outside config/harnessHome.ts', () => {

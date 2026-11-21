@@ -13,10 +13,11 @@
  * through an expression rather than its name; a `hold` set by any other means (`Object.assign` onto a value already
  * made, a spread into it, `Object.defineProperty`).
  */
-import { readdirSync, readFileSync } from 'node:fs'
-import { join, sep } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import typescript from 'typescript'
 import { expect, it } from 'vitest'
+import { sourceFiles } from './testing/sourceFiles.js'
 
 // Read through the alias, the package's proxy runs once rather than at every read (architecture.failureLogs.spec.ts).
 import ts = typescript
@@ -134,16 +135,8 @@ it.each([
   'throw new Error(`${detail}`)',
 ])('passes %s', (code) => expect(planted(code)).toEqual([]))
 
-/**
- * Every file under [dir], from cli/src, but in a folder whose name starts with a dot: specs make scratch folders in
- * src/.tmp while this runs (engines/pluginPosts.spec.ts), and one that went mid-walk failed the scan.
- */
-const sources = (dir: string): string[] => readdirSync(join(SRC, dir), { withFileTypes: true }).flatMap((entry) =>
-  entry.name.startsWith('.') ? [] : entry.isDirectory() ? sources(join(dir, entry.name)) : [join(dir, entry.name)])
-
 it('every hold is built from string literals', () => {
-  const files = sources('')
-    .map((file) => file.split(sep).join('/'))
+  const files = sourceFiles(SRC)
     .filter((file) => file.endsWith('.ts') && !/\.(spec|test|d)\.ts$/.test(file))
     .map((file) => [file, readFileSync(join(SRC, file), 'utf8')] as const)
   expect(holdsNotFixed(files), 'A hold (HookPreparationHeld, or a class that extends it) is built from fixed words alone: '

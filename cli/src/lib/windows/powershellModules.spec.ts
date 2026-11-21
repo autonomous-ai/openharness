@@ -11,11 +11,12 @@
  * listener and uninstall scripts on both Windows runners (windows.yml run 44827687986: "The term 'New-Alias' is not
  * recognized"). So Utility is the first module every such script imports.
  */
-import { readdirSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { buildWindowsRemoveScript } from '../../team/windowsRemoveScript.js'
+import { sourceFiles } from '../../testing/sourceFiles.js'
 import { windowsListenerQuery, windowsPeerQuery } from '../peerAccount.js'
 import { windowsProcessQuery } from '../signOut.js'
 import { START_OUTSIDE_JOB } from '../uninstall/removal.js'
@@ -178,8 +179,7 @@ describe('PowerShell scripts import their modules by path, with autoload off', (
   })
 
   const src = fileURLToPath(new URL('../..', import.meta.url))
-  const sources = readdirSync(src, { recursive: true, encoding: 'utf8' })
-    .map((file) => file.split('\\').join('/'))
+  const sources = sourceFiles(src)
     .filter((file) => /\.(ts|mts|js|mjs)$/.test(file) && !/\.(spec|test)\.ts$/.test(file))
     .map((file) => [file, readFileSync(join(src, file), 'utf8')] as const)
 

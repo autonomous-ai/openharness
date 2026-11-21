@@ -12,10 +12,11 @@
  * Its limits: it finds the patterns below and no more. A `ps` argument list built in a variable (`run(ps, args)`) and a
  * `ps` in a shell line (`sh -c 'ps eww …'`) are not reached; review is what catches those.
  */
-import { readdirSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import ts from 'typescript'
 import { expect, it } from 'vitest'
+import { sourceFiles } from './testing/sourceFiles.js'
 
 const CLI = join(__dirname, '..')
 
@@ -132,8 +133,7 @@ it.each([
 ])('passes %s', (code) => expect(environmentReads(code)).toEqual([]))
 
 it('no file of the daemon or its hook reads another process\'s environment', () => {
-  const files = ['src', 'hook'].flatMap((folder) => readdirSync(join(CLI, folder), { recursive: true, encoding: 'utf8' })
-    .map((name) => join(folder, name)))
+  const files = ['src', 'hook'].flatMap((folder) => sourceFiles(join(CLI, folder)).map((name) => `${folder}/${name}`))
     .filter((file) => /\.([cm]?[jt]s|tsx)$/.test(file) && !/\.(spec|test)\.([cm]?ts|tsx)$/.test(file))
   const found = files.flatMap((file) => environmentReads(readFileSync(join(CLI, file), 'utf8'), file).map((finding) => `${file}: ${finding}`))
   expect(found, 'The daemon never reads another process\'s environment (cli/AGENTS.md, Protect the core): an API token, a '

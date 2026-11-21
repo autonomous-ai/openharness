@@ -1,6 +1,7 @@
 import { readInlineScreen } from '../testing/inlineScreen.js'
 import { inlineSubmission } from '../testing/inlineSubmission.js'
-import { readdirSync, readFileSync } from 'node:fs'
+import { sourceFiles } from '../testing/sourceFiles.js'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AutonomousDeviceInput } from './deviceInput.js'
@@ -792,10 +793,8 @@ describe('every route a message takes to a pane', () => {
   it('has one writer: nothing in the daemon submits text to a pane but it', () => {
     // A route added later that called the terminal directly would type into a permission prompt.
     const root = new URL('../', import.meta.url).pathname
-    const sources = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => entry.isDirectory()
-      ? sources(join(dir, entry.name))
-      : entry.name.endsWith('.ts') && !entry.name.endsWith('.spec.ts') ? [join(dir, entry.name)] : [])
-    const using = sources(root).filter((file) => readFileSync(file, 'utf8').includes('submitTerminalAction')).map((file) => file.slice(root.length))
+    const using = sourceFiles(root)
+      .filter((file) => file.endsWith('.ts') && !file.endsWith('.spec.ts') && readFileSync(join(root, file), 'utf8').includes('submitTerminalAction'))
     expect(using.sort()).toEqual(['core/input.ts', 'core/terminals/control.ts'])
     expect(readFileSync(join(root, 'core/input.ts'), 'utf8').match(/submitTerminalAction\(/g)).toHaveLength(1)
     expect(messageWriter).toBeTypeOf('function')

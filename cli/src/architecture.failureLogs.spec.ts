@@ -51,10 +51,11 @@
  * result; a stream's close reason), each fixed at its sink with a behaviour test
  * (docs/plans/2026-11-21-log-no-stored-strings-plan.md).
  */
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join, posix } from 'node:path'
 import typescript from 'typescript'
 import { expect, it } from 'vitest'
+import { sourceFiles } from './testing/sourceFiles.js'
 
 // Vitest hands a test an imported package through a proxy that runs at every read, and the scan reads TypeScript's
 // functions millions of times: through the alias, the package is read once, and the scan takes half the time.
@@ -689,18 +690,8 @@ function failureLogs(code: string, file = 'file.ts'): string[] {
   return found
 }
 
-/**
- * Every file under [dir], as a path from cli/src with `/`. A dot-folder (`.tmp`) holds no daemon code but specs'
- * scratch folders, which a spec running beside this one deletes mid-scan: walked, it failed the scan with ENOENT.
- */
-const filesUnder = (dir: string): string[] => readdirSync(join(SRC, dir), { withFileTypes: true })
-  .flatMap((entry) => {
-    const file = dir ? `${dir}/${entry.name}` : entry.name
-    return entry.isDirectory() ? (entry.name.startsWith('.') ? [] : filesUnder(file)) : [file]
-  })
-
 /** The hits in every file of the daemon: every .ts under cli/src but tests, e2e scripts, the TUI and the terminal list. */
-const daemonHits = (): string[] => filesUnder('')
+const daemonHits = (): string[] => sourceFiles(SRC)
   .filter((file) => file.endsWith('.ts') && !/\.(spec|test|d)\.ts$/.test(file) && !/^(e2e|tui)\//.test(file)
     && !/(^|\/)__fixtures__\//.test(file) && !TERMINAL.includes(file))
   .flatMap((file) => failureLogs(readFileSync(join(SRC, file), 'utf8'), file))
