@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, isAbsolute, join, win32 } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -129,6 +129,18 @@ describe.each(['darwin', 'linux'] as const)('findGit and findGh on %s', (platfor
     const found = await findGit({ platform, env: { PATH: folderWith() }, loginShell: async () => '/opt/homebrew/bin/git' })
     expect(found).toBe('/opt/homebrew/bin/git')
     expect(isAbsolute(found!)).toBe(true)
+  })
+
+  it("finds gh where its installers put it when PATH has none, before asking the login shell", async () => {
+    // A daemon launchd starts has the bare system PATH: Homebrew's gh was "not installed" beside a working one (2026-10-17).
+    const home = folderWith()
+    mkdirSync(join(home, '.local', 'bin'), { recursive: true })
+    writeFileSync(join(home, '.local', 'bin', 'gh'), '#!/bin/sh\n', { mode: 0o755 })
+    let asked = 0
+    const found = await findGh({ platform, env: { PATH: folderWith(), HOME: home }, loginShell: async () => { asked += 1; return null } })
+    // A computer with Homebrew's gh finds that one first.
+    expect([join(home, '.local', 'bin', 'gh'), '/opt/homebrew/bin/gh', '/usr/local/bin/gh', '/home/linuxbrew/.linuxbrew/bin/gh']).toContain(found)
+    expect(asked).toBe(0)
   })
 })
 
