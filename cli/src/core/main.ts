@@ -3198,7 +3198,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // would let a long-lived, chatty daemon run unbounded between restarts.
   // A core run by harnessd leaves this to its master, which outlives it (harnessd/master.ts).
   const logTrimTimer = coreLink.supervised ? undefined : setInterval(() => {
-    if (trimLogFile(LOG_FILE)) console.log(`[log] ${tildify(LOG_FILE)} hit its size cap — dropped the oldest half`)
+    if (trimLogFile(LOG_FILE)) console.log('[log] the daemon\'s log hit its size cap — dropped the oldest half')
   }, LOG_CHECK_INTERVAL_MS)
   logTrimTimer?.unref?.() // never hold the event loop open for log upkeep
 
