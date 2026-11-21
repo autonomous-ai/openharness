@@ -711,7 +711,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // it: each lookup answers nothing at once for an agent in none of its panes. herdr's first: herdr inside the person's
   // tmux is the nearer host, and keeps tmux's answer when herdr's finds no app. Zellij's last: a Zellij server started
   // in a tmux pane gives its panes that pane's TMUX_PANE, where tmux's finds no app.
-  firstOuter(createHerdrOuter({ ...outerDeps, atime: ttyAtime }), firstOuter(createTmuxOuter({ ...outerDeps, tmux: tmuxAt }),
+  firstOuter(createHerdrOuter({ ...outerDeps, atime: ttyAtime, tty: readTtyName }), firstOuter(createTmuxOuter({ ...outerDeps, tmux: tmuxAt }),
     createZellijOuter({ ...outerDeps, zellij: zellijAt, tty: readTtyName }))),
   // Windows has no `ps`: there no terminal's pane is read as the agent's own, and none takes its words.
   apps.platform === 'win32' ? undefined : async (pid) => readPtyOwner(pid, await readProcessNames(), readTtyName)) : null

@@ -5,8 +5,9 @@
  * started with, and its tty is herdr's own pty, which no tab holds. herdr's API lists no clients (protocol 19), so a
  * client is found as a herdr process connected to the server's client socket.
  *
- * Only what that needs is read: process names and parents (the table), the unix-socket rows lsof gives for herdr's own
- * processes, their ttys (ps), and a tty's access time (stat), which moves when the person types into it. Never another
+ * Only what that needs is read: process names and parents (the table), the terminals of the caller and its parents up to
+ * the server, the unix-socket rows lsof gives for herdr's own processes, their ttys (ps), and a tty's access time (stat),
+ * which moves when the person types into it. Never another
  * process's environment or argv: those hold secrets. Every value read is outside text, held to its form, and lsof and ps
  * run with no shell.
  */
@@ -14,7 +15,7 @@ import { stat } from 'node:fs/promises'
 import { HERDR_PANE } from './herdrClient.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 import type { OuterLookup } from './outer.js'
-import { parentChain, scannedApps, type ProcessName } from './scannedApp.js'
+import { readPtyMaker, scannedApps, type ProcessName } from './scannedApp.js'
 import { TAB_TTY } from './tabs.js'
 import { OUTER_EVERY_MS, PID } from './tmux.js'
 
@@ -33,6 +34,8 @@ export interface HerdrOuterDeps {
   run: OrcaDeps['run']
   /** The machine's processes, as the open scan reads them; it rejects when the table cannot be read. */
   processes(): Promise<readonly ProcessName[]>
+  /** The terminal one process runs on (scannedApp.ts readTtyName); it rejects when it could not be read. */
+  tty(pid: number): Promise<string | undefined>
   log(line: string): void
   now(): number
   platform: NodeJS.Platform
@@ -127,18 +130,23 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
     return pids[last]
   }
 
-  /** `{}` when no herdr server is among the caller's parents, or none of its clients (or itself, run with
-   *  `--no-session`) is on a tty in a listed app; the step that could not be read, when one could not. */
+  /** `{}` when no herdr server made the caller's terminal, or none of its clients (or itself, run with `--no-session`)
+   *  is on a tty in a listed app; the step that could not be read, when one could not. */
   async function placeOf(pid: number): Promise<ClientPlace | NotRead> {
     // One read of the table serves the server's, the clients' and their apps' walks.
     const rows = await deps.processes().catch(() => undefined)
     if (!rows) return 'processes'
-    const server = parentChain(pid, new Map(rows.map((p) => [p.pid, p]))).find(isHerdr)?.pid
-    if (server === undefined) return {}
+    // The server is the herdr that made the caller's terminal, not the nearest among its parents: a terminal started
+    // from a herdr pane has that server among its parents too, and keeps the pane's variables, yet its agents are in no
+    // herdr client. The table holds no terminal: the caller's and its parents' are read.
+    const maker = await readPtyMaker(pid, rows, deps.tty).catch(() => null)
+    if (maker === null) return 'processes'
+    if (maker?.host !== 'herdr') return {}
+    const server = maker.pid
     const others = rows.filter((p) => p.pid !== server && isHerdr(p)).map((p) => p.pid)
       .sort((a, b) => a - b).slice(-HERDR_CLIENTS_A_LOOKUP)
-    // herdr's `--no-session` runs the panes under the client itself, on its tab's tty, with no client socket: with no
-    // other herdr, or none connected, the server is the one candidate.
+    // herdr before 0.9.0 ran the panes under the client itself with `--no-session`, on its tab's tty, with no client
+    // socket: with no other herdr, or none connected, the server is the one candidate.
     let candidates = [server]
     if (others.length) {
       const sockets = await output(deps.run, '/usr/sbin/lsof', ['-a', '-U', '-p', [server, ...others].join(','), '-F', 'pdn'])
