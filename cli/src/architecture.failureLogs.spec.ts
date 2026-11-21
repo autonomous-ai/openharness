@@ -775,7 +775,8 @@ it.each([
   "import * as path from 'node:path'; console.log(`[x] a ${path.extname(name)} file`)",
   "function run() { const r = probe(); log(`[x] ${r.reason}`) } function probe() { return { ok: false, reason: 'busy' } }",
   "function openOf(p: unknown) { return { session: { engine: 'codex', transcriptPath: p } } } const ask = openOf(payload); console.warn(`[engine ${ask.session.engine}] LIVE_OPEN_FAILED`)",
-  "console.warn(`[x] ${Boolean(err.reason) ? 'not a lock this CLI made' : 'held'}`)",
+  // A condition is tested, never printed.
+  "console.warn(`[x] ${err.reason ? 'not a lock this CLI made' : 'held'}`)",
   "console.warn(`[x] ${error instanceof HookPreparationHeld ? error.hold : errorKind(error)}`)",
   "console.log(`[backend] connected · ${backendName(this.url)}`)",
 ])('passes %s', (code) => expect(failureLogs(withHelpers(code))).toEqual([]))
