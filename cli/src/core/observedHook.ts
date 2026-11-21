@@ -105,7 +105,10 @@ export interface ObservedHookDeps {
   /** Hand the event to the devices process; false when it is not there (the event is dropped). */
   forward: (event: ObservedEvent) => boolean
   now: () => number
+  /** Losses, a few lines a minute at most. */
   log?: (line: string) => void
+  /** One line per handled event, bounded by the rate: it says what happened to an event without its session or path. */
+  note?: (line: string) => void
 }
 
 /** How long losses are counted after the first one, before their count is logged: a flood is a few lines a minute. */
@@ -170,6 +173,7 @@ export function createObservedHook(deps: ObservedHookDeps) {
       : kind === 'no-devices' && devicesUp ? '[devices] a paneless hook event was dropped: no devices process; more are counted once a minute' : null,
     minute: (lost) => `[devices] paneless hook events in the last minute: ${lost.invalid} refused, ${lost.over} over the rate, ${lost['no-devices']} with no devices process`,
   }, deps.log ?? console.warn)
+  const note = deps.note ?? console.log
 
   return {
     onObserved(body: unknown): 'ok' | 'invalid' | 'dropped' {
@@ -182,7 +186,9 @@ export function createObservedHook(deps: ObservedHookDeps) {
         tally('over')
         return 'dropped'
       }
-      if (deps.forward(event)) {
+      const forwarded = deps.forward(event)
+      note(`[hooks] paneless ${event.engine} ${event.event} · ${forwarded ? 'forwarded' : 'no devices'}`)
+      if (forwarded) {
         devicesUp = true
         return 'ok'
       }
