@@ -74,7 +74,7 @@ export class P2pPhone {
 
   async negotiate(): Promise<void> {
     this.peer.start()
-    if (!await this.peer.waitUntilReady(15_000)) throw new Error(`P2P did not connect: ${this.peer.negotiationDetail}`)
+    if (!await this.peer.waitUntilReady(15_000)) throw new Error(`P2P did not connect: ${this.peer.negotiationFacts}`)
   }
 
   send(type: string, payload: Record<string, unknown>, transport: Transport): void {
