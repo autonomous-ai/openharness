@@ -8,9 +8,9 @@ import 'runtime_platform.dart';
 /// the working folder; on Windows git.exe alone, then Git for Windows' folders.
 ///
 /// A bare `git` is looked up by the operating system, and on Windows
-/// `CreateProcessW` searches the working folder before PATH: a `git.exe`
-/// committed to a repository would run from it. A `git.cmd` would need
-/// `cmd.exe` to run it, so it is never taken.
+/// `CreateProcessW` searches the app's own folder, then the app's working
+/// folder, before PATH: a `git.exe` put in either would run. A `git.cmd` would
+/// need `cmd.exe` to run it, so it is never taken.
 class GitProgram {
   GitProgram({
     Map<String, String>? environment,
