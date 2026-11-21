@@ -22,7 +22,7 @@ void main() {
           'SCOOP': 'scoop',
         },
         // Every relative path finds the planted git.exe in the working folder.
-        isFile: (path) {
+        isProgram: (path) {
           asked.add(path);
           return !windowsAbsolute(path) || path == r'C:\Tools\git.exe';
         },
@@ -37,7 +37,7 @@ void main() {
       final git = GitProgram(
         isWindows: true,
         environment: {'PATH': r'C:\Scripts;C:\Git\cmd'},
-        isFile: {
+        isProgram: {
           r'C:\Scripts\git.cmd',
           r'C:\Scripts\git.bat',
           r'C:\Scripts\git',
@@ -65,7 +65,7 @@ void main() {
         final git = GitProgram(
           isWindows: true,
           environment: environment,
-          isFile: {found}.contains,
+          isProgram: {found}.contains,
         );
         expect(git.resolve(), found);
       }
@@ -80,7 +80,7 @@ void main() {
           'SCOOP_GLOBAL': r'D:\scoop-global',
           'ProgramData': r'C:\ProgramData',
         },
-        isFile: {
+        isProgram: {
           r'D:\scoop-global\shims\git.exe',
           r'C:\ProgramData\scoop\shims\git.exe',
         }.contains,
@@ -96,7 +96,7 @@ void main() {
           'PATH': r'C:\Tools',
           'ProgramFiles': r'C:\Program Files',
         },
-        isFile: {
+        isProgram: {
           r'C:\Program Files\Git\cmd\git.exe',
           r'C:\Tools\git.exe',
         }.contains,
@@ -111,7 +111,7 @@ void main() {
       final git = GitProgram(
         isWindows: false,
         environment: {'PATH': '/opt/homebrew/bin:/usr/bin'},
-        isFile: {'/opt/homebrew/bin/git', '/usr/bin/git'}.contains,
+        isProgram: {'/opt/homebrew/bin/git', '/usr/bin/git'}.contains,
       );
 
       expect(git.resolve(), '/opt/homebrew/bin/git');
@@ -146,7 +146,7 @@ void main() {
       final git = GitProgram(
         isWindows: false,
         environment: {'PATH': '.:bin::/usr/bin'},
-        isFile: (path) {
+        isProgram: (path) {
           asked.add(path);
           return !p.posix.isAbsolute(path) || path == '/usr/bin/git';
         },
@@ -161,7 +161,7 @@ void main() {
     final git = GitProgram(
       isWindows: false,
       environment: {'PATH': '/usr/bin'},
-      isFile: (_) => false,
+      isProgram: (_) => false,
     );
 
     expect(
@@ -180,7 +180,7 @@ void main() {
     final git = GitProgram(
       isWindows: false,
       environment: {'PATH': '/usr/bin'},
-      isFile: (path) {
+      isProgram: (path) {
         asks++;
         return installed && path == '/usr/bin/git';
       },

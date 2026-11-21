@@ -15,14 +15,14 @@ class GitProgram {
   GitProgram({
     Map<String, String>? environment,
     bool? isWindows,
-    bool Function(String path)? isFile,
+    bool Function(String path)? isProgram,
   }) : _environment = environment ?? RuntimePlatform.environment,
        _isWindows = isWindows ?? RuntimePlatform.isWindows,
-       _isFile = isFile ?? FileSystemEntity.isFileSync;
+       _isProgram = isProgram ?? _canRun;
 
   final Map<String, String> _environment;
   final bool _isWindows;
-  final bool Function(String path) _isFile;
+  final bool Function(String path) _isProgram;
   String? _found;
 
   /// Found once and kept; a miss looks again next time, so a Git installed
@@ -32,9 +32,19 @@ class GitProgram {
   String resolve() {
     if (_found case final found?) return found;
     for (final candidate in _candidates()) {
-      if (_isFile(candidate)) return _found = candidate;
+      if (_isProgram(candidate)) return _found = candidate;
     }
     throw const ProcessException('git', [], 'git was not found', 2);
+  }
+
+  /// A regular file (a link is followed) and, off Windows, one with an execute
+  /// bit: exec refuses any other, and the git found is kept, so every run
+  /// would fail.
+  static bool _canRun(String path) {
+    final stat = FileStat.statSync(path);
+    // 0x49 is 0o111: the owner's, the group's or anyone's execute bit.
+    return stat.type == FileSystemEntityType.file &&
+        (RuntimePlatform.isWindows || stat.mode & 0x49 != 0);
   }
 
   Iterable<String> _candidates() {

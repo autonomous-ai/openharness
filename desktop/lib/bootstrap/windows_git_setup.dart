@@ -61,7 +61,7 @@ class WindowsGitSetup {
       GitProgram(
         environment: _environment,
         isWindows: true,
-        isFile: _isFile,
+        isProgram: _isFile,
       ).resolve();
       return true;
     } on ProcessException {
