@@ -66,7 +66,7 @@ describe('the catalog', () => {
     const c9 = byId('C9')
     expect(c9.sessions.filter((s) => !s.ghost).map((s) => [s.key, s.ageMs])).toEqual([['b', 60_000], ['a', 120_000]])
     expect(c9.steps.map((s) => [s.kind, 'session' in s ? s.session : s.kind === 'wait' ? s.ms : ''])).toEqual([
-      ['front', ''], ['claude.write', ''], ['wait', 10_000], ['wait', 1_000], ['swipe', 'a'], ['swipe', 'b'], ['wait', 3_000], ['hook', 'b']])
+      ['front', ''], ['claude.write', ''], ['wait', 10_000], ['wait', 1_000], ['swipe', 'a'], ['wait', 1_000], ['swipe', 'b'], ['wait', 3_000], ['hook', 'b']])
     expect(c9.steps.filter((s) => s.kind === 'hook')).toEqual([{ label: 'hook', kind: 'hook', session: 'b', event: 'start' }])
     expect(c9.checks.filter((c) => c.kind !== 'cost')).toEqual([
       { id: 'open', kind: 'open', dim: 'D3', session: 'b', link: true, after: 'swipe', at: 'hook' },
@@ -156,24 +156,36 @@ describe('the catalog', () => {
       const is = step.until !== undefined ? 'condition' : after?.kind === 'wait' && after.until !== undefined ? 'reading' : 'own'
       return is === kind ? [`${s.id} ${step.ms}`] : []
     }))
-    // C6's turn, C9's rest on b, C10's gap between quit and relaunch, C11's time unplugged, X3's still window, X11's and
-    // XH3's switches.
-    expect(waits('own')).toEqual(['C6 5000', 'C9 3000', 'C10 2000', 'C11 3000', 'X3 5000', 'X11 300', 'X11 300', 'XH3 200'])
+    // C6's turn, C9's rests on a and on b, C10's gap between quit and relaunch, C11's time unplugged, X3's still window,
+    // X11's and XH3's switches.
+    expect(waits('own')).toEqual(['C6 5000', 'C9 1000', 'C9 3000', 'C10 2000', 'C11 3000', 'X3 5000', 'X11 300', 'X11 300', 'XH3 200'])
     expect(new Set(waits('condition').map((w) => w.split(' ')[1]))).toEqual(new Set(['10000']))
     // The person reading the face once the list is there.
     expect(new Set(waits('reading').map((w) => w.split(' ')[1]))).toEqual(new Set(['1000']))
     expect(waits('reading')).toHaveLength(waits('condition').length)
   })
 
-  it('an input on the dial or the app comes at least 1 s after its listing, as a person reads the face first', () => {
-    // Faster, it lands in the same instant the list arrives, inside the devices' echo window after a push, which no
-    // person can do. XH2 has no listing (see below).
+  it('an input on the dial or the app comes at least 1 s after its listing and after the input before it', () => {
+    // Faster, it lands in the same instant the list arrives, inside the devices' echo window after a push, or inside a
+    // swipe's rest, whose open makes the devices drop the next title as its echo: no person does either. XH2 has no
+    // listing (see below). X11's switches 300 ms apart and XH3's voice 200 ms after the follow are those scenarios'
+    // point: only the input right after one of their own short waits is let through.
     const inputs = new Set<Step['kind']>(['tap', 'swipe', 'voice', 'attach', 'thread'])
+    const quick = new Set(['X11', 'XH3'])
     for (const s of ALL.filter((s) => s.id !== 'XH2')) {
+      // Since the last listing, or the last input once there is one. A condition wait may end at once: it counts 0.
       let since: number | null = null
-      for (const step of s.steps) {
-        if (step.kind === 'wait') since = step.until !== undefined ? 0 : since === null ? null : since + step.ms
-        if (inputs.has(step.kind)) expect(since, `${s.id} ${step.kind}`).toBeGreaterThanOrEqual(1_000)
+      for (const [i, step] of s.steps.entries()) {
+        if (step.kind === 'wait') {
+          since = step.until !== undefined ? 0 : since === null ? null : since + step.ms
+          continue
+        }
+        if (!inputs.has(step.kind)) continue
+        const before = s.steps[i - 1]
+        if (!(quick.has(s.id) && before?.kind === 'wait' && before.until === undefined)) {
+          expect(since, `${s.id} ${step.kind} ${i}`).toBeGreaterThanOrEqual(1_000)
+        }
+        since = 0
       }
     }
   })
