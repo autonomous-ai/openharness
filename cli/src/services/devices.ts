@@ -1745,10 +1745,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     orcaFront = front
     log(terminals === null ? '[device] orca front · cleared' : `[device] orca front · set · ${terminals.length} terminals`)
     // Read when the dials list, never kept: an agent that starts in one of those terminals joins at the next list, and
-    // one resumed elsewhere leaves. Its terminal is its Orca pane or, with none yet, where the last order read placed it.
+    // one resumed elsewhere leaves. Its terminal is the one a rest and a tap read (observed.ts placeIn): its own Orca
+    // pane, else where the last order read placed it, else the terminal that holds it. Without the held one, an agent
+    // placement could not find left the ring, and a prompt typed into it was skipped as no tile (2026-11-21).
     cableHost.setScope('orca', front && { inScope: (agentId) => {
-      const handle = observed?.paneOf(agentId, 'orca') ?? observed?.placedAt(agentId, 'orca')
-      return handle !== undefined && front.has(handle)
+      const pane = observed?.shownAt(agentId, 'orca')
+      return pane !== undefined && front.has(orcaHandle(pane))
     } })
   }
 
