@@ -1000,6 +1000,7 @@ jobs:
             /scripts/tests/desktop_publication_fixture.py
             /desktop/scripts/upload-desktop.sh
             /desktop/scripts/upload-desktop-linux.sh
+            /desktop/scripts/upload-desktop-windows.sh
           sparse-checkout-cone-mode: false
       - uses: google-github-actions/auth@v2
         with:
