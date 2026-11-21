@@ -60,6 +60,7 @@ const TERMINAL = [
   'agentClient/settings.ts', // harness agent settings, from cli.ts alone: its `err` is the person's own terminal
   'agentClient/mcpServers.ts', // harness mcp-servers, from cli.ts alone
   'dsh/command.ts', // harness dsh, from cli.ts alone
+  'engines/hermesHooksCommand.ts', // harness hermes-hooks, from cli.ts alone: the entries a person adds to Hermes by hand
   'lib/autonomous-device/addonCommand.ts', // harness addon, from cli.ts alone: its `print` is the command's JSON answer
   'lib/apiCommand.ts', // harness api
   'lib/newCommand.ts', // harness new

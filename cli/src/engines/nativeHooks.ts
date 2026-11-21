@@ -81,8 +81,13 @@ function hermesHooksAsToday(port: number, selectedHome: string | undefined, opti
     else console.error(HERMES_HOOK_SETTINGS.messages.failed, errorKind(error))
     return Promise.resolve(false)
   }
-  return installNativeYamlHooks(HERMES_HOOK_SETTINGS, home => command(port, 'hermes', env.CODEX_HOME, home, options?.environment, platform === 'win32' ? 'cmd' : 'bash'), selectedHome,
+  return installNativeYamlHooks(HERMES_HOOK_SETTINGS, home => hermesHookCommand(port, home, options?.environment, platform), selectedHome,
     { ...options, createMissing: !!selectedHome && !!options?.environment })
+}
+
+/** The hook line Harness installs in Hermes [home]; `harness hermes-hooks` prints the same. */
+export function hermesHookCommand(port: number, home: string, environment?: Readonly<Record<string, string>>, platform: NodeJS.Platform = hostPlatform()): string {
+  return command(port, 'hermes', env.CODEX_HOME, home, environment, platform === 'win32' ? 'cmd' : 'bash')
 }
 
 // The removal lines said, each once per file in the daemon's life; at the limit the set starts again.

@@ -165,11 +165,25 @@ function prepareAllowlist(rule: NativeYamlHooks, cmd: string, home: string): (at
  */
 const bare = (line: string): string => (line.endsWith('\r') ? line.slice(0, -1) : line)
 
-function hooksBlock(rule: NativeYamlHooks, cmd: string): string {
+/** The `hooks:` mapping Harness installs for [cmd], without its markers. */
+function hooksMapping(rule: NativeYamlHooks, cmd: string): string {
   const entries = rule.events
     .map((event) => `  ${event}:\n    - command: ${JSON.stringify(cmd)}\n      timeout: ${rule.timeout}`)
     .join('\n')
-  return `\n${rule.begin}\nhooks:\n${entries}\n${rule.end}\n`
+  return `hooks:\n${entries}`
+}
+
+function hooksBlock(rule: NativeYamlHooks, cmd: string): string {
+  return `\n${rule.begin}\n${hooksMapping(rule, cmd)}\n${rule.end}\n`
+}
+
+/**
+ * What a person adds by hand to a config whose own `hooks:` mapping Harness leaves alone: the managed block's entries,
+ * and the names for the passthrough list. `harness hermes-hooks` prints it on their terminal.
+ */
+export function manualHookEntries(rule: NativeYamlHooks, cmd: string): string {
+  const mapping = hooksMapping(rule, cmd)
+  return rule.passthrough ? `${mapping}\n${rule.passthrough.section}:\n  ${rule.passthrough.key}: ${flowList(rule.passthrough.names)}` : mapping
 }
 
 /** True for a top-level `hooks:` mapping that is ours (every command runs our notify.mjs for this engine). */
@@ -419,11 +433,9 @@ async function installIn(rule: NativeYamlHooks, cmd: string, home: string, optio
     }
     if (foreignHooks || document.has('hooks')) {
       error(message(rule.messages.foreign, { file: hashOf(configPath) }))
+      // The entries name the managed Node, notify.mjs and the person's folders, and Export logs sends the log off the
+      // machine: the line names the command that prints them on the person's terminal (manualHookEntries).
       error(rule.messages.manual)
-      // The command by what it is: it names the managed Node, notify.mjs and the person's folders, and Export logs sends
-      // the log off the machine.
-      for (const event of rule.events) error(`[hooks]   ${event}: [{ command: <Harness's notify.mjs command for this home>, timeout: ${rule.timeout} }]`)
-      if (rule.passthrough) error(`[hooks]   and under ${rule.passthrough.section}: ${rule.passthrough.key}: ${flowList(rule.passthrough.names)}`)
       return false
     }
 

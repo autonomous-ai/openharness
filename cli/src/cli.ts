@@ -3192,6 +3192,9 @@ switch (cmd) {
   case 'status':
     status().catch(onError)
     break
+  case 'hermes-hooks': // loaded only here: the engines' hook declarations are not every command's
+    import('./engines/hermesHooksCommand.js').then(({ hermesHooksCommand }) => hermesHooksCommand(daemonPort())).catch(onError)
+    break
   case 'logs':
     if (args[0] === 'export') {
       logsExportCommand({

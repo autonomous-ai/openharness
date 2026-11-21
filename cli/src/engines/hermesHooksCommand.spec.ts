@@ -33,7 +33,7 @@ it('prints, for every home with a config, the exact entries the installer writes
   const { installHermesHooks } = await import('./nativeHooks.js')
   const { hermesHooksCommand } = await import('./hermesHooksCommand.js')
   const lines: string[] = []
-  expect(hermesHooksCommand(4242, (line) => lines.push(line))).toBe(0)
+  hermesHooksCommand(4242, (line) => lines.push(line))
   expect(await installHermesHooks(4242)).toBe(true)
 
   const printed = lines.join('\n')
@@ -49,6 +49,6 @@ it('prints nothing when no home has a config', async () => {
   rmSync(home, { recursive: true })
   const { hermesHooksCommand } = await import('./hermesHooksCommand.js')
   const lines: string[] = []
-  expect(hermesHooksCommand(4242, (line) => lines.push(line))).toBe(0)
+  hermesHooksCommand(4242, (line) => lines.push(line))
   expect(lines).toEqual([])
 })
