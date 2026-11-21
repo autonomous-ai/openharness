@@ -754,6 +754,12 @@ static bool follow_now(pod_ui_t *u, const char *id, uint32_t now_ms)
     const pod_agent_t *a = pod_model_find(&u->model, id);
     const char *app = u->landing[0] ? u->landing : u->landed;
     const bool answer = app[0] && a && !strcmp(a->host, app) && (int32_t)(now_ms - u->landing_ms) < POD_LANDING_MS;
+    const pod_agent_t *ring[1];
+    if (answer && u->landing[0] && pod_app_agents(&u->model, u->landing, ring, 1) < 1) {   // before the ring: it opens in the ring when the ring lands
+        set_id(u->pending_focus, id);
+        u->pending_focus_ms = now_ms;
+        return true;
+    }
     if (!answer && u->touched && (int32_t)(now_ms - u->last_touch_ms) < (int32_t)quiet) return true;
     if (u->down) return true;
     if (pod_nav_follow(&u->nav, &u->model, id, now_ms)) {

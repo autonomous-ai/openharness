@@ -94,7 +94,7 @@ typedef struct {
     // brings the ring (synced), within POD_LANDING_MS; a new contact, the side button, a link drop, an apps frame showing
     // another app and a host focus that lands end the wait. `landed`: the picked app whose room opened (at once or on its
     // ring); within POD_LANDING_MS of landing_ms a focus on one of its agents is the Mac answering the pick, not an echo of
-    // the tap.
+    // the tap. One that comes before the ring waits for it in pending_focus, so it opens in the ring, not in Recent.
     char landing[CABLE_APP_ID_MAX], landed[CABLE_APP_ID_MAX];
     uint32_t landing_ms;
     // The software update (see pod_ui_ota): while on, the stack stays as it was and ph_view_ota is what is drawn.
