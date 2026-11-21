@@ -54,7 +54,6 @@ bool pod_home_apps(const pod_nav_t *, const pod_model_t *);
 // The agents of an app's ring, in roster order: the agents whose host is app_id, only while it is the app shown (an agent the
 // library also lists can keep a stale host after its ring goes). Returns how many.
 int pod_app_agents(const pod_model_t *, const char *app_id, const pod_agent_t *out[], int max);
-bool pod_home_has(const pod_nav_t *, const pod_model_t *, int page);              // is `page` in the list
 int pod_home_pages(const pod_nav_t *, const pod_model_t *, int16_t *out, int cap);   // the pages in order (out may be NULL); returns how many
 int pod_home_clamp(const pod_nav_t *, const pod_model_t *, int scroll);           // a present page is kept, else the nearest to its right, else the nearest to its left; 0 with none
 int pod_tabs_pages_of(const pod_nav_t *, const pod_model_t *);       // the list's length

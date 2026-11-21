@@ -26,6 +26,13 @@ static const ht_run_t *text_run(const char *t) {
 static const ht_run_t *text_prefix(const char *p) { for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == K_TEXT && !strncmp(S.runs[i].text, p, strlen(p))) return &S.runs[i]; return NULL; }
 static const pod_hit_t *nth_hit(pod_action_t a, int n) { for (int i = 0; i < F.hit_count; i++) if (F.hits[i].action == a && n-- == 0) return &F.hits[i]; return NULL; }
 static int hits_of(pod_action_t a) { int n = 0; for (int i = 0; i < F.hit_count; i++) n += F.hits[i].action == a; return n; }
+static bool has_page(const pod_nav_t *nav, const pod_model_t *m, int page)
+{
+    int16_t p[POD_HOME_PAGES_MAX];
+    const int n = pod_home_pages(nav, m, p, POD_HOME_PAGES_MAX);
+    for (int i = 0; i < n; i++) if (p[i] == page) return true;
+    return false;
+}
 
 // The scene in S, rastered from empty: every below-1x frame marked for baking (a Codex face or recap pet) got its arena entry (none dropped for want of
 // room: a dropped one is resampled every frame), and the arena use is exactly those entries' pixels, within BAKE_ARENA_PX (360 K, pod_draw.c).
@@ -1350,7 +1357,7 @@ int main(void) {
         CHECK(!text_run("w2") && hits_of(POD_A_FOLLOW) == 0 && ph_home_moves(&N, &M));
         for (int i = 0; i < 5; i++) pod_model_turn(&M, id[i], "done", NULL, 0, 200000);   // nobody works: no Working page, scroll -1 is tab 0
         N.stack[0].scroll = POD_HOME_WORKING;
-        CHECK(pod_home_working(&M) == 0 && !pod_home_has(&N, &M, POD_HOME_WORKING) && pod_tabs_pages_of(&N, &M) == 1);
+        CHECK(pod_home_working(&M) == 0 && !has_page(&N, &M, POD_HOME_WORKING) && pod_tabs_pages_of(&N, &M) == 1);
         fresh(); ph_view_home(&F, &N, &M, now);
         CHECK(!text_run("Working") && text_run("Solo") && hits_of(POD_A_FOLLOW) == 0);
     }

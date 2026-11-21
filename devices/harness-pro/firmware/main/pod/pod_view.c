@@ -65,14 +65,6 @@ static int list_end(const pod_nav_t *nav, const pod_model_t *m, int *first)
     *first = POD_HOME_APP0;
     return POD_HOME_APP0 + pod_home_app_cards(m, NULL, 0);
 }
-bool pod_home_has(const pod_nav_t *nav, const pod_model_t *m, int page)
-{
-    if (page == POD_HOME_NOTICES) return pod_notice_count(m) > 0;
-    if (page == POD_HOME_WORKING) return pod_home_working(m) > 0;
-    int first;
-    const int end = list_end(nav, m, &first);
-    return page >= first && page < end;
-}
 static void put(int16_t *out, int cap, int *n, int page) { if (out && *n < cap) out[*n] = (int16_t)page; (*n)++; }
 int pod_home_pages(const pod_nav_t *nav, const pod_model_t *m, int16_t *out, int cap)
 {

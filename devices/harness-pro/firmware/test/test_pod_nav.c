@@ -932,6 +932,12 @@ static const char *pages(void) {
     b[k++] = '}'; b[k] = 0;
     return b;
 }
+static bool has_page(int page) {
+    int16_t p[POD_HOME_PAGES_MAX];
+    const int n = pod_home_pages(&N, &M, p, POD_HOME_PAGES_MAX);
+    for (int i = 0; i < n; i++) if (p[i] == page) return true;
+    return false;
+}
 static void nav_test_home_pages(void) {
     fresh();   // a1 works, a4 asks
     CHECK(pod_home_working(&M) == 1 && !strcmp(pages(), "{-2,-1,0,1}") && pod_tabs_pages_of(&N, &M) == 4);
@@ -1069,7 +1075,7 @@ static void nav_test_home_pages_with_apps(void) {
     CHECK(!strcmp(pages(), "{-2,-1,0,1}") && !pod_home_apps(&N, &M));
     act(POD_A_HOME_APPS, 0, 0);
     CHECK(!strcmp(pages(), "{-2,-1,32,33}") && pod_home_apps(&N, &M) && pod_tabs_pages_of(&N, &M) == 4);
-    CHECK(pod_home_has(&N, &M, 33) && !pod_home_has(&N, &M, 34) && !pod_home_has(&N, &M, 0));
+    CHECK(has_page(33) && !has_page(34) && !has_page(0));
     no_window();
     pod_nav_sync(&N, &M);
     CHECK(!strcmp(pages(), "{-2,-1,32,33,34}") && !N.home_apps && pod_home_apps(&N, &M));
