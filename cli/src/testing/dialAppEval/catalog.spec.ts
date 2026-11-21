@@ -156,16 +156,16 @@ describe('the catalog', () => {
       const is = step.until !== undefined ? 'condition' : after?.kind === 'wait' && after.until !== undefined ? 'reading' : 'own'
       return is === kind ? [`${s.id} ${step.ms}`] : []
     }))
-    // C6's turn, C9's rests on a and on b, C10's gap between quit and relaunch, C11's time unplugged, X3's still window,
-    // X11's and XH3's switches.
-    expect(waits('own')).toEqual(['C6 5000', 'C9 1000', 'C9 3000', 'C10 2000', 'C11 3000', 'X3 5000', 'X11 300', 'X11 300', 'XH3 200'])
+    // C6's turn, C9's rests on a and on b, C10's gap between quit and relaunch, C11's rest and its time unplugged, X3's
+    // still window, X11's and XH3's switches.
+    expect(waits('own')).toEqual(['C6 5000', 'C9 1000', 'C9 3000', 'C10 2000', 'C11 1000', 'C11 3000', 'X3 5000', 'X11 300', 'X11 300', 'XH3 200'])
     expect(new Set(waits('condition').map((w) => w.split(' ')[1]))).toEqual(new Set(['10000']))
     // The person reading the face once the list is there.
     expect(new Set(waits('reading').map((w) => w.split(' ')[1]))).toEqual(new Set(['1000']))
     expect(waits('reading')).toHaveLength(waits('condition').length)
   })
 
-  it('an input on the dial or the app comes at least 1 s after its listing and after the input before it', () => {
+  it('an input on the dial or the app comes at least 1 s after its listing, and any step at least 1 s after an input', () => {
     // Faster, it lands in the same instant the list arrives, inside the devices' echo window after a push, or inside a
     // swipe's rest, whose open makes the devices drop the next title as its echo: no person does either. XH2 has no
     // listing (see below). X11's switches 300 ms apart and XH3's voice 200 ms after the follow are those scenarios'
@@ -175,17 +175,20 @@ describe('the catalog', () => {
     for (const s of ALL.filter((s) => s.id !== 'XH2')) {
       // Since the last listing, or the last input once there is one. A condition wait may end at once: it counts 0.
       let since: number | null = null
+      let afterInput = false
       for (const [i, step] of s.steps.entries()) {
         if (step.kind === 'wait') {
           since = step.until !== undefined ? 0 : since === null ? null : since + step.ms
+          if (step.until !== undefined) afterInput = false
           continue
         }
-        if (!inputs.has(step.kind)) continue
+        const input = inputs.has(step.kind)
+        if (!input && !afterInput) continue
         const before = s.steps[i - 1]
         if (!(quick.has(s.id) && before?.kind === 'wait' && before.until === undefined)) {
           expect(since, `${s.id} ${step.kind} ${i}`).toBeGreaterThanOrEqual(1_000)
         }
-        since = 0
+        if (input) [since, afterInput] = [0, true]
       }
     }
   })
