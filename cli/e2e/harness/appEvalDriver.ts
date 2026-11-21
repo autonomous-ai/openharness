@@ -141,11 +141,16 @@ function emptied(dir: string): void {
   }
 }
 /**
- * What tier B leaves out of [scenario] on [platform]. On Linux a tap whose link failed brings its app by the raise
- * (cable/hosts/open.ts, linuxRaise.ts), which no fake records, so an open check of an app whose links fail is left out
- * there: it would fail on a raise that ran.
+ * What tier B leaves out of [scenario] on [platform]; it throws for a world tier B does not build, so no scenario passes
+ * or fails on one it only seems to run. On Linux a tap whose link failed brings its app by the raise (cable/hosts/open.ts,
+ * linuxRaise.ts), which no fake records, so an open check of an app whose links fail is left out there: it would fail
+ * on a raise that ran.
  */
 export function tierBGaps(scenario: Scenario, platform: Platform): string[] {
+  // Every daemon has the ChatGPT app installed before its first dial (openRig).
+  if (scenario.world?.chatgptInstalled === false) throw new Error(`${scenario.id}: tier B builds no world with no ChatGPT app`)
+  // The fake Claude Code asks only a permission (fakeEngine.mjs `<name>.permit`): AskUserQuestion's hooks are not built.
+  if (scenario.steps.some((s) => s.kind === 'hook' && s.asks === 'question')) throw new Error(`${scenario.id}: tier B's Claude Code asks no question`)
   const failing = scenario.world?.linkFails ?? []
   const raised = platform === 'linux' && scenario.checks.some((c) => c.kind === 'open'
     && failing.includes(scenario.sessions.find((s) => s.key === c.session)!.app))
@@ -401,13 +406,16 @@ export class TierBDriver implements EvalDriver {
 
   async start(scenario: Scenario, platform: Platform): Promise<void> {
     if (platform !== process.platform) throw new Error(`tier B runs on its host's platform, not ${platform}`)
+    // No world is seen until this one starts, and one refused here leaves the daemon as the last stop left it.
+    this.world = undefined
+    const gaps = tierBGaps(scenario, platform)
     this.ready = false
     this.next = 0
     if (this.rig && scenario.fresh) await this.closeRig()
     if (this.rig) await this.reset(this.rig)
     const rig = this.rig ??= await openRig()
     const world = this.world = new World(rig, scenario, platform)
-    for (const reason of tierBGaps(scenario, platform)) world.gap(reason)
+    for (const reason of gaps) world.gap(reason)
     linksFail(rig.d.env.HARNESS_OPEN_BIN!, scenario.world?.linkFails ?? [])
     const front = scenario.world?.front ?? scenario.app
     await GENERIC.front(world, { kind: 'front', app: front })
