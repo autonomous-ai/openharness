@@ -1,22 +1,43 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync } from 'node:fs'
 import { tmpdir, userInfo } from 'node:os'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { claudeStoreRoots } from '../cable/hosts/appPlaces.js'
 import { claudeAppFixture } from './claudeAppFixture.js'
 
+const REFUSED = 'the Claude app fixture never writes the real Claude app store'
+const realRoots = () => claudeStoreRoots(process.platform, process.env, userInfo().homedir).map(({ root }) => root)
+
+// Only the constructor runs on a real place: it writes nothing, so even a fixture that accepted one leaves no trace.
 describe('claudeAppFixture', () => {
   const temps: string[] = []
   afterEach(() => { for (const temp of temps.splice(0)) rmSync(temp, { recursive: true, force: true }) })
 
   it("refuses each root of the account's own store, and a folder inside one", () => {
-    // Only the constructor runs on a real place: it writes nothing, so even a fixture that accepted one leaves no trace.
-    const roots = claudeStoreRoots(process.platform, process.env, userInfo().homedir).map(({ root }) => root)
+    const roots = realRoots()
     expect(roots.length).toBeGreaterThan(0)
     for (const root of roots) {
-      for (const place of [root, join(root, 'eval-account'), `${root}/`]) {
-        expect(() => claudeAppFixture(place)).toThrow('the Claude app fixture never writes the real Claude app store')
-      }
+      for (const place of [root, join(root, 'eval-account'), `${root}/`]) expect(() => claudeAppFixture(place)).toThrow(REFUSED)
+    }
+  })
+
+  // Their folders ignore case: another spelling is the same store.
+  it.runIf(process.platform === 'darwin' || process.platform === 'win32')('refuses a root spelled in another case', () => {
+    for (const root of realRoots()) expect(() => claudeAppFixture(root.toUpperCase())).toThrow(REFUSED)
+  })
+
+  it('refuses a root reached through a link to the home folder', () => {
+    const temp = mkdtempSync(join(tmpdir(), 'claude-app-fixture-'))
+    temps.push(temp)
+    const home = userInfo().homedir
+    // A junction on Windows, which needs no right to make; elsewhere the type is not read.
+    const link = join(temp, 'home')
+    symlinkSync(home, link, 'junction')
+    try {
+      for (const root of realRoots()) expect(() => claudeAppFixture(join(link, relative(home, root)))).toThrow(REFUSED)
+    } finally {
+      // The link alone, before its folder goes: nothing is ever removed through it.
+      unlinkSync(link)
     }
   })
 
