@@ -139,7 +139,7 @@ describe("tier A's world records every send, failing closed", () => {
 })
 
 describe("tier A's Linux raise", () => {
-  it('is the real raise on a desktop that takes a process: each raise records the pids and classes it is handed', async () => {
+  it('is the real raise on a desktop that takes a process: each raise records the app asked for, and the pids and classes it is handed', async () => {
     machine.reset()
     const { world, deps } = worldOn('linux')
     // A session's Claude Code in a terminal of its own: the raise walks from the session to the terminal.
@@ -150,13 +150,15 @@ describe("tier A's Linux raise", () => {
     const raise = deps.raise!
     expect([raise.ready({ agent: true }), raise.ready({ agent: false, app: 'claude' }), raise.ready({ agent: false, app: 'codex' })])
       .toEqual([true, true, false])
+    // Two at once, each recorded with its own app.
+    expect(await Promise.all([raise.raise({ pid: 41_000, app: 'codex' }), raise.raise({ app: 'claude' })])).toEqual([true, true])
     expect(await raise.raise({ pid: 41_000 })).toBe(true)
-    expect(await raise.raise({ app: 'claude' })).toBe(true)
     // The ChatGPT app's window has no known class: with no process either, nothing is run.
     expect(await raise.raise({ app: 'codex' })).toBe(false)
     expect(world.seen([]).commands.map((c) => c.argv)).toEqual([
+      ['raise', '--app', 'claude', '--class', 'com.anthropic.Claude', '--class', 'com.anthropic.claude'],
+      ['raise', '--app', 'codex', '--pid', '41000', '--pid', '40000'],
       ['raise', '--pid', '41000', '--pid', '40000'],
-      ['raise', '--class', 'com.anthropic.Claude', '--class', 'com.anthropic.claude'],
     ])
   })
 })
