@@ -19,7 +19,8 @@ class SourceInputTests(unittest.TestCase):
         for name in (".github/workflows/ci.yml", "scripts/check.py", "desktop/scripts/upload.sh",
                      "desktop/lib/main.dart", "desktop/test/app_test.dart", "cli/main.ts", "backend/.gitignore",
                      "backend/scripts/release-be.sh", "docs/guide.md",
-                     "tests/fixtures/layout.json", "daemons/frames.json", "store/catalog.json", "docs/images/poster.png"):
+                     "tests/fixtures/layout.json", "daemons/frames.json", "store/catalog.json", "docs/images/poster.png",
+                     "device-app/src-tauri/tauri.conf.json"):
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("fixture\n")
@@ -41,6 +42,7 @@ class SourceInputTests(unittest.TestCase):
         self.sparse(inputs.ci.SOURCE_INPUTS["process"])
         inputs.verify_checkout(self.root, "process")
         self.assertTrue((self.root / "desktop/scripts/upload.sh").exists())
+        self.assertTrue((self.root / "device-app/src-tauri/tauri.conf.json").exists())
         self.assertFalse((self.root / "desktop/lib/main.dart").exists())
         self.assertFalse((self.root / "cli/main.ts").exists())
         self.assertFalse((self.root / "docs/guide.md").exists())
@@ -49,7 +51,8 @@ class SourceInputTests(unittest.TestCase):
         self.sparse(inputs.ci.SOURCE_INPUTS["desktop"])
         inputs.verify_checkout(self.root, "desktop")
         self.assertTrue((self.root / "desktop/lib/main.dart").exists())
-        for path in ("cli/main.ts", "tests/fixtures/layout.json", "daemons/frames.json", "store/catalog.json", "docs/images/poster.png"):
+        for path in ("cli/main.ts", "tests/fixtures/layout.json", "daemons/frames.json", "store/catalog.json", "docs/images/poster.png",
+                     "device-app/src-tauri/tauri.conf.json"):
             self.assertTrue((self.root / path).exists(), path)
         self.sparse(["scripts/", "desktop/test/"])
         inputs.verify_checkout(self.root, "desktop", subset=True)

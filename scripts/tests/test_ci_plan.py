@@ -174,14 +174,16 @@ class SelectionTests(unittest.TestCase):
                      "scripts/e2e/windows.ps1", "scripts/release-build.sh", "scripts/release-check.sh",
                      "scripts/release-setup.sh", "src-tauri/Cargo.toml", "src-tauri/Cargo.lock"):
             cases["device-app/" + path] = app | {"device-app-update"}
-        for name in ("tauri.conf.json", "tauri.linux.conf.json", "tauri.windows.conf.json"):
+        for name in ("tauri.linux.conf.json", "tauri.windows.conf.json"):
             cases["device-app/src-tauri/" + name] = app | {"device-app-update", "device-app-desktop", "device-app-install"}
+        cases["device-app/src-tauri/tauri.conf.json"] = app | {"device-app-update", "device-app-desktop",
+                                                               "device-app-install", "desktop"}
         for name in ("install.rs", "instance.rs"):
             cases["device-app/src-tauri/src/" + name] = app | {"device-app-desktop"}
         cases["device-app/src-tauri/src/packaging.rs"] = app | {"device-app-desktop", "device-app-install"}
         for path in ("src-tauri/src/appimage_env.rs", "scripts/e2e/linux-install.sh", "scripts/e2e/https-fake-cdn.py"):
             cases["device-app/" + path] = app | {"device-app-install"}
-        for path in ("desktop/lib/devices/device_app_installer.dart",
+        for path in ("desktop/lib/devices/device_app_installer.dart", "desktop/lib/update/tauri_signature.dart",
                      "desktop/integration_test/device_app_install_windows_linux_native_test.dart"):
             cases[path] = {"desktop", "device-app-desktop"}
         cases["website/scripts/device-install.sh"] = {"website", "device-app-install"}
