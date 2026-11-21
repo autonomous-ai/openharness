@@ -5,7 +5,7 @@ import { createHash } from 'crypto'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
-  ts, sid, preview, installTimestampedConsole, logFrame, errorKind, codeOrLength, hashOf, exitOnFatal,
+  ts, sid, preview, installTimestampedConsole, logFrame, errorKind, codeOrLength, hashOf, fileTag, outsideHome, exitOnFatal,
   adoptLegacyLog, prepareLogFile, trimLogFile, LOG_MAX_BYTES,
 } from './log.js'
 
@@ -318,5 +318,26 @@ describe('hashOf', () => {
   it('a second load in the same process tags alike', async () => {
     vi.resetModules()
     expect((await import('./log.js')).hashOf(path)).toBe(hashOf(path))
+  })
+})
+
+// The home as os.homedir() reads it: HOME, and USERPROFILE on Windows.
+describe('fileTag and outsideHome', () => {
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE }
+  const home = join(process.platform === 'win32' ? 'C:\\' : '/', 'people', 'sentinel')
+  beforeEach(() => { process.env.HOME = home; process.env.USERPROFILE = home })
+  afterEach(() => { process.env.HOME = saved.HOME; process.env.USERPROFILE = saved.USERPROFILE })
+
+  it('names a file in the home by its tag alone', () => {
+    const file = join(home, '.claude', 'settings.json')
+    expect(fileTag(file)).toBe(hashOf(file))
+    expect(outsideHome(file)).toBe('')
+  })
+
+  it('says a file is outside the home after its tag, never where', () => {
+    for (const file of [join(home, '..', 'other', 'hooks.json'), join(`${home}-twin`, 'hooks.json'), join(home, '..', '..', 'etc', 'hooks.json')]) {
+      expect(fileTag(file), file).toBe(`${hashOf(file)} (outside the home)`)
+      expect(outsideHome(file), file).toBe(' (outside the home)')
+    }
   })
 })

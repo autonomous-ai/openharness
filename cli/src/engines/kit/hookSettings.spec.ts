@@ -184,13 +184,15 @@ it('names a home by its hash in its log lines, whatever characters the path hold
   const home = join(root, 'a$&b$1{port}{file}')
   const file = join(home, 'settings.json')
   await installHookSettings('claude', { ...claude.settings, messages: { ...claude.settings.messages, installed: '{file}|{script}|{port}' } }, 19473, home)
-  expect(log.mock.calls[0]).toEqual([`${hashOf(file)}|${hashOf(HOOK_SCRIPT)}|19473`])
+  // The test's root is not under the worker's home (vitest.setup.ts): the tag says so.
+  expect(log.mock.calls[0]).toEqual([`${hashOf(file)} (outside the home)|${hashOf(HOOK_SCRIPT)}|19473`])
   expect(JSON.parse(readFileSync(file, 'utf8')).hooks.Stop[0].hooks[0].command).toContain('--port 19473')
 })
 
 // A path names the person's home, and Export logs sends the log off the machine: each line names the file, and the
-// hook script, by a hash, which the end-to-end harness checks against its throwaway root (e2e/harness/daemon.ts).
-it.each(['claude', 'codex'] as const)('a hook install names its file by a hash, never its path: %s', async engine => {
+// hook script, by a hash, and says when the file is outside the home, which the end-to-end harness checks
+// (e2e/harness/daemon.ts `hooksOutside`). The test's root is not under the worker's home (vitest.setup.ts).
+it.each(['claude', 'codex'] as const)('a hook install names its file by a hash, never its path, and says it is outside the home: %s', async engine => {
   const lines: string[] = []
   for (const level of ['log', 'warn', 'error'] as const) vi.spyOn(console, level).mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(' ')) })
   const settings = engine === 'claude' ? claude.settings : codex.settings
@@ -200,11 +202,11 @@ it.each(['claude', 'codex'] as const)('a hook install names its file by a hash, 
   expect(await installHookSettings(engine, settings, 19474, home)).toBe(true)
   expect(lines.join('\n')).not.toContain('sentinel')
   expect(lines).toContain(engine === 'claude'
-    ? `[hooks] installed Claude Code session, turn, wait and subagent hooks → ${hashOf(file)}`
-    : `[hooks] installed Codex session and turn hooks → ${hashOf(file)}`)
+    ? `[hooks] installed Claude Code session, turn, wait and subagent hooks → ${hashOf(file)} (outside the home)`
+    : `[hooks] installed Codex session and turn hooks → ${hashOf(file)} (outside the home)`)
   expect(lines).toContain(engine === 'claude'
-    ? `[hooks] updated (path/port changed) → ${hashOf(HOOK_SCRIPT)} --port 19474 in ${hashOf(file)}`
-    : `[hooks] Codex session and turn hooks already installed → ${hashOf(file)}`)
+    ? `[hooks] updated (path/port changed) → ${hashOf(HOOK_SCRIPT)} --port 19474 in ${hashOf(file)} (outside the home)`
+    : `[hooks] Codex session and turn hooks already installed → ${hashOf(file)} (outside the home)`)
 })
 
 it('reports a held malformed file even when an engine declares no malformed-file lines', async () => {
