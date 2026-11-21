@@ -14,8 +14,8 @@
  * `instanceof` in the expression at hand, a name spelled as one (`e`, `err`, `error`, `ex`, `exception`, `…Error`,
  * `…Err`) that is not a parameter typed `string`, and the `.cause` of any of these. A log call is found when it prints
  * an error's `.message`, `.stack`, `.reason`, `.detail`, `.stderr`, `.stdout`, `.path` or `.toString()`, an error whole
- * (as itself, in a template, a sum, an object, a branch, a method's receiver or what a callback returns, handed to any
- * function but the safe ones below, or built in place), or a local made from either (its initializer, or a value a `let` is given later);
+ * (as itself, in a template, a sum, an object, a branch, the right side of `&&`, a method's receiver or what a callback
+ * returns, handed to any function but the safe ones below, or built in place), or a local made from either (its initializer, or a value a `let` is given later);
  * when it runs in a catch that binds nothing; and when it says "fail" in a catch that binds one and names nothing it
  * caught. It is found, too, when it prints whole, as an identifier or a property read's last name, a name of any value
  * that holds content: process output (`stderr`, `stdout`, `output`, `…Stderr`, `…Stdout`, `…Output`), free text
@@ -470,7 +470,9 @@ function printed(node: ts.Node, whole: boolean, hand: Hand): string | undefined 
   if (ts.isConditionalExpression(inner)) return printed(inner.condition, false, hand) ?? first([inner.whenTrue, inner.whenFalse], true)
   if (ts.isBinaryExpression(inner)) {
     const operands = OPERAND_OPERATORS.includes(inner.operatorToken.kind)
-    return printed(inner.left, operands, hand) ?? printed(inner.right, operands, hand)
+    // `&&` prints its right side whenever its left is truthy.
+    return printed(inner.left, operands, hand)
+      ?? printed(inner.right, operands || inner.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken, hand)
   }
   if (ts.isObjectLiteralExpression(inner)) {
     return first(inner.properties.flatMap((property) => ts.isPropertyAssignment(property) ? [property.initializer]
