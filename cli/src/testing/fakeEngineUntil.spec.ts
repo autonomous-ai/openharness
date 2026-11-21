@@ -12,7 +12,7 @@ const { fakeEngineShim } = await import('../../e2e/harness/daemon.js' as string)
 }
 
 /** The hooks the fake runs here: each writes its input to a file of its own, as two can run at once. */
-const EVENTS = ['UserPromptSubmit', 'Stop', 'PermissionRequest', 'Notification']
+const EVENTS = ['SessionStart', 'UserPromptSubmit', 'Stop', 'PermissionRequest', 'Notification']
 /** Under the 6 s a permission dialog waits before Claude Code says so to its Notification hooks. */
 const AT_ONCE_MS = 3_000
 
@@ -26,7 +26,7 @@ afterEach(() => {
 })
 
 /** The fake Claude Code in a throwaway root, its home there too, typed into on its stdin as at its composer. */
-function start(): { hooks(): Array<Record<string, unknown>>; type(text: string): void; hooked(event: string, test?: (input: Record<string, unknown>) => boolean, timeout?: number): Promise<Record<string, unknown>> } {
+function start(env: Record<string, string> = {}): { hooks(): Array<Record<string, unknown>>; type(text: string): void; hooked(event: string, test?: (input: Record<string, unknown>) => boolean, timeout?: number): Promise<Record<string, unknown>> } {
   root = mkdtempSync(join(tmpdir(), 'fake-until-'))
   const home = join(root, 'home')
   const ran = join(root, 'hooks')
@@ -42,7 +42,7 @@ function start(): { hooks(): Array<Record<string, unknown>>; type(text: string):
     hookLog: join(root, 'hook-runs.log'),
   }), { mode: 0o755 })
   // Only its own home: none of this machine's Claude Code settings reach it.
-  engine = spawn(bin, [], { cwd: root, env: { PATH: process.env.PATH, HOME: home }, stdio: ['pipe', 'ignore', 'ignore'] })
+  engine = spawn(bin, [], { cwd: root, env: { PATH: process.env.PATH, HOME: home, ...env }, stdio: ['pipe', 'ignore', 'ignore'] })
   const hooks = (): Array<Record<string, unknown>> => {
     const inputs: Array<Record<string, unknown>> = []
     // A hook still writing its file is read at the next look.
@@ -90,5 +90,19 @@ describe('the fake Claude Code\'s `!until <name>`', () => {
     expect(asked).toMatchObject({ tool_name: 'Bash', tool_input: { command: 'printf eval' } })
     await claude.hooked('Notification', (input) => input.notification_type === 'permission_prompt', AT_ONCE_MS)
     expect(claude.hooks().filter((input) => input.hook_event_name === 'Stop')).toEqual([])
+  }, 30_000)
+})
+
+describe('the fake Claude Code\'s session title', () => {
+  it('names the title it was given in its hooks, as the Claude app\'s sessions do', async () => {
+    const claude = start({ FAKE_CLAUDE_SESSION_TITLE: 'Eval a' })
+    expect(await claude.hooked('SessionStart')).toMatchObject({ session_title: 'Eval a' })
+    claude.type('hello')
+    expect(await claude.hooked('UserPromptSubmit')).toMatchObject({ session_title: 'Eval a' })
+  }, 30_000)
+
+  it('names none when given none', async () => {
+    const claude = start()
+    expect(await claude.hooked('SessionStart')).not.toHaveProperty('session_title')
   }, 30_000)
 })
