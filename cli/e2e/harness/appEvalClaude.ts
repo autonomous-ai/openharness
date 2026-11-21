@@ -9,8 +9,8 @@
  *   one. So words that reach any session by either path are seen with their target;
  * - the mod's attach, through the real `harness device claude link --json` and its post, as dialClaudeAppFollow.e2e.ts;
  * - the app itself: a process for as long as it runs, which quits with its sessions and relaunches them, and resumes a
- *   resumable session whose continue link opened, then shows it, its mod's attach naming it, as the real app does (the
- *   design's "The fake apps react to links").
+ *   resumable session whose continue link opened, then shows it, the mod in a running session's Claude Code saying its
+ *   attach, as the real app does (the design's "The fake apps react to links").
  *
  * Every process these start runs under the daemon's environment, the network guard's preload in it (appEvalDriver.ts).
  * The app's process is in `world.children`: the driver ends it at stop, and its end first ends each of its sessions
@@ -131,12 +131,13 @@ function appOf(world: TierBWorld): FakeApp {
   return app
 }
 
-/** A link that opened, continuing a resumable session the app is not running: it resumes it and shows it, its mod's
- *  attach naming it. */
+/** A link that opened one of the app's sessions: it resumes a resumable one it is not running, and shows it, the mod in
+ *  the session's Claude Code saying its attach; a session at rest it cannot resume runs no mod to say one. */
 function follow(world: TierBWorld, app: FakeApp, run: OpenRun): void {
   if (app.closed || !run.ok) return
-  const s = world.scenario.sessions.find((one) => one.app === 'claude' && one.resumable && !one.ghost && run.argv.includes(linkOf(one)))
-  if (s) start(world, app, s.key).then(() => attach(world, s.key)).catch((error: unknown) => world.fail(error))
+  const s = world.scenario.sessions.find((one) => one.app === 'claude' && !one.ghost && run.argv.includes(linkOf(one)))
+  if (!s || !(s.resumable || app.live.has(s.key) || app.starting.has(s.key))) return
+  start(world, app, s.key).then(() => attach(world, s.key)).catch((error: unknown) => world.fail(error))
 }
 
 /** The session's Claude Code, its start hook run, and the mod's poll held. */
