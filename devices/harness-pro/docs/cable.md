@@ -4,8 +4,9 @@ The daemon (`cli/src/cable/*`) talks to every device over the same framed JSON c
 and the round dial are two clients of that one daemon. They differ only in what their `hello` says.
 
 **The hello capabilities are the contract.** A capability key in the hello turns on extra daemon output for that
-session. A device that names none of them (the round dial, or an older Pro) gets exactly the traffic it gets
-today: no new field, no new message, byte-identical frames. A daemon that predates a capability simply ignores
+session. A device that names none of them (an older Pro) gets exactly the traffic it gets today: no new field, no
+new message, byte-identical frames. The round dial names `appFilter` and `questionTier` alone, and the others change
+none of its frames. A daemon that predates a capability simply ignores
 the key, and the Pro must still work with empty bodies (plan, Review Focus 1).
 
 Sources: branch `dev/firmware-pro` at 0c73edf72 (read-only), merge base with main `59ce00535`; main at
@@ -29,10 +30,16 @@ Full key list, in the order the Pro sends it:
 | `stats` | `"turn-v1"` | capability |
 | `player` | `"library-v1"` | capability |
 | `ota` | `"v1"` | capability: the Pro takes firmware offers |
+| `appFilter` | `"v1"` | capability |
+| `questionTier` | `"v1"` | capability |
+| `appCards` | `"v1"` | capability |
 | `mac` | `aa:bb:...` | existing |
 | `settings` | object | existing: brightness, character, face, voiceLang, muted, quiet, straightTitle, focusFace, scrollReversed, round |
 
 Dropped from the branch's hello: `speech` (`pcm16-v1`). The Pro does not take speech output.
+
+The daemon answers `appFilter`, `questionTier` and `appCards` (section 2). The Pro firmware that sends them is
+item B of the parity split (`docs/plans/2026-11-20-pro-parity-split.md`); until it lands, the Pro sends none of the three.
 
 A capability is a positive string match; any other value (absent, wrong string, wrong type) means "off".
 Capabilities are per session: they reset on a new port and on close, like the branch's `playerCapable`.
@@ -45,6 +52,18 @@ Capabilities are per session: they reset on a new port and on close, like the br
 | `recap: "long-v1"` | `full` on `summary` (live and `restore:true`) | `{t:"summary", agentId, recap, text, full?:string, restore?:true, ...}`. `full` is the whole answer's prose: markdown stripped, whitespace collapsed, at most **1200 chars**, at most **3600 UTF-8 bytes**, cut on a word boundary with `…`. Omitted (not empty) when the answer has no text. Firmware recap buffer is 2048 B. `recap` and `text` are unchanged. |
 | `activity: "steps-v1"` | `step`, `action`, `elapsedSeconds` on `turn.activity` | `{t:"turn.activity", agentId, text, action?:string, elapsedSeconds?:int, step?:string}`. `step`: one tool card as `"Tool · arg"` (a path argument keeps its last segment), at most **120 chars**, sent as `{text:"", step}` the moment the tool starts; the firmware cuts at 400. `action`: latest assistant-written progress paragraph, whitespace collapsed, at most **188 bytes** (firmware keeps 192 B). `elapsedSeconds`: integer **0..2592000**, parsed from the engine footer (`1h 2m 3s`); anything else is omitted. `action` also rides on the first `turn.activity` right after `turn.started`. |
 | `player: "library-v1"` | feature `player.library` in `welcome.features`; the `player.library.get` request and the `player.library` reply | Request (device to host): `{t:"player.library.get", offset:int 0..1000000, request:int 0..4294967295}`; anything else is ignored. Reply: `{t:"player.library", request, offset, total, machines, rows:[...]}`. `rows` has at most **6** (page size); `offset` is clamped to `max(0, total-6)`; the page is never re-sorted (desktop order). Row: `{id, machineId, name, engine, status, ageSeconds}`; `id`, `machineId` non-empty and < 48 B; `name` <= 95 B, `engine` <= 15 B (control chars to spaces, UTF-8 safe); `status` one of `idle working question finished failed paused offline`; `ageSeconds` is -1 (unknown) or 0..315360000. The firmware rejects the whole page if `count != min(6, total - offset)`. `request` echoes the latest request; a reply for an older request is dropped. Resent at most every 10 s unless the page changed. |
+| `appFilter: "v1"` | the `apps` frame; `app.pick`; feature `apps.switch` in `welcome.features` (when the host can pick an app); the shown app's ring | `apps` (daemon to device): `{t:"apps", shown, apps:[{id, name, count, waiting, working?}]}`. At most **16** rows; on an app's ring the shown app is always among them, and on the window's tab `shown` is `"harness"` and the rows are the other apps. Sent before the ring it names. `waiting` is the Pro's "asking". `app.pick` (device to daemon): `{t:"app.pick", app}`; an `app` of 1-16 characters, anything else is ignored. With no window, or with a window while the view is an app's ring, the list is the shown app's ring and its `agents.end` says `tab: ""` and `view: "machine"`; otherwise the list is the window's tab. One app filter per computer, shared by every dial on it: a pick on one dial turns the ring on all of them. |
+| `questionTier: "v1"` | `tier` on a question told again; feature `question.tier` in `welcome.features` | A question the daemon tells again is sent with `tier: "list"`: a silent Notices row, no beep, wake or toast. A first `question` carries no `tier` (read it as `alert`). |
+| `appCards: "v1"` | `working` on each `apps` row | `working`: integer **0..count**, the app's agents mid-turn. A change of `working` alone pushes `apps`: at most once a second while the list is an app's ring (the machine list's gap), at once on the window's tab. No welcome feature: an older daemon sends no `working`, which reads as 0. A device that does not say `appCards` gets today's `apps` frame byte for byte. |
+
+**`swarms` on an app's ring.** A device that says `swarms: "members-v1"` keeps getting the window's `swarms`
+(`selected`, `items`, `tiles`) while the view is an app's ring. A flip of the view sends no `swarms`; a real tab change
+still does. So `agents.end` can say `tab: ""` while the last `swarms` still holds the window's tabs: a window is open
+when the last `agents.end` has a non-empty `tab`, or the last `swarms` holds a tab. A device without `members-v1` (the
+round dial) gets an empty `swarms` on an app's ring, as before.
+
+**Welcome size.** With `appFilter` and `questionTier`, the welcome to a Pro lists at most 11 names in `features`
+(past 16 the firmware reads none of them, `cable_features.c`).
 
 Order of arrival the firmware tolerates: any. Every field above is optional on the device side; a missing one
 leaves the Pod showing an empty body, never an error.
@@ -113,10 +132,10 @@ separately), every `speech.*` and the speech PCM frame (`0x05`), `models`, `noti
 `selection.state`, `carry.state`, `form.state`, `visit.state`, `metrics.state` (and `metrics.get`),
 `player.overview`, `player.context` (parsed in the shared firmware but unused by Pod), `machine.selected`,
 `machine.error`, `toast`, and the notification fields of `summary` (`silent`, `quiet`, `name`, `machine`), though it reads `tier` (below).
-The Pro does use: `welcome`, `ping`, `agents.*`, `agent.updated`, `machines.*`, `swarms`, `focus`,
+The Pro does use: `welcome`, `ping`, `agents.*`, `agent.updated`, `machines.*`, `swarms`, `apps` (item B), `focus`,
 `turn.started/activity/done/error`, `summary`, `question`, `question.close`, `player.library`, `voice.transcript`,
 `voice.error`; and sends `hello`, `machines.list`, `agents.list`, `player.library.get`, `agent.open`, `scroll`,
-`pong`, the voice stream and `voice.abort` (why "discarded").
+`app.pick` (item B), `pong`, the voice stream and `voice.abort` (why "discarded").
 
 ## 6. Open points
 
@@ -152,7 +171,7 @@ The Pro's USB-Serial/JTAG path loses bytes host to device, each loss under one 6
 
 A gap, or a frame that failed its CRC, makes the Pro send `{t:"resync"}`, at most once per 2 s (and not during a
 firmware transfer, which has its own resend). The daemon answers with a full snapshot, also rate-limited to once per
-2 s: `machines.*`, `swarms`, `agents.*`, `notif.replace` (the notices, including question rows), and a `question`
+2 s: `machines.*`, `swarms`, `apps` (with `appFilter`), `agents.*`, `notif.replace` (the notices, including question rows), and a `question`
 frame for each question still open. It does not replay recent `summary` history (the attach push does); a lost
 `summary` is not repaired by a resync. The welcome of a Pro lists `resync` in `features`; a Pro whose welcome does not (an older daemon) sends the old
 `swarms.list` and `agents.list` instead. A welcome without `seq` turns the gap check off for that session.
@@ -162,4 +181,5 @@ frame for each question still open. It does not replay recent `summary` history 
 `summary` carries `tier`: `"alert"` (beep, wake, toast, Notices entry), `"list"` (Notices entry only: no beep,
 wake or toast) or `"silent"` (the card updates, nothing else). The host still sends the older flags beside it
 for firmware that predates `tier`: `alert` sets neither, `list` sets `quiet: true`, `silent` sets `silent: true`.
-`question` and `turn.error` carry no `tier`; treat both as `alert`.
+`turn.error` carries no `tier`, nor does `question`, but for one told again to a device that says `questionTier`
+(`tier: "list"`, section 2); treat either without it as `alert`.

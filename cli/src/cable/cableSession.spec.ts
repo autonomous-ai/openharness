@@ -14,13 +14,13 @@ import { describe, expect, it, vi, type Mock } from 'vitest'
 import { CABLE_MAX_FRAME, CABLE_MAX_PAYLOAD, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DaemonCableHost } from './cableHost.js'
 import type { MachineFleet } from './machineFleet.js'
-import { CableSession, fitDrawer, SHOWN_ONLY_PREFIX, SWIPE_REST_MS, type CableAgent, type CableHost, type CableMachine, type CablePort, type DialAgent, type DialStatus, type SendOutcome } from './cableSession.js'
+import { CableSession, fitDrawer, SHOWN_ONLY_PREFIX, SWIPE_REST_MS, type CableAgent, type CableHost, type CableMachine, type CablePort, type CableSwarm, type DialAgent, type DialStatus, type SendOutcome } from './cableSession.js'
 import { DialLog } from './dialLog.js'
 import { noticeSummary } from './dialText.js'
 import { NO_ACCESS, NO_ACCESS_YET, PortAccessError } from './portAccess.js'
 import type { PetStore } from './pets/store.js'
 import { HostRegistry } from './hosts/registry.js'
-import type { AppList, AppPick, HostAgent, HostSource } from './hosts/types.js'
+import type { AppEntry, AppList, AppPick, HostAgent, HostSource } from './hosts/types.js'
 import type { RegisteredSession } from '../lib/registry.js'
 
 // The voice router as it runs, watched: what it weighs, and the ranking it asks of the backend, leave this computer.
@@ -5385,7 +5385,9 @@ const NAMES: Record<string, string> = { ghostty: 'Ghostty', vscode: 'VS Code' }
 /** A host with the cable host's app answers: Ghostty (3) shown, VS Code (2, one waiting); v1 can be brought forward.
  *  With a window, a dial that says appFilter holds the shown app's ring while `appView` is set, and the tab t1 (a1, a2)
  *  otherwise; any other dial holds the tab. `focus` is the window's. `tabApps`: the tab's answer to such a dial carries
- *  the other apps, as the cable host's does. */
+ *  the other apps, as the cable host's does. `swarms`: the window's tabs, which the host answers on the tab. `working`:
+ *  each app's agents mid-turn, which the host's rows always carry (`cards`); `list` is the rows without it, the frame a
+ *  dial that does not say appCards gets. */
 function appHost(over: Partial<CableHost> = {}) {
   const state = {
     shown: 'ghostty',
@@ -5395,14 +5397,20 @@ function appHost(over: Partial<CableHost> = {}) {
     focus: undefined as { machineId: string; agentId: string } | undefined,
     rings: { ghostty: [row('g1', 'ghostty'), row('g2', 'ghostty'), row('g3', 'ghostty')], vscode: [row('v1', 'vscode', 'sf'), row('v2', 'vscode')] } as Record<string, CableAgent[]>,
     waiting: { vscode: 1 } as Record<string, number>,
+    working: {} as Record<string, number>,
+    swarms: [{ id: 't1', name: 'Main', agents: 2, panes: 2 }] as CableSwarm[],
   }
   const asked: Array<{ apps?: boolean } | undefined> = []
   const all = () => Object.values(state.rings).flat()
   const onTab = (opts?: { apps?: boolean }) => state.window && !(opts?.apps && state.appView)
-  const list = (): AppList => ({
+  const list = (): { shown: string; apps: Array<Omit<AppEntry, 'working'>> } => ({
     shown: state.shown,
     apps: Object.entries(state.rings).filter(([, r]) => r.length).map(([id, r]) => ({ id, name: NAMES[id], count: r.length, waiting: state.waiting[id] ?? 0 })),
   })
+  const cards = (): AppList => {
+    const { shown, apps } = list()
+    return { shown, apps: apps.map((a) => ({ ...a, working: state.working[a.id] ?? 0 })) }
+  }
   const pickApp = vi.fn((app: string, _cause?: 'pick' | 'notice'): AppPick => {
     if (state.window || !state.rings[app]?.length) return 'ignored'
     if (app === state.shown) return 'same'
@@ -5412,12 +5420,12 @@ function appHost(over: Partial<CableHost> = {}) {
   const host = makeHost({
     listAgentSnapshot: async (opts) => {
       asked.push(opts)
-      if (onTab(opts)) return { agents: AGENTS, tab: 't1', total: 2, ...(opts?.apps && state.tabApps ? { apps: { shown: 'harness', apps: list().apps } } : {}) }
+      if (onTab(opts)) return { agents: AGENTS, tab: 't1', total: 2, ...(opts?.apps && state.tabApps ? { apps: { shown: 'harness', apps: cards().apps } } : {}) }
       if (!opts?.apps) return { agents: all(), tab: '', total: all().length, view: 'machine' as const }
       const rows = state.rings[state.shown] ?? []
-      return { agents: rows, tab: '', total: rows.length, view: 'machine' as const, apps: list() }
+      return { agents: rows, tab: '', total: rows.length, view: 'machine' as const, apps: cards() }
     },
-    listSwarms: (opts) => onTab(opts) ? { selected: 't1', swarms: [{ id: 't1', name: 'Main', agents: 2, panes: 2 }], tiles: [] }
+    listSwarms: (opts) => onTab(opts) ? { selected: 't1', swarms: state.swarms, tiles: [] }
       : { selected: '', swarms: [], tiles: [] },
     activeSwarm: (opts) => onTab(opts) ? 't1' : '',
     appFocus: (opts) => state.window && !onTab(opts) ? undefined : state.focus,
@@ -5429,7 +5437,7 @@ function appHost(over: Partial<CableHost> = {}) {
     openAgent: vi.fn(async () => ({ ok: false as const, error: 'Harness did not open it.' })),
     ...over,
   })
-  return { host, state, asked, pickApp, list }
+  return { host, state, asked, pickApp, list, cards }
 }
 
 describe('a machine list lands a dial that holds no agent (docs/plans/2026-11-18-dial-chatgpt-pick-and-voice-design.md)', () => {
@@ -6145,13 +6153,18 @@ describe('a ring that would overflow the dial goes in two steps (docs/plans/2026
 })
 
 describe('the app filter', () => {
+  /** The Harness Pro's hello, as its firmware says it. */
+  const PRO = {
+    board: 'pro', swarms: 'members-v1', recap: 'long-v1', activity: 'steps-v1', stats: 'turn-v1', player: 'library-v1',
+    ota: 'v1', appFilter: 'v1', questionTier: 'v1', appCards: 'v1',
+  }
   const LIST = new Set(['apps', 'agents.begin', 'agent', 'agents.end'])
   const listFrames = (port: LoopbackPort) => port.sent.filter((m) => LIST.has(m.t as string))
   const listTypes = (port: LoopbackPort) => listFrames(port).map((m) => m.t)
 
-  async function greeted(host: CableHost, appFilter = true) {
+  async function greeted(host: CableHost, appFilter = true, fields: Record<string, unknown> = {}) {
     const c = await connect(host)
-    c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', ...(appFilter ? { appFilter: 'v1' } : {}) })
+    c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', ...(appFilter ? { appFilter: 'v1' } : {}), ...fields })
     await vi.waitFor(() => expect(c.port.types()).toContain('notif.replace'))
     return c
   }
@@ -6537,8 +6550,8 @@ describe('the app filter', () => {
   const voiceAnswered = (port: LoopbackPort) => port.types().some((t) => t === 'voice.transcript' || t === 'voice.error')
 
   /** The host's answers that differ by dial, watched from before the greeting. The dial then turns to g1 (no f), taps it
-   *  and stops it, which asks each of them. */
-  async function asking(appFilter: boolean, window: boolean) {
+   *  and stops it, which asks each of them. `fields`: the rest of the hello. */
+  async function asking(appFilter: boolean, window: boolean, fields: Record<string, unknown> = {}) {
     const { host, state } = appHost({ openAgent: vi.fn() })
     state.window = state.appView = window
     const spies = {
@@ -6547,7 +6560,7 @@ describe('the app filter', () => {
     }
     vi.useFakeTimers({ toFake: ['Date', 'performance'] })
     try {
-      const c = await greeted(host, appFilter)
+      const c = await greeted(host, appFilter, fields)
       // Past the 750 ms after a landing on g1, so the turn to g1 is a hand's and not taken as the landing's echo.
       vi.advanceTimersByTime(751)
       c.port.say({ t: 'focus', agentId: 'g1' })
@@ -6893,6 +6906,267 @@ describe('the app filter', () => {
       // The landing's g1, then the hand's g2: the reorder and its echo told the host no other agent.
       expect(dialShows.mock.calls.map(([, agent]) => agent)).toEqual([{ name: 'g1', app: 'Ghostty' }, { name: 'g2', app: 'Ghostty' }])
     } finally { vi.useRealTimers(); await session.stop() }
+  })
+
+  describe('a Harness Pro hello (docs/plans/2026-11-20-pro-app-data-daemon-design.md)', () => {
+    async function pro(host: CableHost) {
+      const c = await connect(host)
+      c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', ...PRO })
+      await vi.waitFor(() => expect(c.port.types()).toContain('notif.replace'))
+      return c
+    }
+
+    // `sent` and `seqs` are parallel: a spec that reads seqs by index clears both.
+    const clear = (port: LoopbackPort) => { port.sent.length = 0; port.seqs.length = 0 }
+    const swarmsFrames = (port: LoopbackPort) => port.sent.filter((m) => m.t === 'swarms')
+
+    it("the window's swarms stay on a Pro on an app's ring: a view flip pushes none, a new tab still does", async () => {
+      vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+      const { host, state, asked } = appHost()
+      state.window = true
+      const { session, port } = await pro(host)
+      try {
+        clear(port)
+        vi.advanceTimersByTime(100)
+        state.appView = true
+        await session.viewChanged()
+        expect(swarmsFrames(port)).toEqual([])
+        const frames = listFrames(port)
+        expect(frames[0]).toMatchObject({ t: 'apps', shown: 'ghostty' })
+        expect(frames.filter((m) => m.t === 'agent').map((m) => m.id)).toEqual(['g1', 'g2', 'g3'])
+        expect(frames.at(-1)).toEqual({ t: 'agents.end', total: 3, tab: '', view: 'machine' })
+        expect(asked.every((opts) => opts?.apps === true)).toBe(true)
+
+        state.swarms = [...state.swarms, { id: 't2', name: 'Two', agents: 0, panes: 1 }]
+        await session.syncSwarms()
+        expect(swarmsFrames(port)).toHaveLength(1)
+        expect(swarmsFrames(port)[0]).toMatchObject({ selected: 't1', items: [{ id: 't1' }, { id: 't2' }] })
+
+        clear(port)
+        state.appView = false
+        await session.viewChanged()
+        expect(swarmsFrames(port)).toEqual([])
+      } finally { await session.stop(); vi.useRealTimers() }
+    })
+
+    it("a Pro asks every other read as itself on an app's ring: only its swarms are the window's", async () => {
+      const { session, spies } = await asking(true, true, PRO)
+      try {
+        const { listSwarms, ...asks } = spies
+        askedAs(asks, true)
+        expect(listSwarms.mock.calls.length).toBeGreaterThan(0)
+        for (const call of listSwarms.mock.calls) expect(call.at(-1)).toEqual({})
+      } finally { await session.stop() }
+    })
+
+    it('the welcome names apps.switch, question.tier and resync, eleven names in all', async () => {
+      const { host } = appHost({
+        form: async () => ({ ok: false, active: false, error: 'test' }),
+        visit: async () => ({ ok: false, active: false, error: 'test' }),
+        selectPassage: async () => ({ ok: false, error: 'test' }),
+        answerReviewed: async () => ({ ok: false, error: 'test' }),
+        playerLibrary: async () => [],
+      })
+      const { session, port } = await pro(host)
+      try {
+        const features = port.sent.find((m) => m.t === 'welcome')?.features as string[]
+        expect(features).toEqual(['voice.draft', 'agents.refresh', 'player.library', 'resync', 'form', 'selection', 'visit', 'question.review', 'apps.switch', 'question.tier', 'settings'])
+        // Past sixteen the firmware reads none of them (cable_features.c returns 0).
+        expect(features.length).toBeLessThanOrEqual(16)
+      } finally { await session.stop() }
+    })
+
+    it('every apps frame to a Pro carries seq, one more than the frame before', async () => {
+      vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+      const { host, state } = appHost()
+      const { session, port } = await pro(host)
+      try {
+        vi.advanceTimersByTime(1_100)
+        state.rings.vscode = [row('v1', 'vscode', 'sf')]
+        await session.syncAgents()
+        const at = port.sent.flatMap((m, i) => (m.t === 'apps' ? [i] : []))
+        expect(at.length).toBeGreaterThanOrEqual(2)
+        for (const i of at) {
+          expect(typeof port.seqs[i]).toBe('number')
+          expect(port.seqs[i]).toBe(port.seqs[i - 1]! + 1)
+        }
+      } finally { await session.stop(); vi.useRealTimers() }
+    })
+
+    it('resync resends apps before the ring', async () => {
+      const { host } = appHost()
+      const { session, port } = await pro(host)
+      try {
+        clear(port)
+        port.say({ t: 'resync' })
+        await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+        const apps = port.sent.findIndex((m) => m.t === 'apps')
+        expect(port.sent[apps]).toMatchObject({ shown: 'ghostty' })
+        expect(apps).toBeLessThan(port.types().indexOf('agents.begin'))
+      } finally { await session.stop() }
+    })
+
+    it("app.pick of another app turns a Pro's ring", async () => {
+      const { host, pickApp } = appHost()
+      const { session, port } = await pro(host)
+      try {
+        clear(port)
+        port.say({ t: 'app.pick', app: 'vscode' })
+        await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+        expect(pickApp).toHaveBeenCalledWith('vscode')
+        const frames = listFrames(port)
+        expect(frames[0]).toMatchObject({ t: 'apps', shown: 'vscode' })
+        expect(frames.filter((m) => m.t === 'agent').map((m) => m.id)).toEqual(['v1', 'v2'])
+        expect(frames.at(-1)).toEqual({ t: 'agents.end', total: 2, tab: '', view: 'machine' })
+      } finally { await session.stop() }
+    })
+
+    it("a tap on a Harness agent on an app's ring asks for the window's tab, then opens it", async () => {
+      const openAgent = vi.fn(async () => {})
+      const { host, state, pickApp } = appHost({ openAgent })
+      state.window = state.appView = true
+      state.rings.harness = [row('h1', 'harness', 'svfa')]
+      const { session, port } = await pro(host)
+      try {
+        port.say({ t: 'agent.open', agentId: 'h1' })
+        await vi.waitFor(() => expect(openAgent).toHaveBeenCalledWith('h1', undefined))
+        expect(pickApp).toHaveBeenCalledWith('harness', 'notice')
+        expect(pickApp.mock.invocationCallOrder[0]).toBeLessThan(openAgent.mock.invocationCallOrder[0]!)
+      } finally { await session.stop() }
+    })
+
+    it("scroll from a Pro reaches the host as the round dial's does", async () => {
+      const { host } = appHost()
+      const { session, port } = await pro(host)
+      try {
+        port.say({ t: 'scroll', phase: 'down', dy: 0 })
+        port.say({ t: 'scroll', phase: 'move', dy: 12 })
+        port.say({ t: 'scroll', phase: 'up', dy: 3, v: -1800 })
+        await vi.waitFor(() => expect(host.scrolled).toHaveBeenCalledTimes(3))
+        expect(host.scrolled).toHaveBeenNthCalledWith(1, 'down', 0, 0)
+        expect(host.scrolled).toHaveBeenNthCalledWith(2, 'move', 12, 0)
+        expect(host.scrolled).toHaveBeenNthCalledWith(3, 'up', 3, -1800)
+      } finally { await session.stop() }
+    })
+  })
+
+  describe('appCards', () => {
+    async function greet(host: CableHost, fields: Record<string, unknown>) {
+      const c = await connect(host)
+      c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', appFilter: 'v1', ...fields })
+      await vi.waitFor(() => expect(c.port.types()).toContain('notif.replace'))
+      return c
+    }
+    /** The bytes of the first `apps` frame written, as they went down the cable. */
+    const appsBytes = (port: LoopbackPort) => {
+      const frame = port.frames.find((f) => Buffer.from(f).includes('"t":"apps"'))
+      return frame && Buffer.from(frame)
+    }
+    const encoded = (json: string) => Buffer.from(encodeCableFrame(CableType.Json, Buffer.from(json, 'utf8')))
+    // `sent`, `seqs` and `frames` are parallel records of one stream: a spec that clears one clears all.
+    const clear = (port: LoopbackPort) => { port.sent.length = 0; port.seqs.length = 0; port.frames.length = 0 }
+
+    it('a dial that says appCards v1 gets working on each row, after waiting', async () => {
+      const log = vi.fn()
+      const { host, state } = appHost({ log })
+      state.working = { ghostty: 2 }
+      const { session, port } = await greet(host, { appCards: 'v1' })
+      try {
+        expect(JSON.stringify(port.sent.find((m) => m.t === 'apps'))).toBe(
+          '{"t":"apps","shown":"ghostty","apps":[{"id":"ghostty","name":"Ghostty","count":3,"waiting":0,"working":2},{"id":"vscode","name":"VS Code","count":2,"waiting":1,"working":0}]}')
+        expect(log.mock.calls.map(([line]) => line)).toContainEqual(expect.stringMatching(/caps appFilter,appCards$/))
+        expect(port.sent.find((m) => m.t === 'welcome')?.features).toEqual(['voice.draft', 'agents.refresh', 'apps.switch', 'settings'])
+      } finally { await session.stop() }
+    })
+
+    it('an appCards dial is sent five fields a row, in the contract\'s order, whatever else the host\'s entry carries', async () => {
+      const { host } = appHost()
+      const snapshot = host.listAgentSnapshot!.bind(host)
+      // `working` first and a field the wire does not name: the Pro parses fixed fields into fixed buffers.
+      host.listAgentSnapshot = async (opts) => {
+        const s = await snapshot(opts)
+        return s.apps ? { ...s, apps: { ...s.apps, apps: s.apps.apps.map((a) => Object.assign({ working: a.working, rank: 7 }, a)) } } : s
+      }
+      const { session, port } = await greet(host, { appCards: 'v1' })
+      try {
+        expect(JSON.stringify(port.sent.find((m) => m.t === 'apps'))).toBe(
+          '{"t":"apps","shown":"ghostty","apps":[{"id":"ghostty","name":"Ghostty","count":3,"waiting":0,"working":0},{"id":"vscode","name":"VS Code","count":2,"waiting":1,"working":0}]}')
+      } finally { await session.stop() }
+    })
+
+    it('without appCards v1 the apps frame is today\'s, byte for byte, though the host counts working', async () => {
+      const today = encoded('{"t":"apps","shown":"ghostty","apps":[{"id":"ghostty","name":"Ghostty","count":3,"waiting":0},{"id":"vscode","name":"VS Code","count":2,"waiting":1}]}')
+      for (const fields of [{}, { appCards: 'v2' }, { appCards: true }]) {
+        const { host, state } = appHost()
+        state.working = { ghostty: 2 }
+        const { session, port } = await greet(host, fields)
+        try {
+          expect(appsBytes(port)).toEqual(today)
+        } finally { await session.stop() }
+      }
+      const { session, port } = await greet(appHost().host, { appCards: 'v1', appFilter: undefined })
+      try {
+        expect(port.types()).not.toContain('apps')
+      } finally { await session.stop() }
+    })
+
+    it('the tab\'s apps carry working to an appCards dial', async () => {
+      const { host, state, cards } = appHost()
+      state.window = state.tabApps = true
+      state.working = { vscode: 1 }
+      const { session, port } = await greet(host, { appCards: 'v1' })
+      try {
+        const apps = port.sent.find((m) => m.t === 'apps')
+        expect(apps).toEqual({ t: 'apps', shown: 'harness', apps: cards().apps })
+        expect(apps?.apps).toContainEqual(expect.objectContaining({ id: 'vscode', working: 1 }))
+      } finally { await session.stop() }
+    })
+
+    it('a Pro and a round dial on one host: a working change alone pushes apps to the Pro only, held to the 1 s gap', async () => {
+      vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+      const { host, state, cards } = appHost()
+      const pro = await greet(host, PRO)
+      const round = await greet(host, {})
+      try {
+        clear(pro.port)
+        clear(round.port)
+        vi.advanceTimersByTime(1_100)
+        state.working.ghostty = 1
+        await pro.session.syncAgents()
+        await round.session.syncAgents()
+        expect(listFrames(pro.port)).toEqual([{ t: 'apps', ...cards() }])
+        expect(listFrames(round.port)).toEqual([])
+
+        // Ended inside the gap: held, not lost.
+        clear(pro.port)
+        vi.advanceTimersByTime(100)
+        state.working.ghostty = 0
+        await pro.session.syncAgents()
+        expect(listFrames(pro.port)).toEqual([])
+        vi.advanceTimersByTime(1_000)
+        await pro.session.syncAgents()
+        const after = listFrames(pro.port)
+        expect(after).toHaveLength(1)
+        expect(after[0]?.apps).toContainEqual(expect.objectContaining({ id: 'ghostty', working: 0 }))
+
+        await round.session.syncAgents()
+        expect(listFrames(round.port)).toEqual([])
+      } finally { await pro.session.stop(); await round.session.stop(); vi.useRealTimers() }
+    })
+
+    it('appCards is read at each hello and forgotten when the port closes', async () => {
+      const { host } = appHost()
+      const { session, port } = await greet(host, { appCards: 'v1' })
+      try {
+        expect(session['appCards']).toBe(true)
+        port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', appFilter: 'v1', fw: '1.0.1' })
+        await vi.waitFor(() => expect(session['appCards']).toBe(false))
+        port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', appFilter: 'v1', fw: '1.0.1', appCards: 'v1' })
+        await vi.waitFor(() => expect(session['appCards']).toBe(true))
+        await port.close('unplugged')
+        expect(session['appCards']).toBe(false)
+      } finally { await session.stop() }
+    })
   })
 })
 

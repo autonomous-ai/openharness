@@ -985,7 +985,7 @@ export class DaemonCableHost implements CableHost {
     const rows = at < APP_LIMIT ? all.slice(0, APP_LIMIT) : [...all.slice(0, APP_LIMIT - 1), all[at]]
     return {
       shown,
-      apps: rows.map((a) => ({ id: a.id, name: appDisplayName(a.id), count: a.count, waiting: a.waiting })),
+      apps: rows.map((a) => ({ id: a.id, name: appDisplayName(a.id), count: a.count, waiting: a.waiting, working: a.working })),
     }
   }
 
@@ -995,7 +995,7 @@ export class DaemonCableHost implements CableHost {
   private tabApps(agents: HostAgent[]): AppList {
     this.rings.update(agents, this.ranks)
     const rows = this.rings.apps().filter((a) => a.id !== 'harness').slice(0, APP_LIMIT)
-    return { shown: 'harness', apps: rows.map((a) => ({ id: a.id, name: appDisplayName(a.id), count: a.count, waiting: a.waiting })) }
+    return { shown: 'harness', apps: rows.map((a) => ({ id: a.id, name: appDisplayName(a.id), count: a.count, waiting: a.waiting, working: a.working })) }
   }
 
   /** How many agents the account has across every machine — the overview's number, sent beside the
