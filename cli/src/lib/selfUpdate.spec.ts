@@ -796,6 +796,11 @@ describe('the canary\'s verdicts', () => {
     expect(await runCanary(Buffer.from('console.log("loading…"); console.log("9.9.9")\n'), dir, '9.9.9')).toEqual({ ok: true, ptyProtocol: 2 })
     expect(await runCanary(Buffer.from('console.log("9.9.8")\n'), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', ended: 'it says it is 9.9.8' })
     expect(await runCanary(Buffer.from(''), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', ended: 'it says it is nothing' })
+    expect(await runCanary(Buffer.from('console.log("1.2.3-beta.1+b7")\n'), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', ended: 'it says it is 1.2.3-beta.1+b7' })
+    // A last line that is not a version is a line of the build's own output, which can name the person's folders.
+    expect(await runCanary(Buffer.from('console.log("loaded /Users/sentinel/x")\n'), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', ended: 'it says it is text(24)' })
+    expect(await runCanary(Buffer.from('console.log(JSON.stringify({ version: "9.9.8 at /Users/sentinel", ptyProtocol: 2 }))\n'), dir, '9.9.9'))
+      .toEqual({ ok: false, problem: 'wrong-version', ended: 'it says it is text(24)' })
     expect(await runCanary(Buffer.from('process.exit(3)\n'), dir, '9.9.9')).toEqual({ ok: false, problem: 'failed', ended: 'exit 3' })
     expect(await runCanary(Buffer.from('process.kill(process.pid, "SIGKILL")\n'), dir)).toEqual({ ok: false, problem: 'failed', ended: 'signal SIGKILL' })
     expect(await canary(Buffer.from('console.log("anything")\n'), dir)).toBe(true)
