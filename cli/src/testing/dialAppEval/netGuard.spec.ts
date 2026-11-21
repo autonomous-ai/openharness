@@ -23,8 +23,10 @@ import { describeAttempt, guardThisProcess, isLocal, NET_GUARD_FILE_ENV, NET_GUA
 const OFF = '192.0.2.1'
 // Not 9, the discard port: fetch and WebSocket refuse it themselves, before any socket the guard could see.
 const PORT = 8
-const RESOLVES = ['resolve', 'resolve4', 'resolve6', 'resolveAny', 'resolveCaa', 'resolveCname', 'resolveMx',
-  'resolveNaptr', 'resolveNs', 'resolvePtr', 'resolveSoa', 'resolveSrv', 'resolveTxt'] as const
+const member = (owner: object, name: string): unknown => (owner as Record<string, unknown>)[name]
+// Every function of node:dns but these, which ask nothing of the network: a query a later Node adds is in it.
+const NOT_QUERIES = ['Resolver', 'getDefaultResultOrder', 'setDefaultResultOrder', 'getServers', 'setServers']
+const DNS_QUERIES = Object.keys(dns).filter((name) => typeof member(dns, name) === 'function' && !NOT_QUERIES.includes(name))
 
 /** The source of each guarded entry point: a Node with nothing installed has these. */
 function sources(): string {
@@ -32,6 +34,18 @@ function sources(): string {
     dns.promises.lookup].map(String).join('\n')
 }
 const pristine = sources()
+
+/** Every entry point the guard wraps, by where it is: each query of node:dns where it is one, in CommonJS and in ESM. */
+function doors(): Record<string, unknown> {
+  const owners: Record<string, object> = { dns, 'dns.promises': dns.promises, 'dns.Resolver#': dns.Resolver.prototype,
+    'dns.promises.Resolver#': dns.promises.Resolver.prototype, 'node:dns': dnsNamespace, 'node:dns/promises': dnsPromisesNamespace }
+  return {
+    'net.Socket#connect': net.Socket.prototype.connect, 'dgram.Socket#send': dgram.Socket.prototype.send,
+    'dgram.Socket#connect': dgram.Socket.prototype.connect,
+    ...Object.fromEntries(Object.entries(owners).flatMap(([owner, at]) => DNS_QUERIES
+      .filter((name) => Object.hasOwn(at, name)).map((name) => [`${owner}.${name}`, member(at, name)]))),
+  }
+}
 
 let guard: ReturnType<typeof guardThisProcess>
 const roots: string[] = []
@@ -167,6 +181,58 @@ it('a lookup of example.invalid is refused and recorded, and localhost resolves'
   expect(guard.taken()).toEqual([])
 })
 
+it('every query of node:dns, of its promises and of both Resolvers is refused and recorded', async () => {
+  expect(DNS_QUERIES).toEqual(expect.arrayContaining(['lookup', 'lookupService', 'resolveTlsa', 'reverse']))
+  const call = (owner: object, name: string, args: unknown[]) => (member(owner, name) as (...all: unknown[]) => unknown).call(owner, ...args)
+  const called = (owner: object, name: string, args: unknown[]) =>
+    new Promise<unknown>((resolve) => { call(owner, name, [...args, resolve]) })
+  const rejected = (owner: object, name: string, args: unknown[]) =>
+    (call(owner, name, args) as Promise<unknown>).then(() => null, (error: unknown) => error)
+  const resolver = new dns.Resolver()
+  const promises = new dns.promises.Resolver()
+  for (const name of DNS_QUERIES) {
+    // The two that take an address are asked of 192.0.2.1.
+    const args = name === 'lookupService' ? [OFF, 9] : name === 'reverse' ? [OFF] : ['example.invalid']
+    const asks: Array<[string, () => Promise<unknown>]> = [[`dns.${name}`, () => called(dns, name, args)],
+      [`dns.promises.${name}`, () => rejected(dns.promises, name, args)]]
+    if (Object.hasOwn(dns.Resolver.prototype, name)) asks.push([`Resolver#${name}`, () => called(resolver, name, args)])
+    if (Object.hasOwn(dns.promises.Resolver.prototype, name)) asks.push([`promises.Resolver#${name}`, () => rejected(promises, name, args)])
+    for (const [door, ask] of asks) {
+      const error = await ask() as NodeJS.ErrnoException | null
+      expect({ door, code: error?.code, message: error?.message, taken: guard.taken() }).toEqual({ door, code: 'ENOTFOUND',
+        message: `the dial eval reaches no network: ${args[0]}`, taken: [attempt('dns', String(args[0]), null)] })
+    }
+  }
+})
+
+// Only a lookup reads the hosts file; every other query is a DNS server's to answer.
+it('a resolve or a reverse of this machine is refused all the same, and the DNS server hears nothing', async () => {
+  // The server is this machine's: a query the guard let through reaches no one else.
+  const server = dgram.createSocket('udp4')
+  let heard = 0
+  server.on('message', () => { heard++ })
+  server.bind(0, '127.0.0.1')
+  await once(server, 'listening')
+  try {
+    const servers = [`127.0.0.1:${server.address().port}`]
+    const resolver = new dns.Resolver({ timeout: 50, tries: 1 })
+    resolver.setServers(servers)
+    const promises = new dns.promises.Resolver({ timeout: 50, tries: 1 })
+    promises.setServers(servers)
+    const errors = [
+      await new Promise<NodeJS.ErrnoException | null>((resolve) => resolver.resolve4('localhost', resolve)),
+      await new Promise<NodeJS.ErrnoException | null>((resolve) => resolver.reverse('127.0.0.1', resolve)),
+      await promises.resolve4('localhost').then(() => null, (error: NodeJS.ErrnoException) => error),
+      await promises.reverse('::1').then(() => null, (error: NodeJS.ErrnoException) => error),
+    ]
+    expect(errors.map((error) => error?.code)).toEqual(['ENOTFOUND', 'ENOTFOUND', 'ENOTFOUND', 'ENOTFOUND'])
+    expect(guard.taken()).toEqual(['localhost', '127.0.0.1', 'localhost', '::1'].map((host) => attempt('dns', host, null)))
+    expect(heard).toBe(0)
+  } finally {
+    server.close()
+  }
+})
+
 it('a dgram send or connect to 192.0.2.1 is refused and recorded, and one to 127.0.0.1 arrives', async () => {
   const receiver = dgram.createSocket('udp4')
   const sender = dgram.createSocket('udp4')
@@ -188,25 +254,14 @@ it('a dgram send or connect to 192.0.2.1 is refused and recorded, and one to 127
   }
 })
 
-it('uninstall puts every entry point back', () => {
+it('install wraps every entry point, and uninstall puts each back', () => {
   guard.uninstall()
-  const before = {
-    connect: net.Socket.prototype.connect, send: dgram.Socket.prototype.send, dgramConnect: dgram.Socket.prototype.connect,
-    lookup: dns.lookup, esmLookup: dnsNamespace.lookup, promisesLookup: dns.promises.lookup,
-    esmPromisesLookup: dnsPromisesNamespace.lookup,
-    ...Object.fromEntries(RESOLVES.flatMap((name) => [[name, dns[name]], [`promises.${name}`, dns.promises[name]]])),
-  }
+  const before = doors()
   guard = guardThisProcess()
-  expect(net.Socket.prototype.connect).not.toBe(before.connect)
-  expect(dnsNamespace.lookup).not.toBe(before.esmLookup)
-  expect(dnsPromisesNamespace.lookup).not.toBe(before.esmPromisesLookup)
+  const installed = doors()
+  expect(Object.keys(before).filter((door) => installed[door] === before[door])).toEqual([])
   guard.uninstall()
-  expect({
-    connect: net.Socket.prototype.connect, send: dgram.Socket.prototype.send, dgramConnect: dgram.Socket.prototype.connect,
-    lookup: dns.lookup, esmLookup: dnsNamespace.lookup, promisesLookup: dns.promises.lookup,
-    esmPromisesLookup: dnsPromisesNamespace.lookup,
-    ...Object.fromEntries(RESOLVES.flatMap((name) => [[name, dns[name]], [`promises.${name}`, dns.promises[name]]])),
-  }).toEqual(before)
+  expect(doors()).toEqual(before)
   expect(sources()).toBe(pristine)
 })
 
