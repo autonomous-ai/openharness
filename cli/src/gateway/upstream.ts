@@ -17,14 +17,14 @@
  */
 import { WebSocket } from 'ws'
 import { hostname } from 'os'
-import { env } from '../config/env.js'
+import { backendName, env } from '../config/env.js'
 import { tuiPresence, WINDOW_SURFACES, type LocalWindows, type WindowSurface } from '../lib/windowSurfaces.js'
 import { AuthSessionError } from '../lib/authSession.js'
 import { AuthSessionManager } from '../lib/authRefresh.js'
 import { backendHttpBase } from '../lib/backendHttpBase.js'
 import { BACKEND_IDLE_DEADLINE_MS, watchSocketLiveness, type LivenessWatch } from '../lib/wsLiveness.js'
 import { decodeTerminalHop, TerminalHopDirection } from '../lib/terminalBinary.js'
-import { errorKind, hashOf } from '../lib/log.js'
+import { errorKind } from '../lib/log.js'
 import { VERSION } from '../version.js'
 
 const APP_PING_MS = 15_000
@@ -194,7 +194,8 @@ export class UpstreamLink {
     ws.on('open', () => {
       this.openedAt = Date.now()
       // `harness start` waits for the marker (lib/daemonLaunch.ts); the URL names this computer's hostname.
-      console.log(`[backend] connected · ${hashOf(this.url)}`)
+      const backend = backendName(this.url)
+      console.log(`[backend] connected · ${backend}`)
       this.events.status(true)
       this.drainQueue()
       this.events.up()
