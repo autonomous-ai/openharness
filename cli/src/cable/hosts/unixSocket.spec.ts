@@ -166,7 +166,9 @@ describe.skipIf(process.platform === 'win32')('another program\'s Unix socket', 
     const folder = join(config, 'herdr')
     const at = { socketPath: join(folder, 'herdr.sock'), home }
     let told = 0
-    const stopWatch = watchSocket(at, () => { told++ })
+    // The changes the OS told, each with a name: the one a watch tells once it is live has none (folderWatch.ts), and
+    // would end a step before its own change is told.
+    const stopWatch = watchSocket(at, (file) => { if (file !== undefined) told++ })
     const count = () => told
     try {
       // With no <config>, a change in home is told.
@@ -183,7 +185,7 @@ describe.skipIf(process.platform === 'win32')('another program\'s Unix socket', 
     // After its stop nothing is: another watch of the same folder tells of the change.
     const stopped = told
     let seen = 0
-    const other = watchSocket(at, () => { seen++ })
+    const other = watchSocket(at, (file) => { if (file !== undefined) seen++ })
     try {
       await toldOf(() => seen, (name) => mkdir(join(folder, name)))
     } finally {
@@ -225,14 +227,14 @@ describe.skipIf(process.platform === 'win32')('another program\'s Unix socket', 
     }
   })
 
-  /** A watch of <config>/herdr in a home of its own, and how many changes it told. */
+  /** A watch of <config>/herdr in a home of its own, and how many changes the OS told, each with a name (as above). */
   async function watchedHerdr() {
     const home = await mkdtemp(join(tmpdir(), 'hw-'))
     const config = join(home, '.config')
     const folder = join(config, 'herdr')
     await mkdir(folder, { recursive: true })
     let told = 0
-    const stopWatch = watchSocket({ socketPath: join(folder, 'herdr.sock'), home }, () => { told++ })
+    const stopWatch = watchSocket({ socketPath: join(folder, 'herdr.sock'), home }, (file) => { if (file !== undefined) told++ })
     return { config, folder, count: () => told, stop: stopWatch }
   }
 

@@ -52,10 +52,11 @@ async function toldOf(count: () => number, change: (name: string) => Promise<unk
   }
 }
 
-/** A watch of `folders` and how many changes it told. */
+/** A watch of `folders` and how many changes the OS told, each with a name: the one a watch tells once it is live has
+ *  none, and would end a step before its own change is told. */
 function watched(folders: string[]) {
   let told = 0
-  const stop = watchNearest(folders, () => { told++ })
+  const stop = watchNearest(folders, (file) => { if (file !== undefined) told++ })
   return { count: () => told, stop }
 }
 

@@ -6,12 +6,19 @@
 import { existsSync, watch, type FSWatcher } from 'node:fs'
 import { pathToWatch } from '../../lib/pathToWatch.js'
 
+/** How long a watch is given to go live before its caller is told to look once more. On macOS fs.watch returns before
+ *  the watch's FSEvents stream starts on libuv's own thread (src/unix/fsevents.c), up to 4 s later on a loaded Mac
+ *  (2026-11-21): a socket or file made between the caller's look as it started the watch and then, no change tells. */
+const LIVE_MS = 5_000
+
 /** Calls `changed` on each change in the nearest existing folder of `folders` (nearest first), moving to a nearer
  *  one as it appears and out of one that is removed. `file` is the name the OS gave for what changed in the folder
- *  held, none when it gave none. With none of them there it holds nothing and tells nothing. Never recursive. Returns
- *  its stop. Never throws: a watch that cannot be held tells nothing. */
+ *  held, none when it gave none. A watch held that tells no change in its first LIVE_MS tells one with none then, for
+ *  what was made before it was live. With none of them there it holds nothing and tells nothing. Never recursive.
+ *  Returns its stop. Never throws: a watch that cannot be held tells nothing. */
 export function watchNearest(folders: readonly string[], changed: (file?: string) => void): () => void {
   let held: { watcher: FSWatcher; at: number } | undefined
+  let live: NodeJS.Timeout | undefined
   const hold = () => {
     // inotify ends the watch of a folder that is removed, so a program that made it again would never be seen.
     if (held && !existsSync(folders[held.at])) {
@@ -26,6 +33,8 @@ export function watchNearest(folders: readonly string[], changed: (file?: string
       let watcher: FSWatcher
       try {
         watcher = watch(folder, { persistent: false }, (_event, file) => {
+          // A change told says the stream is live, and the caller looks now.
+          clearTimeout(live)
           hold()
           changed(file ?? undefined)
         })
@@ -39,11 +48,14 @@ export function watchNearest(folders: readonly string[], changed: (file?: string
       })
       held?.watcher.close()
       held = { watcher, at }
+      clearTimeout(live)
+      live = setTimeout(() => changed(), LIVE_MS).unref()
       return
     }
   }
   hold()
   return () => {
+    clearTimeout(live)
     held?.watcher.close()
     held = undefined
   }
