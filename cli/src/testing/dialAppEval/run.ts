@@ -41,14 +41,15 @@ export interface EvalDeps {
   log(line: string): void
 }
 
-export function parseArgs(argv: string[]): { tiers: Tier[]; update: boolean } {
+/** Null for arguments it does not know: the command prints its usage. */
+export function parseArgs(argv: string[]): { tiers: Tier[]; update: boolean } | null {
   let tiers: Tier[] = ['a', 'b']
   let update = false
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--update-baseline') update = true
     else if (arg === '--tier' && (argv[i + 1] === 'a' || argv[i + 1] === 'b')) tiers = [argv[++i] as Tier]
-    else throw new Error(USAGE)
+    else return null
   }
   return { tiers, update }
 }
@@ -60,11 +61,9 @@ const catalogRuns = (tiers: readonly Tier[]): Map<string, Scenario> => new Map(t
   PLATFORMS.flatMap((platform) => scenariosFor(tier, platform).map((s) => [`${tier}/${platform}/${s.id}`, s] as const))))
 
 export async function main(argv: string[], deps: EvalDeps): Promise<number> {
-  let args: ReturnType<typeof parseArgs>
-  try {
-    args = parseArgs(argv)
-  } catch (error) {
-    deps.log((error as Error).message)
+  const args = parseArgs(argv)
+  if (!args) {
+    deps.log(USAGE)
     return 2
   }
   const tiers = deps.platform === 'win32' ? args.tiers.filter((t) => t !== 'b') : args.tiers
@@ -105,13 +104,13 @@ export async function main(argv: string[], deps: EvalDeps): Promise<number> {
   const report = { ...grade(results, baseline), ...(skipped.length > 0 ? { skipped } : {}) }
   deps.log(summary(report))
   writeReport(out, report)
-  // The report says what changed; the ratchet's verdict is printed, never fatal: the eval measures.
+  // The ratchet's verdict is printed, never fatal: the eval measures. The report above names the checks that changed.
   if (baseline) {
     const verdicts = [
       ...(tiers.includes('a') ? [['A', tierAVerdict(results, baseline)] as const] : []),
       ...(tiers.includes('b') ? [['B', tierBVerdict(results, baseline, deps.platform as Platform)] as const] : []),
     ]
-    for (const [tier, verdict] of verdicts) if (!verdict.ok) deps.log(`tier ${tier} ratchet: ${verdict.message}`)
+    for (const [tier, verdict] of verdicts) if (!verdict.ok) deps.log(`tier ${tier} ratchet: off its baseline`)
   }
 
   const missing = tiers.filter((t) => !ran(results, t))
@@ -133,7 +132,7 @@ export async function main(argv: string[], deps: EvalDeps): Promise<number> {
     return 1
   }
   writeFileSync(baselinePath, `${JSON.stringify(updateBaseline(baseline, results, tiers), null, 2)}\n`)
-  deps.log(`baseline written: ${baselinePath}`)
+  deps.log('baseline written')
   return 0
 }
 

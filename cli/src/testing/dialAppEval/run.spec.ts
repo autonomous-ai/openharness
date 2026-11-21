@@ -74,11 +74,11 @@ it('argument errors name the usage', async () => {
   expect(parseArgs([])).toEqual({ tiers: ['a', 'b'], update: false })
   expect(parseArgs(['--tier', 'b', '--update-baseline'])).toEqual({ tiers: ['b'], update: true })
   for (const argv of [['--tier', 'c'], ['--tier'], ['--fast'], ['a']]) {
-    expect(() => parseArgs(argv)).toThrow('usage: npm run eval:dial-apps -- [--tier a|b] [--update-baseline]')
+    expect(parseArgs(argv)).toBeNull()
   }
   const h = harness({})
   expect(await main(['--tier', 'c'], h.deps)).toBe(2)
-  expect(h.log()).toContain('usage: npm run eval:dial-apps')
+  expect(h.log()).toContain('usage: npm run eval:dial-apps -- [--tier a|b] [--update-baseline]')
   expect(h.calls).toEqual([])
 })
 
@@ -189,8 +189,9 @@ it('the tiers skip their own ratchet: the command judges it from the merged resu
   const h = harness({ a: results('a', 0.5), b: results('b', 0) })
   expect(await main([], h.deps)).toBe(0)
   expect(h.calls.map((c) => c.env.DIAL_EVAL_SKIP_RATCHET)).toEqual(['1', '1'])
-  expect(h.log()).toContain('tier A ratchet: regression: a/darwin/C1/ring.recall')
-  expect(h.log()).toContain('tier B ratchet: regression: b/darwin/C1/ring.recall')
+  expect(h.log()).toContain('tier A ratchet: off its baseline')
+  expect(h.log()).toContain('tier B ratchet: off its baseline')
+  expect(report().delta.checks.map((c) => c.key)).toEqual(['a/darwin/C1/ring.recall', 'b/darwin/C1/ring.recall'])
 })
 
 it('a results file a tier did not write exits 1, named', async () => {
@@ -206,7 +207,7 @@ it('--update-baseline writes the baseline, keeping the tier not run', async () =
   expect(await main(['--tier', 'a', '--update-baseline'], h.deps)).toBe(0)
   expect(readBaseline()).toEqual({ schema: 1, checks: { 'a/darwin/C1/ring.recall': 1, 'b/darwin/C1/ring.recall': 0.5 },
     apps: { a: { claude: 100, chatgpt: null }, 'b/darwin': { claude: 50, chatgpt: null } } })
-  expect(h.log()).toContain(`baseline written: ${baselinePath}`)
+  expect(h.log()).toContain('baseline written')
 })
 
 it('and refuses on a wrong send', async () => {
