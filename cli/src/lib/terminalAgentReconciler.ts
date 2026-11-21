@@ -277,8 +277,9 @@ export class TerminalAgentReconciler {
   private probeGivenUp = false
   private get passDeadlineMs(): number { return this.deps.passDeadlineMs ?? RECONCILE_PASS_DEADLINE_MS }
 
-  /** Passes completed with a probe that answered. A check that something did not happen waits for two more
-   *  than it read after its change: at least one whole pass then began after the change and looked. */
+  /** Passes that looked at the agents: their probe answered with the process table, and what it saw was applied. A
+   *  given-up probe or one with no process table looked at none. A check that something did not happen waits for two
+   *  more than it read after its change: at least one whole pass then began after the change and looked. */
   get passes(): number { return this.completedPasses }
   private completedPasses = 0
 
@@ -287,7 +288,6 @@ export class TerminalAgentReconciler {
       this.pending = false
       this.refused = false
       await this.reconcileOnce()
-      if (!this.probeGivenUp) this.completedPasses++
       if (!this.refused) this.outageSaid = false
     }
   }
@@ -551,5 +551,6 @@ export class TerminalAgentReconciler {
     // the authoritative availability/registry update.
     this.deps.onProbeStatus?.({ ready: true, error: probeReason })
     this.deps.onReconciled?.(probe.agents.filter(agent => !this.routeHeld(agent.runtimes, probeSeq)))
+    this.completedPasses++
   }
 }
