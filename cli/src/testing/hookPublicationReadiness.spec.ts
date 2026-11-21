@@ -33,7 +33,7 @@ it('sees setup published by the extracted worker without legacy install log line
 })
 it('keeps waiting through stale success logs, a missing engine and a different port', async () => {
   const d = fixture('[hooks] Claude Code session, turn, wait and subagent hooks already installed\n'
-    + '[hooks] Codex session and turn hooks already installed → /fixture/hooks.json\n')
+    + `[hooks] Codex session and turn hooks already installed → ${join(root, 'codex', 'hooks.json')}\n`)
   publish('claude')
   let ready = false
   const installed = d.hooksInstalled(['claude', 'codex']).then(() => { ready = true })
