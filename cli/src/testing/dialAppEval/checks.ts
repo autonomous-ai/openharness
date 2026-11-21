@@ -246,13 +246,18 @@ function stateParts(check: CheckOf<'state'>, world: World, w: Window | undefined
   const id = agentIdOf(session)
   const page = pageOf(session.app)
   const rings = world.rings().filter((r) => r.page === page)
-  const changes: Array<{ at: number; state: string }> = []
-  let state = 'idle'
+  // Every session's changes, not only this one's: the evidence lists those in the window, so a probe on a session that
+  // never changes still says what the driver saw.
+  const all: Array<{ at: number; agentId: string; state: string }> = []
+  const states = new Map<string, string>()
   for (const { at, message } of world.seen.frames) {
-    if (message.agentId !== id) continue
-    const next = stateAfter(message, state)
-    if (next !== undefined) changes.push({ at, state: (state = next) })
+    if (typeof message.agentId !== 'string') continue
+    const next = stateAfter(message, states.get(message.agentId) ?? 'idle')
+    if (next === undefined) continue
+    states.set(message.agentId, next)
+    all.push({ at, agentId: message.agentId, state: next })
   }
+  const changes = all.filter((c) => c.agentId === id)
   // Shown: at some moment in the window the row is in its page's last whole list and in that state.
   const moments = w ? [w.from, ...changes.map((c) => c.at), ...rings.map((r) => r.at)].filter((at) => within(at, w)).sort((x, y) => x - y) : []
   const shownAt = moments.find((at) => {
@@ -260,8 +265,8 @@ function stateParts(check: CheckOf<'state'>, world: World, w: Window | undefined
     const ring = rings.filter((r) => r.at <= at).at(-1)
     return now === check.state && ring !== undefined && ring.rows.some((r) => r.id === id)
   })
-  const seenChanges = w ? changes.filter((c) => within(c.at, w)) : []
-  const evidence = bounded(seenChanges.map((c) => `${check.session} ${c.state} at ${c.at}`))
+  const seenChanges = w ? all.filter((c) => within(c.at, w)) : []
+  const evidence = bounded(seenChanges.map((c) => `${world.keyOf(c.agentId)} ${c.state} at ${c.at}`))
   if (shownAt !== undefined) evidence.push(`${check.session} shown ${check.state} at ${shownAt}`)
   const parts: Part[] = [{ part: 'shown', score: shownAt === undefined ? 0 : 1, timed: false, evidence }]
   if (check.state !== 'idle') {
@@ -287,10 +292,13 @@ function voiceParts(check: CheckOf<'voice'>, world: World, w: Window | undefined
 
 function recapParts(check: CheckOf<'recap'>, world: World, w: Window | undefined): Part[] {
   const id = agentIdOf(world.session(check.session))
-  const summaries = w ? world.seen.frames.filter((f) => f.message.t === 'summary' && f.message.agentId === id && within(f.at, w)) : []
-  const last = summaries.at(-1)
+  // Every session's summaries in the window, so a probe on a session that never has one still says what was seen.
+  const summaries = w ? world.seen.frames.filter((f) => f.message.t === 'summary' && within(f.at, w)) : []
+  const last = summaries.filter((f) => f.message.agentId === id).at(-1)
   const exact = last?.message.text === check.text
-  const evidence = last ? [`summary at ${last.at}: text ${exact ? 'exact' : 'differs'}`] : []
+  // The recap is the session's words: only whether it matched is printed.
+  const evidence = bounded(summaries.map((f) => `summary at ${f.at} for ${world.keyOf(typeof f.message.agentId === 'string' ? f.message.agentId : null)}${
+    f === last ? `, text ${exact ? 'exact' : 'differs'}` : ''}`))
   return [{ part: 'exact', score: exact ? 1 : 0, timed: false, evidence }]
 }
 
