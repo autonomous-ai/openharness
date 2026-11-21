@@ -31,7 +31,7 @@ import { agentIdOf, type App, type Delivery, type Platform, type Scenario, type 
 import { quiet } from './clock.js'
 import { LoopbackDial } from './loopbackDial.js'
 import { machine, type MachineModel } from './machine.js'
-import { createStoreWatch, hostPath } from './storeWatch.js'
+import { createStoreWatch, onHost } from './storeWatch.js'
 
 export interface TierAWorld {
   readonly scenario: Scenario; readonly platform: Platform; readonly machine: MachineModel
@@ -166,10 +166,9 @@ export class World implements TierAWorld {
     for (const name of ['LOCALAPPDATA', 'APPDATA', 'XDG_CONFIG_HOME', 'HARNESS_APPLICATIONS_DIR', 'HARNESS_OPEN_BIN']) vi.stubEnv(name, '')
     // The welcome's voice language follows LANG (cableHost.ts voiceLang): the same on every host.
     vi.stubEnv('LANG', 'en_US.UTF-8')
-    // The readers read the fixture's root on every platform; where the platform's own root is a path of this host, the
-    // fixture is there, so the store's watch on it hears its writes as the app's.
-    const own = claudeStoreRoots(platform, process.env, root)[0]!.root
-    this.claudeStore = claudeAppFixture(hostPath(own) ? own : join(root, 'claude-store'))
+    // The fixture is at the platform's own first root, as this host names it (a Windows one's folders are this host's of
+    // the same names): the readers read it there, and the store's watch on that root hears its writes as the app's.
+    this.claudeStore = claudeAppFixture(onHost(claudeStoreRoots(platform, process.env, root)[0]!.root))
     // A signed-in Claude app has its account's folder.
     this.claudeStore.org()
     const codexHome = join(root, '.codex')
