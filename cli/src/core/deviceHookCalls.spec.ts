@@ -147,8 +147,11 @@ describe('createDeviceHookCalls: inbox', () => {
 describe('createDeviceHookCalls: counts', () => {
   afterEach(() => { vi.useRealTimers() })
 
-  // Counts only, as the paneless events' line (core/observedHook.ts): a forged or flooding hook is seen, and what it said is not.
-  it('logs refused calls and calls over the bounds once a minute, with no id or content; no dial is not counted', async () => {
+  const REFUSED = '[devices] a dial hook call was refused; more are counted once a minute'
+  const OVER = '[devices] a dial hook call was over the bound; more are counted once a minute'
+
+  // Counts only, as the paneless events' lines (core/observedHook.ts): a forged or flooding hook is seen, and what it said is not.
+  it('says the first refused call and the first over the bound at once, the minute\'s count only if more came; no dial is not counted', async () => {
     vi.useFakeTimers()
     const log = vi.fn()
     const { port } = fakeDevices()
@@ -161,18 +164,21 @@ describe('createDeviceHookCalls: counts', () => {
 
     ready = true
     expect(await calls.onInbox({ sessionId: 'secret\nsession' }, live())).toBe('invalid')
+    expect(log.mock.calls).toEqual([[REFUSED]])
     expect(await calls.onInbox({ sessionId: 'secret-session'.repeat(10) }, live())).toBe('invalid')
     for (let i = 0; i < 64; i += 1) void calls.onInbox({ sessionId: `poll-${i}` }, live())
     expect(await calls.onInbox({ sessionId: 'poll-64' }, live())).toBe('off')
-    expect(log).not.toHaveBeenCalled()
+    expect(log.mock.calls).toEqual([[REFUSED], [OVER]])
     vi.advanceTimersByTime(60_000)
-    expect(log.mock.calls).toEqual([['[devices] dial hook calls in the last minute: 2 refused, 1 over the bound']])
+    expect(log.mock.calls[2]).toEqual(['[devices] dial hook calls in the last minute: 1 refused, 0 over the bound'])
     vi.advanceTimersByTime(120_000)
-    expect(log).toHaveBeenCalledTimes(1)
+    expect(log).toHaveBeenCalledTimes(3)
 
+    // A later minute says its first loss at once again, and one loss alone leaves no minute line.
     expect(await calls.onInbox(null, live())).toBe('invalid')
+    expect(log.mock.calls[3]).toEqual([REFUSED])
     vi.advanceTimersByTime(60_000)
-    expect(log.mock.calls[1]).toEqual(['[devices] dial hook calls in the last minute: 1 refused, 0 over the bound'])
+    expect(log).toHaveBeenCalledTimes(4)
     expect(JSON.stringify(log.mock.calls)).not.toMatch(/secret|s1|poll-|id-/)
   })
 })
