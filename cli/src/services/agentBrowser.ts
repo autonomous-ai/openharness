@@ -42,7 +42,7 @@ import { join, resolve } from 'node:path'
 import { harnessPath, legacyHarnessPath, type HomeLook } from '../config/harnessHome.js'
 import { AGENT_BROWSER_REQUESTS, mayOpenBrowser, type AgentLife, type AgentView, type Asker, type CoreApi, type CorePorts, type ServiceRequests } from '../core/api.js'
 import { sweepAgentTmpWhenDue } from '../lib/agentTmp.js'
-import { errorKind } from '../lib/log.js'
+import { codeOrLength, errorKind } from '../lib/log.js'
 import { browserTools } from '../lib/browserToolsAsset.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
 import { BROWSER_CHUNK_BYTES, encodeTerminalLocal } from '../lib/terminalBinary.js'
@@ -586,7 +586,7 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       const done = answer.ok === true && answer.failed !== true
       count(done ? 'agent_browser_command_ok' : 'agent_browser_command_failed')
       // Its name and outcome only: its arguments and the page's words are the person's.
-      log(`agent browser ${agentId}: ${command} ${done ? 'ok' : answer.ok ? 'failed' : String(answer.error).toLowerCase()}`)
+      log(`agent browser ${agentId}: ${command} ${done ? 'ok' : answer.ok ? 'failed' : codeOrLength(answer.error).toLowerCase()}`)
       return answer
     },
     // The panel's size, on Chrome's window: not stored, as Chrome keeps the window's last size in its profile.

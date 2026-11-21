@@ -19,7 +19,7 @@
 import type { ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { RfbShaper, type StreamProfile } from './rfbShaper.js'
-import { errorKind, sid } from '../../lib/log.js'
+import { codeOrLength, errorKind, sid } from '../../lib/log.js'
 import type { AGENT_BROWSER_CLOSE_REASONS, ProductUsageMetric } from '../../lib/productUsageContract.js'
 import { TERMINAL_BINARY_HEADER_BYTES, TerminalBinaryKind, type TerminalBinaryClear } from '../../lib/terminalBinary.js'
 
@@ -135,7 +135,7 @@ export class BrowserStreamManager {
     this.streams.set(stream.id, stream)
     stream.shaper.onOutput(bytes => { if (this.streams.get(stream.id) === stream) child.stdin?.write(bytes) })
     stream.shaper.onClose((reason, detail) => {
-      console.warn(`[agent-browser] stream ${sid(stream.id)} closed: ${detail}`)
+      console.warn(`[agent-browser] stream ${sid(stream.id)} closed: ${codeOrLength(detail)}`)
       this.end(stream, reason)
     })
     child.stdout?.on('data', (data: Buffer) => this.output(stream, data))
@@ -148,7 +148,7 @@ export class BrowserStreamManager {
     })
     child.on('exit', (code, signal) => {
       if (this.streams.get(stream.id) !== stream) return
-      console.warn(`[agent-browser] stream ${sid(stream.id)} exec exited (${code ?? signal}): ${stream.stderr.trim()}`)
+      console.warn(`[agent-browser] stream ${sid(stream.id)} exec exited (${code ?? signal}): stderr ${Buffer.byteLength(stream.stderr)} B`)
       this.end(stream, 'agent')
     })
     this.deps.sendTarget(connId, 'agent_browser_open_result', { requestId, streamId: stream.id })
