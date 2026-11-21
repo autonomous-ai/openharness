@@ -18,6 +18,11 @@ run-name: Desktop ${{ inputs.prepare_only && 'candidate' || inputs.test_candidat
 # The publish job combines every platform's parts with a generation-conditional write and verifies every
 # public download while holding the publication lock. Different releases may build concurrently.
 #
+# Linux is three jobs, so no job that runs build code holds the bucket write or the signing key: build-linux builds
+# and packages each architecture with neither; sign-linux signs both AppImages with Harness Device's Tauri key, running
+# nothing but the pinned minisign, and checks them against the key the apps pin; upload-linux uploads them and writes
+# their parts, with the bucket write and no key. build-linux, sign-linux and build-windows get no id-token.
+#
 # The tag IS the version — CI never auto-bumps. The scripts bump by reading the current version out
 # of the remote metadata.json, so four jobs left to bump on their own would read the same number
 # and publish four different versions under one tag.
@@ -321,6 +326,9 @@ jobs:
     if: needs.preflight.outputs.reused != 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    # Build code runs here (pub packages, CMake, appimagetool): it must not mint the token the GCP federation accepts.
+    permissions:
+      contents: read
     strategy:
       # No max-parallel: each job writes its own scratch manifest, so they cannot race.
       fail-fast: false
@@ -332,11 +340,6 @@ jobs:
           # the app died at launch with "undefined symbol". A 22.04 build runs on 24.04 too.
           - { runner: ubuntu-22.04, arch: x64 }
           - { runner: ubuntu-22.04-arm, arch: arm64 }
-    env:
-      TARGET_ARCH: ${{ matrix.arch }}
-      METADATA_PATH: ${{ needs.version.outputs.scratch_prefix }}/linux-${{ matrix.arch }}.json
-      GCS_PATH: ${{ needs.version.outputs.artifact_prefix }}/Harness-linux-${{ matrix.arch }}.AppImage
-      CDN_ASSET_BASE_URL: ${{ needs.version.outputs.artifact_base_url }}
     defaults:
       run:
         working-directory: desktop
@@ -368,7 +371,7 @@ jobs:
           version: ${{ env.FLUTTER_VERSION }}
 
       # appimagetool packages the Linux bundle into the single-file .AppImage the release publishes
-      # (see RELEASE.md). --appimage-extract-and-run in upload-desktop-linux.sh means the runner
+      # (see RELEASE.md). --appimage-extract-and-run in package-desktop-linux.sh means the runner
       # itself never needs FUSE. Pinned to a numbered release (not "continuous") for reproducibility.
       - name: Download appimagetool
         env:
@@ -381,17 +384,93 @@ jobs:
           chmod +x "$RUNNER_TEMP/appimagetool"
           echo "APPIMAGETOOL=$RUNNER_TEMP/appimagetool" >> "$GITHUB_ENV"
 
+      - name: Build and package linux-${{ matrix.arch }}
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: bash scripts/package-desktop-linux.sh "$VERSION"
+
+      # The AppImage and its .sha256, which sign-linux and upload-linux check before they use it.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-linux-${{ matrix.arch }}
+          path: desktop/build/linux-release/
+          if-no-files-found: error
+
+  # A fresh runner that runs no build code: only minisign, pinned by its sha256 (release-setup.sh), and the check of what
+  # it signed against the key the apps pin. One job for both architectures, as sign-windows is.
+  sign-linux:
+    needs: [version, build-linux]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # It holds the signing key: no bucket write, and no token to mint one.
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /desktop/scripts/sign-desktop-linux.sh
+            /scripts/verify-desktop-release.py
+            /device-app/scripts/release-setup.sh
+            /device-app/src-tauri/tauri.conf.json
+          sparse-checkout-cone-mode: false
+      - name: Install minisign
+        run: bash device-app/scripts/release-setup.sh minisign
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-linux-*
+          path: linux-release
+          merge-multiple: true
+      # The key's only step.
+      - name: Sign the AppImages
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: bash desktop/scripts/sign-desktop-linux.sh "$VERSION" linux-release
+      # What a Linux Desktop checks before it installs: the key it pins, this file and this version.
+      - name: Check the signatures
+        run: |
+          python3 scripts/verify-desktop-release.py "$VERSION" \
+            --signed linux-release/Harness-linux-x64.AppImage linux-release/Harness-linux-arm64.AppImage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-linux-signatures
+          path: linux-release/*.sig
+          if-no-files-found: error
+          overwrite: true
+
+  # The bucket write and no key: what sign-linux signed goes up create-only, with its two parts.
+  upload-linux:
+    needs: [version, build-linux, sign-linux]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      ARTIFACT_PREFIX: ${{ needs.version.outputs.artifact_prefix }}
+      CDN_ASSET_BASE_URL: ${{ needs.version.outputs.artifact_base_url }}
+      SCRATCH_PREFIX: ${{ needs.version.outputs.scratch_prefix }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /.github/actions/setup-gcloud/
+            /desktop/scripts/upload-desktop-linux.sh
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-linux-*
+          path: linux-release
+          merge-multiple: true
       - name: Authenticate to GCP (workload identity federation)
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - uses: ./.github/actions/setup-gcloud
-
-      - name: Build and upload linux-${{ matrix.arch }}
-        env:
-          VERSION: ${{ needs.version.outputs.version }}
-        run: bash scripts/upload-desktop-linux.sh "$VERSION"
+      - name: Upload the Linux AppImages and write their parts
+        run: bash desktop/scripts/upload-desktop-linux.sh "$VERSION" linux-release
 
   # Each architecture on its own runner, like Linux (docs/superpowers/specs/2026-10-19-windows-installer-design.md
   # §2.2). sign-windows signs what these build. The x64 job also builds harness-install.exe, one x64
@@ -403,6 +482,9 @@ jobs:
     if: needs.preflight.outputs.reused != 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+    # Its build code must not mint the token the GCP federation accepts.
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -630,8 +712,8 @@ jobs:
   # The only job that touches the REAL manifest, and the only one that can, because it is the only
   # one that runs after every build has finished.
   publish:
-    needs: [version, preflight, build-macos, build-linux, build-windows, upload-windows]
-    if: ${{ always() && !inputs.prepare_only && needs.version.result == 'success' && needs.preflight.result == 'success' && (needs.preflight.outputs.reused == 'true' || (needs.build-macos.result == 'success' && needs.build-linux.result == 'success' && needs.upload-windows.result == 'success')) }}
+    needs: [version, preflight, build-macos, build-linux, sign-linux, upload-linux, build-windows, upload-windows]
+    if: ${{ always() && !inputs.prepare_only && needs.version.result == 'success' && needs.preflight.result == 'success' && (needs.preflight.outputs.reused == 'true' || (needs.build-macos.result == 'success' && needs.upload-linux.result == 'success' && needs.upload-windows.result == 'success')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     concurrency:
@@ -649,10 +731,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          # tauri.conf.json: the key the Linux signatures are checked against, the one the apps pin.
           sparse-checkout: |
             /.github/actions/setup-gcloud/
             /scripts/publish-desktop-manifest.py
             /scripts/verify-desktop-release.py
+            /device-app/src-tauri/tauri.conf.json
           sparse-checkout-cone-mode: false
       - name: Authenticate to GCP (workload identity federation)
         uses: google-github-actions/auth@v2
@@ -789,7 +873,7 @@ jobs:
   # precisely when scratch manifests are left behind — the builds that DID succeed have already
   # written theirs. `if: always()` here means the prefix is cleared whatever happened upstream.
   cleanup:
-    needs: [version, preflight, build-macos, build-linux, build-windows, upload-windows, candidate, publish]
+    needs: [version, preflight, build-macos, build-linux, sign-linux, upload-linux, build-windows, upload-windows, candidate, publish]
     if: ${{ always() && needs.version.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
@@ -836,21 +920,23 @@ jobs:
   # destination differs. A successful receipt binds nine verified generations to
   # its full producer source tree, Desktop build inputs, version, run and attempt.
   candidate:
-    needs: [version, build-macos, build-linux, upload-windows]
+    needs: [version, build-macos, upload-linux, upload-windows]
     # Explicit results: an implicit success() also inspects skipped ancestors, and sign-windows is skipped while
     # WINDOWS_SIGNING is off.
-    if: ${{ !cancelled() && inputs.prepare_only && needs.version.result == 'success' && needs.build-macos.result == 'success' && needs.build-linux.result == 'success' && needs.upload-windows.result == 'success' }}
+    if: ${{ !cancelled() && inputs.prepare_only && needs.version.result == 'success' && needs.build-macos.result == 'success' && needs.upload-linux.result == 'success' && needs.upload-windows.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v7
         with:
+          # tauri.conf.json: the key the Linux signatures are checked against, the one the apps pin.
           sparse-checkout: |
             /.github/actions/setup-gcloud/
             /scripts/desktop-release-candidate.py
             /scripts/record-ci-validation.py
             /scripts/publish-desktop-manifest.py
             /scripts/verify-desktop-release.py
+            /device-app/src-tauri/tauri.conf.json
           sparse-checkout-cone-mode: false
       - uses: google-github-actions/auth@v2
         with:

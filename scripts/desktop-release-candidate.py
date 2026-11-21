@@ -53,6 +53,9 @@ BUILD_INPUTS = {
     'term': 'tree',
     'tui/vendor': 'tree',
     '.github/actions': 'tree',
+    # Linux: sign-linux's pinned minisign, and the key its signatures are checked against.
+    'device-app/scripts/release-setup.sh': 'blob',
+    'device-app/src-tauri/tauri.conf.json': 'blob',
     WORKFLOW: 'blob',
     'mobile/pubspec.lock': None,  # included when present in the shared pub-cache key
     '.gitattributes': None,
@@ -234,7 +237,7 @@ def read_receipt(artifact, archive, run, repository, version, tree, inputs, buck
 
 def check_jobs(run, jobs, windows_signing=False):
     required = {'version', 'preflight', 'build-macos', 'build-linux (ubuntu-22.04, x64)',
-                'build-linux (ubuntu-22.04-arm, arm64)', 'build-windows (windows-latest, x64)',
+                'build-linux (ubuntu-22.04-arm, arm64)', 'sign-linux', 'upload-linux', 'build-windows (windows-latest, x64)',
                 'build-windows (windows-11-arm, arm64)', 'upload-windows', 'candidate', 'cleanup'}
     # While WINDOWS_SIGNING is `required`, a candidate built before it (sign-windows skipped) would ship unsigned.
     if windows_signing:
