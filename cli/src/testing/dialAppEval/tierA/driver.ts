@@ -13,7 +13,7 @@
 import { vi } from 'vitest'
 import type { startDevices } from '../../../services/devices.js'
 import { CAROUSEL_REFRESH_MS } from '../../dialCarousel.js'
-import type { App, EvalDriver, Platform, Scenario, Seen, Step, StepKind } from '../types.js'
+import { PAGE, type EvalDriver, type Platform, type Scenario, type Seen, type Step, type StepKind } from '../types.js'
 import { installClock, settle } from './clock.js'
 import { installFakeApps } from './fakeApps.js'
 import { machine } from './machine.js'
@@ -29,8 +29,6 @@ type Run = Exclude<Step, { kind: 'wait' }>
 const STEPS: { [K in Exclude<StepKind, 'wait'>]: StepHandler<K> } = {
   ...claudeStoreSteps, ...codexStoreSteps, ...sessionsSteps, ...windowSteps, ...dialSteps, ...voiceSteps,
 }
-/** The page of each app's ring: the ChatGPT app's threads are Codex's. */
-const PAGE: Readonly<Record<App, string>> = { claude: 'claude', chatgpt: 'codex' }
 /** Virtual time for the dial to be found and welcomed: the fleet looks every 2 s, the dial greets every 2 s. */
 const START_WITHIN_MS = 30_000
 
@@ -87,10 +85,6 @@ export class TierADriver implements EvalDriver {
 
   settle(ms: number, until?: () => boolean): Promise<void> {
     return settle(ms, until, this.need().inFlight)
-  }
-
-  now(): number {
-    return this.need().now()
   }
 
   seen(): Seen {

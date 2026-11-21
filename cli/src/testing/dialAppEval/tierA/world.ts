@@ -47,8 +47,6 @@ export interface TierAWorld {
   front: App | 'other'
   /** A fixture file written: the store's watch hears of it now. */
   storeChanged(path: string): void
-  /** Virtual ms since the scenario's time 0. */
-  now(): number
   agentId(key: SessionKey): string
   session(key: SessionKey): SessionDef
   deliver(d: Omit<Delivery, 'at'>): void
@@ -204,10 +202,6 @@ export class World implements TierAWorld {
 
   storeChanged(path: string): void {
     this.watch.changed(path)
-  }
-
-  now(): number {
-    return Date.now() - this.origin
   }
 
   agentId(key: SessionKey): string {
