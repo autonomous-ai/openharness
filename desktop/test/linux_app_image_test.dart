@@ -33,6 +33,12 @@ void main() {
   });
   tearDown(() => root.deleteSync(recursive: true));
 
+  // The entry is written under a POSIX home only, and Windows' temporary
+  // folder is none: there these tests would find no entry.
+  final posixHome = Platform.isWindows
+      ? 'needs a POSIX home: the entry is written under one only'
+      : null;
+
   File entry() => File('$home/.local/share/applications/harness.desktop');
 
   Future<void> launch(String appImage) async {
@@ -60,7 +66,7 @@ void main() {
       2,
       3,
     ]);
-  });
+  }, skip: posixHome);
 
   test("launcherDataHome is the vectors'", () {
     final vectors = jsonDecode(
@@ -100,7 +106,7 @@ void main() {
       entry().readAsStringSync(),
       contains('Exec="$home/My Apps/Harness.AppImage" %u\n'),
     );
-  });
+  }, skip: posixHome);
 
   // The Desktop Entry spec reserves % for field codes: GLib would read %o in
   // 50%off as one and start another path. Windows skips: its temporary
@@ -155,7 +161,7 @@ void main() {
       entry().readAsStringSync(),
       contains('Exec=$home/.local/opt/Harness.AppImage %u\n'),
     );
-  });
+  }, skip: posixHome);
 
   test('an existing launcher for this copy gains the fork protocol', () async {
     final path = '$home/Applications/Harness.AppImage';
@@ -169,7 +175,7 @@ void main() {
       entry().readAsStringSync(),
       contains('MimeType=x-scheme-handler/harness;'),
     );
-  });
+  }, skip: posixHome);
 
   // Read as the Device app reads its entry: the byte as U+FFFD, the rule
   // applied, and nothing thrown.
@@ -189,6 +195,7 @@ void main() {
 
       expect(entry().readAsStringSync(), contains('Exec=$path %u\n'));
     },
+    skip: posixHome,
   );
 
   // Each a new file renamed over the old one, as the Device app's entry is:
@@ -228,7 +235,7 @@ void main() {
       entry().readAsStringSync(),
       contains('Exec=$home/Downloads/Harness-linux-x64.AppImage %u\n'),
     );
-  });
+  }, skip: posixHome);
 
   test('not started from an AppImage, nothing is written', () async {
     await registerAppImageLauncher(
