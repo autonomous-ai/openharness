@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ObservedAsked, ObservedHookEvent } from '../../core/observedHook.js'
 import { STOP_HOOK_GRACE_MS } from '../../core/turns/turnHooks.js'
-import type { HostAdapter, Pane, Place } from './adapter.js'
+import { type HostAdapter, oncePerCaller, type Pane, type Place } from './adapter.js'
 import { createClaudeAppAdapter } from './claudeApp.js'
 import { createCodexAppAdapter } from './codexApp.js'
 import type { CodexQueueResult } from './codexQueue.js'
@@ -2974,6 +2974,7 @@ describe('ObservedSource and the host that owns its caller\'s terminal', () => {
     const { actions } = fakeActions()
     const s = setup({ actions: { ...actions, adapters }, ptyOwner })
     const agent = () => s.src.list()[0]
+    // Its own Zellij pane: none while that pane only holds it.
     const zellijPane = () => s.src.paneOf(agent().id, 'zellij')
     return { ...s, actions, run, ptyOwner, reads, agent, zellijPane }
   }
@@ -2981,7 +2982,7 @@ describe('ObservedSource and the host that owns its caller\'s terminal', () => {
   it('until its caller\'s terminal is read, its Zellij pane takes a tap and no words; read as Zellij\'s, it takes them', async () => {
     const s = owned()
     s.src.ingest(s.ev('session-start', { hostHints: ZELLIJ }))
-    expect(s.zellijPane()).toBe('held:s1:1')
+    expect(s.zellijPane()).toBeUndefined()
     expect(s.src.capabilities(s.agent())).toMatchObject({ voice: false, focus: true })
     s.changes.mockClear()
     await s.reads[0].answer('zellij')
@@ -2997,7 +2998,7 @@ describe('ObservedSource and the host that owns its caller\'s terminal', () => {
     const s = owned()
     s.src.ingest(s.ev('session-start', { engine: 'codex', hostHints: { ...ZELLIJ, TERM_PROGRAM: 'vscode' } }))
     await s.reads[0].answer(undefined)
-    expect(s.zellijPane()).toBe('held:s1:1')
+    expect(s.zellijPane()).toBeUndefined()
     expect(s.src.capabilities(s.agent())).toMatchObject({ voice: false, focus: true })
     expect(await s.src.send(s.agent(), 'next')).toMatchObject({ ok: false })
     expect(s.run).not.toHaveBeenCalled()
@@ -3013,10 +3014,10 @@ describe('ObservedSource and the host that owns its caller\'s terminal', () => {
     expect(s.zellijPane()).toBe('s1:1')
     // Resumed in another process, then another before the first answers.
     s.src.ingest(s.ev('session-start', { hostHints: ZELLIJ, callerPid: 200 }))
-    expect(s.zellijPane()).toBe('held:s1:1')
+    expect(s.zellijPane()).toBeUndefined()
     s.src.ingest(s.ev('session-start', { hostHints: ZELLIJ, callerPid: 300 }))
     await s.reads[1].answer('zellij')
-    expect(s.zellijPane()).toBe('held:s1:1')
+    expect(s.zellijPane()).toBeUndefined()
     await s.reads[2].answer('zellij')
     expect(s.zellijPane()).toBe('s1:1')
     expect(s.ptyOwner.mock.calls).toEqual([[100], [200], [300]])
@@ -3026,7 +3027,7 @@ describe('ObservedSource and the host that owns its caller\'s terminal', () => {
     const s = owned()
     s.src.ingest(s.ev('session-start', { hostHints: ZELLIJ }))
     await s.reads[0].fail()
-    expect(s.zellijPane()).toBe('held:s1:1')
+    expect(s.zellijPane()).toBeUndefined()
     expect(s.logs).toContain('[observed] pty · not read · Error')
     expect(s.logs.join('\n')).not.toContain('someone')
     s.src.ingest(s.ev('turn-start', { hostHints: ZELLIJ }))
@@ -3038,9 +3039,23 @@ describe('ObservedSource and the host that owns its caller\'s terminal', () => {
     expect(s.zellijPane()).toBe('s1:1')
   })
 
-  // Only WezTerm's, kitty's and Zellij's panes take words on the terminal their host made alone: reading any other
-  // caller's would add a read of the process table to its hook for nothing.
-  it('a caller whose hints name no WezTerm, kitty or Zellij pane is never read', () => {
+  it('an Orca terminal\'s and a herdr pane\'s caller has its maker read once, as WezTerm\'s', async () => {
+    const s = owned()
+    const orca = { sessionId: 'orca', hostHints: { ORCA_TERMINAL_HANDLE: HANDLE }, callerPid: 200 }
+    const herdr = { sessionId: 'herdr', hostHints: { HERDR_PANE_ID: 'w1:p2' }, callerPid: 300 }
+    s.src.ingest(s.ev('session-start', orca))
+    s.src.ingest(s.ev('session-start', herdr))
+    s.src.ingest(s.ev('turn-start', orca))
+    await s.reads[0].answer('orca')
+    await s.reads[1].answer('herdr')
+    s.src.ingest(s.ev('turn-stop', orca))
+    s.src.ingest(s.ev('turn-start', herdr))
+    expect(s.ptyOwner.mock.calls).toEqual([[200], [300]])
+  })
+
+  // Only WezTerm's, kitty's, Zellij's, Orca's and herdr's panes take words on the terminal their host made alone: reading
+  // any other caller's would add a read of the process table to its hook for nothing.
+  it('a caller whose hints name no WezTerm, kitty, Zellij, Orca or herdr pane is never read', () => {
     const s = owned()
     const others: Array<Record<string, string>> = [{ TMUX_PANE: '%3' }, { TERM_PROGRAM: 'ghostty' }, {}]
     for (const hostHints of others) s.src.ingest(s.ev('session-start', { hostHints }))
@@ -3064,7 +3079,161 @@ describe('ObservedSource and the host that owns its caller\'s terminal', () => {
     const { actions } = fakeActions()
     const s = setup({ actions: { ...actions, adapters: [createZellijAdapter({ run: vi.fn(), zellij: async () => ({ state: 'present' }), platform: 'linux' })] } })
     s.src.ingest(s.ev('session-start', { hostHints: ZELLIJ }))
-    expect(s.src.paneOf(s.src.list()[0].id, 'zellij')).toBe('held:s1:1')
+    expect(s.src.paneOf(s.src.list()[0].id, 'zellij')).toBeUndefined()
+    expect(s.src.capabilities(s.src.list()[0])).toMatchObject({ voice: false, focus: true })
+  })
+})
+
+// A pane its host did not make the agent's terminal for only holds it (Pane.held): a terminal, an editor or a
+// multiplexer started there keeps that pane's variables, and the pane shows whatever is in front of it. The rule is the
+// source's alone, so these adapters are fakes that name no app.
+describe('ObservedSource and a pane that only holds the agent', () => {
+  // Hints that ask for the read of the caller's maker; the fakes read none of them.
+  const HINTS = { ZELLIJ_PANE_ID: '1' }
+  /** Held unless the host [id] made the caller's terminal. */
+  const unlessMadeBy = (id: string) => (place: Place) => place.ptyOwner !== id
+
+  /** An adapter [id] whose pane of every place is `<id>1`, held while [held] says so. It taps before its app, shows,
+   *  types, and keys its panes `<id>:<pane id>`. */
+  function fake(id: string, held: (place: Place) => boolean) {
+    const typed = vi.fn(async (_pane: Pane, _text: string, _engine: string): Promise<TypeResult> => true)
+    const shown = vi.fn(async (_pane: Pane): Promise<PaneSwitch> => 'ok')
+    const adapter: HostAdapter = {
+      id, tap: 'before', canFocus: () => true, focus: async () => true, show: shown, type: typed,
+      paneOf: (place) => ({ adapter: id, id: `${id}1`, ...(held(place) && { held: true as const }) }),
+      paneKey: (pane) => `${id}:${pane.id}`,
+    }
+    return { adapter, typed, shown }
+  }
+
+  /** A source with [adapters] in that order, each read of a caller's maker answered by hand, in the order they began. */
+  function holding(adapters: readonly HostAdapter[]) {
+    const reads: Array<(owner?: string) => Promise<void>> = []
+    const ptyOwner = vi.fn((_pid: number) => new Promise<string | undefined>((resolve) => {
+      reads.push((owner) => { resolve(owner); return flushed() })
+    }))
+    const { actions } = fakeActions()
+    const s = setup({ actions: { ...actions, adapters }, ptyOwner })
+    const agent = () => s.src.list()[0]
+    /** The pane a tap hands the opener now. */
+    const tapped = async () => {
+      actions.open.mockClear()
+      expect(await s.src.focus(agent())).toBe(true)
+      return actions.open.mock.calls[0][1].pane
+    }
+    return { ...s, actions, ptyOwner, reads, agent, tapped }
+  }
+
+  it('a tap takes the maker\'s pane, then the first that is not held, and a held one last', async () => {
+    const s = holding([fake('h', () => true).adapter, fake('b', () => false).adapter, fake('a', unlessMadeBy('a')).adapter])
+    s.src.ingest(s.ev('session-start', { hostHints: HINTS }))
+    expect(await s.tapped()).toEqual({ adapter: 'b', id: 'b1' })
+    await s.reads[0]('a')
+    expect(await s.tapped()).toEqual({ adapter: 'a', id: 'a1' })
+
+    const held = holding([fake('h', () => true).adapter, fake('a', unlessMadeBy('a')).adapter])
+    held.src.ingest(held.ev('session-start', { hostHints: HINTS }))
+    await held.reads[0]('x')
+    expect(await held.tapped()).toEqual({ adapter: 'h', id: 'h1', held: true })
+  })
+
+  it('no words and no rest go to a held pane: the next pane whose app types takes them', async () => {
+    const h = fake('h', () => true)
+    const b = fake('b', () => false)
+    const s = holding([h.adapter, b.adapter])
+    s.src.ingest(s.ev('turn-stop', { hostHints: HINTS }))
+    expect(await s.src.send(s.agent(), 'next')).toEqual({ ok: true })
+    expect(b.typed.mock.calls).toEqual([[{ adapter: 'b', id: 'b1' }, 'next', 'claude']])
+    expect(await s.src.showPane(s.agent())).toBe('ok')
+    expect(b.shown).toHaveBeenCalledTimes(1)
+    expect(h.typed).not.toHaveBeenCalled()
+    expect(h.shown).not.toHaveBeenCalled()
+
+    const only = holding([fake('h', () => true).adapter])
+    only.src.ingest(only.ev('turn-stop', { hostHints: HINTS }))
+    expect(only.src.capabilities(only.agent())).toMatchObject({ voice: false, focus: true })
+    expect(only.src.hasPane(only.agent())).toBe(false)
+    expect(await only.src.send(only.agent(), 'next')).toMatchObject({ ok: false })
+  })
+
+  it('a held pane\'s key folds no source\'s row once the maker is read, and paneOf names no held pane', async () => {
+    const s = holding([fake('a', unlessMadeBy('a')).adapter, fake('b', () => false).adapter])
+    s.src.ingest(s.ev('session-start', { hostHints: HINTS }))
+    await s.reads[0]('x')
+    expect(s.agent().paneKeys).toEqual(['b:b1'])
+    expect(s.src.paneOf(s.agent().id, 'a')).toBeUndefined()
+    expect(s.src.paneOf(s.agent().id, 'b')).toBe('b1')
+    // Resumed on a terminal a's host made: that pane is its own.
+    s.src.ingest(s.ev('session-start', { hostHints: HINTS, callerPid: 200 }))
+    await s.reads[1]('a')
+    expect(s.agent().paneKeys).toEqual(['a:a1', 'b:b1'])
+    expect(s.src.paneOf(s.agent().id, 'a')).toBe('a1')
+  })
+
+  // A listing source's row of the agent's pane folds into the hooked copy at once, so the list shows one row in the first
+  // moments after a hook, before the read lands (docs/plans/2026-11-21-dial-linux-followups-design.md, Decided).
+  it('a pane held until its maker is read lists its key as an own pane does, and drops it once the read names another host', async () => {
+    const s = holding([fake('a', unlessMadeBy('a')).adapter])
+    s.src.ingest(s.ev('session-start', { hostHints: HINTS }))
+    expect(s.agent().paneKeys).toEqual(['a:a1'])
+    await s.reads[0]('x')
+    expect(s.agent().paneKeys).toBeUndefined()
+    // A read that names no host drops it too.
+    s.src.ingest(s.ev('session-start', { hostHints: HINTS, callerPid: 200 }))
+    expect(s.agent().paneKeys).toEqual(['a:a1'])
+    await s.reads[1](undefined)
+    expect(s.agent().paneKeys).toBeUndefined()
+  })
+
+  it('holds: a pane held until its maker is read holds any asker; once read, only the asker of that agent\'s session; an own pane, an ended agent or another key holds none', async () => {
+    const s = holding([fake('a', unlessMadeBy('a')).adapter])
+    const same = { engine: 'claude', sessionId: 's1' }
+    const other = { engine: 'codex', sessionId: 's9' }
+    s.src.ingest(s.ev('session-start', { hostHints: HINTS }))
+    expect(s.src.holds('a:a1', same)).toBe(true)
+    expect(s.src.holds('a:a1', other)).toBe(true)
+    expect(s.src.holds('a:a1', { engine: 'codex' })).toBe(true)
+    expect(s.src.holds('a:a2', other)).toBe(false)
+    await s.reads[0]('x')
+    expect(s.src.holds('a:a1', same)).toBe(true)
+    for (const asker of [other, { engine: 'claude' }, { engine: 'claude', sessionId: 's2' }, { engine: 'codex', sessionId: 's1' }]) {
+      expect(s.src.holds('a:a1', asker), JSON.stringify(asker)).toBe(false)
+    }
+    // Its own pane.
+    s.src.ingest(s.ev('turn-start', { hostHints: HINTS, callerPid: 200 }))
+    await s.reads[1]('a')
+    expect(s.src.holds('a:a1', same)).toBe(false)
+    expect(s.src.holds('a:a1', other)).toBe(false)
+    // Ended.
+    s.src.ingest(s.ev('session-start', { hostHints: HINTS, callerPid: 300 }))
+    expect(s.src.holds('a:a1', other)).toBe(true)
+    s.src.ingest(s.ev('session-end', { hostHints: HINTS, callerPid: 300 }))
+    expect(s.src.holds('a:a1', same)).toBe(false)
+    expect(s.src.holds('a:a1', other)).toBe(false)
+  })
+
+  it('a read that names no host lands as null and places the agent again, telling no change', async () => {
+    const places: Array<Place['ptyOwner']> = []
+    const logs: string[] = []
+    // As an adapter says once a caller that its pane only holds the agent, once the read landed.
+    const sayHeld = oncePerCaller((line) => { logs.push(line) }, '[device] a · held')
+    const s = holding([fake('a', (place) => {
+      places.push(place.ptyOwner)
+      if (place.ptyOwner !== undefined && place.ptyOwner !== 'a') sayHeld(place.pid)
+      return place.ptyOwner !== 'a'
+    }).adapter])
+    s.src.ingest(s.ev('session-start', { hostHints: HINTS }))
+    expect(places).not.toContain(null)
+    s.changes.mockClear()
+    const placed = places.length
+    await s.reads[0](undefined)
+    expect(places.slice(placed)).toEqual([null])
+    expect(s.changes).not.toHaveBeenCalled()
+    expect(logs).toEqual(['[device] a · held'])
+    // Its next event places it again on the same caller: said once.
+    s.src.ingest(s.ev('turn-start', { hostHints: HINTS }))
+    expect(places.at(-1)).toBeNull()
+    expect(logs).toEqual(['[device] a · held'])
   })
 })
 
@@ -3126,10 +3295,10 @@ describe('ObservedSource panes', () => {
     expect(actions.open).not.toHaveBeenCalled()
   })
 
-  // WezTerm's pane is the nearer for a tap, and Orca's terminal still takes the words and the rest.
+  // With no read of its caller's maker, WezTerm's pane only holds it: Orca's terminal takes the words, the rest and the tap.
   it.each([
-    ['WezTerm', { WEZTERM_PANE: '7', ORCA_TERMINAL_HANDLE: HANDLE }, 'held:7'],
-  ])('%s inside an Orca terminal still takes the dial\'s words and a rest through Orca', async (_, hostHints, tapped) => {
+    ['WezTerm', { WEZTERM_PANE: '7', ORCA_TERMINAL_HANDLE: HANDLE }, HANDLE],
+  ])('%s inside an Orca terminal still takes the dial\'s words, a rest and a tap through Orca', async (_, hostHints, tapped) => {
     const { actions } = fakeActions()
     const { src, ev } = setup({ actions })
     src.ingest(ev('turn-stop', { hostHints }))
@@ -4651,6 +4820,24 @@ describe('ObservedSource and a waiting prompt', () => {
       ['[observed] waiting prompt · shown'], ['[observed] waiting prompt · shown'], ['[observed] waiting prompt · cleared'],
       ['[observed] waiting prompt · shown'], ['[observed] waiting prompt · cleared'],
     ])
+  })
+})
+
+describe('oncePerCaller', () => {
+  it('says its line once per caller, and forgets the oldest past 64 callers', () => {
+    const logs: string[] = []
+    const say = oncePerCaller((line) => { logs.push(line) }, '[device] a · held')
+    say(1)
+    say(1)
+    say(2)
+    expect(logs).toEqual(['[device] a · held', '[device] a · held'])
+    for (let pid = 3; pid <= 65; pid++) say(pid)
+    logs.length = 0
+    say(2)
+    say(65)
+    expect(logs).toEqual([])
+    say(1)
+    expect(logs).toEqual(['[device] a · held'])
   })
 })
 

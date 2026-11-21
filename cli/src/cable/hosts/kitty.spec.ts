@@ -81,6 +81,8 @@ const place = (hints: Record<string, string> = env, host = 'kitty', ptyOwner: st
   ({ host, app: 'kitty', hints, ...(ptyOwner === null ? {} : { ptyOwner }) })
 const pane = (id: string) => ({ adapter: 'kitty', id })
 const OWN = pane(`1@${env.KITTY_LISTEN_ON}`)
+/** The window of an agent kitty did not make the terminal of, as paneOf gives it. */
+const HELD = { ...pane(`held:${OWN.id}`), held: true }
 /** A recorded argv, run as the adapter runs it: the binary where it was found, then the arguments. */
 const ran = (args: readonly string[], file = FAKE_KITTEN): Call => ({ file, args: args.slice(1), timeoutMs: 10_000 })
 const typing = (text: string, id = '1', to: string = env.KITTY_LISTEN_ON): Call[] => [
@@ -154,7 +156,7 @@ describe('the kitty adapter', () => {
     ]
     for (const at of held) {
       const found = adapter.paneOf(at)!
-      expect(found, `${at.host} ${at.ptyOwner}`).toEqual(pane(`held:${OWN.id}`))
+      expect(found, `${at.host} ${at.ptyOwner}`).toEqual(HELD)
       expect(adapter.canFocus(found)).toBe(true)
       expect(adapter.canType(found)).toBe(false)
       expect(await adapter.type(found, 'hello', 'claude')).toBe(false)
@@ -164,12 +166,22 @@ describe('the kitty adapter', () => {
     expect(calls).toEqual([ran(focusWindow.args)])
   })
 
+  // The observed source reads the field alone, never an id's form: a held window is tapped after the agent's other panes,
+  // and takes no words, rest or key.
+  it('a held pane says so; an own one does not', () => {
+    const { adapter } = recorder()
+    expect(adapter.paneOf(place())).toStrictEqual(OWN)
+    for (const ptyOwner of [undefined, null, 'wezterm']) {
+      expect(adapter.paneOf({ ...place(), ptyOwner }), String(ptyOwner)).toStrictEqual(HELD)
+    }
+  })
+
   // VS Code, WezTerm, screen or nvim's :terminal started from kitty window 1 carries KITTY_WINDOW_ID=1, and detectHost
   // says kitty.
   it('a terminal started from the window takes no words', async () => {
     const { calls, adapter } = recorder()
     const found = adapter.paneOf(place({ ...env, TERM_PROGRAM: 'vscode' }, 'kitty', null))!
-    expect(found).toEqual(pane(`held:${OWN.id}`))
+    expect(found).toEqual(HELD)
     expect(adapter.canType(found)).toBe(false)
     expect(await adapter.type(found, 'hello', 'claude')).toBe(false)
     expect(calls).toEqual([])

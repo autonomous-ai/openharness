@@ -29,6 +29,8 @@ function recorder(over: Partial<OrcaDeps> = {}, codes: Array<number | null> = []
 const place = (hints: Record<string, string>, host = 'wezterm', ptyOwner: string | null = 'wezterm'): Place =>
   ({ host, app: 'wezterm', hints, ...(ptyOwner === null ? {} : { ptyOwner }) })
 const pane = (id: string) => ({ adapter: 'wezterm', id })
+/** The pane of an agent WezTerm did not make the terminal of, as paneOf gives it. */
+const heldPane = (id: string) => ({ ...pane(`held:${id}`), held: true })
 // Every command says --no-auto-start: with no WezTerm running, `wezterm cli` would start a mux server that outlives it.
 const activate = (file: string, id: string): Call =>
   ({ file, args: ['cli', '--no-auto-start', 'activate-pane', '--pane-id', id], timeoutMs: 10_000 })
@@ -64,7 +66,7 @@ describe('the WezTerm adapter', () => {
     ]
     for (const at of held) {
       const found = adapter.paneOf(at)!
-      expect(found, `${at.host} ${at.ptyOwner}`).toEqual(pane('held:7'))
+      expect(found, `${at.host} ${at.ptyOwner}`).toEqual(heldPane('7'))
       expect(adapter.canType!(found)).toBe(false)
       expect(await adapter.type!(found, 'hello', 'claude')).toBe(false)
       expect(calls).toEqual([])
@@ -73,11 +75,21 @@ describe('the WezTerm adapter', () => {
     expect(calls).toEqual([activate(FAKE_PATH_WEZTERM, '7')])
   })
 
+  // The observed source reads the field alone, never an id's form: a held pane is tapped after the agent's other panes,
+  // and takes no words, rest or key.
+  it('a held pane says so; an own one does not', () => {
+    const { adapter } = recorder()
+    expect(adapter.paneOf(place({ WEZTERM_PANE: '7' }))).toStrictEqual(pane('7'))
+    for (const ptyOwner of [undefined, null, 'kitty']) {
+      expect(adapter.paneOf({ ...place({ WEZTERM_PANE: '7' }), ptyOwner }), String(ptyOwner)).toStrictEqual(heldPane('7'))
+    }
+  })
+
   // `code .` run in WezTerm's pane 7: Codex in VS Code's terminal carries WEZTERM_PANE=7, and detectHost says WezTerm.
   it('a terminal started from the pane takes no words', async () => {
     const { calls, adapter } = recorder()
     const found = adapter.paneOf(place({ WEZTERM_PANE: '7', TERM_PROGRAM: 'vscode' }, 'wezterm', null))!
-    expect(found).toEqual(pane('held:7'))
+    expect(found).toEqual(heldPane('7'))
     expect(adapter.canType!(found)).toBe(false)
     expect(await adapter.type!(found, 'hello', 'claude')).toBe(false)
     expect(calls).toEqual([])
