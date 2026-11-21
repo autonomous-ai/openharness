@@ -32,7 +32,7 @@ it.each(['missing', 'stalled'] as const)('discovers Muse and closes/resumes Pi w
   const script = buildWithLean(join(scratch, mode), bundle, files)
   const d = daemon = await IsolatedDaemon.create({ scriptPath: script })
   onTestFailed(() => console.log(d.log()))
-  d.env.MUSE_HOME = join(d.root, 'muse'); d.env.PI_HOME = join(d.root, 'pi')
+  d.env.MUSE_HOME = join(d.env.HOME!, 'muse'); d.env.PI_HOME = join(d.env.HOME!, 'pi')
   const museId = 'aaaaaaaa-1111-4222-8333-444444444444'
   const piIds = { unwritten: 'bbbbbbbb-1111-4222-8333-444444444444', written: 'cccccccc-1111-4222-8333-444444444444' }
   for (const engine of ['muse', 'pi'] as const) {

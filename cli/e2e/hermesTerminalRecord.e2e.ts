@@ -41,7 +41,7 @@ afterEach(async () => {
 async function rig() {
   const d = daemon = await IsolatedDaemon.create()
   onTestFailed(() => console.log(d.log()))
-  const home = d.env.HERMES_HOME = join(d.root, 'hermes')
+  const home = d.env.HERMES_HOME = join(d.env.HOME!, 'hermes')
   d.env.HERMES_PATH = join(d.root, 'bin', 'hermes')
   d.env.HOOK_INSTALL_ENGINES = 'hermes'
   mkdirSync(home, { recursive: true })
@@ -261,7 +261,7 @@ it('keeps the hook of a home set to the TUI', async () => {
 
 it('follows a Hermes that only has a HOME of its own, and starts it again in that home', async () => {
   const r = await rig()
-  const folder = join(r.d.root, 'agents', 'a1')
+  const folder = join(r.d.env.HOME!, 'agents', 'a1')
   const own = join(folder, '.hermes')
   const ownConfig = join(own, 'config.yaml')
   await olderHook(r, own)
@@ -301,7 +301,7 @@ const unshareWorks = (): boolean =>
 describe.runIf(process.platform === 'linux' && unshareWorks())('in a sandbox', () => {
   it('binds and follows a Hermes whose home and folder are where the daemon sees them', async () => {
     const r = await rig()
-    const folder = join(r.d.root, 'agents', 'a1')
+    const folder = join(r.d.env.HOME!, 'agents', 'a1')
     const own = join(folder, '.hermes')
     const ownConfig = join(own, 'config.yaml')
     await olderHook(r, own)
@@ -325,7 +325,7 @@ describe.runIf(process.platform === 'linux' && unshareWorks())('in a sandbox', (
 
   it('binds a Hermes whose home, folder and /dev/pts are remapped', async () => {
     const r = await rig()
-    const folder = join(r.d.root, 'agents', 'a1')
+    const folder = join(r.d.env.HOME!, 'agents', 'a1')
     const own = join(folder, '.hermes')
     mkdirSync(own, { recursive: true })
     r.hermes({ home: folder, sandbox: 'remapped' })
@@ -347,7 +347,7 @@ describe.runIf(process.platform === 'linux' && unshareWorks())('in a sandbox', (
   it('leaves alone a Hermes whose home it cannot know, and its pane working', async () => {
     const r = await rig()
     // Only its home is on the sandbox's own filesystem: no path the daemon can see names its store.
-    r.hermes({ home: join(r.d.root, 'agents', 'a1'), sandbox: 'unseen' })
+    r.hermes({ home: join(r.d.env.HOME!, 'agents', 'a1'), sandbox: 'unseen' })
     await r.d.start()
     const c = await r.connect()
     const mark = r.d.log().length

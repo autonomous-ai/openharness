@@ -27,7 +27,7 @@ it('refuses a native hook destination outside the test, including the OpenCode s
   expect(() => assertHooksContained(d.root, d.env)).toThrow('OPENCODE_PLUGIN_DIR')
   d.env.OPENCODE_PLUGIN_DIR = d.root
   expect(() => assertHooksContained(d.root, d.env)).toThrow('OpenCode plugin parent')
-  d.env.OPENCODE_PLUGIN_DIR = join(d.root, 'opencode', 'plugin')
+  d.env.OPENCODE_PLUGIN_DIR = join(d.env.HOME!, 'opencode', 'plugin')
   expect(() => assertHooksContained(d.root, d.env)).not.toThrow()
   d.env.HOOK_INSTALL_ENGINES = 'unknown'
   expect(() => assertHooksContained(d.root, d.env)).toThrow('supported hook engines')
@@ -47,7 +47,7 @@ it('becomes ready and serves control while startup hook preparation is still wai
   onTestFailed(() => console.log(d.log()))
   const binary = join(d.root, 'bin', 'opencode'), entered = join(d.root, 'startup-probe'), release = join(d.root, 'release-probe')
   d.env.OPENCODE_PATH = binary
-  d.env.OPENCODE_PLUGIN_DIR = join(d.root, 'opencode', 'plugin')
+  d.env.OPENCODE_PLUGIN_DIR = join(d.env.HOME!, 'opencode', 'plugin')
   d.env.HOOK_INSTALL_ENGINES = 'opencode'
   writeFileSync(binary, `#!${process.execPath}
 const fs = require('node:fs');
@@ -73,7 +73,7 @@ const timer = setInterval(() => { if (fs.existsSync(${JSON.stringify(release)}))
     expect(d.coresStarted()).toBe(1)
   } finally { writeFileSync(release, '') }
   await until('the startup hook to finish after its probe is released', () =>
-    existsSync(join(d.root, 'opencode', 'plugins', 'launcher-register', 'tui.js')), 10_000)
+    existsSync(join(d.env.HOME!, 'opencode', 'plugins', 'launcher-register', 'tui.js')), 10_000)
 }, 30_000)
 
 it('keeps Stop and agent listing responsive while a native launch version probe waits', async () => {
@@ -81,7 +81,7 @@ it('keeps Stop and agent listing responsive while a native launch version probe 
   onTestFailed(() => console.log(d.log()))
   const binary = join(d.root, 'bin', 'opencode'), entered = join(d.root, 'version-entered'), release = join(d.root, 'version-release')
   d.env.OPENCODE_PATH = binary
-  d.env.OPENCODE_PLUGIN_DIR = join(d.root, 'opencode', 'plugin')
+  d.env.OPENCODE_PLUGIN_DIR = join(d.env.HOME!, 'opencode', 'plugin')
   writeFileSync(binary, `#!${process.execPath}\nconsole.log('opencode v2.0.18')\n`, { mode: 0o755 })
   await d.start()
   const c = client = await LocalClient.connect(d)
@@ -235,7 +235,7 @@ it.each([['missing', 'claude'], ['stalled', 'codex']] as const)(
     const script = buildWithLean(join(scratch, mode), bundle, files)
     const d = daemon = await IsolatedDaemon.create({ scriptPath: script })
     onTestFailed(() => console.log(d.log()))
-    const root = join(d.root, 'native')
+    const root = join(d.env.HOME!, 'native')
     const homes: Record<string, string> = {
       CURSOR_CONFIG_DIR: join(root, 'cursor'), CURSOR_DATA_DIR: join(root, 'cursor-data'),
       OPENCODE_PLUGIN_DIR: join(root, 'opencode', 'plugin'), OPENCODE_DATA_DIR: join(root, 'opencode-data'),

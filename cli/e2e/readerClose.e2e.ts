@@ -19,7 +19,7 @@ it('closes and resumes the same conversation after its reader dies during the re
   const d = daemon = await IsolatedDaemon.create({ env: { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200',
     HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000' } })
   onTestFailed(() => console.log(d.log()))
-  const home = d.env.HERMES_HOME = join(d.root, 'hermes'), commands = join(d.root, 'hermes-script.jsonl')
+  const home = d.env.HERMES_HOME = join(d.env.HOME!, 'hermes'), commands = join(d.root, 'hermes-script.jsonl')
   const signalled = join(d.root, 'engine-signalled.json')
   release = join(d.root, 'release-engine')
   writeFileSync(release, '')

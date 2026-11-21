@@ -31,7 +31,7 @@ it.each(['missing', 'stalled'] as const)('keeps Hermes admission pending and cor
   const scriptPath = buildWithLean(join(scratch, mode), bundle, files)
   const d = daemon = await IsolatedDaemon.create({ scriptPath })
   onTestFailed(() => console.log(d.log()))
-  d.env.HERMES_HOME = join(d.root, 'hermes')
+  d.env.HERMES_HOME = join(d.env.HOME!, 'hermes')
   d.env.HERMES_PATH = join(d.root, 'bin', 'hermes')
   mkdirSync(d.env.HERMES_HOME)
   const database = join(d.env.HERMES_HOME, 'state.db')

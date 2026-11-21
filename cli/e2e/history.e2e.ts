@@ -54,8 +54,8 @@ function transcriptsOf(daemon: IsolatedDaemon, sessionId: string): string[] {
       else if (String(entry.name).endsWith('.jsonl') && String(entry.name).includes(sessionId)) found.push(path)
     }
   }
-  walk(join(daemon.root, 'claude'))
-  walk(join(daemon.root, 'codex'))
+  walk(daemon.engineConfig.claudeProjectsDir)
+  walk(daemon.engineConfig.codexHome)
   return found
 }
 

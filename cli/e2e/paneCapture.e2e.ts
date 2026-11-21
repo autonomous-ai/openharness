@@ -13,7 +13,7 @@ it('an idle Agy pane settles old history and still follows the next live turn', 
   const d = daemon = await IsolatedDaemon.create()
   onTestFailed(() => console.log(d.log()))
   d.env.AGY_PATH = join(d.root, 'bin', 'agy')
-  d.env.AGY_HOME = join(d.root, 'agy')
+  d.env.AGY_HOME = join(d.env.HOME!, 'agy')
   // Nothing invokes an installed engine. The process and pane are real, including discovery.
   writeFileSync(d.env.AGY_PATH, `#!${process.execPath}
 if (process.argv.includes('--version')) { console.log('1.1.14'); process.exit(0) }

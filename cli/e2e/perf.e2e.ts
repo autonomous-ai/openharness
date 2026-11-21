@@ -345,7 +345,7 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
           // What each engine took, from its transcript, against what was answered: none lost, none twice.
           const ledger = saved.slice(0, questionAgents).map(agent => {
             const mine = answers.filter(answer => answer.agentId === agent.id)
-            const seen = engineAnswers(d.root, agent.engine as QuestionEngine, agent.sessionId)
+            const seen = engineAnswers(d.engineConfig, agent.engine as QuestionEngine, agent.sessionId)
             return { agentId: agent.id, engine: agent.engine, asked: mine.length, answered: mine.filter(answer => answer.ok).length,
               ...compareAnswers(mine.filter(answer => answer.ok).map(answer => answer.expected!), seen) }
           })
@@ -393,7 +393,7 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
       if (historyMiB) for (let i = 0; i < saved.length; i += 4) {
         await Promise.all(saved.slice(i, i + 4).map(agent => turn(agent.id, `!grow ${historyMiB}`)))
       }
-      report.transcriptBytes = transcriptBytes(join(d.root, 'claude/projects')) + transcriptBytes(join(d.root, 'codex/sessions'))
+      report.transcriptBytes = transcriptBytes(d.engineConfig.claudeProjectsDir) + transcriptBytes(join(d.engineConfig.codexHome, 'sessions'))
       if (measureReaders) {
         report.firstHistoryReads = []
         for (const agent of saved) {

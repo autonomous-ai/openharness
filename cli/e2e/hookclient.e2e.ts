@@ -158,7 +158,7 @@ describe('the hook client', () => {
   it('keeps a later Cursor turn open when Cancel superseded its linked Stop registration', async () => {
     const d = daemon = await IsolatedDaemon.create()
     onTestFailed(() => console.log(d.log()))
-    const home = join(d.root, 'cursor'), binary = join(d.root, 'bin', 'cursor-agent')
+    const home = join(d.env.HOME!, 'cursor'), binary = join(d.root, 'bin', 'cursor-agent')
     Object.assign(d.env, { CURSOR_HOME: home, CURSOR_CONFIG_DIR: home, CURSOR_DATA_DIR: home, CURSOR_PATH: binary })
     mkdirSync(home, { recursive: true })
     const pidFile = join(d.root, 'cursor.pid')

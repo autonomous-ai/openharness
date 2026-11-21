@@ -34,8 +34,8 @@ it.each(['missing', 'stalled'] as const)('binds, follows Copilot resume and loca
   const d = daemon = await IsolatedDaemon.create({ scriptPath: script })
   onTestFailed(() => console.log(d.log()))
   const first = 'aaaaaaaa-1111-4222-8333-444444444444', next = 'bbbbbbbb-1111-4222-8333-444444444444'
-  d.env.COPILOT_HOME = join(d.root, 'copilot')
-  d.env.CURSOR_HOME = join(d.root, 'cursor')
+  d.env.COPILOT_HOME = join(d.env.HOME!, 'copilot')
+  d.env.CURSOR_HOME = join(d.env.HOME!, 'cursor')
   const cwd = join(d.projectsDir, 'native'); mkdirSync(cwd)
   for (const engine of ['copilot', 'cursor'] as const) {
     const path = join(d.root, 'bin', engine)

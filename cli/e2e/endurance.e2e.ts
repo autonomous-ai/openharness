@@ -123,7 +123,7 @@ async function questionReport(d: IsolatedDaemon, client: LocalClient, questions:
     const mine = questions.outcomes.filter(outcome => outcome.agentId === agentId)
     const sessionId = String(rows.find(row => row.id === agentId)?.sessionId ?? '')
     return { agentId, engine, asked: mine.length, answered: mine.filter(outcome => outcome.ok).length,
-      ...compareAnswers(mine.filter(outcome => outcome.ok).map(outcome => outcome.expected!), sessionId ? engineAnswers(d.root, engine, sessionId) : []) }
+      ...compareAnswers(mine.filter(outcome => outcome.ok).map(outcome => outcome.expected!), sessionId ? engineAnswers(d.engineConfig, engine, sessionId) : []) }
   })
   const outcomes = questions.outcomes
   return {

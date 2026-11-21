@@ -603,7 +603,7 @@ const delivered = (s: Side, id: string, ms = 60_000) => until(`${id} to be deliv
 
 /** What was typed into an agent's conversation: the user prompts its (fake) engine wrote to its transcript. */
 function prompts(s: Side, agent: Record<string, any>): string[] {
-  const projects = join(s.d.root, 'claude', 'projects')
+  const projects = s.d.engineConfig.claudeProjectsDir
   for (const dir of readdirSync(projects)) {
     const file = join(projects, dir, `${agent.sessionId}.jsonl`)
     if (!existsSync(file)) continue
