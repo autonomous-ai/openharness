@@ -85,7 +85,8 @@ export function createWeztermAdapter(deps: OrcaDeps): HostAdapter {
 
 /** The id of the pane on [tty] in `wezterm cli list --format json`'s [stdout]; none when no pane holds it, or when the
  *  list is out of form anywhere: an answer not wholly WezTerm's names no pane to activate. Only `pane_id` and `tty_name`
- *  are read. */
+ *  are read. A `tty_name` of null is WezTerm's own word for a pane on no tty (an SSH or serial domain's): no client is
+ *  on it, so it is passed over. */
 function paneOnTty(stdout: string, tty: string): string | undefined {
   let entries: unknown
   try {
@@ -98,7 +99,7 @@ function paneOnTty(stdout: string, tty: string): string | undefined {
   for (const entry of entries) {
     if (typeof entry !== 'object' || entry === null) return undefined
     const { pane_id: id, tty_name: name } = entry as { pane_id?: unknown; tty_name?: unknown }
-    if (typeof id !== 'number' || !WEZTERM_PANE.test(String(id)) || typeof name !== 'string') return undefined
+    if (typeof id !== 'number' || !WEZTERM_PANE.test(String(id)) || (typeof name !== 'string' && name !== null)) return undefined
     if (name === tty) holding ??= String(id)
   }
   return holding
