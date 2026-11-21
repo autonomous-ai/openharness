@@ -64,7 +64,7 @@ import { engineSessionTitle } from '../lib/sessionTitle.js'
 import { machineNames } from '../lib/machineNames.js'
 import { engineHooks as engineHookFacets } from '../engines/hooks.js'
 import type { LiveFor } from '../engines/facets/live.js'
-import { DAEMON_LOG_FILE, PID_FILE, daemonPort, isAlive, readPid, removePidFileIf, LEGACY_LOG_FILE, MACHINE_NAME_FILE, SERVED_ELSEWHERE, tildify, computerId, thisDeviceLabel, writePidFile } from '../lib/daemonState.js'
+import { DAEMON_LOG_FILE, PID_FILE, daemonPort, isAlive, readPid, removePidFileIf, LEGACY_LOG_FILE, MACHINE_NAME_FILE, failForegroundStart, tildify, computerId, thisDeviceLabel, writePidFile } from '../lib/daemonState.js'
 import { atomicWriteFile } from '../lib/secureState.js'
 import { clearSafeModeMarker, safeModeDisposition, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker } from '../lib/daemonSafeMode.js'
 import { awakeTimeout } from '../lib/sleepAware.js'
@@ -3431,19 +3431,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 }
 
 /**
- * A start-up that threw, and does not stay up: only its kind goes to the log, which Export logs sends, never its words
- * or its stack. The pid file goes if it is this core's: one left naming a process that is gone, the next
- * `harness start` would refuse on.
- */
-const failStart = (err: unknown, code: number): never => {
-  // The one a person meets starting by hand (`harness start -f`, `harness login`) says why, in fixed words.
-  const why = (err as { code?: unknown } | null | undefined)?.code === 'EADDRINUSE' ? SERVED_ELSEWHERE : ''
-  console.error(`Failed to start adapter: ${errorKind(err)}${why}`)
-  removePidFileIf(process.pid)
-  process.exit(code)
-}
-
-/**
  * The daemon's start-up threw. STAY UP anyway, waiting for a fix.
  *
  * Exiting here is what made one bad build unrecoverable: the desktop app answers a dead port by running
@@ -3466,7 +3453,7 @@ const enterSafeMode = (err: unknown): void => {
     // Under harnessd, said for good: any other exit, the master restarts, and a core that another daemon
     // keeps from running was restarted for as long as its master lived (e2e/twodaemons.e2e.ts). Except
     // what stands in the way is leaving too: then the master starts this core again.
-    failStart(err, coreLink.supervised && !disposition.retry ? CORE_EXIT_STOP : 1)
+    failForegroundStart(err, coreLink.supervised && !disposition.retry ? CORE_EXIT_STOP : 1)
   }
   // The marker keeps the stack, for `harness status`; the log, which Export logs sends, gets only the kind.
   const detail = err instanceof Error ? (err.stack ?? err.message) : String(err)
@@ -3554,7 +3541,6 @@ export function runCoreInForeground(session: AuthSession | null, scriptPath: str
   holdHarnessdEnv()
   dropAgentSessionEnv()
   SCRIPT_PATH = scriptPath
-  // The core's own `failStart`, whose line the log guard reads, not the command's `onError`: this process is the
-  // daemon, and what it prints is its log.
-  return runForeground(session).catch((err: unknown) => failStart(err, 1))
+  // How a daemon's start fails, not the command's `onError`: this process is the daemon, and what it prints is its log.
+  return runForeground(session).catch((err: unknown) => failForegroundStart(err))
 }

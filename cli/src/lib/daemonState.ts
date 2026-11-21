@@ -123,18 +123,18 @@ export function removePidFileIf(pid: number | undefined, deps: { readPid: () => 
 }
 
 /** What a failed start says when another daemon serves its data folder, in fixed words: the error's own words name
- *  the socket's path. The core's (core/main.ts `failStart`) and a foreground start's say the same. */
-export const SERVED_ELSEWHERE = ' · another Harness daemon serves this data folder'
+ *  the socket's path. */
+const SERVED_ELSEWHERE = ' · another Harness daemon serves this data folder'
 
 /** How a command fails: say why, let go of the pid file if it is this process's, and exit. Commands alone fail
- *  this way, on the terminal of the person who ran one; a daemon's start fails through [failForegroundStart], and a
- *  core logs a failed start's kind itself, also one a command runs in its own process (core/main.ts
- *  `runCoreInForeground`). */
+ *  this way, on the terminal of the person who ran one; a daemon's start fails through [failForegroundStart]. */
 export const onError = (err: unknown, code = 1): never =>
   exitSaying(err, code, () => console.error('Failed to start adapter:', err))
 
-/** How `harness start --foreground` fails: launchd and systemd run it, and what it prints is then the daemon's log,
- *  which Export logs sends. So an error says its kind, never its words, its stack or a path, as the core's does. */
+/** How a daemon's start fails: `harness start --foreground`, which launchd and systemd run, and the core's, which does
+ *  not stay up (core/main.ts), also one a command runs in its own process (`runCoreInForeground`). What either prints
+ *  is the daemon's log, which Export logs sends. So an error says its kind, never its words, its stack or a path; the
+ *  one a person meets starting by hand (`harness start -f`, `harness login`) says why, in fixed words. */
 export const failForegroundStart = (err: unknown, code = 1): never =>
   exitSaying(err, code, () => {
     const why = (err as { code?: unknown } | null | undefined)?.code === 'EADDRINUSE' ? SERVED_ELSEWHERE : ''
