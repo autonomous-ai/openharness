@@ -21,7 +21,7 @@ afterEach(() => {
 const scenario: Scenario = {
   id: 'S1', app: 'claude', title: 'Eval sessions', dims: ['D4'], platforms: ['darwin', 'win32', 'linux'], tiers: ['a'],
   heldOut: false, steps: [], checks: [], probes: [],
-  sessions: [claudeSession('a', 60_000), claudeSession('b', 120_000), thread('t1', 60_000)],
+  sessions: [claudeSession('a', 60_000), claudeSession('b', 120_000), thread('t1', 60_000), thread('c1', 180_000, { cli: true })],
 }
 
 /** A world whose devices record what they are told, and hold each mod poll until the test answers it. */
@@ -65,6 +65,7 @@ const a = scenario.sessions[0]!
 const b = scenario.sessions[1]!
 const t1 = scenario.sessions[2]!
 const CLAUDE_APP = 'com.anthropic.claudefordesktop'
+const CHATGPT_APP = 'com.openai.codex'
 
 describe("tier A's live sessions", () => {
   it('start puts the process in the machine, tells the devices and opens the mod\'s poll', async () => {
@@ -87,15 +88,21 @@ describe("tier A's live sessions", () => {
       const w = fakeWorld(platform)
       await w.hook('a', 'start')
       await w.hook('t1', 'start')
+      await w.hook('c1', 'start')
       return { told: w.told.map((e) => (e as ObservedHookEvent).hostHints), apps: [...machine.processes.values()].map((p) => p.app),
         open: w.open(), codexTranscript: machine.owners.get(t1.id)!.transcriptPath!.startsWith(w.world.folders.codexSessions) }
     }
     const claude = { CLAUDE_CODE_HOST_SESSION_ID: a.localId, CLAUDE_CODE_ENTRYPOINT: 'claude-desktop' }
-    expect(await hints('darwin')).toEqual({ told: [{ __CFBundleIdentifier: CLAUDE_APP, ...claude }, {}], apps: ['claude', 'codex'],
-      open: [a.id], codexTranscript: true })
-    expect(await hints('linux')).toEqual({ told: [claude, {}], apps: ['claude', 'codex'], open: [a.id], codexTranscript: true })
-    expect(await hints('win32')).toEqual({ told: [{ __CFBundleIdentifier: CLAUDE_APP, ...claude }, { __CFBundleIdentifier: 'com.openai.codex' }],
-      apps: [undefined, undefined], open: [a.id], codexTranscript: true })
+    // The ChatGPT app's Codex inherits the app's bundle id on macOS, and the hook finds the app among its parents on
+    // Windows; a Codex CLI names its terminal.
+    const chatgpt = { __CFBundleIdentifier: CHATGPT_APP }
+    const terminal = { TERM_PROGRAM: 'ghostty' }
+    expect(await hints('darwin')).toEqual({ told: [{ __CFBundleIdentifier: CLAUDE_APP, ...claude }, chatgpt, terminal],
+      apps: ['claude', 'codex', undefined], open: [a.id], codexTranscript: true })
+    expect(await hints('linux')).toEqual({ told: [claude, {}, terminal], apps: ['claude', 'codex', undefined], open: [a.id],
+      codexTranscript: true })
+    expect(await hints('win32')).toEqual({ told: [{ __CFBundleIdentifier: CLAUDE_APP, ...claude }, chatgpt, terminal],
+      apps: [undefined, undefined, undefined], open: [a.id], codexTranscript: true })
   })
 
   it('an answered poll is a mod delivery to that session, and the mod polls again', async () => {
