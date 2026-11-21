@@ -105,7 +105,7 @@ export function prepareLogFile(file: string, legacy: string, maxBytes = LOG_MAX_
  * channel's key can carry the peer's id: it is logged as a short hash of itself instead.
  */
 export function sid(id: string): string {
-  return id.startsWith('agent:') ? `oc-${createHash('sha256').update(id).digest('hex').slice(0, 8)}` : id.slice(0, 8)
+  return id.startsWith('agent:') ? `oc-${hashOf(id)}` : id.slice(0, 8)
 }
 
 // A class name starts upper case: one lower-case word can be a file's or a person's name ("notes", "someone").
@@ -136,6 +136,21 @@ export function errorKind(error: unknown): string {
   } catch {
     return 'Error'
   }
+}
+
+/**
+ * A stored or peer string for a log line: a code (`SERVICE_UNAVAILABLE`) as itself, any other string as its length.
+ * Such a string can hold the person's words or a path naming their home, and Export logs sends the log off the
+ * machine. A lower-case word is never trusted: it can be a file's or a person's name. A non-string is its `typeof`.
+ */
+export function codeOrLength(value: unknown): string {
+  if (typeof value !== 'string') return typeof value
+  return CODE.test(value) ? value : `text(${value.length})`
+}
+
+/** A path, URL or label for a log line: the same text always reads the same, and none of it shows. */
+export function hashOf(text: string): string {
+  return createHash('sha256').update(text).digest('hex').slice(0, 8)
 }
 
 /** One-line, whitespace-flattened preview of user/assistant text, capped with an ellipsis. */
