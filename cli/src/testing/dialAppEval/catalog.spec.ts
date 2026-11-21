@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { HELD_OUT, MAIN } from './catalog.js'
+import { HELD_OUT, MAIN, titleOf } from './catalog.js'
 import { STEP_KINDS, THRESHOLDS, type Check, type CheckKind, type Scenario, type SessionKey, type Step, type StepKind } from './types.js'
 
 const ALL = [...MAIN, ...HELD_OUT]
@@ -98,6 +98,13 @@ describe('the catalog', () => {
     }
   })
 
+  it('XH2 shows the Claude app\'s page first and its title names the ChatGPT page\'s second tile, so only the title can pass it', () => {
+    const xh2 = byId('XH2')
+    expect(xh2.steps.find((s) => s.kind === 'wait' && s.until !== undefined)).toMatchObject({ until: { page: 'claude' } })
+    expect(xh2.steps.find((s) => s.kind === 'thread')).toMatchObject({ title: titleOf('t2') })
+    expect(xh2.sessions.filter((d) => d.app === 'chatgpt' && !d.ghost).map((d) => [d.key, d.ageMs])).toEqual([['t1', 60_000], ['t2', 120_000]])
+  })
+
   it('C8 has no tap or swipe, so its open can only be the voice\'s', () => {
     // A swipe's rest opens the session too: one before the voice would pass the open whatever the voice did. The pick
     // lands on its only row.
@@ -190,12 +197,12 @@ describe('the catalog', () => {
 
   it('an input on the dial or the app comes at least 1 s after its listing, and any step at least 1 s after an input', () => {
     // Faster, it lands in the same instant the list arrives, inside the devices' echo window after a push, or inside a
-    // swipe's rest, whose open makes the devices drop the next title as its echo: no person does either. XH2 has no
-    // listing (see below). X11's switches 300 ms apart and XH3's voice 200 ms after the follow are those scenarios'
-    // point: only the input right after one of their own short waits is let through.
+    // swipe's rest, whose open makes the devices drop the next title as its echo: no person does either. X11's switches
+    // 300 ms apart and XH3's voice 200 ms after the follow are those scenarios' point: only the input right after one of
+    // their own short waits is let through.
     const inputs = new Set<Step['kind']>(['tap', 'swipe', 'voice', 'attach', 'thread'])
     const quick = new Set(['X11', 'XH3'])
-    for (const s of ALL.filter((s) => s.id !== 'XH2')) {
+    for (const s of ALL) {
       // Since the last listing, or the last input once there is one. A condition wait may end at once: it counts 0.
       let since: number | null = null
       let afterInput = false
@@ -217,9 +224,7 @@ describe('the catalog', () => {
   })
 
   it('a step on a row of the dial comes after a wait until the dial lists that row', () => {
-    // XH2's thread is on the ChatGPT page while the dial shows the Claude app's: no list of it reaches the dial first.
-    const unlisted = new Set(['XH2'])
-    for (const s of ALL.filter((s) => !unlisted.has(s.id))) {
+    for (const s of ALL) {
       const listed = new Set<SessionKey>()
       for (const step of s.steps) {
         if (step.kind === 'wait' && step.until) for (const key of step.until.expect) listed.add(key)
