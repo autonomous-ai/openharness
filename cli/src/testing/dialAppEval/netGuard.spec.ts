@@ -41,7 +41,7 @@ function doors(): Record<string, unknown> {
     'dns.promises.Resolver#': dns.promises.Resolver.prototype, 'node:dns': dnsNamespace, 'node:dns/promises': dnsPromisesNamespace }
   return {
     'net.Socket#connect': net.Socket.prototype.connect, 'dgram.Socket#send': dgram.Socket.prototype.send,
-    'dgram.Socket#connect': dgram.Socket.prototype.connect,
+    'dgram.Socket#connect': dgram.Socket.prototype.connect, 'dgram.createSocket': dgram.createSocket,
     ...Object.fromEntries(Object.entries(owners).flatMap(([owner, at]) => DNS_QUERIES
       .filter((name) => Object.hasOwn(at, name)).map((name) => [`${owner}.${name}`, member(at, name)]))),
   }
@@ -108,6 +108,55 @@ describe('a host off this machine', () => {
   })
 })
 
+/** A caller's own lookup: 192.0.2.1 for localhost and an address as itself (a dgram socket's bind asks for 0.0.0.0), one
+ *  address or all as Node asks, on a later turn as a resolver answers. */
+function answersOff(hostname: string, options: unknown, callback: (...answer: unknown[]) => void): void {
+  const address = hostname === 'localhost' ? OFF : hostname
+  const family = net.isIP(address)
+  const all = (options as { all?: boolean } | undefined)?.all
+  setImmediate(() => all ? callback(null, [{ address, family }]) : callback(null, address, family))
+}
+
+/** What a socket's lookup reported; the socket goes then, so a connect the guard let through gets no further. */
+async function lookedUp(socket: net.Socket): Promise<unknown> {
+  // A refused lookup fails the socket as well: its error is read from the lookup.
+  socket.on('error', () => {})
+  const [error] = await once(socket, 'lookup')
+  socket.destroy()
+  return error
+}
+
+describe('localhost, where a caller\'s own lookup answers 192.0.2.1', () => {
+  it.each<[string, () => Promise<unknown>, NetAttempt['api']]>([
+    ['net.connect', () => lookedUp(net.connect({ host: 'localhost', port: PORT, lookup: answersOff })), 'net'],
+    ['tls.connect', () => lookedUp(tls.connect({ host: 'localhost', port: PORT, lookup: answersOff })), 'tls'],
+    ['http.request', async () => {
+      const request = http.request({ host: 'localhost', port: PORT, lookup: answersOff }).on('error', () => {})
+      request.end()
+      const [socket] = await once(request, 'socket') as [net.Socket]
+      return lookedUp(socket)
+    }, 'net'],
+    // The handshake's bound only ends a connect the guard let through.
+    ['a ws WebSocket', () => failure(new WsWebSocket(`ws://localhost:${PORT}/`, { lookup: answersOff, handshakeTimeout: 200 })), 'net'],
+  ])('%s fails and is recorded by that address and its port', async (_name, reach, api) => {
+    const error = await reach() as NodeJS.ErrnoException | undefined
+    expect({ code: error?.code, message: error?.message })
+      .toEqual({ code: 'ENETUNREACH', message: `the dial eval reaches no network: ${OFF}:${PORT}` })
+    expect(guard.taken()).toEqual([attempt(api, OFF, PORT)])
+  })
+
+  it('a dgram socket\'s send fails and is recorded by that address', async () => {
+    const socket = dgram.createSocket({ type: 'udp4', lookup: answersOff })
+    try {
+      const sent = await new Promise<Error | null>((resolve) => socket.send('eval', PORT, 'localhost', resolve))
+      expect((sent as NodeJS.ErrnoException | null)?.code).toBe('ENETUNREACH')
+      expect(guard.taken()).toEqual([attempt('dgram', OFF, null)])
+    } finally {
+      socket.close()
+    }
+  })
+})
+
 describe('this machine', () => {
   it.each(['localhost', '127.0.0.1', '::1'])('%s still connects', async (host) => {
     const server = net.createServer((socket) => socket.end('ok'))
@@ -149,15 +198,16 @@ describe('this machine', () => {
     }
   })
 
-  it.each([undefined, '', 'localhost', 'eval.localhost', '127.0.0.1', '127.1.2.3', '0.0.0.0', '::1', '::', '[::1]',
+  it.each([undefined, '', 'localhost', 'LocalHost', '127.0.0.1', '127.1.2.3', '0.0.0.0', '::1', '::', '[::1]',
     '::ffff:127.0.0.1', '[::ffff:127.0.0.1]'])('%s is local', (host) => {
     expect(isLocal(host)).toBe(true)
   })
 
-  it.each([OFF, 'example.invalid', '10.0.0.1', '192.168.1.2', '::ffff:192.0.2.1', '2001:db8::1', 'localhost.example.invalid'])(
-    '%s is not', (host) => {
-      expect(isLocal(host)).toBe(false)
-    })
+  // A name under localhost is the resolver's to answer, which may ask a DNS server.
+  it.each([OFF, 'example.invalid', '10.0.0.1', '192.168.1.2', '::ffff:192.0.2.1', '2001:db8::1', 'localhost.example.invalid',
+    'eval.localhost'])('%s is not', (host) => {
+    expect(isLocal(host)).toBe(false)
+  })
 })
 
 it('a lookup of example.invalid is refused and recorded, and localhost resolves', async () => {
