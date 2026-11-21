@@ -122,6 +122,15 @@ describe.skipIf(WIN32)('the dial eval, tier B: the Claude app', () => {
     expect(faces.filter((f) => f.at < replug).at(-1)).toEqual({ at: expect.any(Number), page: '', tiles: [], active: null })
   })
 
+  it("a resume the fake Claude app could not start fails its scenario, saying why, and not the file", async () => {
+    const c8 = SCENARIOS.find((s) => s.id === 'C8')!
+    // A title no process's environment can hold: its Claude Code cannot be started.
+    const sessions = c8.sessions.map((s) => s.key === 'a' ? { ...s, title: 'Eval \0' } : s)
+    const steps = [{ kind: 'claude.write' as const, sessions: ['a'] }, ...listed('claude', ['a']), { kind: 'tap' as const, session: 'a' }]
+    const run = await runScenario(driver, { ...c8, sessions, steps }, HOST)
+    expect(run.error).toMatch(/null bytes/)
+  })
+
   it.for(SCENARIOS)('$id: $title', async (scenario) => {
     const began = Date.now()
     const run = await runScenario(driver, scenario, HOST)
