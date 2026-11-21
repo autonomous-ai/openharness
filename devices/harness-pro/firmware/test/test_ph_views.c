@@ -1519,6 +1519,7 @@ int main(void) {
         CHECK(card_grad(ht_rgb(PH_RAISED), ht_rgb(PH_GROUND)) && images_in(0, 720) == 0);
         nm = app_name();
         CHECK(nm && !strncmp(nm->text, "Rex m", 5) && ht_pro_width(nm->pro_font, nm->text) > 364 && nm->w <= 452 && pick_hit(1, "rex"));   // past where an icon would start
+        CHECK(!text_prefix("\xe2\x9c\x93"));   // 0 working, 0 asking, and still no "All done" on an app card
         CHECK(!ph_home_moves(&N, &M));   // 0 working, 0 asking: still
         N.stack[0].scroll = POD_HOME_APP0 + 1;
         CHECK(ph_home_moves(&N, &M));    // vscode: only asking

@@ -4,7 +4,7 @@
 //   agent:<id>, recap:<id>, talk:<id> (ids: fw ota be cli web desk docs vault site cur notes2 kilo; suffixes :long :offline :unread :viet ...),
 //   talk:listen|send, inbox[:viet|:quiet|:failed], ota:<pct>|ota:restart (the update screen), notice:updated|notice:failed (the Home screen with that pill),
 //   <room>:toast[@<ms after it showed>] (the notice toast), ":bell" / ":banner" on a screen (unread entries; banner adds the toast), and the other
-//   apps' screens: tabs:switch, apps, apps:noicon, apps:nowindow, agent:chatgpt:seeit (apps_fixture). The demo is the
+//   apps' screens: tabs:switch, tabs:notices:switch, apps, apps:noicon, apps:nowindow, agent:chatgpt:seeit (apps_fixture). The demo is the
 //   HTML mockup's: the same agents, tabs and times. `--skin pets` is accepted and ignored (Pets is the only interface).
 #include <stdio.h>
 #include <stdlib.h>
@@ -196,6 +196,7 @@ static void cover_tabs(bool seven)
 // The other apps' screens, apps.switch on: Harness (the demo's window), ChatGPT and VS Code. Their hosts, apps and the ChatGPT thread are
 // set only here, so the demo every older screen draws (and its golden) stays as it was.
 //   tabs:switch            Home on tab 0, the pill on Tabs
+//   tabs:notices:switch    Home on the Notices card, the pill on Tabs under its back sheet
 //   apps                   ChatGPT's ring shown (be and docs live in it): Apps chosen, on its card, VS Code peeking
 //   apps:noicon            Rex, an app with no style, in ChatGPT's place: Apps on its card, the Pro's own dark
 //   apps:nowindow          no window (the view is the machine): Home lists the app cards itself, Harness first, no pill
@@ -203,7 +204,7 @@ static void cover_tabs(bool seven)
 static void apps_fixture(const char *screen)
 {
     pod_app_t rows[3] = {{"harness", "Harness", 10, 1, 4}, {"codex", "ChatGPT", 2, 0, 1}, {"vscode", "VS Code", 3, 1, 0}};
-    const bool noicon = !strcmp(screen, "apps:noicon"), ring = !noicon && strcmp(screen, "tabs:switch");
+    const bool noicon = !strcmp(screen, "apps:noicon"), ring = !noicon && strncmp(screen, "tabs:", 5);
     if (noicon) rows[1] = (pod_app_t){"rex", "Rex", 1, 0, 0};
     pod_model_apps_switch(&M, true);
     if (ring) {
@@ -350,7 +351,7 @@ int main(int argc, char **argv)
     const bool toast = strstr(screen, "toast") != NULL;   // <agent|recap>:<id>:toast[@<ms after it showed>], the notice toast over that room (shown at T0)
     if (toast && strchr(screen, '@')) now = T0 + (uint32_t)atoi(strchr(screen, '@') + 1);
     demo();
-    bool banner = strstr(screen, "banner") != NULL, bell = banner || toast || strstr(screen, "bell") != NULL || !strcmp(screen, "tabs:notices"), inbox = !strncmp(screen, "inbox", 5);
+    bool banner = strstr(screen, "banner") != NULL, bell = banner || toast || strstr(screen, "bell") != NULL || !strncmp(screen, "tabs:notices", 12), inbox = !strncmp(screen, "inbox", 5);
     if ((!strncmp(screen, "agent:", 6) || !strncmp(screen, "recap:", 6) || !strncmp(screen, "talk:", 5) || !strncmp(screen, "inbox", 5)))
         console_fixture(screen);   // only the screens that read it: the older Pets goldens keep their model
     if ((bell || inbox) && !strstr(screen, "quiet")) {   // unread entries, oldest first (the newest ends on top); "be" is the one the banner shows
@@ -363,8 +364,9 @@ int main(int argc, char **argv)
         snprintf(((pod_unread_t *)pod_model_unread_find(&M, "be"))->text, POD_UNREAD_TEXT, "Đã sửa lỗi đồng bộ cáp. Mọi bài kiểm thử đều xanh trên máy chủ và thiết bị.");
         snprintf(((pod_unread_t *)pod_model_unread_find(&M, "ota"))->text, POD_UNREAD_TEXT, "Đã nạp mặt mới cho núm xoay, kênh cập nhật không đổi và mọi thứ vẫn chạy ổn định như trước đó.");
     }
-    if (!strcmp(screen, "tabs:switch") || !strncmp(screen, "apps", 4) || !strcmp(screen, "agent:chatgpt:seeit")) {   // before the tabs and agent branches
+    if (!strcmp(screen, "tabs:switch") || !strcmp(screen, "tabs:notices:switch") || !strncmp(screen, "apps", 4) || !strcmp(screen, "agent:chatgpt:seeit")) {   // before the tabs and agent branches
         apps_fixture(screen);
+        if (!strcmp(screen, "tabs:notices:switch")) pod_nav_act(&N, &M, POD_A_SCROLL, POD_HOME_NOTICES, T0);
         if (!strncmp(screen, "agent:", 6)) {   // the tap on that room: the glue's notice line (pod_glue.c talk_fire)
             notice = true;
             notice_text = pod_host_see_it("codex");

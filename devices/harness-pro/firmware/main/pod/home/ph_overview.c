@@ -90,7 +90,7 @@ static int tab_agents(const pod_model_t *m, int t, int *working)
             n++;
             w += pod_model_eff(m, &m->agents[tab->agent[k]]) == POD_WORKING;
         }
-    if (working) *working = w;
+    *working = w;
     return n;
 }
 
@@ -226,7 +226,7 @@ static void on_baseline(ht_scene_t *s, int x, int base, const ht_pro_font_t *f, 
 
 // The first screen (mockup harness-pro-boot.html, option 5 "Shimmer"): the round dial's wordmark, larger, on its own navy ground, with a
 // light sweeping across the letters and a sliding pill in a short track. Shown for Home with no tabs (and no notices): before the first swarms
-// of a link, after a link drop, or a machine with none. No hits. It moves, so Home wakes on the 66 ms beat while it shows (ph_home_moves).
+// of a link, after a link drop, or a machine with none. No hits but the pill's two while it shows (pod_home_switch). It moves, so Home wakes on the 66 ms beat while it shows (ph_home_moves).
 // Geometry is the mockup's 720 px screen: word box top 300, 84 px, line-height 1 (baseline 373), letter-spacing -0.02em; track 260,430 200x6.
 enum { BR_BG = 0x0E1B2C, BR_INK = 0xF2F7FC, BR_LIGHT = 0x9CC6FF, BR_TRACK = 0x1B2A3D, BR_PILL = 0x5F8FD6,
        BR_BASE = 373, BR_SPACE_X100 = 168, BR_SHINE_MS = 2400, BR_SLIDE_MS = 1400,
@@ -442,7 +442,7 @@ static void card(pod_out_frame_t *f, const pod_model_t *m, const card_t *d, int 
         return;
     }
     ph_text(s, nx, y + NAME_Y + nf->height / 2, name_w, nf, PH_CARD_INK, name);
-    if (d->icon) {   // its top on the name's line, NAME_X in from the right edge
+    if (d->icon) {   // the name's NAME_X margin mirrored on the right and its top on the name's line, so name and icon read as one header row
         const ht_pro_bitmap_t b = {d->icon->rgb565, d->icon->alpha, d->icon->size, d->icon->size, 0, NULL};
         ht_pro_image(s, x + w - NAME_X - d->icon->size, y + NAME_Y, &b);
     }
@@ -577,7 +577,7 @@ static void home_pill(pod_out_frame_t *f, bool apps)
     }
 }
 
-// One page of Home: the wordmark, the Working or Notices card, or a tab's card, each with its neighbours.
+// One page of Home: the wordmark, the Working or Notices card, or a tab's or an app's card, each with its neighbours.
 static void home_page(pod_out_frame_t *f, const pod_nav_t *nav, pod_model_t *m, uint32_t now_ms)
 {
     ht_scene_t *s = f->scene;

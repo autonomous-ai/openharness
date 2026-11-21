@@ -42,7 +42,7 @@ unsigned ph_mix(unsigned a, unsigned b, unsigned pct);
 // beside it, status pills (N working with a 4-bar equaliser, N asking with a pulsing dot, else a check and "All done") and up to five 72 px
 // engine logos (asking, working, done; the done ones faded; a state dot under each; more than five: four and "+N"). The previous and next tabs
 // peek at the sides at 86 %, faded 45 % toward the ground (their gradient and name). Ground PH_HOME_BG. No dots, bell, title or pets.
-// One POD_A_ENTER_TAB hit (arg = the tab index, id = the tab's id) over the card; none for a tab with 0 agents. No tabs: the "Harness" wordmark (ph_bd_84, as the round dial's), centred, no hits.
+// One POD_A_ENTER_TAB hit (arg = the tab index, id = the tab's id) over the card; none for a tab with 0 agents. No tabs: the "Harness" wordmark (ph_bd_84, as the round dial's), centred, no hits but the pill's two while it shows.
 // While pod_home_switch (a window and another app with agents), every page, the wordmark too, has the Tabs | Apps pill at its foot: 252 x 46 at (234, 640),
 // the cell of the list Home shows (pod_home_apps) filled, and two hits, POD_A_HOME_TABS over x 180..360 and POD_A_HOME_APPS over x 360..540, y 624..720 (arg 0).
 // While Home lists apps, each page POD_HOME_APP0 + k is an app card: the tab card's body from the app's m->apps row (name, count, working, waiting
