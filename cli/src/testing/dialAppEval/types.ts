@@ -116,7 +116,8 @@ export interface Delivery { at: number; path: 'mod' | 'turns' | 'codex' | 'typed
 export interface Seen {
   frames: Array<{ at: number; message: Record<string, unknown> }>
   faces: Array<{ at: number; page: string; tiles: string[]; active: string | null }>
-  commands: Array<{ at: number; argv: string[] }>
+  /** ok: the command succeeded. */
+  commands: Array<{ at: number; argv: string[]; ok: boolean }>
   deliveries: Delivery[]
   steps: Array<{ at: number; index: number; kind: StepKind; label?: Label }>
   cost?: { cpuPercent: number; loopP99Ms: number; leftovers: number }

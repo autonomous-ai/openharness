@@ -202,7 +202,7 @@ describe('open', () => {
   const s = scenario([tap])
   const open: Check = { id: 'o', kind: 'open', dim: 'D3', session: 'a', link: true, after: 'go' }
   const link = `claude://code/continue?session=${A.localId}`
-  const cmd = (at: number, argv: string[]): Seen['commands'][number] => ({ at, argv })
+  const cmd = (at: number, argv: string[], ok = true): Seen['commands'][number] => ({ at, argv, ok })
 
   it('the session\'s link sent to the app by its bundle passes link, front and latency on macOS', () => {
     const results = run(open, s, seen(s, [500], { commands: [cmd(700, ['/usr/bin/open', '-b', 'com.anthropic.claudefordesktop', link])] }))
@@ -234,6 +234,21 @@ describe('open', () => {
     expect(front('win32', ['C:\\h\\harness-pty.exe', 'raise', '--exe', 'claude.exe'])).toBe(1)
     expect(front('darwin', ['/usr/bin/open', '-b', 'com.anthropic.claudefordesktop'])).toBe(1)
     expect(front('darwin', ['/usr/bin/open', '-b', 'com.openai.codex'])).toBe(0)
+  })
+
+  it('a command that failed is not the app coming up', () => {
+    const refused = run(open, s, seen(s, [500], { commands: [cmd(700, ['/usr/bin/open', '-b', 'com.anthropic.claudefordesktop', link], false)] }))
+    expect(scores(refused)).toEqual({ link: 1, front: 0, latency: 0 })
+    expect(refused[0]!.evidence).toEqual(['tap on a at 500', 'command at 700: link failed'])
+  })
+
+  it('a command carrying the link of an app whose links fail is never the app coming up: the one after it is', () => {
+    const x: Scenario = { ...scenario([tap]), world: { linkFails: ['claude'] } }
+    const commands = [cmd(700, ['/usr/bin/open', '-b', 'com.anthropic.claudefordesktop', link]),
+      cmd(900, ['/usr/bin/open', '-b', 'com.anthropic.claudefordesktop'])]
+    const results = run({ ...open, link: false }, x, seen(x, [500], { commands }))
+    expect(scores(results)).toEqual({ front: 1, latency: 1 })
+    expect(ms(results, 'latency')).toBe(400)
   })
 
   it('the evidence names the tap or swipe it saw, so an input that opened nothing fails with it', () => {
