@@ -3,7 +3,6 @@ import { chmodSync, existsSync, fstatSync, mkdirSync, mkdtempSync, readdirSync, 
 import { tmpdir } from 'node:os'
 import { dirname, join, win32 } from 'node:path'
 import { AtomicWriteUnconfirmed, READ_TRIES, READ_WAIT_MS, RENAME_TRIES, RENAME_WAIT_MS, StateFileUnreadable, atomicWriteFile, atomicWriteFileAsync, atomicWriteJson, atomicWriteJsonAsync, directorySyncSupported, hardenPrivateStateFileIfPresent, insideWindowsRoots, jsonArray, jsonObject, probeState, readPrivateStateFile, readState, requireState, requireWindowsStateFile, secureStateDirectory, syncStateDirectory, windowsStateRoots } from './secureState.js'
-import { hashOf } from './log.js'
 
 const WINDOWS = process.platform === 'win32'
 
@@ -791,7 +790,8 @@ describe('readState', () => {
     mkdirSync(`${file}.unreadable`)
     writeFileSync(join(`${file}.unreadable`, 'older'), 'x')
     expect(readState(file, 'cache', jsonArray)).toEqual({ state: 'missing' })
-    expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(new RegExp(`^\\[state\\] ${hashOf(file)} could not be set aside \\([A-Z]+\\)$`)))
+    // Named as Harness names its own state file: the name tells which one, and its folder stays out.
+    expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/^\[state\] summaries\.json could not be set aside \([A-Z]+\)$/))
     expect(readFileSync(file, 'utf8')).toBe(torn)
     expect(readState(file, 'cache', jsonArray)).toEqual({ state: 'missing' })
     expect(warn).toHaveBeenCalledTimes(1)
