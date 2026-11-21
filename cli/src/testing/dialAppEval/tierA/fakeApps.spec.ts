@@ -13,6 +13,7 @@ import { claudeSession, thread } from '../catalog.js'
 import type { App, Delivery, Platform, Scenario, SessionKey } from '../types.js'
 import { installFakeApps } from './fakeApps.js'
 import { machine } from './machine.js'
+import { startSession } from './steps/sessions.js'
 import type { TierAWorld } from './world.js'
 
 const roots: string[] = []
@@ -54,10 +55,12 @@ function fakeWorld(platform: Platform, more: { front?: App | 'other'; of?: Scena
   const told: ObservedEvent[] = []
   const polls: InboxPoll[] = []
   const shown = { attached: [] as string[], titles: [] as string[] }
+  /** What reached the devices, in order: each hook's event and session, and each attach. */
+  const order: string[] = []
   const gaps: string[] = []
   const rules: Array<(argv: readonly string[]) => { code: number } | undefined> = []
   const devices = {
-    observed: (event: ObservedEvent) => { told.push(event); return true },
+    observed: (event: ObservedEvent) => { told.push(event); order.push(`${event.event} ${event.sessionId}`); return true },
     inboxPoll: (poll: InboxPoll) => { polls.push(poll); return new Promise<InboxAnswer>(() => {}) },
     inboxGone: () => {},
   }
@@ -66,7 +69,7 @@ function fakeWorld(platform: Platform, more: { front?: App | 'other'; of?: Scena
     scenario: more.of ?? scenario, platform, machine, codexHome, front: more.front ?? 'claude',
     ports: { devices },
     listener: {
-      attach: attachHandler((sessionId) => shown.attached.push(sessionId)),
+      attach: attachHandler((sessionId) => { shown.attached.push(sessionId); order.push(`attach ${sessionId}`) }),
       thread: threadHandler((title) => shown.titles.push(title)),
     },
     folders: { claudeProjects: join(root, 'projects'), codexSessions: join(root, 'codex', 'sessions') },
@@ -79,7 +82,7 @@ function fakeWorld(platform: Platform, more: { front?: App | 'other'; of?: Scena
   /** A command the devices ran: the first rule that answers decides. */
   const ran = (argv: string[]) => rules.map((rule) => rule(argv)).find((answer) => answer !== undefined)
   const started = () => told.filter((e) => e.event === 'session-start').map((e) => e.sessionId)
-  return { ran, told, polls, started, shown, gaps, codexHome }
+  return { world, ran, told, polls, started, shown, order, gaps, codexHome }
 }
 
 /** The apps' moment passes, and what they told lands. */
@@ -127,19 +130,29 @@ describe("tier A's fake apps", () => {
     await later()
     expect(w.told).toEqual([])
     expect(machine.processes.size).toBe(0)
-    // Only the two sessions the scenario has and the apps can open are shown.
-    expect(w.shown).toEqual({ attached: [b.id], titles: ['Eval T2'] })
+    // Only the two sessions the scenario has and the apps can open are shown; b at rest runs no Claude Code, whose mod
+    // would say its attach.
+    expect(w.shown).toEqual({ attached: [], titles: ['Eval T2'] })
   })
 
   it("the app shows what a link opens: the Claude app's mod says its attach, the ChatGPT app's window its Codex name", async () => {
     const w = fakeWorld('darwin', { front: 'chatgpt' })
     w.codexHome.name(t2.id, 'Eval Renamed')
+    // b runs: its Claude Code's mod says the attach.
+    await startSession(w.world, 'b')
     w.ran(opener('darwin', claudeLink(b.localId!), CLAUDE_APP))
     w.ran(opener('darwin', codexLink(t2.id), CHATGPT_APP))
     expect(w.shown).toEqual({ attached: [], titles: [] })
     await later()
     expect(w.shown).toEqual({ attached: [b.id], titles: ['Eval Renamed'] })
     expect(w.gaps).toEqual([])
+  })
+
+  it("a Claude session the app resumes from its link is attached once its Claude Code started, as its mod runs there", async () => {
+    const w = fakeWorld('darwin')
+    w.ran(opener('darwin', claudeLink(a.localId!), CLAUDE_APP))
+    await later()
+    expect(w.order).toEqual([`session-start ${a.id}`, `attach ${a.id}`])
   })
 
   it("the ChatGPT app's title reaches the watch only from the front, and never on a world with no Accessibility", async () => {
