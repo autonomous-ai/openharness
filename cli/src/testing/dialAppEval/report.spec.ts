@@ -2,12 +2,14 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
+import { grade } from './grade.js'
 import { markdown, summary, writeReport } from './report.js'
 import type { App, AppScores, CheckResult, Dimension, Report } from './types.js'
 
 const none: Record<Dimension, number | null> = {
   D1: null, D2: null, D3: null, D4: null, D5: null, D6: null, D7: null, D8: null,
 }
+/** Dimension scores 0-100, as the grader gives them. */
 const scores = (score: number | null, dims: Partial<Record<Dimension, number>> = {}, leftOut = 0): AppScores =>
   ({ score, dims: { ...none, ...dims }, leftOut })
 const both = (claude: AppScores, chatgpt: AppScores): Record<App, AppScores> => ({ claude, chatgpt })
@@ -20,8 +22,8 @@ const failing = (evidence: string[]): CheckResult & { pointsLost: number } => ({
 function report(over: Partial<Report> = {}): Report {
   return {
     schema: 1,
-    apps: both(scores(80, { D1: 0.5, D5: 1 }, 2), scores(90, { D1: 1 }, 0)),
-    heldOut: both(scores(70, { D2: 0.7 }), scores(null)),
+    apps: both(scores(80, { D1: 50, D5: 100 }, 2), scores(90, { D1: 100 }, 0)),
+    heldOut: both(scores(70, { D2: 70 }), scores(null)),
     byTier: { a: both(scores(80, {}, 2), scores(90)), b: both(scores(null), scores(null)) },
     byPlatform: { 'a/darwin': both(scores(81, {}, 1), scores(91)) },
     gate: { passed: true, wrongSends: [] },
@@ -39,9 +41,17 @@ afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: tru
 it('the table shows — for a dimension with no check', () => {
   const claudeRow = summary(report()).split('\n').find((line) => line.includes('the Claude app') && line.includes('80'))
   expect(claudeRow).toBeDefined()
-  // D1 0.5 → 50, D5 1 → 100, the six others —.
+  // D1 50, D5 100, the six others —.
   expect(claudeRow!.match(/—/g)).toHaveLength(6)
   expect(markdown(report())).toMatch(/\| the Claude app \| 50 \| — \| — \| — \| 100 \| — \| — \| — \| 80 \|/)
+})
+
+it('a dimension shows the grader\'s 0-100 as it is', () => {
+  const result: CheckResult = { tier: 'a', platform: 'darwin', scenario: 'C1', check: 'ring.recall', app: 'claude', dim: 'D1',
+    heldOut: false, score: 1, timed: false, evidence: [] }
+  const graded = grade({ schema: 1, results: [result], wrongSends: [], gaps: [] }, null)
+  expect(markdown(graded)).toMatch(/\| the Claude app \| 100 \| — \| — \| — \| — \| — \| — \| — \| 100 \|/)
+  expect(summary(graded)).not.toContain('10000')
 })
 
 it('each app\'s score shows its runs left out beside it', () => {
