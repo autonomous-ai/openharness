@@ -79,8 +79,8 @@ describe('scores', () => {
       result({ scenario: 'X2', app: 'chatgpt', platform: 'linux', check: 'ring.recall', dim: 'D1', score: 1 }),
     ], {
       gaps: [
-        { tier: 'a', platform: 'darwin', scenario: 'X2', app: 'chatgpt', reason: 'reads process.platform in windowTitle' },
-        { tier: 'a', platform: 'darwin', scenario: 'X2', app: 'chatgpt', reason: 'reads process.platform in openLink' },
+        { tier: 'a', platform: 'darwin', scenario: 'X2', app: 'chatgpt', heldOut: false, reason: 'reads process.platform in windowTitle' },
+        { tier: 'a', platform: 'darwin', scenario: 'X2', app: 'chatgpt', heldOut: false, reason: 'reads process.platform in openLink' },
       ],
     }), null)
     expect(report.apps.chatgpt.score).toBe(100)
@@ -94,10 +94,9 @@ describe('scores', () => {
     expect(report.gaps).toHaveLength(2)
   })
 
-  it('a held-out scenario\'s gap counts in the held-out leftOut', () => {
-    const report = grade(run([
-      result({ scenario: 'XH1', app: 'chatgpt', heldOut: true, platform: 'linux', check: 'ring.recall', dim: 'D1', score: 1 }),
-    ], { gaps: [{ tier: 'a', platform: 'darwin', scenario: 'XH1', app: 'chatgpt', reason: 'reads process.platform' }] }), null)
+  it('a held-out scenario\'s gap counts in the held-out leftOut, by the gap\'s own mark', () => {
+    // No other run of XH1 says it is held out: the gap does.
+    const report = grade(run([], { gaps: [{ tier: 'a', platform: 'darwin', scenario: 'XH1', app: 'chatgpt', heldOut: true, reason: 'reads process.platform' }] }), null)
     expect(report.heldOut.chatgpt.leftOut).toBe(1)
     expect(report.apps.chatgpt.leftOut).toBe(0)
   })
@@ -237,7 +236,7 @@ describe('droppedKeys', () => {
   })
   const catalog = new Set(['a/darwin/C1', 'a/linux/C1', 'a/darwin/X2', 'b/darwin/C1', 'b/linux/C1'])
   const ran = run([result({ check: 'ring.recall', dim: 'D1', score: 1 })],
-    { gaps: [{ tier: 'a', platform: 'darwin', scenario: 'X2', app: 'chatgpt', reason: 'a platform read' }] })
+    { gaps: [{ tier: 'a', platform: 'darwin', scenario: 'X2', app: 'chatgpt', heldOut: false, reason: 'a platform read' }] })
 
   it('names each check of a subset the update replaces that the run no longer gives, unless a gap or the catalog explains it', () => {
     // C1's order on both platforms went with nothing to say why; X2 is a gap; C9 left the catalog; tier B was not run.

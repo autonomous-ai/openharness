@@ -92,7 +92,7 @@ it('evidence holding os.tmpdir(), HOME or a /work/eval- folder is printed with t
       `read ${join(homedir(), '.claude', 'store.json')} twice`,
       'frame agent cwd=/work/eval-alpha/sub title',
     ])],
-    gaps: [{ tier: 'a', platform: 'linux', scenario: 'C3', app: 'claude', reason: `platform read in ${homedir()}/x.ts` }],
+    gaps: [{ tier: 'a', platform: 'linux', scenario: 'C3', app: 'claude', heldOut: false, reason: `platform read in ${homedir()}/x.ts` }],
   })
   const dir = mkdtempSync(join(tmpdir(), 'report-spec-'))
   dirs.push(dir)

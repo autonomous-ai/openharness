@@ -152,8 +152,10 @@ it("a driver's gap drops the scenario's results and lists it with its app", asyn
   const driver = new Scripted({ tier: 'b', gaps: ['a platform read'], onStep: (d) => d.frames.push(...list(d.now(), [A, B])) })
   const run = await runScenario(driver, scenario([write]), 'win32')
   expect(run).toMatchObject({ scenario: 'S1', platform: 'win32', results: [], probes: [],
-    gaps: [{ tier: 'b', platform: 'win32', scenario: 'S1', app: 'claude', reason: 'a platform read' }] })
+    gaps: [{ tier: 'b', platform: 'win32', scenario: 'S1', app: 'claude', heldOut: false, reason: 'a platform read' }] })
   expect(uncaughtProbes(run)).toEqual([])
+  const held = await runScenario(new Scripted({ gaps: ['a platform read'] }), { ...scenario([write]), heldOut: true }, 'linux')
+  expect(held.gaps.map((g) => g.heldOut)).toEqual([true])
 })
 
 it('checks are evaluated on what the driver saw through its stop', async () => {
