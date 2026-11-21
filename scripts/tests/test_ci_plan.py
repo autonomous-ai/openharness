@@ -482,6 +482,11 @@ class SelectionTests(unittest.TestCase):
                      "pty/src/stream.rs", "devices/harness-pro/firmware/main/app/pro_app.c"):
             with self.subTest(path=path):
                 self.assertIn("cross-read-scan", planner.select([path])[0])
+        # The scan reads the files only an end-to-end suite owns too: a change to one runs it as a component's does.
+        for path in (".github/actions/cli-e2e-setup/action.yml", ".github/actions/device-app-setup/action.yml",
+                     ".github/workflows/windows.yml", "serial/src/main.rs"):
+            with self.subTest(path=path):
+                self.assertIn("cross-read-scan", planner.select([path])[0])
         for path in ("scripts/local-checks.py", "scripts/tests/test_pr_e2e_jobs.py", ".github/workflows/ci.yml",
                      "docs/guide.md"):
             with self.subTest(path=path):
