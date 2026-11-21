@@ -72,8 +72,6 @@ class TauriSignatureTests(unittest.TestCase):
 
     def test_a_signature_made_with_the_key_passes(self):
         self.assertIsNone(self.check(self.good))
-        self.assertEqual(verify.verify_minisign(self.good, DIGEST, public_key=self.signer.public_key),
-                         "timestamp:1795200000\tfile:Harness-linux-x64.AppImage\tdesktop-version:1.2.3")
 
     def test_a_changed_digest_refuses_file(self):
         self.assertRefused("file", self.good, digest=hashlib.blake2b(PAYLOAD + b"!").digest())
@@ -148,8 +146,9 @@ class TauriSignatureTests(unittest.TestCase):
                 self.assertRefused("malformed", signature)
 
     def test_the_pinned_key_verifies_the_live_device_signature(self):
-        self.assertEqual(verify.verify_minisign(LIVE_DEVICE_SIGNATURE, LIVE_DEVICE_DIGEST),
-                         "timestamp:1795156839\tfile:Harness Device.app.tar.gz\tversion:0.1.11")
+        # Every step check_signature takes, the file's last, with the Device's own comment in place of a Desktop one.
+        device_comment = ["timestamp:1795156839", "file:Harness Device.app.tar.gz", "version:0.1.11"]
+        verify._verified(LIVE_DEVICE_SIGNATURE, LIVE_DEVICE_DIGEST, None, lambda fields: fields == device_comment)
 
     def test_the_live_device_signature_is_no_desktop_signature(self):
         with self.assertRaises(verify.SignatureRefused) as caught:

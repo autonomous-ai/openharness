@@ -241,12 +241,6 @@ def _verified(signature, digest, public_key, comment_holds):
         raise SignatureRefused("comment")
     if not ed25519_verify(key, digest, file_signature):
         raise SignatureRefused("file")
-    return comment
-
-
-def verify_minisign(signature, digest, public_key=None):
-    """The trusted comment of a signature the key made over a file of this BLAKE2b-512 digest."""
-    return _verified(signature, digest, public_key, lambda fields: True)
 
 
 def check_signature(signature, digest, file_name, version, public_key=None):
