@@ -84,7 +84,8 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
   run a `git.exe` in the child's working folder before PATH, so a `git.exe` committed to a repository would run as
   `git` there, and adding a folder to PATH cannot stop it. Take PATH's drive or share folders only, the `.exe` alone
   (a `.cmd` needs `cmd.exe`), then the installers' folders: `gitPath()` and `ghPath()` (`cli/src/lib/gitOnPath.ts`),
-  `GitProgram` in Desktop (`desktop/lib/core/git_program.dart`). Tests: `cli/src/lib/gitOnPath.spec.ts`,
+  `GitProgram` in Desktop (`desktop/lib/core/git_program.dart`). Never Scoop's machine-wide root (`SCOOP_GLOBAL`,
+  `%ProgramData%\scoop`): any user can write there. Tests: `cli/src/lib/gitOnPath.spec.ts`,
   `desktop/test/git_program_test.dart`.
 - **A link opens with no shell.** `cmd.exe /c start` ends the command at a URL's `&` and runs the rest, splits it at a
   space and expands its `%`, and a sign-in URL is full of `&`. Open it through System32's

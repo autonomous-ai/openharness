@@ -42,7 +42,7 @@ repro, and numbers before and after for item 5.
 | Task | Files (tests included) | Depends on | Effort | Test that fails first |
 |---|---|---|---|---|
 | 1 (item 2a) A change to ci.yml's top-level `concurrency` runs every job's suite; `on:` documented | `scripts/ci-plan.py`, `scripts/tests/test_ci_plan.py`, `docs/validation-and-release.md` | none | medium | `test_what_a_job_takes_from_the_rest_of_ci_yml_is_part_of_its_definition`, the concurrency subcase |
-| 2 (item 2b) The cross-read scan runs on every PR that changes a component | `scripts/ci-plan.py`, `scripts/tests/test_ci_plan.py`, `docs/validation-and-release.md` | none | high | `test_the_planner_and_the_tables_it_scans_with_alone_run_the_cross_read_scan`, the component cases |
+| 2 (item 2b) The cross-read scan runs on every PR that changes a component | `scripts/ci-plan.py`, `scripts/tests/test_ci_plan.py`, `docs/validation-and-release.md` | none | high | `test_the_planner_its_tables_and_every_suites_own_files_run_the_cross_read_scan`, the component cases |
 | 3 (item 14) Every way of running `flutter test` holds its folder | `scripts/validate-change.py`, `scripts/tests/test_validate_change.py` | none | medium | `test_desktop_test_commands_hold_the_desktop_folder`, the four new commands |
 | 4 (item 1, infra) The real backend's mongod comes from a cache main fills | `.github/actions/cli-e2e-setup/action.yml`, `scripts/tests/test_cli_e2e_workflow.py` | none | high | `test_the_real_backends_mongod_comes_from_a_cache_main_fills` |
 | 5 (item 1) machine.e2e: a resume right after the tmux server died | `cli/src/lib/resumeStoppedAgent.ts`, `cli/src/lib/resumeStoppedAgent.spec.ts`, `cli/src/lib/resumeAgentService.ts`, `cli/src/lib/resumeAgentService.spec.ts`, `cli/src/core/agents/discovery.ts`, `cli/src/core/agents/discovery.spec.ts`, `cli/e2e/machine.e2e.ts` | none | xhigh | found by Step 3 (the layer where the cause is), after the log evidence and a deterministic repro |
@@ -200,7 +200,7 @@ Longest chain of dependent tasks: three (8 → 9 → 12, and 10 → 11 → 12). 
 
 **Depends on:** none (shares its files with Task 1). **Effort:** high.
 
-- [ ] **Step 1: Write the failing cases** in `test_the_planner_and_the_tables_it_scans_with_alone_run_the_cross_read_scan`:
+- [ ] **Step 1: Write the failing cases** in `test_the_planner_its_tables_and_every_suites_own_files_run_the_cross_read_scan`:
   `cli/src/x.ts`, `cli/src/lib/relayFrames.ts`, `desktop/lib/devices/x.dart`, `backend/src/app.ts`, `pty/src/stream.rs`
   and `devices/harness-pro/firmware/main/app/pro_app.c` assert `cross-read-scan` in `planner.select([path])[0]` (the two
   that today assert it is not there move); `scripts/local-checks.py`, `scripts/tests/test_pr_e2e_jobs.py`,

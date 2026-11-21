@@ -334,9 +334,9 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('shared tabs across accou
       `search issues harness-tab:${sharedTabId} --match body --limit 100 --json number,title,state,url,repository,body,updatedAt`,
       `search prs harness-tab:${sharedTabId} --match body --limit 100 --json number,state,url,repository,body,isDraft`,
     ])
-    // The second computer's gh is not signed in, as gh's own search says it. Not "no gh at all": the daemon also looks in
-    // Homebrew's folders and the login shell's PATH (lib/github.ts GH_DIRS), where a developer's Mac or a CI runner has a
-    // real one, which would read whatever login that computer has.
+    // The second computer's gh is not signed in, as gh's own search says it. Not "no gh at all": after PATH, the daemon
+    // also looks in Homebrew's folders, ~/.local/bin and the login shell's PATH (ghPath() in lib/gitOnPath.ts), where a
+    // developer's Mac or a CI runner has a real one, which would read whatever login that computer has.
     writeFileSync(join(B2.d.root, 'bin', 'gh'), "#!/bin/sh\necho 'To get started with GitHub CLI, please run:  gh auth login' >&2\nexit 4\n", { mode: 0o755 })
     expect(await am(B2, { action: 'share_tasks', sharedTabId })).toMatchObject({ error: 'GH_SIGNED_OUT' })
 
