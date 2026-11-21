@@ -1,13 +1,14 @@
 /**
- * Windows' own programs are run by their full paths in System32 (`systemProgram` and `powershellPath`, ./powershell.ts):
- * Node on Windows looks for a bare name in the folder it runs in before PATH. Read as text, as noWindow.spec.ts reads
- * `detached`.
+ * Windows' own programs are run by their full paths in System32 (`systemProgram` and `powershellPath`, ./powershell.ts),
+ * in Windows' own folder as the file system names it (`systemRoot`): Node on Windows looks for a bare name in the folder
+ * it runs in before PATH, and SystemRoot, windir and ComSpec are whoever runs the command's. The bare names are read as
+ * text, as noWindow.spec.ts reads `detached`.
  */
 import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
-import { powershellPath, systemProgram } from './powershell.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { powershellPath, systemProgram, systemRoot } from './powershell.js'
 
 const PROGRAMS = ['cmd', 'icacls', 'powershell', 'reg', 'schtasks', 'taskkill', 'tasklist', 'whoami']
 /** One of them by its bare name, as what a call runs: a spawn's, an exec's or a runner's first argument, a command's
@@ -20,15 +21,35 @@ const RESOLVED_ELSEWHERE: Record<string, string> = {
   'lib/windows/shell.ts': "a pane's shell, which the PTY host starts",
 }
 
+afterEach(() => vi.unstubAllEnvs())
+
+describe('systemRoot', () => {
+  it('is where \\\\?\\GLOBALROOT\\SystemRoot leads, asked of the file system', () => {
+    const asked: string[] = []
+    expect(systemRoot(path => { asked.push(path); return 'D:\\Windows' })).toBe('D:\\Windows')
+    expect(asked).toEqual(['\\\\?\\GLOBALROOT\\SystemRoot'])
+  })
+
+  it('is C:\\Windows when that does not resolve to a drive\'s folder, whatever the environment says', () => {
+    vi.stubEnv('SystemRoot', 'Z:\\evil')
+    vi.stubEnv('windir', 'Z:\\evil')
+    expect(systemRoot(() => { throw new Error('ENOENT') })).toBe('C:\\Windows')
+    expect(systemRoot(() => '\\\\server\\share\\Windows')).toBe('C:\\Windows')
+    expect(systemRoot(() => '\\\\?\\GLOBALROOT\\Device\\X')).toBe('C:\\Windows')
+  })
+
+  it('is C:\\Windows when cmd.exe would read the folder\'s name as something else', () => {
+    for (const name of ['D:\\Win%OS%', 'D:\\a!b', 'D:\\a&b', 'D:\\a"b']) expect(systemRoot(() => name), name).toBe('C:\\Windows')
+  })
+})
+
 describe('Windows programs by their full paths', () => {
-  it("name System32 in the first of SystemRoot and windir that is a drive's folder, else C:\\Windows", () => {
-    expect(systemProgram('whoami.exe', { SystemRoot: 'D:\\Win', windir: 'E:\\Win' })).toBe('D:\\Win\\System32\\whoami.exe')
-    expect(systemProgram('whoami.exe', { windir: 'E:\\Win' })).toBe('E:\\Win\\System32\\whoami.exe')
-    expect(systemProgram('whoami.exe', {})).toBe('C:\\Windows\\System32\\whoami.exe')
-    // An empty or relative value would name a folder under the one the command runs in.
-    expect(systemProgram('whoami.exe', { SystemRoot: '', windir: 'E:\\Win' })).toBe('E:\\Win\\System32\\whoami.exe')
-    expect(systemProgram('whoami.exe', { SystemRoot: 'Windows', windir: '.' })).toBe('C:\\Windows\\System32\\whoami.exe')
-    expect(powershellPath({ SystemRoot: '' })).toBe('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
+  it('a SystemRoot variable naming another folder is ignored', () => {
+    vi.stubEnv('SystemRoot', 'D:\\Elsewhere')
+    vi.stubEnv('windir', 'D:\\Elsewhere')
+    expect(systemProgram('reg.exe')).not.toContain('Elsewhere')
+    expect(systemProgram('reg.exe')).toBe(win32.join(systemRoot(), 'System32', 'reg.exe'))
+    expect(powershellPath()).toBe(win32.join(systemRoot(), 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'))
   })
 
   it('the check finds a bare name as what a call runs', () => {

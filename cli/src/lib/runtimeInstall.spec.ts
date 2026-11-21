@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, win32 } from 'node:path'
 import { tmpdir } from 'node:os'
+import { systemRoot } from './windows/powershell.js'
 
 /** A write of exactly `text` reaches the disk half way, then the disk is full. `events`: each flush (of a file or a
  *  folder) and each rename's target, as they happened. */
@@ -850,6 +851,7 @@ describe('the managed runtimes on Windows', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
     rmSync(root, { recursive: true, force: true })
     for (const key of ['ADAPTER_RUNTIME_DIR', 'HARNESS_BIN_DIR', 'ADAPTER_CLI_DIR', 'ADAPTER_RUNTIME_METADATA_URL', 'ADAPTER_GRID_RUNTIME_METADATA_URL', 'HARNESS_GRID_BIN']) {
       delete process.env[key]
@@ -867,13 +869,16 @@ describe('the managed runtimes on Windows', () => {
   })
 
   it('unpacks with the tar.exe Windows ships, never a tar from PATH, and nodejs.org\'s tarball with /usr/bin/tar elsewhere', async () => {
+    // Windows' own folder, as the file system names it: a SystemRoot variable is whoever runs the command's.
+    vi.stubEnv('SystemRoot', 'D:\\Elsewhere')
+    vi.stubEnv('windir', 'D:\\Elsewhere')
     const { unpackCommand } = await load()
-    expect(unpackCommand('C:\\r\\.node-staging-1\\node.zip', 'C:\\r\\.node-staging-1', 'win32', 'D:\\Windows')).toEqual({
-      file: 'D:\\Windows\\System32\\tar.exe',
+    const unpack = unpackCommand('C:\\r\\.node-staging-1\\node.zip', 'C:\\r\\.node-staging-1', 'win32')
+    expect(unpack.file).not.toContain('Elsewhere')
+    expect(unpack).toEqual({
+      file: win32.join(systemRoot(), 'System32', 'tar.exe'),
       args: ['-xf', 'C:\\r\\.node-staging-1\\node.zip', '-C', 'C:\\r\\.node-staging-1'],
     })
-    // A scrubbed environment with no SystemRoot falls back to Windows' own folder, never to a relative tar.exe.
-    expect(unpackCommand('a.zip', 'b', 'win32', '').file).toBe('C:\\Windows\\System32\\tar.exe')
     expect(unpackCommand('/r/node.tar.gz', '/r', 'darwin')).toEqual({ file: '/usr/bin/tar', args: ['-xzf', '/r/node.tar.gz', '-C', '/r'] })
   })
 
