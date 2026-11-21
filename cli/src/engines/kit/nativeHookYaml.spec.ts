@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HERMES_HOOK_SETTINGS } from '../hermes/contract.js'
+import { hashOf } from '../../lib/log.js'
 import { editPassthrough, installNativeYamlHooks, removeNativeYamlHooks } from './nativeHookYaml.js'
 
 // A home's preparation can be held before it starts, so the homes finish in the order a test chooses.
@@ -92,16 +93,41 @@ it('says what each home did in the homes\' order, whichever home finishes first'
   expect(readFileSync(join(home, 'config.yaml'), 'utf8')).toContain(`--hermes-home ${home}`)
   expect(readFileSync(join(profile, 'config.yaml'), 'utf8')).toContain(`--hermes-home ${profile}`)
   expect(lines).toEqual([
-    `[hooks] installed Hermes session hooks → ${join(home, 'config.yaml')}`,
+    `[hooks] installed Hermes session hooks → ${hashOf(join(home, 'config.yaml'))}`,
     '[hooks] (takes effect on the next hermes session start)',
-    `[hooks] installed Hermes session hooks → ${join(profile, 'config.yaml')}`,
+    `[hooks] installed Hermes session hooks → ${hashOf(join(profile, 'config.yaml'))}`,
     '[hooks] (takes effect on the next hermes session start)',
   ])
 
   lines.length = 0
   profileFirst()
   expect(await installNativeYamlHooks(rule, command)).toBe(true)
-  expect(lines).toEqual(['[hooks] Hermes session hooks already installed', '[hooks] Hermes session hooks already installed (work)'])
+  expect(lines).toEqual(['[hooks] Hermes session hooks already installed', `[hooks] Hermes session hooks already installed (${hashOf(profile)})`])
+})
+
+// A path names the person's home, and Export logs sends the log off the machine: each line names a config, and a
+// profile, by a hash.
+it('a hook install names its file by a hash, never its path', async () => {
+  const lines: string[] = []
+  vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { lines.push(args.join(' ')) })
+  vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => { lines.push(args.join(' ')) })
+  // A default home with no config yet, a profile whose config has no list for the pane names, and one with hooks of the
+  // person's own, which is told what to add by hand: the command names the home, so the line names it by what it is.
+  const at = join(mkdtempSync(join(root, 'sentinel-')), 'hermes'), work = join(at, 'profiles', 'work'), theirs = join(at, 'profiles', 'theirs')
+  mkdirSync(work, { recursive: true }); writeFileSync(join(work, 'config.yaml'), 'model: y\n')
+  mkdirSync(theirs, { recursive: true }); writeFileSync(join(theirs, 'config.yaml'), 'hooks:\n  on_session_start: []\n')
+  const rule = { ...HERMES_HOOK_SETTINGS, home: at }
+  const command = (home: string) => `node /fixture/notify.mjs --port 4242 --data-dir /fixture/data --hermes-home ${home} --engine hermes`
+  await installNativeYamlHooks(rule, command)
+  await installNativeYamlHooks(rule, command)
+  expect(lines.join('\n')).not.toContain('sentinel')
+  expect(lines).toContain(`[hooks] no Hermes config at ${hashOf(join(at, 'config.yaml'))} — skipping (run hermes once first)`)
+  expect(lines).toContain(`[hooks] installed Hermes session hooks → ${hashOf(join(work, 'config.yaml'))}`)
+  expect(lines).toContain(`[hooks] ${hashOf(join(work, 'config.yaml'))} has no terminal.client_env_passthrough list to add Harness's pane names to:`
+    + ' sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness')
+  expect(lines).toContain(`[hooks] Hermes session hooks already installed (${hashOf(work)})`)
+  expect(lines).toContain(`[hooks] ${hashOf(join(theirs, 'config.yaml'))} has its own \`hooks:\` block — leaving it untouched.`)
+  expect(lines).toContain("[hooks]   on_session_start: [{ command: <Harness's notify.mjs command for this home>, timeout: 10 }]")
 })
 
 // Hermes 0.22+ runs every session's hooks in one shared gateway, so a hook names the gateway's pane. Each client's
@@ -182,7 +208,7 @@ describe('the pane names in Hermes\' terminal.client_env_passthrough', () => {
 
     lines.length = 0
     expect(await installNativeYamlHooks(rule, command, profile)).toBe(true)
-    expect(lines[0]).toBe(`[hooks] ${join(profile, 'config.yaml')} has no terminal.client_env_passthrough list to add Harness's pane names to:`
+    expect(lines[0]).toBe(`[hooks] ${hashOf(join(profile, 'config.yaml'))} has no terminal.client_env_passthrough list to add Harness's pane names to:`
       + ' sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness')
   })
 })

@@ -8,6 +8,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { hashOf } from '../lib/log.js'
 import { HERMES_HOOK_SETTINGS } from './hermes/contract.js'
 
 const PERSON = 'model: anthropic/claude\nterminal:\n  client_env_passthrough: ["MY_VAR"]\n'
@@ -21,7 +22,8 @@ let hermesKeepsRecord: typeof import('./hermesRecord.js').hermesKeepsRecord
 let rememberRecordHome: typeof import('./hermesRecord.js').rememberRecordHome
 
 beforeEach(async () => {
-  root = mkdtempSync(join(tmpdir(), 'hermes-hooks-'))
+  // A word no line may hold: the lines name a file by its hash.
+  root = mkdtempSync(join(tmpdir(), 'sentinel-hermes-hooks-'))
   home = join(root, '.hermes'); mkdirSync(home)
   config = join(home, 'config.yaml'); allowlist = join(home, 'shell-hooks-allowlist.json')
   fresh = join(root, 'fresh'); profileConfig = join(home, 'profiles', 'work', 'config.yaml')
@@ -101,6 +103,21 @@ it.skipIf(process.getuid?.() === 0)('says once that it could not remove a hook, 
   expect(warns.filter((line) => line.startsWith("[hooks] could not remove Harness's Hermes hooks from "))).toHaveLength(1)
 })
 
+it('a removal names its file by a hash, never its path', async () => {
+  vi.mocked(hermesKeepsRecord).mockResolvedValue(true); writeFileSync(config, WITH_BLOCK)
+  expect(await installHermesHooks(18473)).toBe(true)
+  expect([...logs, ...warns].join('\n')).not.toContain('sentinel')
+  expect(logs).toEqual([`[hooks] removed Harness's Hermes hooks → ${hashOf(config)}`])
+})
+
+// The disk's error names the file it could not write: the line says how long the reason is, never its words.
+it.skipIf(process.getuid?.() === 0)('a removal that failed names its file by a hash, and neither its path nor the error\'s words', async () => {
+  vi.mocked(hermesKeepsRecord).mockResolvedValue(true); writeFileSync(config, WITH_BLOCK); chmodSync(home, 0o555)
+  expect(await installHermesHooks(18473)).toBe(true)
+  expect(warns.join('\n')).not.toContain('sentinel')
+  expect(warns).toEqual([expect.stringMatching(new RegExp(`^\\[hooks\\] could not remove Harness's Hermes hooks from ${hashOf(config)} · text\\(\\d+\\)$`))])
+})
+
 it('leaves a home whose config or approvals list is a link, and says so once', async () => {
   // A sandbox controls its home: a link there would aim the edit at another file, the host's own Hermes config among
   // them, whose Hermes may still need the hook.
@@ -113,7 +130,7 @@ it('leaves a home whose config or approvals list is a link, and says so once', a
   expect(await installHermesHooks(18473)).toBe(true)
   expect(readFileSync(join(host, 'config.yaml'), 'utf8')).toBe(WITH_BLOCK)
   expect(lstatSync(config).isSymbolicLink()).toBe(true)
-  expect(warns).toEqual([`[hooks] could not remove Harness's Hermes hooks from ${config} · the file is a symbolic link`])
+  expect(warns).toEqual([`[hooks] could not remove Harness's Hermes hooks from ${hashOf(config)} · the file is a symbolic link`])
 
   // The approvals list beside a config of its own: the home is left as it is, and a record seen there changes nothing.
   rmSync(config); writeFileSync(config, PERSON)
@@ -124,7 +141,7 @@ it('leaves a home whose config or approvals list is a link, and says so once', a
   await hermesRecordSeen(home)
   expect(readFileSync(config, 'utf8')).toBe(installed)
   expect(readFileSync(join(host, 'shell-hooks-allowlist.json'), 'utf8')).toBe(approvals)
-  expect(warns).toEqual([`[hooks] could not remove Harness's Hermes hooks from ${allowlist} · the file is a symbolic link`])
+  expect(warns).toEqual([`[hooks] could not remove Harness's Hermes hooks from ${hashOf(allowlist)} · the file is a symbolic link`])
 })
 
 it('removes the hooks of a home the first time a record is seen there', async () => {

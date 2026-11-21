@@ -39,7 +39,8 @@ afterEach(() => {
 
 it('refuses to name a notify.mjs that is not there', () => {
   expect(() => requireHookScript('codex')).toThrow(HookScriptMissing)
-  expect(() => requireHookScript('codex')).toThrow(`notify.mjs is missing (${HOOK_SCRIPT})`)
+  // Fixed words, which the log prints: the path is the held create's to say (hooksHeldDetail.ts).
+  expect(() => requireHookScript('codex')).toThrow('notify.mjs is missing, so no hook')
 })
 
 // Review of #3954: a held create blamed notify.mjs for an engine whose plugin never runs it, or whose hooks are off.
@@ -56,7 +57,7 @@ it.each(['linux', 'darwin', 'win32'] as const)('installs no Codex hook naming a 
   const home = join(root, 'codex')
   expect(await installHookSettings('codex', codex.settings, 19473, home, {}, platform)).toBe(false)
   expect(fs.existsSync(join(home, codex.settings.file))).toBe(false)
-  expect(said.mock.calls).toEqual([['[hooks] Codex hooks are not installed · HookScriptMissing']])
+  expect(said.mock.calls).toEqual([["[hooks] Codex hooks are not installed · notify.mjs is missing, so no hook of Harness's could run"]])
 })
 
 it('installs no native hook naming a missing notify.mjs, and says why in one line', async () => {
@@ -64,14 +65,14 @@ it('installs no native hook naming a missing notify.mjs, and says why in one lin
   const file = join(root, 'grok', 'hooks', 'harness.json')
   expect(await installNativeHookSettings({ ...GROK_HOOK_SETTINGS, file }, 19473, {}, 'linux')).toBe(false)
   expect(fs.existsSync(file)).toBe(false)
-  expect(said.mock.calls).toEqual([[expect.stringMatching(/^\[hooks\] .+ hooks are not installed · HookScriptMissing$/)]])
+  expect(said.mock.calls).toEqual([[expect.stringMatching(/^\[hooks\] .+ hooks are not installed · notify\.mjs is missing, so no hook of Harness's could run$/)]])
 })
 
 it('installs no Hermes hook naming a missing notify.mjs: one line, and false rather than a rejection', async () => {
   const said = vi.spyOn(console, 'error').mockImplementation(() => {})
   expect(await installHermesHooks(19473, join(root, 'hermes'), {}, 'linux')).toBe(false)
   expect(fs.existsSync(join(root, 'hermes', 'config.yaml'))).toBe(false)
-  expect(said.mock.calls).toEqual([['[hooks] Hermes hooks are not installed · HookScriptMissing']])
+  expect(said.mock.calls).toEqual([["[hooks] Hermes hooks are not installed · notify.mjs is missing, so no hook of Harness's could run"]])
 })
 
 // Review of #3954: installHookSettings asked for notify.mjs before the Windows runner, installNativeHookSettings after. An

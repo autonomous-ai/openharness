@@ -13,6 +13,7 @@ import { messagesCommand } from './messagesHook.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import * as preparations from './nativeHookFiles.js'
 import { reviewHash, reviewRecords } from './hookReview.js'
+import { hashOf } from '../../lib/log.js'
 import { HARNESS_AGENT_TOOLS } from '../facets/hooks.js'
 
 // How the watched path is changed: opened for writing in place, or a file renamed onto it.
@@ -177,14 +178,33 @@ it('an updated Codex hook of Harness\'s keeps its place, and the person\'s besid
   expect(state[at(1)]?.trusted_hash).toBe(trusted)
 })
 
-it('names a home literally in its log lines, whatever characters the path holds', async () => {
+it('names a home by its hash in its log lines, whatever characters the path holds', async () => {
   const log = vi.spyOn(console, 'log').mockImplementation(() => {})
   // `$&` and `$1` mean something to String.replace with a string replacement, and {port} to the templates.
   const home = join(root, 'a$&b$1{port}{file}')
   const file = join(home, 'settings.json')
   await installHookSettings('claude', { ...claude.settings, messages: { ...claude.settings.messages, installed: '{file}|{script}|{port}' } }, 19473, home)
-  expect(log.mock.calls[0]).toEqual([`${file}|${HOOK_SCRIPT}|19473`])
+  expect(log.mock.calls[0]).toEqual([`${hashOf(file)}|${hashOf(HOOK_SCRIPT)}|19473`])
   expect(JSON.parse(readFileSync(file, 'utf8')).hooks.Stop[0].hooks[0].command).toContain('--port 19473')
+})
+
+// A path names the person's home, and Export logs sends the log off the machine: each line names the file, and the
+// hook script, by a hash, which the end-to-end harness checks against its throwaway root (e2e/harness/daemon.ts).
+it.each(['claude', 'codex'] as const)('a hook install names its file by a hash, never its path: %s', async engine => {
+  const lines: string[] = []
+  for (const level of ['log', 'warn', 'error'] as const) vi.spyOn(console, level).mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(' ')) })
+  const settings = engine === 'claude' ? claude.settings : codex.settings
+  const home = mkdtempSync(join(root, 'sentinel-')), file = join(home, engine === 'claude' ? 'settings.json' : 'hooks.json')
+  expect(await installHookSettings(engine, settings, 19473, home)).toBe(true)
+  expect(await installHookSettings(engine, settings, 19474, home)).toBe(true)
+  expect(await installHookSettings(engine, settings, 19474, home)).toBe(true)
+  expect(lines.join('\n')).not.toContain('sentinel')
+  expect(lines).toContain(engine === 'claude'
+    ? `[hooks] installed Claude Code session, turn, wait and subagent hooks → ${hashOf(file)}`
+    : `[hooks] installed Codex session and turn hooks → ${hashOf(file)}`)
+  expect(lines).toContain(engine === 'claude'
+    ? `[hooks] updated (path/port changed) → ${hashOf(HOOK_SCRIPT)} --port 19474 in ${hashOf(file)}`
+    : `[hooks] Codex session and turn hooks already installed → ${hashOf(file)}`)
 })
 
 it('reports a held malformed file even when an engine declares no malformed-file lines', async () => {
