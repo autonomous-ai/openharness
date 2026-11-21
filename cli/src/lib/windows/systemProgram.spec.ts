@@ -9,6 +9,7 @@ import { join, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { powershellPath, systemProgram, systemRoot } from './powershell.js'
+import { systemRoot as masterSystemRoot } from '../../harnessd/platform.js'
 
 const PROGRAMS = ['cmd', 'conhost', 'icacls', 'powershell', 'quser', 'reg', 'rundll32', 'schtasks', 'tar', 'taskkill', 'tasklist', 'whoami']
 /** One of them by its bare name, as what a call runs: a spawn's, an exec's or a runner's first argument, a command's
@@ -40,6 +41,23 @@ describe('systemRoot', () => {
 
   it('is C:\\Windows when cmd.exe would read the folder\'s name as something else', () => {
     for (const name of ['D:\\Win%OS%', 'D:\\a!b', 'D:\\a&b', 'D:\\a"b']) expect(systemRoot(() => name), name).toBe('C:\\Windows')
+  })
+
+  it("is what the master's own copy says, for every answer the file system can give", () => {
+    // The master keeps a copy (harnessd/platform.ts): it imports only Node, its own folder and the log trimmer.
+    const table: Array<[answer: string | Error, root: string]> = [
+      ['D:\\Windows', 'D:\\Windows'], ['C:\\WINDOWS', 'C:\\WINDOWS'], [new Error('ENOENT'), 'C:\\Windows'],
+      ['\\\\server\\share\\Windows', 'C:\\Windows'], ['\\\\?\\GLOBALROOT\\Device\\X', 'C:\\Windows'], ['Windows', 'C:\\Windows'],
+      ...['%', '!', '"', '^', '&', '|', '<', '>'].map((sign): [string, string] => [`D:\\a${sign}b`, 'C:\\Windows']),
+    ]
+    for (const [answer, root] of table) {
+      const real = (path: string) => {
+        expect(path).toBe('\\\\?\\GLOBALROOT\\SystemRoot')
+        if (answer instanceof Error) throw answer
+        return answer
+      }
+      expect([systemRoot(real), masterSystemRoot(real)], String(answer)).toEqual([root, root])
+    }
   })
 })
 
