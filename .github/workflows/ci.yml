@@ -1350,7 +1350,6 @@ jobs:
         # The planner tests that need every file: with this set, a missing file fails them instead of skipping.
         env:
           CROSS_READ_SCAN_REQUIRED: '1'
-        shell: bash
         # The names are FullCheckoutTests.NAMES, which its own test keeps complete; a name that is no test fails to
         # load, so a renamed one fails the job instead of leaving it out.
         working-directory: scripts/tests

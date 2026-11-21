@@ -289,11 +289,12 @@ class LinuxE2ETests(unittest.TestCase):
             self.assertIn(name, self.needs)
 
 
-# The planner tests that need every file of the repository, so only the scan's full checkout runs them.
-FULL_CHECKOUT_TESTS = ("test_every_cross_read_in_this_repository_is_declared",
-                       "test_the_dial_host_files_are_the_ones_cli_e2e_leaves_out",
-                       "test_every_declared_input_exists",
-                       "test_every_desktop_file_the_phone_tests_read_selects_mobile")
+# The planner tests that need every file of the repository, so only the scan's full checkout runs them: the names are
+# test_ci_plan.FullCheckoutTests.NAMES, whose own tests keep them complete and prove each fails, not skips, there.
+SCAN = """        run: >-
+          python3 -c 'import unittest, test_ci_plan;
+          unittest.main(module="test_ci_plan", argv=["cross-read-scan", "-v", *test_ci_plan.FullCheckoutTests.NAMES])'
+"""
 
 
 class CrossReadScanTests(unittest.TestCase):
@@ -308,7 +309,7 @@ class CrossReadScanTests(unittest.TestCase):
                      "    runs-on: ubuntu-24.04\n",
                      "    timeout-minutes: 10\n",
                      "          ref: ${{ env.CI_SOURCE_SHA }}\n",
-                     "python3 -m unittest discover -s scripts/tests -p test_ci_plan.py"):
+                     "        working-directory: scripts/tests\n"):
             self.assertIn(text, job)
         # The scan needs every file: a sparse or blob-less checkout would fail it.
         for text in ("sparse-checkout", "filter:"):
@@ -320,12 +321,9 @@ class CrossReadScanTests(unittest.TestCase):
         job = ci_jobs()[1].get("cross-read-scan", "")
         # The tests read this to fail, not skip, on a checkout missing files: a skip would pass the job.
         self.assertIn("CROSS_READ_SCAN_REQUIRED: '1'\n", job)
-        for name in FULL_CHECKOUT_TESTS:
-            self.assertIn(f"-k {name}", job)
-        # A renamed test matches no -k and would pass unseen: the job holds unittest to the count it names.
-        self.assertIn(f"^Ran {len(FULL_CHECKOUT_TESTS)} tests in ", job)
-        # An explicit bash runs with pipefail, so a failing test still fails the step through its log's pipe.
-        self.assertIn("        shell: bash\n", job)
+        # A renamed name is no test and fails to load. Nothing pipes the run, so its status is unittest's: a failure
+        # or a load error fails the step.
+        self.assertIn(SCAN, job)
 
 
 if __name__ == "__main__":
