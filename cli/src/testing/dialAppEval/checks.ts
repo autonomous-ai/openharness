@@ -279,17 +279,27 @@ function openParts(check: CheckOf<'open'>, world: World, w: Window | undefined, 
 }
 
 /**
- * The row's state as the device cards set it, as HarnessSource.noteCard reads them; a restored recap is no news. An open
- * question stays up on the dial until its close or the turn's end: a turn card sent with it is no news either.
+ * The row's state as the device cards set it, as HarnessSource.noteCard reads them; a restored recap is no news. Each
+ * question stays up on the dial until its own close or the turn's end, as the devices keep them: a turn card sent while
+ * one is open is no news either, and the close of one leaves the others asking. `open`: the row's open questions' ids.
  */
-function stateAfter(message: Record<string, unknown>, was: string): string | undefined {
+function stateAfter(message: Record<string, unknown>, open: Set<string>): string | undefined {
+  const question = String(message.id ?? '')
   switch (message.t) {
-    case 'turn.started': return was === 'needs-you' ? undefined : 'working'
-    case 'question': return 'needs-you'
-    case 'question.close': return was === 'needs-you' ? 'working' : undefined
-    case 'turn.done': return 'done'
-    case 'summary': return message.restore === true ? undefined : 'done'
-    case 'turn.error': return 'error'
+    case 'turn.started': return open.size > 0 ? undefined : 'working'
+    case 'question':
+      open.add(question)
+      return 'needs-you'
+    // A close heard twice, or of a question never open, is no news.
+    case 'question.close': return open.delete(question) && open.size === 0 ? 'working' : undefined
+    case 'summary':
+    case 'turn.done':
+      if (message.restore === true) return undefined
+      open.clear()
+      return 'done'
+    case 'turn.error':
+      open.clear()
+      return 'error'
   }
   return undefined
 }
@@ -304,13 +314,13 @@ function stateParts(check: CheckOf<'state'>, world: World, w: Window | undefined
   // Every session's changes, not only this one's: the evidence lists those in the window, so a probe on a session that
   // never changes still says what the driver saw.
   const all: Array<{ at: number; agentId: string; state: string }> = []
-  const states = new Map<string, string>()
+  const questions = new Map<string, Set<string>>()
   for (const { at, message } of world.seen.frames) {
     if (typeof message.agentId !== 'string') continue
-    const next = stateAfter(message, states.get(message.agentId) ?? 'idle')
-    if (next === undefined) continue
-    states.set(message.agentId, next)
-    all.push({ at, agentId: message.agentId, state: next })
+    let open = questions.get(message.agentId)
+    if (!open) questions.set(message.agentId, open = new Set())
+    const next = stateAfter(message, open)
+    if (next !== undefined) all.push({ at, agentId: message.agentId, state: next })
   }
   const changes = all.filter((c) => c.agentId === id)
   // Shown: at some moment in the window the row is in its page's last whole list and in that state.
