@@ -1,2 +1,0 @@
-lib/windows/ptyUpdate.ts 5
-lib/windows/dataFolderClaim.ts 2

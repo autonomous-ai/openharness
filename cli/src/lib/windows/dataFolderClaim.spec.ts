@@ -116,7 +116,7 @@ describe.skipIf(process.platform === 'win32')('the data folder claim, a Unix soc
       const claim = await take(dataDir, TOKEN, deps)
       expect(claim).toMatchObject({ path, held: false })
       claim.release()
-      expect(lines.at(-1)).toBe(`[cli] something that is not Harness holds ${path}; starting without the data folder claim`)
+      expect(lines.at(-1)).toBe("[cli] something that is not Harness holds the data folder's claim; starting without the data folder claim")
     }
   })
 
@@ -172,7 +172,7 @@ describe.skipIf(process.platform === 'win32')('the data folder claim, a Unix soc
     expect(claim).toMatchObject({ path, held: false })
     expect(asked).toBeGreaterThanOrEqual(2)
     expect(asked).toBeLessThanOrEqual(6)
-    expect(lines.at(-1)).toBe(`[cli] ${path} stays taken by something that does not answer; starting without the data folder claim`)
+    expect(lines.at(-1)).toBe("[cli] the data folder's claim stays taken by something that does not answer; starting without the data folder claim")
   })
 
   it('fails the start on any other error', async () => {

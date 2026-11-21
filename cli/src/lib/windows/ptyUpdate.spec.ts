@@ -164,7 +164,7 @@ describe('startPtyUpdater', () => {
     })
     await vi.advanceTimersByTimeAsync(1_000)
     expect(prepared).toEqual(['a'])
-    expect(h.lines).toContain('[update] terminal host 0.11.0 was refused (digest mismatch: nope) — not trying it again for 2 s')
+    expect(h.lines).toContain('[update] terminal host 0.11.0 was refused (PtyPayloadRefused) — not trying it again for 2 s')
     // Two intervals before it is tried again: the check between downloads nothing.
     await vi.advanceTimersByTimeAsync(1_000)
     expect(prepared).toEqual(['a'])
@@ -205,7 +205,7 @@ describe('startPtyUpdater', () => {
     await vi.waitFor(() => expect(given).toHaveLength(2), { timeout: 2_000 })
     expect(given[0]).toBeUndefined()
     expect(given[1]).toBe(zip)
-    expect(h.lines).toContain('[update] terminal host 0.11.0 was downloaded but could not be unpacked (tar exited 1) — unpacking it again next check, from the bytes already verified')
+    expect(h.lines).toContain('[update] terminal host 0.11.0 was downloaded but could not be unpacked (PtyPayloadUnpackFailed) — unpacking it again next check, from the bytes already verified')
     expect(h.lines.some((l) => l.includes('not trying it again'))).toBe(false)
     // Another entry's bytes are never handed to it.
     sha = 'b'
