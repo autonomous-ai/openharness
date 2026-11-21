@@ -56,6 +56,19 @@ describe('the catalog', () => {
     expect(byId('X3').checks.find((c) => c.kind === 'still')).toMatchObject({ after: 'front', at: 'tap' })
   })
 
+  it('C9 swipes from the older a to the new b, which has no hook yet, rests on it, and then b\'s hook arrives', () => {
+    const c9 = byId('C9')
+    expect(c9.sessions.filter((s) => !s.ghost).map((s) => [s.key, s.ageMs])).toEqual([['b', 60_000], ['a', 120_000]])
+    expect(c9.steps.map((s) => [s.kind, 'session' in s ? s.session : s.kind === 'wait' ? s.ms : ''])).toEqual([
+      ['front', ''], ['claude.write', ''], ['wait', 10_000], ['swipe', 'a'], ['swipe', 'b'], ['wait', 3_000], ['hook', 'b']])
+    expect(c9.steps.filter((s) => s.kind === 'hook')).toEqual([{ label: 'hook', kind: 'hook', session: 'b', event: 'start' }])
+    expect(c9.checks.filter((c) => c.kind !== 'cost')).toEqual([
+      { id: 'open', kind: 'open', dim: 'D3', session: 'b', link: true, after: 'swipe', at: 'hook' },
+      { id: 'ring', kind: 'ring', dim: 'D1', page: 'claude', expect: ['b', 'a'], after: 'hook' },
+      { id: 'ringKept', kind: 'ring', dim: 'D7', page: 'claude', expect: ['b', 'a'] },
+    ])
+  })
+
   it('C3, CH1, CH2 and XH1 are tier A only, every other scenario (C10, C11, X7, C8, X9, CH3 and XH3 among them) runs in tier B', () => {
     const onlyA = ['C3', 'CH1', 'CH2', 'XH1']
     for (const s of ALL) expect(s.tiers, s.id).toEqual(onlyA.includes(s.id) ? ['a'] : ['a', 'b'])
@@ -127,8 +140,9 @@ describe('the catalog', () => {
   it('a wait is the person\'s own timing or a condition on the dial bounded by 10 s, never a fixed wait for the dial', () => {
     const waits = (conditioned: boolean): string[] => ALL.flatMap((s) => s.steps.flatMap((step) =>
       (step.kind === 'wait' && (step.until !== undefined) === conditioned ? [`${s.id} ${step.ms}`] : [])))
-    // C6's turn, C10's gap between quit and relaunch, C11's time unplugged, X3's still window, X11's and XH3's switches.
-    expect(waits(false)).toEqual(['C6 5000', 'C10 2000', 'C11 3000', 'X3 5000', 'X11 300', 'X11 300', 'XH3 200'])
+    // C6's turn, C9's rest on b, C10's gap between quit and relaunch, C11's time unplugged, X3's still window, X11's and
+    // XH3's switches.
+    expect(waits(false)).toEqual(['C6 5000', 'C9 3000', 'C10 2000', 'C11 3000', 'X3 5000', 'X11 300', 'X11 300', 'XH3 200'])
     expect(new Set(waits(true).map((w) => w.split(' ')[1]))).toEqual(new Set(['10000']))
   })
 
