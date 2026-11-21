@@ -105,6 +105,20 @@ describe('a file that is not read, in the log', () => {
   })
 })
 
+describe('an engine with no machine MCP path, in the log', () => {
+  it('counts the servers not added, never names them: the person chose their names', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'machine-mcp-'))
+    writeMachineMcp({ sentinel_lamp: lamp({ engines: ['copilot'] }) }, dir)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(machineMcpLaunchArgs('copilot', '/x', dir)).toEqual([])
+      const lines = warn.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+      expect(lines).not.toContain('sentinel')
+      expect(lines).toBe('[agent] machine MCP servers not added · copilot has no machine MCP path in this Harness yet · servers 1')
+    } finally { warn.mockRestore() }
+  })
+})
+
 describe('mcp-servers.json on disk', () => {
   it('the save goes through a temporary file renamed onto the target', () => {
     const dir = mkdtempSync(join(tmpdir(), 'machine-mcp-'))

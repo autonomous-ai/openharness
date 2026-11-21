@@ -6,6 +6,7 @@ import { registry as realRegistry, type AgentLaunch, type ProcessIdentity, type 
 import type { TerminalRuntimeRef, TmuxRuntimeRef } from './terminalTypes.js'
 import { GRID_CREDENTIAL_REQUIRED, heldLaunch, restoreAgents, terminalSurvey, type RestoreAgentsDeps, type RestoreLaunch, type RestoreLaunchResult } from './restoreAgents.js'
 import type { GridLaunchOverride } from './gridLaunch.js'
+import { hashOf } from './log.js'
 import { createStopAgentService, type StopAgentServiceDeps } from './stopAgentService.js'
 import { AgentRestartCoordinator } from './restartAgent.js'
 import { createHeldLaunches } from '../core/agents/heldLaunches.js'
@@ -750,6 +751,18 @@ describe('restoreAgents — which agents get a pane back', () => {
     expect(summary).toEqual({ restored: ['gridded'], skipped: [], failed: [], held: [], unsurveyed: [] })
     expect(h.launched).toEqual([{ agentId: 'gridded', launch: { argv: [] } }, { agentId: 'respawn', launch: { argv: ['claude', '--resume', 'session-a', '--grid', 'grid-abc'], env: { GRID_API_KEY: 'gridkey-abc123' } } }])
     await settled(h, 1, 1)
+  })
+
+  it('names the grid it restored onto by its hash: a person chose its name', async () => {
+    const h = harness([row({ agentId: 'gridded', grid: { baseUrl: GRID.baseUrl, model: null }, gridLaunch: { ...GRID, networkName: 'sentinel grid' } })])
+    h.probes.set('%0', [identity(7)])
+    const log = vi.fn()
+    h.deps.log = log
+    expect((await restoreAgents(h.deps)).restored).toEqual(['gridded'])
+    await settled(h, 1, 1)
+    const lines = log.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+    expect(lines).not.toContain('sentinel')
+    expect(lines).toContain(` · grid ${hashOf('sentinel grid')}`)
   })
 
   it('the fresh fallback of a grid agent is a grid launch too', async () => {

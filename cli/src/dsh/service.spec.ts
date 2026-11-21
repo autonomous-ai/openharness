@@ -49,6 +49,17 @@ describe('daemon package mutations', () => {
     expect(refreshDshRegistry).toHaveBeenLastCalledWith(true)
   })
 
+  it('logs each installer line by its byte length, never its words: npm and uv print paths', async () => {
+    vi.mocked(installDsh).mockImplementation(async (options: DshInstallOptions) => {
+      options.onLine!('added 3 packages in /Users/sentinel/x')
+      return success
+    })
+    expect(await mutateDsh({ id: 'acme/thing' }, () => {})).toEqual({ ok: true, id: 'acme/thing' })
+    const lines = vi.mocked(console.log).mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+    expect(lines).not.toContain('sentinel')
+    expect(lines).toContain('[dsh] install · line 37 B')
+  })
+
   it('rejects an unknown catalog id and an empty request before running code', async () => {
     expect(await mutateDsh({ id: 'acme/missing' }, () => {})).toMatchObject({ ok: false, error: 'INVALID_DSH' })
     expect(await mutateDsh({}, () => {})).toMatchObject({ ok: false, error: 'INVALID_DSH' })

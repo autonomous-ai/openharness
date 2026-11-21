@@ -702,6 +702,16 @@ describe('PtyHostDrain', () => {
     expect(cleaned).toHaveBeenCalledTimes(1)
   })
 
+  it('says why a gone host left by its length, never its words: they can name the discovery file', async () => {
+    quiet()
+    const { drain, step } = drainFixture()
+    drain[0].hostGone = 'there is no /Users/sentinel/run/pty-p1.json'
+    for (let pass = 0; pass < EMPTY_PASSES; pass++) await step()
+    const lines = vi.mocked(console.log).mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+    expect(lines).not.toContain('sentinel')
+    expect(lines).toContain(`[terminal] ptyhost: ptyhost:p${OLD} drained and removed (text(43))`)
+  })
+
   it('skips a step while one runs, and a cleanup that throws does not stop the drain', async () => {
     quiet()
     const { drain, drainer, backends } = drainFixture()
