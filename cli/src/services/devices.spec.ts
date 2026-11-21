@@ -3496,6 +3496,44 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     ])
   })
 
+  // The same with the client in a kitty window, on the socket the agent's hints name, which the tmux server kept from
+  // the kitty window it started in: kitty's tab adapter focuses the window by its own process, kitty's child that made
+  // the client's terminal (kitty.ts createKittyTabAdapter). Its walk is kitty.spec.ts's.
+  it('an agent in the person\'s tmux whose client is in a kitty window: a rest with kitty in front focuses the client\'s window, then selects the tmux pane', async () => {
+    readers.processes.mockResolvedValue([
+      { pid: 4242, ppid: 4000, executable: 'claude' }, { pid: 4000, ppid: 1, executable: 'zsh' },
+      // The client, in its kitty window's shell, on the terminal kitty made.
+      { pid: 4300, ppid: 4299, tty: 'pts/4', executable: 'tmux' }, { pid: 4299, ppid: 4298, tty: 'pts/4', executable: 'bash' },
+      { pid: 4298, ppid: 1, executable: 'kitty' },
+    ])
+    const listener = fakeListener()
+    const { port } = startHere({ listen: listener.listen, orca: { ...orca, run: async (file, args, timeoutMs) => {
+      orcaRuns.push([file, args, timeoutMs])
+      const stdout = args[0] === 'display-message' ? '4000|work|\n' : args[0] === 'list-clients' ? '1794700050|4300|/dev/pts/4\n' : ''
+      return { code: 0, stdout }
+    } } })
+    port.observed(hook('session-start', { hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', KITTY_LISTEN_ON: 'unix:@kitty-1' } }))
+    attach(port)
+    await vi.waitFor(() => expect(said()).toEqual(['[device] tmux client · found']))
+    expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual(expect.objectContaining({ id: 'kitty', count: 1 }))
+    await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+    // Another app in front: neither kitty nor tmux is touched.
+    let runs = orcaRuns.length
+    expect(listener.front('wezterm')).toBeUndefined()
+    host().swipeEnded(ID, 'rest')
+    await vi.waitFor(() => expect(said().filter((line) => line.startsWith('[device] swipe ·'))).toHaveLength(1))
+    expect(orcaRuns.slice(runs)).toEqual([])
+    runs = orcaRuns.length
+    expect(listener.front('kitty')).toBeUndefined()
+    host().swipeEnded(ID, 'rest')
+    await swiped('ok')
+    expect(orcaRuns.slice(runs)).toEqual([
+      ['kitten', ['@', '--to', 'unix:@kitty-1', 'focus-window', '--match', 'pid:4299'], 10_000],
+      ['tmux', expect.arrayContaining(['display-message', '%3']), 10_000],
+      ['tmux', ['select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], 10_000],
+    ])
+  })
+
   // Diego's Terminal tab B ran `herdr` (2026-11-19): Claude Code in a pane of his herdr server, whose hints name no app.
   // The lookup's own runs are this spec's; its walk is herdrOuter.spec.ts's.
   describe('an agent in the person\'s herdr, attached from a Terminal tab', () => {
