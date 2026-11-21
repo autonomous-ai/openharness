@@ -187,17 +187,23 @@ function focusParts(check: CheckOf<'focus'>, world: World, w: Window | undefined
 }
 
 function stillParts(check: CheckOf<'still'>, world: World, w: Window | undefined): Part[] {
-  if (!w) return [{ part: 'still', score: 0, timed: false, evidence: [] }]
-  let was = world.seen.faces.filter((f) => f.at <= w.from).at(-1)?.active ?? null
+  const faces = w ? world.seen.faces.filter((f) => f.at < w.to) : []
+  // A dial whose face was never seen is not shown still: a driver that sees nothing passes nothing.
+  if (!w || faces.length === 0) return [{ part: 'still', score: 0, timed: false, evidence: [] }]
+  // The window opens on the face before it: one that moves at its first ms moved.
+  const start = faces.filter((f) => f.at < w.from).at(-1)
+  let was = start?.active ?? null
   // Inclusive of its last ms, as every mark here is, but not of the step that closes the window (`at`): that step's own
-  // move is the person's, not the dial's. Moving is leaving a tile: the first landing from no tile, when the ring
-  // arrives, is not.
-  const moved = world.seen.faces.filter((f) => f.at >= w.from && f.at <= w.from + check.ms && f.at < w.to).filter((f) => {
+  // move is the person's, not the dial's. Moving is leaving a tile, for another or for none: the first landing from no
+  // tile, when the ring arrives, is not.
+  const moved = faces.filter((f) => f.at >= w.from && f.at <= w.from + check.ms).filter((f) => {
     const left = was !== null && f.active !== was
     was = f.active
     return left
   })
-  const evidence = bounded(moved.map((f) => `face at ${f.at}: ${world.keyOf(f.active)}`))
+  // The face held, the first seen when none came before the window, then each move.
+  const held = start ?? faces[0]!
+  const evidence = bounded([held, ...moved].map((f) => `face at ${f.at}: ${world.keyOf(f.active)}`))
   return [{ part: 'still', score: moved.length === 0 ? 1 : 0, timed: false, evidence }]
 }
 
