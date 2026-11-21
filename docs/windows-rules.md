@@ -89,7 +89,8 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
 - **A link opens with no shell.** `cmd.exe /c start` ends the command at a URL's `&` and runs the rest, splits it at a
   space and expands its `%`, and a sign-in URL is full of `&`. Open it through System32's
   `rundll32.exe url.dll,FileProtocolHandler <url>` (`browserCommand` in `cli/src/lib/openInBrowser.ts`), and refuse a
-  URL holding whitespace or a quote, which Node would quote. Test: `cli/src/lib/openInBrowser.spec.ts`.
+  URL holding whitespace or a quote: Node quotes an argument holding a space, a tab or a double quote. Test:
+  `cli/src/lib/openInBrowser.spec.ts`.
 
 - **A paste can arrive as keys.** The Mac gets one paste event, so Enter after it is safe. Codex on Windows gets a stream of key
   presses, and an Enter within 120 ms of the last becomes a newline in the paste (codex-rs `paste_burst.rs`): the message stays in

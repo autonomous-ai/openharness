@@ -12,8 +12,9 @@ const HARNESS_BROWSER = '/usr/bin/hn-browser'
 /** What opens [url] on [platform], with no shell; null when [url] is not opened (not http(s), or holds whitespace or
  *  a quote). */
 export function browserCommand(url: string, platform: NodeJS.Platform, harnessBrowser?: string | null): { file: string; args: string[] } | null {
-  // url.dll is handed the rest of rundll32's command line as it stands, and Node quotes an argument holding whitespace
-  // or a quote: such a URL would reach the browser quoted or cut, so it is not opened.
+  // url.dll is handed the rest of rundll32's command line as it stands, and Node quotes an argument holding a space, a
+  // tab or a double quote: such a URL would reach the browser quoted, so it is not opened. Nor is one holding other
+  // whitespace or a single quote, which no link Harness opens has.
   if (!/^https?:\/\/[^\s"']+$/.test(url)) return null
   if (harnessBrowser && platform === 'linux') return { file: harnessBrowser, args: [url] }
   if (platform === 'win32') return { file: systemProgram('rundll32.exe'), args: ['url.dll,FileProtocolHandler', url] }
