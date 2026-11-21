@@ -85,6 +85,7 @@ class CliE2eWorkflowTests(unittest.TestCase):
         self.assertTrue(download_id)
         self.assertRegex(download[0], r"(?m)^ *continue-on-error: true$")
         self.assertRegex(download[0], r"ATTEMPTS=3\b")
+        self.assertRegex(download[0], r"\btimeout \d+ node -e ")
         self.assertIn("sleep ", download[0])
         self.assertIn("::warning", download[0])
         save, saved_key = cache("save")
