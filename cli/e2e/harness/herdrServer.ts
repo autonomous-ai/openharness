@@ -7,12 +7,13 @@
  * Its agent is a C program named `claude`: herdr tells an agent by its process name, and a copied `/bin/cat` under that
  * name is killed by macOS. It prints `fake> `, then `GOT[<line>]` for each line it reads.
  *
- * Its client, in a fake terminal app's tab, is pinned to this server by its config folder: never the developer's herdr.
+ * Its client, in a terminal of the test's (a fake app's tab, a WezTerm pane, an xterm), is pinned to this server by its
+ * config folder: never the developer's herdr.
  * `ownHerdrsOnly` keeps the daemon's herdr lookup off the developer's herdr, which may run on the Mac the tests run on.
  */
 import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readlink, writeFile } from 'node:fs/promises'
 import { createConnection } from 'node:net'
 import { userInfo } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -21,6 +22,7 @@ import { observedAgentId } from '../../src/cable/hosts/observed.js'
 import { resolveBinaryOnPath } from '../../src/lib/binaryOnPath.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
 import { writeExecutable } from '../../src/testing/executableFixture.js'
+import { RECORDED_HERDR } from '../../src/testing/recordedHerdr.js'
 import { IsolatedDaemon, until } from './daemon.js'
 import { dialHost } from './dialHosts.js'
 import { tabUnder, type FakeApp } from './outsideAgent.js'
@@ -89,13 +91,15 @@ export class PrivateHerdr {
 
   /**
    * With `lettered`, its panes are splits of one workspace whose ids carry a letter (`w2:pB` on), as a person's herdr
-   * that has run a while: a fresh server's are digits alone.
+   * that has run a while: a fresh server's are digits alone. [env] is what the server inherits beside the daemon's, as
+   * one started from a kitty window or a Zellij pane keeps that terminal's variables, and its panes with it.
    */
-  static async start(d: IsolatedDaemon, { lettered = false } = {}): Promise<PrivateHerdr> {
+  static async start(d: IsolatedDaemon, { lettered = false, env = {} }: { lettered?: boolean; env?: NodeJS.ProcessEnv } = {}):
+    Promise<PrivateHerdr> {
     const config = await PrivateHerdr.install(d)
     const socket = join(config, 'herdr', 'herdr.sock')
     const server = spawn(herdrBinary!, ['server'], {
-      cwd: d.env.HOME, env: { ...d.env, XDG_CONFIG_HOME: config }, stdio: 'ignore', ...ownProcessGroup(),
+      cwd: d.env.HOME, env: { ...d.env, ...env, XDG_CONFIG_HOME: config }, stdio: 'ignore', ...ownProcessGroup(),
     })
     // Ended by the worker's reaper should the worker go before `stop`.
     watchGroup(server.pid!)
@@ -176,16 +180,29 @@ export class PrivateHerdr {
   }
 
   /**
-   * herdr's client attached to this server from a tab of a fake [app], as a person's runs in a terminal app: `herdr`
-   * itself is the tab's process, given a size first, which a pseudo-terminal lacks and the client draws to. Its pid and
-   * its tab's tty. Attached once the server holds one more `herdr-client.sock` connection than before it started.
+   * herdr's client attached to this server from a terminal [start] opens running [argv] under [env], as a person's runs
+   * in a terminal app: `herdr` itself is the terminal's process, given a size first, which a bare pseudo-terminal lacks
+   * and the client draws to. What [start] gave, once the server holds one more `herdr-client.sock` connection than
+   * before it started; closed, when it has a `close`, should the client not attach.
    */
-  async tabClient(app: FakeApp): Promise<{ pid: number; tty: string; close(): Promise<void> }> {
+  async client<T extends { pid: number; close?(): Promise<void> }>(
+    start: (argv: string[], env: NodeJS.ProcessEnv) => Promise<T>): Promise<T> {
     const before = await this.clientConnections()
-    const tab = await tabUnder(this.d, app, ['/bin/sh', '-c', 'stty rows 40 columns 120 && exec "$0"', herdrBinary!],
+    const started = await start(['/bin/sh', '-c', 'stty rows 40 columns 120 && exec "$0"', herdrBinary!],
       { ...this.d.env, XDG_CONFIG_HOME: this.config, TERM: 'xterm-256color' })
     try {
       await until('the herdr client to attach', async () => await this.clientConnections() > before, 20_000, 100)
+    } catch (error) {
+      await started.close?.()
+      throw error
+    }
+    return started
+  }
+
+  /** herdr's client in a tab of a fake [app]: its pid and its tab's tty. */
+  async tabClient(app: FakeApp): Promise<{ pid: number; tty: string; close(): Promise<void> }> {
+    const tab = await this.client((argv, env) => tabUnder(this.d, app, argv, env))
+    try {
       const { stdout } = await execFileAsync('/bin/ps', ['-o', 'tty=', '-p', String(tab.pid)])
       return { pid: tab.pid, tty: `/dev/${stdout.trim()}`, close: () => tab.close() }
     } catch (error) {
@@ -194,11 +211,37 @@ export class PrivateHerdr {
     }
   }
 
-  /** The server's `herdr-client.sock` descriptors. lsof exits 1 with none, its output intact. */
+  /**
+   * The server's `herdr-client.sock` connections. On Linux the rows of `ss -xn` bound to that path whose socket is one
+   * of the server's own descriptors (RECORDED_HERDR: an accepted connection carries the listening path, and `ss -xn`
+   * lists no listening socket); on macOS its descriptors from lsof, which exits 1 with none, its output intact.
+   */
   private async clientConnections(): Promise<number> {
+    if (process.platform === 'linux') {
+      const fds = `/proc/${this.pid}/fd`
+      const own = new Set<string>()
+      for (const fd of await readdir(fds)) {
+        // A descriptor closed between the listing and its read is no connection.
+        const inode = /^socket:\[(\d+)\]$/.exec(await readlink(join(fds, fd)).catch(() => ''))?.[1]
+        if (inode) own.add(inode)
+      }
+      const { stdout } = await execFileAsync(RECORDED_HERDR.paths.ss, ['-xn'])
+      return stdout.split('\n').filter((row) => {
+        const [, , , , local, inode] = row.trim().split(/\s+/)
+        return local?.endsWith('/herdr-client.sock') && own.has(inode)
+      }).length
+    }
     const listed = await execFileAsync('/usr/sbin/lsof', ['-a', '-U', '-p', String(this.pid), '-F', 'n'])
       .catch((error: { stdout?: string }) => ({ stdout: error.stdout ?? '' }))
     return listed.stdout.split('\n').filter((line) => line.startsWith('n') && line.endsWith('/herdr-client.sock')).length
+  }
+
+  /** herdr's focused pane: the one its API says is focused, the focused pane of the workspace in front. */
+  async focused(): Promise<string> {
+    const panes = (await this.rpc('pane.list')).panes as Array<{ pane_id: string; focused: boolean }>
+    const focused = panes.filter((pane) => pane.focused)
+    if (focused.length !== 1) throw new Error(`herdr names ${focused.length} focused panes`)
+    return focused[0].pane_id
   }
 
   /** The suite's fake Claude Code started in a new pane's shell, so its hook runs with herdr's own HERDR_PANE_ID. */
