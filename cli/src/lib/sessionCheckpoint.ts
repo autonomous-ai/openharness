@@ -140,21 +140,19 @@ export class SessionCheckpointStore {
           .catch(() => { throw new IdentityReadUnavailable('the source transcript could not be opened') })
         let reuseCheckpoint = false
         try {
-          let before = await input.stat({ bigint: true }).catch(() => { throw new IdentityReadUnavailable('the source transcript could not be inspected') })
-          authority!.verify(nativeFileKey(before))
-          if (!before.isFile() || !Number.isSafeInteger(Number(before.size))) throw new IdentityReadUnavailable('the source transcript has an unconfirmed type or size')
-          if (before.size === 0n) throw new SessionCheckpointError('This conversation is still being saved. Keep it open and try again shortly.')
           const previousFile = previous?.file && previousFileSafe(previous.file)
             ? await lstat(join(this.directory, previous.file)).catch(() => null) : null
-          before = await input.stat({ bigint: true }).catch(() => { throw new IdentityReadUnavailable('the source transcript became unreadable') })
+          const before = await input.stat({ bigint: true }).catch(() => { throw new IdentityReadUnavailable('the source transcript became unreadable') })
           authority!.verify(nativeFileKey(before))
+          // Validate the same fresh size that reuse and copy consume, after the metadata await.
+          if (!before.isFile() || !Number.isSafeInteger(Number(before.size))) throw new IdentityReadUnavailable('the source transcript has an unconfirmed type or size')
+          if (before.size === 0n) throw new SessionCheckpointError('This conversation is still being saved. Keep it open and try again shortly.')
           // Older manifests did not bind a copied descriptor. Rebuild those once;
           // subsequent quiet exits can reuse this exact, completely saved incarnation.
           if (previous?.version === 1 && previous.source === source && previous.sourceKey === nativeFileKey(before)
             && previous.sourceSize === Number(before.size) && previous.sourceCtime === String(before.ctimeNs)
             && previousFile?.isFile() && previousFile.nlink === 1 && (previousFile.mode & 0o777) === 0o600
             && previousFile.size === Number(before.size)) {
-            authority!.verify(nativeFileKey(before))
             reuseCheckpoint = true
           } else {
             await copyCheckpointDescriptor(input, temporary, Number(before.size))
