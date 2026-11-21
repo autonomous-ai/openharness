@@ -3540,6 +3540,23 @@ describe('spoken output search purpose', () => {
       await session.stop()
     })
 
+    it('a dial\'s refusal of a pet is logged by its code or length', async () => {
+      const lines: string[] = []
+      const store = fakeStore({ all: A, engines: { claude: B } })
+      const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore, log: (line) => lines.push(line) }))
+      port.say({ ...hello, pets: 1, petIds: [] })
+      await settle()
+      port.say({ t: 'pet.error', id: A, reason: 'memory' })
+      await settle()
+      port.say({ t: 'pet.error', id: B, reason: 'no room for /Users/sentinel/pets' })
+      await settle()
+      // The dial's own word stays where the person reads it.
+      expect(session.petDial().errors).toEqual({ [A]: 'memory', [B]: 'no room for /Users/sentinel/pets' })
+      expect(lines).toContain(`cable: dial refused pet ${A}: text(6)`)
+      expect(lines.join('\n')).not.toContain('sentinel')
+      await session.stop()
+    })
+
     it('a hello that lost a held pack abandons the transfer in flight and offers again', async () => {
       const store = fakeStore({ all: A, engines: { claude: B } })
       const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
