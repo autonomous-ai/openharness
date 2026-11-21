@@ -405,7 +405,7 @@ const shown = (node: ts.Node): string => node.getText().replace(/\s+/g, ' ')
  */
 const ERROR_WORDS = ['message', 'stack', 'reason', 'detail', 'stderr', 'stdout', 'path', 'dest', 'cmd', 'spawnargs']
 
-/** Names that hold content, of any value: what a process printed, free text, where a person's things are, and a name a person chose. */
+/** Names that hold content, of any value: what a process printed, free text, where a person's things are, a machine's name. */
 const CONTENT_NAMES: ReadonlyArray<readonly [string, RegExp]> = [
   ['process output', /^(stderr|stdout|output)$|(Stderr|Stdout|Output)$/],
   ['free text', /^(detail|details|message)$|(Detail|Message)$/],
@@ -724,7 +724,7 @@ it.each([
   "const hashOf = (text: string) => text; console.log(`[x] ${hashOf(file)}`)",
   "function errorKind(error: unknown) { return String(error) } try { run() } catch (error) { console.error(`[x] ${errorKind(error)}`) }",
   "import { sid } from './agentIds.js'; console.log(`[x] ${sid(transcriptPath)}`)",
-  "import { codeOrLength as sid } from './lib/log.js'; import { preview as hashOf } from './lib/log.js'; console.log(`[x] ${hashOf(message)}`)",
+  "import { preview as hashOf } from './lib/log.js'; console.log(`[x] ${hashOf(message)}`)",
   "const Number = (value: unknown) => value; console.log(`[x] ${Number(stderr)}`)",
   // Node's error fields: a command line, a child's arguments, a path.
   "try { execSync(line) } catch (error) { console.warn(`[x] exited · ${(error as { cmd?: string }).cmd}`) }",
