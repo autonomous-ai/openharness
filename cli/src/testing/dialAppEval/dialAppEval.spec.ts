@@ -36,6 +36,10 @@ const refused = vi.hoisted(() => async (real: () => Promise<Record<string, unkno
 })
 vi.mock('node:child_process', refused)
 vi.mock('child_process', refused)
+// Each read is counted from its call to its end, so the clock moves on only once it lands (tierA/clock.ts).
+const counted = vi.hoisted(() => async (real: () => Promise<object>) => (await import('./tierA/clock.js')).countFsCalls(await real()))
+vi.mock('node:fs/promises', counted)
+vi.mock('fs/promises', counted)
 // The machine's processes, and whether one still runs, from the model. A session's transcript has no stamp there: one
 // waiting on the person stays so until its next hook.
 vi.mock('../../lib/sessionSearch/externals/support.js', async (real) => ({

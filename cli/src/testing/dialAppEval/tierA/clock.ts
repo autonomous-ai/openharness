@@ -13,9 +13,33 @@ export const EVAL_EPOCH = Date.UTC(2026, 10, 21, 9)
 export const MAX_ADVANCES = 100_000
 /** A world still busy after this long of real time is stuck, not slow: a read of a temp file takes milliseconds. */
 const QUIET_WITHIN_MS = 10_000
-/** A real read under way: the libuv requests `fs` and `fs/promises` hold while one runs. A file handle's close, the
- *  last step of a promise read, is named `CloseReq` there. */
+/** A real read under way that the count of calls below does not see, a file handle's own read and close and the
+ *  callback API: the libuv requests each holds while it runs. A handle's close is named `CloseReq` there. */
 const PENDING_IO: ReadonlySet<string> = new Set(['FSReqCallback', 'FSReqPromise', 'CloseReq'])
+
+/** The calls into node:fs/promises in flight, in a spec that mocks that module with countFsCalls. */
+let fsCalls = 0
+
+/**
+ * `node:fs/promises` with each call that returns a promise counted while it is in flight, for a spec's mock of that
+ * module: on Node 26 a readFile holds no request the resource list shows (2026-11-21), so a read is counted from its
+ * call to its end.
+ */
+export function countFsCalls<T extends object>(fs: T): T {
+  return Object.fromEntries(Object.entries(fs).map(([name, member]: [string, unknown]) => {
+    if (name === 'default' && typeof member === 'object' && member !== null) return [name, countFsCalls(member)]
+    if (typeof member !== 'function') return [name, member]
+    return [name, (...args: unknown[]): unknown => {
+      const result: unknown = member(...args)
+      if (result instanceof Promise) {
+        fsCalls++
+        const landed = (): void => { fsCalls-- }
+        result.then(landed, landed)
+      }
+      return result
+    }]
+  })) as T
+}
 
 export function installClock(): void {
   vi.useFakeTimers({ now: EVAL_EPOCH, toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'] })
@@ -23,9 +47,10 @@ export function installClock(): void {
 
 const turn = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
 const busy = (inFlight: () => number): boolean =>
-  inFlight() > 0 || process.getActiveResourcesInfo().some((resource) => PENDING_IO.has(resource))
+  inFlight() > 0 || fsCalls > 0 || process.getActiveResourcesInfo().some((resource) => PENDING_IO.has(resource))
 
-/** Resolves once no store read is in flight and no real read is under way, on two real turns in a row. */
+/** Resolves once no store read and no call into node:fs/promises is in flight and no real read is under way, on two
+ *  real turns in a row. */
 export async function quiet(inFlight: () => number): Promise<void> {
   const since = process.hrtime.bigint()
   for (let calm = 0; calm < 2;) {

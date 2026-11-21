@@ -7,6 +7,9 @@ import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EVAL_EPOCH, installClock, MAX_ADVANCES, quiet, settle } from './clock.js'
 
+// As dialAppEval.spec.ts mocks it: each read is counted from its call.
+vi.mock('node:fs/promises', async (real) => (await import('./clock.js')).countFsCalls(await real<object>()))
+
 const nothingInFlight = (): number => 0
 /** Virtual ms since the clock was installed. */
 const now = (): number => Date.now() - EVAL_EPOCH
