@@ -6163,6 +6163,11 @@ class AppNotifier extends ChangeNotifier {
   /// check still runs then. A viewer has no local CLI to remove.
   Future<CliAuthStatus> _checkAuthStatus() async {
     if (viewer == null && _discovery.uninstallHeld()) {
+      // A launch asks two or three times, so the log says why it ended on the login screen without flooding it.
+      appLog.info(
+        'auth',
+        'no harness auth status: harness uninstall holds its marker',
+      );
       throw CliNotAvailableException('harness uninstall is removing the CLI');
     }
     return cliLogin.checkStatus();
