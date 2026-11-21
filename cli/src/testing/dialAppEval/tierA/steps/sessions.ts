@@ -91,6 +91,16 @@ function answerLine(s: SessionDef, text: string): string {
   return `${JSON.stringify(line)}\n`
 }
 
+/** The person's line that opens a turn, as each engine's transcript holds it: the last answer is read from after the
+ *  last one (engines/claude/normalize.ts lastTurnTextFromRawLines, engines/codex/normalizer.ts lastCodexTurnText). */
+function promptLine(s: SessionDef): string {
+  const text = 'Eval prompt.'
+  const line = s.app === 'claude'
+    ? { type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } }
+    : { type: 'event_msg', payload: { type: 'user_message', message: text } }
+  return `${JSON.stringify(line)}\n`
+}
+
 function tell(world: TierAWorld, key: SessionKey, live: Live, event: ObservedEventName): void {
   const s = world.session(key)
   // Claude Code says the name the app gave the session on these two (hook/notify.mjs observedBody).
@@ -159,6 +169,7 @@ export const sessionsSteps: { hook: StepHandler<'hook'>; quit: StepHandler<'quit
     const s = world.session(step.session)
     switch (step.event) {
       case 'turn-start':
+        appendFileSync(live.transcriptPath, promptLine(s))
         tell(world, step.session, live, 'turn-start')
         break
       case 'needs-input':
