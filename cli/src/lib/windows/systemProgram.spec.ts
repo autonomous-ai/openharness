@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { powershellPath, systemProgram, systemRoot } from './powershell.js'
 
-const PROGRAMS = ['cmd', 'icacls', 'powershell', 'reg', 'schtasks', 'taskkill', 'tasklist', 'whoami']
+const PROGRAMS = ['cmd', 'conhost', 'icacls', 'powershell', 'quser', 'reg', 'rundll32', 'schtasks', 'tar', 'taskkill', 'tasklist', 'whoami']
 /** One of them by its bare name, as what a call runs: a spawn's, an exec's or a runner's first argument, a command's
  *  `file`, or the fallback for a variable that names one (`ComSpec ?? 'cmd.exe'`). */
 const BARE = new RegExp(String.raw`(?:\b(?:spawn|spawnSync|execFile|execFileSync|exec|patientExec|run|runner|runGuestCommand)\)?\(|\bfile:|\?\?|\|\|)\s*(['"\x60])(?:${PROGRAMS.join('|')})(?:\.exe)?\1`, 'g')

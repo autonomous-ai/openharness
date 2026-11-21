@@ -21,6 +21,10 @@ function windowsDisk(...files: string[]) {
   return { isFile, asked }
 }
 
+/** A drive's (C:\…) or a share's (\\server\…) path: the same file whatever folder a program runs in. `\repo`, which
+ *  win32.isAbsolute takes, is a folder of the working folder's drive. */
+const fixedPath = (path: string) => /^(?:[A-Za-z]:\\|\\\\[^\\])/.test(path)
+
 const WINDOWS_ROOTS = { ProgramFiles: 'C:\\Program Files', LOCALAPPDATA: 'C:\\Users\\ana\\AppData\\Local', USERPROFILE: 'C:\\Users\\ana' }
 const noLoginShell = async () => null
 /** The gh a computer with Homebrew has, which findGh finds before one in ~/.local/bin. */
@@ -52,9 +56,9 @@ describe('findGit on Windows', () => {
     const disk = windowsDisk('.\\git.exe', 'tools\\git.exe', 'bin\\git.exe', 'C:\\Program Files\\Git\\cmd\\git.exe')
     const found = await findGit({ platform: 'win32', env: { ...WINDOWS_ROOTS, PATH: '.;;tools;\\repo;C:bin;C:\\Tools' }, isFile: disk.isFile })
     expect(found).toBe('C:\\Program Files\\Git\\cmd\\git.exe')
-    expect(win32.isAbsolute(found!)).toBe(true)
+    expect(fixedPath(found!)).toBe(true)
     expect(disk.asked.length).toBeGreaterThan(0)
-    expect(disk.asked.filter((path) => !win32.isAbsolute(path))).toEqual([])
+    expect(disk.asked.filter((path) => !fixedPath(path))).toEqual([])
   })
 
   it("reads a PATH folder in quotes as Node's spawn does: without them, and with any `;` inside", async () => {
@@ -95,7 +99,7 @@ describe('findGh on Windows', () => {
     const disk = windowsDisk('.\\gh.exe', 'tools\\gh.exe')
     expect(await findGh({ platform: 'win32', env: { ...WINDOWS_ROOTS, PATH: '.;;tools' }, isFile: disk.isFile })).toBeNull()
     expect(disk.asked.length).toBeGreaterThan(0)
-    expect(disk.asked.filter((path) => !win32.isAbsolute(path))).toEqual([])
+    expect(disk.asked.filter((path) => !fixedPath(path))).toEqual([])
   })
 
   it('takes gh.exe alone from PATH, never a gh.cmd', async () => {
