@@ -842,6 +842,45 @@ describe('a pass with a deadline', () => {
   })
 })
 
+describe('the passes count', () => {
+  const reconciler = (probed: () => Promise<TerminalAgentProbe>, passDeadlineMs?: number) => new TerminalAgentReconciler({
+    current: () => [], backends: [], backendOrder: ['tmux'],
+    onDiscovered: vi.fn(), onObserved: vi.fn(), onDormant: vi.fn(), onRemoved: vi.fn(), probe: probed, passDeadlineMs,
+  })
+
+  it('counts each completed pass once', async () => {
+    const probed = vi.fn(async () => probe([]))
+    const run = reconciler(probed)
+    // The second and third ask while the first runs: they share the one pass that follows it.
+    await Promise.all([run.trigger(), run.trigger(), run.trigger()])
+    expect(probed).toHaveBeenCalledTimes(2)
+    expect(run.passes).toBe(2)
+    await run.trigger()
+    expect(run.passes).toBe(3)
+  })
+
+  it('does not count a pass that gave up on its probe', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.useFakeTimers()
+    try {
+      const run = reconciler(() => new Promise<TerminalAgentProbe>(() => {}), 10)
+      const asked = run.trigger()
+      await vi.advanceTimersByTimeAsync(10)
+      await expect(asked).resolves.toBe(false)
+      expect(run.passes).toBe(0)
+    } finally {
+      vi.useRealTimers()
+      warn.mockRestore()
+    }
+  })
+
+  it('does not count a pass that throws', async () => {
+    const run = reconciler(async () => { throw new Error('ps timed out') })
+    await expect(run.trigger()).rejects.toThrow('ps timed out')
+    expect(run.passes).toBe(0)
+  })
+})
+
 describe('a pass whose observations cannot be saved', () => {
   afterEach(() => { vi.restoreAllMocks() })
   const live = (): TerminalAgentProbe => probe([{ instanceId: 'tmux:default', result: { state: 'available', roots: [{ runtime: tmux, rootPid: 1, cwd: '/work' }] } }])
