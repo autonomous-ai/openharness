@@ -4,9 +4,12 @@
  * Node on Windows looks for a bare name in the child's working folder before PATH (docs/windows-rules.md §2), so a
  * `git.exe` committed into a repository would run as `git` there. Prepending a folder to PATH, as tmux does
  * (tmuxOnPath.ts), cannot fix that: the working folder is looked in first. A path names one file wherever it runs.
- * On macOS a daemon launchd starts has a PATH without Homebrew's, so the login shell is asked next, as for tmux.
+ * On macOS a daemon launchd starts has a PATH without Homebrew's: a Mac with Homebrew's gh was told to install it
+ * beside a working `gh` in every terminal (2026-10-17). So gh is looked for where its installers put it, and then the
+ * login shell is asked, as for tmux.
  */
-import { isAbsolute, win32 } from 'node:path'
+import { homedir } from 'node:os'
+import { delimiter, isAbsolute, join, win32 } from 'node:path'
 import { resolveBinaryOnPath } from './binaryOnPath.js'
 import { resolveViaLoginShell } from './tmuxOnPath.js'
 import { fileExists, fixedFolder, gitForWindowsRoots, programFilesRoots, scoopRoots } from './windows/gitBash.js'
@@ -25,7 +28,7 @@ export interface ProgramSearch {
 /** The absolute path of the git to run, or null. Never a file in the working folder. */
 export function findGit(search: ProgramSearch = {}): Promise<string | null> {
   // Git for Windows' installer puts git.exe in <root>\cmd; Scoop puts a shim that starts it in <root>\shims.
-  return findProgram('git', search, (env) => [
+  return findProgram('git', search, (env, platform) => platform !== 'win32' ? [] : [
     ...gitForWindowsRoots(env).map((root) => win32.join(root, 'cmd')),
     ...scoopRoots(env).map((root) => win32.join(root, 'shims')),
   ])
@@ -33,18 +36,23 @@ export function findGit(search: ProgramSearch = {}): Promise<string | null> {
 
 /** The absolute path of the gh to run, or null. Never a file in the working folder. */
 export function findGh(search: ProgramSearch = {}): Promise<string | null> {
-  return findProgram('gh', search, (env) => [
-    ...programFilesRoots(env).map((root) => win32.join(root, 'GitHub CLI')),
-    ...scoopRoots(env).map((root) => win32.join(root, 'shims')),
-  ])
+  return findProgram('gh', search, (env, platform) => platform !== 'win32'
+    // Homebrew on Apple silicon and on Intel, Linuxbrew, and a user install.
+    ? ['/opt/homebrew/bin', '/usr/local/bin', '/home/linuxbrew/.linuxbrew/bin', join(env.HOME || homedir(), '.local', 'bin')]
+    : [...programFilesRoots(env).map((root) => win32.join(root, 'GitHub CLI')), ...scoopRoots(env).map((root) => win32.join(root, 'shims'))])
 }
 
-async function findProgram(name: Program, search: ProgramSearch, installFolders: (env: NodeJS.ProcessEnv) => string[]): Promise<string | null> {
+async function findProgram(name: Program, search: ProgramSearch,
+  installFolders: (env: NodeJS.ProcessEnv, platform: NodeJS.Platform) => string[]): Promise<string | null> {
   const { platform = process.platform, env = process.env, isFile = fileExists, loginShell = () => resolveViaLoginShell(name) } = search
-  // A relative PATH entry names a folder under the one the program runs in.
-  if (platform !== 'win32') return resolveBinaryOnPath(name, env, isAbsolute) ?? await loginShell()
+  // A relative PATH entry names a folder under the one the program runs in. The login shell is asked last, as it is
+  // a process that can take seconds.
+  if (platform !== 'win32') {
+    return resolveBinaryOnPath(name, env, isAbsolute)
+      ?? resolveBinaryOnPath(name, { PATH: installFolders(env, platform).join(delimiter) }, isAbsolute) ?? await loginShell()
+  }
   // The .exe alone: a .cmd runs only through cmd.exe.
-  const folders = [...(env.PATH ?? '').split(';'), ...installFolders(env)].filter(fixedFolder)
+  const folders = [...(env.PATH ?? '').split(';'), ...installFolders(env, platform)].filter(fixedFolder)
   return folders.map((folder) => win32.join(folder, `${name}.exe`)).find((path) => isFile(path)) ?? null
 }
 

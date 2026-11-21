@@ -21,6 +21,8 @@ function windowsDisk(...files: string[]) {
 
 const WINDOWS_ROOTS = { ProgramFiles: 'C:\\Program Files', LOCALAPPDATA: 'C:\\Users\\ana\\AppData\\Local', USERPROFILE: 'C:\\Users\\ana' }
 const noLoginShell = async () => null
+/** The gh a computer with Homebrew has, which findGh finds before one in ~/.local/bin. */
+const HOMEBREW_GH = ['/opt/homebrew/bin/gh', '/usr/local/bin/gh', '/home/linuxbrew/.linuxbrew/bin/gh']
 
 const folders: string[] = []
 const startFolder = process.cwd()
@@ -138,8 +140,7 @@ describe.each(['darwin', 'linux'] as const)('findGit and findGh on %s', (platfor
     writeFileSync(join(home, '.local', 'bin', 'gh'), '#!/bin/sh\n', { mode: 0o755 })
     let asked = 0
     const found = await findGh({ platform, env: { PATH: folderWith(), HOME: home }, loginShell: async () => { asked += 1; return null } })
-    // A computer with Homebrew's gh finds that one first.
-    expect([join(home, '.local', 'bin', 'gh'), '/opt/homebrew/bin/gh', '/usr/local/bin/gh', '/home/linuxbrew/.linuxbrew/bin/gh']).toContain(found)
+    expect([join(home, '.local', 'bin', 'gh'), ...HOMEBREW_GH]).toContain(found)
     expect(asked).toBe(0)
   })
 })
@@ -150,7 +151,7 @@ describe('relative PATH entries', () => {
     process.chdir(folderWith('git', 'gh'))
     for (const platform of ['darwin', 'linux'] as const) {
       expect(await findGit({ platform, env: { PATH: '.' }, loginShell: noLoginShell })).toBeNull()
-      expect(await findGh({ platform, env: { PATH: '.' }, loginShell: noLoginShell })).toBeNull()
+      expect([null, ...HOMEBREW_GH]).toContain(await findGh({ platform, env: { PATH: '.', HOME: folderWith() }, loginShell: noLoginShell }))
     }
     const disk = windowsDisk('.\\git.exe', '.\\gh.exe')
     expect(await findGit({ platform: 'win32', env: { PATH: '.' }, isFile: disk.isFile })).toBeNull()
