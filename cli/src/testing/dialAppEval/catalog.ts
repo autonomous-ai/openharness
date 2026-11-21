@@ -272,7 +272,8 @@ export const MAIN: Scenario[] = [
     ],
     checks: [
       { id: 'still', kind: 'still', dim: 'D2', ms: 5 * S, after: 'front', at: 'tap' },
-      { id: 'ringKept', kind: 'ring', dim: 'D7', page: 'chatgpt', expect: ['t1', 't2'], after: 'front' },
+      // From the start: the one whole list lands before front, and the last list before the tap is the ring still held.
+      { id: 'ringKept', kind: 'ring', dim: 'D7', page: 'chatgpt', expect: ['t1', 't2'], at: 'tap' },
       { id: 'openKept', kind: 'open', dim: 'D7', session: 't2', link: true, after: 'tap' },
     ],
     probes: [{ id: 'open', kind: 'open', dim: 'D7', session: 'z', link: true, after: 'tap' }],
