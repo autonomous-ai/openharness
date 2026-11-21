@@ -435,6 +435,10 @@ export interface HookServerOptions {
   admissionBytesCapacity?: number
 }
 
+/** Claude Code's own SessionEnd reasons, its hook input's `reason` (read from Claude Code 2.1.330): fixed words, logged as
+ *  they are. Any other engine's reason is logged as a code or a length. */
+const SESSION_END_REASONS: readonly string[] = ['clear', 'resume', 'logout', 'prompt_input_exit', 'other']
+
 /** The `/api/status` fields a caller without the local credential is answered. */
 // Which daemon this is (its pid and computer, as a takeover or a status check compares) and where its socket
 // is — never the account, its folders or its connections.
@@ -981,7 +985,8 @@ export function startHookServer(
       if (req.method === 'POST' && url === '/api/hook/session-end') {
         const hook = await boundHook('session-end')
         if (!hook) return
-        console.log(`[hooks] ${sid(hook.sessionId)} session-end${hook.reason ? ` · reason=${codeOrLength(hook.reason)}` : ''}`)
+        const reason = hook.reason && (SESSION_END_REASONS.includes(hook.reason) ? hook.reason : codeOrLength(hook.reason))
+        console.log(`[hooks] ${sid(hook.sessionId)} session-end${reason ? ` · reason=${reason}` : ''}`)
         handlers.onSessionEnd(hook.sessionId, hook.reason)
         json(200, { ok: true })
         return
