@@ -305,7 +305,6 @@ describe("WezTerm's tab of an outer place", () => {
       entries({ ...other, pane_id: 1234567890 }),
       entries({ ...other, pane_id: undefined }),
       entries({ ...other, tty_name: undefined }),
-      entries({ ...other, tty_name: null }),
       panes(LISTED_PANES_MAX + 1),
     ]
     expect(LISTED_PANES_MAX).toBe(256)
@@ -319,6 +318,14 @@ describe("WezTerm's tab of an outer place", () => {
     const { calls, adapter } = tabRecorder([{ code: 0, stdout: panes(LISTED_PANES_MAX) }, done])
     expect(await adapter.show(tab('/dev/pts/255'), 'agent-1')).toBe('ok')
     expect(calls).toEqual([list, activate(FAKE_PATH_WEZTERM, '255')])
+  })
+
+  // WezTerm's tty_name is an Option: a pane on an SSH or serial domain has none, and is no pane a client could be on.
+  it("a pane with no tty (an SSH domain's tty_name: null) is passed over: the client's pane is still activated", async () => {
+    const stdout = JSON.stringify([{ ...recordedEntries[1]!, tty_name: null }, recordedEntries[0]!])
+    const { calls, adapter } = tabRecorder([{ code: 0, stdout }, done])
+    expect(await adapter.show(tab('/dev/pts/0'), 'agent-1')).toBe('ok')
+    expect(calls).toEqual([list, activate(FAKE_PATH_WEZTERM, '0')])
   })
 
   it('a list that failed: failed, and wezterm is looked for again', async () => {
