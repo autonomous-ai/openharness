@@ -364,6 +364,30 @@ describe('ensureNodeMeetsMinimum', () => {
     expect(performance.now() - started).toBeLessThan(1_000)
   })
 
+  it('a runtime ready or kept names no folder', async () => {
+    // Export logs sends the log off the machine, and the runtime folder is under the person's home.
+    rmSync(root, { recursive: true, force: true })
+    root = mkdtempSync(join(tmpdir(), 'sentinel-'))
+    runtimeDir = join(root, '.harness', 'runtime')
+    binDir = join(root, '.local', 'bin')
+    cliDir = join(root, '.harness', 'cli')
+    for (const dir of [runtimeDir, binDir, cliDir]) mkdirSync(dir, { recursive: true })
+    installedNode('v22.23.2', key)
+    const lines: string[] = []
+    const log = (line: string): void => { lines.push(line) }
+    const broken = buildArchive('v24.22.2', key, 'node', '#!/bin/sh\nexit 1\n')
+    stubFetch(manifestFor('node', key, 'v24.22.2', broken.bytes, broken.root), broken.bytes)
+    expect(await (await load()).ensureNodeMeetsMinimum(log)).toMatchObject({ reason: 'does-not-run' })
+    const good = buildArchive('v24.22.3', key)
+    stubFetch(manifestFor('node', key, 'v24.22.3', good.bytes, good.root), good.bytes)
+    expect(await (await load()).ensureNodeMeetsMinimum(log)).toMatchObject({ reason: null })
+
+    const said = lines.join('\n')
+    expect(said).not.toContain('sentinel')
+    expect(said).toContain('  ✗ Node stays on the one installed: does-not-run')
+    expect(said).toContain('  ✓ Node runtime ready (v24.22.3)')
+  })
+
   it('touches nothing on a computer with no managed Node, and says so when the Node it runs on is too old', async () => {
     const fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)

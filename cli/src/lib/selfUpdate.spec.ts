@@ -615,6 +615,29 @@ describe('the updater when things go wrong', () => {
     expect(readdirSync(dir)).toEqual([])
   })
 
+  it('a refused update names why in words and a kind', async () => {
+    // A canary that never ran: the spawn's message names the interpreter's path, which is under the person's home.
+    vi.resetModules()
+    vi.doMock('./nodeRuntime.js', async (original) => ({ ...await original<typeof import('./nodeRuntime.js')>(), managedNodePath: () => '/Users/sentinel/node' }))
+    try {
+      const { startSelfUpdater: startWithoutNode } = await import('./selfUpdate.js')
+      serve(Buffer.from('console.log("9.9.9")\n'))
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const errors: string[] = []
+      let poller: { stop(): void } | undefined
+      vi.spyOn(console, 'error').mockImplementation((...parts: unknown[]) => { errors.push(parts.map(String).join(' ')); poller?.stop() })
+      poller = startWithoutNode({
+        currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir: tempDir(), intervalMs: 10, onStaged: () => {},
+      })
+      await vi.waitFor(() => expect(errors).toHaveLength(1), { timeout: 5_000 })
+      expect(errors.join('\n')).not.toContain('sentinel')
+      expect(errors[0]).toBe('[update] 9.9.9 failed its canary (ENOENT) — not trying it again for 20 ms')
+    } finally {
+      vi.doUnmock('./nodeRuntime.js')
+      vi.resetModules()
+    }
+  })
+
   it('waits out a busy spawn lock with the build it already verified, and reports any other failure', async () => {
     let downloads = 0
     serve(Buffer.from('#!/usr/bin/env node\nconsole.log("9.9.9")\n'), () => { downloads++ })
@@ -771,10 +794,10 @@ describe('the canary\'s verdicts', () => {
     const dir = tempDir()
     expect(await runCanary(Buffer.from('console.log("9.9.9")\n'), dir, '9.9.9')).toEqual({ ok: true, ptyProtocol: 2 })
     expect(await runCanary(Buffer.from('console.log("loading…"); console.log("9.9.9")\n'), dir, '9.9.9')).toEqual({ ok: true, ptyProtocol: 2 })
-    expect(await runCanary(Buffer.from('console.log("9.9.8")\n'), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', detail: 'it says it is 9.9.8' })
-    expect(await runCanary(Buffer.from(''), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', detail: 'it says it is nothing' })
-    expect(await runCanary(Buffer.from('process.exit(3)\n'), dir, '9.9.9')).toEqual({ ok: false, problem: 'failed', detail: 'exit 3' })
-    expect(await runCanary(Buffer.from('process.kill(process.pid, "SIGKILL")\n'), dir)).toEqual({ ok: false, problem: 'failed', detail: 'signal SIGKILL' })
+    expect(await runCanary(Buffer.from('console.log("9.9.8")\n'), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', ended: 'it says it is 9.9.8' })
+    expect(await runCanary(Buffer.from(''), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', ended: 'it says it is nothing' })
+    expect(await runCanary(Buffer.from('process.exit(3)\n'), dir, '9.9.9')).toEqual({ ok: false, problem: 'failed', ended: 'exit 3' })
+    expect(await runCanary(Buffer.from('process.kill(process.pid, "SIGKILL")\n'), dir)).toEqual({ ok: false, problem: 'failed', ended: 'signal SIGKILL' })
     expect(await canary(Buffer.from('console.log("anything")\n'), dir)).toBe(true)
     expect(await canary(Buffer.from('console.log("9.9.8")\n'), dir, '9.9.9')).toBe(false)
     const file = join(dir, 'not-a-folder')
@@ -796,15 +819,15 @@ describe('the canary\'s verdicts', () => {
 
   it('gives up on a build that does not answer in time, in seconds as in milliseconds', async () => {
     expect(await runCanary(Buffer.from('setInterval(() => {}, 1000)\n'), tempDir(), '9.9.9', 300))
-      .toEqual({ ok: false, problem: 'failed', detail: 'no answer within 300 ms' })
+      .toEqual({ ok: false, problem: 'failed', ended: 'no answer within 300 ms' })
     expect(await runCanary(Buffer.from('setInterval(() => {}, 1000)\n'), tempDir(), '9.9.9', 1_000))
-      .toEqual({ ok: false, problem: 'failed', detail: 'no answer within 1 s' })
+      .toEqual({ ok: false, problem: 'failed', ended: 'no answer within 1 s' })
   })
 
   it('kills a build that ignores the SIGTERM at its deadline, so the next check can run', async () => {
     const started = performance.now()
     const stubborn = Buffer.from("process.on('SIGTERM', () => {})\nsetInterval(() => {}, 1000)\n")
-    expect(await runCanary(stubborn, tempDir(), '9.9.9', 300)).toEqual({ ok: false, problem: 'failed', detail: 'no answer within 300 ms' })
+    expect(await runCanary(stubborn, tempDir(), '9.9.9', 300)).toEqual({ ok: false, problem: 'failed', ended: 'no answer within 300 ms' })
     // SIGTERM at 300 ms, ignored; SIGKILL two seconds on.
     expect(performance.now() - started).toBeLessThan(10_000)
   }, 20_000)
@@ -814,7 +837,7 @@ describe('the canary\'s verdicts', () => {
     vi.doMock('./nodeRuntime.js', () => ({ managedNodePath: () => '/nonexistent/node' }))
     try {
       const { runCanary: runWithoutNode } = await import('./selfUpdate.js')
-      expect(await runWithoutNode(Buffer.from('console.log(1)\n'), tempDir(), '1')).toMatchObject({ ok: false, problem: 'failed', detail: expect.stringContaining('ENOENT') })
+      expect(await runWithoutNode(Buffer.from('console.log(1)\n'), tempDir(), '1')).toMatchObject({ ok: false, problem: 'failed', ended: 'ENOENT' })
     } finally {
       vi.doUnmock('./nodeRuntime.js')
       vi.resetModules()
@@ -846,7 +869,7 @@ describe('the terminal host protocol a build needs (spec §5, the protocol rule)
     expect(await runCanary(Buffer.from('console.log(JSON.stringify({ version: "9.9.9" }))\n'), dir)).toEqual({ ok: true, ptyProtocol: 2 })
     // A G build says its protocol; its JSON version is the one checked.
     expect(await runCanary(build('9.9.9', 3), dir, '9.9.9')).toEqual({ ok: true, ptyProtocol: 3 })
-    expect(await runCanary(build('9.9.8', 3), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', detail: 'it says it is 9.9.8' })
+    expect(await runCanary(build('9.9.8', 3), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', ended: 'it says it is 9.9.8' })
     expect(readdirSync(dir), 'the canary cleans up after itself').toEqual([])
   })
 

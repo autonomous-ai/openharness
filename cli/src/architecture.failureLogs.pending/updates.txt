@@ -1,5 +1,0 @@
-lib/selfUpdate.ts 4
-config/env.ts 2
-lib/secureState.ts 1
-lib/openclawStore.ts 1
-lib/gridWindowsPin.ts 1
