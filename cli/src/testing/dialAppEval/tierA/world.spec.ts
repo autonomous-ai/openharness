@@ -1,5 +1,6 @@
 // Tier A's world (world.ts) with a recording start in place of the devices: what it hands them, and how it records
 // each command, raise and send they make. Every folder is a temp one, on virtual time.
+import { existsSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createCodexQueue } from '../../../cable/hosts/codexQueue.js'
 import type { CoreApi } from '../../../core/api.js'
@@ -50,6 +51,15 @@ describe("tier A's world", () => {
     expect(await deps.windowsRaise!.app('com.openai.codex')).toBe(false)
     expect(await deps.windowsRaise!.link('codex://threads/eval', 'com.openai.codex')).toBe(true)
     expect(world.seen([]).commands.map(({ argv, ok }) => [argv[1], ok])).toEqual([['raise', false], ['open-link', true]])
+  })
+
+  it('closes what a step held open as it closes, while its folder is still there', async () => {
+    const { world } = worldOn('darwin')
+    const closed: boolean[] = []
+    world.onClose(() => closed.push(existsSync(world.codexHome.home)))
+    expect(closed).toEqual([])
+    await world.close()
+    expect(closed).toEqual([true])
   })
 
   it("speaks the same language on every host: the devices' voice language follows LANG", () => {
