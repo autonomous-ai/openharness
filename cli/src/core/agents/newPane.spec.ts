@@ -409,6 +409,17 @@ describe('watching a new pane', () => {
     expect(deps.announceSession).not.toHaveBeenCalled()
   })
 
+  it("a pane that exits before ready logs its output's line count, never a line of it", async () => {
+    const warn = vi.mocked(console.warn)
+    const { deps, watch } = setup()
+    paneState.mockResolvedValue({ dead: false, engineExit: 2 } as never)
+    vi.mocked(deps.captureTerminal).mockResolvedValueOnce('boom /Users/sentinel/x\nmore\n\n')
+    await watch('claude', pending, spawned, ['/Users/sentinel/bin/claude'], undefined)
+    const lines = warn.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+    expect(lines).not.toContain('sentinel')
+    expect(lines).toMatch(/\[agent\] create · claude · agent a1 · "claude" started and exited with status 2 after \S+ · pane output 2 lines/)
+  })
+
   it('backs off between looks, and gives up on a start that never shows, keeping the terminal', async () => {
     const warn = vi.mocked(console.warn)
     const { deps, watch } = setup()
@@ -508,7 +519,7 @@ describe('watching a new pane', () => {
       expect(deps.registry.confirmEngineExit).not.toHaveBeenCalled()
       expect(deps.retainExitedSession).not.toHaveBeenCalled()
       expect(vi.mocked(deps.announceSession).mock.calls.at(-1)![0].launch).toMatchObject({ state: 'failed', error: 'OPENCLAW_FOLDER_IN_USE' })
-      expect(logLines()).toContain('[agent] create failed · openclaw · Another OpenClaw is using this folder. Give each run its own --local folder.')
+      expect(logLines()).toContain('[agent] create failed · openclaw · OPENCLAW_FOLDER_IN_USE')
       expect(logLines().join('\n')).not.toContain('/run/skill-1')
       // Failed into a row the registry no longer has: nothing to announce.
       vi.mocked(deps.registry.setLaunch).mockReturnValueOnce(null)
@@ -635,7 +646,7 @@ describe('watching a new pane', () => {
     expect(deps.registry.confirmEngineExit).not.toHaveBeenCalled()
     expect(deps.retainExitedSession).not.toHaveBeenCalled()
     expect(vi.mocked(console.warn).mock.calls.map(([line]) => String(line)))
-      .toContain('[agent] create failed · openclaw · OpenClaw has no Gateway token. Run openclaw onboard.')
+      .toContain('[agent] create failed · openclaw · OPENCLAW_NO_TOKEN')
   })
 
   it('is ready as soon as its process is seen when the launch has no folder', async () => {
