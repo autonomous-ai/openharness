@@ -123,7 +123,7 @@ components, `ci.yml`, other scripts. It runs the four `test_ci_plan.py` tests th
 cross-read scan among them, on a full checkout with `CROSS_READ_SCAN_REQUIRED=1`: a skipped test fails, and so does a
 run of other than those 4 tests. `process-checks`' sparse checkout skips them. The scan takes about 20 s locally and
 about 0.5 runner-minutes on CI. A string the scan reads as an undeclared path blocks the PR until it is declared in
-`PR_READS` or `DEPENDS`, or added to `NOT_READS` with its reason when it is no read.
+`DEPENDS` (and, for a unit suite, `PR_READS`), or added to `NOT_READS` with its reason when it is no read.
 
 `plan` (actionlint and suite selection), `process-checks` and `ci/required` always
 run (after **Update branch**, untouched components reuse their earlier result: see
