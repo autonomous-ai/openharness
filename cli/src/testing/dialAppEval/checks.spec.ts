@@ -230,6 +230,15 @@ describe('open', () => {
     expect(front('darwin', ['/usr/bin/open', '-b', 'com.openai.codex'])).toBe(0)
   })
 
+  it('the evidence names the tap or swipe it saw, so an input that opened nothing fails with it', () => {
+    const x = scenario([{ kind: 'swipe', session: 'b', label: 'go' }])
+    const results = run(open, x, seen(x, [500]))
+    expect(scores(results)).toEqual({ link: 0, front: 0, latency: 0 })
+    for (const r of results) expect(r.evidence).toEqual(['swipe on b at 500', 'no command'])
+    const opened = run(open, s, seen(s, [500], { commands: [cmd(700, ['/usr/bin/open', '-b', 'com.anthropic.claudefordesktop', link])] }))
+    expect(opened[0]!.evidence).toEqual(['tap on a at 500', 'command at 700: link front'])
+  })
+
   it('latency 3001 ms scores 0, and link: false has no link part', () => {
     const late = seen(s, [500], { commands: [cmd(3501, ['/usr/bin/open', '-b', 'com.anthropic.claudefordesktop'])] })
     expect(scores(run({ ...open, link: false }, s, late))).toEqual({ front: 1, latency: 0 })
