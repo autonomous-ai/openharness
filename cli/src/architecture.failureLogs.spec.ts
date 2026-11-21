@@ -641,6 +641,9 @@ it.each([
   "log(`[x] ${problems.map(function (problem) { return problem.message }).join(' · ')}`)",
   "console.log(`[x] done${ok && result.detail}`)",
   "log(`[x] exited ${code} ${verbose && stderr}`)",
+  // A callback handed to a library: its callers are not the file's to check.
+  "child.stderr.on('data', (output) => console.log(output))",
+  "run().then((output) => console.log(output))",
 ])('finds %s', (code) => expect(failureLogs(code)).not.toEqual([]))
 
 it.each([
@@ -681,6 +684,8 @@ it.each([
   "this.host.log(`cable: ${serialPortName(port.path)} is in use by another program`)",
   "const say = (message: string) => console.log(message)",
   "const deps = { log: (line: string) => console.log(line) }",
+  "const log = deps.log ?? ((message: string) => console.log(message))",
+  "class Viewer { private say(message: string) { console.log(message) } }",
   "import path from 'node:path'; console.log(`[x] ${path.sep}`)",
   "function run() { const r = probe(); log(`[x] ${r.reason}`) } function probe() { return { ok: false, reason: 'busy' } }",
   "function openOf(p: unknown) { return { session: { engine: 'codex', transcriptPath: p } } } const ask = openOf(payload); console.warn(`[engine ${ask.session.engine}] LIVE_OPEN_FAILED`)",
