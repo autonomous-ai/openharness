@@ -93,8 +93,10 @@ fires. `'dropped'` mixes two causes: over the per-session rate (20/s) or the cou
 - Fix: leading-edge, as `gatewayLink.ts:122-135` and `recapsLink.ts:61-74` already do: log the first loss when it
   happens, then count, and log the minute's summary only if more came. Split `'dropped'` into `over the rate` and `no
   devices`. "No devices" is normal on a machine without a dial, so it is logged once per devices-down period (the first
-  loss after devices were last seen up), not per event. Lines carry counts and fixed text only, no session, path or
+  loss after devices were last seen up), not per event. A refused body (a broken or forged hook) is said at once too,
+  as a refused dial hook call is: one rule for every loss. Lines carry counts and fixed text only, no session, path or
   engine:
+  - `[devices] a paneless hook event was refused; more are counted once a minute`
   - `[devices] a paneless hook event was dropped: over 20 a second for its session; more are counted once a minute`
   - `[devices] a paneless hook event was dropped: no devices process; more are counted once a minute`
   - `[devices] paneless hook events in the last minute: 1 refused, 7 over the rate, 3 with no devices process`

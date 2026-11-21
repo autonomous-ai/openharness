@@ -167,10 +167,12 @@ export function createObservedHook(deps: ObservedHookDeps) {
   // daemon's start counts as devices seen up.
   let devicesUp = true
   const tally = minuteCounts(['invalid', 'over', 'no-devices'] as const, {
-    // A refused body is a broken or forged hook, not a lost event: it is only counted.
-    now: (kind) => kind === 'over'
-      ? `[devices] a paneless hook event was dropped: over ${EVENTS_PER_SECOND} a second for its session; more are counted once a minute`
-      : kind === 'no-devices' && devicesUp ? '[devices] a paneless hook event was dropped: no devices process; more are counted once a minute' : null,
+    // A refused body is a broken or forged hook, whose events are lost as the others' are: said at once as well, as a
+    // refused dial hook call is (deviceHookCalls.ts).
+    now: (kind) => kind === 'invalid' ? '[devices] a paneless hook event was refused; more are counted once a minute'
+      : kind === 'over'
+        ? `[devices] a paneless hook event was dropped: over ${EVENTS_PER_SECOND} a second for its session; more are counted once a minute`
+        : devicesUp ? '[devices] a paneless hook event was dropped: no devices process; more are counted once a minute' : null,
     minute: (lost) => `[devices] paneless hook events in the last minute: ${lost.invalid} refused, ${lost.over} over the rate, ${lost['no-devices']} with no devices process`,
   }, deps.log ?? console.warn)
   const note = deps.note ?? console.log
