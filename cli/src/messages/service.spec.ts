@@ -827,15 +827,27 @@ describe('from the owner\'s other machines', () => {
   })
 
   it('refuses a hand-over once too many messages wait on this machine', async () => {
-    const t = setup()
-    for (let i = 0; i < LIMITS.waiting; i++) {
-      const m = { ...incoming(), id: `m${String(i).padStart(7, '0')}` }
-      await t.ask({ action: 'deliver', message: m }, OWNER_REMOTE)
-      t.deliveryEvent({ deliveryId: t.delivered.at(-1)![2], sessionId: 'api', state: 'rejected', reason: 'team_waiting_idle' })
+    // Load the persisted queue for a stopped harness. Rewriting its whole history for every setup delivery made
+    // this boundary test time out under suite load; only the two boundary requests need to run live.
+    const store = new MessageStore(join(root, 'state'))
+    for (let i = 0; i < LIMITS.waiting - 1; i++) {
+      const message = { ...incoming(), id: `m${String(i).padStart(7, '0')}` }
+      store.record(message)
+      store.status({ messageId: message.id, machineId: 'm1', agentId: 'api', state: 'queued', reason: 'its harness is stopped', at: 5 })
+      store.state.local.push({ key: deliveryKey(message.id, 'api'), messageId: message.id, agentId: 'api',
+        pane: '', state: 'queued', reason: 'its harness is stopped', tries: 0, nextTryAt: 0, at: 5 })
     }
+    store.save()
+    const t = setup({ agents: [] })
+    expect(await t.ask({ action: 'deliver', message: incoming() }, OWNER_REMOTE)).toMatchObject({
+      statuses: [expect.objectContaining({ messageId: incoming().id, agentId: 'api', state: 'queued' })],
+    })
     expect(await t.ask({ action: 'deliver', message: { ...incoming(), id: 'mzzzzzzz' } }, OWNER_REMOTE)).toMatchObject({ error: 'MAILBOX_FULL' })
-    // Five hundred deliveries, each saved to disk: about five seconds on a busy machine.
-  }, 30_000)
+    expect(t.delivered).toEqual([])
+    const persisted = new MessageStore(join(root, 'state'))
+    expect(persisted.state.local.filter(delivery => delivery.state === 'queued')).toHaveLength(LIMITS.waiting)
+    expect(persisted.entry('mzzzzzzz')).toBeUndefined()
+  })
 
   it('refuses a message for an agent outside the sender\'s tabs, and one that is not a message', async () => {
     const t = setup()

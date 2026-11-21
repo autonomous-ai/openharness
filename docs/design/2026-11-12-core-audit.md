@@ -321,7 +321,7 @@ with the Swarm on: 563 -> 561 files, 96,222 -> 95,875 lines; off, 548 files, 94,
   Its finite 128-frame/8 MiB loading queue has a five-second timeout and never blocks terminal input;
   shared cleanup holds unknown tab membership until resolved or physically closed.
   Main's duplicate pane/tab/unread records are removed, but the loaded owner still runs and
-  retains old-client state in the core process. Its old aggregate retention remains unbounded.
+  retains old-client state in the core process, bounded to 128 reporters and 8 MiB of encoded input.
   It preserves latest-live reporter selection and Devices-only restart recovery. Remove the
   door only after an ordering-safe Desktop replay migration has shipped and its actual release
   date has started the thirty-day compatibility window; no expiry date is invented here.

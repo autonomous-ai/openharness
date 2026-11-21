@@ -415,8 +415,21 @@ it('starts with the existing binding as authority when no hook watermark exists 
   await f.hook(a, 200, boundAt - 1)
   await vi.waitFor(() => expect(f.logs.some(line => line.includes('ignored · stale_hook'))).toBe(true))
   expect(f.current().sessionId).toBe(b)
-  await f.hook(a, 200, boundAt + 1)
-  await vi.waitFor(() => expect(f.current().sessionId).toBe(a))
+  let entered!: () => void, release!: () => void
+  const preparing = new Promise<void>(resolve => { entered = resolve })
+  const held = new Promise<void>(resolve => { release = resolve })
+  inspection.prepare = async () => { inspection.prepare = undefined; entered(); await held }
+  // A 200 reply admits the hook to the queue, not the registry. Wait for the caller's completion
+  // notification after real storage publication, without imposing waitFor's one-second disk budget.
+  const registered = new Promise<void>(resolve => { f.registered.mockImplementationOnce(() => resolve()) })
+  try {
+    await f.hook(a, 200, boundAt + 1)
+    await preparing
+    expect(f.current().sessionId).toBe(b)
+    expect(f.registered).not.toHaveBeenCalled()
+  } finally { release() }
+  await registered
+  expect(f.current().sessionId).toBe(a)
   expect(f.registered).toHaveBeenCalledOnce()
 })
 
