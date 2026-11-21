@@ -5,6 +5,7 @@
  * scenario says. Nothing it hands the devices starts a process or reads this machine: the readers of the machine are
  * the spec's mocks (dialAppEval.spec.ts), answering from the model (machine.ts).
  */
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, relative } from 'node:path'
@@ -15,7 +16,7 @@ import { CodexAppThreads } from '../../../cable/hosts/codexAppThreads.js'
 import { windowClasses } from '../../../cable/hosts/frontApp.js'
 import type { HcClient } from '../../../cable/hosts/hcClient.js'
 import type { HerdrClient } from '../../../cable/hosts/herdrClient.js'
-import { createLinuxRaise } from '../../../cable/hosts/linuxRaise.js'
+import { createLinuxRaise, type LinuxRaise } from '../../../cable/hosts/linuxRaise.js'
 import type { OpencodeClient } from '../../../cable/hosts/opencodeClient.js'
 import type { OrcaReadDeps, OrcaReads } from '../../../cable/hosts/orca.js'
 import { env } from '../../../config/env.js'
@@ -316,6 +317,31 @@ export class World implements TierAWorld {
     })
   }
 
+  /**
+   * Linux's raise: the real one (linuxRaise.ts), its ready and its walk of the session's parents, on a desktop that takes
+   * a window by its process (X11, as sway, Hyprland and KDE do); GNOME's raise by the app's class alone is not graded.
+   * Its backend's command is `raise [--app <app id>] [--pid <pid>]… [--class <class>]…`: the app the devices asked it to
+   * raise, each raise its own however many run at once, then the pids nearest first and the classes as frontApp.ts
+   * windowClasses spells them, what the real raise hands every desktop's backend.
+   */
+  private linuxRaise(): LinuxRaise {
+    const asked = new AsyncLocalStorage<string | undefined>()
+    const real = createLinuxRaise({
+      find: async () => ({ kind: 'x11', display: ':0' }),
+      backend: () => ({
+        raise: async ({ pids, classes }) => {
+          const app = asked.getStore()
+          return this.ran(['raise', ...(app === undefined ? [] : ['--app', app]), ...pids.flatMap((pid) => ['--pid', String(pid)]),
+            ...classes.flatMap((name) => ['--class', name])]).code === 0
+        },
+      }),
+      processes: async () => [...machine.processes.values()].map(({ pid, ppid }) => ({ pid, ppid })),
+      classes: windowClasses,
+      log: () => {},
+    })
+    return { ready: (window) => real.ready(window), raise: (window) => asked.run(window.app, () => real.raise(window)) }
+  }
+
   private deps(root: string, installed: boolean): DevicesDeps {
     const { platform, scenario } = this
     const typed = (text: string): void => this.deliver({ path: 'typed', target: null, text })
@@ -388,21 +414,8 @@ export class World implements TierAWorld {
       processParents: async () => [...machine.processes.values()].map(({ pid, ppid }) => ({ pid, ppid })),
       claudeFullscreen: async () => false,
       processGroups: async () => undefined,
-      // Linux's and Windows' ways to bring a window forward, as the commands the checks read (checks.ts fronts). On Linux
-      // the real raise (linuxRaise.ts), its ready and its walk of the session's parents, on a desktop that takes a window
-      // by its process (X11, as sway, Hyprland and KDE do): GNOME's raise by the app's class alone is not graded. Its
-      // backend's command is `raise [--pid <pid>]… [--class <class>]…`, the pids nearest first and the classes as
-      // frontApp.ts windowClasses spells them: what the real raise hands every desktop's backend.
-      raise: platform === 'linux' ? createLinuxRaise({
-        find: async () => ({ kind: 'x11', display: ':0' }),
-        backend: () => ({
-          raise: async ({ pids, classes }) => this.ran(['raise', ...pids.flatMap((pid) => ['--pid', String(pid)]),
-            ...classes.flatMap((name) => ['--class', name])]).code === 0,
-        }),
-        processes: async () => [...machine.processes.values()].map(({ pid, ppid }) => ({ pid, ppid })),
-        classes: windowClasses,
-        log: () => {},
-      }) : undefined,
+      // Linux's and Windows' ways to bring a window forward, as the commands the checks read (checks.ts fronts).
+      raise: platform === 'linux' ? this.linuxRaise() : undefined,
       windowsRaise: platform === 'win32' ? {
         app: async (bundle) => this.ran(['harness-pty', 'raise', bundle]).code === 0,
         link: async (url, bundle) => this.ran(['harness-pty', 'open-link', url, ...(bundle ? [bundle] : [])]).code === 0,
