@@ -236,6 +236,18 @@ export const MAIN: Scenario[] = [
     probes: [{ id: 'focus', kind: 'focus', dim: 'D7', session: 'z', after: 'replug' }],
   }),
   scenario({
+    id: 'C12', app: 'claude', title: 'Voice on a running, idle session: the exact words reach it, once',
+    dims: ['D5'], sessions: [...claudeSessions(['a']), claudeGhost],
+    steps: [
+      { kind: 'claude.write', sessions: ['a'] },
+      { kind: 'hook', session: 'a', event: 'start' },
+      ...listed('claude', ['a']),
+      { label: 'voice', kind: 'voice', transcript: 'Eval words for alpha.', target: 'a' },
+    ],
+    checks: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'a', text: 'Eval words for alpha.', after: 'voice' }],
+    probes: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'z', text: 'Eval words for alpha.', after: 'voice' }],
+  }),
+  scenario({
     id: 'X1', app: 'chatgpt', title: 'Three projects and eight threads: the ring in the sidebar\'s order, by Codex\'s names',
     dims: ['D1'],
     sessions: [

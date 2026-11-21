@@ -101,6 +101,7 @@ as the real app does. Without it C8 and C10 could never pass, even once their be
   D1, D7)
 - **C10.** Quit the app and relaunch it → the ring comes back right, no duplicate rows. (D7, D1)
 - **C11.** Unplug and replug the dial → the ring and the focused row come back. (D7)
+- **C12.** Voice on a running, idle Claude-app session → the exact text reaches it, once. (D5)
 
 ### Main set: the ChatGPT app
 
@@ -122,7 +123,7 @@ as the real app does. Without it C8 and C10 could never pass, even once their be
   watch reports only the front window's title, so this is a run of title lines) → the dial ends on the last one's
   thread and never bounces back to an earlier one (the echo rules). (D2, D7)
 
-### Held-out set (6 of 28, 21%)
+### Held-out set (6 of 29, 21%)
 
 In their own file (`heldOut.ts` beside the catalog; the tier B ones in their own e2e file), scored and reported
 separately, never in the headline score. Whoever fixes a failing group does not read them (the file's header says so).
