@@ -324,11 +324,12 @@ void main() {
   // `harness uninstall` holds its marker while it removes the CLI: a `harness auth status` run then starts a CLI out
   // of the files being removed, and on Windows holds them so the removal fails.
   test(
-    'ensureCliDaemonReady runs no harness auth status while uninstall holds its marker',
+    'ensureCliDaemonReady runs no harness auth status while uninstall holds its marker, and asks again once the marker is gone',
     () async {
+      var held = true;
       final discovery = _ScriptedDiscovery([
         const LocalCliProbe.down('connection refused'),
-      ], uninstalling: () => true);
+      ], uninstalling: () => held);
       final cli = _SignedInCli();
       final notifier = _Notifier(discovery, cli: cli);
       addTearDown(notifier.dispose);
@@ -344,21 +345,6 @@ void main() {
         ),
       );
       expect(cli.checks, 0);
-    },
-  );
-
-  test(
-    'ensureCliDaemonReady runs no harness auth status while uninstall holds its marker, and asks again once the marker is gone',
-    () async {
-      var held = true;
-      final discovery = _ScriptedDiscovery([
-        const LocalCliProbe.down('connection refused'),
-      ], uninstalling: () => held);
-      final cli = _SignedInCli();
-      final notifier = _Notifier(discovery, cli: cli);
-      addTearDown(notifier.dispose);
-
-      await expectLater(notifier.ensureCliDaemonReady(), throwsStateError);
       held = false;
       await expectLater(notifier.ensureCliDaemonReady(), throwsStateError);
       expect(cli.checks, 1);
