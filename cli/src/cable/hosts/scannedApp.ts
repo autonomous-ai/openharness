@@ -1,6 +1,6 @@
 // Which app a session the open scan found runs in, from its parent processes' executables alone
 // (docs/specs/2026-11-14-dial-app-filter.md, "The scan learns the app where that is cheap"), and which host made the
-// pseudo-terminal a hook's caller runs on (ptyOwner). Nothing else of a process is read but the terminal it runs on: its
+// pseudo-terminal a hook's caller runs on (ptyMaker). Nothing else of a process is read but the terminal it runs on: its
 // environment holds secrets, and its name is outside text (a process can write a prompt there), so a name is matched
 // against the tables and dropped, never kept, logged or sent.
 
@@ -153,7 +153,7 @@ function nearestApp(bundles: readonly string[], ids: ReadonlyMap<string, string 
 /** A process and up to WALK_PARENTS of its parents, nearest first, from one read of the table: a pid the table does not
  *  hold starts none. A parent that started after its child ends it: Windows hands a freed pid to the next process and
  *  never reparents, so that is another process on the old pid (lib/callerPane.ts). The open scan reads their names, a
- *  tap on a tmux pane their ids (tmux.ts), ptyOwner their terminals, and the VS Code match their pids. */
+ *  tap on a tmux pane their ids (tmux.ts), ptyMaker their terminals, and the VS Code match their pids. */
 export function parentChain<P extends Pick<ProcessName, 'pid' | 'ppid'> & { startMarker?: string }>(pid: number, table: ReadonlyMap<number, P>): P[] {
   const chain: P[] = []
   const passed = new Set<number>()
@@ -177,7 +177,11 @@ function startedAfter(parent: { startMarker?: string }, child: { startMarker?: s
 
 /** The hosts whose panes the dial reaches, by the name of the process that makes a pane's pseudo-terminal: a terminal's
  *  own (WezTerm's GUI, or its mux server, which Linux cuts to 15 characters) or a multiplexer's server (tmux's names
- *  itself so on Linux). macOS names each by its path. */
+ *  itself so on Linux). macOS names each by its path. herdr's server, a child of its first client on no terminal
+ *  (RECORDED_HERDR), names itself `herdr`, as its client does, which made the panes before herdr 0.9.0 (`--no-session`).
+ *  Orca's terminal host, per RECORDED_ORCA: `Orca Agents` on macOS, the daemon that renames itself `orca-agents` on
+ *  Linux (.deb and AppImage), and the app itself, `orca-ide`, when the daemon could not start. Orca from before its
+ *  terminal host, and a Linux daemon whose rename failed (`node`), are not covered. */
 const PTY_HOSTS: Readonly<Record<string, string>> = {
   'wezterm-gui': 'wezterm',
   'wezterm-mux-server': 'wezterm',
@@ -186,34 +190,49 @@ const PTY_HOSTS: Readonly<Record<string, string>> = {
   zellij: 'zellij',
   tmux: 'tmux',
   'tmux: server': 'tmux',
+  herdr: 'herdr',
+  'Orca Agents': 'orca',
+  'orca-agents': 'orca',
+  'orca-ide': 'orca',
 }
 
+/** The process that made a pseudo-terminal, and its host when PTY_HOSTS lists it. */
+export interface PtyMaker { pid: number; host?: string }
+
 /**
- * The host that made the pseudo-terminal a process runs on: of it and its parents (parentChain), the first on another
+ * The process that made the pseudo-terminal a process runs on: of it and its parents (parentChain), the first on another
  * terminal or on none. Its environment cannot say: a terminal, an editor or a multiplexer started from a host's pane
- * keeps that pane's variables. None when the process runs on no terminal, the walk ends first, or that process is no
- * host the dial types into. Its name is matched and dropped, never kept.
+ * keeps that pane's variables. None when the process runs on no terminal or the walk ends first. Its name is matched
+ * and dropped, never kept.
  */
-export function ptyOwner(pid: number, rows: readonly PtyProcess[]): string | undefined {
+export function ptyMaker(pid: number, rows: readonly PtyProcess[]): PtyMaker | undefined {
   const [own, ...parents] = parentChain(pid, new Map(rows.map((p) => [p.pid, p])))
   if (own?.tty === undefined) return undefined
   const maker = parents.find((p) => p.tty !== own.tty)
-  const name = maker && basename(maker.executable)
-  return name !== undefined && Object.hasOwn(PTY_HOSTS, name) ? PTY_HOSTS[name] : undefined
+  if (!maker) return undefined
+  const name = basename(maker.executable)
+  return Object.hasOwn(PTY_HOSTS, name) ? { pid: maker.pid, host: PTY_HOSTS[name] } : { pid: maker.pid }
 }
 
-/** ptyOwner over [rows], which hold no terminal: the caller's and its parents' are read one at a time ([tty],
- *  readTtyName), up to the first on another terminal or none, past which ptyOwner never looks. */
-export async function readPtyOwner(
+/** ptyMaker over [rows], which hold no terminal: the caller's and its parents' are read one at a time ([tty],
+ *  readTtyName), up to the first on another terminal or none, past which ptyMaker never looks. */
+export async function readPtyMaker(
   pid: number, rows: readonly ProcessName[], tty: (pid: number) => Promise<string | undefined>,
-): Promise<string | undefined> {
+): Promise<PtyMaker | undefined> {
   const read: PtyProcess[] = []
   for (const p of parentChain(pid, new Map(rows.map((r) => [r.pid, r])))) {
     const on = await tty(p.pid)
     read.push(on === undefined ? p : { ...p, tty: on })
     if (on === undefined || on !== read[0].tty) break
   }
-  return ptyOwner(pid, read)
+  return ptyMaker(pid, read)
+}
+
+/** readPtyMaker's host alone. */
+export async function readPtyOwner(
+  pid: number, rows: readonly ProcessName[], tty: (pid: number) => Promise<string | undefined>,
+): Promise<string | undefined> {
+  return (await readPtyMaker(pid, rows, tty))?.host
 }
 
 /** The app each of these processes runs in, read from this machine. */

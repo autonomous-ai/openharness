@@ -6,8 +6,9 @@ import type { TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
 import { RECORDED_KITTY } from '../../testing/recordedKitty.js'
 import type { Place } from './adapter.js'
 import { APP_BUNDLES } from './hostDetect.js'
-import { createKittyAdapter, kittyFinder, type KittyDeps } from './kitty.js'
+import { createKittyAdapter, createKittyTabAdapter, kittyFinder, type KittyDeps } from './kitty.js'
 import { MAX_TEXT } from './orca.js'
+import type { ProcessName } from './scannedApp.js'
 
 /** The person's login shell, as the finder asks it: never this machine's own. It answers [answer] for any name. */
 const shell = vi.hoisted(() => ({ asked: [] as string[], answer: null as string | null }))
@@ -36,7 +37,8 @@ vi.mock('../../lib/binaryOnPath.js', async (real) => {
 const FAKE_KITTEN = '/fake/bin/kitten'
 const {
   env, envFromConf, envRemoteControlOff, focusWindow, sendText, sendTextBackslash, sendKeyOtherActive,
-  sendTextOtherActive, enter, kittyAt, kittyPlusKitten, remoteControlOff, noSocket, missingWindow,
+  sendTextOtherActive, enter, kittyAt, kittyPlusKitten, remoteControlOff, noSocket, missingWindow, focusWindowPid,
+  focusWindowPidDescendant,
 } = RECORDED_KITTY
 /** kitten where the finder found it, off the devices' PATH. */
 const FOUND = async (): Promise<TmuxPathOutcome> => ({ state: 'adopted', path: FAKE_KITTEN, from: '/fake/bin' })
@@ -81,6 +83,8 @@ const place = (hints: Record<string, string> = env, host = 'kitty', ptyOwner: st
   ({ host, app: 'kitty', hints, ...(ptyOwner === null ? {} : { ptyOwner }) })
 const pane = (id: string) => ({ adapter: 'kitty', id })
 const OWN = pane(`1@${env.KITTY_LISTEN_ON}`)
+/** The window of an agent kitty did not make the terminal of, as paneOf gives it. */
+const HELD = { ...pane(`held:${OWN.id}`), held: true }
 /** A recorded argv, run as the adapter runs it: the binary where it was found, then the arguments. */
 const ran = (args: readonly string[], file = FAKE_KITTEN): Call => ({ file, args: args.slice(1), timeoutMs: 10_000 })
 const typing = (text: string, id = '1', to: string = env.KITTY_LISTEN_ON): Call[] => [
@@ -154,7 +158,7 @@ describe('the kitty adapter', () => {
     ]
     for (const at of held) {
       const found = adapter.paneOf(at)!
-      expect(found, `${at.host} ${at.ptyOwner}`).toEqual(pane(`held:${OWN.id}`))
+      expect(found, `${at.host} ${at.ptyOwner}`).toEqual(HELD)
       expect(adapter.canFocus(found)).toBe(true)
       expect(adapter.canType(found)).toBe(false)
       expect(await adapter.type(found, 'hello', 'claude')).toBe(false)
@@ -164,12 +168,22 @@ describe('the kitty adapter', () => {
     expect(calls).toEqual([ran(focusWindow.args)])
   })
 
+  // The observed source reads the field alone, never an id's form: a held window is tapped after the agent's other panes,
+  // and takes no words, rest or key.
+  it('a held pane says so; an own one does not', () => {
+    const { adapter } = recorder()
+    expect(adapter.paneOf(place())).toStrictEqual(OWN)
+    for (const ptyOwner of [undefined, null, 'wezterm']) {
+      expect(adapter.paneOf({ ...place(), ptyOwner }), String(ptyOwner)).toStrictEqual(HELD)
+    }
+  })
+
   // VS Code, WezTerm, screen or nvim's :terminal started from kitty window 1 carries KITTY_WINDOW_ID=1, and detectHost
   // says kitty.
   it('a terminal started from the window takes no words', async () => {
     const { calls, adapter } = recorder()
     const found = adapter.paneOf(place({ ...env, TERM_PROGRAM: 'vscode' }, 'kitty', null))!
-    expect(found).toEqual(pane(`held:${OWN.id}`))
+    expect(found).toEqual(HELD)
     expect(adapter.canType(found)).toBe(false)
     expect(await adapter.type(found, 'hello', 'claude')).toBe(false)
     expect(calls).toEqual([])
@@ -382,6 +396,169 @@ describe('kitty\'s binary', () => {
     expect(await adapter.focus(pane(`held:${OWN.id}`))).toBe(false)
     expect(await adapter.type(OWN, 'hello', 'claude')).toBe(false)
     expect(calls).toEqual([])
+  })
+})
+
+/** The recording's window 1 under its kitty: kitty's child `sh` 1430, its `sh` 1431, and that one's process 1432, here a
+ *  multiplexer's client; kitty's own pid was not recorded. */
+const KITTY_TABLE: ProcessName[] = [
+  { pid: 1, ppid: 0, executable: 'init' },
+  { pid: 1420, ppid: 1, executable: 'kitty' },
+  { pid: 1430, ppid: 1420, executable: 'sh' },
+  { pid: 1431, ppid: 1430, executable: 'sh' },
+  { pid: 1432, ppid: 1431, executable: 'herdr' },
+]
+const CLIENT = 1432
+/** The terminal each of KITTY_TABLE's processes runs on (readTtyName): kitty's own window's, and none for kitty. */
+const KITTY_TTYS: ReadonlyMap<number, string> = new Map([[1430, '/dev/pts/0'], [1431, '/dev/pts/0'], [1432, '/dev/pts/0']])
+/** The pid kitty matches a window by: the window's own process alone (focusWindowPid, focusWindowPidDescendant). */
+const WINDOW_PROCESS = focusWindowPid.args.at(-1)!
+
+/** kitty's tab adapter, with a runner that answers as the recorded kitty did: `focus-window --match pid:` finds a window
+ *  on a socket in form only by its own process; [table] is the machine's processes, [tty] reads a
+ *  process's terminal, and kitty is in front. */
+function tabRecorder(over: Partial<KittyDeps> = {}, table: () => Promise<readonly ProcessName[]> = async () => KITTY_TABLE,
+  tty: (pid: number) => Promise<string | undefined> = async (pid) => KITTY_TTYS.get(pid)) {
+  const calls: Call[] = []
+  const owners: string[] = []
+  let front: string | undefined = 'kitty'
+  let reads = 0
+  const adapter = createKittyTabAdapter({
+    run: async (file, args, timeoutMs) => {
+      calls.push({ file, args, timeoutMs })
+      return { code: args.at(-1) === WINDOW_PROCESS ? focusWindowPid.code : focusWindowPidDescendant.code, stdout: '' }
+    },
+    kitty: FOUND,
+    platform: 'linux',
+    log: () => {},
+    uid: UID,
+    socketOwner: (path) => {
+      owners.push(path)
+      return path === '/tmp/kitty' ? UID : null
+    },
+    ...over,
+    front: () => front,
+    processes: () => { reads++; return table() },
+    tty,
+  })
+  return { calls, owners, adapter, reads: () => reads, toFront: (app: string | undefined) => { front = app } }
+}
+
+/** An agent in a multiplexer whose client is in a kitty window, as the outer lookup placed it. */
+const outerPlace = (outer?: Place['outer'], hints: Record<string, string> = { KITTY_LISTEN_ON: env.KITTY_LISTEN_ON }): Place =>
+  ({ host: 'herdr', app: 'kitty', hints, ...(outer ? { outer } : {}) })
+const tab = (id: string) => ({ adapter: 'kitty-tab', id })
+const CLIENT_TAB = tab(`${CLIENT}@${env.KITTY_LISTEN_ON}`)
+
+describe("kitty's tab of an outer place", () => {
+  it("a place in kitty by its client's process and the hinted socket is a tab after the app", () => {
+    const { adapter, calls, owners } = tabRecorder()
+    expect(adapter.id).toBe('kitty-tab')
+    expect(adapter.tap).toBe('after')
+    expect(adapter.paneOf(outerPlace({ app: 'kitty', tty: '/dev/pts/0', pid: CLIENT }))).toStrictEqual(CLIENT_TAB)
+    expect(adapter.paneOf(outerPlace({ app: 'kitty', pid: CLIENT }, { KITTY_LISTEN_ON: 'unix:@mykitty' })))
+      .toStrictEqual(tab(`${CLIENT}@unix:@mykitty`))
+    expect(adapter.canFocus(CLIENT_TAB)).toBe(true)
+    const notTabs: Array<Place['outer']> = [undefined, { app: 'wezterm', pid: CLIENT }, { app: 'kitty' },
+      { app: 'kitty', tty: '/dev/pts/0' }, ...[0, -1, 1.5, 12345678901].map((pid) => ({ app: 'kitty', pid }))]
+    for (const outer of notTabs) expect(adapter.paneOf(outerPlace(outer)), JSON.stringify(outer)).toBeUndefined()
+    // No socket hint, or one out of form: no tab.
+    const notSockets: Array<Record<string, string>> = [{}, { KITTY_LISTEN_ON: 'tcp:localhost:5000' }, { KITTY_LISTEN_ON: 'unix:/tmp/a b' },
+      { KITTY_LISTEN_ON: '' }]
+    for (const hints of notSockets) {
+      expect(adapter.paneOf(outerPlace({ app: 'kitty', pid: CLIENT }, hints)), JSON.stringify(hints)).toBeUndefined()
+    }
+    for (const id of ['1432', '@unix:/tmp/kitty', '0@unix:/tmp/kitty', '1432@unix:kitty', '1432@', 'held:1432@unix:/tmp/kitty']) {
+      expect(adapter.canFocus(tab(id)), id).toBe(false)
+    }
+    // An abstract socket is Linux's alone.
+    const mac = tabRecorder({ platform: 'darwin' }).adapter
+    expect(mac.paneOf(outerPlace({ app: 'kitty', pid: CLIENT }))).toStrictEqual(CLIENT_TAB)
+    expect(mac.paneOf(outerPlace({ app: 'kitty', pid: CLIENT }, { KITTY_LISTEN_ON: 'unix:@mykitty' }))).toBeUndefined()
+    const windows = tabRecorder({ platform: 'win32' }).adapter
+    expect(windows.paneOf(outerPlace({ app: 'kitty', pid: CLIENT }))).toBeUndefined()
+    expect(windows.canFocus(CLIENT_TAB)).toBe(false)
+    expect(calls).toEqual([])
+    expect(owners).toEqual([])
+  })
+
+  it('a rest only while kitty is in front', () => {
+    const { adapter, toFront, calls } = tabRecorder()
+    expect(adapter.canShow(CLIENT_TAB)).toBe(true)
+    expect(adapter.canShow(tab('1432@unix:kitty'))).toBe(false)
+    for (const app of ['wezterm', 'terminal-app', undefined]) {
+      toFront(app)
+      expect(adapter.canShow(CLIENT_TAB), String(app)).toBe(false)
+    }
+    expect(calls).toEqual([])
+  })
+
+  // `focus-window --match pid:` matches a window's own process alone, kitty's child (RECORDED_KITTY.focusWindowPid),
+  // never one below it (focusWindowPidDescendant), and the match makes the window's tab active.
+  it('show focuses the window whose own process holds the client', async () => {
+    expect(focusWindowPid.tabActive).toBe(true)
+    const { calls, adapter, reads } = tabRecorder()
+    expect(await adapter.show(CLIENT_TAB, 'agent-1')).toBe('ok')
+    expect(calls).toEqual([ran(focusWindowPid.args)])
+    expect(reads()).toBe(1)
+    // A client kitty started itself is its window's own process.
+    expect(await adapter.focus(tab(`1430@${env.KITTY_LISTEN_ON}`))).toBe(true)
+    expect(calls.slice(1)).toEqual([ran(focusWindowPid.args)])
+    // macOS names kitty by its path.
+    const mac = tabRecorder({ platform: 'darwin' }, async () =>
+      KITTY_TABLE.map((p) => (p.executable === 'kitty' ? { ...p, executable: '/Applications/kitty.app/Contents/MacOS/kitty' } : p)))
+    expect(await mac.adapter.show(CLIENT_TAB, 'agent-1')).toBe('ok')
+    expect(mac.calls).toEqual([ran(focusWindowPid.args)])
+  })
+
+  // A terminal kitty does not list (xterm, Alacritty) opened from a kitty window leaves kitty the nearest app among the
+  // client's parents, but kitty did not make the client's terminal: focusing the window that started it raises a
+  // window the agent is not in.
+  it('a client in a terminal started from a kitty window: no kitty window is focused', async () => {
+    const table: ProcessName[] = [
+      { pid: 1, ppid: 0, executable: 'init' },
+      { pid: 1420, ppid: 1, executable: 'kitty' },
+      { pid: 1430, ppid: 1420, executable: 'sh' },
+      { pid: 1440, ppid: 1430, executable: 'xterm' },
+      { pid: 1450, ppid: 1440, executable: 'sh' },
+      { pid: 1460, ppid: 1450, executable: 'herdr' },
+    ]
+    const ttys = new Map([[1430, '/dev/pts/0'], [1440, '/dev/pts/0'], [1450, '/dev/pts/1'], [1460, '/dev/pts/1']])
+    const { calls, adapter } = tabRecorder({}, async () => table, async (pid) => ttys.get(pid))
+    const client = tab(`1460@${env.KITTY_LISTEN_ON}`)
+    expect(await adapter.show(client, 'agent-1')).toBe('failed')
+    expect(await adapter.focus(client)).toBe(false)
+    expect(calls).toEqual([])
+  })
+
+  it("no kitty among the client's parents, or its terminal not read: nothing runs", async () => {
+    const noKitty = KITTY_TABLE.map((p) => (p.executable === 'kitty' ? { ...p, executable: 'gnome-terminal-server' } : p))
+    const tables = [async () => noKitty, async () => KITTY_TABLE.filter((p) => p.pid !== CLIENT),
+      async (): Promise<ProcessName[]> => { throw new Error('process table not read') }]
+    for (const table of tables) {
+      const { calls, adapter } = tabRecorder({}, table)
+      expect(await adapter.show(CLIENT_TAB, 'agent-1')).toBe('failed')
+      expect(await adapter.focus(CLIENT_TAB)).toBe(false)
+      expect(calls).toEqual([])
+    }
+    // The client's terminal could not be read: no maker, no window.
+    const unread = tabRecorder({}, async () => KITTY_TABLE, async () => { throw new Error('tty not read') })
+    expect(await unread.adapter.show(CLIENT_TAB, 'agent-1')).toBe('failed')
+    expect(unread.calls).toEqual([])
+  })
+
+  // Another account's kitty would show that account's window. An abstract socket has no owner to read: a focus there
+  // costs a look, never words, as the kitty adapter's own tap.
+  it("a socket at a path not this account's: nothing runs; an abstract socket takes the focus", async () => {
+    const theirs = tabRecorder({ socketOwner: () => 1001 })
+    expect(await theirs.adapter.show(CLIENT_TAB, 'agent-1')).toBe('failed')
+    expect(await theirs.adapter.focus(CLIENT_TAB)).toBe(false)
+    expect(theirs.calls).toEqual([])
+    expect(theirs.reads()).toBe(0)
+    const abstract = tabRecorder()
+    expect(await abstract.adapter.focus(tab(`${CLIENT}@unix:@mykitty`))).toBe(true)
+    expect(abstract.calls).toEqual([ran(['kitten', '@', '--to', 'unix:@mykitty', 'focus-window', '--match', WINDOW_PROCESS])])
+    expect(abstract.owners).toEqual([])
   })
 })
 

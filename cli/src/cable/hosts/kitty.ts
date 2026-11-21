@@ -6,6 +6,11 @@
  * against their form before each command, which runs with no shell, and a socket at a path is spoken to only when it is
  * this account's. Linux's abstract socket has no owner to read, so it takes a tap alone. kitty's binary is found as the
  * core finds tmux (kittyFinder): the master's PATH may hold none.
+ *
+ * kitty's tab of an outer place (docs/plans/2026-11-21-dial-linux-followups-design.md, "The tab"): the kitty window
+ * holding a multiplexer's client, focused by its own process on the socket the agent's hints name, after kitty is in
+ * front. kitty matches a window by its own process alone (RECORDED_KITTY.focusWindowPid), and its `ls` is never read:
+ * it holds the windows' environment.
  */
 import { dirname, join } from 'node:path'
 import { binaryOnPath, resolveBinaryOnPath } from '../../lib/binaryOnPath.js'
@@ -14,6 +19,9 @@ import { resolveViaLoginShell, tmuxInstallDirectories, type TmuxPathOutcome } fr
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { APP_BUNDLES } from './hostDetect.js'
 import { CONTROL, MAX_TEXT, RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
+import { parentChain, readPtyMaker, type ProcessName } from './scannedApp.js'
+import { PID } from './tmux.js'
+import type { PaneSwitch } from './types.js'
 
 const APP_KITTEN = '/Applications/kitty.app/Contents/MacOS/kitten'
 const WINDOW_ID = /^[0-9]{1,9}$/
@@ -25,6 +33,8 @@ const ABSTRACT_SOCKET = /^unix:@[A-Za-z0-9._-]{1,58}$/
 const HELD = 'held:'
 /** `<window>@<socket>`, held or not. A window id holds no `@`, so the first one ends it. */
 const PANE = /^(held:)?([0-9]{1,9})@(.+)$/
+/** `<client's pid>@<socket>`: a tab of an outer place. */
+const TAB = /^([1-9][0-9]{0,9})@(.+)$/
 
 export interface KittyDeps {
   run: OrcaDeps['run']
@@ -63,6 +73,18 @@ function socketOf(platform: NodeJS.Platform, listenOn: string): { listenOn: stri
   return platform === 'linux' && ABSTRACT_SOCKET.test(listenOn) ? { listenOn } : undefined
 }
 
+// Another account's socket would take the dial's words to that account's kitty. An abstract socket has no owner to read,
+// and once kitty is gone any account may take its name: a tap there costs a look, words would run at that account's
+// prompt. So only a socket at a path that is this account's takes words.
+const ours = (deps: KittyDeps, path: string | undefined): boolean => path === undefined || deps.socketOwner(path) === deps.uid
+
+/** One `@` command to the window's kitty where kitty was found; false when none was or it did not exit 0. */
+async function remote(deps: KittyDeps, listenOn: string, args: string[]): Promise<boolean> {
+  const found = await deps.kitty()
+  if (found.state === 'absent') return false
+  return (await deps.run(found.state === 'adopted' ? found.path : 'kitten', ['@', '--to', listenOn, ...args], RUN_TIMEOUT_MS)).code === 0
+}
+
 export function createKittyAdapter(deps: KittyDeps): HostAdapter & Required<Pick<HostAdapter, 'type' | 'canType'>> {
   // Per window, the words being typed: two sends at once would mix in its prompt. Busy queues nothing.
   const sending = new Set<string>()
@@ -73,19 +95,9 @@ export function createKittyAdapter(deps: KittyDeps): HostAdapter & Required<Pick
     const socket = parts && socketOf(deps.platform, parts[3])
     return socket ? { own: !parts[1], id: parts[2], ...socket } : undefined
   }
-  // Another account's socket would take the dial's words to that account's kitty. An abstract socket has no owner to read,
-  // and once kitty is gone any account may take its name: a tap there costs a look, words would run at that account's
-  // prompt. So only a socket at a path that is this account's takes words.
-  const ours = (path: string | undefined): boolean => path === undefined || deps.socketOwner(path) === deps.uid
   const typable = (pane: Pane) => {
     const at = windowOf(pane)
     return at?.own && at.path !== undefined ? at : undefined
-  }
-  /** One `@` command to the window's kitty where kitty was found; false when none was or it did not exit 0. */
-  const remote = async (listenOn: string, args: string[]): Promise<boolean> => {
-    const found = await deps.kitty()
-    if (found.state === 'absent') return false
-    return (await deps.run(found.state === 'adopted' ? found.path : 'kitten', ['@', '--to', listenOn, ...args], RUN_TIMEOUT_MS)).code === 0
   }
 
   return {
@@ -107,18 +119,19 @@ export function createKittyAdapter(deps: KittyDeps): HostAdapter & Required<Pick
       // A multiplexer, a terminal or an editor started in a kitty window keeps its variables, and that window shows
       // whichever of their panes is in front, or a shell that runs what is typed: only a window kitty made the agent's
       // terminal for takes words. Any other only focuses.
-      return { adapter: 'kitty', id: `${place.ptyOwner === 'kitty' ? '' : HELD}${id}@${listenOn}` }
+      const windowId = `${id}@${listenOn}`
+      return place.ptyOwner === 'kitty' ? { adapter: 'kitty', id: windowId } : { adapter: 'kitty', id: `${HELD}${windowId}`, held: true }
     },
     // Whether kitty is found is asked at the verb, and a tap that finds none brings its app forward.
     canFocus: (pane) => windowOf(pane) !== undefined,
     async focus(pane) {
       const at = windowOf(pane)
-      return !!at && ours(at.path) && await remote(at.listenOn, ['focus-window', '--match', `id:${at.id}`])
+      return !!at && ours(deps, at.path) && await remote(deps, at.listenOn, ['focus-window', '--match', `id:${at.id}`])
     },
     canType: (pane) => typable(pane) !== undefined,
     async type(pane, text) {
       const at = typable(pane)
-      if (text === '' || text.length > MAX_TEXT || !at || sending.has(pane.id) || !ours(at.path)) return false
+      if (text === '' || text.length > MAX_TEXT || !at || sending.has(pane.id) || !ours(deps, at.path)) return false
       sending.add(pane.id)
       try {
         // kitty reads Python escapes in send-text (RECORDED_KITTY.sendTextBackslash): each backslash doubled lands as
@@ -126,11 +139,53 @@ export function createKittyAdapter(deps: KittyDeps): HostAdapter & Required<Pick
         // Enter is send-text's `\r` escape, not send-key, which goes to the active window whatever --match names
         // (RECORDED_KITTY.sendKeyOtherActive).
         const words = text.replace(CONTROL, ' ').replaceAll('\\', '\\\\')
-        const send = (typed: string) => remote(at.listenOn, ['send-text', '--match', `id:${at.id}`, '--', typed])
+        const send = (typed: string) => remote(deps, at.listenOn, ['send-text', '--match', `id:${at.id}`, '--', typed])
         return await send(words) && await send('\\r')
       } finally {
         sending.delete(pane.id)
       }
     },
+  }
+}
+
+/** The kitty window holding a multiplexer's client, by the client's process: a rest focuses it while kitty is in front,
+ *  and a tap once kitty came forward. Windows' kitty has no remote control the hints name. */
+export function createKittyTabAdapter(deps: KittyDeps & {
+  front(): string | undefined; processes(): Promise<readonly ProcessName[]>
+  /** The terminal a process runs on (readTtyName); none on none. */
+  tty(pid: number): Promise<string | undefined> }):
+HostAdapter & Required<Pick<HostAdapter, 'canShow' | 'show'>> {
+  const tabOf = (pane: Pane): { pid: number; listenOn: string; path?: string } | undefined => {
+    const parts = deps.platform === 'win32' ? null : TAB.exec(pane.id)
+    const socket = parts && socketOf(deps.platform, parts[2])
+    return socket ? { pid: Number(parts[1]), ...socket } : undefined
+  }
+  // kitty matches a window by its own process, kitty's child, never by one below it (RECORDED_KITTY
+  // focusWindowPidDescendant): of the client and its parents, the one started by the kitty that made the client's
+  // terminal. A kitty further up holds a terminal started from its window (an xterm, an Alacritty), whose window the
+  // agent is not in. One table read a verb.
+  const focus = async (pane: Pane): Promise<boolean> => {
+    const at = tabOf(pane)
+    if (!at || !ours(deps, at.path)) return false
+    const rows = await deps.processes().catch(() => undefined)
+    if (!rows) return false
+    const maker = await readPtyMaker(at.pid, rows, deps.tty).catch(() => undefined)
+    if (maker?.host !== 'kitty') return false
+    const own = parentChain(at.pid, new Map(rows.map((p) => [p.pid, p]))).find((p) => p.ppid === maker.pid)
+    return own !== undefined && await remote(deps, at.listenOn, ['focus-window', '--match', `pid:${own.pid}`])
+  }
+  return {
+    id: 'kitty-tab',
+    tap: 'after',
+    paneOf(place: Place): Pane | undefined {
+      const pid = place.outer?.app === 'kitty' ? place.outer.pid : undefined
+      const listenOn = place.hints.KITTY_LISTEN_ON
+      if (deps.platform === 'win32' || pid === undefined || !PID.test(String(pid)) || listenOn === undefined) return undefined
+      return socketOf(deps.platform, listenOn) ? { adapter: 'kitty-tab', id: `${pid}@${listenOn}` } : undefined
+    },
+    canFocus: (pane) => tabOf(pane) !== undefined,
+    canShow: (pane) => tabOf(pane) !== undefined && deps.front() === 'kitty',
+    focus,
+    show: async (pane): Promise<PaneSwitch> => (await focus(pane) ? 'ok' : 'failed'),
   }
 }

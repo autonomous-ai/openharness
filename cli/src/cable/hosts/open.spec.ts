@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { RECORDED_GNOME_SHELL } from '../../testing/recordedGnomeShell.js'
 import type { HostAdapter, Pane } from './adapter.js'
 import { createClaudeAppAdapter } from './claudeApp.js'
 import { createCodexAppAdapter } from './codexApp.js'
@@ -6,6 +7,7 @@ import { windowClasses } from './frontApp.js'
 import { createHerdrAdapter } from './herdr.js'
 import { detectApp, detectHost } from './hostDetect.js'
 import { createLinuxRaise, type LinuxRaise, type RaiseTarget } from './linuxRaise.js'
+import { createGnomeRaise } from './linuxRaiseGnome.js'
 import { bundleOf, createOpenActions, type OpenTarget } from './open.js'
 import { createOrcaAdapter, type OrcaDeps } from './orca.js'
 import { createTabsAdapter } from './tabs.js'
@@ -76,11 +78,13 @@ function recorder(over: Partial<Over> = {}, codes: Array<number | null> = [], mo
 
 /** The adapters whose pane a tap takes, in the order the observed source keeps them: each reads the hints alone. */
 const inert: OrcaDeps = { run: async () => ({ code: 0, stdout: '' }), onPath: () => null, exists: () => false, platform: 'darwin' }
-const tapped = [createHerdrAdapter({ ...inert, client: herdrClient, front: () => undefined }), createWeztermAdapter(inert), createOrcaAdapter(inert), createClaudeAppAdapter({ ...inert, inFront: () => true })]
+const tapped = [createHerdrAdapter({ ...inert, client: herdrClient, front: () => undefined, log: () => {} }), createWeztermAdapter(inert), createOrcaAdapter(inert), createClaudeAppAdapter({ ...inert, inFront: () => true })]
 
-/** What an agent's hook hints let a tap open, as the observed source reads them. */
+/** What an agent's hook hints let a tap open, as the observed source reads them: a herdr pane or an Orca terminal its
+ *  hints name is the one herdr or Orca's terminal host made its terminal in. */
 const target = (hints: Record<string, string>): OpenTarget => {
-  const place = { host: detectHost(hints), app: detectApp(hints), hints }
+  const ptyOwner = hints.HERDR_PANE_ID !== undefined ? 'herdr' : hints.ORCA_TERMINAL_HANDLE !== undefined ? 'orca' : undefined
+  const place = { host: detectHost(hints), app: detectApp(hints), hints, ptyOwner }
   return { bundle: bundleOf(place.host, hints), pane: tapped.map((adapter) => adapter.paneOf(place)).find((pane) => pane) }
 }
 const run = (file: string, ...args: string[]): Call => ({ file, args, timeoutMs: 10_000 })
@@ -92,7 +96,7 @@ describe('opening an agent outside Harness from the dial', () => {
   it('Orca: its terminal is switched to, then Orca comes forward', async () => {
     const { calls, switched, opener } = recorder()
     const orca = target({ ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE })
-    expect(opener.can(orca)).toBe(true)
+    expect(opener.can('a1', orca)).toBe(true)
     expect(await opener.open('a1', orca)).toBe(true)
     expect(switched).toEqual([HANDLE])
     expect(calls).toEqual([forward('com.stablyai.orca')])
@@ -101,7 +105,7 @@ describe('opening an agent outside Harness from the dial', () => {
   it('the Claude app: its session through claude://code/continue, which brings the app forward itself', async () => {
     const { calls, opener } = recorder()
     const app = target({ __CFBundleIdentifier: CLAUDE, CLAUDE_CODE_HOST_SESSION_ID: SESSION })
-    expect(opener.can(app)).toBe(true)
+    expect(opener.can('a1', app)).toBe(true)
     expect(await opener.open('a1', app)).toBe(true)
     expect(calls).toEqual([run(OPEN, '-b', CLAUDE, `claude://code/continue?session=${SESSION}`)])
   })
@@ -120,7 +124,7 @@ describe('opening an agent outside Harness from the dial', () => {
     const scanned: OpenTarget = { bundle: CLAUDE, pane: { adapter: 'claude', id: SESSION } }
     const link = run(OPEN, '-b', CLAUDE, `claude://code/continue?session=${SESSION}`)
     const ok = recorder()
-    expect(ok.opener.can(scanned)).toBe(true)
+    expect(ok.opener.can('a1', scanned)).toBe(true)
     expect(await ok.opener.open('a1', scanned)).toBe(true)
     expect(ok.calls).toEqual([link])
     expect(ok.logs).toEqual([])
@@ -170,7 +174,7 @@ describe('opening an agent outside Harness from the dial', () => {
     ['tmux in iTerm2', { TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'com.googlecode.iterm2' }, 'com.googlecode.iterm2'],
   ])('%s comes forward by its bundle id', async (_app, hints, bundle) => {
     const { calls, switched, opener } = recorder()
-    expect(opener.can(target(hints))).toBe(true)
+    expect(opener.can('a1', target(hints))).toBe(true)
     expect(await opener.open('a1', target(hints))).toBe(true)
     expect(calls).toEqual([forward(bundle)])
     expect(switched).toEqual([])
@@ -201,7 +205,7 @@ describe('opening an agent outside Harness from the dial', () => {
     const { calls, opener } = recorder()
     const none: Array<Record<string, string>> = [{}, { TERM_PROGRAM: 'tmux' }, { ZELLIJ: '0' }, { REX_BLOCK: 'x' }, { __CFBundleIdentifier: 'com.example.unknown' }]
     for (const hints of none) {
-      expect(opener.can(target(hints)), JSON.stringify(hints)).toBe(false)
+      expect(opener.can('a1', target(hints)), JSON.stringify(hints)).toBe(false)
       expect(await opener.open('a1', target(hints))).toBe(false)
     }
     expect(calls).toEqual([])
@@ -251,7 +255,7 @@ describe('opening an agent outside Harness from the dial', () => {
     // An Orca terminal no hint names the app of.
     const bare = recorder({ orcaSwitch: async () => false })
     const handleOnly = target({ ORCA_TERMINAL_HANDLE: HANDLE })
-    expect(bare.opener.can(handleOnly)).toBe(true)
+    expect(bare.opener.can('a1', handleOnly)).toBe(true)
     expect(await bare.opener.open('a1', handleOnly)).toBe(false)
     expect(bare.calls).toEqual([])
     expect(bare.logs).toEqual([])
@@ -300,7 +304,7 @@ describe('opening an agent outside Harness from the dial', () => {
     for (const hints of appsOnly) {
       // The Claude app's link answers yes at its first look, while xdg-mime is read (appLink.ts): it names none, so the
       // tap opens nothing.
-      expect(linux.opener.can(target(hints))).toBe(hints === appsOnly[2])
+      expect(linux.opener.can('a4', target(hints))).toBe(hints === appsOnly[2])
       expect(await linux.opener.open('a4', target(hints))).toBe(false)
     }
     expect(linux.calls).toEqual([
@@ -398,7 +402,7 @@ describe('a tap on a Codex app session', () => {
   it('the Codex app: its thread through codex://threads, which brings the app forward itself', async () => {
     for (const app of [hooked, scanned]) {
       const { calls, logs, opener } = recorder()
-      expect(opener.can(app)).toBe(true)
+      expect(opener.can('a1', app)).toBe(true)
       expect(await opener.open('a1', app)).toBe(true)
       expect(calls).toEqual([link])
       expect(logs).toEqual([])
@@ -439,7 +443,7 @@ describe('a tap on a Codex app session', () => {
     const { calls, logs, opener } = recorder({ platform: 'linux' })
     for (const app of [hooked, scanned]) {
       // The first look answers yes while xdg-mime is read (appLink.ts); it names none, so the next answers no.
-      expect(opener.can(app)).toBe(app === hooked)
+      expect(opener.can('a1', app)).toBe(app === hooked)
       expect(await opener.open('a1', app)).toBe(false)
     }
     expect(calls).toEqual([lookup('codex')])
@@ -518,11 +522,11 @@ describe('a tap in the order its pane\'s adapter keeps', () => {
   // Its pane is raised once its app came (observed.ts focus): the opener brings the app alone.
   it('a pane that taps after its app is not the opener\'s', async () => {
     const r = withMadeUp('after')
-    expect(r.opener.can(both)).toBe(true)
+    expect(r.opener.can('a1', both)).toBe(true)
     expect(await r.opener.open('a1', both)).toBe(true)
     expect(r.calls).toEqual([forward(TERMINAL)])
     expect(r.logs).toEqual([])
-    expect(r.opener.can({ pane: PANE })).toBe(false)
+    expect(r.opener.can('a1', { pane: PANE })).toBe(false)
     expect(await r.opener.open('a1', { pane: PANE })).toBe(false)
     expect(r.calls).toHaveLength(1)
     expect(r.adapter.focus).not.toHaveBeenCalled()
@@ -534,7 +538,7 @@ describe('a tap in the order its pane\'s adapter keeps', () => {
     expect(await r.opener.open('a1', both)).toBe(true)
     expect(r.calls).toEqual([forward(TERMINAL)])
     expect(r.logs).toEqual([])
-    expect(r.opener.can({ pane: PANE })).toBe(false)
+    expect(r.opener.can('a1', { pane: PANE })).toBe(false)
     expect(await r.opener.open('a1', { pane: PANE })).toBe(false)
     expect(r.calls).toHaveLength(1)
     expect(r.switched).toEqual([])
@@ -575,7 +579,7 @@ describe('a tap on Linux brings the window forward through the raise', () => {
 
   it('Linux: a pane that comes before its app is followed by the raise, with the agent\'s process and app', async () => {
     const r = onLinux()
-    expect(r.opener.can(WEZTERM)).toBe(true)
+    expect(r.opener.can('a1', WEZTERM)).toBe(true)
     expect(await r.opener.open('a1', WEZTERM)).toBe(true)
     expect(r.calls).toEqual([ACTIVATE])
     expect(r.raised).toEqual([{ window: { pid: 4242, app: 'wezterm' }, ran: [ACTIVATE] }])
@@ -607,7 +611,7 @@ describe('a tap on Linux brings the window forward through the raise', () => {
 
   it('Linux: an agent with no pane is raised by its process, and the tap answers what the raise did', async () => {
     const r = onLinux({ windows: { a1: { pid: 4242, app: 'warp' } }, raises: [true, false] })
-    expect(r.opener.can(WARP)).toBe(true)
+    expect(r.opener.can('a1', WARP)).toBe(true)
     expect(await r.opener.open('a1', WARP)).toBe(true)
     expect(await r.opener.open('a1', WARP)).toBe(false)
     expect(r.windows()).toEqual([{ pid: 4242, app: 'warp' }, { pid: 4242, app: 'warp' }])
@@ -638,27 +642,71 @@ describe('a tap on Linux brings the window forward through the raise', () => {
 
   it('Linux: can() is the pane or a desktop found', async () => {
     const none = onLinux({ ready: false })
-    expect(none.opener.can(WEZTERM)).toBe(true)
-    expect(none.opener.can(WARP)).toBe(false)
-    expect(none.opener.can({})).toBe(false)
+    expect(none.opener.can('a1', WEZTERM)).toBe(true)
+    expect(none.opener.can('a1', WARP)).toBe(false)
+    expect(none.opener.can('a1', {})).toBe(false)
     expect(await none.opener.open('a1', WARP)).toBe(false)
     expect(none.raised).toEqual([])
     const found = onLinux()
-    expect(found.opener.can(WARP)).toBe(true)
-    expect(found.opener.can({})).toBe(true)
+    expect(found.opener.can('a1', WARP)).toBe(true)
+    expect(found.opener.can('a1', {})).toBe(true)
   })
 
-  // On GNOME the raise takes an app's class alone: an agent in an app with none would answer false at every tap.
-  it('Linux: can() asks the raise for an agent\'s window in the app its bundle names', () => {
+  // On GNOME the raise takes an app's class alone: a check that asked about another app than the raise is handed would
+  // refuse a tap the raise can bring, or offer one it cannot.
+  it('Linux: can() asks the raise about the agent\'s own window app, the one the raise uses', async () => {
     const asked: Array<{ agent: boolean; app?: string }> = []
+    const raised: Window[] = []
     const r = recorder({
       platform: 'linux',
-      raise: { ready: (window) => { asked.push(window); return window?.app === 'kitty' }, raise: async () => true },
+      raise: {
+        ready: (window) => { asked.push(window); return window.app === 'claude' },
+        raise: async (window) => { raised.push(window); return true },
+      },
+      windowOf: (agentId) => agentId === 'a1' ? { pid: 4242, app: 'claude' } : undefined,
     })
-    expect(r.opener.can(target({ KITTY_WINDOW_ID: '1' }))).toBe(true)
-    expect(r.opener.can(WARP)).toBe(false)
-    expect(r.opener.can({})).toBe(false)
-    expect(asked).toEqual([{ agent: true, app: 'kitty' }, { agent: true, app: 'warp' }, { agent: true }])
+    // Its bundle names another app, or none: the agent's own window app is asked about.
+    expect(r.opener.can('a1', WARP)).toBe(true)
+    expect(r.opener.can('a1', {})).toBe(true)
+    // An agent the source knows no window of.
+    expect(r.opener.can('a2', {})).toBe(false)
+    expect(asked).toEqual([{ agent: true, app: 'claude' }, { agent: true, app: 'claude' }, { agent: true }])
+    expect(await r.opener.open('a1', {})).toBe(true)
+    expect(raised).toEqual([{ pid: 4242, app: 'claude' }])
+  })
+
+  it('GNOME: the check and the raise ask about the same class', async () => {
+    const bus = 'unix:abstract=/tmp/dbus-u'
+    const gdbus: Array<{ file: string; args: string[] }> = []
+    // The raise itself over a GNOME it found, its extension answering as recorded: only gdbus is made up.
+    const raise = createLinuxRaise({
+      find: async () => ({ kind: 'gnome', bus }),
+      backend: () => createGnomeRaise({
+        run: async (file, args) => {
+          gdbus.push({ file, args })
+          return { code: 0, stdout: RECORDED_GNOME_SHELL.activateHit.stdout }
+        },
+        onPath: (name) => `/usr/bin/${name}`,
+      }, bus),
+      processes: async () => [],
+      classes: windowClasses,
+      log: () => {},
+    })
+    await vi.waitFor(() => expect(raise.ready({ agent: false, app: 'claude' })).toBe(true))
+    // a1's app was learnt from its parents, so its target names no bundle; herdr has no class.
+    const windows: Record<string, Window> = { a1: { pid: 4242, app: 'claude' }, a2: { pid: 4343, app: 'herdr' } }
+    const r = recorder({ platform: 'linux', raise, windowOf: (agentId) => windows[agentId] })
+    expect(r.opener.can('a1', {})).toBe(true)
+    expect(await r.opener.open('a1', {})).toBe(true)
+    expect(gdbus).toEqual([{ file: '/usr/bin/gdbus', args: [
+      'call', '--address', bus, '--dest', 'org.gnome.Shell', '--object-path', '/de/lucaswerkmeister/ActivateWindowByTitle',
+      '--method', 'de.lucaswerkmeister.ActivateWindowByTitle.activateByWmClass', 'com.anthropic.Claude',
+    ] }])
+    gdbus.length = 0
+    expect(r.opener.can('a2', {})).toBe(false)
+    expect(await r.opener.open('a2', {})).toBe(false)
+    expect(gdbus).toEqual([])
+    expect(r.calls).toEqual([])
   })
 })
 
@@ -954,7 +1002,7 @@ describe('a tap on Windows brings the app forward through the raise', () => {
 
   it('Orca: its terminal is switched to, then Orca comes forward by its bundle, and open never runs', async () => {
     const r = onWindows()
-    expect(r.opener.can(ORCA)).toBe(true)
+    expect(r.opener.can('a1', ORCA)).toBe(true)
     expect(await r.opener.open('a1', ORCA)).toBe(true)
     expect(r.asked).toEqual([['switch', HANDLE], ['app', 'com.stablyai.orca']])
     expect(r.calls).toEqual([])
@@ -965,7 +1013,7 @@ describe('a tap on Windows brings the app forward through the raise', () => {
 
   it('an agent with no pane brings its app, and the tap answers what the raise did: refused is done, none fails', async () => {
     const r = onWindows([true, false])
-    expect(r.opener.can(WARP)).toBe(true)
+    expect(r.opener.can('a1', WARP)).toBe(true)
     expect(await r.opener.open('a1', WARP)).toBe(true)
     expect(await r.opener.open('a1', WARP)).toBe(false)
     expect(r.asked).toEqual([['app', 'dev.warp.Warp-Stable'], ['app', 'dev.warp.Warp-Stable']])
@@ -981,7 +1029,7 @@ describe('a tap on Windows brings the app forward through the raise', () => {
   ])('herdr in %s: its pane is focused, then the terminal comes forward', async (_, hints, bundle) => {
     const r = onWindows()
     const herdr = target({ HERDR_PANE_ID: 'w1:p2', ...hints })
-    expect(r.opener.can(herdr)).toBe(true)
+    expect(r.opener.can('a1', herdr)).toBe(true)
     expect(await r.opener.open('a1', herdr)).toBe(true)
     expect(r.calls).toEqual([run('/fake/bin/herdr', 'agent', 'focus', 'w1:p2')])
     expect(r.asked).toEqual([['app', bundle]])
@@ -1030,7 +1078,7 @@ describe('a tap on Windows brings the app forward through the raise', () => {
   it('a Codex app session opens by its link, sent to the app by its bundle', async () => {
     const r = onWindows()
     const codex = { bundle: CODEX_APP, pane: { adapter: 'codex', id: THREAD } }
-    expect(r.opener.can(codex)).toBe(true)
+    expect(r.opener.can('a1', codex)).toBe(true)
     expect(await r.opener.open('a1', codex)).toBe(true)
     expect(r.asked).toEqual([['link', `codex://threads/${THREAD}`, CODEX_APP]])
     expect(r.calls).toEqual([])
@@ -1038,7 +1086,7 @@ describe('a tap on Windows brings the app forward through the raise', () => {
 
   it('with no raise, Windows answers as before: no app comes, and there is no desktop or bring', async () => {
     const { calls, opener } = recorder({ platform: 'win32' })
-    expect(opener.can(WARP)).toBe(false)
+    expect(opener.can('a1', WARP)).toBe(false)
     expect(await opener.open('a1', WARP)).toBe(false)
     expect(opener.desktop).toBeUndefined()
     expect(opener.bring).toBeUndefined()

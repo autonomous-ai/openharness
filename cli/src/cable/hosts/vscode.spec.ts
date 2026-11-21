@@ -159,7 +159,7 @@ describe('a tap on a session in the VS Code extension\'s tab (docs/specs/2026-11
     expect(failed.logs.join()).not.toContain(UUID)
     const linux = recorder({ platform: 'linux' })
     // The first look answers yes while xdg-mime is read (appLink.ts): none is on PATH, so the tap opens nothing.
-    expect(linux.opener.can(target(TAB))).toBe(true)
+    expect(linux.opener.can('a1', target(TAB))).toBe(true)
     expect(await linux.opener.open('a1', target(TAB))).toBe(false)
     expect(linux.calls).toEqual([])
   })
@@ -263,7 +263,7 @@ describe('an agent in VS Code\'s integrated terminal (docs/plans/2026-11-17-dial
     windows.held = HELD
     const tap = tapOf(TERM)
     expect(adapter.canFocus(pane())).toBe(true)
-    expect(opener.can(tap)).toBe(true)
+    expect(opener.can('a1', tap)).toBe(true)
     expect(await opener.open('a1', tap)).toBe(true)
     expect(windows.shows).toEqual([{ terminal: HELD, tap: true }])
     expect(calls).toEqual([])
@@ -287,7 +287,7 @@ describe('an agent in VS Code\'s integrated terminal (docs/plans/2026-11-17-dial
     expect(windows.shows).toEqual([])
     expect(logs).toEqual([])
     expect(calls).toEqual([forward(VSCODE)])
-    expect(recorder({ platform: 'linux' }).opener.can(tapOf(TERM))).toBe(false)
+    expect(recorder({ platform: 'linux' }).opener.can('a1', tapOf(TERM))).toBe(false)
   })
 
   it('a rest shows the terminal only while VS Code is in front', async () => {

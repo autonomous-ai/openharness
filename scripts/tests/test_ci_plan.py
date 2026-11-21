@@ -27,6 +27,11 @@ FOUR_BUILDS = [{"bundle": "appimage", "arch": "x64"}, {"bundle": "appimage", "ar
 NO_LINUX_E2E = {"linux_files": [], "linux_shards": 0, "linux_full": False}
 # The checkout the full-checkout tests read.
 REPOSITORY = Path(__file__).resolve().parents[2]
+# The e2e files that drive an Orca terminal through the stand-in but skip off macOS: no PR CI suite runs them.
+MACOS_ONLY_ORCA_E2E = ("cli/e2e/dialVscodeFollow.e2e.ts", "cli/e2e/deviceHerdrApp.e2e.ts",
+                       "cli/e2e/dialHerdrTerminal.e2e.ts", "cli/e2e/dialTmuxTerminal.e2e.ts")
+# An e2e file that starts an agent in an Orca terminal: InOrca given the terminal's handle.
+IN_ORCA_TERMINAL = re.compile(r"new InOrca\([^)]*\bORCA_TERMINAL_HANDLE\b")
 
 
 def full_checkout(test, *paths):
@@ -439,6 +444,27 @@ class SelectionTests(unittest.TestCase):
         canary = imports_from(root, [planner.LINUX_E2E_CANARY], within)
         run = imports_from(root, files + adapters, within) - set(files)
         self.assertEqual(sorted(path for path in run if not planner.dial_hosts_path(path) and path not in canary), [])
+
+    def test_the_orca_e2e_files_are_plain_and_run_on_linux(self):
+        for path in planner.LINUX_E2E_ORCA_FILES:
+            with self.subTest(path=path):
+                self.assertTrue(planner.E2E_FILE.fullmatch(path))
+                self.assertTrue(planner.linux_e2e_file(path))
+                self.assertNotIn(path, planner.LINUX_E2E_NEVER)
+                self.assertFalse(planner.dial_hosts_path(path))
+
+    def test_the_orca_e2e_files_are_every_linux_one_through_the_stand_in(self):
+        root = REPOSITORY
+        full_checkout(self, "cli/e2e/harness", "cli/src/cable/hosts")
+        for path in (*planner.LINUX_E2E_ORCA_FILES, *planner.LINUX_E2E_ORCA_PATHS, *MACOS_ONLY_ORCA_E2E):
+            with self.subTest(path=path):
+                self.assertTrue((root / path).is_file())
+        # A new Orca e2e file is placed: on linux-e2e's list, a dial host's, or macOS only.
+        through = sorted(str(path.relative_to(root)) for path in (root / "cli/e2e").rglob("*.e2e.ts")
+                         if IN_ORCA_TERMINAL.search(path.read_text()))
+        self.assertLessEqual(set(planner.LINUX_E2E_ORCA_FILES), set(through))
+        self.assertEqual([path for path in through if path not in planner.LINUX_E2E_ORCA_FILES
+                          and path not in MACOS_ONLY_ORCA_E2E and not planner.dial_hosts_path(path)], [])
 
     def test_the_planner_and_the_tables_it_scans_with_alone_run_the_cross_read_scan(self):
         # process-checks' checkout is sparse, where the repository-wide scan skips: two undeclared reads slipped in so.
@@ -890,6 +916,40 @@ class GitPlanTests(unittest.TestCase):
         (self.root / planner.LINUX_E2E_CANARY).unlink()
         self.commit()
         with self.assertRaisesRegex(ValueError, re.escape(planner.LINUX_E2E_CANARY)):
+            self.plan()
+
+    def test_a_change_to_the_orca_stand_in_or_adapter_runs_the_orca_e2e_files(self):
+        adapter, stand_in = "cli/src/cable/hosts/orca.ts", "cli/e2e/harness/orcaHost.ts"
+        self.assertLessEqual({"linux-e2e", "dial-hosts"}, planner.select([adapter])[0])
+        # The rest of the hosts' folder is dial-hosts' alone.
+        self.assertNotIn("linux-e2e", planner.select(["cli/src/cable/hosts/scannedApp.ts"])[0])
+        canary = planner.LINUX_E2E_CANARY.removeprefix("cli/")
+        orca = sorted(path.removeprefix("cli/") for path in planner.LINUX_E2E_ORCA_FILES)
+        for path in (planner.LINUX_E2E_CANARY, *planner.LINUX_E2E_ORCA_FILES, adapter, stand_in):
+            self.write(path)
+        self.hints({})
+        self.base = self.commit()
+        # The adapter alone runs them and no canary, as they are real files; beside the PR's own; the stand-in, a
+        # harness file, with the canary too; and the adapter's deletion still runs them.
+        for changed, deleted, files in (((adapter,), (), orca),
+                                        ((adapter, "cli/e2e/a.e2e.ts"), (), sorted([*orca, "e2e/a.e2e.ts"])),
+                                        ((stand_in,), (), sorted([*orca, canary])), ((), (adapter,), orca)):
+            with self.subTest(changed=changed, deleted=deleted):
+                self.git("checkout", "-q", "--detach", self.base)
+                for path in changed:
+                    self.write(path, "changed")
+                for path in deleted:
+                    (self.root / path).unlink()
+                self.commit()
+                plan = self.plan()
+                self.assertIn("linux-e2e", plan["reasons"][(changed or deleted)[0]])
+                self.assertEqual(plan["e2e"]["linux_files"], files)
+        # A head without one of them fails the plan, naming it: a PR that renames or deletes one updates the list.
+        self.git("checkout", "-q", "--detach", self.base)
+        self.write(adapter, "changed")
+        (self.root / planner.LINUX_E2E_ORCA_FILES[0]).unlink()
+        self.commit()
+        with self.assertRaisesRegex(ValueError, re.escape(planner.LINUX_E2E_ORCA_FILES[0])):
             self.plan()
 
     def test_a_change_to_a_jobs_definition_in_ci_yml_runs_its_suite(self):
@@ -1843,6 +1903,7 @@ class FullCheckoutTests(unittest.TestCase):
     """The tests ci.yml's cross-read-scan job runs on a full checkout, with CROSS_READ_SCAN_REQUIRED=1."""
     NAMES = ("SelectionTests.test_every_desktop_file_the_phone_tests_read_selects_mobile",
              "SelectionTests.test_the_dial_host_files_are_the_ones_cli_e2e_leaves_out",
+             "SelectionTests.test_the_orca_e2e_files_are_every_linux_one_through_the_stand_in",
              "SelectionTests.test_every_declared_input_exists",
              "CrossReadTests.test_every_cross_read_in_this_repository_is_declared")
 

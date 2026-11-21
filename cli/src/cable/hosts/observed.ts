@@ -111,7 +111,7 @@ export interface ObservedDeps {
   /** The tty of a process in a tab app (tabs.ts readTty), rejecting when `ps` could not be read; absent (off macOS), no
    *  agent has a tab. */
   tty?(pid: number): Promise<string | undefined>
-  /** The host that made the pseudo-terminal a process runs on (scannedApp.ts ptyOwner), rejecting when the process table
+  /** The host that made the pseudo-terminal a process runs on (scannedApp.ts readPtyOwner), rejecting when the process table
    *  could not be read. Absent (Windows), no terminal's or multiplexer's pane is any agent's own. */
   ptyOwner?(pid: number): Promise<string | undefined>
   /** Every owner a scan read, before any is listed. Absent, nothing is told. */
@@ -126,9 +126,9 @@ export interface ObservedDeps {
   outer?: OuterLookup
 }
 
-/** The hints of the panes that take words only on the terminal their host made (Place.ptyOwner: wezterm.ts, kitty.ts,
- *  zellij.ts): no other caller's terminal is read. */
-const PTY_HINTS = ['WEZTERM_PANE', 'KITTY_WINDOW_ID', 'ZELLIJ_PANE_ID']
+/** The hints of the panes that take words only on the terminal their host made (Place.ptyOwner): no other caller's
+ *  terminal is read. */
+const PTY_HINTS = ['WEZTERM_PANE', 'KITTY_WINDOW_ID', 'ZELLIJ_PANE_ID', 'HERDR_PANE_ID', 'ORCA_TERMINAL_HANDLE']
 
 /** Whether a caller's app is learnt from its parents: its hints name none, or name VS Code by TERM_PROGRAM alone, which
  *  Cursor's terminal says too. Only a bundle id tells the two apart, and Linux has none. */
@@ -149,8 +149,9 @@ export interface ObservedActions {
   /** The session's mod has a poll open, or closed one moments ago. */
   modReady(sessionId: string): boolean
   toMod(sessionId: string, text: string): Promise<Delivery>
-  /** Whether a tap can open the target here: macOS brings an app forward, elsewhere only a pane's own command runs. */
-  canOpen(target: OpenTarget): boolean
+  /** Whether a tap can open the target here (open.ts can): a pane its adapter brings forward, its app by bundle on macOS
+   *  and Windows, or on Linux the agent's window, found by [agentId] (windowOf), as a target names no window. */
+  canOpen(agentId: string, target: OpenTarget): boolean
   /** A tap: the agent's pane and its app, in the order the pane's adapter keeps (open.ts). */
   open(agentId: string, target: OpenTarget): Promise<boolean>
   /** Codex's own queue (codexQueue.ts): a thread runs its words as its next turn, and no terminal is typed into. */
@@ -177,10 +178,12 @@ interface Located {
   pane: Pane
 }
 
+// A held pane (Pane.held) shows the terminal, editor or multiplexer the agent was started from, and whatever is in front
+// there: words typed into it would run at another's prompt, and a rest would show something else.
 /** The dial's words go to the first pane whose app types now. */
-const words = (adapter: HostAdapter, pane: Pane): boolean => !!adapter.type && (adapter.canType?.(pane) ?? true)
+const words = (adapter: HostAdapter, pane: Pane): boolean => !pane.held && !!adapter.type && (adapter.canType?.(pane) ?? true)
 /** A rest shows the first pane its app can show now, without coming forward. */
-const rest = (adapter: HostAdapter, pane: Pane): boolean => !!adapter.show && (adapter.canShow?.(pane) ?? true)
+const rest = (adapter: HostAdapter, pane: Pane): boolean => !pane.held && !!adapter.show && (adapter.canShow?.(pane) ?? true)
 /** A tap hands the opener the first pane its app brings forward here, before or instead of the app: one after it is
  *  raised once the app came. */
 const tapped = (adapter: HostAdapter, pane: Pane): boolean => adapter.tap !== 'after' && adapter.canFocus(pane)
@@ -210,16 +213,19 @@ interface Entry {
   tty?: string
   /** When the read of ttyPid began, once that read failed. */
   ttyFailedAt?: number
-  /** The caller the host that made its terminal was read for, that host once read, and when that read began, once it
-   *  failed (learnPtyOwner). */
+  /** The caller the host that made its terminal was read for, that host once read (null: none the dial types into), and
+   *  when that read began, once it failed (learnPtyOwner). */
   ptyPid?: number
-  ptyOwner?: string
+  ptyOwner?: string | null
   ptyFailedAt?: number
   /** The caller and hints its outer place was last asked for (ObservedDeps.outer), while it runs nested: only that ask's
    *  answer lands. */
   outerAsk?: { pid: number; hints: Readonly<Record<string, string>> }
   /** The app and tab it is seen in, from that answer, while its caller and hints are those it was asked for. */
   outer?: Outer
+  /** The client's process from an answer that named no app (a client in a terminal with no page): the raise's alone,
+   *  never a page, a tab or a pane, while its caller and hints are those it was asked for. */
+  outerPid?: number
   /** The process whose parents were walked for its app, a caller whose hints named none, and the app they named: none
    *  while the walk runs, or when they named no listed app. */
   appPid?: number
@@ -266,8 +272,12 @@ export class ObservedSource implements HostSource {
 
   list(): HostAgent[] {
     return [...this.entries.values()].map((e) => {
-      // The keys a listing source knows its panes by (registry.ts).
-      const paneKeys = e.panes.flatMap(({ adapter, pane }) => (adapter.paneKey ? [adapter.paneKey(pane)] : []))
+      // The keys a listing source knows its panes by (registry.ts). A held pane's would fold another agent's row there
+      // into this one; until its maker is read, it may be this agent's own, and its key folds that source's row of it, so
+      // the list shows no two rows in the first moments after a hook
+      // (docs/plans/2026-11-21-dial-linux-followups-design.md, Decided).
+      const paneKeys = e.panes.flatMap(({ adapter, pane }) =>
+        (adapter.paneKey && (!pane.held || e.ptyOwner === undefined) ? [adapter.paneKey(pane)] : []))
       // An ended session gives its row to another source's live copy. It keeps its pane keys to find one whose session id
       // differs (the Claude app's store, before it names the new id): the registry folds nothing by an ended copy's keys.
       if (!this.live(e)) return { ...e.agent, ended: true, ...(paneKeys.length && { paneKeys }) }
@@ -289,7 +299,7 @@ export class ObservedSource implements HostSource {
     return {
       status: true,
       voice: live && (!!this.first(e, words) || this.modReady(e, actions) || this.queueable(e, actions)),
-      focus: live && actions.canOpen(this.target(e)),
+      focus: live && actions.canOpen(e.agent.id, this.target(e)),
       // Its prompts are answered in its own app: the dial only shows them.
       answer: false,
     }
@@ -440,14 +450,25 @@ export class ObservedSource implements HostSource {
     const actions = this.deps.actions
     if (!e || !actions || !this.live(e)) return false
     const target = this.target(e)
-    if (!actions.canOpen(target)) return false
+    if (!actions.canOpen(e.agent.id, target)) return false
     const opened = await actions.open(e.agent.id, target)
-    // `open -b` brings the app forward on whichever tab it had: a pane that comes after its app (a tab) is raised once it
-    // came, also when the tapped pane was the multiplexer's inside that tab. Read after the open, as an agent that ended
-    // or moved meanwhile has no such pane to raise.
-    const tab = opened ? this.shown(agent).find(({ adapter }) => adapter.tap === 'after') : undefined
-    if (tab?.adapter.canFocus(tab.pane)) await tab.adapter.focus(tab.pane)
+    if (opened) await this.raiseAfter(agent)
     return opened
+  }
+
+  /** `open -b` brings the app forward on whichever tab it had: a pane that comes after its app (a tab) is raised once it
+   *  came, also when the tapped pane was the multiplexer's inside that tab. Read after the open, as an agent that ended
+   *  or moved meanwhile has no such pane to raise. A nested agent's is raised without asking whether a rest could show
+   *  it: one shown only while its app is in front would be skipped while the front report lags the open. */
+  private async raiseAfter(agent: HostAgent): Promise<void> {
+    const e = this.entries.get(agent.id)
+    if (e?.outer && this.live(e)) {
+      const tab = this.shownOnly(e).find(({ adapter, pane }) => adapter.tap === 'after' && adapter.canFocus(pane))
+      if (tab) await tab.adapter.focus(tab.pane)
+      return
+    }
+    const tab = this.shown(agent).find(({ adapter }) => adapter.tap === 'after')
+    if (tab?.adapter.canFocus(tab.pane)) await tab.adapter.focus(tab.pane)
   }
 
   /** Only a pane whose app can show it now (an Orca terminal, a Claude app session while that app is in front, a tab a
@@ -484,23 +505,33 @@ export class ObservedSource implements HostSource {
   private target(e: Entry): OpenTarget {
     const panes = this.shownOnly(e)
     // The pane of the host that made its terminal is where it is: one before it in the adapters' order only holds it
-    // (tmux inside a Zellij pane).
+    // (tmux inside a Zellij pane). A held pane comes after its others: switched to, it shows the terminal, editor or
+    // multiplexer the agent was started from, not the one it runs in.
     const near = panes.find(({ adapter, pane }) => adapter.id === e.ptyOwner && tapped(adapter, pane))
+      ?? panes.find(({ adapter, pane }) => !pane.held && tapped(adapter, pane))
       ?? panes.find(({ adapter, pane }) => tapped(adapter, pane))
     const bundle = e.bundle ?? near?.adapter.bundle
     return { ...(bundle ? { bundle } : {}), ...(near ? { pane: near.pane } : {}) }
   }
 
-  /** What a rest and a tap may show: its panes, and in an adapter where it has none, the pane its caller placed it at. A
-   *  place is a guess: showing the wrong terminal costs a look, while words typed there would run at another's prompt.
-   *  So only these two read it, never words, `byPane` or `paneOf`. */
+  /** What a rest and a tap may show: its panes, and in an adapter where it has none of its own, the pane its caller
+   *  placed it at (placeIn). A place is a guess: showing the wrong terminal costs a look, while words typed there would
+   *  run at another's prompt. So only these two and its name read it, never words, `byPane` or `paneOf`. */
   private shownOnly(e: Entry): readonly Located[] {
     return (this.deps.actions?.adapters ?? []).flatMap((adapter) => {
-      const own = e.panes.find((located) => located.adapter === adapter)
-      if (own) return [own]
-      const at = this.paneNames.get(adapter.id)?.placed.get(e.agent.id)
-      return at === undefined ? [] : [{ adapter, pane: { adapter: adapter.id, id: at } }]
+      const pane = this.placeIn(e, adapter.id)
+      return pane ? [{ adapter, pane }] : []
     })
+  }
+
+  /** Its pane in that adapter as a rest, a tap and its name read it: its own; else the one its caller placed it at; else
+   *  its held one. A held pane counts as none for the devices (paneOf), which place the agent where it runs, while the
+   *  held pane shows only where it was started from. */
+  private placeIn(e: Entry, adapter: string): Pane | undefined {
+    const own = e.panes.find(({ pane }) => pane.adapter === adapter)?.pane
+    if (own && !own.held) return own
+    const at = this.paneNames.get(adapter)?.placed.get(e.agent.id)
+    return at === undefined ? own : { adapter, id: at }
   }
 
   /** Every pane its adapters know it by, afresh: a session resumed elsewhere keeps none it left. One paired with an hc
@@ -527,28 +558,44 @@ export class ObservedSource implements HostSource {
     return found && { ...found.agent }
   }
 
-  /** The live agent with that adapter's pane of that id: of two, the one heard from last. */
+  /** The live agent with that adapter's pane of that id: of two, the one heard from last. A held pane is not its own, as
+   *  for paneOf. */
   byPane(adapter: string, id: string): HostAgent | undefined {
     let found: Entry | undefined
     for (const e of this.entries.values()) {
-      if (!this.live(e) || !e.panes.some(({ pane }) => pane.adapter === adapter && pane.id === id)) continue
+      if (!this.live(e) || !e.panes.some(({ pane }) => pane.adapter === adapter && pane.id === id && !pane.held)) continue
       if (!found || e.agent.lastActivityAt > found.agent.lastActivityAt) found = e
     }
     return found && { ...found.agent }
   }
 
-  /** A live agent's pane id in that adapter; none when it has no pane there, or its session ended. */
+  /** A live agent's pane id in that adapter; none when it has no pane there, or its session ended. A held pane is not
+   *  its own: the devices' paths that read this (Orca's ring and scope, the scroll) take it for none. */
   paneOf(agentId: string, adapter: string): string | undefined {
     const e = this.entries.get(agentId)
-    return e && this.live(e) ? e.panes.find(({ pane }) => pane.adapter === adapter)?.pane.id : undefined
+    return e && this.live(e) ? e.panes.find(({ pane }) => pane.adapter === adapter && !pane.held)?.pane.id : undefined
+  }
+
+  /** Whether a live agent holds a pane its adapter keys [key] (Pane.held) and the asker's row folds into it: that
+   *  agent's maker is not read yet, so the pane may be its own, or the asker carries its session, the same agent another
+   *  source lists. A source that types into panes asks it first, so what folds with a held pane takes no words there by
+   *  that source's route either. */
+  holds(key: string, asker: { engine: string; sessionId?: string }): boolean {
+    for (const e of this.entries.values()) {
+      if (!this.live(e) || !e.panes.some(({ adapter, pane }) => pane.held && adapter.paneKey?.(pane) === key)) continue
+      if (e.ptyOwner === undefined) return true
+      if (asker.sessionId !== undefined && asker.engine === e.agent.engine && asker.sessionId === e.agent.sessionId) return true
+    }
+    return false
   }
 
   /** A live agent's latest process, the one whose window a raise brings forward, and its app; none once its session
    *  ended, as its window holds something else now. Nested in a multiplexer, the process is the client its app holds:
-   *  the agent's own is under the multiplexer's server, which owns no window. */
+   *  the agent's own is under the multiplexer's server, which owns no window. A client in a terminal with no page is
+   *  that client too (Entry.outerPid). */
   windowOf(agentId: string): { pid: number; app: string } | undefined {
     const e = this.entries.get(agentId)
-    return e && this.live(e) ? { pid: e.outer?.pid ?? e.caller ?? e.pid, app: e.agent.app } : undefined
+    return e && this.live(e) ? { pid: e.outer?.pid ?? e.outerPid ?? e.caller ?? e.pid, app: e.agent.app } : undefined
   }
 
   /** The pane its caller last placed it at in that adapter (setPaneNames), as shownOnly reads it; never one of its panes. */
@@ -628,7 +675,10 @@ export class ObservedSource implements HostSource {
    * The host that made its caller's terminal (Place.ptyOwner), read once per process in the background, as its tty is,
    * and only for a caller whose hints name a pane that asks it (PTY_HINTS): until it lands, a terminal's or a
    * multiplexer's pane only holds the agent, and takes no words. An answer lands only while that process is still its
-   * caller. A read that failed said nothing of the host: a later event reads it again, no sooner than TTY_RETRY_MS.
+   * caller, null when it named no host: placed again, its adapters know the read landed, and may say so. A host named is
+   * told; none is told only when a held pane's key goes, as the list showed it while the read ran (list), and every pane
+   * stays held as it was. A read that failed said nothing of the host: a later event reads it again, no sooner than
+   * TTY_RETRY_MS.
    */
   private learnPtyOwner(entry: Entry, pid: number): void {
     if (!this.deps.ptyOwner || !PTY_HINTS.some((key) => entry.hints[key] !== undefined)) return
@@ -639,10 +689,10 @@ export class ObservedSource implements HostSource {
     entry.ptyFailedAt = undefined
     this.deps.ptyOwner(pid).then((owner) => {
       if (entry.ptyPid !== pid) return
-      entry.ptyOwner = owner
-      if (owner === undefined || !this.live(entry)) return
+      entry.ptyOwner = owner ?? null
+      if (!this.live(entry)) return
       this.locate(entry)
-      this.emit()
+      if (owner !== undefined || entry.panes.some(({ adapter, pane }) => pane.held && adapter.paneKey)) this.emit()
     }, (error) => {
       if (entry.ptyPid === pid) entry.ptyFailedAt = now
       // Its kind only: never the pid or the session.
@@ -662,7 +712,10 @@ export class ObservedSource implements HostSource {
   private askOuter(entry: Entry, e: ObservedHookEvent): boolean {
     const last = entry.outerAsk
     const same = last !== undefined && last.pid === e.callerPid && sameHints(last.hints, e.hostHints)
-    if (!same) entry.outer = undefined
+    if (!same) {
+      entry.outer = undefined
+      entry.outerPid = undefined
+    }
     if (same && e.event !== 'session-start' && e.event !== 'turn-start') return true
     const answer = this.deps.outer?.(e.hostHints, e.callerPid)
     if (!answer) {
@@ -677,6 +730,7 @@ export class ObservedSource implements HostSource {
     void answer.then((place) => {
       if (entry.outerAsk !== ask || !this.live(entry)) return
       entry.outer = place.app ? { app: place.app, tty: place.tty, pid: place.pid } : undefined
+      entry.outerPid = !place.app && Number.isSafeInteger(place.pid) && place.pid! > 0 ? place.pid : undefined
       entry.tty = entry.outer?.tty
       this.placeApp(entry, ask.hints, ask.pid)
       this.locate(entry)
@@ -722,10 +776,10 @@ export class ObservedSource implements HostSource {
     return pane?.renamed ? pane.title : e.title ?? pane?.title ?? folderName(e.agent.cwd, e.agent.engine)
   }
 
-  /** The name of its pane in the first adapter that names one: its own pane there, else the one it was placed at. */
+  /** The name of its pane in the first adapter that names one, the pane a rest and a tap show there (placeIn). */
   private paneName(e: Entry): PaneName | undefined {
-    for (const [adapter, { names, placed }] of this.paneNames) {
-      const id = e.panes.find(({ pane }) => pane.adapter === adapter)?.pane.id ?? placed.get(e.agent.id)
+    for (const [adapter, { names }] of this.paneNames) {
+      const id = this.placeIn(e, adapter)?.id
       const name = id === undefined ? undefined : names.get(id)
       if (name) return name
     }

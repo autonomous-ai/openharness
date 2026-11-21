@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Place } from './adapter.js'
 import type { HerdrPrompt } from './herdrClient.js'
 import { createHerdrAdapter, type HerdrAdapterDeps } from './herdr.js'
+import { ptyMaker } from './scannedApp.js'
 
 const FAKE_PATH_HERDR = '/fake/bin/herdr'
 
@@ -27,12 +28,14 @@ function recorder(over: Partial<HerdrAdapterDeps> = {}, codes: Array<number | nu
     platform: 'darwin',
     client,
     front: () => 'terminal-app',
+    log: () => {},
     ...over,
   }
   return { calls, prompt, socketStamp, adapter: createHerdrAdapter(deps) }
 }
 
-const place = (hints: Record<string, string>): Place => ({ host: 'herdr', app: 'herdr', hints })
+/** An agent at these hints, on a terminal herdr made. */
+const place = (hints: Record<string, string>): Place => ({ host: 'herdr', app: 'herdr', hints, ptyOwner: 'herdr' })
 const pane = (id: string) => ({ adapter: 'herdr', id })
 const focusCall = (id: string): Call => ({ file: FAKE_PATH_HERDR, args: ['agent', 'focus', id], timeoutMs: 10_000 })
 /** Lets every step already able to run take place. */
@@ -225,6 +228,80 @@ describe('the herdr adapter', () => {
       expect(await words).toEqual({ outcome: 'sent' })
       expect(run.mock.calls).toEqual([[FAKE_PATH_HERDR, ['agent', 'focus', 'w1:p2'], 10_000]])
       expect(prompt.mock.calls).toEqual([['w1:p2', 'claude', 'one']])
+    })
+  })
+
+  // A terminal, an editor or a multiplexer started in a herdr pane keeps HERDR_PANE_ID: words sent to that pane over
+  // herdr's socket land at its prompt, another agent's or a shell's.
+  describe('the agent\'s own pane', () => {
+    const madeBy = (owner: string | null | undefined, pid = 100): Place => ({ ...place({ HERDR_PANE_ID: 'w1:p2' }), pid, ptyOwner: owner })
+    const held = { adapter: 'herdr', id: 'held:w1:p2', held: true }
+    /** The adapter, its lines kept. */
+    const logged = (platform: NodeJS.Platform = 'darwin') => {
+      const logs: string[] = []
+      return { logs, ...recorder({ platform, log: (line) => { logs.push(line) } }) }
+    }
+
+    it('a herdr pane is the agent\'s own only when herdr made its terminal', () => {
+      const { adapter } = logged()
+      expect(adapter.paneOf(madeBy('herdr'))).toEqual(pane('w1:p2'))
+      expect(adapter.paneOf({ ...madeBy('herdr'), outer: { app: 'terminal-app' } })).toEqual(pane('w1:p2:terminal-app'))
+      for (const owner of [undefined, null, 'wezterm']) {
+        expect(adapter.paneOf(madeBy(owner)), String(owner)).toEqual(held)
+        // Held, it carries no app: no rest shows it.
+        expect(adapter.paneOf({ ...madeBy(owner), outer: { app: 'terminal-app' } }), String(owner)).toEqual(held)
+      }
+    })
+
+    // No maker is read on Windows (no `ps`): the pane stays the agent's own there.
+    it('Windows: the agent\'s own, as today', () => {
+      const { logs, adapter } = logged('win32')
+      for (const owner of [undefined, null, 'herdr']) expect(adapter.paneOf(madeBy(owner)), String(owner)).toEqual(pane('w1:p2'))
+      expect(logs).toEqual([])
+    })
+
+    it('a held pane takes a tap alone: herdr agent focus runs on its bare id, a rest and words do nothing', async () => {
+      const { calls, adapter, prompt } = logged()
+      const pane = adapter.paneOf(madeBy(null))!
+      expect(await adapter.focus(pane)).toBe(true)
+      expect(calls).toEqual([focusCall('w1:p2')])
+      calls.length = 0
+      expect(adapter.canShow!(pane)).toBe(false)
+      expect(await adapter.show!(pane, 'agent-1')).toBe('failed')
+      expect(await adapter.type!(pane, 'next', 'claude')).toBe(false)
+      for (const id of ['held:', 'held:w1', 'held:--help', 'held:w1:p2:terminal-app']) {
+        expect(await adapter.focus({ adapter: 'herdr', id }), id).toBe(false)
+      }
+      expect(calls).toEqual([])
+      expect(prompt).not.toHaveBeenCalled()
+      // The key herdr's row of that pane has: the herdr source asks the observed agents by it before its words.
+      expect(adapter.paneKey(pane)).toBe('herdr:w1:p2')
+    })
+
+    it('held is said once a caller, after the read, naming nothing', () => {
+      const { logs, adapter } = logged()
+      // Not read yet: nothing is said.
+      adapter.paneOf(madeBy(undefined))
+      expect(logs).toEqual([])
+      adapter.paneOf(madeBy(null))
+      adapter.paneOf(madeBy('wezterm'))
+      adapter.paneOf(madeBy('herdr'))
+      expect(logs).toEqual(['[device] herdr · held'])
+      adapter.paneOf(madeBy(null, 200))
+      expect(logs).toEqual(['[device] herdr · held', '[device] herdr · held'])
+    })
+
+    // herdr before 0.9.0 ran a `--no-session` client's panes under the client itself: that client, a `herdr` on the
+    // person's terminal, made the agent's terminal.
+    it('--no-session\'s client as maker is own', () => {
+      const rows = [
+        { pid: 100, ppid: 90, tty: 'pts/1', executable: 'claude' },
+        { pid: 90, ppid: 80, tty: 'pts/1', executable: '/bin/sh' },
+        { pid: 80, ppid: 70, tty: 'pts/0', executable: '/usr/local/bin/herdr' },
+        { pid: 70, ppid: 1, tty: 'pts/0', executable: 'bash' },
+      ]
+      const { adapter } = logged('linux')
+      expect(adapter.paneOf(madeBy(ptyMaker(100, rows)?.host))).toEqual(pane('w1:p2'))
     })
   })
 

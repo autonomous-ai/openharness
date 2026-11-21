@@ -16,12 +16,11 @@ import type { HostAdapter, Pane, Place } from './adapter.js'
 import { APP_IDS } from './hostDetect.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 import type { OuterLookup } from './outer.js'
-import { parentChain, scannedApps, type ProcessName } from './scannedApp.js'
-import { TAB_TTY } from './tabs.js'
+import { parentChain, readPtyOwner, scannedApps, type ProcessName } from './scannedApp.js'
+import { clientTtyForm } from './tabs.js'
 
 const TMUX_PANE_ID = /^%[0-9]{1,9}$/
-/** A process id as the table and the hooks give it; the herdr and Zellij lookups hold their pids to it too
- *  (herdrOuter.ts, zellij.ts). */
+/** A process id as the table and the hooks give it. */
 export const PID = /^[1-9][0-9]{0,9}$/
 /** This adapter's pane: tmux's pane id and the agent's process, `%3:100`, as the hook's event named them, and the app
  *  holding the client that shows its session when one was found, `%3:100:terminal-app`. */
@@ -195,6 +194,8 @@ export interface TmuxOuterDeps {
   run: TmuxDeps['run']
   tmux: TmuxDeps['tmux']
   processes: TmuxDeps['processes']
+  /** The terminal one process runs on (scannedApp.ts readTtyName); it rejects when it could not be read. */
+  tty(pid: number): Promise<string | undefined>
   log: TmuxDeps['log']
   now(): number
   platform: NodeJS.Platform
@@ -202,10 +203,10 @@ export interface TmuxOuterDeps {
   bundleId(bundle: string): Promise<string | undefined>
 }
 
-/** The app that holds the tmux client showing an agent's pane, that client's tty when it names a tab, and its process. */
+/** The app that holds the tmux client showing an agent's pane, that client's tty when it is in its platform's form, and its process. */
 interface ClientPlace { app?: string; tty?: string; pid?: number }
 /** The step of a lookup that could not be read, as its line names it: no tmux found, the pane's facts, the process
- *  table, the session's clients, the client's app. */
+ *  table or a terminal of the caller's, the session's clients, the client's app. */
 type NotRead = 'tmux' | 'pane' | 'processes' | 'clients' | 'app'
 
 /**
@@ -213,16 +214,16 @@ type NotRead = 'tmux' | 'pane' | 'processes' | 'clients' | 'app'
  * session, at that client's tty. The pane's own hints cannot say: tmux sets TERM_PROGRAM=tmux, and the bundle id is the
  * one the server started with, none when the daemon started it (Diego's Mac, 2026-11-19), and another app's after a
  * re-attach. It only reads, the pane's facts and its session's clients, and only for a pane of the person's that holds
- * the hook's caller (pid). Nothing at once when the hints name no tmux pane in form or the caller is no pid; else the
- * client's place, `{}` when none is found. Never rejects.
+ * the hook's caller (pid), on a terminal tmux made. Nothing at once when the hints name no tmux pane in form or the
+ * caller is no pid; else the client's place, `{}` when none is found. Never rejects.
  */
 export function createTmuxOuter(deps: TmuxOuterDeps): OuterLookup {
   // By pane and caller: an answer holds for the caller whose chain held the pane, a pane of the same id may be another
   // server's. A lookup in flight is shared past its 5 s, so a tmux that hangs to its timeout runs no second one.
   const asked = new Map<string, { at: number; answer: Promise<ClientPlace>; settled: boolean }>()
 
-  /** `{}` when the pane is not the person's, holds no process of the caller's, or no client of its session is in a
-   *  listed app; the step that could not be read, when one could not. */
+  /** `{}` when the pane is not the person's, holds no process of the caller's, tmux made no terminal the caller runs on,
+   *  or no client of its session is in a listed app; the step that could not be read, when one could not. */
   async function placeOf(id: string, pid: number): Promise<ClientPlace | NotRead> {
     const facts = await paneFacts(deps, id)
     if (typeof facts === 'string') return facts
@@ -231,6 +232,12 @@ export function createTmuxOuter(deps: TmuxOuterDeps): OuterLookup {
     const rows = await deps.processes().catch(() => undefined)
     if (!rows) return 'processes'
     if (!holdsPane(rows, pid, facts.pid)) return {}
+    // A terminal started from the pane is under it too, and keeps its TMUX_PANE, yet its agents are in no tmux pane:
+    // tmux must have made the caller's terminal, as Zellij's and herdr's lookups ask. The table holds no terminal: the
+    // caller's and its parents' are read.
+    const owner = await readPtyOwner(pid, rows, deps.tty).catch(() => null)
+    if (owner === null) return 'processes'
+    if (owner !== 'tmux') return {}
     // By the pane id, which tmux resolves to its session: a session's name could read as another target (`$0`, `@1`).
     const listed = await runTmux(deps, ['list-clients', '-t', id, '-F', TMUX_CLIENT_PLACES])
     if (listed?.code !== 0) return 'clients'
@@ -244,8 +251,8 @@ export function createTmuxOuter(deps: TmuxOuterDeps): OuterLookup {
     const apps = await scannedApps([client.pid], { platform: deps.platform, roots: deps.roots, processes: async () => rows, bundleId: deps.bundleId })
     const app = apps.get(client.pid)
     if (!app) return {}
-    // A tty out of form names no tab: a control client has none, and Linux's are no tab the dial selects.
-    return TAB_TTY.test(client.tty) ? { app, tty: client.tty, pid: client.pid } : { app, pid: client.pid }
+    // A tty out of the platform's form names no tab: a control client has none.
+    return clientTtyForm(deps.platform)?.test(client.tty) ? { app, tty: client.tty, pid: client.pid } : { app, pid: client.pid }
   }
 
   async function lookUp(id: string, pid: number): Promise<ClientPlace> {

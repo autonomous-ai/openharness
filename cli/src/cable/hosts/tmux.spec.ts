@@ -4,6 +4,7 @@ import { bundleOf, createOpenActions, type OpenTarget } from './open.js'
 import { tmuxFinder } from '../../lib/binaryFinder.js'
 import type { TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
 import { createTmuxAdapter, createTmuxOuter, type TmuxDeps, type TmuxOuterDeps } from './tmux.js'
+import type { PtyProcess } from './scannedApp.js'
 
 const OPEN = '/usr/bin/open'
 /** tmux on the process's PATH, as the core finds it. */
@@ -11,10 +12,10 @@ const PRESENT = async (): Promise<TmuxPathOutcome> => ({ state: 'present' })
 
 interface Call { file: string; args: string[]; timeoutMs: number }
 
-/** The agent (100) in its shell (90), the pane's process, under tmux's server (80). */
-const TABLE = [
-  { pid: 100, ppid: 90, executable: 'claude' }, { pid: 90, ppid: 80, executable: 'zsh' }, { pid: 80, ppid: 1, executable: 'tmux' },
-  { pid: 4242, ppid: 1, executable: 'other' },
+/** The agent (100) in its shell (90), the pane's process, under tmux's server (80), which made their terminal. */
+const TABLE: PtyProcess[] = [
+  { pid: 100, ppid: 90, tty: 'ttys010', executable: 'claude' }, { pid: 90, ppid: 80, tty: 'ttys010', executable: 'zsh' },
+  { pid: 80, ppid: 1, executable: 'tmux' }, { pid: 4242, ppid: 1, executable: 'other' },
 ]
 
 /** A recording runner that runs nothing, so no spec moves a tmux client or brings the developer's own apps forward: each
@@ -246,7 +247,7 @@ describe('a tap on an agent in the person\'s own tmux pane (docs/specs/2026-11-1
   it('the pane holds the agent: the person\'s client is switched to it, then its app comes forward', async () => {
     const { calls, logs, opener } = recorder({}, [], OWN)
     expect(target(IN_GHOSTTY)).toEqual({ bundle: 'com.mitchellh.ghostty', pane: { adapter: 'tmux', id: '%3:100' } })
-    expect(opener.can(target(IN_GHOSTTY))).toBe(true)
+    expect(opener.can('a1', target(IN_GHOSTTY))).toBe(true)
     expect(await opener.open('a1', target(IN_GHOSTTY))).toBe(true)
     expect(calls).toEqual([asked, listed, switched(), ghostty])
     expect(logs).toEqual([])
@@ -353,7 +354,7 @@ describe('a tap on an agent in the person\'s own tmux pane (docs/specs/2026-11-1
 
   it('on Linux the client is switched, and nothing comes forward', async () => {
     const linux = recorder({ platform: 'linux' }, [], OWN)
-    expect(linux.opener.can(target(IN_GHOSTTY))).toBe(true)
+    expect(linux.opener.can('a1', target(IN_GHOSTTY))).toBe(true)
     expect(await linux.opener.open('a1', target(IN_GHOSTTY))).toBe(true)
     expect(linux.calls).toEqual([asked, listed, switched()])
   })
@@ -361,7 +362,7 @@ describe('a tap on an agent in the person\'s own tmux pane (docs/specs/2026-11-1
 
 /** The client's processes: tmux's client (4300) under a pseudo-terminal helper (4299), under Terminal in the person's
  *  Applications folder. */
-const CLIENT_CHAIN = [
+const CLIENT_CHAIN: PtyProcess[] = [
   { pid: 4300, ppid: 4299, executable: 'tmux' },
   { pid: 4299, ppid: 4298, executable: '/usr/bin/python3' },
   { pid: 4298, ppid: 1, executable: '/Users/u/Applications/Terminal.app/Contents/MacOS/Terminal' },
@@ -378,11 +379,16 @@ const none = ['[device] tmux client · none']
 /** The lookup's line when a step could not be read, naming that step. */
 const notRead = (why: 'tmux' | 'pane' | 'processes' | 'clients' | 'app') => [`[device] tmux client · not read · ${why}`]
 
-/** A recording runner as `recorder`, for the lookup: it runs nothing, each call answers the next of [codes], then exit 0. */
-function lookup(over: Partial<TmuxOuterDeps> = {}, codes: Array<number | null> = [], said: { pane?: string; clients?: string } = {}) {
+/** A recording runner as `recorder`, for the lookup: it runs nothing, each call answers the next of [codes], then exit 0,
+ *  and a process's terminal is the one the table gives it. */
+function lookup(
+  over: Partial<Omit<TmuxOuterDeps, 'processes'>> & { processes?: () => Promise<readonly PtyProcess[]> } = {},
+  codes: Array<number | null> = [], said: { pane?: string; clients?: string } = {},
+) {
   const calls: Call[] = []
   const logs: string[] = []
   const clock = { t: 1_000_000 }
+  const table = over.processes ?? (async () => [...TABLE, ...CLIENT_CHAIN])
   let reads = 0
   const outer = createTmuxOuter({
     run: async (file, args, timeoutMs) => {
@@ -390,14 +396,15 @@ function lookup(over: Partial<TmuxOuterDeps> = {}, codes: Array<number | null> =
       const stdout = args[0] === 'display-message' ? said.pane ?? '' : args[0] === 'list-clients' ? said.clients ?? '' : ''
       return { code: codes.length ? codes.shift()! : 0, stdout }
     },
-    processes: async () => { reads++; return [...TABLE, ...CLIENT_CHAIN] },
     tmux: PRESENT,
     log: (line) => { logs.push(line) },
     now: () => clock.t,
     platform: 'darwin',
     roots: ['/Users/u/Applications/'],
     bundleId: async (bundle) => (bundle === '/Users/u/Applications/Terminal.app' ? 'com.apple.Terminal' : undefined),
+    tty: async (pid) => (await table()).find((p) => p.pid === pid)?.tty,
     ...over,
+    processes: async () => { reads++; return table() },
   })
   return { calls, logs, clock, reads: () => reads, outer }
 }
@@ -434,6 +441,19 @@ describe('the outer place of an agent in the person\'s tmux', () => {
   // A second tmux server of the person's (`-L`) can have a pane of the same id.
   it('a pane not in the caller\'s chain answers {}', async () => {
     const { calls, logs, outer } = lookup({}, [], { ...ONE, pane: says(4242) })
+    expect(await outer(NESTED, 100)).toEqual({})
+    expect(calls).toEqual([asked])
+    expect(logs).toEqual(none)
+  })
+
+  // Linux: an xterm or WezTerm started from a tmux pane is that pane's child and keeps its TMUX_PANE, yet its agents
+  // are in no tmux pane: the walk up holds the pane, the terminal's maker does not.
+  it('a terminal started from a tmux pane: {}', async () => {
+    const processes = async () => [
+      { pid: 100, ppid: 96, tty: 'pts/7', executable: 'claude' }, { pid: 96, ppid: 95, tty: 'pts/7', executable: 'bash' },
+      { pid: 95, ppid: 90, tty: 'ttys010', executable: 'xterm' }, ...TABLE.filter((p) => p.pid !== 100), ...CLIENT_CHAIN,
+    ]
+    const { calls, logs, outer } = lookup({ processes }, [], ONE)
     expect(await outer(NESTED, 100)).toEqual({})
     expect(calls).toEqual([asked])
     expect(logs).toEqual(none)
@@ -481,11 +501,15 @@ describe('the outer place of an agent in the person\'s tmux', () => {
     expect(logs).toEqual(none)
   })
 
-  it('on Linux the app is read from the names, and no tty passes', async () => {
-    const processes = async () => [...TABLE, { pid: 4300, ppid: 4299, executable: 'tmux' }, { pid: 4299, ppid: 1, executable: 'ghostty' }]
+  // The app is read from the names; the pts names the WezTerm or kitty tab holding the client (the dial-linux follow-ups
+  // spec), and a macOS tty there names none.
+  it('Linux: a client in a WezTerm window on /dev/pts/3: its app, tty and process', async () => {
+    const processes = async () => [...TABLE, { pid: 4300, ppid: 4299, executable: 'tmux' }, { pid: 4299, ppid: 1, executable: 'wezterm-gui' }]
     const { logs, outer } = lookup({ platform: 'linux', processes }, [], { ...ONE, clients: places(1794700050, 4300, '/dev/pts/3') })
-    expect(await outer(NESTED, 100)).toStrictEqual({ app: 'ghostty', pid: 4300 })
+    expect(await outer(NESTED, 100)).toStrictEqual({ app: 'wezterm', tty: '/dev/pts/3', pid: 4300 })
     expect(logs).toEqual(found)
+    const mac = lookup({ platform: 'linux', processes }, [], ONE)
+    expect(await mac.outer(NESTED, 100)).toStrictEqual({ app: 'wezterm', pid: 4300 })
   })
 
   it('tmux or ps that fails: {} and not read, with the step, never a rejection', async () => {
@@ -497,6 +521,7 @@ describe('the outer place of an agent in the person\'s tmux', () => {
       ['display-message fails', lookup({}, [1], ONE), [asked], notRead('pane')],
       ['display-message says no fact', lookup({}, [], { ...ONE, pane: 'abc\n' }), [asked], notRead('pane')],
       ['the table is not read', lookup({ processes: async () => { throw new Error('process table not read') } }, [], ONE), [asked], notRead('processes')],
+      ['the caller\'s terminal is not read', lookup({ tty: async () => { throw new Error('tty not read') } }, [], ONE), [asked], notRead('processes')],
       ['list-clients fails', lookup({}, [0, 1], ONE), [asked, clientsAsked], notRead('clients')],
       ['the app scan throws', lookup({ roots }, [], ONE), [asked, clientsAsked], notRead('app')],
       ['a client with no activity', lookup({}, [], { ...ONE, clients: 'soon|4300|/dev/ttys004\n' }), [asked, clientsAsked], none],

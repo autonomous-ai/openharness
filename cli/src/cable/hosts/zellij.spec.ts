@@ -66,6 +66,8 @@ const hints = { ZELLIJ: env.ZELLIJ, ZELLIJ_PANE_ID: env.ZELLIJ_PANE_ID, ZELLIJ_S
 const place = (over: Record<string, string> = {}, host = 'zellij', ptyOwner: string | null = 'zellij'): Place =>
   ({ host, app: 'terminal', hints: { ...hints, ...over }, ...(ptyOwner === null ? {} : { ptyOwner }) })
 const pane = (id: string) => ({ adapter: 'zellij', id })
+/** The pane of an agent Zellij's server did not make the terminal of, as paneOf gives it. */
+const HELD = { ...pane('held:s1:1'), held: true }
 /** A recorded argv, run as the adapter runs it: the binary where it was found, then the arguments. */
 const ran = (args: readonly string[]): Call => ({ file: FAKE_ZELLIJ, args: args.slice(1), timeoutMs: 10_000 })
 const typing = (id: string, text: string, session = 's1'): Call[] => [
@@ -112,7 +114,7 @@ describe('the Zellij adapter', () => {
     ]
     for (const at of held) {
       const found = adapter.paneOf(at)!
-      expect(found, `${at.host} ${at.ptyOwner}`).toEqual(pane('held:s1:1'))
+      expect(found, `${at.host} ${at.ptyOwner}`).toEqual(HELD)
       expect(adapter.canType(found)).toBe(false)
       expect(await adapter.type(found, 'hello', 'claude')).toBe(false)
       expect(calls).toEqual([])
@@ -121,12 +123,24 @@ describe('the Zellij adapter', () => {
     expect(calls).toEqual([ran(focusPaneId.args)])
   })
 
+  // The observed source reads the field alone, never an id's form: a held pane is tapped after the agent's other panes,
+  // and takes no words, rest or key.
+  it('a held pane says so; an own one does not', () => {
+    const { adapter } = recorder()
+    expect(adapter.paneOf(place())).toStrictEqual(pane('s1:1'))
+    // A session named held is no held pane.
+    expect(adapter.paneOf(place({ ZELLIJ_SESSION_NAME: 'held' }))).toStrictEqual(pane('held:1'))
+    for (const ptyOwner of [undefined, null, 'tmux']) {
+      expect(adapter.paneOf({ ...place(), ptyOwner }), String(ptyOwner)).toStrictEqual(HELD)
+    }
+  })
+
   // VS Code, WezTerm, kitty or nvim's :terminal started from Zellij's pane 1 carries its variables, and detectHost says
   // Zellij: words written there would run at that pane's shell.
   it('a terminal started from the pane takes no words', async () => {
     const { calls, adapter } = recorder()
     const found = adapter.paneOf(place({ TERM_PROGRAM: 'vscode' }, 'zellij', null))!
-    expect(found).toEqual(pane('held:s1:1'))
+    expect(found).toEqual(HELD)
     expect(adapter.canType(found)).toBe(false)
     expect(await adapter.type(found, 'hello', 'claude')).toBe(false)
     expect(calls).toEqual([])

@@ -427,10 +427,10 @@ describe('Orca adapter', () => {
     }
   })
 
-  // The hint sets observed.spec.ts and the e2e suites already send for an Orca terminal.
+  // The hint sets observed.spec.ts and the e2e suites already send for an Orca terminal, on a terminal Orca made.
   it('paneOf takes a terminal handle in its own form, and refuses any other', () => {
     const adapter = createOrcaAdapter(quietDeps())
-    const place = (hints: Record<string, string>) => ({ host: 'orca', app: 'orca', hints })
+    const place = (hints: Record<string, string>) => ({ host: 'orca', app: 'orca', hints, ptyOwner: 'orca' })
     const pane = { adapter: 'orca', id: HANDLE }
     expect(adapter.paneOf(place({ ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE }))).toEqual(pane)
     expect(adapter.paneOf(place({ ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE, __CFBundleIdentifier: 'com.stablyai.orca' }))).toEqual(pane)
@@ -441,15 +441,15 @@ describe('Orca adapter', () => {
     expect(adapter.paneOf(place({ __CFBundleIdentifier: 'com.stablyai.orca' }))).toBeUndefined()
     expect(adapter.paneOf(place({}))).toBeUndefined()
     // Only the handle names the pane: the host, the app and a tty change nothing.
-    expect(adapter.paneOf({ host: 'terminal', app: 'terminal', hints: { ORCA_TERMINAL_HANDLE: HANDLE }, tty: '/dev/ttys004' })).toEqual(pane)
-    expect(adapter.paneOf({ host: 'orca', app: 'orca', hints: {}, tty: '/dev/ttys004' })).toBeUndefined()
+    expect(adapter.paneOf({ host: 'terminal', app: 'terminal', hints: { ORCA_TERMINAL_HANDLE: HANDLE }, tty: '/dev/ttys004', ptyOwner: 'orca' })).toEqual(pane)
+    expect(adapter.paneOf({ host: 'orca', app: 'orca', hints: {}, tty: '/dev/ttys004', ptyOwner: 'orca' })).toBeUndefined()
   })
 
   it('in a multiplexer it has no pane: the handle names the terminal the multiplexer started in', () => {
     const adapter = createOrcaAdapter(quietDeps())
     const hints = { ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE }
-    for (const host of ['herdr', 'rex', 'zellij', 'tmux']) expect(adapter.paneOf({ host, app: 'orca', hints }), host).toBeUndefined()
-    for (const host of ['orca', 'wezterm', 'kitty', 'terminal']) expect(adapter.paneOf({ host, app: 'orca', hints }), host).toEqual({ adapter: 'orca', id: HANDLE })
+    for (const host of ['herdr', 'rex', 'zellij', 'tmux']) expect(adapter.paneOf({ host, app: 'orca', hints, ptyOwner: 'orca' }), host).toBeUndefined()
+    for (const host of ['orca', 'wezterm', 'kitty', 'terminal']) expect(adapter.paneOf({ host, app: 'orca', hints, ptyOwner: 'orca' }), host).toEqual({ adapter: 'orca', id: HANDLE })
   })
 
   it('focus is the switch: true only when it exits 0', async () => {
@@ -469,12 +469,67 @@ describe('Orca adapter', () => {
   it('its members work when called apart from it', async () => {
     const { calls, adapter } = adapterRecorder()
     const { paneOf, focus, show, type } = adapter
-    const pane = paneOf({ host: 'orca', app: 'orca', hints: { ORCA_TERMINAL_HANDLE: HANDLE } })!
+    const pane = paneOf({ host: 'orca', app: 'orca', hints: { ORCA_TERMINAL_HANDLE: HANDLE }, ptyOwner: 'orca' })!
     expect(pane).toEqual({ adapter: 'orca', id: HANDLE })
     expect(await focus(pane)).toBe(true)
     expect(await show(pane, 'a1')).toBe('ok')
     expect(await type(pane, 'hi', 'claude')).toBe(true)
     expect(calls.map((call) => call.args[1])).toEqual(['switch', 'switch', 'send'])
+  })
+
+  // VS Code from `code .`, a WezTerm or kitty window, or an xterm started in an Orca terminal keeps its handle: words
+  // typed by that handle land at the Orca terminal's prompt, another agent's or a shell's.
+  describe('the agent\'s own terminal', () => {
+    const hints = { ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE }
+    const madeBy = (ptyOwner: string | null | undefined, pid = 100) => ({ host: 'orca', app: 'orca', hints, pid, ptyOwner })
+    const own = { adapter: 'orca', id: HANDLE }
+    const held = { adapter: 'orca', id: `held:${HANDLE}`, held: true }
+    /** The adapter, its lines kept. */
+    const logged = (platform: NodeJS.Platform = 'darwin') => {
+      const logs: string[] = []
+      const adapter = createOrcaAdapter({ ...quietDeps(), platform }, { worktreeOf: () => undefined, log: (line) => { logs.push(line) }, switching: () => {} })
+      return { logs, adapter }
+    }
+
+    it('an Orca terminal is the agent\'s own only when Orca\'s terminal host made its terminal', () => {
+      const { adapter } = logged()
+      expect(adapter.paneOf(madeBy('orca'))).toEqual(own)
+      for (const owner of [undefined, null, 'wezterm']) expect(adapter.paneOf(madeBy(owner)), String(owner)).toEqual(held)
+      // In a multiplexer, and with a handle out of form, still none.
+      expect(adapter.paneOf({ ...madeBy('orca'), host: 'tmux' })).toBeUndefined()
+      expect(adapter.paneOf({ ...madeBy(null), hints: { ORCA_TERMINAL_HANDLE: '--help' } })).toBeUndefined()
+    })
+
+    // No maker is read on Windows (no `ps`): the handle stays the agent's own there.
+    it('Windows: the agent\'s own, as today', () => {
+      const { logs, adapter } = logged('win32')
+      for (const owner of [undefined, null, 'orca']) expect(adapter.paneOf(madeBy(owner)), String(owner)).toEqual(own)
+      expect(logs).toEqual([])
+    })
+
+    it('a held terminal takes a tap alone: the switch runs, a rest and words do nothing', async () => {
+      const { calls, adapter } = adapterRecorder()
+      const pane = adapter.paneOf(madeBy(null))!
+      expect(await adapter.focus(pane)).toBe(true)
+      expect(calls).toEqual([{ file: FAKE_PATH_ORCA, args: ['terminal', 'switch', '--terminal', HANDLE, '--json'], timeoutMs: 10_000 }])
+      calls.length = 0
+      expect(await adapter.show(pane, 'a1')).toBe('failed')
+      expect(await adapter.type(pane, 'hi', 'claude')).toBe(false)
+      expect(calls).toEqual([])
+    })
+
+    it('held is said once a caller, after the read, naming nothing', () => {
+      const { logs, adapter } = logged()
+      // Not read yet: nothing is said.
+      adapter.paneOf(madeBy(undefined))
+      expect(logs).toEqual([])
+      adapter.paneOf(madeBy(null))
+      adapter.paneOf(madeBy('wezterm'))
+      adapter.paneOf(madeBy('orca'))
+      expect(logs).toEqual(['[device] orca · held'])
+      adapter.paneOf(madeBy(null, 200))
+      expect(logs).toEqual(['[device] orca · held', '[device] orca · held'])
+    })
   })
 })
 

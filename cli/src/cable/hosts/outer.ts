@@ -15,11 +15,18 @@ export type OuterLookup = (
   pid: number,
 ) => Promise<{ app?: string; tty?: string; pid?: number }> | undefined
 
-/** The first lookup's answer when it names an app; else the second's, asked only once the first has settled. */
+/**
+ * The first lookup's answer when it names an app; else the second's when that names one, asked only once the first
+ * has settled; else the first's, whose client's process alone still tells which process to raise.
+ */
 export function firstOuter(first: OuterLookup, second: OuterLookup): OuterLookup {
   return (hints, pid) => {
     const found = first(hints, pid)
     if (!found) return second(hints, pid)
-    return found.then((place) => (place.app ? place : (second(hints, pid) ?? {})))
+    return found.then(async (place) => {
+      if (place.app) return place
+      const next = await second(hints, pid)
+      return next?.app ? next : place
+    })
   }
 }

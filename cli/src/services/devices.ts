@@ -48,9 +48,9 @@ import { HcSource } from '../cable/hosts/hcSource.js'
 import { createHerdrAdapter } from '../cable/hosts/herdr.js'
 import { createHerdrAppAdapter } from '../cable/hosts/herdrApp.js'
 import { createHerdrClient, herdrClientDeps, type HerdrClient } from '../cable/hosts/herdrClient.js'
-import { createHerdrOuter, ttyAtime } from '../cable/hosts/herdrOuter.js'
+import { createHerdrOuter, procSockets, ttyAtime } from '../cable/hosts/herdrOuter.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
-import { createKittyAdapter, kittyFinder } from '../cable/hosts/kitty.js'
+import { createKittyAdapter, createKittyTabAdapter, kittyFinder } from '../cable/hosts/kitty.js'
 import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
 import { systemLinuxRaise, type LinuxRaise } from '../cable/hosts/linuxRaise.js'
@@ -60,7 +60,7 @@ import { observedPlaces } from '../cable/hosts/observedPlaces.js'
 import { createOpenActions } from '../cable/hosts/open.js'
 import { createOpencodeClient, opencodeClientDeps, opencodeMessageId, type OpencodeClient } from '../cable/hosts/opencodeClient.js'
 import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
-import { createOrcaAdapter, createOrcaReads, orcaDeps, type OrcaFocusWatch, type OrcaReadDeps, type OrcaReads, type OrcaTerminal } from '../cable/hosts/orca.js'
+import { createOrcaAdapter, createOrcaReads, orcaDeps, orcaHandle, type OrcaFocusWatch, type OrcaReadDeps, type OrcaReads, type OrcaTerminal } from '../cable/hosts/orca.js'
 import { firstOuter } from '../cable/hosts/outer.js'
 import { readRecord } from '../cable/hosts/record.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
@@ -72,7 +72,7 @@ import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
 import { createVscodeAdapter, termPid } from '../cable/hosts/vscode.js'
 import { readForeground, readProcessParents, vscodeStreams, type VscodeTerminalsDeps } from '../cable/hosts/vscodeTerminals.js'
-import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
+import { createWeztermAdapter, createWeztermTabAdapter } from '../cable/hosts/wezterm.js'
 import { createZellijAdapter, createZellijOuter, zellijFinder } from '../cable/hosts/zellij.js'
 import { createEngineTally } from '../cable/engineTally.js'
 import { createVscodeExtensionSetup } from '../cable/vscodeExtensionSetup.js'
@@ -428,7 +428,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** Where herdr's socket is, from the daemon's own environment: the client reads it, and the herdr source watches for it. */
   const herdrAt = herdrClientDeps()
   const herdrClient = deps.herdr ?? createHerdrClient(herdrAt)
-  const herdrAdapter = createHerdrAdapter({ ...apps, client: herdrClient, front: () => cableHost.latestFront() })
+  const herdrAdapter = createHerdrAdapter({ ...apps, client: herdrClient, front: () => cableHost.latestFront(), log })
   /** `HARNESS_OPEN_BIN`: the end-to-end tests' fake `open`, run for each `open -b` (cable/hosts/open.ts). */
   const openBin = process.env.HARNESS_OPEN_BIN
   /** Where the ChatGPT app is looked for. `HARNESS_APPLICATIONS_DIR`, an absolute path alone, stands in for
@@ -575,21 +575,27 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const tmuxAt = tmuxFinder()
   const zellijAt = zellijFinder()
   const tmux = noting(createTmuxAdapter({ run: apps.run, tmux: tmuxAt, processes: readProcessNames, log, front: () => cableHost.latestFront() }))
+  // One lookup of kitty, for its windows and for the tab holding a multiplexer's client.
+  const kittyDeps = { run: apps.run, kitty: kittyFinder(), platform: apps.platform, log, uid: process.getuid?.() ?? -1, socketOwner }
   const orca = createOrcaAdapter(apps, { worktreeOf: (handle) => orcaWorktrees.get(handle), log, switching: (handle) => orcaSwitches.note(handle) })
   const adapters: readonly HostAdapter[] = [herdrNoted, noting(createZellijAdapter({ run: apps.run, zellij: zellijAt, platform: apps.platform })),
     tmux, herdrAppNoted, cmuxAppNoted, ...[
-    createKittyAdapter({ run: apps.run, kitty: kittyFinder(), platform: apps.platform, log, uid: process.getuid?.() ?? -1, socketOwner }),
+    createKittyAdapter(kittyDeps),
     createWeztermAdapter(apps),
     // A rest's or a tap's switch: Orca's focus line for that pane, a moment later, is the dial's own echo.
     { ...orca,
-      show: (pane: Pane, agentId: string) => { orcaSwitches.note(pane.id); return orca.show(pane, agentId) },
-      focus: (pane: Pane) => { orcaSwitches.note(pane.id); return orca.focus(pane) } },
+      show: (pane: Pane, agentId: string) => { orcaSwitches.note(orcaHandle(pane.id)); return orca.show(pane, agentId) },
+      focus: (pane: Pane) => { orcaSwitches.note(orcaHandle(pane.id)); return orca.focus(pane) } },
   ].map(noting), claudeNoted, codexNoted, ...[
     // No echo to guard: VS Code sends no attach for the follow to take as a person's.
     createVscodeAdapter('vscode', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'vscode', terminals: vscode, raise: raise && ((window) => raise.raise(window)), windows }),
     createVscodeAdapter('cursor', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'cursor', terminals: vscode, raise: raise && ((window) => raise.raise(window)), windows }),
     // After Cursor's terminals and tabs: whatever agent in Cursor they do not reach opens its folder's window.
     createCursorFolderAdapter({ run: apps.run, platform: apps.platform, bin: openBin, isFolder, cli: () => cursorFolderCli(cursorExtension), windows }),
+    // The WezTerm pane and the kitty window holding a multiplexer's client, as the tabs adapter's tab of Terminal,
+    // iTerm2 and Ghostty.
+    createWeztermTabAdapter({ ...apps, front: () => cableHost.latestFront() }),
+    createKittyTabAdapter({ ...kittyDeps, front: () => cableHost.latestFront(), processes: readProcessNames, tty: readTtyName }),
     createTabsAdapter({
       isOpen: () => tabs.isOpen(),
       select: (tab, raise) => {
@@ -697,7 +703,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // runs the continue link a rest runs: its attach is the dial's own echo too.
     open: (agentId, target) => {
       noteMove()
-      if (target.pane?.adapter === claude.id && opener.can(target)) noteLink(agentId)
+      if (target.pane?.adapter === claude.id && opener.can(agentId, target)) noteLink(agentId)
       return opener.open(agentId, target)
     },
     codexQueue,
@@ -708,11 +714,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // a session paired there would be listed twice on Herdr's page.
   hookIds ? (pid): string | undefined => hcSource?.terminalOf(pid) : undefined,
   // An agent in a pane of the person's herdr, tmux or Zellij is on the page of the app holding the client that shows
-  // it: each lookup answers nothing at once for an agent in none of its panes. herdr's first: herdr inside the person's
-  // tmux is the nearer host, and keeps tmux's answer when herdr's finds no app. Zellij's last: a Zellij server started
-  // in a tmux pane gives its panes that pane's TMUX_PANE, where tmux's finds no app.
-  firstOuter(createHerdrOuter({ ...outerDeps, atime: ttyAtime }), firstOuter(createTmuxOuter({ ...outerDeps, tmux: tmuxAt }),
-    createZellijOuter({ ...outerDeps, zellij: zellijAt, tty: readTtyName }))),
+  // it: each lookup answers nothing at once for an agent in none of its panes, and places only one on a terminal its
+  // host made, so at most one names an app. herdr's first: its client's process alone, in a terminal with no page, is
+  // kept for Linux's raise when neither other names an app.
+  firstOuter(createHerdrOuter({ ...outerDeps, atime: ttyAtime, tty: readTtyName, onPath: apps.onPath, sockets: procSockets }),
+    firstOuter(createTmuxOuter({ ...outerDeps, tmux: tmuxAt, tty: readTtyName }),
+      createZellijOuter({ ...outerDeps, zellij: zellijAt, tty: readTtyName }))),
   // Windows has no `ps`: there no terminal's pane is read as the agent's own, and none takes its words.
   apps.platform === 'win32' ? undefined : async (pid) => readPtyOwner(pid, await readProcessNames(), readTtyName)) : null
   // Orca is asked only for the parts that use its homes, the first time as the devices start: the start pass waits for
@@ -740,6 +747,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     client: herdrClient,
     watch: (changed) => watchSocket(herdrAt, changed),
     prompt: herdrAdapter.prompt,
+    held: (paneKey, asker) => observed.holds(paneKey, asker),
     // The command a hooked agent's tap runs (Q6): the dial's move is noted as every tap's is. Only a shown pane is true:
     // herdr's adapter never refuses one, though the noted copy is typed as any adapter's.
     focus: async (paneId) => (await herdrNoted.focus({ adapter: herdrAdapter.id, id: paneId })) === true,

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { FRONT_NONE, frontAppId, windowClasses } from './frontApp.js'
 import { APP_IDS, detectApp } from './hostDetect.js'
 import { RECORDED_LINUX_APPS } from '../../testing/recordedLinuxApps.js'
+import { RECORDED_WEZTERM } from '../../testing/recordedWezterm.js'
 
 const BUNDLES: [string, string][] = [
   ['com.stablyai.orca', 'orca'],
@@ -59,6 +60,11 @@ describe('frontAppId', () => {
   it.each(LINUX_APPS)('the Claude and ChatGPT apps on Linux map by their recorded comm: %s', (comm, id) => {
     expect(frontAppId(comm)).toBe(id)
   })
+
+  it.each(['wezterm-mux-server', RECORDED_WEZTERM.muxServerComm])(
+    'frontAppId names WezTerm for its mux server, whole and as Linux cuts it: %s', (comm) => {
+      expect(frontAppId(comm)).toBe('wezterm')
+    })
 
   it.each(['com.apple.Safari', 'org.alacritty', 'net.kovidgoyal.kitty-quick-access', 'alacritty', '', 'x'.repeat(128),
     'constructor', '__proto__', 'toString', 'COM.MITCHELLH.GHOSTTY', 'com.openai.chat', 'codex', 'Codex.exe',
