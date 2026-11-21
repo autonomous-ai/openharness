@@ -7,9 +7,11 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
+import { RECORDED_HERDR } from '../../testing/recordedHerdr.js'
 import { ObservedSource, type ObservedDeps } from './observed.js'
 import {
-  appRoots, learnApps, parseProcessNames, ptyOwner, readBundleId, readProcessNames, readPtyOwner, readTtyName, scannedApps,
+  appRoots, learnApps, parseProcessNames, ptyMaker, ptyOwner, readBundleId, readProcessNames, readPtyMaker, readPtyOwner,
+  readTtyName, scannedApps,
   WALK_PARENTS, type ProcessName, type PtyProcess, type ScannedAppDeps,
 } from './scannedApp.js'
 
@@ -395,6 +397,54 @@ describe('the host that owns a process\'s terminal, read', () => {
   it('none for `?` and `??`', async () => {
     expect(await readTtyName(1, async () => '?\n')).toBeUndefined()
     expect(await readTtyName(1, async () => '??      \n')).toBeUndefined()
+  })
+})
+
+// herdr's own-pane check and its client lookup need the process itself, not only its host: herdr's server is where its
+// sockets are (docs/plans/2026-11-21-dial-linux-followups-design.md § 1).
+describe('the process that made a pseudo-terminal', () => {
+  const HERDR = RECORDED_HERDR.pids
+  /** Each recorded process with the terminal `ps -o tty=` gave it. */
+  const recorded = (): PtyProcess[] => parseProcessNames(RECORDED_HERDR.table).map((p) => {
+    const tty = RECORDED_HERDR.ttyOf[p.pid]?.trim()
+    return tty && tty !== '?' ? { ...p, tty } : p
+  })
+
+  it('ptyMaker over herdr\'s recorded scene: an agent in a pane is made by the server', () => {
+    expect(ptyMaker(HERDR.agent, recorded())).toEqual({ pid: HERDR.serverA, host: 'herdr' })
+    expect(ptyMaker(HERDR.otherShell, recorded())).toEqual({ pid: HERDR.otherServer, host: 'herdr' })
+    // herdr before 0.9.0 (#4500's macOS tests ran 0.8.0): `--no-session` ran the panes under the client, on its
+    // terminal's pty. 0.9.0 removed it (RECORDED_HERDR.noSession), so this table is made up.
+    const noSession = table([[300, 299, 'claude', 'pts/6'], [299, 298, 'sh', 'pts/6'], [298, 297, 'herdr', 'pts/5'],
+      [297, 296, '-bash', 'pts/5'], [296, 1, 'wezterm-gui']])
+    expect(ptyMaker(300, noSession)).toEqual({ pid: 298, host: 'herdr' })
+  })
+
+  it('a maker no table lists: its pid and no host', () => {
+    // herdr's client A, on the pty the stand-in terminal made.
+    expect(ptyMaker(HERDR.clientA, recorded())).toEqual({ pid: HERDR.terminalA })
+    expect(ptyOwner(HERDR.clientA, recorded())).toBeUndefined()
+  })
+
+  it('a process on no terminal, or a walk that ends first: undefined', () => {
+    expect(ptyMaker(HERDR.serverA, recorded())).toBeUndefined()
+    expect(ptyMaker(100, table([[100, 50, 'claude', 'pts/2'], [50, 1, 'bash', 'pts/2']]))).toBeUndefined()
+  })
+
+  it('readPtyMaker reads ttys one at a time up to the maker, and rejects as readTtyName does', async () => {
+    const exec = vi.fn(async (_command: string, args: readonly string[]): Promise<string | null> =>
+      RECORDED_HERDR.ttyOf[Number(args[3])] ?? null)
+    const rows = parseProcessNames(RECORDED_HERDR.table)
+    expect(await readPtyMaker(HERDR.agent, rows, (pid) => readTtyName(pid, exec))).toEqual({ pid: HERDR.serverA, host: 'herdr' })
+    expect(exec.mock.calls.map(([, args]) => Number(args[3]))).toEqual([HERDR.agent, HERDR.agentShell, HERDR.serverA])
+    const gone = (pid: number) => readTtyName(pid, async (_command, args) => (Number(args[3]) === HERDR.agent ? 'pts/3\n' : null))
+    expect(await readPtyMaker(HERDR.agent, rows, gone).catch((e: unknown) => e)).toEqual(new Error('tty not read'))
+  })
+
+  it('macOS: herdr by its path\'s last part', () => {
+    const rows = table([[400, 399, 'claude', 'ttys007'], [399, 398, '-zsh', 'ttys007'], [398, 1, '/Users/u/.local/bin/herdr']])
+    expect(ptyMaker(400, rows)).toEqual({ pid: 398, host: 'herdr' })
+    expect(ptyOwner(400, rows)).toBe('herdr')
   })
 })
 
