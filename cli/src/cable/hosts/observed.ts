@@ -673,9 +673,10 @@ export class ObservedSource implements HostSource {
    * The host that made its caller's terminal (Place.ptyOwner), read once per process in the background, as its tty is,
    * and only for a caller whose hints name a pane that asks it (PTY_HINTS): until it lands, a terminal's or a
    * multiplexer's pane only holds the agent, and takes no words. An answer lands only while that process is still its
-   * caller, null when it named no host: placed again, its adapters know the read landed, and may say so. Only a host
-   * named is told: none leaves every pane held, as it was while the read ran. A read that failed said nothing of the
-   * host: a later event reads it again, no sooner than TTY_RETRY_MS.
+   * caller, null when it named no host: placed again, its adapters know the read landed, and may say so. A host named is
+   * told; none is told only when a held pane's key goes, as the list showed it while the read ran (list), and every pane
+   * stays held as it was. A read that failed said nothing of the host: a later event reads it again, no sooner than
+   * TTY_RETRY_MS.
    */
   private learnPtyOwner(entry: Entry, pid: number): void {
     if (!this.deps.ptyOwner || !PTY_HINTS.some((key) => entry.hints[key] !== undefined)) return
@@ -689,7 +690,7 @@ export class ObservedSource implements HostSource {
       entry.ptyOwner = owner ?? null
       if (!this.live(entry)) return
       this.locate(entry)
-      if (owner !== undefined) this.emit()
+      if (owner !== undefined || entry.panes.some(({ adapter, pane }) => pane.held && adapter.paneKey)) this.emit()
     }, (error) => {
       if (entry.ptyPid === pid) entry.ptyFailedAt = now
       // Its kind only: never the pid or the session.
