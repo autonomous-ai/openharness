@@ -4,9 +4,8 @@ import type { AddressInfo } from 'node:net'
 import { hostname } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WebSocketServer, type WebSocket } from 'ws'
-import { env } from '../config/env.js'
+import { backendName, env } from '../config/env.js'
 import { AuthSessionError } from '../lib/authSession.js'
-import { hashOf } from '../lib/log.js'
 import { UpstreamLink } from './upstream.js'
 
 // A computer's name that is not its hostname, so the adapter-ws label below shows which one it sends.
@@ -231,8 +230,17 @@ describe('UpstreamLink reconnect backoff', () => {
 })
 
 describe('UpstreamLink connected line', () => {
+  // Every process says the backend with the same words (core/main.ts, device/deviceLink.ts): a hash differs between processes.
+  it('names the backend by whether it is the one a build dials unless told otherwise', () => {
+    expect(backendName('wss://harness-api.autonomous.ai')).toBe('the production backend')
+    expect(backendName('wss://harness-api.autonomous.ai/api/adapter-ws?label=sentinel&v=1')).toBe('the production backend')
+    expect(backendName('wss://harness-api.autonomous.ai.example/api/adapter-ws')).toBe('another backend')
+    expect(backendName('ws://localhost:8090')).toBe('another backend')
+    expect(backendName('not a URL')).toBe('another backend')
+  })
+
   // `harness start` waits for `[backend] connected` (lib/daemonLaunch.ts); the URL carries the hostname.
-  it('the connected line keeps its marker and names no URL', async () => {
+  it('the connected line keeps its marker and says which backend in fixed words, never its URL', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const originalUrl = env.BACKEND_WS_URL
     let dialed = ''
@@ -245,7 +253,8 @@ describe('UpstreamLink connected line', () => {
       await up
 
       const lines = log.mock.calls.map((call) => call.map(String).join(' '))
-      expect(lines.filter((line) => line.startsWith('[backend] connected'))).toEqual([`[backend] connected · ${hashOf(`${server.url}${dialed}`)}`])
+      expect(dialed).toContain('label=')
+      expect(lines.filter((line) => line.startsWith('[backend] connected'))).toEqual(['[backend] connected · another backend'])
       expect(lines.join('\n')).not.toContain('127.0.0.1')
     } finally {
       link.stop()

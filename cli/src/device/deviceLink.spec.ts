@@ -147,6 +147,13 @@ const until = async (what: string, check: () => boolean, ms = 4_000): Promise<vo
 }
 
 describe('the fleet\'s lane, sealed by the gateway', () => {
+  it('says which backend it dials in fixed words, never its URL', async () => {
+    const { link, lines } = await lane()
+    await link.online()
+    expect(lines.filter((line) => line.startsWith('device: connecting'))).toEqual(['device: connecting → another backend'])
+    expect(lines.join('\n')).not.toContain('127.0.0.1')
+  })
+
   it('sends a linked machine nothing in the clear: what the gateway cannot seal goes nowhere, and a session starts again', async () => {
     const { server, seal, link, lines } = await lane()
     await link.online()
