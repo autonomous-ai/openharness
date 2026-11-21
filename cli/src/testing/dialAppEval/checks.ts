@@ -422,7 +422,7 @@ export function condition(until: Until, scenario: Scenario, seen: Seen): { holds
 }
 
 /**
- * Each delivery after a voice step to anyone but that step's target; one with no known target is a wrong send too. A
+ * Each delivery after a voice step to anyone but that step's target; one with no known target is a wrong-session send too. A
  * delivery is the latest voice step's that spoke its words, as one can land after the next step; words no step spoke are
  * the latest step's.
  */

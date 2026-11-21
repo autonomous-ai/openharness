@@ -66,8 +66,8 @@ function subsetRows(r: Report): string[][] {
 function gateLines(r: Report): string[] {
   const { passed, wrongSends } = r.gate
   return [
-    passed ? 'Gate: passed' : `Gate: failed, ${wrongSends.length} wrong send${wrongSends.length === 1 ? '' : 's'}`,
-    // A wrong send names keys and the delivery path only: the spoken text is personal content.
+    passed ? 'Gate: passed' : `Gate: failed, ${wrongSends.length} wrong-session send${wrongSends.length === 1 ? '' : 's'}`,
+    // A wrong-session send names keys and the delivery path only: the spoken text is personal content.
     ...wrongSends.map((w) =>
       `- ${w.scenario} ${w.platform} tier ${w.tier}: target ${w.target}, got ${w.got ?? 'none'}, path ${w.path}, at ${w.at} ms`),
   ]
@@ -79,7 +79,7 @@ function sections(r: Report): Array<[string, string[]]> {
     ['Not run', (r.skipped ?? []).map((s) => `- tier ${s.tier}: ${s.reason}`)],
     ['Failing checks', r.failing.flatMap((f) => [
       `- ${f.tier}/${f.platform}/${f.scenario}/${f.check} (${APP_NAMES[f.app]}, ${f.dim}): score ${num(f.score)}, ` +
-        `${num(f.pointsLost)} points lost${f.ms == null ? '' : `, ${f.ms} ms`}`,
+        `${points(f.pointsLost)} lost${f.ms == null ? '' : `, ${f.ms} ms`}`,
       ...f.evidence.map((line) => `    ${line}`),
     ])],
     ['Points lost', r.groups.map((g) =>
@@ -99,6 +99,8 @@ function sections(r: Report): Array<[string, string[]]> {
 function num(n: number | null): string {
   return n === null ? '—' : String(Math.round(n * 10) / 10)
 }
+
+const points = (n: number): string => `${num(n)} point${num(n) === '1' ? '' : 's'}`
 
 function columns(cells: string[]): string {
   return cells.map((cell, i) => (i === 0 ? cell.padEnd(16) : cell.padStart(i > DIMENSIONS.length ? 7 : 5))).join(' ')

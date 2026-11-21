@@ -12,7 +12,7 @@ export type Label = string
 
 export const DIMENSIONS: readonly Dimension[] = ['D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D8']
 
-/** Each dimension's weight in an app's score: voice send counts most, since a wrong send is the worst failure. */
+/** Each dimension's weight in an app's score: voice send counts most, since a wrong-session send is the worst failure. */
 export const WEIGHTS: Readonly<Record<Dimension, number>> = {
   D1: 15, D2: 15, D3: 15, D4: 10, D5: 25, D6: 5, D7: 10, D8: 5,
 }

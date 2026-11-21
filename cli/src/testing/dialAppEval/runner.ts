@@ -34,7 +34,7 @@ const firstLine = (error: unknown): string => String(error instanceof Error ? er
 export async function runScenario(driver: EvalDriver, scenario: Scenario, platform: Platform): Promise<ScenarioRun> {
   /** Each condition wait run, and whether it held: one that reached its limit let what came after it run on a world that was not ready. */
   const waited: Array<{ index: number; held: boolean; evidence: string[] }> = []
-  // A throw ends the steps, never the run: what was seen up to it still holds the wrong sends the gate must see.
+  // A throw ends the steps, never the run: what was seen up to it still holds the wrong-session sends the gate must see.
   let error: string | undefined
   let doing = 'start'
   try {
@@ -66,7 +66,7 @@ export async function runScenario(driver: EvalDriver, scenario: Scenario, platfo
   const { tier } = driver
   const on = { tier, platform }
   const gaps = driver.gaps().map((reason) => ({ ...on, scenario: scenario.id, app: scenario.app, heldOut: scenario.heldOut, reason }))
-  // A wrong send fails the run whatever else holds, so a gap does not hide one.
+  // A wrong-session send fails the run whatever else holds, so a gap does not hide one.
   const wrong = wrongSends(scenario, seen).map((w) => ({ ...on, ...w }))
   const score = (checks: readonly Check[]): CheckResult[] => gaps.length > 0 ? []
     : checks.flatMap((check) => evaluate(check, scenario, seen, tier, platform))
