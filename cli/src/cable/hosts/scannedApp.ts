@@ -178,7 +178,10 @@ function startedAfter(parent: { startMarker?: string }, child: { startMarker?: s
 /** The hosts whose panes the dial reaches, by the name of the process that makes a pane's pseudo-terminal: a terminal's
  *  own (WezTerm's GUI, or its mux server, which Linux cuts to 15 characters) or a multiplexer's server (tmux's names
  *  itself so on Linux). macOS names each by its path. herdr's server, a child of its first client on no terminal
- *  (RECORDED_HERDR), names itself `herdr`, as its client does, which made the panes before herdr 0.9.0 (`--no-session`). */
+ *  (RECORDED_HERDR), names itself `herdr`, as its client does, which made the panes before herdr 0.9.0 (`--no-session`).
+ *  Orca's terminal host, per RECORDED_ORCA: `Orca Agents` on macOS, the daemon that renames itself `orca-agents` on
+ *  Linux (.deb and AppImage), and the app itself, `orca-ide`, when the daemon could not start. Orca from before its
+ *  terminal host, and a Linux daemon whose rename failed (`node`), are not covered. */
 const PTY_HOSTS: Readonly<Record<string, string>> = {
   'wezterm-gui': 'wezterm',
   'wezterm-mux-server': 'wezterm',
@@ -188,6 +191,9 @@ const PTY_HOSTS: Readonly<Record<string, string>> = {
   tmux: 'tmux',
   'tmux: server': 'tmux',
   herdr: 'herdr',
+  'Orca Agents': 'orca',
+  'orca-agents': 'orca',
+  'orca-ide': 'orca',
 }
 
 /** The process that made a pseudo-terminal, and its host when PTY_HOSTS lists it. */
