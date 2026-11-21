@@ -16,6 +16,10 @@ const UPDATE_TIER_A = 'run `npm run eval:dial-apps -- --tier a --update-baseline
 type Run = Pick<CheckResult, 'tier' | 'platform' | 'scenario'>
 const runKey = (r: Run): string => `${r.tier}/${r.platform}/${r.scenario}`
 const runOfKey = (key: string): string => key.split('/', 3).join('/')
+/** The scenarios held out, as the run marks them: each result and gap carries its scenario's mark. */
+const heldOutOf = (results: RunResults): Set<string> =>
+  new Set([...results.results, ...results.gaps].filter((r) => r.heldOut).map((r) => r.scenario))
+const heldOutKey = (held: ReadonlySet<string>) => (key: string): boolean => held.has(key.split('/', 3)[2]!)
 /** A baseline subset: tier A as one, as it runs every platform by injection; tier B one per platform it drove. */
 const subsetOf = (r: Pick<CheckResult, 'tier' | 'platform'>): string => (r.tier === 'a' ? 'a' : `b/${r.platform}`)
 const subsetOfKey = (key: string): string => {
@@ -108,9 +112,10 @@ export function grade(results: RunResults, baseline: Baseline | null): Report {
   // A baseline entry of a subset this run did not drive is not a change.
   const subsets = new Set([...results.results, ...results.gaps].map(subsetOf))
   const keys = new Set([...after.keys(), ...Object.keys(before).filter((key) => subsets.has(subsetOfKey(key)))])
-  const checks = [...keys].sort()
+  const changed = [...keys].sort()
     .map((key) => ({ key, before: before[key] ?? null, after: after.get(key) ?? null }))
     .filter((c) => c.before !== c.after)
+  const isHeldOut = heldOutKey(heldOutOf(results))
 
   return {
     schema: 1,
@@ -121,12 +126,13 @@ export function grade(results: RunResults, baseline: Baseline | null): Report {
     gate: { passed: results.wrongSends.length === 0, wrongSends: results.wrongSends },
     failing,
     groups: rankedGroups(failing),
-    gaps: results.gaps,
+    gaps: mainGaps,
     delta: {
       apps: Object.fromEntries([...subsetScores(results, [...subsets].sort())].map(([subset, now]) => [subset,
         Object.fromEntries(APPS.map((app) => [app, { before: baseline?.apps[subset]?.[app] ?? null, after: now[app] }])) as
           Report['delta']['apps'][string]])),
-      checks,
+      checks: changed.filter((c) => !isHeldOut(c.key)),
+      heldOutChanged: changed.filter((c) => isHeldOut(c.key)).length,
     },
   }
 }
@@ -139,7 +145,10 @@ function gateFailure(results: RunResults): Verdict | null {
   return { ok: false, message: lines.join('\n') }
 }
 
-/** Tier A is deterministic, so its baseline is exact: any difference fails, a drop as a regression, the rest as stale. */
+/**
+ * Tier A is deterministic, so its baseline is exact: any difference fails, a drop as a regression, a check the run no
+ * longer gives as missing, the rest as stale.
+ */
 export function tierAVerdict(results: RunResults, baseline: Baseline): Verdict {
   const gate = gateFailure(results)
   if (gate) return gate
@@ -156,10 +165,16 @@ export function tierAVerdict(results: RunResults, baseline: Baseline): Verdict {
     else if (is < (was ?? 1)) regressions.push(key)
     else if (was !== is) stale.push(key)
   }
+  // The held-out checks are counted, never named: the message is read by whoever fixes the main set.
+  const isHeldOut = heldOutKey(heldOutOf(results))
+  const named = (keys: string[]): string[] => keys.filter((key) => !isHeldOut(key))
+  const heldOut = [...regressions, ...missing, ...stale].filter(isHeldOut).length
+  const line = (label: string, keys: string[], after = ''): string[] => (keys.length > 0 ? [`${label}: ${keys.join(', ')}${after}`] : [])
   const lines = [
-    ...(regressions.length > 0 ? [`regression: ${regressions.join(', ')}`] : []),
-    ...(missing.length > 0 ? [`missing: ${missing.join(', ')}`] : []),
-    ...(stale.length > 0 ? [`stale baseline: ${stale.join(', ')}; ${UPDATE_TIER_A}`] : []),
+    ...line('regression', named(regressions)),
+    ...line('missing', named(missing)),
+    ...line('stale baseline', named(stale), `; ${UPDATE_TIER_A}`),
+    ...(heldOut > 0 ? [`held out: ${heldOut} check${heldOut === 1 ? ' differs' : 's differ'} from the baseline`] : []),
   ]
   return lines.length > 0 ? { ok: false, message: lines.join('\n') } : { ok: true, message: 'tier A matches the baseline' }
 }

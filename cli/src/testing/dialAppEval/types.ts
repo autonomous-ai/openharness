@@ -159,10 +159,14 @@ export interface Report {
   gate: { passed: boolean; wrongSends: WrongSend[] }
   /** groups ranked, most points lost first. */
   failing: Array<CheckResult & { pointsLost: number }>; groups: Group[]
+  /** The main set's: a held-out gap counts only in its table's left out. */
   gaps: CoverageGap[]
-  /** apps: keyed by subset, as the baseline's, for each subset this run drove. */
+  /**
+   * apps: keyed by subset, as the baseline's, for each subset this run drove. checks: the main set's; the held-out ones
+   * that changed are only counted, so the report shows nothing of them to fix by.
+   */
   delta: { apps: Record<string, Record<App, { before: number | null; after: number | null }>>;
-           checks: Array<{ key: string; before: number | null; after: number | null }> }
+           checks: Array<{ key: string; before: number | null; after: number | null }>; heldOutChanged: number }
 }
 export interface Verdict { ok: boolean; message: string }
 export interface EvalDriver {

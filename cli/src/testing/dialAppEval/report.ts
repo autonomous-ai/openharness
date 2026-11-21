@@ -15,8 +15,8 @@ export function summary(report: Report): string {
   const r = clean(report)
   const lines = [`Dial eval (target ${TARGET})`, columns(['', ...DIMENSIONS, 'score', ''])]
   for (const app of APPS) lines.push(columns(scoreRow(app, r.apps[app])))
-  lines.push('', 'Held out', columns(['', ...DIMENSIONS, 'score']))
-  for (const app of APPS) lines.push(columns(scoreRow(app, r.heldOut[app]).slice(0, -1)))
+  lines.push('', 'Held out', columns(['', ...DIMENSIONS, 'score', '']))
+  for (const app of APPS) lines.push(columns(scoreRow(app, r.heldOut[app])))
   lines.push('', ...subsetRows(r).map(([run, app, score, leftOut]) =>
     `${run.padEnd(10)} ${app.padEnd(16)} ${score.padStart(5)} ${leftOut}`))
   lines.push('', ...gateLines(r))
@@ -33,7 +33,7 @@ export function markdown(report: Report): string {
     '## Scores', '', `Target: ${TARGET}`, '',
     ...table(['App', ...DIMENSIONS, 'Score', 'Left out'], APPS.map((app) => scoreRow(app, r.apps[app]))), '',
     '## Held out', '',
-    ...table(['App', ...DIMENSIONS, 'Score'], APPS.map((app) => scoreRow(app, r.heldOut[app]).slice(0, -1))), '',
+    ...table(['App', ...DIMENSIONS, 'Score', 'Left out'], APPS.map((app) => scoreRow(app, r.heldOut[app]))), '',
     '## By tier and platform', '',
     ...table(['Run', 'App', 'Score', 'Left out'], subsetRows(r)), '',
     '## Gate', '', ...gateLines(r),
@@ -86,6 +86,8 @@ function sections(r: Report): Array<[string, string[]]> {
       ...Object.entries(r.delta.apps).flatMap(([subset, apps]) =>
         APPS.map((app) => `- ${subset}, ${APP_NAMES[app]}: ${num(apps[app].before)} → ${num(apps[app].after)}`)),
       ...r.delta.checks.map((c) => `- ${c.key}: ${num(c.before)} → ${num(c.after)}`),
+      ...(r.delta.heldOutChanged > 0
+        ? [`- held out: ${r.delta.heldOutChanged} check${r.delta.heldOutChanged === 1 ? '' : 's'} changed`] : []),
     ]],
   ]
   return all.filter(([, body]) => body.length > 0)
