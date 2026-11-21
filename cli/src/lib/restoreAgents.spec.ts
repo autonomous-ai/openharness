@@ -556,6 +556,13 @@ describe('restoreAgents — a survey that could not tell', () => {
     expect(h.calls.filter((call) => /releaseEngine|createPane/.test(call))).toEqual([])
   })
 
+  it('a survey that failed outright fails its row with a code of its own beside the reason', async () => {
+    const h = harness([row()])
+    h.deps.liveProcess = async () => { throw new Error('ps said /Users/sentinel/x') }
+    const summary = await restoreAgents(h.deps)
+    expect(summary.failed).toEqual([{ agentId: 'agent-a', code: 'SURVEY_FAILED', reason: 'ps said /Users/sentinel/x' }])
+  })
+
   it('each held restore reads a fresh tmux inventory, preserving its pane until it actually disappears', async () => {
     const h = harness([row({ launch: heldLaunch('store') })])
     let panes: TerminalRuntimeRef[] = []
@@ -824,7 +831,7 @@ describe('restoreAgents — which agents get a pane back', () => {
   it('a launch the machine cannot build fails the row instead of opening a pane on the wrong login', async () => {
     const h = harness([row({ agentId: 'gridded', grid: { baseUrl: GRID.baseUrl, model: null }, gridLaunch: GRID })], { refuseLaunch: true })
     const summary = await restoreAgents(h.deps)
-    expect(summary.failed).toEqual([{ agentId: 'gridded', reason: 'no way to point it at a grid' }])
+    expect(summary.failed).toEqual([{ agentId: 'gridded', code: 'GRID_ENGINE_UNSUPPORTED', reason: 'no way to point it at a grid' }])
     expect(h.paneCreates).toBe(1)
     expect(h.respawns).toBe(0)
     expect(h.launched[0].launch.argv).toEqual([])
@@ -849,7 +856,7 @@ describe('restoreAgents — which agents get a pane back', () => {
     })
     const summary = await restoreAgents(h.deps)
     expect(summary.restored).toEqual(['agent-b'])
-    expect(summary.failed).toEqual([{ agentId: 'agent-a', reason: expect.stringContaining('claude.cmd is a batch file') }])
+    expect(summary.failed).toEqual([{ agentId: 'agent-a', code: 'ENGINE_LAUNCH_REFUSED', reason: expect.stringContaining('claude.cmd is a batch file') }])
     expect(h.calls).toContain('setLaunch:agent-a:failed:ENGINE_LAUNCH_REFUSED')
     await settled(h, 1, 1)
   })
@@ -865,7 +872,7 @@ describe('restoreAgents — which agents get a pane back', () => {
   it('records a pane that could not be opened and leaves the row untouched', async () => {
     const h = harness([row()], { failCreate: true })
     const summary = await restoreAgents(h.deps)
-    expect(summary.failed).toEqual([{ agentId: 'agent-a', reason: 'tmux said no' }])
+    expect(summary.failed).toEqual([{ agentId: 'agent-a', code: 'WAITING_PANE_FAILED', reason: 'tmux said no' }])
     expect(h.calls).not.toContainEqual(expect.stringMatching(/^updateRuntimes/))
     expect(h.calls).not.toContainEqual(expect.stringMatching(/^hold/))
     expect(h.rows.get('agent-a')?.tmuxPane).toBe('%3')
@@ -881,7 +888,7 @@ describe('restoreAgents — which agents get a pane back', () => {
     // A terminal host's refusal can quote the folder it was asked to open the pane in.
     h.deps.respawn = respawn
     const summary = await restoreAgents(h.deps)
-    expect(summary.failed).toEqual([{ agentId: 'agent-a', reason }])
+    expect(summary.failed).toEqual([{ agentId: 'agent-a', code: 'PANE_FAILED', reason }])
     const lines = log.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
     expect(lines).not.toContain('sentinel')
     expect(lines).toContain(`[restore] claude · agent agent-a · could not open a pane · ${logged}`)
@@ -1038,7 +1045,7 @@ describe('restoreAgents — held until the service a launch asks is ready', () =
     const h = harness([gridRow('refused', { launch: HELD }), gridRow('lost', { launch: HELD, resumeOnly: true, sessionId: '' })], { alivePanes: ['%47', '%44'] })
     withModels(h, ['refused'])
     const summary = await restoreAgents(h.deps)
-    expect(summary.failed.map((f) => f.agentId)).toEqual(['refused', 'lost'])
+    expect(summary.failed.map(({ agentId, code }) => [agentId, code])).toEqual([['refused', 'GRID_ENGINE_UNSUPPORTED'], ['lost', 'RESUME_UNAVAILABLE']])
     expect(h.calls).toContain('kill:%47')
     expect(h.calls).toContain('kill:%44')
     expect(h.rows.get('refused')?.launch).toMatchObject({ state: 'failed', error: 'GRID_ENGINE_UNSUPPORTED' })
@@ -1048,7 +1055,7 @@ describe('restoreAgents — held until the service a launch asks is ready', () =
     const h = harness([gridRow('gridded')], { failCreate: true })
     withModels(h)
     h.deps.defer = true
-    expect((await restoreAgents(h.deps)).failed).toEqual([{ agentId: 'gridded', reason: 'tmux said no' }])
+    expect((await restoreAgents(h.deps)).failed).toEqual([{ agentId: 'gridded', code: 'WAITING_PANE_FAILED', reason: 'tmux said no' }])
     const bare = harness([gridRow('gridded')])
     bare.deps.needs = () => 'models'
     bare.deps.defer = true
@@ -1441,7 +1448,7 @@ describe('missing held panes against the durable registry', () => {
       expect(entries.every(entry => realRegistry.byAgent(entry.agentId)?.active === false)).toBe(true)
       expect(h.respawns).toBe(0)
       if (mode !== 'cycle') expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining('left intact for review'))
-      if (mode === 'chain failure') expect(result.failed).toHaveLength(1)
+      if (mode === 'chain failure') expect(result.failed).toEqual([expect.objectContaining({ code: 'WAITING_PANE_FAILED' })])
       // The synchronous batch has released durable writes before its returned Promise settles.
       const committing = realRegistry.transaction(() => realRegistry.setLaunch(entries[0].agentId, heldLaunch('store')))
       await expect((async () => (await realRegistry.setClosePlan(entries[0].agentId, null)))()).resolves.not.toBeInstanceOf(Error)
