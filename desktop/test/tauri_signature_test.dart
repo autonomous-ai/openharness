@@ -281,11 +281,14 @@ void main() {
 
   // Only tests hand the checks another key, so a release build trusts the
   // pinned one alone. App code may forward its own `tauriPublicKey` parameter:
-  // its callers are checked here too, and every such parameter defaults to the
-  // pinned key.
+  // its callers are checked here too, every such parameter defaults to the
+  // pinned key, and a check is handed only the field that parameter sets.
   test('app code trusts no other Tauri key', () {
     final passed = RegExp(r'\btauriPublicKey\s*:\s*([^,;)}]+)');
     final defaulted = RegExp(r'\b_?tauriPublicKey\s*=\s*([^,;)}]+)');
+    final checked = RegExp(
+      r'\bcheckTauriSignature\([^;]*?\bpublicKey\s*:\s*([^,;)}]+)',
+    );
     final offenders = <String>[];
     for (final file in Directory('lib').listSync(recursive: true)) {
       if (file is! File || !file.path.endsWith('.dart')) continue;
@@ -293,6 +296,7 @@ void main() {
       for (final (pattern, allowed) in [
         (passed, 'tauriPublicKey'),
         (defaulted, 'tauriUpdatePublicKey'),
+        (checked, '_tauriPublicKey'),
       ]) {
         for (final match in pattern.allMatches(source)) {
           if (match[1]!.trim() != allowed) {
