@@ -554,9 +554,9 @@ YAML_ALIAS = re.compile(r"(?m)(?:^[ \t]*-|:)[ \t]+\*([\w-]+)")
 
 def edited_job_suites(root, base, head):
     """The suites whose ci.yml jobs head edits, adds or removes: a job's definition is part of what its suite tests, with
-    what it takes from the rest of the file (the env variables it names, the permissions and defaults, the anchors it
-    names). device-app-build's are the Device suites that install its packages; the plan, process and gate jobs run
-    none."""
+    what it takes from the rest of the file (the env variables it names, the permissions, defaults and concurrency, the
+    anchors it names). device-app-build's are the Device suites that install its packages; the plan, process and gate
+    jobs run none."""
     def top(commit):
         try:
             return yaml_entries(git(root, "show", f"{commit}:{CI_WORKFLOW}") + "\n")
@@ -567,7 +567,7 @@ def edited_job_suites(root, base, head):
     old, new = yaml_entries(old_top.get("jobs", "")), yaml_entries(new_top.get("jobs", ""))
     jobs = old.keys() | new.keys()
     edited = {job for job in jobs if old.get(job) != new.get(job)}
-    if any(old_top.get(key) != new_top.get(key) for key in ("permissions", "defaults")):
+    if any(old_top.get(key) != new_top.get(key) for key in ("permissions", "defaults", "concurrency")):
         edited |= jobs
     old_env, new_env = yaml_entries(old_top.get("env", "")), yaml_entries(new_top.get("env", ""))
     variables = [re.escape(name) for name in old_env.keys() | new_env.keys() if old_env.get(name) != new_env.get(name)]
