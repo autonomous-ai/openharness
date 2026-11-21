@@ -49,7 +49,8 @@ final _ed25519 = DartEd25519();
 /// base64-encoded) was made by [publicKey] over [digest], the BLAKE2b-512 of
 /// the file, and its trusted comment names `file:<fileName>` and
 /// [versionField] (the whole field, e.g. `desktop-version:1.2.3`) among its
-/// tab-separated fields.
+/// tab-separated fields; a Desktop one (`desktop-version:`) has no field that
+/// starts with `version:`.
 ///
 /// The cheap checks come first, so hostile text never costs a hash: [digest]
 /// is called only once the signature and its comment hold. Each refusal has
@@ -79,7 +80,14 @@ Future<void> checkTauriSignature(
     throw const TauriSignatureRefused(SignatureRefusal.global);
   }
   final fields = signed.trustedComment.split('\t');
-  if (!fields.contains('file:$fileName') || !fields.contains(versionField)) {
+  // Harness Device's updater trusts a `version:` field, so a Desktop signature
+  // carrying one could make a Linux Device install Desktop.
+  final readsAsDevice =
+      versionField.startsWith('desktop-version:') &&
+      fields.any((field) => field.startsWith('version:'));
+  if (!fields.contains('file:$fileName') ||
+      !fields.contains(versionField) ||
+      readsAsDevice) {
     throw const TauriSignatureRefused(SignatureRefusal.comment);
   }
   if (!await _verifies(await digest(), signed.fileSignature, ed25519)) {
