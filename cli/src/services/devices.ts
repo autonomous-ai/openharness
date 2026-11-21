@@ -60,7 +60,7 @@ import { observedPlaces } from '../cable/hosts/observedPlaces.js'
 import { createOpenActions } from '../cable/hosts/open.js'
 import { createOpencodeClient, opencodeClientDeps, opencodeMessageId, type OpencodeClient } from '../cable/hosts/opencodeClient.js'
 import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
-import { createOrcaAdapter, createOrcaReads, orcaDeps, type OrcaFocusWatch, type OrcaReadDeps, type OrcaReads, type OrcaTerminal } from '../cable/hosts/orca.js'
+import { createOrcaAdapter, createOrcaReads, orcaDeps, orcaHandle, type OrcaFocusWatch, type OrcaReadDeps, type OrcaReads, type OrcaTerminal } from '../cable/hosts/orca.js'
 import { firstOuter } from '../cable/hosts/outer.js'
 import { readRecord } from '../cable/hosts/record.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
@@ -584,8 +584,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     createWeztermAdapter(apps),
     // A rest's or a tap's switch: Orca's focus line for that pane, a moment later, is the dial's own echo.
     { ...orca,
-      show: (pane: Pane, agentId: string) => { orcaSwitches.note(pane.id); return orca.show(pane, agentId) },
-      focus: (pane: Pane) => { orcaSwitches.note(pane.id); return orca.focus(pane) } },
+      show: (pane: Pane, agentId: string) => { orcaSwitches.note(orcaHandle(pane.id)); return orca.show(pane, agentId) },
+      focus: (pane: Pane) => { orcaSwitches.note(orcaHandle(pane.id)); return orca.focus(pane) } },
   ].map(noting), claudeNoted, codexNoted, ...[
     // No echo to guard: VS Code sends no attach for the follow to take as a person's.
     createVscodeAdapter('vscode', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'vscode', terminals: vscode, raise: raise && ((window) => raise.raise(window)), windows }),

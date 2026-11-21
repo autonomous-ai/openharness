@@ -37,6 +37,8 @@ export const CONTROL = /\p{Cc}/gu
 const MULTIPLEXERS: ReadonlySet<string> = new Set(['herdr', 'rex', 'zellij', 'tmux'])
 // A terminal Orca's terminal host did not make the agent's terminal for: it only holds the agent.
 const HELD = 'held:'
+/** The Orca terminal handle a pane names, held or not: Orca's own lines name the bare handle. */
+export const orcaHandle = (paneId: string): string => paneId.startsWith(HELD) ? paneId.slice(HELD.length) : paneId
 
 export interface OrcaDeps {
   /** Its stdout too: tmux's answer is what it printed (tmux.ts). */
@@ -236,7 +238,7 @@ export function createOrcaAdapter(deps: OrcaDeps, worktrees: OrcaWorktrees = NO_
     // `orca terminal switch` runs on every platform. A held terminal's handle is out of ORCA_HANDLE's form, so a rest and
     // the words refuse it.
     canFocus: () => true,
-    focus: async (pane) => (await orca.switchTo(pane.id.startsWith(HELD) ? pane.id.slice(HELD.length) : pane.id)) === 'ok',
+    focus: async (pane) => (await orca.switchTo(orcaHandle(pane.id))) === 'ok',
     show: (pane) => orca.switchTo(pane.id),
     type: (pane, text) => orca.send(pane.id, text),
   }
