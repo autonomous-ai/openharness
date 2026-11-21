@@ -12,7 +12,7 @@ import { homedir } from 'node:os'
 import { delimiter, isAbsolute, join, win32 } from 'node:path'
 import { resolveBinaryOnPath } from './binaryOnPath.js'
 import { warmLoginShellEnvironment } from './loginShellEnv.js'
-import { fileExists, fixedFolder, gitForWindowsRoots, programFilesRoots, scoopRoots } from './windows/gitBash.js'
+import { fileExists, fixedFolder, gitForWindowsRoots, pathFolders, programFilesRoots, scoopRoots } from './windows/gitBash.js'
 
 export type Program = 'git' | 'gh'
 
@@ -56,7 +56,7 @@ async function findProgram(name: Program, search: ProgramSearch,
       ?? resolveBinaryOnPath(name, { PATH: installFolders(env, platform).join(delimiter) }, isAbsolute) ?? await loginShell()
   }
   // The .exe alone: a .cmd runs only through cmd.exe.
-  const folders = [...(env.PATH ?? '').split(';'), ...installFolders(env, platform)].filter(fixedFolder)
+  const folders = [...pathFolders(env.PATH), ...installFolders(env, platform)].filter(fixedFolder)
   return folders.map((folder) => win32.join(folder, `${name}.exe`)).find((path) => isFile(path)) ?? null
 }
 

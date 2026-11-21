@@ -29,7 +29,7 @@ export function findGitBash({ env = process.env, isFile = fileExists }: GitBashS
   // The git on PATH first, as the person's own terminal would run it. Git for Windows puts it in <root>\cmd (the
   // installer's default), <root>\bin or <root>\mingw64\bin; its bash is <root>\bin\bash.exe in each.
   // A relative entry names a folder of whatever folder the daemon runs in, which someone else's repository may fill.
-  for (const dir of (env.PATH ?? '').split(';').filter(fixedFolder)) {
+  for (const dir of pathFolders(env.PATH).filter(fixedFolder)) {
     if (!isFile(win32.join(dir, 'git.exe'))) continue
     candidates.push(win32.resolve(dir, '..', 'bin', 'bash.exe'), win32.resolve(dir, '..', '..', 'bin', 'bash.exe'))
     // Scoop's git.exe on PATH is a shim in <root>\shims; the git it starts, and its bash, are in <root>\apps\git\current.
@@ -57,6 +57,12 @@ export function gitForWindowsRoots(env: NodeJS.ProcessEnv): string[] {
  *  on PATH. */
 export function scoopRoots(env: NodeJS.ProcessEnv): string[] {
   return [env.SCOOP, env.USERPROFILE && win32.join(env.USERPROFILE, 'scoop')].filter((root): root is string => !!root)
+}
+
+/** PATH's folders as Node's spawn reads them on Windows (libuv's search_path): one in quotes, " or ', may hold a `;`,
+ *  and the quotes are no part of it. */
+export function pathFolders(path: string | undefined): string[] {
+  return [...(path ?? '').matchAll(/(?:"[^"]*"?|'[^']*'?)?[^;]*/g)].map(([folder]) => folder.replace(/^["']|["']$/g, ''))
 }
 
 /** A folder that is the same whatever folder a program runs in: a drive's (C:\…) or a share's (\\server\…). Any other
