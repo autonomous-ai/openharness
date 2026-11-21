@@ -161,6 +161,8 @@ export interface Report {
   failing: Array<CheckResult & { pointsLost: number }>; groups: Group[]
   /** The main set's: a held-out gap counts only in its table's left out. */
   gaps: CoverageGap[]
+  /** Each tier the eval command did not run, and why. */
+  skipped?: Array<{ tier: Tier; reason: string }>
   /**
    * apps: keyed by subset, as the baseline's, for each subset this run drove. checks: the main set's; the held-out ones
    * that changed are only counted, so the report shows nothing of them to fix by.

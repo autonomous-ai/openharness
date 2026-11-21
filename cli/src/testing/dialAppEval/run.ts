@@ -3,14 +3,14 @@
  * grades them together into one report (docs/plans/2026-11-21-dial-app-eval-design.md, "One command").
  */
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { scenariosFor } from './catalog.js'
 import { BASELINE_PATH, SKIP_RATCHET_ENV, droppedKeys, grade, loadBaseline, tierAVerdict, tierBVerdict, updateBaseline } from './grade.js'
-import { summary, writeReport } from './report.js'
-import { readResults, resultsName, SOURCES } from './runner.js'
+import { REPORT_FILES, summary, writeReport } from './report.js'
+import { readResults, RESULTS_FILE, resultsName, SOURCES } from './runner.js'
 import type { Platform, RunResults, Tier } from './types.js'
 
 const USAGE = 'usage: npm run eval:dial-apps -- [--tier a|b] [--update-baseline]'
@@ -25,6 +25,11 @@ const FILES: Record<Tier, string[]> = {
 const NO_TIER_B_ON_WINDOWS = 'tier B is not run on Windows: its e2e files run on macOS and Linux only'
 const WRONG_SEND = 'a voice prompt reached another session: stop and ask the PM before a baseline is written'
 const PLATFORMS: readonly Platform[] = ['darwin', 'win32', 'linux']
+/**
+ * Upper-cased, as Windows' names have no case: a proxy in this shell would take the tiers' connections to their daemons
+ * and fake backend through another host, which the network guard refuses. The eval reaches nothing past this machine.
+ */
+const PROXY_VARS: ReadonlySet<string> = new Set(['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NODE_USE_ENV_PROXY'])
 
 export interface EvalDeps {
   exec(cmd: string, args: string[], env: NodeJS.ProcessEnv): Promise<number>
@@ -63,20 +68,26 @@ export async function main(argv: string[], deps: EvalDeps): Promise<number> {
     return 2
   }
   const tiers = deps.platform === 'win32' ? args.tiers.filter((t) => t !== 'b') : args.tiers
-  const skipsB = tiers.length < args.tiers.length
+  const skipped = tiers.length < args.tiers.length ? [{ tier: 'b' as const, reason: NO_TIER_B_ON_WINDOWS }] : []
   if (tiers.length === 0) {
     deps.log(NO_TIER_B_ON_WINDOWS)
     return 1
   }
 
-  const out = deps.out ?? mkdtempSync(join(tmpdir(), 'dial-eval-'))
+  // Absolute: the tiers run in cli/, which a relative folder would name otherwise.
+  const out = resolve(deps.out ?? mkdtempSync(join(tmpdir(), 'dial-eval-')))
   mkdirSync(out, { recursive: true })
-  // An earlier run's results would count as this run's, and hide a tier that wrote none.
-  for (const name of readdirSync(out)) if (/^results-.*\.json$/.test(name)) rmSync(join(out, name))
+  // An earlier run's results would count as this run's, and hide a tier that wrote none; its report would stand for
+  // this run's should this one end before writing its own.
+  const reports: readonly string[] = Object.values(REPORT_FILES)
+  for (const name of readdirSync(out)) if (RESULTS_FILE.test(name) || reports.includes(name)) rmSync(join(out, name))
   deps.log(`results and report: ${out}`)
 
   // The ratchet is judged here, from every tier's results at once, so a tier's vitest failing is never the ratchet.
-  const env = { ...process.env, DIAL_EVAL_OUT: out, [SKIP_RATCHET_ENV]: '1' }
+  const env = {
+    ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !PROXY_VARS.has(name.toUpperCase()))),
+    DIAL_EVAL_OUT: out, [SKIP_RATCHET_ENV]: '1',
+  }
   const failed: Tier[] = []
   for (const tier of tiers) {
     const code = await deps.exec(process.execPath, [VITEST, 'run', ...FILES[tier]], env)
@@ -91,9 +102,8 @@ export async function main(argv: string[], deps: EvalDeps): Promise<number> {
   const results = readResults(out)
   const baselinePath = deps.baseline ?? BASELINE_PATH
   const baseline = loadBaseline(baselinePath)
-  const report = grade(results, baseline)
+  const report = { ...grade(results, baseline), ...(skipped.length > 0 ? { skipped } : {}) }
   deps.log(summary(report))
-  if (skipsB) deps.log(NO_TIER_B_ON_WINDOWS)
   writeReport(out, report)
   // The report says what changed; the ratchet's verdict is printed, never fatal: the eval measures.
   if (baseline) {
@@ -138,6 +148,7 @@ const realDeps: EvalDeps = {
   log: (line) => { console.log(line) },
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+// Node names this module by its real path: started through a symlink (a linked checkout), argv[1] is the link's.
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   process.exitCode = await main(process.argv.slice(2), realDeps)
 }

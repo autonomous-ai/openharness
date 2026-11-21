@@ -41,11 +41,13 @@ export function markdown(report: Report): string {
   ].join('\n') + '\n'
 }
 
+export const REPORT_FILES = { json: 'report.json', md: 'report.md' } as const
+
 /** Writes report.json and report.md into dir, which it makes if missing. */
 export function writeReport(dir: string, report: Report): { json: string; md: string } {
   mkdirSync(dir, { recursive: true })
-  const json = join(dir, 'report.json')
-  const md = join(dir, 'report.md')
+  const json = join(dir, REPORT_FILES.json)
+  const md = join(dir, REPORT_FILES.md)
   writeFileSync(json, JSON.stringify(clean(report), null, 2) + '\n')
   writeFileSync(md, markdown(report))
   return { json, md }
@@ -74,6 +76,7 @@ function gateLines(r: Report): string[] {
 /** The lists after the gate, each only when it has something in it. */
 function sections(r: Report): Array<[string, string[]]> {
   const all: Array<[string, string[]]> = [
+    ['Not run', (r.skipped ?? []).map((s) => `- tier ${s.tier}: ${s.reason}`)],
     ['Failing checks', r.failing.flatMap((f) => [
       `- ${f.tier}/${f.platform}/${f.scenario}/${f.check} (${APP_NAMES[f.app]}, ${f.dim}): score ${num(f.score)}, ` +
         `${num(f.pointsLost)} points lost${f.ms == null ? '' : `, ${f.ms} ms`}`,
