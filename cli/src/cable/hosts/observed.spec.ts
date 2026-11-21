@@ -3175,6 +3175,23 @@ describe('ObservedSource and a pane that only holds the agent', () => {
     expect(s.agent().name).toBe('Build')
   })
 
+  // The devices scope Orca's ring by it: an agent whose terminal is held still runs in that terminal's worktree.
+  it('shownAt answers the pane a rest and a tap show: its own, else its place, else its held one; none once its session ended', async () => {
+    const s = holding([fake('a', unlessMadeBy('a')).adapter])
+    s.src.ingest(s.ev('session-start', { hostHints: HINTS }))
+    const id = s.agent().id
+    // Held until its maker is read.
+    expect(s.src.shownAt(id, 'a')).toBe('a1')
+    s.src.setPaneNames('a', new Map(), new Map([[id, 't3']]))
+    expect(s.src.shownAt(id, 'a')).toBe('t3')
+    await s.reads[0]('a')
+    expect(s.src.shownAt(id, 'a')).toBe('a1')
+    expect(s.src.shownAt(id, 'b')).toBeUndefined()
+    expect(s.src.shownAt('observed:unknown', 'a')).toBeUndefined()
+    s.src.ingest(s.ev('session-end', { hostHints: HINTS }))
+    expect(s.src.shownAt(id, 'a')).toBeUndefined()
+  })
+
   it('a held pane\'s key folds no source\'s row once the maker is read, and neither paneOf nor byPane finds a held pane', async () => {
     const s = holding([fake('a', unlessMadeBy('a')).adapter, fake('b', () => false).adapter])
     s.src.ingest(s.ev('session-start', { hostHints: HINTS }))
@@ -3820,7 +3837,7 @@ describe('ObservedSource panes', () => {
     src.setPaneNames('codex', named([THREAD, 'Fix the build']), none)
     const agent = src.list()[0]
     expect(agent.name).toBe('proj')
-    expect(src.placedAt(agent.id, 'codex')).toBeUndefined()
+    expect(src.shownAt(agent.id, 'codex')).toBeUndefined()
   })
 
   it('its own title (the hook\'s) and a user record name win over a pane name the person did not set', async () => {
@@ -3981,17 +3998,17 @@ describe('ObservedSource panes', () => {
     expect(src.list()[0].name).toBe('proj')
   })
 
-  it('placedAt answers the pane an agent was placed at, in that adapter alone', async () => {
+  it('shownAt answers the pane an agent was placed at, in that adapter alone', async () => {
     const s = setup({ actions: fakeActions().actions })
     const id = await scannedIdle(s)
     s.src.setPaneNames('orca', named([HANDLE, 'PM']), new Map([[id, HANDLE]]))
-    expect(s.src.placedAt(id, 'orca')).toBe(HANDLE)
-    expect(s.src.placedAt(id, 'cmux')).toBeUndefined()
-    expect(s.src.placedAt('observed:unknown', 'orca')).toBeUndefined()
+    expect(s.src.shownAt(id, 'orca')).toBe(HANDLE)
+    expect(s.src.shownAt(id, 'cmux')).toBeUndefined()
+    expect(s.src.shownAt('observed:unknown', 'orca')).toBeUndefined()
     // A place is never one of its panes.
     expect(s.src.paneOf(id, 'orca')).toBeUndefined()
     s.src.setPaneNames('orca', named([HANDLE, 'PM']), none)
-    expect(s.src.placedAt(id, 'orca')).toBeUndefined()
+    expect(s.src.shownAt(id, 'orca')).toBeUndefined()
   })
 })
 

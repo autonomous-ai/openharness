@@ -11467,7 +11467,7 @@ describe('Orca\'s ring is the worktree on screen (docs/plans/2026-11-18-dial-orc
 
   // Review Focus 2: an xterm started from Orca terminal 1 keeps its handle, and agent 1 runs in the xterm. Orca's terminal
   // host made agent 2's terminal; agent 3, which the attach scan found, really runs in terminal 1.
-  it('an agent whose Orca terminal is held takes no rank or scope from it, is placed by its folder, and leaves that terminal\'s handle to place another', async () => {
+  it('an agent whose Orca terminal is held takes no rank from it, is placed by its folder ahead of it, and leaves that terminal\'s handle to place another', async () => {
     readers.processes.mockResolvedValue([
       { pid: 4241, ppid: 4100, tty: 'pts/5', executable: 'claude' }, { pid: 4100, ppid: 4010, tty: 'pts/1', executable: 'xterm' },
       { pid: 4010, ppid: 4000, tty: 'pts/1', executable: 'bash' },
@@ -11490,6 +11490,35 @@ describe('Orca\'s ring is the worktree on screen (docs/plans/2026-11-18-dial-orc
     listener.orcaFront([H(1)])
     expect(await ring()).toEqual([agent(3)])
     expect(logs.filter((line) => line === '[device] orca · held')).toEqual(['[device] orca · held'])
+  })
+
+  // The dial's own rule for a follow (cableSession.ts followLocal): it moves only to an agent its ring holds.
+  const dialFollows = () => vi.spyOn(seen.cable as unknown as { followLocal: (agentId: string, cause: Parameters<DaemonCableHost['localFollowed']>[0]) => Promise<void> }, 'followLocal')
+    .mockImplementation(async (agentId, cause) => {
+      const { agents } = await host().listAgentSnapshot({ apps: true })
+      seen.host.localFollowed!(cause, agents.some((a) => a.id === agentId) ? 'moved' : 'no-tile')
+    })
+
+  it('an agent whose Orca terminal is held and that no terminal row places is in scope by that terminal, and its prompt moves the dial', async () => {
+    // Agent 2 runs in an xterm started from Orca terminal 2, and Orca names no terminal an agent runs in.
+    readers.processes.mockResolvedValue([...ORCA_CALLERS.filter(({ pid }) => pid !== 4242),
+      { pid: 4242, ppid: 4100, tty: 'pts/5', executable: 'claude' }, { pid: 4100, ppid: 3900, tty: 'pts/2', executable: 'xterm' }])
+    const { port, listener } = await scoped(2, [H(1), H(2)])
+    listener.orcaFront([H(1), H(2)])
+    expect(await ring()).toEqual([agent(1), agent(2)])
+    dialFollows()
+    port.observed(hook(2, { event: 'turn-start' }))
+    await vi.waitFor(() => expect(logs.filter((line) => line.startsWith('[device] prompt'))).toEqual(['[device] prompt · moved']))
+    listener.orcaFront([H(1)])
+    expect(await ring()).toEqual([agent(1)])
+  })
+
+  it('an agent whose terminal\'s maker is not read yet is in scope by its Orca terminal at once', async () => {
+    const { port, listener } = await scoped(1, [H(1), H(2)])
+    listener.orcaFront([H(1), H(2)])
+    readers.processes.mockReturnValue(new Promise(() => {}))
+    port.observed(hook(2))
+    expect(await ring()).toEqual([agent(1), agent(2)])
   })
 
   it('a terminal with no agent, and no terminal at all, give an empty ring', async () => {
