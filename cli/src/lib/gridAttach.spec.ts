@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { reconcileGridAttach, createGridAccess, type GridAttachDeps, type GridAttachResult } from './gridAttach.js'
 import { handOffToGrid, type GridHandoffResult } from './gridHandoff.js'
 import type { EnsureResult } from './gridEnsure.js'
+import { hashOf } from './log.js'
 
 const NAME = 'someone-7f3a91c4'
 const EMAIL = 'someone@autonomous.ai'
@@ -102,6 +103,22 @@ describe('reconcileGridAttach — bringing grid into line for a grid feature', (
     expect(r.status).toBe('signed-in')
     expect(d.handoff).toHaveBeenCalledOnce()
     expect(d.ensure).toHaveBeenCalledWith(NAME)
+  })
+
+  it('logs the account\'s grid by a fixed word, never its name or a hash of it: the name starts as the email does', async () => {
+    const sentinel = 'sentinel-7f3a91c4'
+    const lines: string[] = []
+    const log = (line: string) => { lines.push(line) }
+    await reconcileGridAttach(deps({ mintName: async () => sentinel, gridNames: async () => [sentinel], log }))
+    await reconcileGridAttach(deps({ mintName: async () => sentinel, gridNames: async () => [], log }), { ownGrid: false })
+    await reconcileGridAttach(deps({ mintName: async () => sentinel, gridNames: async () => [], log }))
+    expect(lines.join('\n')).not.toContain('sentinel')
+    expect(lines.join('\n')).not.toContain(hashOf(sentinel))
+    expect(lines).toEqual([
+      "already signed in with the account's grid — nothing to do",
+      "signed grid in as this account (the account's grid not needed yet)",
+      "signed grid in and ensured the account's grid: existed",
+    ])
   })
 
   it('does nothing and reports no-cli when there is no grid binary', async () => {
