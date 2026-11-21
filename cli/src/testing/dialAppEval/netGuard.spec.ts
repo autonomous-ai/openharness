@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync, statSync } from 'node:fs'
 import http from 'node:http'
 import https from 'node:https'
 import net from 'node:net'
-import { tmpdir } from 'node:os'
+import os, { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import tls from 'node:tls'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -155,6 +155,25 @@ describe('localhost, where a caller\'s own lookup answers 192.0.2.1', () => {
       socket.close()
     }
   })
+})
+
+// The machine's name can be the person's.
+it.each([
+  ['eval-machine.invalid', 'eval-machine.invalid'],
+  ['eval-machine.invalid', 'EVAL-Machine.invalid.local'],
+  ['eval-machine.invalid.local', 'eval-machine.invalid'],
+])('on a machine named %s, a refused %s is recorded and said as <this machine>', async (hostname, host) => {
+  const named = vi.spyOn(os, 'hostname').mockReturnValue(hostname)
+  // Its lookup never answers, so even a guard that let the name through would ask no resolver for it.
+  const never = (_name: string, _options: unknown, callback: (error: Error) => void) =>
+    setImmediate(callback, Object.assign(new Error('never resolved'), { code: 'ENOTFOUND' }))
+  try {
+    const error = await failure(net.connect({ host, port: PORT, lookup: never })) as Error
+    expect(error.message).toBe(`the dial eval reaches no network: <this machine>:${PORT}`)
+    expect(guard.taken()).toEqual([attempt('net', '<this machine>', PORT)])
+  } finally {
+    named.mockRestore()
+  }
 })
 
 describe('this machine', () => {
