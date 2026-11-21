@@ -12,14 +12,16 @@
  */
 import { vi } from 'vitest'
 import type { startDevices } from '../../../services/devices.js'
+import { CAROUSEL_REFRESH_MS } from '../../dialCarousel.js'
 import type { App, EvalDriver, Platform, Scenario, Seen, Step, StepKind } from '../types.js'
 import { installClock, settle } from './clock.js'
+import { installFakeApps } from './fakeApps.js'
 import { machine } from './machine.js'
 import { claudeStoreSteps } from './steps/claudeStore.js'
 import { codexStoreSteps } from './steps/codexStore.js'
 import { dialSteps } from './steps/dial.js'
 import { sessionsSteps } from './steps/sessions.js'
-import { voiceSteps } from './steps/voice.js'
+import { recordTyping, voiceSteps } from './steps/voice.js'
 import { windowSteps } from './steps/window.js'
 import { World, type StepHandler, type TierAWorld } from './world.js'
 
@@ -47,6 +49,9 @@ export class TierADriver implements EvalDriver {
     this.steps = []
     this.next = 0
     const world = this.world = new World(scenario, platform, this.deps.startDevices)
+    // Before the dial is up: a link the devices run from then on reaches the apps, and words typed are seen.
+    installFakeApps(world)
+    recordTyping(world)
     await world.quiet()
     const front = scenario.world?.front ?? scenario.app
     await windowSteps.front(world, { kind: 'front', app: front })
@@ -65,6 +70,12 @@ export class TierADriver implements EvalDriver {
     const index = world.scenario.steps.indexOf(step, this.next)
     if (index < 0) throw new Error(`${world.scenario.id}: a ${step.kind} step that is not its next`)
     this.next = index + 1
+    // The person speaks to the session the glass shows, and the glass applies a list the dial just heard within its
+    // refresh period: speaking at the moment the list came, they would speak to a face that has not drawn it yet.
+    if (step.kind === 'voice') {
+      const target = world.agentId(step.target)
+      await this.settle(CAROUSEL_REFRESH_MS, () => world.dial.faces.at(-1)?.active === target)
+    }
     this.steps.push({ at: Date.now(), index, kind: step.kind, ...(step.label === undefined ? {} : { label: step.label }) })
     await (STEPS[step.kind] as (world: TierAWorld, step: Run) => Promise<void>)(world, step)
     // What the step set going lands before anything else happens: the next step comes at the same virtual moment.

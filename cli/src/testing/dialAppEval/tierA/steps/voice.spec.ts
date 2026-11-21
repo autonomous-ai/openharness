@@ -34,7 +34,7 @@ function worldOf(dial: LoopbackDial) {
 
 /** The fleet's side of the port, once it sent the dial a ring of a and b: each frame the dial sent, decoded. */
 async function ringed(dial: LoopbackDial) {
-  const heard: Array<{ type: CableType; json?: Record<string, unknown>; bytes: number }> = []
+  const heard: Array<{ type: number; json?: Record<string, unknown>; bytes: number }> = []
   const decoder = new CableDecoder()
   dial.replug()
   const port = await dial.cable.open!('/dev/eval-dial', (chunk) => decoder.feed(chunk, (frame) => {
