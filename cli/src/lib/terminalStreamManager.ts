@@ -1,13 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { typedByPerson } from './typedInput.js'
-import { unlink } from 'node:fs/promises'
 import { deflateSync } from 'node:zlib'
 import { ENGINES } from '../engines/types.js'
 import { launchContract } from '../engines/launches.js'
 import type { RegisteredSession } from './registry.js'
-import { writeImageToOsClipboard } from './osClipboard.js'
 import { sleptFor } from './sleepAware.js'
-import { writePasteDropFile, writePasteImageFile } from './pasteDropFiles.js'
+import { openPreparedPaste, PasteArtifactCleanupUnconfirmed } from './pasteArtifact.js'
+import { PASTE_OFF, type PastePort, type PasteResult } from '../core/api.js'
 import type { TerminalBackendCoordinator } from './terminalBackendCoordinator.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import { terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
@@ -33,25 +32,21 @@ import {
  *  session — see `pasteImage()`. */
 const CTRL_V_BYTE = Uint8Array.of(0x16)
 
-/** Per-chunk size for a chunked image/file upload — comfortably under the 512 KiB per-binary-message
- *  ceiling shared by the backend relay and the P2P data channel (with AEAD/framing overhead room to
- *  spare), and large enough that a 4 MB image is ~16 chunks / a 10 MB file ~40. Deliberately NOT a
- *  credit/window scheme like the firmware pusher's (cli/src/cable/fwPush.ts) — that exists because
- *  USB Serial/JTAG has no real backpressure; a WebSocket already backpressures at the socket layer,
- *  so the client just sends chunks back-to-back. Mirrors the Dart client's own chunk size — keep
- *  the two in step. */
+/** Below the terminal transport's 512 KiB message ceiling. Desktop may send four of these before
+ *  waiting for progress; the paste worker reserves that complete window at begin. */
 export const UPLOAD_CHUNK_BYTES = 256 * 1024
 
 interface PendingUpload {
+  generation: string
   kind: TerminalBinaryKind.imagePaste | TerminalBinaryKind.pasteFile
-  /** Only meaningful (and required) for a `pasteFile` upload. */
-  filename?: string
-  totalBytes: number
-  expectedChunks: number
-  /** Indexed by chunk seq; sparse until every chunk has arrived. */
-  chunks: (Buffer | undefined)[]
-  bytesReceived: number
+  held?: boolean
+  cleanupUnconfirmed?: boolean
 }
+
+/** The existing backend lane owns admission; a held callback keeps that charge after dispatch advances. */
+type RetainInput = (settled: Promise<unknown>) => void
+export type TerminalInputAdmission = (run: (retain: RetainInput) => Promise<void>, refused: () => void) => Promise<void>
+const unchargedInput: RetainInput = () => {}
 
 type FramePayload = Record<string, unknown>
 
@@ -161,8 +156,10 @@ interface ActiveStream {
   lastSyncAt: number
   nextSeq: number
   lastInputSeq: number
+  /** One source observation per controlling stream; takeover/reopen creates a fresh stream. */
+  inputSourceSent?: boolean
   /** Keystrokes that came ahead of one still on its way, by their seq — see `input`. */
-  heldInput: Map<number, Uint8Array>
+  heldInput: Map<number, { bytes: Uint8Array; release(): void }>
   heldInputBytes: number
   heldInputTimer: ReturnType<typeof setTimeout> | null
   /** When the oldest keystroke still waiting began to wait (traced only). */
@@ -201,6 +198,8 @@ interface ActiveStream {
 }
 
 export interface TerminalStreamManagerDeps {
+  paste?: () => PastePort | null
+  preparedPaste?: typeof openPreparedPaste
   /** An independent observer manager never acquires the owner control lease. */
   readOnly?: boolean
   terminals: TerminalBackendCoordinator
@@ -226,9 +225,11 @@ export interface TerminalStreamManagerDeps {
    * holds what the person typed or pasted, not only what the terminal sends by itself (lib/typedInput.ts), which the
    * agent cleanup reads as the person joining a harness another agent started (services/agentCleanup.ts).
    * `from`: the stream's connection and what its client said it is on `terminal_open`, so a page a program in the
-   * pane opens can go to the phone the person is typing on (core/terminals/browser.ts).
+   * pane opens can go to the phone the person is typing on (gateway/browser.ts).
    */
   onInput?: (agentId: string, typed: boolean, from: { connId: string, kind: string | null }) => void
+  /** First accepted person input on this controlling stream: shared lifecycle fact, without keystroke traffic. */
+  onInputSource?: (agentId: string, from: { connId: string, kind: string | null }) => void
   /** While an agent changes host, every write to its terminal waits here, and goes to the pane it ends on;
    *  its streams follow it through `retarget`. Absent: nothing is ever held. */
   moveGate?: MoveGate
@@ -336,7 +337,7 @@ export class TerminalStreamManager {
     return state?.connId === connId && state.watching
   }
 
-  async handleFrame(connId: string, type: string, payload: FramePayload): Promise<boolean> {
+  async handleFrame(connId: string, type: string, payload: FramePayload, admission?: TerminalInputAdmission): Promise<boolean> {
     const named = typeof payload.streamId === 'string' ? this.streams.get(payload.streamId) : undefined
     if (named && named.connId === connId && named.closing) return true
     if (this.deps.readOnly && !TerminalStreamManager.WATCH_SAFE_TYPES.includes(type)) {
@@ -383,7 +384,7 @@ export class TerminalStreamManager {
         this.sendError(connId, 'TERMINAL_BINARY_REQUIRED', { streamId: typeof payload.streamId === 'string' ? payload.streamId : undefined })
         return true
       case 'terminal_chunked_upload_begin':
-        this.beginChunkedUpload(connId, payload)
+        await this.beginChunkedUpload(connId, payload, admission)
         return true
       case 'terminal_chunked_upload_cancel':
         this.cancelChunkedUpload(connId, payload)
@@ -402,7 +403,7 @@ export class TerminalStreamManager {
     }
   }
 
-  async handleBinary(connId: string, frame: TerminalBinaryClear): Promise<void> {
+  async handleBinary(connId: string, frame: TerminalBinaryClear, admission?: TerminalInputAdmission): Promise<void> {
     if (this.deps.readOnly) return
     // Every binary kind below writes to the terminal, so a watcher's are dropped outright — see the
     // gate in `handleFrame`. Silent, like the other drops here: the client already knows it is
@@ -412,18 +413,32 @@ export class TerminalStreamManager {
       && frame.kind !== TerminalBinaryKind.imagePaste && frame.kind !== TerminalBinaryKind.pasteFile) return
     const state = this.streams.get(frame.streamId)
     if (!state || state.connId !== connId || state.closing) return
-    if (frame.kind === TerminalBinaryKind.imagePaste || frame.kind === TerminalBinaryKind.pasteFile) {
-      await this.receiveUploadChunk(state, frame.kind, frame.seq, frame.bytes)
+    const upload = frame.kind === TerminalBinaryKind.imagePaste || frame.kind === TerminalBinaryKind.pasteFile
+    const pending = upload ? state.pendingUpload : null
+    if (upload && (!pending || pending.kind !== frame.kind || pending.cleanupUnconfirmed)) return
+    if (upload && (!Number.isSafeInteger(frame.seq) || frame.seq < 0 || !frame.bytes.length || frame.bytes.length > UPLOAD_CHUNK_BYTES)) {
+      this.refuseUpload(state, pending!, 'PASTE_INVALID_CHUNK')
       return
     }
-    if (frame.kind === TerminalBinaryKind.paste) {
-      // A paste carries no number to wait in line by: it must not go ahead of keystrokes typed before it, so
-      // any still waiting for a missing one are given up first, as they were before anything waited.
-      if (state.heldInput.size > 0) this.giveUpHeldInput(state)
-      await this.paste(state, frame.bytes)
-      return
+    // Capture authority before enqueue: queued bytes must never be interpreted under a later begin.
+    const run = async (retain: RetainInput): Promise<void> => {
+      if (state.closing || this.streams.get(state.streamId) !== state) return
+      if (upload) {
+        if (state.pendingUpload !== pending) return
+        await this.receiveUploadChunk(state, frame.kind as PendingUpload['kind'], frame.seq, frame.bytes, pending!, retain)
+      } else if (frame.kind === TerminalBinaryKind.paste) {
+        if (state.heldInput.size > 0) this.giveUpHeldInput(state)
+        await this.paste(state, frame.bytes, retain)
+      } else await this.input(state, frame.seq, frame.bytes, retain)
     }
-    await this.input(state, frame.seq, frame.bytes)
+    if (!admission) { await run(unchargedInput); return }
+    await admission(run, () => {
+      if (upload) this.refuseUpload(state, pending!, 'PASTE_WINDOW_EXCEEDED')
+      else {
+        this.sendError(connId, 'TERMINAL_INPUT_OVERFLOW', { streamId: state.streamId, message: 'terminal input exceeded its safe queue limit' })
+        void this.closeStream(state, 'terminal input exceeded its safe queue limit', true)
+      }
+    })
   }
 
   private capabilities(connId: string, requestId: unknown): void {
@@ -770,14 +785,14 @@ export class TerminalStreamManager {
    * what was expected. Anything else — a number already used, a frame that is malformed — is refused at once, and
    * what waited goes with it ([refuseInput]).
    */
-  private async input(state: ActiveStream, inputSeq: number, bytes: Uint8Array): Promise<void> {
+  private async input(state: ActiveStream, inputSeq: number, bytes: Uint8Array, retain: RetainInput): Promise<void> {
     // A seq that is not a safe integer at all is an ordering fault too, as far as the client is concerned.
     const malformed = !Number.isSafeInteger(inputSeq) ? 'seq' : bytes.length === 0 ? 'empty' : bytes.length > INPUT_MAX_BYTES ? 'size' : null
     if (malformed) { this.refuseInput(state, malformed, inputSeq, bytes.length); return }
     const expectedSeq = state.lastInputSeq + 1
     if (inputSeq === expectedSeq) {
       state.inputHoldOff = false
-      this.writeInput(state, inputSeq, bytes)
+      this.writeInput(state, inputSeq, bytes, retain)
       this.releaseHeldInput(state)
       return
     }
@@ -787,7 +802,9 @@ export class TerminalStreamManager {
       if (state.heldInput.size < INPUT_REORDER_MAX_FRAMES && state.heldInputBytes + bytes.length <= INPUT_REORDER_MAX_BYTES) {
         if (state.heldInput.size === 0) state.heldSince = this.now()
         this.deps.typingTrace?.(`stream=${state.streamId.slice(0, 8)} seq=${inputSeq} held: ${expectedSeq} has not come (${state.heldInput.size + 1} waiting)`)
-        state.heldInput.set(inputSeq, bytes)
+        let release!: () => void
+        retain(new Promise<void>((resolve) => { release = resolve }))
+        state.heldInput.set(inputSeq, { bytes, release })
         state.heldInputBytes += bytes.length
         state.heldInputTimer ??= setTimeout(() => this.giveUpHeldInput(state), INPUT_REORDER_WAIT_MS)
         return
@@ -826,10 +843,12 @@ export class TerminalStreamManager {
   private releaseHeldInput(state: ActiveStream): void {
     if (state.heldInput.size === 0) return
     const from = state.lastInputSeq + 1
-    for (let next = from, bytes = state.heldInput.get(next); bytes; next++, bytes = state.heldInput.get(next)) {
+    for (let next = from, held = state.heldInput.get(next); held; next++, held = state.heldInput.get(next)) {
       state.heldInput.delete(next)
-      state.heldInputBytes -= bytes.length
-      this.writeInput(state, next, bytes)
+      state.heldInputBytes -= held.bytes.length
+      const release = held.release
+      try { this.writeInput(state, next, held.bytes, (settled) => { void settled.then(release, release) }) }
+      catch (error) { release(); throw error }
     }
     if (state.lastInputSeq >= from) {
       this.deps.typingTrace?.(`stream=${state.streamId.slice(0, 8)} seq=${from}..${state.lastInputSeq} released after ${Math.round(this.now() - state.heldSince)}ms`)
@@ -852,11 +871,12 @@ export class TerminalStreamManager {
   private dropHeldInput(state: ActiveStream): void {
     if (state.heldInputTimer) clearTimeout(state.heldInputTimer)
     state.heldInputTimer = null
+    for (const held of state.heldInput.values()) held.release()
     state.heldInput.clear()
     state.heldInputBytes = 0
   }
 
-  private writeInput(state: ActiveStream, inputSeq: number, bytes: Uint8Array): void {
+  private writeInput(state: ActiveStream, inputSeq: number, bytes: Uint8Array, retain: RetainInput): void {
     state.lastInputSeq = inputSeq
     if (this.deps.typingTrace) state.echoProbe = { seq: inputSeq, at: this.now() }
     state.expiresAt = this.now() + HEARTBEAT_TIMEOUT_MS
@@ -866,16 +886,25 @@ export class TerminalStreamManager {
     const gate = this.heldGate(state)
     if (gate) {
       const held = Uint8Array.from(bytes)
-      gate.enqueue(state.agentId, () => this.reportInput(state, this.writeRawTo(state, held, true)), () => this.moveRefused(state, 'TERMINAL_INPUT_FAILED'))
+      this.enqueueHeldInput(gate, state, () => this.reportInput(state, this.writeRawTo(state, held, true)), retain,
+        () => { this.moveRefused(state, 'TERMINAL_INPUT_FAILED') })
       return
     }
     // Not awaited. `writeRaw` hands its `send-keys` to the control client's FIFO synchronously, so
     // keystroke order is already fixed by the time it returns its promise — and the seq above is
-    // spent, so the next frame cannot race this one. Awaiting the reply held the whole local
-    // socket (localWsServer.ts serialises every message behind this call) for one tmux round-trip
-    // per keystroke; now the round-trips overlap, which is what ControlCommandQueue pipelines for.
-    // The result still matters, only later: a failure is reported when tmux says so.
-    void this.reportInput(state, state.handle.writeRaw(bytes))
+    // spent, so the next frame cannot race this one. The per-stream lane may advance as soon as that
+    // ordering is established, keeping ControlCommandQueue's round-trips pipelined. Its admission stays
+    // charged until the result settles; a failure is reported when tmux says so.
+    retain(this.reportInput(state, state.handle.writeRaw(bytes)))
+  }
+
+  /** Ordering transfers to the existing move queue now; its admission stays owned until delivery ends. */
+  private enqueueHeldInput(gate: MoveGate, state: ActiveStream, deliver: () => Promise<void>, retain: RetainInput,
+    refuse: () => void): void {
+    let release!: () => void
+    retain(new Promise<void>((resolve) => { release = resolve }))
+    gate.enqueue(state.agentId, async () => { try { await deliver() } finally { release() } },
+      () => { try { refuse() } finally { release() } })
   }
 
   /** A keystroke write's outcome, told to the client when it failed. */
@@ -924,10 +953,11 @@ export class TerminalStreamManager {
   }
 
   /** A paste into [state]'s pane, as `writeRawTo` writes raw bytes. */
-  private pasteRawTo(state: ActiveStream, text: string, held = false): Promise<TerminalActionResult> {
+  private pasteRawTo(state: ActiveStream, text: string, held = false, allowed: () => boolean = () => true): Promise<TerminalActionResult> {
+    if (!allowed()) return Promise.resolve(terminalActionNotStarted('paste was cancelled'))
     if (this.deps.moveGate?.refused(state.agentId)) return Promise.resolve(terminalActionNotStarted('The harness is held until the daemon restarts.'))
     // Asked again as it lands (main's guard): a paste takes two tmux processes, and its stream may close meanwhile.
-    if (!held || !state.closing) return state.handle.pasteRaw(text, () => !state.closing && !this.deps.moveGate?.refused(state.agentId))
+    if (!held || !state.closing) return state.handle.pasteRaw(text, () => !state.closing && !this.deps.moveGate?.refused(state.agentId) && allowed())
     return this.writeToRow(state, (backend, runtime) => backend.pasteInput?.(runtime, text))
   }
 
@@ -944,8 +974,17 @@ export class TerminalStreamManager {
 
   /** See `TerminalStreamManagerDeps.onInput`. A listener's failure is its own: input is never held by it. */
   private tookInput(state: ActiveStream, typed: boolean): void {
-    try { this.deps.onInput?.(state.agentId, typed, { connId: state.connId, kind: state.client?.kind ?? null }) } catch (error) {
+    const source = { connId: state.connId, kind: state.client?.kind ?? null }
+    try { this.deps.onInput?.(state.agentId, typed, source) } catch (error) {
       this.diagnostic(state, 'input_listener_failed', { reason: error instanceof Error ? error.message : String(error) })
+    }
+    if (!typed || state.inputSourceSent || !this.deps.onInputSource) return
+    const agentId = state.agentId
+    state.inputSourceSent = true
+    try { this.deps.onInputSource(agentId, source) } catch {
+      // A failed observer never holds input. Permit the next real input to report its source again.
+      state.inputSourceSent = undefined
+      this.diagnostic(state, 'input_source_listener_failed', {})
     }
   }
 
@@ -981,7 +1020,7 @@ export class TerminalStreamManager {
    * (TERMINAL_*_PASTE_MAX_*_BYTES in terminalBinary.ts) — anything over that never decodes into a
    * frame at all, so there is nothing left to check here.
    */
-  private async paste(state: ActiveStream, bytes: Uint8Array): Promise<void> {
+  private async paste(state: ActiveStream, bytes: Uint8Array, retain: RetainInput): Promise<void> {
     if (bytes.length === 0) return
     let text: string
     try {
@@ -995,7 +1034,8 @@ export class TerminalStreamManager {
     // Held while the agent changes host, in order with its keystrokes (see `input`).
     const gate = this.heldGate(state)
     if (gate) {
-      gate.enqueue(state.agentId, () => this.deliverPaste(state, text, true), () => this.moveRefused(state, 'TERMINAL_PASTE_FAILED'))
+      this.enqueueHeldInput(gate, state, () => this.deliverPaste(state, text, true), retain,
+        () => { this.moveRefused(state, 'TERMINAL_PASTE_FAILED') })
       return
     }
     await this.deliverPaste(state, text)
@@ -1011,103 +1051,144 @@ export class TerminalStreamManager {
     }
   }
 
-  /**
-   * A clipboard IMAGE paste (raw PNG bytes, already fully assembled from a chunked upload — see
-   * `receiveUploadChunk`) — writes the bytes into THIS machine's own OS clipboard (see
-   * osClipboard.ts), then replays a literal Ctrl+V so whichever engine is attached to the pane
-   * reads that clipboard exactly as it already does for a locally-driven session. Nothing here is
-   * engine-specific: this only bridges the clipboard and the keystroke, the same way `paste()`
-   * only bridges a clipboard string into the pty.
-   *
-   * When no native clipboard is reachable right now (the clipboard tool isn't installed, or this
-   * is a genuinely headless Linux box with no X11/Wayland session at all), this does not fail —
-   * it falls back to pasting the image's file PATH as plain text through the exact same
-   * `pasteRaw` call `paste()` uses, so the user/engine can still get at the image, just not via
-   * the OS clipboard. The client is told which happened (`terminal_paste_image_result`) so it can
-   * show the right feedback instead of a silent difference in behavior.
-   */
-  private async pasteImage(state: ActiveStream, bytes: Uint8Array, held = false): Promise<void> {
+  /** The worker owns clipboard bytes and its global reservation; core owns the final input. */
+  private async pasteImage(state: ActiveStream, pending: PendingUpload,
+    artifact: NonNullable<Extract<PasteResult, { bytesWritten: number }>['artifact']>, held = false): Promise<void> {
+    const port = this.deps.paste?.() ?? PASTE_OFF
+    let file: ReturnType<typeof openPreparedPaste> | undefined
+    let result: TerminalActionResult | undefined
+    let outcome: 'clipboard' | 'fallback_path' = 'fallback_path'
+    let reason: string | undefined, closeFailed = false, failed = false
     if (this.moveRefused(state, 'TERMINAL_PASTE_IMAGE_FAILED')) return
-    if (bytes.length === 0) return
     state.expiresAt = this.now() + HEARTBEAT_TIMEOUT_MS
-    let path: string
     try {
-      path = await writePasteImageFile(bytes)
-    } catch (error) {
-      this.sendError(state.connId, 'TERMINAL_PASTE_IMAGE_FAILED', {
-        streamId: state.streamId,
-        message: error instanceof Error ? error.message : 'could not save the pasted image',
-      })
-      return
-    }
-    if (this.moveRefused(state, 'TERMINAL_PASTE_IMAGE_FAILED')) { void unlink(path).catch(() => {}); return }
-    const clipboard = await writeImageToOsClipboard(path, bytes)
-    if (clipboard.state === 'written') {
-      // The OS clipboard now owns the bytes — the file was only a hand-off.
-      void unlink(path).catch(() => { /* best effort */ })
-      const result = await this.writeRawTo(state, CTRL_V_BYTE, held)
-      if (result.state !== 'succeeded') {
-        this.sendError(state.connId, 'TERMINAL_PASTE_IMAGE_FAILED', { streamId: state.streamId, message: result.reason })
-        if (result.dispatch === 'possibly_executed') await this.sendKeyframe(state, 'input')
-        return
+      file = (this.deps.preparedPaste ?? openPreparedPaste)(pending.generation, artifact, undefined, TERMINAL_LOCAL_IMAGE_PASTE_MAX_PAYLOAD_BYTES)
+      const current = () => this.uploadCurrent(state, pending, held) && file!.current()
+      if (!this.uploadCurrent(state, pending, held)) return
+      if (this.moveRefused(state, 'TERMINAL_PASTE_IMAGE_FAILED')) return
+      if (!file.current()) throw new Error('PASTE_INVALID_ARTIFACT')
+      const clipboard = await port.clipboard({ generation: pending.generation, connection: state.connId,
+        streamId: state.streamId, artifact }).catch(() => ({ state: 'unavailable' as const, reason: 'PASTE_UNAVAILABLE' }))
+      // The reservation spans this synchronous dispatch and its actual input promise, including unknown outcomes.
+      if (!this.uploadCurrent(state, pending, held)) return
+      if (this.moveRefused(state, 'TERMINAL_PASTE_IMAGE_FAILED')) return
+      if (!file.current()) throw new Error('PASTE_INVALID_ARTIFACT')
+      if (clipboard.state === 'written') {
+        outcome = 'clipboard'
+        result = await this.writeRawTo(state, CTRL_V_BYTE, held)
+      } else {
+        reason = clipboard.reason
+        result = await this.pasteRawTo(state, file.path, held, current)
       }
-      this.deps.sendTarget(state.connId, 'terminal_paste_image_result', {
-        streamId: state.streamId,
-        outcome: 'clipboard',
-      })
+    } catch (error) {
+      failed = true
+      if (error instanceof PasteArtifactCleanupUnconfirmed) closeFailed = true
+    } finally {
+      // A cancelled generation cannot release another image's reservation. No early release on Cancel.
+      try { file?.close() } catch { closeFailed = true }
+      if (closeFailed) { pending.cleanupUnconfirmed = true; this.diagnostic(state, 'paste_image_close_failed', {}) }
+      try { port.releaseClipboard(pending.generation) } catch { this.diagnostic(state, 'paste_clipboard_release_failed', {}) }
+    }
+    if (!this.uploadCurrent(state, pending, held) || state.closing) return
+    if (failed) {
+      this.sendError(state.connId, 'TERMINAL_PASTE_IMAGE_FAILED', { streamId: state.streamId,
+        message: closeFailed ? 'PASTE_FILE_CLOSE_FAILED' : 'PASTE_INVALID_ARTIFACT' })
       return
     }
-    // 'failed' and 'unavailable' get the same treatment: whether the clipboard tool is missing
-    // entirely or was found but couldn't actually reach a display (the exact case a Docker test rig
-    // with a stale $DISPLAY and no X server hits — xclip is on PATH, so this lands in 'failed', not
-    // 'unavailable', even though the outcome — no OS clipboard to write to — is identical), the user
-    // still needs the image. Hard-failing here used to freeze the whole session over what is, from
-    // the engine's perspective, just a degraded paste. Fall back to the file's path as ordinary
-    // text, and keep the file: it has to keep resolving after this call returns.
-    const result = await this.pasteRawTo(state, path, held)
-    if (state.closing) return
-    if (result.state !== 'succeeded') {
-      this.sendError(state.connId, 'TERMINAL_PASTE_IMAGE_FAILED', { streamId: state.streamId, message: result.reason })
-      if (result.dispatch === 'possibly_executed') await this.sendKeyframe(state, 'input')
+    if (!result) return
+    if (closeFailed || result.state !== 'succeeded') {
+      this.sendError(state.connId, 'TERMINAL_PASTE_IMAGE_FAILED', { streamId: state.streamId,
+        message: closeFailed ? 'PASTE_FILE_CLOSE_FAILED' : result.state === 'succeeded' ? 'PASTE_UNAVAILABLE' : result.reason })
+      if (closeFailed || result.dispatch === 'possibly_executed') await this.sendKeyframe(state, 'input')
       return
     }
     this.deps.sendTarget(state.connId, 'terminal_paste_image_result', {
-      streamId: state.streamId,
-      outcome: 'fallback_path',
-      reason: clipboard.reason,
+      streamId: state.streamId, outcome, ...(reason ? { reason } : {}),
     })
   }
 
-  /**
-   * A dropped (non-image) FILE (bytes already fully assembled from a chunked upload — see
-   * `receiveUploadChunk`) — writes it to disk on THIS machine (under its original name, see
-   * `writePasteDropFile`) and pastes that path as plain text, the same `pasteRaw` call `paste()`
-   * uses. Unlike `pasteImage()`, there is no OS-clipboard attempt and no Ctrl+V replay: the goal
-   * here is only "the pane gets a valid path", not "the engine auto-attaches this" — a client only
-   * sends this at all for a genuinely REMOTE pane (a local one pastes its own already-valid path
-   * without ever reaching the wire), so there is no local/remote branch to make here either.
-   */
-  private async pasteFile(state: ActiveStream, filename: string, bytes: Uint8Array, held = false): Promise<void> {
+  /** The worker prepared this file. Core proves its identity and supplies only that path to the
+   *  stream that requested it; the worker has no terminal-writing authority. */
+  private async pasteFile(state: ActiveStream, pending: PendingUpload,
+    artifact: NonNullable<Extract<PasteResult, { bytesWritten: number }>['artifact']>, held = false): Promise<void> {
     if (this.moveRefused(state, 'TERMINAL_PASTE_FILE_FAILED')) return
     state.expiresAt = this.now() + HEARTBEAT_TIMEOUT_MS
-    let path: string
+    let file: ReturnType<typeof openPreparedPaste> | undefined
+    let result: TerminalActionResult | undefined
+    let closeFailed = false, failed = false
     try {
-      path = await writePasteDropFile(filename, bytes)
+      file = (this.deps.preparedPaste ?? openPreparedPaste)(pending.generation, artifact)
+      const current = () => this.uploadCurrent(state, pending, held) && file!.current()
+      result = await this.pasteRawTo(state, file.path, held, current)
     } catch (error) {
-      this.sendError(state.connId, 'TERMINAL_PASTE_FILE_FAILED', {
-        streamId: state.streamId,
-        message: error instanceof Error ? error.message : 'could not save the dropped file',
-      })
+      failed = true
+      if (error instanceof PasteArtifactCleanupUnconfirmed) closeFailed = true
+    } finally {
+      try { file?.close() } catch {
+        closeFailed = true
+      }
+      if (closeFailed) { pending.cleanupUnconfirmed = true; this.diagnostic(state, 'paste_file_close_failed', {}) }
+    }
+    if (!this.uploadCurrent(state, pending, held) || state.closing) return
+    if (closeFailed) {
+      this.sendError(state.connId, 'TERMINAL_PASTE_FILE_FAILED', { streamId: state.streamId, message: 'PASTE_FILE_CLOSE_FAILED' })
+      // Show any dispatched input even though descriptor cleanup failed.
+      if (result) await this.sendKeyframe(state, 'input')
       return
     }
-    const result = await this.pasteRawTo(state, path, held)
-    if (state.closing) return
+    if (failed) {
+      this.sendError(state.connId, 'TERMINAL_PASTE_FILE_FAILED', { streamId: state.streamId, message: 'PASTE_INVALID_ARTIFACT' })
+      return
+    }
+    if (!result) return
     if (result.state !== 'succeeded') {
       this.sendError(state.connId, 'TERMINAL_PASTE_FILE_FAILED', { streamId: state.streamId, message: result.reason })
       if (result.dispatch === 'possibly_executed') await this.sendKeyframe(state, 'input')
       return
     }
-    this.deps.sendTarget(state.connId, 'terminal_paste_file_result', { streamId: state.streamId, path })
+    this.deps.sendTarget(state.connId, 'terminal_paste_file_result', { streamId: state.streamId, path: file!.path })
+  }
+
+  private uploadCurrent(state: ActiveStream, pending: PendingUpload, held = false): boolean {
+    return state.pendingUpload === pending && (!state.closing || held)
+  }
+
+  private clearUpload(state: ActiveStream, pending: PendingUpload): void {
+    if (state.pendingUpload !== pending || pending.cleanupUnconfirmed) return
+    state.pendingUpload = null
+  }
+
+  private refuseUpload(state: ActiveStream, pending: PendingUpload, reason: string): void {
+    if (!this.uploadCurrent(state, pending)) return
+    this.diagnostic(state, 'chunked_upload_failed', { code: reason })
+    this.deps.paste?.()?.cancel(pending.generation)
+    this.clearUpload(state, pending)
+    const invalidImage = pending.kind === TerminalBinaryKind.imagePaste && reason === 'PASTE_INVALID_CHUNK'
+    this.sendError(state.connId, invalidImage ? 'TERMINAL_CHUNKED_UPLOAD_INVALID'
+      : pending.kind === TerminalBinaryKind.pasteFile ? 'TERMINAL_PASTE_FILE_FAILED' : 'TERMINAL_PASTE_IMAGE_FAILED',
+    { streamId: state.streamId, message: invalidImage ? 'malformed upload chunk' : reason })
+  }
+
+  private async deliverUpload(state: ActiveStream, pending: PendingUpload, deliver: (held: boolean) => Promise<void>,
+    retain: RetainInput): Promise<void> {
+    const run = async (held: boolean) => {
+      try { if (this.uploadCurrent(state, pending, held)) await deliver(held) }
+      finally {
+        // Keep the existing global upload charge even after Cancel or view disconnect. No uncertain fd is retried.
+        if (pending.cleanupUnconfirmed) retain(new Promise<void>(() => {}))
+        else this.clearUpload(state, pending)
+      }
+    }
+    const gate = this.heldGate(state)
+    if (gate) {
+      pending.held = true
+      this.enqueueHeldInput(gate, state, () => run(true), retain, () => {
+        if (!this.uploadCurrent(state, pending, true)) return
+        try { this.moveRefused(state, 'TERMINAL_PASTE_FAILED') }
+        finally { this.clearUpload(state, pending) }
+      })
+    }
+    else await run(false)
   }
 
   /**
@@ -1117,7 +1198,7 @@ export class TerminalStreamManager {
    * Validated and either accepted or rejected up front, before any chunk is sent, so a client on a
    * slow link finds out immediately rather than after transferring several MB for nothing.
    */
-  private beginChunkedUpload(connId: string, payload: FramePayload): void {
+  private async beginChunkedUpload(connId: string, payload: FramePayload, admission?: TerminalInputAdmission): Promise<void> {
     // Unlike resize/scroll/ack (silently no-op on a bad lookup is harmless — the next real event
     // self-corrects), a paste that vanishes here leaves the client's progress overlay waiting on a
     // reply that will never come, with nothing to explain why: it looks exactly like a hang. Reply
@@ -1161,87 +1242,61 @@ export class TerminalStreamManager {
       reject(`exceeds the ${Math.floor(ceiling / (1024 * 1024))} MB limit`)
       return
     }
-    state.expiresAt = this.now() + HEARTBEAT_TIMEOUT_MS
-    state.pendingUpload = {
-      kind: uploadKind,
-      filename,
-      totalBytes,
-      expectedChunks: Math.ceil(totalBytes / UPLOAD_CHUNK_BYTES),
-      chunks: [],
-      bytesReceived: 0,
+    const begin = async (): Promise<void> => {
+      state.expiresAt = this.now() + HEARTBEAT_TIMEOUT_MS
+      const pending: PendingUpload = { generation: randomUUID(), kind: uploadKind }
+      state.pendingUpload = pending
+      const answer = await (this.deps.paste?.() ?? PASTE_OFF).begin({ generation: pending.generation,
+        connection: state.connId, streamId, kind: payload.uploadKind as 'image' | 'file',
+        filename: uploadKind === TerminalBinaryKind.imagePaste ? 'image.png' : filename!, totalBytes }).catch(() => ({ error: 'PASTE_UNAVAILABLE' }))
+      if (!this.uploadCurrent(state, pending)) return
+      if ('error' in answer) { this.clearUpload(state, pending); reject(answer.error); return }
+      this.diagnostic(state, 'chunked_upload_begin', { uploadKind: payload.uploadKind, totalBytes })
+      this.deps.sendTarget(connId, 'terminal_chunked_upload_begin_result', { streamId, accepted: true })
     }
-    this.diagnostic(state, 'chunked_upload_begin', { uploadKind: payload.uploadKind, totalBytes, ...loggedExtension(filename) })
-    this.deps.sendTarget(connId, 'terminal_chunked_upload_begin_result', { streamId, accepted: true })
+    if (admission) await admission(begin, () => reject('PASTE_WINDOW_EXCEEDED'))
+    else await begin()
   }
 
-  /** The user's own Cancel — stop and discard whatever has arrived so far. Nothing has been
-   *  written to disk yet at this point (chunks are only assembled and handed off once every one
-   *  has arrived), so there is no partial file to clean up — just drop the in-memory buffer. */
+  /** Revoke final input immediately. The worker retains a cancelled file's reservations until its
+   *  outstanding disk/native operations and cleanup settle for either upload kind. */
   private cancelChunkedUpload(connId: string, payload: FramePayload): void {
     const state = this.streamFor(connId, payload)
     if (!state) return
     if (state.pendingUpload) this.diagnostic(state, 'chunked_upload_cancelled', {})
-    state.pendingUpload = null
+    if (state.pendingUpload) this.deps.paste?.()?.cancel(state.pendingUpload.generation)
+    if (state.pendingUpload) this.clearUpload(state, state.pendingUpload)
   }
 
   /**
    * One chunk of an in-flight upload announced by `beginChunkedUpload`. `seq` is the chunk index
-   * (not an ordered keystroke sequence the way `input()`'s is) — stored by index rather than
+   * (not an ordered keystroke sequence the way `input()`'s is) — written/stored by index rather than
    * assumed in-order, since nothing guarantees frame ordering survives a relay hop-by-hop, though
    * in practice it should. A stray chunk with no matching (or a kind-mismatched) `pendingUpload` is
    * ignored rather than errored: it most likely means a cancel or a previous upload's tail-end
    * arrived late.
    *
-   * Progress is acked once per chunk, after it is durably held here — matching the firmware
-   * pusher's philosophy (`fwPush.ts`'s `fw.progress`) of reporting confirmed receipt, not merely
-   * "sent", which is what makes the client's percentage honest on a slow link. Once every expected
-   * byte has arrived, this hands the assembled bytes to the SAME finishing logic `pasteImage`/
-   * `pasteFile` already had before this feature existed — only how the bytes arrived changed.
+   * Chunks are forwarded as views; the worker acknowledges a settled write. Both kinds keep their
+   * generation through final dispatch, so Cancel/new begin
+   * cannot give a stale preparation or progress reply the next upload's authority.
    */
   private async receiveUploadChunk(
     state: ActiveStream,
     kind: TerminalBinaryKind.imagePaste | TerminalBinaryKind.pasteFile,
     seq: number,
     bytes: Uint8Array,
+    pending: PendingUpload,
+    retain: RetainInput,
   ): Promise<void> {
-    const pending = state.pendingUpload
-    if (!pending) {
-      this.diagnostic(state, 'chunked_upload_stray_chunk', { seq, kind })
-      return
-    }
-    if (pending.kind !== kind) return
-    if (!Number.isSafeInteger(seq) || seq < 0 || seq >= pending.expectedChunks
-      || bytes.length === 0 || bytes.length > UPLOAD_CHUNK_BYTES) {
-      this.diagnostic(state, 'chunked_upload_invalid_chunk', { seq, byteLength: bytes.length, expectedChunks: pending.expectedChunks })
-      this.sendError(state.connId, 'TERMINAL_CHUNKED_UPLOAD_INVALID', { streamId: state.streamId, message: 'malformed upload chunk' })
-      state.pendingUpload = null
-      return
-    }
     state.expiresAt = this.now() + HEARTBEAT_TIMEOUT_MS
-    if (pending.chunks[seq] === undefined) {
-      pending.chunks[seq] = Buffer.from(bytes)
-      pending.bytesReceived += bytes.length
-    }
-    this.deps.sendTarget(state.connId, 'terminal_chunked_upload_progress', {
-      streamId: state.streamId,
-      bytesWritten: pending.bytesReceived,
-      totalBytes: pending.totalBytes,
-    })
-    if (pending.bytesReceived < pending.totalBytes) return
-    state.pendingUpload = null
-    this.diagnostic(state, 'chunked_upload_assembled', { totalBytes: pending.totalBytes })
-    // A plain Uint8Array, not a Buffer — pasteImage/pasteFile hand this to code (osClipboard,
-    // pasteDropFiles) written against the same Uint8Array shape the old atomic frame's `bytes`
-    // always was, and callers/tests comparing against a Uint8Array must not have to know this
-    // path happens to assemble through Buffer internally.
-    const assembled = new Uint8Array(Buffer.concat(pending.chunks.filter((chunk): chunk is Buffer => chunk !== undefined)))
-    const deliver = (held: boolean): Promise<void> => kind === TerminalBinaryKind.imagePaste
-      ? this.pasteImage(state, assembled, held)
-      : this.pasteFile(state, pending.filename!, assembled, held)
-    // Held while the agent changes host, in order with its keystrokes (see `input`).
-    const gate = this.heldGate(state)
-    if (gate) gate.enqueue(state.agentId, () => deliver(true), () => this.moveRefused(state, 'TERMINAL_PASTE_FAILED'))
-    else await deliver(false)
+    const answer = await (this.deps.paste?.() ?? PASTE_OFF).chunk({ generation: pending.generation, connection: state.connId,
+      streamId: state.streamId, seq }, bytes).catch(() => ({ error: 'PASTE_UNAVAILABLE' }))
+    if (!this.uploadCurrent(state, pending) || 'ignored' in answer) return
+    if ('error' in answer) { this.refuseUpload(state, pending, answer.error); return }
+    this.deps.sendTarget(state.connId, 'terminal_chunked_upload_progress', { streamId: state.streamId,
+      bytesWritten: answer.bytesWritten, totalBytes: answer.totalBytes })
+    if (answer.artifact) await this.deliverUpload(state, pending, (held) => kind === TerminalBinaryKind.imagePaste
+      ? this.pasteImage(state, pending, answer.artifact!, held) : this.pasteFile(state, pending, answer.artifact!, held), retain)
   }
 
   /** Scroll gestures arrive stream-scoped, same as resize — no ordering/seq guard needed since,
@@ -1663,6 +1718,9 @@ export class TerminalStreamManager {
   ): Promise<void> {
     if (state.closing) return
     state.closing = true
+    if (state.pendingUpload && !state.pendingUpload.held) this.deps.paste?.()?.cancel(state.pendingUpload.generation)
+    // An input already held for a host move remains the person's input after this view closes.
+    if (state.pendingUpload && !state.pendingUpload.held) this.clearUpload(state, state.pendingUpload)
     if (state.pausedAt != null) state.pausedMs += Math.max(0, this.now() - state.pausedAt)
     this.diagnostic(state, 'closed', {
       reason,
@@ -1683,8 +1741,7 @@ export class TerminalStreamManager {
     state.stallTimer = null
     state.heldInputTimer = null
     // Keystrokes still waiting for a missing one go with the stream: nothing is written to a pane let go.
-    state.heldInput.clear()
-    state.heldInputBytes = 0
+    this.dropHeldInput(state)
     this.streams.delete(state.streamId)
     const controlled = this.controllerByPlacement.get(state.placementKey) === state.ownerId
     if (this.controllerByAgent.get(state.agentId) === state.ownerId) this.controllerByAgent.delete(state.agentId)

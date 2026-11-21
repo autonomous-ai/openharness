@@ -77,7 +77,7 @@ describe('a guest session', () => {
     expect(opened).not.toHaveBeenCalled()
     expect(answered().at(-1)).toEqual({ type: 'terminal_open', payload: expect.objectContaining({ error: 'NOT_YOUR_HARNESS' }) })
     await ask('terminal_open', { agentId: 'mine' })
-    expect(opened).toHaveBeenCalledWith('remote', 'terminal_open', expect.objectContaining({ agentId: 'mine' }))
+    expect(opened).toHaveBeenCalledWith('remote', 'terminal_open', expect.objectContaining({ agentId: 'mine' }), undefined)
   })
 
   it('the owner\'s own app is still the owner', async () => {

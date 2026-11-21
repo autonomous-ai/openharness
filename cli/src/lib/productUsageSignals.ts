@@ -28,7 +28,7 @@ const unavailable = new Set(['SERVICE_UNAVAILABLE', 'SERVICE_FAILED', 'GRID_UNAV
 // 2026-10-28 both were `other`, 2,225 that day, a Desktop list re-reading a conversation that had left the index.
 const invalid = new Set(['INVALID_ENGINE', 'INVALID_CWD', 'CWD_NOT_FOUND', 'INVALID_GRID', 'INVALID_DSH',
   'INVALID_MODEL', 'INVALID_PERMISSION_MODE', 'INVALID_LAUNCH_ARGS', 'INVALID_CREATION_ID', 'INVALID_PROJECT_SOURCE', 'WORKTREE_BUSY',
-  'BAD_SESSION', 'NOT_INDEXED', 'NOT_RUNNING'])
+  'BAD_SESSION', 'NOT_INDEXED', 'NOT_RUNNING', 'CWD_CHANGED', 'WORKSPACE_IN_USE', 'DSH_WORKSPACE_MISSING', 'SESSION_OWNER_INVALID'])
 /** A Store install's or update's own refusals (dsh/install.ts, dsh/update.ts), by kind. Until 2026-10-28 every one was
  * `other`: that day's 11 failed installs, all on Windows, said nothing of why. For the Store's requests only, so a
  * create's or a resume's totals keep their meaning. Its busy and not-installed refusals are named with the others'. */

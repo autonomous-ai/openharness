@@ -57,16 +57,16 @@ function setup(mode: 'inline' | 'worker', content = prompt('T1')) {
     }, announceSession: vi.fn(), terminalGone: async () => false,
     runtimeProfiles: { transcriptFields: () => [], beginHydrate: () => profile, hydrate: vi.fn(), hydrateEvidence: vi.fn(), ingest: () => false,
       ingestConfig: async () => false, ingestPane: () => false, capturePane: async () => null },
-    cursorDiscovery: { add: async () => {} }, device: () => undefined, captureTerminal: async () => null,
+    cursorDiscovery: { add: async () => {} }, captureTerminal: async () => null,
     emit, settled, tokenUsage: { changed: () => {} }, questionWatcher: { start: vi.fn() }, terminalLabel: () => 'private fixture',
     storeOf: async () => null, concurrency: 1 })
   const ingest = createIngest({ liveFor, has: () => true, bySession: () => row, normalizers,
-    tokenUsage: { changed: vi.fn() }, device: () => undefined, runtimeProfiles: { ingest: () => false, evidence: () => false },
+    tokenUsage: { changed: vi.fn() }, runtimeProfiles: { ingest: () => false, evidence: () => false },
     announceTurnAborted: vi.fn(), emit, attachSession: attach.attachSession, setIdentityHold: () => false, announceSession: vi.fn() })
   ingest.wireWatcher(watcher)
   const cancel = createCancel({ resolve: () => row, beforeCancel: attach.beforeCancel, normalizers,
     input: { cancel: vi.fn(), cancelConfirmed: vi.fn(async () => true) },
-    device: () => undefined, stopHeartbeat: vi.fn(), questionWatcher: { stop: vi.fn() }, mirror: { cancel: vi.fn() },
+    stopHeartbeat: vi.fn(), questionWatcher: { stop: vi.fn() }, mirror: { cancel: vi.fn() },
     turnActivity: { observe: vi.fn() }, turnStartedAt: new Map(), tell: vi.fn() })
   const hooks = createTurnHooks({ resolve: () => row, normalizers, others: others.streams, holdStop: attach.holdStop, afterStop: attach.afterStop,
     emit, drain: async () => watcher.pollSession(row.sessionId), announceTurnAborted: vi.fn(),

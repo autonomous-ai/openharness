@@ -1,6 +1,7 @@
 /** The Store's launch contribution. Core owns the pane and registry; the Store owns package execution. */
 import type { AgentEngine } from '../engines/types.js'
 import type { DshAccount, DshLaunch } from './launch.js'
+import { launchText } from '../lib/launchContribution.js'
 
 export interface DshMaterializeRequest {
   dsh: string
@@ -14,6 +15,25 @@ export interface DshMaterializeRequest {
 export interface DshLaunchRequest extends DshMaterializeRequest {
   forkOf?: { agentId: string; dshRuntime: string | null }
 }
+
+/** One requested package, not an installed index or an executable manifest. */
+export interface DshDescribeRequest { dsh: string; engine: AgentEngine }
+export interface DshDescription {
+  ok: true
+  id: string
+  name: string
+  permissionMode: string | null
+  /** Existing create refusal for a viewer or incompatible engine; aliases still resolve for receipts. */
+  refusal: string | null
+}
+/** A detached account name, never a credential or provider configuration. */
+export function dshAccountIn(value: unknown): DshAccount | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const name = (value as DshAccount).privateGrid
+  return name === undefined ? {} : name === null || launchText(name, 4096) ? { privateGrid: name } : null
+}
+export type DshContextAnswer = { ok: true; account: DshAccount } | DshRefusal
+export type DshDescribeAnswer = DshDescription | DshRefusal
 
 export interface DshRefusal {
   ok: false

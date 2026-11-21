@@ -14,12 +14,15 @@
  * tabs, unread rows and focus it keeps, and says again whenever the devices start.
  *
  * The Wi-Fi device is a service of its own beside these (services/wifi.ts), in the same process, on a link
- * of its own: it rides the gateway's sessions, and borrows the dial's walk and stroke through the core.
+ * of its own: it rides the gateway's sessions and calls the devices' bounded desk endpoint.
  */
 import { randomUUID } from 'node:crypto'
 import { existsSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
+import { deviceDeskFor, publishDeviceDesk, type DeviceDesk } from './deviceDesk.js'
+import { deskRequest, DESK_WAIT_MS } from '../lib/autonomous-device/deskProtocol.js'
+import { createOwnerCommands } from './ownerCommands.js'
 import { env } from '../config/env.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, type CoreApi, type CorePorts, type DeviceHookPort, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
 import { CableFleet, testDialDiscovery, type CableFleetOptions } from '../cable/cableFleet.js'
@@ -100,7 +103,7 @@ import { claudeProjectsRoots, codexHomeRoots, movedEngineHomes } from '../lib/en
 import { harnessDevicesRequest } from '../lib/harnessDevices.js'
 import { errorKind } from '../lib/log.js'
 import { pidAlive } from '../lib/processProof.js'
-import { ptyHostBinary } from '../lib/ptyHost/launch.js'
+import { ptyHostBinary } from '../lib/ptyHost/binary.js'
 import { OpenSessions, SessionRows } from '../lib/sessionSearch/external.js'
 import { externalProviders } from '../lib/sessionSearch/externals/index.js'
 import { fileStamp, listProcesses, processAlive } from '../lib/sessionSearch/externals/support.js'
@@ -111,12 +114,26 @@ import { tmuxFinder } from '../lib/binaryFinder.js'
 import { VERSION } from '../version.js'
 import { createPartGuard } from './devicesGuard.js'
 import { attachHandler, dialStream, frontHandler, noticeHandler, notifyHandler, orcaFrontHandler, tabHandler, tabsStream, threadHandler, type DevicesListener, type ListenerHandler, type ListenerStreamHandler } from './devicesListener.js'
+import type { FleetSession } from './fleetRouter.js'
 import { FLEET_FALLBACKS, startFleet, type Fleet } from './fleet.js'
 
 export { DEVICES_REQUESTS }
 
 /** What the devices need that is not the core's to give. */
+/** The component reads only these row fields; a process never manufactures a full registry record. */
+export type DeviceSession = FleetSession & { displayName?: string; runtimeProfile?: string | null }
+export type DevicesCore = Omit<CoreApi, 'agents'> & {
+  agents: Pick<CoreApi['agents'], 'runtimeModels' | 'setRuntime' | 'fork' | 'activityText' | 'activitySnapshot'> & {
+    advertised(): DeviceSession[]
+    serviceSessions?(): DeviceSession[]
+    displayName(session: DeviceSession): string
+    runtimeProfile(session: DeviceSession): string | null
+  }
+}
+
 export interface DevicesDeps {
+  /** Direct gestures for the Wi-Fi component in this worker; no core callback or socket hop. */
+  onDesk?: (desk: import('./deviceDesk.js').DeviceDesk) => void
   /** Where each dial keeps its log, one file a day (cable/dialLog.ts). */
   logsDir: string
   /** Where custom pets are kept; `<HARNESS_DEVICES_DIR>/pets` when unset. */
@@ -138,9 +155,11 @@ export interface DevicesDeps {
   onExit?: (run: () => void) => void
   /** Read this computer's agents again before a list is built from them: in their own process the devices
    *  keep a copy, asked of the core as the dial's tick or ⌘K needs it (services/devicesProcess.ts). */
-  refresh?: () => Promise<void>
+  refresh?: () => Promise<boolean>
   /** Called with a function this part runs whenever its link to the core drops: the calls that core held have failed. */
   onCoreGone?: (run: () => void) => void
+  /** Old cores' private route calls, retained only in this service process until 2026-12-16. */
+  onLegacyCommands?: (handlers: ServiceRequests) => void
   /** An agent's conversation token totals, read fresh (not the 15 s cache); null when unknown or remote.
    *  Defaults to the core's `usageFresh`. */
   readUsage?: (agentId: string) => Promise<{ input?: number; cached?: number; output?: number } | null>
@@ -174,8 +193,8 @@ export interface DevicesDeps {
    *  (lib/windows/storePackage.ts) by default. */
   storePackageFolder?: (name: string) => Promise<string | null>
   /** Opens the devices' own listener with these handlers (services/devicesListener.ts). Given by the devices process,
-   *  and on Windows inside the core's too, where every service runs, until Windows services run in their own process
-   *  (services/inline.ts). Elsewhere inside the core's process (`HARNESSD_SERVICES=none`, Harness OS) there is none, so
+   *  and by explicit inline/old-master Windows starts through services/inline.ts. Elsewhere inside the core's process
+   *  (`HARNESSD_SERVICES=none`, Harness OS) there is none, so
    *  the core's process opens no socket for the devices, and the dial follows no app in front there. */
   listen?: (handlers: Readonly<Record<string, ListenerHandler | ListenerStreamHandler>>, log: (line: string) => void) => Promise<DevicesListener | null>
   /** For this service's tests: how an agent's tty is read; `ps` by default (cable/hosts/tabs.ts). */
@@ -318,8 +337,10 @@ function observedSource(
   })
 }
 
-export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps): ServiceRequests {
+export function startDevices(core: DevicesCore, ports: CorePorts, deps: DevicesDeps): ServiceRequests {
   const log = deps.log ?? ((line: string) => console.log(line))
+  // Refresh the process snapshot when present, then reconcile restored notices. Inline starts read the core directly.
+  const refreshDisplay = async (): Promise<void> => { await deps.refresh?.(); lookHarness() }
   const monotonic = deps.now ?? (() => performance.now())
   const tally = createTally((line) => log(`[cable] ${line}`))
   const tierOf = deps.decideTier ?? createTierDecider({
@@ -333,8 +354,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // off Windows, or a listener that failed to open) the menu must not offer a setting no click can change.
   const notifyMode = new NotifyModeStore(join(core.dataDir, NOTIFY_MODE_FILE))
   let listenerOpen = false
-  const sayStatus = (status: DialStatus): void => core.clients.sendLocal({ type: 'dial_status',
-    payload: { ...status, ...(listenerOpen ? { notify: notifyMode.get() } : {}) } })
+  const sayStatus = (status: DialStatus): void => { core.clients.sendWindow({ target: { kind: 'all' }, frame: { type: 'dial_status',
+    payload: { ...status, ...(listenerOpen ? { notify: notifyMode.get() } : {}) } } }) }
 
   // What the windows on this computer last said: the desk the dial walks and whether it is in front, and
   // which window has the person's attention for a spoken selection, a visit or a form.
@@ -358,12 +379,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // the trust group read; this copy writes no file of its own, so `machines.json` has one writer.
   const machines = new MachineListCache(() => core.account.machines(), () => core.machine.computerId(),
     (line) => log(`[cable] ${line}`), core.dataDir, () => null, false)
-  // Each read of the core's agents, as a list is built (once a second with a dial attached), lets a restored notice
-  // waiting for a Harness agent find it (`lookHarness`): a dial can attach before the first read. Inside the core's
-  // process the agents are read directly, with no refresh, and the look runs all the same: on Windows the devices there
-  // have their listener (services/inline.ts), so a notice is made and restored there too.
-  const refresh = (): Promise<void> => (deps.refresh?.() ?? Promise.resolve()).then(() => lookHarness())
-  const fleet: Fleet | null = part.start('fleet', () => startFleet(core, { machines, desk: () => desk, refresh }).fleet, FLEET_FALLBACKS)
+  const fleet: Fleet | null = part.start('fleet', () => startFleet(core, { machines, desk: () => desk, refresh: refreshDisplay }).fleet, FLEET_FALLBACKS)
 
   // ── the window bridges ─────────────────────────────────────────────────────────────────────────────
   //
@@ -375,23 +391,23 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     send: (voiceId, text, cmd) => {
       // To the windows on this computer, never the cloud: this asks the window in front of the dial to
       // open a palette, and fanning it out would pop one open on a computer nobody is sitting at.
-      core.clients.sendLocal({ type: 'voice_route_request', payload: { voiceId, text, ...(cmd ? { cmd } : {}) } })
+      core.clients.sendWindow({ target: { kind: 'all' }, frame: { type: 'voice_route_request', payload: { voiceId, text, ...(cmd ? { cmd } : {}) } } })
       log(`[route] voice → the window · ${Buffer.byteLength(text, 'utf8')} bytes${cmd ? ` · /${cmd}` : ''}`)
     },
     log: (line) => log(`[cable] ${line}`),
   })
   const windowSelection = new WindowSelection({
     focus: () => focus.voice ?? undefined,
-    send: (connId, payload) => core.clients.sendToWindow(connId, { type: 'dial_selection', payload }),
+    send: (connId, payload) => core.clients.sendWindow({ target: { kind: 'connection', connId }, frame: { type: 'dial_selection', payload } }),
   })
   const windowForm = new WindowForm({
     focus: () => focus.form ?? undefined,
-    send: (connId, payload) => core.clients.sendToWindow(connId, { type: 'dial_form', payload }),
+    send: (connId, payload) => core.clients.sendWindow({ target: { kind: 'connection', connId }, frame: { type: 'dial_form', payload } }),
     log: (line) => log(`[cable] ${line}`),
   })
   const windowVisit = new WindowVisit({
     focus: () => focus.voice ?? undefined,
-    send: (connId, payload) => core.clients.sendToWindow(connId, { type: 'dial_visit', payload }),
+    send: (connId, payload) => core.clients.sendWindow({ target: { kind: 'connection', connId }, frame: { type: 'dial_visit', payload } }),
   })
 
   // ── the dial on the USB cable ──────────────────────────────────────────────────────────────────────
@@ -615,8 +631,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  skill reach them too (docs/plans/2026-11-17-new-user-onboarding-design.md, "C. Orca homes"). */
   const orcaHomes = deps.orcaHomes ?? orcaHomesCache(monotonic, log)
   // The dial skill in each home an engine's sessions use and Claude Code's plugin, set up once a dial has attached on this
-  // computer (cable/dialSetup.ts), wherever the devices have their listener: their own process, and on Windows the
-  // core's, until Windows services run in their own process (services/inline.ts). Elsewhere inside the core's
+  // computer (cable/dialSetup.ts), wherever the devices have their listener: their own process, or Windows' explicit
+  // inline/old-master compatibility door (services/inline.ts). Elsewhere inside the core's
   // (`HARNESSD_SERVICES=none`) there is none, so a skill would name a `harness device notify` that cannot ring. A part
   // of its own, so a throw in a person's home is never the dial's, nor the core's; each `claude` it runs has its time
   // (devices/claudePlugin.ts).
@@ -646,8 +662,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (skill && !stopped) part.call('skill', () => skill.started())
   }
   // Harness's VS Code extension, set up once a computer in VS Code and once in Cursor through the dial setup's record
-  // (cable/vscodeExtensionSetup.ts), where the dial setup runs: on Windows the core's process runs the editor's `code`
-  // or `cursor` then, each run in its time (devices/vscodeExtension.ts VSCODE_RUN_MS). Each editor's setup a part of
+  // (cable/vscodeExtensionSetup.ts), where the dial setup runs: the devices process (or its explicit inline door) runs
+  // the editor's `code` or `cursor`, each within its time (devices/vscodeExtension.ts VSCODE_RUN_MS). Each setup a part of
   // its own, so a throw in one editor's files is never the dial's, and a fault or a failed pass's hour in one never
   // holds the other. `HARNESS_VSCODE_BIN` and `HARNESS_CURSOR_BIN`: the end-to-end tests' VS Code and Cursor, so a
   // daemon under test finds none of this computer's own (devices/vscodeExtension.ts).
@@ -947,7 +963,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     | OffPane
     | undefined
   const toWindows = (phase: 'down' | 'move' | 'up', dy: number, velocity: number): void =>
-    core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity } })
+    { core.clients.sendWindow({ target: { kind: 'all' }, frame: { type: 'dial_scroll', payload: { phase, dy, velocity } } }) }
   /** Lines to the stroke's pane. A page stroke reads its agent again first: once it waits on the person a key could
    *  land in the prompt, so the rest of the stroke is lines alone. */
   const toPane = (route: ToPane, phase: 'down' | 'move' | 'up', dy: number): void => {
@@ -1025,9 +1041,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
 
   const cableHost = new DaemonCableHost({
     // The cloud harnesses too, where the core offers them: tiles on the desk the dial walks like any other.
-    sessions: () => [...core.agents.advertised(), ...core.agents.cloud?.() ?? []],
+    sessions: () => [...core.agents.advertised(), ...core.agents.serviceSessions?.() ?? []],
     scanLearnsApps: scanLearnsApps(apps.platform),
-    refresh,
+    refresh: refreshDisplay,
     displayName: (session) => core.agents.displayName(session),
     appFocus: () => focus.voice ?? undefined,
     activityText: async (agentId) => {
@@ -1080,7 +1096,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // when the dial gave one ('question'): the window then brings the agent forward rather than opening a
     // tab, and an older window that does not know the field opens one as before.
     opened: (machineId, agentId, reason) =>
-      core.clients.sendLocal({ type: 'dial_open', payload: { machineId, agentId, ...(reason ? { reason } : {}) } }),
+      core.clients.sendWindow({ target: { kind: 'all' }, frame: { type: 'dial_open', payload: { machineId, agentId, ...(reason ? { reason } : {}) } } }),
     // A person's tap on an agent, a notice's "In <app>" among them, brings them to it: its notice goes. Opening the alert to
     // read it does not.
     tapped: (agentId) => endNotice(agentId),
@@ -1093,16 +1109,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         ...[...shown].map(([agentId, { line }]) => ({ agentId, machineId, question: true, text: line }))]
     },
     notificationRead: (machineId, agentId, readToken) =>
-      core.clients.sendLocal({ type: 'dial_notification_read', payload: { machineId, agentId, readToken } }),
-    forked: (machineId, agentId, sourceAgentId) => core.clients.sendLocal({ type: 'dial_forked', payload: { machineId, agentId, sourceAgentId } }),
+      core.clients.sendWindow({ target: { kind: 'all' }, frame: { type: 'dial_notification_read', payload: { machineId, agentId, readToken } } }),
+    forked: (machineId, agentId, sourceAgentId) => core.clients.sendWindow({ target: { kind: 'all' }, frame: { type: 'dial_forked', payload: { machineId, agentId, sourceAgentId } } }),
     // The dial's Fork: the same path the window's `agent_fork` takes, then `forked` above lands on it.
     forkAgent: (agentId) => core.agents.fork(agentId),
-    focused: (machineId, agentId) => core.clients.sendLocal({ type: 'dial_focus', payload: { machineId, agentId } }),
+    focused: (machineId, agentId) => core.clients.sendWindow({ target: { kind: 'all' }, frame: { type: 'dial_focus', payload: { machineId, agentId } } }),
     // The outcome only: never the agent, its session or its terminal.
     swiped: (outcome) => log(`[device] swipe · ${outcome}`),
     turned: noteMove,
     localFollowed: (cause, outcome) => log(FOLLOWED[cause === 'attach' ? attachAsk : cause][outcome]),
-    swarmSelected: (swarmId) => core.clients.sendLocal({ type: 'dial_swarm', payload: { swarmId } }),
+    swarmSelected: (swarmId) => core.clients.sendWindow({ target: { kind: 'all' }, frame: { type: 'dial_swarm', payload: { swarmId } } }),
     // Guarded as a notice into the dial is: a throw on the scroll path (a window's stream) is logged, never the session's.
     scrolled: (phase, dy, velocity) => part.call('dial', () => routeScroll(phase, dy, velocity)),
     // Gestures stay at this desk. The device inventory and its settings also reach the owner's other
@@ -1234,7 +1250,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** One card for the dial, in its four calls. A remote machine's and this computer's are the same calls,
    *  so a new kind of card lands on both the day it lands on either. [notice]: its agent's notice was pending as the
    *  card came (toDial). */
-  const dispatch = (event: DialEvent, notice: boolean): void | Promise<void> => {
+  const dispatch = (event: DialEvent, notice: boolean, current: () => boolean): void | Promise<void> => {
+    if (!current()) return
     if (event.kind !== 'processing') latestUpdate.delete(event.agentId)
     if (event.kind === 'processing') {
       if (event.update) latestUpdate.set(event.agentId, event.update)
@@ -1250,6 +1267,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       const start = starts.get(event.agentId)
       starts.delete(event.agentId)
       const finish = (tokens: Pick<TurnStatsFields, 'tokensIn' | 'tokensOut'>): void => {
+        if (!current()) return
         const all = { ...fields, ...tokens }
         if (Object.keys(all).length) void cable.turnStats(event.agentId, all)
         void cable.turnDone(event.agentId)
@@ -1288,7 +1306,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       return tierOf({ engine: who?.engine ?? '', recap, durationS: turn?.durationS ?? null,
         stats: turn?.stats ?? {}, subagent: false, onScreen: false, failed: event.failed === true, needsYou })
         .then((d) => d.tier, () => 'list' as const)
-        .then((tier) => { void cable.summary(agentId, recap, event.text, tier, event.fullText, false) })
+        .then((tier) => { if (current()) void cable.summary(agentId, recap, event.text, tier, event.fullText, false) })
     }
     else {
       began.delete(event.agentId); ended.delete(event.agentId)
@@ -1344,13 +1362,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     queued.set(agentId, tail)
     void tail.then(() => { if (queued.get(agentId) === tail) queued.delete(agentId) })
   }
-  const toDial = (event: DialEvent): void => {
+  const toDial = (event: DialEvent, current: () => boolean = () => true): void => {
+    if (!current()) return
     // The last streamed text goes out before the turn's end, in the same per-agent order.
     if (event.kind !== 'processing') endReplies(event.agentId, true)
     // Read as the card comes, not as its turn in the queue does: a summary can wait up to 2 s behind its turn's done
     // (TOKENS_WAIT_MS), and the next turn's start, a message sent while the agent worked, ends the notice meanwhile.
     const notice = event.kind === 'summary' && notices.pending(event.agentId)
-    inOrder(event.agentId, () => dispatch(event, notice))
+    inOrder(event.agentId, () => dispatch(event, notice, current))
   }
 
   // A remote machine's cards reach the dial through the same calls. The fleet has already noted which
@@ -1946,6 +1965,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     .catch((error: unknown): null => { log(`[devices] listener not opened · ${errorKind(error)}`); return null })
 
   let stopped = false
+  let revokeDesk: (() => void) | undefined
   if (deps.cableDisabled) log('[cable] disabled (CABLE_DISABLE=true) — the serial port is left alone')
   else if (!listening) cable.start()
   else {
@@ -1961,6 +1981,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
 
   /** A card bound for the devices, translated once for the cable. */
   const toCable = (frame: Record<string, unknown>): void => {
+    // Addressed cards describe one conversation, even after waiting in the existing send queue.
+    const agentId = frame.agentId, sessionId = frame.dbSessionId
+    const current = frame.type === 'commander_event' && sessionId !== undefined ? () => {
+      if (stopped || typeof agentId !== 'string' || typeof sessionId !== 'string' || !sessionId) return false
+      const row = core.agents.advertised().find(row => row.agentId === agentId)
+        ?? core.agents.serviceSessions?.().find(row => row.agentId === agentId)
+      return row?.sessionId === sessionId
+    } : () => true
+    if (!current()) return
     // A question, its close and a turn's card each also move the agent on the dial's list with no window (hosts/harness.ts).
     const close = cableQuestionCloseFor(frame as Parameters<typeof cableQuestionCloseFor>[0])
     if (close) {
@@ -2001,7 +2030,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const gone = (frame as { type?: string; payload?: { agentId?: unknown } })
     if (gone.type === 'agent_deleted' && typeof gone.payload?.agentId === 'string') { latestUpdate.delete(gone.payload.agentId); began.delete(gone.payload.agentId); ended.delete(gone.payload.agentId); endReplies(gone.payload.agentId, false); endNotice(gone.payload.agentId); questionsOpen.delete(gone.payload.agentId) }
     const step = cableStepFor(frame as Parameters<typeof cableStepFor>[0])
-    if (step) { inOrder(step.agentId, () => { void cable.turnStep(step.agentId, step.step) }); return }
+    if (step) { inOrder(step.agentId, () => { if (current()) void cable.turnStep(step.agentId, step.step) }); return }
     const event = cableEventFor(frame as Parameters<typeof cableEventFor>[0])
     // Logged at the fork, not at the send: this answers "did the daemon even decide to tell the dial",
     // a different question from "did the wire carry it", and the one nobody could answer when a tile
@@ -2014,7 +2043,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (!event.subagent) cableHost.harness.noteCard(event.agentId, event.kind)
     // A turn running: a restored notice of that agent rang before it, and is over.
     if (event.kind === 'processing') part.call('notices', () => notices.working(event.agentId))
-    toDial(event)
+    toDial(event, current)
   }
   /**
    * A turn's start outside a pane turns the dials to its agent only when a person typed its prompt in the app settled in
@@ -2120,6 +2149,17 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     tabReport = undefined
     if (cable.isConnected) log('[device] tab · skipped · not in front')
   }
+  // ⌘K in the window: a typed task, and which agent it belongs to, on any of the owner's machines.
+  const routeTask = async (text: string): Promise<RouteAnswer> => fleet ? fleet.routeTask(text) : unrouted(NO_AGENT_LIST)
+  // Committed, through the fleet's router — the dial's own dispatch — so a remote agent is reached on its
+  // own machine instead of being looked for in this computer's registry.
+  const routeSend = async (agentId: string, text: string): Promise<SendResult> => {
+    const sent = fleet?.routeSend(agentId, text) ?? { ok: false as const, machine: '', reason: NO_AGENT_LIST }
+    log(`[route] ⌘K → ${sid(agentId)} · bytes=${Buffer.byteLength(text, 'utf8')}`
+      + (sent.ok ? '' : ` · REFUSED: ${sent.reason}${sent.machine ? ` (${sent.machine})` : ''}`))
+    return sent
+  }
+
   /**
    * A thread opened in the ChatGPT app turns the dials to it as a selected tab does, once the app has settled in front
    * (docs/plans/2026-11-20-dial-chatgpt-follow-ax-design.md, "The devices process"): Harness Device reports the title of
@@ -2237,19 +2277,6 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       windowForm.disconnected(connId)
       windowSelection.focusChanged()
     }),
-    // ⌘K in the window: a typed task, and which agent it belongs to, on any of the owner's machines.
-    routeTask: async (text) => fleet ? fleet.routeTask(text) : unrouted(NO_AGENT_LIST),
-    // Committed, through the fleet's router — the dial's own dispatch — so a remote agent is reached on its
-    // own machine instead of being looked for in this computer's registry.
-    routeSend: async (agentId, text): Promise<SendResult> => {
-      const sent = fleet?.routeSend(agentId, text) ?? { ok: false as const, machine: '', reason: NO_AGENT_LIST }
-      log(`[route] ⌘K → ${sid(agentId)} · bytes=${Buffer.byteLength(text, 'utf8')}`
-        + (sent.ok ? '' : ` · REFUSED: ${sent.reason}${sent.machine ? ` (${sent.machine})` : ''}`))
-      return sent
-    },
-    // The Wi-Fi device borrows the dial's walk along the desk and its stroke, until it is one of the devices.
-    stepFocus: (direction, currentAgentId) => cableHost.stepFocus(direction, currentAgentId),
-    scroll: (phase, dy, velocity) => cableHost.scrolled(phase, dy, velocity),
     // The voice router warms a worker on an engine the machine runs, while a device is watching.
     engines: (engines) => setVoiceRouterSessions(engines.map((engine) => ({ engine }))),
     commanders: (connected) => setVoiceRouterDeviceConnected(connected),
@@ -2260,6 +2287,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     stop: async () => {
       // A cable still waiting on the listener never starts, and a stroke's answer landing from here on sends nothing.
       stopped = true
+      revokeDesk?.()
       // A stop is not an ending: the detach below and a listing source's emptied list end cards in memory, and the next
       // start must still find them, so the file takes what was waiting and nothing after.
       part.call('notices', () => noticeFile.close())
@@ -2283,6 +2311,17 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     },
   }
   ports.devices = port
+  const direct: DeviceDesk = {
+    stepFocus: (direction, currentAgentId, current) => cableHost.stepFocus(direction, currentAgentId, () => !stopped && current()),
+    scroll: (phase, dy, velocity, current) => { if (!stopped && current()) cableHost.scrolled(phase, dy, velocity) },
+  }
+  if (deps.onDesk) deps.onDesk(direct)
+  else {
+    const machineId = core.machine.id()
+    revokeDesk = publishDeviceDesk({ dataDir: core.dataDir, machineId, desk: direct, faults: deps.faults, log,
+      current: () => !stopped && !!machineId && core.machine.id() === machineId, hasWindow: () => core.clients.hasWindow(),
+    })
+  }
 
   // The Devices tab: physical devices belong to this machine, and only its owner may manage them.
   const tab = {
@@ -2302,16 +2341,21 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    * task, whose states other than the three are dropped rather than guessed at: an answer this side cannot read must not
    * settle a spoken turn as though it had been understood. A window's only, on this computer.
    */
+  const ownerCommand = createOwnerCommands({ task: routeTask, send: routeSend, log })
+  deps.onLegacyCommands?.({
+    routeTask: async ({ text }) => ({ ...await routeTask(typeof text === 'string' ? text : '') }),
+    routeSend: ({ agentId, text }) => routeSend(typeof agentId === 'string' ? agentId : '', typeof text === 'string' ? text : ''),
+  })
   const windowFrame = async (payload: Record<string, unknown>, asker: { local?: boolean; owner: boolean }): Promise<Record<string, unknown>> => {
     if (!asker.local || !asker.owner) return { error: 'LOCAL_ONLY' }
     const frame = (payload.payload && typeof payload.payload === 'object' ? payload.payload : {}) as Record<string, unknown>
     const said = (field: string): string => (typeof frame[field] === 'string' ? frame[field] as string : '')
     if (payload.frame === 'route_task') {
       const task = said('text').trim()
-      return { ...(task ? await port.routeTask(task) : unrouted('empty task')) }
+      return { ...(task ? await routeTask(task) : unrouted('empty task')) }
     }
     if (payload.frame === 'route_send') {
-      const sent = said('agentId') && said('text') ? await port.routeSend(said('agentId'), said('text')) : { ok: false as const, machine: '', reason: 'nothing to send' }
+      const sent = said('agentId') && said('text') ? await routeSend(said('agentId'), said('text')) : { ok: false as const, machine: '', reason: 'nothing to send' }
       return sent.ok ? { ok: true } : { ok: false, machine: sent.machine, reason: sent.reason }
     }
     if (payload.frame === 'voice_route_reply') {
@@ -2322,12 +2366,32 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     }
     return { error: 'UNKNOWN_FRAME' }
   }
+  const deskFrame: NonNullable<ServiceRequests[string]> = async (payload, asker, closed) => {
+    if (!asker.local || !asker.owner || !asker.connection || asker.rpcRoute || !closed || closed.aborted || stopped) return { error: 'LOCAL_ONLY' }
+    const request = deskRequest(payload.frame as string, payload.payload)
+    if (!request) return { error: 'INVALID_REQUEST' }
+    const peer = deviceDeskFor(core.dataDir, request.machineId)
+    const current = (): boolean => !stopped && !closed.aborted && core.machine.id() === request.machineId
+      && deviceDeskFor(core.dataDir, request.machineId) === peer
+    if (!peer || !current()) return { error: 'DESK_UNAVAILABLE' }
+    if (request.kind === 'probe') return { protocol: 1, machineId: request.machineId }
+    if (request.kind === 'scroll') return { ok: peer.scroll(request.phase, request.dy, request.velocity, current) }
+    if (request.expiresAt <= Date.now() || request.expiresAt > Date.now() + DESK_WAIT_MS) return { error: 'DESK_TIMEOUT' }
+    if (deps.refresh && !await deps.refresh() || !current()) return { error: 'DESK_UNAVAILABLE' }
+    const result = await peer.stepFocus(request.direction, request.currentAgentId, () => current() && Date.now() < request.expiresAt)
+    if (!current() || Date.now() >= request.expiresAt) return { error: 'DESK_UNAVAILABLE' }
+    return typeof result === 'string' ? { step: result } : { ...result }
+  }
   // Pets name files on this computer by path, so they are answered to a process here only, never the owner's relayed app.
   const local = (type: string) => (payload: Record<string, unknown>, asker: { local?: boolean; owner: boolean }) =>
     !asker.owner ? { error: 'OWNER_REQUIRED' } : asker.local ? harnessDevicesRequest(tab, type, payload) : { error: 'LOCAL_ONLY' }
   return {
     harness_devices_list: answer('harness_devices_list'), harness_device_settings: answer('harness_device_settings'),
     pet_preview: local('pet_preview'), pet_apply: local('pet_apply'), pet_reset: local('pet_reset'), pet_status: local('pet_status'),
-    devices_ws: (payload, asker) => windowFrame(payload, asker),
+    devices_ws: (payload, asker, closed) => payload.frame === 'harness_device_step' || payload.frame === 'harness_device_scroll'
+      ? deskFrame(payload, asker, closed) : asker.rpcRoute === true
+      ? ownerCommand(typeof payload.frame === 'string' ? payload.frame : '',
+        payload.payload && typeof payload.payload === 'object' && !Array.isArray(payload.payload) ? payload.payload as Record<string, unknown> : {}, asker, closed)
+      : windowFrame(payload, asker),
   }
 }

@@ -14,7 +14,8 @@ import { LAUNCH_LOCATION_VARIABLES } from './nativeLocations.js'
 import type { AgentEngine } from '../types.js'
 import { NativeEvidenceBudget } from './nativeEvidence.js'
 import { NativePaths } from './nativePaths.js'
-import { executableSnapshot, nativeVersionProbe, type NativeExecutableSnapshot } from './nativeVersion.js'
+import { executableIdentity, retainedExecutable } from './nativeExecutable.js'
+import type { NativeExecutableSnapshot } from './versionData.js'
 
 export type LaunchExecutableResult =
   | { state: 'ready'; executable: NativeExecutableSnapshot; environment: NodeJS.ProcessEnv }
@@ -52,7 +53,7 @@ export function clearLaunchEnvironmentCache(): void {
 /** No unavailable or negative shell answer is cached. A slot belongs to the
  * actual child until its callback, including timeout/oversized-output kills.
  * A capture still running is joined; one taken in the last ENVIRONMENT_TTL_MS is answered again. */
-export async function launchEnvironment(shell?: string): Promise<NodeJS.ProcessEnv | null> {
+export async function launchEnvironment(shell?: string, execute: typeof execFile = execFile): Promise<NodeJS.ProcessEnv | null> {
   const interactive = interactiveEngineShell(shell)
   if (!interactive) return withWindowsHome(pickLocations(process.env))
   // Keyed by the shell, not its argv: a shell that is not POSIX gets a one-time script file in its argv.
@@ -64,7 +65,7 @@ export async function launchEnvironment(shell?: string): Promise<NodeJS.ProcessE
   if (probing >= MAX_PROBES) return null
   const code = `process.stdout.write(${JSON.stringify(ENV_MARKER)}+JSON.stringify(Object.fromEntries(${JSON.stringify(LAUNCH_LOCATION_VARIABLES)}.filter(k=>process.env[k]!==undefined).map(k=>[k,process.env[k]]))))`
   const argv = engineShellArgv(interactive, [`exec ${shellSingleQuote(managedNodePath())} -e ${shellSingleQuote(code)}`, 'harness-launch-environment'])
-  const capture = captureEnvironment(argv).then(environment => {
+  const capture = captureEnvironment(argv, execute).then(environment => {
     capturing.delete(key)
     if (environment) captured.set(key, { at: Date.now(), environment })
     return environment
@@ -73,11 +74,11 @@ export async function launchEnvironment(shell?: string): Promise<NodeJS.ProcessE
   return capture.then(environment => environment && { ...environment })
 }
 
-function captureEnvironment(argv: string[]): Promise<NodeJS.ProcessEnv | null> {
+function captureEnvironment(argv: string[], execute: typeof execFile): Promise<NodeJS.ProcessEnv | null> {
   probing++
   return new Promise(done => {
     try {
-      const child = probeExecFile(execFile)(argv[0], argv.slice(1), { timeout: 5_000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024 }, (error, output) => {
+      const child = probeExecFile(execute)(argv[0], argv.slice(1), { timeout: 5_000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024 }, (error, output) => {
         probing--
         if (error) { done(null); return }
         try {
@@ -110,8 +111,8 @@ const reportedAliases = new Set<string>()
 /** A complete absence can authorize installation. Unreadable routes and failed
  * shell capture cannot: installing then would risk replacing a working engine. A Windows Store app's alias is no
  * engine at all (storeAppAlias): looked past, and absent when nothing else is found. */
-export async function captureLaunchExecutable(engine: AgentEngine, shell?: string): Promise<LaunchExecutableResult> {
-  const environment = await launchEnvironment(shell)
+export async function captureLaunchExecutable(engine: AgentEngine, shell?: string, execute: typeof execFile = execFile): Promise<LaunchExecutableResult> {
+  const environment = await launchEnvironment(shell, execute)
   if (!environment || !environment.HOME || !isAbsolute(environment.HOME)) return held('Waiting to read the engine’s launch environment.')
   const command = engineBin(engine), override = enginePathOverride(engine)
   // An entry that is not absolute names no fixed folder, so it is left out of the search, as an over-long
@@ -187,9 +188,9 @@ export async function captureLaunchExecutable(engine: AgentEngine, shell?: strin
       }
       return held(`Waiting to confirm access to the selected engine executable (${path}).`)
     }
-    const executable = executableSnapshot(nativeVersionProbe({ args: [], output: /^$/, timeoutMs: 5_000 }, () => path))
-    if (!executable) return held('Waiting for the selected engine executable to stop changing.')
-    return { state: 'ready', executable, environment: withNodeForScript(path, environment) }
+    const identity = executableIdentity(path)
+    if (!identity) return held('Waiting for the selected engine executable to stop changing.')
+    return { state: 'ready', executable: retainedExecutable(path, identity), environment: withNodeForScript(path, environment) }
   }
   if (aliased) return held('Waiting to confirm the engine search path and its aliases.')
   if (unreachable) return held(`Waiting to confirm access to the selected engine executable (${unreachable}).`)

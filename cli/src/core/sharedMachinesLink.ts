@@ -2,33 +2,53 @@
  * Shared machines in their own process (the edge host; services/sharedMachinesProcess.ts), as the core
  * reaches it: a guest's harness (`guestLaunch`), asked when a guest's New Harness arrives and never in a
  * connection's line. An answer that does not come (the process is down, or slower than its wait,
- * core/api.ts `LONG_ANSWERS`), or one not shaped as a launch, is the fallback: guest access unavailable.
- * The argv and the variables are checked here, as strings, because the core runs them in a pane.
+ * core/api.ts `LONG_ANSWERS`), or one not shaped as a launch, becomes guest access unavailable at the caller.
+ * createGuestCreate checks the fixed command against its captured request before any backend or pane effect.
  */
-import { GUEST_LAUNCH_UNAVAILABLE, type GuestLaunch, type SharedMachinesCorePort } from './api.js'
-import { isGuestUser } from '../lib/guestUser.js'
+import type { GuestLaunch, GuestLaunchInput, SharedMachinesCorePort } from './api.js'
+import { guestUserFor, guestWorkspaceFor } from '../lib/guestUser.js'
+import { GUEST_HELPER_PATH, GUEST_PANE_BOOTSTRAP, guestEngineArgv } from '../lib/guestLaunchWire.js'
+import { launchContributionIn, launchRecord, launchText } from '../lib/launchContribution.js'
+import { isAbsolute, resolve, win32 } from 'node:path'
 
 /** Ask shared machines' process (core/serviceLinks.ts `call`, for `sharedMachines`): never rejects. */
 export type CallSharedMachines = (type: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>>
 
-const strings = (value: unknown): value is string[] => Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === 'string')
-const stringMap = (value: unknown): value is Record<string, string> =>
-  !!value && typeof value === 'object' && !Array.isArray(value) && Object.values(value).every((v) => typeof v === 'string')
+/** Only the requested guest's declared command is admitted, including the inline compatibility path. */
+export function guestLaunchIn(value: unknown, input: GuestLaunchInput): GuestLaunch | null {
+  if (!launchRecord(value)) return null
+  if (value.ok === false) return launchText(value.error) && (value.detail === undefined || launchText(value.detail))
+    ? { ok: false, error: value.error, ...(value.detail !== undefined ? { detail: value.detail } : {}) } : null
+  if (value.ok !== true || !launchText(value.workspace) || (input.engine !== 'claude' && input.engine !== 'codex')) return null
+  const windows = value.guestHostUser !== undefined
+  if (process.platform === 'win32' && !windows) return null
+  const user = guestUserFor(input.email)
+  if (windows && value.guestHostUser !== user) return null
+  const fallback = guestWorkspaceFor(input.email, windows ? 'win32' : process.platform)
+  const requested = input.cwd && (windows ? win32.isAbsolute(input.cwd) : isAbsolute(input.cwd))
+    ? (windows ? win32.resolve(input.cwd) : resolve(input.cwd)) : null
+  const workspace = value.workspace
+  if (workspace !== fallback && workspace !== requested) return null
+  const contribution = launchContributionIn({ args: value.argv, env: value.env })
+  if (!contribution) return null
+  const { env, args } = contribution
+  const engine = guestEngineArgv({ ...input, engine: input.engine })
+  let expected: string[]
+  if (windows) {
+    if (Object.keys(env).length) return null
+    expected = engine
+  } else {
+    if (Object.keys(env).length !== 3 || env.TERM !== 'xterm-256color' || env.COLORTERM !== 'truecolor' || !env.LANG) return null
+    expected = ['/bin/sh', '-c', GUEST_PANE_BOOTSTRAP, 'harness-guest', GUEST_HELPER_PATH, user, workspace, input.engine,
+      'sudo', '-n', GUEST_HELPER_PATH, 'run', user, '--cwd', workspace, '--pass', 'TERM', '--pass', 'COLORTERM', '--pass', 'LANG', '--', ...engine]
+  }
+  if (args.length !== expected.length || args.some((arg, index) => arg !== expected[index])) return null
+  return { ok: true, workspace, argv: args, env, ...(windows ? { guestHostUser: user } : {}) }
+}
 
 export function createSharedMachinesLink(call: CallSharedMachines): SharedMachinesCorePort {
   return {
-    guestLaunch: async (input): Promise<GuestLaunch> => {
-      const answer = await call('guestLaunch', { ...input })
-      if (answer.ok === true && typeof answer.workspace === 'string' && strings(answer.argv) && stringMap(answer.env)
-        && (answer.guestHostUser === undefined || (typeof answer.guestHostUser === 'string' && isGuestUser(answer.guestHostUser)))) {
-        return { ok: true, workspace: answer.workspace, argv: answer.argv, env: answer.env,
-          ...(typeof answer.guestHostUser === 'string' ? { guestHostUser: answer.guestHostUser } : {}) }
-      }
-      if (answer.ok === false && typeof answer.error === 'string') {
-        return { ok: false, error: answer.error, ...(typeof answer.detail === 'string' ? { detail: answer.detail } : {}) }
-      }
-      return GUEST_LAUNCH_UNAVAILABLE
-    },
+    guestLaunch: (input) => call('guestLaunch', { ...input }),
     // The process stops its own relay.
     stop: () => {},
   }

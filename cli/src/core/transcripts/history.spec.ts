@@ -21,10 +21,16 @@ import { messagesToEvents, windowRawLines } from '../../lib/normalize.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { HistoryPage, ThreadPages } from '../../lib/transcriptPages.js'
 import { tailFileCapped } from '../../lib/transcriptTail.js'
-import { createHistory } from './history.js'
+import { createHistory, type HistoryDeps } from './history.js'
 import { wholeHistoryPage } from '../../engines/others/transcripts.js'
 import { createStoreOf } from './stores.js'
 import { loadEngine } from '../../engines/inProcess.js'
+
+const deferred = () => {
+  let resolve!: () => void
+  const promise = new Promise<void>(done => { resolve = done })
+  return { promise, resolve }
+}
 
 /**
  * `session_get`, answered by the core: which reader, replay and window each engine's history goes
@@ -120,7 +126,7 @@ function transcript(lines: string[], name = 'session.jsonl'): string {
   return file
 }
 
-function setup(s?: RegisteredSession, kept: RegisteredSession[] = [], readerFor = engineTranscriptFor) {
+function setup(s?: RegisteredSession, kept: RegisteredSession[] = [], readerFor?: HistoryDeps['readerFor']) {
   // The pager pages a thread by the rules its engine's reader hands it: a record's cursor (Claude Code's) or a
   // line count (Codex's). Each kind is its own mock, so what each engine asked for is checked by kind.
   const claude = vi.fn(async (_path: string, _opts: { limit?: number; before?: string }) => page([], false, null))
@@ -134,9 +140,12 @@ function setup(s?: RegisteredSession, kept: RegisteredSession[] = [], readerFor 
   const hermesDb = vi.fn(async (_s: RegisteredSession) => '/profiles/work/state.db')
   const deps = {
     resolve: vi.fn((id: string) => (s && (id === s.sessionId || id === s.agentId) ? s : undefined)),
-    stopped: vi.fn(() => kept),
-    pages,
-    readerFor,
+    stopped: vi.fn(async () => kept),
+    lineCount: pages.lineCount,
+    readerFor: readerFor ?? ((engine: string) => {
+      const reader = engineTranscriptFor(engine)
+      return reader && { lastTurnText: reader.lastTurnText, historyPage: (session, ask) => reader.historyPage(session, ask, pages) }
+    }),
     storeOf: createStoreOf({ opencode: '/stores/opencode.db', kilo: '/stores/kilo.db', devin: '/stores/sessions.db', openclaw: async () => null }, hermesDb),
     hermesDb,
   }
@@ -148,6 +157,18 @@ const about = (s: RegisteredSession, timestamp: number | Date) =>
   ({ id: s.sessionId, title: 'Release notes', timestamp: new Date(timestamp).toISOString(), engine: s.engine })
 
 describe('a shell result in history', () => {
+  it('asks the selected reader for history without lending it a core-owned pager', async () => {
+    const s = session('claude', { transcriptPath: '/private/transcript.jsonl' })
+    const answer = { events: [], timestamp: new Date(TOUCHED).toISOString(), hasMore: false, oldestCursor: null }
+    const reader = { historyPage: vi.fn(async () => answer), lastTurnText: vi.fn(async () => null) }
+    const { sessionGet, pages } = setup(s, [], () => reader)
+    const result = await sessionGet({ sessionId: s.agentId, limit: 3, before: 'cursor' })
+    expect(result).toMatchObject({ id: s.agentId, ...answer })
+    expect(reader.historyPage).toHaveBeenCalledExactlyOnceWith(s, { limit: 3, before: 'cursor' })
+    expect(pages.page).not.toHaveBeenCalled()
+    expect(pages.lineCount).not.toHaveBeenCalled()
+  })
+
   it('never carries the turn stats\' outputTail', async () => {
     const s = session('devin')
     const end = { type: 'tool_end', payload: { id: 't1', tool: 'Bash', output: 'x', outputTail: 'tail', isError: false, summary: '' } }
@@ -609,9 +630,11 @@ describe('history crossing a reader boundary', () => {
       const s = session('claude', { transcriptPath: '/read.jsonl' })
       let finish!: () => void
       const waiting = new Promise<void>((r) => { finish = r })
-      const adapter = { historyPage: async () => { await waiting; return { events: [], timestamp: MTIME.toISOString() } }, lastTurnText: async () => null }
+      const entered = deferred()
+      const adapter = { historyPage: async () => { entered.resolve(); await waiting; return { events: [], timestamp: MTIME.toISOString() } }, lastTurnText: async () => null }
       const h = setup(s, [], () => adapter)
       const result = h.sessionGet({ sessionId: s.sessionId })
+      await entered.promise
       if (change === 'mutate') s.transcriptPath = '/replacement.jsonl'
       else h.deps.resolve.mockReturnValue(undefined)
       finish()

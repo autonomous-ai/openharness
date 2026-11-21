@@ -16,7 +16,7 @@ function setup() {
   const core = fakeCore({ agents: { resolve, closeStarted, lastActivity, live: vi.fn(() => sessions) } })
   const notify = vi.fn(() => true)
   const call = vi.fn(async (_type: string, _payload: Record<string, unknown>, _waitMs: number): Promise<Record<string, unknown>> => ({ ok: true }))
-  return { link: createAgentCleanupLink(core, notify, call), notify, call, closeStarted, lastActivity, core }
+  return { link: createAgentCleanupLink(core, call), notify, call, closeStarted, lastActivity, core }
 }
 
 describe('the agent cleanup in its own process, as the core sees it', () => {
@@ -24,17 +24,7 @@ describe('the agent cleanup in its own process, as the core sees it', () => {
   // harnessd/services.ts `hears`): nothing of it is said here.
   it('has no stop of its own to tell', () => {
     const { link } = setup()
-    expect(Object.keys(link.port).sort()).toEqual(['forgetTold', 'stop', 'typed'])
-  })
-
-  it('tells it once that the person typed into a harness another agent started, by its agent id, and nothing of the rest', () => {
-    const { link, notify } = setup()
-    link.port.typed('s-kid')
-    link.port.typed('kid')
-    // Every keystroke into the person's own harness, or one it does not know, costs a lookup and no frame.
-    link.port.typed('mine')
-    link.port.typed('nobody')
-    expect(notify.mock.calls).toEqual([[{ type: 'service_event', payload: { kind: 'typed', agentId: 'kid' } }, { untilDelivered: true }]])
+    expect(Object.keys(link.port).sort()).toEqual(['forgetTold', 'stop'])
     expect(link.port.stop()).toBeUndefined()
   })
 
@@ -79,7 +69,7 @@ describe('the agent cleanup in its own process, as the core sees it', () => {
   })
 
   it('closes nothing, and knows no time, in a core that cannot', async () => {
-    const link = createAgentCleanupLink(fakeCore(), () => true, async () => ({}))
+    const link = createAgentCleanupLink(fakeCore(), async () => ({}))
     expect(await link.answer('closeStarted', { agentId: 'kid', mode: 'now' })).toEqual({ error: 'UNSUPPORTED' })
     expect(await link.answer('lastActivity', { agentId: 'kid' })).toEqual({ at: null })
   })

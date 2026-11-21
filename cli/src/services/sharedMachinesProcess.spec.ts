@@ -66,6 +66,10 @@ describe('shared machines in their own process', () => {
     expect(await options!.requests.guestLaunch!(input, core)).toEqual({ ok: true, workspace: '/g/work', argv: ['sh'], env: {} })
     expect(guestLaunch).toHaveBeenCalledWith(input)
     expect(await options!.requests.guestLaunch!({ email: 'kim@acme.io' }, core)).toEqual(GUEST_LAUNCH_UNAVAILABLE)
+    for (const answer of [null, [], 'not a reply']) {
+      guestLaunch.mockResolvedValueOnce(answer as never)
+      expect(await options!.requests.guestLaunch!(input, core)).toEqual({})
+    }
     // A service that filled no port builds nothing.
     runSharedMachinesService({
       dataDir: '/data', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't',

@@ -5,8 +5,8 @@
  *
  * The core never waits on them. What it tells them (a card, the desk, a window's answer) is a notice on
  * their link, dropped while they are down, since the core keeps the state they need and says it again
- * when they connect. What it asks of them (⌘K, the Wi-Fi device's step along the desk) is a request on
- * the link with a deadline and an answer for when they do not give one: a hung devices process costs ⌘K
+ * when they connect. What it asks of them (the Wi-Fi device's step along the desk) is a request on
+ * the link with a deadline and an answer for when they do not give one: a hung devices process costs the caller
  * its answer, never a window's typing or an agent's turn.
  *
  * What they ask of the core is the core's API, as a service in the core's process would call it: this
@@ -19,7 +19,7 @@
 import type { AppSwarms } from '../cable/cableSession.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
 import type { ReviewedAnswer } from '../cable/questionInbox.js'
-import { DEVICES_FALLBACKS, readFallback, type CoreApi, type DeviceBridgeFrame, type DevicesPort, type DeviceWindowFrame, type InboxAnswer, type RouteAnswer, type SendResult, type WindowFocus } from './api.js'
+import { DEVICES_FALLBACKS, readFallback, type CoreApi, type DevicesPort, type InboxAnswer, type WindowFocus } from './api.js'
 import { answerAccountQuery } from './accountQueries.js'
 import type { ServiceFrame } from './serviceLinks.js'
 
@@ -46,19 +46,13 @@ export interface DevicesLinkDeps {
   log?: (line: string) => void
 }
 
-/** How long ⌘K waits for the devices to pick an agent: the classifier has 20 s (services/fleet.ts). */
-export const ROUTE_TASK_WAIT_MS = 25_000
-/** How long anything else waits for them: a send, a step along the desk. */
+/** How long the Wi-Fi device waits for a step along the desk. */
 export const DEVICES_WAIT_MS = 5_000
 /** The mod's poll, past the devices' own 25 s hold: a hold that runs out is their empty answer, which the mod follows at once. */
 export const INBOX_CALL_MS = 27_000
 
 const fallback = <T>(member: keyof typeof DEVICES_FALLBACKS): T => readFallback(DEVICES_FALLBACKS[member]).value as T
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
-const isFrame = (value: unknown): value is { type: string; payload: Record<string, unknown> } =>
-  !!value && typeof value === 'object' && typeof (value as { type?: unknown }).type === 'string'
-  && !!(value as { payload?: unknown }).payload && typeof (value as { payload?: unknown }).payload === 'object'
-
 export function createDevicesLink(deps: DevicesLinkDeps) {
   const { core } = deps
   const log = deps.log ?? ((line: string) => console.warn(line))
@@ -79,12 +73,6 @@ export function createDevicesLink(deps: DevicesLinkDeps) {
     windowFocus: (focus) => event('windowFocus', { focus }),
     windowReply: (which, connId, machineId, reply) => event('windowReply', { which, connId, machineId, reply }),
     windowGone: (connId) => event('windowGone', { connId }),
-    routeTask: async (task) => answered(await deps.call('routeTask', { text: task }, ROUTE_TASK_WAIT_MS), 'routeTask', (answer) => answer as unknown as RouteAnswer),
-    routeSend: async (agentId, task) => answered(await deps.call('routeSend', { agentId, text: task }, DEVICES_WAIT_MS), 'routeSend',
-      (answer) => answer as unknown as SendResult),
-    stepFocus: async (direction, currentAgentId) => answered(await deps.call('stepFocus', { direction, ...(currentAgentId ? { currentAgentId } : {}) }, DEVICES_WAIT_MS),
-      'stepFocus', (answer) => (answer.step === 'no_agents' ? 'no_agents' : { machineId: text(answer.machineId), agentId: text(answer.agentId) })),
-    scroll: (phase, dy, velocity) => event('scroll', { phase, dy, velocity }),
     engines: (engines) => event('engines', { engines }),
     commanders: (connected) => event('commanders', { connected }),
     observed: (observed) => event('observed', { ...observed }),
@@ -106,19 +94,6 @@ export function createDevicesLink(deps: DevicesLinkDeps) {
 
   /** What the devices may ask of the core (`service_query`), by name. */
   const queries: Record<string, (payload: Record<string, unknown>) => Record<string, unknown> | Promise<Record<string, unknown>>> = {
-    // This computer's agents as the dial lists them, and what else the dial reads in line: asked as its
-    // tick or ⌘K builds a list, so the devices read the registry as it is then.
-    view: () => ({
-      agents: [
-        ...core.agents.advertised().map((session) => ({ ...session, displayName: core.agents.displayName(session), runtimeProfile: core.agents.runtimeProfile(session) })),
-        // The cloud harnesses: on the dial's wheel as on the desk, with no pane behind them.
-        ...core.agents.cloud?.() ?? [],
-      ],
-      machine: { id: core.machine.id(), computerId: core.machine.computerId(), name: core.machine.name() },
-      signedIn: core.account.signedIn(),
-      environment: core.account.environment(),
-      hasWindow: core.clients.hasWindow(),
-    }),
     activityText: async ({ agentId }) => ({ text: await core.agents.activityText(text(agentId)) }),
     activitySnapshot: async ({ agentId }) => ({ activity: await core.agents.activitySnapshot?.(text(agentId)) ?? null }),
     usageFresh: async ({ agentId }) => ({ usage: await core.usageFresh?.(text(agentId)) ?? null }),
@@ -141,10 +116,6 @@ export function createDevicesLink(deps: DevicesLinkDeps) {
     stop: ({ agentId }) => core.turns.stop(text(agentId)),
     answer: ({ agentId, requestId, answers }) => core.questions.answer(text(agentId), text(requestId), (answers && typeof answers === 'object' ? answers : {}) as Record<string, string>),
     setRuntime: ({ agentId, model, effort }) => core.agents.setRuntime(text(agentId), typeof model === 'string' ? model : undefined, typeof effort === 'string' ? effort : undefined),
-    sendLocal: ({ frame }) => { if (isFrame(frame)) core.clients.sendLocal(frame as DeviceWindowFrame) },
-    // A bridge's ask for one window: told, not asked, since the bridge answers a window that has gone by its
-    // own deadline either way.
-    sendToWindow: ({ connId, frame }) => { if (isFrame(frame)) core.clients.sendToWindow(text(connId), frame as DeviceBridgeFrame) },
     devicesChanged: ({ status, revision }) => core.clients.devicesChanged({ status, revision }),
     dialWatching: ({ watching: on }) => watching(on === true),
   }

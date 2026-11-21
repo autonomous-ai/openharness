@@ -25,7 +25,10 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { createProductUsage } from './productUsage.js'
 import { env } from '../config/env.js'
-import type { GatewayAccount, GatewayEvents, GatewayOps, HttpAnswer, ServiceRequests, WindowRelay } from '../core/api.js'
+import type { CoreApi, GatewayAccount, GatewayEvents, GatewayOps, HttpAnswer, ServiceRequests, WindowRelay } from '../core/api.js'
+import { isLocalClientId } from '../lib/relayFrames.js'
+import { createBrowser } from './browser.js'
+import { createCallbackReplay } from './callbackReplay.js'
 import { AutonomousDeviceDirect } from '../lib/autonomous-device/direct.js'
 import { deviceRefusal, deviceRoutes } from '../lib/autonomous-device/localHttp.js'
 import { startDevicePart } from '../lib/autonomous-device/parts.js'
@@ -54,9 +57,21 @@ import { shareWindows } from './share.js'
 import { createAccountHttp } from './accountHttp.js'
 import { accountRoutes, gatewayHttp } from './accountRoutes.js'
 import { keyRoutes, type KeyOps } from './keyRoutes.js'
+import { startGatewayDevicePeer } from './devicePeer.js'
+import { devicePeerKey } from '../lib/autonomous-device/peerEndpoint.js'
+
+import { connectorAccountKey, createGatewayConnectorSync } from './connectorSync.js'
+import { connectorsDir } from '../lib/connectors/store.js'
+import type { VaultStore } from '../lib/connectors/vaultStore.js'
+import type { VaultAccount } from '../lib/connectors/vaultOps.js'
 
 /** What the gateway needs of the core, in whichever process it runs. */
 export interface GatewayHost {
+  agents?: Pick<CoreApi['agents'], 'ofPane' | 'follow'>
+  /** Process-owned physical request credit survives replacement of the gateway instance. */
+  callbackReplay?: ReturnType<typeof createCallbackReplay>
+  connectorStore?: VaultStore
+  peer?: { composition: 'inline' | 'services'; port: number; token?: string }
   events: GatewayEvents
   /** The id this daemon serves under: the account's machine id signed in, the computer's own signed out. */
   machineId: string
@@ -79,6 +94,9 @@ export interface GatewayHost {
 }
 
 export interface StartedGateway {
+  /** Old-core private RPC only. Retain at least 30 days after the first published CLI release containing
+   * this adapter; record that release-derived retirement date before removal. Never exposed by the new CoreApi. */
+  legacyConnectorVault: VaultAccount['connectorVault']
   port: RelayGateway
   ops: GatewayOps
   windowRelay: Required<WindowRelay>
@@ -163,6 +181,9 @@ const PAIR_STATUS: Record<string, number> = {
 export function startGateway(given: GatewayHost): StartedGateway {
   const host = { ...given, tokens: given.tokens ?? new AuthSessionManager(backendHttpBase()) }
   let account = host.account
+  let connectionSync: ReturnType<typeof createGatewayConnectorSync> | undefined
+  let connectionsReady = false
+  const invalidateConnectionTrust = (): void => { connectionsReady = false; connectionSync?.accountChanged() }
   let reachable: Set<string> | null = null
   const accountHttp = createAccountHttp({
     tokens: host.tokens, account: () => account,
@@ -377,6 +398,7 @@ export function startGateway(given: GatewayHost): StartedGateway {
     suspend: (pubs) => syncer.suspend(pubs),
     resume: () => syncer.resume(),
     signedOut: () => {
+      invalidateConnectionTrust()
       // This machine's key was removed from the account: it is signed out, and comes back — after a
       // new `harness login` — with a NEW key, which every other device announces as a new device.
       console.log('[devlog] this machine was removed from the account\'s devices — signing out')
@@ -384,19 +406,35 @@ export function startGateway(given: GatewayHost): StartedGateway {
       host.events.revoked()
     },
     seen: deviceKeysSeen,
-    changed: () => host.events.toWindows({ type: 'device_keys_changed', payload: {} }),
+    changed: () => {
+      host.events.toWindows({ type: 'device_keys_changed', payload: {} })
+      connectionLogChanged()
+    },
     log: (line) => console.log(line),
   })
   // Each register is also the offer of a sweep of unused app keys (at most one per 6 hours, on one
   // machine of the account: deviceLogSyncer `sweepStale`).
-  const registerAndSweep = (): void => { void devlog.register().then(() => devlog.sweepStale()) }
+  function connectionLogChanged(): void {
+    const listed = devlog.list()
+    connectionsReady = !!account.machineId && devlog.current() && !!listed.head && !listed.frozen
+      && listed.members.some(member => member.self && member.machineId === account.machineId && !member.pending && !member.suspended)
+    connectionSync?.changed(null)
+  }
+  const registerAndSweep = (): void => {
+    const owner = connectorAccountKey(account)
+    invalidateConnectionTrust()
+    void devlog.register().then(() => {
+      if (owner === connectorAccountKey(account)) connectionLogChanged()
+      return devlog.sweepStale()
+    })
+  }
   devLogSyncer = devlog
   syncer.devlog = devlog
   // Removed while online: the backend's `machine_revoked` arrives before this machine reads the log, and
   // stops it. The key is spent all the same, or the next `harness login` would come back under a banned
   // key and be signed out again.
   gateway.onDeviceRemoved = (pub) => {
-    if (pub === b64e(relayIdentityStore.getIdentity().pub)) spendIdentity()
+    if (pub === b64e(relayIdentityStore.getIdentity().pub)) { invalidateConnectionTrust(); spendIdentity() }
   }
   // A removal of another key under this machine id — the earlier install a reinstall waits behind — is
   // not this machine signed out: the log re-read that follows registers this key (deviceLogSyncer).
@@ -407,7 +445,12 @@ export function startGateway(given: GatewayHost): StartedGateway {
   syncer.onDropped = (pub) => {
     if (devlog.list().members.some((m) => m.pub === pub && !m.self)) void devlog.remove(pub)
   }
-  gateway.onDeviceKeysChanged = () => { void devlog.refresh() }
+  gateway.onDeviceKeysChanged = () => {
+    const owner = connectorAccountKey(account)
+    invalidateConnectionTrust()
+    void devlog.refresh().then(() => { if (owner === connectorAccountKey(account)) connectionLogChanged() })
+  }
+  gateway.onConnectorsChanged = revision => connectionSync?.changed(revision)
   // Every time the link comes up: a sign-in from before the log existed joins it with no one doing
   // anything, and one that joined already only reads what it missed while offline. Wired signed out
   // too, and register() rather than refresh() on the timer: a daemon that was signed out when it started
@@ -455,11 +498,19 @@ export function startGateway(given: GatewayHost): StartedGateway {
     if (!hit || !selector.trim()) return { ok: false, error: 'NOT_FOUND' }
     return { ok: true, pub: hit.pub, label: hit.label, fingerprint: hit.fingerprint }
   }
+  const devicePeer = startGatewayDevicePeer(gateway, {
+    dataDir: env.ADAPTER_DATA_DIR, port: host.peer?.port ?? env.PORT,
+    key: devicePeerKey(host.peer?.composition ?? 'services', host.peer?.token === undefined ? undefined : { HARNESSD_SERVICE_TOKEN: host.peer.token }),
+    wake: () => host.wifiServing?.() ?? Promise.resolve(false),
+    ready: startDirect,
+    unavailable: () => { direct?.stop(); direct = undefined },
+    failed: code => console.warn(`[gateway] ${code}`),
+  })
   const devicePairs = () => gateway.listPairs().filter((p) => p.role === 'device')
   /** The direct links, once the Wi-Fi device's service serves: a device they connected to a service that is not there
    *  would be answered by nothing. Waited for first, as the core asks for that service's process. */
   const directLink = async (): Promise<AutonomousDeviceDirect> => {
-    if (!direct) await host.wifiServing?.().catch(() => false)
+    if (!direct) await devicePeer.serving()
     if (!direct) throw deviceRefusal('UNAVAILABLE', 'The Wi-Fi device link is not running on this computer: its state could not be read. See the daemon\'s log.')
     return direct
   }
@@ -536,46 +587,7 @@ export function startGateway(given: GatewayHost): StartedGateway {
     },
   }
 
-  const ops: GatewayOps = {
-    accessToken: (options) => host.tokens.accessToken(options),
-    backend: (async (method: string, path: string, body?: unknown) => {
-      const answer = await accountHttp.backend(method, path, body)
-      // Whatever the answer: a request that timed out may still have changed the choice.
-      if (method === 'POST' && path === '/api/product-usage/settings') void usage?.choiceChanged()
-      return answer
-    }) as GatewayOps['backend'],
-    machines: accountHttp.machines,
-    mintGridName: accountHttp.mintGridName,
-    status: async () => ({ fingerprint: gateway.fingerprint(), pairs: gateway.listPairs(), pending: gateway.pendingPair() as Record<string, unknown> | null }),
-    wifiService: (on) => {
-      if (on) { startDirect(); return }
-      direct?.stop()
-      direct = undefined
-    },
-    revokeIdentity: (identity) => { gateway.e2ee.revoke(fingerprint(b64d(identity))) },
-    account: (next) => {
-      // Tokens may change before this process restarts. Never send the previous account's queue
-      // under a new sign-in, even when both accounts happen to have the same preference revision.
-      if (next.machineId !== account.machineId || next.autonomousEnv !== account.autonomousEnv
-          || next.signIn?.epoch !== account.signIn?.epoch || next.signIn?.acct !== account.signIn?.acct) void usage?.stop(true)
-      account = next
-      startGroup()
-      registerAndSweep()
-    },
-    reachable: (machineIds) => { reachable = machineIds ? new Set(machineIds) : null },
-    lane,
-    observerKey: ownerKey,
-    tabKey,
-    tabRelay,
-    sharedTrust: async (desired) => applySharedTrust({
-      peers: relayPeers,
-      paired: () => gateway.pairedPeers(),
-      trust: (peer) => gateway.trustPeer(peer),
-      untrust: (pub) => { gateway.untrustPeer(pub) },
-      dropSessions: (machineId) => { relayPool.invalidate(machineId); relayPool.invalidateIsolated(machineId) },
-      selfPub: () => b64e(relayIdentityStore.getIdentity().pub),
-    }, desired),
-    connectorVault: {
+  const connectorVault: VaultAccount['connectorVault'] = {
       // Sealed for every machine the verified log holds, this one included, but never a key a fork
       // suspended or one nobody has yet said is theirs (pending): a device added by whoever got hold of
       // the account must not be handed its connections.
@@ -603,8 +615,55 @@ export function startGateway(given: GatewayHost): StartedGateway {
         }
         return { plaintext, complete: machines.every((pub) => sealedFor.has(pub)) }
       },
+    }
+
+  const ops: GatewayOps = {
+    accessToken: (options) => host.tokens.accessToken(options),
+    backend: (async (method: string, path: string, body?: unknown) => {
+      const answer = await accountHttp.backend(method, path, body)
+      // Whatever the answer: a request that timed out may still have changed the choice.
+      if (method === 'POST' && path === '/api/product-usage/settings') void usage?.choiceChanged()
+      return answer
+    }) as GatewayOps['backend'],
+    machines: accountHttp.machines,
+    mintGridName: accountHttp.mintGridName,
+    status: async () => ({ fingerprint: gateway.fingerprint(), pairs: gateway.listPairs(), pending: gateway.pendingPair() as Record<string, unknown> | null }),
+    account: (next) => {
+      // Tokens may change before this process restarts. Never send the previous account's queue
+      // under a new sign-in, even when both accounts happen to have the same preference revision.
+      if (next.machineId !== account.machineId || next.autonomousEnv !== account.autonomousEnv
+          || next.signIn?.epoch !== account.signIn?.epoch || next.signIn?.acct !== account.signIn?.acct) void usage?.stop(true)
+      if (connectorAccountKey(next) !== connectorAccountKey(account)) invalidateConnectionTrust()
+      account = next
+      connectionSync?.accountChanged()
+      startGroup()
+      registerAndSweep()
     },
+    reachable: (machineIds) => { reachable = machineIds ? new Set(machineIds) : null },
+    lane,
+    observerKey: ownerKey,
+    tabKey,
+    tabRelay,
+    sharedTrust: async (desired) => applySharedTrust({
+      peers: relayPeers,
+      paired: () => gateway.pairedPeers(),
+      trust: (peer) => gateway.trustPeer(peer),
+      untrust: (pub) => { gateway.untrustPeer(pub) },
+      dropSessions: (machineId) => { relayPool.invalidate(machineId); relayPool.invalidateIsolated(machineId) },
+      selfPub: () => b64e(relayIdentityStore.getIdentity().pub),
+    }, desired),
+    connectorSync: (refresh) => connectionSync ? connectionSync.sync(refresh) : Promise.reject(new Error('CONNECTORS_SYNC_UNAVAILABLE')),
   }
+
+  connectionSync = createGatewayConnectorSync({
+    root: connectorsDir(), store: host.connectorStore, account: () => account,
+    ready: () => connectionsReady,
+    backend: (method, path, body, waitMs) => accountHttp.backend(method, path, body, waitMs),
+    vault: connectorVault,
+    changed: () => host.events.notice({ type: 'connectors_changed', revision: 0 }),
+    log: line => console.warn(line),
+  })
+  connectionLogChanged()
 
   // The Wi-Fi device's routes about its pairings and direct links (lib/autonomous-device/localHttp.ts checks them).
   const deviceHttp = deviceRoutes({
@@ -629,34 +688,54 @@ export function startGateway(given: GatewayHost): StartedGateway {
   })
   // The keys' (gateway/keyRoutes.ts), and the account's (gateway/accountRoutes.ts), through `ops.backend`: a choice written
   // there is read again at once.
+  const callbackReplay = given.callbackReplay ?? createCallbackReplay()
+  const browser = createBrowser({
+    follow: given.agents?.follow,
+    agentOfPane: async pane => (await given.agents?.ofPane?.(pane))?.agentId,
+    sendTo: (connection, type, payload) => gateway.target(connection, type, payload),
+    isLocal: isLocalClientId,
+    who: connection => gateway.peerIdentity(connection),
+    replay: callbackReplay.run,
+    now: Date.now,
+    log: line => console.log(line),
+  })
   const requests: ServiceRequests = {
     gateway_http: gatewayHttp(deviceHttp, keyRoutes(keyOps), accountRoutes((method, path, body) => ops.backend(method, path, body))),
+    gateway_ws: browser.request,
   }
 
   return {
     port: gateway,
+    legacyConnectorVault: connectorVault,
     ops,
     windowRelay,
     requests,
     stop: async () => {
+      browser.stop()
+      const callbacksStopped = given.callbackReplay ? Promise.resolve(null) : callbackReplay.stop().then(() => null, () => new Error('CALLBACK_CLOSE_TIMEOUT'))
       // Shutdown never waits for the optional disk queue. The stopped collector cannot upload. Its final, clean
       // state is on disk when stop() returns (written synchronously), so a process that exits next keeps it. A write
       // already on its way can still rename an older snapshot over it and put the final state back after: waited for
       // below, at most half a second, so an exit in between does not read as an unclean restart (review of #1393).
       const usageStopped = usage?.stop()
+      const connectionsStopped = connectionSync?.stop()
       clearInterval(devlogTimer)
       syncer.stop()
       direct?.stop()
+      await devicePeer.stop()
       relayPool.close()
       shareRelay.close()
       lane.clear()
       tabKey.clear()
       tabRelay.closeAll()
       await gateway.stop()
+      await connectionsStopped
       if (usageStopped) {
         await Promise.race([usageStopped.catch(() => false),
           new Promise<void>(resolve => { setTimeout(resolve, 500).unref?.() })])
       }
+      const callbackFailure = await callbacksStopped
+      if (callbackFailure) throw callbackFailure
     },
   }
 }

@@ -39,9 +39,9 @@ export function createHeartbeats({ bySession, sessionTurnOpen, agentIdFor, runti
   // revision, which every probe of an idle open turn moves with nothing new.
   const lastSent = new Map<string, string>()
   /** Every window reads the agent's activity as it is now, not at its next beat. */
-  const tell = (sessionId: string): void => {
+  const tell = (sessionId: string, cause?: 'cancel'): void => {
     const activity = turnActivity.snapshot(sessionId)
-    if (activity) clients.send(correlateAgentEvent({ type: 'agent_activity', payload: { activity } }, sessionId, agentIdFor(sessionId)))
+    if (activity) clients.send(correlateAgentEvent({ type: 'agent_activity', payload: { activity, ...(cause ? { cause } : {}) } }, sessionId, agentIdFor(sessionId)))
   }
   const tellChanged = (sessionId: string): void => {
     const activity = turnActivity.snapshot(sessionId)

@@ -1,5 +1,5 @@
 import { removeRegistryAgent } from '../testing/registryFixtures.js'
-import { existsSync, linkSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
@@ -9,11 +9,12 @@ import { StoppedAgentStore } from './stoppedAgents.js'
 import { AgentCreationReceiptError } from './agentCreationReceipt.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { SessionCheckpointStore } from './sessionCheckpoint.js'
-import { PurgeAgentService, inspectNativeHistory, eraseNativeHistory, sessionDataBytes, type PurgeDeps, type PurgeRequest } from './purgeAgentService.js'
+import { PurgeAgentService, inspectNativeHistory, eraseNativeHistory, type PurgeDeps, type PurgeRequest } from './purgeAgentService.js'
 import { builtinSqlite } from './sqliteBuiltin.js'
 import type { StopAgentOptions } from './stopAgentService.js'
 import * as worktrees from './worktreeDeletion.js'
 import { WORKSPACES_OFF } from '../core/api.js'
+import { sessionDataBytes } from '../engines/others/historySize.js'
 import { env } from '../config/env.js'
 
 let root: string, session: RegisteredSession, stopped: StoppedAgentStore, checkpoints: SessionCheckpointStore
@@ -25,6 +26,7 @@ let eraseFirst = vi.fn<(session: RegisteredSession) => Promise<void>>()
 /** Workspaces as the purge finds them at each call: up, on this module's functions, unless a test takes them down. */
 let workspaces: PurgeDeps['worktrees']
 beforeEach(async () => {
+  await registry.load()
   root = mkdtempSync(join(tmpdir(), 'harness-purge-'))
   const codexHome = join(root, 'profile'), cwd = join(root, 'project')
   mkdirSync(join(codexHome, 'sessions'), { recursive: true }); mkdirSync(cwd)
@@ -43,18 +45,79 @@ beforeEach(async () => {
   checkpoints = new SessionCheckpointStore(join(root, 'checkpoints'))
   stop = vi.fn(async (id, options) => {
     expect(options.current?.()).toBe(true)
-    stopped.save(registry.byAgent(id)!)
+    await stopped.save(registry.byAgent(id)!)
     ;(await removeRegistryAgent(registry, id))
   })
   deleted = vi.fn(); eraseRecords = vi.fn(async () => {}); eraseFirst = vi.fn(async () => {}); now = 1000
   workspaces = () => worktrees.worktreeAnswers(worktrees)
-  service = new PurgeAgentService({ live: id => registry.byAgent(id), sessions: () => [...registry.list(), ...stopped.list()],
+  service = new PurgeAgentService({ live: id => registry.byAgent(id), liveSessions: () => registry.list(),
     worktrees: () => workspaces(), stopped, checkpoints, stop, restarting: () => false, deleted, eraseRecords, eraseFirst, now: () => now })
   target = { agentId: session.agentId, sessionId: session.sessionId, createdAt: session.registeredAt }
 })
-afterEach(async () => { for (const row of registry.list()) (await removeRegistryAgent(registry, row.agentId)); rmSync(root, { recursive: true, force: true }); vi.restoreAllMocks() })
+afterEach(async () => { for (const row of registry.list()) (await removeRegistryAgent(registry, row.agentId)); await stopped?.close(); rmSync(root, { recursive: true, force: true }); vi.restoreAllMocks() })
 const review = () => service.request({ ...target, mode: 'inspect' })
 const remove = (reviewId: unknown) => service.request({ ...target, mode: 'delete', reviewId: String(reviewId) })
+
+describe('database deletion without safe subprocess authority', () => {
+  const engines = ['opencode', 'kilo', 'hermes', 'devin'] as const
+  const original = { OPENCODE_DATA_DIR: env.OPENCODE_DATA_DIR, KILO_DATA_DIR: env.KILO_DATA_DIR, DEVIN_HOME: env.DEVIN_HOME }
+  afterEach(() => Object.assign(env, original))
+  function database(engine: typeof engines[number]): string {
+    Object.assign(env, { OPENCODE_DATA_DIR: root, KILO_DATA_DIR: root, DEVIN_HOME: root })
+    Object.assign(session, { engine, hermesHome: root, transcriptPath: null })
+    const path = join(root, { opencode: 'opencode.db', kilo: 'kilo.db', hermes: 'state.db', devin: 'sessions.db' }[engine])
+    const db = new (builtinSqlite()!)(path, { readOnly: false })
+    try {
+      if (engine === 'opencode' || engine === 'kilo') db.exec("CREATE TABLE session(id TEXT PRIMARY KEY); CREATE TABLE message(id TEXT PRIMARY KEY, session_id TEXT); CREATE TABLE part(message_id TEXT, content TEXT); INSERT INTO session VALUES ('selected-session'), ('other'); INSERT INTO message VALUES ('m', 'selected-session'); INSERT INTO part VALUES ('m', 'kept');")
+      else db.exec(`CREATE TABLE sessions(id TEXT PRIMARY KEY); CREATE TABLE ${engine === 'hermes' ? 'messages' : 'message_nodes'}(session_id TEXT, content TEXT); INSERT INTO sessions VALUES ('selected-session'), ('other'); INSERT INTO ${engine === 'hermes' ? 'messages' : 'message_nodes'} VALUES ('selected-session', 'kept');`)
+    } finally { db.close() }
+    return path
+  }
+  const tree = () => ({ path: join(root, 'temporary'), main: session.cwd!, branch: 'feature', head: 'commit',
+    bytes: 100, dirty: false, changes: [], signature: 'tree-review', dev: 1, ino: 2 })
+  it.each(engines)('preserves the read-only monitor total for %s', async engine => {
+    const path = database(engine), before = readFileSync(path)
+    expect(await sessionDataBytes(session, checkpoints)).toBe(engine === 'opencode' || engine === 'kilo' ? 38 : 36)
+    expect(readFileSync(path)).toEqual(before)
+  })
+  it('preserves the OpenCode v2 monitor layout selection', async () => {
+    const path = database('opencode'), db = new (builtinSqlite()!)(path, { readOnly: false })
+    try { db.exec("CREATE TABLE session_v2(id TEXT PRIMARY KEY); CREATE TABLE session_message(session_id TEXT, content TEXT); INSERT INTO session_v2 VALUES ('selected-session'); INSERT INTO session_message VALUES ('selected-session', 'v');") }
+    finally { db.close() }
+    const before = readFileSync(path)
+    expect(await sessionDataBytes(session, checkpoints)).toBe(33)
+    expect(readFileSync(path)).toEqual(before)
+  })
+  it.each(engines)('refuses %s inspection and mixed deletion before every effect and retains the shared store', async engine => {
+    const path = database(engine), before = readFileSync(path), workspace = tree()
+    vi.spyOn(worktrees, 'inspectWorktree').mockResolvedValue(workspace)
+    const eraseTree = vi.spyOn(worktrees, 'removeReviewedWorktree').mockResolvedValue()
+    const refused = { error: 'DELETE_REFUSED', reason: 'STORAGE_PURGE_AUTHORITY_UNAVAILABLE', stopped: false, sessionDeleted: false, worktreeDeleted: false }
+    expect(await review()).toMatchObject(refused)
+    const plan = await service.request({ ...target, mode: 'inspect', includeWorktree: true })
+    expect(plan).toMatchObject({ choices: { sessionData: { available: false, reason: expect.stringContaining('Delete this conversation in its engine.') }, worktreeData: { available: true } } })
+    expect(await service.request({ ...target, mode: 'delete', reviewId: String(plan.reviewId), path: workspace.path,
+      choices: { sessionData: true, worktreeData: true } })).toMatchObject(refused)
+    // A stale review or substituted dependency cannot bypass the core's pre-effect refusal.
+    expect(await remove('review-from-another-core')).toMatchObject(refused)
+    expect(stop).not.toHaveBeenCalled(); expect(eraseFirst).not.toHaveBeenCalled(); expect(eraseRecords).not.toHaveBeenCalled()
+    expect(eraseTree).not.toHaveBeenCalled(); expect(deleted).not.toHaveBeenCalled()
+    expect((await stopped.get(session.agentId))).toBeNull()
+    expect(registry.byAgent(session.agentId)).toBe(session)
+    expect(readFileSync(path)).toEqual(before)
+  })
+  it.each(engines)('keeps separately selected worktree deletion available for %s', async engine => {
+    const path = database(engine), before = readFileSync(path), workspace = tree()
+    vi.spyOn(worktrees, 'inspectWorktree').mockResolvedValue(workspace)
+    const eraseTree = vi.spyOn(worktrees, 'removeReviewedWorktree').mockResolvedValue()
+    const plan = await service.request({ ...target, mode: 'inspect', includeWorktree: true })
+    expect(await service.request({ ...target, mode: 'delete', reviewId: String(plan.reviewId), path: workspace.path,
+      choices: { sessionData: false, worktreeData: true } })).toMatchObject({ deleted: true, worktreeDeleted: true, sessionDeleted: false, historyKept: true })
+    expect(stop).toHaveBeenCalledOnce(); expect(eraseTree).toHaveBeenCalledOnce()
+    expect(eraseFirst).not.toHaveBeenCalled(); expect(eraseRecords).not.toHaveBeenCalled(); expect(deleted).not.toHaveBeenCalled()
+    expect(readFileSync(path)).toEqual(before)
+  })
+})
 
 it('says where a harness works is unknown while workspaces do not answer, and asks git nothing itself', async () => {
   workspaces = () => WORKSPACES_OFF
@@ -110,7 +173,7 @@ describe('selected session and worktree cleanup', () => {
     expect(eraseTree).toHaveBeenCalledTimes(worktreeData ? 1 : 0)
     expect(existsSync(session.transcriptPath!)).toBe(!sessionData)
     expect(existsSync(join(session.cwd!, 'project.txt'))).toBe(true)
-    expect(stopped.get(session.agentId) !== null).toBe(!sessionData)
+    expect((await stopped.get(session.agentId)) !== null).toBe(!sessionData)
   })
   it('refuses unreviewed, protected, empty or dirty selections before stopping', async () => {
     for (const scenario of ['legacy', 'protected', 'empty', 'dirty', 'path']) {
@@ -194,7 +257,7 @@ it('previews without stopping, then deletes only reviewed history and checkpoint
   expect(files.every(path => !existsSync(path))).toBe(true)
   expect(existsSync(join(session.codexHome!, 'sessions', 'other.jsonl'))).toBe(true)
   expect(existsSync(join(session.cwd!, 'project.txt'))).toBe(true)
-  expect(stopped.get(session.agentId)).toBeNull()
+  expect((await stopped.get(session.agentId))).toBeNull()
   expect(deleted).toHaveBeenCalledOnce()
   expect(await remove(plan.reviewId)).toHaveProperty('error')
   expect(stop).toHaveBeenCalledOnce()
@@ -212,7 +275,7 @@ describe('every record of a harness', () => {
     expect(eraseRecords).toHaveBeenCalledWith(expect.objectContaining({ agentId: session.agentId }))
     expect(deleted).toHaveBeenCalledOnce()
     expect(eraseRecords.mock.invocationCallOrder[0]).toBeLessThan(deleted.mock.invocationCallOrder[0]!)
-    expect(stopped.get(session.agentId)).toBeNull()
+    expect((await stopped.get(session.agentId))).toBeNull()
   })
 
   it('a harness whose engine\'s history Harness erases keeps nothing', async () => {
@@ -247,7 +310,7 @@ describe('every record of a harness', () => {
     expect(existsSync(session.transcriptPath!)).toBe(true)
     expect(eraseRecords).not.toHaveBeenCalled()
     expect(deleted).not.toHaveBeenCalled()
-    expect(stopped.get(session.agentId)).not.toBeNull()
+    expect((await stopped.get(session.agentId))).not.toBeNull()
     expect(await deleteOnce()).toMatchObject({ deleted: true, sessionDeleted: true })
     expect(eraseFirst).toHaveBeenCalledTimes(2)
     expect(eraseFirst).toHaveBeenLastCalledWith(expect.objectContaining({ agentId: session.agentId }))
@@ -262,11 +325,11 @@ describe('every record of a harness', () => {
     expect(refused).toMatchObject({ error: 'DELETE_REFUSED', sessionDeleted: false })
     expect(String(refused.detail)).toContain('The agent ledger is busy. Try again.')
     expect(deleted).not.toHaveBeenCalled()
-    expect(stopped.get(session.agentId)).not.toBeNull()
+    expect((await stopped.get(session.agentId))).not.toBeNull()
     expect(await deleteOnce()).toMatchObject({ deleted: true, sessionDeleted: true })
     expect(eraseRecords).toHaveBeenCalledTimes(2)
     expect(deleted).toHaveBeenCalledOnce()
-    expect(stopped.get(session.agentId)).toBeNull()
+    expect((await stopped.get(session.agentId))).toBeNull()
     expect(stop).toHaveBeenCalledOnce()
   })
 
@@ -300,9 +363,9 @@ it('keeps history if stopping fails, another harness uses it, or the file was re
   expect(await remove(plan.reviewId)).toHaveProperty('error')
   expect(existsSync(session.transcriptPath!)).toBe(true)
   const other = { ...session, agentId: 'other-agent' }
-  stopped.save(other)
+  await stopped.save(other)
   expect(await review()).toMatchObject({ error: 'DELETE_REFUSED', detail: expect.stringContaining('Another harness') })
-  stopped.remove(other.agentId)
+  await stopped.remove(other.agentId)
   const changed = await review()
   renameSync(session.transcriptPath!, session.transcriptPath! + '.old')
   writeFileSync(session.transcriptPath!, 'different file')
@@ -339,7 +402,7 @@ describe('a harness still starting', () => {
     expect(stop).toHaveBeenCalledOnce()
     expect(eraseRecords).toHaveBeenCalledOnce()
     expect(deleted).toHaveBeenCalledOnce()
-    expect(stopped.get(session.agentId)).toBeNull()
+    expect((await stopped.get(session.agentId))).toBeNull()
   })
 
   it('that cannot be stopped yet is refused in plain words, nothing deleted', async () => {
@@ -356,7 +419,7 @@ describe('a harness still starting', () => {
 
 it('can explicitly review remaining checkpoints after an interrupted partial deletion', async () => {
   await checkpoints.save(session, { screen: 'keep until confirmed' })
-  stopped.save(session); (await removeRegistryAgent(registry, session.agentId))
+  await stopped.save(session); (await removeRegistryAgent(registry, session.agentId))
   rmSync(session.transcriptPath!)
   const plan = await review()
   expect(plan.reviewId).toBeTypeOf('string')
@@ -382,11 +445,43 @@ it('binds worktree deletion to the reviewed path and dirty consent, blocking con
   expect(await service.worktreeRequest({ ...target, mode: 'delete', reviewId: String(final.reviewId), path, discardChanges: true })).toMatchObject({ deleted: true, historyKept: true, branchKept: true })
   expect(erase).toHaveBeenCalledOnce()
   expect(existsSync(session.transcriptPath!)).toBe(true)
-  expect(stopped.get(session.agentId)).not.toBeNull()
+  expect((await stopped.get(session.agentId))).not.toBeNull()
   expect(service.busy(session.agentId)).toBe(false)
   expect(service.blocksFolder(path)).toBe(false)
   expect(deleted).not.toHaveBeenCalled()
   inspect.mockRestore(); erase.mockRestore()
+})
+
+it.each(['root-resolution', 'final-child-answer'] as const)('keeps a worktree when stopped occupancy changes at %s', async phase => {
+  const path = join(root, 'temporary')
+  const tree = { path, main: session.cwd!, branch: 'feature', head: 'commit', bytes: 1, dirty: false, changes: [], signature: 'review', dev: 1, ino: 2 }
+  const other = { ...session, agentId: 'other-stopped', sessionId: 'other-conversation', cwd: join(root, 'elsewhere') }
+  await stopped.save(other)
+  const file = join(root, 'stopped', `${other.agentId}.json`)
+  const occupy = () => {
+    const value = JSON.parse(readFileSync(file, 'utf8'))
+    writeFileSync(file, JSON.stringify({ ...value, session: { ...value.session, cwd: join(path, 'child') } }))
+  }
+  let armed = false
+  vi.spyOn(worktrees, 'inspectWorktree').mockImplementation(async () => {
+    if (armed && phase === 'root-resolution') occupy()
+    return tree
+  })
+  const query = stopped.query.bind(stopped)
+  vi.spyOn(stopped, 'query').mockImplementation(async request => {
+    const answer = await query(request)
+    if (armed && phase === 'final-child-answer' && !registry.byAgent(session.agentId)) occupy()
+    return answer
+  })
+  const erase = vi.spyOn(worktrees, 'removeReviewedWorktree').mockResolvedValue()
+  const plan = await service.worktreeRequest({ ...target, mode: 'inspect' })
+  expect(plan.reviewId).toBeTypeOf('string')
+  armed = true
+  expect(await service.worktreeRequest({ ...target, mode: 'delete', reviewId: String(plan.reviewId), path }))
+    .toMatchObject({ error: 'WORKTREE_DELETE_REFUSED' })
+  expect(erase).not.toHaveBeenCalled()
+  expect(existsSync(session.transcriptPath!)).toBe(true)
+  expect(deleted).not.toHaveBeenCalled()
 })
 
 describe('shared native databases', () => {
@@ -398,31 +493,27 @@ describe('shared native databases', () => {
     Object.assign(session, { engine: 'hermes', hermesHome: home, transcriptPath: null })
     return db
   }
-  it('deletes only one conversation atomically, retaining the shared database and other sessions', async () => {
+  it('keeps read-only monitor totals and both conversations while deletion is unavailable', async () => {
     const db = dbFixture()
     try {
-      const history = await inspectNativeHistory(session)
-      expect(history.bytes).toBeGreaterThan(0)
-      await eraseNativeHistory(history)
-      expect(db.prepare('SELECT id FROM sessions').all()).toEqual([{ id: 'keep' }])
-      expect(db.prepare('SELECT content FROM messages').all()).toEqual([{ content: 'retained' }])
+      expect(await sessionDataBytes(session, checkpoints)).toBe(39)
+      await expect(inspectNativeHistory(session)).rejects.toThrow('Delete this conversation in its engine.')
+      expect(db.prepare('SELECT id FROM sessions').all()).toEqual([{ id: 'keep' }, { id: 'selected-session' }])
+      expect(db.prepare('SELECT content FROM messages').all()).toEqual([{ content: 'remove' }, { content: 'retained' }])
       expect(existsSync(join(session.hermesHome!, 'state.db'))).toBe(true)
     } finally { db.close() }
   })
-  it('refuses dependent conversations, new dependencies and changed schemas without partial deletion', async () => {
+  it('keeps monitor sizes unknown for dependent conversations, new references and trigger schemas', async () => {
     const db = dbFixture()
     try {
-      const history = await inspectNativeHistory(session)
       db.exec("INSERT INTO sessions VALUES ('child', 'selected-session')")
-      await expect(eraseNativeHistory(history)).rejects.toThrow()
-      await expect(inspectNativeHistory(session)).rejects.toThrow('depend')
-      expect(db.prepare('SELECT id FROM messages').all()).toHaveLength(2)
-      db.exec("DELETE FROM sessions WHERE id='child'")
-      const next = await inspectNativeHistory(session)
-      db.exec('CREATE TABLE added(id TEXT REFERENCES sessions(id) ON DELETE CASCADE)')
-      await expect(eraseNativeHistory(next)).rejects.toThrow()
-      await expect(inspectNativeHistory(session)).rejects.toThrow('Other engine data')
+      expect(await sessionDataBytes(session, checkpoints)).toBeNull()
+      db.exec("DELETE FROM sessions WHERE id='child'; CREATE TABLE added(id TEXT REFERENCES sessions(id) ON DELETE CASCADE)")
+      expect(await sessionDataBytes(session, checkpoints)).toBeNull()
+      db.exec("DROP TABLE added; CREATE TRIGGER prevent AFTER DELETE ON sessions BEGIN SELECT 1; END")
+      expect(await sessionDataBytes(session, checkpoints)).toBeNull()
       expect(db.prepare('SELECT id FROM sessions').all()).toHaveLength(2)
+      expect(db.prepare('SELECT id FROM messages').all()).toHaveLength(2)
     } finally { db.close() }
   })
 
@@ -458,26 +549,28 @@ describe('shared native databases', () => {
   }
   const opencode2Tables = ['session_v2', 'session_message', 'session_part', 'blob_ref', 'instruction_entry', 'instruction_state', 'session_inbox', 'schedule']
 
-  it('deletes an OpenCode 2 conversation with everything that names it, keeping the others and the shared blobs', async () => {
+  it('reads an OpenCode 2 conversation size without deleting its rows or the shared blobs', async () => {
     const { db, restore } = opencode2Fixture()
     try {
-      await eraseNativeHistory(await inspectNativeHistory(session))
+      expect(await sessionDataBytes(session, checkpoints)).toBe(230)
+      await expect(inspectNativeHistory(session)).rejects.toMatchObject({ code: 'STORAGE_PURGE_AUTHORITY_UNAVAILABLE' })
       for (const table of opencode2Tables) {
         const column = table === 'session_v2' ? 'id' : 'session_id'
-        expect(db.prepare(`SELECT ${column} AS id FROM ${table}`).all(), table).toEqual([{ id: 'keep' }])
+        expect(db.prepare(`SELECT ${column} AS id FROM ${table} ORDER BY ${column}`).all(), table).toEqual([{ id: 'keep' }, { id: 'selected-session' }])
       }
       expect(db.prepare('SELECT hash FROM blob').all()).toEqual([{ hash: 'h' }])
     } finally { restore() }
   })
 
-  it('keeps an OpenCode 2 conversation another was forked from, and still refuses a table it does not know', async () => {
+  it('keeps an OpenCode 2 conversation size unknown for forks and tables it does not know', async () => {
     const { db, restore } = opencode2Fixture()
     try {
       db.exec("INSERT INTO session_v2 VALUES ('fork', 'p', NULL, 'selected-session')")
-      await expect(inspectNativeHistory(session)).rejects.toThrow('depend')
+      expect(await sessionDataBytes(session, checkpoints)).toBeNull()
       db.exec("DELETE FROM session_v2 WHERE id = 'fork'")
+      expect(await sessionDataBytes(session, checkpoints)).toBe(230)
       db.exec('CREATE TABLE added(session_id TEXT REFERENCES session_v2(id) ON DELETE CASCADE)')
-      await expect(inspectNativeHistory(session)).rejects.toThrow('Other engine data')
+      expect(await sessionDataBytes(session, checkpoints)).toBeNull()
       for (const table of opencode2Tables) expect(db.prepare(`SELECT 1 FROM ${table}`).all(), table).toHaveLength(2)
     } finally { restore() }
   })

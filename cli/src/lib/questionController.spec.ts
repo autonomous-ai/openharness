@@ -12,6 +12,29 @@ const deferred = <T>() => { let resolve!: (value: T) => void; const promise = ne
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
 describe('asynchronous question evidence', () => {
+  it.each(['stale', 'missing answer', 'unmatched option', 'stuck', 'binding error'] as const)(
+    'logs only fixed metadata for native question refusals (%s)', async mode => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const current = { ...row(), agentId: 'CANARYID-agent', sessionId: 'CANARYID-session' }
+      const question = { kind: 'question' as const, question: 'CANARYCONTENT-question', multi: false, typeRow: null,
+        rows: [{ number: '1', label: 'Yes', checked: false }] }
+      const apply = vi.fn(async () => true), release = vi.fn(), sendKey = vi.fn(async () => true), sendText = vi.fn(async () => true)
+      const controller = new AskQuestionController({ getSession: () => current, capture: async () => 'synthetic pane',
+        readQuestion: async () => question, sendKey, sendText, acquireControl: () => release, wait: async () => {},
+        questionControlFor: () => { if (mode === 'binding error') throw new Error('CANARYERROR-provider'); return { apply } } })
+      const answers = mode === 'missing answer' ? { unrelated: 'Yes' }
+        : { [question.question]: mode === 'unmatched option' ? 'CANARYANSWER-option' : 'Yes' }
+      const result = await controller.answer({ agentId: current.agentId, answers,
+        ...(mode === 'stale' ? { requestId: 'CANARYREQUEST-old' } : {}) })
+      expect(result.ok).toBe(false)
+      expect(release).toHaveBeenCalledOnce()
+      expect(warn).toHaveBeenCalled()
+      expect(JSON.stringify([...log.mock.calls, ...warn.mock.calls])).not.toContain('CANARY')
+      if (mode !== 'stuck') expect(apply).not.toHaveBeenCalled()
+      expect(sendKey).not.toHaveBeenCalled(); expect(sendText).not.toHaveBeenCalled()
+    })
+
   it('binds native control before capture and snapshots the reviewed answer', async () => {
     const current = row(), release = vi.fn(), apply = vi.fn(async () => true), questionControlFor = vi.fn(() => ({ apply }))
     const sendKey = vi.fn(async () => true), sendText = vi.fn(async () => true)
@@ -44,17 +67,18 @@ describe('asynchronous question evidence', () => {
 
   it('releases its lease and types nothing when the control port cannot be bound', async () => {
     const current = row(), sendKey = vi.fn(async () => true), sendText = vi.fn(async () => true), release = vi.fn()
-    let bind: () => undefined = () => { throw new Error('no control port') }
+    let bind: () => { apply(): Promise<boolean> } | undefined = () => { throw new Error('no control port') }
+    const readQuestion = vi.fn(async (): Promise<PaneView> => null).mockResolvedValueOnce(view)
     const controller = new AskQuestionController({ getSession: () => current, capture: async () => capture,
-      readQuestion: async () => view, sendKey, sendText, acquireControl: () => release, questionControlFor: () => bind() })
+      readQuestion, sendKey, sendText, acquireControl: () => release, questionControlFor: () => bind() })
     if (!view || view.kind !== 'question') throw new Error('missing recorded fixture')
     const answer = { agentId: 'agent', answers: { [view.question]: view.rows[0].label } }
     expect(await controller.answer(answer)).toMatchObject({ ok: false, error: 'ANSWER_FAILED' })
     expect(sendKey).not.toHaveBeenCalled(); expect(sendText).not.toHaveBeenCalled()
     expect(release).toHaveBeenCalledOnce()
     // Nothing is left marked as driving this terminal: the next answer is entered, not refused as busy.
-    bind = () => undefined
-    expect(await controller.answer(answer)).not.toMatchObject({ error: 'ANSWER_BUSY' })
+    bind = () => ({ apply: async () => true })
+    expect(await controller.answer(answer)).toEqual({ ok: true })
     expect(release).toHaveBeenCalledTimes(2)
   })
 
@@ -62,6 +86,33 @@ describe('asynchronous question evidence', () => {
     const question = { kind: 'question' as const, question: 'Drink?', multi: false, typeRow: null,
       rows: [{ number: '1', label: 'Tea', checked: false }, { number: '2', label: 'Coffee', checked: false }] }
     const answer = { agentId: 'agent', answers: { 'Drink?': 'Coffee' } }
+    it.each([
+      { stage: 'before input', reviewed: false, applies: [], views: [] },
+      { stage: 'before input', reviewed: true, applies: [], views: [] },
+      { stage: 'after a completed choice', reviewed: false, applies: [true], views: [question] },
+      { stage: 'after a completed choice', reviewed: true, applies: [true], views: [question] },
+      { stage: 'after an uncertain choice', reviewed: false, applies: [false], views: [question] },
+      { stage: 'after an uncertain choice', reviewed: true, applies: [false], views: [question] },
+      { stage: 'after an uncertain review', reviewed: false, applies: [true, false], views: [question, { kind: 'review', submitRow: 'Enter' }] },
+      { stage: 'after an uncertain review', reviewed: true, applies: [true, false], views: [question, { kind: 'review', submitRow: 'Enter' }] },
+    ])('refuses unreadable evidence $stage (reviewed: $reviewed)', async ({ reviewed, applies, views }) => {
+      const release = vi.fn(), apply = vi.fn(async () => false)
+      for (const result of applies) apply.mockResolvedValueOnce(result)
+      const readQuestion = vi.fn(async (): Promise<PaneView> => null)
+      for (const view of views) readQuestion.mockResolvedValueOnce(view as PaneView)
+      const read = vi.fn(async (): Promise<string | null> => null)
+      for (const _view of views) read.mockResolvedValueOnce(capture)
+      const controller = new AskQuestionController({ getSession: row, capture: read, readQuestion,
+        sendKey: vi.fn(), sendText: vi.fn(), wait: async () => {}, acquireControl: () => release,
+        questionControlFor: () => ({ apply, failure: () => 'uncertain' }) })
+      expect(await controller.answer({ ...answer, ...(reviewed ? {
+        expectedQuestions: [{ key: 'Drink?', q: 'Drink?', options: ['Tea', 'Coffee'], multi: false }],
+      } : {}) })).toEqual({ ok: false, error: 'ANSWER_FAILED', detail: 'The question could not be read.' })
+      expect(readQuestion).toHaveBeenCalledTimes(views.length)
+      expect(apply).toHaveBeenCalledTimes(applies.length)
+      expect(release).toHaveBeenCalledOnce()
+    })
+
     const run = async (failure: 'refused' | 'uncertain' | undefined, views: PaneView[], applies = [false]) => {
       const current = row(), release = vi.fn(), sendKey = vi.fn(async () => true), sendText = vi.fn(async () => true)
       const apply = vi.fn(async () => false)
@@ -222,6 +273,56 @@ describe('asynchronous question evidence', () => {
     expect(onQuestionGone).toHaveBeenCalledOnce()
     watcher.stopAll()
   })
+  it.each(['turn end', 'confirmed empty pane'] as const)('a reconnect reset retains the outstanding close identity through %s', async ending => {
+    vi.useFakeTimers()
+    const current = row(), onQuestion = vi.fn(), onQuestionGone = vi.fn()
+    let observed = true
+    const readQuestion = vi.fn(async (): Promise<PaneView> => view)
+    const watcher = new QuestionWatcher({ getSession: () => current, capture: async () => capture,
+      hasDevice: () => observed, readQuestion, onQuestion, onQuestionGone })
+    try {
+      watcher.start(current.sessionId)
+      await vi.advanceTimersByTimeAsync(1_500)
+      expect(onQuestion).toHaveBeenCalledOnce()
+      const requestId = onQuestion.mock.calls[0][1]
+      observed = false
+      await vi.advanceTimersByTimeAsync(20_000)
+      watcher.reset()
+      observed = true
+      if (ending === 'turn end') watcher.stop(current.sessionId)
+      else {
+        readQuestion.mockResolvedValue(null)
+        await vi.advanceTimersByTimeAsync(1_500)
+        expect(onQuestionGone).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(1_500)
+      }
+      expect(onQuestionGone).toHaveBeenCalledExactlyOnceWith(current.sessionId, requestId)
+      expect(onQuestion).toHaveBeenCalledOnce()
+      watcher.stop(current.sessionId)
+      expect(onQuestionGone).toHaveBeenCalledOnce()
+    } finally { watcher.stopAll() }
+  })
+  it.each(['same', 'changed'] as const)('a reconnect reset still reannounces the %s question and closes its current identity', async change => {
+    vi.useFakeTimers()
+    const current = row(), onQuestion = vi.fn(), onQuestionGone = vi.fn()
+    if (!view || view.kind !== 'question') throw new Error('missing recorded fixture')
+    const readQuestion = vi.fn(async (): Promise<PaneView> => view)
+    const watcher = new QuestionWatcher({ getSession: () => current, capture: async () => capture,
+      hasDevice: () => true, readQuestion, onQuestion, onQuestionGone })
+    try {
+      watcher.start(current.sessionId)
+      await vi.advanceTimersByTimeAsync(1_500)
+      const originalId = onQuestion.mock.calls[0][1]
+      watcher.reset()
+      if (change === 'changed') readQuestion.mockResolvedValue({ ...view, question: 'A different question?' })
+      await vi.advanceTimersByTimeAsync(1_500)
+      expect(onQuestion).toHaveBeenCalledTimes(2)
+      const currentId = onQuestion.mock.calls[1][1]
+      expect(currentId === originalId).toBe(change === 'same')
+      watcher.stop(current.sessionId)
+      expect(onQuestionGone).toHaveBeenCalledExactlyOnceWith(current.sessionId, currentId)
+    } finally { watcher.stopAll() }
+  })
   it.each(['replace', 'stop'] as const)('holds one pending interpretation and discards it after %s', async change => {
     vi.useFakeTimers()
     const current = row(), pending = deferred<PaneView>(), onQuestion = vi.fn()
@@ -332,7 +433,7 @@ describe('a hook said a dialog is coming', () => {
 })
 
 describe('the log of an answer that was not keyed', () => {
-  // The question and the answer are the person's words: the log names the harness and their sizes, never the words.
+  // Only the refusal category is logged; questions, answers and session/request identities stay private.
   const QUESTION = 'SECRET-QUESTION-MARKER?'
   const question = { kind: 'question' as const, question: QUESTION, multi: false, typeRow: null,
     rows: [{ number: '1', label: 'Tea', checked: false }, { number: '2', label: 'Coffee', checked: false }] }
@@ -348,14 +449,15 @@ describe('the log of an answer that was not keyed', () => {
 
   it.each([
     ['stuck on the dialog', { answers: { [QUESTION]: 'Coffee' } }, 'dialog stuck'],
-    ['the dialog changed', { answers: { [QUESTION]: 'Coffee' }, requestId: 'req-1' }, 'req=req-1'],
-    ['no answer names the question', { answers: { 'Other?': 'Coffee' } }, 'no answer names'],
-    ['no option matches the answer', { answers: { [QUESTION]: 'SECRET-ANSWER-MARKER' } }, 'no option matched'],
-  ])('says the harness and sizes, not the words, when %s', async (_, answer, says) => {
+    ['the dialog changed', { answers: { [QUESTION]: 'Coffee' }, requestId: 'req-1' }, 'stale request; nothing typed'],
+    ['no answer names the question', { answers: { 'Other?': 'Coffee' } }, 'question mismatch; nothing typed'],
+    ['no option matches the answer', { answers: { [QUESTION]: 'SECRET-ANSWER-MARKER' } }, 'option mismatch; no text input'],
+  ])('names the refusal without content or identities when %s', async (_, answer, says) => {
     const lines = (await warned(answer)).filter(line => line.includes(says))
     expect(lines).toHaveLength(1)
-    expect(lines[0]).toContain('[question] agent ')
-    expect(lines[0]).toMatch(/\d+ chars/)
+    expect(lines[0]).toBe(`[question] ${says}`)
+    expect(lines[0]).not.toContain('agent')
+    expect(lines[0]).not.toContain('req-1')
     expect(lines[0]).not.toContain('SECRET')
   })
 })

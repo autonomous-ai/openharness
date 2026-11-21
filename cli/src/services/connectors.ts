@@ -28,15 +28,13 @@ import * as gateway from '../lib/connectors/gateway.js'
 import { connectVia, disconnectVia, elsewhere, type ElsewhereDeps } from '../lib/connectors/elsewhere.js'
 import { keepAlive, KEEP_ALIVE_S } from '../lib/connectors/renew.js'
 import { ConnectorError, Store, validateCode } from '../lib/connectors/store.js'
-import { answerVaultOp } from '../lib/connectors/vaultOps.js'
-import { VaultSync, vaultPortOf, type VaultPort } from '../lib/connectors/vaultSync.js'
+import type { ConnectorSync } from '../core/api.js'
+import { transport } from '../lib/connectors/rest.js'
 
 /** The request connectors answers for the apps, declared in core/api.ts for the core to route. */
 export { CONNECTORS_REQUESTS } from '../core/api.js'
 
 const GATEWAY_CACHE_MS = 60_000
-/** How long a Refresh waits for the account's connections to be exchanged before it lists what is here. */
-const SYNC_WAIT_MS = 15_000
 /** How often the bridge looks for connections to keep alive (renew.ts `keepAlive`), and how soon after it starts. */
 const KEEP_ALIVE_EVERY_MS = 3_600_000
 const KEEP_ALIVE_FIRST_MS = 120_000
@@ -52,9 +50,8 @@ export interface ConnectorsDeps {
   env: NodeJS.ProcessEnv
   /** How long to wait before listening again while another process holds the port. */
   retryMs: number
-  /** The account's sealed connections (lib/connectors/vaultSync.ts), or null to keep them on this
-   *  computer alone. In the core's process it is the core's own `connector_vault` answer, signed in. */
-  vaultPort: VaultPort | null
+  /** Only sharing status and an explicit refresh cross the account boundary. */
+  connectorSync: ConnectorSync | null
 }
 
 /** How many tries a held port gets before asking whose it is. */
@@ -174,8 +171,8 @@ export function startConnectors(core: CoreApi, ports: CorePorts, overrides: Conn
   const deps: ConnectorsDeps = {
     vault: store, port: overrides.port ?? bridgePort(env, store),
     offered: overrides.offered ?? (() => gateway.available()), env, retryMs: overrides.retryMs ?? 5_000,
-    vaultPort: overrides.vaultPort !== undefined ? overrides.vaultPort
-      : core.account.signedIn() ? vaultPortOf((op, payload = {}) => answerVaultOp(core.account, { ...payload, op })) : null,
+    connectorSync: overrides.connectorSync !== undefined ? overrides.connectorSync
+      : refresh => core.account.signedIn() ? core.account.connectorSync(refresh) : Promise.resolve({ shared: false }),
   }
   const { vault } = deps
   const flows = new Flows(vault, env)
@@ -210,7 +207,13 @@ export function startConnectors(core: CoreApi, ports: CorePorts, overrides: Conn
   // Stamped now, not at a client's first call: the day counts from this start.
   if (local) { try { retireBridgeKey(vault) } catch { /* The next request tries again. */ } }
   /** Every agent installed here given its entries; a config that cannot be written now is written at the next change. */
-  const syncAgents = (): void => { try { sync(vault, env) } catch { /* Left as it is. */ } }
+  let projected: string | null = null
+  const syncAgents = (force = true): void => {
+    try {
+      const codes = Object.entries(vault.tokens()).filter(([, token]) => transport(token) !== 'none').map(([code]) => code).sort().join('|')
+      if (force || codes !== projected) { sync(vault, env); projected = codes }
+    } catch { /* The next notice, reconnect or explicit Refresh tries again. */ }
+  }
   syncAgents()
   // The core asks as an agent launches on a profile home (core/api.ts ConnectorsPort). A home that cannot be written now
   // (the vault's lock held past its wait, a read-only folder) launches with what its config holds, and is said here: never
@@ -224,16 +227,10 @@ export function startConnectors(core: CoreApi, ports: CorePorts, overrides: Conn
     },
   }
 
-  // Connections the same on every computer of the account: read now, at each `connectors_changed`, and
-  // written whenever this computer's change (here, by `harness connections`, by a renewal in the bridge).
-  const shared = deps.vaultPort ? new VaultSync({ vault, port: deps.vaultPort, env, log: console.warn }) : null
-  if (shared) {
-    shared.start()
-    core.account.onNotice((notice) => {
-      if (notice.type === 'connectors_changed') shared.changed(notice.revision)
-      else if (notice.type === 'device_keys_changed') shared.changed(null)
-    })
-  }
+  // Gateway notices carry no connection data; edge rereads its local store and projects only a changed tool set.
+  core.account.onNotice(notice => {
+    if (notice.type === 'connectors_changed') syncAgents(false)
+  })
 
   const keepAliveAfter = overrides.keepAliveAfter ?? KEEP_ALIVE_S + Math.floor(Math.random() * KEEP_ALIVE_SPREAD_S)
   const keepRound = (): void => {
@@ -260,11 +257,16 @@ export function startConnectors(core: CoreApi, ports: CorePorts, overrides: Conn
       // installed since the last connection change (Claude Code or Codex set up after signing in) has none.
       // Only when the person asks: nothing watches for an agent being installed.
       case 'list': {
-        if (payload.sync === true) {
-          if (shared) await Promise.race([shared.run(), new Promise((done) => setTimeout(done, SYNC_WAIT_MS).unref())])
-          syncAgents()
+        let shared = false
+        try { shared = (await deps.connectorSync?.(payload.sync === true))?.shared ?? false }
+        catch {
+          if (payload.sync === true) {
+            syncAgents()
+            throw new ConnectorError('Connections could not sync. Try again.')
+          }
         }
-        return { ...cards(vault, await gatewayOffers()), shared: shared !== null }
+        if (payload.sync === true) syncAgents()
+        return { ...cards(vault, await gatewayOffers()), shared }
       }
       case 'connect': {
         const code = validateCode(payload.connector)

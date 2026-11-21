@@ -97,7 +97,7 @@ it.each(['capture', 'checkpoint'] as const)('a queued Pi Close retries real nati
   const native = join(folder, `day_${row.sessionId}.jsonl`), duplicate = join(folder, `next_${row.sessionId}.jsonl`)
   const header = JSON.stringify({ type: 'session', id: row.sessionId, cwd }) + '\n'
   const store = new SessionCheckpointStore(directory)
-  deps.checkpoint = vi.fn(s => store.save(s, { screen: 'The private terminal is idle' }))
+  deps.checkpoint = vi.fn(async s => (await store.save(s, { screen: 'The private terminal is idle' })))
   deps.stop = vi.fn(async (id, options) => {
     const captured = { ...row }
     if (phase === 'capture') captured.transcriptPath = await findResumedTranscript('pi', row.sessionId, { cwd })
@@ -192,7 +192,7 @@ it('a close of one already closed, the same conversation, is closed: asked after
   // A window closing a tab closes its panes one at a time; the harnesses a pane's harness started close with it
   // (services/agentCleanup.ts), and the window's own close of one of them was answered AGENT_CHANGED.
   const asked = request()
-  const closedAlready = vi.fn((r: AgentCloseRequest) => r.agentId === asked.agentId && r.sessionId === asked.sessionId && !registry.byAgent(r.agentId) ? row : null)
+  const closedAlready = vi.fn(async (r: AgentCloseRequest) => r.agentId === asked.agentId && r.sessionId === asked.sessionId && !registry.byAgent(r.agentId) ? row : null)
   service.dispose()
   service = new CloseAgentService({ ...deps, closedAlready })
   let finish!: () => void
@@ -214,7 +214,7 @@ it('an inspect of one already closed, the same conversation, is closed', async (
   // The terminal client inspects before every close: one asked again after a close it shows as unconfirmed (its
   // answer lost, or the harness bound a conversation meanwhile) was answered AGENT_CHANGED, "Stop not confirmed".
   const asked = request()
-  const closedAlready = vi.fn((r: AgentCloseRequest) => r.agentId === asked.agentId && r.sessionId === asked.sessionId && !registry.byAgent(r.agentId) ? row : null)
+  const closedAlready = vi.fn(async (r: AgentCloseRequest) => r.agentId === asked.agentId && r.sessionId === asked.sessionId && !registry.byAgent(r.agentId) ? row : null)
   service.dispose()
   service = new CloseAgentService({ ...deps, closedAlready })
   expect(await service.request(request('now'))).toEqual({ closed: true })
@@ -255,7 +255,7 @@ it('persists a deferred close, survives a daemon restart and waits for sustained
   expect(await service.request(request('after_task'))).toEqual({ deferred: true })
   expect(row.closePlan?.id).toBe(plan.id)
   service.dispose()
-  registry.load()
+  await registry.load()
   row = registry.byAgent(row.agentId)!
   expect(row.closePlan?.id).toBe(plan.id)
   service = new CloseAgentService(deps)
@@ -281,7 +281,7 @@ it('durably records a deferred close that arrives during a registry discovery tr
     await transaction
     expect(await closing).toEqual({ deferred: true })
     expect(registry.byAgent(row.agentId)?.closePlan?.state).toBe('waiting')
-    registry.load()
+    await registry.load()
     expect(registry.byAgent(row.agentId)?.closePlan?.state).toBe('waiting')
   } finally { finish(); await transaction }
 })
@@ -409,7 +409,7 @@ it.each(['claude', 'codex'] as const)('closes an unused %s chat only after savin
   const directory = join(env.ADAPTER_DATA_DIR, 'unused-checkpoints', row.agentId)
   const store = new SessionCheckpointStore(directory)
   deps.activity = vi.fn(async () => inspectCloseActivity(row, screen, undefined, false))
-  deps.checkpoint = vi.fn((s, phase) => store.save(s, { screen: phase === 'before' ? screen : null }))
+  deps.checkpoint = vi.fn(async (s, phase) => (await store.save(s, { screen: phase === 'before' ? screen : null })))
   deps.stop = vi.fn(async (id, options) => {
     await options.checkpoint!(row, 'before')
     await options.beforeStop!(row)
@@ -421,8 +421,8 @@ it.each(['claude', 'codex'] as const)('closes an unused %s chat only after savin
   })
   expect(await service.request(request('inspect'))).toEqual({ activity: 'idle' })
   expect(await service.request(request('idle'))).toEqual({ closed: true, withoutConversation: true })
-  expect(deps.checkpoint).toHaveBeenNthCalledWith(1, row, 'before')
-  expect(deps.checkpoint).toHaveBeenNthCalledWith(2, row, 'after')
+  expect(deps.checkpoint).toHaveBeenNthCalledWith(1, row, 'before', expect.any(Function), undefined)
+  expect(deps.checkpoint).toHaveBeenNthCalledWith(2, row, 'after', expect.any(Function), undefined)
   expect(registry.byAgent(row.agentId)).toBeUndefined()
 })
 
@@ -822,7 +822,7 @@ describe('what a close says of the conversation it kept', () => {
   ] as const)('a close of one already closed, kept with %s, says so', async (_, sessionId, said) => {
     const kept = { ...row, sessionId }
     service.dispose()
-    service = new CloseAgentService({ ...deps, closedAlready: () => registry.byAgent(row.agentId) ? null : kept })
+    service = new CloseAgentService({ ...deps, closedAlready: async () => registry.byAgent(row.agentId) ? null : kept })
     await removeRegistryAgent(registry, row.agentId)
     for (const mode of ['now', 'idle', 'inspect'] as const) expect(await service.request(request(mode))).toEqual(said)
     expect(deps.stop).not.toHaveBeenCalled()
@@ -843,6 +843,23 @@ describe('what a close says of the conversation it kept', () => {
     ] as const
     beforeEach(() => { Object.assign(row, { engine: 'openclaw', sessionId: 'agent:main:plain' }) })
 
+    it('reads empty-conversation truth after checkpoint and stop, with no stopped process identity', async () => {
+      let checkpointed = false, stopped = false
+      const conversationEmpty = reading(async () => {
+        expect(checkpointed).toBe(true)
+        expect(stopped).toBe(true)
+        return true
+      })
+      vi.mocked(deps.checkpoint).mockImplementation(async () => { checkpointed = true })
+      vi.mocked(deps.stop).mockImplementation(async (id, options) => {
+        await options.checkpoint?.({ ...row }, 'before')
+        await removeRegistryAgent(registry, id)
+        stopped = true
+      })
+      expect(await service.request(request('now'))).toEqual({ closed: true, withoutConversation: true })
+      expect(conversationEmpty).toHaveBeenCalledWith(expect.objectContaining({ processIdentity: null }))
+    })
+
     it.each(stores)('closed while its store %s, says so', async (_, answer, said) => {
       const conversationEmpty = reading(answer)
       stopSaving()
@@ -853,7 +870,7 @@ describe('what a close says of the conversation it kept', () => {
       const conversationEmpty = vi.fn(answer)
       const kept = { ...row }
       service.dispose()
-      service = new CloseAgentService({ ...deps, conversationEmpty, closedAlready: () => registry.byAgent(row.agentId) ? null : kept })
+      service = new CloseAgentService({ ...deps, conversationEmpty, closedAlready: async () => registry.byAgent(row.agentId) ? null : kept })
       await removeRegistryAgent(registry, row.agentId)
       for (const mode of ['now', 'idle', 'inspect'] as const) expect(await service.request(request(mode))).toEqual(said)
       expect(conversationEmpty).toHaveBeenCalledWith(kept)

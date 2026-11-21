@@ -14,6 +14,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  type Dir,
   writeFileSync,
   type Stats,
 } from 'node:fs'
@@ -28,6 +29,36 @@ import { errorKind } from './log.js'
 
 const PRIVATE_DIRECTORY_MODE = 0o700
 const PRIVATE_FILE_MODE = 0o600
+const uncertainStateFiles = new Set<number | FileHandle | Dir>()
+
+export class StateFileCleanupUnconfirmed extends Error {
+  readonly code = 'STATE_FILE_CLEANUP_UNCONFIRMED'
+  constructor() { super('State file cleanup unconfirmed; restart required'); this.name = 'StateFileCleanupUnconfirmed' }
+}
+
+export function stateFileCustodyHealthy(): void {
+  if (uncertainStateFiles.size) throw new StateFileCleanupUnconfirmed()
+}
+
+/** Never retry an uncertain close: the descriptor could already have been reused. */
+export function closeStateFileDescriptor(fd: number): void {
+  if (uncertainStateFiles.has(fd)) throw new StateFileCleanupUnconfirmed()
+  try { closeSync(fd) }
+  catch { uncertainStateFiles.add(fd); throw new StateFileCleanupUnconfirmed() }
+}
+
+/** Already-owned handles may still settle after another close failed. */
+export async function closeStateFileHandle(handle: FileHandle): Promise<void> {
+  if (uncertainStateFiles.has(handle)) throw new StateFileCleanupUnconfirmed()
+  try { await handle.close() }
+  catch { uncertainStateFiles.add(handle); throw new StateFileCleanupUnconfirmed() }
+}
+
+export function closeStateDirectoryIterator(directory: Dir): void {
+  if (uncertainStateFiles.has(directory)) throw new StateFileCleanupUnconfirmed()
+  try { directory.closeSync() }
+  catch { uncertainStateFiles.add(directory); throw new StateFileCleanupUnconfirmed() }
+}
 
 function ownerUid(): number | null {
   return typeof process.getuid === 'function' ? process.getuid() : null
@@ -83,13 +114,14 @@ function* step<T = void>(call: Step): Steps<T> {
 }
 
 function callSync(s: Step): unknown {
+  if (s.call !== 'close') stateFileCustodyHealthy()
   switch (s.call) {
     case 'open': return openSync(s.path, s.flags, s.mode)
     case 'write': return writeFileSync(s.handle as number, s.data)
     case 'stat': return fstatSync(s.handle as number)
     case 'chmod': return fchmodSync(s.handle as number, s.mode)
     case 'flush': return fsyncSync(s.handle as number)
-    case 'close': return closeSync(s.handle as number)
+    case 'close': return closeStateFileDescriptor(s.handle as number)
     case 'rename': return renameSync(s.from, s.to)
     case 'link': return linkSync(s.from, s.to)
     case 'copyNew': return copyFileSync(s.from, s.to, constants.COPYFILE_EXCL)
@@ -100,13 +132,14 @@ function callSync(s: Step): unknown {
 }
 
 function callAsync(s: Step): Promise<unknown> {
+  if (s.call !== 'close') stateFileCustodyHealthy()
   switch (s.call) {
     case 'open': return fs.open(s.path, s.flags, s.mode)
     case 'write': return (s.handle as FileHandle).writeFile(s.data)
     case 'stat': return (s.handle as FileHandle).stat()
     case 'chmod': return (s.handle as FileHandle).chmod(s.mode)
     case 'flush': return (s.handle as FileHandle).sync()
-    case 'close': return (s.handle as FileHandle).close()
+    case 'close': return closeStateFileHandle(s.handle as FileHandle)
     case 'rename': return fs.rename(s.from, s.to)
     case 'link': return fs.link(s.from, s.to)
     case 'copyNew': return fs.copyFile(s.from, s.to, constants.COPYFILE_EXCL)
@@ -118,6 +151,7 @@ function callAsync(s: Step): Promise<unknown> {
 
 /** Runs [steps] with the synchronous calls: a call that throws is thrown into the steps, where the rules catch it. */
 function runSync<T>(steps: Steps<T>): T {
+  stateFileCustodyHealthy()
   let next = steps.next()
   while (!next.done) {
     let result: unknown
@@ -129,6 +163,7 @@ function runSync<T>(steps: Steps<T>): T {
 
 /** `runSync`, each call awaited instead. */
 async function runAsync<T>(steps: Steps<T>): Promise<T> {
+  stateFileCustodyHealthy()
   let next = steps.next()
   while (!next.done) {
     let result: unknown
@@ -198,9 +233,21 @@ function secureWindowsStateDirectory(directory: string, create: boolean): void {
 }
 
 export function secureStateDirectory(directory: string, create = true): void {
+  stateFileCustodyHealthy()
   if (process.platform === 'win32') {
     secureWindowsStateDirectory(directory, create)
     return
+  }
+  // Close/Resume repeatedly checks private directories without retaining the descriptor.
+  // Read current metadata instead; creation and any tightening still use the opened directory.
+  if (!create) {
+    const uid = ownerUid()
+    if (uid !== null) {
+      try {
+        const stat = lstatSync(directory)
+        if (stat.isDirectory() && stat.uid === uid && (stat.mode & 0o7777) === PRIVATE_DIRECTORY_MODE) return
+      } catch { /* Preserve the original open error and permission handling below. */ }
+    }
   }
   if (create) mkdirSync(directory, { recursive: true, mode: PRIVATE_DIRECTORY_MODE })
   const fd = openSync(
@@ -232,7 +279,7 @@ export function secureStateDirectory(directory: string, create = true): void {
       }
     }
   } finally {
-    closeSync(fd)
+    closeStateFileDescriptor(fd)
   }
 }
 
@@ -258,13 +305,14 @@ function* inspectSteps(handle: Handle, maxBytes: number): Steps<void> {
 }
 
 export function readPrivateStateFile(file: string, maxBytes = Number.MAX_SAFE_INTEGER): string {
+  stateFileCustodyHealthy()
   if (process.platform === 'win32') requireInsideWindowsRoots(file, 'file')
   const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
   try {
     runSync(inspectSteps(fd, maxBytes))
     return readFileSync(fd, 'utf8')
   } finally {
-    closeSync(fd)
+    closeStateFileDescriptor(fd)
   }
 }
 
@@ -315,7 +363,7 @@ const LINK_REFUSED = new Set(['EPERM', 'ENOTSUP', 'EXDEV', 'ENOSYS', 'EISDIR'])
 
 /** The new file is in place, but its folder has not confirmed it is durable. */
 export class AtomicWriteUnconfirmed extends Error {
-  constructor(cause: unknown) { super(cause instanceof Error ? cause.message : String(cause), { cause }) }
+  constructor(cause: unknown, readonly retryable = true) { super(cause instanceof Error ? cause.message : String(cause), { cause }) }
 }
 
 const pauseCell = new Int32Array(new SharedArrayBuffer(4))

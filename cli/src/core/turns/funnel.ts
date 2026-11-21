@@ -1,8 +1,8 @@
 /**
  * The event funnel: the one place a session's live events fan out from, to the app, search, input, the
- * device's input, the device service, the heartbeat, the question watcher and the recaps. The
+ * heartbeat, the question watcher and the recaps. The
  * order is exact and it matters: per event, the frame goes to the app before anything acts on it; the
- * recaps hear the whole batch after the loop; the device stream comes last and never on a replay.
+ * recaps hear the whole batch after the loop. Negotiated app consumers receive its batch identity.
  *
  * Until the core has built what the funnel feeds, events wait: a hook can register a session the instant
  * the hook server binds. `arm` installs the funnel and delivers what waited, in order. `emit` is the same
@@ -12,14 +12,10 @@
  */
 import { withoutOutputTail } from '../../lib/cardUpdate.js'
 import { correlateAgentEvent } from '../../lib/agentEvent.js'
-import type { AutonomousDeviceInput } from '../deviceInput.js'
-import { isDeviceInputBoundary } from '../deviceInput.js'
-import type { SubmissionReader } from '../../lib/submissionReader.js'
-import type { WifiFeed } from '../wifi.js'
 import type { TurnRecaps } from './recaps.js'
 import type { QuietTitles } from '../agents/quietTitles.js'
 import type { ShortTurnGuard } from './shortTurnGuard.js'
-import { deviceErrorText } from '../cardText.js'
+import type { SessionFailure } from '../api.js'
 import { errorKind, preview, sid } from '../../lib/log.js'
 import type { CursorNormalizer } from '../../engines/cursor/normalizer.js'
 import type { QuestionWatcher } from '../../lib/questionController.js'
@@ -27,6 +23,7 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import type { SessionInputController } from '../../lib/sessionInput.js'
 import { promptLine } from '../../lib/activitySummary.js'
 import { isProgressEvent, type TurnActivity } from '../../lib/turnActivity.js'
+import type { SessionEventBatch } from '../../lib/sessionEvents.js'
 
 type Events = ReturnType<CursorNormalizer['ingest']>
 type EmitOptions = { resumed?: boolean; replay?: boolean }
@@ -34,9 +31,7 @@ type Frame = { type: string; agentId?: string; dbSessionId?: string; payload: Re
 
 export interface FunnelClients {
   /** The app. */
-  send(frame: Frame): void
-  /** The dial. */
-  sendCommander(frame: Frame): void
+  send(frame: Frame, batch?: SessionEventBatch): void
 }
 
 /** What the funnel feeds, built by the time it is armed. */
@@ -55,16 +50,10 @@ export interface FunnelDeps {
   /** The prompt of each agent's last turn start, by agent, for the one-line summary of what it does (turns/summaries.ts).
    *  Not cleared when the turn ends: an idle agent with no recap is summarised by its last prompt. */
   prompts?: Map<string, string>
-  input: Pick<SessionInputController, 'onTurnStarted' | 'onTurnEnded'>
-  deviceInput: Pick<AutonomousDeviceInput, 'onTurnStarted' | 'onTurnEnded'>
-  /** Which engines take a message typed mid-turn into their own queue (their declared submission policy). */
-  submission: Pick<SubmissionReader, 'policy'>
-  device: () => Pick<WifiFeed, 'turnStarted' | 'turnEnded' | 'stream'> | undefined
+  input: Pick<SessionInputController, 'onTurnStarted' | 'onTurnEnded' | 'onUserMessage'>
   startHeartbeat: (sessionId: string) => void
   questionWatcher: Pick<QuestionWatcher, 'start' | 'noteTurnStart' | 'stop'>
   mirror: Pick<TurnRecaps, 'ingest'>
-  /** How a consumer outside the core is called ([outsideConsumers]). */
-  outside?: OutsideConsumers
   /** The agent's engine is working now: a live turn start or its progress, never a re-read (the mover's quiet clock,
    *  lib/hostMove/quiet.ts). */
   working?: (agentId: string) => void
@@ -76,52 +65,20 @@ export interface FunnelDeps {
   quietTitles?: Pick<QuietTitles, 'turnStarted'>
 }
 
-type OutsideConsumers = (consumer: string, call: () => void) => void
-
-/**
- * A consumer outside the core — the device service — answers for itself: one that
- * throws is logged, at most once a minute per consumer and with how many were not, and every consumer
- * after it still gets the event. The heartbeat, the question watcher and the recaps must not miss a
- * turn because a device was unplugged mid-call. The services on the boundary are guarded the same way
- * (core/serviceHost.ts), and so are the dial and the window bridges on the local socket (cli.ts).
- */
-export function outsideConsumers(options: {
-  log?: (line: string) => void
-  now?: () => number
-  /** What the lines start with: `[funnel]` by default. */
-  prefix?: string
-  /** Consumers to fail on every call, for the end-to-end suite only (`HARNESSD_TEST_FAULTS`). */
-  faults?: ReadonlySet<string>
-} = {}): OutsideConsumers {
-  const log = options.log ?? ((line: string) => console.error(line))
-  const now = options.now ?? Date.now
-  const prefix = options.prefix ?? 'funnel'
-  const said = new Map<string, { at: number; quiet: number }>()
-  return (consumer, call) => {
-    try {
-      if (options.faults?.has(consumer)) throw new Error(`injected fault: ${consumer}`)
-      call()
-    } catch (error) {
-      const at = now()
-      const last = said.get(consumer)
-      if (last && at - last.at < 60_000) { last.quiet++; return }
-      log(`[${prefix}] ${consumer} failed · ${errorKind(error)}${last?.quiet ? ` · ${last.quiet} more since` : ''}`)
-      said.set(consumer, { at, quiet: 0 })
-    }
-  }
-}
-
 /** The funnel itself, over what it feeds. */
 export function funnelFor({
   bySession, tokenUsage, agentIdFor, turnActivity, isSubagentSession, clients, search, turnStartedAt, prompts, input,
-  deviceInput, submission, device, startHeartbeat, questionWatcher, mirror, outside = outsideConsumers(), working, shortTurns,
+  startHeartbeat, questionWatcher, mirror, working, shortTurns,
   quietTitles, quietTurnOpen,
 }: FunnelDeps) {
+  let batch = 0
   return (sessionId: string, events: Events, opts?: EmitOptions): void => {
     if (!events.length || !bySession(sessionId)?.active) return
     const usageSession = bySession(sessionId)
     if (usageSession?.engine === 'opencode') tokenUsage.changed(usageSession)
-    for (const [eventIndex, event] of events.entries()) {
+    const id = ++batch
+    for (let index = 0; index < events.length; index++) {
+      const event = events[index]
       const agentId = agentIdFor(sessionId)
       const replay = !!(opts?.resumed || opts?.replay)
       turnActivity.observe(sessionId, event.type, replay)
@@ -155,7 +112,8 @@ export function funnelFor({
         // (docs/design/2026-11-12-hachi.md, "Hachi's own turns"). Read before the recaps hear this batch, which ends the mark.
         else if (!replay && quietTurnOpen?.(sessionId)) frame.subagent = true
       }
-      clients.send(withoutOutputTail(frame))
+      clients.send(withoutOutputTail(frame), { id, index, count: events.length, ...(opts?.replay ? { replay: true as const } : {}) })
+      if (!replay && event.type === 'user_message') input.onUserMessage(agentId, event.payload.content)
       if (event.type === 'turn_started' || event.type === 'turn_ended') search?.touch(sessionId)
       if (event.type === 'turn_started') {
         turnStartedAt.set(sessionId, Date.now())
@@ -164,8 +122,6 @@ export function funnelFor({
         else prompts?.delete(agentId)
         console.log(`[turn] ${sid(sessionId)} started · engine=${bySession(sessionId)?.engine ?? 'claude'} · bytes=${Buffer.byteLength(event.payload.userMessage, 'utf8')}`)
         input.onTurnStarted(agentIdFor(sessionId), event.payload.userMessage)
-        deviceInput.onTurnStarted(agentId, event.payload.userMessage)
-        outside('devices', () => device()?.turnStarted(agentId))
         startHeartbeat(sessionId)
         questionWatcher.start(sessionId)   // Claude opens its dialog INSIDE a turn
         // ...and anything already drawn belongs to the turn BEFORE this one — unless this is a turn the
@@ -181,11 +137,6 @@ export function funnelFor({
           `[turn] ${sid(sessionId)} ended${event.payload.aborted ? ' · aborted (interrupted)' : ''}` +
             `${startedAt ? ` · ${Date.now() - startedAt}ms` : ''}`,
         )
-        // Filter only the Device receipt view; shared normalizers, mirror, and local input stay unchanged.
-        if (!isDeviceInputBoundary(submission.policy(usageSession?.engine ?? ''), events, eventIndex)) {
-          outside('devices', () => device()?.turnEnded(agentId, event.payload.aborted === true))
-          deviceInput.onTurnEnded(agentId)
-        }
         input.onTurnEnded(agentIdFor(sessionId))
         // Command Code asks AFTER the turn: `ask_user_question` ends the turn (its Stop hook fires), the
         // dialog goes up, and the answer opens a NEW turn. Stopping the watcher here is what left the
@@ -198,12 +149,12 @@ export function funnelFor({
       }
     }
     mirror.ingest(events, sessionId, { replay: !!(opts?.resumed || opts?.replay) })
-    // Subscribed devices only (lib/autonomous-device/stream.ts). A transcript re-read is history, not live.
-    if (!opts?.replay) outside('devices', () => device()?.stream(agentIdFor(sessionId), events))
   }
 }
 
-export function createEventFunnel({ clients, agentIdFor }: { clients: FunnelClients; agentIdFor: (sessionId: string) => string }) {
+export function createEventFunnel({ clients, agentIdFor, failure }: {
+  clients: FunnelClients; agentIdFor: (sessionId: string) => string; failure(failure: SessionFailure): void
+}) {
   const queuedSessionEvents: Array<{ sessionId: string; events: Events; opts?: EmitOptions }> = []
   let funnel: ((sessionId: string, events: Events, opts?: EmitOptions) => void) | null = null
   const emit = (sessionId: string, events: Events, opts?: EmitOptions): void => {
@@ -225,16 +176,12 @@ export function createEventFunnel({ clients, agentIdFor }: { clients: FunnelClie
     sessionId: string,
     engine: string,
     message: string,
-    deviceMessage = message,
+    failureSummary?: string,
   ): void => {
     console.log(`[turn] ${sid(sessionId)} aborted by ${engine} error · ${preview(message)}`)
-    clients.send({ type: 'error', agentId: agentIdFor(sessionId), dbSessionId: sessionId, payload: { message } })
-    clients.sendCommander({
-      type: 'commander_event',
-      agentId: agentIdFor(sessionId),
-      dbSessionId: sessionId,
-      payload: { kind: 'error', text: deviceErrorText(deviceMessage, engine) },
-    })
+    const agentId = agentIdFor(sessionId)
+    clients.send({ type: 'error', agentId, dbSessionId: sessionId, payload: { message } })
+    failure({ agentId, sessionId, engine, message, ...(failureSummary === undefined ? {} : { failureSummary }) })
   }
   return { emit, arm, announceTurnAborted }
 }

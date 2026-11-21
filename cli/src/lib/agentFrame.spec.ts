@@ -154,12 +154,12 @@ describe('agentFrame', () => {
     expect(said).not.toHaveBeenCalled()
   })
 
-  it('never carries the grid launch — the key stays in the registry', async () => {
+  it('never carries the private grid launch reference', async () => {
     const row = session(assignment)
-    row.gridLaunch = { networkId: 'grid-abc', networkName: 'Team grid', baseUrl: assignment.baseUrl, apiKey: 'gridkey-SECRET' }
+    row.gridLaunch = storedGridFixture({ networkId: 'grid-abc', networkName: 'Team grid', baseUrl: assignment.baseUrl, apiKey: 'fixture-grid-key' })
     const frame = await agentFrame(row, { selectedModel: null, terminalAvailable: true })
     expect(frame).not.toHaveProperty('gridLaunch')
-    expect(JSON.stringify(frame)).not.toContain('gridkey-SECRET')
+    expect(JSON.stringify(frame)).not.toContain(row.gridLaunch.credential.binding)
   })
 
   // The task is the person's words, typed into the pane once (core/agents/bind.ts); no client is ever sent it.
@@ -356,4 +356,26 @@ describe('agentFrame updatedAt', () => {
       await rm(dir, { recursive: true, force: true })
     }
   })
+})
+import { storedGridFixture } from '../testing/gridCredentials.js'
+
+it('keeps native title, lifecycle, usage and workspace facts through the shared serializer', async () => {
+  const row: RegisteredSession = { ...session(assignment), defaultName: 'Chosen', title: 'Task title', cwd: '/',
+    closePlan: { id: 'close', identity: 'current', requestedAt: 1, state: 'waiting', detail: 'Closing' }, interpretationHold: 'Waiting for reader', gridWebSearch: 'unavailable' }
+  const output = { linesAdded: 0, linesRemoved: null, pullRequestsCreated: 1 }
+  const usage = { totalTokens: 3, inputTokens: 1, outputTokens: 2, cachedTokens: 0, updatedAt: '2026-11-19T00:00:00Z', output }
+  const frame = await agentFrame(row, { selectedModel: null, terminalAvailable: true, workspace: '/workspace', tokenUsage: usage })
+  expect(frame).toMatchObject({ title: 'Task title', closePlan: { state: 'waiting', detail: 'Closing' }, identityHold: row.interpretationHold,
+    workspace: '/workspace', project: { name: '/', cwd: '/' }, grid: { ...assignment, webSearch: 'unavailable' },
+    tokenUsage: { totalTokens: 3, inputTokens: 1, outputTokens: 2, cachedTokens: 0, updatedAt: usage.updatedAt },
+    outputStats: { ...output, updatedAt: usage.updatedAt } })
+  expect(row.closePlan).toEqual({ id: 'close', identity: 'current', requestedAt: 1, state: 'waiting', detail: 'Closing' })
+  expect(Object.isFrozen(row)).toBe(false)
+})
+
+it('keeps an admission hold and detail-free native close plan without inventing fields', async () => {
+  const row: RegisteredSession = { ...session(null), admissionHold: 'Waiting for admission', closePlan: { id: 'close', identity: 'current', requestedAt: 1, state: 'failed' } }
+  const frame = await agentFrame(row, { selectedModel: null, terminalAvailable: true })
+  expect(frame).toMatchObject({ identityHold: 'Waiting for admission', closePlan: { state: 'failed' } })
+  expect(frame.closePlan).not.toHaveProperty('detail')
 })

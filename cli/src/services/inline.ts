@@ -16,14 +16,17 @@ export { questionControlFor } from '../engines/questionControls.js'
  * target, and its test"). The core still routes these services' requests and holds their fallbacks: both are
  * declared in core/api.ts, which it loads either way.
  */
-export { engineTranscriptFor } from '../engines/transcripts.js'
+export { createInlineHistory } from '../engines/transcripts.js'
 // A conversation kept in a database read whole, for a service in this process (core/api.ts `transcripts`): theirs, as
 // each service's own process reads it (lib/databaseHistory.ts), loaded only once one asks (engines/inProcess.ts).
 export { databaseHistory } from '../engines/storeHistory.js'
 export { liveFor } from '../engines/live.js'
 // The other engines' live streams, and their reads, in this process: as their worker serves them.
 export { otherEngineRequests } from '../engines/others/otherEnginesProcess.js'
+export { hermesBackground, openclawUserRows } from '../engines/others/storageRequests.js'
+export { exportDatabase } from '../engines/others/checkpoint.js'
 export { screenFor } from '../engines/screens.js'
+export { terminalScreen } from '../engines/kit/screen.js'
 export { submissionFor } from '../engines/submissions.js'
 export { nativeControlFor } from '../engines/nativeControls.js'
 export { backgroundJobFor } from '../engines/backgroundJobs.js'
@@ -31,8 +34,10 @@ export { providerMoveFor } from '../engines/providerMoves.js'
 export { prepareResume } from '../engines/resumePreparation.js'
 export { modelControlFor } from '../engines/modelControls.js'
 export { runtimeFor } from '../engines/runtime.js'
+export { RuntimeProfileState } from '../lib/runtimeProfileState.js'
+export { preloadEngine } from '../engines/inProcess.js'
 export { startGateway } from '../gateway/start.js'
-export { startAgentBrowser } from './agentBrowser.js'
+export { startInlineClientStreams } from './inlineClientStreams.js'
 export { startAgentCleanup } from './agentCleanup.js'
 export { startMemory } from './memory.js'
 export { startCloud } from './cloud.js'
@@ -45,6 +50,7 @@ export { startHandoff } from './handoff.js'
 export { startMessagesInCore } from './messages.js'
 export { startModels } from './models.js'
 export { startMonitor } from './monitor.js'
+export { startPaste } from './paste.js'
 export { startOrchestrator } from './orchestrator.js'
 export { startOsDevice } from './osDevice.js'
 export { startMachineAddons } from './machineAddons.js'
@@ -56,17 +62,19 @@ export { startShell } from './shell.js'
 export { startSharing } from './sharing.js'
 export { startStoreInCore } from './store.js'
 export { startUsageInCore } from './usage.js'
-export { startViewers } from './viewers.js'
 export { startWifi } from './wifi.js'
 export { startWindowNames } from './windowNames.js'
 export { startEngineProbe } from './engineProbe.js'
 export { startWorkspaces } from './workspaces.js'
 
+export { createLocalNativeSetup } from './nativeSetup.js'
+export { createServiceHost } from './inlineHost.js'
+export { inlineSharedMachinesPort } from '../lib/sharedMachinesPort.js'
+
 /**
- * The devices in the core's process. On Windows with their own pipe, as in their own process: every service runs in the
- * core's there (masterProcess.ts `masterEnv`), and without it `harness device notify`, the editors' extensions and the
- * plugins reach no dial. Until Windows services run in their own process. Elsewhere none, as before. `platform` is for
- * its tests.
+ * Explicit inline and old-master compatibility starts on Windows still need the devices' authenticated pipe for
+ * notify commands, editor extensions and plugins. Normal starts own that pipe in the devices process. Elsewhere
+ * inline starts keep the existing core door. `platform` is for tests.
  */
 export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps, platform: NodeJS.Platform = process.platform): ServiceRequests {
   return startDevicesService(core, ports, platform === 'win32' ? { ...deps, listen: listenForDevices(core.dataDir, platform) } : deps)

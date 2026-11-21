@@ -32,6 +32,7 @@ export class InOwnTmux {
 
   /** [made] is the tmux command that makes its pane. */
   private static async begin(d: IsolatedDaemon, folder: string, made: readonly string[]): Promise<InOwnTmux> {
+    await d.hooksInstalled(['claude'])
     const cwd = join(d.projectsDir, folder)
     mkdirSync(cwd, { recursive: true })
     const from = d.hookLog().length

@@ -1,3 +1,4 @@
+import type { BrowserRuntime, BrowserRuntimeSlot } from './agentBrowserRuntime.js'
 import type { ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
@@ -9,7 +10,7 @@ import { createInterface } from 'node:readline'
 import { PassThrough } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAgentLife } from '../core/agentLife.js'
-import { emptyPorts, type AgentBrowserPort, type Asker, type CoreApi, type CorePorts, type ServiceRequests, type TurnDelivery } from '../core/api.js'
+import { emptyPorts, type Asker, type CoreApi, type CorePorts, type ServiceRequests, type TurnDelivery } from '../core/api.js'
 import type { AgentBrowserFrame } from '../lib/agentFrame.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { decodeTerminalLocal } from '../lib/terminalBinary.js'
@@ -54,7 +55,7 @@ const session = (agentId: string, over: Partial<RegisteredSession> = {}) => ({ a
 
 let fake: FakePodman
 let dataDir: string
-const started: CorePorts[] = []
+const started: BrowserRuntimeSlot[] = []
 const servers: Server[] = []
 
 beforeEach(() => {
@@ -83,7 +84,7 @@ async function stopAll() {
 
 /** The port, and what the core tells the service of agents as it follows them (core/agentLife.ts): a look at a live
  *  agent, its end, its purge and a new agent in the pane one ended in. */
-type Port = AgentBrowserPort & {
+type Port = BrowserRuntime & {
   published(agentId: string): AgentBrowserFrame | undefined
   running(session: RegisteredSession): void
   ended(agentId: string): void
@@ -100,7 +101,7 @@ function start(core: CoreApi = fakeCore({ dataDir }), options: AgentBrowserOptio
   hub.follow(event => { if (event.kind === 'ended' || event.kind === 'purged') published.delete(event.agentId) })
   // A core the spec lends no following follows through [hub].
   core.agents.follow ??= hub.follow
-  const ports = emptyPorts()
+  const ports: BrowserRuntimeSlot = { agentBrowser: null }
   started.push(ports)
   const requests = startAgentBrowser(core, ports, {
     podman: createPodman({ resolve: async () => fake.path, platform: 'linux' }),
@@ -149,17 +150,18 @@ function viewing(clients = true) {
   const frames: Array<[connId: string, type: string, payload: Record<string, unknown>]> = []
   const screen: Array<[streamId: string, seq: number, bytes: string]> = []
   const core = fakeCore({ dataDir, ...(clients ? { clients: {
-    browserFrame: (connId, type, payload) => { frames.push([connId, type, payload]); return true },
+    streamFrame: (connId, type, payload) => { frames.push([connId, type, payload]); return true },
     // The service frames them as a window is sent them, and the core sends that frame on as it is.
-    browserBytes: (frame) => {
+    streamBytes: (frame) => {
       const { streamId, seq, bytes } = decodeTerminalLocal(frame)!
       screen.push([streamId, seq, Buffer.from(bytes).toString()])
       return true
     },
   } } : {}) })
+  if (!clients) Reflect.deleteProperty(core.clients, 'streamFrame')
   let opens = 0
   /** A viewer's open through the port: the stream it was given, or why none. */
-  const open = (port: AgentBrowserPort, agentId: string, asker: Asker = LOCAL, connId = 'local:w'): string => {
+  const open = (port: BrowserRuntime, agentId: string, asker: Asker = LOCAL, connId = 'local:w'): string => {
     const requestId = `r-${++opens}`
     expect(port.stream(connId, 'agent_browser_open', { requestId, agentId }, asker)).toBe(true)
     const answer = frames.find(([, type, payload]) => type === 'agent_browser_open_result' && payload.requestId === requestId)![2]
@@ -387,6 +389,10 @@ describe('the agent browser service', () => {
     const refused = v.open(port, 'a1')
     port.streamRefused(refused)
     expect(v.closes()).toEqual([['mac-2', gone, 'closed'], ['mac-3', moved, 'route'], ['mac-4', relayed, 'rate'], ['local:w', refused, 'backlog']])
+    const local = v.open(port, 'a1'), remote = v.open(port, 'a1', OTHER_DESKTOP, 'mac-5')
+    port.streamClosed()
+    expect(v.closes().slice(-2)).toEqual([['local:w', local, 'agent'], ['mac-5', remote, 'agent']])
+    expect(v.pipes.slice(-2).every(pipe => pipe.stdin.writableEnded && pipe.kill.mock.calls.length > 0)).toBe(true)
   })
 
   it('a stop and a delete close the browser\'s viewers at once', async () => {
@@ -502,14 +508,17 @@ describe('the agent browser service', () => {
     saveState({ a1: defaultSettings(HOST) })
     const run = vi.fn(async () => ({ code: 0, stdout: '', stderr: '' }))
     const { podman, spawn } = podmanHere()
-    const { port, requests } = start(undefined, { platform: 'win32', podman, setup: { run } })
+    const streamFrame = vi.fn(() => true)
+    const { port, requests } = start(fakeCore({ dataDir, clients: { streamFrame } }), { platform: 'win32', podman, setup: { run } })
     expect(await requests.agent_browser_available!({}, PLAIN_OWNER)).toEqual({ state: 'unsupported' })
     port.running(session('a1'))
     port.ended('a1')
     port.purged('a1')
     expect(port.published('a1')).toBeUndefined()
-    // No stream is taken: the core refuses the open at once (core/browserStreams.ts), and the rest is told to nothing.
-    expect(port.stream('local:w', 'agent_browser_open', { requestId: 'r-1', agentId: 'a1' }, LOCAL)).toBe(false)
+    expect(port.stream('local:w', 'agent_browser_open', { requestId: 'r-1', agentId: 'a1' }, LOCAL)).toBe(true)
+    expect(streamFrame).toHaveBeenCalledExactlyOnceWith('local:w', 'agent_browser_open_result', { requestId: 'r-1', error: 'NO_BROWSER' })
+    expect(port.stream('local:w', 'agent_browser_open', {}, LOCAL)).toBe(false)
+    expect(port.stream('local:w', 'agent_browser_close', { streamId: 's' }, LOCAL)).toBe(false)
     port.streamInput('s', Uint8Array.of(1))
     port.streamClosed('local:w')
     port.streamRoute('s', 'direct')
@@ -774,7 +783,7 @@ describe('the agent browser service', () => {
 
   it('inline migration reads the legacy flag from the core list without using omissions to delete profiles', async () => {
     saveState({ a1: defaultSettings(HOST), unreadable: defaultSettings(HOST) })
-    const all = vi.fn(() => [session('a1')])
+    const all = vi.fn(async () => [session('a1')])
     const sw = startSwitching([session('b1', { browser: undefined })], { agents: { all }, options: { everyAgent: undefined } })
     sw.move('a1', 'b1')
     await ready(sw.port, 'b1')

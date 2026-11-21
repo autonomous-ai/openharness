@@ -1,6 +1,10 @@
+import { emptyOwnerCore } from '../testing/cloudOwners.js'
+import type { ServiceSessionRow } from '../lib/sessionOwnerWire.js'
+import { OWNER_DOWN as CLOUD_DOWN, OWNER_REPLY_DOWN as CLOUD_REPLY_DOWN, OWNER_ANSWER_DOWN as CLOUD_ANSWER_DOWN } from '../lib/sessionOwnerWire.js'
+import { SERVICE_HOSTS } from '../harnessd/services.js'
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, mayOpenBrowser, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, GATEWAY_REQUESTS, LANE_OFF, MACHINE_ADDON_REQUESTS, PAIR_WAIT_MS, SERVICE_HTTP_ROUTES, SERVICE_WS_FRAMES, WIFI_REQUESTS, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, WIFI_FALLBACKS, WIFI_OFF, WORKSPACES_FALLBACKS, WORKSPACES_OFF, WORKSPACES_UNAVAILABLE, type CoreApiDeps } from './api.js'
+import { readSessions, SESSION_READ_HEADER_BYTES, SESSION_READ_MEMBERS_BYTES, AGENT_BROWSER_REQUESTS, OWNER_FALLBACKS, CONNECTOR_SYNC_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, sendLocalWindow, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, GATEWAY_REQUESTS, LANE_OFF, MACHINE_ADDON_REQUESTS, PASTE_FALLBACKS, PASTE_OFF, PAIR_WAIT_MS, SERVICE_HTTP_ROUTES, SERVICE_WS_FRAMES, WIFI_REQUESTS, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, WIFI_FALLBACKS, WORKSPACES_FALLBACKS, WORKSPACES_OFF, WORKSPACES_UNAVAILABLE, type CoreApiDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
 import { answerAgentQuery } from './agentQueries.js'
@@ -9,6 +13,11 @@ import { createDevicesLink } from './devicesLink.js'
 import { createWorkspacesLink } from './workspacesLink.js'
 import { createAgentLife } from './agentLife.js'
 import { agentsIn, processCoreApi } from '../services/processCoreApi.js'
+import { agentFacts, agentFrame } from '../lib/agentFrame.js'
+import * as transcriptActivity from '../lib/transcriptActivity.js'
+import { collectSessionRead } from '../testing/sessionSnapshot.js'
+import { RECORD_READ_BYTES } from '../lib/recordReadWire.js'
+import { createFrameParts } from './frameParts.js'
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
 
@@ -50,12 +59,15 @@ describe('the core API services stand on', () => {
     expect(route('GET', '/api/pairs')!.waitMs).toBe(30_000)
   })
   it('sends a window\'s ⌘K and its answer to a spoken task to the devices, as a request they declare', () => {
-    expect(SERVICE_WS_FRAMES.map((each) => [each.frame, each.type, each.result])).toEqual([
-      ['route_task', 'devices_ws', 'route_result'], ['route_send', 'devices_ws', 'route_send_result'], ['voice_route_reply', 'devices_ws', undefined]])
-    for (const each of SERVICE_WS_FRAMES) expect((DEVICES_REQUESTS as readonly string[]).includes(each.type)).toBe(true)
+    const frames = SERVICE_WS_FRAMES.filter(each => each.type === 'devices_ws')
+    expect(frames.map((each) => [each.frame, each.type, each.result])).toEqual([
+      ['route_task', 'devices_ws', 'route_result'], ['route_send', 'devices_ws', 'route_send_result'], ['harness_device_step', 'devices_ws', 'harness_device_step_result'], ['harness_device_scroll', 'devices_ws', undefined], ['voice_route_reply', 'devices_ws', undefined]])
+    for (const each of frames) expect((DEVICES_REQUESTS as readonly string[]).includes(each.type)).toBe(true)
     const reason = 'the devices service is unavailable'
-    expect(SERVICE_WS_FRAMES[0].unanswered).toEqual({ agentId: '', machineId: '', name: '', confidence: 0, reason, candidates: [], weighed: 0, machines: 0, via: '' })
-    expect(SERVICE_WS_FRAMES[1].unanswered).toEqual({ ok: false, machine: '', reason })
+    expect(frames[0].unanswered).toEqual({ agentId: '', machineId: '', name: '', confidence: 0, reason, candidates: [], weighed: 0, machines: 0, via: '' })
+    expect(frames[1].unanswered).toEqual({ ok: false, machine: '', reason })
+    expect(frames[2]).toMatchObject({ waitMs: 5000, unanswered: { error: 'DESK_UNAVAILABLE' } })
+    for (const each of frames.slice(2, 4)) expect(each).not.toHaveProperty('rpc')
   })
   it('gives a service with no lane of the core\'s nothing to seal with, and never its frame back in the clear', async () => {
     await expect(LANE_OFF.hello('m', 'pub')).rejects.toThrow(/no E2EE identity/)
@@ -111,6 +123,7 @@ describe('the core API services stand on', () => {
       dataDir: '/data',
       registry: {
         list: vi.fn(() => [row('live')]),
+        rows(this: CoreApiDeps['registry']) { return this.list()[Symbol.iterator]() },
         byAgent: vi.fn((agentId: string) => (agentId === 'live' ? row('live') : undefined)),
         resolve: vi.fn((id: string) => (id === 'live' || id === 's-live' ? row('live') : undefined)),
         advertised: vi.fn(() => [row('live')]),
@@ -121,7 +134,7 @@ describe('the core API services stand on', () => {
       syncSession: vi.fn(),
       runtimeModels: vi.fn(async () => []),
       viewerChanged: vi.fn(),
-      viewerFrame: vi.fn(() => true),
+      streamFrame: vi.fn(() => true),
       gridNamed: vi.fn(),
       gridModelsChanged: vi.fn(),
       dshInstallStatus: vi.fn(),
@@ -137,12 +150,13 @@ describe('the core API services stand on', () => {
       fork: vi.fn(async () => ({ ok: true as const, agentId: 'fork' })),
       create: vi.fn(async () => ({ ok: true as const, agentId: 'made' })),
       dsh: vi.fn(() => null),
+      facts: session => agentFacts(session, session.agentId === 'live'),
       windows: vi.fn(),
       daemon: { command: 'harness', port: 18473, machineId: () => 'machine-1', autonomousEnv: 'prod' },
       observerKey: OBSERVER_KEY_OFF,
       tabKey: TAB_KEY_OFF,
       tabRelay: TAB_RELAY_OFF,
-      connectorVault: CONNECTOR_VAULT_OFF,
+      connectorSync: CONNECTOR_SYNC_OFF,
       observer: vi.fn(() => true),
       turns: { send: vi.fn(), stop: vi.fn(), recent: vi.fn(async () => []), asks: vi.fn(async () => []), deliver: vi.fn(), cancelDelivery: vi.fn(() => true), onDelivery: vi.fn(() => () => {}) },
       questions: { answer: vi.fn(), answerReviewed: vi.fn(async () => true) },
@@ -151,66 +165,272 @@ describe('the core API services stand on', () => {
       signedIn: vi.fn(() => true),
       environment: vi.fn(() => 'prod'),
       machines: vi.fn(async () => ({ status: 200, body: {} })),
-      sendLocal: vi.fn(),
-      sendToWindow: vi.fn(() => true),
       hasWindow: vi.fn(() => true),
       devicesChanged: vi.fn(),
       dialWatching: vi.fn(),
-      wifi: WIFI_OFF,
       lastTurn: vi.fn(async () => null),
       turnCard: vi.fn(),
       turnSummary: vi.fn(),
       log: vi.fn(),
     })
 
-  it.each(['credential', 'null', 'absent'] as const)('keeps %s launch custody out of every service agent read', (kind) => {
-    const override = { networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic-agent-view-canary' }
-    const live = row('live'), stopped = row('stopped'), cloud = row('cloud')
-    for (const session of [live, stopped, cloud]) {
+  const capture = (deps: CoreApiDeps) => collectSessionRead(createCoreApi(deps).agents.readSessions)
+
+  it('preserves explicit membership through the in-process API', async () => {
+    const deps = coreDeps(), shown = { ...row('shown'), active: false, registeredAt: 1, lastHookAt: 0, transcriptPath: null },
+      hidden = { ...shown, agentId: 'hidden', sessionId: '' }
+    deps.registry.list = () => [shown, hidden]
+    deps.registry.byAgent = id => id === 'shown' ? shown : hidden
+    deps.registry.advertisedRows = () => [shown][Symbol.iterator]()
+    deps.turns.running = () => false
+    deps.facts = session => ({ displayName: session.agentId, terminalAvailable: session === shown, parts: {} })
+    const core = createCoreApi(deps)
+    expect((await collectSessionRead(core.agents.readSessions, 'advertised')).registered.map(row => row.session.agentId)).toEqual(['shown'])
+    expect((await collectSessionRead(core.agents.readSessions, 'registered')).registered.map(row => row.session.agentId)).toEqual(['shown', 'hidden'])
+  })
+
+  it.each(['membership', 'aggregate bytes'])('captures complete valid %s beyond the former whole-reply limit', async kind => {
+    const rows = Array.from({ length: kind === 'membership' ? 4097 : 1600 }, (_, i) => ({
+      ...row(`a-${i}`), active: true, registeredAt: 1, lastHookAt: 0, transcriptPath: null,
+      dsh: kind === 'aggregate bytes' && (i === 8 || i === 9) ? 'p'.repeat(1_600_000) : null,
+    }))
+    const byId = new Map(rows.map(row => [row.agentId, row]))
+    const deps = coreDeps()
+    deps.registry.list = () => rows; deps.registry.byAgent = id => byId.get(id)
+    deps.turns.running = () => false
+    deps.facts = session => ({ displayName: session.agentId, terminalAvailable: true, parts: parts.read(session.agentId) })
+    const core = createCoreApi(deps)
+    const parts = createFrameParts({ core, epoch: () => 'run', hosts: { fixture: {
+      services: ['fixture'], heapLimitMiB: 1, rssLimitMiB: 0, frameParts: { fixture: { fields: ['dsh'] } },
+    } } })
+    const publisher = parts.scope('fixture', core)
+    if (kind === 'aggregate bytes') for (const i of [8, 9]) {
+      publisher.agents.publishFrame!({ ...rows[i], frameEpoch: 'run' }, { dsh: rows[i].dsh })
+      expect(parts.read(rows[i].agentId).dsh).toBe(rows[i].dsh)
+    }
+    expect((await collectSessionRead(core.agents.readSessions)).registered).toHaveLength(rows.length)
+  })
+
+  it('captures complete lean current session facts with parts last and no launch authority or retained service trees', async () => {
+    const live = { ...row('live'), active: true, registeredAt: 1, lastHookAt: 2, transcriptPath: '/history/session',
+      firstTask: 'PRIVATE', dsh: 'retained', gridLaunch: storedGridFixture({ networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'PRIVATE' }), launch: { state: 'held', service: 'engine', detail: 'wait', nativeToken: 'PRIVATE' } } as RegisteredSession
+    const hidden = { ...live, agentId: 'hidden', sessionId: '', launch: undefined, dsh: undefined }
+    const deps = coreDeps(), order: string[] = []
+    deps.registry.list = () => [live, hidden]
+    deps.registry.byAgent = id => id === 'live' ? live : hidden
+    const parts = { dsh: 'published', ignored: { secret: 'PRIVATE' } }
+    deps.runtimeProfile = session => { order.push(`profile ${session.agentId}`); parts.dsh = session.agentId; return 'selected' }
+    deps.turns.running = id => { order.push(`running ${id}`); return id === live.sessionId }
+    deps.facts = session => { order.push(`facts ${session.agentId}`); return { displayName: session.agentId, terminalAvailable: session === live, parts } }
+    deps.serviceRead = { ids: () => ['cloud'][Symbol.iterator](), row: () => ({ ...live, agentId: 'cloud', displayName: 'Cloud name', runtimeProfile: 'cloud-profile' } as unknown as ServiceSessionRow) }
+    const pending = capture(deps)
+    parts.dsh = 'after-await'; live.launch = { state: 'ready' }
+    const captured = await pending
+    expect(order).toEqual(['profile live', 'running s-live', 'facts live', 'profile hidden', 'running ', 'facts hidden'])
+    expect(captured.registered).toHaveLength(2)
+    expect(captured.registered[0]).toMatchObject({ session: { transcriptPath: '/history/session', launch: { state: 'ready' } },
+      facts: { displayName: 'live', terminalAvailable: true, parts: { dsh: 'live' } }, selectedModel: 'selected', turnRunning: true })
+    expect(captured.registered[1]).toMatchObject({ facts: { terminalAvailable: false }, turnRunning: false })
+    expect(captured.registered[1].session).not.toHaveProperty('launch')
+    expect(captured.registered[1].session).not.toHaveProperty('dsh')
+    expect(captured.cloud).toEqual([{ agentId: 'cloud', sessionId: 's-live', engine: 'claude', registeredAt: 1,
+      transcriptPath: '/history/session', lastHookAt: 2, displayName: 'Cloud name', selectedModel: 'cloud-profile' }])
+    expect(JSON.stringify(captured)).not.toContain('PRIVATE')
+    expect(deps.stoppedAgents.list).not.toHaveBeenCalled()
+    // Optional source fields keep their exact absence and fallback meaning, without inventing full rows.
+    deps.serviceRead = undefined; deps.facts = session => ({ displayName: session.agentId, terminalAvailable: true, parts: { dsh: null } })
+    for (const launch of [{ state: 'starting' }, { state: 'ready' }, { state: 'failed', error: 'FAILED' },
+      { state: 'failed', error: 'FAILED', detail: 'detail' }] as const) {
+      live.launch = launch
+      expect((await capture(deps)).registered[0].session.launch).toEqual(launch)
+    }
+    deps.serviceRead = { ids: () => ['cloud'][Symbol.iterator](), row: () => live as unknown as ServiceSessionRow }
+    expect((await capture(deps)).cloud[0]).toMatchObject({ displayName: '', selectedModel: null })
+  })
+
+  it.each(['replaced', 'removed', 'unavailable'] as const)('refuses a session whose final facts provider makes it %s before detachment', async change => {
+    const original = { ...row('live'), registeredAt: 1, lastHookAt: 0, transcriptPath: null, active: true }
+    let current: RegisteredSession | undefined = original
+    const deps = coreDeps()
+    deps.registry.list = () => [original]; deps.registry.byAgent = () => current
+    deps.turns.running = () => false
+    deps.facts = () => {
+      if (change === 'unavailable') return null as unknown as ReturnType<NonNullable<CoreApiDeps['facts']>>
+      current = change === 'removed' ? undefined : { ...original, cwd: '/replacement' }
+      return { displayName: 'old name', terminalAvailable: true, parts: { dsh: 'old/package' } }
+    }
+    await expect(capture(deps)).rejects.toThrow('SESSION_READ_UNAVAILABLE')
+    expect(deps.log).toHaveBeenCalledExactlyOnceWith('[sessions] SESSION_READ_UNAVAILABLE')
+  })
+
+  it('refuses unavailable authority and bounds complete captures before copying rows or reading later providers', async () => {
+    const live = { ...row('live'), registeredAt: 1, lastHookAt: 0, transcriptPath: null, active: true }
+    const deps = coreDeps()
+    deps.registry.list = () => [live]; deps.registry.byAgent = () => live
+    deps.turns.running = () => false
+    await expect(capture({ ...deps, facts: undefined })).rejects.toThrow('SESSION_READ_UNAVAILABLE')
+    await expect(capture({ ...deps, turns: { ...deps.turns, running: undefined } })).rejects.toThrow('SESSION_READ_UNAVAILABLE')
+    deps.runtimeProfile = () => { deps.registry.byAgent = () => undefined; return null }
+    await expect(capture(deps)).rejects.toThrow('SESSION_READ_UNAVAILABLE')
+    deps.registry.byAgent = () => live; deps.runtimeProfile = () => null
+    const facts = vi.fn(() => ({ displayName: 'Live', terminalAvailable: true, parts: {} }))
+    deps.facts = facts
+    deps.registry.rows = function* () { for (let i = 0; i < SESSION_READ_MEMBERS_BYTES / 48 + 1; i++) yield { ...live, agentId: `member-${i}` } }
+    await expect(capture(deps)).rejects.toThrow('SESSION_READ_TOO_LARGE')
+    expect(facts).not.toHaveBeenCalled()
+    deps.registry.rows = () => [live][Symbol.iterator]()
+    deps.machine.name = () => 'x'.repeat(SESSION_READ_HEADER_BYTES)
+    await expect(capture(deps)).rejects.toThrow('SESSION_READ_TOO_LARGE')
+    expect(facts).not.toHaveBeenCalled()
+    deps.machine.name = () => 'Desk'
+    deps.facts = () => ({ displayName: 'Live', terminalAvailable: true, parts: { dsh: 'x'.repeat(RECORD_READ_BYTES) } })
+    await expect(capture(deps)).rejects.toThrow('SESSION_READ_TOO_LARGE')
+    expect(deps.log).toHaveBeenCalledWith('[sessions] SESSION_READ_TOO_LARGE')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await expect(readSessions({ ...deps, log: undefined }, (_record, settled) => { settled(true); return true })).rejects.toThrow('SESSION_READ_TOO_LARGE')
+    expect(warn).toHaveBeenCalledWith('[sessions] SESSION_READ_TOO_LARGE'); warn.mockRestore()
+    await expect(collectSessionRead(processCoreApi('/data', 'fixture').agents.readSessions)).rejects.toThrow('SESSION_READ_UNAVAILABLE')
+  })
+
+  it('captures current registered facts for app and component callers without widening shown replies', async () => {
+    const live = { ...row('live'), active: true, registeredAt: 1, lastHookAt: 1, boundAt: 0,
+      transcriptPath: null, defaultName: 'Before attachment', runtimes: [], primaryRuntimeKey: '' }
+    let current: RegisteredSession | undefined = live
+    const publication = { dsh: 'published/id', dshName: 'Published name', viewerUrl: null, viewerName: null, verdict: null }
+    const deps = coreDeps()
+    deps.registry.list = () => current ? [current] : []
+    deps.registry.byAgent = id => id === 'live' ? current : undefined
+    deps.registry.terminalAvailable = () => false
+    deps.facts = session => agentFacts(session, deps.registry.terminalAvailable(session.agentId), publication)
+    deps.runtimeProfile = () => 'runtime-v1:kept'
+    const core = createCoreApi(deps), shown = core.agents.live()[0]
+    const frame = await agentFrame(live, { selectedModel: 'runtime-v1:kept', terminalAvailable: false, parts: () => publication })
+    expect(core.agents.facts({ ...shown, defaultName: 'stale caller name' })).toEqual({
+      displayName: frame.name, terminalAvailable: frame.terminal.available, parts: publication,
+    })
+    expect(createCoreApi({ ...deps, facts: undefined }).agents.facts(shown)).toBeNull()
+    expect(frame).toMatchObject({ name: 'Before attachment', launch: { state: 'ready' }, dsh: 'published/id', dshName: 'Published name' })
+    expect(Object.hasOwn(shown, 'launch')).toBe(false)
+    expect(shownAgents(core)).toEqual({ agents: [{ ...shown, displayName: frame.name,
+      terminalAvailable: false, selectedModel: 'runtime-v1:kept', dshContext: null }] })
+    live.dsh = 'old/id'
+    expect(shownAgents(core)).toMatchObject({ agents: [{ dshContext: {
+      id: 'published/id', name: 'Published name', viewerUrl: null, viewerName: null, verdict: null,
+    } }] })
+    current = undefined
+    expect(core.agents.facts(shown)).toBeNull()
+    expect(processCoreApi('/data', 'fixture', { live: () => [shown] }).agents.facts(shown)).toBeNull()
+    expect(shownAgents(processCoreApi('/data', 'fixture', { live: () => [shown] }))).toEqual({ error: 'SESSION_FACTS_UNAVAILABLE' })
+  })
+
+  it('keeps app facts in their original await phases and rejects a newer run\'s publication', async () => {
+    const live = { ...row('live'), active: true, registeredAt: 1, lastHookAt: 1, boundAt: 0,
+      transcriptPath: null, defaultName: 'Before read', runtimes: [], primaryRuntimeKey: '' }
+    let available = false, epoch = 'first'
+    const deps = coreDeps()
+    deps.registry.list = () => [live]
+    deps.registry.byAgent = id => id === 'live' ? live : undefined
+    deps.registry.terminalAvailable = () => available
+    deps.facts = session => agentFacts(session, deps.registry.terminalAvailable(session.agentId), parts.read(session.agentId))
+    const core = createCoreApi(deps)
+    const parts = createFrameParts({ core, epoch: () => epoch, hosts: { fixture: {
+      services: ['fixture'], heapLimitMiB: 1, rssLimitMiB: 0,
+      frameParts: { fixture: { fields: ['dsh', 'dshName'] } },
+    } } })
+    const publisher = parts.scope('fixture', core)
+    publisher.agents.publishFrame!({ ...live, frameEpoch: epoch }, { dsh: 'first/id', dshName: 'First' })
+    let release!: (value: number) => void
+    const reading = vi.spyOn(transcriptActivity, 'transcriptActivityAt').mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    try {
+      const pending = agentFrame(live, { selectedModel: 'caller-selected', terminalAvailable: available, parts: parts.forFrame(live) })
+      expect(reading).toHaveBeenCalledOnce()
+      live.defaultName = 'After read'; available = true; epoch = 'replacement'
+      publisher.agents.publishFrame!({ ...live, frameEpoch: epoch }, { dsh: 'replacement/id', dshName: 'Replacement' })
+      release(1)
+      expect(await pending).toMatchObject({ name: 'After read', terminal: { available: false },
+        selectedModel: 'caller-selected', dsh: null, dshName: null })
+      expect(core.agents.facts(live)).toEqual({ displayName: 'After read', terminalAvailable: true,
+        parts: { dsh: 'replacement/id', dshName: 'Replacement' } })
+      const changedDuringFormat = await agentFrame(live, { selectedModel: 'caller-selected', terminalAvailable: available,
+        parts: parts.forFrame(live), waitingFor: () => { epoch = 'third'; return null } })
+      expect(changedDuringFormat).toMatchObject({ dsh: null, dshName: null })
+    } finally { reading.mockRestore() }
+  })
+
+  it('keeps every registered row and its raw launch state separate from app defaults and terminal membership', async () => {
+    const registered: RegisteredSession[] = [
+      { ...row('unbound'), sessionId: '', active: true },
+      { ...row('starting'), active: true, launch: { state: 'starting' as const } },
+      { ...row('ready'), active: true, launch: { state: 'ready' as const } },
+      { ...row('failed'), active: true, launch: { state: 'failed' as const, error: 'ENGINE_DID_NOT_START', detail: 'See terminal.' } },
+      { ...row('inactive'), active: false },
+    ].map(session => ({ ...session, registeredAt: 1, transcriptPath: null, runtimes: [], primaryRuntimeKey: '' }))
+    const deps = coreDeps()
+    deps.registry.list = () => registered
+    deps.registry.byAgent = id => registered.find(session => session.agentId === id)
+    deps.registry.terminalAvailable = id => id === 'ready'
+    deps.registry.advertised = () => registered.filter(session => deps.registry.terminalAvailable(session.agentId))
+    deps.facts = session => agentFacts(session, deps.registry.terminalAvailable(session.agentId))
+    const core = createCoreApi(deps)
+    const shown = shownAgents(core).agents as Array<Record<string, unknown>>
+    expect(shown.map(session => session.agentId)).toEqual(registered.map(session => session.agentId))
+    expect(core.agents.advertised().map(session => session.agentId)).toEqual(['ready'])
+    expect(shown.map(session => session.terminalAvailable)).toEqual([false, false, true, false, false])
+    for (const [index, session] of registered.entries()) {
+      const facts = core.agents.facts(session)!
+      const frame = await agentFrame(session, { selectedModel: null, terminalAvailable: facts.terminalAvailable })
+      expect(shown[index]).toEqual({ ...session, displayName: frame.name, terminalAvailable: frame.terminal.available,
+        selectedModel: null, dshContext: null })
+      expect(frame.launch).toEqual(session.launch ?? { state: 'ready' })
+      expect(frame.status).toBe(session.active ? 'active' : 'offline')
+      expect(Object.hasOwn(shown[index], 'launch')).toBe(Object.hasOwn(session, 'launch'))
+    }
+  })
+
+  it.each(['credential', 'null', 'absent'] as const)('keeps %s launch custody out of every service agent read', async (kind) => {
+    const override = storedGridFixture({ networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic-agent-view-canary' })
+    const live = row('live'), stopped = row('stopped')
+    for (const session of [live, stopped]) {
       if (kind === 'credential') session.gridLaunch = override
       else if (kind === 'null') session.gridLaunch = null
     }
-    const before = structuredClone([live, stopped, cloud])
+    const before = structuredClone([live, stopped])
     const deps = coreDeps()
     deps.registry.list = () => [live]
     deps.registry.advertised = () => [live]
     deps.registry.byAgent = id => id === live.agentId ? live : undefined
     deps.registry.resolve = id => id === live.sessionId ? live : undefined
-    deps.stoppedAgents.list = () => [stopped]
-    const core = createCoreApi({ ...deps, cloudRows: () => [cloud] })
-    const views = [...core.agents.all(), ...core.agents.live(), ...core.agents.advertised(),
-      core.agents.byAgent('live')!, core.agents.resolve('s-live')!, ...core.agents.cloud!()]
-    expect(views.map(session => session.agentId)).toEqual(['live', 'stopped', 'live', 'live', 'live', 'live', 'cloud'])
+    deps.stoppedAgents.list = async () => [stopped]
+    const core = createCoreApi(deps)
+    const views = [...await core.agents.all(), ...core.agents.live(), ...core.agents.advertised(),
+      core.agents.byAgent('live')!, core.agents.resolve('s-live')!]
+    expect(views.map(session => session.agentId)).toEqual(['live', 'stopped', 'live', 'live', 'live', 'live'])
     for (const session of views) {
       expect(Object.hasOwn(session, 'gridLaunch')).toBe(false)
       expect(session).toEqual(row(session.agentId))
-      expect([live, stopped, cloud].includes(session)).toBe(false)
+      expect([live, stopped].includes(session)).toBe(false)
     }
-    expect([live, stopped, cloud]).toEqual(before)
+    expect([live, stopped]).toEqual(before)
     if (kind === 'credential') expect(live.gridLaunch).toBe(override)
     // Even a view taken before a key is assigned must not become a secret-bearing alias later.
-    for (const session of [live, stopped, cloud]) session.gridLaunch = override
-    expect(JSON.stringify(views)).not.toContain(override.apiKey)
+    for (const session of [live, stopped]) session.gridLaunch = override
+    expect(JSON.stringify(views)).not.toContain(override.credential.binding)
     expect(views.every(session => !Object.hasOwn(session, 'gridLaunch'))).toBe(true)
     expect(core.agents.byAgent('missing')).toBeUndefined()
     expect(core.agents.resolve('missing')).toBeUndefined()
   })
 
   it('sends metadata without launch credentials through every agent-list service dispatch', async () => {
-    const override = { networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic-agent-dispatch-canary' }
+    const override = storedGridFixture({ networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic-agent-dispatch-canary' })
     const live: RegisteredSession = { ...row('live'), dsh: 'fixture', browser: true, gridLaunch: override }
     const stopped = { ...row('stopped'), gridLaunch: override }
     const deps = coreDeps()
     deps.registry.list = () => [live]
     deps.registry.advertised = () => [live]
-    deps.stoppedAgents.list = () => [stopped]
+    deps.stoppedAgents.list = async () => [stopped]
     const core = createCoreApi(deps)
     const replies = await Promise.all(['agents', 'live', 'advertised'].map(query => answerAgentQuery(core, query)))
     replies.push(shownAgents(core))
-    const devices = createDevicesLink({ core, notify: () => true, call: async () => ({}), state: () => ({
-      desk: [], foreground: false, swarms: null, unread: [], focus: { voice: null, form: null }, engines: [], commanders: false,
-    }) })
-    replies.push(await devices.answer('view', {}))
     const workspaces = createWorkspacesLink(core, frame => { replies.push(frame.payload ?? {}); return true }, async () => ({}))
     workspaces.port.nameBranches()
     const browserEvents: unknown[] = []
@@ -232,7 +452,7 @@ describe('the core API services stand on', () => {
     }
     const sent = JSON.stringify([replies, browserEvents])
     expect(sent).not.toContain('gridLaunch')
-    expect(sent).not.toContain(override.apiKey)
+    expect(sent).not.toContain(override.credential.binding)
     expect(live.gridLaunch).toBe(override)
     expect(stopped.gridLaunch).toBe(override)
   })
@@ -244,17 +464,17 @@ describe('the core API services stand on', () => {
     const conversations = { ...CONVERSATIONS_OFF }
     expect(createCoreApi({ ...deps, conversations }).conversations).toBe(conversations)
     // The cloud agents' doors, only from a core that offers them.
-    expect(core.cloud).toBeUndefined()
-    const cloud = { publish: vi.fn(), ask: vi.fn(), unask: vi.fn() }
-    expect(createCoreApi({ ...deps, cloud }).cloud).toBe(cloud)
-    expect(core.agents.cloud).toBeUndefined()
-    const rows = [{ agentId: 'cloud_1' }] as RegisteredSession[]
-    expect(createCoreApi({ ...deps, cloudRows: () => rows }).agents.cloud!()).toEqual(rows)
+    expect(core.owners).toBeUndefined()
+    const owners = emptyOwnerCore()
+    expect(createCoreApi({ ...deps, owners }).owners).toBe(owners)
+    expect(core.agents.serviceSessions).toBeUndefined()
+    const rows = [{ agentId: 'cloud_1' }] as ServiceSessionRow[]
+    expect(createCoreApi({ ...deps, serviceRows: () => rows }).agents.serviceSessions!()).toEqual(rows)
     expect(core.dataDir).toBe('/data')
     expect(await core.terminals.open({ argv: ['/bin/zsh'], cwd: '/work' })).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })
     const terminals = { ...TERMINALS_OFF, open: vi.fn(async () => ({ ok: true as const, agentId: 'shell' })), watch: TERMINALS_OFF.watch }
     expect(createCoreApi({ ...deps, terminals }).terminals).toBe(terminals)
-    expect(core.agents.all().map((s) => s.agentId)).toEqual(['live', 'stopped'])
+    expect((await core.agents.all()).map((s) => s.agentId)).toEqual(['live', 'stopped'])
     expect(core.agents.live().map((s) => s.agentId)).toEqual(['live'])
     expect(core.agents.displayName).toBe(projectDisplayName)
     expect(core.transcripts.databaseHistory).toBe(deps.databaseHistory)
@@ -267,13 +487,9 @@ describe('the core API services stand on', () => {
     expect(core.agents.runtimeModels).toBe(deps.runtimeModels)
     expect(core.clients.viewerChanged).toBe(deps.viewerChanged)
     // A viewer stream's frames reach a client; nothing else a viewers process names does.
-    expect(core.clients.viewerFrame('c1', 'viewer_data', { streamId: 's' })).toBe(true)
-    expect(deps.viewerFrame).toHaveBeenCalledWith('c1', 'viewer_data', { streamId: 's' })
-    expect(core.clients.viewerFrame('c1', 'agent_synced', {})).toBe(false)
-    expect(deps.viewerFrame).toHaveBeenCalledTimes(1)
-    // A core that names no browser streams offers a service none.
-    expect(core.clients.browserFrame).toBeUndefined()
-    expect(core.clients.browserBytes).toBeUndefined()
+    expect(core.clients.streamFrame('c1', 'viewer_data', { streamId: 's' })).toBe(true)
+    expect(deps.streamFrame).toHaveBeenCalledWith('c1', 'viewer_data', { streamId: 's' })
+    expect(core.clients.streamBytes).toBeUndefined()
     expect(core.clients.dshInstallStatus).toBe(deps.dshInstallStatus)
     expect(core.agents.advertised().map((s) => s.agentId)).toEqual(['live'])
     expect(core.clients.gridNamed).toBe(deps.gridNamed)
@@ -402,39 +618,17 @@ describe('the core API services stand on', () => {
     expect(createCoreApi(coreDeps()).count).toBeUndefined()
   })
 
-  // A verified machine share is `owner` too, and the browser holds its person's logins.
-  it('passes a browser stream\'s answers and bytes on, and nothing else the agent browser names', () => {
-    const browserFrame = vi.fn(() => true)
-    const browserBytes = vi.fn(() => true)
-    const core = createCoreApi({ ...coreDeps(), browserFrame, browserBytes })
-    expect(core.clients.browserFrame?.('c1', 'agent_browser_open_result', { requestId: 'r-1' })).toBe(true)
-    expect(core.clients.browserFrame?.('c1', 'agent_browser_close', { streamId: 's' })).toBe(true)
-    expect(browserFrame.mock.calls).toEqual([['c1', 'agent_browser_open_result', { requestId: 'r-1' }], ['c1', 'agent_browser_close', { streamId: 's' }]])
-    // A frame of another kind, a terminal's or a viewer's, is never the agent browser's to send a window.
-    for (const type of ['terminal_output', 'viewer_data', 'agent_synced', 'agent_browser_open']) expect(core.clients.browserFrame?.('c1', type, {}), type).toBe(false)
-    expect(browserFrame).toHaveBeenCalledTimes(2)
-    expect(core.clients.browserBytes).toBe(browserBytes)
+  it('exposes no default stream sender without a service-scoped adapter', () => {
+    const { streamFrame: _unused, ...deps } = coreDeps()
+    const core = createCoreApi(deps)
+    expect(core.clients.streamFrame('c1', 'viewer_data', {})).toBe(false)
+    expect(core.clients.streamFrame('c1', 'agent_browser_open_result', {})).toBe(false)
+    expect(core.clients.streamBytes).toBeUndefined()
   })
 
-  it('opens an agent\'s browser for this computer and the owner\'s own apps only, never a plain owner or a guest', () => {
-    expect(AGENT_BROWSER_REQUESTS).toEqual(['agent_browser_available', 'agent_browser_setup', 'agent_browser_retry',
-      'agent_browser_state', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test',
-      'agent_browser_start', 'agent_browser_stop', 'agent_browser_run', 'agent_browser_window'])
-    expect(mayOpenBrowser({ local: true, owner: true })).toBe(true)
-    expect(mayOpenBrowser({ local: false, owner: true, accountOwner: true })).toBe(true)
-    expect(mayOpenBrowser({ local: false, owner: true })).toBe(false)
-    expect(mayOpenBrowser({ local: false, owner: true, accountOwner: true, guest: 'kim@acme.io' })).toBe(false)
-    expect(mayOpenBrowser({ local: true, owner: false, guest: 'kim@acme.io' })).toBe(false)
-  })
-
-  it('tells the agent browser nothing while it is off, and its frames carry no browser', () => {
-    // Asserted member by member, not as one object, so a member added later still has to answer one of these.
-    const { stream, streamInput, ...notices } = AGENT_BROWSER_FALLBACKS
-    // Nobody took a viewer's frame: the core refuses the open at once, as when the service never started, and ends a
-    // stream whose viewer's bytes reached nobody (core/browserStreams.ts).
-    expect(stream).toBe(false)
-    expect(streamInput).toBe(false)
-    for (const [member, fallback] of Object.entries(notices)) expect(fallback, member).toBeUndefined()
+  it('passes an explicitly scoped stream byte sender through', () => {
+    const streamBytes = vi.fn(() => true)
+    expect(createCoreApi({ ...coreDeps(), streamBytes }).clients.streamBytes).toBe(streamBytes)
   })
 
   it('tells the agent cleanup nothing while it is off: every harness is left open, as before it, and none whose told lines it could not erase is deleted', () => {
@@ -443,11 +637,37 @@ describe('the core API services stand on', () => {
     expect(readFallback(forgetTold)).toEqual({ deferred: true, value: false })
   })
 
+  it.each(['processing', 'tool', 'done', 'summary', 'error'])('fences session-addressed recaps %s at the current registry binding', (kind) => {
+    let current: RegisteredSession | undefined = { ...row('a'), sessionId: 's' }
+    const turnCard = vi.fn(), registry = { byAgent: vi.fn(() => current) }
+    const core = createCoreApi({ registry, turnCard } as unknown as CoreApiDeps)
+    const card = { type: 'commander_event' as const, agentId: 'a', dbSessionId: 's', payload: { kind, text: 'old' } }
+    core.clients.turnCard(card)
+    expect(turnCard).toHaveBeenCalledExactlyOnceWith(card)
+    current = { ...row('a'), sessionId: 'replacement' }
+    core.clients.turnCard(card)
+    current = undefined
+    core.clients.turnCard(card)
+    expect(turnCard).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses unknown and malformed recaps addresses but keeps an inactive registered session', () => {
+    const turnCard = vi.fn(), registry = { byAgent: (id: string) => id === 'a' ? { agentId: 'a', sessionId: 's', active: false } : undefined }
+    const core = createCoreApi({ registry, turnCard } as unknown as CoreApiDeps)
+    const card = { type: 'commander_event' as const, agentId: 'a', dbSessionId: 's', payload: { kind: 'error' } }
+    for (const patch of [{ agentId: 4 }, { agentId: 'unknown' }, { dbSessionId: 4 }, { dbSessionId: '' }, { dbSessionId: undefined }]) {
+      core.clients.turnCard({ ...card, ...patch } as never)
+    }
+    expect(turnCard).not.toHaveBeenCalled()
+    core.clients.turnCard(card)
+    expect(turnCard).toHaveBeenCalledExactlyOnceWith(card)
+  })
+
   it('lets the recaps send a turn\'s cards and recaps, and nothing else, down those doors', () => {
     const log = vi.fn()
     const turnCard = vi.fn()
     const turnSummary = vi.fn()
-    const core = createCoreApi({ turnCard, turnSummary, log } as unknown as CoreApiDeps)
+    const core = createCoreApi({ turnCard, turnSummary, log, registry: { byAgent: () => ({ agentId: 'a', sessionId: 's' }) } } as unknown as CoreApiDeps)
     const card = { type: 'commander_event' as const, agentId: 'a', dbSessionId: 's', payload: { kind: 'done' } }
     core.clients.turnCard(card)
     core.clients.turnSummary({ type: 'turn_summary', payload: {} })
@@ -477,26 +697,52 @@ describe('the core API services stand on', () => {
     expect(readFallback(RECAPS_FALLBACKS.liveCards)).toEqual({ deferred: true, value: [] })
   })
 
-  it('lets the devices put their own frames in front of the windows, and no other', () => {
-    const deps = coreDeps()
-    const core = createCoreApi(deps)
-    core.clients.sendLocal({ type: 'dial_focus', payload: { agentId: 'a' } })
-    expect(deps.sendLocal).toHaveBeenCalledWith({ type: 'dial_focus', payload: { agentId: 'a' } })
-    expect(core.clients.sendToWindow('window-1', { type: 'dial_form', payload: {} })).toBe(true)
-    expect(deps.sendToWindow).toHaveBeenCalledWith('window-1', { type: 'dial_form', payload: {} })
-    // A devices process speaks as a service: what it may show a person is decided here, frame by frame.
-    core.clients.sendLocal({ type: 'agent_deleted', payload: {} } as unknown as Parameters<typeof core.clients.sendLocal>[0])
-    expect(core.clients.sendToWindow('window-1', { type: 'dial_focus', payload: {} } as unknown as Parameters<typeof core.clients.sendToWindow>[1])).toBe(false)
-    core.clients.sendLocal(null as unknown as Parameters<typeof core.clients.sendLocal>[0])
-    expect(deps.sendLocal).toHaveBeenCalledTimes(1)
-    expect(deps.sendToWindow).toHaveBeenCalledTimes(1)
-    expect(deps.log).toHaveBeenCalledWith('[services] the devices sent a window agent_deleted, which is not theirs to send')
-    expect(deps.log).toHaveBeenCalledWith('[services] the devices sent a window dial_focus, which is not theirs to send')
-    // Said to the console when the core gives no log of its own.
+  it('grants local delivery only for the authenticated service and declared target/type pair', () => {
+    const declarations = SERVICE_HOSTS.devices.windows!, send = vi.fn(() => true), log = vi.fn()
+    const delivery = (kind: string, type: string) => ({ target: kind === 'connection' ? { kind, connId: 'physical-window' } : { kind }, frame: { type, payload: {} } })
+    for (const [service, rights] of Object.entries(declarations)) {
+      for (const [kind, frames] of Object.entries(rights)) for (const type of frames!) {
+        const frame = delivery(kind, type)
+        expect(sendLocalWindow(frame, rights, send, log)).toBe(true)
+        expect(send).toHaveBeenLastCalledWith(frame)
+        expect(createCoreApi(coreDeps()).clients.sendWindow(frame as never)).toBe(false)
+      }
+    }
+    for (const [rights, kind, type] of [
+      [declarations.wifi, 'all', 'device_focus'], [declarations.wifi, 'connection', 'device_prepare_open'],
+      [declarations.devices, 'first', 'device_focus'], [declarations.devices, 'all', 'device_focus'],
+      [declarations.devices, 'all', 'dial_form'], [declarations.devices, 'connection', 'dial_focus'],
+      [declarations.wifi, 'first', 'agent_deleted'], [undefined, 'first', 'device_focus'],
+      [{ first: undefined }, 'first', 'device_focus'],
+    ] as const) expect(sendLocalWindow(delivery(kind, type), rights, send, log)).toBe(false)
+    expect(log.mock.calls.every(([line]) => line === '[services] WINDOW_FRAME_REFUSED')).toBe(true)
+  })
+
+  it('refuses malformed local delivery without forwarding content or trusting prototype keys', () => {
+    const rights = SERVICE_HOSTS.devices.windows!.wifi, send = vi.fn(() => true), log = vi.fn()
+    const valid = { target: { kind: 'first' }, frame: { type: 'device_focus', payload: {} } }
+    const bad = [undefined, null, [], new Date(), {}, { target: valid.target }, { ...valid, frame: { type: 'device_focus' } }, { ...valid, target: null }, { ...valid, target: [] },
+      { ...valid, frame: null }, { ...valid, frame: [] }, { ...valid, frame: { ...valid.frame, payload: null } },
+      { ...valid, frame: { ...valid.frame, payload: [] } }, { ...valid, frame: { ...valid.frame, payload: new Date() } },
+      { ...valid, target: { kind: 'constructor' } }, { ...valid, target: {} },
+      { ...valid, target: { kind: 'first', connId: 'chosen' } }, { ...valid, frame: { payload: {} } },
+      { ...valid, frame: { type: 3, payload: {} } }, { ...valid, target: Object.create({ kind: 'first' }) },
+      { ...valid, frame: Object.create(valid.frame) }]
+    for (const frame of bad) expect(sendLocalWindow(frame, rights, send, log)).toBe(false)
+    for (const target of [{ kind: 'connection' }, { kind: 'connection', connId: '' }, { kind: 'connection', connId: 1 },
+      { kind: 'connection', connId: 'x'.repeat(257) }, { kind: 'connection', connId: 'w', extra: true }]) {
+      expect(sendLocalWindow({ target, frame: { type: 'dial_form', payload: {} } }, SERVICE_HOSTS.devices.windows!.devices, send, log)).toBe(false)
+    }
+    expect(send).not.toHaveBeenCalled()
+    const plain = Object.assign(Object.create(null), valid)
+    plain.target = Object.assign(Object.create(null), valid.target)
+    plain.frame = { ...valid.frame, payload: Object.create(null) }
+    expect(sendLocalWindow(plain, rights, send, log)).toBe(true)
+    send.mockReturnValueOnce(false)
+    expect(sendLocalWindow(valid, rights, send, log)).toBe(false)
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    createCoreApi({ ...deps, log: undefined }).clients.sendLocal({ type: 'nothing' } as unknown as Parameters<typeof core.clients.sendLocal>[0])
-    expect(warn).toHaveBeenCalledWith('[services] the devices sent a window nothing, which is not theirs to send')
-    warn.mockRestore()
+    try { expect(sendLocalWindow(null, rights, send)).toBe(false); expect(warn).toHaveBeenCalledWith('[services] WINDOW_FRAME_REFUSED') }
+    finally { warn.mockRestore() }
   })
 
   // Hachi 5a (OPENHARNES-15): `harness goal done` on Hachi's home tells every window of the account, here and away.
@@ -522,11 +768,10 @@ describe('the core API services stand on', () => {
 
   it('answers ⌘K, when the devices fail, with no agent picked and nothing sent, saying why', async () => {
     const reason = 'the devices service is unavailable'
-    expect(await (readFallback(DEVICES_FALLBACKS.routeTask).value)).toMatchObject({ agentId: '', reason, candidates: [] })
-    expect(readFallback(DEVICES_FALLBACKS.routeSend)).toEqual({ deferred: true, value: { ok: false, machine: '', reason } })
-    // The Wi-Fi device finds no desk to walk; the dial and the window bridges hear nothing.
-    expect(readFallback(DEVICES_FALLBACKS.stepFocus).value).toBe('no_agents')
-    for (const member of ['card', 'desk', 'swarms', 'unread', 'appFocus', 'seen', 'settings', 'windowFocus', 'windowReply', 'windowGone', 'scroll', 'engines', 'commanders'] as const) {
+    expect(SERVICE_WS_FRAMES.find(route => route.frame === 'route_task')?.unanswered).toMatchObject({ agentId: '', reason, candidates: [] })
+    expect(SERVICE_WS_FRAMES.find(route => route.frame === 'route_send')?.unanswered).toEqual({ ok: false, machine: '', reason })
+    expect(DEVICES_FALLBACKS).not.toHaveProperty('stepFocus')
+    for (const member of ['card', 'desk', 'swarms', 'unread', 'appFocus', 'seen', 'settings', 'windowFocus', 'windowReply', 'windowGone', 'engines', 'commanders'] as const) {
       expect(DEVICES_FALLBACKS[member], member).toBeUndefined()
     }
     expect(readFallback(DEVICES_FALLBACKS.stop)).toEqual({ deferred: true, value: undefined })
@@ -542,28 +787,12 @@ describe('the core API services stand on', () => {
   })
 
   it('answers, when the Wi-Fi device\'s service is off, nothing to its devices', () => {
-    for (const member of ['request', 'resume', 'appFocus', 'stop'] as const) {
+    for (const member of ['resume', 'appFocus', 'stop'] as const) {
       expect(readFallback(WIFI_FALLBACKS[member]), member).toEqual({ deferred: true, value: undefined })
     }
-    for (const member of ['session', 'dropped', 'revoked', 'card', 'turnStarted', 'turnEnded', 'stream', 'transcript', 'delivery',
-      'dispatched', 'inputStatus', 'agentGone', 'revealed'] as const) {
+    for (const member of ['delivery', 'input', 'disconnected', 'revealed'] as const) {
       expect(WIFI_FALLBACKS[member], member).toBeUndefined()
     }
-  })
-
-  it('gives a service that is not the Wi-Fi device\'s doors that list, send, make and move nothing', async () => {
-    expect(await WIFI_OFF.view()).toEqual({ agents: [], store: [], hasWindow: false })
-    expect(await WIFI_OFF.stop('a')).toBe(false)
-    expect(await WIFI_OFF.answer('a', 'r', {})).toBe(false)
-    expect(await WIFI_OFF.create('p', 'claude', '/w')).toEqual({ ok: false, error: 'UNSUPPORTED' })
-    expect(await WIFI_OFF.stepFocus('next')).toBe('no_app')
-    expect(WIFI_OFF.scroll('down', 0, 0)).toBe(false)
-    expect(WIFI_OFF.focusApp('a', 0, 'r')).toBe(false)
-    await expect(WIFI_OFF.submit('a', 't', 'd')).resolves.toBeUndefined()
-    for (const call of [() => WIFI_OFF.cancel('d'), () => WIFI_OFF.started('a', 't'),
-      () => WIFI_OFF.reveal('o', 'a'), () => WIFI_OFF.send('c', 'i', 't', {}), () => WIFI_OFF.hello('c', null), () => WIFI_OFF.joined(), () => WIFI_OFF.ready(),
-      () => WIFI_OFF.unpaired('i'), () => WIFI_OFF.focus('r'), () => WIFI_OFF.transcripts('a', 0), () => WIFI_OFF.watching([]),
-      () => WIFI_OFF.streams([])]) expect(call()).toBeUndefined()
   })
 
   it('falls back, when Agent Messages fails, to writing none of its deliveries', () => {
@@ -571,13 +800,41 @@ describe('the core API services stand on', () => {
   })
 
   it('falls back, when cloud agents fail, to refusing each call with a reason a person reads', () => {
-    for (const fallback of Object.values(CLOUD_FALLBACKS)) expect(readFallback(fallback)).toEqual({ deferred: true, value: CLOUD_DOWN })
-    expect(CLOUD_DOWN.detail).toContain('Cloud agents are not running here')
+    for (const member of ['create', 'rename', 'stopHarness'] as const) expect(readFallback(OWNER_FALLBACKS[member])).toEqual({ deferred: true, value: CLOUD_REPLY_DOWN })
+    expect(readFallback(OWNER_FALLBACKS.deliver)).toEqual({ deferred: true, value: CLOUD_DOWN })
+    expect(readFallback(OWNER_FALLBACKS.answer)).toEqual({ deferred: true, value: CLOUD_ANSWER_DOWN })
+    expect(CLOUD_DOWN.detail).toContain('Agents are not running here')
+  })
+
+  it('refuses uploads while paste is unavailable and still accepts cancellation, clipboard release and stop', async () => {
+    const upload = { generation: 'g', connection: 'c', streamId: 's' }
+    const unavailable = { error: 'PASTE_UNAVAILABLE' }
+    expect(await PASTE_OFF.begin({ ...upload, filename: 'file.txt', totalBytes: 3 })).toEqual(unavailable)
+    expect(await PASTE_OFF.chunk({ ...upload, seq: 0 }, Buffer.from('abc'))).toEqual(unavailable)
+    expect(await PASTE_OFF.clipboard({ ...upload, artifact: { name: 'image.png', version: 'fixture' } }))
+      .toEqual({ state: 'unavailable', reason: 'PASTE_UNAVAILABLE' })
+    expect(PASTE_OFF.releaseClipboard(upload.generation)).toBeUndefined()
+    expect(PASTE_OFF.cancel(upload.generation)).toBeUndefined()
+    expect(PASTE_OFF.cancel(null)).toBeUndefined()
+    expect(await PASTE_OFF.stop()).toBeUndefined()
+    for (const fallback of [PASTE_FALLBACKS.begin, PASTE_FALLBACKS.chunk]) {
+      expect(readFallback(fallback)).toEqual({ deferred: true, value: unavailable })
+    }
+    expect(readFallback(PASTE_FALLBACKS.cancel)).toEqual({ deferred: false, value: undefined })
+    expect(readFallback(PASTE_FALLBACKS.stop)).toEqual({ deferred: false, value: undefined })
+    expect(readFallback(PASTE_FALLBACKS.releaseClipboard)).toEqual({ deferred: false, value: undefined })
+    expect(readFallback(PASTE_FALLBACKS.clipboard)).toEqual({ deferred: true, value: { state: 'unavailable', reason: 'PASTE_UNAVAILABLE' } })
   })
 
   it('starts with every port empty: a service fills its own when it starts', () => {
-    expect(emptyPorts()).toEqual({ usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, connectors: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, sharedMachines: null, agentBrowser: null })
+    expect(emptyPorts()).toEqual({ usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, paste: null, connectors: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, sharedMachines: null })
     expect(emptyPorts()).not.toBe(emptyPorts())
+  })
+
+  it('refuses package descriptions while Store is absent instead of inventing package facts', async () => {
+    const ports = emptyPorts()
+    await expect((ports.store ?? STORE_OFF).dshDescribe({ dsh: 'test/draw', engine: 'claude' }))
+      .rejects.toMatchObject({ name: 'ServiceUnavailableError', service: 'store', message: 'the store service is unavailable' })
   })
 
   it('answers models\' fallbacks while it is off: no set-up and no target, no note and no prewarm, no name of its own', async () => {
@@ -586,7 +843,8 @@ describe('the core API services stand on', () => {
     const dsh = { dsh: 'test/draw', workspace: '/workspace', engine: 'claude' as const, account: {}, key: 'agent' }
     await expect(STORE_OFF.dshMaterialize(dsh)).rejects.toThrow('the store service is unavailable')
     await expect(STORE_OFF.dshLaunch(dsh)).rejects.toThrow('the store service is unavailable')
-    await expect(MODELS_OFF.ensure()).rejects.toThrow('the models service is unavailable')
+    STORE_OFF.stop()
+    await expect(STORE_OFF.dshContext(dsh)).rejects.toThrow('the store service is unavailable')
     await expect(MODELS_OFF.launchTarget({ model: 'm', grid: 'mine' })).rejects.toThrow('the models service is unavailable')
     await expect(MODELS_OFF.moveTarget({ gridName: null, model: 'm' })).rejects.toThrow('the models service is unavailable')
     await expect(MODELS_OFF.lists()).rejects.toThrow('the models service is unavailable')
@@ -601,7 +859,7 @@ describe('the core API services stand on', () => {
 
   it('waits longer only for answers that take longer, each a request or port call of its service', () => {
     for (const type of Object.keys(LONG_ANSWERS.models!)) {
-      expect([...MODELS_REQUESTS, 'ensure', 'moveTarget', 'launchTarget', 'privateGridName', 'lists']).toContain(type)
+      expect([...MODELS_REQUESTS, 'moveTarget', 'launchTarget', 'privateGridName', 'lists']).toContain(type)
     }
     // A grid command may run half an hour, and is waited for longer than that.
     expect(LONG_ANSWERS.models!.grid_fleet_run).toBeGreaterThan(30 * 60_000)
@@ -654,8 +912,7 @@ describe('the core API services stand on', () => {
     expect(TERMINALS_OFF.watch.onOutput(() => {})()).toBeUndefined()
     await expect(OBSERVER_KEY_OFF.publicKey()).rejects.toThrow('no E2EE identity')
     await expect(OBSERVER_KEY_OFF.signWelcome('m', 's', 'p', 'e')).rejects.toThrow('no E2EE identity')
-    await expect(CONNECTOR_VAULT_OFF.seal('{}')).rejects.toThrow('no E2EE identity')
-    expect(await CONNECTOR_VAULT_OFF.open({})).toBeNull()
+    await expect(CONNECTOR_SYNC_OFF(true)).rejects.toThrow('CONNECTORS_SYNC_UNAVAILABLE')
     expect(SHARING_FALLBACKS).toEqual({ observer: undefined, linkDown: undefined, stop: undefined })
   })
 
@@ -671,8 +928,10 @@ describe('the core API services stand on', () => {
   it('answers for workspaces while they are off: branches keep their names, a create waits, and no worktree is read or removed', async () => {
     const project = { source: 'worktree' as const, gitSource: '/work/app' }
     const target = { cwd: '/work/app-wt' }
+    expect(WORKSPACES_OFF.stop()).toBeUndefined()
     expect(WORKSPACES_OFF.nameBranches()).toBeUndefined()
     expect(WORKSPACES_OFF.ready()).toBe(false)
+    expect(await WORKSPACES_OFF.prepareInstructions('/work/app-wt', 'claude')).toBe(false)
     const folder = { ok: false, error: 'SERVICE_UNAVAILABLE', detail: `Could not make the project folder. ${WORKSPACES_UNAVAILABLE}` }
     expect(await WORKSPACES_OFF.prepareFolder(project, { cloneFallback: true })).toEqual(folder)
     expect(await WORKSPACES_OFF.describeWorkspace(target, [])).toBeNull()
@@ -697,3 +956,4 @@ describe('the core API services stand on', () => {
     expect(LONG_ANSWERS.sharedMachines).toEqual({ guestLaunch: 2 * 60_000, shared_machines: 11 * 60_000 })
   })
 })
+import { storedGridFixture } from '../testing/gridCredentials.js'

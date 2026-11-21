@@ -1,3 +1,6 @@
+import { boundedJsonBytes } from '../lib/boundedJsonBytes.js'
+import { RECORD_READ_ID_BYTES, RECORD_READ_REQUEST_BYTES } from '../lib/recordReadWire.js'
+import type { ClientStreamQuota } from '../lib/clientStreamQueue.js'
 /**
  * The core's end of the services that run in their own processes (harnessd/services.ts starts them).
  *
@@ -14,8 +17,10 @@
  */
 import { performance } from 'node:perf_hooks'
 import { randomUUID, timingSafeEqual } from 'node:crypto'
-import type { Asker } from './api.js'
+import type { Asker, ReadReceiver } from './api.js'
 import { HANDOFF_DEADLINE_MS } from '../lib/handoffAuthority.js'
+import { SERVICE_REQUESTS_MAX } from './serviceHost.js'
+export { SERVICE_REQUESTS_MAX } from './serviceHost.js'
 
 export interface ServiceFrame {
   type: string
@@ -25,9 +30,10 @@ export interface ServiceFrame {
 
 /** Where frames to one service's connection go. */
 export interface ServiceSink {
-  sendFrame(frame: ServiceFrame): boolean
+  sendFrame(frame: ServiceFrame, quota?: ClientStreamQuota): boolean
+  sendFrame(frame: ServiceFrame, quota: { kind: 'records' }, settled: (sent: boolean) => void): boolean
   /** Bytes, for a service that carries terminals (the gateway); false when the socket refused them. */
-  sendBinary?(bytes: Uint8Array): boolean
+  sendBinary?(bytes: Uint8Array, quota?: ClientStreamQuota): boolean
   /** How many bytes are waiting on the socket to the service: a hung one stops reading, and what the core
    *  keeps sending it would pile up in the core's memory. */
   buffered?(): number
@@ -54,6 +60,8 @@ export interface ServiceLinksOptions {
   owned: Readonly<Record<string, readonly string[]>>
   /** The core's answer to a service's question (`service_query`): `query` names it. */
   answer(service: string, query: string, payload: Record<string, unknown>, authority: ServiceQueryAuthority): Record<string, unknown> | Promise<Record<string, unknown>>
+  /** A declared complete read over this connection, paced by the physical sink's settlement. */
+  read?(service: string, query: string, receive: ReadReceiver<unknown, unknown>, signal: AbortSignal, authority: ServiceQueryAuthority): Promise<void>
   /** What a service tells the core without asking (`service_notice`), and its binary frames: the gateway's
    *  remote clients and what they sent. Only the services that send them are given these. */
   notice?(service: string, payload: Record<string, unknown>): void
@@ -67,14 +75,14 @@ export interface ServiceLinksOptions {
    *  `LONG_ANSWERS`): a grid command, grid's set-up, a harness's install. */
   waits?: Readonly<Record<string, Readonly<Record<string, number>>>>
   /** The services whose process runs only once asked for: the experiments (core/api.ts `EXPERIMENTS`), the
-   *  devices (core/devicesWake.ts), models (core/modelsWake.ts) and the viewers and the Store (core/viewersWake.ts). A request for one that has not connected yet
+   *  devices (services/componentStartup.ts), models (services/componentStartup.ts) and the viewers and the Store (services/componentStartup.ts). A request for one that has not connected yet
    *  asks for it (`want`) and waits for it to connect, for its own wait or `startWaitMs`, whichever is shorter,
    *  and then for its answer, for its own wait. One that has connected and is down again is answered as any
    *  service is, at once, unless it is in `waitsThroughRestart`; so is one that did not connect in time, until it does. */
   onDemand?: ReadonlySet<string>
   /** Of those, the ones whose requests also wait for them to come back after they connected and went (a crash, a
    *  kill, the master's restart for an update), as a first start is waited for: asked for again, within the same
-   *  start wait and then the request's own, at most `RESTART_HELD_MAX` at a time for each. The Store's and the engine
+   *  start wait and then the request's own, at most `SERVICE_REQUESTS_MAX` at a time for each. The Store's and the engine
    *  probe's (core/main.ts). */
   waitsThroughRestart?: ReadonlySet<string>
   /** How long a service on demand may take to connect from when it is first asked for (`ON_DEMAND_START_MS`), and, by service,
@@ -91,6 +99,7 @@ export interface ServiceLinksOptions {
 }
 
 interface Connected {
+  read?: { id: string; closed: AbortController }
   sink: ServiceSink
   close: (code: number, reason: string) => void
 }
@@ -124,11 +133,6 @@ export const ON_DEMAND_START_MS = 20_000
  *  the 20 s of the others, which lost that message. */
 export const READER_START_MS = 45_000
 
-/** The most requests held at once for one service to come back after it went (`waitsThroughRestart`); past it,
- *  a request is answered SERVICE_UNAVAILABLE at once, as before. A window asks the Store a few things at a time
- *  (its list, an install): this is many windows' worth, and all a service that does not come back can pile up. */
-export const RESTART_HELD_MAX = 100
-
 /** Who asks when the core itself asks a service (`call`): this machine's owner, on this machine. */
 const THE_CORE: Asker = { local: true, owner: true }
 
@@ -161,7 +165,7 @@ export function createServiceLinks(options: ServiceLinksOptions) {
   const startOver = (service: string): void => {
     starts.delete(service)
     unstarted.add(service)
-    // What waits for a service not connected waits for its start: what was sent to it was answered as it went (`heldFor`).
+    // What waits for a service not connected waits for its start: what was sent to it was answered as it went.
     for (const [id, entry] of waiting) if (entry.service === service) settle(id, entry, unavailable(service))
     for (const up of upWaiters.get(service) ?? []) up(false)
     upWaiters.delete(service)
@@ -172,9 +176,10 @@ export function createServiceLinks(options: ServiceLinksOptions) {
     options.want?.(service)
   }
   const waiting = new Map<string, Waiting>()
+  const waitingCounts = new Map<string, number>()
   /** What a service must hear even if it is down when it is said (a purge's forgetting), delivered on
    *  its next connection; bounded, the oldest dropped first. */
-  const held = new Map<string, ServiceFrame[]>()
+  const held = new Map<string, Map<string | symbol, ServiceFrame>>()
   const unavailable = (service: string) => ({ error: 'SERVICE_UNAVAILABLE', service, retryable: true })
 
   const tokenMatches = (offered: string): boolean => {
@@ -186,16 +191,11 @@ export function createServiceLinks(options: ServiceLinksOptions) {
 
   const settle = (id: string, entry: Waiting, result: Record<string, unknown>): void => {
     waiting.delete(id)
+    const remaining = waitingCounts.get(entry.service)! - 1
+    if (remaining) waitingCounts.set(entry.service, remaining)
+    else waitingCounts.delete(entry.service)
     clearTimer(entry.timer)
     entry.reply(result)
-  }
-
-  /** How many requests wait for `service`, which is down: all of them wait for it to connect, since what was sent to
-   *  it was answered as it went (`closed`, and `accept` for a replaced connection). */
-  const heldFor = (service: string): number => {
-    let count = 0
-    for (const entry of waiting.values()) if (entry.service === service) count++
-    return count
   }
 
   /** How long an answer from `service` to `type` is waited for: its own wait when it has one. */
@@ -207,16 +207,21 @@ export function createServiceLinks(options: ServiceLinksOptions) {
   /** Send `type` to `service`, its answer to `reply`, whatever becomes of the service. An experiment that is
    *  not connected is asked for, and the request goes once it connects: off, it costs nothing until asked. */
   const ask = (service: string, type: string, payload: Record<string, unknown>, asker: Asker, reply: (result: Record<string, unknown>) => void, waitMs?: number): void => {
+    const count = waitingCounts.get(service) ?? 0
+    if (count >= SERVICE_REQUESTS_MAX) {
+      log(`[services] ${service} SERVICE_REQUESTS_FULL`)
+      reply(unavailable(service)); return
+    }
     const link = links.get(service)
     const awaited = !link && !!options.onDemand?.has(service) && !unstarted.has(service)
     // Coming back after it connected: the Store, while the master restarts the viewers' process (a crash, an update's
     // handover), answered the windows' Store list SERVICE_UNAVAILABLE at once (7 times on 2026-10-16, a day of six
     // updates). Held as a first start is, in time and in number: a process that does not come back holds at most
-    // RESTART_HELD_MAX requests for one start wait, and none after it (`unstarted`). The other services are refused at
+    // SERVICE_REQUESTS_MAX requests for one start wait, and none after it (`unstarted`). The other services are refused at
     // once while down, as their callers expect: a viewer's rendered frame, an engine worker's answer, ⌘K's route
     // (e2e/viewersProcess, engineQuestionControl and devicesProcess).
     const starting = awaited && (!seen.has(service)
-      || (!!options.waitsThroughRestart?.has(service) && heldFor(service) < RESTART_HELD_MAX))
+      || !!options.waitsThroughRestart?.has(service))
     if (!link && !starting) { reply(unavailable(service)); return }
     const id = newId()
     const frame: ServiceFrame = { type, payload: { ...payload, requestId: id }, asker }
@@ -227,6 +232,7 @@ export function createServiceLinks(options: ServiceLinksOptions) {
     // Cleared whenever the entry is settled, so it only ever fires for one still waiting.
     entry.timer = setTimer(() => settle(id, entry, unavailable(service)), wait)
     waiting.set(id, entry)
+    waitingCounts.set(service, count + 1)
     if (starting) return
     if (!link!.sink.sendFrame(frame)) settle(id, entry, unavailable(service))
   }
@@ -241,6 +247,7 @@ export function createServiceLinks(options: ServiceLinksOptions) {
       }
       // A service reconnecting (the core restarted, its socket dropped) replaces its old connection.
       const replaced = links.get(service)
+      replaced?.read?.closed.abort()
       replaced?.close(4409, 'replaced by a newer connection')
       for (const [id, entry] of waiting) if (replaced && entry.connection === replaced) settle(id, entry, unavailable(service))
       const connected: Connected = { sink, close }
@@ -254,9 +261,9 @@ export function createServiceLinks(options: ServiceLinksOptions) {
       // Found by QA on a quiet machine: a cold Share received its request before `connected`, so it
       // read agents without a core connection and answered HARNESS_NOT_FOUND. Welcome it first.
       accepted?.()
-      const owed = held.get(service) ?? []
+      const owed = held.get(service)
       held.delete(service)
-      for (const frame of owed) sink.sendFrame(frame)
+      for (const frame of owed?.values() ?? []) sink.sendFrame(frame)
       // What the core tells it as it connects comes before the requests that woke it: the gateway answers
       // nothing until it is told what to start from (core/gatewayLink.ts `connected`).
       options.connected?.(service)
@@ -285,6 +292,58 @@ export function createServiceLinks(options: ServiceLinksOptions) {
           if (links.get(service) !== connected) return
           const payload = frame.payload ?? {}
           if (frame.type === 'service_notice') { options.notice?.(service, payload); return }
+          if (frame.type === 'service_read_cancel') {
+            const reading = connected.read
+            if (reading && reading.id === payload.requestId) {
+              reading.closed.abort()
+              close(1013, 'Read cancelled')
+            }
+            return
+          }
+          if (frame.type === 'service_read') {
+            const requestId = payload.requestId, query = payload.query
+            const validId = (id: unknown): id is string => typeof id === 'string' && !!id && Buffer.byteLength(id) <= RECORD_READ_ID_BYTES
+            if (!validId(requestId) || !validId(query) || boundedJsonBytes(frame, RECORD_READ_REQUEST_BYTES) === null) { close(1008, 'Invalid read'); return }
+            const error = (code: string): void => {
+              let settled = false
+              const done = (sent: boolean): void => {
+                if (settled) return
+                settled = true
+                if (!sent && links.get(service) === connected) close(1013, 'Read unavailable')
+              }
+              try { if (!sink.sendFrame({ type: 'service_read_error', payload: { requestId, code } }, { kind: 'records' }, done)) done(false) }
+              catch { done(false) }
+            }
+            if (connected.read) {
+              if (connected.read.id === requestId) { connected.read.closed.abort(); close(1008, 'Duplicate read') }
+              else error('READ_BUSY')
+              return
+            }
+            if (!options.read) { error('READ_NOT_DECLARED'); return }
+            const reading = { id: requestId, closed: new AbortController() }
+            connected.read = reading
+            const generation = newId()
+            const current = (): boolean => links.get(service) === connected && connected.read === reading && !reading.closed.signal.aborted
+            // The source sends begin before returning. Own the request before calling it, including inline/reentrant sinks.
+            void Promise.resolve().then(() => {
+              if (!current()) throw new Error('READ_UNAVAILABLE')
+              return options.read!(service, query, (record, settled) => {
+                if (!current()) { settled(false); return false }
+                return sink.sendFrame({ type: `service_read_${record.type}`, payload: { ...record.payload, requestId, generation } },
+                  { kind: 'records' }, settled)
+              }, reading.closed.signal, { ...authority, current })
+            }).then(() => {
+              if (current()) connected.read = undefined
+            }, failure => {
+              if (!current()) return
+              const code = failure instanceof Error && failure.message === 'READ_NOT_DECLARED' ? 'READ_NOT_DECLARED'
+                : failure instanceof Error && failure.message === 'SESSION_READ_TOO_LARGE' ? 'SESSION_READ_TOO_LARGE' : 'READ_UNAVAILABLE'
+              if (failure instanceof Error && failure.message === 'SESSION_READ_TIMEOUT') {
+                reading.closed.abort(); close(1013, 'Read timeout')
+              } else { connected.read = undefined; error(code) }
+            })
+            return
+          }
           if (frame.type === 'service_query') {
             const requestId = payload.requestId
             const query = typeof payload.query === 'string' ? payload.query : ''
@@ -303,6 +362,7 @@ export function createServiceLinks(options: ServiceLinksOptions) {
         },
         receiveBinary: (bytes) => { if (links.get(service) === connected) options.binary?.(service, bytes) },
         closed: () => {
+          connected.read?.closed.abort()
           if (links.get(service) !== connected) return
           links.delete(service)
           log(`[services] ${service} disconnected`)
@@ -354,8 +414,8 @@ export function createServiceLinks(options: ServiceLinksOptions) {
     },
 
     /** Bytes for a service that carries terminals; false when it is not connected or would not take them. */
-    notifyBinary(service: string, bytes: Uint8Array): boolean {
-      return links.get(service)?.sink.sendBinary?.(bytes) ?? false
+    notifyBinary(service: string, bytes: Uint8Array, quota?: ClientStreamQuota): boolean {
+      return links.get(service)?.sink.sendBinary?.(bytes, quota) ?? false
     },
 
     /** How many bytes wait on the socket to a service; 0 when it is not connected. */
@@ -364,13 +424,17 @@ export function createServiceLinks(options: ServiceLinksOptions) {
     },
 
     /** Tell a service something it needs to know; false when it is not connected to hear it. With
-     *  `untilDelivered`, what it misses is said again when it next connects. */
-    notify(service: string, frame: ServiceFrame, opts: { untilDelivered?: boolean } = {}): boolean {
-      if (links.get(service)?.sink.sendFrame(frame)) return true
+     *  `untilDelivered`, what it misses is said again when it next connects. `replaceKey` replaces an older
+     *  observation in its original position, so repeated observations cannot evict other agents' notices. */
+    notify(service: string, frame: ServiceFrame, opts: { untilDelivered?: boolean; replaceKey?: string; quota?: ClientStreamQuota } = {}): boolean {
+      if (links.get(service)?.sink.sendFrame(frame, opts.quota)) {
+        if (opts.replaceKey !== undefined) held.get(service)?.delete(opts.replaceKey)
+        return true
+      }
       if (opts.untilDelivered && Object.hasOwn(options.owned, service)) {
-        const owed = held.get(service) ?? []
-        owed.push(frame)
-        if (owed.length > HELD_MAX) owed.shift()
+        const owed = held.get(service) ?? new Map<string | symbol, ServiceFrame>()
+        owed.set(opts.replaceKey ?? Symbol(), frame)
+        if (owed.size > HELD_MAX) owed.delete(owed.keys().next().value!)
         held.set(service, owed)
       }
       return false

@@ -15,9 +15,11 @@ function setup(stopped: RegisteredSession[], live: RegisteredSession[] = [], ext
   const sent: unknown[] = []
   const commander: unknown[] = []
   const stoppedAgents = {
-    list: vi.fn(() => [...records.values()]),
-    get: vi.fn((id: string) => records.get(id) ?? null),
-    supersede: vi.fn((id: string) => { const saved = records.get(id) ?? null; records.delete(id); return saved }),
+    list: vi.fn(async () => [...records.values()]),
+    selectConversations: vi.fn(async (keys: readonly string[]) => [...records.values()].filter(row => keys.includes(conversationKey(row)!))),
+    current: (row: RegisteredSession) => records.get(row.agentId) === row,
+    get: vi.fn(async (id: string) => records.get(id) ?? null),
+    supersede: vi.fn(async (id: string, current: () => boolean = () => true) => { if (!current()) return null; const saved = records.get(id) ?? null; records.delete(id); return saved }),
     resumeReservedAt: vi.fn((id: string) => reservations.get(id) ?? null),
   }
   const owners = createConversationOwners({
@@ -40,97 +42,116 @@ describe('a conversation', () => {
 describe('one owner per conversation, stopped harnesses included', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('a running harness wins: every stopped record of another harness holding it is set aside and announced', () => {
+  it.each(['live loser', 'reservation', 'changed loser', 'changed winner', 'new live winner'] as const)(
+    'retains a selected archive when %s appears before supersession', async change => {
+      const loser = row('old', 'c1'), winner = row('winner', 'c1', { boundAt: 9_000 })
+      const live: RegisteredSession[] = []
+      const { owners, stoppedAgents, records, reservations, sent } = setup([loser, winner], live)
+      stoppedAgents.supersede.mockImplementationOnce(async (_id, current = () => true) => {
+        if (change === 'live loser') live.push(loser)
+        if (change === 'reservation') reservations.set(loser.agentId, 9_999_999)
+        if (change === 'changed loser') records.set(loser.agentId, { ...loser })
+        if (change === 'changed winner') records.set(winner.agentId, { ...winner })
+        if (change === 'new live winner') live.push(row('another', 'c1'))
+        expect(current()).toBe(false)
+        return null
+      })
+      expect(await owners.settle()).toEqual([])
+      expect(records.has(loser.agentId)).toBe(true)
+      expect(sent).toEqual([])
+    })
+
+  it('a running harness wins: every stopped record of another harness holding it is set aside and announced', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const { owners, records, sent, commander } = setup([row('old', 'c1', { boundAt: 9_000 }), row('older', 'c1')], [row('new', 'c1', { boundAt: 1 })])
-    expect(owners.settle().sort()).toEqual(['old', 'older'])
+    expect((await owners.settle()).sort()).toEqual(['old', 'older'])
     expect([...records.keys()]).toEqual([])
     expect(sent).toContainEqual({ type: 'agent_deleted', payload: { agentId: 'old', retained: false, successor: 'new' } })
     expect(commander).toContainEqual({ type: 'agent_deleted', payload: { agentId: 'old' } })
   })
 
-  it.each([true, false])('hands over a Codex conversation across explicit and implicit default profiles, archived explicit=%s', explicit => {
+  it.each([true, false])('hands over a Codex conversation across explicit and implicit default profiles, archived explicit=%s', async explicit => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const saved = row('builder-3', 'conversation', { engine: 'codex', codexHome: explicit ? env.CODEX_HOME : null })
     const running = row('replacement', 'conversation', { engine: 'codex', codexHome: explicit ? null : env.CODEX_HOME })
     const { owners, sent } = setup([saved], [running])
-    expect(owners.settle()).toEqual(['builder-3'])
+    expect((await owners.settle())).toEqual(['builder-3'])
     expect(sent).toContainEqual({ type: 'agent_deleted', payload: { agentId: 'builder-3', retained: false, successor: 'replacement' } })
   })
 
-  it('among stopped records the newest binding wins, then the newest record, then the id', () => {
+  it('among stopped records the newest binding wins, then the newest record, then the id', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const bound = setup([row('a', 'c1', { boundAt: 3000 }), row('b', 'c1', { boundAt: 5000 }), row('c', 'c1', { boundAt: null })])
-    expect(bound.owners.settle().sort()).toEqual(['a', 'c'])
+    expect((await bound.owners.settle()).sort()).toEqual(['a', 'c'])
     expect([...bound.records.keys()]).toEqual(['b'])
     const touched = setup([row('a', 'c1', { touchedAt: 9 }), row('b', 'c1', { touchedAt: 7 })])
-    expect(touched.owners.settle()).toEqual(['b'])
+    expect((await touched.owners.settle())).toEqual(['b'])
     const named = setup([row('b', 'c1'), row('a', 'c1')])
-    expect(named.owners.settle()).toEqual(['b'])
+    expect((await named.owners.settle())).toEqual(['b'])
     // A record bound before its fields existed dates from its registration.
     const legacy = setup([row('a', 'c1', { boundAt: null, registeredAt: 7000 }), row('b', 'c1', { boundAt: 6000 })])
-    expect(legacy.owners.settle()).toEqual(['b'])
+    expect((await legacy.owners.settle())).toEqual(['b'])
   })
 
-  it('leaves alone what has one owner: a lone record, a running harness\'s own record, other conversations', () => {
+  it('leaves alone what has one owner: a lone record, a running harness\'s own record, other conversations', async () => {
     const { owners, records } = setup([row('a', 'c1'), row('b', 'c2'), row('live', 'c3'), row('t', '', { engine: 'terminal' })], [row('live', 'c3'), row('other', 'c4')])
-    expect(owners.settle()).toEqual([])
+    expect((await owners.settle())).toEqual([])
     expect([...records.keys()]).toEqual(['a', 'b', 'live', 't'])
   })
 
-  it('never sets aside a record whose resume is in flight; an older reservation protects nothing', () => {
+  it('never sets aside a record whose resume is in flight; an older reservation protects nothing', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const { owners, records, reservations } = setup([row('a', 'c1', { boundAt: 1 }), row('b', 'c1', { boundAt: 2 }), row('c', 'c1', { boundAt: 3 })])
     reservations.set('a', 10_000_000 - 1000)
     reservations.set('b', 10_000_000 - 600_001)
-    expect(owners.settle()).toEqual(['b'])
+    expect((await owners.settle())).toEqual(['b'])
     expect([...records.keys()].sort()).toEqual(['a', 'c'])
   })
 
-  it('settles only the conversations named, and nothing for none', () => {
+  it('settles only the conversations named, and nothing for none', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const { owners, stoppedAgents } = setup([row('a', 'c1'), row('b', 'c1', { boundAt: 2000 }), row('x', 'c2'), row('y', 'c2', { boundAt: 2000 })])
-    expect(owners.settle([null])).toEqual([])
+    expect((await owners.settle([null]))).toEqual([])
     expect(stoppedAgents.list).not.toHaveBeenCalled()
-    expect(owners.settle([conversationKey(row('?', 'c1'))])).toEqual(['a'])
-    expect(owners.settle()).toEqual(['x'])
+    expect((await owners.settle([conversationKey(row('?', 'c1'))]))).toEqual(['a'])
+    expect((await owners.settle())).toEqual(['x'])
   })
 
-  it('a record that vanished or cannot be moved stays, said, and the others still settle', () => {
+  it('a record that vanished or cannot be moved stays, said, and the others still settle', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { owners, stoppedAgents, sent } = setup([row('gone', 'c1'), row('stuck', 'c1'), row('ok', 'c1'), row('owner', 'c1', { boundAt: 9000 })])
-    stoppedAgents.supersede.mockImplementation((id: string) => {
+    stoppedAgents.supersede.mockImplementation(async (id: string) => {
       if (id === 'gone') return null
       if (id === 'stuck') throw new Error('disk full')
       if (id === 'ok') return row('ok', 'c1')
       throw 'not a record'
     })
-    expect(owners.settle()).toEqual(['ok'])
+    expect(await owners.settle()).toEqual(['ok'])
     expect(warn).toHaveBeenCalledWith('[agent] stuck could not be set aside for owner · Error')
     expect(sent).toHaveLength(1)
   })
 
-  it('a non-Error failure is said by its type', () => {
+  it('a non-Error failure is said by its type', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { owners, stoppedAgents } = setup([row('a', 'c1'), row('b', 'c1', { boundAt: 9000 })])
     stoppedAgents.supersede.mockImplementation(() => { throw 'plain' })
-    expect(owners.settle()).toEqual([])
+    expect(await owners.settle()).toEqual([])
     expect(warn).toHaveBeenCalledWith('[agent] a could not be set aside for b · string')
   })
 
-  it('settles the conversation a stopped record holds as saved, or nothing when there is no record', () => {
+  it('settles the conversation a stopped record holds as saved, or nothing when there is no record', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const { owners } = setup([row('stopped-now', 'c1', { boundAt: 1000 }), row('took-it', 'c1', { boundAt: 5000 })])
-    expect(owners.settleSaved('nobody')).toEqual([])
-    expect(owners.settleSaved('stopped-now')).toEqual(['stopped-now'])
+    expect((await owners.settleSaved('nobody'))).toEqual([])
+    expect((await owners.settleSaved('stopped-now'))).toEqual(['stopped-now'])
   })
 
-  it('reads the clock it is given, or the real one', () => {
+  it('reads the clock it is given, or the real one', async () => {
     const { stoppedAgents } = setup([])
     const owners = createConversationOwners({ stoppedAgents, live: () => [], clients: { send: () => {}, sendCommander: () => {} }, reservationMs: 1 })
-    stoppedAgents.list.mockReturnValue([row('a', 'c1'), row('b', 'c1', { boundAt: 9000 })])
+    stoppedAgents.list.mockResolvedValue([row('a', 'c1'), row('b', 'c1', { boundAt: 9000 })])
     stoppedAgents.resumeReservedAt.mockReturnValue(Date.now() + 60_000)
-    expect(owners.settle()).toEqual([])
+    expect((await owners.settle())).toEqual([])
   })
 })

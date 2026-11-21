@@ -61,7 +61,7 @@ export interface AttachRules {
 export interface AttachSpan {
   /** The file length the walk started from. Anything after it is the tail's to read. */
   end: number
-  /** Where the last turn's work begins: the fold and the device observer start here. */
+  /** Where the last turn's work begins. */
   turnFrom: number
   /** Where the runtime profile's replay starts — at or before `turnFrom`. */
   profileFrom: number
@@ -79,8 +79,6 @@ export interface AttachConsumers {
   /** The turn fold — the seeds, then every record from `turnFrom`. */
   fold(line: string): void
   close?(reason: TranscriptClose['reason']): void
-  /** The device's transcript observer — every record from `turnFrom`. */
-  observe?(line: string): void
 }
 
 export interface AttachRead {
@@ -233,7 +231,7 @@ export async function replayAttachSpan(
   const feed = (consume: (line: string) => void, line: string): void => {
     try { consume(line) } catch (error) { if (failures++ === 0) firstFailure = error }
   }
-  const { profile, fold, observe } = consumers
+  const { profile, fold } = consumers
   const closeThrough = replayCloses(closes, reason => consumers.close!(reason))
   consumers.start?.(span)
   if (span.head !== null) feed(profile, span.head)
@@ -244,7 +242,6 @@ export async function replayAttachSpan(
     feed(profile, line)
     if (offset < span.turnFrom) return
     records++
-    if (observe) feed(observe, line)
     feed(fold, line)
   }, isWholeRecord, undefined, closeFileIdentity(closes))
   if (!read && closes.length) throw boundaryChanged()

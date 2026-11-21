@@ -17,7 +17,7 @@ import { format } from 'node:util'
 import { env } from './config/env.js'
 import { processExecve, probeMaster, runMaster, type Execve, type MasterConfig } from './harnessd/master.js'
 import { baseNode, namedNode } from './harnessd/processName.js'
-import { PROBE_ANSWER, PROBE_TIMEOUT_MS } from './harnessd/reexec.js'
+import { PROBE_ANSWER, PROBE_TIMEOUT_MS, decodeResume, RESUME_ENV } from './harnessd/reexec.js'
 import { dropAgentSessionEnv } from './lib/agentSessionEnv.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
 import { acquireSpawnLock, tryAcquireSpawnLockSync } from './lib/daemonSpawnLock.js'
@@ -32,6 +32,8 @@ import { leanFingerprint, readLeanBundle, releaseLeanClaim, writeLeanBundle, typ
 import { errorKind, ts } from './lib/log.js'
 import { confirm as confirmUpdate, pendingVersion, putNodeBack, restore as restoreUpdate, unjudgedUpdate } from './lib/selfUpdate.js'
 import { keepStaged, ptyUnjudged, rollBackStaged } from './lib/windows/ptyUpdate.js'
+import { SERVICES_EXPLICIT_ENV } from './harnessd/workerContract.js'
+import { createArtifactPreparation } from './harnessd/executionArtifactProcess.js'
 import { enterHome } from './lib/workingFolder.js'
 import { VERSION } from './version.js'
 
@@ -59,26 +61,36 @@ export interface MasterStart {
   bundleFingerprint?: string
   /** What the lean bundle's folder fingerprints to (harnessd/leanBundle.ts `leanFingerprint`). */
   leanFingerprint?: string
+  /** Set by the packaged entries; source CLI development has no installed bundle publication. */
+  packaged?: true
 }
 
 /**
  * The master's environment, with the services kept in the core's process when the core will have no local
  * socket for them to reach it by: its path in this data folder is too long for one (lib/localSocket.ts, 96
- * bytes) or the platform has none. Every service process reaches the core only through that socket, and one
+ * bytes). Every Unix service process reaches the core only through that socket, and one
  * started without it exits at once, again and again until the master parks it: on such a machine search, the
  * viewers, the gateway and every other service answered SERVICE_UNAVAILABLE for good (e2e/noSocket.e2e.ts).
  *
- * Windows has none every time (no service processes there yet), and its log line says only that: the socket's
- * depth, which is the reason elsewhere, read as a fault at every Windows start (task-B3.21 finding F2).
+ * Windows services discover the core's authenticated named pipe on every connection; its lack of a Unix
+ * socket is not an inline mode. An explicit debugging choice still stays as given.
  */
 export function masterEnv(
   given: NodeJS.ProcessEnv, socketPath: string | null, log: (line: string) => void = (line) => console.log(line),
   platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
-  if (socketPath !== null || given.HARNESSD_SERVICES === 'none') return given
-  log(platform === 'win32'
-    ? `${ts()} [harnessd] on Windows the services run in the core's process`
-    : `${ts()} [harnessd] this data folder is too deep for the daemon's local socket — the services run in the core's process`)
+  if (platform === 'win32' && given.HARNESSD_SERVICES === 'none') {
+    if (decodeResume(given[RESUME_ENV]) && given[SERVICES_EXPLICIT_ENV] !== '1') {
+      // Old Windows masters set none themselves. Their handover carries no evidence of a user choice.
+      const next = { ...given }
+      delete next.HARNESSD_SERVICES
+      log(`${ts()} [harnessd] recomputing the Windows service default after a legacy handover`)
+      return next
+    }
+    return given[SERVICES_EXPLICIT_ENV] === '1' ? given : { ...given, [SERVICES_EXPLICIT_ENV]: '1' }
+  }
+  if (platform === 'win32' || socketPath !== null || given.HARNESSD_SERVICES === 'none') return given
+  log(`${ts()} [harnessd] this data folder is too deep for the daemon's local socket — the services run in the core's process`)
   return { ...given, HARNESSD_SERVICES: 'none' }
 }
 
@@ -266,6 +278,12 @@ export function startMaster(
     runtimeDir: env.ADAPTER_RUNTIME_DIR,
     ...windowsConfig,
     ...start,
+    ...(start.packaged ? {
+      executionArtifacts: createArtifactPreparation({ directory: LEAN_DIR,
+        node: namedNode(baseNode(process.execPath), 'harnessd-prepare', env.ADAPTER_RUNTIME_DIR, { log: masterLog }),
+        ...(serviceScriptPath ? { keepMasterEntry: serviceScriptPath } : {}) }),
+      leanArtifacts: platform !== 'win32' && process.env.HARNESSD_LEAN !== 'off' && !existsSync(LEAN_OFF_FILE),
+    } : {}),
     pidFile: PID_FILE,
     writePidFile: (pid) => writePidFile(pid),
     readPidFile: () => { const read = readPidFile(); return read.state === 'pid' ? read.pid : null },
@@ -402,24 +420,23 @@ export const processBundleDeps = (): BundleMasterDeps => ({
 
 /**
  * The master, started on [bundlePath] (cli.js): re-executed on the lean bundle cli.js carries, on the Node
- * `masterNode` names, when this Node can (22.15 and 23.11 on), with the services started from it; run here, from
- * cli.js, with the services still started from the lean bundle when it cannot; and as before, from cli.js alone, when
- * there is no lean bundle to use, `HARNESSD_LEAN=off` or `LEAN_OFF_FILE`. A lean bundle is used only once
+ * `masterNode` names, when this Node can (22.15 and 23.11 on); otherwise the master stays on cli.js. Its children
+ * independently execute an admitted immutable cohort, including when lean execution is disabled. A lean bundle is used only once
  * it has answered the probe a master about to re-execute asks (harnessd/reexec.ts): one that cannot start
  * a master is never handed the daemon.
  */
 export function startMasterFromBundle(bundlePath: string, deps: BundleMasterDeps = processBundleDeps()): void {
   // The lean bundle's claims and its services' identity rely on hard links of the managed node (harnessd/AGENTS.md
-  // rules 7 and 8), which a Windows install does not make: there the master and everything it starts run from cli.js,
-  // on the Node harness-launch.exe started it on, the one `current-node` names.
-  if (deps.platform === 'win32') { deps.start({ scriptPath: bundlePath }); return }
+  // rules 7 and 8), which a Windows install does not make. There the master stays on cli.js and its children use
+  // admitted full snapshots, on the Node harness-launch.exe started it on, the one `current-node` names.
+  if (deps.platform === 'win32') { deps.start({ scriptPath: bundlePath, packaged: true }); return }
   const fromBundle = (reason: string | null, lean?: { path: string; fingerprint: string }): void => {
     if (reason) deps.log(`[harnessd] ${reason}`)
     deps.nodeBack?.(false)
-    deps.start({ scriptPath: bundlePath, ...(lean ? { serviceScriptPath: lean.path, leanFingerprint: lean.fingerprint } : {}) })
+    deps.start({ scriptPath: bundlePath, packaged: true, ...(lean ? { serviceScriptPath: lean.path, leanFingerprint: lean.fingerprint } : {}) })
   }
   if (deps.env.HARNESSD_LEAN === 'off') { fromBundle(null); return }
-  if (deps.leanOff()) { fromBundle(`${LEAN_OFF_FILE} is there: the master, the core and the services run from ${bundlePath}`); return }
+  if (deps.leanOff()) { fromBundle(`${LEAN_OFF_FILE} is there: the master runs from ${bundlePath}`); return }
   let written: { lean: LeanBundle; path: string } | null
   try {
     const lean = readLeanBundle(deps.read(bundlePath))
@@ -428,7 +445,7 @@ export function startMasterFromBundle(bundlePath: string, deps: BundleMasterDeps
     fromBundle(`the lean bundle could not be written out (${errorKind(error)}): the master, the core and the services run from cli.js`)
     return
   }
-  if (!written) { fromBundle(`no lean bundle in ${bundlePath}: the master, the core and the services run from it`); return }
+  if (!written) { fromBundle(`no lean bundle in ${bundlePath}: the master runs from it`); return }
   const { lean, path: leanPath } = written
   const fingerprint = leanFingerprint(lean)
   const leanEnv = { ...deps.env, [BUNDLE_ENV]: bundlePath, [BUNDLE_SHA256_ENV]: lean.bundleSha256, [LEAN_FINGERPRINT_ENV]: fingerprint }
@@ -445,11 +462,11 @@ export function startMasterFromBundle(bundlePath: string, deps: BundleMasterDeps
     probed = deps.probe(node, leanPath, leanEnv)
   }
   if (!probed.ok) {
-    fromBundle(`the lean bundle ${leanPath} did not answer its probe (${probed.detail}): the master, the core and the services run from ${bundlePath}`)
+    fromBundle(`the lean bundle ${leanPath} did not answer its probe (${probed.detail}): the master runs from ${bundlePath}`)
     return
   }
   if (!deps.execve) {
-    fromBundle(`this Node cannot re-execute the master: it runs from ${bundlePath}, the core and the services from ${leanPath}`, { path: leanPath, fingerprint })
+    fromBundle(`this Node cannot re-execute the master: it runs from ${bundlePath}`, { path: leanPath, fingerprint })
     return
   }
   // An exec that fails cannot be caught once it has begun: on Node 22.23 and 24.22.2 a node binary that is not there
@@ -457,7 +474,7 @@ export function startMasterFromBundle(bundlePath: string, deps: BundleMasterDeps
   // (MODULE_NOT_FOUND). The probe ran both a moment ago; they are checked again right before.
   const missing = [node, leanPath].find((path) => !deps.exists(path))
   if (missing) {
-    fromBundle(`${missing} is not there to re-execute on: the master, the core and the services run from ${bundlePath}`)
+    fromBundle(`${missing} is not there to re-execute on: the master runs from ${bundlePath}`)
     return
   }
   try {

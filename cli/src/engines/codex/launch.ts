@@ -128,21 +128,11 @@ export const launch: EngineLaunch = {
     // sends none, and costs the whole `withinMs`.
     resizeRepaint: { clears: '\u001b[3J', ends: '\u001b[?2026l', withinMs: 250 },
   },
-  /**
-   * Codex 0.162.1 has no setting for its attribution's text: its own line ("Generated with [Codex](…)") is an
-   * instruction in its developer message (`<git_attribution>`), on or off by workspace. `developer_instructions` is
-   * the config key that adds to that message, so ours is worded as Codex words its own, and stays beside it.
-   */
-  attribution: {
-    kind: 'instruction',
-    home: { setting: 'CODEX_HOME' }, file: 'config.toml', folder: '.codex/config.toml', key: 'developer_instructions',
-    instruction: 'When you create or update a pull request, its body must include this exact line once, near the end and '
-      + 'after any other attribution line: `{line}` It says another agent started this session in Harness. Do not add it '
-      + 'to commit messages.',
-    args: ['-c', 'developer_instructions={value}'],
+  // Its sandbox cannot reach Harness's local API: keep the existing instruction beside the person's own config.
+  harnessInstructions: {
+    kind: 'config',
+    config: { home: { setting: 'CODEX_HOME' }, file: 'config.toml', folder: '.codex/config.toml',
+      key: 'developer_instructions', args: ['-c', 'developer_instructions={value}'] },
+    also: 'Codex\'s sandbox cannot reach Harness: run each harness command outside it, with escalated permissions.',
   },
-  // Beside the attribution's instruction, in the one `developer_instructions` value (facets/launch.ts).
-  // Its sandbox keeps a command from Harness's socket and port: told only that Harness was not running, an agent ran
-  // `harness start` and asked the person to let it start Harness (a fresh Mac, 2026-10-12; lib/unreachable.ts).
-  harnessInstructions: { kind: 'attribution', also: 'Codex\'s sandbox cannot reach Harness: run each harness command outside it, with escalated permissions.' },
 }

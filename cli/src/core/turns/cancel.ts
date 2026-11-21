@@ -6,7 +6,6 @@
  * Moved verbatim out of `runForeground` (the core boundary, step 10: docs/design/2026-10-03-harnessd.md).
  */
 import type { QuestionWatcher } from '../../lib/questionController.js'
-import type { WifiFeed } from '../wifi.js'
 import type { TurnRecaps } from './recaps.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { SessionInputController } from '../../lib/sessionInput.js'
@@ -18,8 +17,6 @@ export interface CancelDeps {
   beforeCancel?: (session: RegisteredSession) => void
   normalizers: Pick<SessionNormalizers, 'closeTurns'>
   input: Pick<SessionInputController, 'cancel' | 'cancelConfirmed'>
-  /** The Wi-Fi device's service, wherever it runs (core/wifi.ts). */
-  device: () => Pick<WifiFeed, 'turnEnded'> | undefined
   stopHeartbeat: (sessionId: string) => void
   questionWatcher: Pick<QuestionWatcher, 'stop'>
   mirror: Pick<TurnRecaps, 'cancel'>
@@ -27,24 +24,24 @@ export interface CancelDeps {
   /** When each open turn started (the heartbeats'): the WiFi device reads an agent as running by it. */
   turnStartedAt: Map<string, number>
   /** Every window is told how the agent reads now (core/turns/heartbeats.ts). */
-  tell: (sessionId: string) => void
+  tell: (sessionId: string, cause?: 'cancel') => void
 }
 
 export function createCancel({
-  resolve, normalizers, input, device, stopHeartbeat, questionWatcher, mirror, turnActivity, turnStartedAt, tell, beforeCancel,
+  resolve, normalizers, input, stopHeartbeat, questionWatcher, mirror, turnActivity, turnStartedAt, tell, beforeCancel,
 }: CancelDeps) {
   // Web cancel (C-c) interrupts the turn — claude writes no end_turn line to close it, so stop the
   // heartbeat and mark the turn closed here (mirrors the hosted runtime stopping its heartbeat on cancel). We do
   // NOT emit turn_ended: the web clears its own dots on cancel, and a turn_ended would fire a device
   // recap for a killed turn. The next real prompt reopens a fresh turn.
-  const cancelAgent = (id: string, confirmed = false): Promise<boolean> => {
+  const cancelAgent = (id: string, confirmed = false, current: () => boolean = () => true): Promise<boolean> => {
+    if (!current()) return Promise.resolve(false)
     const record = resolve(id)
     const sessionId = record?.sessionId ?? id
     if (record) beforeCancel?.(record)
     // Cursor's sub-agents end with its turn's cancel, in its worker (engines/others/streams.ts).
     normalizers.closeTurns(sessionId)
-    const cancelled = confirmed ? input.cancelConfirmed(record?.agentId ?? sessionId) : (input.cancel(record?.agentId ?? sessionId), Promise.resolve(true))
-    device()?.turnEnded(record?.agentId ?? sessionId, true)
+    const cancelled = confirmed ? input.cancelConfirmed(record?.agentId ?? sessionId, current) : (input.cancel(record?.agentId ?? sessionId), Promise.resolve(true))
     stopHeartbeat(sessionId)
     questionWatcher.stop(sessionId)
     mirror.cancel(sessionId) // close the device's "Working…" tile (bare done, no recap) — a cancel emits no turn_ended
@@ -54,21 +51,30 @@ export function createCancel({
     // end by hook reads idle until its next turn starts (core/turns/turnHooks.ts).
     turnStartedAt.delete(sessionId)
     turnActivity.observe(sessionId, 'turn_ended')
-    tell(sessionId)
-    return cancelled
+    tell(sessionId, 'cancel')
+    return confirmed ? cancelled.then(ok => current() && ok) : cancelled
   }
   return cancelAgent
 }
 
 /**
  * Takes a `cancel` frame: the person interrupted an agent's turn (C-c from the app), the agent named by
- * agent id or session id. Nothing is answered: every window reads the agent as idle once it is.
+ * agent id or session id. An optional request id asks for confirmation; legacy callers receive no reply.
  *
  * Moved verbatim out of the socket's request switch (docs/design/2026-10-03-harnessd.md).
  */
-export function createCancelRequest(cancel: (id: string) => void) {
-  return (payload: Record<string, unknown>): void => {
+export function createCancelRequest(cancel: (id: string, confirmed?: boolean, current?: () => boolean) => void | Promise<boolean>) {
+  return (payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void = () => {},
+    current: () => boolean = () => true): void | Promise<void> => {
     const target = (payload.agentId as string | undefined) || (payload.sessionId as string | undefined)
-    if (target) cancel(target)
+    if (payload.requestId === undefined) { if (target) void cancel(target); return }
+    if (!current()) return
+    if (typeof payload.requestId !== 'string' || !payload.requestId || payload.requestId.length > 128
+      || typeof target !== 'string' || !target || target.length > 200) { reply({ error: 'INVALID_REQUEST' }); return }
+    const answer = (result: Record<string, unknown>): void => { if (current()) reply(result) }
+    try {
+      return Promise.resolve(cancel(target, true, current)).then(ok => answer({ ok: ok === true }),
+        () => answer({ ok: false, error: 'CANCEL_UNAVAILABLE' }))
+    } catch { answer({ ok: false, error: 'CANCEL_UNAVAILABLE' }) }
   }
 }

@@ -1,40 +1,16 @@
-/**
- * The account's connected services, the same on every computer: like the desk (the account's tabs), kept
- * on the backend and announced to every computer when it changes (`connectors_changed`), but sealed for
- * the account's machines so the backend reads none of it (lib/e2ee/connectorVault.ts, through the gateway).
- *
- * Each computer merges what the backend holds into what it holds and writes back what it knew that the
- * backend did not. The merge, per service:
- *   - the token issued last wins (`obtained_at`): a connection made or renewed on any computer reaches the
- *     others, and a stale copy a computer refreshed with too late (its refresh token rotated away, so it
- *     marked it `needs_reconnect`) loses to the one renewed in time;
- *   - between two copies of one token, the one marked `needs_reconnect` wins: that token is dead everywhere;
- *   - a disconnect (`removed.json`) wins over every token issued before it, and loses to one issued after;
- *   - a `dcr` token carries the OAuth client it was issued to (clients.json), since only that client can
- *     renew it.
- * The backend keeps one envelope under a revision: a write over an older revision is refused with the
- * newer envelope, merged into, and written again.
- */
-import { createHash } from 'node:crypto'
-import { statSync } from 'node:fs'
-import { join } from 'node:path'
-import { errorKind } from '../log.js'
-import { sync } from './agents.js'
-import { cleanToken, locked, type Client, type Store, type Token } from './store.js'
+/** Account connector synchronization belongs to the gateway; only metadata leaves that process. */
+import type { Store } from './store.js'
+import { fingerprint, parseSnapshot, type Snapshot } from './vaultSnapshot.js'
+import { VaultStore, VaultStoreError } from './vaultStore.js'
+import { VAULT_PLAINTEXT_BYTES } from './vaultBounds.js'
+export * from './vaultSnapshot.js'
 
-/** What travels, sealed: every connection, its OAuth client, and the disconnects. */
-export interface Snapshot {
-  v: 1
-  connections: Record<string, { token: Token, client?: Client }>
-  removed: Record<string, number>
-}
-
-/** The backend's side (routes/connectorVault.ts), as the connectors service reaches it. */
+/** The backend and local crypto as gateway-owned synchronization reaches them. */
 export interface VaultPort {
   /** The envelope and its revision; null when the backend cannot be read (signed out, offline). */
-  read(): Promise<{ revision: number, envelope: unknown } | null>
+  read(waitMs?: number): Promise<{ revision: number, envelope: unknown } | null>
   /** Written, or refused with the newer envelope; null when the backend cannot be reached. */
-  write(base: number, envelope: Record<string, unknown>): Promise<{ written: boolean, revision: number, envelope: unknown } | null>
+  write(base: number, envelope: Record<string, unknown>, waitMs?: number): Promise<{ written: boolean, revision: number, envelope: unknown } | null>
   seal(plaintext: string): Promise<Record<string, unknown>>
   /** Null when no machine of the account sealed it for this one; `complete`: sealed for every one. */
   open(envelope: unknown): Promise<{ plaintext: string, complete: boolean } | { stranded: true } | null>
@@ -42,20 +18,19 @@ export interface VaultPort {
 
 type Payload = Record<string, unknown>
 
-/** The port over the core's `connector_vault` query (core/connectorsQueries.ts), asked in line or over
- *  the service's link: `read`, `write`, `seal`, `open`. */
-export function vaultPortOf(call: (op: string, payload?: Payload) => Promise<Payload>): VaultPort {
+/** Gateway-local operation adapter; secret-bearing operations never go through CoreApi. */
+export function vaultPortOf(call: (op: string, payload?: Payload, waitMs?: number) => Promise<Payload>): VaultPort {
   const data = (answer: Payload): Payload | null => {
     const body = answer.body as Payload | undefined
     return answer.status === 200 && body?.success === true && body.data && typeof body.data === 'object' ? body.data as Payload : null
   }
   return {
-    read: async () => {
-      const d = data(await call('read'))
+    read: async (waitMs) => {
+      const d = data(await call('read', undefined, waitMs))
       return d && typeof d.revision === 'number' ? { revision: d.revision, envelope: d.envelope ?? null } : null
     },
-    write: async (base, envelope) => {
-      const d = data(await call('write', { base, envelope }))
+    write: async (base, envelope, waitMs) => {
+      const d = data(await call('write', { base, envelope }, waitMs))
       return d && typeof d.revision === 'number' ? { written: d.written === true, revision: d.revision, envelope: d.envelope ?? null } : null
     },
     seal: async (plaintext) => {
@@ -71,199 +46,161 @@ export function vaultPortOf(call: (op: string, payload?: Payload) => Promise<Pay
   }
 }
 
-/** Disconnects older than this are forgotten: every computer that was on has heard of them. */
-const REMOVED_KEPT_S = 180 * 24 * 3600
-const WRITE_ATTEMPTS = 4
-
-const issued = (token: Token | undefined): number => token?.obtained_at ?? 0
-
-/** This computer's connections as a snapshot. */
-export function snapshotOf(vault: Store): Snapshot {
-  const connections: Snapshot['connections'] = {}
-  for (const [code, token] of Object.entries(vault.tokens())) {
-    const client = token.source === 'dcr' && token.issuer ? vault.client(token.issuer) : undefined
-    connections[code] = client ? { token, client } : { token }
-  }
-  return { v: 1, connections, removed: vault.removed() }
-}
-
-/** A snapshot from another computer, with nothing kept that this one would not write itself. */
-export function parseSnapshot(text: string): Snapshot | null {
-  let raw: unknown
-  try { raw = JSON.parse(text) } catch { return null }
-  const data = raw as Partial<Snapshot> | null
-  if (!data || data.v !== 1 || !data.connections || typeof data.connections !== 'object') return null
-  const result: Snapshot = { v: 1, connections: {}, removed: {} }
-  for (const [code, entry] of Object.entries(data.connections)) {
-    try {
-      const token = cleanToken((entry as { token?: unknown }).token)
-      const client = (entry as { client?: unknown }).client
-      result.connections[code] = validClient(client) ? { token, client } : { token }
-    } catch { /* A connection this computer could not use is left out. */ }
-  }
-  for (const [code, at] of Object.entries(data.removed ?? {})) {
-    if (typeof at === 'number' && Number.isInteger(at) && at > 0) result.removed[code] = at
-  }
-  return result
-}
-
-function validClient(value: unknown): value is Client {
-  const c = value as Partial<Client> | null
-  return !!c && typeof c.client_id === 'string' && !!c.client_id && typeof c.token_endpoint === 'string'
-    && /^https:\/\//.test(c.token_endpoint) && typeof c.client_secret === 'string'
-}
-
-/** The two copies of one service's connection: which is the one to keep. */
-function newer(a: Snapshot['connections'][string] | undefined, b: Snapshot['connections'][string] | undefined) {
-  if (!a) return b
-  if (!b) return a
-  if (issued(a.token) !== issued(b.token)) return issued(a.token) > issued(b.token) ? a : b
-  return b.token.needs_reconnect && !a.token.needs_reconnect ? b : a
-}
-
-/** [a] and [b] merged by the rules above. `now` forgets old disconnects. */
-export function merge(a: Snapshot, b: Snapshot, now = Math.floor(Date.now() / 1000)): Snapshot {
-  const result: Snapshot = { v: 1, connections: {}, removed: {} }
-  for (const code of new Set([...Object.keys(a.removed), ...Object.keys(b.removed)])) {
-    const at = Math.max(a.removed[code] ?? 0, b.removed[code] ?? 0)
-    if (at > now - REMOVED_KEPT_S) result.removed[code] = at
-  }
-  for (const code of new Set([...Object.keys(a.connections), ...Object.keys(b.connections)])) {
-    const kept = newer(a.connections[code], b.connections[code])
-    const removedAt = Math.max(a.removed[code] ?? 0, b.removed[code] ?? 0)
-    if (kept && issued(kept.token) > removedAt) result.connections[code] = kept
-  }
-  return result
-}
-
-/** The same snapshot always reads the same: for telling whether anything moved. */
-export function fingerprint(snapshot: Snapshot): string {
-  const sorted = (value: unknown): unknown => Array.isArray(value) ? value.map(sorted)
-    : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(k => [k, sorted((value as Record<string, unknown>)[k])]))
-      : value
-  return createHash('sha256').update(JSON.stringify(sorted(snapshot))).digest('hex')
-}
-
-/** Write [snapshot] as this computer's connections, then give the agents their entries again. */
-export function apply(vault: Store, snapshot: Snapshot, env: NodeJS.ProcessEnv = process.env): void {
-  const same = (a: Snapshot['connections'][string], b: Snapshot['connections'][string] | undefined) =>
-    !!b && fingerprint({ v: 1, connections: { x: a }, removed: {} }) === fingerprint({ v: 1, connections: { x: b }, removed: {} })
-  locked(vault.root, () => {
-    const now = snapshotOf(vault)
-    for (const code of Object.keys(now.connections)) if (!(code in snapshot.connections)) vault.drop(code)
-    for (const [code, entry] of Object.entries(snapshot.connections)) {
-      if (same(entry, now.connections[code])) continue
-      vault.put(code, entry.token)
-      if (entry.client && entry.token.issuer) vault.putClient(entry.token.issuer, entry.client)
-    }
-    vault.putRemoved(snapshot.removed)
-  })
-  try { sync(vault, env) } catch { /* An agent config that cannot be written leaves the connections saved. */ }
-}
-
+export type VaultSyncResult = 'synced' | 'unavailable' | 'stopped' | 'unconfirmed'
 export interface VaultSyncDeps {
-  vault: Store
+  vault: Pick<Store, 'root'>
   port: VaultPort
+  /** Kept for source-compatible callers; profile projection now belongs to edge. */
   env?: NodeJS.ProcessEnv
   log?: (line: string) => void
-  /** How often this computer's own files are looked at, and the backend read again without a notice. */
   pollMs?: number
   refreshMs?: number
+  current?: () => boolean
+  changed?: () => void
+  store?: VaultStore
 }
 
-/**
- * Keeps this computer's connections and the account's in step: read at start, at `connectors_changed`
- * and now and then; written when this computer's own files changed (a connection made, renewed or
- * dropped here, by any process).
- */
+const WRITE_ATTEMPTS = 4
+const EXCHANGE_MS = 15_000
+
+/** One exchange and one coalesced trigger; notices never allocate a waiting callback. */
 export class VaultSync {
   private revision = -1
   private unreadable = false
-  private running: Promise<void> | null = null
+  private running: Promise<VaultSyncResult> | null = null
   private again = false
+  private stopped = false
+  private checking = false
+  private scheduled: NodeJS.Immediate | null = null
   private filesAt = ''
+  private projected = false
   private timers: NodeJS.Timeout[] = []
+  private readonly store: VaultStore
 
-  constructor(private readonly deps: VaultSyncDeps) {}
+  constructor(private readonly deps: VaultSyncDeps) { this.store = deps.store ?? new VaultStore(deps.vault.root) }
 
   start(): void {
+    if (this.stopped || this.timers.length) return
     void this.run()
-    const poll = setInterval(() => { if (this.filesChanged()) void this.run() }, this.deps.pollMs ?? 5_000)
-    const refresh = setInterval(() => void this.run(), this.deps.refreshMs ?? 10 * 60_000)
-    poll.unref(); refresh.unref()
-    this.timers.push(poll, refresh)
+    const poll = setInterval(() => { void this.look() }, this.deps.pollMs ?? 5_000)
+    const refresh = setInterval(() => { void this.run() }, this.deps.refreshMs ?? 10 * 60_000)
+    poll.unref(); refresh.unref(); this.timers.push(poll, refresh)
   }
 
-  stop(): void { for (const timer of this.timers.splice(0)) clearInterval(timer) }
+  stop(): void {
+    this.stopped = true
+    this.again = false
+    if (this.scheduled) { clearImmediate(this.scheduled); this.scheduled = null }
+    for (const timer of this.timers.splice(0)) clearInterval(timer)
+  }
 
-  /** The backend announced a change (`connectors_changed`), or the account's devices changed (a revision
-   *  of null): a machine added or confirmed is one to seal for. */
-  changed(revision: number | null): void { if (revision === null || revision !== this.revision) void this.run() }
+  /** Actual settlement, not a caller deadline, controls when the next account may own the writer. */
+  settled(): Promise<unknown> { return this.running ?? Promise.resolve() }
 
-  /** One exchange at a time; a request during one runs once more after it. */
-  run(): Promise<void> {
+  changed(revision: number | null): void {
+    if (!this.stopped && (revision === null || revision !== this.revision)) void this.run()
+  }
+
+  run(): Promise<VaultSyncResult> {
+    if (!this.current()) return Promise.resolve('stopped')
     if (this.running) { this.again = true; return this.running }
+    if (this.scheduled) { clearImmediate(this.scheduled); this.scheduled = null }
     this.running = (async () => {
+      let result: VaultSyncResult = 'unavailable'
+      let rounds = 0
+      const expires = performance.now() + EXCHANGE_MS
       do {
         this.again = false
-        try { await this.exchange() } catch (error) { this.deps.log?.(`[connectors] could not keep connections in step · ${errorKind(error)}`) }
-      } while (this.again)
-    })().finally(() => { this.running = null })
+        try { result = await this.exchange(expires) }
+        catch (error) {
+          result = error instanceof VaultStoreError && error.code.endsWith('_UNCONFIRMED') ? 'unconfirmed'
+            : !this.current() ? 'stopped' : 'unavailable'
+          if (result !== 'stopped') {
+            const code = error instanceof VaultStoreError ? error.code : result
+            this.say(`[connectors] synchronization ${code}`)
+          }
+        }
+      } while (++rounds < 2 && this.again && this.current() && performance.now() < expires)
+      return result
+    })().finally(() => {
+      this.running = null
+      if (this.again && this.current()) {
+        this.scheduled = setImmediate(() => { this.scheduled = null; void this.run() })
+        this.scheduled.unref()
+      }
+    })
     return this.running
   }
 
-  private filesChanged(): boolean {
-    const at = ['tokens.json', 'clients.json', 'removed.json'].map(name => {
-      try { return String(statSync(join(this.deps.vault.root, name)).mtimeMs) } catch { return '-' }
-    }).join('|')
-    const changed = at !== this.filesAt
-    this.filesAt = at
-    return changed
+  private current(): boolean { return !this.stopped && (this.deps.current?.() ?? true) }
+  private say(line: string): void { try { this.deps.log?.(line) } catch { /* A log sink cannot change synchronization authority. */ } }
+  private changedLocal = (): void => {
+    this.projected = true
+    try { this.deps.changed?.() } catch { /* Edge reconnect/Refresh rereads current local state. */ }
   }
 
-  private async exchange(): Promise<void> {
-    const { vault, port } = this.deps
-    let read = await port.read()
-    if (!read) return
+  private async look(): Promise<void> {
+    if (this.checking || !this.current()) return
+    this.checking = true
+    const before = this.filesAt
+    try {
+      const at = await this.store.version()
+      // An exchange completed while these probes waited; its exact observed versions supersede this check.
+      if (!this.current() || this.filesAt !== before) return
+      if (at !== this.filesAt) void this.run()
+    } catch {
+      if (this.current()) this.say('[connectors] synchronization STORE_UNAVAILABLE')
+    } finally { this.checking = false }
+  }
+
+  private async exchange(expires: number): Promise<VaultSyncResult> {
+    const check = () => { if (!this.current() || performance.now() >= expires) throw new Error('SYNC_UNAVAILABLE') }
+    const left = () => { check(); return Math.max(1, Math.ceil(expires - performance.now())) }
+    const port = this.deps.port
+    let read = await port.read(left())
+    check()
+    if (!read) return 'unavailable'
     for (let attempt = 0; attempt < WRITE_ATTEMPTS; attempt++) {
       let theirs: Snapshot = { v: 1, connections: {}, removed: {} }
       let complete = true
       if (read.envelope) {
         const opened = await port.open(read.envelope)
-        // Not sealed for this computer (yet: a machine nobody has said is theirs, or one added after the
-        // last write): nothing of it is taken, and nothing is written over it, or the connections the
-        // other computers keep there would be lost. A computer that can open it seals it for this one too.
+        check()
         if (!opened) {
-          if (!this.unreadable) this.deps.log?.('[connectors] the account\'s connections are not shared with this computer yet')
-          this.unreadable = true
-          this.revision = read.revision
-          return
+          if (!this.unreadable) this.say('[connectors] account connections are not shared with this computer yet')
+          this.unreadable = true; this.revision = read.revision
+          return 'unavailable'
         }
         this.unreadable = false
         if ('stranded' in opened) {
-          // Sealed only by or for computers the account no longer has: nobody will open it, and waiting for
-          // one left every computer of the account without the others' connections. This one's are written
-          // in its place, for the account's machines as they are now.
-          this.deps.log?.('[connectors] the account\'s saved connections were sealed for computers no longer in the account: replacing them with this computer\'s')
+          this.say('[connectors] connections were sealed for computers no longer in the account; sharing local connections')
           complete = false
         } else {
-          theirs = parseSnapshot(opened.plaintext) ?? theirs
-          complete = opened.complete
+          const parsed = parseSnapshot(opened.plaintext)
+          if (!parsed) return 'unavailable'
+          theirs = parsed; complete = opened.complete
         }
       }
-      const mine = snapshotOf(vault)
-      const merged = merge(mine, theirs)
-      if (fingerprint(merged) !== fingerprint(mine)) apply(vault, merged, this.deps.env)
+      const observed = await this.store.merge(theirs, check, this.changedLocal)
+      const merged = observed.snapshot
+      // A previous gateway may have committed before its notice arrived. Never notify while a disk lock is held.
+      if (!this.projected) this.changedLocal()
+      check()
       this.revision = read.revision
-      this.filesChanged()
       const empty = !Object.keys(merged.connections).length && !Object.keys(merged.removed).length
       const needed = read.envelope ? fingerprint(merged) !== fingerprint(theirs) || !complete : !empty
-      if (!needed) return
-      const written = await port.write(read.revision, await port.seal(JSON.stringify(merged)))
-      if (!written) return
-      if (written.written) { this.revision = written.revision; return }
+      if (!needed) { check(); this.filesAt = observed.version; return 'synced' }
+      const plain = JSON.stringify(merged)
+      // Backend ciphertext is capped at one million base64 characters, including the authentication tag.
+      if (Buffer.byteLength(plain) > VAULT_PLAINTEXT_BYTES) return 'unavailable'
+      const envelope = await port.seal(plain)
+      check()
+      const written = await port.write(read.revision, envelope, left())
+      check()
+      if (!written) return 'unavailable'
+      if (written.written) { this.revision = written.revision; this.filesAt = observed.version; return 'synced' }
       read = { revision: written.revision, envelope: written.envelope }
     }
-    throw new Error('the connections changed on another computer too quickly')
+    return 'unavailable'
   }
 }

@@ -164,6 +164,8 @@ export class FakeBackend {
   deviceLog: { entries: DevLogEntry[]; state: DevLogState; acks: unknown[] } | null = null
   /** Off: a backend from before acknowledgements — their routes answer 404. */
   deviceAcks = true
+  /** Opt-in account vault: ciphertext only, with the real revision-CAS response shape. */
+  connectorVault: { revision: number; envelope: unknown; holdReads: boolean; pendingReads: number } | null = null
   /** Machines shared across accounts, by machine id, and who added one shared with their domain. */
   readonly shares = new Map<string, FakeShare>()
   readonly shareAdds = new Set<string>()
@@ -199,6 +201,27 @@ export class FakeBackend {
       res.setHeader('content-type', 'application/json')
       if (backend.down) { res.statusCode = 503; res.end(json({ success: false, error: { code: 'UNAVAILABLE' } })); return }
       if (!machine) { res.statusCode = 401; res.end(json({ success: false, error: { code: 'UNAUTHORIZED' } })); return }
+      const vault = backend.connectorVault
+      if (vault && req.url === '/api/connector-vault') {
+        if (req.method === 'GET') {
+          if (vault.holdReads) {
+            vault.pendingReads++
+            res.once('close', () => { vault.pendingReads-- })
+          } else res.end(json({ success: true, data: { revision: vault.revision, envelope: vault.envelope } }))
+          return
+        }
+        if (req.method === 'PUT') {
+          let raw = ''
+          req.on('data', chunk => { raw += String(chunk) })
+          req.on('end', () => {
+            const body = JSON.parse(raw) as { base: number; envelope: unknown }
+            const written = body.base === vault.revision
+            if (written) { vault.revision++; vault.envelope = body.envelope }
+            res.end(json({ success: true, data: { written, revision: vault.revision, envelope: vault.envelope } }))
+          })
+          return
+        }
+      }
       if (backend.echo?.test(req.url?.split('?')[0] ?? '')) {
         let raw = ''
         req.on('data', chunk => { raw += String(chunk) })

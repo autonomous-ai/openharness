@@ -76,7 +76,7 @@ jobs:
       - uses: ./.github/actions/cli-e2e-setup
         with:
           node-version: ${{ env.CLI_NODE_VERSION }}
-          packages: tcsh dash
+          packages: tcsh dash xvfb xclip
           real-backend: 'true'
       # The complete file list, before sharding: the summary requires each file exactly once.
       - name: Discover the complete end-to-end inventory
@@ -155,7 +155,7 @@ jobs:
   # and passed, on the same rules as ci.yml's `typecheck-test` for the default suite. Its summary
   # carries each file's duration, which refreshes cli/ci-e2e-durations.json.
   e2e-summary:
-    needs: e2e
+    needs: [e2e, dial-hosts]
     if: ${{ !cancelled() && !inputs.agent_browser_podman && !inputs.dial_hosts }}
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -183,6 +183,10 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 7
+      - name: Require the dial's hosts to pass
+        env:
+          DIAL_HOSTS_RESULT: ${{ needs.dial-hosts.result }}
+        run: test "$DIAL_HOSTS_RESULT" = success
 
   # The agent browser on real Podman: rootless, as the runner's own user, as on a person's Linux
   # machine. The test runs Podman in a store of its own and removes it, whatever happened.

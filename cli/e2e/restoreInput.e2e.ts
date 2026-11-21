@@ -48,10 +48,14 @@ fi
       })
       const outcome = client.next((frame) => frame.agentId === agentId
         && (frame.type === 'turn_ended' || frame.type === 'error'), 30_000, 'the message sent during restore')
+      const waiting = client.next(frame => frame.agentId === agentId
+        && (frame.type === 'message_waiting' || frame.type === 'error'), 15_000, 'restore input to wait safely')
       client.send('message', { agentId, content: 'sent while the restored shell was starting' })
-      await new Promise((resolve) => setTimeout(resolve, 1_000))
+      const observed = await waiting
+      expect(observed, JSON.stringify(observed)).toMatchObject({ type: 'message_waiting' })
       writeFileSync(release, '')
-      expect(await outcome).toMatchObject({ type: 'turn_ended', agentId })
+      const ended = await outcome
+      expect(ended, JSON.stringify(ended)).toMatchObject({ type: 'turn_ended', agentId })
       expect(client.frames.filter((frame) => frame.type === 'turn_started' && frame.agentId === agentId))
         .toEqual([expect.objectContaining({ payload: expect.objectContaining({ userMessage: 'sent while the restored shell was starting' }) })])
     } finally {

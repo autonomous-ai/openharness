@@ -194,10 +194,10 @@ class LocalProcessTests(unittest.TestCase):
         output = self.root / "output"
         output.write_text("")
         event.write_text(json.dumps(dict(pull_request=dict(head=dict(sha=event_head or p["head"]), body=body))))
-        env = dict(os.environ, CI_PLAN=json.dumps(p), CI_SOURCE_SHA=p["head"], GITHUB_EVENT_PATH=str(event),
+        env = dict(os.environ, CI_SOURCE_SHA=p["head"], GITHUB_EVENT_PATH=str(event),
                    GITHUB_EVENT_NAME=p["event"], GITHUB_OUTPUT=str(output))
         result = subprocess.run([sys.executable, str(SCRIPTS / "local-checks.py")], env=env,
-                                cwd=self.root, text=True, capture_output=True, timeout=10)
+                                cwd=self.root, input=json.dumps(p), text=True, capture_output=True, timeout=10)
         return result, output.read_text()
 
     @staticmethod

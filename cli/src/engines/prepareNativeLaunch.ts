@@ -2,7 +2,7 @@ import type { CreationAuthority } from '../lib/agentCreationReceipt.js'
 import type { createNativeInstallations, NativeInstallation } from './kit/nativeInstall.js'
 import { engineName } from '../lib/agentNames.js'
 import { inspectNativeLaunch, type NativeLaunchResult, type NativeLaunchSource } from './nativeLaunch.js'
-import type { AgentEngine } from './types.js'
+import { isTerminalEngine, type AgentEngine } from './types.js'
 
 /** Installation is its own durable effect. It never contains the agent argv or
  * first prompt, and completing it still requires fresh executable evidence. */
@@ -33,6 +33,8 @@ export function createNativeLaunchPreparer({ installations, inspect = inspectNat
     const downloadHold = (): NativeLaunchResult => authority.current()
       ? { ...held(`Downloading ${engineName(engine)}. The harness starts once it is downloaded.`), installing: true } : stale()
     if (!authority.current()) return stale()
+    // A shell needs no engine installation, marker or probe; optional setup cannot hold it.
+    if (isTerminalEngine(engine)) return inspect(engine, source)
     // Read before the look starts, not beside it: a look that began first could see the half-written engine while
     // the marker was there and answer after the marker had gone, and the read beside it, still opening the file,
     // saw no marker either (PR CI, #1394). No marker costs one failed open; a live one, its `ps`.

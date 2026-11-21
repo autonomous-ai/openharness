@@ -1,37 +1,33 @@
-import { LAUNCH_LOCATION_VARIABLES } from '../engines/kit/nativeLocations.js'
 import type { NativeLaunch } from '../engines/nativeLaunch.js'
+import type { TerminalCommand } from './terminalTypes.js'
 import { nativeLaunchGuard } from '../engines/kit/nativeLaunchGuard.js'
 import { nativePaneHold, NATIVE_LAUNCH_MARKER } from './nativePaneHold.js'
-import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, basename, dirname, join } from 'node:path'
 import { baseNode } from '../harnessd/baseNode.js'
 import { env } from '../config/env.js'
-import { harnessPathText } from '../config/harnessHome.js'
 import { launchContract, launchField } from '../engines/launches.js'
 import { startupFunctions, startupNeedsScript, startupRuns } from '../engines/kit/launchStartup.js'
 import { screenArgs, screenEnvPrefix, screenPrelude, screenVariables } from '../engines/kit/launchScreen.js'
 import { isTerminalEngine, PROCESS_ENGINES, type AgentEngine } from '../engines/types.js'
 import { isOpencodeV2 } from '../engines/opencode/contract.js'
 import { OPENCLAW_LAUNCH } from '../engines/openclaw/contract.js'
-import { binaryOnPath, resolveBinaryOnPath } from './binaryOnPath.js'
-import { notStoreAppAlias } from './windows/storeAppAlias.js'
+import { resolveBinaryOnPath } from './binaryOnPath.js'
 import { windowsEngineArgv } from './windows/launch.js'
 import { nativeLaunchConfirmed, windowsHeldPaneArgv, windowsStartupArgs } from './windows/engineStart.js'
 import { defaultWindowsShell } from './windows/shell.js'
 import { engineBin } from './engineBin.js'
 import { launchModelArgs, type LaunchModel } from './launchModel.js'
-import { engineInstallPaths, engineInstallRecipe, npmEnginePrefix, type EngineInstallRecipe } from './engineInstall.js'
+import { engineInstallRecipe } from './engineInstall.js'
 import { engineLabel } from './agentNames.js'
 import { GRID_NO_UPDATE_CHECK_VAR, gridBinaryPath } from './gridBinary.js'
-import { loginShellEnvironment } from './loginShellEnv.js'
 import { managedNodePath } from './nodeRuntime.js'
 import { RAISE_OPEN_FILES_SH } from './openFiles.js'
 import { ENGINE_EXIT_PANE_OPTION } from './engineExitOption.js'
 import { shellSingleQuote } from './shellQuote.js'
-import { browserPrelude } from './browserShim.js'
+import { browserPrelude } from './browserPrelude.js'
 import { currentUserShell } from './userShell.js'
 import { harnessPaneOwner } from './harnessSessionLabel.js'
 import { errorKind } from './log.js'
@@ -283,23 +279,6 @@ export interface LaunchCommandOptions {
    */
   ownerArgs?: readonly string[]
   /**
-   * A shell line to run in the pane BEFORE the engine, from `engineInstall.ts` — the engine is not on
-   * this machine yet and the user agreed to fetch it.
-   *
-   * It runs inside the same interactive shell the engine is about to be exec'd into, which is the
-   * only context where installing helps: `npm`, `node` and `curl` routinely arrive through
-   * `.zshrc`/`.bashrc` (nvm, asdf, vendor installers), and a prefix chosen by the daemon's PATH would
-   * either not find npm or install into a prefix the engine's own shell cannot then see. The second
-   * failure is the dangerous one — it looks like success and leaves the engine still missing.
-   *
-   * Ignored when there is no interactive shell to wrap with: without one there is no launch script to
-   * put it in, and running an installer through a bare `execFile` would use the daemon's PATH, which
-   * is the case above.
-   */
-  installFirst?: string
-  /** Install only when command[0] is absent, checked inside the pane's already-started shell. */
-  installIfMissing?: EngineInstallRecipe
-  /**
    * Environment variables to clear in the pane before the engine starts — the vendor credentials a
    * grid launch must not leave lying around. See `gridConflictingEnvToClear` in `gridLaunch.ts`,
    * which is the only caller and which computes them from what the launch itself sets.
@@ -326,7 +305,7 @@ export interface LaunchCommandOptions {
    * A conversation taken over from the terminal that has it, once its turn ends (`agent_create`
    * `takeOver: 'wait'`): the pane says it is waiting and starts the engine when that process is
    * gone — the daemon stops it when the turn ends. Ctrl-C gives up and leaves it where it was.
-   * Ignored without an interactive shell, like `installFirst`: there is no script to wait in.
+   * Ignored without an interactive shell: there is no script to wait in.
    */
   waitForPid?: { pid: number; name: string }
 }
@@ -563,7 +542,7 @@ function throughPosixShell(shell: InteractiveEngineShell, args: readonly string[
  * that stopped like the rest (`STOP_PROOF_FUNCTIONS`), and so does Linux's bash 5; the bash 3.2 that
  * is macOS's /bin/sh never sees the stop, and the engine would wait, stopped, for good.
  */
-function posixRunner(): string {
+export function posixRunner(): string {
   return existsSync('/bin/dash') ? '/bin/dash' : '/bin/sh'
 }
 
@@ -622,14 +601,17 @@ function sourcedOnce(script: string): string {
  * else would before the sweep an hour on. A launch with no such file (Windows, or no data folder) runs again as it is:
  * on Windows the pane's other launch facts were read from it (`windowsPaneLaunch`'s `held`).
  */
-export function launchAttempts(first: string[], build: () => string[]): (attempt: number) => string[] {
-  let last = first
-  return (attempt) => {
-    const file = attempt === 1 ? null : launchFileOf(last)
-    if (!file) return last
-    try { rmSync(file, { force: true }) } catch { /* the sweep takes it */ }
-    last = build()
-    return last
+export function launchAttempts(first: TerminalCommand, build: () => string[]): (attempt?: number) => string[] {
+  let last = typeof first === 'function' ? undefined : first
+  let calls = 0
+  return (attempt = calls + 1) => {
+    calls = attempt
+    const file = last && attempt !== 1 ? launchFileOf(last) : null
+    if (file) try { rmSync(file, { force: true }) } catch { /* the sweep takes it */ }
+    // Native commands remain deferred until the backend has checked dispatch authority.
+    if (typeof first === 'function') last = first()
+    else if (file) last = build()
+    return last!
   }
 }
 
@@ -696,12 +678,8 @@ export function buildEngineLaunchArgv(
       + unreadableCwdGuard()
       + 'shift\n'
     : ''
-  // The engine is found (or installed first), then run at the script's top level (`engineRunScript`).
-  const engineFound = opts.native ? 'harness_engine_bin=$1\n' : opts.installIfMissing
-    ? installIfMissingScript(opts.installIfMissing, runtimeNode, { engine, messageWaiting: Boolean(opts.firstPrompt) })
-    : opts.installFirst
-      ? installFirstScript(opts.installFirst)
-      : 'harness_engine_bin=$1\n'
+  // Installation settled in engineSetup before this prepared engine receives a pane.
+  const engineFound = 'harness_engine_bin=$1\n'
   const heldCommand = `/bin/sh -c ${shellSingleQuote('trap \'\' INT QUIT TSTP; printf \'%s\\n\' \"$1\"; while :; do sleep 3600; done')} harness-held ${shellSingleQuote('Waiting for native launch preparation to be confirmed.')} ${shellSingleQuote(opts.native?.token ?? '')}`
   // tmux retains pane_start_command across exec. Transition this pane to the
   // inert command so core can recognize its exact token after a crash, using the
@@ -909,7 +887,7 @@ export function engineFallbackPrelude(engine: AgentEngine, shellPath: string, tm
  * Ctrl+Z at that moment is ignored rather than stopping a helper in a function, which zsh would again
  * take for the end of the script.
  */
-const STOP_PROOF_FUNCTIONS = [
+export const STOP_PROOF_FUNCTIONS = [
   'harness_stopped() {',
   '  [ "$harness_status" -gt 128 ] 2>/dev/null || return 1',
   '  harness_signal=$(kill -l "$harness_status" 2>/dev/null) || return 1',
@@ -1074,53 +1052,11 @@ export function harnessNodePrelude(runtimeNode: string = managedNodePath()): str
  * future caller rather than against anything on the wire; it is here because the day that changes is
  * the day nobody re-reads this function.
  */
-function clearEnvPrelude(names: readonly string[] | undefined): string {
+export function clearEnvPrelude(names: readonly string[] | undefined): string {
   const safe = (names ?? []).filter((name) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
   return safe.length ? `unset ${safe.join(' ')}\n` : ''
 }
 
-/**
- * Install, then start the engine — or say why not, and stop.
- *
- * Three things this script gets right, each of which was a way to lose:
- *
- *  * **The engine only on success.** Running the engine after a failed install reproduces the exact
- *    `command not found` this feature exists to replace, with a screenful of npm output above it to
- *    bury the cause.
- *  * **The install line is not interpolated into a command.** It is the vendor's own published line
- *    from `engineInstall.ts` — a constant in our source, never anything a user or a peer supplied —
- *    and it is `eval`ed as the shell line it is written as, because `curl … | bash` is one of them.
- *    Nothing from the wire reaches here; if that ever changes, this is the line that must not.
- *  * **`"$@"` still carries the engine argv positionally**, so engine paths and flags are never
- *    re-parsed by the shell. That property is what the plain `exec "$@"` had and it is preserved.
- *
- * The install runs in a subshell at the script's top level, like the engine, so a Ctrl+Z in the
- * middle of it is resumed rather than ending the pane (`STOP_PROOF_FUNCTIONS`).
- *
- * The banner matters more than it looks. A pane that sits silent for forty seconds of `npm install`
- * reads as a hung agent, and the person's next move is to kill it.
- */
-function installFirstScript(install: string): string {
-  return [
-    `printf '%s\\n' 'harness: installing the engine — this pane becomes the agent when it finishes' 'harness: $ ${install.replace(/'/g, "'\\''")}' ''`,
-    'harness_status=0',
-    `(eval ${JSON.stringify(install)}) || harness_status=$?`,
-    'harness_resume',
-    `if [ "$harness_status" -ne 0 ]; then printf '\\n%s\\n' 'harness: the install failed, so the agent was not started. The command is above; fix it and create the agent again.'; exit 1; fi`,
-    'harness_engine_bin=$1',
-    '',
-  ].join('\n')
-}
-
-/**
- * Make npm recipes work on machines where Harness owns Node instead of installing it system-wide.
- *
- * The verified Node archive provisioned by `harness start` includes npm, but the daemon deliberately
- * does not mutate the user's PATH. A tmux login shell can therefore have neither `node` nor `npm`
- * even though the runtime executing Harness has both. Prefer any npm the user already configured;
- * otherwise prepend the managed runtime's bin directory for this pane only. This is portable across
- * macOS and Linux and avoids an interactive/root package-manager install in an agent launch.
- */
 /** Harness's own Node folders. An npm engine run through them (`npm install -g` without a prefix) lands here. */
 export function npmRuntimeBins(runtimeNode: string = managedNodePath()): string[] {
   return [...new Set([dirname(runtimeNode), dirname(baseNode(process.execPath))])]
@@ -1145,25 +1081,6 @@ export function npmEngineBins(runtimeNode: string = managedNodePath()): string[]
   return [...new Set([...current, ...older])]
 }
 
-function npmRuntimePrelude(recipe: EngineInstallRecipe, runtimeNode: string): string {
-  if (!recipe.executable.npmGlobal) return ''
-  const bins = npmRuntimeBins(runtimeNode)
-    .map(shellSingleQuote)
-    .join(' ')
-  return [
-    'if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then',
-    `  for harness_node_bin in ${bins}; do`,
-    '    if [ -x "$harness_node_bin/node" ] && [ -x "$harness_node_bin/npm" ]; then',
-    '      PATH="$harness_node_bin${PATH:+:$PATH}"',
-    '      export PATH',
-    '      hash -r 2>/dev/null || true',
-    '      break',
-    '    fi',
-    '  done',
-    'fi',
-  ].join('\n')
-}
-
 /**
  * The `grid` this pane's agent gets is the one the daemon resolved — and stays it.
  *
@@ -1171,7 +1088,7 @@ function npmRuntimePrelude(recipe: EngineInstallRecipe, runtimeNode: string): st
  * this pane, by name. A managed grid under `~/.harness/runtime` is invisible to a shell's PATH, and
  * a login file that puts `~/.local/bin` first is ordinary — which is where grid's own installer
  * (uv, on a Mac) leaves a `grid` of some other version. So the prepend is made HERE, after those
- * files have run, the way [npmRuntimePrelude] does for the managed Node — never by a symlink in
+ * files have run, the way engine setup does for the managed Node — never by a symlink in
  * `~/.local/bin`, which would fight the installer for one file. Two versions of `grid` writing one
  * `~/.grid` is the outcome this exists to prevent.
  *
@@ -1240,397 +1157,6 @@ export function noDevtoolsPrelude(places: DevtoolsPlaces = MAC_DEVTOOLS): string
   ].join('\n')
 }
 
-/** Install if needed, then run an exact native argv from an existing interactive prompt.
- * The parent shell keeps its helpers and environment when the agent exits. */
-export function shellAgentArgv(binary: string, args: string[], recipe: EngineInstallRecipe,
-  runtimeNode: string = managedNodePath()): string[] {
-  return ['/bin/sh', '-c', RAISE_OPEN_FILES_SH + STOP_PROOF_FUNCTIONS
-    + installIfMissingScript(recipe, runtimeNode) + 'shift\nexec "$harness_engine_bin" "$@"\n',
-    'harness-shell-agent', binary, ...args]
-}
-
-/**
- * Install-if-missing has to resolve twice: before installing, and again after it returns.
- *
- * A `curl | bash` installer cannot export PATH back into its parent shell. Several supported
- * vendors correctly put their binary under ~/.local/bin and update a profile for the NEXT shell,
- * which previously made this very pane print `command not found` after a successful install. The
- * source-owned candidate paths below bridge that one-shell gap without sourcing arbitrary profile
- * files a second time. npm installs also get their active global prefix as a fallback.
- */
-/**
- * How a pane says it is installing its agent. The installer's own output (the command, npm's notices,
- * "engine is missing") read as an error to the people it was for: the owner, reviewing a fresh-Mac
- * run, "we don't want to show scary text on the terminal" (2026-10-08). So the pane shows three plain
- * lines and a bar that moves with time (installers report no progress), and the installer's output
- * goes to a log under ~/.harness/logs, shown only when the install fails. It runs through Harness's
- * own Node, so where that is missing (an install without the managed runtime) the pane shows the
- * installer as before. Typical times are measured on a fresh Mac (VM, 2026-10-08).
- */
-export interface FriendlyInstall {
-  engine: string
-  /** A first message is waiting to go to the agent once it starts. */
-  messageWaiting: boolean
-}
-
-const TYPICAL_INSTALL_SECONDS: Readonly<Record<string, number>> = { opencode: 10, claude: 12, pi: 12, codex: 20 }
-
-/** The progress shown while the installer's output streams into the log (argv: label, seconds, log, waiting). */
-const INSTALL_PROGRESS_JS = [
-  'const fs=require("fs");const [label,sec,log,waiting]=process.argv.slice(1);const E=Number(sec)*1000;const t0=Date.now();',
-  // not a state file: the installer's log, appended as its output streams
-  'const out=fs.openSync(log,"a");fs.writeSync(out,"\\n--- "+new Date().toISOString()+" installing "+label+"\\n");',
-  // not a state file: the same log
-  'process.stdin.on("data",(d)=>fs.writeSync(out,d));',
-  'const rows=waiting==="1"?3:2;let drawn=false;',
-  'const draw=()=>{const t=Date.now()-t0;const f=Math.min(0.97,Math.max(0.04,1-1/(1+2.4*t/E)));const n=Math.round(f*24);',
-  'const left=Math.round((E-t)/1000);const when=t>3*E?"still working, this can take a while":left>3?"about "+left+" s":"almost there";',
-  'const lines=["Installing "+label+"…  "+when,"█".repeat(n)+"░".repeat(24-n)].concat(waiting==="1"?["Your message goes as soon as it starts."]:[]);',
-  'let text=drawn?"\\x1b["+rows+"F":"";for(const l of lines)text+="\\r\\x1b[2K"+l+"\\n";drawn=true;process.stdout.write(text);};',
-  'draw();const tick=setInterval(draw,500);',
-  'process.stdin.on("end",()=>{clearInterval(tick);fs.closeSync(out);});',
-].join('')
-
-function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string, friendly?: FriendlyInstall, home?: string, downloadEngine = friendly?.engine): string {
-  const install = recipe.command
-  const label = downloadEngine ? (downloadEngine === 'claude' ? 'Claude Code' : engineLabel(downloadEngine)) : ''
-  const seconds = friendly ? (TYPICAL_INSTALL_SECONDS[friendly.engine] ?? 15) : 0
-  const names = recipe.executable.names.map(shellSingleQuote).join(' ')
-  const paths = engineInstallPaths(recipe, home).map(shellSingleQuote).join(' ')
-  const prefix = home ? join(home, '.local') : npmEnginePrefix()
-  // Scope both npm env spellings to the installer subprocess. Do not rewrite .npmrc or install
-  // into a different OS user's shared prefix, and do not tie the engine to a versioned Node folder.
-  // Either way a subshell, run at the top level where a stop is resumed (STOP_PROOF_FUNCTIONS).
-  const run = (line: string) => recipe.executable.npmGlobal
-    ? `(export npm_config_prefix=${shellSingleQuote(prefix)} NPM_CONFIG_PREFIX=${shellSingleQuote(prefix)}; eval ${shellSingleQuote(line)})`
-    : `(eval ${shellSingleQuote(line)})`
-  const installCommand = run(install)
-  // The same line, its output into the log and the progress on the screen. Its status is the
-  // installer's, written by the inner subshell; no file means the subshell itself was ended (Ctrl-C),
-  // which counts as 130 so no fallback follows.
-  const quiet = (line: string) => '( ( ' + run(line) + '; printf %s $? >"$harness_install_rc" ) 2>&1 | '
-    + `${shellSingleQuote(runtimeNode)} -e ${shellSingleQuote(INSTALL_PROGRESS_JS)} ${shellSingleQuote(label)} ${seconds} "$harness_install_log" ${friendly?.messageWaiting ? 1 : 0}`
-    + '; harness_rc="$(cat "$harness_install_rc" 2>/dev/null || echo 130)"; rm -f "$harness_install_rc"; exit "$harness_rc" )'
-  const candidates = [names, paths].filter(Boolean).join(' ')
-  // `curl … | bash` exits 0 when curl itself fails (bash ran an empty script), so the fallback is
-  // decided by whether an executable exists afterwards, not by the first line's status.
-  // Decided first, then run as a top-level command like the first install line: a Ctrl+Z inside a
-  // compound `if` makes zsh drop the rest of it (STOP_PROOF_FUNCTIONS). An install the person ended
-  // with Ctrl-C (130) is not followed by another one.
-  const fallback = recipe.fallback ? [
-    'harness_try_fallback=0',
-    'if [ -z "$harness_engine_bin" ] && [ "$harness_status" -ne 130 ]; then',
-    '  hash -r 2>/dev/null || true',
-    '  if ! harness_find_engine "$1"; then',
-    '    harness_try_fallback=1',
-    '    harness_status=0',
-    `    [ "$harness_quiet" -eq 1 ] || printf '\\n%s\\n' 'harness: that install did not finish; trying the npm package instead' 'harness: $ ${recipe.fallback.replace(/'/g, "'\\''")}' ''`,
-    // The friendly view keeps it in the log, which a failure shows the end of.
-    ...(friendly ? [`    [ "$harness_quiet" -eq 0 ] || printf '%s\\n' 'harness: that install did not finish; trying the npm package instead' >>"$harness_install_log"`] : []),
-    '  fi',
-    'fi',
-    `[ "$harness_try_fallback" -eq 0 ] || [ "$harness_quiet" -eq 1 ] || ${run(recipe.fallback)} || harness_status=$?`,
-    ...(friendly ? [`[ "$harness_try_fallback" -eq 0 ] || [ "$harness_quiet" -eq 0 ] || ${quiet(recipe.fallback)} || harness_status=$?`] : []),
-    'harness_resume',
-  ] : []
-  return [
-    'resolve_engine() {',
-    '  candidate="$1"',
-    '  resolved=""',
-    '  case "$candidate" in',
-    '    */*) resolved="$candidate" ;;',
-    '    *) resolved="$(command -v "$candidate" 2>/dev/null)" || true ;;',
-    '  esac',
-    '  [ -n "$resolved" ] && [ -f "$resolved" ] && [ -x "$resolved" ]',
-    '}',
-    // The first of these that is there becomes `harness_engine_bin`. Loops are fine here: nothing in
-    // them can stop the way the engine can.
-    'harness_find_engine() {',
-    '  harness_engine_bin=',
-    `  for candidate in "$1"${candidates ? ` ${candidates}` : ''}; do`,
-    '    if resolve_engine "$candidate"; then harness_engine_bin="$resolved"; return 0; fi',
-    '  done',
-    ...(recipe.executable.npmGlobal ? [
-      '  npm_prefix="$(npm prefix -g 2>/dev/null)" || true',
-      '  if [ -n "$npm_prefix" ]; then',
-      `    for bin in ${names}; do`,
-      '      if resolve_engine "$npm_prefix/bin/$bin"; then harness_engine_bin="$resolved"; return 0; fi',
-      '    done',
-      '  fi',
-    ] : []),
-    '  return 1',
-    '}',
-    // A previously installed npm launcher also needs Node. Resolve the runtime before executing
-    // it, not just before installing it; fresh users often have no system node on PATH.
-    npmRuntimePrelude(recipe, runtimeNode),
-    // Desktop Harness downloads OpenCode, Codex and Claude Code beside a fresh computer's setup and
-    // names the downloading process in `~/.harness/run/downloading-<engine>`. A pane that opens
-    // meanwhile waits for that download, under the same line and bar, rather than starting a second
-    // install into the folder it is writing (two npm installs into one prefix can break both). A
-    // marker whose process is gone, or is not that download, is ignored. At most ten minutes.
-    // The waiting runs in command substitutions, out of a Ctrl+Z's reach (STOP_PROOF_FUNCTIONS), with
-    // the bar sent to the terminal through standard error. A wait ended early (Ctrl-C, the ten
-    // minutes) while the download still runs ends the pane rather than starting a second install.
-    ...(downloadEngine ? [
-      'harness_wait_download() {',
-      `  harness_dl_pid=$(cat "${harnessPathText('run')}/downloading-$1" 2>/dev/null) || return 0`,
-      "  case \"$harness_dl_pid\" in ''|*[!0-9]*) return 0 ;; esac",
-      '  kill -0 "$harness_dl_pid" 2>/dev/null || return 0',
-      '  ps -p "$harness_dl_pid" -o command= 2>/dev/null | grep -q harness-download || return 0',
-      '  if [ "$harness_quiet" -eq 1 ]; then',
-      '    harness_dl_w=$( ( harness_dl_i=0; while kill -0 "$harness_dl_pid" 2>/dev/null && [ "$harness_dl_i" -lt 1200 ]; do sleep 0.5; harness_dl_i=$((harness_dl_i + 1)); done ) | '
-        + `${shellSingleQuote(runtimeNode)} -e ${shellSingleQuote(INSTALL_PROGRESS_JS)} ${shellSingleQuote(label)} ${seconds} "$harness_install_log" ${friendly?.messageWaiting ? 1 : 0} >&2 ) || :`,
-      '  else',
-      `    printf '%s\\n' ${shellSingleQuote(`harness: ${label} is downloading in the background; waiting for it`)}`,
-      '    harness_dl_i=0; while kill -0 "$harness_dl_pid" 2>/dev/null && [ "$harness_dl_i" -lt 1200 ]; do harness_dl_w=$(sleep 0.5) || :; harness_dl_i=$((harness_dl_i + 1)); done',
-      '  fi',
-      `  if kill -0 "$harness_dl_pid" 2>/dev/null; then printf '\\n%s\\n' ${shellSingleQuote(`${label} is still downloading. Try again in a minute.`)}; exit 1; fi`,
-      '  hash -r 2>/dev/null || true',
-      '}',
-    ] : []),
-    'harness_quiet=0',
-    ...(friendly ? [
-      'harness_install_log="' + harnessPathText('logs') + '/install-' + friendly.engine.replace(/[^a-z0-9-]/g, '') + '.log"',
-      // Beside the log rather than in a temporary folder: nothing machine-specific in the script.
-      'harness_install_rc="' + harnessPathText('logs') + '/install-' + friendly.engine.replace(/[^a-z0-9-]/g, '') + '-$$.rc"',
-      `[ -x ${shellSingleQuote(runtimeNode)} ] && mkdir -p "${harnessPathText('logs')}" 2>/dev/null && harness_quiet=1`,
-    ] : []),
-    ...(downloadEngine ? [`harness_find_engine "$1" || harness_wait_download ${shellSingleQuote(downloadEngine.replace(/[^a-z0-9-]/g, ''))}`] : []),
-    'if ! harness_find_engine "$1"; then',
-    ...(recipe.executable.npmGlobal ? [
-      '  if ! command -v npm >/dev/null 2>&1; then',
-      `    printf '%s\\n' 'harness: npm is unavailable and the managed Node.js/npm runtime could not be used.'`,
-      '    exit 1',
-      '  fi',
-    ] : []),
-    `  [ "$harness_quiet" -eq 1 ] || printf '%s\\n' 'harness: engine is missing — installing it in this terminal' 'harness: $ ${install.replace(/'/g, "'\\''")}' ''`,
-    ...(recipe.executable.npmGlobal ? [`  [ "$harness_quiet" -eq 1 ] || printf '%s\\n' ${shellSingleQuote(`harness: installing for this user in ${npmEnginePrefix()}`)}`] : []),
-    'fi',
-    'harness_status=0',
-    `[ -n "$harness_engine_bin" ] || [ "$harness_quiet" -eq 1 ] || ${installCommand} || harness_status=$?`,
-    ...(friendly ? [`[ -n "$harness_engine_bin" ] || [ "$harness_quiet" -eq 0 ] || ${quiet(install)} || harness_status=$?`] : []),
-    'harness_resume',
-    ...fallback,
-    'if [ -z "$harness_engine_bin" ]; then',
-    ...(friendly ? [
-      `  if [ "$harness_status" -ne 0 ] && [ "$harness_quiet" -eq 1 ]; then printf '\\n%s\\n\\n' ${shellSingleQuote(`${label} could not be installed.`)}; tail -n 12 "$harness_install_log"; printf '\\n%s\\n' "Full details: $harness_install_log"; exit 1; fi`,
-    ] : []),
-    `  if [ "$harness_status" -ne 0 ]; then printf '\\n%s\\n' 'harness: the install failed, so the agent was not started. The command is above; fix it and create the agent again.'; exit 1; fi`,
-    '  hash -r 2>/dev/null || true',
-    ...(friendly ? [
-      `  if [ "$harness_quiet" -eq 1 ] && ! harness_find_engine "$1"; then printf '\\n%s\\n' ${shellSingleQuote(`${label} was installed but could not be started.`)} "Full details: $harness_install_log"; exit 1; fi`,
-    ] : []),
-    `  if ! harness_find_engine "$1"; then printf '\\n%s\\n' 'harness: the install completed, but its executable could not be found. Check the installer output and PATH above.'; exit 1; fi`,
-    'fi',
-    '',
-  ].filter(Boolean).join('\n') + '\n'
-}
-
-/** An installation dependency only. Core must rebuild a launch after this exits;
- * no engine argv or first prompt is carried into the installer. */
-export function buildEngineInstallationArgv(engine: AgentEngine, recipe: EngineInstallRecipe,
-  environment: Record<string, string>, runtimeNode: string = managedNodePath()): string[] {
-  // The installers are POSIX shell lines (`curl … | bash`, npm under a POSIX prelude): there is nothing to run them in.
-  if (process.platform === 'win32') throw new Error(`The POSIX installer of ${engine} does not run on Windows (engines/kit/windowsInstall.ts does).`)
-  const shell = interactiveEngineShell(environment.SHELL) ?? { path: posixRunner(), args: ['-c'], label: 'shell' }
-  if (Object.keys(environment).some(key => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key))) throw new Error('Invalid installation environment name')
-  const locations = Object.entries(environment).map(([key, value]) => `export ${key}=${shellSingleQuote(value)}\n`).join('')
-  // A detached dependency has no foreground terminal job. Keep descendants in
-  // its one process group so a deadline also ends stopped installer children.
-  const body = RAISE_OPEN_FILES_SH + clearEnvPrelude(LAUNCH_LOCATION_VARIABLES.filter(key => !(key in environment))) + locations + 'set +m 2>/dev/null || :\n' + STOP_PROOF_FUNCTIONS
-    + installIfMissingScript(recipe, runtimeNode, undefined, environment.HOME, engine) + 'exit 0\n'
-  return engineShellArgv(shell, [body, 'harness-native-install', engineBin(engine)])
-}
-
-function availabilityScript(recipe: EngineInstallRecipe | undefined): string {
-  const names = recipe?.executable.names.map(shellSingleQuote).join(' ') ?? ''
-  const paths = recipe ? engineInstallPaths(recipe).map(shellSingleQuote).join(' ') : ''
-  const candidates = [names, paths].filter(Boolean).join(' ')
-  return [
-    ...(recipe ? [npmRuntimePrelude(recipe, managedNodePath())] : []),
-    `for candidate in "$@" ${candidates}; do`,
-    '  case "$candidate" in',
-    '    */*) resolved="$candidate" ;;',
-    '    *) resolved="$(command -v "$candidate" 2>/dev/null)" || true ;;',
-    '  esac',
-    '  if [ -n "$resolved" ] && [ -f "$resolved" ] && [ -x "$resolved" ]; then exit 0; fi',
-    'done',
-    ...(recipe?.executable.npmGlobal ? [
-      'npm_prefix="$(npm prefix -g 2>/dev/null)" || true',
-      'if [ -n "$npm_prefix" ]; then',
-      `  for bin in ${names}; do [ -f "$npm_prefix/bin/$bin" ] && [ -x "$npm_prefix/bin/$bin" ] && exit 0; done`,
-      'fi',
-    ] : []),
-    // An ordinary shell/profile failure may also exit 1. Only this value proves the probe ran to completion and found nothing.
-    'exit 42',
-  ].join('\n')
-}
-
-type CommandAvailability = { status: 'available' | 'missing' | 'unverified'; detail?: string }
-/**
- * Does the same interactive shell that launches a new agent resolve this CLI?
- *
- * The fallback is intentionally the daemon PATH: without a usable absolute
- * SHELL there is no safer context to consult and direct launch is used too.
- */
-export function commandAvailableInInteractiveShell(command: string, shell: string | undefined, recipe: EngineInstallRecipe | undefined, detailed: true): Promise<CommandAvailability>
-export function commandAvailableInInteractiveShell(command: string, shell?: string, recipe?: EngineInstallRecipe): Promise<boolean>
-export async function commandAvailableInInteractiveShell(
-  command: string,
-  shell: string | undefined = undefined,
-  recipe: EngineInstallRecipe | undefined = undefined,
-  detailed = false,
-): Promise<boolean | CommandAvailability> {
-  const interactive = interactiveEngineShell(shell)
-  if (!interactive) {
-    // Windows: a Store app's alias passes accessSync but is no engine (lib/windows/storeAppAlias.ts), and a launch looks
-    // past it to install the engine. Counted here, New showed an older Claude desktop app's `claude.exe` as Claude Code
-    // installed, so the install it then got came without the dialog announcing it.
-    const found = binaryOnPath(command, process.env, notStoreAppAlias)
-      || (recipe ? engineInstallPaths(recipe).some((candidate) => binaryOnPath(candidate, process.env, notStoreAppAlias)) : false)
-    return detailed ? { status: found ? 'available' : 'missing' } : found
-  }
-  const [file, ...args] = engineShellArgv(interactive, [availabilityScript(recipe), 'harness-engine-probe', command])
-  const result = await new Promise<CommandAvailability>((resolve) => {
-    execFile(
-      file,
-      args,
-      { timeout: 5_000 },
-      (error) => {
-        if (!error) return resolve({ status: 'available' })
-        if (Number(error.code) === 42) return resolve({ status: 'missing' })
-        if (error.killed) return resolve({ status: 'unverified', detail: 'Interactive shell tool probe timed out after 5 seconds.' })
-        resolve({ status: 'unverified', detail: `Interactive shell tool probe failed (${String(error.code ?? error.signal ?? 'unknown error')}).` })
-      },
-    )
-  })
-  return detailed ? result : result.status === 'available'
-}
-
-/**
- * What `command args…` prints on both streams, and its exit status, run in the interactive shell a new agent launches
- * through, so it finds the Node and PATH the engine will. Windows has no such shell: there it is run as a pane would run
- * [engine] (an npm shim as node on its script, lib/windows/launch.ts), with its console hidden (docs/windows-rules.md).
- * Null when it gave no answer within 5 seconds, or could not be started.
- */
-export async function commandOutputInInteractiveShell(engine: AgentEngine, command: string, args: readonly string[], shell: string | undefined = undefined): Promise<{ code: number; output: string } | null> {
-  const interactive = interactiveEngineShell(shell)
-  let run: string[]
-  try {
-    run = interactive
-      ? engineShellArgv(interactive, ['"$@" 2>&1', 'harness-engine-output', command, ...args])
-      : windowsEngineArgv(engine, [command, ...args])
-  } catch (error) {
-    // A shim Windows will not run (lib/windows/launch.ts): the launch itself says why.
-    console.warn(`[engine] ${engine} ${args.join(' ')} not run · ${errorKind(error)}`)
-    return null
-  }
-  const [file, ...argv] = run
-  return await new Promise((resolve) => {
-    execFile(file, argv, { timeout: 5_000, maxBuffer: 64 * 1024, windowsHide: true }, (error, stdout, stderr) => {
-      const code = !error ? 0 : typeof (error as { code?: unknown }).code === 'number' ? (error as { code: number }).code : null
-      resolve(code === null || error?.killed ? null : { code, output: `${stdout}\n${stderr}` })
-    })
-  })
-}
-
-export type CommandFlagSupport = 'supported' | 'unsupported' | 'unknown'
-
-/**
- * The probe's one "help ran, the flag is not in it" exit. Not 1: that is what a shell exits with
- * for its own failures (the zsh `status` bug was one), and each of them would be a false refusal.
- * Shells fail with 1, 2, 126, 127 or 128+n, never this.
- */
-const FLAG_UNSUPPORTED_EXIT = 64
-
-/**
- * The pairs this probe has seen the engine SUPPORT, each with the engine file it saw (`engineFileStamp`).
- *
- * Every relaunch asks, and a post-reboot restore asks once per agent, so the working case — which
- * is nearly every case — is worth answering from memory instead of spawning `--help` again.
- *
- * Only `supported` is kept, deliberately. The remedy for the other two answers is to change the
- * engine on disk: openharness#285 was closed by its reporter upgrading opencode until it had
- * `--auto`. A cached `unsupported` would go on refusing that upgraded engine until the daemon
- * happened to restart, which is the one outcome worth more than the spawn it saves. `unknown` is
- * not kept for the same reason at shorter range: one slow `--help` would turn Auto off machine-wide.
- *
- * ⚠️ And a kept `supported` is only good for the file it was read from. An update can drop a flag as
- * well as add one, and remembered by name alone the answer outlived it: measured end to end
- * (`e2e/updates.e2e.ts`), an engine updated to a build without its permission flag was still
- * launched with it, and refused it at once — the row went ready, then stopped, with no reason given —
- * where a daemon restarted after the update refused the create and said why.
- */
-const flagSupportCache = new Map<string, string>()
-
-/**
- * Which file a command name runs, as a stamp that changes when an update replaces or rewrites it:
- * its real path (a Homebrew or native install points at a new version's folder), inode, size and
- * modification time. Resolved on the login shell's PATH, the one a launch resolves it on, then the
- * daemon's own. '' when neither finds it — remembered by name alone then, as before.
- */
-function engineFileStamp(command: string): string {
-  const path = resolveBinaryOnPath(command, { PATH: loginShellEnvironment().PATH })
-    ?? resolveBinaryOnPath(command)
-  if (!path) return ''
-  try {
-    const stat = statSync(path, { bigint: true })
-    return [realpathSync(path), stat.ino, stat.size, stat.mtimeNs].join('\u0000')
-  } catch {
-    return ''
-  }
-}
-
-/** Test seam, and for a machine where the engine was just upgraded. */
-export function resetCommandFlagSupportCache(): void { flagSupportCache.clear() }
-
-/**
- * Checks a CLI's own help from the same interactive shell that would launch
- * it. `unknown` is deliberately non-blocking: a broken or unusually slow help
- * command must not turn an otherwise usable engine into a false refusal.
- */
-export async function commandSupportsFlagInInteractiveShell(
-  command: string,
-  flag: string,
-  shell: string | undefined = undefined,
-): Promise<CommandFlagSupport> {
-  const key = `${command}\u0000${flag}\u0000${shell ?? ''}`
-  const stamp = engineFileStamp(command)
-  if (flagSupportCache.get(key) === stamp) return 'supported'
-  const interactive = interactiveEngineShell(shell)
-  if (!interactive) return 'unknown'
-  // `harness_help_status`, not `status`: in zsh `status` is a read-only special parameter (an alias
-  // of `$?`), so `status=$?` is a fatal error there and the shell dies with exit 1 — which this
-  // function would read as `unsupported` and refuse an engine that does support the flag. macOS
-  // defaults $SHELL to zsh, so the bare name made every Auto-approval probe on a Mac a false
-  // refusal. Same reason `engineFallbackPrelude` namespaces its own `harness_status`.
-  const script = [
-    'help="$("$1" --help 2>&1)"',
-    'harness_help_status=$?',
-    '[ "$harness_help_status" -eq 0 ] || exit 2',
-    // The flag, not a longer one that starts with it. A plain `*"$2"*` reads `--auto-update` in
-    // opencode's help as support for `--auto` — and then launches the very pane openharness#285
-    // reported, full of help text. So: followed by something that cannot continue a flag, or
-    // ending the help. `[!…]` is POSIX and behaves the same in sh, bash and zsh (measured).
-    `case "$help" in *"$2"[!A-Za-z0-9-]*|*"$2") exit 0 ;; *) exit ${FLAG_UNSUPPORTED_EXIT} ;; esac`,
-  ].join('\n')
-  const [file, ...args] = engineShellArgv(interactive, [script, 'harness-engine-capability', command, flag])
-  return await new Promise((resolve) => {
-    execFile(
-      file,
-      args,
-      { timeout: 5_000 },
-      (error) => {
-        const answer: CommandFlagSupport = !error
-          ? 'supported'
-          : Number((error as { code?: number | string }).code) === FLAG_UNSUPPORTED_EXIT ? 'unsupported' : 'unknown'
-        if (answer === 'supported') flagSupportCache.set(key, stamp)
-        resolve(answer)
-      },
-    )
-  })
-}
-
 /** What a launch would add for its permission mode, and whether the engine on disk knows it. */
 export interface PermissionLaunchChoice {
   permissionMode?: string | null
@@ -1654,42 +1180,6 @@ export function permissionFlagToVerify(engine: AgentEngine, choice: PermissionLa
   return flags?.find((token) => token.startsWith('--')) ?? null
 }
 
-/**
- * Ask the engine on disk whether it knows the flag this launch would pass it.
- *
- * `null` means "launch as asked": either nothing is being added, or the engine takes it, or the
- * probe could not tell (`unknown` never refuses — see `commandSupportsFlagInInteractiveShell`).
- *
- * Best-effort by construction, and that is the right way round. The probe needs an interactive
- * shell to resolve the engine the way a launch will, so a machine that offers none answers
- * `unknown` and nothing is refused. A daemon started by systemd or in a container has no `SHELL`
- * in its environment — measured on a Linux container here — but `currentUserShell` falls back to
- * the passwd entry, which on a normal account is a real shell, so the check does reach the boxes
- * openharness#285 came from.
- */
-async function unsupportedPermissionFlag(
-  engine: AgentEngine,
-  choice: PermissionLaunchChoice,
-  shell: string | undefined,
-): Promise<string | null> {
-  const flag = permissionFlagToVerify(engine, choice)
-  if (!flag) return null
-  const support = await commandSupportsFlagInInteractiveShell(engineBin(engine), flag, shell)
-  return support === 'unsupported' ? flag : null
-}
-
-/**
- * The first flag of a launch model (lib/launchModel.ts) that the engine on disk does not list in its `--help`, or null.
- * It reads the help the way the permission gate does, through the same probe and cache, so a Claude Code too old for
- * `--model` or `--effort` is refused before a pane exists instead of printing its help in one. `unknown` never refuses.
- */
-export async function unsupportedLaunchModelFlag(engine: AgentEngine, launchModel: LaunchModel, shell: string | undefined = undefined): Promise<string | null> {
-  for (const flag of launchModelArgs(engine, launchModel).filter((arg) => arg.startsWith('--'))) {
-    if (await commandSupportsFlagInInteractiveShell(engineBin(engine), flag, shell) === 'unsupported') return flag
-  }
-  return null
-}
-
 /** The line that updates [engine]: its install line, which fetches the latest. Those are POSIX shell lines, so on
  *  Windows only an npm one, which PowerShell runs as written, is named. */
 export function engineUpdateCommand(engine: AgentEngine, platform: NodeJS.Platform = process.platform): string | null {
@@ -1710,7 +1200,6 @@ export function engineUpdateCommand(engine: AgentEngine, platform: NodeJS.Platfo
 export async function refusePermissionFlagIfUnsupported(
   engine: AgentEngine,
   choice: PermissionLaunchChoice,
-  shell: string | undefined = undefined,
   native?: NativeLaunch,
 ): Promise<{ error: string; detail: string; unavailable?: string } | null> {
   if (native) {
@@ -1718,7 +1207,8 @@ export async function refusePermissionFlagIfUnsupported(
     if (support === 'unknown') return { error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: 'Waiting to confirm the selected executable’s permission flags.' }
     if (support === 'supported') return null
   }
-  const flag = native ? permissionFlagToVerify(engine, choice) : await unsupportedPermissionFlag(engine, choice, shell)
+  if (!native && !isTerminalEngine(engine)) return { error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: 'Waiting for engine setup.' }
+  const flag = native ? permissionFlagToVerify(engine, choice) : null
   if (!flag) return null
   const update = engineUpdateCommand(engine)
   return {
@@ -1739,12 +1229,12 @@ export async function refusePermissionFlagIfUnsupported(
 export async function dropPermissionFlagIfUnsupported<T extends PermissionLaunchChoice>(
   engine: AgentEngine,
   choice: T,
-  shell: string | undefined = undefined,
   native?: NativeLaunch,
 ): Promise<{ choice: T; droppedFlag: string | null; nativeHold?: string }> {
+  if (!native && !isTerminalEngine(engine)) return { choice, droppedFlag: null, nativeHold: 'Waiting for engine setup.' }
   const support = native ? await native.permission(choice) : null
   if (support === 'unknown') return { choice, droppedFlag: null, nativeHold: 'Waiting to confirm the selected executable’s permission flags.' }
-  const droppedFlag = support === 'supported' ? null : native ? permissionFlagToVerify(engine, choice) : await unsupportedPermissionFlag(engine, choice, shell)
+  const droppedFlag = support === 'supported' ? null : native ? permissionFlagToVerify(engine, choice) : null
   if (!droppedFlag) return { choice, droppedFlag: null }
   // Ask in its place, launched with no flag at all: Claude Code's Ask names its mode with the very flag a build
   // this old may lack, so it goes as the engine's own default, which asked before auto mode existed.

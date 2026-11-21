@@ -9,6 +9,8 @@ import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
 const CATALOG_TTL_MS = 5 * 60_000
+const FOOTER_TARGETS = 128
+const FOOTER_TARGET_BYTES = 64 * 1024
 
 export interface CursorModelTarget {
   rawId: string
@@ -252,7 +254,16 @@ class ProfileReader {
           model: target.modelKey,
           effort,
         })
+        // A worker lives across sessions; observation history must not grow for its whole lifetime.
+        // These are derived values: an evicted footer reconstructs the same synthetic target next time.
         targets.set(id, target)
+        let bytes = 0
+        for (const [key, value] of targets) bytes += Buffer.byteLength(key) + Buffer.byteLength(JSON.stringify(value))
+        while (targets.size > FOOTER_TARGETS || bytes > FOOTER_TARGET_BYTES) {
+          const [key, value] = targets.entries().next().value!
+          bytes -= Buffer.byteLength(key) + Buffer.byteLength(JSON.stringify(value))
+          targets.delete(key)
+        }
         this.cursorTargets.set(session.sessionId, targets)
       }
       state.model = target.modelKey

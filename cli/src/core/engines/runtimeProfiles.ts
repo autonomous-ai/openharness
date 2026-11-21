@@ -3,7 +3,8 @@ import type { RuntimeProfileState } from '../../lib/runtimeProfileState.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { LiveFrame } from '../../engines/worker/liveProtocol.js'
 import type { ProfileEvidence, RuntimeProfile, RuntimeRecord } from '../../engines/facets/runtime.js'
-import { EngineReadError } from '../../engines/worker/protocol.js'
+import { modelControlEngine } from '../../engines/worker/modelControlProtocol.js'
+import { EngineReadError, readerEngine } from '../../engines/worker/protocol.js'
 import { createRuntimeSessions } from './runtimeSessions.js'
 import type { RuntimeTransport } from './runtimeTransport.js'
 
@@ -16,7 +17,7 @@ export interface ProfileHydration {
 }
 
 export interface RuntimeProfilesDeps {
-  local: RuntimeProfileState
+  local?: RuntimeProfileState
   handles(engine: string): boolean
   resolve(id: string): RegisteredSession | undefined
   transport: RuntimeTransport
@@ -35,9 +36,9 @@ function evidence(frames: readonly LiveFrame[]): RuntimeRecord[] {
 export function createRuntimeProfiles({ local, handles, resolve, transport }: RuntimeProfilesDeps) {
   let changed: ((id: string) => void) | null = null
   const remote = createRuntimeSessions({ resolve, transport, changed: id => changed?.(id) })
-  local.onChanged = id => changed?.(id)
-  const forId = (id: string) => handles(resolve(id)?.engine ?? '') ? remote : local
-  const forSession = (session: RegisteredSession) => handles(session.engine) ? remote : local
+  if (local) local.onChanged = id => changed?.(id)
+  const forId = (id: string) => handles(resolve(id)?.engine ?? '') ? remote : local ?? remote
+  const forSession = (session: RegisteredSession) => handles(session.engine) ? remote : local ?? remote
   const rawUnavailable = (): never => { throw new EngineReadError('ENGINE_INVALID_REQUEST') }
   const observe = async (session: RegisteredSession, operation: { kind: 'config' } | { kind: 'pane'; text: string }, silent: boolean): Promise<boolean> => {
     const before = remote.selectedModel(session)
@@ -49,8 +50,7 @@ export function createRuntimeProfiles({ local, handles, resolve, transport }: Ru
     get onChanged() { return changed },
     set onChanged(value: ((id: string) => void) | null) { changed = value },
     selectedModel: (session: RegisteredSession) => forSession(session).selectedModel(session),
-    // Only an inline reader knows one (OpenClaw's); a worker's engine has none.
-    workspace: (session: RegisteredSession): string | null => handles(session.engine) ? null : local.workspace(session),
+    display: (session: RegisteredSession) => forSession(session).display(session),
     getState: (id: string) => forId(id).getState(id),
     beginControl: (session: RegisteredSession, target: RuntimeProfile) => forSession(session).beginControl(session, target),
     cancelControl: (id: string) => forId(id).cancelControl(id),
@@ -59,26 +59,26 @@ export function createRuntimeProfiles({ local, handles, resolve, transport }: Ru
     confirmControlProfile: (target: RuntimeProfile) => forId(target.sessionId).confirmControlProfile(target),
     waitForModel: (id: string, timeout: number) => forId(id).waitForModel(id, timeout),
     waitForProfile: (id: string, timeout: number) => forId(id).waitForProfile(id, timeout),
-    forget(id: string): void { remote.forget(id); local.forget(id) },
+    forget(id: string): void { remote.forget(id); local?.forget(id) },
     stop(): void { remote.stop(); changed = null },
     withoutChangeEvents<T>(run: () => Promise<T>): Promise<T> {
-      return remote.withoutChangeEvents(() => local.withoutChangeEvents(run))
+      return remote.withoutChangeEvents(() => local ? local.withoutChangeEvents(run) : run())
     },
     ingest(session: RegisteredSession, line: string, silent = false): boolean {
-      return handles(session.engine) ? rawUnavailable() : local.ingest(session, line, silent)
+      return handles(session.engine) ? rawUnavailable() : local?.ingest(session, line, silent) ?? false
     },
-    /** The other engines' records' evidence, from their worker's frames and folds: theirs stays with the local state. */
-    evidence: (session: RegisteredSession, evidence: readonly ProfileEvidence[]): boolean => local.evidence(session, evidence),
-    hydrateEvidence: (session: RegisteredSession, evidence: readonly ProfileEvidence[]): void => local.hydrateEvidence(session, evidence),
+    /** Live evidence shares the same accepted view and revision as pane/config observations. */
+    evidence: (session: RegisteredSession, evidence: readonly ProfileEvidence[]): boolean => forSession(session).evidence(session, evidence),
+    hydrateEvidence: (session: RegisteredSession, evidence: readonly ProfileEvidence[]): void => forSession(session).hydrateEvidence(session, evidence),
     hydrate(session: RegisteredSession, lines: string[]): void {
       if (handles(session.engine)) rawUnavailable()
-      local.hydrate(session, lines)
+      local?.hydrate(session, lines)
     },
     transcriptFields(session: RegisteredSession, line: string) {
-      return handles(session.engine) ? rawUnavailable() : local.transcriptFields(session, line)
+      return handles(session.engine) ? rawUnavailable() : local?.transcriptFields(session, line) ?? []
     },
     beginHydrate(session: RegisteredSession): ProfileHydration {
-      if (!handles(session.engine)) return local.beginHydrate(session)
+      if (!handles(session.engine)) return local ? local.beginHydrate(session) : rawUnavailable()
       const pending = remote.stage(session, true, true)
       return { ingest: rawUnavailable, commit: rawUnavailable,
         ingestFrames: frames => pending.ingest(evidence(frames)),
@@ -89,38 +89,34 @@ export function createRuntimeProfiles({ local, handles, resolve, transport }: Ru
       return remote.prepare(session, evidence(frames))
     },
     ingestPane(session: RegisteredSession, text: string, silent = false): boolean | Promise<boolean> {
-      return handles(session.engine) ? observe(session, { kind: 'pane', text }, silent) : local.ingestPane(session, text, silent)
+      return handles(session.engine) ? observe(session, { kind: 'pane', text }, silent) : local?.ingestPane(session, text, silent) ?? false
     },
     capturePane: (session: RegisteredSession, capture: (id: string, historyLines?: number) => Promise<string | null>,
       historyLines?: number, silent = false) => forSession(session).capturePane(session, capture, historyLines, silent),
     ingestConfig(session: RegisteredSession, silent = false): Promise<boolean> {
-      return handles(session.engine) ? observe(session, { kind: 'config' }, silent) : local.ingestConfig(session, silent)
+      return handles(session.engine) ? observe(session, { kind: 'config' }, silent) : local?.ingestConfig(session, silent) ?? Promise.resolve(false)
     },
     async supportsControl(session: RegisteredSession): Promise<boolean> {
-      if (session.gateway) return false
-      return handles(session.engine) ? (await remote.read(session, { kind: 'describe' })).supportsControl : local.supportsControl(session)
+      if (session.gateway || !modelControlEngine(session.engine)) return false
+      return handles(session.engine) ? (await remote.read(session, { kind: 'describe' })).supportsControl : local?.supportsControl(session) ?? false
     },
     async effortAllowed(session: RegisteredSession, model: string, effort: string, listed: readonly string[] | null): Promise<boolean> {
+      if (!readerEngine(session.engine)) return false
       return handles(session.engine)
         ? (await remote.read(session, { kind: 'effort', model, effort, listed: listed && [...listed] })).effortAllowed!
-        : local.effortAllowed(session, model, effort, listed)
+        : local?.effortAllowed(session, model, effort, listed) ?? false
     },
     async codexCatalog(session: RegisteredSession) {
-      return handles(session.engine) ? (await remote.read(session, { kind: 'catalog' })).catalog! : local.codexCatalog(session)
+      return handles(session.engine) ? (await remote.read(session, { kind: 'catalog' })).catalog! : local?.codexCatalog(session) ?? []
     },
     async modelsForSession(session: RegisteredSession) {
-      if (session.gateway) return []
-      return handles(session.engine) ? (await remote.read(session, { kind: 'models' })).models! : local.modelsForSession(session)
+      if (session.gateway || !modelControlEngine(session.engine)) return []
+      return handles(session.engine) ? (await remote.read(session, { kind: 'models' })).models! : local?.modelsForSession(session) ?? []
     },
     async modelsForSessions(sessions: RegisteredSession[]) {
       return (await Promise.all(sessions.map(session => this.modelsForSession(session)))).flat()
     },
-    cursorTarget: local.cursorTarget.bind(local),
-    devinTarget: local.devinTarget.bind(local),
-    commandcodeTarget: local.commandcodeTarget.bind(local),
-    hermesTarget: local.hermesTarget.bind(local),
-    opencodeCatalog: local.opencodeCatalog.bind(local),
-    kiloCatalog: local.kiloCatalog.bind(local),
+
   }
 }
 

@@ -19,9 +19,15 @@ afterEach(async () => { client?.close(); await daemon?.close(); client = undefin
 
 const row = async (agentId: string) =>
   ((await client!.request<{ agents: Array<Record<string, any>> }>('agents_list', { includeStopped: true }, 30_000)).agents).find(a => a.id === agentId)
-/** The agent back up after a move, bound to a conversation other than [not] when one is named. */
+/** Claude's startup hook has rebound the launch before the next model change begins. */
 const settled = (agentId: string, wanted: (sessionId: string) => boolean, what: string) =>
-  until(what, async () => { const agent = await row(agentId); return agent?.status === 'active' && agent.sessionId && wanted(agent.sessionId) ? agent : null }, 60_000, 500)
+  until(what, async () => {
+    const agent = await row(agentId)
+    const saved = (JSON.parse(readFileSync(join(daemon!.dataDir, 'registry.json'), 'utf8')) as Array<Record<string, any>>)
+      .find(row => row.agentId === agentId)
+    return saved && !saved.launch && agent?.status === 'active' && (!agent.launch || agent.launch.state === 'ready')
+      && agent.sessionId && saved.sessionId === agent.sessionId && wanted(agent.sessionId) ? agent : null
+  }, 60_000, 500)
 async function turn(agentId: string, content: string): Promise<void> {
   const ended = client!.next((frame: Frame) => frame.type === 'turn_ended' && frame.agentId === agentId, 45_000, `turn_ended (${content})`)
   client!.send('message', { agentId, content })

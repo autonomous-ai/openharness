@@ -14,7 +14,7 @@ import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import type { Socket } from 'node:net'
 import { patientExec, type ExecDone, type PatientExecOptions } from './patientExec.js'
-import { ptyHostBinary } from './ptyHost/launch.js'
+import { ptyHostBinary } from './ptyHost/binary.js'
 import { modulesByPath, runPowershellAsync } from './windows/powershell.js'
 import { errorKind } from './log.js'
 

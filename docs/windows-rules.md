@@ -67,6 +67,13 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
 
 ## 2. Starting processes
 
+- **A missing Unix socket is not a reason to run services inside the core.** Windows services use the
+  daemon's authenticated named pipe, rediscovered after each core restart. Check the daemon's proof before
+  sending the service token, and bound discovery and registration. The core boundary audit found the master
+  forced every Windows service inline (2026-11-17). Tests: `masterProcess.spec.ts`,
+  `services/process.connection.spec.ts`, `services/process.pipe.spec.ts`. An older master's declared inline
+  plan remains an upgrade compatibility path until a safe supervised replacement; the transport fix alone
+  does not prove old-worker rollback or signed Windows process isolation.
 - A **detached PowerShell has no console, exits 0, and runs nothing.** A zero exit from it proves nothing: check the
   result the script should have made.
 - Node ends a child that is not detached when Node exits (a kill-on-close job). Only that direct child: what the child

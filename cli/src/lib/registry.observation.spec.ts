@@ -1,6 +1,7 @@
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  chmodSync, fsyncSync, mkdirSync, mkdtempSync, readFileSync, renameSync,
+  chmodSync, fsync, fsyncSync, mkdirSync, mkdtempSync, readFileSync, renameSync,
   rmSync, statSync, symlinkSync, utimesSync, writeFileSync,
 } from 'fs'
 import { tmpdir } from 'os'
@@ -10,7 +11,7 @@ import type { registry as Registry } from './registry.js'
 // Count actual writes; the registry, locks, permission checks and fsyncs still use real files.
 vi.mock('fs', async (importOriginal) => {
   const fs = await importOriginal<typeof import('fs')>()
-  return { ...fs, fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync), mkdirSync: vi.fn(fs.mkdirSync) }
+  return { ...fs, fsync: vi.fn(fs.fsync), fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync), mkdirSync: vi.fn(fs.mkdirSync) }
 })
 
 const asyncSync = vi.hoisted(() => vi.fn((sync: () => Promise<void>) => sync()))
@@ -20,24 +21,15 @@ vi.mock('node:fs/promises', async original => {
   return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
     const handle = await actual.open(...args), sync = handle.sync.bind(handle)
     handle.sync = () => asyncSync(sync)
-    if (args[0] === file) {
-      const read = handle.readFile.bind(handle)
-      handle.readFile = (async (...readArgs: Parameters<typeof read>) => {
-        const result = await read(...readArgs)
-        const afterRead = reads.afterRegistryRead
-        reads.afterRegistryRead = undefined
-        afterRead?.()
-        return result
-      }) as typeof handle.readFile
-    }
     return handle
   } }
 })
-const fsyncs = () => vi.mocked(fsyncSync).mock.calls.length + asyncSync.mock.calls.length
+const fsyncs = () => vi.mocked(fsyncSync).mock.calls.length + vi.mocked(fsync).mock.calls.length + asyncSync.mock.calls.length + preparedSyncs
 
 let directory: string
 let file: string
-let registry: typeof Registry
+let registry: typeof Registry, storage: typeof import('./sessionStorage.js')['sessionStorage']
+let preparedSyncs = 0
 // Loads the module graph once, before any hook's time limit: cold, it takes seconds on a loaded machine. Each test
 // still imports fresh modules (vi.resetModules), now from the warm transform cache.
 await import('./registry.js')
@@ -50,7 +42,7 @@ const plan = {
   requestedAt: 1790900000000, state: 'waiting' as const,
 }
 const readRows = () => JSON.parse(readFileSync(file, 'utf8'))
-const clearCounts = () => vi.clearAllMocks()
+const clearCounts = () => { vi.clearAllMocks(); preparedSyncs = 0 }
 const registryWrites = () => vi.mocked(renameSync).mock.calls.filter(([, target]) => target === file).length
 const lockAttempts = () => vi.mocked(mkdirSync).mock.calls.filter(([target]) => target === `${file}.lock`).length
 
@@ -69,8 +61,23 @@ beforeEach(async () => {
   directory = mkdtempSync(join(tmpdir(), 'registry-observation-'))
   file = join(directory, 'registry.json')
   for (const key of ['ADAPTER_DATA_DIR', 'CLAUDE_PROJECTS_DIR', 'CODEX_HOME', 'CURSOR_HOME']) vi.stubEnv(key, directory)
+  storage = (await import('./sessionStorage.js')).sessionStorage
+  const equal = storage.equal.bind(storage), prepare = storage.prepare.bind(storage)
+  vi.spyOn(storage, 'equal').mockImplementation(async proof => {
+    const value = await equal(proof)
+    const afterRead = reads.afterRegistryRead
+    reads.afterRegistryRead = undefined
+    afterRead?.()
+    return value
+  })
+  vi.spyOn(storage, 'prepare').mockImplementation(async (...args) => {
+    const value = await prepare(...args)
+    // The real child acknowledges only after its exact image is flushed; locks/directory sync stay local.
+    preparedSyncs++
+    return value
+  })
   registry = (await import('./registry.js')).registry
-  registry.load()
+  await registry.load()
   expect((await registry.openProcessAgent(input))).not.toBeNull()
   await registry.flush()
   clearCounts()
@@ -80,9 +87,11 @@ beforeEach(async () => {
 afterEach(async () => {
   reads.afterRegistryRead = undefined
   vi.mocked(fsyncSync).mockReset()
+  vi.mocked(fsync).mockReset()
   asyncSync.mockReset()
   // Failure tests deliberately leave unsafe or corrupt state; settle the final barrier before cleanup.
-  await registry.flush().catch(() => {})
+  try { await registry.flush({ exiting: true }).catch(() => {}) }
+  finally { await closeSessionStorageFixture(storage) }
   vi.useRealTimers()
   vi.unstubAllEnvs()
   vi.restoreAllMocks()
@@ -156,7 +165,7 @@ describe('unchanged discovery observations', () => {
       closePlan: reversed(plan), lastOpenedAt: 1790900000000,
     })], null, 2))
     clearCounts()
-    registry.load()
+    await registry.load()
     const discover = () => registry.transaction(() => {
       registry.updateRuntimes(input.agentId, [{ backend: 'tmux', paneId: '%31' }])
       registry.updateProcessIdentity(input.agentId, { ...input.processIdentity })

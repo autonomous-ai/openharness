@@ -3,12 +3,10 @@ import type { InstalledDsh } from './installed.js'
 import { dshLaunch, harnessEnvToClear, DSH_SESSION_ENV } from './launch.js'
 import { buildLaunchOverrides, type LaunchOverridesDeps } from '../lib/launchOverrides.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
-import { HARNESS_INSTRUCTIONS } from '../lib/agentAttribution.js'
 import { env } from '../config/env.js'
-import { setAgentSettingsForTest, signedOutForTest } from '../testing/agentSettings.js'
+import { signedOutForTest } from '../testing/agentSettings.js'
 
 // Harness's status line rides every Claude launch beside what these pin (engines/claude/statusLine.spec.ts).
-vi.mock('../engines/kit/statusLine.js', async (original) => ({ ...await original<object>(), statusLineSetting: () => null }))
 
 afterEach(() => signedOutForTest())
 
@@ -58,15 +56,13 @@ describe('buildLaunchOverrides with a DSH', () => {
   }
 
   it('layers the DSH env and argv over a plain relaunch', async () => {
-    // With what every harness is told once the account lets agents start agents (off by default).
-    setAgentSettingsForTest(env.ADAPTER_DATA_DIR, { agentsStartAgents: true })
     const built = await buildLaunchOverrides(deps, 'claude', { dsh: 'autonomous/circuit', cwd: '/ws' }, 'agent-1')
     expect(built.ok).toBe(true)
     if (!built.ok) return
     expect(built.overrides.env.HARNESS_DSH).toBe('autonomous/circuit')
     expect(built.overrides.env.CIRCUIT_TOOLCHAIN).toBe('/src/circuit/toolchain')
-    // Its own argv, then what every harness is told (lib/agentAttribution.ts).
-    expect(built.overrides.extraArgs).toEqual(['--add-dir', '/ws/inputs', '--append-system-prompt', HARNESS_INSTRUCTIONS])
+    // Optional values remain separate until final dispatch; these are the DSH's own arguments.
+    expect(built.overrides.extraArgs).toEqual(['--add-dir', '/ws/inputs'])
   })
 
   it('layers it over a Codex profile too, keeping CODEX_HOME', async () => {

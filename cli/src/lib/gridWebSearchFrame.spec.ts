@@ -19,11 +19,21 @@ import { buildLaunchOverrides, type LaunchOverridesDeps } from './launchOverride
 import { clearGridMcpUrlCache } from './gridMcpUrl.js'
 import { resolveGridTarget } from './gridTarget.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 
 const { gridName: GRID, baseUrl: BASE_URL, mcpUrl: MCP_URL, plan } = fakeGridAnswers()
 
 let fake: FakeGrid | null = null
 let dataDir = ''
+let ownedRegistry: typeof import('./registry.js')['registry'] | undefined
+let ownedStorage: typeof import('./sessionStorage.js')['sessionStorage'] | undefined
+async function closeRegistry() {
+  try { await ownedRegistry?.flush({ exiting: true }) }
+  finally {
+    try { if (ownedStorage) await closeSessionStorageFixture(ownedStorage) }
+    finally { ownedRegistry = undefined; ownedStorage = undefined }
+  }
+}
 
 function install(overrides: FakeGridPlan = {}): FakeGrid {
   fake = installFakeGrid({ ...plan, ...overrides })
@@ -32,13 +42,16 @@ function install(overrides: FakeGridPlan = {}): FakeGrid {
 
 /** The registry, fresh, on its own state directory — the same way `registry.spec.ts` loads it. */
 async function loadRegistry() {
+  await closeRegistry()
   vi.resetModules()
   process.env.ADAPTER_DATA_DIR = dataDir
   process.env.CLAUDE_PROJECTS_DIR = dataDir
   process.env.CODEX_HOME = dataDir
   process.env.CURSOR_HOME = dataDir
   const { registry } = await import('./registry.js')
-  registry.load()
+  ownedRegistry = registry
+  ownedStorage = (await import('./sessionStorage.js')).sessionStorage
+  await registry.load()
   return registry
 }
 
@@ -61,7 +74,7 @@ async function retargetOntoGrid(registry: Awaited<ReturnType<typeof loadRegistry
   const built = await buildLaunchOverrides(DEPS, 'claude', { gridLaunch: target }, agentId)
   if (!built.ok || !built.overrides.gridLaunchRecord) throw new Error(built.ok ? 'no grid launch was built' : built.detail)
   registry.updateProcessIdentity(agentId, IDENTITY, null, { baseUrl: BASE_URL, model })
-  registry.setGridLaunch(agentId, built.overrides.gridLaunchRecord)
+  await registry.setGridLaunch(agentId, built.overrides.gridLaunchRecord)
   return built.overrides.gridLaunchRecord.webSearch
 }
 
@@ -69,7 +82,8 @@ beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), 'grid-websearch-frame-'))
 })
 
-afterEach(() => {
+afterEach(async () => {
+  await closeRegistry()
   fake?.dispose()
   fake = null
   clearGridMcpUrlCache()
@@ -116,7 +130,7 @@ describe('the web-search status on the per-agent frame', () => {
 
     // The move home: the respawned process reads as "on no grid", and the launch is cleared.
     registry.updateProcessIdentity(row.agentId, { ...IDENTITY, startMarker: 'boot-2' }, null, null)
-    registry.setGridLaunch(row.agentId, null)
+    await registry.setGridLaunch(row.agentId, null)
 
     const frame = await agentFrame(registry.byAgent(row.agentId)!, { selectedModel: null, terminalAvailable: true })
     expect(frame).toHaveProperty('grid', null)

@@ -3,7 +3,7 @@ import type { EngineModelControl } from '../../engines/facets/modelControl.js'
 import { RuntimeProfileControlError, type RuntimeProfileErrorCode } from '../../engines/facets/modelControl.js'
 import type { RuntimeCatalogModel, RuntimeProfile } from '../../engines/facets/runtime.js'
 import { createModelControlHost } from '../../engines/worker/modelControlHost.js'
-import { modelControlAction, modelControlAnswer, modelControlCheck, modelControlEnvelope, modelControlInput, modelControlSize,
+import { modelControlEngine, modelControlAction, modelControlAnswer, modelControlCheck, modelControlEnvelope, modelControlInput, modelControlSize,
   MODEL_CONTROL_APPLY, MODEL_CONTROL_CAPABILITIES, MODEL_CONTROL_CHECK_MS, MODEL_CONTROL_ERRORS, MODEL_CONTROL_HOST,
   MODEL_CONTROL_IN_FLIGHT, MODEL_CONTROL_QUERIES, MODEL_CONTROL_QUERY_MS, MODEL_CONTROL_VALIDATE,
   MODEL_CONTROL_VERSION, MODEL_CONTROL_WAIT_MS, MODEL_CONTROL_WRITES } from '../../engines/worker/modelControlProtocol.js'
@@ -17,8 +17,9 @@ export interface ModelControlsDeps {
   resolve(id: string): RegisteredSession | undefined
   call(service: string, method: string, payload: Record<string, unknown>, waitMs: number): Promise<Record<string, unknown>>
   catalog(session: RegisteredSession): Promise<RuntimeCatalogModel[]>
-  capture(target: string, lines: number): Promise<string | null>
+  capture(session: RegisteredSession, lines: number, observe: boolean): Promise<string | null>
   text(target: string, text: string, allowed: () => boolean): Promise<boolean>
+  literal(target: string, text: string, allowed: () => boolean): Promise<boolean>
   key(target: string, key: string, allowed: () => boolean): Promise<boolean>
   waitForModel(sessionId: string, ms: number): Promise<boolean>
   waitForProfile(sessionId: string, ms: number): Promise<boolean>
@@ -60,15 +61,16 @@ export function createModelControls(deps: ModelControlsDeps) {
       const grant = grants.get(payload.token), action = payload.action
       if (!grant || grant.service !== service) return denied
       if (!grant.allowed() || grant.pending || ++grant.queries > MODEL_CONTROL_QUERIES
-        || ((action.kind === 'text' || action.kind === 'key') && ++grant.writes > MODEL_CONTROL_WRITES)
+        || ((action.kind === 'text' || action.kind === 'literal' || action.kind === 'key') && ++grant.writes > MODEL_CONTROL_WRITES)
         || (action.kind === 'confirmEffort' && action.effort !== grant.target.effort)) { grants.delete(payload.token); return denied }
       grant.pending = true
       try {
         const { session, allowed } = grant
         const value = await bounded((async () => {
           if (action.kind === 'catalog') return deps.catalog(session)
-          if (action.kind === 'capture') return deps.capture(session.agentId, action.lines)
+          if (action.kind === 'capture') return deps.capture(session, action.lines, action.observe === true)
           if (action.kind === 'text') return deps.text(session.agentId, action.text, allowed)
+          if (action.kind === 'literal') return deps.literal(session.agentId, action.text, allowed)
           if (action.kind === 'key') return deps.key(session.agentId, action.key, allowed)
           if (action.kind === 'waitForModel') return deps.waitForModel(session.sessionId, action.ms)
           if (action.kind === 'waitForProfile') return deps.waitForProfile(session.sessionId, action.ms)
@@ -84,7 +86,7 @@ export function createModelControls(deps: ModelControlsDeps) {
   }
   const forSession: ModelControlFor = registered => {
     const bound = transport.bind(registered)
-    if (!bound) return undefined
+    if (!bound || !modelControlEngine(bound.engine)) return undefined
     const { engine, session, service, isolated, run } = bound
     let catalog: RuntimeCatalogModel[] = []
     return {

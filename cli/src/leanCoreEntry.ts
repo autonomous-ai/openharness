@@ -17,12 +17,15 @@
  * update runs it. Without it this core cannot know the CLI, and dies before it beats: its master then
  * starts it from cli.js (harnessd/leanServices.ts).
  */
+import './harnessd/childEntry.js'
 import './lib/connectWait.js'
 import { LEAN_CORE_SCRIPT_ENV } from './harnessd/protocol.js'
 
 const [, , command] = process.argv
 const cli = process.env[LEAN_CORE_SCRIPT_ENV]
-if (command !== '__run') {
+if (command === '__storage') {
+  ;(await import('./storage/process.js')).runSessionStorage()
+} else if (command !== '__run') {
   console.error(`[harnessd] the lean bundle's core entry runs the core (__run); ${command ?? 'nothing'} is the CLI's (cli.js)`)
   process.exit(2)
 } else if (!cli) {

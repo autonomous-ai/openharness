@@ -1,3 +1,4 @@
+import type { SharedTrustPeer } from '../lib/sharedMachinesAccount.js'
 /**
  * Sharing a whole machine with other accounts (docs/plans/2026-10-15-share-machine-plan.md), in the edge
  * host. Off by default.
@@ -34,8 +35,7 @@ import { guestHelperStatus, installGuestHelper, type GuestHelperInstallResult, t
 import { errorKind } from '../lib/log.js'
 import { atomicWriteJson, jsonObject, readState, requireState } from '../lib/secureState.js'
 import { createWindowsGuestAccounts } from '../lib/windows/windowsGuestAccounts.js'
-import { failed, type PortFailure, type ShareMember, type SharedMachinesPort, type SharePolicy,
-  type SharedTrustPeer } from '../lib/sharedMachinesPort.js'
+import { failed, type PortFailure, type ShareMember, type SharedMachinesPort, type SharePolicy } from '../lib/sharedMachinesPort.js'
 import { createGuestLaunches, type GuestLaunches } from './guestLaunches.js'
 
 /** The request shared machines answers for the apps, declared in core/api.ts for the core to route. */

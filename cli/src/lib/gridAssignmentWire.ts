@@ -62,7 +62,7 @@ export function gridAssignmentEvidence(key: string, engine: AgentEngine, args: s
  * relaunch writes it with the process it starts: no process is read back for an engine whose grid is in no command
  * line, so nothing else would correct the row. Null for a launch on the engine's own login.
  */
-export function launchedGrid(override: GridLaunchOverride | null | undefined): GridAssignment | null {
+export function launchedGrid(override: Pick<GridLaunchOverride, 'baseUrl' | 'model'> | null | undefined): GridAssignment | null {
   return override ? { baseUrl: override.baseUrl, model: override.model ?? null } : null
 }
 

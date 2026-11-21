@@ -3,6 +3,10 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rename
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { fileURLToPath } from 'node:url'
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
+import { once } from 'node:events'
+import type { ChildProcess } from 'node:child_process'
 
 const faults = vi.hoisted(() => ({
   copied: undefined as (() => void | Promise<void>) | undefined,
@@ -22,10 +26,6 @@ vi.mock('node:fs/promises', async original => {
     if (source && faults.sourceFailure === 'open') throw Error('Source open unavailable')
     const restore = source ? faults.openingSource?.() : undefined
     const handle = await actual.open(...args).finally(() => restore?.())
-    if (String(args[0]).includes('registry.json.') && String(args[0]).endsWith('.tmp')) {
-      const sync = handle.sync.bind(handle)
-      handle.sync = async () => { await sync(); await faults.preparedRegistry?.() }
-    }
     if (source) {
       const stat = handle.stat.bind(handle), read = handle.read.bind(handle), close = handle.close.bind(handle)
       handle.close = async () => {
@@ -56,14 +56,26 @@ vi.mock('node:fs/promises', async original => {
     return result
   } }
 })
-vi.mock('node:child_process', () => {
+vi.mock('node:child_process', async original => {
+  const actual = await original<typeof import('node:child_process')>()
   const forbidden = () => { throw Error('Host binaries are forbidden in the transcript authority fixture') }
   return { exec: forbidden, execSync: forbidden,
     execFile: (command: string, args: string[], _options: unknown, done: (error: null, value: string) => void) => {
       if (command !== 'ps' || JSON.stringify(args) !== JSON.stringify(['-p', String(process.pid), '-o', 'lstart='])) forbidden()
       done(null, 'fixture-start')
     }, execFileSync: forbidden,
-    spawn: forbidden, spawnSync: forbidden, fork: forbidden }
+    spawn: (command: string, args: string[], options: import('node:child_process').SpawnOptions) => {
+      // Only the required storage child may execute; engine and host probes remain forbidden.
+      expect(command).toBe(process.execPath)
+      expect(args).toEqual(['--import', import.meta.resolve('tsx'),
+        fileURLToPath(new URL('../storage/entry.ts', import.meta.url)), '__storage'])
+      expect([root, join(root, 'ADAPTER_DATA_DIR')]).toContain(options.env?.ADAPTER_DATA_DIR)
+      const child = actual.spawn(command, args, options)
+      const settled = Promise.all([once(child, 'exit'), once(child, 'close'), once(child, 'disconnect')])
+      void settled.catch(() => {})
+      children.set(child, settled)
+      return child
+    }, spawnSync: forbidden, fork: forbidden }
 })
 vi.mock('./loginShellEnv.js', () => ({ loginShellEnvironment: () => ({}) }))
 vi.mock('./bootId.js', async original => ({ ...await original<object>(), currentBootId: () => 'fixture-boot', bootChanged: () => false }))
@@ -83,6 +95,10 @@ let registry: typeof import('./registry.js')['registry']
 let row: import('./registry.js').RegisteredSession
 let capture: typeof import('./captureResumeIdentity.js')['captureResumeIdentity']
 let checkpoints: import('./sessionCheckpoint.js').SessionCheckpointStore
+let storage: import('./sessionStorage.js').SessionStorage
+const stoppedStores: import('./stoppedAgents.js').StoppedAgentStore[] = []
+const children = new Map<ChildProcess, Promise<unknown>>()
+function ownStopped(store: import('./stoppedAgents.js').StoppedAgentStore) { stoppedStores.push(store); return store }
 const header = (id = A) => JSON.stringify({ type: 'session_meta', payload: { id, cwd: root, source: 'cli' } }) + '\n'
 const files = () => Object.fromEntries(readdirSync(directory).map(name => [name, readFileSync(join(directory, name), 'utf8')]))
 
@@ -106,6 +122,14 @@ beforeEach(async () => {
   vi.mocked(processChecks.terminateDeletedAgent).mockReset().mockResolvedValue('gone')
   vi.mocked(processChecks.checkPidRuntime).mockReset().mockResolvedValue({ state: 'gone', reason: 'fixture process ended' })
   ;({ registry } = await import('./registry.js'))
+  ;({ sessionStorage: storage } = await import('./sessionStorage.js'))
+  const prepare = storage.prepare.bind(storage)
+  vi.spyOn(storage, 'prepare').mockImplementation(async (...args) => {
+    const image = await prepare(...args)
+    try { if (args[0].kind === 'registry') await faults.preparedRegistry?.() }
+    catch (error) { await storage.discard(image); throw error }
+    return image
+  })
   capture = (await import('./captureResumeIdentity.js')).captureResumeIdentity
   checkpoints = new (await import('./sessionCheckpoint.js')).SessionCheckpointStore(directory)
   row = (await registry.openPendingAgent({ engine: 'codex', cwd: root, runtimes: [{ backend: 'tmux', paneId: '%1' }] }))!
@@ -115,10 +139,21 @@ beforeEach(async () => {
   ;(await registry.flush())
 })
 afterEach(async () => {
-  await registry.flush({ exiting: true }).catch(() => {})
+  const outcomes: PromiseSettledResult<unknown>[] = await Promise.allSettled([registry.flush({ exiting: true })])
   faults.copied = undefined; faults.inspectedCheckpoint = undefined; faults.openingSource = undefined; faults.sourceFailure = undefined
   faults.preparedRegistry = undefined
-  vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.resetModules()
+  // Signal-boundary cases replace process.kill; cleanup must prove actual owned PID absence.
+  vi.restoreAllMocks()
+  outcomes.push(...await Promise.allSettled([closeSessionStorageFixture(storage), ...stoppedStores.splice(0).map(store => store.close())]))
+  outcomes.push(...await Promise.allSettled(children.values()))
+  for (const child of children.keys()) if (child.pid) {
+    try { process.kill(child.pid, 0); outcomes.push({ status: 'rejected', reason: Error('transcript storage child still exists') }) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') outcomes.push({ status: 'rejected', reason: error }) }
+  }
+  children.clear()
+  vi.unstubAllEnvs(); vi.resetModules()
+  const failures = outcomes.filter(result => result.status === 'rejected').map(result => result.reason)
+  if (failures.length) throw new AggregateError(failures, 'transcript fixture cleanup failed')
   rmSync(root, { recursive: true, force: true })
 })
 
@@ -298,12 +333,12 @@ it('preserves a repaired parent through Stop and the final real forget archive',
   writeFileSync(child, JSON.stringify({ type: 'session_meta', payload: { id: B, cwd: root,
     source: { subagent: { thread_spawn: { parent_thread_id: A } } } } }) + '\n')
   row.transcriptPath = child
-  const stopped = new StoppedAgentStore(join(root, 'stopped'))
+  const stopped = ownStopped(new StoppedAgentStore(join(root, 'stopped')))
   const forget = createForgetSession({ registry, stoppedAgents: stopped, syncRecapPool: vi.fn(), normalizers: { forget: vi.fn() },
     forgetAttach: vi.fn(), turnStartedAt: new Map(), prompts: new Map(), neverFoldedHistory: new Set(), replayedFirstTurn: new Set(),
     clearAgyIdleWatch: vi.fn(), cursorDiscovery: { remove: vi.fn() },
     runtimeProfiles: { forget: vi.fn() }, watcher: { removeSession: vi.fn(async () => {}) },
-    stopHeartbeat: vi.fn(), input: { forget: vi.fn() }, deviceInput: { forget: vi.fn() },
+    stopHeartbeat: vi.fn(), input: { forget: vi.fn() },
     ended: vi.fn(), mirror: { forget: vi.fn() }, clients: { send: vi.fn(), sendCommander: vi.fn() } })
   const stop = createStopAgentService({ registry, stoppedAgents: stopped, restartJobs: new AgentRestartCoordinator(),
     stopJobs: new Map(), backendFor: () => ({ kill: vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const })) }),
@@ -311,13 +346,13 @@ it('preserves a repaired parent through Stop and the final real forget archive',
     forgetSession: forget, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: async () => {} })
   const checkpoint = async (session: typeof row) => {
     expect(session.transcriptPath).toBe(parent)
-    stopped.save({ ...row, title: 'A hook saved the stale child path' })
+    await stopped.save({ ...row, title: 'A hook saved the stale child path' })
   }
   await stop(row.agentId, { checkpoint })
   const { checkPidRuntime } = await import('./deleteAgentFallback.js')
   expect(checkPidRuntime).toHaveBeenCalledWith(expect.objectContaining({ agentId: row.agentId, processIdentity: row.processIdentity }))
   expect(registry.byAgent(row.agentId)).toBeUndefined()
-  expect(stopped.get(row.agentId)).toMatchObject({ active: false, sessionId: A, transcriptPath: parent })
+  expect((await stopped.get(row.agentId))).toMatchObject({ active: false, sessionId: A, transcriptPath: parent })
 })
 
 it.each(['prepared image', 'process refresh'] as const)('retains a typed Stop hold when native evidence changes during the %s', async phase => {
@@ -326,11 +361,11 @@ it.each(['prepared image', 'process refresh'] as const)('retains a typed Stop ho
   const { StoppedAgentStore } = await import('./stoppedAgents.js')
   const { AgentRestartCoordinator } = await import('./restartAgent.js')
   const { checkPidRuntime } = await import('./deleteAgentFallback.js')
-  const stopped = new StoppedAgentStore(join(root, 'stopped')), send = vi.fn()
+  const stopped = ownStopped(new StoppedAgentStore(join(root, 'stopped'))), send = vi.fn()
   const forget = createForgetSession({ registry, stoppedAgents: stopped, syncRecapPool: vi.fn(), normalizers: { forget: vi.fn() },
     forgetAttach: vi.fn(), turnStartedAt: new Map(), prompts: new Map(), neverFoldedHistory: new Set(), replayedFirstTurn: new Set(),
     clearAgyIdleWatch: vi.fn(), cursorDiscovery: { remove: vi.fn() }, runtimeProfiles: { forget: vi.fn() },
-    watcher: { removeSession: vi.fn(async () => {}) }, stopHeartbeat: vi.fn(), input: { forget: vi.fn() }, deviceInput: { forget: vi.fn() },
+    watcher: { removeSession: vi.fn(async () => {}) }, stopHeartbeat: vi.fn(), input: { forget: vi.fn() },
     ended: vi.fn(), mirror: { forget: vi.fn() }, clients: { send, sendCommander: vi.fn() } })
   const stop = createStopAgentService({ registry, stoppedAgents: stopped, restartJobs: new AgentRestartCoordinator(),
     stopJobs: new Map(), backendFor: () => ({ kill: vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const })) }),
@@ -352,7 +387,7 @@ it.each(['prepared image', 'process refresh'] as const)('retains a typed Stop ho
   expect(registry.byAgent(row.agentId)?.sessionId).toBe(A)
   expect(JSON.parse(readFileSync(join(root, 'ADAPTER_DATA_DIR', 'registry.json'), 'utf8')))
     .toEqual(expect.arrayContaining([expect.objectContaining({ agentId: row.agentId, sessionId: A })]))
-  expect(stopped.get(row.agentId)).toMatchObject({ sessionId: A, transcriptPath: transcript })
+  expect((await stopped.get(row.agentId))).toMatchObject({ sessionId: A, transcriptPath: transcript })
   expect(send).not.toHaveBeenCalled()
   expect(result).toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
 })
@@ -380,7 +415,7 @@ it('retains a typed Stop hold when the native broker contains a failed grant che
     argv: argvTokens, readFile: async () => JSON.stringify({ pid: 90, processStartTime: 'server-birth' }), log: vi.fn() })
   core.connected('engine-codex')
   const kill = vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const })), forget = vi.fn()
-  const stop = createStopAgentService({ registry, stoppedAgents: new StoppedAgentStore(join(root, 'stopped')),
+  const stop = createStopAgentService({ registry, stoppedAgents: ownStopped(new StoppedAgentStore(join(root, 'stopped'))),
     restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), backendFor: () => ({ kill }),
     agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), nudge: vi.fn() },
     forgetSession: forget, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: core.stop })
@@ -398,7 +433,7 @@ it.each(['checkpoint', 'native drain'])('holds Stop when its transcript changes 
   const kill = vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const }))
   const forget = vi.fn()
   const stopNative = vi.fn(async () => { if (phase === 'native drain') writeFileSync(transcript, header(B)) })
-  const stop = createStopAgentService({ registry, stoppedAgents: new StoppedAgentStore(join(root, 'stopped')),
+  const stop = createStopAgentService({ registry, stoppedAgents: ownStopped(new StoppedAgentStore(join(root, 'stopped'))),
     restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), backendFor: () => ({ kill }),
     agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), nudge: vi.fn() },
     forgetSession: forget, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative })
@@ -432,7 +467,7 @@ it.each(['binding', 'process birth', 'native grant', 'contained grant', 'process
       return { state: 'succeeded' as const, dispatch: 'executed' as const }
     })
     const forget = vi.fn(), nativeMutation = vi.fn()
-    const stop = createStopAgentService({ registry, stoppedAgents: new StoppedAgentStore(join(root, 'stopped')),
+    const stop = createStopAgentService({ registry, stoppedAgents: ownStopped(new StoppedAgentStore(join(root, 'stopped'))),
       restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), backendFor: () => ({ kill }),
       agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), nudge: vi.fn() },
       forgetSession: forget, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: async (_session, current) => {
@@ -465,7 +500,7 @@ it.each(['before', 'configuration', 'history repair', 'permission', 'tmux dispat
       return { choice, droppedFlag: null }
     })
     ;(await removeRegistryAgent(registry, row.agentId))
-    const stopped = new StoppedAgentStore(join(root, 'stopped')); stopped.save(row)
+    const stopped = ownStopped(new StoppedAgentStore(join(root, 'stopped'))); await stopped.save(row)
     const writeConfiguration = vi.fn()
     const prepare = vi.fn(async () => { if (phase === 'history repair') writeFileSync(transcript, header(B)); return phase === 'history repair' })
     const create = vi.fn(async () => {
@@ -504,7 +539,7 @@ it.each(['before', 'configuration', 'history repair', 'permission', 'tmux dispat
       detail: expect.stringContaining(phase === 'conversation ownership' ? 'another live harness' : 'different conversation') })
     expect(registry.byAgent(row.agentId)).toBeUndefined()
     expect(announce).not.toHaveBeenCalled()
-    expect(stopped.get(row.agentId)?.sessionId).toBe(A)
+    expect((await stopped.get(row.agentId))?.sessionId).toBe(A)
     if (newOwner) expect(registry.bySession(A)?.agentId).toBe(newOwner)
     if (phase === 'before' || phase === 'configuration') {
       expect(writeConfiguration).not.toHaveBeenCalled()

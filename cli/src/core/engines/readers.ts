@@ -1,6 +1,6 @@
 /** The core's reader port: bounded calls, no reader implementation and no fallback after a failure. */
 import { createHash } from 'node:crypto'
-import type { EngineTranscript, TranscriptSession } from '../../engines/facets/transcript.js'
+import type { TranscriptReader, TranscriptSession } from '../../engines/facets/transcript.js'
 import type { HistoryAnswer, HistoryAsk } from '../../engines/facets/transcript.js'
 import type { LastTurnText } from '../../engines/kit/events.js'
 import { isOtherEngine, OTHER_ENGINES, OTHER_ENGINES_SERVICE, readWaitMs } from '../../engines/otherEngines.js'
@@ -14,7 +14,7 @@ export interface EngineReaderDeps {
   isolated: ReadonlySet<string>
   call(service: string, type: string, payload: Record<string, unknown>, waitMs: number): Promise<Record<string, unknown>>
   /** Only supplied by the explicit inline/older-master compatibility path. */
-  inline?: (engine: string) => EngineTranscript | undefined
+  inline?: (engine: string) => TranscriptReader | undefined
   log?: (line: string) => void
 }
 
@@ -100,7 +100,7 @@ export function createEngineReaders(deps: EngineReaderDeps) {
       throw error instanceof EngineReadError ? error : new EngineReadError('ENGINE_UNAVAILABLE')
     } finally { pending.set(engine, pending.get(engine)! - 1) }
   }
-  const makeReader = (engine: string): EngineTranscript => ({
+  const makeReader = (engine: string): TranscriptReader => ({
     historyPage: (session, ask) => read(engine, READER_HISTORY, session, ask) as Promise<HistoryAnswer>,
     lastTurnText: async (session) => {
       // A conversation kept in a store has no transcript path: its store is what is read.
@@ -108,9 +108,9 @@ export function createEngineReaders(deps: EngineReaderDeps) {
       return read(engine, READER_LAST_TURN, session) as Promise<LastTurnText | null>
     },
   })
-  const readers = new Map<string, EngineTranscript>([...Object.keys(READER_SERVICES), ...OTHER_ENGINES].map((engine) => [engine, makeReader(engine)]))
+  const readers = new Map<string, TranscriptReader>([...Object.keys(READER_SERVICES), ...OTHER_ENGINES].map((engine) => [engine, makeReader(engine)]))
   return {
-    forEngine(engine: string): EngineTranscript | undefined {
+    forEngine(engine: string): TranscriptReader | undefined {
       if (readerEngine(engine)) {
         return deps.isolated.has(READER_SERVICES[engine]) ? readers.get(engine) : deps.inline?.(engine) ?? readers.get(engine)
       }

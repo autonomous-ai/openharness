@@ -1,3 +1,5 @@
+import { APPROVE_RE, REJECT_RE } from '../../lib/questionApproval.js'
+export { isApprovalDialog } from '../../lib/questionApproval.js'
 import type { FoundDialog, PaneView, QuestionRow, QuestionView } from '../facets/screen.js'
 import { earlierDialogEnd, PERMISSION_FOOTER_RE, QUESTION_FOOTER_RE } from '../../lib/dialogEnd.js'
 
@@ -131,17 +133,6 @@ function parseDownward(lines: string[], tabBar: number): PaneView {
  * be read as a prompt.
  */
 
-/** The first row of an approval, measured across claude, commandcode, codex, devin, grok, amp and kilo. */
-const APPROVE_RE = /^(yes|allow|approve|accept|proceed|run|continue)\b/i
-/** \u2026and the row that declines it. Never dropped \u2014 see the rule amp's parser states: a device user given
- *  three ways to say yes and none to say no cannot answer the prompt at all. */
-// `skip` is here because cursor's decline row is "Skip & tell the agent what to do instead" — an engine
-// whose only way to refuse says neither "no" nor "reject" would otherwise fail the yes/no guard and its
-// whole prompt would go unread.
-// Claude's plan review does not use a negative verb at all: its only refusal
-// row is "Tell Claude what to change". Keep `tell ... what to change` narrow so
-// an ordinary numbered list beginning with "Tell" cannot become an approval.
-const REJECT_RE = /^(no|reject|deny|decline|cancel|skip|don'?t|stop)\b|^tell\b.*\bwhat to change\b/i
 /** The solid rule that opens the frame. Deliberately NOT the dashed one (`\u254c`) that brackets an edit diff,
  *  which sits BELOW the header and would cost the title. */
 const FRAME_RULE_RE = /^\s*[\u2500\u2501\u2550]{6,}\s*$/
@@ -369,19 +360,6 @@ function dialogAbove(lines: string[], start: number, footer: number): string {
     top = i
   }
   return lines.slice(top, footer).map((line) => line.trimEnd()).join('\n').trim()
-}
-
-/**
- * A dialog that asks to RUN or CHANGE something (an approval), whichever parser read it: a framed
- * permission prompt, or a footer dialog whose first row approves, whose rows include a rejection, and
- * which names a command (`$ …`) or asks "would you like to run / make …". What the pair's floor treats as
- * a permission prompt (pair/classify.ts); nothing else reads it.
- */
-export function isApprovalDialog(view: QuestionView): boolean {
-  if (view.permission) return true
-  if (!view.rows.length || !APPROVE_RE.test(view.rows[0].label) || !view.rows.some((row) => REJECT_RE.test(row.label))) return false
-  const text = view.dialog ?? view.question
-  return /(^|\n)\s*\$ /.test(text) || /would you like to (run|make|apply|execute|edit|write)/i.test(text)
 }
 
 /** Match an answer to a row. The device stores option labels in an 80-byte buffer, so a long label comes

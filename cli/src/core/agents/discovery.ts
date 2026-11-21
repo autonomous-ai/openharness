@@ -14,7 +14,6 @@ import { OPENCLAW_FIRST_TASK, OPENCLAW_STATES, readOpenclawScreen } from '../../
 import { externalResumePending } from '../../lib/externalResume.js'
 import { paneReadIdentity } from '../transcripts/readIdentity.js'
 import { isTerminalEngine } from '../../engines/types.js'
-import type { AutonomousDeviceInput } from '../deviceInput.js'
 import type { QuestionWatcher } from '../../lib/questionController.js'
 import { sameGridAssignment } from '../../lib/gridAssignmentWire.js'
 import { errorKind, sid } from '../../lib/log.js'
@@ -37,14 +36,13 @@ export interface DiscoveryDeps {
   attach: (session: RegisteredSession) => void
   /** The new committed agent took the previous agent's pane. */
   taken: (from: string, to: RegisteredSession) => void
-  forgetSession: (id: string, opts?: { force?: boolean; agentId?: string; captured?: RegisteredSession }) => Promise<void>
+  forgetSession: (id: string, opts?: { force?: boolean; agentId?: string; captured?: RegisteredSession; authority?: RegistryAuthority }) => Promise<void>
   announceSession: (session: RegisteredSession) => void
   bindObservedAgent: (observed: DiscoveredTerminalAgent) => Promise<void>
   syncRecapPool: () => void
   attachSession: (session: RegisteredSession) => Promise<boolean>
   invalidateTerminalControl: (agentId: string) => void
   input: Pick<SessionInputController, 'forget'>
-  deviceInput: Pick<AutonomousDeviceInput, 'forget'>
   questionWatcher: Pick<QuestionWatcher, 'stop'>
   stopHeartbeat: (sessionId: string) => void
   retainExitedSession: (agent: RegisteredSession, announce: boolean, authority?: RegistryAuthority) => Promise<LaunchPublication>
@@ -61,7 +59,7 @@ export interface DiscoveryDeps {
 
 export function createDiscoveryHandlers({
   registry, attach, taken, forgetSession, announceSession, bindObservedAgent, syncRecapPool, attachSession,
-  invalidateTerminalControl, input, deviceInput, questionWatcher, stopHeartbeat, retainExitedSession,
+  invalidateTerminalControl, input, questionWatcher, stopHeartbeat, retainExitedSession,
   stoppedAgents, send, restoreDegraded, terminals, current: operationCurrent,
 }: DiscoveryDeps) {
   const observedAuthority = (observed: DiscoveredTerminalAgent, selected?: RegisteredSession) => {
@@ -102,9 +100,9 @@ export function createDiscoveryHandlers({
     looked.add(key)
     return true
   }
-  const archivedOwner = (terminal: RegisteredSession, observed: DiscoveredTerminalAgent): RegisteredSession | undefined => {
+  const archivedOwner = async (terminal: RegisteredSession, observed: DiscoveredTerminalAgent): Promise<RegisteredSession | undefined> => {
     let archived: RegisteredSession[]
-    try { archived = stoppedAgents.list() } catch (error) {
+    try { archived = await stoppedAgents.list() } catch (error) {
       console.warn(`[discovery] saved harnesses unreadable; ${sid(terminal.agentId)} adopts its engine as new: ${errorKind(error)}`)
       return undefined
     }
@@ -118,14 +116,14 @@ export function createDiscoveryHandlers({
    * the pane. Not while a resume of it is under way (what went with the pane comes back with it), and not once it is
    * purged (no saved record).
    */
-  const paneTaken = (previous: string, adopted: RegisteredSession): void => {
+  const paneTaken = async (previous: string, adopted: RegisteredSession, current: () => boolean): Promise<void> => {
     if (stoppedAgents.resumeReservedAt(previous) !== null) return
     let saved: RegisteredSession | null
-    try { saved = stoppedAgents.get(previous) } catch (error) {
+    try { saved = await stoppedAgents.get(previous) } catch (error) {
       console.warn(`[discovery] saved harnesses unreadable; ${sid(adopted.agentId)} takes nothing of its pane: ${errorKind(error)}`)
       return
     }
-    if (saved) taken(previous, adopted)
+    if (saved && stoppedAgents.resumeReservedAt(previous) === null && current()) taken(previous, adopted)
   }
   /**
    * Every `openclaw` command renames its process to `openclaw` (`onboard`, `logs --follow`, `doctor`, `sessions` too:
@@ -200,8 +198,8 @@ export function createDiscoveryHandlers({
     // engine already (a build with the engine fix but not this one), as long as no conversation is bound to it.
     const holder = !isTerminalEngine(observed.engine) && (isTerminalEngine(current.engine)
       || (!!current.terminalHost && !current.sessionId && current.engine === observed.engine))
-    const owner = holder && firstLook(current, observed) ? archivedOwner(current, observed) : undefined
     const authority = observedAuthority(observed, current)
+    const owner = holder && firstLook(current, observed) ? await archivedOwner(current, observed) : undefined
     let revived: RegisteredSession | null = null
     if (owner) {
       try { revived = await registry.reinstateArchived(current.agentId, owner, observed.processIdentity, authority) }
@@ -215,7 +213,7 @@ export function createDiscoveryHandlers({
       }
     }
     if (revived) {
-      try { stoppedAgents.remove(revived.agentId) } catch (error) {
+      try { await stoppedAgents.remove(revived.agentId, () => authority.committed(revived!)) } catch (error) {
         console.warn(`[discovery] ${sid(revived.agentId)} archive could not be removed: ${errorKind(error)}`)
       }
       console.log(`[discovery] ${sid(revived.agentId)} back from the archive · its ${observed.engine} never stopped`
@@ -244,7 +242,10 @@ export function createDiscoveryHandlers({
       current = registry.byAgent(publication.entry.agentId)!
     }
     if (adopted) console.log(`[discovery] ${sid(current.agentId)} terminal → ${observed.engine} · ${observed.primaryRuntimeKey}`)
-    if (adopted && previous) paneTaken(previous, adopted)
+    if (adopted && previous) {
+      await paneTaken(previous, adopted, () => authority.committed(adopted))
+      if (!authority.committed(adopted)) return
+    }
     if (!wasLaunching && !adopted) {
       registry.updateRuntimes(current.agentId, observed.runtimes, observed.primaryRuntimeKey)
       registry.updateProcessIdentity(current.agentId, observed.processIdentity, observed.gateway, observed.grid)
@@ -326,14 +327,13 @@ export function createDiscoveryHandlers({
     if (refreshed) announceSession(refreshed)
   }
   const onDormant = async (agent: RegisteredSession, reason: string): Promise<void> => {
-    if (!agent.active || agent.launch?.state === 'held') return
+    if (!agent.active || agent.launch?.state === 'held' || operationCurrent?.(agent.agentId) === false) return
     const selected = structuredClone(agent), runtime = primaryRuntime(selected)
     const backend = terminals.backendFor(runtime)
     const current = () => operationCurrent?.(selected.agentId) !== false
       && terminals.backendFor(runtime) === backend && matchesLaunchReceipt(registry.byAgent(selected.agentId), selected)
     invalidateTerminalControl(agent.agentId)
     input.forget(agent.agentId)
-    deviceInput.forget(agent.agentId)
     if (agent.sessionId) {
       questionWatcher.stop(agent.sessionId)
       stopHeartbeat(agent.sessionId)
@@ -341,9 +341,12 @@ export function createDiscoveryHandlers({
     // An OpenClaw TUI whose config has no Gateway token prints so and exits, before it binds a session. Its launch
     // failed, saying what to run, and the agent stays for show to find instead of becoming a terminal.
     if (agent.engine === 'openclaw' && !agent.sessionId) {
-      const read = await backend?.capture(runtime)
+      const read = await backend?.capture(runtime).catch(error => {
+        console.warn(`[discovery] ${sid(agent.agentId)} exit pane unreadable · ${errorKind(error)}`)
+        return undefined
+      })
+      if (!current()) return
       if (read?.state === 'succeeded' && readOpenclawScreen(read.value).state === 'no-token') {
-        if (!current()) return
         const failed = registry.setLaunch(agent.agentId, { state: 'failed', error: 'OPENCLAW_NO_TOKEN', detail: OPENCLAW_STATES.noToken })
         if (failed) announceSession(failed)
         console.log(`[discovery] ${sid(agent.agentId)} failed · ${OPENCLAW_STATES.noToken}`)
@@ -376,6 +379,9 @@ export function createDiscoveryHandlers({
     announceSession(agent)
   }
   const onRemoved = async (agent: RegisteredSession, reason: string): Promise<void> => {
+    // A scan can finish while Resume owns this row. Keep its selection through publication.
+    const current = () => operationCurrent?.(agent.agentId) !== false
+    if (!current()) return
     // A missing waiting shell does not end the conversation held for preparation/recovery.
     if (agent.launch?.state === 'held') {
       registry.setActive(agent.agentId, false)
@@ -393,7 +399,7 @@ export function createDiscoveryHandlers({
       return
     }
     console.log(`[discovery] ${sid(agent.agentId)} removed · ${reason}`)
-    await forgetSession(agent.agentId, { force: true, captured: structuredClone(agent) })
+    await forgetSession(agent.agentId, { force: true, captured: structuredClone(agent), authority: { current } })
   }
   const onTerminalAvailability = (agent: RegisteredSession, available: boolean): void => {
     const changed = registry.terminalAvailable(agent.agentId) !== available

@@ -12,7 +12,6 @@ import { lockDsh } from './lock.js'
 import * as packageLock from './lock.js'
 import { createHash } from 'node:crypto'
 import { bundledRevisions } from './builtinIds.js'
-import { bundledPending } from '../core/viewersWake.js'
 
 let root: string
 let original: string
@@ -49,15 +48,15 @@ it('uses the embedded release bundle and returns unavailable in unbundled develo
   expect(installedDsh(MODEL_MANAGER_ID)?.manifest.name).toBe('Model Manager')
 })
 
-it('records each harness under the revision the release build works out for the core to check (core/viewersWake.ts)', () => {
+it('records each harness under the revision the release build supplies', () => {
   expect(bundledRevisions()).toEqual({})
   // build-bundle.mjs: the sha256 of each bundle's JSON as the Store reads it back.
   const text = JSON.stringify(bundle())
   vi.stubGlobal('__MODEL_MANAGER_BUNDLE__', text)
   vi.stubGlobal('__BUILTIN_REVISIONS__', JSON.stringify({ models: createHash('sha256').update(JSON.stringify(JSON.parse(text))).digest('hex') }))
-  expect(bundledPending({ revisions: bundledRevisions() })).toBe('Model Manager to put in place')
+  expect(installedDsh(MODEL_MANAGER_ID)).toBeUndefined()
   expect(ensureBundledModelManager()).toBe(true)
-  expect(bundledPending({ revisions: bundledRevisions() })).toBeNull()
+  expect(installedDsh(MODEL_MANAGER_ID)?.revision).toBe(bundledRevisions().models)
   // Revisions that do not read as a list of them are none.
   for (const malformed of ['[]', 'null', '{']) {
     vi.stubGlobal('__BUILTIN_REVISIONS__', malformed)

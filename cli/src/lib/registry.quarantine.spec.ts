@@ -1,4 +1,5 @@
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'fs'
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
+import { rmSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -20,9 +21,10 @@ vi.mock('fs', async (real) => {
 
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
-vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
 
 let dataDir = ''
+const stores = new Set<typeof import('./sessionStorage.js')['sessionStorage']>()
+const registries = new Set<typeof import('./registry.js')['registry']>()
 const processIdentity = (pid: number) => ({ pid, executable: 'claude', startMarker: `Mon Aug 10 10:00:${String(pid % 60).padStart(2, '0')} 2026` })
 
 async function loadRegistry() {
@@ -31,7 +33,10 @@ async function loadRegistry() {
   process.env.CLAUDE_PROJECTS_DIR = dataDir
   process.env.CODEX_HOME = dataDir
   process.env.CURSOR_HOME = dataDir
-  return (await import('./registry.js')).registry
+  stores.add(deadline.slowSessionStorage((await import('./sessionStorage.js')).sessionStorage))
+  const registry = (await import('./registry.js')).registry
+  registries.add(registry)
+  return registry
 }
 
 describe('a registry no version can load', () => {
@@ -43,11 +48,32 @@ describe('a registry no version can load', () => {
     rename.fails = false
     error = vi.spyOn(console, 'error').mockImplementation(() => {})
   })
-  afterEach(() => { vi.restoreAllMocks() })
+  afterEach(async () => {
+    await Promise.allSettled([...registries].map(registry => registry.flush({ exiting: true })))
+    registries.clear()
+    const closed = await Promise.allSettled([...stores].map(closeSessionStorageFixture))
+    stores.clear(); vi.restoreAllMocks()
+    const failures = closed.filter(result => result.status === 'rejected').map(result => result.reason)
+    if (failures.length) throw new AggregateError(failures, 'quarantine fixture cleanup failed')
+    rmSync(dataDir, { recursive: true, force: true })
+    for (const name of ['ADAPTER_DATA_DIR', 'CLAUDE_PROJECTS_DIR', 'CODEX_HOME', 'CURSOR_HOME']) delete process.env[name]
+  })
+
+  it.each([false, 'error'] as const)('does not log malformed Registry content when quarantine fails=%s', async fails => {
+    const content = 'secret123'
+    writeFileSync(join(dataDir, 'registry.json'), content, { mode: 0o600 })
+    rename.fails = fails
+    const registry = await loadRegistry()
+    await registry.load()
+    expect(error).toHaveBeenCalled()
+    expect(error.mock.calls.flat().join(' ')).not.toContain(content)
+    const retained = fails ? 'registry.json' : readdirSync(dataDir).find(name => name.startsWith('registry.json.corrupt-'))!
+    expect(readFileSync(join(dataDir, retained), 'utf8')).toBe(content)
+  })
 
   it('with two rows claiming one agent: moved aside, and the registry starts empty and writable', async () => {
     const registry = await loadRegistry()
-    registry.load()
+    await registry.load()
     ;(await registry.openProcessAgent({ agentId: 'a1', engine: 'claude', tmuxPane: '%1', processIdentity: processIdentity(101) }))
     ;(await registry.openProcessAgent({ agentId: 'a2', engine: 'claude', tmuxPane: '%2', processIdentity: processIdentity(102) }))
     const file = join(dataDir, 'registry.json')
@@ -57,7 +83,7 @@ describe('a registry no version can load', () => {
     writeFileSync(file, duplicated, { mode: 0o600 })
 
     const again = await loadRegistry()
-    again.load()
+    await again.load()
     expect(again.list()).toEqual([])
     const aside = readdirSync(dataDir).filter((name) => name.startsWith('registry.json.corrupt-'))
     expect(aside).toHaveLength(1)
@@ -71,7 +97,7 @@ describe('a registry no version can load', () => {
     writeFileSync(file, '[{"agentId":', { mode: 0o600 })
     rename.fails = 'error'
     const registry = await loadRegistry()
-    registry.load()
+    await registry.load()
     expect(error).toHaveBeenCalledWith('[registry] registry is not JSON, and it could not be moved aside (EXDEV); refusing to overwrite it')
     ;(await registry.openProcessAgent({ agentId: 'must-not-write', engine: 'claude', tmuxPane: '%9', processIdentity: processIdentity(109) }))
     expect(readFileSync(file, 'utf8')).toBe('[{"agentId":')
@@ -82,9 +108,9 @@ describe('a registry no version can load', () => {
     const file = join(dataDir, 'registry.json')
     writeFileSync(file, '[{"agentId":"a1","defaultName": SECRET-NAME-MARKER}]', { mode: 0o600 })
     const registry = await loadRegistry()
-    registry.load()
+    await registry.load()
     expect(registry.list()).toEqual([])
-    expect(error).toHaveBeenCalledWith(expect.stringMatching(/^\[registry\] registry is not JSON; moved it aside to .*registry\.json\.corrupt-\S+ and started empty$/))
+    expect(error).toHaveBeenCalledWith('[registry] registry is not JSON; moved it aside and started empty')
     expect(error.mock.calls.flat().join('\n')).not.toContain('SECRET')
   })
 
@@ -93,7 +119,7 @@ describe('a registry no version can load', () => {
     writeFileSync(file, '{"schemaVersion":2}', { mode: 0o600 })
     rename.fails = 'string'
     const registry = await loadRegistry()
-    registry.load()
+    await registry.load()
     expect(error).toHaveBeenCalledWith('[registry] registry root is not an array, and it could not be moved aside (string); refusing to overwrite it')
   })
 })

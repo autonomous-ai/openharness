@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { emptyPorts, MODELS_FALLBACKS, type ModelsPort } from '../core/api.js'
 import { listClaudeCommands } from '../engines/claude/lists.js'
 import { listOpencodeCommands } from '../engines/opencode/commandList.js'
-import { createServiceHost } from '../core/serviceHost.js'
+import { createServiceHost } from './inlineHost.js'
 import { installedDsh } from '../dsh/installed.js'
 import { appEngineOps, scanAppModels } from '../lib/appModels.js'
 import { createGridAccess, gridNamesLocal, reconcileGridAttach, type GridAttachResult } from '../lib/gridAttach.js'
@@ -29,7 +29,10 @@ import { linkClaudeProfile } from '../lib/claudeProfiles.js'
 import { listClaudeProfiles, profileId } from '../lib/claudeHomes.js'
 import { linkCodexProfile, listCodexProfiles } from '../lib/codexProfiles.js'
 import { fakeCore } from '../testing/fakeCore.js'
+import { storedGridFixture } from '../testing/gridCredentials.js'
 import { compactRuntimePickerModels, launchTarget, MODELS_REQUESTS, runtimeModelCatalog, startModels } from './models.js'
+import { ensureBundledModelManager } from '../dsh/builtins.js'
+vi.mock('../dsh/builtins.js', () => ({ ensureBundledModelManager: vi.fn(() => true) }))
 
 const access = vi.hoisted(() => ({ ensure: vi.fn(async (_request?: { ownGrid?: boolean }): Promise<GridAttachResult> => ({ status: 'converged', name: 'grid-1', detail: 'ok' })) }))
 vi.mock('../lib/gridAttach.js', () => ({
@@ -147,6 +150,17 @@ function deferred<T>() {
 }
 
 describe('the models service', () => {
+  it('prepares its bundled package on first local-model request with Store off and retries only when asked again', async () => {
+    const run = setup()
+    vi.mocked(ensureBundledModelManager).mockClear().mockReturnValueOnce(false).mockImplementationOnce(() => { throw Error('DSH_INDEX_BUSY') })
+    expect(ensureBundledModelManager).not.toHaveBeenCalled()
+    expect(await run.ask('grid_fleet_models_list')).toEqual({ error: 'The Model Manager package is unavailable. Try again.' })
+    expect(await run.ask('grid_fleet_models_list')).toEqual({ error: 'Models are unavailable. Try again.' })
+    expect(ensureBundledModelManager).toHaveBeenCalledTimes(2)
+    await run.ask('grid_fleet_models_list')
+    await run.ask('grid_fleet_models_list')
+    expect(ensureBundledModelManager).toHaveBeenCalledTimes(3)
+  })
   beforeEach(() => { vi.spyOn(console, 'log').mockImplementation(() => {}) })
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
 
@@ -281,12 +295,6 @@ describe('the models service', () => {
   })
 
   describe('its port', () => {
-    it('has grid ready through the one access', async () => {
-      const { port } = setup()
-      expect(await port.ensure({ ownGrid: true })).toMatchObject({ status: 'converged' })
-      expect(access.ensure).toHaveBeenCalledWith({ ownGrid: true })
-    })
-
     it('reads an agent\'s note off the pictures, and starts a sleeping grid while someone types, ignoring a prewarm that fails', async () => {
       const { port } = setup()
       const grid = { baseUrl: 'https://fixture.invalid/g/n1/relay/v1', model: 'big' }
@@ -840,6 +848,13 @@ describe('the models service', () => {
         expect(vi.mocked(apiTargetAnswer).mock.calls.at(-1)!.slice(1)).toEqual(['a', 'm'])
       })
 
+      it('refuses a saved reference when no private storage resolver was composed', async () => {
+        const { port } = setup()
+        const override = storedGridFixture({ networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic' })
+        expect(await port.gridLaunch({ engine: 'claude', override, machine: { hermesSystemManaged: false } }))
+          .toMatchObject({ ok: false, error: 'GRID_CREDENTIAL_UNAVAILABLE', unavailable: 'session-storage' })
+      })
+
       it('codex_profiles_list: the folders this machine lists, with the ones the asker has seen; a failed scan is said', async () => {
         const { ask } = setup()
         const { core } = setup()
@@ -946,4 +961,64 @@ describe('the device picker\'s compact catalog', () => {
     // The web asks without a picker mode and still gets the whole catalog.
     expect(compactRuntimePickerModels(many, 's1', undefined, null)).toHaveLength(40)
   })
+})
+
+describe('package launch context in models', () => {
+beforeEach(() => { vi.spyOn(console, 'warn').mockImplementation(() => {}); vi.clearAllMocks() })
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.clearAllMocks() })
+it('prepares owner launch context without enumerating models or notifying a picker', async () => {
+  const name = vi.fn(async () => 'private-context')
+  const { ask, core } = setup([], { account: { privateGridName: name } })
+  access.ensure.mockClear(); local.list.mockClear(); vi.mocked(core.clients.gridModelsChanged).mockClear()
+  expect(await ask('grid_launch_context', { setup: true })).toEqual({ ok: true, account: { privateGrid: 'private-context' } })
+  expect(access.ensure).toHaveBeenCalledExactlyOnceWith({ ownGrid: true })
+  expect(access.ensure.mock.invocationCallOrder[0]).toBeLessThan(name.mock.invocationCallOrder[0])
+  expect(local.list).not.toHaveBeenCalled()
+  expect(core.clients.gridModelsChanged).not.toHaveBeenCalled()
+})
+it('reads ordinary package context without setup and prefers the backend account name', async () => {
+  const run = setup([], { account: { privateGridName: async () => 'backend-grid' } })
+  expect(await run.ask('grid_launch_context', { setup: false, privateGrid: 'untrusted' }))
+    .toEqual({ ok: true, account: { privateGrid: 'backend-grid' } })
+  expect(access.ensure).not.toHaveBeenCalled()
+  expect(deriveHarnessGridName).not.toHaveBeenCalled()
+})
+it('rejects non-owners, guests and malformed setup before reading or changing account state', async () => {
+  const name = vi.fn(async () => null), run = setup([], { account: { privateGridName: name } })
+  for (const asker of [{ local: true, owner: false }, { local: true, owner: true, guest: { id: 'guest' } }]) {
+    expect(await run.requests.grid_launch_context!({ setup: true }, asker as never)).toEqual({ error: 'OWNER_REQUIRED' })
+  }
+  for (const setup of [undefined, null, 1, 'true']) {
+    expect(await run.ask('grid_launch_context', { setup })).toEqual({ error: 'INVALID_REQUEST' })
+  }
+  expect(name).not.toHaveBeenCalled(); expect(access.ensure).not.toHaveBeenCalled()
+})
+it('bounds setup at eight seconds while its original operation can complete later', async () => {
+  vi.useFakeTimers()
+  const setupWork = deferred<GridAttachResult>(), name = vi.fn(async () => 'private')
+  access.ensure.mockReturnValueOnce(setupWork.promise)
+  const run = setup([], { account: { privateGridName: name } })
+  const answer = run.ask('grid_launch_context', { setup: true })
+  await vi.advanceTimersByTimeAsync(7_999); expect(name).not.toHaveBeenCalled()
+  await vi.advanceTimersByTimeAsync(1)
+  expect(await answer).toEqual({ ok: true, account: { privateGrid: 'private' } })
+  expect(console.warn).toHaveBeenCalledWith('[models] LAUNCH_SETUP_PENDING')
+  setupWork.resolve({ status: 'converged', name: 'private', detail: 'ok' }); await setupWork.promise
+  expect(access.ensure).toHaveBeenCalledOnce()
+})
+it('retains null account fallback on read failure and rejects a malformed contribution', async () => {
+  const name = vi.fn(async (): Promise<string | null> => { throw Error('private account content') })
+  const run = setup([], { account: { privateGridName: name } })
+  expect(await run.ask('grid_launch_context', { setup: false })).toEqual({ ok: true, account: { privateGrid: null } })
+  expect(console.warn).toHaveBeenCalledWith('[models] LAUNCH_CONTEXT_UNAVAILABLE · Error')
+  name.mockResolvedValueOnce('x'.repeat(4097))
+  expect(await run.ask('grid_launch_context', { setup: false })).toEqual({ error: 'CONTEXT_INVALID' })
+  expect(console.warn).toHaveBeenCalledWith('[models] LAUNCH_CONTEXT_INVALID')
+  name.mockResolvedValueOnce(null); vi.mocked(deriveHarnessGridName).mockResolvedValueOnce('derived')
+  expect(await run.ask('grid_launch_context', { setup: false })).toEqual({ ok: true, account: { privateGrid: 'derived' } })
+  access.ensure.mockRejectedValueOnce(Error('private setup failure'))
+  name.mockResolvedValueOnce(null)
+  expect(await run.ask('grid_launch_context', { setup: true })).toEqual({ ok: true, account: { privateGrid: null } })
+  expect(vi.mocked(console.warn).mock.calls.flat().join(' ')).not.toContain('private account content')
+})
 })

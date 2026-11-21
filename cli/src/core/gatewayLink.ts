@@ -1,3 +1,4 @@
+import type { ClientStreamQuota } from '../lib/clientStreamQueue.js'
 /**
  * The gateway in its own process, as the core sees it (docs/design/2026-10-06-core-boundary-next.md, step
  * 10, R2; the process's side is gateway/gatewayProcess.ts). The relay, the E2EE sessions and every key
@@ -18,7 +19,7 @@
  */
 import { RelayConnectError } from '../lib/relayFrames.js'
 import { decodeGatewayBinary, encodeGatewayBinary, GatewayBinary, GATEWAY_CALLS } from '../lib/gatewayWire.js'
-import { decodeTerminalLocal, encodeTerminalLocal } from '../lib/terminalBinary.js'
+import { clientStreamLocalFrame, decodeTerminalLocal, encodeTerminalLocal } from '../lib/terminalBinary.js'
 import { currentToken, RENEWAL_WAIT_MS, tokenOf } from '../lib/authSession.js'
 import { guestMachineList, withStaleMarker } from '../lib/machineListReply.js'
 import { PAIR_WAIT_MS, type GatewayMachines } from './api.js'
@@ -34,8 +35,8 @@ export interface GatewayLinkDeps {
   /** The core's side of what the gateway tells it (BackendSocket's `fromGateway`). */
   events: GatewayEvents
   /** The service link to the gateway (core/serviceLinks.ts, for `gateway`). */
-  notify(frame: ServiceFrame): boolean
-  notifyBinary(bytes: Uint8Array): boolean
+  notify(frame: ServiceFrame, quota?: ClientStreamQuota): boolean
+  notifyBinary(bytes: Uint8Array, quota?: ClientStreamQuota): boolean
   buffered(): number
   call(type: string, payload: Record<string, unknown>, waitMs?: number): Promise<Record<string, unknown>>
   /** What the gateway starts from each time it connects: this machine's ids, whether it is signed in. */
@@ -44,7 +45,7 @@ export interface GatewayLinkDeps {
   backend(method: 'GET', path: string): Promise<HttpAnswer>
   /** The last machine list reported by the gateway, for the models service's presence labels. */
   machines?(state: GatewayMachines): void
-  /** Ask the master for the gateway's process (harnessd/coreLink.ts `want`): it runs on demand (core/gatewayWake.ts). */
+  /** Ask the master for the gateway's process (harnessd/coreLink.ts `want`): it runs on demand (services/componentStartup.ts). */
   want?(): void
   /** Whether the Wi-Fi device's service serves, its process asked for and waited for a while (core/wifi.ts `serving`):
    *  the gateway's look for devices and its pairing wait for it, and only the core can ask for that process. */
@@ -112,7 +113,6 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
   let requestsOpen = true
   let dial: 'connect' | 'local' | null = null
   let localClients: LocalWindows = { desktop: 0, tui: 0 }
-  let wifiService = false
   let reachable: string[] | null = null
   let machines: GatewayMachines | null = null
   /** The remote clients the gateway registered, to forget each when it goes. */
@@ -122,10 +122,12 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
   let droppedSaidAt = -Infinity
   let droppedUnsaid = 0
 
-  const send = (kind: string, payload: Record<string, unknown> = {}): boolean =>
-    up && deps.notify({ type: 'service_event', payload: { ...payload, kind } })
+  const send = (kind: string, payload: Record<string, unknown> = {}, quota?: ClientStreamQuota): boolean =>
+    up && deps.notify({ type: 'service_event', payload: { ...payload, kind } }, quota)
   /** A frame for remote clients: dropped rather than held while the gateway reads nothing. */
-  const fits = (): boolean => {
+  const fits = (quota?: ClientStreamQuota): boolean => {
+    // Stream refusal must reach the physical owner, which revokes a final close it cannot queue.
+    if (quota) return true
     if (deps.buffered() <= GATEWAY_BUFFER_LIMIT) return true
     const at = now()
     if (at - droppedSaidAt < 60_000) droppedUnsaid++
@@ -181,7 +183,12 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
   }
 
   const port: GatewayPort = {
-    usage: (event) => { if (deps.buffered() < GATEWAY_USAGE_BUFFER_LIMIT) send('usage', { event }) },
+    usage: (event) => {
+      if (deps.buffered() >= GATEWAY_USAGE_BUFFER_LIMIT) return
+      // A counter already has a flat wire shape; carry provenance without a second event envelope.
+      if (event.kind === 'service') send('usageCounter', { metric: event.metric, service: event.service })
+      else send('usage', { event })
+    },
     usageCounter: (metric) => { if (deps.buffered() < GATEWAY_USAGE_BUFFER_LIMIT) send('usageCounter', { metric }) },
     connect: () => { dial = 'connect'; need(); send('connect') },
     serveThisComputerOnly: () => { dial = 'local'; send('thisComputerOnly') },
@@ -192,20 +199,17 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
     commander: (frame) => { bulk('commander', { frame }) },
     user: (frame) => { send('user', { frame }) },
     reply: (connId, type, requestId, payload) => { send('reply', { connId, type, requestId, payload }) },
-    target: (connId, type, payload) => up && linkUp && clients.has(connId) && bulk('target', { connId, type, payload }),
-    terminal: (connId, type, payload) => reachableClient(connId) && bulk('terminal', { connId, type, payload }),
-    terminalBinary: (connId, clear) => {
-      if (!reachableClient(connId) || !fits()) return false
-      const local = encodeTerminalLocal(clear)
-      const bytes = local && encodeGatewayBinary(GatewayBinary.remote, connId, local)
-      return !!bytes && deps.notifyBinary(bytes)
+    target: (connId, type, payload, quota) => up && linkUp && clients.has(connId) && fits(quota) && send('target', { connId, type, payload }, quota),
+    terminal: (connId, type, payload, quota) => reachableClient(connId) && fits(quota) && send('terminal', { connId, type, payload }, quota),
+    terminalBinary: (connId, local, quota) => {
+      if (!reachableClient(connId) || !fits(quota)) return false
+      const bytes = encodeGatewayBinary(GatewayBinary.remote, connId, local)
+      return !!bytes && deps.notifyBinary(bytes, quota)
     },
     observer: (connId, type, payload) => up && linkUp && send('observer', { connId, type, payload }),
     windowOpened: (surface) => { send('windowOpened', { surface }) },
     localClients: (windows) => { localClients = windows; send('localClients', { windows }) },
     local: async (connId, frame) => { if (up || seen) forwardLocal(connId, frame); else owe('localFrame', { connId, frame }) },
-    device: (connId, type, payload) => reachableClient(connId) && send('device', { connId, type, payload }),
-    deviceClient: (connId, identity) => { send('deviceClient', { connId, identity }) },
     stop: async () => { send('stop') },
   }
 
@@ -304,8 +308,6 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
         pending: answer.pending && typeof answer.pending === 'object' ? answer.pending as Record<string, unknown> : null,
       }
     },
-    wifiService: (on) => { wifiService = on; if (on) need(); send('wifiService', { on }) },
-    revokeIdentity: (identity) => { send('revokeIdentity', { identity }) },
     account: (next) => {
       if (machines && machines.owner !== next.machineId) {
         machines = null
@@ -321,18 +323,10 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
     },
     tabKey: tabKeyOps,
     tabRelay: tabRelayOps,
-    // The account's connected services, sealed and opened by the gateway (lib/e2ee/connectorVault.ts).
-    connectorVault: {
-      seal: async (plaintext) => {
-        const answer = await deps.call(GATEWAY_CALLS.connectorVault, { op: 'seal', plaintext }, LANE_WAIT_MS)
-        if (answer.envelope && typeof answer.envelope === 'object') return record(answer.envelope)
-        throw new Error(typeof answer.error === 'string' && !answer.error.startsWith('SERVICE_') ? answer.error : 'the gateway holds no key just now: it is not running')
-      },
-      open: async (envelope) => {
-        const answer = await deps.call(GATEWAY_CALLS.connectorVault, { op: 'open', envelope }, LANE_WAIT_MS)
-        if (answer.stranded === true) return { stranded: true }
-        return typeof answer.plaintext === 'string' ? { plaintext: answer.plaintext, complete: answer.complete === true } : null
-      },
+    connectorSync: async (refresh) => {
+      const answer = await deps.call(GATEWAY_CALLS.connectorVault, { op: 'sync', refresh }, 16_000)
+      if (typeof answer.shared !== 'boolean' || answer.error) throw new Error('CONNECTORS_SYNC_UNAVAILABLE')
+      return { shared: answer.shared }
     },
     // Machines shared across accounts, pinned and trusted by the gateway (gateway/sharedTrust.ts).
     sharedTrust: async (desired) => {
@@ -445,12 +439,6 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
       case 'busy':
         events.busy()
         return
-      case 'device':
-        void events.device(connId, record(payload.frame), payload.opened ? record(payload.opened) : null)
-        return
-      case 'deviceRevoked':
-        events.deviceRevoked(text(payload.identity))
-        return
       case 'toWindows':
         events.toWindows(record(payload.frame))
         return
@@ -459,17 +447,10 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
         if (event) events.tabFrame(event)
         return
       }
-      case 'browserRoute': {
-        const streamId = text(payload.streamId)
-        const route = payload.route
-        if (streamId && (route === 'direct' || route === 'turn' || route === 'relay')) events.browserRoute(streamId, route)
-        return
-      }
-      case 'browserRouteLost':
-        if (text(payload.streamId)) events.browserRouteLost(text(payload.streamId))
-        return
-      case 'browserTransportError':
-        events.browserTransportError()
+      case 'clientStreamControl':
+        if (typeof payload.service === 'string' && (payload.streamId === null || typeof payload.streamId === 'string')) {
+          events.streamControl(payload.service, payload.streamId, record(payload.payload))
+        }
         return
       case 'windowOpened': {
         const window = windows.get(text(payload.id))
@@ -495,8 +476,8 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
     const decoded = decodeGatewayBinary(raw)
     if (!decoded) return
     if (decoded.kind === GatewayBinary.window) { windows.get(decoded.id)?.sink.sendBinary(decoded.bytes); return }
-    const clear = decodeTerminalLocal(decoded.bytes)
-    if (clear) void events.binary(decoded.id, clear)
+    const clear = clientStreamLocalFrame(decoded.bytes) ?? decodeTerminalLocal(decoded.bytes)
+    if (clear) void events.binary(decoded.id, clear, decoded.bytes)
   }
 
   /**
@@ -530,7 +511,7 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
       up = true
       seen = true
       // The account as the core reads it now (`start`), which is never older than the last one it said.
-      send('start', { requestsOpen, dial, localClients, wifiService, reachable, ...deps.start() })
+      send('start', { requestsOpen, dial, localClients, reachable, ...deps.start() })
       // Then what waited for its first start, in the order it came.
       if (owedTimer) clearTimeout(owedTimer)
       owedTimer = null

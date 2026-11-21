@@ -10,13 +10,15 @@ import { relaySocket } from './testing/relaySocket.js'
 import { bindLaunchRequests } from './testing/socketCore.js'
 import { env } from './config/env.js'
 import { emptyPorts, STORE_OFF, STORE_FALLBACKS } from './core/api.js'
-import { createServiceHost } from './core/serviceHost.js'
+import { createServiceHost } from './services/inlineHost.js'
 import { refreshDshRegistry } from './dsh/catalog.js'
 import { dshInstallDir, invalidateInstalledDsh, upsertInstalledRecord } from './dsh/installed.js'
 import { resetBundledDshRegistry } from './dsh/registry.js'
 import { dshListRows } from './dsh/wire.js'
 import { STORE_REQUESTS, startStore, type StoreDeps } from './services/store.js'
 import { fakeCore } from './testing/fakeCore.js'
+import { storeLaunchPort } from './services/storeLaunch.js'
+import { dshThrough } from './core/agents/dshThrough.js'
 
 describe('the DSH requests on the local socket', () => {
   let socket: BackendSocket
@@ -27,14 +29,17 @@ describe('the DSH requests on the local socket', () => {
   let mutate: StoreDeps['mutate']
   let remove: StoreDeps['remove']
   const serveStore = (faults: ReadonlySet<string> = new Set()): void => {
-    const host = createServiceHost(emptyPorts(), { log: () => {}, faults })
+    const ports = emptyPorts()
+    const host = createServiceHost(ports, { log: () => {}, faults })
     const deps: StoreDeps = { prepare: () => true, setupAgain: async () => ({ done: 0, needsSetup: 0, busy: 0 }), refresh: refreshDshRegistry, rows: dshListRows, mutate: (input, progress) => mutate(input, progress), remove: (id) => remove(id), watch: () => () => {} }
     const core = fakeCore({ clients: { dshInstallStatus: (status) => socket.send({ type: 'dsh_install_status', payload: status }) } })
     host.start('store', (api, ports) => {
-      ports.store = STORE_OFF
+      ports.store = { ...storeLaunchPort(), stop: () => {} }
       return startStore(api, deps)
     }, core, STORE_FALLBACKS, STORE_REQUESTS)
     socket.serviceRouter = (type, payload, asker, reply) => host.route(type, payload, asker, reply)
+    const launch = dshThrough({ store: () => ports.store ?? STORE_OFF, nameOf: () => undefined, account: () => ({}) })
+    bindLaunchRequests(socket, { describeDsh: launch.describe })
   }
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'dsh-socket-'))
@@ -78,6 +83,16 @@ describe('the DSH requests on the local socket', () => {
     await vi.waitFor(() => expect(replies('agent_create')).toHaveLength(2))
     expect(create).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ engine: 'codex', dsh: 'acme/thing', cwd: root }))
     expect(replies('agent_create')[1]).toMatchObject({ error: 'TEST_STOP' })
+  })
+
+  it('agent_create refuses Store packages while the Store is off without invoking the launcher', async () => {
+    serveStore(new Set(['store']))
+    const create = vi.fn<NonNullable<BackendSocket['onCreateAgent']>>(async () => ({ ok: false, error: 'TEST_STOP' }))
+    socket.onCreateAgent = create
+    ask('agent_create', { requestId: 'off', dsh: 'acme/thing', engine: 'codex', cwd: root })
+    await vi.waitFor(() => expect(replies('agent_create')).toHaveLength(1))
+    expect(replies('agent_create')[0]).toMatchObject({ error: 'DSH_UNAVAILABLE' })
+    expect(create).not.toHaveBeenCalled()
   })
 
   it('dsh_list: what is installed here, then what the registry offers', async () => {

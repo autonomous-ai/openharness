@@ -8,6 +8,8 @@
     "panes": [
       {
         "argv": [
+          "/usr/bin/env",
+          "HARNESS_NATIVE_LAUNCH_TOKEN=<native-token>",
           "/bin/sh",
           "-ic",
           ". '<root>/adapter_data_dir/launch/<script>.sh'",
@@ -18,6 +20,14 @@
           "fixture prompt"
         ],
         "env": {
+          "HOME": "<root>/home",
+          "PATH": "<root>/bin",
+          "CLAUDE_CONFIG_DIR": "<root>/claude_config_dir",
+          "CODEX_HOME": "<root>/codex_home",
+          "OPENCODE_CONFIG_DIR": "<root>/opencode_config_dir",
+          "OPENCODE_DATA_DIR": "<root>/opencode_data_dir",
+          "SHELL": "/bin/sh",
+          "ZDOTDIR": "<root>/zdotdir",
           "OPENCODE_CONFIG_CONTENT": "{\"permission\":\"ask\",\"model\":\"opencode/muse-spark-1.3-contributor-free\",\"small_model\":\"opencode/muse-spark-1.3-contributor-free\",\"provider\":{\"opencode\":{\"models\":{\"muse-spark-1.3-contributor-free\":{\"options\":{\"reasoningEffort\":\"xhigh\"}}}}},\"agent\":{\"build\":{\"model\":\"opencode/muse-spark-1.3-contributor-free\",\"variant\":\"xhigh\"},\"plan\":{\"model\":\"opencode/muse-spark-1.3-contributor-free\",\"variant\":\"xhigh\"}}}"
         },
         "engine": "opencode",
@@ -25,10 +35,25 @@
         "permissionMode": null,
         "grid": null,
         "gridLaunchRecord": null,
-        "script": "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: v1 exited ('\"$harness_status\"'). This pane is a shell now — run v1 again, or stop the pane.'\n  exec '/bin/sh'\n}\nunset HARNESS_DSH HARNESS_DSH_DIR HARNESS_WORKSPACE HARNESS_CONTEXT_FILE HARNESS_SKILLS_DIR HARNESS_PRIVATE_GRID\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
+        "script": "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: v1 exited ('\"$harness_status\"'). This pane is a shell now — run v1 again, or stop the pane.'\n  exec '/bin/sh'\n}\nunset HARNESS_DSH HARNESS_DSH_DIR HARNESS_WORKSPACE HARNESS_CONTEXT_FILE HARNESS_SKILLS_DIR HARNESS_PRIVATE_GRID\nunset XDG_CONFIG_HOME XDG_DATA_HOME OPENCODE_CONFIG OPENCODE_DB PI_CODING_AGENT_DIR HERMES_HOME CURSOR_CONFIG_DIR CURSOR_DATA_DIR GROK_HOME AGY_HOME COPILOT_HOME CLAUDE_PROJECTS_DIR CURSOR_HOME AGY_CONFIG_DIR COMMANDCODE_HOME DEVIN_HOME DEVIN_CONFIG_PATH OPENCODE_PLUGIN_DIR KILO_PLUGIN_DIR PI_HOME PI_CODING_AGENT_SESSION_DIR AMP_PLUGIN_DIR OPENCLAW_STATE_DIR OPENCLAW_HOME\nexport HOME='<root>/home'\nexport PATH='<root>/bin'\nexport CLAUDE_CONFIG_DIR='<root>/claude_config_dir'\nexport CODEX_HOME='<root>/codex_home'\nexport OPENCODE_CONFIG_DIR='<root>/opencode_config_dir'\nexport OPENCODE_DATA_DIR='<root>/opencode_data_dir'\nexport SHELL='/bin/sh'\nexport ZDOTDIR='<root>/zdotdir'\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nif ! '<node>' -e 'const fs=require(\"node:fs\"),p=JSON.parse(process.argv[1]);const id=s=>`${s.dev}:${s.ino}:${s.mode}:${s.uid}`;const ver=s=>`${id(s)}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`;const stamp=s=>`${s.dev}:${s.ino}:${s.uid}:${s.mode}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`;const stat=p=>{try{return fs.lstatSync(p,{bigint:true})}catch(e){if(e.code===\"ENOENT\")return null;throw e}};try{if(!p.ready)throw 0;const s=fs.statSync(p.command,{bigint:true});if(`${p.command}:${fs.realpathSync(p.command)}:${s.dev}:${s.ino}:${s.mode}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`!==p.identity)throw 0;for(const f of p.files){for(const r of f.facts){const s=stat(r.path);if((s?id(s):null)!==r.identity)throw 0;if(r.alias&&(!s||ver(s)!==r.alias.version||fs.readlinkSync(r.path)!==r.alias.target))throw 0;}const s=stat(f.target);if((s?stamp(s):null)!==f.stamp)throw 0;}}catch{process.exitCode=75}' '{\"ready\":true,\"command\":\"<root>/bin/v1\",\"identity\":\"<root>/bin/v1:<root>/bin/v1:<device>:<inode>:33216:63:<mtime-ns>:<ctime-ns>\",\"files\":[]}'; then\n'<node>' -e 'const [tmux,pane,pid,nonce,held]=process.argv.slice(1);if(/^%[0-9]+$/.test(pane)&&/^[0-9]+$/.test(pid)){const proof=\"#{&&:#{==:#{pane_id},\"+pane+\"},#{&&:#{==:#{pane_pid},\"+pid+\"},#{m:*\"+nonce+\"*,#{pane_start_command}}}}\";try{require(\"node:child_process\").execFileSync(tmux,[\"if-shell\",\"-F\",\"-t\",pane,proof,\"respawn-pane -k -t \"+pane+\" \"+held],{timeout:2000,killSignal:\"SIGKILL\",stdio:\"ignore\"})}catch{}}' '/fixture/bin/tmux' \"${TMUX_PANE:-}\" \"$$\" 'HARNESS_NATIVE_LAUNCH_TOKEN=<native-token>' '/usr/bin/env HARNESS_DAEMON=<daemon-owner> /bin/sh -c '\"'\"'trap '\"'\"'\"'\"'\"'\"'\"'\"''\"'\"'\"'\"'\"'\"'\"'\"' INT QUIT TSTP; printf '\"'\"'\"'\"'\"'\"'\"'\"'%s\\n'\"'\"'\"'\"'\"'\"'\"'\"' \"$1\"; while :; do sleep 3600; done'\"'\"' harness-held '\"'\"'Waiting for native launch preparation to be confirmed.'\"'\"' '\"'\"'<native-token>'\"'\"''\nexec /usr/bin/env HARNESS_DAEMON=<daemon-owner> /bin/sh -c 'trap '\"'\"''\"'\"' INT QUIT TSTP; printf '\"'\"'%s\\n'\"'\"' \"$1\"; while :; do sleep 3600; done' harness-held 'Waiting for native launch preparation to be confirmed.' '<native-token>'\nfi\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
       }
     ],
-    "native": []
+    "native": [
+      {
+        "binary": "opencode",
+        "args": [
+          "--version"
+        ],
+        "cwd": "<repo>"
+      },
+      {
+        "binary": "opencode",
+        "args": [
+          "--help"
+        ],
+        "cwd": "<repo>"
+      }
+    ]
   },
   "v1 fork named=false": {
     "result": {
@@ -39,6 +64,8 @@
     "panes": [
       {
         "argv": [
+          "/usr/bin/env",
+          "HARNESS_NATIVE_LAUNCH_TOKEN=<native-token>",
           "/bin/sh",
           "-ic",
           ". '<root>/adapter_data_dir/launch/<script>.sh'",
@@ -50,6 +77,16 @@
           "--prompt",
           "You are a fork of the agent \"work · ses_\" in <root>/work. It kept working; you are its copy, picking up from what it knew. Here is its recent history, oldest first.\n\nAsked: fixture ask\n\nIts last full answer:\nfixture answer\n\nContinue from there. Your task now: try another approach"
         ],
+        "env": {
+          "HOME": "<root>/home",
+          "PATH": "<root>/bin",
+          "CLAUDE_CONFIG_DIR": "<root>/claude_config_dir",
+          "CODEX_HOME": "<root>/codex_home",
+          "OPENCODE_CONFIG_DIR": "<root>/opencode_config_dir",
+          "OPENCODE_DATA_DIR": "<root>/opencode_data_dir",
+          "SHELL": "/bin/sh",
+          "ZDOTDIR": "<root>/zdotdir"
+        },
         "engine": "opencode",
         "agent": null,
         "forkedFrom": {
@@ -60,10 +97,17 @@
         "permissionMode": null,
         "grid": null,
         "gridLaunchRecord": null,
-        "script": "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: v1 exited ('\"$harness_status\"'). This pane is a shell now — run v1 again, or stop the pane.'\n  exec '/bin/sh'\n}\nunset HARNESS_DSH HARNESS_DSH_DIR HARNESS_WORKSPACE HARNESS_CONTEXT_FILE HARNESS_SKILLS_DIR HARNESS_PRIVATE_GRID\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
+        "script": "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: v1 exited ('\"$harness_status\"'). This pane is a shell now — run v1 again, or stop the pane.'\n  exec '/bin/sh'\n}\nunset HARNESS_DSH HARNESS_DSH_DIR HARNESS_WORKSPACE HARNESS_CONTEXT_FILE HARNESS_SKILLS_DIR HARNESS_PRIVATE_GRID\nunset XDG_CONFIG_HOME XDG_DATA_HOME OPENCODE_CONFIG OPENCODE_DB PI_CODING_AGENT_DIR HERMES_HOME CURSOR_CONFIG_DIR CURSOR_DATA_DIR GROK_HOME AGY_HOME COPILOT_HOME CLAUDE_PROJECTS_DIR CURSOR_HOME AGY_CONFIG_DIR COMMANDCODE_HOME DEVIN_HOME DEVIN_CONFIG_PATH OPENCODE_PLUGIN_DIR KILO_PLUGIN_DIR PI_HOME PI_CODING_AGENT_SESSION_DIR AMP_PLUGIN_DIR OPENCLAW_STATE_DIR OPENCLAW_HOME\nexport HOME='<root>/home'\nexport PATH='<root>/bin'\nexport CLAUDE_CONFIG_DIR='<root>/claude_config_dir'\nexport CODEX_HOME='<root>/codex_home'\nexport OPENCODE_CONFIG_DIR='<root>/opencode_config_dir'\nexport OPENCODE_DATA_DIR='<root>/opencode_data_dir'\nexport SHELL='/bin/sh'\nexport ZDOTDIR='<root>/zdotdir'\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nif ! '<node>' -e 'const fs=require(\"node:fs\"),p=JSON.parse(process.argv[1]);const id=s=>`${s.dev}:${s.ino}:${s.mode}:${s.uid}`;const ver=s=>`${id(s)}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`;const stamp=s=>`${s.dev}:${s.ino}:${s.uid}:${s.mode}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`;const stat=p=>{try{return fs.lstatSync(p,{bigint:true})}catch(e){if(e.code===\"ENOENT\")return null;throw e}};try{if(!p.ready)throw 0;const s=fs.statSync(p.command,{bigint:true});if(`${p.command}:${fs.realpathSync(p.command)}:${s.dev}:${s.ino}:${s.mode}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`!==p.identity)throw 0;for(const f of p.files){for(const r of f.facts){const s=stat(r.path);if((s?id(s):null)!==r.identity)throw 0;if(r.alias&&(!s||ver(s)!==r.alias.version||fs.readlinkSync(r.path)!==r.alias.target))throw 0;}const s=stat(f.target);if((s?stamp(s):null)!==f.stamp)throw 0;}}catch{process.exitCode=75}' '{\"ready\":true,\"command\":\"<root>/bin/v1\",\"identity\":\"<root>/bin/v1:<root>/bin/v1:<device>:<inode>:33216:63:<mtime-ns>:<ctime-ns>\",\"files\":[]}'; then\n'<node>' -e 'const [tmux,pane,pid,nonce,held]=process.argv.slice(1);if(/^%[0-9]+$/.test(pane)&&/^[0-9]+$/.test(pid)){const proof=\"#{&&:#{==:#{pane_id},\"+pane+\"},#{&&:#{==:#{pane_pid},\"+pid+\"},#{m:*\"+nonce+\"*,#{pane_start_command}}}}\";try{require(\"node:child_process\").execFileSync(tmux,[\"if-shell\",\"-F\",\"-t\",pane,proof,\"respawn-pane -k -t \"+pane+\" \"+held],{timeout:2000,killSignal:\"SIGKILL\",stdio:\"ignore\"})}catch{}}' '/fixture/bin/tmux' \"${TMUX_PANE:-}\" \"$$\" 'HARNESS_NATIVE_LAUNCH_TOKEN=<native-token>' '/usr/bin/env HARNESS_DAEMON=<daemon-owner> /bin/sh -c '\"'\"'trap '\"'\"'\"'\"'\"'\"'\"'\"''\"'\"'\"'\"'\"'\"'\"'\"' INT QUIT TSTP; printf '\"'\"'\"'\"'\"'\"'\"'\"'%s\\n'\"'\"'\"'\"'\"'\"'\"'\"' \"$1\"; while :; do sleep 3600; done'\"'\"' harness-held '\"'\"'Waiting for native launch preparation to be confirmed.'\"'\"' '\"'\"'<native-token>'\"'\"''\nexec /usr/bin/env HARNESS_DAEMON=<daemon-owner> /bin/sh -c 'trap '\"'\"''\"'\"' INT QUIT TSTP; printf '\"'\"'%s\\n'\"'\"' \"$1\"; while :; do sleep 3600; done' harness-held 'Waiting for native launch preparation to be confirmed.' '<native-token>'\nfi\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
       }
     ],
     "native": [
+      {
+        "binary": "opencode",
+        "args": [
+          "--version"
+        ],
+        "cwd": "<repo>"
+      },
       {
         "binary": "opencode",
         "args": [
@@ -77,7 +121,16 @@
     "result": {
       "ok": true,
       "overrides": {
-        "env": {},
+        "env": {
+          "HOME": "<root>/home",
+          "PATH": "<root>/bin",
+          "CLAUDE_CONFIG_DIR": "<root>/claude_config_dir",
+          "CODEX_HOME": "<root>/codex_home",
+          "OPENCODE_CONFIG_DIR": "<root>/opencode_config_dir",
+          "OPENCODE_DATA_DIR": "<root>/opencode_data_dir",
+          "SHELL": "/bin/sh",
+          "ZDOTDIR": "<root>/zdotdir"
+        },
         "extraArgs": [
           "-m",
           "fixture/model#high"
@@ -90,10 +143,63 @@
           "HARNESS_SKILLS_DIR",
           "HARNESS_PRIVATE_GRID"
         ],
-        "sessionModel": "fixture/model#high"
+        "sessionModel": "fixture/model#high",
+        "native": {
+          "token": "<native-token>",
+          "executable": {
+            "command": "<root>/bin/v1",
+            "identity": "<root>/bin/v1:<root>/bin/v1:<device>:<inode>:33216:63:<mtime-ns>:<ctime-ns>"
+          },
+          "opencodeMajor": 1,
+          "environment": {
+            "HOME": "<root>/home",
+            "PATH": "<root>/bin",
+            "CLAUDE_CONFIG_DIR": "<root>/claude_config_dir",
+            "CODEX_HOME": "<root>/codex_home",
+            "OPENCODE_CONFIG_DIR": "<root>/opencode_config_dir",
+            "OPENCODE_DATA_DIR": "<root>/opencode_data_dir",
+            "SHELL": "/bin/sh",
+            "ZDOTDIR": "<root>/zdotdir"
+          },
+          "proofs": [],
+          "clearEnvironment": [
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "OPENCODE_CONFIG",
+            "OPENCODE_DB",
+            "PI_CODING_AGENT_DIR",
+            "HERMES_HOME",
+            "CURSOR_CONFIG_DIR",
+            "CURSOR_DATA_DIR",
+            "GROK_HOME",
+            "AGY_HOME",
+            "COPILOT_HOME",
+            "CLAUDE_PROJECTS_DIR",
+            "CURSOR_HOME",
+            "AGY_CONFIG_DIR",
+            "COMMANDCODE_HOME",
+            "DEVIN_HOME",
+            "DEVIN_CONFIG_PATH",
+            "OPENCODE_PLUGIN_DIR",
+            "KILO_PLUGIN_DIR",
+            "PI_HOME",
+            "PI_CODING_AGENT_SESSION_DIR",
+            "AMP_PLUGIN_DIR",
+            "OPENCLAW_STATE_DIR",
+            "OPENCLAW_HOME"
+          ]
+        }
       }
     },
-    "native": []
+    "native": [
+      {
+        "binary": "opencode",
+        "args": [
+          "--version"
+        ],
+        "cwd": "<repo>"
+      }
+    ]
   },
   "v1 create named=true": {
     "result": {
@@ -104,6 +210,8 @@
     "panes": [
       {
         "argv": [
+          "/usr/bin/env",
+          "HARNESS_NATIVE_LAUNCH_TOKEN=<native-token>",
           "/bin/sh",
           "-ic",
           ". '<root>/adapter_data_dir/launch/<script>.sh'",
@@ -116,6 +224,14 @@
           "fixture prompt"
         ],
         "env": {
+          "HOME": "<root>/home",
+          "PATH": "<root>/bin",
+          "CLAUDE_CONFIG_DIR": "<root>/claude_config_dir",
+          "CODEX_HOME": "<root>/codex_home",
+          "OPENCODE_CONFIG_DIR": "<root>/opencode_config_dir",
+          "OPENCODE_DATA_DIR": "<root>/opencode_data_dir",
+          "SHELL": "/bin/sh",
+          "ZDOTDIR": "<root>/zdotdir",
           "OPENCODE_CONFIG_CONTENT": "{\"permission\":\"ask\",\"model\":\"opencode/muse-spark-1.3-contributor-free\",\"small_model\":\"opencode/muse-spark-1.3-contributor-free\",\"provider\":{\"opencode\":{\"models\":{\"muse-spark-1.3-contributor-free\":{\"options\":{\"reasoningEffort\":\"xhigh\"}}}}},\"agent\":{\"build\":{\"model\":\"opencode/muse-spark-1.3-contributor-free\",\"variant\":\"xhigh\"},\"plan\":{\"model\":\"opencode/muse-spark-1.3-contributor-free\",\"variant\":\"xhigh\"}}}"
         },
         "engine": "opencode",
@@ -123,10 +239,18 @@
         "permissionMode": null,
         "grid": null,
         "gridLaunchRecord": null,
-        "script": "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: v1 exited ('\"$harness_status\"'). This pane is a shell now — run v1 again, or stop the pane.'\n  exec '/bin/sh'\n}\nunset HARNESS_DSH HARNESS_DSH_DIR HARNESS_WORKSPACE HARNESS_CONTEXT_FILE HARNESS_SKILLS_DIR HARNESS_PRIVATE_GRID\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
+        "script": "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: v1 exited ('\"$harness_status\"'). This pane is a shell now — run v1 again, or stop the pane.'\n  exec '/bin/sh'\n}\nunset HARNESS_DSH HARNESS_DSH_DIR HARNESS_WORKSPACE HARNESS_CONTEXT_FILE HARNESS_SKILLS_DIR HARNESS_PRIVATE_GRID\nunset XDG_CONFIG_HOME XDG_DATA_HOME OPENCODE_CONFIG OPENCODE_DB PI_CODING_AGENT_DIR HERMES_HOME CURSOR_CONFIG_DIR CURSOR_DATA_DIR GROK_HOME AGY_HOME COPILOT_HOME CLAUDE_PROJECTS_DIR CURSOR_HOME AGY_CONFIG_DIR COMMANDCODE_HOME DEVIN_HOME DEVIN_CONFIG_PATH OPENCODE_PLUGIN_DIR KILO_PLUGIN_DIR PI_HOME PI_CODING_AGENT_SESSION_DIR AMP_PLUGIN_DIR OPENCLAW_STATE_DIR OPENCLAW_HOME\nexport HOME='<root>/home'\nexport PATH='<root>/bin'\nexport CLAUDE_CONFIG_DIR='<root>/claude_config_dir'\nexport CODEX_HOME='<root>/codex_home'\nexport OPENCODE_CONFIG_DIR='<root>/opencode_config_dir'\nexport OPENCODE_DATA_DIR='<root>/opencode_data_dir'\nexport SHELL='/bin/sh'\nexport ZDOTDIR='<root>/zdotdir'\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nif ! '<node>' -e 'const fs=require(\"node:fs\"),p=JSON.parse(process.argv[1]);const id=s=>`${s.dev}:${s.ino}:${s.mode}:${s.uid}`;const ver=s=>`${id(s)}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`;const stamp=s=>`${s.dev}:${s.ino}:${s.uid}:${s.mode}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`;const stat=p=>{try{return fs.lstatSync(p,{bigint:true})}catch(e){if(e.code===\"ENOENT\")return null;throw e}};try{if(!p.ready)throw 0;const s=fs.statSync(p.command,{bigint:true});if(`${p.command}:${fs.realpathSync(p.command)}:${s.dev}:${s.ino}:${s.mode}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`!==p.identity)throw 0;for(const f of p.files){for(const r of f.facts){const s=stat(r.path);if((s?id(s):null)!==r.identity)throw 0;if(r.alias&&(!s||ver(s)!==r.alias.version||fs.readlinkSync(r.path)!==r.alias.target))throw 0;}const s=stat(f.target);if((s?stamp(s):null)!==f.stamp)throw 0;}}catch{process.exitCode=75}' '{\"ready\":true,\"command\":\"<root>/bin/v1\",\"identity\":\"<root>/bin/v1:<root>/bin/v1:<device>:<inode>:33216:63:<mtime-ns>:<ctime-ns>\",\"files\":[]}'; then\n'<node>' -e 'const [tmux,pane,pid,nonce,held]=process.argv.slice(1);if(/^%[0-9]+$/.test(pane)&&/^[0-9]+$/.test(pid)){const proof=\"#{&&:#{==:#{pane_id},\"+pane+\"},#{&&:#{==:#{pane_pid},\"+pid+\"},#{m:*\"+nonce+\"*,#{pane_start_command}}}}\";try{require(\"node:child_process\").execFileSync(tmux,[\"if-shell\",\"-F\",\"-t\",pane,proof,\"respawn-pane -k -t \"+pane+\" \"+held],{timeout:2000,killSignal:\"SIGKILL\",stdio:\"ignore\"})}catch{}}' '/fixture/bin/tmux' \"${TMUX_PANE:-}\" \"$$\" 'HARNESS_NATIVE_LAUNCH_TOKEN=<native-token>' '/usr/bin/env HARNESS_DAEMON=<daemon-owner> /bin/sh -c '\"'\"'trap '\"'\"'\"'\"'\"'\"'\"'\"''\"'\"'\"'\"'\"'\"'\"'\"' INT QUIT TSTP; printf '\"'\"'\"'\"'\"'\"'\"'\"'%s\\n'\"'\"'\"'\"'\"'\"'\"'\"' \"$1\"; while :; do sleep 3600; done'\"'\"' harness-held '\"'\"'Waiting for native launch preparation to be confirmed.'\"'\"' '\"'\"'<native-token>'\"'\"''\nexec /usr/bin/env HARNESS_DAEMON=<daemon-owner> /bin/sh -c 'trap '\"'\"''\"'\"' INT QUIT TSTP; printf '\"'\"'%s\\n'\"'\"' \"$1\"; while :; do sleep 3600; done' harness-held 'Waiting for native launch preparation to be confirmed.' '<native-token>'\nfi\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
       }
     ],
-    "native": []
+    "native": [
+      {
+        "binary": "opencode",
+        "args": [
+          "--version"
+        ],
+        "cwd": "<repo>"
+      }
+    ]
   },
   "v1 fork named=true": {
     "result": {
@@ -137,6 +261,8 @@
     "panes": [
       {
         "argv": [
+          "/usr/bin/env",
+          "HARNESS_NATIVE_LAUNCH_TOKEN=<native-token>",
           "/bin/sh",
           "-ic",
           ". '<root>/adapter_data_dir/launch/<script>.sh'",
@@ -150,6 +276,16 @@
           "--prompt",
           "You are a fork of the agent \"work · ses_\" in <root>/work. It kept working; you are its copy, picking up from what it knew. Here is its recent history, oldest first.\n\nAsked: fixture ask\n\nIts last full answer:\nfixture answer\n\nContinue from there. Your task now: try another approach"
         ],
+        "env": {
+          "HOME": "<root>/home",
+          "PATH": "<root>/bin",
+          "CLAUDE_CONFIG_DIR": "<root>/claude_config_dir",
+          "CODEX_HOME": "<root>/codex_home",
+          "OPENCODE_CONFIG_DIR": "<root>/opencode_config_dir",
+          "OPENCODE_DATA_DIR": "<root>/opencode_data_dir",
+          "SHELL": "/bin/sh",
+          "ZDOTDIR": "<root>/zdotdir"
+        },
         "engine": "opencode",
         "agent": "reviewer",
         "forkedFrom": {
@@ -160,16 +296,33 @@
         "permissionMode": null,
         "grid": null,
         "gridLaunchRecord": null,
-        "script": "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: v1 exited ('\"$harness_status\"'). This pane is a shell now — run v1 again, or stop the pane.'\n  exec '/bin/sh'\n}\nunset HARNESS_DSH HARNESS_DSH_DIR HARNESS_WORKSPACE HARNESS_CONTEXT_FILE HARNESS_SKILLS_DIR HARNESS_PRIVATE_GRID\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
+        "script": "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: v1 exited ('\"$harness_status\"'). This pane is a shell now — run v1 again, or stop the pane.'\n  exec '/bin/sh'\n}\nunset HARNESS_DSH HARNESS_DSH_DIR HARNESS_WORKSPACE HARNESS_CONTEXT_FILE HARNESS_SKILLS_DIR HARNESS_PRIVATE_GRID\nunset XDG_CONFIG_HOME XDG_DATA_HOME OPENCODE_CONFIG OPENCODE_DB PI_CODING_AGENT_DIR HERMES_HOME CURSOR_CONFIG_DIR CURSOR_DATA_DIR GROK_HOME AGY_HOME COPILOT_HOME CLAUDE_PROJECTS_DIR CURSOR_HOME AGY_CONFIG_DIR COMMANDCODE_HOME DEVIN_HOME DEVIN_CONFIG_PATH OPENCODE_PLUGIN_DIR KILO_PLUGIN_DIR PI_HOME PI_CODING_AGENT_SESSION_DIR AMP_PLUGIN_DIR OPENCLAW_STATE_DIR OPENCLAW_HOME\nexport HOME='<root>/home'\nexport PATH='<root>/bin'\nexport CLAUDE_CONFIG_DIR='<root>/claude_config_dir'\nexport CODEX_HOME='<root>/codex_home'\nexport OPENCODE_CONFIG_DIR='<root>/opencode_config_dir'\nexport OPENCODE_DATA_DIR='<root>/opencode_data_dir'\nexport SHELL='/bin/sh'\nexport ZDOTDIR='<root>/zdotdir'\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nif ! '<node>' -e 'const fs=require(\"node:fs\"),p=JSON.parse(process.argv[1]);const id=s=>`${s.dev}:${s.ino}:${s.mode}:${s.uid}`;const ver=s=>`${id(s)}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`;const stamp=s=>`${s.dev}:${s.ino}:${s.uid}:${s.mode}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`;const stat=p=>{try{return fs.lstatSync(p,{bigint:true})}catch(e){if(e.code===\"ENOENT\")return null;throw e}};try{if(!p.ready)throw 0;const s=fs.statSync(p.command,{bigint:true});if(`${p.command}:${fs.realpathSync(p.command)}:${s.dev}:${s.ino}:${s.mode}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`!==p.identity)throw 0;for(const f of p.files){for(const r of f.facts){const s=stat(r.path);if((s?id(s):null)!==r.identity)throw 0;if(r.alias&&(!s||ver(s)!==r.alias.version||fs.readlinkSync(r.path)!==r.alias.target))throw 0;}const s=stat(f.target);if((s?stamp(s):null)!==f.stamp)throw 0;}}catch{process.exitCode=75}' '{\"ready\":true,\"command\":\"<root>/bin/v1\",\"identity\":\"<root>/bin/v1:<root>/bin/v1:<device>:<inode>:33216:63:<mtime-ns>:<ctime-ns>\",\"files\":[]}'; then\n'<node>' -e 'const [tmux,pane,pid,nonce,held]=process.argv.slice(1);if(/^%[0-9]+$/.test(pane)&&/^[0-9]+$/.test(pid)){const proof=\"#{&&:#{==:#{pane_id},\"+pane+\"},#{&&:#{==:#{pane_pid},\"+pid+\"},#{m:*\"+nonce+\"*,#{pane_start_command}}}}\";try{require(\"node:child_process\").execFileSync(tmux,[\"if-shell\",\"-F\",\"-t\",pane,proof,\"respawn-pane -k -t \"+pane+\" \"+held],{timeout:2000,killSignal:\"SIGKILL\",stdio:\"ignore\"})}catch{}}' '/fixture/bin/tmux' \"${TMUX_PANE:-}\" \"$$\" 'HARNESS_NATIVE_LAUNCH_TOKEN=<native-token>' '/usr/bin/env HARNESS_DAEMON=<daemon-owner> /bin/sh -c '\"'\"'trap '\"'\"'\"'\"'\"'\"'\"'\"''\"'\"'\"'\"'\"'\"'\"'\"' INT QUIT TSTP; printf '\"'\"'\"'\"'\"'\"'\"'\"'%s\\n'\"'\"'\"'\"'\"'\"'\"'\"' \"$1\"; while :; do sleep 3600; done'\"'\"' harness-held '\"'\"'Waiting for native launch preparation to be confirmed.'\"'\"' '\"'\"'<native-token>'\"'\"''\nexec /usr/bin/env HARNESS_DAEMON=<daemon-owner> /bin/sh -c 'trap '\"'\"''\"'\"' INT QUIT TSTP; printf '\"'\"'%s\\n'\"'\"' \"$1\"; while :; do sleep 3600; done' harness-held 'Waiting for native launch preparation to be confirmed.' '<native-token>'\nfi\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
       }
     ],
-    "native": []
+    "native": [
+      {
+        "binary": "opencode",
+        "args": [
+          "--version"
+        ],
+        "cwd": "<repo>"
+      }
+    ]
   },
   "v1 relaunch named=true": {
     "result": {
       "ok": true,
       "overrides": {
-        "env": {},
+        "env": {
+          "HOME": "<root>/home",
+          "PATH": "<root>/bin",
+          "CLAUDE_CONFIG_DIR": "<root>/claude_config_dir",
+          "CODEX_HOME": "<root>/codex_home",
+          "OPENCODE_CONFIG_DIR": "<root>/opencode_config_dir",
+          "OPENCODE_DATA_DIR": "<root>/opencode_data_dir",
+          "SHELL": "/bin/sh",
+          "ZDOTDIR": "<root>/zdotdir"
+        },
         "extraArgs": [
           "-m",
           "fixture/model#high",
@@ -184,10 +337,63 @@
           "HARNESS_SKILLS_DIR",
           "HARNESS_PRIVATE_GRID"
         ],
-        "sessionModel": "fixture/model#high"
+        "sessionModel": "fixture/model#high",
+        "native": {
+          "token": "<native-token>",
+          "executable": {
+            "command": "<root>/bin/v1",
+            "identity": "<root>/bin/v1:<root>/bin/v1:<device>:<inode>:33216:63:<mtime-ns>:<ctime-ns>"
+          },
+          "opencodeMajor": 1,
+          "environment": {
+            "HOME": "<root>/home",
+            "PATH": "<root>/bin",
+            "CLAUDE_CONFIG_DIR": "<root>/claude_config_dir",
+            "CODEX_HOME": "<root>/codex_home",
+            "OPENCODE_CONFIG_DIR": "<root>/opencode_config_dir",
+            "OPENCODE_DATA_DIR": "<root>/opencode_data_dir",
+            "SHELL": "/bin/sh",
+            "ZDOTDIR": "<root>/zdotdir"
+          },
+          "proofs": [],
+          "clearEnvironment": [
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "OPENCODE_CONFIG",
+            "OPENCODE_DB",
+            "PI_CODING_AGENT_DIR",
+            "HERMES_HOME",
+            "CURSOR_CONFIG_DIR",
+            "CURSOR_DATA_DIR",
+            "GROK_HOME",
+            "AGY_HOME",
+            "COPILOT_HOME",
+            "CLAUDE_PROJECTS_DIR",
+            "CURSOR_HOME",
+            "AGY_CONFIG_DIR",
+            "COMMANDCODE_HOME",
+            "DEVIN_HOME",
+            "DEVIN_CONFIG_PATH",
+            "OPENCODE_PLUGIN_DIR",
+            "KILO_PLUGIN_DIR",
+            "PI_HOME",
+            "PI_CODING_AGENT_SESSION_DIR",
+            "AMP_PLUGIN_DIR",
+            "OPENCLAW_STATE_DIR",
+            "OPENCLAW_HOME"
+          ]
+        }
       }
     },
-    "native": []
+    "native": [
+      {
+        "binary": "opencode",
+        "args": [
+          "--version"
+        ],
+        "cwd": "<repo>"
+      }
+    ]
   },
   "v1 retarget own login": {
     "result": {
@@ -230,7 +436,16 @@
           "reviewer"
         ],
         {
-          "env": {},
+          "env": {
+            "HOME": "<root>/home",
+            "PATH": "<root>/bin",
+            "CLAUDE_CONFIG_DIR": "<root>/claude_config_dir",
+            "CODEX_HOME": "<root>/codex_home",
+            "OPENCODE_CONFIG_DIR": "<root>/opencode_config_dir",
+            "OPENCODE_DATA_DIR": "<root>/opencode_data_dir",
+            "SHELL": "/bin/sh",
+            "ZDOTDIR": "<root>/zdotdir"
+          },
           "extraArgs": [
             "-m",
             "fixture/model#high",
@@ -245,7 +460,52 @@
             "HARNESS_SKILLS_DIR",
             "HARNESS_PRIVATE_GRID"
           ],
-          "sessionModel": "fixture/model#high"
+          "sessionModel": "fixture/model#high",
+          "native": {
+            "token": "<native-token>",
+            "executable": {
+              "command": "<root>/bin/v1",
+              "identity": "<root>/bin/v1:<root>/bin/v1:<device>:<inode>:33216:63:<mtime-ns>:<ctime-ns>"
+            },
+            "opencodeMajor": 1,
+            "environment": {
+              "HOME": "<root>/home",
+              "PATH": "<root>/bin",
+              "CLAUDE_CONFIG_DIR": "<root>/claude_config_dir",
+              "CODEX_HOME": "<root>/codex_home",
+              "OPENCODE_CONFIG_DIR": "<root>/opencode_config_dir",
+              "OPENCODE_DATA_DIR": "<root>/opencode_data_dir",
+              "SHELL": "/bin/sh",
+              "ZDOTDIR": "<root>/zdotdir"
+            },
+            "proofs": [],
+            "clearEnvironment": [
+              "XDG_CONFIG_HOME",
+              "XDG_DATA_HOME",
+              "OPENCODE_CONFIG",
+              "OPENCODE_DB",
+              "PI_CODING_AGENT_DIR",
+              "HERMES_HOME",
+              "CURSOR_CONFIG_DIR",
+              "CURSOR_DATA_DIR",
+              "GROK_HOME",
+              "AGY_HOME",
+              "COPILOT_HOME",
+              "CLAUDE_PROJECTS_DIR",
+              "CURSOR_HOME",
+              "AGY_CONFIG_DIR",
+              "COMMANDCODE_HOME",
+              "DEVIN_HOME",
+              "DEVIN_CONFIG_PATH",
+              "OPENCODE_PLUGIN_DIR",
+              "KILO_PLUGIN_DIR",
+              "PI_HOME",
+              "PI_CODING_AGENT_SESSION_DIR",
+              "AMP_PLUGIN_DIR",
+              "OPENCLAW_STATE_DIR",
+              "OPENCLAW_HOME"
+            ]
+          }
         },
         "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: v1 exited ('\"$harness_status\"'). This pane is a shell now — run v1 again, or stop the pane.'\n  exec '/bin/sh'\n}\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
       ],
@@ -288,6 +548,13 @@
         "control": [
           "cancel"
         ]
+      },
+      {
+        "binary": "opencode",
+        "args": [
+          "--version"
+        ],
+        "cwd": "<repo>"
       },
       {
         "control": [
@@ -340,7 +607,16 @@
             "reviewer"
           ],
           {
-            "env": {},
+            "env": {
+              "HOME": "<root>/home",
+              "PATH": "<root>/bin",
+              "CLAUDE_CONFIG_DIR": "<root>/claude_config_dir",
+              "CODEX_HOME": "<root>/codex_home",
+              "OPENCODE_CONFIG_DIR": "<root>/opencode_config_dir",
+              "OPENCODE_DATA_DIR": "<root>/opencode_data_dir",
+              "SHELL": "/bin/sh",
+              "ZDOTDIR": "<root>/zdotdir"
+            },
             "extraArgs": [
               "-m",
               "fixture/model#high",
@@ -355,7 +631,52 @@
               "HARNESS_SKILLS_DIR",
               "HARNESS_PRIVATE_GRID"
             ],
-            "sessionModel": "fixture/model#high"
+            "sessionModel": "fixture/model#high",
+            "native": {
+              "token": "<native-token>",
+              "executable": {
+                "command": "<root>/bin/v1",
+                "identity": "<root>/bin/v1:<root>/bin/v1:<device>:<inode>:33216:63:<mtime-ns>:<ctime-ns>"
+              },
+              "opencodeMajor": 1,
+              "environment": {
+                "HOME": "<root>/home",
+                "PATH": "<root>/bin",
+                "CLAUDE_CONFIG_DIR": "<root>/claude_config_dir",
+                "CODEX_HOME": "<root>/codex_home",
+                "OPENCODE_CONFIG_DIR": "<root>/opencode_config_dir",
+                "OPENCODE_DATA_DIR": "<root>/opencode_data_dir",
+                "SHELL": "/bin/sh",
+                "ZDOTDIR": "<root>/zdotdir"
+              },
+              "proofs": [],
+              "clearEnvironment": [
+                "XDG_CONFIG_HOME",
+                "XDG_DATA_HOME",
+                "OPENCODE_CONFIG",
+                "OPENCODE_DB",
+                "PI_CODING_AGENT_DIR",
+                "HERMES_HOME",
+                "CURSOR_CONFIG_DIR",
+                "CURSOR_DATA_DIR",
+                "GROK_HOME",
+                "AGY_HOME",
+                "COPILOT_HOME",
+                "CLAUDE_PROJECTS_DIR",
+                "CURSOR_HOME",
+                "AGY_CONFIG_DIR",
+                "COMMANDCODE_HOME",
+                "DEVIN_HOME",
+                "DEVIN_CONFIG_PATH",
+                "OPENCODE_PLUGIN_DIR",
+                "KILO_PLUGIN_DIR",
+                "PI_HOME",
+                "PI_CODING_AGENT_SESSION_DIR",
+                "AMP_PLUGIN_DIR",
+                "OPENCLAW_STATE_DIR",
+                "OPENCLAW_HOME"
+              ]
+            }
           },
           "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: v1 exited ('\"$harness_status\"'). This pane is a shell now — run v1 again, or stop the pane.'\n  exec '/bin/sh'\n}\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
         ]
@@ -418,6 +739,8 @@
     "panes": [
       {
         "argv": [
+          "/usr/bin/env",
+          "HARNESS_NATIVE_LAUNCH_TOKEN=<native-token>",
           "/bin/sh",
           "-ic",
           ". '<root>/adapter_data_dir/launch/<script>.sh'",
@@ -428,6 +751,14 @@
           "fixture prompt"
         ],
         "env": {
+          "HOME": "<root>/home",
+          "PATH": "<root>/bin",
+          "CLAUDE_CONFIG_DIR": "<root>/claude_config_dir",
+          "CODEX_HOME": "<root>/codex_home",
+          "OPENCODE_CONFIG_DIR": "<root>/opencode_config_dir",
+          "OPENCODE_DATA_DIR": "<root>/opencode_data_dir",
+          "SHELL": "/bin/sh",
+          "ZDOTDIR": "<root>/zdotdir",
           "OPENCODE_CONFIG_CONTENT": "{\"permission\":\"ask\",\"model\":\"opencode/muse-spark-1.3-contributor-free\",\"small_model\":\"opencode/muse-spark-1.3-contributor-free\",\"provider\":{\"opencode\":{\"models\":{\"muse-spark-1.3-contributor-free\":{\"options\":{\"reasoningEffort\":\"xhigh\"}}}}},\"agent\":{\"build\":{\"model\":\"opencode/muse-spark-1.3-contributor-free\",\"variant\":\"xhigh\"},\"plan\":{\"model\":\"opencode/muse-spark-1.3-contributor-free\",\"variant\":\"xhigh\"}}}"
         },
         "engine": "opencode",
@@ -435,10 +766,25 @@
         "permissionMode": null,
         "grid": null,
         "gridLaunchRecord": null,
-        "script": "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: v2 exited ('\"$harness_status\"'). This pane is a shell now — run v2 again, or stop the pane.'\n  exec '/bin/sh'\n}\nunset HARNESS_DSH HARNESS_DSH_DIR HARNESS_WORKSPACE HARNESS_CONTEXT_FILE HARNESS_SKILLS_DIR HARNESS_PRIVATE_GRID\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
+        "script": "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: v2 exited ('\"$harness_status\"'). This pane is a shell now — run v2 again, or stop the pane.'\n  exec '/bin/sh'\n}\nunset HARNESS_DSH HARNESS_DSH_DIR HARNESS_WORKSPACE HARNESS_CONTEXT_FILE HARNESS_SKILLS_DIR HARNESS_PRIVATE_GRID\nunset XDG_CONFIG_HOME XDG_DATA_HOME OPENCODE_CONFIG OPENCODE_DB PI_CODING_AGENT_DIR HERMES_HOME CURSOR_CONFIG_DIR CURSOR_DATA_DIR GROK_HOME AGY_HOME COPILOT_HOME CLAUDE_PROJECTS_DIR CURSOR_HOME AGY_CONFIG_DIR COMMANDCODE_HOME DEVIN_HOME DEVIN_CONFIG_PATH OPENCODE_PLUGIN_DIR KILO_PLUGIN_DIR PI_HOME PI_CODING_AGENT_SESSION_DIR AMP_PLUGIN_DIR OPENCLAW_STATE_DIR OPENCLAW_HOME\nexport HOME='<root>/home'\nexport PATH='<root>/bin'\nexport CLAUDE_CONFIG_DIR='<root>/claude_config_dir'\nexport CODEX_HOME='<root>/codex_home'\nexport OPENCODE_CONFIG_DIR='<root>/opencode_config_dir'\nexport OPENCODE_DATA_DIR='<root>/opencode_data_dir'\nexport SHELL='/bin/sh'\nexport ZDOTDIR='<root>/zdotdir'\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nif ! '<node>' -e 'const fs=require(\"node:fs\"),p=JSON.parse(process.argv[1]);const id=s=>`${s.dev}:${s.ino}:${s.mode}:${s.uid}`;const ver=s=>`${id(s)}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`;const stamp=s=>`${s.dev}:${s.ino}:${s.uid}:${s.mode}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`;const stat=p=>{try{return fs.lstatSync(p,{bigint:true})}catch(e){if(e.code===\"ENOENT\")return null;throw e}};try{if(!p.ready)throw 0;const s=fs.statSync(p.command,{bigint:true});if(`${p.command}:${fs.realpathSync(p.command)}:${s.dev}:${s.ino}:${s.mode}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`!==p.identity)throw 0;for(const f of p.files){for(const r of f.facts){const s=stat(r.path);if((s?id(s):null)!==r.identity)throw 0;if(r.alias&&(!s||ver(s)!==r.alias.version||fs.readlinkSync(r.path)!==r.alias.target))throw 0;}const s=stat(f.target);if((s?stamp(s):null)!==f.stamp)throw 0;}}catch{process.exitCode=75}' '{\"ready\":true,\"command\":\"<root>/bin/v2\",\"identity\":\"<root>/bin/v2:<root>/bin/v2:<device>:<inode>:33216:63:<mtime-ns>:<ctime-ns>\",\"files\":[]}'; then\n'<node>' -e 'const [tmux,pane,pid,nonce,held]=process.argv.slice(1);if(/^%[0-9]+$/.test(pane)&&/^[0-9]+$/.test(pid)){const proof=\"#{&&:#{==:#{pane_id},\"+pane+\"},#{&&:#{==:#{pane_pid},\"+pid+\"},#{m:*\"+nonce+\"*,#{pane_start_command}}}}\";try{require(\"node:child_process\").execFileSync(tmux,[\"if-shell\",\"-F\",\"-t\",pane,proof,\"respawn-pane -k -t \"+pane+\" \"+held],{timeout:2000,killSignal:\"SIGKILL\",stdio:\"ignore\"})}catch{}}' '/fixture/bin/tmux' \"${TMUX_PANE:-}\" \"$$\" 'HARNESS_NATIVE_LAUNCH_TOKEN=<native-token>' '/usr/bin/env HARNESS_DAEMON=<daemon-owner> /bin/sh -c '\"'\"'trap '\"'\"'\"'\"'\"'\"'\"'\"''\"'\"'\"'\"'\"'\"'\"'\"' INT QUIT TSTP; printf '\"'\"'\"'\"'\"'\"'\"'\"'%s\\n'\"'\"'\"'\"'\"'\"'\"'\"' \"$1\"; while :; do sleep 3600; done'\"'\"' harness-held '\"'\"'Waiting for native launch preparation to be confirmed.'\"'\"' '\"'\"'<native-token>'\"'\"''\nexec /usr/bin/env HARNESS_DAEMON=<daemon-owner> /bin/sh -c 'trap '\"'\"''\"'\"' INT QUIT TSTP; printf '\"'\"'%s\\n'\"'\"' \"$1\"; while :; do sleep 3600; done' harness-held 'Waiting for native launch preparation to be confirmed.' '<native-token>'\nfi\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
       }
     ],
-    "native": []
+    "native": [
+      {
+        "binary": "opencode",
+        "args": [
+          "--version"
+        ],
+        "cwd": "<repo>"
+      },
+      {
+        "binary": "opencode",
+        "args": [
+          "--help"
+        ],
+        "cwd": "<repo>"
+      }
+    ]
   },
   "v2 fork named=false": {
     "result": {
@@ -449,6 +795,8 @@
     "panes": [
       {
         "argv": [
+          "/usr/bin/env",
+          "HARNESS_NATIVE_LAUNCH_TOKEN=<native-token>",
           "/bin/sh",
           "-ic",
           ". '<root>/adapter_data_dir/launch/<script>.sh'",
@@ -458,6 +806,16 @@
           "--prompt",
           "You are a fork of the agent \"work · ses_\" in <root>/work. It kept working; you are its copy, picking up from what it knew. Here is its recent history, oldest first.\n\nAsked: fixture ask\n\nIts last full answer:\nfixture answer\n\nContinue from there. Your task now: try another approach"
         ],
+        "env": {
+          "HOME": "<root>/home",
+          "PATH": "<root>/bin",
+          "CLAUDE_CONFIG_DIR": "<root>/claude_config_dir",
+          "CODEX_HOME": "<root>/codex_home",
+          "OPENCODE_CONFIG_DIR": "<root>/opencode_config_dir",
+          "OPENCODE_DATA_DIR": "<root>/opencode_data_dir",
+          "SHELL": "/bin/sh",
+          "ZDOTDIR": "<root>/zdotdir"
+        },
         "engine": "opencode",
         "agent": null,
         "forkedFrom": {
@@ -468,10 +826,17 @@
         "permissionMode": null,
         "grid": null,
         "gridLaunchRecord": null,
-        "script": "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: v2 exited ('\"$harness_status\"'). This pane is a shell now — run v2 again, or stop the pane.'\n  exec '/bin/sh'\n}\nunset HARNESS_DSH HARNESS_DSH_DIR HARNESS_WORKSPACE HARNESS_CONTEXT_FILE HARNESS_SKILLS_DIR HARNESS_PRIVATE_GRID\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
+        "script": "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: v2 exited ('\"$harness_status\"'). This pane is a shell now — run v2 again, or stop the pane.'\n  exec '/bin/sh'\n}\nunset HARNESS_DSH HARNESS_DSH_DIR HARNESS_WORKSPACE HARNESS_CONTEXT_FILE HARNESS_SKILLS_DIR HARNESS_PRIVATE_GRID\nunset XDG_CONFIG_HOME XDG_DATA_HOME OPENCODE_CONFIG OPENCODE_DB PI_CODING_AGENT_DIR HERMES_HOME CURSOR_CONFIG_DIR CURSOR_DATA_DIR GROK_HOME AGY_HOME COPILOT_HOME CLAUDE_PROJECTS_DIR CURSOR_HOME AGY_CONFIG_DIR COMMANDCODE_HOME DEVIN_HOME DEVIN_CONFIG_PATH OPENCODE_PLUGIN_DIR KILO_PLUGIN_DIR PI_HOME PI_CODING_AGENT_SESSION_DIR AMP_PLUGIN_DIR OPENCLAW_STATE_DIR OPENCLAW_HOME\nexport HOME='<root>/home'\nexport PATH='<root>/bin'\nexport CLAUDE_CONFIG_DIR='<root>/claude_config_dir'\nexport CODEX_HOME='<root>/codex_home'\nexport OPENCODE_CONFIG_DIR='<root>/opencode_config_dir'\nexport OPENCODE_DATA_DIR='<root>/opencode_data_dir'\nexport SHELL='/bin/sh'\nexport ZDOTDIR='<root>/zdotdir'\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nif ! '<node>' -e 'const fs=require(\"node:fs\"),p=JSON.parse(process.argv[1]);const id=s=>`${s.dev}:${s.ino}:${s.mode}:${s.uid}`;const ver=s=>`${id(s)}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`;const stamp=s=>`${s.dev}:${s.ino}:${s.uid}:${s.mode}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`;const stat=p=>{try{return fs.lstatSync(p,{bigint:true})}catch(e){if(e.code===\"ENOENT\")return null;throw e}};try{if(!p.ready)throw 0;const s=fs.statSync(p.command,{bigint:true});if(`${p.command}:${fs.realpathSync(p.command)}:${s.dev}:${s.ino}:${s.mode}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`!==p.identity)throw 0;for(const f of p.files){for(const r of f.facts){const s=stat(r.path);if((s?id(s):null)!==r.identity)throw 0;if(r.alias&&(!s||ver(s)!==r.alias.version||fs.readlinkSync(r.path)!==r.alias.target))throw 0;}const s=stat(f.target);if((s?stamp(s):null)!==f.stamp)throw 0;}}catch{process.exitCode=75}' '{\"ready\":true,\"command\":\"<root>/bin/v2\",\"identity\":\"<root>/bin/v2:<root>/bin/v2:<device>:<inode>:33216:63:<mtime-ns>:<ctime-ns>\",\"files\":[]}'; then\n'<node>' -e 'const [tmux,pane,pid,nonce,held]=process.argv.slice(1);if(/^%[0-9]+$/.test(pane)&&/^[0-9]+$/.test(pid)){const proof=\"#{&&:#{==:#{pane_id},\"+pane+\"},#{&&:#{==:#{pane_pid},\"+pid+\"},#{m:*\"+nonce+\"*,#{pane_start_command}}}}\";try{require(\"node:child_process\").execFileSync(tmux,[\"if-shell\",\"-F\",\"-t\",pane,proof,\"respawn-pane -k -t \"+pane+\" \"+held],{timeout:2000,killSignal:\"SIGKILL\",stdio:\"ignore\"})}catch{}}' '/fixture/bin/tmux' \"${TMUX_PANE:-}\" \"$$\" 'HARNESS_NATIVE_LAUNCH_TOKEN=<native-token>' '/usr/bin/env HARNESS_DAEMON=<daemon-owner> /bin/sh -c '\"'\"'trap '\"'\"'\"'\"'\"'\"'\"'\"''\"'\"'\"'\"'\"'\"'\"'\"' INT QUIT TSTP; printf '\"'\"'\"'\"'\"'\"'\"'\"'%s\\n'\"'\"'\"'\"'\"'\"'\"'\"' \"$1\"; while :; do sleep 3600; done'\"'\"' harness-held '\"'\"'Waiting for native launch preparation to be confirmed.'\"'\"' '\"'\"'<native-token>'\"'\"''\nexec /usr/bin/env HARNESS_DAEMON=<daemon-owner> /bin/sh -c 'trap '\"'\"''\"'\"' INT QUIT TSTP; printf '\"'\"'%s\\n'\"'\"' \"$1\"; while :; do sleep 3600; done' harness-held 'Waiting for native launch preparation to be confirmed.' '<native-token>'\nfi\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
       }
     ],
     "native": [
+      {
+        "binary": "opencode",
+        "args": [
+          "--version"
+        ],
+        "cwd": "<repo>"
+      },
       {
         "binary": "opencode",
         "args": [
@@ -485,7 +850,16 @@
     "result": {
       "ok": true,
       "overrides": {
-        "env": {},
+        "env": {
+          "HOME": "<root>/home",
+          "PATH": "<root>/bin",
+          "CLAUDE_CONFIG_DIR": "<root>/claude_config_dir",
+          "CODEX_HOME": "<root>/codex_home",
+          "OPENCODE_CONFIG_DIR": "<root>/opencode_config_dir",
+          "OPENCODE_DATA_DIR": "<root>/opencode_data_dir",
+          "SHELL": "/bin/sh",
+          "ZDOTDIR": "<root>/zdotdir"
+        },
         "extraArgs": [],
         "clearEnv": [
           "HARNESS_DSH",
@@ -495,20 +869,80 @@
           "HARNESS_SKILLS_DIR",
           "HARNESS_PRIVATE_GRID"
         ],
-        "sessionModel": "fixture/model#high"
+        "sessionModel": "fixture/model#high",
+        "native": {
+          "token": "<native-token>",
+          "executable": {
+            "command": "<root>/bin/v2",
+            "identity": "<root>/bin/v2:<root>/bin/v2:<device>:<inode>:33216:63:<mtime-ns>:<ctime-ns>"
+          },
+          "opencodeMajor": 2,
+          "environment": {
+            "HOME": "<root>/home",
+            "PATH": "<root>/bin",
+            "CLAUDE_CONFIG_DIR": "<root>/claude_config_dir",
+            "CODEX_HOME": "<root>/codex_home",
+            "OPENCODE_CONFIG_DIR": "<root>/opencode_config_dir",
+            "OPENCODE_DATA_DIR": "<root>/opencode_data_dir",
+            "SHELL": "/bin/sh",
+            "ZDOTDIR": "<root>/zdotdir"
+          },
+          "proofs": [],
+          "clearEnvironment": [
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "OPENCODE_CONFIG",
+            "OPENCODE_DB",
+            "PI_CODING_AGENT_DIR",
+            "HERMES_HOME",
+            "CURSOR_CONFIG_DIR",
+            "CURSOR_DATA_DIR",
+            "GROK_HOME",
+            "AGY_HOME",
+            "COPILOT_HOME",
+            "CLAUDE_PROJECTS_DIR",
+            "CURSOR_HOME",
+            "AGY_CONFIG_DIR",
+            "COMMANDCODE_HOME",
+            "DEVIN_HOME",
+            "DEVIN_CONFIG_PATH",
+            "OPENCODE_PLUGIN_DIR",
+            "KILO_PLUGIN_DIR",
+            "PI_HOME",
+            "PI_CODING_AGENT_SESSION_DIR",
+            "AMP_PLUGIN_DIR",
+            "OPENCLAW_STATE_DIR",
+            "OPENCLAW_HOME"
+          ]
+        }
       }
     },
-    "native": []
+    "native": [
+      {
+        "binary": "opencode",
+        "args": [
+          "--version"
+        ],
+        "cwd": "<repo>"
+      }
+    ]
   },
   "v2 create named=true": {
     "result": {
-      "threw": {
-        "name": "NamedAgentUnsupportedError",
-        "message": "opencode has no documented way to open as a named agent, so the agent was not created."
-      }
+      "ok": false,
+      "error": "AGENT_UNSUPPORTED",
+      "detail": "opencode has no documented way to open as a named agent, so the agent was not created."
     },
     "panes": [],
-    "native": []
+    "native": [
+      {
+        "binary": "opencode",
+        "args": [
+          "--version"
+        ],
+        "cwd": "<repo>"
+      }
+    ]
   },
   "v2 fork named=true": {
     "result": {
@@ -519,6 +953,8 @@
     "panes": [
       {
         "argv": [
+          "/usr/bin/env",
+          "HARNESS_NATIVE_LAUNCH_TOKEN=<native-token>",
           "/bin/sh",
           "-ic",
           ". '<root>/adapter_data_dir/launch/<script>.sh'",
@@ -528,6 +964,16 @@
           "--prompt",
           "You are a fork of the agent \"work · ses_\" in <root>/work. It kept working; you are its copy, picking up from what it knew. Here is its recent history, oldest first.\n\nAsked: fixture ask\n\nIts last full answer:\nfixture answer\n\nContinue from there. Your task now: try another approach"
         ],
+        "env": {
+          "HOME": "<root>/home",
+          "PATH": "<root>/bin",
+          "CLAUDE_CONFIG_DIR": "<root>/claude_config_dir",
+          "CODEX_HOME": "<root>/codex_home",
+          "OPENCODE_CONFIG_DIR": "<root>/opencode_config_dir",
+          "OPENCODE_DATA_DIR": "<root>/opencode_data_dir",
+          "SHELL": "/bin/sh",
+          "ZDOTDIR": "<root>/zdotdir"
+        },
         "engine": "opencode",
         "agent": "reviewer",
         "forkedFrom": {
@@ -538,16 +984,33 @@
         "permissionMode": null,
         "grid": null,
         "gridLaunchRecord": null,
-        "script": "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: v2 exited ('\"$harness_status\"'). This pane is a shell now — run v2 again, or stop the pane.'\n  exec '/bin/sh'\n}\nunset HARNESS_DSH HARNESS_DSH_DIR HARNESS_WORKSPACE HARNESS_CONTEXT_FILE HARNESS_SKILLS_DIR HARNESS_PRIVATE_GRID\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
+        "script": "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: v2 exited ('\"$harness_status\"'). This pane is a shell now — run v2 again, or stop the pane.'\n  exec '/bin/sh'\n}\nunset HARNESS_DSH HARNESS_DSH_DIR HARNESS_WORKSPACE HARNESS_CONTEXT_FILE HARNESS_SKILLS_DIR HARNESS_PRIVATE_GRID\nunset XDG_CONFIG_HOME XDG_DATA_HOME OPENCODE_CONFIG OPENCODE_DB PI_CODING_AGENT_DIR HERMES_HOME CURSOR_CONFIG_DIR CURSOR_DATA_DIR GROK_HOME AGY_HOME COPILOT_HOME CLAUDE_PROJECTS_DIR CURSOR_HOME AGY_CONFIG_DIR COMMANDCODE_HOME DEVIN_HOME DEVIN_CONFIG_PATH OPENCODE_PLUGIN_DIR KILO_PLUGIN_DIR PI_HOME PI_CODING_AGENT_SESSION_DIR AMP_PLUGIN_DIR OPENCLAW_STATE_DIR OPENCLAW_HOME\nexport HOME='<root>/home'\nexport PATH='<root>/bin'\nexport CLAUDE_CONFIG_DIR='<root>/claude_config_dir'\nexport CODEX_HOME='<root>/codex_home'\nexport OPENCODE_CONFIG_DIR='<root>/opencode_config_dir'\nexport OPENCODE_DATA_DIR='<root>/opencode_data_dir'\nexport SHELL='/bin/sh'\nexport ZDOTDIR='<root>/zdotdir'\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nif ! '<node>' -e 'const fs=require(\"node:fs\"),p=JSON.parse(process.argv[1]);const id=s=>`${s.dev}:${s.ino}:${s.mode}:${s.uid}`;const ver=s=>`${id(s)}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`;const stamp=s=>`${s.dev}:${s.ino}:${s.uid}:${s.mode}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`;const stat=p=>{try{return fs.lstatSync(p,{bigint:true})}catch(e){if(e.code===\"ENOENT\")return null;throw e}};try{if(!p.ready)throw 0;const s=fs.statSync(p.command,{bigint:true});if(`${p.command}:${fs.realpathSync(p.command)}:${s.dev}:${s.ino}:${s.mode}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`!==p.identity)throw 0;for(const f of p.files){for(const r of f.facts){const s=stat(r.path);if((s?id(s):null)!==r.identity)throw 0;if(r.alias&&(!s||ver(s)!==r.alias.version||fs.readlinkSync(r.path)!==r.alias.target))throw 0;}const s=stat(f.target);if((s?stamp(s):null)!==f.stamp)throw 0;}}catch{process.exitCode=75}' '{\"ready\":true,\"command\":\"<root>/bin/v2\",\"identity\":\"<root>/bin/v2:<root>/bin/v2:<device>:<inode>:33216:63:<mtime-ns>:<ctime-ns>\",\"files\":[]}'; then\n'<node>' -e 'const [tmux,pane,pid,nonce,held]=process.argv.slice(1);if(/^%[0-9]+$/.test(pane)&&/^[0-9]+$/.test(pid)){const proof=\"#{&&:#{==:#{pane_id},\"+pane+\"},#{&&:#{==:#{pane_pid},\"+pid+\"},#{m:*\"+nonce+\"*,#{pane_start_command}}}}\";try{require(\"node:child_process\").execFileSync(tmux,[\"if-shell\",\"-F\",\"-t\",pane,proof,\"respawn-pane -k -t \"+pane+\" \"+held],{timeout:2000,killSignal:\"SIGKILL\",stdio:\"ignore\"})}catch{}}' '/fixture/bin/tmux' \"${TMUX_PANE:-}\" \"$$\" 'HARNESS_NATIVE_LAUNCH_TOKEN=<native-token>' '/usr/bin/env HARNESS_DAEMON=<daemon-owner> /bin/sh -c '\"'\"'trap '\"'\"'\"'\"'\"'\"'\"'\"''\"'\"'\"'\"'\"'\"'\"'\"' INT QUIT TSTP; printf '\"'\"'\"'\"'\"'\"'\"'\"'%s\\n'\"'\"'\"'\"'\"'\"'\"'\"' \"$1\"; while :; do sleep 3600; done'\"'\"' harness-held '\"'\"'Waiting for native launch preparation to be confirmed.'\"'\"' '\"'\"'<native-token>'\"'\"''\nexec /usr/bin/env HARNESS_DAEMON=<daemon-owner> /bin/sh -c 'trap '\"'\"''\"'\"' INT QUIT TSTP; printf '\"'\"'%s\\n'\"'\"' \"$1\"; while :; do sleep 3600; done' harness-held 'Waiting for native launch preparation to be confirmed.' '<native-token>'\nfi\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
       }
     ],
-    "native": []
+    "native": [
+      {
+        "binary": "opencode",
+        "args": [
+          "--version"
+        ],
+        "cwd": "<repo>"
+      }
+    ]
   },
   "v2 relaunch named=true": {
     "result": {
       "ok": true,
       "overrides": {
-        "env": {},
+        "env": {
+          "HOME": "<root>/home",
+          "PATH": "<root>/bin",
+          "CLAUDE_CONFIG_DIR": "<root>/claude_config_dir",
+          "CODEX_HOME": "<root>/codex_home",
+          "OPENCODE_CONFIG_DIR": "<root>/opencode_config_dir",
+          "OPENCODE_DATA_DIR": "<root>/opencode_data_dir",
+          "SHELL": "/bin/sh",
+          "ZDOTDIR": "<root>/zdotdir"
+        },
         "extraArgs": [],
         "clearEnv": [
           "HARNESS_DSH",
@@ -557,10 +1020,63 @@
           "HARNESS_SKILLS_DIR",
           "HARNESS_PRIVATE_GRID"
         ],
-        "sessionModel": "fixture/model#high"
+        "sessionModel": "fixture/model#high",
+        "native": {
+          "token": "<native-token>",
+          "executable": {
+            "command": "<root>/bin/v2",
+            "identity": "<root>/bin/v2:<root>/bin/v2:<device>:<inode>:33216:63:<mtime-ns>:<ctime-ns>"
+          },
+          "opencodeMajor": 2,
+          "environment": {
+            "HOME": "<root>/home",
+            "PATH": "<root>/bin",
+            "CLAUDE_CONFIG_DIR": "<root>/claude_config_dir",
+            "CODEX_HOME": "<root>/codex_home",
+            "OPENCODE_CONFIG_DIR": "<root>/opencode_config_dir",
+            "OPENCODE_DATA_DIR": "<root>/opencode_data_dir",
+            "SHELL": "/bin/sh",
+            "ZDOTDIR": "<root>/zdotdir"
+          },
+          "proofs": [],
+          "clearEnvironment": [
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "OPENCODE_CONFIG",
+            "OPENCODE_DB",
+            "PI_CODING_AGENT_DIR",
+            "HERMES_HOME",
+            "CURSOR_CONFIG_DIR",
+            "CURSOR_DATA_DIR",
+            "GROK_HOME",
+            "AGY_HOME",
+            "COPILOT_HOME",
+            "CLAUDE_PROJECTS_DIR",
+            "CURSOR_HOME",
+            "AGY_CONFIG_DIR",
+            "COMMANDCODE_HOME",
+            "DEVIN_HOME",
+            "DEVIN_CONFIG_PATH",
+            "OPENCODE_PLUGIN_DIR",
+            "KILO_PLUGIN_DIR",
+            "PI_HOME",
+            "PI_CODING_AGENT_SESSION_DIR",
+            "AMP_PLUGIN_DIR",
+            "OPENCLAW_STATE_DIR",
+            "OPENCLAW_HOME"
+          ]
+        }
       }
     },
-    "native": []
+    "native": [
+      {
+        "binary": "opencode",
+        "args": [
+          "--version"
+        ],
+        "cwd": "<repo>"
+      }
+    ]
   },
   "v2 retarget own login": {
     "result": {
@@ -599,7 +1115,16 @@
           "ses_fixture"
         ],
         {
-          "env": {},
+          "env": {
+            "HOME": "<root>/home",
+            "PATH": "<root>/bin",
+            "CLAUDE_CONFIG_DIR": "<root>/claude_config_dir",
+            "CODEX_HOME": "<root>/codex_home",
+            "OPENCODE_CONFIG_DIR": "<root>/opencode_config_dir",
+            "OPENCODE_DATA_DIR": "<root>/opencode_data_dir",
+            "SHELL": "/bin/sh",
+            "ZDOTDIR": "<root>/zdotdir"
+          },
           "extraArgs": [],
           "clearEnv": [
             "HARNESS_DSH",
@@ -609,7 +1134,52 @@
             "HARNESS_SKILLS_DIR",
             "HARNESS_PRIVATE_GRID"
           ],
-          "sessionModel": "fixture/model#high"
+          "sessionModel": "fixture/model#high",
+          "native": {
+            "token": "<native-token>",
+            "executable": {
+              "command": "<root>/bin/v2",
+              "identity": "<root>/bin/v2:<root>/bin/v2:<device>:<inode>:33216:63:<mtime-ns>:<ctime-ns>"
+            },
+            "opencodeMajor": 2,
+            "environment": {
+              "HOME": "<root>/home",
+              "PATH": "<root>/bin",
+              "CLAUDE_CONFIG_DIR": "<root>/claude_config_dir",
+              "CODEX_HOME": "<root>/codex_home",
+              "OPENCODE_CONFIG_DIR": "<root>/opencode_config_dir",
+              "OPENCODE_DATA_DIR": "<root>/opencode_data_dir",
+              "SHELL": "/bin/sh",
+              "ZDOTDIR": "<root>/zdotdir"
+            },
+            "proofs": [],
+            "clearEnvironment": [
+              "XDG_CONFIG_HOME",
+              "XDG_DATA_HOME",
+              "OPENCODE_CONFIG",
+              "OPENCODE_DB",
+              "PI_CODING_AGENT_DIR",
+              "HERMES_HOME",
+              "CURSOR_CONFIG_DIR",
+              "CURSOR_DATA_DIR",
+              "GROK_HOME",
+              "AGY_HOME",
+              "COPILOT_HOME",
+              "CLAUDE_PROJECTS_DIR",
+              "CURSOR_HOME",
+              "AGY_CONFIG_DIR",
+              "COMMANDCODE_HOME",
+              "DEVIN_HOME",
+              "DEVIN_CONFIG_PATH",
+              "OPENCODE_PLUGIN_DIR",
+              "KILO_PLUGIN_DIR",
+              "PI_HOME",
+              "PI_CODING_AGENT_SESSION_DIR",
+              "AMP_PLUGIN_DIR",
+              "OPENCLAW_STATE_DIR",
+              "OPENCLAW_HOME"
+            ]
+          }
         },
         "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: v2 exited ('\"$harness_status\"'). This pane is a shell now — run v2 again, or stop the pane.'\n  exec '/bin/sh'\n}\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
       ],
@@ -652,6 +1222,13 @@
         "control": [
           "cancel"
         ]
+      },
+      {
+        "binary": "opencode",
+        "args": [
+          "--version"
+        ],
+        "cwd": "<repo>"
       },
       {
         "control": [
@@ -721,7 +1298,16 @@
             "ses_fixture"
           ],
           {
-            "env": {},
+            "env": {
+              "HOME": "<root>/home",
+              "PATH": "<root>/bin",
+              "CLAUDE_CONFIG_DIR": "<root>/claude_config_dir",
+              "CODEX_HOME": "<root>/codex_home",
+              "OPENCODE_CONFIG_DIR": "<root>/opencode_config_dir",
+              "OPENCODE_DATA_DIR": "<root>/opencode_data_dir",
+              "SHELL": "/bin/sh",
+              "ZDOTDIR": "<root>/zdotdir"
+            },
             "extraArgs": [],
             "clearEnv": [
               "HARNESS_DSH",
@@ -731,7 +1317,52 @@
               "HARNESS_SKILLS_DIR",
               "HARNESS_PRIVATE_GRID"
             ],
-            "sessionModel": "fixture/model#high"
+            "sessionModel": "fixture/model#high",
+            "native": {
+              "token": "<native-token>",
+              "executable": {
+                "command": "<root>/bin/v2",
+                "identity": "<root>/bin/v2:<root>/bin/v2:<device>:<inode>:33216:63:<mtime-ns>:<ctime-ns>"
+              },
+              "opencodeMajor": 2,
+              "environment": {
+                "HOME": "<root>/home",
+                "PATH": "<root>/bin",
+                "CLAUDE_CONFIG_DIR": "<root>/claude_config_dir",
+                "CODEX_HOME": "<root>/codex_home",
+                "OPENCODE_CONFIG_DIR": "<root>/opencode_config_dir",
+                "OPENCODE_DATA_DIR": "<root>/opencode_data_dir",
+                "SHELL": "/bin/sh",
+                "ZDOTDIR": "<root>/zdotdir"
+              },
+              "proofs": [],
+              "clearEnvironment": [
+                "XDG_CONFIG_HOME",
+                "XDG_DATA_HOME",
+                "OPENCODE_CONFIG",
+                "OPENCODE_DB",
+                "PI_CODING_AGENT_DIR",
+                "HERMES_HOME",
+                "CURSOR_CONFIG_DIR",
+                "CURSOR_DATA_DIR",
+                "GROK_HOME",
+                "AGY_HOME",
+                "COPILOT_HOME",
+                "CLAUDE_PROJECTS_DIR",
+                "CURSOR_HOME",
+                "AGY_CONFIG_DIR",
+                "COMMANDCODE_HOME",
+                "DEVIN_HOME",
+                "DEVIN_CONFIG_PATH",
+                "OPENCODE_PLUGIN_DIR",
+                "KILO_PLUGIN_DIR",
+                "PI_HOME",
+                "PI_CODING_AGENT_SESSION_DIR",
+                "AMP_PLUGIN_DIR",
+                "OPENCLAW_STATE_DIR",
+                "OPENCLAW_HOME"
+              ]
+            }
           },
           "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: v2 exited ('\"$harness_status\"'). This pane is a shell now — run v2 again, or stop the pane.'\n  exec '/bin/sh'\n}\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
         ]
@@ -788,67 +1419,29 @@
   "unknown create named=false": {
     "result": {
       "ok": false,
-      "error": "RECORDED",
-      "detail": "No pane is opened by this golden."
+      "error": "NATIVE_LAUNCH_HELD",
+      "unavailable": "native",
+      "detail": "Waiting to confirm the selected OpenCode executable’s version."
     },
-    "panes": [
+    "panes": [],
+    "native": [
       {
-        "argv": [
-          "/bin/sh",
-          "-ic",
-          ". '<root>/adapter_data_dir/launch/<script>.sh'",
-          "harness-engine",
-          "<root>/work",
-          "<root>/bin/unknown",
-          "--prompt",
-          "fixture prompt"
+        "binary": "opencode",
+        "args": [
+          "--version"
         ],
-        "env": {
-          "OPENCODE_CONFIG_CONTENT": "{\"permission\":\"ask\",\"model\":\"opencode/muse-spark-1.3-contributor-free\",\"small_model\":\"opencode/muse-spark-1.3-contributor-free\",\"provider\":{\"opencode\":{\"models\":{\"muse-spark-1.3-contributor-free\":{\"options\":{\"reasoningEffort\":\"xhigh\"}}}}},\"agent\":{\"build\":{\"model\":\"opencode/muse-spark-1.3-contributor-free\",\"variant\":\"xhigh\"},\"plan\":{\"model\":\"opencode/muse-spark-1.3-contributor-free\",\"variant\":\"xhigh\"}}}"
-        },
-        "engine": "opencode",
-        "agent": null,
-        "permissionMode": null,
-        "grid": null,
-        "gridLaunchRecord": null,
-        "script": "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: unknown exited ('\"$harness_status\"'). This pane is a shell now — run unknown again, or stop the pane.'\n  exec '/bin/sh'\n}\nunset HARNESS_DSH HARNESS_DSH_DIR HARNESS_WORKSPACE HARNESS_CONTEXT_FILE HARNESS_SKILLS_DIR HARNESS_PRIVATE_GRID\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
+        "cwd": "<repo>"
       }
-    ],
-    "native": []
+    ]
   },
   "unknown fork named=false": {
     "result": {
       "ok": false,
-      "error": "RECORDED",
-      "detail": "No pane is opened by this golden."
+      "error": "NATIVE_LAUNCH_HELD",
+      "unavailable": "native",
+      "detail": "Waiting to confirm the selected OpenCode executable’s version."
     },
-    "panes": [
-      {
-        "argv": [
-          "/bin/sh",
-          "-ic",
-          ". '<root>/adapter_data_dir/launch/<script>.sh'",
-          "harness-engine",
-          "<root>/work",
-          "<root>/bin/unknown",
-          "-m",
-          "fixture/model#high",
-          "--prompt",
-          "You are a fork of the agent \"work · ses_\" in <root>/work. It kept working; you are its copy, picking up from what it knew. Here is its recent history, oldest first.\n\nAsked: fixture ask\n\nIts last full answer:\nfixture answer\n\nContinue from there. Your task now: try another approach"
-        ],
-        "engine": "opencode",
-        "agent": null,
-        "forkedFrom": {
-          "agentId": "fixture-agent",
-          "name": "work · ses_",
-          "sessionId": "ses_fixture"
-        },
-        "permissionMode": null,
-        "grid": null,
-        "gridLaunchRecord": null,
-        "script": "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: unknown exited ('\"$harness_status\"'). This pane is a shell now — run unknown again, or stop the pane.'\n  exec '/bin/sh'\n}\nunset HARNESS_DSH HARNESS_DSH_DIR HARNESS_WORKSPACE HARNESS_CONTEXT_FILE HARNESS_SKILLS_DIR HARNESS_PRIVATE_GRID\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
-      }
-    ],
+    "panes": [],
     "native": [
       {
         "binary": "opencode",
@@ -861,336 +1454,111 @@
   },
   "unknown relaunch named=false": {
     "result": {
-      "ok": true,
-      "overrides": {
-        "env": {},
-        "extraArgs": [
-          "-m",
-          "fixture/model#high"
-        ],
-        "clearEnv": [
-          "HARNESS_DSH",
-          "HARNESS_DSH_DIR",
-          "HARNESS_WORKSPACE",
-          "HARNESS_CONTEXT_FILE",
-          "HARNESS_SKILLS_DIR",
-          "HARNESS_PRIVATE_GRID"
-        ],
-        "sessionModel": "fixture/model#high"
-      }
+      "ok": false,
+      "error": "NATIVE_LAUNCH_HELD",
+      "unavailable": "native",
+      "detail": "Waiting to confirm the selected OpenCode executable’s version."
     },
-    "native": []
+    "native": [
+      {
+        "binary": "opencode",
+        "args": [
+          "--version"
+        ],
+        "cwd": "<repo>"
+      }
+    ]
   },
   "unknown create named=true": {
     "result": {
       "ok": false,
-      "error": "RECORDED",
-      "detail": "No pane is opened by this golden."
+      "error": "NATIVE_LAUNCH_HELD",
+      "unavailable": "native",
+      "detail": "Waiting to confirm the selected OpenCode executable’s version."
     },
-    "panes": [
+    "panes": [],
+    "native": [
       {
-        "argv": [
-          "/bin/sh",
-          "-ic",
-          ". '<root>/adapter_data_dir/launch/<script>.sh'",
-          "harness-engine",
-          "<root>/work",
-          "<root>/bin/unknown",
-          "--agent",
-          "reviewer",
-          "--prompt",
-          "fixture prompt"
+        "binary": "opencode",
+        "args": [
+          "--version"
         ],
-        "env": {
-          "OPENCODE_CONFIG_CONTENT": "{\"permission\":\"ask\",\"model\":\"opencode/muse-spark-1.3-contributor-free\",\"small_model\":\"opencode/muse-spark-1.3-contributor-free\",\"provider\":{\"opencode\":{\"models\":{\"muse-spark-1.3-contributor-free\":{\"options\":{\"reasoningEffort\":\"xhigh\"}}}}},\"agent\":{\"build\":{\"model\":\"opencode/muse-spark-1.3-contributor-free\",\"variant\":\"xhigh\"},\"plan\":{\"model\":\"opencode/muse-spark-1.3-contributor-free\",\"variant\":\"xhigh\"}}}"
-        },
-        "engine": "opencode",
-        "agent": "reviewer",
-        "permissionMode": null,
-        "grid": null,
-        "gridLaunchRecord": null,
-        "script": "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: unknown exited ('\"$harness_status\"'). This pane is a shell now — run unknown again, or stop the pane.'\n  exec '/bin/sh'\n}\nunset HARNESS_DSH HARNESS_DSH_DIR HARNESS_WORKSPACE HARNESS_CONTEXT_FILE HARNESS_SKILLS_DIR HARNESS_PRIVATE_GRID\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
+        "cwd": "<repo>"
       }
-    ],
-    "native": []
+    ]
   },
   "unknown fork named=true": {
     "result": {
       "ok": false,
-      "error": "RECORDED",
-      "detail": "No pane is opened by this golden."
+      "error": "NATIVE_LAUNCH_HELD",
+      "unavailable": "native",
+      "detail": "Waiting to confirm the selected OpenCode executable’s version."
     },
-    "panes": [
+    "panes": [],
+    "native": [
       {
-        "argv": [
-          "/bin/sh",
-          "-ic",
-          ". '<root>/adapter_data_dir/launch/<script>.sh'",
-          "harness-engine",
-          "<root>/work",
-          "<root>/bin/unknown",
-          "-m",
-          "fixture/model#high",
-          "--agent",
-          "reviewer",
-          "--prompt",
-          "You are a fork of the agent \"work · ses_\" in <root>/work. It kept working; you are its copy, picking up from what it knew. Here is its recent history, oldest first.\n\nAsked: fixture ask\n\nIts last full answer:\nfixture answer\n\nContinue from there. Your task now: try another approach"
+        "binary": "opencode",
+        "args": [
+          "--version"
         ],
-        "engine": "opencode",
-        "agent": "reviewer",
-        "forkedFrom": {
-          "agentId": "fixture-agent",
-          "name": "work · ses_",
-          "sessionId": "ses_fixture"
-        },
-        "permissionMode": null,
-        "grid": null,
-        "gridLaunchRecord": null,
-        "script": "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: unknown exited ('\"$harness_status\"'). This pane is a shell now — run unknown again, or stop the pane.'\n  exec '/bin/sh'\n}\nunset HARNESS_DSH HARNESS_DSH_DIR HARNESS_WORKSPACE HARNESS_CONTEXT_FILE HARNESS_SKILLS_DIR HARNESS_PRIVATE_GRID\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
+        "cwd": "<repo>"
       }
-    ],
-    "native": []
+    ]
   },
   "unknown relaunch named=true": {
     "result": {
-      "ok": true,
-      "overrides": {
-        "env": {},
-        "extraArgs": [
-          "-m",
-          "fixture/model#high",
-          "--agent",
-          "reviewer"
-        ],
-        "clearEnv": [
-          "HARNESS_DSH",
-          "HARNESS_DSH_DIR",
-          "HARNESS_WORKSPACE",
-          "HARNESS_CONTEXT_FILE",
-          "HARNESS_SKILLS_DIR",
-          "HARNESS_PRIVATE_GRID"
-        ],
-        "sessionModel": "fixture/model#high"
-      }
+      "ok": false,
+      "error": "NATIVE_LAUNCH_HELD",
+      "unavailable": "native",
+      "detail": "Waiting to confirm the selected OpenCode executable’s version."
     },
-    "native": []
+    "native": [
+      {
+        "binary": "opencode",
+        "args": [
+          "--version"
+        ],
+        "cwd": "<repo>"
+      }
+    ]
   },
   "unknown retarget own login": {
     "result": {
-      "ok": true
+      "ok": false,
+      "error": "NATIVE_LAUNCH_HELD",
+      "detail": "Waiting to confirm the selected OpenCode executable’s version."
     },
     "events": [
       [
         "cancel"
       ],
       [
-        "holdRoute"
-      ],
-      [
-        "clearEnv",
-        [
-          "GRID_API_KEY",
-          "OPENCODE_CONFIG"
-        ]
-      ],
-      [
-        "holdOpen"
-      ],
-      [
-        "terminate"
-      ],
-      [
-        "respawn",
-        [
-          "/bin/sh",
-          "-ic",
-          ". '<root>/adapter_data_dir/launch/<script>.sh'",
-          "harness-engine",
-          "<root>/work",
-          "<root>/bin/unknown",
-          "--session",
-          "ses_fixture",
-          "-m",
-          "fixture/model#high",
-          "--agent",
-          "reviewer"
-        ],
-        {
-          "env": {},
-          "extraArgs": [
-            "-m",
-            "fixture/model#high",
-            "--agent",
-            "reviewer"
-          ],
-          "clearEnv": [
-            "HARNESS_DSH",
-            "HARNESS_DSH_DIR",
-            "HARNESS_WORKSPACE",
-            "HARNESS_CONTEXT_FILE",
-            "HARNESS_SKILLS_DIR",
-            "HARNESS_PRIVATE_GRID"
-          ],
-          "sessionModel": "fixture/model#high"
-        },
-        "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: unknown exited ('\"$harness_status\"'). This pane is a shell now — run unknown again, or stop the pane.'\n  exec '/bin/sh'\n}\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
-      ],
-      [
-        "process",
-        "fixture-agent",
-        {
-          "pid": 4343,
-          "executable": "opencode",
-          "startMarker": "replacement"
-        },
-        null,
-        null
-      ],
-      [
-        "grid",
-        "fixture-agent",
-        null
-      ],
-      [
-        "active",
-        "fixture-agent",
-        true
-      ],
-      [
-        "announce"
-      ],
-      [
-        "assignment"
-      ],
-      [
         "release"
-      ],
-      [
-        "releaseRoute"
       ]
     ],
     "native": [
+      {
+        "binary": "opencode",
+        "args": [
+          "--version"
+        ],
+        "cwd": "<repo>"
+      },
       {
         "control": [
           "cancel"
         ]
       },
       {
-        "control": [
-          "holdRoute"
-        ]
-      },
-      {
-        "binary": "sqlite3",
+        "binary": "opencode",
         "args": [
-          "-batch",
-          "-bail",
-          "<root>/fixture.db",
-          "PRAGMA busy_timeout = 5000;\nBEGIN IMMEDIATE;\nUPDATE message SET data = json_set(data, '$.model.providerID', 'fixture', '$.model.modelID', 'model#high') WHERE id = (SELECT id FROM message WHERE session_id = 'ses_fixture' AND json_extract(data, '$.role') = 'user' ORDER BY time_created DESC LIMIT 1);\nSELECT changes();\nUPDATE session SET model = json_object('id', 'model#high', 'providerID', 'fixture', 'variant', 'default') WHERE id = 'ses_fixture' AND EXISTS (SELECT 1 FROM message WHERE session_id = 'ses_fixture' AND json_extract(data, '$.role') = 'user');\nSELECT changes();\nCOMMIT;"
-        ]
-      },
-      {
-        "control": [
-          "clearEnv",
-          [
-            "GRID_API_KEY",
-            "OPENCODE_CONFIG"
-          ]
-        ]
-      },
-      {
-        "control": [
-          "holdOpen"
-        ]
-      },
-      {
-        "control": [
-          "terminate"
-        ]
-      },
-      {
-        "control": [
-          "respawn",
-          [
-            "/bin/sh",
-            "-ic",
-            ". '<root>/adapter_data_dir/launch/<script>.sh'",
-            "harness-engine",
-            "<root>/work",
-            "<root>/bin/unknown",
-            "--session",
-            "ses_fixture",
-            "-m",
-            "fixture/model#high",
-            "--agent",
-            "reviewer"
-          ],
-          {
-            "env": {},
-            "extraArgs": [
-              "-m",
-              "fixture/model#high",
-              "--agent",
-              "reviewer"
-            ],
-            "clearEnv": [
-              "HARNESS_DSH",
-              "HARNESS_DSH_DIR",
-              "HARNESS_WORKSPACE",
-              "HARNESS_CONTEXT_FILE",
-              "HARNESS_SKILLS_DIR",
-              "HARNESS_PRIVATE_GRID"
-            ],
-            "sessionModel": "fixture/model#high"
-          },
-          "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: unknown exited ('\"$harness_status\"'). This pane is a shell now — run unknown again, or stop the pane.'\n  exec '/bin/sh'\n}\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
-        ]
-      },
-      {
-        "control": [
-          "process",
-          "fixture-agent",
-          {
-            "pid": 4343,
-            "executable": "opencode",
-            "startMarker": "replacement"
-          },
-          null,
-          null
-        ]
-      },
-      {
-        "control": [
-          "grid",
-          "fixture-agent",
-          null
-        ]
-      },
-      {
-        "control": [
-          "active",
-          "fixture-agent",
-          true
-        ]
-      },
-      {
-        "control": [
-          "announce"
-        ]
-      },
-      {
-        "control": [
-          "assignment"
-        ]
+          "--version"
+        ],
+        "cwd": "<repo>"
       },
       {
         "control": [
           "release"
-        ]
-      },
-      {
-        "control": [
-          "releaseRoute"
         ]
       }
     ]
@@ -1198,277 +1566,73 @@
   "missing create named=false": {
     "result": {
       "ok": false,
-      "error": "RECORDED",
-      "detail": "No pane is opened by this golden."
+      "error": "NATIVE_LAUNCH_HELD",
+      "unavailable": "native",
+      "detail": "Waiting for the configured engine executable to become available."
     },
-    "panes": [
-      {
-        "argv": [
-          "/bin/sh",
-          "-ic",
-          ". '<root>/adapter_data_dir/launch/<script>.sh'",
-          "harness-engine",
-          "<root>/work",
-          "<root>/bin/missing",
-          "--prompt",
-          "fixture prompt"
-        ],
-        "env": {
-          "OPENCODE_CONFIG_CONTENT": "{\"permission\":\"ask\",\"model\":\"opencode/muse-spark-1.3-contributor-free\",\"small_model\":\"opencode/muse-spark-1.3-contributor-free\",\"provider\":{\"opencode\":{\"models\":{\"muse-spark-1.3-contributor-free\":{\"options\":{\"reasoningEffort\":\"xhigh\"}}}}},\"agent\":{\"build\":{\"model\":\"opencode/muse-spark-1.3-contributor-free\",\"variant\":\"xhigh\"},\"plan\":{\"model\":\"opencode/muse-spark-1.3-contributor-free\",\"variant\":\"xhigh\"}}}"
-        },
-        "engine": "opencode",
-        "agent": null,
-        "permissionMode": null,
-        "grid": null,
-        "gridLaunchRecord": null,
-        "script": "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: missing exited ('\"$harness_status\"'). This pane is a shell now — run missing again, or stop the pane.'\n  exec '/bin/sh'\n}\nunset HARNESS_DSH HARNESS_DSH_DIR HARNESS_WORKSPACE HARNESS_CONTEXT_FILE HARNESS_SKILLS_DIR HARNESS_PRIVATE_GRID\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
-      }
-    ],
+    "panes": [],
     "native": []
   },
   "missing fork named=false": {
     "result": {
       "ok": false,
-      "error": "RECORDED",
-      "detail": "No pane is opened by this golden."
+      "error": "NATIVE_LAUNCH_HELD",
+      "unavailable": "native",
+      "detail": "Waiting for the configured engine executable to become available."
     },
-    "panes": [
-      {
-        "argv": [
-          "/bin/sh",
-          "-ic",
-          ". '<root>/adapter_data_dir/launch/<script>.sh'",
-          "harness-engine",
-          "<root>/work",
-          "<root>/bin/missing",
-          "-m",
-          "fixture/model#high",
-          "--prompt",
-          "You are a fork of the agent \"work · ses_\" in <root>/work. It kept working; you are its copy, picking up from what it knew. Here is its recent history, oldest first.\n\nAsked: fixture ask\n\nIts last full answer:\nfixture answer\n\nContinue from there. Your task now: try another approach"
-        ],
-        "engine": "opencode",
-        "agent": null,
-        "forkedFrom": {
-          "agentId": "fixture-agent",
-          "name": "work · ses_",
-          "sessionId": "ses_fixture"
-        },
-        "permissionMode": null,
-        "grid": null,
-        "gridLaunchRecord": null,
-        "script": "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: missing exited ('\"$harness_status\"'). This pane is a shell now — run missing again, or stop the pane.'\n  exec '/bin/sh'\n}\nunset HARNESS_DSH HARNESS_DSH_DIR HARNESS_WORKSPACE HARNESS_CONTEXT_FILE HARNESS_SKILLS_DIR HARNESS_PRIVATE_GRID\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
-      }
-    ],
+    "panes": [],
     "native": []
   },
   "missing relaunch named=false": {
     "result": {
-      "ok": true,
-      "overrides": {
-        "env": {},
-        "extraArgs": [
-          "-m",
-          "fixture/model#high"
-        ],
-        "clearEnv": [
-          "HARNESS_DSH",
-          "HARNESS_DSH_DIR",
-          "HARNESS_WORKSPACE",
-          "HARNESS_CONTEXT_FILE",
-          "HARNESS_SKILLS_DIR",
-          "HARNESS_PRIVATE_GRID"
-        ],
-        "sessionModel": "fixture/model#high"
-      }
+      "ok": false,
+      "error": "NATIVE_LAUNCH_HELD",
+      "unavailable": "native",
+      "detail": "Waiting for the configured engine executable to become available."
     },
     "native": []
   },
   "missing create named=true": {
     "result": {
       "ok": false,
-      "error": "RECORDED",
-      "detail": "No pane is opened by this golden."
+      "error": "NATIVE_LAUNCH_HELD",
+      "unavailable": "native",
+      "detail": "Waiting for the configured engine executable to become available."
     },
-    "panes": [
-      {
-        "argv": [
-          "/bin/sh",
-          "-ic",
-          ". '<root>/adapter_data_dir/launch/<script>.sh'",
-          "harness-engine",
-          "<root>/work",
-          "<root>/bin/missing",
-          "--agent",
-          "reviewer",
-          "--prompt",
-          "fixture prompt"
-        ],
-        "env": {
-          "OPENCODE_CONFIG_CONTENT": "{\"permission\":\"ask\",\"model\":\"opencode/muse-spark-1.3-contributor-free\",\"small_model\":\"opencode/muse-spark-1.3-contributor-free\",\"provider\":{\"opencode\":{\"models\":{\"muse-spark-1.3-contributor-free\":{\"options\":{\"reasoningEffort\":\"xhigh\"}}}}},\"agent\":{\"build\":{\"model\":\"opencode/muse-spark-1.3-contributor-free\",\"variant\":\"xhigh\"},\"plan\":{\"model\":\"opencode/muse-spark-1.3-contributor-free\",\"variant\":\"xhigh\"}}}"
-        },
-        "engine": "opencode",
-        "agent": "reviewer",
-        "permissionMode": null,
-        "grid": null,
-        "gridLaunchRecord": null,
-        "script": "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: missing exited ('\"$harness_status\"'). This pane is a shell now — run missing again, or stop the pane.'\n  exec '/bin/sh'\n}\nunset HARNESS_DSH HARNESS_DSH_DIR HARNESS_WORKSPACE HARNESS_CONTEXT_FILE HARNESS_SKILLS_DIR HARNESS_PRIVATE_GRID\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
-      }
-    ],
+    "panes": [],
     "native": []
   },
   "missing fork named=true": {
     "result": {
       "ok": false,
-      "error": "RECORDED",
-      "detail": "No pane is opened by this golden."
+      "error": "NATIVE_LAUNCH_HELD",
+      "unavailable": "native",
+      "detail": "Waiting for the configured engine executable to become available."
     },
-    "panes": [
-      {
-        "argv": [
-          "/bin/sh",
-          "-ic",
-          ". '<root>/adapter_data_dir/launch/<script>.sh'",
-          "harness-engine",
-          "<root>/work",
-          "<root>/bin/missing",
-          "-m",
-          "fixture/model#high",
-          "--agent",
-          "reviewer",
-          "--prompt",
-          "You are a fork of the agent \"work · ses_\" in <root>/work. It kept working; you are its copy, picking up from what it knew. Here is its recent history, oldest first.\n\nAsked: fixture ask\n\nIts last full answer:\nfixture answer\n\nContinue from there. Your task now: try another approach"
-        ],
-        "engine": "opencode",
-        "agent": "reviewer",
-        "forkedFrom": {
-          "agentId": "fixture-agent",
-          "name": "work · ses_",
-          "sessionId": "ses_fixture"
-        },
-        "permissionMode": null,
-        "grid": null,
-        "gridLaunchRecord": null,
-        "script": "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: missing exited ('\"$harness_status\"'). This pane is a shell now — run missing again, or stop the pane.'\n  exec '/bin/sh'\n}\nunset HARNESS_DSH HARNESS_DSH_DIR HARNESS_WORKSPACE HARNESS_CONTEXT_FILE HARNESS_SKILLS_DIR HARNESS_PRIVATE_GRID\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
-      }
-    ],
+    "panes": [],
     "native": []
   },
   "missing relaunch named=true": {
     "result": {
-      "ok": true,
-      "overrides": {
-        "env": {},
-        "extraArgs": [
-          "-m",
-          "fixture/model#high",
-          "--agent",
-          "reviewer"
-        ],
-        "clearEnv": [
-          "HARNESS_DSH",
-          "HARNESS_DSH_DIR",
-          "HARNESS_WORKSPACE",
-          "HARNESS_CONTEXT_FILE",
-          "HARNESS_SKILLS_DIR",
-          "HARNESS_PRIVATE_GRID"
-        ],
-        "sessionModel": "fixture/model#high"
-      }
+      "ok": false,
+      "error": "NATIVE_LAUNCH_HELD",
+      "unavailable": "native",
+      "detail": "Waiting for the configured engine executable to become available."
     },
     "native": []
   },
   "missing retarget own login": {
     "result": {
-      "ok": true
+      "ok": false,
+      "error": "NATIVE_LAUNCH_HELD",
+      "detail": "Waiting for the configured engine executable to become available."
     },
     "events": [
       [
         "cancel"
       ],
       [
-        "holdRoute"
-      ],
-      [
-        "clearEnv",
-        [
-          "GRID_API_KEY",
-          "OPENCODE_CONFIG"
-        ]
-      ],
-      [
-        "holdOpen"
-      ],
-      [
-        "terminate"
-      ],
-      [
-        "respawn",
-        [
-          "/bin/sh",
-          "-ic",
-          ". '<root>/adapter_data_dir/launch/<script>.sh'",
-          "harness-engine",
-          "<root>/work",
-          "<root>/bin/missing",
-          "--session",
-          "ses_fixture",
-          "-m",
-          "fixture/model#high",
-          "--agent",
-          "reviewer"
-        ],
-        {
-          "env": {},
-          "extraArgs": [
-            "-m",
-            "fixture/model#high",
-            "--agent",
-            "reviewer"
-          ],
-          "clearEnv": [
-            "HARNESS_DSH",
-            "HARNESS_DSH_DIR",
-            "HARNESS_WORKSPACE",
-            "HARNESS_CONTEXT_FILE",
-            "HARNESS_SKILLS_DIR",
-            "HARNESS_PRIVATE_GRID"
-          ],
-          "sessionModel": "fixture/model#high"
-        },
-        "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: missing exited ('\"$harness_status\"'). This pane is a shell now — run missing again, or stop the pane.'\n  exec '/bin/sh'\n}\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
-      ],
-      [
-        "process",
-        "fixture-agent",
-        {
-          "pid": 4343,
-          "executable": "opencode",
-          "startMarker": "replacement"
-        },
-        null,
-        null
-      ],
-      [
-        "grid",
-        "fixture-agent",
-        null
-      ],
-      [
-        "active",
-        "fixture-agent",
-        true
-      ],
-      [
-        "announce"
-      ],
-      [
-        "assignment"
-      ],
-      [
         "release"
-      ],
-      [
-        "releaseRoute"
       ]
     ],
     "native": [
@@ -1479,120 +1643,7 @@
       },
       {
         "control": [
-          "holdRoute"
-        ]
-      },
-      {
-        "binary": "sqlite3",
-        "args": [
-          "-batch",
-          "-bail",
-          "<root>/fixture.db",
-          "PRAGMA busy_timeout = 5000;\nBEGIN IMMEDIATE;\nUPDATE message SET data = json_set(data, '$.model.providerID', 'fixture', '$.model.modelID', 'model#high') WHERE id = (SELECT id FROM message WHERE session_id = 'ses_fixture' AND json_extract(data, '$.role') = 'user' ORDER BY time_created DESC LIMIT 1);\nSELECT changes();\nUPDATE session SET model = json_object('id', 'model#high', 'providerID', 'fixture', 'variant', 'default') WHERE id = 'ses_fixture' AND EXISTS (SELECT 1 FROM message WHERE session_id = 'ses_fixture' AND json_extract(data, '$.role') = 'user');\nSELECT changes();\nCOMMIT;"
-        ]
-      },
-      {
-        "control": [
-          "clearEnv",
-          [
-            "GRID_API_KEY",
-            "OPENCODE_CONFIG"
-          ]
-        ]
-      },
-      {
-        "control": [
-          "holdOpen"
-        ]
-      },
-      {
-        "control": [
-          "terminate"
-        ]
-      },
-      {
-        "control": [
-          "respawn",
-          [
-            "/bin/sh",
-            "-ic",
-            ". '<root>/adapter_data_dir/launch/<script>.sh'",
-            "harness-engine",
-            "<root>/work",
-            "<root>/bin/missing",
-            "--session",
-            "ses_fixture",
-            "-m",
-            "fixture/model#high",
-            "--agent",
-            "reviewer"
-          ],
-          {
-            "env": {},
-            "extraArgs": [
-              "-m",
-              "fixture/model#high",
-              "--agent",
-              "reviewer"
-            ],
-            "clearEnv": [
-              "HARNESS_DSH",
-              "HARNESS_DSH_DIR",
-              "HARNESS_WORKSPACE",
-              "HARNESS_CONTEXT_FILE",
-              "HARNESS_SKILLS_DIR",
-              "HARNESS_PRIVATE_GRID"
-            ],
-            "sessionModel": "fixture/model#high"
-          },
-          "rm -f -- '<root>/adapter_data_dir/launch/<script>.sh'\nharness_nofile=$(ulimit -S -n 2>/dev/null) || harness_nofile=unlimited; if [ \"$harness_nofile\" != unlimited ] && [ \"$harness_nofile\" -lt 65536 ] 2>/dev/null; then ulimit -S -n 65536 2>/dev/null || ulimit -S -n \"$(ulimit -H -n)\" 2>/dev/null || true; fi; unset harness_nofile\nharness_stopped() {\n  [ \"$harness_status\" -gt 128 ] 2>/dev/null || return 1\n  harness_signal=$(kill -l \"$harness_status\" 2>/dev/null) || return 1\n  case $harness_signal in\n    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;\n    *) return 1 ;;\n  esac\n}\nharness_fg() {\n  harness_now=$(date +%s 2>/dev/null) || harness_now=0\n  if [ $((harness_now - harness_resumed)) -le 1 ]; then harness_quick=$((harness_quick + 1)); else harness_quick=0; fi\n  harness_resumes=$((harness_resumes + 1))\n  case $harness_signal in *TTIN|*TTOU) harness_stuck=$harness_quick ;; *) harness_stuck=0 ;; esac\n  if [ \"$harness_stuck\" -ge 5 ] || { [ -z \"${ZSH_VERSION:-}\" ] && [ \"$harness_resumes\" -ge 1000 ]; }; then\n    kill -9 %% 2>/dev/null\n    harness_status=137\n    return 0\n  fi\n  if [ \"$harness_quick\" -ge 3 ]; then harness_waited=$(sleep 1) || :; fi\n  harness_resumed=$(date +%s 2>/dev/null) || harness_resumed=0\n  harness_status=0\n  fg >/dev/null || harness_status=$?\n}\nharness_resume() {\n  if [ -n \"${ZSH_VERSION:-}\" ]; then\n    while harness_stopped; do harness_fg; done\n    return 0\n  fi\n  harness_stopped || return 0\n  harness_fg\n  harness_resume\n}\nharness_resumed=0\nharness_quick=0\nharness_resumes=0\nharness_after() {\n  if [ \"$harness_status\" -eq 127 ]; then exit 127; fi\n  [ -n \"${TMUX_PANE:-}\" ] && { '/fixture/bin/tmux' set-option -p -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1 || '/fixture/bin/tmux' set-option -w -t \"$TMUX_PANE\" @harness_engine_exit \"$harness_status\" >/dev/null 2>&1; } || true\n  if ! [ -t 0 ]; then exit \"$harness_status\"; fi\n  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ \"$((harness_waiting))\" -gt 0 ]; do :; done\n    stty \"$harness_tty\" 2>/dev/null || true\n  fi\n  if [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n  printf '\\n%s\\n' 'harness: missing exited ('\"$harness_status\"'). This pane is a shell now — run missing again, or stop the pane.'\n  exec '/bin/sh'\n}\nGRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\nif [ -x '<root>/adapter_data_dir/bin/harness-browser' ]; then if [ \"${BROWSER:-}\" != '<root>/adapter_data_dir/bin/harness-browser' ]; then HARNESS_PREVIOUS_BROWSER=\"${BROWSER:-}\"; export HARNESS_PREVIOUS_BROWSER; fi; BROWSER='<root>/adapter_data_dir/bin/harness-browser'; export BROWSER; fi\nif [ \"${HARNESS_DEVELOPER_DIR:-}\" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\nif [ -x '/usr/bin/xcode-select' ] && [ -z \"${DEVELOPER_DIR:-}\" ] && [ ! -d '/Library/Developer/CommandLineTools/usr/bin' ] && [ ! -e '/var/db/xcode_select_link' ] && ! harness_devtools=$('/usr/bin/xcode-select' -p 2>/dev/null); then\n  DEVELOPER_DIR='/Library/Developer/CommandLineTools'\n  HARNESS_DEVELOPER_DIR=1\n  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR\nfi\nif ! cd -- \"$1\"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\nif ! [ -r . ]; then printf '%s\\n' \"harness: cannot read $PWD — the agent was not started.\" 'harness: check the folder'\"'\"'s permissions for this user.' >&2; exit 1; fi\nshift\nif [ -n \"${ZSH_VERSION:-}\" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\ntrap : INT QUIT\nharness_engine_bin=$1\nshift\nharness_status=0\n\"$harness_engine_bin\" \"$@\" || harness_status=$?\nharness_resume\nharness_after"
-        ]
-      },
-      {
-        "control": [
-          "process",
-          "fixture-agent",
-          {
-            "pid": 4343,
-            "executable": "opencode",
-            "startMarker": "replacement"
-          },
-          null,
-          null
-        ]
-      },
-      {
-        "control": [
-          "grid",
-          "fixture-agent",
-          null
-        ]
-      },
-      {
-        "control": [
-          "active",
-          "fixture-agent",
-          true
-        ]
-      },
-      {
-        "control": [
-          "announce"
-        ]
-      },
-      {
-        "control": [
-          "assignment"
-        ]
-      },
-      {
-        "control": [
           "release"
-        ]
-      },
-      {
-        "control": [
-          "releaseRoute"
         ]
       }
     ]

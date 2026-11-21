@@ -20,7 +20,7 @@ function deps(over: Overrides = {}): RestartAgentDeps & { calls: string[] } {
   const calls: string[] = []
   const holdOpenImpl = over.holdOpen ?? (async () => ({ ok: true }))
   const terminateImpl = over.terminate ?? (async () => 'terminated' as const)
-  const respawnImpl = over.respawn ?? (async () => ({ ok: true }))
+  const respawnImpl = over.respawn ?? (async (command: () => string[]) => { command(); return { ok: true } })
   const waitForProcessImpl = over.waitForProcess ?? (async () => IDENTITY)
   const buildArgvImpl = over.buildArgv ?? (() => ['claude'])
   return {
@@ -29,19 +29,46 @@ function deps(over: Overrides = {}): RestartAgentDeps & { calls: string[] } {
     ...(over.stopConflictingJob ? { stopConflictingJob: async () => { calls.push('stopConflictingJob'); await over.stopConflictingJob!() } } : {}),
     holdOpen: async () => { calls.push('holdOpen'); return holdOpenImpl() },
     terminate: async (checkAfterMs) => { calls.push('terminate'); return terminateImpl(checkAfterMs) },
-    respawn: async (argv) => { calls.push('respawn'); return respawnImpl(argv) },
+    respawn: async command => { calls.push('respawn'); return respawnImpl(command) },
     waitForProcess: async () => { calls.push('waitForProcess'); return waitForProcessImpl() },
     buildArgv: (opts) => { calls.push('buildArgv'); return buildArgvImpl(opts) },
     log: () => {},
-    keepAbandoned: () => { calls.push('keepAbandoned') },
+    keepAbandoned: async () => { calls.push('keepAbandoned') },
   }
 }
 
 describe('restartAgent', () => {
+  it('publishes no restart script until the backend invokes its final command', async () => {
+    const buildArgv = vi.fn(() => ['claude'])
+    const d = deps({ buildArgv })
+    d.respawn = async command => {
+      expect(buildArgv).not.toHaveBeenCalled()
+      expect(typeof command).toBe('function')
+      expect((command as unknown as () => string[])()).toEqual(['claude'])
+      return { ok: true }
+    }
+    expect(await restartAgent({ engine: 'claude', sessionId: 'selected-session' }, false, d)).toMatchObject({ ok: true })
+    expect(buildArgv).toHaveBeenCalledOnce()
+  })
+
+  it('keeps final command selection bound to the prepared resume after a dispatch wait', async () => {
+    let optional = true
+    const seen: unknown[] = []
+    const buildArgv = vi.fn(opts => { seen.push(opts); return ['claude', ...(optional ? ['optional'] : [])] })
+    const d = deps({ buildArgv })
+    d.respawn = async command => {
+      expect(buildArgv).not.toHaveBeenCalled()
+      optional = false
+      expect(command()).toEqual(['claude'])
+      return { ok: true }
+    }
+    expect(await restartAgent({ engine: 'claude', sessionId: 'selected-session' }, false, d)).toMatchObject({ ok: true })
+    expect(seen).toEqual([{ bypassPermission: false, resumeSessionId: 'selected-session' }])
+  })
   it('prepares history after its writer stops and before the resume launch', async () => {
     const d = deps({ prepareResume: vi.fn() })
     await restartAgent({ engine: 'codex', sessionId: 's1' }, false, d)
-    expect(d.calls).toEqual(['holdOpen', 'terminate', 'prepareResume', 'buildArgv', 'respawn', 'waitForProcess'])
+    expect(d.calls).toEqual(['holdOpen', 'terminate', 'prepareResume', 'respawn', 'buildArgv', 'waitForProcess'])
   })
 
   it('resumes the prepared fork of a moved conversation, once its writer has stopped', async () => {
@@ -82,7 +109,7 @@ describe('restartAgent', () => {
     const stopConflictingJob = vi.fn()
     const d = deps({ stopConflictingJob })
     await restartAgent({ engine: 'claude', sessionId: 's1' }, false, d)
-    expect(d.calls).toEqual(['holdOpen', 'terminate', 'stopConflictingJob', 'buildArgv', 'respawn', 'waitForProcess'])
+    expect(d.calls).toEqual(['holdOpen', 'terminate', 'stopConflictingJob', 'respawn', 'buildArgv', 'waitForProcess'])
     expect(stopConflictingJob).toHaveBeenCalledTimes(1)
   })
 
@@ -98,7 +125,7 @@ describe('restartAgent', () => {
     expect(d.stopConflictingJob).toBeUndefined()
     const outcome = await restartAgent({ engine: 'codex', sessionId: 's1' }, false, d)
     expect(outcome.ok).toBe(true)
-    expect(d.calls).toEqual(['holdOpen', 'terminate', 'buildArgv', 'respawn', 'waitForProcess'])
+    expect(d.calls).toEqual(['holdOpen', 'terminate', 'respawn', 'buildArgv', 'waitForProcess'])
   })
 
   it('does not prepare a fresh launch or repeat preparation on the fresh fallback', async () => {
@@ -114,7 +141,7 @@ describe('restartAgent', () => {
     const d = deps()
     const outcome = await restartAgent({ engine: 'claude', sessionId: 's1' }, false, d)
     expect(outcome).toEqual({ ok: true, processIdentity: IDENTITY, resumed: true })
-    expect(d.calls).toEqual(['holdOpen', 'terminate', 'buildArgv', 'respawn', 'waitForProcess'])
+    expect(d.calls).toEqual(['holdOpen', 'terminate', 'respawn', 'buildArgv', 'waitForProcess'])
   })
 
   it('stops nothing when the respawn would be refused, as on a tmux too old for the relaunch\'s environment', async () => {
@@ -125,7 +152,7 @@ describe('restartAgent', () => {
     // Asked, and not refused: the restart goes on as before.
     const allowed = { ...deps(), respawnRefusal: async () => null }
     expect(await restartAgent({ engine: 'codex', sessionId: 's1' }, false, allowed)).toMatchObject({ ok: true })
-    expect(allowed.calls).toEqual(['holdOpen', 'terminate', 'buildArgv', 'respawn', 'waitForProcess'])
+    expect(allowed.calls).toEqual(['holdOpen', 'terminate', 'respawn', 'buildArgv', 'waitForProcess'])
   })
 
   it('stops nothing when the relaunch is refused on this platform, and asks with the resume it would launch', async () => {

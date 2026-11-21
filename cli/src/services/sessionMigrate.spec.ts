@@ -9,7 +9,7 @@ import { createSessionMigrate, productionMigrateDeps, type MigrateDeps } from '.
 vi.mock('../lib/engineProbe.js', () => ({ probeEngines: vi.fn(async (engines: string[]) => engines.map(engine => ({ engine, installed: true, signedIn: true }))) }))
 vi.mock('../lib/loginShellEnv.js', async (original) => ({ ...await original<object>(), warmLoginShellEnvironment: vi.fn(async () => ({})) }))
 const versionRun = vi.hoisted(() => ({ result: { code: 0, output: 'codex-cli 0.130.0\n' } as { code: number; output: string } | null }))
-vi.mock('../lib/engineLaunch.js', () => ({ commandOutputInInteractiveShell: vi.fn(async () => versionRun.result) }))
+vi.mock('../engines/kit/interactiveProbe.js', () => ({ commandOutputInInteractiveShell: vi.fn(async () => versionRun.result) }))
 
 /**
  * `agent_session_migrate`: the owner's alone, checked before anything is read; the agent's own vouched transcript

@@ -129,7 +129,8 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
   const deps: HomeBridgeDeps = {
     platform: process.platform, home: homedir(), environment: process.env, socket: unixSocketPath(core.dataDir, env.PORT),
     // The master's PATH, this process's, may hold no tmux: it runs the one the core finds, so the core's server.
-    master: process.ppid, bootId, rows: procRows, tmuxAt: tmuxFinder(), tmux: listPanes, setupsPending: pendingSetups, askForStore,
+    // A failed shell lookup is retried at the next check even when tmux exists only on the shell's PATH.
+    master: process.ppid, bootId, rows: procRows, tmuxAt: tmuxFinder(undefined, () => true), tmux: listPanes, setupsPending: pendingSetups, askForStore,
     log: console.log, ...given,
   }
   // Nothing moves off Linux, and with no bridge.json there is no bridge to keep.
@@ -173,13 +174,12 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
   /** The processes of the panes the move retagged: they carry the new tag. A pane made since started after the move, and does not count. */
   const panePids = async (): Promise<number[]> => {
     const found = await deps.tmuxAt()
-    // No tmux found is a tmux not installed: no pane.
-    if (found.state === 'absent') return []
+    // Discovery may have timed out or failed; it cannot prove that the old server has no panes.
+    if (found.state === 'absent') throw Object.assign(new Error('tmux discovery was not confirmed'), { code: 'HOME_BRIDGE_TMUX_UNAVAILABLE' })
     const { status, stdout, stderr = '', error } = deps.tmux(found.state === 'adopted' ? found.path : 'tmux')
-    if (status !== 0) {
-      // A tmux that is missing, or has no server, has no pane. Any other failure, a timeout or another version's server,
-      // says nothing of them: the check is tried again.
-      if (error?.code === 'ENOENT' || NO_SERVER.test(stderr)) return []
+    if (status !== 0 || error) {
+      // Only tmux itself can confirm there is no server. A missing binary or failed invocation says nothing of its panes.
+      if (status === 1 && !error && NO_SERVER.test(stderr)) return []
       throw new Error(`tmux could not list its panes: ${error?.code ?? (stderr.trim().split('\n')[0] || `status ${status}`)}`)
     }
     return stdout.split('\n').flatMap((line) => {

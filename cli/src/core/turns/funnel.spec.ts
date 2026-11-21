@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { deviceErrorText } from '../cardText.js'
-import { inlineSubmission } from '../../testing/inlineSubmission.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import { createEventFunnel, funnelFor, outsideConsumers, type FunnelDeps } from './funnel.js'
+import { createEventFunnel, funnelFor, type FunnelDeps } from './funnel.js'
 import { createShortTurnGuard } from './shortTurnGuard.js'
+import { createServiceLinks, type ServiceFrame } from '../serviceLinks.js'
+import { createDeliveries } from '../deliveries.js'
+import { SessionInputController } from '../../lib/sessionInput.js'
+import { readInlineScreen } from '../../testing/inlineScreen.js'
+import { inlineSubmission } from '../../testing/inlineSubmission.js'
 
 type Event = Parameters<ReturnType<typeof funnelFor>>[1][number]
 const started = (userMessage = 'go'): Event => ({ type: 'turn_started', payload: { userMessage } }) as Event
@@ -27,10 +30,7 @@ function setup(engine = 'claude', over: Partial<FunnelDeps> = {}) {
     clients: { send: vi.fn((frame: { type: string }) => { calls.push(`send ${frame.type}`) }) },
     search: { touch: vi.fn(log('search')) },
     turnStartedAt: new Map(),
-    input: { onTurnStarted: vi.fn(log('input started')), onTurnEnded: vi.fn(log('input ended')) },
-    deviceInput: { onTurnStarted: vi.fn(log('deviceInput started')), onTurnEnded: vi.fn(log('deviceInput ended')) },
-    submission: inlineSubmission,
-    device: () => ({ turnStarted: vi.fn(log('device started')), turnEnded: vi.fn(log('device ended')), stream: vi.fn(log('device stream')) }),
+    input: { onTurnStarted: vi.fn(log('input started')), onTurnEnded: vi.fn(log('input ended')), onUserMessage: vi.fn() },
     startHeartbeat: vi.fn(log('heartbeat')),
     questionWatcher: { start: vi.fn(log('questions start')), noteTurnStart: vi.fn(log('questions pre-turn')), stop: vi.fn(log('questions stop')) },
     mirror: { ingest: vi.fn(log('mirror')) },
@@ -41,6 +41,78 @@ function setup(engine = 'claude', over: Partial<FunnelDeps> = {}) {
 
 describe('the event funnel', () => {
   afterEach(() => vi.restoreAllMocks())
+
+  it('confirms the first task accepted as a user message within an intervening turn', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const row = { agentId: 'a1', sessionId: 's1', engine: 'openclaw', active: true } as RegisteredSession
+    const input = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => row, validateRuntime: async () => true,
+      inject: async () => true, sendKey: async () => true, onError: vi.fn() })
+    const { funnel } = setup('openclaw', { input })
+    try {
+      input.expectFirstTask('a1', 'Fix the parser')
+      input.submitFirstTask('a1', 'Fix the parser')
+      await vi.waitFor(() => expect(input.awaitingConfirmation('a1')).toBe(true))
+      const echo: Event = { type: 'user_message', payload: { content: 'Fix the parser' } }
+      funnel('s1', [echo], { replay: true })
+      funnel('s1', [echo], { resumed: true })
+      funnel('s1', [{ type: 'user_message', payload: { content: 'Unrelated' } }])
+      expect(input.firstTaskWaiting('a1')).toBe(true)
+      funnel('s1', [started('An intervening message')])
+      expect(input.firstTaskWaiting('a1')).toBe(true)
+      // OpenClaw normalizes a second user row before the first answer as user_message, not another turn_started.
+      funnel('s1', [echo])
+      expect(input.firstTaskWaiting('a1')).toBe(false)
+      expect(input.awaitingConfirmation('a1')).toBe(false)
+    } finally { input.forget('a1') }
+  })
+
+  it('publishes a live user row before its input confirmation can act on it', () => {
+    const { funnel, deps, calls } = setup('openclaw')
+    vi.mocked(deps.input.onUserMessage).mockImplementation(() => { calls.push('input user') })
+    funnel('s1', [{ type: 'user_message', payload: { content: 'go' } }])
+    expect(calls.indexOf('send user_message')).toBeLessThan(calls.indexOf('input user'))
+    expect(vi.mocked(deps.turnActivity.observe).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(deps.input.onUserMessage).mock.invocationCallOrder[0])
+  })
+
+  it('enqueues dispatch and started notices before a read response requested at the earlier app send point', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const wire: ServiceFrame[] = [], token = 't'.repeat(48)
+    const links = createServiceLinks({ token, owned: { wifi: [] },
+      answer: async () => ({ value: { agentId: 'a1', sessionId: 's1' } }) })
+    const link = links.accept('wifi', token, { sendFrame: frame => { wire.push(frame); return true } }, vi.fn())!
+    const deliveries = createDeliveries({ deliverers: new Set(['wifi']), submit: vi.fn(), cancel: () => false,
+      tell: (service, event) => { links.notify(service, { type: 'service_event', payload: { kind: 'delivery', event } }) },
+      tellInput: (service, event) => { links.notify(service, { type: 'service_event', payload: { kind: 'input', event } }) } })
+    deliveries.ready()
+    deliveries.answer('wifi', 'input', { version: 1, agentId: 'a1', text: 'go', deliveryId: 'd', when: 'composer' },
+      { current: () => true, ownsRequest: () => false })
+    deliveries.input({ agentId: 'a1', deliveryId: 'd', phase: 'dispatching', when: 'composer', sessionId: 's1', activity: { epoch: 'core', revision: 1 } })
+    const f = setup('opencode', {
+      clients: { send: () => link.receive({ type: 'service_query', payload: { query: 'resolve', id: 'a1', requestId: 'barrier' } }) },
+      input: { onTurnStarted: () => deliveries.settled({ sessionId: 'a1', deliveryId: 'd', state: 'started' }), onTurnEnded: vi.fn(), onUserMessage: vi.fn() },
+    })
+    f.funnel('s1', [started()])
+    expect(wire.map(frame => frame.payload?.kind)).toEqual(['input', 'delivery'])
+    await vi.waitFor(() => expect(wire).toHaveLength(3))
+    expect(wire[2]).toMatchObject({ type: 'service_query_result', payload: { requestId: 'barrier' } })
+    link.closed()
+  })
+
+  it('carries original batch provenance at each existing app send point without delaying its side effects', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const f = setup()
+    f.funnel('s1', [ended(), started('next')])
+    const calls = vi.mocked(f.deps.clients.send).mock.calls as unknown as Array<[unknown, unknown]>
+    expect(calls.map(call => call[1])).toEqual([
+      { id: expect.any(Number), index: 0, count: 2 }, { id: expect.any(Number), index: 1, count: 2 },
+    ])
+    expect((calls[0][1] as { id: number }).id).toBe((calls[1][1] as { id: number }).id)
+    expect(f.calls.indexOf('input ended')).toBeLessThan(f.calls.indexOf('send turn_started'))
+    f.funnel('s1', [text()])
+    expect((calls[2][1] as { id: number }).id).not.toBe((calls[0][1] as { id: number }).id)
+  })
 
   it('tells of an agent working on each live turn start and progress, never on its end or a re-read', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -90,50 +162,29 @@ describe('the event funnel', () => {
     expect((deps.mirror.ingest as ReturnType<typeof vi.fn>).mock.calls[0][0][0].payload.outputTail).toBe('tail')
   })
 
-  it('carries on past a device service that throws: every consumer after it still gets the event', () => {
-    vi.spyOn(console, 'log').mockImplementation(() => {})
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const boom = (what: string) => vi.fn(() => { throw new Error(`${what} unplugged`) })
-    const { funnel, calls } = setup('claude', {
-      device: () => ({ turnStarted: boom('device'), turnEnded: boom('device'), stream: boom('device') }),
-    })
-    funnel('s1', [started(), text(), ended()])
-    expect(calls).toEqual([
-      'send turn_started', 'search',
-      'input started', 'deviceInput started', 'heartbeat', 'questions start', 'questions pre-turn',
-      'send text_delta',
-      'send turn_ended', 'search',
-      'deviceInput ended', 'input ended', 'questions stop',
-      'mirror',
-    ])
-    // Once a minute per consumer: the devices failed three times and said so once.
-    expect(error.mock.calls.map(([line]) => line)).toEqual(['[funnel] devices failed · Error'])
-  })
-
-
-  it('fans a live turn out in its exact order: the app first, the recaps after the batch, the device stream last', () => {
+  it('fans a live turn out in its exact order: the app first, the recaps after the batch', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const { funnel, calls } = setup()
     funnel('s1', [started(), text(), ended()])
     expect(calls).toEqual([
       'send turn_started', 'search',
-      'input started', 'deviceInput started', 'device started', 'heartbeat', 'questions start', 'questions pre-turn',
+      'input started', 'heartbeat', 'questions start', 'questions pre-turn',
       'send text_delta',
       'send turn_ended', 'search',
-      'device ended', 'deviceInput ended', 'input ended', 'questions stop',
-      'mirror', 'device stream',
+      'input ended', 'questions stop',
+      'mirror',
     ])
   })
 
-  it('marks a turn picked up at attach as such, and still streams it to the device', () => {
+  it('marks a turn picked up at attach as replay', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const { funnel, calls, deps } = setup()
     funnel('s1', [started()], { resumed: true })
     // Not a turn starting now: a dialog already up belongs to it.
     expect(calls).toEqual([
       'send turn_started', 'search',
-      'input started', 'deviceInput started', 'device started', 'heartbeat', 'questions start',
-      'mirror', 'device stream',
+      'input started', 'heartbeat', 'questions start',
+      'mirror',
     ])
     const frame = vi.mocked(deps.clients.send).mock.calls[0][0] as Record<string, any>
     expect(frame.replay).toBe(true)
@@ -141,11 +192,10 @@ describe('the event funnel', () => {
     expect(vi.mocked(deps.mirror.ingest).mock.calls[0][2]).toEqual({ replay: true })
   })
 
-  it('re-reads a transcript as history: nothing streamed to the device', () => {
+  it('re-reads a transcript as history with explicit replay metadata', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const { funnel, calls, deps } = setup()
     funnel('s1', [started(), ended()], { replay: true })
-    expect(calls).not.toContain('device stream')
     expect(calls).toContain('questions pre-turn')
     const end = vi.mocked(deps.clients.send).mock.calls[1][0] as Record<string, any>
     expect(end.replay).toBe(true)
@@ -211,7 +261,7 @@ describe('the event funnel', () => {
     expect(quietTurnOpen).toHaveBeenCalledWith('s1')
   })
 
-  it('leaves the device\'s input alone across a native turn boundary, and Command Code\'s question watcher running', () => {
+  it('leaves turn-batch interpretation to the component and Command Code\'s question watcher running', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const native = setup('codex')
     native.funnel('s1', [ended(), started()])
@@ -219,7 +269,7 @@ describe('the event funnel', () => {
     const commandcode = setup('commandcode')
     commandcode.funnel('s1', [ended()])
     expect(commandcode.calls).not.toContain('questions stop')
-    expect(commandcode.calls).toContain('device ended')
+    expect(commandcode.calls).toContain('send turn_ended')
   })
 
   it('carries the turn\'s activity, says when a turn ends without a start, and counts OpenCode\'s usage', () => {
@@ -241,8 +291,8 @@ describe('the event funnel', () => {
       bySession: () => lookups++ === 0 ? ({ agentId: 'a1', sessionId: 's1', engine: 'codex', active: true } as RegisteredSession) : undefined,
     })
     expect(() => run.funnel('s1', [ended(), started()])).not.toThrow()
-    // Without its engine, a native turn boundary is not recognised, so the device hears the turn end.
-    expect(run.calls).toContain('device ended')
+    // The full batch still reaches the component; the funnel does not interpret its native boundary.
+    expect(run.calls).toContain('send turn_started')
     expect(String(log.mock.calls[1][0])).toContain('engine=claude')
   })
 
@@ -254,13 +304,13 @@ describe('the event funnel', () => {
     expect(calls).toEqual([])
   })
 
-  it('works without search or a device service', () => {
+  it('works without search', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
-    const { funnel, calls } = setup('claude', { search: null, device: () => undefined })
+    const { funnel, calls } = setup('claude', { search: null })
     funnel('s1', [started(), ended()])
     expect(calls).toEqual([
-      'send turn_started', 'input started', 'deviceInput started', 'heartbeat', 'questions start', 'questions pre-turn',
-      'send turn_ended', 'deviceInput ended', 'input ended', 'questions stop',
+      'send turn_started', 'input started', 'heartbeat', 'questions start', 'questions pre-turn',
+      'send turn_ended', 'input ended', 'questions stop',
       'mirror',
     ])
   })
@@ -271,7 +321,7 @@ describe('createEventFunnel', () => {
 
   it('holds events until it is armed, delivers them in order, and is the same function after', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
-    const funnel = createEventFunnel({ clients: { send: vi.fn(), sendCommander: vi.fn() }, agentIdFor: () => 'a1' })
+    const funnel = createEventFunnel({ clients: { send: vi.fn() }, failure: vi.fn(), agentIdFor: () => 'a1' })
     const emit = funnel.emit
     emit('s1', [started('first')])
     emit('s1', [])
@@ -284,60 +334,40 @@ describe('createEventFunnel', () => {
     expect(calls.filter((call) => call.startsWith('send'))).toEqual(['send turn_started', 'send text_delta', 'send turn_ended'])
   })
 
-  it('tells the app and, in the device\'s words, the dial when an engine aborts a turn', () => {
+  it('tells the app and raw lifecycle when an engine aborts a turn', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    const clients = { send: vi.fn(), sendCommander: vi.fn() }
-    const funnel = createEventFunnel({ clients, agentIdFor: () => 'a1' })
+    const clients = { send: vi.fn(), sendCommander: vi.fn() }, failure = vi.fn()
+    const funnel = createEventFunnel({ clients, agentIdFor: () => 'a1', failure })
     funnel.announceTurnAborted('s1', 'devin', 'the model refused')
     funnel.announceTurnAborted('s1', 'commandcode', 'rate limited: retry in 60s', 'rate limited')
     expect(clients.send.mock.calls).toEqual([
       [{ type: 'error', agentId: 'a1', dbSessionId: 's1', payload: { message: 'the model refused' } }],
       [{ type: 'error', agentId: 'a1', dbSessionId: 's1', payload: { message: 'rate limited: retry in 60s' } }],
     ])
-    expect(clients.sendCommander.mock.calls.map(([frame]) => frame.payload.text)).toEqual([
-      deviceErrorText('the model refused', 'devin'),
-      deviceErrorText('rate limited', 'commandcode'),
+    expect(failure.mock.calls).toEqual([
+      [{ agentId: 'a1', sessionId: 's1', engine: 'devin', message: 'the model refused' }],
+      [{ agentId: 'a1', sessionId: 's1', engine: 'commandcode', message: 'rate limited: retry in 60s', failureSummary: 'rate limited' }],
     ])
+    expect(clients.sendCommander).not.toHaveBeenCalled()
     expect(String(log.mock.calls[0][0])).toContain('aborted by devin error')
   })
-})
 
-describe('a consumer outside the core', () => {
-  it('is logged at most once a minute, with how many failures went unsaid, and never stops the caller', () => {
-    const lines: string[] = []
-    let at = 0
-    const outside = outsideConsumers({ log: (line) => lines.push(line), now: () => at })
-    const ran: string[] = []
-    outside('devices', () => { throw new Error('serial port gone') })
-    at += 10_000
-    outside('devices', () => { throw 'still gone' })
-    outside('recaps', () => { ran.push('recaps') })
-    at += 60_000
-    outside('devices', () => { throw 'back and gone again' })
-    at += 60_001
-    outside('devices', () => { throw new Error('once more') })
-    expect(ran).toEqual(['recaps'])
-    expect(lines).toEqual([
-      '[funnel] devices failed · Error',
-      '[funnel] devices failed · string · 1 more since',
-      '[funnel] devices failed · Error',
-    ])
+  it('preserves the distinct raw failure and summary while delegating card construction', () => {
+    const clients = { send: vi.fn(), sendCommander: vi.fn() }, failure = vi.fn()
+    const funnel = createEventFunnel({ clients, agentIdFor: () => 'a1', failure })
+    funnel.announceTurnAborted('s1', 'commandcode', 'Error: 500\nTrace ID: private', 'Error: 500')
+    expect(clients.send).toHaveBeenCalledExactlyOnceWith({ type: 'error', agentId: 'a1', dbSessionId: 's1', payload: { message: 'Error: 500\nTrace ID: private' } })
+    expect(failure).toHaveBeenCalledExactlyOnceWith({ agentId: 'a1', sessionId: 's1', engine: 'commandcode', message: 'Error: 500\nTrace ID: private', failureSummary: 'Error: 500' })
+    expect(clients.send.mock.invocationCallOrder[0]).toBeLessThan(failure.mock.invocationCallOrder[0])
+    expect(clients.sendCommander).not.toHaveBeenCalled()
   })
 
-  it('reports to the error log by default', () => {
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-    outsideConsumers()('devices', () => { throw new Error('x') })
-    expect(error).toHaveBeenCalledWith('[funnel] devices failed · Error')
-    error.mockRestore()
+  it('keeps an explicitly empty failure summary and the address captured before reentrant app publication', () => {
+    let agentId = 'before'
+    const failure = vi.fn(), funnel = createEventFunnel({ failure, agentIdFor: () => agentId,
+      clients: { send: () => { agentId = 'after' } } })
+    funnel.announceTurnAborted('s1', 'codex', 'raw', '')
+    expect(failure).toHaveBeenCalledExactlyOnceWith({ agentId: 'before', sessionId: 's1', engine: 'codex', message: 'raw', failureSummary: '' })
   })
 
-  it('says whose it is, and fails a consumer named in the end-to-end suite\'s faults without running it', () => {
-    const lines: string[] = []
-    const ran: string[] = []
-    const outside = outsideConsumers({ log: (line) => lines.push(line), prefix: 'devices', faults: new Set(['dial']) })
-    outside('dial', () => { ran.push('dial') })
-    outside('window', () => { ran.push('window') })
-    expect(ran).toEqual(['window'])
-    expect(lines).toEqual(['[devices] dial failed · Error'])
-  })
 })

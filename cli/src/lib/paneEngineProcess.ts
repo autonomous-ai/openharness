@@ -8,7 +8,7 @@ import { errorKind } from './log.js'
 import { registry, type ProcessIdentity, type RegisteredSession } from './registry.js'
 import { comparableStartMarker, enrichProcessRows, processRows, processTreePids, selectEngineProcess, type ProcessRow } from './processTable.js'
 import type { TerminalBackend } from './terminalBackend.js'
-import { processIdentityOf, sameProcessIdentity, terminalRuntimeLabel } from './terminalRuntime.js'
+import { processAmong, processIdentityOf, sameProcessIdentity, terminalRuntimeLabel } from './terminalRuntime.js'
 import type { TerminalRuntimeRef } from './terminalTypes.js'
 
 /** What the lookups below need of a backend: the pane's own root process, and the table its panes are in when that is
@@ -96,7 +96,12 @@ export async function checkSessionRuntime<Ref extends TerminalRuntimeRef>(
   runtime: NoInfer<Ref>,
 ): Promise<RuntimeCheck> {
   const found = await lookupPaneEngineProcess(backend, runtime, session.engine)
-  if (!found.ok) return { state: found.unknown ? 'unknown' : 'gone', reason: found.reason }
+  if (!found.ok) {
+    // Discovery can temporarily miss the executable while its recorded process still runs. The same exact
+    // pid/start proof as both terminal backends prevents Resume from replacing that live process.
+    if (processAmong(session.processIdentity, found.paneProcesses)) return { state: 'alive' }
+    return { state: found.unknown ? 'unknown' : 'gone', reason: found.reason }
+  }
   const live = found.identity
   const saved = session.processIdentity
   // A persisted identity whose startMarker is not a C-locale lstart stamp was written either by the

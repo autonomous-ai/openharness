@@ -1,9 +1,14 @@
+import { localPendingCreationDiscovery } from '../testing/pendingCreation.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as fs from 'node:fs'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AgentCreationReceiptError, AgentCreationReceipts, creationFingerprint, type AgentCreationOutcome } from './agentCreationReceipt.js'
+
+async function* pendingFor(directory: string, receipts: AgentCreationReceipts) {
+  for await (const id of localPendingCreationDiscovery(directory).scan()) yield id ? receipts.pendingIntent(id) : null
+}
 
 const roots: string[] = []
 function fixture() {
@@ -221,7 +226,7 @@ describe('recoverable undispatched creation intents', () => {
     const recovered = new AgentCreationReceipts(directory)
     expect(recovered.status(id)).toEqual({ state: 'pending', held })
     const found = []
-    for await (const row of recovered.pendingIntents()) if (row) found.push(row)
+    for await (const row of pendingFor(directory, recovered)) if (row) found.push(row)
     expect(found).toEqual([{ id, fingerprint, request, held }])
     let ready!: () => void
     const service = new Promise<void>(resolve => { ready = resolve })
@@ -435,19 +440,19 @@ describe('recoverable undispatched creation intents', () => {
     expect(() => receipts.status(other)).toThrow('CREATION_STORAGE_FAILED')
     expect(() => receipts.runIntent(`${id}-huge`, fingerprint, { text: 'x'.repeat(262_144) }, held, prepare)).toThrow('CREATION_STORAGE_FAILED')
     const found = []
-    for await (const item of receipts.pendingIntents()) if (item) found.push(item)
+    for await (const item of pendingFor(directory, receipts)) if (item) found.push(item)
     expect(found).toEqual([])
     expect(prepare).not.toHaveBeenCalled()
   })
 })
 
-// The core scans for pending intents every minute, for its whole life. Each scan made the folder if it was missing
+// The storage child scans for pending intents. The old core scan made the folder if it was missing
 // and fsynced its parent even when it was there: an idle core's second largest cost (#3880, profiled 2026-11-10).
-// A scan only reads.
+// Empty discovery still only reads; a pending legacy intent may need a durable marker.
 describe('a scan for pending intents', () => {
   it('writes nothing to the disk, with no folder yet or with one', async () => {
     const { directory, receipts } = fixture()
-    const scan = async () => { const found = []; for await (const item of receipts.pendingIntents()) if (item) found.push(item); return found }
+    const scan = async () => { const found = []; for await (const item of pendingFor(directory, receipts)) if (item) found.push(item); return found }
     vi.mocked(fs.fsyncSync).mockClear()
 
     expect(await scan()).toEqual([])

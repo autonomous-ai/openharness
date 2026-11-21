@@ -44,6 +44,7 @@ type LaunchHelpers = ReturnType<typeof createLaunchHelpers>
 type RetargetAgent = NonNullable<BackendSocket['onRetargetAgent']>
 
 export interface RetargetDeps {
+  opencodeMajor?: () => Promise<number | null>
   /** What it answers when no backend here can respawn a pane: the configured backend's own code (terminalBackend.ts
    *  `noBackendCode`); `TMUX_UNAVAILABLE`, as before, by default. */
   noBackendCode?: string
@@ -71,7 +72,7 @@ export interface RetargetDeps {
   moveConversation?: MoveConversation
 }
 
-export function createAgentRetargeter({
+export function createAgentRetargeter({ opencodeMajor: readOpencodeMajor,
   sessionTurnOpen, purgeBusy, terminals, registry, runtimeProfiles, launchOverridesDeps, acquireTerminalControl,
   relaunchOverrides, downgradedPermission, agentReconciler, restartJobs, paneSwapDeps, liveBypassPermission,
   announceSession, refreshGridAssignment, opencodeDb, noBackendCode = 'TMUX_UNAVAILABLE', moveConversation,
@@ -173,7 +174,7 @@ export function createAgentRetargeter({
     const rewritesOpencodeSession = session.engine === 'opencode' && !!session.sessionId
       && (!!grid || !!remembered?.includes('/'))
     const opencode = session.engine === 'opencode' ? opencodeLaunch : null
-    const opencodeMajor = native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null
+    const opencodeMajor = native ? native.opencodeMajor : opencode ? await readOpencodeMajor?.() ?? null : null
     if (!current()) return changed()
     if (rewritesOpencodeSession && opencode && !opencode.isOpencodeV2(opencodeMajor) && !builtinSqlite() && !binaryOnPath('sqlite3')) {
       return {
@@ -219,6 +220,8 @@ export function createAgentRetargeter({
       const built = await relaunchOverrides(session, target, current, native)
       if (!current()) return changed()
       if (!built.ok) return { ok: false, error: built.error, detail: built.detail }
+      const settings = await built.overrides.native?.prepareSettings?.(session.cwd ?? null, current)
+      if (settings) built.overrides = { ...built.overrides, settings }
       const dispatchCurrent = () => current() && native?.current() !== false && built.overrides.native?.current() !== false
       const preparationChanged = () => current()
         ? failed('NATIVE_LAUNCH_HELD', 'Waiting for fresh executable and hook evidence.') : changed()
@@ -319,9 +322,12 @@ export function createAgentRetargeter({
         console.warn(`[grid] retarget ${sid(session.agentId)} failed · ${outcome.detail}`)
         return failed('RESPAWN_FAILED', outcome.detail)
       }
+      const record = built.overrides.gridLaunchRecord
+      // Models may have refreshed the endpoint since the target was selected.
+      const launchedGrid = grid && (record?.override ?? grid)
       const publication = await registry.confirmLaunch(session.agentId, { processIdentity: outcome.processIdentity,
-        grid: grid ? { baseUrl: grid.baseUrl, model: grid.model ?? null } : null,
-        gridLaunchRecord: built.overrides.gridLaunchRecord ?? null, ...(grid && remembered ? { subscriptionModel: remembered } : {}),
+        grid: launchedGrid ? { baseUrl: launchedGrid.baseUrl, model: launchedGrid.model ?? null } : null,
+        gridLaunchRecord: record ?? null, ...(grid && remembered ? { subscriptionModel: remembered } : {}),
       }, { current: dispatchCurrent, refresh: async () => {
         const observed = await resolvePaneEngineProcess(backend, pane, session.engine)
         if (!sameProcessIdentity(observed, outcome.processIdentity) || observed?.executable !== outcome.processIdentity.executable) {
@@ -341,7 +347,6 @@ export function createAgentRetargeter({
       // would leave the banner up over an agent that had already been moved.
       announceSession(refreshed); refreshGridAssignment(refreshed)
       const how = outcome.resumed ? (movesProvider ? 'continued in a fork' : 'resumed') : 'fresh session'
-      const record = built.overrides.gridLaunchRecord
       const where = record
         ? describeGridLaunch(session.engine, record.override, record.webSearch)
         : `${session.engine} on its own login`

@@ -16,35 +16,57 @@
  * - `observer_send`: a frame Share sealed for one of its observers, to the relay through the gateway;
  * - `account`: the account signed in here, its id and email, as the core reads it (`core.account.identity`), for Share
  *   alone: the observers a shared tab wants are derived for this account's harnesses;
- * - `cloud_publish`, `cloud_ask`, `cloud_unask`: the cloud agents' harnesses and their questions
- *   (`core.cloud`, core/agents/cloud.ts), for the cloud service alone;
+ * Session-owner stages and questions use the same authenticated handler, independently of experiment membership.
+ * Their bound door validates the service's immutable factory declaration and current owner authority.
  * The core answers them only for the experiments (core/api.ts `EXPERIMENTS`): creating an agent or
  * telling the windows something is no other process's to ask. The process's side is
  * services/processCoreApi.ts. Agent Messages, an experiment until 2026-10-12, asks a few of the same and is
  * answered by its own link, for what it uses alone (core/messagesLink.ts).
  */
 import type { BackendSocket } from '../backendSocket.js'
+import { isAbsolute } from 'node:path'
 import { experimentBackendAllowed, type AgentCreateRequest, type CoreApi } from './api.js'
+import { agentDshContext } from '../lib/agentFrame.js'
+import type { ServiceQueryAuthority } from './serviceLinks.js'
+import type { SessionOwnerCore, OwnerBegin, OwnerAppend, OwnerQuestion, OwnerQuestionClose } from '../lib/sessionOwnerWire.js'
 
 type Payload = Record<string, unknown>
-type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account' | 'cloud'>
+type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account'>
 
-const QUERIES: ReadonlySet<string> = new Set(['shown', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask'])
+const QUERIES: ReadonlySet<string> = new Set(['shown', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account'])
+const OWNER_QUERIES: ReadonlySet<string> = new Set(['session_owner_begin', 'session_owner_append', 'session_owner_end',
+  'session_owner_cancel', 'session_owner_checkpoint', 'session_owner_ask', 'session_owner_unask'])
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
+/** The existing ID-only Create shape. Unknown launch-identity fields never enter the creator. */
+export function parseAgentCreate(payload: Payload): AgentCreateRequest | null {
+  if (!text(payload.engine) || !text(payload.cwd)
+    || payload.prompt !== null && typeof payload.prompt !== 'string'
+    || payload.name !== null && typeof payload.name !== 'string') return null
+  if ('requireUnusedWorkspace' in payload && (payload.requireUnusedWorkspace !== true
+    || !isAbsolute(payload.cwd as string) || (payload.cwd as string).length > 4096 || /[\x00-\x1f\x7f]/.test(payload.cwd as string))) return null
+  return { engine: payload.engine as AgentCreateRequest['engine'], cwd: payload.cwd as string,
+    dsh: text(payload.dsh) || null, prompt: payload.prompt as string | null, name: payload.name as string | null,
+    bypassPermission: payload.bypassPermission === true,
+    ...(payload.requireUnusedWorkspace === true ? { requireUnusedWorkspace: true } : {}) }
+}
 
 /** The live agents as the apps are shown them (`shown`): each with its name, whether its terminal is there and
  *  what its frame says about its harness. */
 export function shownAgents(core: Pick<CoreApi, 'agents'>): Payload {
-  return {
-    agents: core.agents.live().map((session) => ({
+  const agents = []
+  for (const session of core.agents.live()) {
+    const facts = core.agents.facts(session)
+    if (!facts) return { error: 'SESSION_FACTS_UNAVAILABLE' }
+    agents.push({
       ...session,
-      displayName: core.agents.displayName(session),
-      terminalAvailable: core.agents.terminalAvailable(session.agentId),
+      displayName: facts.displayName,
+      terminalAvailable: facts.terminalAvailable,
       selectedModel: core.agents.runtimeProfile(session),
-      dshContext: core.agents.dsh(session),
-    })),
+      dshContext: agentDshContext(session, facts.parts),
+    })
   }
+  return { agents }
 }
 
 /** How an agent's shell reaches this daemon (`daemon`). */
@@ -55,8 +77,9 @@ export function daemonAddress(core: Pick<CoreApi, 'daemon'>): Payload {
 /** The services, not experiments, that ask how this daemon is reached: the add-ons of a device that is this machine
  *  (services/machineAddonsProcess.ts), for the account's machine id; Hachi's service (services/hachi.ts), which follows
  *  harnesses here and on the owner's other machines as a tool does; and the agent cleanup, which hands what Hachi
- *  started on another machine to the person there (services/hachiHandOver.ts). */
-const DAEMON_ASKERS: ReadonlySet<string> = new Set(['machineAddons', 'hachi', 'agentCleanup'])
+ *  started on another machine to the person there (services/hachiHandOver.ts). Store uses the same local
+ *  owner transport for Models-owned package context; it receives no account credential here. */
+const DAEMON_ASKERS: ReadonlySet<string> = new Set(['machineAddons', 'hachi', 'agentCleanup', 'engineSetup', 'store'])
 
 /** This daemon's address, to those services. Answered before the experiments' check, which would refuse it as
  *  NOT_AN_EXPERIMENT; any other query of theirs is not answered here. */
@@ -96,7 +119,22 @@ export const routeRefused = createRouteRefusals()
 
 /** The answer to an experiment's query, or null when it is not one of these. */
 export async function answerExperimentQuery(core: Core, experiments: ReadonlySet<string>, service: string, query: string, payload: Payload,
-  refused: ReturnType<typeof createRouteRefusals> = routeRefused): Promise<Payload | null> {
+  refused: ReturnType<typeof createRouteRefusals> = routeRefused, authority?: ServiceQueryAuthority, owners?: SessionOwnerCore): Promise<Payload | null> {
+  // This door is bound by composition to the exact authenticated service; factory admission is shared with native creation.
+  if (OWNER_QUERIES.has(query)) {
+    if (authority?.current?.() !== true || !owners) return { error: 'SERVICE_UNAVAILABLE' }
+    // The link adds routing metadata; exact session-data admission must still reject every other extra field.
+    const { query: _query, requestId: _requestId, ...value } = payload
+    switch (query) {
+      case 'session_owner_begin': return await owners.begin(value as unknown as OwnerBegin)
+      case 'session_owner_append': return await owners.append(value as unknown as OwnerAppend)
+      case 'session_owner_end': return await owners.end(text(payload.transfer))
+      case 'session_owner_cancel': return await owners.cancel(text(payload.transfer))
+      case 'session_owner_checkpoint': return await owners.checkpoint(text(payload.factory))
+      case 'session_owner_ask': return await owners.ask(text(payload.agentId), text(payload.questionId), payload.question as OwnerQuestion)
+      case 'session_owner_unask': return await owners.unask(text(payload.agentId), text(payload.questionId), payload.close as OwnerQuestionClose)
+    }
+  }
   if (!QUERIES.has(query)) return null
   // `account` is also what models asks for the account's grid name, of its own link (core/modelsLink.ts): only
   // Share's is answered here. Seen 2026-10-18: since #1376 models got NOT_AN_EXPERIMENT back instead, so the backend's grid
@@ -107,15 +145,8 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
     case 'shown':
       return shownAgents(core)
     case 'create': {
-      if (!text(payload.engine) || !text(payload.cwd) || typeof payload.prompt !== 'string' || typeof payload.name !== 'string') return { ok: false, error: 'INVALID_REQUEST' }
-      const request: AgentCreateRequest = {
-        engine: payload.engine as AgentCreateRequest['engine'],
-        cwd: text(payload.cwd),
-        dsh: text(payload.dsh) || null,
-        prompt: payload.prompt,
-        name: payload.name,
-        bypassPermission: payload.bypassPermission === true,
-      }
+      const request = parseAgentCreate(payload)
+      if (!request || typeof payload.prompt !== 'string' || typeof payload.name !== 'string') return { ok: false, error: 'INVALID_REQUEST' }
       return { ...await core.agents.create(request) }
     }
     case 'stop_turn':
@@ -142,15 +173,6 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) }
       }
-    case 'cloud_publish':
-    case 'cloud_ask':
-    case 'cloud_unask': {
-      if (service !== 'cloud' || !core.cloud) return { error: 'NOT_CLOUD' }
-      if (query === 'cloud_publish') core.cloud.publish(Array.isArray(payload.harnesses) ? payload.harnesses : [])
-      else if (query === 'cloud_ask') core.cloud.ask(text(payload.agentId), text(payload.questionId), (payload.question ?? {}) as { text: string; choices: string[] })
-      else core.cloud.unask(text(payload.agentId), text(payload.questionId))
-      return {}
-    }
     case 'account': {
       const known = await core.account.identity()
       return known ? { ...known } : { error: 'ACCOUNT_UNAVAILABLE' }

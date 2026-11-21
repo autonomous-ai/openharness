@@ -13,29 +13,28 @@
  * reading left for their worker (docs/design/2026-11-12-core-audit.md, section 3).
  */
 import { withoutOutputTail } from '../../lib/cardUpdate.js'
-import type { EngineTranscript } from '../../engines/facets/transcript.js'
+import type { TranscriptReader } from '../../engines/facets/transcript.js'
 import { keepsStore } from '../../engines/otherEngines.js'
 import { EngineReadError } from '../../engines/worker/protocol.js'
 import { transcriptReadIdentity } from './readIdentity.js'
 import { lastActivityAt } from '../../lib/agentFrame.js'
 import { sid } from '../../lib/log.js'
 import { projectDisplayName, type RegisteredSession } from '../../lib/registry.js'
-import type { TranscriptPager } from '../../lib/transcriptPages.js'
 
 export interface HistoryDeps {
   /** The registry's lookup, by agent or session id. */
   resolve: (id: string) => RegisteredSession | undefined
   /** The conversations kept as stopped harnesses (lib/stoppedAgents.ts): a stop's, an exited engine's,
    *  and one a restart, a move or a restore had to leave for a new one. */
-  stopped: () => readonly RegisteredSession[]
-  /** Line counts, and the explicit inline compatibility path's pages. Isolated readers own their indexes. */
-  pages: Pick<TranscriptPager, 'page' | 'lineCount'>
-  readerFor: (engine: string) => EngineTranscript | undefined
+  stopped: () => Promise<readonly RegisteredSession[]>
+  /** Incremental line counts; paging belongs to the reader's own process. */
+  lineCount: (path: string) => Promise<number>
+  readerFor: (engine: string) => TranscriptReader | undefined
   /** The store a conversation kept in a database is in (core/transcripts/stores.ts); null for one that is in none. */
   storeOf: (session: RegisteredSession) => Promise<string | null>
 }
 
-export function createHistory({ resolve, stopped, pages, readerFor, storeOf }: HistoryDeps) {
+export function createHistory({ resolve, stopped, lineCount, readerFor, storeOf }: HistoryDeps) {
   /** A conversation with nothing to show: no transcript yet, or no reader for its engine. */
   const emptyPage = (s: RegisteredSession, sessionId: string): Record<string, unknown> => ({
     id: sessionId,
@@ -47,7 +46,12 @@ export function createHistory({ resolve, stopped, pages, readerFor, storeOf }: H
     oldestCursor: null,
   })
 
-  const lookup = (id: string) => resolve(id) ?? stopped().find((saved) => saved.sessionId === id)
+  const lookup = async (id: string) => {
+    const live = resolve(id)
+    if (live) return live
+    const saved = await stopped()
+    return resolve(id) ?? saved.find(row => row.sessionId === id)
+  }
 
   /** The reply to a `session_get` request, for the socket to send as it is. */
   const sessionGet = async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
@@ -62,7 +66,7 @@ export function createHistory({ resolve, stopped, pages, readerFor, storeOf }: H
     // file (that let a caller read any *.jsonl on the computer, incl. unshared claude history /
     // traversal). A kept conversation used to answer NOT_FOUND, so a conversation the daemon had to
     // leave for a new one could no longer be read at all (round 24).
-    const s = lookup(sessionId)
+    const s = await lookup(sessionId)
     if (!s) return { error: 'NOT_FOUND' }
     // The registry finds an agent by its agent id too, and the reply names the id it was asked by. What
     // is read is the conversation's own, `s.sessionId`: an engine's store, Amp's export and Cursor's task
@@ -81,8 +85,8 @@ export function createHistory({ resolve, stopped, pages, readerFor, storeOf }: H
     const identity = transcriptReadIdentity(s)
     try {
       const read = store ? { ...s, store: await storeOf(s) } : s
-      const { events, timestamp, ...page } = await reader.historyPage(read, { limit, before }, pages)
-      if (transcriptReadIdentity(lookup(sessionId)) !== identity) throw new EngineReadError('ENGINE_STALE_REPLY')
+      const { events, timestamp, ...page } = await reader.historyPage(read, { limit, before })
+      if (transcriptReadIdentity(await lookup(sessionId)) !== identity) throw new EngineReadError('ENGINE_STALE_REPLY')
       return { id: sessionId, title: projectDisplayName(s), events, timestamp, engine: s.engine, ...page }
     } catch (error) {
       const failed = error instanceof EngineReadError ? error : new EngineReadError('ENGINE_UNAVAILABLE')
@@ -101,8 +105,8 @@ export function createHistory({ resolve, stopped, pages, readerFor, storeOf }: H
     // plainly beats inventing one: the web then shows the tab with an empty thread until the bind
     // lands, instead of pinning `currentSessionId` to an id no event will ever carry.
     if (!s || !s.sessionId) return { sessions: [] }
-    // Counted from an index kept as the file grows (lib/transcriptPages.ts), not by reading it whole.
-    const messageCount = s.transcriptPath ? await pages.lineCount(s.transcriptPath) : 0
+    // Counted from an index kept as the file grows (lib/transcriptIndex.ts), not by reading it whole.
+    const messageCount = s.transcriptPath ? await lineCount(s.transcriptPath) : 0
     return {
       sessions: [{
         id: s.sessionId,

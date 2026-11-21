@@ -279,3 +279,12 @@ Phone sign-in relay (lib/loopbackGet.ts, core/terminals/browser.ts, 127 lines ->
 engine install (core/agents/guestCreate.ts, lib/windows/guestEngine.ts -> edge shared machines), cloud agents' cards
 (core/agents/cloud.ts -> cloud), the gateway's pass-throughs (core/gatewayLink.ts lane/tabKey/vault), `harness remote`
 (lib/terminalHandoff.ts, backendSocket remote_terminal_handoff), lib/ownerCommands.ts (route_task/route_send slot).
+
+
+Owner-command extraction is implemented on `codex/core-owner-commands` and independently reviewed; publication is
+pending final integrated receipts and acceptance of the measured validation-refusal cost. See
+[Design and measured results](../2026-11-16-owner-command-routes.md). It removes the core's owner-command handler and
+two feature ports, uses the existing declared service router, and bounds every shared service link to 100 outstanding
+requests. Frozen native acceptance passed all four cases, including both internal version-skew directions and failure
+isolation. Default core closure is 540 files / 92,626 lines, versus 541 / 92,668. This is one part of step 4; phone
+sign-in, guest installation, cloud cards, gateway pass-throughs and remote handoff remain open.

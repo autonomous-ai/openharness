@@ -1,3 +1,4 @@
+import { prepareCloudPort, type CloudCreateResult } from './responses.js'
 /**
  * Cloud agents (docs/design/2026-10-11-cloud-agents.md): harnesses that run on their maker's servers. This
  * service owns them. It starts one through its adapter, keeps its conversation, looks at the maker while it
@@ -13,8 +14,10 @@
 import { randomBytes } from 'node:crypto'
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { CloudCore, CloudPort, CloudResult, ServiceRequests } from '../core/api.js'
-import { CLOUD_AGENT_IDS, CLOUD_AGENTS, SAID_MAX, cloudAgentFrame, cloudRequestRefusal, isCloudAgent, repositoryOf, type CloudAgentId, type CloudCard, type CloudHarness } from '../lib/cloudAgents.js'
+import type { ServiceRequests } from '../core/api.js'
+import type { SessionOwnerCore, OwnerDelivery } from '../lib/sessionOwnerWire.js'
+import type { SessionFacts } from '../lib/sessionPresentation.js'
+import { CLOUD_AGENT_IDS, CLOUD_AGENTS, SAID_MAX, cloudAgentFrame, cloudHarnessIn, cloudRequestRefusal, isCloudAgent, repositoryOf, type CloudAgentId, type CloudCard, type CloudHarness } from '../lib/cloudAgents.js'
 import { deriveTurnSummary } from '../lib/deviceRecap.js'
 import { errorKind } from '../lib/log.js'
 import { splitSummary } from '../lib/recapReads.js'
@@ -25,6 +28,7 @@ import { devinAdapter } from './devin.js'
 import { foAdapter } from './fo.js'
 import { McpClient } from './mcp.js'
 import { CloudError, type CloudAdapter, type CloudUpdate, type Remote } from './types.js'
+import { createCloudPublication, type CloudJournal, type CloudReservation } from './publication.js'
 
 interface Entry {
   harness: CloudHarness
@@ -56,7 +60,7 @@ export function cloudCard(said: string): CloudCard | null {
 
 export interface CloudServiceOptions {
   dataDir: string
-  core: CloudCore
+  core: SessionOwnerCore
   bridge?: Bridge
   /** Swapped in tests for fakes of the makers. */
   adapters?: Partial<Record<CloudAgentId, CloudAdapter>>
@@ -75,6 +79,18 @@ const QUIET_MS = 24 * 60 * 60_000
 const LOOK_MIN_MS = 5_000
 const TRANSCRIPT_MAX = 500
 
+const OUTPUT_DETAILS: Readonly<Record<string, string>> = {
+  CLOUD_PUBLICATION_RECOVERY_REQUIRED: 'Run harness start --restart to rebuild Cloud notification history from saved provider sessions.',
+  CLOUD_PUBLICATION_UNAVAILABLE: 'Cloud output is waiting for a new connection. If it stays unavailable, run harness start --restart.',
+  CLOUD_PUBLICATION_BUSY: 'Cloud output is busy. Try again after pending work completes.',
+  CLOUD_PUBLICATION_LIMIT: 'Cloud output reached its limit. Restart Harness; if it remains unavailable, keep its Cloud data and contact support.',
+  CLOUD_QUESTION_INVALID: 'Cloud question output was refused. Restart Harness; if it happens again, contact support.',
+  CLOUD_PUBLICATION_INVALID: 'Cloud output was refused. Restart Harness; if it happens again, contact support.',
+  CLOUD_STATE_UNAVAILABLE: 'Cloud saved data could not be read. Keep the files and restore a known-good backup or contact support.',
+}
+const outputDetail = (error: string): string => OUTPUT_DETAILS[error] ?? 'Cloud output is unavailable.'
+const outputFailure = (error: string) => ({ ok: false as const, error, detail: outputDetail(error) })
+
 /** A harness's name from its task: its first line, short. */
 export function nameFor(task: string, agent: CloudAgentId): string {
   const line = task.split('\n').map((part) => part.trim()).find(Boolean) ?? ''
@@ -90,6 +106,12 @@ export function startCloudService(options: CloudServiceOptions) {
   const dir = join(options.dataDir, 'cloud')
   const stateFile = join(dir, 'harnesses.json')
   const entries = new Map<string, Entry>()
+  let publication!: ReturnType<typeof createCloudPublication>
+  let ready: Promise<void> = Promise.resolve()
+  let durable: unknown[] = []
+  let savedPublication: unknown
+  let stateUnavailable = false
+  const optimistic = new Map<string, Pick<CloudHarness, 'state' | 'activity' | 'providerStatus'>>()
   const timers = new Map<string, unknown>()
   /** One thing at a time per harness: a look and a message never cross. */
   const queues = new Map<string, Promise<unknown>>()
@@ -121,11 +143,27 @@ export function startCloudService(options: CloudServiceOptions) {
   }
 
   const transcriptFile = (agentId: string): string => join(dir, `${agentId}.jsonl`)
-  let unread = false
-  const save = (): void => {
-    if (unread) return
+  const persist = (journal: CloudJournal): void => {
+    if (stateUnavailable) throw new Error('CLOUD_STATE_UNAVAILABLE')
     mkdirSync(dir, { recursive: true, mode: 0o700 })
-    atomicWriteFile(stateFile, JSON.stringify({ harnesses: [...entries.values()].map(({ harness, remote, question, changedAt, creationId }) => ({ harness, remote, question, changedAt, creationId })) }), 'cache')
+    atomicWriteFile(stateFile, JSON.stringify({ harnesses: durable, publication: journal }), 'trust')
+  }
+  // Another harness may finish while deliver awaits its maker. Its optimistic working state is not durable.
+  const captureProviderState = (): unknown[] => [...entries.values()].map(({ harness, remote, question, changedAt, creationId }) => ({
+    harness: { ...harness, ...optimistic.get(harness.agentId) }, remote: { ...remote }, question, changedAt, creationId,
+  }))
+  const save = (): void => {
+    durable = captureProviderState()
+    persist(publication.state())
+  }
+  const admitted = async <T>(work: (reservation: CloudReservation) => Promise<T>, existing?: CloudReservation): Promise<T | { ok: false; error: string; detail: string }> => {
+    const reservation = existing ?? (stateUnavailable ? null : publication.reserve())
+    if (!reservation) return outputFailure(stateUnavailable ? 'CLOUD_STATE_UNAVAILABLE' : publication.status() ?? 'CLOUD_PUBLICATION_BUSY')
+    try {
+      await ready
+      if (publication.blocked()) return outputFailure(publication.status() ?? 'CLOUD_PUBLICATION_UNAVAILABLE')
+      return await work(reservation)
+    } finally { if (!existing) publication.release(reservation) }
   }
   const transcript = (agentId: string): TranscriptMessage[] => {
     try {
@@ -159,15 +197,23 @@ export function startCloudService(options: CloudServiceOptions) {
     return entry.card.lines
   }
 
-  const publish = (): void => {
-    if (stopped) return
-    options.core.publish([...entries.values()].map((entry) => ({ ...entry.harness, links: [...entry.harness.links], card: cardOf(entry) })))
+  const snapshot = (): CloudHarness[] => [...entries.values()].map(entry => ({ ...entry.harness, links: [...entry.harness.links], card: cardOf(entry) }))
+  const publish = (reservation: CloudReservation): boolean => !stopped && publication.publish(snapshot(), reservation)
+  const saveAndPublish = (reservation: CloudReservation): void => {
+    // Queued/offline output must save before append: a failed save may never leave work for a later ACK to send.
+    if (!publication.canStartPublication()) { save(); publish(reservation); return }
+    const before = publication.state()
+    durable = captureProviderState()
+    let written = false
+    try { written = publish(reservation) }
+    // Idle publication persists synchronously before its first await. No change or a failed intent still needs
+    // the provider save, with exactly the journal from before that attempt, not its uncommitted pending image.
+    finally { if (!written) persist(before) }
   }
-  const touched = (entry: Entry): void => {
+  const touched = (entry: Entry, reservation: CloudReservation): void => {
     entry.harness.updatedAt = new Date(now()).toISOString()
     entry.changedAt = now()
-    save()
-    publish()
+    saveAndPublish(reservation)
   }
   const serial = <T>(agentId: string, work: () => Promise<T>): Promise<T> => {
     const run = (queues.get(agentId) ?? Promise.resolve()).catch(() => {}).then(work)
@@ -175,17 +221,17 @@ export function startCloudService(options: CloudServiceOptions) {
     return run
   }
 
-  const ask = (entry: Entry, question: { text: string; choices: string[] } | null): void => {
+  const ask = (entry: Entry, question: { text: string; choices: string[] } | null, reservation: CloudReservation): void => {
     const asked = entry.question
     if (asked && question && asked.text === question.text && asked.choices.join('\n') === question.choices.join('\n')) return
-    if (asked) { options.core.unask(entry.harness.agentId, asked.requestId); entry.question = null }
+    if (asked) { publication.unask(entry.harness.agentId, asked.requestId, reservation); entry.question = null }
     if (!question) return
-    entry.question = { requestId: `cloud_q_${randomBytes(6).toString('hex')}`, ...question }
-    options.core.ask(entry.harness.agentId, entry.question.requestId, question)
+    entry.question = { requestId: `cloud_q_${randomBytes(6).toString('hex')}`, text: question.text.slice(0, 500), choices: question.choices.slice(0, 6).map(choice => choice.slice(0, 500)) }
+    publication.ask({ agentId: entry.harness.agentId, requestId: entry.question.requestId, question: { text: entry.question.text, choices: entry.question.choices } }, reservation)
   }
 
   /** What one look found, applied: new messages recorded, where it is now, and its question. */
-  const apply = (entry: Entry, update: CloudUpdate): boolean => {
+  const apply = (entry: Entry, update: CloudUpdate, reservation: CloudReservation): boolean => {
     const before = JSON.stringify([entry.harness, entry.remote, entry.question?.text])
     const seen = new Set(transcript(entry.harness.agentId).slice(-TRANSCRIPT_MAX).map((message) => message.id))
     for (const message of update.messages) {
@@ -203,12 +249,12 @@ export function startCloudService(options: CloudServiceOptions) {
     if (update.branch !== undefined) entry.harness.branch = update.branch
     if (update.links) entry.harness.links = update.links
     if (update.remote) entry.remote = { ...entry.remote, ...update.remote }
-    if (entry.harness.state !== 'needs_input') ask(entry, null)
-    else if (update.question) ask(entry, update.question)
+    if (entry.harness.state !== 'needs_input') ask(entry, null, reservation)
+    else if (update.question) ask(entry, update.question, reservation)
     // Waiting, with nothing new said and nothing asked yet (a restart): it asks what it last said.
     else if (!entry.question) {
       const said = transcript(entry.harness.agentId).filter((message) => message.from === 'agent').at(-1)?.text
-      ask(entry, { text: (said ?? `${CLOUD_AGENTS[entry.harness.agent].name} is waiting for you.`).slice(0, 500), choices: [] })
+      ask(entry, { text: (said ?? `${CLOUD_AGENTS[entry.harness.agent].name} is waiting for you.`).slice(0, 500), choices: [] }, reservation)
     }
     return JSON.stringify([entry.harness, entry.remote, entry.question?.text]) !== before
   }
@@ -224,30 +270,35 @@ export function startCloudService(options: CloudServiceOptions) {
   const look = (agentId: string): Promise<void> => serial(agentId, async () => {
     const entry = entries.get(agentId)
     if (!entry || stopped || !watching(entry)) return
-    let update: CloudUpdate
-    const controller = new AbortController()
-    looking.set(agentId, controller)
-    const started = now()
+    await ready
+    const reservation = stateUnavailable ? null : publication.reserve()
+    if (!reservation) { schedule(agentId, WORKING_MS); return }
     try {
-      update = await adapters[entry.harness.agent].poll(entry.remote, controller.signal)
-      entry.failures = 0
-    } catch (error) {
-      // Cut short by the person's words: they are next in line, and look again after.
-      if (controller.signal.aborted) return
-    
-      entry.failures += 1
-      const said = error instanceof CloudError ? error.message : `${CLOUD_AGENTS[entry.harness.agent].name} could not be reached.`
-      log(`[cloud] ${agentId} look failed (${entry.failures}): ${errorKind(error)}`)
-      if (entry.harness.activity !== said) { entry.harness.activity = said; touched(entry) }
-      schedule(agentId, Math.min(BACKOFF_MAX_MS, WORKING_MS * 2 ** entry.failures))
-      return
-    }
-    finally {
-      if (looking.get(agentId) === controller) looking.delete(agentId)
-    }
-    if (apply(entry, update)) touched(entry)
-    const waitedLong = update.waited && now() - started >= LOOK_MIN_MS
-    if (watching(entry)) schedule(agentId, waitedLong ? 0 : update.waited ? LOOK_MIN_MS : entry.harness.state === 'needs_input' ? WAITING_MS : WORKING_MS)
+      let update: CloudUpdate
+      const controller = new AbortController()
+      looking.set(agentId, controller)
+      const started = now()
+      try {
+        update = await adapters[entry.harness.agent].poll(entry.remote, controller.signal)
+        entry.failures = 0
+      } catch (error) {
+        // Cut short by the person's words: they are next in line, and look again after.
+        if (controller.signal.aborted) return
+
+        entry.failures += 1
+        const said = error instanceof CloudError ? error.message : `${CLOUD_AGENTS[entry.harness.agent].name} could not be reached.`
+        log(`[cloud] ${agentId} look failed (${entry.failures}): ${errorKind(error)}`)
+        if (entry.harness.activity !== said) { entry.harness.activity = said; touched(entry, reservation) }
+        schedule(agentId, Math.min(BACKOFF_MAX_MS, WORKING_MS * 2 ** entry.failures))
+        return
+      }
+      finally {
+        if (looking.get(agentId) === controller) looking.delete(agentId)
+      }
+      if (apply(entry, update, reservation)) touched(entry, reservation)
+      const waitedLong = update.waited && now() - started >= LOOK_MIN_MS
+      if (watching(entry)) schedule(agentId, waitedLong ? 0 : update.waited ? LOOK_MIN_MS : entry.harness.state === 'needs_input' ? WAITING_MS : WORKING_MS)
+    } finally { publication.release(reservation) }
   })
 
   const refused = (error: unknown, agent?: CloudAgentId): { ok: false; error: string; detail: string } => error instanceof CloudError
@@ -255,9 +306,9 @@ export function startCloudService(options: CloudServiceOptions) {
     : { ok: false, error: 'CLOUD_FAILED', detail: `${agent ? CLOUD_AGENTS[agent].name : 'The cloud agent'} could not be reached. Try again.` }
 
   /** New Harnesses still starting at their maker, by `creationId`: a retry while one starts gets its answer. */
-  const creating = new Map<string, ReturnType<CloudPort['create']>>()
+  const creating = new Map<string, Promise<CloudCreateResult>>()
 
-  const create: CloudPort['create'] = (request) => {
+  const create = (request: Record<string, unknown>): Promise<CloudCreateResult> => {
     // The same New Harness asked again (a window that timed out waiting): the harness it made, not a second.
     const creationId = typeof request.creationId === 'string' && request.creationId ? request.creationId.slice(0, 120) : undefined
     if (!creationId) return createNew(request, undefined)
@@ -268,7 +319,7 @@ export function startCloudService(options: CloudServiceOptions) {
     return pending
   }
 
-  const createNew = async (request: Record<string, unknown>, creationId: string | undefined): ReturnType<CloudPort['create']> => {
+  const createNew = async (request: Record<string, unknown>, creationId: string | undefined): Promise<CloudCreateResult> => {
     const agent = request.engine
     if (!isCloudAgent(agent)) return { ok: false, error: 'INVALID_ENGINE', detail: 'That is not a cloud agent.' }
     const task = typeof request.prompt === 'string' ? request.prompt.trim() : ''
@@ -277,38 +328,40 @@ export function startCloudService(options: CloudServiceOptions) {
     const repository = repositoryOf(request.repositoryUrl) ?? repositoryOf(request.repository)
     const acuLimit = typeof request.acuLimit === 'number' && Number.isInteger(request.acuLimit) && request.acuLimit > 0 && request.acuLimit <= 1000 ? request.acuLimit : undefined
     const model = typeof request.model === 'string' && request.model ? request.model.slice(0, 120) : undefined
-    let started: Awaited<ReturnType<CloudAdapter['start']>>
-    try {
-      started = await adapters[agent].start({ task, repository, options: { acuLimit, model } })
-    } catch (error) {
-      codes.delete(agent)
-      return refused(error, agent)
-    }
-    const at = new Date(now()).toISOString()
-    const entry: Entry = {
-      harness: {
-        agentId: `cloud_${randomBytes(8).toString('hex')}`, agent,
-        name: typeof request.name === 'string' && request.name.trim() ? request.name.trim().slice(0, 120) : nameFor(task, agent),
-        state: 'starting', activity: null, repository, branch: null, links: started.links, messages: 0, createdAt: at, updatedAt: at,
-      },
-      remote: started.remote,
-      question: null,
-      changedAt: now(),
-      failures: 0,
-      heard: false,
-      ...(creationId ? { creationId } : {}),
-    }
-    entries.set(entry.harness.agentId, entry)
-    record(entry, { id: `person-${now()}`, from: 'person', text: task, at })
-    if (started.update) apply(entry, started.update)
-    if (entry.harness.state === 'starting' && !started.update?.state) entry.harness.state = 'working'
-    touched(entry)
-    log(`[cloud] ${entry.harness.agentId} started on ${agent}`)
-    schedule(entry.harness.agentId, started.update?.waited || adapters[agent].answered?.(entry.remote) ? 0 : 2_000)
-    return { ok: true, agent: cloudAgentFrame(entry.harness) }
+    return admitted(async reservation => {
+      let started: Awaited<ReturnType<CloudAdapter['start']>>
+      try {
+        started = await adapters[agent].start({ task, repository, options: { acuLimit, model } })
+      } catch (error) {
+        codes.delete(agent)
+        return refused(error, agent)
+      }
+      const at = new Date(now()).toISOString()
+      const entry: Entry = {
+        harness: {
+          agentId: `cloud_${randomBytes(8).toString('hex')}`, agent,
+          name: typeof request.name === 'string' && request.name.trim() ? request.name.trim().slice(0, 120) : nameFor(task, agent),
+          state: 'starting', activity: null, repository, branch: null, links: started.links, messages: 0, createdAt: at, updatedAt: at,
+        },
+        remote: started.remote,
+        question: null,
+        changedAt: now(),
+        failures: 0,
+        heard: false,
+        ...(creationId ? { creationId } : {}),
+      }
+      entries.set(entry.harness.agentId, entry)
+      record(entry, { id: `person-${now()}`, from: 'person', text: task, at })
+      if (started.update) apply(entry, started.update, reservation)
+      if (entry.harness.state === 'starting' && !started.update?.state) entry.harness.state = 'working'
+      touched(entry, reservation)
+      log(`[cloud] ${entry.harness.agentId} started on ${agent}`)
+      schedule(entry.harness.agentId, started.update?.waited || adapters[agent].answered?.(entry.remote) ? 0 : 2_000)
+      return { ok: true as const, agent: cloudAgentFrame(entry.harness) }
+    })
   }
 
-  const deliver = (agentId: string, text: string): Promise<CloudResult> => { interrupt(agentId); return serial(agentId, async () => {
+  const deliver = (agentId: string, text: string, existing?: CloudReservation): Promise<OwnerDelivery> => admitted(reservation => { interrupt(agentId); return serial(agentId, async () => {
     const entry = entries.get(agentId)
     if (!entry) return { ok: false, error: 'UNKNOWN_AGENT', detail: 'That cloud harness is gone.' }
     const words = text.trim()
@@ -317,58 +370,61 @@ export function startCloudService(options: CloudServiceOptions) {
     // `ask_fo` with its whole reply, 15 s later, and the dial sat on the last recap all that time (2026-10-11).
     // Told, not saved: refused, it is back where it was.
     const was = { state: entry.harness.state, activity: entry.harness.activity, providerStatus: entry.harness.providerStatus }
+    optimistic.set(agentId, was)
     entry.harness.state = 'working'
     entry.harness.activity = null
     // The status from before these words is not this turn's. It stands again when the next look says so;
     // a refused send puts the old one back, because the maker never took the words.
     delete entry.harness.providerStatus
-    publish()
+    publish(reservation)
     const adapter = adapters[entry.harness.agent]
     try {
       const moved = await adapter.send(entry.remote, words)
       if (moved) entry.remote = { ...entry.remote, ...moved }
     } catch (error) {
+      optimistic.delete(agentId)
       Object.assign(entry.harness, was)
       if (!was.providerStatus) delete entry.harness.providerStatus
-      publish()
+      publish(reservation)
       return refused(error, entry.harness.agent)
     }
+    optimistic.delete(agentId)
     record(entry, { id: `person-${now()}`, from: 'person', text: words, at: new Date(now()).toISOString() })
     entry.heard = false
-    ask(entry, null)
-    touched(entry)
+    ask(entry, null, reservation)
+    touched(entry, reservation)
     // Its reply already here: read now, not after the wait a maker that is only starting needs.
     schedule(agentId, adapter.answered?.(entry.remote) ? 0 : 2_000)
     return { ok: true }
-  }) }
+  }) }, existing)
 
-  const answer = async (agentId: string, requestId: string, answers: Record<string, string>): Promise<CloudResult> => {
+  const answer = async (agentId: string, requestId: string, answers: Record<string, string>): Promise<OwnerDelivery> => admitted(async reservation => {
     const entry = entries.get(agentId)
     const question = entry?.question
     if (!entry || !question || question.requestId !== requestId) return { ok: false, error: 'STALE_QUESTION', detail: 'That question was already answered.' }
     const words = Object.values(answers).filter((value) => typeof value === 'string' && value.trim()).join('\n')
     // Taken at once, before anything waits: a second answer (the dial and the window both) finds it answered.
     entry.question = null
-    options.core.unask(agentId, question.requestId)
-    const result = await deliver(agentId, words)
+    publication.unask(agentId, question.requestId, reservation)
+    const result = await deliver(agentId, words, reservation)
     // Not taken: the question stands, asked again.
-    if (!result.ok && !entry.question && entry.harness.state === 'needs_input') ask(entry, { text: question.text, choices: question.choices })
+    if (!result.ok && !entry.question && entry.harness.state === 'needs_input') ask(entry, { text: question.text, choices: question.choices }, reservation)
     return result
-  }
+  })
 
   /** Only the name Harness shows: nothing is asked of the maker, and its activity time stands. */
-  const rename = async (agentId: string, name: string): Promise<CloudResult> => {
+  const rename = async (agentId: string, name: string, before: SessionFacts): Promise<OwnerDelivery> => admitted(async reservation => {
     const entry = entries.get(agentId)
     if (!entry) return { ok: false, error: 'UNKNOWN_AGENT', detail: 'That cloud harness is gone.' }
+    if (entry.harness.agent !== before.engine || entry.harness.createdAt !== before.createdAt) return { ok: false, error: 'UNKNOWN_AGENT', detail: 'That cloud harness is gone.' }
     const trimmed = name.trim().slice(0, 120)
     if (!trimmed) return { ok: false, error: 'MISSING_NAME', detail: 'A harness needs a name.' }
     entry.harness.name = trimmed
-    save()
-    publish()
+    saveAndPublish(reservation)
     return { ok: true }
-  }
+  })
 
-  const stopHarness = (agentId: string): Promise<CloudResult> => { interrupt(agentId); return serial(agentId, async () => {
+  const stopHarness = (agentId: string): Promise<OwnerDelivery> => admitted(reservation => { interrupt(agentId); return serial(agentId, async () => {
     const entry = entries.get(agentId)
     if (!entry) return { ok: false, error: 'UNKNOWN_AGENT', detail: 'That cloud harness is gone.' }
     const adapter = adapters[entry.harness.agent]
@@ -379,10 +435,10 @@ export function startCloudService(options: CloudServiceOptions) {
     entry.harness.activity = adapter.stop ? null : `${CLOUD_AGENTS[entry.harness.agent].name} keeps working on its own.`
     // A local stop is not the maker's last report. Showing that report would call a finished session current.
     delete entry.harness.providerStatus
-    ask(entry, null)
-    touched(entry)
+    ask(entry, null, reservation)
+    touched(entry, reservation)
     return adapter.stop ? { ok: true } : { ok: true, detail: `${CLOUD_AGENTS[entry.harness.agent].name} keeps working on its own.` }
-  }) }
+  }) })
 
   const requests: ServiceRequests = {
     cloud_transcript: (payload, asker) => {
@@ -401,6 +457,8 @@ export function startCloudService(options: CloudServiceOptions) {
     },
     cloud_agents: async (_payload, asker) => {
       if (!asker.owner) return { error: 'OWNER_REQUIRED' }
+      const error = stateUnavailable ? 'CLOUD_STATE_UNAVAILABLE' : publication.status()
+      if (error) return { error, detail: outputDetail(error) }
       const agents = await Promise.all(CLOUD_AGENT_IDS.map(async (id) => {
         const info = CLOUD_AGENTS[id]
         const connected = await connectionFor(bridge, id).then(() => true, () => false)
@@ -410,31 +468,43 @@ export function startCloudService(options: CloudServiceOptions) {
     },
   }
 
-  // The harnesses from before this start: told to the core again, and looked at where one was working. A file that
-  // cannot be read now (EACCES, EMFILE) may name them all: this run keeps its harnesses in memory and writes nothing.
-  const saved = readState(stateFile, 'cache', jsonObject)
-  unread = saved.state === 'unreadable'
-  const harnesses = saved.state === 'ok' && Array.isArray(saved.value.harnesses) ? saved.value.harnesses as Array<Omit<Entry, 'failures'>> : []
-  for (const raw of harnesses) {
-    if (!raw?.harness?.agentId || !isCloudAgent(raw.harness.agent) || !raw.remote?.id) continue
-    // A harness saved before it kept its last words finds them in its conversation.
-    if (typeof raw.harness.said !== 'string') raw.harness.said = transcript(raw.harness.agentId).filter((message) => message.from === 'agent').at(-1)?.text.slice(0, SAID_MAX) ?? null
-    entries.set(raw.harness.agentId, { harness: raw.harness, remote: raw.remote, question: null, changedAt: raw.changedAt ?? now(), failures: 0, heard: true,
-      ...(typeof raw.creationId === 'string' ? { creationId: raw.creationId } : {}) })
+  // The harnesses from before this start: told to the core again, and looked at where one was working.
+  try {
+    const read = readState(stateFile, 'trust', jsonObject)
+    if (read.state === 'unreadable') throw new Error('CLOUD_STATE_UNAVAILABLE')
+    const saved = (read.state === 'ok' ? read.value : { harnesses: [] }) as { harnesses?: Array<Omit<Entry, 'failures'>>; publication?: unknown }
+    if (!Array.isArray(saved.harnesses)) throw new Error('CLOUD_STATE_UNAVAILABLE')
+    durable = saved.harnesses
+    savedPublication = saved.publication
+    for (const raw of saved.harnesses ?? []) {
+      if (!cloudHarnessIn(raw?.harness) || typeof raw.remote?.id !== 'string' || !raw.remote.id) {
+        stateUnavailable = true
+        continue
+      }
+      // A harness saved before it kept its last words finds them in its conversation.
+      if (typeof raw.harness.said !== 'string') raw.harness.said = transcript(raw.harness.agentId).filter((message) => message.from === 'agent').at(-1)?.text.slice(0, SAID_MAX) ?? null
+      entries.set(raw.harness.agentId, { harness: raw.harness, remote: raw.remote, question: null, changedAt: raw.changedAt ?? now(), failures: 0, heard: true,
+        ...(typeof raw.creationId === 'string' ? { creationId: raw.creationId } : {}) })
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') { stateUnavailable = true }
   }
-  for (const entry of entries.values()) if (watching(entry)) schedule(entry.harness.agentId, 1_000)
+  if (stateUnavailable) log('[cloud] CLOUD_STATE_UNAVAILABLE')
+  publication = createCloudPublication({ core: options.core, saved: savedPublication, persist, snapshot, log,
+    questions: () => [...entries.values()].flatMap(entry => entry.question ? [{ agentId: entry.harness.agentId, requestId: entry.question.requestId, question: { text: entry.question.text, choices: entry.question.choices } }] : []),
+  })
+  for (const entry of entries.values()) if (!stateUnavailable && watching(entry)) schedule(entry.harness.agentId, 1_000)
 
   return {
     requests,
-    port: { create, deliver, answer, rename, stopHarness } satisfies CloudPort,
+    port: prepareCloudPort({ create, deliver, answer, rename, stopHarness }),
     /** The core connected again (its restart): it is told every harness, and asked every open question, again. */
-    republish(): void {
-      publish()
-      for (const entry of entries.values()) if (entry.question) options.core.ask(entry.harness.agentId, entry.question.requestId, { text: entry.question.text, choices: entry.question.choices })
-    },
+    republish(): Promise<void> { ready = stateUnavailable ? Promise.resolve() : publication.connect(); return ready },
+    disconnected(): void { publication.disconnect() },
     transcript,
     stop(): void {
       stopped = true
+      publication.stop()
       for (const timer of timers.values()) clearTimer(timer)
       timers.clear()
     },

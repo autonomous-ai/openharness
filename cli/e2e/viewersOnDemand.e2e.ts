@@ -8,8 +8,8 @@
  * - A harness here: created, it asks for the process and its viewer comes up; after a restart, the core asks for it
  *   as it starts, and the viewer comes back.
  * - Named in `HARNESSD_SERVICES`, as every master before this one ran it: it starts with the daemon.
- * - From a release bundle (`E2E_BUNDLE=1`): the release's own harnesses are put in place as the core starts, and
- *   once they are, the next start asks for nothing.
+ * - From a release bundle (`E2E_BUNDLE=1`): Store stays off until a request needs it; that first request prepares
+ *   the release's own harnesses, and installed packages alone do not wake it on a later start.
  * A core too old to ask has it started as it binds: harnessd/services.spec.ts, and e2e/reexec.e2e.ts under a release.
  */
 import { randomUUID } from 'node:crypto'
@@ -24,7 +24,7 @@ import { IsolatedDaemon, until } from './harness/daemon.js'
 const HARNESS = 'e2e/sketch'
 /** A run from a release bundle, which carries the release's own harnesses (only a bundle does). */
 const BUNDLED = !!process.env.E2E_BUNDLE_PATH
-const ASKING = "asking for the viewers' process"
+const ASKING = '[startup] viewers:'
 
 const viewerScript = (d: IsolatedDaemon) => join(d.env.DSH_DIR!, 'e2e', 'sketch', 'viewer.mjs')
 const installedFile = (d: IsolatedDaemon) => join(d.env.DSH_DIR!, 'installed.json')
@@ -38,8 +38,7 @@ const bundledInstalled = (d: IsolatedDaemon): boolean => {
     record.id === harness.id && record.source === harness.source && typeof record.revision === 'string'))
 }
 
-/** A harness with a viewer of its own (a small web server on the port the daemon hands it), added to what is
- *  installed here: a bundle's own harnesses stay in place, or every start would ask for the Store again. */
+/** Add a harness with its own small viewer server, preserving any packages already installed here. */
 function installHarness(d: IsolatedDaemon): void {
   const dir = join(d.env.DSH_DIR!, 'e2e', 'sketch')
   mkdirSync(dir, { recursive: true })
@@ -92,22 +91,16 @@ describe('the viewers\' process, once something needs it', () => {
       try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
     }
   })
-  /** A daemon as a computer runs it from its second start on, settled: from a bundle, the first start puts the
-   *  release's own harnesses in place, which asks for the Store (the last test). Returns where its log stands then. */
+  /** Wait for startup and an actual service connection; no Store demand has been made. */
   const fresh = async (env: Record<string, string> = {}): Promise<{ d: IsolatedDaemon; from: number }> => {
     const d = await IsolatedDaemon.create({ env: { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', ...env } })
     daemon = d
     started.push(d)
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
     await d.start()
-    if (BUNDLED) {
-      await until('the release\'s harnesses in place', () => bundledInstalled(d) || null, 60_000, 250)
-      await d.restart()
-    }
-    const from = d.log().lastIndexOf('[harnessd] core started')
-    // The others are up, and the core has had time to ask for anything it would ask for as it starts.
+    const from = 0
+    // Explicitly enabled workers can start before the core's start log. The others are up, and the core has had time to ask for anything it would ask for as it starts.
     await until('the services to connect', () => since(d, from).includes('[services] search connected') || null, 30_000, 200)
-    await new Promise((resolve) => setTimeout(resolve, 3_000))
     return { d, from }
   }
 
@@ -132,7 +125,7 @@ describe('the viewers\' process, once something needs it', () => {
     // Started, it stays: the next request is answered by the same process.
     expect(Array.isArray((await window.request('dsh_list', {}, 60_000)).dsh)).toBe(true)
     expect(starts(d, from)).toBe(1)
-    expect(d.coresStarted()).toBe(BUNDLED ? 2 : 1)
+    expect(d.coresStarted()).toBe(1)
     window.close()
   })
 
@@ -147,7 +140,7 @@ describe('the viewers\' process, once something needs it', () => {
     expect((await closed).payload).toMatchObject({ streamId, error: 'Viewer is no longer available' })
     await until('the viewers to have connected', () => connections(d, from) >= 1 || null, 10_000, 100)
     expect(starts(d, from)).toBe(1)
-    expect(since(d, from)).toContain(`[viewers] a viewer stream: ${ASKING}`)
+    expect(d.coresStarted()).toBe(1)
     phone.close()
   })
 
@@ -166,7 +159,7 @@ describe('the viewers\' process, once something needs it', () => {
 
     await d.restart()
     const after = d.log().lastIndexOf('[harnessd] core started')
-    expect(since(d, after)).toContain(`[viewers] a harness here: ${ASKING}`)
+    await until('retained viewers to request their process', () => since(d, after).includes(`${ASKING} retained viewer servers`) || null, 30_000, 100)
     await until('the viewers to connect', () => connections(d, after) >= 1 || null, 30_000, 200)
     const again = await LocalClient.connect(d)
     await until('the harness\'s viewer back', async () => {
@@ -186,19 +179,22 @@ describe('the viewers\' process, once something needs it', () => {
     window.close()
   })
 
-  it.skipIf(!BUNDLED)('from a release bundle, puts the release\'s own harnesses in place as the core starts, and asks nothing once they are', async () => {
-    const d = await IsolatedDaemon.create({ env: { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200' } })
-    daemon = d
-    started.push(d)
-    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
-    await d.start()
-    expect(d.log()).toContain(`[viewers] Model Manager to put in place: ${ASKING}`)
-    await until('the release\'s harnesses in place', () => bundledInstalled(d) || null, 60_000, 250)
+  it.skipIf(!BUNDLED)('prepares release packages on first Store demand and leaves Store off on the next boot', async () => {
+    const { d, from: first } = await fresh()
+    expect(starts(d, first)).toBe(0)
+    expect(since(d, first)).not.toContain(ASKING)
+    const window = await LocalClient.connect(d)
+    try {
+      const list = await window.request('dsh_list', {}, 60_000)
+      expect(list.error, JSON.stringify(list)).toBeUndefined()
+      expect(Array.isArray(list.dsh)).toBe(true)
+      await until('the release packages to be prepared', () => bundledInstalled(d) || null, 60_000, 250)
+      expect(starts(d, first)).toBe(1)
+    } finally { window.close() }
     await d.restart()
     const from = d.log().lastIndexOf('[harnessd] core started')
     await until('the services to connect', () => since(d, from).includes('[services] search connected') || null, 30_000, 200)
-    await new Promise((resolve) => setTimeout(resolve, 3_000))
-    // This build's revisions are what the Store recorded (build-bundle.mjs, dsh/builtins.ts): nothing to ask for.
+    // Installed packages alone do not demand a running Store or viewer process.
     expect(since(d, from)).not.toContain(ASKING)
     expect(starts(d, from)).toBe(0)
   })

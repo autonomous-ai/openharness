@@ -2,11 +2,12 @@
 // answer reaching it there. Every caller (⌘K, the voice route, the dial) goes through one of these.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { snapshotRow } from '../testing/sessionSnapshot.js'
 import { FleetError, type FleetMachine, type MachineFleet } from '../cable/machineFleet.js'
 import type { ReviewedAnswer } from '../cable/questionInbox.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { transcriptActivityAt } from '../lib/transcriptActivity.js'
-import { FleetRouter, type FleetLocal } from './fleetRouter.js'
+import { FleetRouter, type FleetLocal, type FleetSession } from './fleetRouter.js'
 import { DeviceFleet } from '../device/deviceFleet.js'
 
 vi.mock('../lib/transcriptActivity.js', () => ({ transcriptActivityAt: vi.fn(async () => null) }))
@@ -14,7 +15,7 @@ vi.mock('../lib/transcriptActivity.js', () => ({ transcriptActivityAt: vi.fn(asy
 const session = (agentId: string, registeredAt: number, engine?: string) =>
   ({ agentId, registeredAt, engine, sessionId: `s-${agentId}` }) as unknown as RegisteredSession
 
-function localOf(over: Partial<FleetLocal> = {}, sessions: RegisteredSession[] = []): FleetLocal {
+function localOf(over: Partial<FleetLocal> = {}, sessions: FleetSession[] = []): FleetLocal {
   return {
     machineName: () => 'MacbookPro.local',
     machineId: () => 'mine',
@@ -685,4 +686,15 @@ describe('an answer reviewed on a device', () => {
     alone.noteAgent('other', 'r1')
     expect(await alone.answerReviewed(remote)).toEqual({ ok: false, error: 'That machine is unavailable. Check its connection.' })
   })
+})
+
+
+it('reads Recent activity from the lean session path and falls back to its hook time without a full registry row', async () => {
+  const row = snapshotRow().session
+  row.transcriptPath = '/snapshot/history'; row.lastHookAt = 500
+  vi.mocked(transcriptActivityAt).mockResolvedValueOnce(900).mockResolvedValueOnce(null)
+  const router = new FleetRouter(localOf({}, [row]))
+  expect([...(await router.activityTimes())]).toEqual([['agent', 900]])
+  expect(transcriptActivityAt).toHaveBeenLastCalledWith('/snapshot/history', 'claude')
+  expect([...(await router.activityTimes())]).toEqual([['agent', 500]])
 })

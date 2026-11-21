@@ -6,10 +6,11 @@ import { randomUUID } from 'node:crypto'
 import type { RegisteredSession } from '../registry.js'
 import type { DshRegistryEntry } from '../../dsh/registry.js'
 const state = vi.hoisted(() => ({ agents: [] as RegisteredSession[], catalog: [] as DshRegistryEntry[] }))
-// The core's registry, as the core's Wi-Fi doors read it (core/wifiAgents.ts): the Store runs with the device's
-// service, in the devices' process, and reads the agents and makes one through them.
-const registry = { list: () => state.agents, advertised: () => state.agents, terminalAvailable: () => true }
-const deviceStoreAgents = (machineId: string) => storeAgents({ registry, machineId: () => machineId })
+const deviceStoreAgents = (machineId: string) => {
+  const projection = wifiProjection(snapshotFixture({ machine: { id: machineId, computerId: 'computer', name: 'Fixture' } }))
+  for (const row of state.agents) projection.row(snapshotValue(snapshotRow(row.agentId, { session: { ...snapshotRow(row.agentId).session, ...row } })), { remaining: Infinity, retain: () => {} })
+  return projection.value().store
+}
 vi.mock('../../dsh/catalog.js', () => ({ refreshDshRegistry: async () => state.catalog, catalogEntry: (id: string) => state.catalog.find(e => e.id === id) }))
 import { env } from '../../config/env.js'
 import * as engineLaunch from '../engineLaunch.js'
@@ -17,7 +18,10 @@ import { installDsh } from '../../dsh/install.js'
 import { installedDsh, invalidateInstalledDsh } from '../../dsh/installed.js'
 import { materializeWorkspace } from '../../dsh/materialize.js'
 import { createDeviceStore, deviceStorePackages } from './storeRuntime.js'
-import { storeAgents, wifiCreate } from '../../core/wifiAgents.js'
+import { wifiProjection } from '../../services/wifiView.js'
+import { snapshotFixture, snapshotRow, snapshotValue } from '../../testing/sessionSnapshot.js'
+import { createForExperiment } from '../../core/experimentQueries.js'
+import type { AgentCreateRequest } from '../../core/api.js'
 import { DeviceStoreResultSchema } from './storeContract.js'
 import { HARNESS_MONOREPO } from '../../dsh/registry.js'
 
@@ -48,7 +52,9 @@ async function setup() {
     return { ok: true as const, session }
   })
   const store = createDeviceStore({ dataDir: join(root, 'state'), machineId: 'mac', agents: () => deviceStoreAgents('mac'),
-    create: wifiCreate({ registry, machineId: () => 'mac', createAgent: () => create }) })
+    agentsCurrent: () => true,
+    create: (dsh, engine, cwd) => createForExperiment(create, { dsh, engine: engine as AgentCreateRequest['engine'], cwd,
+      prompt: null, name: null, bypassPermission: false, requireUnusedWorkspace: true }) })
   const request = { type: 'agent.prepare', requestId: randomUUID(), machineId: 'mac', packageId: 'test/robot-fixture', workspace: { kind: 'existing', path: cwd }, idempotencyKey: 'prepare' }
   return { source, cwd, create, store, request }
 }

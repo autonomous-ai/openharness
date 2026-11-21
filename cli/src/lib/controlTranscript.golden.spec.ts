@@ -1,3 +1,4 @@
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 /** Healthy capture and Close checkpoints recorded on main before the legacy path checks move. */
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -6,14 +7,17 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, expect, it, vi } from 'vitest'
 import type { AgentEngine } from '../engines/types.js'
 
-vi.mock('node:child_process', () => {
+vi.mock('node:child_process', async original => {
+  const actual = await original<typeof import('node:child_process')>()
+  const { spawnSessionStorageFixture } = await import('../testing/sessionStorageFixture.js')
   const forbidden = () => { throw Error('Host binaries are forbidden in the control transcript golden') }
   return { exec: forbidden, execSync: forbidden,
     execFile: (command: string, args: string[], _options: unknown, done: (error: null, value: string) => void) => {
       if (command !== 'ps' || JSON.stringify(args) !== JSON.stringify(['-p', String(process.pid), '-o', 'lstart='])) forbidden()
       done(null, 'fixture-start')
     }, execFileSync: forbidden,
-    spawn: forbidden, spawnSync: forbidden, fork: forbidden }
+    spawn: (command: string, args: string[], options: import('node:child_process').SpawnOptions) => spawnSessionStorageFixture(actual.spawn, command, args, options),
+    spawnSync: forbidden, fork: forbidden }
 })
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 vi.mock('./loginShellEnv.js', () => ({ loginShellEnvironment: () => ({}) }))
@@ -43,6 +47,7 @@ it.each(['linux', 'darwin'])('keeps complete native capture and checkpoint behav
   }
   const log = vi.spyOn(console, 'log').mockImplementation(() => {})
   let owned: typeof import('./registry.js')['registry'] | undefined
+  let ownedStorage: typeof import('./sessionStorage.js')['sessionStorage'] | undefined
   try {
     Object.defineProperty(process, 'platform', { ...originalPlatform, value: platform })
     vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-10-10T08:00:00Z') })
@@ -71,6 +76,7 @@ it.each(['linux', 'darwin'])('keeps complete native capture and checkpoint behav
     symlinkSync(cases[1].file!, path('alias.jsonl'))
     vi.resetModules()
     const { registry } = await import('./registry.js')
+    ownedStorage = (await import('./sessionStorage.js')).sessionStorage
     owned = registry
     const { captureResumeIdentity } = await import('./captureResumeIdentity.js')
     const { SessionCheckpointStore } = await import('./sessionCheckpoint.js')
@@ -100,6 +106,7 @@ it.each(['linux', 'darwin'])('keeps complete native capture and checkpoint behav
     ;(await import('./engineHomes.js')).resetEngineHomes()
   } finally {
     await owned?.flush({ exiting: true }).catch(() => {})
+    if (ownedStorage) await closeSessionStorageFixture(ownedStorage)
     log.mockRestore(); vi.useRealTimers(); vi.unstubAllEnvs(); vi.resetModules()
     Object.defineProperty(process, 'platform', originalPlatform)
     rmSync(root, { recursive: true, force: true })

@@ -1,3 +1,4 @@
+import { emptyOwnerCore } from '../testing/cloudOwners.js'
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -11,23 +12,36 @@ import { answerExperimentQuery, answerDaemonQuery, createForExperiment, createRo
 const agent = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/w' }) as RegisteredSession
 const experiments = new Set(['orchestrator'])
 
-describe('the cloud agents\' doors', () => {
-  it('are the cloud service\'s alone, and carry its harnesses and questions to the core', async () => {
-    const cloud = { publish: vi.fn(), ask: vi.fn(), unask: vi.fn() }
-    const core = fakeCore({ cloud })
-    const both = new Set(['orchestrator', 'cloud'])
-    expect(await answerExperimentQuery(core, both, 'cloud', 'cloud_publish', { harnesses: [{ agentId: 'cloud_1' }] })).toEqual({})
-    expect(cloud.publish).toHaveBeenLastCalledWith([{ agentId: 'cloud_1' }])
-    await answerExperimentQuery(core, both, 'cloud', 'cloud_publish', { harnesses: 'x' })
-    expect(cloud.publish).toHaveBeenLastCalledWith([])
-    await answerExperimentQuery(core, both, 'cloud', 'cloud_ask', { agentId: 'cloud_1', questionId: 'cloud_q_1', requestId: 'the-link-s-own', question: { text: 'Which?', choices: [] } })
-    expect(cloud.ask).toHaveBeenCalledWith('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] })
-    await answerExperimentQuery(core, both, 'cloud', 'cloud_ask', {})
-    expect(cloud.ask).toHaveBeenLastCalledWith('', '', {})
-    await answerExperimentQuery(core, both, 'cloud', 'cloud_unask', { agentId: 'cloud_1', questionId: 'cloud_q_1' })
-    expect(cloud.unask).toHaveBeenCalledWith('cloud_1', 'cloud_q_1')
-    expect(await answerExperimentQuery(core, both, 'orchestrator', 'cloud_publish', {})).toEqual({ error: 'NOT_CLOUD' })
-    expect(await answerExperimentQuery(fakeCore(), both, 'cloud', 'cloud_publish', {})).toEqual({ error: 'NOT_CLOUD' })
+describe('authenticated session-owner doors', () => {
+  it('preserves each typed stage/checkpoint refusal through the actual dispatcher', async () => {
+    const conflict = { ok: false, error: 'SESSION_OWNER_CONFLICT' } as const
+    const owners = { ...emptyOwnerCore(), begin: () => conflict, append: () => conflict, end: () => conflict, cancel: () => conflict, checkpoint: () => conflict }
+    const authority = { current: () => true, ownsRequest: () => false }
+    for (const query of ['begin', 'append', 'end', 'cancel', 'checkpoint']) {
+      expect(await answerExperimentQuery(fakeCore(), new Set(), 'cloud', `session_owner_${query}`, {}, undefined, authority, owners)).toEqual(conflict)
+    }
+  })
+
+  it('passes exact typed payloads independently of experiment membership, refusing missing or stale authority', async () => {
+    const empty = emptyOwnerCore(), owners = { begin: vi.fn(empty.begin), append: vi.fn(empty.append), end: vi.fn(empty.end), cancel: vi.fn(empty.cancel), checkpoint: vi.fn(empty.checkpoint), ask: vi.fn(empty.ask), unask: vi.fn(empty.unask) }
+    const authority = { current: () => true, ownsRequest: () => false }
+    const ask = (query: string, payload: Record<string, unknown>) => answerExperimentQuery(fakeCore(), new Set(), 'cloud', query, payload, undefined, authority, owners)
+    const begin = { format: 'session-facts-v1', transfer: 't', factory: 'fo', before: 'a'.repeat(64), after: 'b'.repeat(64), count: 0 }
+    const append = { transfer: 't', index: 0, rows: [] }
+    await ask('session_owner_begin', begin); expect(owners.begin).toHaveBeenCalledWith(begin)
+    await ask('session_owner_append', append); expect(owners.append).toHaveBeenCalledWith(append)
+    for (const method of ['end', 'cancel'] as const) { await ask(`session_owner_${method}`, { transfer: 't' }); expect(owners[method]).toHaveBeenCalledWith('t') }
+    await ask('session_owner_checkpoint', { factory: 'fo' }); expect(owners.checkpoint).toHaveBeenCalledWith('fo')
+    await ask('session_owner_ask', { agentId: 'a', questionId: 'q', question: {} }); expect(owners.ask).toHaveBeenCalledWith('a', 'q', {})
+    await ask('session_owner_unask', { agentId: 'a', questionId: 'q', close: {} }); expect(owners.unask).toHaveBeenCalledWith('a', 'q', {})
+    await ask('session_owner_ask', {}); expect(owners.ask).toHaveBeenLastCalledWith('', '', undefined)
+    for (const query of ['begin', 'append', 'end', 'cancel', 'checkpoint', 'ask', 'unask']) {
+      for (const proof of [undefined, { ...authority, current: () => false }]) {
+        expect(await answerExperimentQuery(fakeCore(), new Set(), 'cloud', `session_owner_${query}`, {}, undefined, proof, owners)).toEqual({ error: 'SERVICE_UNAVAILABLE' })
+      }
+      expect(await answerExperimentQuery(fakeCore(), new Set(), 'cloud', `session_owner_${query}`, {}, undefined, authority)).toEqual({ error: 'SERVICE_UNAVAILABLE' })
+    }
+    expect(await ask('cloud_publish', {})).toBeNull()
   })
 })
 
@@ -39,18 +53,20 @@ describe('what an experiment in its own process may ask of the core', () => {
   })
 
   it('shows the live agents as the apps are shown them: name, terminal and harness', async () => {
+    const first = { ...agent('a1'), dsh: 'original/id' }
+    const publication = { dsh: 'published/id', dshName: 'Published', viewerUrl: 'http://127.0.0.1:1/', viewerName: null, verdict: null }
     const core = fakeCore({
       agents: {
-        live: () => [agent('a1'), agent('a2')],
-        displayName: (session) => `name of ${session.agentId}`,
-        terminalAvailable: (agentId) => agentId === 'a1',
+        live: () => [first, agent('a2')],
+        facts: session => ({ displayName: `name of ${session.agentId}`, terminalAvailable: session.agentId === 'a1',
+          parts: session.agentId === 'a1' ? publication : {} }),
         runtimeProfile: session => session.agentId === 'a1' ? 'runtime-v1:a1:claude:opus@high' : null,
-        dsh: (session) => (session.agentId === 'a1' ? { viewerUrl: 'http://127.0.0.1:1/' } as never : null),
       },
     })
     expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'shown', {})).toEqual({
       agents: [
-        { ...agent('a1'), displayName: 'name of a1', terminalAvailable: true, selectedModel: 'runtime-v1:a1:claude:opus@high', dshContext: { viewerUrl: 'http://127.0.0.1:1/' } },
+        { ...first, displayName: 'name of a1', terminalAvailable: true, selectedModel: 'runtime-v1:a1:claude:opus@high',
+          dshContext: { id: 'published/id', name: 'Published', viewerUrl: 'http://127.0.0.1:1/', viewerName: null, verdict: null } },
         { ...agent('a2'), displayName: 'name of a2', terminalAvailable: false, selectedModel: null, dshContext: null },
       ],
     })
@@ -168,10 +184,25 @@ describe('what an experiment in its own process may ask of the core', () => {
     expect(lines[17]).toBe('[services] router asked for a backend route which it has not declared, and was refused: GET /api/device-keys (core/api.ts)')
   })
 
+  it('uses the default diagnostic for an actual refused route without logging its query content', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const core = fakeCore()
+    try {
+      expect(await answerExperimentQuery(core, new Set(['sharing']), 'sharing', 'backend', {
+        method: 'GET', path: '/api/device-keys?question-content-canary',
+      })).toEqual({ error: 'ROUTE_NOT_DECLARED' })
+      expect(core.account.backend).not.toHaveBeenCalled()
+      expect(warn).toHaveBeenCalledExactlyOnceWith('[services] sharing asked for a backend route which it has not declared, and was refused: GET /api/device-keys (core/api.ts)')
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('question-content-canary')
+    } finally { warn.mockRestore() }
+  })
+
   it('has every experiment declare its backend routes, if only that it calls none', () => {
     expect(Object.keys(EXPERIMENT_BACKEND_ROUTES).sort()).toEqual(Object.keys(EXPERIMENTS).sort())
     for (const service of ['orchestrator', 'memory', 'cloud']) expect(EXPERIMENT_BACKEND_ROUTES[service]).toEqual([])
     expect(experimentBackendAllowed('messages', 'GET', '/api/agent-messages')).toBe(false)
+    expect(experimentBackendAllowed('router', 'POST', '/api/route/jev')).toBe(true)
+    expect(experimentBackendAllowed('router', 'GET', '/api/route/jev')).toBe(false)
   })
 
   // A route a service starts to call and does not declare fails here, not on a person's computer: every backend path written
@@ -295,7 +326,7 @@ describe('what the add-ons of a device that is this machine ask of the core', ()
 
   it('is told to Hachi\'s service and the agent cleanup, which reach this daemon and the owner\'s other machines as a tool does', () => {
     const core = fakeCore({ daemon: { machineId: () => 'm_account' } as never })
-    for (const service of ['hachi', 'agentCleanup']) expect(answerDaemonQuery(core, service, 'daemon')).toMatchObject({ port: 18473, machineId: 'm_account' })
+    for (const service of ['hachi', 'agentCleanup', 'store']) expect(answerDaemonQuery(core, service, 'daemon')).toMatchObject({ port: 18473, machineId: 'm_account' })
   })
 })
 

@@ -29,6 +29,7 @@ interface Synced { id?: unknown; starting?: unknown; launch?: { state?: unknown;
  *  and why, held and why (the hold carries `namedState`). Its name, title or usage changing is no news to them. */
 const standingOf = ({ starting, launch, identityHold }: Synced): string =>
   JSON.stringify([starting === true, launch?.state === 'failed' && launch.error, identityHold])
+interface Watch { named: Map<string, Told>; content: boolean }
 
 export interface ToolWatchesDeps {
   /** One frame to one connection here; false when it is gone. */
@@ -36,7 +37,8 @@ export interface ToolWatchesDeps {
 }
 
 export function createToolWatches(deps: ToolWatchesDeps) {
-  const watches = new Map<string, Map<string, Told>>()
+  // One admission per actual tool connection, shared with its explicit question-content observation.
+  const watches = new Map<string, Watch>()
 
   /** The frame [watch] is told of [frame] about [agentId], or null when it is nothing new. */
   const toldOf = (type: string, agentId: string, payload: Record<string, unknown>, told: Told, quiet: boolean): Record<string, unknown> | null => {
@@ -81,14 +83,34 @@ export function createToolWatches(deps: ToolWatchesDeps) {
       }
       const named = new Set(agentIds as string[])
       if (named.size > TOOL_WATCH_MAX_AGENTS) return { error: 'TOO_MANY', message: `A watch names at most ${TOOL_WATCH_MAX_AGENTS} harnesses.` }
-      if (!named.size) { watches.delete(connId); return { ok: true } }
+      if (!named.size) {
+        const previous = watches.get(connId)
+        if (previous?.content) previous.named.clear()
+        else watches.delete(connId)
+        return { ok: true }
+      }
       if (!watches.has(connId) && watches.size >= TOOL_WATCHES_MAX) return { error: 'TOO_MANY', message: `At most ${TOOL_WATCHES_MAX} watches at once.` }
-      watches.set(connId, new Map([...named].map((id) => [id, {}])))
+      watches.set(connId, { named: new Map([...named].map((id) => [id, {}])), content: watches.get(connId)?.content ?? false })
       return { ok: true }
     },
+    /** Reserve the same admission for content without changing an existing named metadata watch. */
+    content(connId: string, enabled: boolean): boolean {
+      const previous = watches.get(connId)
+      if (enabled) {
+        if (!previous && watches.size >= TOOL_WATCHES_MAX) return false
+        if (previous) previous.content = true
+        else watches.set(connId, { named: new Map(), content: true })
+      } else if (previous) {
+        if (previous.named.size) previous.content = false
+        else watches.delete(connId)
+      }
+      return true
+    },
+    /** Existing bounded admissions, not another observer registry. Scopes remain on their connections. */
+    connections(): IterableIterator<string> { return watches.keys() },
     /** Whether a tool follows [agentId]: the daemon then looks for its question as for a window's (core/questions.ts). */
     follows(agentId: string): boolean {
-      for (const named of watches.values()) if (named.has(agentId)) return true
+      for (const { named } of watches.values()) if (named.has(agentId)) return true
       return false
     },
     /** The connection went: its watch with it. */
@@ -101,7 +123,7 @@ export function createToolWatches(deps: ToolWatchesDeps) {
       const id = frame.type === 'agent_synced' ? (payload.agent as Synced | undefined)?.id : typeof frame.agentId === 'string' ? frame.agentId : payload.agentId
       const agentId = typeof id === 'string' ? id : ''
       if (!agentId) return
-      for (const [connId, named] of watches) {
+      for (const [connId, { named }] of watches) {
         const told = named.get(agentId)
         const sent = told && toldOf(frame.type, agentId, payload, told, frame.subagent === true)
         if (sent && !deps.sendTo(connId, sent)) watches.delete(connId)

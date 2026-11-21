@@ -1,3 +1,4 @@
+import { commandAvailableInInteractiveShell, commandOutputInInteractiveShell } from '../engines/kit/interactiveProbe.js'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -6,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { writeExecutable } from '../testing/executableFixture.js'
 import { isolatedTmux, type IsolatedTmux } from '../testing/isolatedTmux.js'
 import { resolveBinaryOnPath } from './binaryOnPath.js'
-import { buildEngineCommandArgv, buildEngineLaunchArgv, commandAvailableInInteractiveShell, commandSupportsFlagInInteractiveShell } from './engineLaunch.js'
+import { buildEngineCommandArgv, buildEngineLaunchArgv } from './engineLaunch.js'
 
 const zsh = ['/bin/zsh', '/usr/bin/zsh'].find(existsSync)
 const engines = ['claude', 'opencode', 'codex'] as const
@@ -83,8 +84,8 @@ describe.skipIf(!zsh)('agent startup in a real zsh login shell', () => {
   it('availability and capability probes also skip startup maintenance', async () => {
     const f = fixture()
     await expect(commandAvailableInInteractiveShell(f.binary, zsh)).resolves.toBe(true)
-    await expect(commandSupportsFlagInInteractiveShell(f.binary, '--auto', zsh)).resolves.toBe('supported')
-    await expect(commandSupportsFlagInInteractiveShell(f.binary, '--missing', zsh)).resolves.toBe('unsupported')
+    const help = await commandOutputInInteractiveShell('claude', f.binary, ['--help'], zsh)
+    expect(help).toMatchObject({ code: 0, output: expect.stringContaining('--auto') })
     expect(process.env.DISABLE_AUTO_UPDATE).toBe('false')
   })
 })

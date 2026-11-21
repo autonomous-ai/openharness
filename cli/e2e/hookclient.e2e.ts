@@ -193,7 +193,7 @@ setInterval(() => {}, 1000)
             ...(firedAt ? { 'x-harness-hook-fired-at': String(firedAt) } : {}) },
           body: JSON.stringify({ engine: 'cursor', sessionId, tmuxPane: pane, cwd, callerPid, transcriptPath, hookEvent: event }),
         })
-        return { status: response.status, body: await response.json() }
+        return { status: response.status, body: await response.json() as Record<string, unknown> }
       }
       const initial = await hook('sessionStart')
       expect(initial.status, JSON.stringify(initial)).toBeLessThan(300)
@@ -335,6 +335,7 @@ setInterval(() => {}, 1000)
       return now?.status === 'active' && rowOnDisk(d, now.id)?.engine === 'terminal' ? now : null
     }, 60_000, 250)
     client.close()
+    await d.hooksInstalled([engine])
     await d.stop()
 
     // The person starts the engine in that terminal.
@@ -370,6 +371,7 @@ setInterval(() => {}, 1000)
 
   it.each(engines)('%s in a tmux session the person opened by hand is no agent, whether the daemon is down or up', async (engine) => {
     const d = await fresh()
+    await d.hooksInstalled([engine])
     await d.stop()
     const before = onDisk(d)
     const cwd = join(d.projectsDir, `own-session-${engine}`)

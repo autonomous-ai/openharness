@@ -32,11 +32,11 @@ export function searchRequests(index: Pick<SessionSearchIndex, 'search' | 'tail'
     // leave sealed — the relay reads neither. `from`/`to`: only sessions worked on in that window
     // (epoch ms) — "the dial one from last week". The client reads the time words, so every machine
     // searches the same window.
-    session_search: (payload) => {
+    session_search: async (payload) => {
       const query = typeof payload.query === 'string' ? payload.query.slice(0, 500) : ''
       const catalogAfter = typeof payload.catalogAfter === 'string' && payload.catalogAfter.length <= 256
         ? payload.catalogAfter : undefined
-      return { ...(catalogAfter !== undefined ? { catalog: true } : {}), ...index.search(query, {
+      return { ...(catalogAfter !== undefined ? { catalog: true } : {}), ...await index.search(query, {
         limit: number(payload.limit), from: number(payload.from), to: number(payload.to),
         ...(catalogAfter !== undefined ? { catalogAfter } : {}),
       }) }
@@ -81,15 +81,15 @@ function openIndex(core: CoreApi, readers: ReturnType<typeof createExternalSessi
     const titleOf = (s: RegisteredSession) => s.title || core.agents.displayName(s)
     const index = new SessionSearchIndex({
       store,
-      catalogMetadata: () => {
+      catalogMetadata: async () => {
         const entries = new Map<string, ExternalHit>(readers.sessions.list().flatMap(s =>
           [s.sessionId, ...(s.aliases ?? [])].map(id => [id, { title: s.title, cwd: s.cwd, origin: s.origin }] as const)))
-        for (const s of core.agents.all()) if (s.sessionId) entries.set(s.sessionId,
+        for (const s of await core.agents.all()) if (s.sessionId) entries.set(s.sessionId,
           { title: titleOf(s), cwd: s.cwd || '', origin: 'harness' })
         return entries
       },
-      sources: () => {
-        const own = core.agents.all()
+      sources: async () => {
+        const own = await core.agents.all()
         const sources = own.flatMap((s): SearchSource[] => {
           const readHistory = s.transcriptPath ? undefined : core.transcripts.databaseHistory(s)
           if (!s.sessionId || (!s.transcriptPath && !readHistory)) return []
@@ -121,7 +121,7 @@ function openIndex(core: CoreApi, readers: ReturnType<typeof createExternalSessi
         }
         return sources
       },
-      agents: () => core.agents.all().map((s) => s.agentId),
+      agents: async () => (await core.agents.all()).map((s) => s.agentId),
       discover: () => readers.sessions.scan(),
       openSessions: readers.open,
       log: (line) => console.log(line),

@@ -13,10 +13,21 @@
  *
  * Nothing heavy may be imported statically here: it would be evaluated by every process.
  */
+import './harnessd/childEntry.js'
 import './lib/connectWait.js'
 import { fileURLToPath } from 'node:url'
+import { LEAN_CORE_SCRIPT_ENV } from './harnessd/protocol.js'
 
 const [, , command, name] = process.argv
+// A frozen execution artifact still uses helpers beside the CLI selected by its supervisor. Admission
+// already checked the actual entry path, before this metadata can change the identity runtime sees.
+const script = (command === '__run' || command === '__service')
+  ? process.env[LEAN_CORE_SCRIPT_ENV] ?? fileURLToPath(import.meta.url)
+  : fileURLToPath(import.meta.url)
+if (command === '__run' || command === '__service') {
+  delete process.env[LEAN_CORE_SCRIPT_ENV]
+  process.argv[1] = script
+}
 // What an old Team account's boot job runs (its first step, its master, and what its master starts): only these load the guard.
 const guard = command !== undefined && ['team', '__harnessd', '__run', '__service'].includes(command)
   ? await import('./team/bootGuard.js') : null
@@ -44,9 +55,11 @@ if (command === '__swarm-shell-guard') {
   process.exitCode = (await import('./masterProcess.js')).probeThisMaster()
 } else if (command === '__service') {
   await (await import('./serviceProcess.js')).startServiceProcess(name)
+} else if (command === '__storage') {
+  ;(await import('./storage/process.js')).runSessionStorage()
 } else if (command === '__run') {
   // The core: started the one way it is started from the lean bundle too (coreProcess.ts), on cli.js.
-  (await import('./coreProcess.js')).startCoreProcess(fileURLToPath(import.meta.url))
+  (await import('./coreProcess.js')).startCoreProcess(script)
 } else {
   await import('./cli.js')
 }

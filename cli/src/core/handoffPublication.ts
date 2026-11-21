@@ -15,10 +15,14 @@ import { validateHandoff } from '../lib/handoffValidation.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { TurnSource } from '../lib/sessionSearch/sessionTurns.js'
 
-export interface HandoffPublicationDeps {
-  directory: string
+export interface HandoffPublicationAuthority {
   resolve(agentId: string): RegisteredSession | null | undefined
   ownedByOther(sessionId: string, agentId: string): boolean
+  current(): boolean
+}
+export interface HandoffPublicationDeps {
+  directory: string
+  authority(facts: PreparedHandoff): Promise<HandoffPublicationAuthority>
   isRecentlyDeleted(sessionId: string): boolean
   now?(): number
   /** How long a discovery or a selection is kept for its request: the request's deadline. */
@@ -49,12 +53,14 @@ export function createHandoffPublisher(deps: HandoffPublicationDeps) {
       validateHandoff(prepared)
       prepared = structuredClone(prepared)
       const request = prepared.request
+      const authority = await deps.authority(prepared)
       const verify = (facts: PreparedHandoff, reserved: boolean): void => {
         validateHandoff(facts)
+        if (!authority.current()) return hold()
         if (facts.request.agentId !== request.agentId || facts.request.changeId !== request.changeId
           || facts.request.targetEngine !== request.targetEngine || !permit.current(request)) throw new HandoffError('HANDOFF_UNAVAILABLE')
         const records = facts.sessions.map(session => {
-          const current = deps.resolve(session.agentId)
+          const current = authority.resolve(session.agentId)
           if (!current || current.identityHold || handoffSessionFact(current).fingerprint !== session.fingerprint) return hold()
           return current
         })
@@ -109,7 +115,7 @@ export function createHandoffPublisher(deps: HandoffPublicationDeps) {
           const read = reads[0]
           if (!id || read.sessionId !== id || read.engine !== owner.engine || read.profile !== (owner.codexHome ?? undefined)
             || read.cwd !== owner.cwd || (index > 0 || owner.sessionId) && read.path !== selectedPath
-            || deps.ownedByOther(id, owner.agentId) || deps.isRecentlyDeleted(id)) return hold()
+            || authority.ownedByOther(id, owner.agentId) || deps.isRecentlyDeleted(id)) return hold()
           const proof = controlTranscriptEvidence(read.engine, read.sessionId, read.path, read.profile, read.cwd)
           const current = new NativeFiles(); current.locate(read.path)
           const file = current.file(proof.path)!

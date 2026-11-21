@@ -5,14 +5,12 @@
  */
 import { homedir } from 'node:os'
 import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
-import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
-import { engineInstallRecipe } from '../../lib/engineInstall.js'
-import { buildEngineLaunchArgv, commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
+import { buildEngineLaunchArgv } from '../../lib/engineLaunch.js'
 import { launchedGrid, type GridAssignment } from '../../lib/gridAssignmentWire.js'
 import { windowsPaneLaunch } from '../../lib/windows/engineStart.js'
 import { sid } from '../../lib/log.js'
 import { matchesLaunchReceipt, type LaunchPublicationInput, type ProcessIdentity, type registry, type RegisteredSession } from '../../lib/registry.js'
-import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
+import { lookupPaneEngineProcess } from '../../lib/paneEngineProcess.js'
 import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
@@ -25,29 +23,11 @@ import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import type { createLaunchHelpers } from './launch.js'
 import type { RestartAgent } from './launches.js'
 import type { PaneSwap } from './swap.js'
-import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
+import { moveHeldLine } from '../../lib/hostMove/held.js'
 import type { LaunchOverridesDeps } from '../../lib/launchOverrides.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
 type LaunchHelpers = ReturnType<typeof createLaunchHelpers>
-
-/**
- * Longer than any shell that answered: `commandAvailableInInteractiveShell` gives up after 5s and then
- * says no. A no that took that long is a slow rc file, not a missing engine, and must not refuse a
- * restart that would work — the same rule `commandSupportsFlagInInteractiveShell` keeps for `unknown`.
- */
-const ENGINE_CHECK_GAVE_UP_MS = 4_500
-
-/**
- * Whether the engine's command is on this machine, asked as create asks of a pane that died: the same
- * interactive shell, the same command, the same install recipe. Null when the shell gave up first.
- */
-async function engineInstalled(engine: AgentEngine): Promise<boolean | null> {
-  const startedAt = Date.now()
-  const installed = await commandAvailableInInteractiveShell(engineBin(engine), undefined,
-    enginePathOverride(engine) ? undefined : engineInstallRecipe(engine))
-  return installed || Date.now() - startedAt < ENGINE_CHECK_GAVE_UP_MS ? installed : null
-}
 
 type RestartAgentHandler = RestartAgent
 
@@ -79,8 +59,13 @@ export async function commitRelaunchedEngine(
     current,
     refresh: async () => {
       if (identity) {
-        const observed = await resolvePaneEngineProcess(place.backend, place.runtime, engine)
-        if (!sameProcessIdentity(identity, observed) || observed?.executable !== identity.executable) {
+        const observed = await lookupPaneEngineProcess(place.backend, place.runtime, engine)
+        const refusal = !observed.ok ? (observed.unknown ? 'PROCESS_PROBE_UNAVAILABLE' : 'PROCESS_NOT_FOUND')
+          : !sameProcessIdentity(identity, observed.identity) ? 'PROCESS_IDENTITY_CHANGED'
+          : observed.identity.executable !== identity.executable ? 'PROCESS_EXECUTABLE_CHANGED' : null
+        if (refusal) {
+          // A failed probe and a changed process need different repairs; no process fields reach the log.
+          console.warn(`[restart] ${refusal}`)
           throw new IdentityReadUnavailable('the replacement process changed before publication')
         }
       } else {
@@ -225,17 +210,11 @@ export function createAgentRestarter({
     // cannot come back. Asked anyway, the swap killed the working agent and gave up twenty seconds
     // later with "did not come back up" (updates.e2e.ts, round 24). Asked here, before anything is
     // touched, the agent goes on running and the person is told why.
-    const inspected = await inspectNative?.(engine, session, { id: session.agentId, current })
+    if (!inspectNative) return { ok: false, error: 'NATIVE_LAUNCH_HELD', detail: 'Waiting for engine setup. Nothing was stopped.' }
+    const inspected = await inspectNative(engine, session, { id: session.agentId, current })
     if (!current()) return changed
-    if (inspected && !inspected.ok) return inspected
-    const native = inspected?.ok ? inspected.launch : undefined
-    const installed = native ? true : await engineInstalled(engine)
-    if (!current()) return changed
-    if (installed === false) {
-      console.warn(`[restart] ${sid(session.agentId)} refused · ${engine} is not installed`)
-      return { ok: false, error: 'ENGINE_NOT_INSTALLED', detail: `${engine} is not installed. Install it, then restart again. Nothing was stopped.` }
-    }
-
+    if (!inspected.ok) return inspected
+    const native = inspected.launch
     // The replacement is launched WITH what the original was: its grid's env and argv (a bare
     // respawn would inherit the tmux session's variables but never the codex `-c …` / pi `--model`
     // half, and an agent moved here by a retarget has nothing in the session env at all), or its
@@ -244,6 +223,9 @@ export function createAgentRestarter({
     const built = await relaunchOverrides(session, launchArgs ? { ...session, launchArgs } : session, current, native)
     if (!current()) return changed
     if (!built.ok) return built
+    const settings = await built.overrides.native?.prepareSettings?.(session.cwd ?? null, current)
+    if (!current()) return changed
+    if (settings) built.overrides = { ...built.overrides, settings }
 
     // Shell startup and native checks can outlast the reconciler's default 30-second hold.
     // Keep this route through publication, and release only this operation's own reservation.

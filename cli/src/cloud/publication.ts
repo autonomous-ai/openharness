@@ -1,0 +1,231 @@
+/** The Cloud component's bounded output owner. Core retains no receipts or notification history. */
+import { createHash } from 'node:crypto'
+import type { SessionOwnerCore, OwnerQuestionClose, OwnerQuestion } from '../lib/sessionOwnerWire.js'
+import { cloudHarnessIn, type CloudHarness } from '../lib/cloudAgents.js'
+import { cloudQuestionClose, prepareCloudQuestion } from './questions.js'
+import { cloudPresentationFingerprint, emptyPresentation, prepareCloudCards, type CloudPresentation } from './cards.js'
+import { CLOUD_OWNER_FACTORY, transferCloudPresentation } from './transfer.js'
+
+export interface CloudJournal { version: 2; accepted: CloudPresentation; pending: CloudPresentation | null; checksum: string }
+type Question = { agentId: string; requestId: string; question: { text: string; choices: string[] } }
+type Action = { kind: 'publish'; changed: CloudHarness[]; removed: string[] }
+  | { kind: 'ask'; value: { agentId: string; requestId: string; question: OwnerQuestion } }
+  | { kind: 'unask'; agentId: string; requestId: string; close: OwnerQuestionClose }
+interface Queued { action: Action; bytes: number }
+export interface CloudReservation { actions: number; bytes: number; released: boolean }
+export const CLOUD_OUTPUT_ACTIONS = 64
+export const CLOUD_OUTPUT_BYTES = 6 * 1024 * 1024
+// A normalized row has at most eight links, 4,000 answer characters and two 2,000-character card parts.
+// JSON escapes may cost six bytes per character. An operation emits at most two rows and three questions.
+const ROW_BYTES = 192 * 1024
+// Two maximal rows plus three prepared question/close pairs and their queue envelopes.
+const RESERVATION_BYTES = 512 * 1024
+const RESERVATION_ACTIONS = 6
+const WAIT_MS = 10_000
+const checksum = ({ version, accepted, pending }: Omit<CloudJournal, 'checksum'>): string =>
+  createHash('sha256').update(JSON.stringify({ version, accepted, pending })).digest('hex')
+const fingerprint = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+function presentation(value: unknown): value is CloudPresentation {
+  if (!value || typeof value !== 'object') return false
+  const state = value as CloudPresentation
+  if (!fingerprint(state.fingerprint) || !Array.isArray(state.owners)) return false
+  const seen = new Set<string>()
+  return state.owners.every(owner => {
+    if (!owner || typeof owner.agentId !== 'string' || !owner.agentId.startsWith('cloud_') || owner.agentId.length > 80
+      || seen.has(owner.agentId) || !fingerprint(owner.fingerprint) || typeof owner.busy !== 'boolean'
+      || typeof owner.told !== 'string' || owner.told.length > 4000) return false
+    seen.add(owner.agentId)
+    return true
+  })
+}
+function journalIn(value: unknown): CloudJournal | null {
+  if (!value || typeof value !== 'object') return null
+  const journal = value as CloudJournal
+  return journal.version === 2 && presentation(journal.accepted) && (journal.pending === null || presentation(journal.pending))
+    && Buffer.byteLength(JSON.stringify(journal)) <= 2 * CLOUD_OUTPUT_BYTES && journal.checksum === checksum(journal) ? journal : null
+}
+
+export function createCloudPublication(options: {
+  core: SessionOwnerCore
+  saved: unknown
+  /** Atomically writes this metadata alongside the last durable provider snapshot, never optimistic state. */
+  persist(journal: CloudJournal): void
+  snapshot(): CloudHarness[]
+  questions(): Question[]
+  log(line: string): void
+}) {
+  let journal = journalIn(options.saved)
+  let accepted = journal?.accepted ?? emptyPresentation()
+  let pending: CloudPresentation | null = journal?.pending ?? null
+  let epoch = 0, running = false, connected = false, initialized = false, stopped = false, recovering = false
+  let hold: string | null = null, unavailable = false
+  let bytes = 0, reservedBytes = 0, reservedActions = 0, reservedImageBytes = 0
+  let imageBytes = Buffer.byteLength(JSON.stringify(options.snapshot()))
+  let queue: Queued[] = []
+  let wire = new Map<string, CloudHarness>(), projected = new Map<string, CloudHarness>()
+  const cancellations = new Set<() => void>()
+  const state = (): CloudJournal => {
+    const body = { version: 2 as const, accepted, pending }
+    return { ...body, checksum: checksum(body) }
+  }
+  const fail = (reason: string, permanent = false): void => {
+    if (permanent) hold = reason
+    if (!unavailable || permanent) options.log(`[cloud] ${reason}`)
+    unavailable = true
+  }
+  const within = <T>(work: T | Promise<T>, waitMs = WAIT_MS): Promise<T> => new Promise((resolve, reject) => {
+    const cancel = () => finish(() => reject(new Error('CLOUD_PUBLICATION_UNAVAILABLE')))
+    const timer = setTimeout(cancel, waitMs).unref()
+    const finish = (done: () => void) => { clearTimeout(timer); cancellations.delete(cancel); done() }
+    cancellations.add(cancel)
+    Promise.resolve(work).then(value => finish(() => resolve(value)), () => finish(() => reject(new Error('CLOUD_PUBLICATION_UNAVAILABLE'))))
+  })
+  const cancel = (): void => { for (const stop of cancellations) stop() }
+  const persist = (): void => {
+    const value = state()
+    options.persist(value)
+    journal = value
+  }
+  const readyToPump = (): boolean => initialized && connected && !running && !stopped && !recovering && !hold && !unavailable
+  const pump = (): boolean => {
+    if (!readyToPump() || !queue.length) return false
+    let persisted = false
+    running = true
+    const generation = epoch
+    void (async () => {
+      try {
+        while (queue.length && generation === epoch && connected) {
+          const item = queue[0]
+          if (item.action.kind === 'publish') {
+            for (const id of item.action.removed) wire.delete(id)
+            for (const row of item.action.changed) wire.set(row.agentId, row)
+            const rows = [...wire.values()]
+            const prepared = prepareCloudCards(rows, accepted)
+            const payloadBytes = Buffer.byteLength(JSON.stringify({ harnesses: [], cards: prepared.cards })) - 2 + prepared.imageBytes
+            if (payloadBytes > CLOUD_OUTPUT_BYTES) {
+              fail('CLOUD_PUBLICATION_LIMIT', true); return
+            }
+            pending = prepared.next
+            persist()
+            persisted = true
+            // The provider plus pending common image is durable before begin or the first append can await.
+            const result = await transferCloudPresentation(options.core, rows, prepared.cards, accepted.fingerprint,
+              prepared.next.fingerprint, within, () => generation === epoch && connected && !stopped, WAIT_MS)
+            if (generation !== epoch) return
+            if (!result.ok) {
+              if (result.error === 'SESSION_OWNER_CONFLICT') fail('CLOUD_PUBLICATION_RECOVERY_REQUIRED', true)
+              else if (result.error === 'SESSION_OWNER_LIMIT') fail('CLOUD_PUBLICATION_LIMIT', true)
+              else if (result.error === 'SESSION_OWNER_INVALID') fail('CLOUD_PUBLICATION_INVALID', true)
+              else fail('CLOUD_PUBLICATION_UNAVAILABLE')
+              return
+            }
+            accepted = pending
+            pending = null
+          } else if (item.action.kind === 'ask') {
+            const { agentId, requestId, question } = item.action.value
+            const result = await within(options.core.ask(agentId, requestId, question))
+            if (generation !== epoch) return
+            if (!result.ok) { fail(result.error === 'SERVICE_UNAVAILABLE' ? 'CLOUD_PUBLICATION_UNAVAILABLE' : 'CLOUD_QUESTION_INVALID', result.error !== 'SERVICE_UNAVAILABLE'); return }
+          } else {
+            const result = await within(options.core.unask(item.action.agentId, item.action.requestId, item.action.close))
+            if (generation !== epoch) return
+            if (!result.ok) { fail(result.error === 'SERVICE_UNAVAILABLE' ? 'CLOUD_PUBLICATION_UNAVAILABLE' : 'CLOUD_QUESTION_INVALID', result.error !== 'SERVICE_UNAVAILABLE'); return }
+          }
+          queue.shift(); bytes -= item.bytes
+        }
+      } catch { if (generation === epoch) fail('CLOUD_PUBLICATION_UNAVAILABLE') }
+      finally { if (generation === epoch) running = false }
+    })()
+    // Only this synchronous turn counts. A later queued intent cannot make an earlier provider save durable.
+    return persisted
+  }
+  const append = (action: Action, reservation?: CloudReservation): boolean => {
+    if (stopped) return false
+    const size = Buffer.byteLength(JSON.stringify(action))
+    if (reservation) {
+      if (reservation.released || reservation.actions < 1 || reservation.bytes < size) {
+        fail('CLOUD_PUBLICATION_LIMIT', true); throw new Error('CLOUD_PUBLICATION_LIMIT')
+      }
+      reservation.actions--; reservation.bytes -= size
+      reservedActions--; reservedBytes -= size
+    }
+    if (queue.length + reservedActions >= CLOUD_OUTPUT_ACTIONS || bytes + reservedBytes + size > CLOUD_OUTPUT_BYTES) {
+      fail('CLOUD_PUBLICATION_LIMIT', true); throw new Error('CLOUD_PUBLICATION_LIMIT')
+    }
+    queue.push({ action, bytes: size }); bytes += size
+    return pump()
+  }
+  const publish = (list: CloudHarness[], reservation?: CloudReservation, force = false, provenImage?: string): boolean => {
+    if (recovering || stopped || hold) return false
+    if (!Array.isArray(list)) { fail('CLOUD_PUBLICATION_INVALID', true); throw new Error('CLOUD_PUBLICATION_INVALID') }
+    const rows = new Map<string, CloudHarness>()
+    for (const raw of list) {
+      const row = cloudHarnessIn(raw)
+      if (!row || rows.has(row.agentId)) { fail('CLOUD_PUBLICATION_INVALID', true); throw new Error('CLOUD_PUBLICATION_INVALID') }
+      if (Buffer.byteLength(JSON.stringify(row)) > ROW_BYTES) { fail('CLOUD_PUBLICATION_LIMIT', true); throw new Error('CLOUD_PUBLICATION_LIMIT') }
+      rows.set(row.agentId, row)
+    }
+    const encoded = JSON.stringify([...rows.values()])
+    imageBytes = Buffer.byteLength(encoded)
+    if (imageBytes > CLOUD_OUTPUT_BYTES - 4096) {
+      fail('CLOUD_PUBLICATION_LIMIT', true); throw new Error('CLOUD_PUBLICATION_LIMIT')
+    }
+    if (force) {
+      wire = rows; projected = rows
+      // Recovery already proved this exact nonempty image against an intact durable journal.
+      if (provenImage && cloudPresentationFingerprint(rows.values()) === provenImage) return false
+    }
+    const changed = [...rows.values()].filter(row => JSON.stringify(projected.get(row.agentId)) !== JSON.stringify(row))
+    const removed = [...projected.keys()].filter(id => !rows.has(id))
+    if (!force && !changed.length && !removed.length) return false
+    const persisted = append({ kind: 'publish', changed, removed }, reservation)
+    projected = rows
+    return persisted
+  }
+  return {
+    state,
+    blocked: () => !!hold || stopped,
+    status: () => hold ?? (unavailable ? 'CLOUD_PUBLICATION_UNAVAILABLE' : null),
+    reserve(): CloudReservation | null {
+      if (!initialized || hold || stopped || queue.length + reservedActions + RESERVATION_ACTIONS > CLOUD_OUTPUT_ACTIONS
+        || bytes + reservedBytes + RESERVATION_BYTES > CLOUD_OUTPUT_BYTES
+        || imageBytes + reservedImageBytes + 2 * ROW_BYTES > CLOUD_OUTPUT_BYTES - 4096) return null
+      reservedActions += RESERVATION_ACTIONS; reservedBytes += RESERVATION_BYTES; reservedImageBytes += 2 * ROW_BYTES
+      return { actions: RESERVATION_ACTIONS, bytes: RESERVATION_BYTES, released: false }
+    },
+    release(reservation: CloudReservation): void {
+      if (reservation.released) return
+      reservedActions -= reservation.actions; reservedBytes -= reservation.bytes; reservedImageBytes -= 2 * ROW_BYTES
+      reservation.released = true
+    },
+    canStartPublication: (): boolean => readyToPump() && queue.length === 0,
+    publish: (list: CloudHarness[], reservation?: CloudReservation): boolean => publish(list, reservation),
+    ask(value: Question, reservation?: CloudReservation): void { if (!recovering && !hold) append({ kind: 'ask', value: { ...value, question: prepareCloudQuestion(value.agentId, value.requestId, value.question) } }, reservation) },
+    unask(agentId: string, requestId: string, reservation?: CloudReservation): void { if (!recovering && !hold) append({ kind: 'unask', agentId, requestId, close: cloudQuestionClose(agentId, requestId) }, reservation) },
+    async connect(): Promise<void> {
+      if (stopped) return
+      const generation = ++epoch
+      cancel(); initialized = true; connected = true; recovering = true; running = false
+      queue = []; bytes = 0; wire = new Map(); projected = new Map()
+      try {
+        const checkpoint = await within(options.core.checkpoint(CLOUD_OWNER_FACTORY))
+        if (generation !== epoch) return
+        if (!('fingerprint' in checkpoint)) { fail('CLOUD_PUBLICATION_RECOVERY_REQUIRED', true); return }
+        const image = checkpoint.fingerprint
+        // Empty authority is a fresh core, including an explicit operator restart after a journal hold.
+        const empty = emptyPresentation(), retained = image !== empty.fingerprint
+        if (!retained) accepted = empty
+        else if (journal && image === journal.accepted.fingerprint) accepted = journal.accepted
+        else if (journal?.pending && image === journal.pending.fingerprint) accepted = journal.pending
+        else { fail('CLOUD_PUBLICATION_RECOVERY_REQUIRED', true); return }
+        pending = null; hold = null; unavailable = false; recovering = false
+        // Unsent history follows the previous reconnect contract: the provider's current state and questions.
+        publish(options.snapshot(), undefined, true, retained ? image : undefined)
+        for (const value of options.questions()) append({ kind: 'ask', value: { ...value, question: prepareCloudQuestion(value.agentId, value.requestId, value.question) } })
+      } catch { if (generation === epoch) fail('CLOUD_PUBLICATION_UNAVAILABLE') }
+      finally { if (generation === epoch) recovering = false }
+    },
+    disconnect(): void { ++epoch; connected = false; recovering = false; running = false; cancel() },
+    stop(): void { stopped = true; ++epoch; connected = false; cancel(); queue = []; bytes = 0 },
+  }
+}

@@ -1,4 +1,5 @@
 import { releaseRegistryEngine, removeRegistryAgent } from '../testing/registryFixtures.js'
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -10,10 +11,10 @@ import { createExternalResumes } from '../core/agents/externalResume.js'
 import { stopExternalOwner } from '../core/agents/externalOwner.js'
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
-vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
 vi.mock('./bootId.js', async original => ({ ...await original<object>(), currentBootId: () => 'linux:12345678-1234-1234-1234-123456789012' }))
 
 const instances = new Set<typeof import('./registry.js')['registry']>()
+const stores = new Set<typeof import('./sessionStorage.js')['sessionStorage']>()
 let root: string
 beforeEach(() => {
   // No test here means the write deadline to pass: how fast this machine writes the registry never fails them.
@@ -25,13 +26,21 @@ beforeEach(() => {
   writeFileSync(join(root, 'record.jsonl'), '{}\n')
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
-afterEach(async () => { for (const instance of instances) await instance.flush({ exiting: true }).catch(() => {}); instances.clear(); vi.restoreAllMocks(); vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }) })
+afterEach(async () => {
+  for (const instance of instances) await instance.flush({ exiting: true }).catch(() => {})
+  instances.clear()
+  const closed = await Promise.allSettled([...stores].map(closeSessionStorageFixture))
+  stores.clear(); vi.restoreAllMocks(); vi.unstubAllEnvs()
+  const failures = closed.filter(result => result.status === 'rejected').map(result => result.reason)
+  if (failures.length) throw new AggregateError(failures, 'external resume fixture cleanup failed')
+  rmSync(root, { recursive: true, force: true })
+})
 const intent = (extra: Partial<ExternalResumeIntent> = {}): ExternalResumeIntent => ({
   token: '12345678-1234-1234-1234-123456789012', request: { engine: 'claude', sessionId: 'alias' }, takeOver: null, phase: 'waiting', ...extra,
 })
 const fact = () => ({ engine: 'claude' as const, sessionId: 'canonical', aliases: ['alias', 'other-alias'], cwd: root,
   origin: 'terminal' as const, title: 'Saved conversation', mtime: 1, transcriptPath: join(root, 'record.jsonl') })
-async function load() { vi.resetModules(); const mod = await import('./registry.js'); instances.add(mod.registry); mod.registry.load(); return mod.registry }
+async function load() { vi.resetModules(); stores.add(deadline.slowSessionStorage((await import('./sessionStorage.js')).sessionStorage)); const mod = await import('./registry.js'); instances.add(mod.registry); await mod.registry.load(); return mod.registry }
 const disk = (): RegisteredSession[] => JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))
 const write = (rows: RegisteredSession[]) => writeFileSync(join(root, 'registry.json'), JSON.stringify(rows), { mode: 0o600 })
 const pending = async (extra: Partial<ExternalResumeIntent> = {}) => {
@@ -154,7 +163,7 @@ it('refuses KILL when another writer durably binds the conversation during the T
   const owner = { engine: 'claude' as const, pid: 101, tty: '/dev/fixture-terminal', record: '/fixture/record' }
   const kill = vi.fn(), launch = vi.fn()
   let written = false
-  const controller = createExternalResumes({ registry, backend: null, backendFor: () => undefined, stopped: () => [], cancelled: () => false,
+  const controller = createExternalResumes({ registry, backend: null, backendFor: () => undefined, stoppedQuery: async query => ({ witness: 'fixture', matches: query.kind === 'conversations' ? query.ids.map(() => false) : [false], current: () => true }), cancelled: () => false,
     generation: () => 1, waiting: async () => true, preflight: async () => null, announce: () => {}, forget: async () => {}, launch,
     inspect: async request => ({ ok: true, request, session: fact(), owner, generation: 'ps:1', busy: false }),
     stopOwner: (target, control) => stopExternalOwner(target, { ...control, exists: () => true, generation: () => 'ps:1',

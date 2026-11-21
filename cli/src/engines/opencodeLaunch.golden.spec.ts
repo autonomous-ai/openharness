@@ -1,8 +1,9 @@
-/** Former-code launch answers and native commands, before OpenCode control becomes eager. */
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+/** OpenCode launch answers and native commands, including executable confirmation before pane effects. */
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { launchShapeProofs } from '../testing/launchShapeProofs.js'
 import { afterAll, beforeAll, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { AgentEngine } from './types.js'
@@ -34,7 +35,8 @@ function normalize(value: unknown, label?: string): unknown {
     .split(process.execPath).join('<node>').split(dirname(process.execPath)).join('<node-dir>')
     .replace(/\/launch\/[0-9a-f-]{36}\.sh/g, '/launch/<script>.sh')
   if (label) text = text.split(label).join('<pane-label>')
-  return JSON.parse(text)
+  // The launch script contains a second JSON document: normalize its observed stat identities too.
+  return JSON.parse(launchShapeProofs(text), (_key, part: unknown) => typeof part === 'string' ? launchShapeProofs(part) : part)
 }
 function paneAnswer(): unknown {
   return captured.panes.map(pane => {
@@ -67,23 +69,31 @@ beforeAll(() => {
   mkdirSync(work); mkdirSync(join(root, 'bin')); mkdirSync(join(root, 'zdotdir'))
   vi.stubEnv('PATH', join(root, 'bin'))
   vi.stubEnv('OPENCODE_PATH', join(root, 'bin', 'v1'))
-  // These binaries only report facts or record requests. They never launch an engine or open a real store.
-  for (const [name, version] of [['v1', '1.18.31'], ['v2', 'opencode v2.0.18'], ['unknown', 'not-a-version']]) {
-    writeExecutable(join(root, 'bin', name), `#!${process.execPath}
+  // Keep the inspected executable bytes host-independent; only this private symlink names the real Node.
+  symlinkSync(process.execPath, join(root, 'bin', 'node'))
+  // These programs only report facts or record requests. They never launch an engine or open a real store.
+  writeFileSync(join(root, 'bin', 'opencode.cjs'), `
 const fs = require('node:fs');
-const args = process.argv.slice(2);
-fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({binary:'opencode',args,cwd:process.cwd()})+'\\n');
-if(args[0]==='--version') console.log(${JSON.stringify(version)});
+const path = require('node:path');
+const args = process.argv.slice(3);
+const version = {v1:'1.18.31',v2:'opencode v2.0.18',unknown:'not-a-version'}[process.argv[2]];
+const calls = path.join(__dirname, '..', 'calls.jsonl'), model = path.join(__dirname, '..', 'model.json');
+fs.appendFileSync(calls, JSON.stringify({binary:'opencode',args,cwd:process.cwd()})+'\\n');
+if(args[0]==='--version') console.log(version);
+else if(args[0]==='--help') console.log('--permission --agent --model --session --prompt');
 else if(args[1]==='model.list') console.log(JSON.stringify({data:[{providerID:'fixture',id:'model'}]}));
-else if(args[1]==='session.switchModel') { fs.writeFileSync(${JSON.stringify(join(root, 'model.json'))}, args[args.indexOf('-d')+1]); console.log('{}'); }
-else if(args[1]==='session.get') console.log(JSON.stringify({data:{id:'ses_fixture',...JSON.parse(fs.readFileSync(${JSON.stringify(join(root, 'model.json'))},'utf8'))}}));
+else if(args[1]==='session.switchModel') { fs.writeFileSync(model, args[args.indexOf('-d')+1]); console.log('{}'); }
+else if(args[1]==='session.get') console.log(JSON.stringify({data:{id:'ses_fixture',...JSON.parse(fs.readFileSync(model,'utf8'))}}));
 else { console.error('Unexpected fixture command'); process.exitCode=1; }
 `)
+  for (const name of ['v1', 'v2', 'unknown']) {
+    writeExecutable(join(root, 'bin', name), `#!/bin/sh\nexec "\${0%/*}/node" "\${0%/*}/opencode.cjs" "${name}" "$@"\n`)
   }
-  writeExecutable(join(root, 'bin', 'sqlite3'), `#!${process.execPath}
-require('node:fs').appendFileSync(${JSON.stringify(calls)}, JSON.stringify({binary:'sqlite3',args:process.argv.slice(2)})+'\\n');
+  writeFileSync(join(root, 'bin', 'sqlite3.cjs'), `
+require('node:fs').appendFileSync(require('node:path').join(__dirname, '..', 'calls.jsonl'), JSON.stringify({binary:'sqlite3',args:process.argv.slice(2)})+'\\n');
 console.log('5000\\n1\\n1');
 `)
+  writeExecutable(join(root, 'bin', 'sqlite3'), '#!/bin/sh\nexec "${0%/*}/node" "${0%/*}/sqlite3.cjs" "$@"\n')
   vi.resetModules()
 })
 afterAll(() => {
@@ -91,7 +101,7 @@ afterAll(() => {
   if (root) rmSync(root, { recursive: true, force: true })
 })
 
-it('records create, fork, relaunch and actual retarget dispatch before the extraction', async () => {
+it('records confirmed create, fork, relaunch and retarget dispatch, and holds unconfirmed executables', async () => {
   const { launchShapes } = await import('../testing/launchShapes.js')
   const { opencodeMajorVersion } = await import('./opencode/version.js')
   const { createAgentRetargeter } = await import('../core/agents/retarget.js')
@@ -107,7 +117,7 @@ it('records create, fork, relaunch and actual retarget dispatch before the extra
   }) as unknown as RegisteredSession
   const createRest = { createBackend: {}, registry: {}, hooksDisabled: true, hookPort: 4242,
     installOpencodePlugin: async () => true, terminalHintMachineName: () => 'fixture-machine', blocksFolder: () => false,
-    gridSetup: () => null, privateGridName: async () => null, watchNewPane: async () => {}, announceSession: () => {}, attach: () => {},
+    watchNewPane: async () => {}, announceSession: () => {}, attach: () => {},
   }
   for (const version of ['v1', 'v2', 'unknown', 'missing']) {
     vi.stubEnv('OPENCODE_PATH', join(root, 'bin', version))
@@ -135,6 +145,7 @@ it('records create, fork, relaunch and actual retarget dispatch before the extra
     const source = row('opencode', true), events: unknown[] = []
     const event = (entry: unknown[]) => { events.push(entry); appendFileSync(calls, JSON.stringify({ control: entry }) + '\n') }
     const retarget = createAgentRetargeter({
+      opencodeMajor: opencodeMajorVersion,
       purgeBusy: () => false,
       // The pane's own backend, tmux here: the retarget clears its session environment and hands the pane back.
       terminals: (() => {
@@ -167,8 +178,10 @@ it('records create, fork, relaunch and actual retarget dispatch before the extra
       paneSwapDeps: (s: RegisteredSession, _pane: unknown, overrides: { extraArgs: string[]; env: unknown; clearEnv: string[] }) => ({
         holdOpen: async () => { event(['holdOpen']); return { ok: true } },
         terminate: async () => { event(['terminate']); return 'gone' },
+        // This records native model dispatch; swap.spec.ts separately proves the real swap forwards native/env.
         buildArgv: (options: { bypassPermission: boolean; resumeSessionId?: string }) => buildEngineLaunchArgv(s.engine, { ...options, cwd: s.cwd!, extraArgs: overrides.extraArgs }),
-        respawn: async (argv: string[]) => {
+        respawn: async (command: string[] | (() => string[])) => {
+          const argv = typeof command === 'function' ? command() : command
           const script = argv.map(arg => /^\. '(.+\/launch\/[0-9a-f-]{36}\.sh)'$/.exec(arg)?.[1]).find(Boolean)
           event(['respawn', argv, overrides, script ? readFileSync(script, 'utf8') : null]); return { ok: true }
         },
@@ -177,7 +190,9 @@ it('records create, fork, relaunch and actual retarget dispatch before the extra
       liveBypassPermission: async () => false, announceSession: () => event(['announce']), refreshGridAssignment: () => event(['assignment']),
       opencodeDb: join(root, 'fixture.db'),
     } as never)
-    actual[`${version} retarget own login`] = normalize({ result: await retarget({ agentId: source.agentId, grid: null }), events, native: nativeCalls() })
+    const moved = await retarget({ agentId: source.agentId, grid: null })
+    expect(moved.ok, `${version} retarget`).toBe(version === 'v1' || version === 'v2')
+    actual[`${version} retarget own login`] = normalize({ result: moved, events, native: nativeCalls() })
   }
   if (RECORD) writeFileSync(GOLDEN, JSON.stringify(actual, null, 2) + '\n')
   else expect(actual).toEqual(JSON.parse(readFileSync(GOLDEN, 'utf8')))
@@ -188,4 +203,12 @@ it('contains no host paths or executable location', () => {
   expect(text).not.toContain(root)
   expect(text).not.toContain(process.execPath)
   expect(text).not.toMatch(/\/Users\/|\/home\/runner|opencode-launch-golden-/)
+})
+
+it('keeps executable proof bytes independent of host paths', () => {
+  for (const name of ['v1', 'v2', 'unknown', 'sqlite3']) {
+    const executable = readFileSync(join(root, 'bin', name), 'utf8')
+    expect(executable).not.toContain(root)
+    expect(executable).not.toContain(process.execPath)
+  }
 })

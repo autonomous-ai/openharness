@@ -6,8 +6,8 @@
  * reaches an engine by itself: this CLI is what spawns the engine, so this module turns that payload
  * into the launch — environment, and where the vendor demands it, argv.
  *
- * The one place that payload is kept is the registry row (`RegisteredSession.gridLaunch`, in a 0600
- * file this daemon owns) — so a restart, or a pane recreated after a reboot, relaunches onto the SAME
+ * The legacy durable registry/stopped images keep the key through the dated rollback window; current
+ * RegisteredSession rows carry only a private image-bound reference. Models resolves the selected key — so a restart, or a pane recreated after a reboot, relaunches onto the SAME
  * grid with the SAME key rather than silently coming back on the engine's own login. Nothing THIS
  * module writes (argv, a config directory) ever carries the key; that rule is unchanged.
  *
@@ -744,7 +744,7 @@ export function contractEnvVarNames(engine: AgentEngine): string[] {
  * is built, as a relaunch always refused it.
  */
 export function answerGridLaunch(
-  request: GridLaunchRequest,
+  request: Omit<GridLaunchRequest, 'override'> & { override: GridLaunchOverride },
   refreshApi: (override: GridLaunchOverride) => { override: GridLaunchOverride; apiBase?: string } | { error: string; detail: string },
 ): GridLaunchAnswer {
   let override = request.override
@@ -759,4 +759,21 @@ export function answerGridLaunch(
   const base = apiBase ? { apiBase } : {}
   if (!built.ok) return { ...built, ...base }
   return { ok: true, launch: built.launch, override, ...base }
+}
+
+/** Resolves one selected legacy credential for this launch only; the returned record keeps its reference. */
+export async function answerSelectedGridLaunch(request: GridLaunchRequest,
+  refreshApi: Parameters<typeof answerGridLaunch>[1],
+  resolve: (reference: import('./sessionStorageWire.js').StoredGridLaunch) => Promise<GridLaunchOverride>): Promise<GridLaunchAnswer> {
+  if ('apiKey' in request.override) return answerGridLaunch({ ...request, override: request.override }, refreshApi)
+  const selected = request.override
+  let override: GridLaunchOverride
+  try { override = await resolve(selected) }
+  catch { return { ok: false, error: 'GRID_CREDENTIAL_UNAVAILABLE',
+    detail: 'The saved Grid credential could not be verified. Retry this launch.', unavailable: 'session-storage' } }
+  const answer = answerGridLaunch({ ...request, override }, refreshApi)
+  if (!answer.ok) return answer
+  const fields: Array<keyof GridLaunchOverride> = ['networkId', 'networkName', 'baseUrl', 'apiKey', 'model', 'mcpUrl', 'contextWindow']
+  const resolved = answer.override as GridLaunchOverride
+  return fields.every(field => override[field] === resolved[field]) ? { ...answer, override: selected } : answer
 }

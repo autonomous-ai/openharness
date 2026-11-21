@@ -1,10 +1,13 @@
 /** Private model-control messages. All terminal effects need a separate, revocable core grant. */
 import type { ModelControlCheck, ModelControlInput, RuntimeProfileErrorCode } from '../facets/modelControl.js'
 import type { RuntimeCatalogModel, RuntimeProfile, RuntimeSession } from '../facets/runtime.js'
-import { record, type ReaderEngine } from './protocol.js'
-import { runtimeContext } from './runtimeProtocol.js'
+import { record, readerEngine, type ReaderEngine } from './protocol.js'
+import { runtimeContext, runtimeProfile } from './runtimeProtocol.js'
 import { CONTROL_BYTES, controlEnvelope, controlSize, controlToken } from './controlWire.js'
 import { screenCapture } from './screenProtocol.js'
+
+export type ModelControlEngine = ReaderEngine | 'opencode'
+export const modelControlEngine = (engine: string): engine is ModelControlEngine => readerEngine(engine) || engine === 'opencode'
 
 export const MODEL_CONTROL_VERSION = 1
 export const MODEL_CONTROL_CAPABILITIES = 'engine_model_control_capabilities'
@@ -33,31 +36,29 @@ export function modelControlCatalog(value: unknown): value is RuntimeCatalogMode
     && typeof m.listed === 'boolean' && text(m.defaultEffort, 200) && Array.isArray(m.efforts) && m.efforts.length <= 64 && m.efforts.every(label))
 }
 
-function profile(value: unknown, session: RuntimeSession, engine: ReaderEngine): RuntimeProfile | null {
-  const context = runtimeContext({ session, state: EMPTY_STATE,
-    control: { target: value, before: null, modelConfirmed: false, effortConfirmed: false } }, engine)
-  const target = context?.control?.target
+function profile(value: unknown, session: RuntimeSession): RuntimeProfile | null {
+  const target = runtimeProfile(value, session)
   return target && label(target.model) && label(target.effort) ? target : null
 }
 
-export function modelControlInput(value: unknown, engine: ReaderEngine): ModelControlInput | null {
+export function modelControlInput(value: unknown, engine: ModelControlEngine): ModelControlInput | null {
   if (!record(value) || !fields(value, ['session', 'target', 'current', 'options', 'catalog'])) return null
   const context = runtimeContext({ session: value.session, state: EMPTY_STATE }, engine)
   if (!context) return null
-  const target = profile(value.target, context.session, engine)
-  const current = value.current === null ? null : profile(value.current, context.session, engine)
+  const target = profile(value.target, context.session)
+  const current = value.current === null ? null : profile(value.current, context.session)
   if (!target || !modelControlCatalog(value.catalog) || (value.current !== null && !current) || !Array.isArray(value.options) || value.options.length > 4096
     || !value.options.every(o => record(o) && fields(o, ['id', 'displayName', 'description']) && text(o.id, 32768) && text(o.displayName, 32768)
       && (o.description === undefined || text(o.description, 256)))) return null
   return { session: context.session, target, current, catalog: structuredClone(value.catalog), options: value.options.map(o => ({ id: o.id, displayName: o.displayName })) }
 }
 
-export function modelControlCheck(value: unknown, engine: ReaderEngine): ModelControlCheck | null {
+export function modelControlCheck(value: unknown, engine: ModelControlEngine): ModelControlCheck | null {
   if (!record(value) || !fields(value, ['session', 'target', 'stage', 'state', 'catalog', 'pane'])
     || (value.stage !== 'target' && value.stage !== 'scope') || !modelControlCatalog(value.catalog)) return null
   const context = runtimeContext({ session: value.session, state: value.state }, engine)
   if (!context) return null
-  const target = profile(value.target, context.session, engine)
+  const target = profile(value.target, context.session)
   const pane = value.pane
   if (!target || (pane !== undefined && (!record(pane) || !fields(pane, ['idle', 'plan', 'dialog', 'draft'])
     || !['idle', 'plan', 'dialog', 'draft'].every(k => typeof pane[k] === 'boolean')))) return null
@@ -67,8 +68,9 @@ export function modelControlCheck(value: unknown, engine: ReaderEngine): ModelCo
 
 export type ModelControlAction =
   | { kind: 'catalog' }
-  | { kind: 'capture'; lines: number }
+  | { kind: 'capture'; lines: number; observe?: true }
   | { kind: 'text'; text: string }
+  | { kind: 'literal'; text: string }
   | { kind: 'key'; key: string }
   | { kind: 'waitForModel'; ms: number }
   | { kind: 'waitForProfile'; ms: number }
@@ -77,9 +79,9 @@ export type ModelControlAction =
 export function modelControlAction(value: unknown): value is ModelControlAction {
   if (!record(value)) return false
   if (value.kind === 'catalog') return fields(value, ['kind'])
-  if (value.kind === 'capture') return fields(value, ['kind', 'lines']) && Number.isInteger(value.lines) && Number(value.lines) >= 1 && Number(value.lines) <= 100
-  if (value.kind === 'text') return fields(value, ['kind', 'text']) && label(value.text)
-  if (value.kind === 'key') return fields(value, ['kind', 'key']) && typeof value.key === 'string' && /^(?:Enter|Escape|[1-9])$/.test(value.key)
+  if (value.kind === 'capture') return fields(value, ['kind', 'lines', 'observe']) && (value.observe === undefined || value.observe === true) && Number.isInteger(value.lines) && Number(value.lines) >= 1 && Number(value.lines) <= 100
+  if (value.kind === 'text' || value.kind === 'literal') return fields(value, ['kind', 'text']) && label(value.text)
+  if (value.kind === 'key') return fields(value, ['kind', 'key']) && typeof value.key === 'string' && /^(?:Enter|Escape|BSpace|[1-9])$/.test(value.key)
   if (value.kind === 'confirmEffort') return fields(value, ['kind', 'effort']) && label(value.effort)
   return (value.kind === 'waitForModel' || value.kind === 'waitForProfile') && fields(value, ['kind', 'ms'])
     && Number.isInteger(value.ms) && Number(value.ms) > 0 && Number(value.ms) <= 8000

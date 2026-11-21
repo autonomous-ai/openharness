@@ -5,14 +5,13 @@
  * can then find (kit/launchExecutable.ts), so a record says how the install went and never that the engine is there.
  */
 import { spawn as nodeSpawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { closeSync, mkdirSync, openSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { stripVTControlCharacters } from 'node:util'
 import { ENGINE_WINDOWS_INSTALL, npmEnginePrefix, type EngineInstallRecipe, type WindowsInstall } from '../../lib/engineInstall.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { atomicWriteFile } from '../../lib/secureState.js'
 import { powershellPath, systemProgram } from '../../lib/windows/powershell.js'
-import { endProcessTree, processTreeKillDeps } from '../../lib/windows/treeKill.js'
 import type { AgentEngine } from '../types.js'
 import type { NativeInstallation } from './nativeInstall.js'
 
@@ -33,14 +32,52 @@ const INSTALL_COMMAND_VARIABLE = 'HARNESS_INSTALL_COMMAND'
  * ran (Hermes on DESKTOP-0TFH0OJ, 2026-11-04). So this small process is the detached one, and its child has a console no one sees.
  * Through `cmd` instead, the hidden console takes the output, and the person is told nothing of why an install failed.
  */
-export const INSTALL_RUNNER = [
-  "const { spawn } = require('node:child_process')",
-  `const { file, args, verbatim } = JSON.parse(process.env.${INSTALL_COMMAND_VARIABLE})`,
-  `delete process.env.${INSTALL_COMMAND_VARIABLE}`,
-  "const child = spawn(file, args, { windowsHide: true, windowsVerbatimArguments: verbatim, stdio: ['ignore', 1, 2] })",
-  "child.once('error', (error) => { console.error(error.message); process.exit(1) })",
-  "child.once('exit', (code) => process.exit(code ?? 1))",
-].join('\n')
+export const INSTALL_RUNNER = String.raw`
+const { spawn, execFile } = require('node:child_process');
+const fs = require('node:fs'), path = require('node:path'), { stripVTControlCharacters } = require('node:util');
+const { file, args, verbatim, record, request, dispatch, log } = JSON.parse(process.env.HARNESS_INSTALL_COMMAND);
+delete process.env.HARNESS_INSTALL_COMMAND;
+function publish(value) {
+  if (!record) return;
+  const owner = JSON.parse(fs.readFileSync(record, 'utf8'));
+  if (owner.dispatch !== dispatch || owner.request !== request) throw Error('Installation dispatch ownership changed');
+  const next = record + '.' + process.pid + '.next';
+  const fd = fs.openSync(next, 'wx', 0o600);
+  // not a state file: this standalone helper fills only its exclusive staging file before the atomic rename
+  try { fs.writeFileSync(fd, JSON.stringify(value)); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+  fs.renameSync(next, record);
+}
+function detail(fallback) {
+  if (!log) return fallback;
+  let fd;
+  try {
+    fd = fs.openSync(log, 'r'); const size = fs.fstatSync(fd).size, bytes = Buffer.alloc(Math.min(size, 65536));
+    const read = fs.readSync(fd, bytes, 0, bytes.length, Math.max(0, size - bytes.length));
+    return stripVTControlCharacters(bytes.subarray(0, read).toString('utf8')).split(/\r?\n/).map(line => line.trim()).filter(Boolean).at(-1)?.slice(0, 300) || fallback;
+  } catch { return fallback; } finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+let timer, timedOut = false;
+function finish(code, reason) {
+  clearTimeout(timer);
+  const why = timedOut ? 'it took longer than 20 minutes.' : reason || detail('its installer stopped with code ' + code + '.');
+  try { publish(code === 0 && !timedOut ? { state: 'done', request } : { state: 'failed', request, detail: why }); }
+  catch { console.error('Installation result needs recovery.'); process.exit(2); }
+  process.exit(timedOut ? 1 : code ?? 1);
+}
+try {
+  // The old controller must still read failed for this request, even if this helper later dies.
+  publish({ state: 'failed', request, detail: 'Installation dispatch needs recovery.', dispatch, pid: process.pid, startedAt: Date.now() });
+  const child = spawn(file, args, { windowsHide: true, windowsVerbatimArguments: verbatim, stdio: ['ignore', 1, 2] });
+  child.once('error', error => { console.error(error.message); finish(1, error.message); });
+  child.once('exit', code => finish(code ?? 1));
+  timer = setTimeout(() => {
+    timedOut = true;
+    if (process.platform === 'win32') execFile(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe'),
+      ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 5000 }, () => process.exit(2));
+    else child.kill('SIGKILL');
+  }, 20 * 60_000);
+} catch (error) { console.error(error.message); finish(1, error.message); }
+`
 
 /**
  * The vendor's installer, as `irm <url> | iex` runs it, with its flags. As bytes when the server calls it a download, which
@@ -72,29 +109,22 @@ export function windowsInstallCommand(install: WindowsInstall, places: InstallPl
 
 type InstallRecord =
   | { state: 'running'; pid: number; request: string; startedAt: number }
-  | { state: 'done' | 'failed'; request: string; detail?: string }
+  | { state: 'done' | 'failed'; request: string; detail?: string; dispatch?: string; pid?: number; startedAt?: number }
 
 const running = (): NativeInstallation => ({ complete: false, running: true, detail: 'Installing.' })
 const failed = (detail: string): NativeInstallation => ({ complete: false, failed: true, detail })
+const recovery = (): NativeInstallation => ({ complete: false, detail: 'Engine installation needs recovery: its dispatch has no confirmed result.' })
 
 function processRuns(pid: number): boolean {
   try { process.kill(pid, 0); return true } catch { return false }
 }
 
-function lastLine(log: string): string | null {
-  try {
-    const lines = stripVTControlCharacters(readFileSync(log, 'utf8')).split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
-    return lines.at(-1)?.slice(0, 300) ?? null
-  } catch { return null }
-}
 
-export function createWindowsInstallations({ directory, spawn = nodeSpawn, alive = processRuns, now = Date.now,
-  endTree = (pid: number) => endProcessTree(pid, processTreeKillDeps(null)), where }: {
+export function createWindowsInstallations({ directory, spawn = nodeSpawn, alive = processRuns, now = Date.now, where }: {
   directory: string
   spawn?: typeof nodeSpawn
   alive?: (pid: number) => boolean
   now?: () => number
-  endTree?: (pid: number) => Promise<unknown>
   where?: () => SpawnPlaces
 }) {
   const places = where ?? (() => {
@@ -111,14 +141,18 @@ export function createWindowsInstallations({ directory, spawn = nodeSpawn, alive
   }
   const write = (engine: AgentEngine, record: InstallRecord) => {
     mkdirSync(directory, { recursive: true })
-    atomicWriteFile(recordFile(engine), JSON.stringify(record), 'cache')
+    // A lost dispatch record would let another controller run the same installer again.
+    atomicWriteFile(recordFile(engine), JSON.stringify(record), 'cache', { durable: true })
   }
   /** A running record with an installer behind it. One whose process is gone (a restart) or too old never holds a launch. */
   const live = (record: InstallRecord | null): boolean =>
-    record?.state === 'running' && alive(record.pid) && now() - record.startedAt < RECORD_SETTLES_MS
+    !!record && (record.state === 'running' || record.state === 'failed' && !!record.dispatch)
+      && typeof record.pid === 'number' && record.pid > 0 && typeof record.startedAt === 'number'
+      && alive(record.pid) && now() - record.startedAt < RECORD_SETTLES_MS
 
   const start = (engine: AgentEngine, environment: Record<string, string>, request: string): NativeInstallation => {
     const log = join(directory, `${engine}.log`)
+    let dispatched = false
     try {
       mkdirSync(directory, { recursive: true })
       const at = places()
@@ -130,32 +164,32 @@ export function createWindowsInstallations({ directory, spawn = nodeSpawn, alive
       const path = Object.keys(env).filter((key) => key.toLowerCase() === 'path').map((key) => { const value = env[key]; delete env[key]; return value }).find(Boolean)
       env.PATH = path ? `${at.nodeDir};${path}` : at.nodeDir
       rmSync(log, { force: true })
+      const dispatch = randomUUID()
+      // Failed is deliberately backward readable: rollback cannot replay this same saved request.
+      write(engine, { state: 'failed', request, detail: 'Installation dispatch needs recovery.', dispatch })
       // not a state file: the installer's output log, a new file each run
       const output = openSync(log, 'w')
       let child
       try {
         // Detached, so a daemon restarting does not end it, and hidden. See INSTALL_RUNNER for why it does not run the installer itself.
-        child = spawn(at.node, ['-e', INSTALL_RUNNER], { env: { ...env, [INSTALL_COMMAND_VARIABLE]: JSON.stringify(command) }, cwd: directory, detached: true, windowsHide: true, stdio: ['ignore', output, output] })
+        child = spawn(at.node, ['-e', INSTALL_RUNNER], { env: { ...env, [INSTALL_COMMAND_VARIABLE]: JSON.stringify({ ...command, record: recordFile(engine), request, dispatch, log }) }, cwd: directory, detached: true, windowsHide: true, stdio: ['ignore', output, output] })
+        dispatched = true
       } finally { closeSync(output) }
       child.unref?.()
-      const pid = child.pid ?? 0
-      let timedOut = false
-      const limit = setTimeout(() => { timedOut = true; void Promise.resolve(endTree(pid)).catch(() => {}) }, WINDOWS_INSTALL_LIMIT_MS)
-      limit.unref?.()
       const settle = (record: InstallRecord) => {
-        clearTimeout(limit)
         const now = read(engine)
-        if (now?.state === 'running' && now.pid === pid) write(engine, record)
+        if (now && 'dispatch' in now && now.dispatch === dispatch) write(engine, record)
       }
-      child.once('exit', (code: number | null) => {
-        if (code === 0 && !timedOut) return settle({ state: 'done', request })
-        const detail = timedOut ? 'it took longer than 20 minutes.' : lastLine(log) ?? `its installer stopped with code ${code}.`
-        settle({ state: 'failed', request, detail })
+      child.once('exit', () => {
+        // Only the helper's durable result proves completion. Killing it or losing that result cannot authorize retry.
+        const record = read(engine)
+        if (record && 'dispatch' in record && record.dispatch === dispatch) console.warn('[engine-setup] INSTALLATION_RECOVERY_REQUIRED')
       })
       child.once('error', (error: Error) => settle({ state: 'failed', request, detail: error.message }))
-      write(engine, { state: 'running', pid, request, startedAt: now() })
       return running()
     } catch (error) {
+      // A helper may already have dispatched. Parent bookkeeping cannot prove it did not.
+      if (dispatched) { console.warn('[engine-setup] INSTALLATION_RECOVERY_REQUIRED'); return recovery() }
       const detail = error instanceof Error ? error.message : String(error)
       try { write(engine, { state: 'failed', request, detail }) } catch { /* said below all the same */ }
       return failed(detail)
@@ -163,19 +197,24 @@ export function createWindowsInstallations({ directory, spawn = nodeSpawn, alive
   }
 
   const ensure = async (engine: AgentEngine, _recipe: EngineInstallRecipe, environment: Record<string, string>, request: string,
-    current: () => boolean): Promise<NativeInstallation> => {
+    current: () => boolean, authorize?: () => Promise<boolean>): Promise<NativeInstallation> => {
     if (!current()) return { complete: false, detail: 'The saved launch request changed before installation.' }
     const record = read(engine)
     if (live(record)) return running()
+    if (record && 'dispatch' in record && record.dispatch) return recovery()
     if (record?.request === request && record.state === 'failed') return failed(record.detail ?? 'its installer failed.')
     // Asked again by the launch that installed it, whose look found nothing: another install would find it no better.
     if (record?.request === request && record.state === 'done') return failed('its installer finished, but Harness could not find it. Try again.')
+    if (authorize && !await authorize() || !current()) return { complete: false, detail: 'The saved launch request changed before installation.' }
+    // Another preparation may have committed while this one waited for core.
+    if (JSON.stringify(read(engine)) !== JSON.stringify(record)) return ensure(engine, _recipe, environment, request, current)
     return start(engine, environment, request)
   }
 
   const status = async (engine: AgentEngine, request: string, _current: () => boolean): Promise<NativeInstallation | null> => {
     const record = read(engine)
     if (live(record)) return running()
+    if (record && 'dispatch' in record && record.dispatch) return recovery()
     return record?.request === request && record.state === 'failed' ? failed(record.detail ?? 'its installer failed.') : null
   }
 

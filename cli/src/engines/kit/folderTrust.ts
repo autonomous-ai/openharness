@@ -20,12 +20,29 @@ type TomlTrust = Extract<TrustContract, { format: 'toml' }>
 
 /** Whether the engine already trusts `path`, by the settings in `file`. */
 export function trustsIn(trust: TrustContract, file: string, path: string): boolean {
-  return trust.format === 'json' ? jsonTrusts(trust, file, path) : tomlTrusts(trust, file, path)
+  if (!existsSync(file)) return false
+  let text: string
+  try { text = readFileSync(file, 'utf8') } catch (error) { if (trust.format === 'toml') throw error; return false }
+  return trustsText(trust, text, path)
 }
 
 /** Record trust in `cwd` in `file`. A missing file is left missing: the engine writes it on its first run. */
 export function recordTrustIn(trust: TrustContract, file: string, cwd: string): 'trusted' | 'already' | 'skipped' {
-  return trust.format === 'json' ? recordJson(trust, file, cwd) : recordToml(trust, file, cwd)
+  if (!existsSync(file)) return 'skipped'
+  let text: string
+  try { text = readFileSync(file, 'utf8') } catch (error) { if (trust.format === 'toml') throw error; return 'skipped' }
+  const prepared = prepareTrustText(trust, text, cwd)
+  if (prepared.state === 'trusted') replaceConfigFile(file, prepared.text)
+  return prepared.state
+}
+
+export function trustsText(trust: TrustContract, text: string, path: string): boolean {
+  return trust.format === 'json' ? jsonTrusts(trust, text, path) : tomlTrusts(trust, text, path)
+}
+
+/** The same transformation for direct CLI writes and checked setup candidates. */
+export function prepareTrustText(trust: TrustContract, text: string, cwd: string): { state: 'trusted' | 'already' | 'skipped'; text: string } {
+  return trust.format === 'json' ? recordJson(trust, text, cwd) : recordToml(trust, text, cwd)
 }
 
 /** A folder as this platform compares it. DESKTOP-0TFH0OJ, 2026-10-23: a worktree's source came as `C:\…\<tab>/<project>`
@@ -43,12 +60,13 @@ function within(base: string, path: string): boolean {
 /** The root of the Git repository `path` is in, or null outside one: where Claude Code stops looking for an accepted folder
  *  above it (2.1.309 walks up to the root its `$_` finds, no further), so a repository cloned under an accepted folder asks
  *  again. */
-function repositoryRoot(path: string): string | null {
+function repositoryRoot(path: string, marker: string): string | null {
   const paths = windows() ? win32 : posix
-  for (let folder = path; ; folder = paths.dirname(folder)) {
-    if (existsSync(paths.join(folder, '.git'))) return folder
+  for (let folder = path, depth = 0; depth < 64; depth++, folder = paths.dirname(folder)) {
+    if (existsSync(paths.join(folder, marker))) return folder
     if (paths.dirname(folder) === folder) return null
   }
+  throw Error('The repository ancestry exceeds its limit')
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -67,36 +85,34 @@ export function replaceConfigFile(file: string, text: string): void {
   renameSync(tmp, target)
 }
 
-function recordJson(trust: JsonTrust, file: string, cwd: string): 'trusted' | 'already' | 'skipped' {
-  if (!existsSync(file)) return 'skipped'
+function recordJson(trust: JsonTrust, text: string, cwd: string): ReturnType<typeof prepareTrustText> {
+  const unchanged = (state: 'already' | 'skipped'): ReturnType<typeof prepareTrustText> => ({ state, text })
   let config: unknown
   try {
-    config = JSON.parse(readFileSync(file, 'utf8'))
+    config = JSON.parse(text)
   } catch {
-    return 'skipped'
+    return unchanged('skipped')
   }
   // Anything but the shape the engine writes is left exactly as it is: writing trust into an array,
   // or spreading a string entry into an object, would rewrite what the person has.
-  if (!isPlainObject(config)) return 'skipped'
-  if (config[trust.projects] !== undefined && !isPlainObject(config[trust.projects])) return 'skipped'
+  if (!isPlainObject(config)) return unchanged('skipped')
+  if (config[trust.projects] !== undefined && !isPlainObject(config[trust.projects])) return unchanged('skipped')
   const projects = (config[trust.projects] ?? {}) as Record<string, unknown>
   const existing = projects[cwd]
-  if (existing !== undefined && !isPlainObject(existing)) return 'skipped'
-  if (existing?.[trust.accepted] === true) return 'already'
+  if (existing !== undefined && !isPlainObject(existing)) return unchanged('skipped')
+  if (existing?.[trust.accepted] === true) return unchanged('already')
   projects[cwd] = { ...structuredClone(trust.entry), ...(existing ?? {}), [trust.accepted]: true }
   config[trust.projects] = projects
-  replaceConfigFile(file, JSON.stringify(config, null, 2))
-  return 'trusted'
+  return { state: 'trusted', text: JSON.stringify(config, null, 2) }
 }
 
 /** Its own entry, or a folder above it in the same Git repository, says yes: the inheritance Claude Code applies. Unreadable or absent
  *  settings read as no. */
-function jsonTrusts(trust: JsonTrust, file: string, path: string): boolean {
-  if (!existsSync(file)) return false
+function jsonTrusts(trust: JsonTrust, text: string, path: string): boolean {
   let config: unknown
-  try { config = JSON.parse(readFileSync(file, 'utf8')) } catch { return false }
+  try { config = JSON.parse(text) } catch { return false }
   if (!isPlainObject(config) || !isPlainObject(config[trust.projects])) return false
-  const root = repositoryRoot(path)
+  const root = repositoryRoot(path, trust.repositoryBoundary)
   for (const [key, entry] of Object.entries(config[trust.projects] as Record<string, unknown>)) {
     if (isPlainObject(entry) && entry[trust.accepted] === true && within(key, path) && (root === null || within(root, key))) return true
   }
@@ -119,9 +135,7 @@ function tomlKey(quoted: string): string | null {
 }
 
 /** Exactly `path`, by its own table's value, which runs to the next header. */
-function tomlTrusts(trust: TomlTrust, file: string, path: string): boolean {
-  if (!existsSync(file)) return false
-  const text = readFileSync(file, 'utf8')
+function tomlTrusts(trust: TomlTrust, text: string, path: string): boolean {
   for (const match of text.matchAll(headerPattern(trust))) {
     const key = tomlKey(match[1])
     if (key === null || !sameFolder(key, path)) continue
@@ -138,15 +152,12 @@ function tomlTrusts(trust: TomlTrust, file: string, path: string): boolean {
  * dotted keys, would make the appended table a duplicate definition, a file the engine refuses to load.
  * Those are left alone.
  */
-function recordToml(trust: TomlTrust, file: string, cwd: string): 'trusted' | 'already' | 'skipped' {
-  if (!existsSync(file)) return 'skipped'
-  const text = readFileSync(file, 'utf8')
+function recordToml(trust: TomlTrust, text: string, cwd: string): ReturnType<typeof prepareTrustText> {
   const keys = [...text.matchAll(headerPattern(trust))].map((match) => tomlKey(match[1]))
-  if (keys.includes(cwd)) return 'already'
+  if (keys.includes(cwd)) return { state: 'already', text }
   // A key this cannot read might be this folder spelled another way: not safe to append after.
-  if (keys.includes(null) || otherwisePattern(trust).test(text)) return 'skipped'
+  if (keys.includes(null) || otherwisePattern(trust).test(text)) return { state: 'skipped', text }
   // A TOML basic string is a JSON string, except that DEL must be escaped too.
   const header = `[${trust.table}.${JSON.stringify(cwd).replace(/\x7f/g, '\\u007f')}]`
-  replaceConfigFile(file, `${text.replace(/\s*$/, '')}\n\n${header}\n${trust.key} = ${JSON.stringify(trust.value)}\n`)
-  return 'trusted'
+  return { state: 'trusted', text: `${text.replace(/\s*$/, '')}\n\n${header}\n${trust.key} = ${JSON.stringify(trust.value)}\n` }
 }

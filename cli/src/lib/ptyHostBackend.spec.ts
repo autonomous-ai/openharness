@@ -8,6 +8,8 @@ import type { PtyEvent, PtyOp } from './ptyHost/protocol.js'
 import type { PtyHostClient } from './ptyHost/client.js'
 import type { EnsurePtyHostResult, PtyHostTarget } from './ptyHost/launch.js'
 import type { PtyRuntimeRef } from './terminalTypes.js'
+import { restoreTerminals } from './restoreTerminals.js'
+import type { RegisteredSession } from './registry.js'
 import { writeExecutable } from '../testing/executableFixture.js'
 
 // validate's branches, not the process table: the same narrow mock tmuxBackendValidate.spec.ts uses.
@@ -442,6 +444,17 @@ describe('PtyHostBackend input', () => {
     const { backend, calls } = await ready()
     expect(await backend.sendKey(PANE, 'enter', () => false)).toMatchObject({ state: 'failed', dispatch: 'not_started' })
     expect(calls).toEqual([])
+  })
+
+  it('dispatches a held row paste before awaiting its acknowledgement, without a load-buffer gap', async () => {
+    let acknowledge!: (reply: unknown) => void
+    const reply = new Promise((resolve) => { acknowledge = resolve })
+    const { backend, calls } = await ready({ paste: () => reply })
+    const pasted = backend.pasteInput(PANE, '/private-fixture/prepared-file')
+    // The manager's final generation/file check and this client call share one synchronous turn.
+    expect(calls).toEqual([{ op: 'paste', pane: '%1', text: '/private-fixture/prepared-file', bracketed: true }])
+    acknowledge({ state: 'ok', value: {} })
+    expect(await pasted).toEqual({ state: 'succeeded', dispatch: 'executed' })
   })
 
   it('sendKey sends the tmux name of the key', async () => {
@@ -1330,4 +1343,70 @@ setTimeout(() => process.exit(0), 30000)
       if (stub.pid !== GONE_PID) try { process.kill(stub.pid, 'SIGKILL') } catch { /* already gone */ }
     }
   }, 20_000)
+})
+
+it.each(['create', 'respawn'] as const)('selects the final owner command after the %s receipt wait', async operation => {
+  const { backend, calls } = await ready({ create: { state: 'ok', value: { pane: '%1' } } })
+  let release!: () => void, optionalCurrent = true
+  const journal = new Promise<void>(resolve => { release = resolve })
+  const finalCommand = vi.fn(() => optionalCurrent ? ['stale-optional'] : ['current-base', 'owner-word'])
+  const request = { command: finalCommand, cwd: '/owner/work', env: { OWNER_VALUE: 'private-fixture' },
+    clearInherited: ['OLD_VALUE'], afterExit: { command: ['owner-shell'] }, current: () => true,
+    onDispatch: () => journal }
+  const pending = operation === 'create' ? backend.create(request as never) : backend.respawn(PANE, request as never)
+  optionalCurrent = false; release()
+  await pending
+  expect(finalCommand).toHaveBeenCalledTimes(1)
+  expect(calls.find(call => call.op === operation)).toMatchObject({ command: ['current-base', 'owner-word'], cwd: '/owner/work',
+    env: { OWNER_VALUE: 'private-fixture' }, clearInherited: ['OLD_VALUE'], afterExit: { command: ['owner-shell'] } })
+  backend.dispose()
+})
+
+it.each(['create', 'respawn'] as const)('refuses %s when the final command factory revokes required authority or throws', async operation => {
+  for (const failure of ['required', 'throws'] as const) {
+    const { backend, calls } = await ready()
+    let current = true
+    const finalCommand = vi.fn(() => { if (failure === 'throws') throw Error('owner preparation failed'); current = false; return ['never-executed'] })
+    const request = { command: finalCommand, current: () => current }
+    const result = operation === 'create' ? await backend.create(request as never) : await backend.respawn(PANE, request as never)
+    expect(result).toMatchObject({ state: 'failed', dispatch: 'not_started' })
+    expect(finalCommand).toHaveBeenCalledTimes(1)
+    expect(calls.some(call => call.op === 'create' || call.op === 'respawn')).toBe(false)
+    backend.dispose()
+  }
+})
+
+it.each(['create', 'respawn'] as const)('selects restore or moved %s commands only after the receipt and required authority check', async operation => {
+  for (const changed of ['optional', 'required', 'receipt throws', 'factory throws'] as const) {
+    const { backend, calls } = await ready({ create: { state: 'ok', value: { pane: '%1' } } }, { features: ['held-token'] })
+    let optional = true, required = true, release!: () => void, entered!: () => void
+    const receipt = new Promise<void>(resolve => { release = resolve })
+    const preparing = new Promise<void>(resolve => { entered = resolve })
+    const publish = vi.fn(() => { entered(); return receipt.then(() => { if (changed === 'receipt throws') throw Error('fixture receipt refused') }) })
+    const command = vi.fn(() => { if (changed === 'factory throws') throw Error('fixture owner command refused'); return ['owner-command', ...(optional ? ['optional'] : [])] })
+    const terminals = restoreTerminals({ backendFor: () => backend, newPanesOn: () => backend,
+      listTmuxPanes: vi.fn(), cwd: '/owner', label: () => 'owner-label' })
+    const launch = { argv: command, env: { OWNER_VALUE: 'fixture' },
+      paneLaunch: { cwd: '/owner/work', afterExit: { command: ['owner-shell'] }, clearInherited: ['OLD'] } }
+    const control = { current: () => required, onDispatch: publish, expectedHeldToken: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }
+    const row = { engine: 'claude', runtimes: [{ ...PANE, instance: 'old' }] } as RegisteredSession
+    const pending = operation === 'create' ? terminals.createPane(row, launch, control) : terminals.respawn(PANE, launch, control)
+    await preparing
+    expect(command).not.toHaveBeenCalled()
+    if (changed === 'optional') optional = false; else if (changed === 'required') required = false
+    release()
+    const result = await pending
+    expect(publish).toHaveBeenCalledOnce()
+    if (changed === 'optional') {
+      expect(result.ok).toBe(true)
+      expect(command).toHaveBeenCalledOnce()
+      expect(calls.find(call => call.op === operation)).toMatchObject({ command: ['owner-command'], cwd: '/owner/work',
+        env: { OWNER_VALUE: 'fixture' }, afterExit: { command: ['owner-shell'] }, clearInherited: ['OLD'] })
+    } else {
+      expect(result.ok).toBe(false)
+      expect(command).toHaveBeenCalledTimes(changed === 'factory throws' ? 1 : 0)
+      expect(calls.some(call => call.op === operation)).toBe(false)
+    }
+    backend.dispose()
+  }
 })

@@ -5,18 +5,50 @@ import { dshRootDir, installedDsh as lookup } from '../dsh/installed.js'
 import { materializeWorkspace } from '../dsh/materialize.js'
 import { forkRuntimeKey, prepareHarnessLaunch } from '../dsh/runtime.js'
 import { dshPreparations, type PrepareDsh } from '../dsh/preparation.js'
-import { prepareInstructionWrites } from '../scm/launch.js'
+import { prepareInstructionWrites } from '../scm/instructionWrites.js'
+import { dshPinnedPermissionMode } from '../dsh/manifest.js'
+import { incompatibleHarnessEngine } from '../dsh/compatibility.js'
+import type { DshAccount } from '../dsh/launch.js'
+import { BUNDLED_HARNESSES, MODEL_MANAGER_ID } from '../dsh/builtinIds.js'
+import { dshUnavailable, type DshLaunchAnswer, type DshLaunchRequest } from '../dsh/launchWire.js'
+
+/** The producer knows what it builds; core receives it as unknown until the caller checks it. */
+interface StoreLaunchPort extends Omit<StorePort, 'stop'> {
+  dshLaunch(request: DshLaunchRequest): Promise<DshLaunchAnswer>
+}
 
 const detail = (error: unknown) => error instanceof Error ? error.message : String(error)
 
 export function storeLaunchPort(installedDsh: typeof lookup = lookup,
-  prepare: PrepareDsh = dshPreparations(join(dshRootDir(), '.preparations'))): StorePort {
+  prepare: PrepareDsh = dshPreparations(join(dshRootDir(), '.preparations')), prepared: (id?: string) => boolean = () => true,
+  context: (setup: boolean) => Promise<DshAccount> = async () => ({ privateGrid: null })): StoreLaunchPort {
   const missing = (id: string) => ({ ok: false as const, error: 'DSH_NOT_INSTALLED', detail: `${id} is not installed on this machine` })
+  const find = (id: string) => {
+    const ready = prepared(id)
+    const installed = installedDsh(id)
+    return installed ? { ok: true as const, installed }
+      : !ready && BUNDLED_HARNESSES.some(harness => harness.id === id) ? dshUnavailable(id) : missing(id)
+  }
   return {
+    async dshContext({ dsh }) {
+      const found = find(dsh)
+      if (!found.ok) return found
+      return { ok: true, account: await context(found.installed.id === MODEL_MANAGER_ID) }
+    },
+    async dshDescribe({ dsh, engine }) {
+      const found = find(dsh)
+      if (!found.ok) return found.error === 'DSH_NOT_INSTALLED' ? { ...found, error: 'INVALID_DSH' } : found
+      const { installed } = found
+      return { ok: true, id: installed.id, name: installed.manifest.name,
+        permissionMode: dshPinnedPermissionMode(installed.manifest),
+        refusal: installed.manifest.kind === 'viewer' ? `${dsh} is a viewer package, not an agent`
+          : incompatibleHarnessEngine(dsh, installed.manifest, engine) }
+    },
     async dshMaterialize(request) {
       const { dsh, workspace, engine, account } = request
-      const installed = installedDsh(dsh)
-      if (!installed) return missing(dsh)
+      const found = find(dsh)
+      if (!found.ok) return found
+      const { installed } = found
       try {
         return await prepare(workspace, { kind: 'materialize', ...request, package: installed }, async () => {
           try {
@@ -34,8 +66,9 @@ export function storeLaunchPort(installedDsh: typeof lookup = lookup,
     },
     async dshLaunch(request) {
       const { dsh, workspace, engine, key, account, forkOf } = request
-      const installed = installedDsh(dsh)
-      if (!installed) return missing(dsh)
+      const found = find(dsh)
+      if (!found.ok) return found
+      const { installed } = found
       try {
         return await prepare(workspace, { kind: 'launch', ...request, package: installed }, async () => {
           try {

@@ -106,7 +106,7 @@ describe('gateway detection on the live terminal discovery path', () => {
       for (const key of ['ADAPTER_DATA_DIR', 'CLAUDE_PROJECTS_DIR', 'CODEX_HOME', 'CURSOR_HOME']) vi.stubEnv(key, directory)
       vi.resetModules()
       const { registry } = await import('./registry.js')
-      registry.load()
+      await registry.load()
       for (const agent of probe.agents) {
         const observed = { engine: agent.engine, runtimes: agent.runtimes, primaryRuntimeKey: agent.primaryRuntimeKey,
           cwd: agent.cwd, processIdentity: agent.processIdentity }

@@ -26,7 +26,7 @@
  */
 import { sid } from './log.js'
 import { builtinSqlite } from './sqliteBuiltin.js'
-import { sqliteReadAll, type SqliteParam, type SqliteReadResult, type SqliteRow } from './sqliteRead.js'
+import { sqliteReadAll, type SqliteParam, type SqliteReadOptions, type SqliteReadResult, type SqliteRow } from './sqliteRead.js'
 
 /** A page's budget: the rows it keeps add up to at most this, unless its first row alone is larger. */
 export const PAGE_BYTES = 4 * 1024 * 1024
@@ -134,12 +134,12 @@ function compare(a: unknown, b: unknown): number {
 const orderOf = (page: StorePage): string[] => page.parts ? ['page_n', 'page_part', ...page.parts.order] : ['page_n']
 
 /** One page after `after` (the key of the last row read; null from the start). */
-export async function readStorePage(db: string, page: StorePage, after: SqliteParam[] | null): Promise<StorePageRead> {
+export async function readStorePage(db: string, page: StorePage, after: SqliteParam[] | null, options: Pick<SqliteReadOptions, 'fresh'> = {}): Promise<StorePageRead> {
   const { sql, fixed } = statement(page, after !== null)
   // A page's payload is at most the budget, or its one row up to the cap; past the cap, none. Each row adds at most
   // its names and numbers. The CLI's JSON escaping can multiply the whole.
   const maxBuffer = (Math.max(PAGE_BYTES, MAX_ROW_BYTES) + PAGE_ROWS * fixed) * (builtinSqlite() ? 1 : CLI_ESCAPE)
-  const read = await sqliteReadAll(db, sql, [...page.params, ...(after ?? [])], { maxBuffer })
+  const read = await sqliteReadAll(db, sql, [...page.params, ...(after ?? [])], { maxBuffer, ...options })
   if (!read.ok) return read
   // Ordered on a copy: the read threads hand one answer, the same array, to every caller that asked the same page.
   const order = orderOf(page)

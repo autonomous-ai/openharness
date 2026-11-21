@@ -33,6 +33,65 @@ afterEach(() => { vi.mocked(fs.lstatSync).mockReset(); vi.mocked(fs.readlinkSync
 const paths = () => new NativePaths(new NativeEvidenceBudget(), 'win32')
 
 describe('NativePaths on Windows', () => {
+  it('groups sibling snapshots while keeping drive ancestry and absent leaves', () => {
+    const one = paths(), two = paths()
+    one.resolveSync('C:\\Users\\u\\.claude\\settings.json')
+    two.resolveSync('C:\\Users\\u\\.claude\\missing.json', true)
+    const expected = [one.snapshot(), two.snapshot()]
+    vi.mocked(fs.lstatSync).mockClear()
+    expect(NativePaths.snapshots([one, two])).toEqual(expected)
+    expect(vi.mocked(fs.lstatSync).mock.calls.filter(args => args[0] === 'C:\\Users\\u')).toHaveLength(1)
+  })
+
+  it('forks the selected Windows route with a new budget and refuses reparse points', () => {
+    const file = 'C:\\Users\\u\\.claude\\settings.json', base = paths()
+    base.resolveSync(file)
+    const fork = base.fork(new NativeEvidenceBudget())
+    expect(fork.resolveSync(file)?.path).toBe(file)
+    expect(fork.snapshot()).toEqual(base.snapshot())
+    expect(() => fork.resolveSync('C:\\Users\\u\\dotfiles\\settings.json')).toThrow(/reparse point/)
+    expect(() => base.fork(new NativeEvidenceBudget(-1)).resolveSync(file)).toThrow(/deadline/)
+  })
+
+  it('reuses only provisional directories and still charges every step and reads every snapshot fact', () => {
+    const directories = new Map<string, fs.BigIntStats>(), file = 'C:\\Users\\u\\.claude\\settings.json'
+    const originalBudget = new NativeEvidenceBudget(), originalSteps = vi.spyOn(originalBudget, 'step')
+    const original = new NativePaths(originalBudget, 'win32')
+    original.resolveSync(file, false, directories); original.snapshot()
+    expect([...directories.keys()]).toEqual(['C:\\', 'C:\\Users', 'C:\\Users\\u', 'C:\\Users\\u\\.claude'])
+    vi.mocked(fs.lstatSync).mockClear()
+    const nextBudget = new NativeEvidenceBudget(), nextSteps = vi.spyOn(nextBudget, 'step')
+    const next = new NativePaths(nextBudget, 'win32')
+    next.resolveSync(file, false, directories); next.snapshot()
+    expect(nextSteps).toHaveBeenCalledTimes(originalSteps.mock.calls.length)
+    expect(vi.mocked(fs.lstatSync).mock.calls.map(args => args[0])).toEqual([file, 'C:\\', 'C:\\Users', 'C:\\Users\\u', 'C:\\Users\\u\\.claude', file])
+    const exhausted = new NativeEvidenceBudget()
+    for (let index = 0; index < 32768; index++) exhausted.step()
+    vi.mocked(fs.lstatSync).mockClear()
+    expect(() => new NativePaths(exhausted, 'win32').resolveSync(file, false, directories)).toThrow(/work limit/)
+    expect(() => new NativePaths(new NativeEvidenceBudget(-1), 'win32').resolveSync(file, false, directories)).toThrow(/deadline/)
+    expect(fs.lstatSync).not.toHaveBeenCalled()
+  })
+
+  it('does not put absent leaves or reparse points in provisional directory observations', () => {
+    const directories = new Map<string, fs.BigIntStats>()
+    const missing = 'C:\\Users\\u\\.claude\\missing.json', link = 'C:\\Users\\u\\dotfiles'
+    expect(paths().resolveSync(missing, true, directories)).toBeNull()
+    expect(() => paths().resolveSync(`${link}\\settings.json`, true, directories)).toThrow(/reparse point/)
+    expect(directories.has(missing)).toBe(false)
+    expect(directories.has(link)).toBe(false)
+  })
+
+  it('refuses a directory replaced after its provisional read at the fresh snapshot', () => {
+    const directories = new Map<string, fs.BigIntStats>(), file = 'C:\\Users\\u\\.claude\\settings.json'
+    paths().resolveSync(file, false, directories)
+    const observed = paths()
+    observed.resolveSync(file, false, directories)
+    const ancestor = tree.get('C:\\Users\\u')!
+    tree.set('C:\\Users\\u', { kind: 'link', ino: 42, target: 'D:\\other' })
+    try { expect(() => observed.snapshot()).toThrow(/changed/) } finally { tree.set('C:\\Users\\u', ancestor) }
+  })
+
   it('walks a drive path component by component from its root', () => {
     const walker = paths()
     expect(walker.resolveSync('C:\\Users\\u\\.claude\\settings.json')?.path).toBe('C:\\Users\\u\\.claude\\settings.json')

@@ -99,6 +99,13 @@ const IN_PROCESS_ONLY = 'services/inline.ts'
  * (docs/design/2026-10-08-other-engines-out-of-core.md). An `import()` of their code anywhere else is followed.
  */
 const LAZY_LOADERS = new Set(['engines/inProcess.ts'])
+/** Only this edge opens the terminal host implementation: configured startup or a Windows guest. */
+const PTY_HOST_DOOR = { importer: 'core/main.ts', target: 'core/ptyHost.ts' }
+const TMUX_BACKEND_DOOR = { importer: 'core/main.ts', target: 'lib/tmuxBackend.ts' }
+/** An already admitted core reuses its payload; only standalone packaged startup prepares a cohort. */
+const STORAGE_PREPARATION_DOOR = { importer: 'harnessd/sessionStorageOwner.ts', target: 'harnessd/executionArtifactProcess.ts' }
+/** Existing Desktop clients cannot replay on a Devices-only restart; reviewed removal conditions are in the audit. */
+const LEGACY_DEVICE_WINDOW_DOOR = { importer: 'lib/legacyDeviceWindowLoader.ts', target: 'lib/legacyDeviceWindowState.ts' }
 
 /**
  * Every file the core's process loads, one a line and in order: the walk from `core/main.ts` with every door shut.
@@ -136,7 +143,12 @@ function closureOf(entry: string): Map<string, number> {
 /** Whether the walk follows an import of `target` written in `importer`: every one but an `import()` of
  *  `IN_PROCESS_ONLY`, or one written in a lazy loader. */
 function followed(importer: string, target: string, dynamic: boolean): boolean {
-  return !dynamic || (target !== IN_PROCESS_ONLY && !LAZY_LOADERS.has(importer))
+  return !dynamic || (target !== IN_PROCESS_ONLY && !LAZY_LOADERS.has(importer)
+    && !(importer === PTY_HOST_DOOR.importer && target === PTY_HOST_DOOR.target)
+    && !(importer === TMUX_BACKEND_DOOR.importer && target === TMUX_BACKEND_DOOR.target)
+    && !(importer === STORAGE_PREPARATION_DOOR.importer && target === STORAGE_PREPARATION_DOOR.target)
+    && !(importer === LEGACY_DEVICE_WINDOW_DOOR.importer && target === LEGACY_DEVICE_WINDOW_DOOR.target)
+    && !(importer === 'core/conversationQueries.ts' && target === 'core/handoffDependencies.ts'))
 }
 
 /** Each file read and parsed once, however many walks pass through it. */
@@ -172,15 +184,22 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
  *  repair's closure may reach of the two engines. */
 const LAUNCH_CONTRACTS = new Set(['engines/claude/launch.ts', 'engines/codex/launch.ts'])
 const SESSION_STORES = new Set(['engines/claude/sessionStore.ts', 'engines/codex/sessionStore.ts'])
-const DECLARED = new Set(['engines/claude/hookContract.ts', 'engines/codex/hookContract.ts', 'engines/claude/discoveryContract.ts',
+const DECLARED = new Set(['engines/claude/hookAuthority.ts', 'engines/codex/hookAuthority.ts', 'engines/claude/discoveryContract.ts',
   'engines/codex/discoveryContract.ts', ...SESSION_STORES])
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
+  /^dsh\/(installed|manifest|compatibility|launch)\.ts$/,
+  // Optional settings interpretation and generated status-line source are setup's.
+  /^engines\/kit\/(attribution|statusLine)\.ts$/,
+  // Setup owns installation and engine probes; trusted executable/location selection remains core launch authority.
+  /^engines\/kit\/(downloadMarker|nativeInstall|installationScript|interactiveProbe|nativeVersion|nativeProbe|windowsInstall|setupProbe)\.ts$/,
+  /^engines\/hermesRecord\.ts$/, /^engines\/opencode\/version\.ts$/,
   /^engines\/(claude|codex)\/(screen|composer|activity|stoppedGoal|modelControl|modelPicker|questionControl|submission|nativeControl)\.ts$/,
-  // Claude Code's and Codex's hooks are declared data (hookContract.ts) that the kit applies in core: no hook code
-  // of theirs is the core's, and none runs in a worker either (docs/design/2026-10-08-engine-hooks.md).
-  /^engines\/(claude|codex)\/(hooks|installHooks)\.ts$/,
+  // Hook admission and Stop remain mandatory authority; installation parsing/templates belong to setup.
+  /^engines\/(claude|codex)\/(hooks|installHooks|hookContract)\.ts$/,
+  /^engines\/(nativeHooks|hookInstallations)\.ts$/,
+  /^engines\/kit\/(hookSettings|hookReview|nativeHookSettings|nativeHookYaml|nativePlugin|notifyHooks|yamlSetting|hermesRecordSettings|hookPreparationFiles)\.ts$/,
   // Claude Code's stop of a `claude --bg` job holding a session it resumes runs in its worker (#4146).
   /^engines\/(backgroundJobs|claude\/backgroundJob)\.ts$/,
   // Linking a Claude Code profile and what a reported profile id stands for are models' and usage's: the core checks a
@@ -314,6 +333,55 @@ const FACETS_FREE_OF_THEM: Array<[string, string]> = [
 ]
 
 describe('the daemon\'s shape', () => {
+  it('admits supervised children before any entry loads runtime, through only the audited generic closure', () => {
+    for (const entry of ['entry.ts', 'cli.ts', 'leanEntry.ts', 'leanCoreEntry.ts']) {
+      const source = ts.createSourceFile(entry, readFileSync(join(SRC, entry), 'utf8'), ts.ScriptTarget.Latest, true)
+      const first = source.statements[0]
+      expect(ts.isImportDeclaration(first) && !first.importClause && ts.isStringLiteral(first.moduleSpecifier)
+        ? first.moduleSpecifier.text : null, `${entry} must admit before imports with effects`).toBe('./harnessd/childEntry.js')
+    }
+    // Every session pays this entry-only closure, which the walk from core/main.ts does not see.
+    expect([...closureOf('harnessd/childEntry.ts').keys()].sort()).toEqual([
+      'harnessd/bundleFingerprint.ts', 'harnessd/childAdmission.ts', 'harnessd/childEntry.ts', 'harnessd/executedEntry.ts', 'harnessd/workerContract.ts',
+    ])
+  })
+  it('keeps optional settings interpretation outside the core launch path', () => {
+    const optional = ['engines/kit/attribution.ts', 'engines/kit/statusLine.ts', 'services/nativeLaunchSettings.ts']
+    for (const entry of ['core/main.ts', 'engines/launches.ts', 'lib/launchOverrides.ts', 'core/agents/create.ts']) {
+      const closure = closureOf(entry)
+      for (const file of optional) expect(closure.has(file), `${entry} loads ${file}`).toBe(false)
+    }
+    // Experiments still owns the settings copy; this extraction removes only the launch reader.
+    expect(closureOf('engines/launches.ts').has('lib/agentSettings.ts')).toBe(false)
+    expect(closureOf('services/engineSetup.ts').has('services/nativeLaunchSettings.ts')).toBe(true)
+  })
+
+  it('keeps installer scripts and interactive engine probes outside the core', () => {
+    const loaded = closureOf('core/main.ts')
+    for (const file of ['engines/kit/installationScript.ts', 'engines/kit/interactiveProbe.ts']) {
+      expect(loaded.has(file), file).toBe(false)
+    }
+    expect(closureOf('services/engineSetup.ts').has('engines/kit/installationScript.ts')).toBe(true)
+    expect(closureOf('shellLaunch.ts').has('engines/kit/installationScript.ts')).toBe(true)
+    expect(closureOf('lib/engineProbe.ts').has('engines/kit/interactiveProbe.ts')).toBe(true)
+  })
+
+  it('keeps Cloud provider normalization and presentation policy outside the core process', () => {
+    expect(closureOf('core/main.ts').has('lib/cloudAgents.ts')).toBe(false)
+    expect(closureOf('cloud/service.ts').has('lib/cloudAgents.ts')).toBe(true)
+  })
+
+  it('keeps inline hosting, history paging and shared-machine reply parsing outside the default core', () => {
+    const loaded = closureOf('core/main.ts')
+    for (const file of ['services/inlineHost.ts', 'lib/transcriptPages.ts', 'lib/sharedMachinesPort.ts', 'harnessd/servicePlan.ts']) {
+      expect(loaded.has(file), `${file} is not default-core implementation`).toBe(false)
+    }
+    // The contracts used by real supervised callers remain available without the inline implementation.
+    expect(loaded.has('core/serviceHost.ts')).toBe(true)
+    expect(loaded.has('core/transcripts/history.ts')).toBe(true)
+    expect(loaded.has('core/sharedMachinesQueries.ts')).toBe(true)
+  })
+
   it('a service reaches the core only through core/api.ts: never a core module, the registry, cli.ts or the socket', () => {
     const wrong = importsIn('services').filter(({ file, from, typeOnly }) => {
       if (SERVICE_MAY_IMPORT[`${file} → ${from}`]) return false
@@ -345,7 +413,7 @@ describe('the daemon\'s shape', () => {
     // A statement that waits itself: an `await` in it that is not inside a function of its own.
     const waits = (node: ts.Node): boolean => ts.isAwaitExpression(node) || (!ts.isFunctionLike(node) && ts.forEachChild(node, waits) === true)
     const statements = [...run.body!.statements]
-    const started = statements.findIndex((statement) => /\bserviceHost\.(serve|start)\(/.test(statement.getText(source)))
+    const started = statements.findIndex((statement) => /\bserviceHost!?\.(serve|start)\(/.test(statement.getText(source)))
     const hooks = statements.findIndex((statement) => statement.getText(source).includes('await startHookServer('))
     expect(started).toBeGreaterThan(0)
     expect(hooks).toBeGreaterThan(started)
@@ -373,19 +441,32 @@ describe('the daemon\'s shape', () => {
 
   it('screen, submission and native-control brokers and input authority do not load the engines\' native code', () => {
     for (const entry of ['core/input.ts', 'core/questions.ts', 'core/engines/screens.ts', 'core/engines/screenTransport.ts',
-      'core/deviceInput.ts', 'lib/sessionInput.ts', 'core/engines/submissions.ts', 'core/engines/submissionTransport.ts',
+      'lib/sessionInput.ts', 'core/engines/submissions.ts', 'core/engines/submissionTransport.ts',
       'core/engines/nativeControls.ts', 'core/turns/activity.ts']) {
       expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file)), entry).toEqual([])
     }
   })
 
-  it('hook installation, admission, transcript correction and turn closing load the engines\' declared hook contracts alone', () => {
-    const contracts = new Set(['engines/claude/hookContract.ts', 'engines/codex/hookContract.ts'])
-    for (const entry of ['engines/hooks.ts', 'engines/kit/hookSettings.ts', 'engines/kit/hookRules.ts', 'engines/kit/stopHook.ts',
+  it('hook admission, transcript correction and turn closing load mandatory authority alone', () => {
+    const contracts = new Set(['engines/claude/hookAuthority.ts', 'engines/codex/hookAuthority.ts'])
+    for (const entry of ['engines/hooks.ts', 'engines/kit/hookRules.ts', 'engines/kit/stopHook.ts',
       'core/turns/turnHooks.ts']) {
       expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file) && !contracts.has(file)), entry).toEqual([])
     }
     expect([...closureOf('engines/hooks.ts').keys()].filter(file => contracts.has(file)).sort()).toEqual([...contracts].sort())
+  })
+
+  it('core hook publication reaches no vendor parser or template while setup owns them', () => {
+    const optional = [ 'engines/hookInstallations.ts', 'engines/nativeHooks.ts',
+      'engines/kit/hookSettings.ts', 'engines/kit/nativeHookSettings.ts', 'engines/kit/nativeHookYaml.ts',
+      'engines/kit/nativePlugin.ts', 'engines/kit/notifyHooks.ts', 'engines/claude/hookContract.ts', 'engines/codex/hookContract.ts' ]
+    for (const entry of ['core/main.ts', 'core/engines/hooks.ts', 'engines/nativeHookSetup.ts']) {
+      expect([...closureOf(entry).keys()].filter(file => optional.includes(file)), entry).toEqual([])
+    }
+    const worker = closureOf('services/nativeSetupFiles.ts')
+    for (const file of optional.filter(file => !['engines/nativeHooks.ts', 'engines/hookInstallations.ts'].includes(file))) {
+      expect(worker.has(file), file).toBe(true)
+    }
   })
 
   it('discovery loads the engines\' declared contracts alone', () => {
@@ -412,7 +493,7 @@ describe('the daemon\'s shape', () => {
     }
     // The stores alone, and what Codex's shares with its launch and hook contracts (the rollout layout, the child rule).
     expect([...closureOf('engines/sessionStoreContracts.ts').keys()].filter(file => /^engines\/(claude|codex)\//.test(file)).sort())
-      .toEqual(['engines/claude/sessionStore.ts', 'engines/codex/hookContract.ts', 'engines/codex/launch.ts', 'engines/codex/sessionStore.ts'])
+      .toEqual(['engines/claude/sessionStore.ts', 'engines/codex/hookAuthority.ts', 'engines/codex/launch.ts', 'engines/codex/sessionStore.ts'])
     // The kit's mechanics know no engine at all.
     for (const entry of ['engines/kit/sessionRecords.ts', 'engines/kit/continuation.ts']) {
       expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file)), entry).toEqual([])
@@ -450,6 +531,14 @@ describe('the daemon\'s shape', () => {
     }
   })
 
+  it('saved API metadata and instruction writers stay outside the session process', () => {
+    for (const entry of ['core/main.ts', 'core/agents/create.ts', 'core/agents/fork.ts', 'core/agents/launch.ts', 'scm/launch.ts']) {
+      const closure = [...closureOf(entry).keys()]
+      for (const file of ['lib/apiConnectionMetadata.ts', 'lib/apiInstructions.ts', 'scm/instructionWrites.ts']) expect(closure, entry).not.toContain(file)
+    }
+    expect([...closureOf('scm/launch.ts').keys()]).not.toContain('dsh/adapters.ts')
+  })
+
   it('building a launch loads the engines\' declared launch contracts alone', () => {
     const contracts = new Set(['engines/claude/launch.ts', 'engines/codex/launch.ts'])
     // The builders: the argv and its script, a relaunch's overrides, a harness's flags. The homes they launch in
@@ -458,7 +547,7 @@ describe('the daemon\'s shape', () => {
       'engines/kit/launchStartup.ts', 'dsh/adapters.ts', 'engines/launchPrep.ts', 'engines/kit/folderTrust.ts',
       'engines/kit/resumeRepair.ts', 'dsh/runtime.ts', 'lib/apiInstructions.ts', 'engines/kit/attribution.ts', 'lib/agentAttribution.ts']) {
       expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file) && !contracts.has(file)
-        && !SESSION_STORES.has(file) && file !== 'engines/codex/hookContract.ts'), entry).toEqual([])
+        && !SESSION_STORES.has(file) && file !== 'engines/codex/hookAuthority.ts'), entry).toEqual([])
     }
     expect([...closureOf('lib/engineLaunch.ts').keys()].filter(file => contracts.has(file)).sort()).toEqual([...contracts].sort())
     // The launches themselves reach the registry too, whose hook admission reads the hook contracts and whose
@@ -467,6 +556,13 @@ describe('the daemon\'s shape', () => {
     for (const entry of ['core/agents/create.ts', 'core/agents/fork.ts', 'core/agents/restart.ts', 'core/agents/swap.ts',
       'core/agents/launch.ts', 'core/agents/launches.ts', 'lib/resumeAgentService.ts']) {
       expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file) && !declared.has(file)), entry).toEqual([])
+    }
+  })
+
+  it('core launch callers load no folder trust or inherited MCP implementation', () => {
+    for (const entry of ['core/main.ts', 'core/agents/create.ts', 'core/agents/launches.ts', 'core/agents/launch.ts', 'engines/folderTrustPreparation.ts']) {
+      expect([...closureOf(entry).keys()].filter(file => ['engines/launchPrep.ts', 'engines/kit/folderTrust.ts',
+        'engines/kit/inheritedMcp.ts', 'services/nativeSetupTrust.ts'].includes(file)), entry).toEqual([])
     }
   })
 
@@ -506,9 +602,9 @@ describe('the daemon\'s shape', () => {
     }
   })
 
-  it('native hook installation never loads optional code and reaches only engine declarations', () => {
-    for (const entry of ['core/engines/hooks.ts', 'engines/nativeHooks.ts', 'engines/kit/nativeHookSettings.ts',
-      'engines/kit/nativeHookYaml.ts', 'engines/kit/nativeHookHomes.ts', 'engines/kit/nativePlugin.ts']) {
+  it('native hook coordination reaches only engine declarations and bounded publication', () => {
+    for (const entry of ['core/engines/hooks.ts', 'engines/nativeHookSetup.ts', 'engines/kit/nativeHookPublication.ts',
+      'engines/kit/nativeHookHomes.ts', 'engines/kit/opencodeHookPreparation.ts']) {
       const imports = importsFor(entry, readFileSync(join(SRC, entry), 'utf8'))
       expect(imports.filter(one => one.dynamic || /inProcess\.js$/.test(one.from)), entry).toEqual([])
       expect([...closureOf(entry).keys()].filter(theirs), entry).toEqual([])
@@ -528,6 +624,11 @@ describe('the daemon\'s shape', () => {
     }
     const main = readFileSync(join(SRC, 'core/main.ts'), 'utf8')
     expect(main).not.toMatch(/\bengineNow\s*\(\s*['"]opencode['"]/)
+  })
+
+  it('service counter forwarding loads no product vocabulary in core', () => {
+    const forbidden = /(^|\/)(serviceMetrics|productUsageContract|productHealthContract)\.ts$/
+    expect([...closureOf('core/agentQueries.ts').keys()].filter(file => forbidden.test(file))).toEqual([])
   })
 
   it('the gateway reaches the core only through core/api.ts: never a core module, the registry, cli.ts or the socket', () => {
@@ -553,6 +654,88 @@ describe('the daemon\'s shape', () => {
       .map(({ file, from }) => `${file} imports ${from}`)
     expect(wrong, 'The master is the one process that must not fail: no feature code in it (src/harnessd/AGENTS.md).').toEqual([])
   })
+
+  it('the default core does not load the optional PTY host implementation; generic input and protocol contracts stay', () => {
+    const implementation = [
+      'core/agents/hostMove.ts',
+      'lib/guestRunner.ts',
+      'lib/hostMove/moveAgent.ts',
+      'lib/hostMove/mover.ts',
+      'lib/hostMove/quiet.ts',
+      'lib/hostMove/seed.ts',
+      'lib/ptyHost/client.ts',
+      'lib/ptyHost/drain.ts',
+      'lib/ptyHost/launch.ts',
+      'lib/ptyHost/protocol.ts',
+      'lib/ptyHost/stream.ts',
+      'lib/ptyHostBackend.ts',
+      'lib/terminalEnvironment.ts',
+      'lib/windows/guestHostBackend.ts',
+      'lib/windows/treeKill.ts',
+      // Both selected terminal backends use these snapshot mechanics.
+      'lib/cellAdvance.ts',
+      'lib/terminalKeys.ts',
+      'lib/historyRewrap.ts',
+      'lib/sgrCarry.ts',
+      'lib/tmuxStream.ts',
+    ]
+    const closure = closureOf('core/main.ts')
+    expect(implementation.filter((file) => closure.has(file)),
+      'Package 13: load the host implementation only when the configured backend or a Windows guest needs it.').toEqual([])
+    for (const contract of ['lib/hostMove/gate.ts', 'lib/ptyHost/instance.ts']) {
+      expect(closure.has(contract), `${contract} remains a shared input/protocol contract`).toBe(true)
+    }
+    const opened = closureOf(PTY_HOST_DOOR.target)
+    expect([...opened.keys()].filter((file) => !closure.has(file)).sort()).toEqual([PTY_HOST_DOOR.target, ...implementation].sort())
+    expect(importsFor(PTY_HOST_DOOR.importer, readFileSync(join(SRC, PTY_HOST_DOOR.importer), 'utf8'))
+      .filter(({ from }) => from === './ptyHost.js')).toEqual([{ from: './ptyHost.js', dynamic: true }])
+    expect(followed(PTY_HOST_DOOR.importer, PTY_HOST_DOOR.target, true)).toBe(false)
+    expect(followed(PTY_HOST_DOOR.importer, PTY_HOST_DOOR.target, false)).toBe(true)
+    expect(followed('core/agents/create.ts', PTY_HOST_DOOR.target, true)).toBe(true)
+    expect(followed(PTY_HOST_DOOR.importer, 'lib/ptyHost/launch.ts', true)).toBe(true)
+  }, WALK_TIMEOUT_MS)
+
+  it('loads tmux implementation only through its selected-backend edge', () => {
+    const cold = closureOf('core/main.ts'), opened = closureOf(TMUX_BACKEND_DOOR.target)
+    const implementation = ['lib/tmuxBackend.ts', 'lib/tmuxStream.ts', 'lib/historyRewrap.ts', 'lib/sgrCarry.ts', 'lib/cellAdvance.ts', 'lib/terminalKeys.ts']
+    expect(implementation.filter(file => cold.has(file))).toEqual([])
+    expect([...opened.keys()].filter(file => !cold.has(file)).sort()).toEqual(implementation.sort())
+    expect(importsFor(TMUX_BACKEND_DOOR.importer, readFileSync(join(SRC, TMUX_BACKEND_DOOR.importer), 'utf8'))
+      .filter(({ from }) => from === '../lib/tmuxBackend.js')).toEqual([{ from: '../lib/tmuxBackend.js', dynamic: true }])
+    expect(followed(TMUX_BACKEND_DOOR.importer, TMUX_BACKEND_DOOR.target, true)).toBe(false)
+    expect(followed(TMUX_BACKEND_DOOR.importer, TMUX_BACKEND_DOOR.target, false)).toBe(true)
+    expect(followed('core/agents/create.ts', TMUX_BACKEND_DOOR.target, true)).toBe(true)
+    expect(followed(TMUX_BACKEND_DOOR.importer, 'lib/tmuxStream.ts', true)).toBe(true)
+  }, WALK_TIMEOUT_MS)
+
+  it('loads artifact preparation only for the standalone storage startup edge', () => {
+    const cold = closureOf('core/main.ts'), opened = closureOf(STORAGE_PREPARATION_DOOR.target)
+    const implementation = ['harnessd/childCapture.ts', 'harnessd/executionArtifactChild.ts',
+      'harnessd/executionArtifactProcess.ts', 'harnessd/executionArtifacts.ts', 'harnessd/leanBundle.ts']
+    expect(implementation.filter(file => cold.has(file))).toEqual([])
+    expect([...opened.keys()].filter(file => !cold.has(file)).sort()).toEqual(implementation.sort())
+    expect(importsFor(STORAGE_PREPARATION_DOOR.importer, readFileSync(join(SRC, STORAGE_PREPARATION_DOOR.importer), 'utf8'))
+      .filter(({ from }) => from === './executionArtifactProcess.js')).toEqual([{ from: './executionArtifactProcess.js', dynamic: true }])
+    expect(followed(STORAGE_PREPARATION_DOOR.importer, STORAGE_PREPARATION_DOOR.target, true)).toBe(false)
+    expect(followed(STORAGE_PREPARATION_DOOR.importer, STORAGE_PREPARATION_DOOR.target, false)).toBe(true)
+    expect(followed('core/main.ts', STORAGE_PREPARATION_DOOR.target, true)).toBe(true)
+    expect(followed(STORAGE_PREPARATION_DOOR.importer, 'harnessd/executionArtifacts.ts', true)).toBe(true)
+  }, WALK_TIMEOUT_MS)
+
+  it('loads old Desktop desk interpretation only through its exact compatibility door', () => {
+    const importer = 'lib/legacyDeviceWindowLoader.ts', target = 'lib/legacyDeviceWindowState.ts'
+    const cold = closureOf('core/main.ts'), opened = closureOf(target)
+    const implementation = ['lib/deviceWindowState.ts', 'lib/notificationRead.ts', target]
+    expect(implementation.filter(file => cold.has(file))).toEqual([])
+    expect([...opened.keys()].filter(file => !cold.has(file)).sort()).toEqual(implementation.sort())
+    expect(importsFor(importer, readFileSync(join(SRC, importer), 'utf8'))
+      .filter(({ from }) => from === './legacyDeviceWindowState.js'))
+      .toEqual([{ from: './legacyDeviceWindowState.js', dynamic: true }])
+    expect(followed(importer, target, true)).toBe(false)
+    expect(followed(importer, target, false)).toBe(true)
+    expect(followed('core/main.ts', target, true)).toBe(true)
+    expect(followed(importer, 'lib/deviceWindowState.ts', true)).toBe(true)
+  }, WALK_TIMEOUT_MS)
 
   it('the core\'s process loads no edge file but those listed, and reports source size for review', () => {
     const closure = closureOf('core/main.ts')
@@ -591,6 +774,36 @@ describe('the daemon\'s shape', () => {
     expect(readFileSync(join(SRC, CORE_FILES), 'utf8').split('\n')).not.toContain('lib/computerName.ts')
   })
 
+  it('keeps optional startup policy and its filesystem discovery outside the core closure', () => {
+    const loaded = closureOf('core/main.ts')
+    for (const file of ['core/devicesWake.ts', 'core/gatewayWake.ts', 'core/modelsWake.ts', 'core/viewersWake.ts',
+      'services/componentStartup.ts', 'services/componentStartupFiles.ts', 'services/componentStartupProcess.ts']) expect(loaded.has(file), file).toBe(false)
+    for (const file of ['core/main.ts', 'core/experiments.ts', 'core/api.ts', 'lib/clientStreamContract.ts']) {
+      expect(readFileSync(join(SRC, file), 'utf8'), file).not.toMatch(/orchestrator\/\*\.json|harness-shares\.json|cloud\/harnesses\.json|agent-browser\.json|cu\.usbmodem|ttyACM|current-grid|viewers\.json/)
+    }
+  }, WALK_TIMEOUT_MS)
+
+  it('Change agent loads its publication transaction only through its exact conversation door', () => {
+    const handoff = ['core/handoffDependencies.ts', 'core/handoffPublication.ts', 'lib/handoffDiscovery.ts',
+      'lib/handoffFiles.ts', 'lib/handoffGit.ts', 'lib/handoffPublication.ts', 'lib/handoffValidation.ts', 'lib/subagentTranscript.ts']
+    const cold = closureOf('core/main.ts'), warm = new Map([...cold, ...closureOf('core/handoffDependencies.ts')])
+    expect([...warm.keys()].filter(file => !cold.has(file)).sort()).toEqual([...handoff].sort())
+    for (const file of handoff) {
+      expect(cold.has(file), `${file} must stay out while Change agent is unused`).toBe(false)
+      expect(warm.has(file), `${file} remains in the warmed authority boundary`).toBe(true)
+    }
+    expect(importsFor('core/conversationQueries.ts', readFileSync(join(SRC, 'core/conversationQueries.ts'), 'utf8'))
+      .filter(({ dynamic }) => dynamic)).toEqual([{ from: './handoffDependencies.js', dynamic: true }])
+    expect(followed('core/conversationQueries.ts', 'core/handoffDependencies.ts', true)).toBe(false)
+    expect(followed('core/main.ts', 'core/handoffDependencies.ts', true)).toBe(true)
+    expect(followed('core/conversationQueries.ts', 'core/handoffDependencies.ts', false)).toBe(true)
+    expect(followed('core/conversationQueries.ts', 'lib/handoffPublication.ts', true)).toBe(true)
+    console.info('[architecture] handoff loading (informational):', JSON.stringify({
+      coldFiles: cold.size, coldLines: [...cold.values()].reduce((sum, count) => sum + count, 0),
+      warmFiles: warm.size, warmLines: [...warm.values()].reduce((sum, count) => sum + count, 0),
+    }))
+  }, WALK_TIMEOUT_MS)
+
   // The core meets the outside least (cli/AGENTS.md, Protect the core, rule 4). Its one call to another host was the
   // sign-in's renewal, which the gateway's process makes now (the core audit of 2026-11-12, decision 4). Whatever can
   // open a connection, a network module imported for its code (not its types) or a `fetch`, is in one of these files,
@@ -600,7 +813,6 @@ describe('the daemon\'s shape', () => {
       'core/main.ts': 'listens: the daemon\'s local HTTP server, on loopback and its private socket',
       'hookServer.ts': 'listens: the engines\' hooks, on this computer',
       'lib/localSocket.ts': 'the daemon\'s own Unix socket, to ask whether a daemon serves here already',
-      'lib/loopbackGet.ts': 'a GET to this computer\'s loopback alone',
       'lib/ptyHost/client.ts': 'the Windows terminal host\'s pipe on this computer',
       'lib/ptyHost/launch.ts': 'the Windows terminal host\'s pipe on this computer',
       'lib/windows/dataFolderClaim.ts': 'a named pipe on this computer that claims the data folder',
@@ -678,7 +890,8 @@ describe('the daemon\'s shape', () => {
       visit(source)
       return opens
     }
-    const loaded = new Set(closureOf('core/main.ts').keys())
+    // Opening a terminal backend does not exempt its pipe and launcher from the local-only network rule.
+    const loaded = new Set([...closureOf('core/main.ts').keys(), ...closureOf(PTY_HOST_DOOR.target).keys(), ...closureOf(TMUX_BACKEND_DOOR.target).keys()])
     const opening = [...loaded].filter((file) => opensIn(readFileSync(join(SRC, file), 'utf8'))).sort()
     expect(opening.filter((file) => !OPENS[file]), 'A file the core\'s process loads can open a connection: the core calls no other host. Make the call in the component that faces it (the gateway, for the backend), or, for one on this computer only, list it here and say what it does.').toEqual([])
     expect(Object.keys(OPENS).filter((file) => !opening.includes(file)), 'Opens no connection, or is no longer loaded: remove it from the list.').toEqual([])
@@ -715,6 +928,8 @@ describe('the daemon\'s shape', () => {
     expect(closureOf('entry.ts').has('cli.ts')).toBe(true)
     expect(closureOf('core/main.ts').has('core/api.ts')).toBe(true)
     expect(closureOf('core/main.ts').has('cli.ts')).toBe(false)
+    // All optional engine implementations are now behind the dated inline compatibility composition.
+    expect(closureOf('core/main.ts').has('engines/inProcess.ts')).toBe(false)
     // The core loads the services' own code only when they run in its process: imported dynamically, and
     // only from its entry, the import is not followed. Any other import of it is.
     const main = importsFor('core/main.ts', readFileSync(join(SRC, 'core', 'main.ts'), 'utf8')).filter(({ from }) => from === '../services/inline.js')

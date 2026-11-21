@@ -1,5 +1,5 @@
 import type { InlineRuntimeContext, InlineRuntimeReader } from '../facets/inlineRuntime.js'
-import type { RuntimeModelOption } from '../facets/runtime.js'
+import type { RuntimeCatalogModel, RuntimeModelOption, RuntimeSession } from '../facets/runtime.js'
 import { addOption, encodeRuntimeProfile, RUNTIME_EFFORTS } from '../kit/runtime.js'
 import { confirmObserved } from '../kit/runtimeReader.js'
 import { env } from '../../config/env.js'
@@ -43,9 +43,14 @@ class ProfileReader {
     }
   }
 
-  /** Its `/models` and `/effort` pickers are driven (lib/runtimeControl.ts `setOpencode`), session or none. */
+  /** Its own model-control facet drives `/models` and `/effort`, session or none. */
   supportsControl(): boolean {
     return true
+  }
+
+  async modelCatalog(session: RuntimeSession): Promise<RuntimeCatalogModel[]> {
+    return (await this.catalog(session.cwd)).map(entry => ({ slug: entry.id, displayName: entry.name ?? entry.id,
+      listed: true, defaultEffort: 'auto', efforts: entry.efforts ?? [] }))
   }
 
   async models(context: InlineRuntimeContext): Promise<RuntimeModelOption[]> {
@@ -92,7 +97,7 @@ class ProfileReader {
     const where = cwd ? `?location%5Bdirectory%5D=${encodeURIComponent(cwd)}` : ''
     try {
       entries = opencode.parseOpencodeApiModels(await run(['api', 'GET', `/api/model${where}`]))
-    } catch { /* an OpenCode before 2 has no `api`: its ids below */ }
+    } catch { /* An older OpenCode has only the ids returned below. */ }
     if (!entries.length) {
       try {
         entries = opencode.parseOpencodeModelsOutput(await run(['models']))

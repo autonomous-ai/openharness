@@ -2,9 +2,9 @@
  * never an empty configuration, and a completed write includes its directory. */
 import { randomUUID } from 'node:crypto'
 import { accessSync, closeSync, constants, fchmodSync, fstatSync, fsync, linkSync, lstatSync, mkdirSync, openSync, readSync, statSync, unlinkSync, writeFileSync, type BigIntStats } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
-import { NativeEvidenceBudget } from './nativeEvidence.js'
-import { NativePaths, verifyNativePathFacts } from './nativePaths.js'
+import { basename, dirname, isAbsolute, join } from 'node:path'
+import { NativeEvidenceBudget, nativeUnavailable } from './nativeEvidence.js'
+import { NativePaths, verifyNativePathFacts, withoutDevice, type NativePathFact } from './nativePaths.js'
 import { directorySyncSupported } from '../../lib/secureState.js'
 import { isRoot, renameReplacing, unchangedFlushFlags } from './windowsFiles.js'
 import { HookPreparationHeld } from './hookHeld.js'
@@ -25,6 +25,9 @@ export interface HookPreparationProof {
 }
 const MAX_BYTES = 1024 * 1024
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT'
+type HookFileVerifier = (directories?: Map<string, BigIntStats>) => void
+const hookFileFacts = new WeakMap<HookFileVerifier, { facts: readonly NativePathFact[]; target: string; stamp: string | null }>()
+const hookRouteFacts = new WeakMap<() => void, { facts: readonly NativePathFact[]; keys: readonly string[] }>()
 
 /**
  * The directories each attempt has flushed. On macOS every fsync is F_FULLFSYNC, a full drive flush (25-35 ms on an
@@ -83,24 +86,24 @@ async function syncDirectoryChain(path: string, attempt: HookPreparationAttempt)
 
 /** Create only absent directories. The final leaf-to-root flush confirms every name. Existing
  * aliases are resolved before use; no directory is chmodded or replaced. */
-function ensureDirectory(path: string, attempt: HookPreparationAttempt): void {
+export function prepareHookDirectory(path: string, attempt: HookPreparationAttempt, mode?: number): void {
   attempt.check()
   try {
     if (!lstatSync(path).isDirectory()) throw new HookPreparationHeld('the configuration directory changed type')
   } catch (error) {
     if (!missing(error)) throw error
-    ensureDirectory(dirname(path), attempt)
+    prepareHookDirectory(dirname(path), attempt, mode)
     attempt.verify(); attempt.check()
-    try { mkdirSync(path) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+    try { mkdirSync(path, { mode }) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
     directoryChanged(attempt, dirname(path))
   }
 }
 
-/** Resolve a missing descendant through a bounded, verified existing ancestor. */
-function directoryPath(path: string): string {
+/** A surrounding proof can reuse its provisional walk; its final snapshot still checks every fact afresh. */
+function directoryPath(path: string, paths?: NativePaths): string {
   const suffix: string[] = []
   for (let depth = 0; depth < 256; depth++) {
-    const route = new NativePaths(new NativeEvidenceBudget()).resolveSync(path, true)
+    const route = (paths ?? new NativePaths(new NativeEvidenceBudget())).resolveSync(path, true)
     if (route) {
       if (!route.info.isDirectory()) throw new HookPreparationHeld('the configuration parent is not a directory')
       return join(route.path, ...suffix)
@@ -111,13 +114,39 @@ function directoryPath(path: string): string {
   throw new HookPreparationHeld('the configuration directory exceeds its path limit')
 }
 
+/** The fresh snapshot has verified its own walk. Compare it with the original route too:
+ * an ancestor can be replaced between an independent old-fact pass and that walk. */
+function verifyRetainedPathSnapshot(expected: readonly NativePathFact[], fresh: readonly NativePathFact[]): void {
+  const budget = new NativeEvidenceBudget()
+  if (!expected.length || expected.length > 256) return nativeUnavailable('the retained route exceeds its limit')
+  // Bound the map by the retained set; a Windows snapshot also includes its writable leaf.
+  const current = new Map(expected.map(fact => [fact.path, undefined as NativePathFact | undefined]))
+  for (const fact of fresh) {
+    budget.step()
+    if (current.has(fact.path)) current.set(fact.path, fact)
+  }
+  for (const fact of expected) {
+    budget.step()
+    if (!isAbsolute(fact.path) || fact.path.includes('\0') || Buffer.byteLength(fact.path) > 4096) {
+      return nativeUnavailable('the retained route is invalid')
+    }
+    const now = current.get(fact.path)
+    if (!now || withoutDevice(now.identity) !== withoutDevice(fact.identity)
+      || (fact.alias && (!now.alias || withoutDevice(now.alias.version) !== withoutDevice(fact.alias.version)
+        || now.alias.target !== fact.alias.target))) {
+      return nativeUnavailable('the retained route changed during preparation')
+    }
+  }
+}
+
 /** The result is local to one preparation attempt, not a settings cache.
  * A changed alias, owner, file or contents invalidates the whole observation. */
 export function inspectHookFile(file: string, defaultMode = 0o666) {
   const paths = new NativePaths(new NativeEvidenceBudget())
   const located = paths.resolveSync(file, true)
   const facts = paths.snapshot()
-  const directory = directoryPath(dirname(file))
+  // Reuse the captured parent components; the final verifier still reads the route afresh.
+  const directory = directoryPath(dirname(file), paths)
   const target = located?.path ?? join(directory, basename(file))
   let before: string | null = null, content: string | null = null, mode = defaultMode
   if (located) {
@@ -141,19 +170,29 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
       content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)
     } finally { closeSync(fd) }
   }
-  const verify = () => {
-    verifyNativePathFacts(facts.filter(fact => fact.identity !== null))
-    // Another destination in the same preparation may have created a shared
-    // absent directory. New ordinary directories are fine; a newly inserted
-    // alias is not authority to write at a different location.
-    const fresh = new NativePaths(new NativeEvidenceBudget())
-    fresh.resolveSync(file, true)
-    const knownAliases = new Set(facts.filter(fact => fact.alias).map(fact => fact.path))
-    if (fresh.snapshot().some(fact => fact.alias && !knownAliases.has(fact.path))) {
-      throw new HookPreparationHeld('the settings route gained an unconfirmed alias')
+  const retained = facts.filter(fact => fact.identity !== null)
+  const complete = located !== null && retained.length === facts.length
+  const knownAliases = new Set(facts.filter(fact => fact.alias).map(fact => fact.path))
+  const verify = (directories?: Map<string, BigIntStats>) => {
+    if (!directories && complete) {
+      // A complete route needs no reconstruction. Keep both fresh passes: a child
+      // read may reveal a replacement of an ancestor the first pass already saw.
+      const budget = new NativeEvidenceBudget()
+      verifyNativePathFacts(retained, budget)
+      verifyNativePathFacts(retained, budget)
+    } else {
+      // Another destination may have created a shared absent directory. New
+      // ordinary directories are fine; a new alias grants no publication authority.
+      const fresh = new NativePaths(new NativeEvidenceBudget())
+      fresh.resolveSync(file, true, directories)
+      const snapshot = fresh.snapshot()
+      verifyRetainedPathSnapshot(retained, snapshot)
+      if (snapshot.some(fact => fact.alias && !knownAliases.has(fact.path))) {
+        throw new HookPreparationHeld('the settings route gained an unconfirmed alias')
+      }
     }
     let now: BigIntStats | null
-    try { now = lstatSync(target, { bigint: true }) } catch (error) { if (!missing(error)) throw error; now = null }
+    try { now = lstatSync(target, { bigint: true, throwIfNoEntry: false }) ?? null } catch (error) { if (!missing(error)) throw error; now = null }
     if ((now ? version(now) : null) !== before) throw new HookPreparationHeld('the settings file changed before publication')
   }
   const prepare = (next: string | null) => {
@@ -172,8 +211,13 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
     throw new HookPreparationHeld('the configuration parent exceeds its path limit')
   }
   verify()
+  // The walk stops at its first absent component. A null target therefore has
+  // existing parents; keep that fact so a new file or alias invalidates the observation.
+  const fixedRoute = complete || (located === null && retained.length === facts.length - 1
+    && facts.at(-1)?.path === target && facts.at(-1)?.identity === null)
+  if (fixedRoute) hookFileFacts.set(verify, { facts, target, stamp: before })
   return {
-    content, directory, stamp: before,
+    content, directory, mode, stamp: before,
     verify, prepare,
     async replace(next: string, attempt: HookPreparationAttempt, exclusive = false): Promise<HookFilePublication> {
       attempt.verify(); prepare(next)
@@ -204,7 +248,7 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
       // Resolve an existing ancestor before creating descendants; this preserves
       // relocated config homes without following a replaced alias at publish.
       const parent = directoryPath(dirname(target))
-      ensureDirectory(parent, attempt)
+      prepareHookDirectory(parent, attempt)
       const actual = join(parent, target.slice(dirname(target).length + 1))
       // Creation invalidates absent-ancestor facts; capture the new route and
       // still require the exact old leaf (or its observed absence).
@@ -281,27 +325,125 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
   }
 }
 
+/** Capture only the verifiers, never a successful check. Every invocation reads the filesystem afresh. */
+export function hookFileVerifier(files: readonly { observed: ReturnType<typeof inspectHookFile> }[]): () => void {
+  return observationVerifier(files.map(file => file.observed.verify)) ?? (() => {
+    const directories = new Map<string, BigIntStats>()
+    for (const file of files) file.observed.verify(directories)
+  })
+}
+
+function observationVerifier(checks: readonly HookFileVerifier[], verifyRoutes?: () => void): (() => void) | undefined {
+  if (!checks.length || checks.length > 32) return undefined
+  const observed = checks.map(check => hookFileFacts.get(check))
+  if (observed.some(file => !file)) return undefined
+  if (!verifyRoutes && checks.length === 1 && observed[0]!.stamp !== null) return checks[0]
+  const union = new Map<string, NativePathFact>()
+  const versions = new Map<string, string | null>()
+  for (const file of observed) {
+    if (versions.has(file!.target) && versions.get(file!.target) !== file!.stamp) return undefined
+    versions.set(file!.target, file!.stamp)
+    for (const fact of file!.facts) {
+      const previous = union.get(fact.path)
+      if (previous && (previous.identity !== fact.identity || previous.alias?.target !== fact.alias?.target
+        || previous.alias?.version !== fact.alias?.version)) return undefined
+      if (!union.has(fact.path) && union.size >= 256) return undefined
+      union.set(fact.path, fact)
+    }
+  }
+  const route = verifyRoutes ? hookRouteFacts.get(verifyRoutes) : undefined
+  if (verifyRoutes) {
+    // File versions are stronger than writable-leaf identities, but only on
+    // the originally reserved routes. New observations cannot adopt a new route.
+    if (!route || route.keys.some(key => !versions.has(key)) || route.facts.some(fact => {
+      const current = union.get(fact.path)
+      return !current || withoutDevice(current.identity) !== withoutDevice(fact.identity)
+        || current.alias?.target !== fact.alias?.target
+        || withoutDevice(current.alias?.version) !== withoutDevice(fact.alias?.version)
+    })) return undefined
+  }
+  // NativePaths captures ancestors before descendants; Map updates preserve their first position.
+  const facts = [...union.values()], reverse = [...facts].reverse()
+  const checkFile = (path: string, info: BigIntStats | null) => {
+    const expected = versions.get(path)
+    if (expected !== undefined && (info ? version(info) : null) !== expected) {
+      throw new HookPreparationHeld('the settings file changed before publication')
+    }
+  }
+  // Complete groups keep their original fence. Missing-leaf checks add no
+  // per-fact branch or callback to this already measured path.
+  if (!route && observed.every(file => file!.stamp !== null)) return () => {
+    const budget = new NativeEvidenceBudget(), devices = new Map<string, bigint | null>()
+    verifyNativePathFacts(facts, budget, devices)
+    verifyNativePathFacts(reverse, budget, devices, checkFile)
+    budget.step()
+  }
+  const changedFile = (path: string, info: BigIntStats) => {
+    if (route?.keys.includes(path) && info.isSymbolicLink()) {
+      throw new HookPreparationHeld('the reserved destination route changed')
+    }
+    if (versions.get(path) !== null) return
+    if (info.isSymbolicLink()) throw new HookPreparationHeld('the settings route gained an unconfirmed alias')
+    throw new HookPreparationHeld('the settings file changed before publication')
+  }
+  // Recheck every file version and route fact. Ordinary ancestors follow their
+  // descendants in this pass; shared aliases keep the existing union order.
+  return () => {
+    const budget = new NativeEvidenceBudget(), devices = new Map<string, bigint | null>()
+    verifyNativePathFacts(facts, budget, devices, undefined, changedFile)
+    verifyNativePathFacts(reverse, budget, devices, checkFile, changedFile)
+    budget.step()
+  }
+}
+
+/** Share a fresh fence only when every reserved route is covered by known file observations. */
+function preparationVerifier(checks: readonly HookFileVerifier[], verifyRoutes: () => void): () => void {
+  const combined = observationVerifier(checks, verifyRoutes)
+  if (combined) return combined
+  const verifyFiles = observationVerifier(checks)
+  return () => {
+    verifyRoutes()
+    if (verifyFiles) verifyFiles()
+    else {
+      const directories = new Map<string, BigIntStats>()
+      for (const check of checks) check(directories)
+    }
+  }
+}
 
 export interface HookPreparationAttempt {
   /** The original caller and deadline still authorize another effect. */
   check(): void
   /** All unfinished destinations and already-published outputs still match. */
   verify(): void
-  observe(file: string, verify: () => void): void
+  observe(file: string, verify: (directories?: Map<string, BigIntStats>) => void): void
   /** Own the descriptor until the actual syscall settles, even after a reply timeout. */
   flush(fd: number): Promise<void>
 }
 export interface HookPreparationOptions {
+  /** Setup renders against captured inputs; only the core's native publisher has real file effects. */
+  files?: HookPreparationFiles
   /** Join only the same port, executable, command and complete destination set. */
   identity?: string
   current?(): boolean
+  /** Retained native dependencies: checked at effect/acknowledgement fences, not while flushing an owned descriptor. */
+  verify?(): void
   timeoutMs?: number
   /** Immutable effect claims must let a competing publisher finish. */
   retainConflicts?: boolean
+  /** A native launch may wait once for revoked work to actually release its destinations. */
+  settleConflicts?: boolean
   /** Evidence retained by this launch; never a global success cache. */
   confirmed?(proof: HookPreparationProof): void
 }
-interface PendingPreparation { identity?: string; keys: string[]; revoke(): void; reply: Promise<unknown>; waiters: number; proof?: HookPreparationProof }
+export interface HookPreparationFiles {
+  report(stream: 'log' | 'warn' | 'error', ...args: unknown[]): void
+  inspect: typeof inspectHookFile
+  run: typeof runHookPreparation
+  directory(path: string, mode: number | undefined, attempt: HookPreparationAttempt): void
+  write(file: string, text: string, mode: number, attempt: HookPreparationAttempt): Promise<void>
+}
+interface PendingPreparation { identity?: string; keys: string[]; revoke(): void; reply: Promise<unknown>; settled: Promise<void>; waiters: number; proof?: HookPreparationProof }
 function preparationProof(files: readonly string[], verifyRoutes: () => void): HookPreparationProof {
   verifyRoutes()
   const confirmed = files.map(file => {
@@ -309,8 +451,12 @@ function preparationProof(files: readonly string[], verifyRoutes: () => void): H
     const observed = inspectHookFile(file)
     return { file, target: located?.path ?? join(directoryPath(dirname(file)), basename(file)), stamp: observed.stamp, facts: paths.snapshot(), verify: observed.verify }
   })
+  const verifyFiles = preparationVerifier(confirmed.map(file => file.verify), verifyRoutes)
   const proof = { files: confirmed.map(({ verify: _verify, ...file }) => file), current: () => {
-    try { verifyRoutes(); for (const file of confirmed) file.verify(); return true } catch { return false }
+    try {
+      verifyFiles()
+      return true
+    } catch { return false }
   } }
   if (!proof.current()) throw new HookPreparationHeld('the prepared settings changed before acknowledgement')
   return proof
@@ -318,15 +464,19 @@ function preparationProof(files: readonly string[], verifyRoutes: () => void): H
 async function joinPreparation<T>(pending: PendingPreparation, options: HookPreparationOptions, verifyRoutes: () => void, files: readonly string[]): Promise<T> {
   const deadline = performance.now() + (options.timeoutMs ?? 5_000)
   verifyRoutes()
+  options.verify?.()
   if (options.current?.() === false) throw new HookPreparationHeld('the joining owner changed')
   if (pending.waiters >= 16) throw new HookPreparationHeld('the preparation waiters are occupied')
   pending.waiters++
+  // The callback still occupies this slot after a joining caller’s shorter deadline.
+  const reply = pending.reply.finally(() => { pending.waiters-- })
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    const result = await Promise.race([pending.reply, new Promise<never>((_, reject) => {
+    const result = await Promise.race([reply, new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new HookPreparationHeld('the joining preparation exceeded its deadline')), options.timeoutMs ?? 5_000)
     })])
     verifyRoutes()
+    options.verify?.()
     if (pending.proof && !pending.proof.current()) throw new HookPreparationHeld('the prepared settings changed before acknowledgement')
     // Joining shares the publication, not the caller's aliases. Retain this
     // caller's route all the way through the final pane guard.
@@ -335,10 +485,34 @@ async function joinPreparation<T>(pending: PendingPreparation, options: HookPrep
       throw new HookPreparationHeld('the prepared settings changed while their proof was captured')
     }
     if (performance.now() >= deadline) throw new HookPreparationHeld('the joining preparation exceeded its deadline')
+    options.verify?.()
     if (options.current?.() === false) throw new HookPreparationHeld('the joining owner changed')
     options.confirmed?.(proof)
     return result as T
-  } finally { clearTimeout(timer); pending.waiters-- }
+  } finally { clearTimeout(timer) }
+}
+/** Waiting grants no publication proof: the caller must acquire and capture its own reservation afterward. */
+async function settlePreparations(conflicts: PendingPreparation[], options: HookPreparationOptions, verifyRoutes: () => void, deadline: number): Promise<void> {
+  verifyRoutes()
+  options.verify?.()
+  if (options.current?.() === false) throw new HookPreparationHeld('the waiting owner changed')
+  if (performance.now() >= deadline) throw new HookPreparationHeld('the preparation exceeded its deadline')
+  if (conflicts.some(pending => pending.waiters >= 16)) throw new HookPreparationHeld('the preparation waiters are occupied')
+  for (const pending of conflicts) { pending.waiters++; pending.revoke() }
+  // A timeout ends the reply, not the callbacks retained by hung actual I/O.
+  const settled = Promise.all(conflicts.map(pending => pending.settled)).then(() => {
+    for (const pending of conflicts) pending.waiters--
+  })
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([settled, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new HookPreparationHeld('the preparation exceeded its deadline')), deadline - performance.now())
+    })])
+    verifyRoutes()
+    options.verify?.()
+    if (options.current?.() === false) throw new HookPreparationHeld('the waiting owner changed')
+    if (performance.now() >= deadline) throw new HookPreparationHeld('the preparation exceeded its deadline')
+  } finally { clearTimeout(timer) }
 }
 const pendingPreparations = new Set<PendingPreparation>()
 const MAX_PREPARATIONS = 16
@@ -363,37 +537,92 @@ export function hookPreparationRoutes(files: readonly string[]): { verify(): voi
     const paths = new NativePaths(new NativeEvidenceBudget())
     const located = paths.resolveSync(file, true), facts = paths.snapshot()
     const key = located?.path ?? join(directoryPath(dirname(file)), basename(file))
-    return { file, key, facts: facts.filter(fact => fact.identity !== null && fact.path !== located?.path),
+    return { file, key, complete: facts.length > 0 && facts.length <= 256 && facts.every(fact => fact.identity !== null || fact.path === key)
+      && (!located || key === join(directoryPath(dirname(file), paths), basename(file))),
+      facts: facts.filter(fact => fact.identity !== null && fact.path !== located?.path),
       aliases: new Set(facts.filter(fact => fact.alias).map(fact => fact.path)) }
   })
+  const keys = [...new Set(reservations.map(reservation => reservation.key))].sort()
+  // Complete routes need fresh observations, not another path reconstruction.
+  // Conflicting captures or a larger union keep the original per-route proof.
+  const union = new Map<string, NativePathFact>()
+  let complete = reservations.every(reservation => reservation.complete)
+  for (const reservation of reservations) for (const fact of reservation.facts) {
+    const previous = union.get(fact.path)
+    if (previous && (withoutDevice(previous.identity) !== withoutDevice(fact.identity)
+      || previous.alias?.target !== fact.alias?.target
+      || withoutDevice(previous.alias?.version) !== withoutDevice(fact.alias?.version))) complete = false
+    if (union.size < 256 || union.has(fact.path)) union.set(fact.path, fact)
+    else complete = false
+  }
+  const retained = complete && union.size ? [...union.values()] : undefined
   const verifyRoutes = () => {
-    for (const { file, key, facts, aliases } of reservations) {
-      if (facts.length) verifyNativePathFacts(facts)
-      const fresh = new NativePaths(new NativeEvidenceBudget()), located = fresh.resolveSync(file, true)
-      const target = located?.path ?? join(directoryPath(dirname(file)), basename(file))
-      if (target !== key || fresh.snapshot().some(fact => fact.alias && !aliases.has(fact.path))) {
+    if (retained) {
+      const budget = new NativeEvidenceBudget(), devices = new Map<string, bigint | null>()
+      const leaves = () => keys.map(key => {
+        budget.step()
+        let info: BigIntStats | undefined
+        try { info = lstatSync(key, { bigint: true, throwIfNoEntry: false }) } catch (error) {
+          if (missing(error)) return null
+          return nativeUnavailable('a native location became unreadable')
+        }
+        if (!info) return null
+        if (info.isSymbolicLink()) throw new HookPreparationHeld('the reserved destination route changed')
+        return fileIdentity(info)
+      })
+      // A later leaf can replace an ancestor already checked. Keep both passes,
+      // and keep each writable leaf stable within this invocation as snapshot did.
+      verifyNativePathFacts(retained, budget, devices)
+      const before = leaves()
+      verifyNativePathFacts(retained, budget, devices)
+      const after = leaves()
+      if (before.some((identity, index) => identity !== after[index])) {
+        return nativeUnavailable('a native path or alias changed during inspection')
+      }
+      budget.step()
+      return
+    }
+    const directories = new Map<string, BigIntStats>()
+    const current = reservations.map(reservation => {
+      const fresh = new NativePaths(new NativeEvidenceBudget()), located = fresh.resolveSync(reservation.file, true, directories)
+      const target = located?.path ?? join(directoryPath(dirname(reservation.file), fresh), basename(reservation.file))
+      return { fresh, target }
+    })
+    const snapshots = NativePaths.snapshots(current.map(route => route.fresh))
+    for (const [index, { target }] of current.entries()) {
+      const { key, facts, aliases } = reservations[index]
+      const snapshot = snapshots[index]
+      if (facts.length) verifyRetainedPathSnapshot(facts, snapshot)
+      if (target !== key || snapshot.some(fact => fact.alias && !aliases.has(fact.path))) {
         throw new HookPreparationHeld('the reserved destination route changed')
       }
     }
   }
-  const keys = [...new Set(reservations.map(reservation => reservation.key))].sort()
-  return { verify: verifyRoutes, keys, facts: [...new Map(reservations.flatMap(item => item.facts).map(fact => [fact.path, fact])).values()] }
+  if (retained) hookRouteFacts.set(verifyRoutes, { facts: retained, keys })
+  return { verify: verifyRoutes, keys: [...keys], facts: [...new Map(reservations.flatMap(item => item.facts).map(fact => [fact.path, fact])).values()] }
 }
 
 /** Disk waits remain in eager core code. Reservations survive a timeout until
  * actual I/O settles: a late fsync must never use a closed, recycled descriptor. */
 export async function runHookPreparation<T>(files: readonly string[], work: (attempt: HookPreparationAttempt) => Promise<T>, options: HookPreparationOptions = {}): Promise<T> {
+  const deadline = performance.now() + (options.timeoutMs ?? 5_000)
   const { verify: verifyRoutes, keys } = hookPreparationRoutes(files)
   const conflicts = [...pendingPreparations].filter(pending => pending.keys.some(key => keys.includes(key)))
   if (conflicts.length) {
     const same = conflicts.length === 1 && options.identity !== undefined && conflicts[0].identity === options.identity
       && JSON.stringify(conflicts[0].keys) === JSON.stringify(keys)
     if (same) return await joinPreparation<T>(conflicts[0], options, verifyRoutes, files)
-    if (!options.retainConflicts) for (const pending of conflicts) pending.revoke()
-    throw new HookPreparationHeld('another preparation still owns these destinations')
+    if (options.settleConflicts && !options.retainConflicts) {
+      await settlePreparations(conflicts, options, verifyRoutes, deadline)
+      if ([...pendingPreparations].some(pending => pending.keys.some(key => keys.includes(key)))) {
+        throw new HookPreparationHeld('another preparation still owns these destinations')
+      }
+    } else {
+      if (!options.retainConflicts) for (const pending of conflicts) pending.revoke()
+      throw new HookPreparationHeld('another preparation still owns these destinations')
+    }
   }
   if (pendingPreparations.size >= MAX_PREPARATIONS) throw new HookPreparationHeld('the disk preparation slots are occupied')
-  const deadline = performance.now() + (options.timeoutMs ?? 5_000)
   let revoked = false
   const cancellations = new Set<() => void>()
   const revoke = () => { revoked = true; for (const cancel of [...cancellations]) cancel() }
@@ -402,11 +631,24 @@ export async function runHookPreparation<T>(files: readonly string[], work: (att
       throw new HookPreparationHeld('the preparation expired or its owner changed')
     }
   }
-  const observations = new Map<string, () => void>()
-  const verify = () => { check(); verifyRoutes(); for (const inspect of observations.values()) inspect(); check() }
+  const observations = new Map<string, (directories?: Map<string, BigIntStats>) => void>()
+  let verifyObservations = preparationVerifier([], verifyRoutes)
+  let observationRevision = 0
+  const verify = () => {
+    check()
+    const checked = observationRevision
+    verifyObservations()
+    // Metadata reads consume no dependency authority. Fence dependencies once after them, even in nested attempts.
+    options.verify?.(); check()
+    if (checked !== observationRevision) throw new HookPreparationHeld('the settings observations changed during verification')
+  }
   const attempt: HookPreparationAttempt = {
     check, verify,
-    observe: (file, inspect) => { observations.set(file, inspect) },
+    observe: (file, inspect) => {
+      observations.set(file, inspect)
+      observationRevision++
+      verifyObservations = preparationVerifier([...observations.values()], verifyRoutes)
+    },
     async flush(fd) {
       check()
       if (!MAX_FLUSHES) throw new HookPreparationHeld('filesystem capacity cannot spare a disk confirmation')
@@ -432,13 +674,14 @@ export async function runHookPreparation<T>(files: readonly string[], work: (att
   }
   directoryFlushes.set(attempt, { flushed: new Set(), changes: 0 })
   let timer: ReturnType<typeof setTimeout> | undefined
-  const pending: PendingPreparation = { identity: options.identity, keys, revoke, reply: Promise.resolve(), waiters: 0 }
+  const pending: PendingPreparation = { identity: options.identity, keys, revoke, reply: Promise.resolve(), settled: Promise.resolve(), waiters: 0 }
   pendingPreparations.add(pending)
   // Dispatch only after the reservation is visible. A timeout ends the caller's
   // wait; the finally below runs only when the actual work (and its FDs) finishes.
   const actual = Promise.resolve().then(() => {
     verify()
     for (const file of files) observations.set(file, inspectHookFile(file).verify)
+    verifyObservations = preparationVerifier([...observations.values()], verifyRoutes)
     return work(attempt)
   }).then(result => {
     verify()
@@ -452,8 +695,9 @@ export async function runHookPreparation<T>(files: readonly string[], work: (att
     pendingPreparations.delete(pending)
     clearTimeout(timer)
   })
+  pending.settled = actual.then(() => {}, () => {})
   pending.reply = Promise.race([actual, new Promise<never>((_, reject) => {
-    timer = setTimeout(() => { revoke(); reject(new HookPreparationHeld('disk confirmation exceeded its deadline')) }, options.timeoutMs ?? 5_000)
+    timer = setTimeout(() => { revoke(); reject(new HookPreparationHeld('disk confirmation exceeded its deadline')) }, Math.max(0, deadline - performance.now()))
   })])
   return await pending.reply as T
 }

@@ -331,7 +331,7 @@ def main():
         if top is None:
             sys.exit(refuse(sys.stderr, "this is not a git repository"))
         sys.exit(run(Path(top.strip()), args.base, sys.stdout, sys.stderr))
-    plan = json.loads(os.environ["CI_PLAN"])
+    plan = json.load(sys.stdin)
     if plan.get("head") != os.environ["CI_SOURCE_SHA"] or plan.get("event") != os.environ["GITHUB_EVENT_NAME"]:
         raise ValueError("local check source differs from CI plan")
     records = check(plan, json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text()))

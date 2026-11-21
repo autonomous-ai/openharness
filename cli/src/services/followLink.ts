@@ -13,7 +13,7 @@ import type { RegisteredSession } from '../lib/registry.js'
 import { agentsIn, isSession } from './processCoreApi.js'
 
 type Payload = Record<string, unknown>
-type Query = (query: string, payload?: Payload) => Promise<Payload>
+type Query = (query: string, payload: Payload) => Promise<Payload>
 
 const isId = (value: unknown): value is string => typeof value === 'string' && value.length > 0
 
@@ -23,6 +23,18 @@ export function agentLifeIn(payload: Payload): AgentLife | null {
   const event = payload.event as Payload
   if (event.kind === 'running') return isSession(event.session) ? { kind: 'running', session: event.session } : null
   if (event.kind === 'ended' || event.kind === 'stopped') return isId(event.agentId) ? { kind: event.kind, agentId: event.agentId } : null
+  if (event.kind === 'input') {
+    if (!isId(event.agentId) || event.agentId.length > 128 || typeof event.startedByAgent !== 'boolean') return null
+    let source: { connection: string; clientKind: string | null } | undefined
+    if (event.source !== undefined) {
+      if (!event.source || typeof event.source !== 'object' || Array.isArray(event.source)) return null
+      const value = event.source as Payload
+      if (!isId(value.connection) || value.connection.length > 256
+        || (value.clientKind !== null && (typeof value.clientKind !== 'string' || value.clientKind.length > 64))) return null
+      source = { connection: value.connection, clientKind: value.clientKind }
+    }
+    return { kind: 'input', agentId: event.agentId, startedByAgent: event.startedByAgent, ...(source ? { source } : {}) }
+  }
   if (event.kind === 'purged') {
     return isId(event.agentId) && Array.isArray(event.sessionIds) ? { kind: 'purged', agentId: event.agentId, sessionIds: event.sessionIds.filter(isId) } : null
   }
@@ -119,6 +131,13 @@ export function followLink(options: FollowOptions, log: (line: string) => void =
       generation++
       heard = null
       settle(false)
+    },
+    /** A different component/account must inherit neither private rows nor the prior owner's callbacks. */
+    reset(): void {
+      generation++; heard = null; caughtUp = false
+      told.clear(); listeners.clear()
+      for (const waiter of waiters) waiter(false)
+      waiters = []
     },
     /** Whether this connection's catch-up is in, waiting [ms] at most for it. */
     ready(ms: number): Promise<boolean> {

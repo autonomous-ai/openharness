@@ -1,22 +1,15 @@
-/**
- * What the connectors service in its own process may ask of the core (`service_query`, core/serviceLinks.ts):
- * `connector_vault`, the account's connected services kept the same on every computer
- * (lib/connectors/vaultSync.ts), answered here by lib/connectors/vaultOps.ts. Its `op` is one of:
- * - `read`: the account's envelope and revision (`GET /api/connector-vault`), signed in by the core;
- * - `write`: an envelope over a revision (`PUT /api/connector-vault`), answered as the backend answers;
- * - `seal`: this computer's connections sealed for the account's machines by the gateway, which holds the
- *   identity (lib/e2ee/connectorVault.ts);
- * - `open`: an envelope opened by the gateway (`plaintext`, and whether it was sealed for every account
- *   machine, `complete`), or nothing when no account machine signed it for this one.
- * Only the connectors service is answered; it reaches no other path of the backend this way.
- */
+/** Only metadata crosses from connectors to account synchronization in the gateway. */
 import type { CoreApi } from './api.js'
-import { answerVaultOp } from '../lib/connectors/vaultOps.js'
-
 type Payload = Record<string, unknown>
 
-/** The answer to the connectors service's query, or null when it is not one. */
 export async function answerConnectorsQuery(core: Pick<CoreApi, 'account'>, service: string, query: string, payload: Payload): Promise<Payload | null> {
   if (query !== 'connector_vault' || service !== 'connectors') return null
-  return answerVaultOp(core.account, payload)
+  if (payload.op !== 'sync' || typeof payload.refresh !== 'boolean'
+    || (payload.query !== undefined && payload.query !== query)
+    || (payload.requestId !== undefined && (typeof payload.requestId !== 'string' || payload.requestId.length > 128))
+    || Object.keys(payload).some(key => !['op', 'refresh', 'query', 'requestId'].includes(key))) return { error: 'UNKNOWN_OP' }
+  try {
+    const answer = await core.account.connectorSync(payload.refresh)
+    return typeof answer.shared === 'boolean' ? { shared: answer.shared } : { error: 'CONNECTORS_SYNC_UNAVAILABLE' }
+  } catch { return { error: 'CONNECTORS_SYNC_UNAVAILABLE' } }
 }

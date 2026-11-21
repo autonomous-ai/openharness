@@ -43,7 +43,7 @@ function setup(agents: RegisteredSession[] = [], external: unknown[] = [], owned
   // What happens to agents, as the core tells whoever follows them (core/agentLife.ts): a purge.
   const hub = createAgentLife({ live: () => [], notify: () => true, hears: {} })
   const core = fakeCore({
-    agents: { all: vi.fn(() => agents), displayName: vi.fn((s: RegisteredSession) => `name of ${s.agentId}`), follow: hub.follow },
+    agents: { all: vi.fn(async () => agents), displayName: vi.fn((s: RegisteredSession) => `name of ${s.agentId}`), follow: hub.follow },
     transcripts: { databaseHistory: vi.fn((s: RegisteredSession) => (s.engine === 'opencode' ? reader : undefined)) },
 
   })
@@ -94,7 +94,7 @@ describe('the session search service', () => {
     })
   })
 
-  it('catalog metadata includes earlier native sessions, aliases, and current Harness titles and folders', () => {
+  it('catalog metadata includes earlier native sessions, aliases, and current Harness titles and folders', async () => {
     const { index } = setup([
       row({ sessionId: 'owned', cwd: '/work', title: 'My work' }),
       row({ agentId: 'a2', sessionId: 'untitled', cwd: null, title: null }),
@@ -103,7 +103,7 @@ describe('the session search service', () => {
       { sessionId: 'native', aliases: ['alias'], title: 'Native work', cwd: '/native', origin: 'codex' },
       { sessionId: 'owned', title: 'Old title', cwd: '/old', origin: 'codex' },
     ])
-    expect([...index.opts.catalogMetadata!()]).toEqual([
+    expect([...(await index.opts.catalogMetadata!())]).toEqual([
       ['native', { title: 'Native work', cwd: '/native', origin: 'codex' }],
       ['alias', { title: 'Native work', cwd: '/native', origin: 'codex' }],
       ['owned', { title: 'My work', cwd: '/work', origin: 'harness' }],
@@ -127,12 +127,12 @@ describe('the session search service', () => {
       }
     }
 
-    it('session_search: the words cut to 500 characters, and only finite numbers for the limit and the window', () => {
+    it('session_search: the words cut to 500 characters, and only finite numbers for the limit and the window', async () => {
       const { index: idx, searched } = index()
       const requests = searchRequests(idx as never)
-      expect(requests.session_search({ query: 'dial scroll', limit: 12, from: 5, to: 9 }, ASKER)).toEqual({ hits: [], indexed: 3, pending: 0, ready: true, tookMs: 1 })
-      requests.session_search({ query: 'x'.repeat(600), limit: Number.NaN, from: '5', to: Infinity }, ASKER)
-      requests.session_search({ query: 7 }, ASKER)
+      expect(await requests.session_search({ query: 'dial scroll', limit: 12, from: 5, to: 9 }, ASKER)).toEqual({ hits: [], indexed: 3, pending: 0, ready: true, tookMs: 1 })
+      await requests.session_search({ query: 'x'.repeat(600), limit: Number.NaN, from: '5', to: Infinity }, ASKER)
+      await requests.session_search({ query: 7 }, ASKER)
       expect(searched).toEqual([
         ['dial scroll', { limit: 12, from: 5, to: 9 }],
         ['x'.repeat(500), { limit: undefined, from: undefined, to: undefined }],
@@ -140,15 +140,15 @@ describe('the session search service', () => {
       ])
     })
 
-    it('session_search: pages a bounded catalog cursor and identifies catalog replies', () => {
+    it('session_search: pages a bounded catalog cursor and identifies catalog replies', async () => {
       const { index: idx, searched } = index()
       const requests = searchRequests(idx as never)
       for (const cursor of ['', 'older-session']) {
-        expect(requests.session_search({ catalogAfter: cursor }, ASKER)).toMatchObject({ catalog: true })
+        expect(await requests.session_search({ catalogAfter: cursor }, ASKER)).toMatchObject({ catalog: true })
         expect(searched.at(-1)).toEqual(['', { limit: undefined, from: undefined, to: undefined, catalogAfter: cursor }])
       }
       for (const cursor of [false, 'x'.repeat(257)]) {
-        expect(requests.session_search({ catalogAfter: cursor }, ASKER)).not.toHaveProperty('catalog')
+        expect(await requests.session_search({ catalogAfter: cursor }, ASKER)).not.toHaveProperty('catalog')
         expect(searched.at(-1)?.[1]).not.toHaveProperty('catalogAfter')
       }
     })
@@ -167,7 +167,7 @@ describe('the session search service', () => {
   })
 
   describe('what it indexes', () => {
-    it('every agent with a transcript or a database history, named and stamped by its conversation', () => {
+    it('every agent with a transcript or a database history, named and stamped by its conversation', async () => {
       const agents = [
         row({ agentId: 'file', sessionId: 's-file', transcriptPath: '/t/file.jsonl', title: 'Fix login', cwd: '/work/app/api', lastTranscriptAt: 50, lastHookAt: 70 }),
         row({ agentId: 'db', sessionId: 's-db', engine: 'opencode', boundAt: 40 }),
@@ -178,7 +178,7 @@ describe('the session search service', () => {
       ]
       const { index } = setup(agents)
       // Each carries its folder and title for the index's own readers; the header is as it was.
-      expect(index.opts.sources()).toEqual([
+      expect((await index.opts.sources())).toEqual([
         { agentId: 'file', sessionId: 's-file', engine: 'claude', transcriptPath: '/t/file.jsonl', header: 'name of file · Fix login · api app', changedAt: 70, readHistory: undefined,
           harness: { cwd: '/work/app/api', title: 'Fix login' } },
         { agentId: 'db', sessionId: 's-db', engine: 'opencode', transcriptPath: null, header: 'name of db', changedAt: 40, readHistory: reader,
@@ -190,7 +190,7 @@ describe('the session search service', () => {
       ])
     })
 
-    it('conversations Harness did not start, unless Harness holds them under any of their ids', () => {
+    it('conversations Harness did not start, unless Harness holds them under any of their ids', async () => {
       const external = [
         { sessionId: 'mine-now', engine: 'claude', transcriptPath: '/t/a.jsonl', mtime: 1 },
         { sessionId: 'mine-before', engine: 'claude', transcriptPath: '/t/b.jsonl', mtime: 1 },
@@ -200,7 +200,7 @@ describe('the session search service', () => {
         { sessionId: 'their-db', engine: 'opencode', transcriptPath: null, readHistory: reader, mtime: 8, cwd: '/w', origin: 'app' },
       ]
       const { index } = setup([row({ sessionId: 'mine-now', transcriptPath: '/t/a.jsonl' }), row({ agentId: 'a2', sessionId: '' })], external, ['mine-before', 's1'])
-      expect(index.opts.sources().filter((s) => !s.agentId)).toEqual([
+      expect((await index.opts.sources()).filter((s) => !s.agentId)).toEqual([
         { agentId: '', sessionId: 'theirs', engine: 'codex', transcriptPath: '/t/d.jsonl', header: '', changedAt: 9, external: { cwd: '/work/tool', origin: 'terminal', title: 'Refactor' } },
         { agentId: '', sessionId: 'their-db', engine: 'opencode', transcriptPath: null, header: '', changedAt: 8, external: { cwd: '/w', origin: 'app', title: undefined }, readHistory: reader },
       ])
@@ -208,7 +208,7 @@ describe('the session search service', () => {
 
     it('keeps every agent\'s sessions while the agent exists, looks again for others, and logs as the daemon does', async () => {
       const { readers, index } = setup([row({ agentId: 'a1' }), row({ agentId: 'a2' })])
-      expect([...index.opts.agents!()]).toEqual(['a1', 'a2'])
+      expect([...(await index.opts.agents!())]).toEqual(['a1', 'a2'])
       await index.opts.discover!()
       expect(readers.sessions.scan).toHaveBeenCalled()
       index.opts.log!('[search] indexed 3 sessions')

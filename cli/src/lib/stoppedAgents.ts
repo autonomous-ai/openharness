@@ -1,48 +1,82 @@
 /** Stopped work is durable history, separate from the registry of live terminal routes. */
-import { closeSync, constants, fsyncSync, lstatSync, openSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync, type BigIntStats } from 'node:fs'
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { env } from '../config/env.js'
 import { isTerminalEngine } from '../engines/types.js'
 import { projectDisplayName, strictPersistedRow, withHermesHome, type RegisteredSession } from './registry.js'
-import { atomicWriteJson, readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
+import { closeStateFileDescriptor, directorySyncSupported, readPrivateStateFile, secureStateDirectory, stateFileCustodyHealthy, syncStateDirectory } from './secureState.js'
 import { sameProcessIdentity } from './terminalRuntime.js'
 import { conversationKey } from './conversationIdentity.js'
+import { SessionStorage, sessionStorage } from './sessionStorage.js'
+import { SessionStorageUnavailable, sessionFileIdentity, sessionImageProof, type SessionImage, type SessionImageProof, type StoppedArchiveQuery } from './sessionStorageWire.js'
+import { RegistryPersistenceUnavailable, RegistryWriteQueue } from './registryPersistence.js'
+import { AtomicWriteUnconfirmed } from './secureState.js'
+import { prepareSessionPublication } from './sessionPublication.js'
 
 const SAFE_ID = /^[a-zA-Z0-9_-]{1,128}$/
-const CATALOG_CACHE_RECORDS = 2048
-const CATALOG_CACHE_BYTES = 4 * 1024 * 1024
-const CATALOG_CACHE_MS = 30_000
-
-function catalogFingerprint(stat: BigIntStats): string {
-  // ctime catches in-place edits even if a writer restores mtime. Inode/device
-  // distinguish atomic replacements; mode/owner/type changes must miss too.
-  return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.birthtimeNs,
-    stat.mode, stat.uid, stat.gid, stat.nlink].join(':')
-}
-
 export class StoppedAgentStore {
-  private readonly catalogCache = new Map<string, { fingerprint: string; bytes: number; at: number; session: RegisteredSession }>()
-  private catalogCacheBytes = 0
+  private readonly writer = new RegistryWriteQueue()
+  private readonly proofs = new WeakMap<RegisteredSession, SessionImageProof>()
+  private readonly storage: SessionStorage
 
-  constructor(
-    private readonly directory = join(env.ADAPTER_DATA_DIR, 'stopped-agents'),
-    // Only tests pass another: going past the real bound would take 2,049 files on disk.
-    private readonly cacheRecords = CATALOG_CACHE_RECORDS,
-  ) {}
+  constructor(private readonly directory = join(env.ADAPTER_DATA_DIR, 'stopped-agents')) {
+    this.storage = directory === join(env.ADAPTER_DATA_DIR, 'stopped-agents') ? sessionStorage
+      : new SessionStorage(dirname(directory), undefined, basename(directory))
+  }
 
-  get(agentId: string): RegisteredSession | null {
+  private decode(agentId: string, image: SessionImage, selected = true): RegisteredSession | null {
+    if (image.state === 'missing') return null
+    if (!image.json || !image.value || typeof image.value !== 'object') throw new SessionStorageUnavailable('invalid')
+    const raw = image.value as { version?: unknown; session?: unknown }
+    if (raw.version !== 1) return null
+    const session = strictPersistedRow(raw.session)
+    if (!session || session.agentId !== agentId) return null
+    if (selected) this.proofs.set(session, image.proof)
+    return session
+  }
+
+  query(query: StoppedArchiveQuery) { return this.storage.stoppedQuery(query) }
+
+  /** A keep action takes its absence witness after establishing the archive container it will write. */
+  prepareSave(): void {
+    secureStateDirectory(dirname(this.directory))
+    secureStateDirectory(this.directory)
+  }
+
+  async selectConversations(keys: readonly string[]): Promise<RegisteredSession[]> {
+    const wanted = [...new Set(keys)], rows: RegisteredSession[] = []
+    for (let offset = 0; offset < wanted.length; offset += 258) {
+      const answer = await this.query({ kind: 'owners', keys: wanted.slice(offset, offset + 258), defaultCodexHome: env.CODEX_HOME })
+      for (const image of answer.selected!) {
+        if (image.state !== 'image' || !sessionImageProof(image.proof) || image.proof.document.kind !== 'stopped') throw new SessionStorageUnavailable('invalid')
+        const row = this.decode(image.proof.document.agentId, image)
+        if (!row || !wanted.includes(conversationKey(row)!)) throw new SessionStorageUnavailable('invalid')
+        rows.push(row)
+      }
+    }
+    return rows
+  }
+
+  async get(agentId: string): Promise<RegisteredSession | null> {
     if (!SAFE_ID.test(agentId)) return null
+    return this.decode(agentId, await this.storage.read({ kind: 'stopped', agentId }))
+  }
+
+  /** A fresh read grants only this exact image. Recheck synchronously at the caller's final effect. */
+  current(session: RegisteredSession): boolean {
+    const proof = this.proofs.get(session)
+    if (!proof) return false
     try {
       secureStateDirectory(this.directory, false)
-      const raw = JSON.parse(readPrivateStateFile(join(this.directory, `${agentId}.json`), 1024 * 1024))
-      if (raw.version !== 1) return null
-      const session = strictPersistedRow(raw.session)
-      return session?.agentId === agentId ? session : null
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-      throw new Error('Could not read the saved stopped harness.')
-    }
+      return sessionFileIdentity(lstatSync(join(this.directory, `${session.agentId}.json`), { bigint: true })) === proof.identity
+    } catch { return false }
+  }
+
+  /** Custom fixture stores own their child; the production child is closed by the core. */
+  async close(): Promise<void> {
+    await this.writer.finish(async () => {})
+    if (this.storage !== sessionStorage) await this.storage.close()
   }
 
   /** The id of every saved record, readable or not (`list()` skips an unreadable one). No folder yet → none; any other error throws. */
@@ -55,70 +89,66 @@ export class StoppedAgentStore {
     }
   }
 
-  list(): RegisteredSession[] {
-    try {
-      secureStateDirectory(this.directory, false)
-      const ids = readdirSync(this.directory).filter(name => name.endsWith('.json')).map(name => name.slice(0, -5))
-      const present = new Set(ids)
-      for (const id of this.catalogCache.keys()) if (!present.has(id)) this.forgetCatalogRecord(id)
-      return ids.flatMap(id => {
-        try {
-          const saved = this.catalogRecord(id)
-          return saved ? [saved] : []
-        } catch {
-          this.forgetCatalogRecord(id)
-          // One unreadable record must not hide the other saved harnesses.
-          return []
-        }
-      })
-    } catch (error) {
-      this.catalogCache.clear()
-      this.catalogCacheBytes = 0
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
-      throw error
-    }
+  list(): Promise<RegisteredSession[]> { return this.listRows(false) }
+
+  private async listRows(catalog: boolean): Promise<RegisteredSession[]> {
+    try { secureStateDirectory(this.directory, false) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error }
+    const rows: RegisteredSession[] = []
+    const read = catalog ? this.storage.stoppedCatalog.bind(this.storage) : this.storage.stoppedList.bind(this.storage)
+    await read(image => {
+      try {
+        const saved = this.decode(image.state === 'image' && image.proof.document.kind === 'stopped' ? image.proof.document.agentId : '', image, !catalog)
+        if (saved) rows.push(saved)
+      } catch (error) {
+        // A bad archive cannot hide its peers. A missing worker is a failed listing, never an empty catalog.
+        if (!(error instanceof SessionStorageUnavailable) || !['unsafe', 'invalid', 'missing', 'changed'].includes(error.code)) throw error
+      }
+    })
+    return rows
   }
 
-  /** Status snapshots repeatedly enumerate the same saved metadata. Recheck
-   * every file's identity on every read, but only reopen/parse changed files.
-   * Actions still use get(), which always performs a fresh guarded read. */
-  private catalogRecord(agentId: string): RegisteredSession | null {
-    if (!SAFE_ID.test(agentId)) return null
-    const file = join(this.directory, `${agentId}.json`)
-    const before = lstatSync(file, { bigint: true })
-    const fingerprint = catalogFingerprint(before)
-    const cached = this.catalogCache.get(agentId)
-    const now = Date.now()
-    // Some mounted filesystems have coarse timestamps. Bound reuse even when
-    // their metadata cannot distinguish two writes; no background timer is needed.
-    if (cached?.fingerprint === fingerprint && now >= cached.at && now - cached.at < CATALOG_CACHE_MS) {
-      return structuredClone(cached.session)
-    }
-    this.forgetCatalogRecord(agentId)
-    const session = this.get(agentId)
-    const bytes = Number(before.size)
-    if (session && this.catalogCache.size < this.cacheRecords
-      && this.catalogCacheBytes + bytes <= CATALOG_CACHE_BYTES
-      && catalogFingerprint(lstatSync(file, { bigint: true })) === fingerprint) {
-      this.catalogCache.set(agentId, { fingerprint, bytes, at: now, session: structuredClone(session) })
-      this.catalogCacheBytes += bytes
-    }
-    return session
+  private write<T>(agentId: string, current: () => boolean,
+    apply: (previous: RegisteredSession | null) => { session: RegisteredSession; result: T } | null,
+    sourceCurrent: () => boolean = () => true): Promise<T | null> {
+    return this.writer.run(async deadline => this.storage.withWrite(deadline.expires, async () => {
+      secureStateDirectory(dirname(this.directory))
+      secureStateDirectory(this.directory)
+      const document = { kind: 'stopped' as const, agentId }
+      const source = await this.storage.retain(document)
+      let prepared: Awaited<ReturnType<typeof prepareSessionPublication>> | undefined
+      const verify = () => { deadline.check(); if (!current()) throw new RegistryPersistenceUnavailable('stopped owner changed') }
+      const verifySource = () => { if (!sourceCurrent()) throw new RegistryPersistenceUnavailable('stopped source changed') }
+      try {
+        verify()
+        verifySource()
+        const change = apply(this.decode(agentId, source.image))
+        if (!change) return null
+        prepared = await prepareSessionPublication(this.storage, document, source, { version: 1, session: change.session }, deadline)
+        verify()
+        verifySource()
+        prepared.publish(() => {})
+        await prepared.sync()
+        await prepared.settle()
+        verify()
+        prepared.finish()
+        deadline.markAdmitted()
+        return change.result
+      } catch (error) {
+        if (prepared?.published && !(error instanceof AtomicWriteUnconfirmed)) throw new AtomicWriteUnconfirmed(error, false)
+        throw error
+      } finally {
+        try { await prepared?.discard() } finally { await source.release() }
+      }
+    }))
   }
 
-  private forgetCatalogRecord(agentId: string): void {
-    const cached = this.catalogCache.get(agentId)
-    if (!cached) return
-    this.catalogCacheBytes -= cached.bytes
-    this.catalogCache.delete(agentId)
-  }
-
-  save(session: RegisteredSession): void {
+  async save(session: RegisteredSession, current: () => boolean = () => true, sourceCurrent?: () => boolean): Promise<void> {
     if (!SAFE_ID.test(session.agentId)) throw new Error('Invalid stopped harness identity.')
+    await this.write(session.agentId, current, previous => {
     // An exited engine leaves its pane as a shell. Stopping that shell must keep
     // the conversation saved before confirmEngineExit cleared its binding/profile.
-    const previous = this.get(session.agentId)
-    if (isTerminalEngine(session.engine) && previous) return
+    if (isTerminalEngine(session.engine) && previous) return null
     // A temporarily unbound observation of the SAME process cannot erase a known conversation.
     // A replacement process must earn its own binding; never carry history across PID reuse.
     if (!session.sessionId && previous?.sessionId && previous.engine === session.engine
@@ -164,21 +194,17 @@ export class StoppedAgentStore {
     delete snapshot.previousAgentId
     // A snapshot without a tmux pane omits the legacy alias just like registry persistence.
     if (!snapshot.tmuxPane) delete (snapshot as Partial<RegisteredSession>).tmuxPane
-    atomicWriteJson(join(this.directory, `${session.agentId}.json`), { version: 1, session: snapshot }, 'trust')
-    this.forgetCatalogRecord(session.agentId)
+    return { session: snapshot as RegisteredSession, result: undefined }
+    }, sourceCurrent)
   }
 
   /** Correct one field of an archive in place — the folder a Claude row drifted out of (cwdRepair.ts).
    *  Not `save`: that recomputes the name and stamps `touchedAt`, and a patch must not reorder the
    *  catalog or rename anything. Nothing else on the row changes. */
-  patch(agentId: string, patch: Partial<Pick<RegisteredSession, 'cwd'>>): boolean {
-    const saved = this.get(agentId)
-    if (!saved) return false
-    secureStateDirectory(dirname(this.directory))
-    secureStateDirectory(this.directory)
-    atomicWriteJson(join(this.directory, `${agentId}.json`), { version: 1, session: { ...saved, ...patch } }, 'trust')
-    this.forgetCatalogRecord(agentId)
-    return true
+  async patch(agentId: string, patch: Partial<Pick<RegisteredSession, 'cwd'>>, current: () => boolean = () => true,
+    sourceCurrent?: () => boolean): Promise<boolean> {
+    if (!SAFE_ID.test(agentId)) return false
+    return await this.write(agentId, current, saved => saved ? { session: { ...saved, ...patch }, result: true } : null, sourceCurrent) ?? false
   }
 
   /** Reserve before tmux allocation. A crash between allocation and registry persistence
@@ -224,11 +250,11 @@ export class StoppedAgentStore {
     if (!SAFE_ID.test(agentId)) return
     const file = join(this.directory, `${agentId}.resume`)
     try {
-      secureStateDirectory(this.directory, false)
-      const marker = readPrivateStateFile(file, 1024)
-      if (token !== undefined && JSON.parse(marker).token !== token) return
-      unlinkSync(file)
-      this.syncDirectory()
+      this.changeDirectory(() => {
+        secureStateDirectory(this.directory, false)
+        const marker = readPrivateStateFile(file, 1024)
+        return token === undefined || JSON.parse(marker).token === token
+      }, [() => unlinkSync(file)])
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
   }
 
@@ -236,13 +262,49 @@ export class StoppedAgentStore {
     syncStateDirectory(this.directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
   }
 
+  private changeDirectory(current: () => boolean, changes: readonly (() => void)[], destination?: string): void {
+    stateFileCustodyHealthy()
+    const handles: { path: string; fd: number }[] = []
+    let mutated = false
+    try {
+      // Confirm the new name before the removed one. Both handles must exist before any archive or marker mutation.
+      if (directorySyncSupported()) for (const path of destination ? [destination, this.directory] : [this.directory]) {
+        handles.push({ path, fd: openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW) })
+      }
+      if (!current()) return
+      for (const { path, fd } of handles) {
+        secureStateDirectory(path, false)
+        const held = fstatSync(fd, { bigint: true }), named = lstatSync(path, { bigint: true })
+        if (held.dev !== named.dev || held.ino !== named.ino) throw new RegistryPersistenceUnavailable('stopped directory changed')
+      }
+      for (const change of changes) { change(); mutated = true }
+      if (handles.length) for (const { fd } of handles) fsyncSync(fd)
+      else this.syncDirectory()
+    } catch (error) {
+      if (mutated) throw new AtomicWriteUnconfirmed(error, false)
+      throw error
+    } finally {
+      let failed: unknown
+      for (const { fd } of handles) {
+        try { closeStateFileDescriptor(fd) } catch (error) { failed ??= error }
+      }
+      if (failed) throw failed
+    }
+  }
+
   /** Permanent deletion is separate from Stop, which always retains this record. */
-  remove(agentId: string): void {
+  async remove(agentId: string, current: () => boolean = () => true): Promise<void> {
     if (!SAFE_ID.test(agentId)) throw new Error('Invalid stopped harness identity.')
-    if (!this.get(agentId)) return
-    unlinkSync(join(this.directory, `${agentId}.json`))
-    this.forgetCatalogRecord(agentId)
-    this.syncDirectory()
+    await this.writer.run(async deadline => this.storage.withWrite(deadline.expires, async () => {
+      const saved = await this.get(agentId)
+      if (!saved) return
+      deadline.check()
+      this.changeDirectory(() => {
+        deadline.check()
+        if (!current() || !this.current(saved)) throw new RegistryPersistenceUnavailable('stopped owner changed')
+        return true
+      }, [() => unlinkSync(join(this.directory, `${agentId}.json`))])
+    }))
   }
 
   /**
@@ -250,24 +312,38 @@ export class StoppedAgentStore {
    * Moved into `superseded/`, never deleted, so a wrong owner can be put back by hand; a reservation it left
    * goes with it, since nothing can resume a record that is not listed. Null when there is no such record.
    */
-  supersede(agentId: string): RegisteredSession | null {
+  async supersede(agentId: string, current: () => boolean = () => true): Promise<RegisteredSession | null> {
+    return this.writer.run(async deadline => this.storage.withWrite(deadline.expires, async () => {
     if (!SAFE_ID.test(agentId)) return null
-    const saved = this.get(agentId)
+    const saved = await this.get(agentId)
     if (!saved) return null
     const aside = join(this.directory, 'superseded')
     secureStateDirectory(aside)
-    renameSync(join(this.directory, `${agentId}.json`), join(aside, `${agentId}.json`))
-    this.forgetCatalogRecord(agentId)
-    this.finishResume(agentId)
-    this.syncDirectory()
+    const marker = join(this.directory, `${agentId}.resume`)
+    let reserved = false
+    this.changeDirectory(() => {
+      // A marker read failure must not be discovered after moving its archive out of the listed set.
+      try { readPrivateStateFile(marker, 1024); reserved = true }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+      deadline.check()
+      if (!current() || !this.current(saved)) throw new RegistryPersistenceUnavailable('stopped owner changed')
+      return true
+    }, [
+      () => renameSync(join(this.directory, `${agentId}.json`), join(aside, `${agentId}.json`)),
+      () => {
+        if (reserved) try { unlinkSync(marker) }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+      },
+    ], aside)
     return saved
+    }))
   }
 
   /** Suppress archives whose identity or conversation is already running. */
-  available(live: readonly RegisteredSession[]): RegisteredSession[] {
+  async available(live: readonly RegisteredSession[]): Promise<RegisteredSession[]> {
     const ids = new Set(live.map(session => session.agentId))
     const conversations = new Set(live.map(conversationKey))
-    return this.list().filter(session => {
+    return (await this.listRows(true)).filter(session => {
       const key = conversationKey(session)
       return !ids.has(session.agentId) && (key === null || !conversations.has(key))
     })

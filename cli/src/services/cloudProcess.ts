@@ -2,13 +2,14 @@
  * Cloud agents in their own process (`harness __service cloud`), an experiment: the same service as in the
  * core's process (services/cloud.ts), answering two askers:
  * - the apps' requests, `cloud_transcript` and `cloud_agents`;
- * - the core, through its port (core/cloudLink.ts): `create`, `deliver`, `answer`, `rename` and `stopHarness`, named as the
+ * - the core, through its port (core/sessionOwnerLink.ts): `create`, `deliver`, `answer`, `rename` and `stopHarness`, named as the
  *   port's members so that a test's fault names the same member whichever process it runs in.
  *
  * What it tells the core (its harnesses, their questions) is asked of the core over its link
  * (services/processCoreApi.ts `cloud`), and told again whole each time it connects: a core that restarted
  * knows none of it.
  */
+import type { SessionFacts } from '../lib/sessionPresentation.js'
 import { emptyPorts } from '../core/api.js'
 import { startCloudOn } from './cloud.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
@@ -43,13 +44,14 @@ export function runCloudService(options: CloudProcessOptions): ServiceProcess {
     token: options.token,
     requests: {
       ...service.requests,
-      // The port's members, asked only by the core (core/cloudLink.ts).
+      // The port's members, asked only by the core (core/sessionOwnerLink.ts).
       create: (payload) => port.create(payload),
       deliver: (payload) => port.deliver(text(payload.agentId), text(payload.text)),
       answer: (payload) => port.answer(text(payload.agentId), text(payload.questionId), answers(payload.answers)),
-      rename: (payload) => port.rename(text(payload.agentId), text(payload.name)),
+      rename: (payload) => port.rename(text(payload.agentId), text(payload.name), payload.before as SessionFacts),
       stopHarness: (payload) => port.stopHarness(text(payload.agentId)),
     },
-    onConnected: (connection) => { core = connection; service.republish() },
+    onConnected: (connection) => { core = connection; void service.republish() },
+    onDisconnected: () => { core = null; service.disconnected() },
   })
 }

@@ -19,8 +19,8 @@ function harness(over: Partial<RetainExitedSessionDeps> = {}) {
   const shell = row({ agentId: 'agent-shell', engine: 'terminal', sessionId: '', defaultName: 'Terminal harness' })
   const deps: RetainExitedSessionDeps = {
     stoppedAgents: {
-      save: entry => { calls.push(`save:${entry.agentId}`); archive.set(entry.agentId, entry) },
-      get: agentId => archive.get(agentId) ?? null,
+      save: async entry => { calls.push(`save:${entry.agentId}`); archive.set(entry.agentId, entry) },
+      get: async agentId => archive.get(agentId) ?? null,
     },
     registry: {
       confirmEngineExit: async (agentId, disposition) => {

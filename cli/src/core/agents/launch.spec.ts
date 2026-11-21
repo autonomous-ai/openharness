@@ -5,7 +5,6 @@ import type { GridLaunchAnswer, GridLaunchOverride, GridLaunchRequest } from '..
 import { dropPermissionFlagIfUnsupported } from '../../lib/engineLaunch.js'
 import { buildLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps } from '../../lib/launchOverrides.js'
 import { loadEngine } from '../../engines/inProcess.js'
-import { prepareInstructionWrites } from '../../scm/launch.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createLaunchHelpers, gridLaunchThrough, type LaunchHelperDeps } from './launch.js'
 
@@ -17,10 +16,6 @@ vi.mock('../../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
 })
-vi.mock('../../scm/launch.js', async (real) => {
-  const actual = await real<typeof import('../../scm/launch.js')>()
-  return { ...actual, prepareInstructionWrites: vi.fn(async () => {}) }
-})
 vi.mock('../../lib/launchOverrides.js', async (real) => ({ ...await real<object>(), buildLaunchOverrides: vi.fn(async () => ({ ok: true })) }))
 
 /** The operation's hold, which these cases never let go of. */
@@ -31,9 +26,9 @@ const session = (over: Partial<RegisteredSession> = {}): RegisteredSession =>
 function setup() {
   const deps: LaunchHelperDeps = {
     authority: () => () => true,
-    prepareApiTools: vi.fn(),
+    prepareInstructions: vi.fn(async () => {}),
     launchOverridesDeps: { marker: 'deps' } as unknown as LaunchOverridesDeps,
-    setGridLaunch: vi.fn(() => true),
+    setGridLaunch: vi.fn(async () => true),
     prepareResume,
   }
   return { deps, helpers: createLaunchHelpers(deps) }
@@ -41,6 +36,23 @@ function setup() {
 
 describe('relaunch helpers', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
+
+  it('waits for deferred workspace instructions and refuses a relaunch revoked during them', async () => {
+    const { deps } = setup()
+    let release!: () => void, entered!: () => void
+    const ready = new Promise<void>(resolve => { entered = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    let current = true
+    deps.authority = () => () => current
+    deps.prepareInstructions = async () => { entered(); await gate }
+    const row = session()
+    const result = createLaunchHelpers(deps).relaunchOverrides(row)
+    await ready
+    row.cwd = '/replacement'
+    current = false
+    release()
+    expect(await result).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+  })
 
   it('delegates repair to the injected coordinator without reading history in launch helpers', async () => {
     const { deps } = setup()
@@ -64,7 +76,6 @@ describe('relaunch helpers', () => {
     deps.authority = () => () => false
     expect(await createLaunchHelpers(deps).relaunchOverrides(session())).toMatchObject({ error: 'AGENT_CHANGED' })
     expect(buildLaunchOverrides).not.toHaveBeenCalled()
-    expect(prepareInstructionWrites).not.toHaveBeenCalled()
   })
 
   it('keeps the caller authority separate and does not write after a cancelled preparation reply', async () => {
@@ -73,11 +84,10 @@ describe('relaunch helpers', () => {
     expect(buildLaunchOverrides).not.toHaveBeenCalled()
     vi.mocked(buildLaunchOverrides).mockResolvedValueOnce({ ok: false, error: 'AGENT_CHANGED', detail: 'revoked' })
     expect(await helpers.relaunchOverrides(session())).toMatchObject({ error: 'AGENT_CHANGED' })
-    expect(prepareInstructionWrites).not.toHaveBeenCalled()
-    expect(deps.prepareApiTools).not.toHaveBeenCalled()
+    expect(deps.prepareInstructions).not.toHaveBeenCalled()
   })
 
-  it.each(['service', 'SCM'] as const)('a Stop or rebind during %s cannot redirect deferred instructions', async stage => {
+  it.each(['service', 'workspace'] as const)('a Stop or rebind during %s cannot redirect deferred instructions', async stage => {
     const { deps } = setup()
     let allowed = true
     deps.authority = () => () => allowed
@@ -85,16 +95,15 @@ describe('relaunch helpers', () => {
     let release!: () => void
     const gate = new Promise<void>(resolve => { release = resolve })
     if (stage === 'service') vi.mocked(buildLaunchOverrides).mockImplementationOnce(async () => { await gate; return { ok: true } as never })
-    else vi.mocked(prepareInstructionWrites).mockImplementationOnce(async () => { await gate })
+    else vi.mocked(deps.prepareInstructions).mockImplementationOnce(async () => { await gate })
     const result = createLaunchHelpers(deps).relaunchOverrides(row)
-    await vi.waitFor(() => expect(stage === 'service' ? buildLaunchOverrides : prepareInstructionWrites).toHaveBeenCalled())
+    await vi.waitFor(() => expect(stage === 'service' ? buildLaunchOverrides : deps.prepareInstructions).toHaveBeenCalled())
     row.cwd = '/replacement'; row.engine = 'codex'
     allowed = false
     release()
     expect(await result).toMatchObject({ error: 'AGENT_CHANGED' })
-    expect(deps.prepareApiTools).not.toHaveBeenCalled()
-    if (stage === 'service') expect(prepareInstructionWrites).not.toHaveBeenCalled()
-    else expect(prepareInstructionWrites).toHaveBeenCalledExactlyOnceWith('/work')
+    if (stage === 'service') expect(deps.prepareInstructions).not.toHaveBeenCalled()
+    else expect(deps.prepareInstructions).toHaveBeenCalledExactlyOnceWith('/work', 'claude')
   })
 
   it.each(['store', 'models'])('leaves instruction files alone while %s is unavailable', async unavailable => {
@@ -102,8 +111,7 @@ describe('relaunch helpers', () => {
     const refused = { ok: false as const, error: 'SERVICE_UNAVAILABLE', detail: 'Waiting for preparation.', unavailable }
     vi.mocked(buildLaunchOverrides).mockResolvedValueOnce(refused)
     expect(await helpers.relaunchOverrides(session())).toEqual(refused)
-    expect(prepareInstructionWrites).not.toHaveBeenCalled()
-    expect(deps.prepareApiTools).not.toHaveBeenCalled()
+    expect(deps.prepareInstructions).not.toHaveBeenCalled()
   })
 
   it('relaunches with eager control when optional OpenCode code cannot load', async () => {
@@ -111,15 +119,14 @@ describe('relaunch helpers', () => {
     vi.mocked(loadEngine).mockImplementation(() => new Promise(() => {}))
     expect(await helpers.relaunchOverrides(session({ engine: 'opencode' }))).toEqual({ ok: true })
     expect(await helpers.relaunchOverrides(session())).toEqual({ ok: true })
-    expect(prepareInstructionWrites).toHaveBeenCalledWith('/work')
-    expect(deps.prepareApiTools).toHaveBeenCalledWith('/work', 'opencode')
+    expect(deps.prepareInstructions).toHaveBeenCalledWith('/work', 'opencode')
     expect(loadEngine).not.toHaveBeenCalled()
   })
 
   it('rebuilds a launch from the row: its DSH, folder and named agent, whatever the source adds', async () => {
     const { deps, helpers } = setup()
     expect(await helpers.relaunchOverrides(session())).toEqual({ ok: true })
-    expect(deps.prepareApiTools).toHaveBeenCalledWith('/work', 'claude')
+    expect(deps.prepareInstructions).toHaveBeenCalledWith('/work', 'claude')
     expect(buildLaunchOverrides).toHaveBeenLastCalledWith(deps.launchOverridesDeps, 'claude', expect.objectContaining({
       dsh: 'blender', dshRuntime: null, cwd: '/work', agent: 'reviewer', gridLaunch: null,
     }), 'a1', expect.any(Function), undefined)
@@ -156,13 +163,28 @@ describe('relaunch helpers', () => {
     expect(buildLaunchOverrides).toHaveBeenLastCalledWith(deps.launchOverridesDeps, 'openclaw', expect.objectContaining({ openclawLocal: null }), 'a1', expect.any(Function), undefined)
   })
 
-  it('records the web-search decision a relaunch made, when it made one', () => {
+  it('records the web-search decision a relaunch made, when it made one', async () => {
     const { deps, helpers } = setup()
-    helpers.refreshGridWebSearch('a1', {} as LaunchOverrides)
+    await helpers.refreshGridWebSearch('a1', {} as LaunchOverrides)
     expect(deps.setGridLaunch).not.toHaveBeenCalled()
     const record = { networkId: 'grid-1' }
-    helpers.refreshGridWebSearch('a1', { gridLaunchRecord: record } as unknown as LaunchOverrides)
-    expect(deps.setGridLaunch).toHaveBeenCalledWith('a1', record)
+    await helpers.refreshGridWebSearch('a1', { gridLaunchRecord: record } as unknown as LaunchOverrides)
+    expect(deps.setGridLaunch).toHaveBeenCalledWith('a1', record, { current: expect.any(Function) })
+    expect(vi.mocked(deps.setGridLaunch).mock.lastCall![2]!.current!()).toBe(true)
+  })
+
+  it.each(['caller', 'owner'] as const)('keeps the %s fence live through durable Grid refresh', async revoked => {
+    const { deps } = setup()
+    let caller = true, owner = true
+    deps.authority = () => () => owner
+    deps.setGridLaunch = vi.fn(async (_id, _record, authority) => {
+      expect(authority!.current!()).toBe(true)
+      if (revoked === 'caller') caller = false; else owner = false
+      expect(authority!.current!()).toBe(false)
+      return false
+    })
+    const helpers = createLaunchHelpers(deps)
+    await helpers.refreshGridWebSearch('a1', { gridLaunchRecord: {} } as LaunchOverrides, () => caller)
   })
 
   it('retains an imported Hermes profile for every relaunch, without applying it after an engine change', async () => {
@@ -182,7 +204,7 @@ describe('relaunch helpers', () => {
     const { helpers } = setup()
     vi.mocked(dropPermissionFlagIfUnsupported).mockResolvedValueOnce({ choice: { bypassPermission: false }, droppedFlag: '--permission-mode' } as never)
     expect(await helpers.downgradedPermission(session({ permissionMode: 'plan' } as Partial<RegisteredSession>), true, 'restart')).toEqual({ bypassPermission: false })
-    expect(dropPermissionFlagIfUnsupported).toHaveBeenCalledWith('claude', { permissionMode: 'plan', bypassPermission: true }, undefined, undefined)
+    expect(dropPermissionFlagIfUnsupported).toHaveBeenCalledWith('claude', { permissionMode: 'plan', bypassPermission: true }, undefined)
     expect(String(warn.mock.calls[0][0])).toContain('does not take --permission-mode · starting in Ask · update claude to get plan back')
     vi.mocked(dropPermissionFlagIfUnsupported).mockResolvedValueOnce({ choice: { bypassPermission: true }, droppedFlag: '--dangerously-skip-permissions' } as never)
     await helpers.downgradedPermission(session(), true, 'retarget')
@@ -279,9 +301,9 @@ describe('a grid launch, as the core asks the models service for it', () => {
 
   it("hands back models' answer as it is, including saved API details owned by models", async () => {
     const built: GridLaunchAnswer = { ok: true, launch: { env: {}, args: [], webSearch: 'on' }, override: grid }
-    expect(await gridLaunchThrough(() => ({ gridLaunch: async () => built }))(request())).toBe(built)
+    expect(await gridLaunchThrough(() => ({ gridLaunch: async () => built }))(request())).toEqual(built)
     const refused: GridLaunchAnswer = { ok: false, error: 'API_UNAVAILABLE', detail: 'OpenRouter was removed.', apiBase: 'https://openrouter.ai/api/v1' }
-    expect(await gridLaunchThrough(() => ({ gridLaunch: async () => refused }))(request(api))).toBe(refused)
+    expect(await gridLaunchThrough(() => ({ gridLaunch: async () => refused }))(request(api))).toEqual(refused)
   })
 
   it('refuses at once, naming the grid or the API, when models is down or answers nothing usable', async () => {

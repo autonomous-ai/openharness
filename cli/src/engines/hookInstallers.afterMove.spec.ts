@@ -30,13 +30,14 @@ const OVERRIDES = ['ADAPTER_DATA_DIR', 'ADAPTER_CLI_DIR', 'ADAPTER_RUNTIME_DIR',
 interface Phase {
   env: typeof import('../config/env.js')['env']
   node: string
+  setup: NonNullable<import('./kit/nativeLocations.js').NativeHookOptions['setup']>
   script: string
   command: typeof import('./kit/notifyHooks.js')['command']
   isOurs: typeof import('./kit/notifyHooks.js')['isOurs']
   messagesCommand: typeof import('./kit/messagesHook.js')['messagesCommand']
   isMessagesBlock: typeof import('./kit/messagesHook.js')['isMessagesBlock']
   reviewRecords: typeof import('./kit/hookReview.js')['reviewRecords']
-  claude: typeof import('./hooks.js')['engineHooks']['claude']
+  claude: typeof import('./nativeHookSetup.js')['engineHookInstallations']['claude']
   plugins: Record<(typeof PLUGINS)[number], string>
   credential: string
   socket: string | null
@@ -79,19 +80,22 @@ async function start(dataRoot: string): Promise<Phase> {
     const notify = await import('./kit/notifyHooks.js')
     const messages = await import('./kit/messagesHook.js')
     const { reviewRecords } = await import('./kit/hookReview.js')
-    const { engineHooks } = await import('./hooks.js')
+    const { engineHookInstallations: engineHooks } = await import('./nativeHookSetup.js')
     const { installEngineHooks } = await import('../core/engines/hooks.js')
     const { managedNodePath } = await import('../lib/nodeRuntime.js')
     const { hookTokenPath } = await import('../lib/hookAuth.js')
     const { unixSocketPath } = await import('../lib/localSocket.js')
-    const { OPENCODE_LEGACY_PLUGIN } = await import('./opencode/contract.js')
-    const { KILO_PLUGIN } = await import('./kilo/contract.js')
-    const { PI_EXTENSION } = await import('./pi/contract.js')
-    const { AMP_PLUGIN } = await import('./amp/contract.js')
-    const installed = installEngineHooks(PORT, { only: new Set(['claude', 'codex', ...PLUGINS]), environment: {} })
+    const { OPENCODE_LEGACY_PLUGIN } = await import('./opencode/setup.js')
+    const { KILO_PLUGIN } = await import('./kilo/setup.js')
+    const { PI_EXTENSION } = await import('./pi/setup.js')
+    const { AMP_PLUGIN } = await import('./amp/setup.js')
+    const { nativeSetupProbes } = await import('../services/nativeSetup.js')
+    const { prepareNativeHookFiles } = await import('../services/nativeSetupFiles.js')
+    const setup: Phase['setup'] = { ...nativeSetupProbes, prepareFiles: (input, _request, current) => prepareNativeHookFiles(input, current) }
+    const installed = installEngineHooks(PORT, { only: new Set(['claude', 'codex', ...PLUGINS]), environment: {}, setup })
     try { await installed.settled } finally { installed.close() }
     return {
-      env, node: managedNodePath(), script: notify.HOOK_SCRIPT, command: notify.command, isOurs: notify.isOurs,
+      env, setup, node: managedNodePath(), script: notify.HOOK_SCRIPT, command: notify.command, isOurs: notify.isOurs,
       messagesCommand: messages.messagesCommand, isMessagesBlock: messages.isMessagesBlock, reviewRecords, claude: engineHooks.claude,
       plugins: {
         opencode: join(dirname(dirname(OPENCODE_LEGACY_PLUGIN.file)), 'plugins', 'launcher-register', 'tui.js'),
@@ -222,10 +226,11 @@ describe('the hook installers after the move', () => {
       hooks: Object.fromEntries(claudeContract.settings.events.map(({ event, matcher }) =>
         [event, [{ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: positional, timeout: 5 }] }]])),
     }, null, 2) + '\n')
-    expect(await after.claude.installIn(PORT, own)).toBe(true)
+    expect(await after.claude.installIn(PORT, own, { setup: after.setup })).toBe(true)
     const settings = json(join(own, 'settings.json'))
     for (const { event } of claudeContract.settings.events) {
-      expect(settings.hooks![event].map((block) => block.hooks.map((hook) => hook.command))).toEqual([[after.command(PORT, 'claude')]])
+      expect(settings.hooks![event].map((block) => block.hooks.map((hook) => hook.command)))
+        .toEqual([[after.command(PORT, 'claude', undefined, undefined, { HOME: home, CLAUDE_CONFIG_DIR: own })]])
     }
     expect(read(join(own, 'settings.json'))).not.toContain(positional)
   })

@@ -12,7 +12,7 @@ import type { AutonomousDeviceFrame } from './service.js'
  * device that reconnects subscribes again.
  */
 export type StreamKind = 'tool' | 'text' | 'final'
-export type StreamEndReason = 'expired' | 'unsubscribed' | 'replaced'
+export type StreamEndReason = 'expired' | 'unsubscribed' | 'replaced' | 'unavailable'
 export const STREAM_KINDS: readonly StreamKind[] = ['tool', 'text', 'final']
 export const STREAM_TTL_MAX_SEC = 300
 export const STREAM_TTL_DEFAULT_SEC = 60
@@ -55,10 +55,13 @@ export class AgentStreams {
   private readonly subs = new Map<string, Subscription>()
   /** The open turn's answer text per agent, kept whether or not anyone watches, so a mid-turn subscriber still gets the whole final. */
   private readonly turnText = new Map<string, string>()
+  private turnBytes = 0
+  private needsStart = false
   private readonly now: () => number
   constructor(private readonly options: AgentStreamsOptions) { this.now = options.now ?? Date.now }
 
   subscribe(deviceId: string, agentId: string, ttlSec: number, include: ReadonlySet<StreamKind>): { subscriptionId: string; expiresAt: number; ttlMs: number } {
+    if (this.needsStart && !this.turnText.has(agentId)) throw new StreamRequestError('SESSION_EVENTS_UNAVAILABLE', 'Wait for a newly observed turn before subscribing.')
     const existing = [...this.subs.values()].find(s => s.deviceId === deviceId && s.agentId === agentId)
     // The old subscription's frames all carry its own id, so the device can tell the two apart.
     if (existing) this.end(existing, 'replaced')
@@ -89,11 +92,12 @@ export class AgentStreams {
   /** Live events for one agent, in order. Replayed history must not be passed here. */
   ingest(agentId: string, events: readonly LiveEvent[]): void {
     for (const e of events) {
-      if (e.type === 'turn_started') this.turnText.set(agentId, '')
+      if (e.type === 'turn_started') this.keep(agentId, '')
       else if (e.type === 'text_delta') {
+        if (this.needsStart && !this.turnText.has(agentId)) continue
         const kept = (this.turnText.get(agentId) ?? '') + e.payload.content
         // Past the cap the final is already truncated; keep the head, stop growing.
-        this.turnText.set(agentId, Buffer.byteLength(kept) > FINAL_MAX_BYTES + 4 ? clip(kept, FINAL_MAX_BYTES + 4).text : kept)
+        if (!this.keep(agentId, Buffer.byteLength(kept) > FINAL_MAX_BYTES + 4 ? clip(kept, FINAL_MAX_BYTES + 4).text : kept)) continue
         for (const sub of this.watching(agentId, 'text')) this.queueText(sub, e.payload.content)
       } else if (e.type === 'tool_start') {
         for (const sub of this.watching(agentId, 'tool')) {
@@ -107,8 +111,9 @@ export class AgentStreams {
             ...(e.payload.durationSeconds !== undefined ? { durationSeconds: e.payload.durationSeconds } : {}) })
         }
       } else if (e.type === 'turn_ended') {
+        if (this.needsStart && !this.turnText.has(agentId)) continue
         const final = clip((this.turnText.get(agentId) ?? '').trim(), FINAL_MAX_BYTES)
-        this.turnText.delete(agentId)
+        this.forget(agentId)
         for (const sub of this.watching(agentId)) this.flushText(sub)
         for (const sub of this.watching(agentId, 'final')) {
           this.send(sub, 'stream.final', e.payload.aborted ? { aborted: true } : { text: final.text, ...(final.truncated ? { truncated: true } : {}) })
@@ -117,9 +122,28 @@ export class AgentStreams {
     }
   }
 
+  private keep(agentId: string, text: string): boolean {
+    const previous = this.turnText.get(agentId), bytes = Buffer.byteLength(text)
+    const next = this.turnBytes - (previous === undefined ? 0 : Buffer.byteLength(previous)) + bytes
+    if (previous === undefined && this.turnText.size >= 1024 || next > 16 * 1024 * 1024) {
+      console.warn('[wifi] STREAM_STATE_BACKPRESSURE')
+      this.unavailable()
+      return false
+    }
+    this.turnBytes = next; this.turnText.set(agentId, text)
+    return true
+  }
+  forget(agentId: string): void {
+    const previous = this.turnText.get(agentId)
+    if (previous !== undefined) this.turnBytes -= Buffer.byteLength(previous)
+    this.turnText.delete(agentId)
+  }
+  unavailable(): void {
+    this.needsStart = true; this.turnText.clear(); this.turnBytes = 0
+    for (const sub of [...this.subs.values()]) this.end(sub, 'unavailable')
+  }
+
   count(): number { return this.subs.size }
-  /** The agents subscribed to, each once. */
-  agents(): string[] { return [...new Set([...this.subs.values()].map(s => s.agentId))] }
 
   private watching(agentId: string, kind?: StreamKind): Subscription[] {
     const at = this.now()

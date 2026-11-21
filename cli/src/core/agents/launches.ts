@@ -1,3 +1,4 @@
+import type { PendingCreationDiscovery } from '../../lib/pendingCreationWire.js'
 /**
  * The requests that start an agent's process: `agent_create`, `agent_fork`, `agent_resume` and
  * `agent_restart`, and `agent_create_status`, which asks what became of one. A client that names its
@@ -13,24 +14,23 @@ import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, sep } from 'node:path'
 import type { BackendSocket } from '../../backendSocket.js'
 import { WORKSPACES_OFF, type Asker, type WorkspacesPort } from '../api.js'
-import { installedDsh } from '../../dsh/installed.js'
-import { DSH_ID_RE, dshSupportedEngines } from '../../dsh/manifest.js'
+import { DSH_ID_RE } from '../../dsh/id.js'
+import { dshUnavailable, type DshDescribeAnswer, type DshDescription } from '../../dsh/launchWire.js'
 import { homeIsAbsolute } from '../../engines/kit/homeAdoption.js'
-import { folderTrust } from '../../engines/launchPrep.js'
+import type { PrepareFolderTrust } from '../../engines/folderTrustPreparation.js'
 import type { NativeLaunchResult, NativeLaunchSource } from '../../engines/nativeLaunch.js'
-import * as opencodeLaunch from '../../engines/launchControl.js'
 import { OPENCLAW_KEY, OPENCLAW_LOCAL } from '../../engines/openclaw/contract.js'
-import { ENGINES, isTerminalEngine, type AgentEngine } from '../../engines/types.js'
+import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
 import { parseLaunchArgs } from '../../lib/launchArgs.js'
 import { AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationOutcome, type AgentCreationReceipts, type AgentCreationStatus, type CreationAuthority } from '../../lib/agentCreationReceipt.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
 import { engineLabel } from '../../lib/agentNames.js'
 import {
   AGENT_NAME_RE, FirstPromptUnsupportedError, MAX_FIRST_PROMPT_CHARS, NamedAgentUnsupportedError, permissionModeApproves,
-  permissionModeFlags, supportsFirstPrompt, supportsNamedAgent, unsupportedLaunchModelFlag,
+  permissionModeFlags, supportsFirstPrompt, supportsNamedAgent,
 } from '../../lib/engineLaunch.js'
 import { parseGridLaunchOverride, type GridLaunchOverride } from '../../lib/gridLaunchWire.js'
-import { parseLaunchModel } from '../../lib/launchModel.js'
+import { parseLaunchModel, type LaunchModel } from '../../lib/launchModel.js'
 import { errorKind } from '../../lib/log.js'
 import { parseNewAgentModel, type NewAgentModel } from '../../lib/newAgentModel.js'
 import { parseProjectFolder, prepareNewFolder, projectsRoot, ProjectFolderError, type ProjectFolder } from '../../lib/projectFolder.js'
@@ -60,20 +60,27 @@ export type RestartAgent = (agentId: string, launchArgs?: string[]) => Promise<
 export type ResumeAgent = (agentId: string, permissionMode?: string, launchArgs?: string[]) => ReturnType<RestartAgent>
 
 export interface LaunchRequestDeps {
+  /** Native ownership from the same immutable declaration used by service factories. */
+  nativeFactory(value: unknown): value is AgentEngine
+  discovery: PendingCreationDiscovery
+  /** Bounded facts from the Store; never the installed index in core. */
+  describeDsh?: (dsh: string, engine: CreateInput['engine']) => Promise<DshDescribeAnswer>
   /** The receipts of launches asked for with a `creationId`. */
-  receipts: Pick<AgentCreationReceipts, 'run' | 'status' | 'createdLaunchModel' | 'creator' | 'has' | 'runIntent' | 'pendingIntents' | 'pendingIntent' | 'cancelIntent'>
+  receipts: Pick<AgentCreationReceipts, 'run' | 'status' | 'createdLaunchModel' | 'creator' | 'has' | 'runIntent' | 'pendingIntent' | 'cancelIntent'>
   /** Each launch, read when a request comes in: null on a machine that cannot launch agents. */
   createAgent: () => CreateAgent | null
-  prepareCreate?: (input: Parameters<CreateAgent>[0], authority: LaunchAuthority, context?: { local: boolean }) => Promise<LaunchPreparation<Awaited<ReturnType<CreateAgent>>>>
+  prepareCreate?: (input: Parameters<CreateAgent>[0], authority: LaunchAuthority,
+    context?: { local: boolean; folderTrustAttempted?: true }) => Promise<LaunchPreparation<Awaited<ReturnType<CreateAgent>>>>
   /** The engine itself made ready, installed first when it is missing (engines/prepareNativeLaunch.ts): what a new
    *  project waits for before its folder is made. */
+  opencodeMajor?: () => Promise<number | null>
   prepareEngine?: (engine: CreateInput['engine'], source: NativeLaunchSource, authority: Pick<CreationAuthority, 'id' | 'current'>) => Promise<NativeLaunchResult>
   forkAgent: () => ForkAgent | null
   resumeAgent: () => ResumeAgent | null
   restartAgent: () => RestartAgent | null
   byAgent: (agentId: string) => RegisteredSession | undefined
   /** A stopped agent's saved row (the stopped-agents store): a resume may bring it back with new launch words. */
-  stoppedAgent: (agentId: string) => RegisteredSession | undefined
+  stoppedAgent: (agentId: string) => Promise<RegisteredSession | undefined>
   /** An agent's frame, as the socket builds it for every reply. */
   toProject: (s: RegisteredSession) => Promise<AgentFrame>
   /** Where a new agent on a grid model sends its inference: the models service's to resolve, on this
@@ -87,6 +94,9 @@ export interface LaunchRequestDeps {
   /** Workspaces, which make the folder a create asks git for (a clone, a worktree, the folder itself on another branch):
    *  the core runs no git. Null while they are off. */
   workspaces: () => WorkspacesPort | null
+  prepareFolderTrust?: PrepareFolderTrust
+  /** Existing setup observations of the core-selected executable; no receipt is admitted for an unsupported flag. */
+  probeLaunchModel?: (engine: AgentEngine, model: LaunchModel) => Promise<string | null>
 }
 
 type Reply = (result: Record<string, unknown>) => void
@@ -101,7 +111,7 @@ export const WORKSPACES_WAIT_MS = 10 * 60_000
 const WORKSPACES_GONE = { state: 'failed' as const, error: 'SERVICE_UNAVAILABLE',
   detail: 'Could not make the project folder: Harness\'s workspaces service was not available for 10 minutes. Try again, or restart Harness.' }
 
-export function createLaunchRequests({ receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, stoppedAgent, toProject, modelTarget, guestCreate, claudeHomeListed, workspaces }: LaunchRequestDeps) {
+export function createLaunchRequests({ nativeFactory, describeDsh = async id => dshUnavailable(id), receipts, discovery, createAgent, prepareCreate, prepareEngine, opencodeMajor, forkAgent, resumeAgent, restartAgent, byAgent, stoppedAgent, toProject, modelTarget, guestCreate, claudeHomeListed, workspaces, prepareFolderTrust, probeLaunchModel }: LaunchRequestDeps) {
   /** Since when each create has waited for workspaces, by its creation id: in memory, as its hold is retried in this
    *  core. An entry lasts only while its create waits: it goes when the create goes on, gives up or is cancelled. */
   const waitingSince = new Map<string, number>()
@@ -116,25 +126,25 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     authority.hold(WORKSPACES_HOLD)
     return null
   }
-  const validateInstalled = async (input: CreateInput, known?: ReturnType<typeof installedDsh>): Promise<{ error: string; detail: string } | null> => {
-    if (input.dsh) {
-      const installed = known ?? installedDsh(input.dsh)
-      if (!installed) return { error: 'INVALID_DSH', detail: `${input.dsh} is not installed on this machine` }
-      if (installed.manifest.kind === 'viewer') return { error: 'INVALID_DSH', detail: `${input.dsh} is a viewer package, not an agent` }
-      if (!dshSupportedEngines(installed.manifest).includes(input.engine)) return { error: 'INVALID_DSH',
-        detail: `${input.dsh} supports ${dshSupportedEngines(installed.manifest).join(', ')}; ${input.engine} is not compatible` }
+  const validateInstalled = async (input: CreateInput, installed: DshDescribeAnswer | undefined): Promise<{ error: string; detail: string } | null> => {
+    if (installed) {
+      if (!installed.ok) return { error: installed.error, detail: installed.detail }
+      if (installed.refusal) return { error: 'INVALID_DSH', detail: installed.refusal }
     }
-    if (input.agent && !supportsNamedAgent(input.engine, input.engine === 'opencode' ? await opencodeLaunch.opencodeMajorVersion() : null)) {
+    if (input.agent && !supportsNamedAgent(input.engine, input.engine === 'opencode' ? (await opencodeMajor?.() ?? null) : null)) {
       return { error: 'AGENT_UNSUPPORTED', detail: new NamedAgentUnsupportedError(input.engine).message }
     }
     return null
   }
 
-  const executeCreate = async (input: CreateInput, projectFolder: ProjectFolder | null, local: boolean, invoke: CreateAgent, validated = false): Promise<AgentCreationOutcome> => {
+  const executeCreate = async (input: CreateInput, projectFolder: ProjectFolder | null, local: boolean, invoke: CreateAgent, validated = false,
+    current: () => boolean = () => true, environment?: NodeJS.ProcessEnv, known?: DshDescription): Promise<AgentCreationOutcome> => {
+    const description = known ?? (input.dsh ? await describeDsh(input.dsh, input.engine) : undefined)
     if (!validated) {
-      const refusal = await validateInstalled(input)
+      const refusal = await validateInstalled(input, description)
       if (refusal) return { state: 'failed', ...refusal }
     }
+    if (!current()) return { state: 'unconfirmed' }
     const { dsh, resumeSessionId } = input
     let preparedFolder: string | undefined
     /** A new project's folder, which this made empty: removed again if nothing starts in it. */
@@ -143,7 +153,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     /** The SSH alias a clone got in through, which the apps tell the person: it is the account later pushes go as. */
     let clonedVia: { alias: string } | undefined
     if (projectFolder?.source === 'new') {
-      try { made = preparedFolder = await prepareNewFolder(projectFolder, { label: (dsh ? installedDsh(dsh)?.manifest.name : null) ?? engineLabel(input.engine) }) }
+      try { made = preparedFolder = await prepareNewFolder(projectFolder, { label: (description?.ok ? description.name : null) ?? engineLabel(input.engine) }) }
       catch (error) {
         return { state: 'failed', error: error instanceof ProjectFolderError ? error.code : 'PROJECT_PREPARATION_FAILED',
           detail: error instanceof ProjectFolderError ? error.message : 'Could not prepare the project folder.',
@@ -163,6 +173,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       scmLaunchRecord = prepared.scmLaunchRecord ?? null
       if (prepared.clonedVia) clonedVia = prepared.clonedVia
     }
+    if (!current()) return { state: 'unconfirmed' }
     if (projectFolder && preparedFolder) {
       // Only a folder this daemon just made EMPTY is one the engine need not ask about. A clone or
       // the person's own repo is theirs to answer for (engines/kit/folderTrust.ts); a worktree gets only
@@ -171,13 +182,14 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       // source folder: nothing to record.
       try {
         // A Codex agent on its own profile reads its trust from that profile's config.toml, not ~/.codex.
-        const engineTrust = folderTrust(input.engine, input.codexHome ?? input.claudeHome ?? null)
-        if (engineTrust && (projectFolder.source === 'new'
-          || (projectFolder.source === 'worktree' && preparedFolder.startsWith(join(projectsRoot(), 'worktrees') + sep)
-            && engineTrust.trusts(projectFolder.gitSource)))) {
-          engineTrust.record(preparedFolder)
+        if (projectFolder.source === 'new' && !dsh
+          || projectFolder.source === 'worktree' && preparedFolder.startsWith(join(projectsRoot(), 'worktrees') + sep)) {
+          await prepareFolderTrust?.({ engine: input.engine, cwd: preparedFolder, environment,
+            profile: input.codexHome ?? input.claudeHome ?? null,
+            ...(projectFolder.source === 'new' ? { empty: true } : { source: projectFolder.gitSource }),
+          }, current)
         }
-      } catch (error) { console.warn(`[agent] pre-trust skipped · ${input.engine} · ${errorKind(error)}`) }
+      } catch (caughtFailure) { console.warn(('[trust] FOLDER_TRUST_UNAVAILABLE') + ' · ' + errorKind(caughtFailure)) }
     } else if (!dsh && !resumeSessionId && local && dirname(input.cwd) === projectsRoot()) {
       // On the LOCAL machine the desktop makes a new workspace ITSELF and sends the path as a plain
       // cwd, so `projectFolder` above never sees it. Such a folder is empty and is trusted the way a
@@ -192,12 +204,14 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       //   · from a LOCAL frame. agent_create is not backend-only, so a relayed peer would otherwise
       //     name an empty path on this host and have it trusted.
       //
-      // DSH trust is decided in cli.ts, where the template count is known; leave that to it.
+      // Materialized templates retain the engine's own trust prompt.
       try {
         const empty = await readdir(input.cwd).then((names) => names.length === 0, () => false)
-        if (empty) folderTrust(input.engine, input.codexHome ?? input.claudeHome ?? null)?.record(input.cwd)
-      } catch (error) { console.warn(`[agent] pre-trust skipped · ${input.engine} · ${errorKind(error)}`) }
+        if (empty && current()) await prepareFolderTrust?.({ engine: input.engine, cwd: input.cwd, environment,
+          profile: input.codexHome ?? input.claudeHome ?? null, empty: true }, current)
+      } catch (caughtFailure) { console.warn(('[trust] FOLDER_TRUST_UNAVAILABLE') + ' · ' + errorKind(caughtFailure)) }
     }
+    if (!current()) return { state: 'unconfirmed' }
     const result = await invoke(preparedFolder ? { ...input, cwd: preparedFolder, scmLaunchRecord } : input)
     if (result.ok) return { state: 'created', agentId: result.session.agentId, ...(clonedVia ? { clonedVia } : {}) }
     // tmux may have executed before a timeout; registration cleanup is best-effort.
@@ -212,13 +226,13 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
 
   const modelHold = { service: 'models', detail: 'Waiting for the selected model. This request is saved and will continue when it is available.' }
   const launchHold = { service: 'launch', detail: 'Waiting for launch preparation. This request is saved and will continue when its dependencies are available.' }
-  const pending = createPendingLaunches({ receipts, prepare: async (saved, authority) => {
+  const pending = createPendingLaunches({ receipts, discovery, prepare: async (saved, authority) => {
     if (saved.kind === 'native-create-v1') {
       if (!prepareCreate || typeof saved.local !== 'boolean' || !saved.input || typeof saved.input !== 'object'
         || typeof saved.label !== 'string' || !/^harness-[a-z0-9-]+$/.test(saved.label)) return null
       const input = structuredClone(saved.input) as CreateInput
       const projectFolder = (saved.projectFolder ?? null) as ProjectFolder | null
-      if (!ENGINES.includes(input.engine) || typeof input.cwd !== 'string' || input.resumeSessionId
+      if (!nativeFactory(input.engine) || typeof input.cwd !== 'string' || input.resumeSessionId
         || (projectFolder !== null && typeof projectFolder.source !== 'string')) return null
       const { local, label } = saved
       if (saved.selection) {
@@ -250,10 +264,13 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
         const folder = waitForFolder(authority, projectFolder)
         if (folder !== 'go') return folder
         const invoke: CreateAgent = async (prepared) => {
-          const ready = await prepareCreate(prepared, { ...authority, label }, { local })
+          // executeCreate has already made this project's trust decision, including an
+          // unavailable optional preparation. A retry here would double its five-second wait.
+          const ready = await prepareCreate(prepared, { ...authority, label }, { local, folderTrustAttempted: true })
           return ready.ok ? ready.dispatch() : { ok: false, error: ready.error, ...(ready.detail ? { detail: ready.detail } : {}) }
         }
-        return () => executeCreate(input, projectFolder, local, invoke)
+        return () => executeCreate(input, projectFolder, local, invoke, false,
+          () => authority.current() && (!engine || engine.ok && engine.launch.current()), engine?.ok ? engine.launch.environment : undefined)
       }
       const ready = await prepareCreate(input, { ...authority, label }, { local })
       if (!authority.current()) return null
@@ -278,7 +295,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       || !saved.input || typeof saved.input !== 'object' || !saved.selection || typeof saved.selection !== 'object') return null
     const input = structuredClone(saved.input) as CreateInput
     const selection = saved.selection as NewAgentModel
-    if (!ENGINES.includes(input.engine) || typeof input.cwd !== 'string' || input.resumeSessionId
+    if (!nativeFactory(input.engine) || typeof input.cwd !== 'string' || input.resumeSessionId
       || input.grid !== null || typeof selection.model !== 'string' || typeof selection.grid !== 'string') return null
     const invoke = createAgent()
     if (!invoke) return null
@@ -288,7 +305,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     const projectFolder = (saved.projectFolder ?? null) as ProjectFolder | null
     const folder = waitForFolder(authority, projectFolder)
     if (folder !== 'go') return folder
-    return () => executeCreate(input, projectFolder, saved.local as boolean, invoke)
+    return () => executeCreate(input, projectFolder, saved.local as boolean, invoke, false, authority.current)
   } })
 
   /** Recover by stable runtime identity; a deleted agent must never become a fresh launch. */
@@ -364,9 +381,9 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
    *  of a machine shared with them asks (core/guestPolicy.ts). */
   const create = async (payload: Record<string, unknown>, asker: Pick<Asker, 'local' | 'guest'>, reply: Reply): Promise<void> => {
     if (asker.guest !== undefined) { await createForGuest(payload, asker.guest, reply); return }
-    const engine = payload.engine as AgentEngine | undefined
+    const engine = payload.engine
     const cwd = payload.cwd
-    if (typeof engine !== 'string' || !ENGINES.includes(engine)) { reply({ error: 'INVALID_ENGINE' }); return }
+    if (!nativeFactory(engine)) { reply({ error: 'INVALID_ENGINE' }); return }
     let projectFolder
     try { projectFolder = parseProjectFolder(payload) }
     catch (error) {
@@ -408,7 +425,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     // A Claude Code too old for the flags would print its help in the new pane. Refused here, before any receipt, so the
     // caller creates the agent without them and switches the model afterwards, as it did before the flags.
     if (launchModel.state === 'ok') {
-      const missing = await unsupportedLaunchModelFlag(engine, launchModel.launchModel)
+      const missing = await probeLaunchModel?.(engine, launchModel.launchModel)
       if (missing) { reply({ error: 'LAUNCH_MODEL_UNSUPPORTED', detail: `The ${engine} on this machine does not support ${missing}; update ${engine} to launch it with a model.` }); return }
     }
     // Checked here whatever the client checked (`Agent._safeCodexHome` in the desktop app), because a client's own check is
@@ -452,16 +469,16 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     // A DSH is refused, never approximated: an agent created as its plain base engine would look
     // like it worked and have none of the skills the user picked the tile for.
     let dsh: string | null = null
-    let installed: ReturnType<typeof installedDsh>
+    let installed: DshDescribeAnswer | undefined
     if (payload.dsh !== undefined && payload.dsh !== null) {
       if (typeof payload.dsh !== 'string' || !DSH_ID_RE.test(payload.dsh)) {
         reply({ error: 'INVALID_DSH', detail: 'dsh must be an owner/name id' }); return
       }
-      installed = installedDsh(payload.dsh)
-      // Formerly-named packages used their canonical ID in both launch input
-      // and v1 fingerprints. Resolve aliases without refusing a known receipt
-      // merely because the package is no longer installed.
-      dsh = installed?.id ?? payload.dsh
+      installed = await describeDsh(payload.dsh, engine)
+      // Formerly-named packages used their canonical ID in launch input and v1 fingerprints.
+      // Without that identity, receipt admission below may only replay an existing exact match;
+      // it must not persist the unresolved alias as a new request's identity.
+      dsh = installed.ok ? installed.id : payload.dsh
     }
     // A first prompt is refused BEFORE any pane exists: an engine with no way to take one would
     // otherwise open on an empty input and look like the person's request had been heard. The
@@ -569,11 +586,21 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       const create = onCreateAgent
       try {
         const fingerprint = creationFingerprint(projectFolder ? { ...fingerprintInput, projectFolder } : fingerprintInput)
+        let knownReceipt = false
+        if (installed && !installed.ok) {
+          // Without Store, a former package name cannot be compared with its canonical receipt.
+          // Replay only a proven match; neither admit an unstable identity nor invent a conflict.
+          try { knownReceipt = receipts.has(creationId, fingerprint) }
+          catch (error) {
+            if (!(error instanceof AgentCreationReceiptError && error.code === 'CREATION_CONFLICT')) throw error
+          }
+          if (!knownReceipt) { reply({ error: installed.error, detail: installed.detail }); return }
+        }
         // A new project too, which waits for its engine as any other create does (above).
         const durableNative = !!prepareCreate && !resumeSessionId
         // A new project is refused at once for a harness or named agent it cannot have, as it always was, rather than
         // after its engine is installed and its folder made.
-        if ((!durableNative || projectFolder) && model.state !== 'ok' && !receipts.has(creationId, fingerprint)) {
+        if ((!durableNative || projectFolder) && model.state !== 'ok' && !knownReceipt && !receipts.has(creationId, fingerprint)) {
           const refusal = await validateInstalled(input, installed)
           if (refusal) { reply(refusal); return }
         }
@@ -582,10 +609,10 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
             selection: model.state === 'ok' ? model.selection : null, label: buildHarnessSessionLabel(engine), local: asker.local }, model.state === 'ok' ? modelHold : launchHold)
           : model.state === 'ok'
           ? pending.start(creationId, fingerprint, { kind: 'model-create-v1', input, selection: model.selection, projectFolder, local: asker.local }, modelHold)
-          : receipts.run(creationId, fingerprint, () => executeCreate(input, projectFolder, asker.local, create, true))
+          : receipts.run(creationId, fingerprint, () => executeCreate(input, projectFolder, asker.local, create, true, undefined, undefined, installed?.ok ? installed : undefined))
         void operation.then(async (status) => {
           reply({ creationId, ...await creationStatusPayload(status) })
-        }).catch(() => reply({ error: 'INTERNAL' }))
+        }).catch(error => reply({ error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' }))
       } catch (error) {
         reply({ error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' })
       }
@@ -629,7 +656,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     if (payload.launchArgs !== undefined) {
       if (!asker.ownerApp) { reply({ error: 'INVALID_LAUNCH_ARGS', detail: 'Launch flags can only be changed from your own Harness app.' }); return }
       // A harness a bad flag left stopped is in the stopped store, not the registry: the way back is to resume it.
-      const known = byAgent(target) ?? stoppedAgent(target)
+      const known = byAgent(target) ?? await stoppedAgent(target)
       if (typeof payload.launchArgs !== 'string') {
         reply({ error: 'INVALID_LAUNCH_ARGS' }); return
       }

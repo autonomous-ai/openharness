@@ -1,32 +1,100 @@
 import { randomUUID } from 'node:crypto'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { EventEmitter } from 'node:events'
+import { realpathSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { emptyPorts, type CoreApi, type RemoteClient, type WifiPort } from '../core/api.js'
+import { emptyPorts, type CoreApi, type CorePorts, type RemoteClient, type WifiPort } from '../core/api.js'
 import { AutonomousDeviceService } from '../lib/autonomous-device/service.js'
 import { createDeviceStore } from '../lib/autonomous-device/storeRuntime.js'
+import { AutonomousDeviceStore } from '../lib/autonomous-device/store.js'
+import { AgentCreationReceipts } from '../lib/agentCreationReceipt.js'
 import type { LiveEvent } from '../lib/normalize.js'
+import { snapshotFixture, snapshotRow, snapshotReader } from '../testing/sessionSnapshot.js'
+import type { SessionSnapshot } from '../testing/sessionSnapshot.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { startWifi } from './wifi.js'
+import { startWifi as startWifiService, type WifiDeps } from './wifi.js'
+import { devicePeerConnection } from '../lib/autonomous-device/peerConnection.js'
+import { devicePeerKey } from '../lib/autonomous-device/peerEndpoint.js'
+import { GatewayDeviceFixture } from '../testing/devicePeer.js'
+import { publishDeviceDesk, type DeviceDesk } from './deviceDesk.js'
+import { stepDeviceDesk } from '../lib/autonomous-device/deskClient.js'
+import { cancelTurn } from '../agentClient/cancel.js'
+import { observeQuestions, type QuestionListener } from '../agentClient/questions.js'
+import type { ClientSocket } from '../agentClient/daemon.js'
+import type { DeviceSessionFeedOptions } from '../lib/autonomous-device/sessionFeed.js'
+import type { createDeviceEvidence } from '../lib/autonomous-device/evidenceReader.js'
+import * as gatewayRelay from '../lib/autonomous-device/overGateway.js'
+import * as wifiViews from './wifiView.js'
 
+vi.mock('../lib/autonomous-device/deskClient.js', () => ({ stepDeviceDesk: vi.fn(async () => 'no_agents') }))
+
+vi.mock('../agentClient/cancel.js', () => ({ cancelTurn: vi.fn(async () => true) }))
+
+vi.mock('../agentClient/questions.js', () => ({ observeQuestions: vi.fn((_where, listener: QuestionListener) => ({
+  ready: Promise.resolve().then(() => { listener.begin('fixture'); listener.end('fixture') }), answer: vi.fn(async () => true), close: vi.fn(),
+})) }))
+
+const peers: GatewayDeviceFixture[] = []
+const peerByCore = new WeakMap<CoreApi, GatewayDeviceFixture>()
+const feedByCore = new WeakMap<CoreApi, DeviceSessionFeedOptions>()
+const evidenceByCore = new WeakMap<CoreApi, Parameters<typeof createDeviceEvidence>[0]>()
+const deskOwners: Array<() => void> = []
+const running: WifiPort[] = []
+vi.mock('../lib/autonomous-device/peerConnection.js', () => ({ devicePeerConnection: vi.fn(options => {
+  const peer = new GatewayDeviceFixture(options)
+  peers.push(peer)
+  return peer
+}) }))
 let dataDir: string
 beforeEach(() => { dataDir = mkdtempSync(join(tmpdir(), 'wifi-service-')) })
-afterEach(() => { rmSync(dataDir, { recursive: true, force: true }); vi.useRealTimers() })
-
+afterEach(async () => {
+  for (const port of running.splice(0)) await port.stop()
+  for (const revoke of deskOwners.splice(0)) revoke()
+  peers.length = 0
+  rmSync(dataDir, { recursive: true, force: true }); vi.useRealTimers()
+})
+const peerFor = (core: CoreApi) => peerByCore.get(core)!
 const client: RemoteClient = { role: 'device', label: 'Desk', identity: 'device-1', direct: true }
 const agent = { agentId: 'agent', name: 'Agent', engine: 'claude', state: 'idle' }
-/** A request as the gateway hands it on: sealed as it came, and as its session opened it. */
-const sealed = (req: Record<string, unknown>) => [{ type: 'autonomous_device_request', payload: { __e2e: true } }, { payload: req }] as const
-/** What the service sent the device, in order: the core seals each to its session. */
-const sent = (core: CoreApi): Array<Record<string, any>> =>
-  vi.mocked(core.wifi.send).mock.calls.map(([connId, identity, frame, payload]) => ({ connId, identity, frame, ...payload }))
+const snapshotFor = (view: { agents: Array<{ agentId: string; name?: string; engine?: string; state?: string }>; store?: Array<{ agentId: string }>; hasWindow: boolean }): SessionSnapshot => {
+  const rows = view.agents.map(agent => snapshotRow(agent.agentId, {
+    session: { ...snapshotRow(agent.agentId).session, engine: (agent.engine ?? 'claude') as 'claude' },
+    facts: { displayName: agent.name ?? '', terminalAvailable: true, parts: {} }, turnRunning: agent.state === 'running',
+  }))
+  for (const stored of view.store ?? []) if (!rows.some(row => row.session.agentId === stored.agentId)) rows.push(snapshotRow(stored.agentId,
+    { facts: { displayName: '', terminalAvailable: false, parts: {} } }))
+  return snapshotFixture({ registered: rows, hasWindow: view.hasWindow })
+}
+const sent = (core: CoreApi): Array<Record<string, any>> => peerFor(core).replies()
+function startWifi(core: CoreApi, ports: ReturnType<typeof emptyPorts>, deps: WifiDeps = {}) {
+  const requests = startWifiService(core, ports, {
+    evidence: options => {
+      evidenceByCore.set(core, options)
+      return { arm: vi.fn(async () => {}), input: vi.fn(), flush: vi.fn(async () => {}), changed: vi.fn(),
+        forget: vi.fn(), stop: vi.fn(async () => {}), settled: vi.fn(), disconnected: vi.fn(), connected: vi.fn() }
+    },
+    observeSessions: options => {
+      feedByCore.set(core, options)
+      return { ready: Promise.resolve(), deskReady: vi.fn(async () => true), scroll: vi.fn(() => true), close: vi.fn(), stop: vi.fn(async () => {}), barrier: vi.fn(async () => {}) }
+    },
+    ...deps,
+  })
+  peerByCore.set(core, peers.at(-1)!)
+  running.push(ports.wifi!)
+  void ports.wifi!.resume({ focus: null }).catch(() => {})
+  return requests
+}
+
+const observed = (core: CoreApi, frames: Parameters<DeviceSessionFeedOptions['receive']>[1], source?: string) =>
+  feedByCore.get(core)!.receive('agent', frames, () => true, source)
 
 function started(over: Parameters<typeof fakeCore>[0] = {}) {
   const core = fakeCore({
     dataDir,
     ...over,
-    wifi: { view: vi.fn(async () => ({ agents: [agent], store: [], hasWindow: true })), ...over.wifi },
+    conversations: { resolve: vi.fn(async () => ({ ...agent, sessionId: 's1' } as never)), ...over.conversations },
+    agents: { readSessions: vi.fn(snapshotReader(async () => snapshotFor({ agents: [agent], store: [], hasWindow: true }))), ...over.agents },
   })
   const ports = emptyPorts()
   const requests = startWifi(core, ports)
@@ -35,37 +103,891 @@ function started(over: Parameters<typeof fakeCore>[0] = {}) {
   const http = async (method: string, target: string, body?: unknown): Promise<Record<string, any>> =>
     requests.wifi_http!({ method, target, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, { local: true, owner: true })
   const ask = async (req: Record<string, unknown>, connId = 'c1') => {
-    const [frame, opened] = sealed({ requestId: randomUUID(), ...req })
-    await port.request(connId, frame, opened)
+    const payload = { requestId: randomUUID(), ...req }
+    await peerFor(core).request(connId, payload)
     // Answered once the service's own wait (a stop, an answer) is over.
-    await vi.waitFor(() => expect(sent(core).some((m) => m.frame === 'autonomous_device_result' && m.requestId === opened.payload.requestId)).toBe(true))
-    return sent(core).find((m) => m.requestId === opened.payload.requestId)!
+    await vi.waitFor(() => expect(sent(core).some((m) => m.frame === 'autonomous_device_result' && m.requestId === payload.requestId)).toBe(true))
+    return sent(core).find((m) => m.requestId === payload.requestId)!
   }
   const hello = async (connId = 'c1') => {
-    port.session(connId, client)
+    peerFor(core).session(connId, client)
     return ask({ type: 'hello', proto: 1 }, connId)
   }
-  return { core, port, ask, hello, http }
+  return { core, port, peer: peerFor(core), ask, hello, http }
+}
+
+async function joinDevice(core: CoreApi, connId = 'c1'): Promise<void> {
+  const requestId = randomUUID()
+  peerFor(core).session(connId, client)
+  await peerFor(core).request(connId, { type: 'hello', proto: 1, requestId })
+  await vi.waitFor(() => expect(sent(core).some(frame => frame.requestId === requestId)).toBe(true))
 }
 
 /** A device's identity as `harness device receipt` names it: a key, as its pairing made it. */
 const KEY = Buffer.alloc(32, 7).toString('base64')
 
 describe('the Wi-Fi device, with the dials', () => {
-  it('answers a device\'s hello through the core, which seals it to the session it came on, and counts it as watching', async () => {
+  it.each(['complete', 'failed'] as const)('keeps a confirmed Store creation pending while the pre-create view is still held: %s', async outcome => {
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    let created = false, store!: AutonomousDeviceStore, release!: (snapshot: SessionSnapshot) => void, fail!: (error: Error) => void
+    const snapshot = () => snapshotFixture({ registered: created ? [snapshotRow('created', {
+      session: { ...snapshotRow('created').session, cwd: realpathSync(dataDir), dsh: 'test/package',
+        active: true, sessionId: 'bound' },
+      facts: { displayName: 'Package', terminalAvailable: true, parts: {} },
+    })] : [], hasWindow: true })
+    const read = vi.fn(snapshotReader(async () => snapshot()))
+    Object.assign(core.agents, { readSessions: read, create: vi.fn(async () => {
+      created = true
+      return { ok: true, agentId: 'created' }
+    }) })
+    startWifi(core, ports, { store: options => {
+      store = new AutonomousDeviceStore({ directory: join(dataDir, 'preparations'), machineId: 'machine-1',
+        agents: options.agents,
+        agentsCurrent: options.agentsCurrent,
+        packages: async () => [{ packageId: 'test/package', name: 'Package', description: '', category: null,
+          engine: 'claude', installed: true, catalog: false, verified: false, viewerPackageId: null,
+          installAllowed: false, version: 'one', broken: null }],
+        install: async () => ({ ok: true }), doctor: async () => ({ ok: true, checked: true, lines: [] }),
+        workspace: async () => realpathSync(dataDir),
+        create: async (id, cwd) => {
+          const result = await options.create(id, 'claude', cwd)
+          return result.ok ? { state: 'created', agentId: result.agentId } : { state: 'failed', error: result.error }
+        }, reveal: options.reveal,
+      })
+      return store
+    } })
+    await ports.wifi!.resume({ focus: null })
+    const old = snapshot()
+    read.mockImplementationOnce(snapshotReader(() => new Promise((resolve, reject) => { release = resolve; fail = reject })))
+    const held = ports.wifi!.appFocus('machine-1', null, 'window')
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    try {
+      const answer = await store.request('device', { type: 'agent.prepare', requestId: randomUUID(), machineId: 'machine-1',
+        packageId: 'test/package', idempotencyKey: 'once', workspace: { kind: 'new', name: 'Package' } })
+      const id = (answer.operation as { operationId: string }).operationId
+      const receipts = new AgentCreationReceipts(join(dataDir, 'preparations', 'creations'))
+      await vi.waitFor(() => expect(receipts.status(id)).toEqual({ state: 'created', agentId: 'created' }))
+      expect(store.get('device', id)).toMatchObject({ state: 'running', phase: 'launch', agentId: 'created', error: null })
+      expect(core.clients.sendWindow).not.toHaveBeenCalled()
+      if (outcome === 'failed') {
+        const refused = expect(held).rejects.toThrow('read failed')
+        fail(new Error('read failed')); await refused
+        expect(store.get('device', id)).toMatchObject({ state: 'running', phase: 'launch', agentId: 'created', error: null })
+        expect(receipts.status(id)).toEqual({ state: 'created', agentId: 'created' })
+        await ports.wifi!.appFocus('machine-1', null, 'window')
+      } else { release(old); await held }
+      expect(store.get('device', id)).toMatchObject({ state: 'ready', phase: 'complete', agentId: 'created', error: null })
+      expect(await store.request('device', { type: 'agent.prepare', requestId: randomUUID(), machineId: 'machine-1',
+        packageId: 'test/package', idempotencyKey: 'once', workspace: { kind: 'new', name: 'Package' } })).toMatchObject({ status: 'duplicate' })
+      expect(core.agents.create).toHaveBeenCalledOnce()
+    } finally { release(old); await held.catch(() => {}) }
+  })
+
+  it('revokes Store view evidence with its component and preserves a known create after stop', async () => {
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    let given!: Parameters<typeof createDeviceStore>[0], finish!: (value: { ok: true; agentId: string }) => void
+    startWifi(core, ports, { store: options => { given = options; expect(options.agentsCurrent()).toBe(false); return createDeviceStore(options) } })
+    await ports.wifi!.resume({ focus: null })
+    expect(given.agentsCurrent()).toBe(true)
+    ports.wifi!.disconnected()
+    expect(given.agentsCurrent()).toBe(false)
+    await ports.wifi!.resume({ focus: null })
+    expect(given.agentsCurrent()).toBe(true)
+    vi.mocked(core.agents.create).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const creating = given.create('test/package', 'claude', dataDir)
+    await ports.wifi!.stop()
+    const reads = vi.mocked(core.agents.readSessions).mock.calls.length
+    finish({ ok: true, agentId: 'created' })
+    expect(await creating).toEqual({ ok: true, agentId: 'created' })
+    expect(given.agentsCurrent()).toBe(false)
+    expect(core.agents.readSessions).toHaveBeenCalledTimes(reads)
+  })
+  it('uses the process-owned validated view source while keeping inline reads separate', async () => {
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    const readView = vi.fn(async () => ({ agents: [], store: [], hasWindow: true }))
+    startWifi(core, ports, { readView })
+    await ports.wifi!.resume({ focus: null })
+    expect(readView).toHaveBeenCalledWith(expect.any(AbortSignal))
+    expect(core.agents.readSessions).not.toHaveBeenCalled()
+    const calls = readView.mock.calls.length
+    expect(await ports.wifi!.appFocus('machine-1', null, 'window')).toBeUndefined()
+    expect(readView).toHaveBeenCalledTimes(calls + 1)
+  })
+  it('refuses an old relay request callback after disconnect or component stop', async () => {
+    const relay = vi.spyOn(gatewayRelay, 'deviceRelayOverGateway')
+    try {
+      const core = fakeCore({ dataDir }), ports = emptyPorts()
+      startWifi(core, ports); await ports.wifi!.resume({ focus: null })
+      const refresh = relay.mock.calls.at(-1)![0].beforeRequest
+      ports.wifi!.disconnected()
+      await expect(refresh({ type: 'agents.list' })).rejects.toThrow('CORE_VIEW_UNAVAILABLE')
+      await ports.wifi!.resume({ focus: null }); await ports.wifi!.stop()
+      await expect(refresh({ type: 'agents.list' })).rejects.toThrow('CORE_VIEW_UNAVAILABLE')
+    } finally { relay.mockRestore() }
+  })
+
+  it('does not restart the relay if its owner disconnects after projection but before resume completes', async () => {
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    startWifi(core, ports); await ports.wifi!.resume({ focus: null })
+    let complete!: (view: wifiViews.WifiView) => void
+    const projected = new Promise<wifiViews.WifiView>(resolve => { complete = resolve })
+    const reader = vi.spyOn(wifiViews, 'readWifiView').mockReturnValueOnce(projected)
+    const start = vi.spyOn(peerFor(core), 'start')
+    try {
+      const pending = ports.wifi!.resume({ focus: null })
+      complete({ agents: [], store: [], hasWindow: false })
+      await projected
+      ports.wifi!.disconnected()
+      await pending
+      expect(start).not.toHaveBeenCalled()
+    } finally { reader.mockRestore(); start.mockRestore() }
+  })
+
+  it.each(['disconnect', 'resume', 'stop', 'machine'] as const)('revokes the original Stop and closes its socket owner on %s', async end => {
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    let device!: ConstructorParameters<typeof AutonomousDeviceService>[0], release!: (ok: boolean) => void
+    const stop = vi.fn((_id: string, _current: () => boolean, _signal: AbortSignal) => new Promise<boolean>(done => { release = done }))
+    startWifi(core, ports, { stop, service: options => { device = options; return new AutonomousDeviceService(options) } })
+    const pending = device.stop('agent'), [, current, signal] = stop.mock.calls[0]
+    if (end === 'disconnect') ports.wifi!.disconnected()
+    else if (end === 'stop') await ports.wifi!.stop()
+    else if (end === 'resume') await ports.wifi!.resume({ focus: null })
+    else vi.mocked(core.machine.id).mockReturnValue('other')
+    expect(current()).toBe(false)
+    if (end !== 'machine') expect(signal.aborted).toBe(true)
+    release(true); expect(await pending).toBe(false)
+    if (end !== 'resume') expect(await device.stop('agent')).toBe(false)
+  })
+
+  it('stops through its component-owned confirmed request instead of the private core door', async () => {
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    let device!: ConstructorParameters<typeof AutonomousDeviceService>[0]
+    const stop = vi.fn(async (_agentId: string, current: () => boolean) => current())
+    startWifi(core, ports, { stop, service: options => { device = options; return new AutonomousDeviceService(options) } })
+    expect(await device.stop('agent')).toBe(true)
+    expect(stop).toHaveBeenCalledWith('agent', expect.any(Function), expect.any(AbortSignal))
+  })
+
+  it('revokes a confirmed stop when its original core epoch goes away', async () => {
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    let device!: ConstructorParameters<typeof AutonomousDeviceService>[0], finish!: (ok: boolean) => void, current!: () => boolean
+    const stop = vi.fn((_agentId: string, live: () => boolean) => { current = live; return new Promise<boolean>(resolve => { finish = resolve }) })
+    startWifi(core, ports, { stop, service: options => { device = options; return new AutonomousDeviceService(options) } })
+    const pending = device.stop('agent')
+    expect(stop).toHaveBeenCalledOnce()
+    ports.wifi!.disconnected()
+    expect(current()).toBe(false)
+    finish(true)
+    expect(await pending).toBe(false)
+  })
+
+  it('derives the actual device list and Store preparation evidence from shared session facts', async () => {
+    const row = (agentId: string, terminalAvailable: boolean) => ({
+      session: { agentId, sessionId: '', engine: 'claude', registeredAt: 1, transcriptPath: null, lastHookAt: 0,
+        active: true, cwd: dataDir, dsh: null },
+      facts: { displayName: `Shown ${agentId}`, terminalAvailable, parts: { dsh: 'service-package' } },
+      selectedModel: null, turnRunning: true,
+    })
+    const snapshot = vi.fn(snapshotReader(async () => ({ version: 2, registered: [row('shown', true), row('hidden', false)], cloud: [],
+      machine: { id: 'machine-1', computerId: 'c1', name: 'Desk' }, signedIn: true, environment: 'prod', hasWindow: true })))
+    const core = fakeCore({ dataDir })
+    Object.assign(core.agents, { readSessions: snapshot })
+    let storeOptions!: Parameters<typeof createDeviceStore>[0]
+    const ports = emptyPorts()
+    startWifi(core, ports, { store: options => { storeOptions = options; return createDeviceStore(options) } })
+    await joinDevice(core)
+    const requestId = randomUUID()
+    await peerFor(core).request('c1', { type: 'agents.list', requestId })
+    await vi.waitFor(() => expect(sent(core).some(frame => frame.requestId === requestId)).toBe(true))
+    const answer = sent(core).find(frame => frame.requestId === requestId)!
+    expect(answer.agents).toEqual([{ agentId: 'shown', machineId: 'machine-1', name: 'Shown shown', engine: 'claude',
+      packageId: 'service-package', workspace: realpathSync(dataDir), runtime: 'starting', state: 'running' }])
+    expect(storeOptions.agents().map(agent => [agent.agentId, agent.runtime])).toEqual([['shown', 'starting'], ['hidden', 'unavailable']])
+    expect(snapshot).toHaveBeenCalled()
+  })
+
+  it('builds first-window focus and reveal frames in the component with its verified machine', async () => {
+    const sendWindow = vi.fn(() => false)
+    const core = fakeCore({ dataDir, machine: { id: () => 'verified-machine' }, clients: { sendWindow } })
+    let device!: ConstructorParameters<typeof AutonomousDeviceService>[0]
+    let store!: Parameters<typeof createDeviceStore>[0]
+    startWifi(core, emptyPorts(), {
+      service: options => { device = options; return new AutonomousDeviceService(options) },
+      store: options => { store = options; return createDeviceStore(options) },
+    })
+    expect(device.requestAppFocus!('agent', 123, 'revision')).toBe(false)
+    store.reveal!('operation', 'agent')
+    expect(sendWindow.mock.calls).toEqual([
+      [{ target: { kind: 'first' }, frame: { type: 'device_focus', payload: { machineId: 'verified-machine', agentId: 'agent', expiresAt: 123, focusRevision: 'revision' } } }],
+      [{ target: { kind: 'first' }, frame: { type: 'device_prepare_open', payload: { operationId: 'operation', machineId: 'verified-machine', agentId: 'agent' } } }],
+    ])
+  })
+
+  it('binds a cohost gesture to this component until its result settles', async () => {
+    const core = fakeCore({ dataDir, agents: { readSessions: vi.fn(snapshotReader(async () => snapshotFor({ agents: [agent], store: [], hasWindow: true }))) } })
+    const ports = emptyPorts()
+    let given!: ConstructorParameters<typeof AutonomousDeviceService>[0], current!: () => boolean
+    let release!: (value: { machineId: string; agentId: string }) => void
+    const stepFocus = vi.fn<DeviceDesk['stepFocus']>((_direction, _agent, active) => {
+      current = active; return new Promise<{ machineId: string; agentId: string }>(resolve => { release = resolve })
+    })
+    const scroll = vi.fn<DeviceDesk['scroll']>((_phase, _dy, _velocity, active) => active())
+    deskOwners.push(publishDeviceDesk({ dataDir, machineId: core.machine.id(), current: () => true, hasWindow: () => true, desk: { stepFocus, scroll } }))
+    startWifi(core, ports, { service: options => { given = options; return new AutonomousDeviceService(options) } })
+    await joinDevice(core)
+    expect(given.scroll!('move', 2, 3)).toBe(true)
+    stepFocus.mockResolvedValueOnce({ machineId: core.machine.id(), agentId: 'next' })
+    expect(await given.stepFocus!('next', 'agent')).toEqual({ machineId: core.machine.id(), agentId: 'next' })
+    const step = given.stepFocus!('next', 'agent')
+    expect(current()).toBe(true)
+    ports.wifi!.disconnected()
+    expect(current()).toBe(false)
+    release({ machineId: core.machine.id(), agentId: 'next' })
+    expect(await step).toBe('no_agents')
+    expect(given.scroll!('move', 2, 3)).toBe(false)
+    expect(await given.stepFocus!('next', 'agent')).toBe('no_agents')
+    expect(core).not.toHaveProperty('wifi')
+  })
+
+  it('uses the published devices desk inline with a current window and withdraws late results', async () => {
+    let hasWindow = false
+    const core = fakeCore({ dataDir, agents: { readSessions: vi.fn(snapshotReader(async () => snapshotFor({ agents: [agent], store: [], hasWindow }))) } })
+    const ports = emptyPorts(), scroll = vi.fn(), stepFocus = vi.fn(async () => ({ machineId: core.machine.id(), agentId: 'next' }))
+    deskOwners.push(publishDeviceDesk({ dataDir, machineId: core.machine.id(), current: () => true, hasWindow: () => hasWindow, desk: { stepFocus, scroll } }))
+    let given!: ConstructorParameters<typeof AutonomousDeviceService>[0]
+    startWifi(core, ports, { service: options => { given = options; return new AutonomousDeviceService(options) } })
+    await joinDevice(core)
+    expect(await given.stepFocus!('next', 'agent')).toBe('no_app')
+    expect(given.scroll!('move', 2, 3)).toBe(false)
+    expect(stepFocus).not.toHaveBeenCalled(); expect(scroll).not.toHaveBeenCalled()
+    hasWindow = true; await ports.wifi!.resume({ focus: null })
+    expect(await given.stepFocus!('next', 'agent')).toEqual({ machineId: core.machine.id(), agentId: 'next' })
+    expect(given.scroll!('move', 2, 3)).toBe(true)
+    let release!: (value: { machineId: string; agentId: string }) => void
+    stepFocus.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    const pending = given.stepFocus!('next', 'agent')
+    ports.wifi!.disconnected(); release({ machineId: core.machine.id(), agentId: 'next' })
+    expect(await pending).toBe('no_agents')
+    expect(core).not.toHaveProperty('wifi')
+  })
+
+  it('keeps a mixed scroll refusal bound to its own probe while a later gesture recovers', async () => {
+    const relay = vi.spyOn(gatewayRelay, 'deviceRelayOverGateway')
+    let finish!: (ready: boolean) => void
+    const deskReady = vi.fn<() => Promise<boolean>>().mockImplementationOnce(() => new Promise(resolve => { finish = resolve })).mockResolvedValue(true)
+    const scroll = vi.fn(() => true), core = fakeCore({ dataDir }), ports = emptyPorts()
+    startWifi(core, ports, { observeSessions: () => ({ ready: Promise.resolve(), close: vi.fn(), stop: vi.fn(async () => {}), barrier: vi.fn(async () => {}), deskReady, scroll }) })
+    await joinDevice(core)
+    const before = relay.mock.calls.at(-1)![0].beforeRequest
+    const first = before({ type: 'scroll', phase: 'down' })
+    await vi.waitFor(() => expect(deskReady).toHaveBeenCalledOnce())
+    expect(await before({ type: 'scroll', phase: 'up', dy: 0, velocity: 0 })).toBeUndefined()
+    finish(false)
+    expect(await first).toMatchObject({ code: 'FOCUS_UNAVAILABLE' })
+    expect(scroll).not.toHaveBeenCalled()
+    expect(await before({ type: 'agents.list' })).toBeUndefined()
+    expect(await before({ type: 'scroll', phase: 'invalid' })).toBeUndefined()
+    expect(deskReady).toHaveBeenCalledTimes(2)
+    relay.mockRestore()
+  })
+
+  it.each(['resume', 'feed', 'binding'] as const)('refuses an awaited mixed scroll after the same-identity %s lifetime changes', async change => {
+    const relay = vi.spyOn(gatewayRelay, 'deviceRelayOverGateway')
+    let finish!: (ready: boolean) => void, bound = true
+    const deskReady = vi.fn(() => new Promise<boolean>(resolve => { finish = resolve }))
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    let options!: DeviceSessionFeedOptions
+    startWifi(core, ports, { deskCurrent: () => { const original = bound; return () => original && bound }, observeSessions: given => {
+      options = given
+      return { ready: Promise.resolve(), close: vi.fn(), stop: vi.fn(async () => {}), barrier: vi.fn(async () => {}), deskReady, scroll: vi.fn(() => true) }
+    } })
+    await joinDevice(core)
+    const before = relay.mock.calls.at(-1)![0].beforeRequest
+    const old = before({ type: 'scroll', phase: 'move', dy: 1, velocity: 2 })
+    await vi.waitFor(() => expect(deskReady).toHaveBeenCalledOnce())
+    if (change === 'resume') await ports.wifi!.resume({ focus: null })
+    else if (change === 'binding') bound = false
+    else options.unavailable('SESSION_EVENTS_UNAVAILABLE')
+    finish(true)
+    expect(await old).toMatchObject({ code: 'FOCUS_UNAVAILABLE' })
+    relay.mockRestore()
+  })
+
+  it('skips a mixed probe for a cohost stroke and refuses a missing observation feed', async () => {
+    const relay = vi.spyOn(gatewayRelay, 'deviceRelayOverGateway'), deskReady = vi.fn(async () => true)
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    let given!: ConstructorParameters<typeof AutonomousDeviceService>[0], feed!: DeviceSessionFeedOptions
+    startWifi(core, ports, { service: options => { given = options; return new AutonomousDeviceService(options) }, observeSessions: options => {
+      feed = options
+      return { ready: Promise.resolve(), close: vi.fn(), stop: vi.fn(async () => {}), barrier: vi.fn(async () => {}), deskReady, scroll: vi.fn(() => true) }
+    } })
+    await joinDevice(core)
+    const before = relay.mock.calls.at(-1)![0].beforeRequest
+    const revoke = publishDeviceDesk({ dataDir, machineId: core.machine.id(), current: () => true, hasWindow: () => true,
+      desk: { stepFocus: async () => 'no_agents', scroll: vi.fn() } })
+    expect(await before({ type: 'scroll', phase: 'up' })).toBeUndefined()
+    expect(deskReady).not.toHaveBeenCalled(); revoke()
+    feed.unavailable('SESSION_EVENTS_UNAVAILABLE')
+    expect(given.scroll!('up', 0, 0)).toBe(false)
+    expect(await before({ type: 'scroll', phase: 'down' })).toMatchObject({ code: 'FOCUS_UNAVAILABLE' })
+    relay.mockRestore()
+  })
+
+  it('refuses a stroke whose captured binding is revoked during the shared view read', async () => {
+    const relay = vi.spyOn(gatewayRelay, 'deviceRelayOverGateway'), core = fakeCore({ dataDir }), ports = emptyPorts()
+    let bound = true, finish!: (value: Awaited<ReturnType<NonNullable<WifiDeps['readView']>>>) => void
+    const view: Awaited<ReturnType<NonNullable<WifiDeps['readView']>>> = { agents: [], store: [], hasWindow: true }
+    const readView = vi.fn(async () => view)
+    startWifi(core, ports, { readView, deskCurrent: () => () => bound })
+    await joinDevice(core)
+    readView.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const result = relay.mock.calls.at(-1)![0].beforeRequest({ type: 'scroll', phase: 'down' })
+    bound = false; finish(view)
+    expect(await result).toMatchObject({ code: 'FOCUS_UNAVAILABLE' })
+    relay.mockRestore()
+  })
+
+  it('uses the component daemon address for a mixed step when its process CoreApi has no address', async () => {
+    const core = fakeCore({ dataDir, daemon: { port: 0 } }), ports = emptyPorts()
+    let given!: ConstructorParameters<typeof AutonomousDeviceService>[0]
+    startWifi(core, ports, { peer: { composition: 'inline', port: 12345 }, service: options => { given = options; return new AutonomousDeviceService(options) } })
+    await joinDevice(core)
+    await given.stepFocus!('previous', 'agent')
+    expect(stepDeviceDesk).toHaveBeenLastCalledWith({ dataDir, port: 12345, machineId: core.machine.id() }, 'previous', 'agent', expect.any(Function), expect.any(AbortSignal))
+  })
+
+  it('uses one mixed step request and rechecks its original component after the reply', async () => {
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    let given!: ConstructorParameters<typeof AutonomousDeviceService>[0], finish!: (result: { machineId: string; agentId: string }) => void
+    startWifi(core, ports, { service: options => { given = options; return new AutonomousDeviceService(options) } })
+    await joinDevice(core)
+    const step = vi.mocked(stepDeviceDesk)
+    step.mockClear().mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const old = given.stepFocus!('next', 'agent')
+    expect(step).toHaveBeenCalledOnce()
+    ports.wifi!.disconnected()
+    finish({ machineId: core.machine.id(), agentId: 'next' })
+    expect(await old).toBe('no_agents')
+    expect(step).toHaveBeenCalledOnce()
+  })
+
+  it('answers on its existing owner-tool question socket with the question id and no permission authority', async () => {
+    const actual = await vi.importActual<typeof import('../agentClient/questions.js')>('../agentClient/questions.js')
+    const socket = new EventEmitter() as EventEmitter & ClientSocket
+    const wire: Array<{ type: string; payload: Record<string, unknown> }> = []
+    const frame = (type: string, payload: Record<string, unknown>) => socket.emit('message', { toString: () => JSON.stringify({ type, payload }) }, false)
+    socket.close = vi.fn(() => { socket.emit('close', 1000) })
+    socket.send = text => {
+      const sent = JSON.parse(text); wire.push(sent)
+      if (sent.type === 'machine_select') queueMicrotask(() => frame('connected', { questionProtocol: 1 }))
+      if (sent.type === 'questions_observe') queueMicrotask(() => {
+        frame('questions_observe_result', { requestId: sent.payload.requestId, ok: true, generation: 'g' })
+        frame('questions_begin', { generation: 'g' }); frame('questions_end', { generation: 'g' })
+      })
+    }
+    const core = fakeCore({ dataDir, agents: { readSessions: vi.fn(snapshotReader(async () => snapshotFor({ agents: [agent], store: [], hasWindow: true }))) } })
+    let given!: ConstructorParameters<typeof AutonomousDeviceService>[0]
+    startWifi(core, emptyPorts(), {
+      service: options => { given = options; return new AutonomousDeviceService(options) },
+      observeQuestions: (listener, budget) => actual.observeQuestions({ dataDir, port: 1, machineId: 'machine-1' }, listener,
+        () => { queueMicrotask(() => queueMicrotask(() => socket.emit('open'))); return socket }, budget),
+    })
+    await joinDevice(core)
+    const answer = given.answer('agent', 'the-question-id', { q: 'yes' })
+    await Promise.resolve()
+    expect(wire.filter(frame => frame.type === 'question_response')).toEqual([{ type: 'question_response', payload: {
+      agentId: 'agent', requestId: 'the-question-id', answers: { q: 'yes' }, allowPermissions: false,
+    } }])
+    frame('question_response_result', { requestId: 'the-question-id', ok: true })
+    expect(await answer).toBe(true)
+    expect(wire.filter(frame => frame.type === 'machine_select')).toHaveLength(1)
+  })
+
+  it('does not confirm an answer after its original core or question observation ended', async () => {
+    for (const lost of ['core', 'observation', 'resume', 'stop'] as const) {
+      let listener!: QuestionListener, settle!: (ok: boolean) => void, current!: () => boolean
+      const answer = vi.fn((_agent: string, _id: string, _answers: Record<string, string>, active: () => boolean) => {
+        current = active; return new Promise<boolean>(resolve => { settle = resolve })
+      })
+      const core = fakeCore({ dataDir, agents: { readSessions: vi.fn(snapshotReader(async () => snapshotFor({ agents: [agent], store: [], hasWindow: true }))) } })
+      const ports = emptyPorts(); let given!: ConstructorParameters<typeof AutonomousDeviceService>[0]
+      startWifi(core, ports, { service: options => { given = options; return new AutonomousDeviceService(options) },
+        observeQuestions: heard => { listener = heard; return { ready: Promise.resolve().then(() => { heard.begin('g'); heard.end('g') }), answer, close: vi.fn() } } })
+      await joinDevice(core)
+      answer.mockResolvedValueOnce(false)
+      expect(await given.answer('agent', 'negative', { q: 'yes' })).toBe(false)
+      const pending = given.answer('agent', 'q', { q: 'yes' })
+      expect(current()).toBe(true)
+      if (lost === 'core') ports.wifi!.disconnected()
+      else if (lost === 'observation') listener.unavailable('QUESTION_ANSWER_TIMEOUT')
+      else if (lost === 'resume') await ports.wifi!.resume({ focus: null })
+      else await ports.wifi!.stop()
+      expect(current()).toBe(false)
+      settle(true)
+      expect(await pending).toBe(false)
+      if (lost !== 'resume') expect(await given.answer('agent', 'q', { q: 'yes' })).toBe(false)
+      expect(answer).toHaveBeenCalledTimes(2)
+      await ports.wifi!.stop()
+    }
+  })
+
+  it('bounds the existing focus chain and retains its actual charge through disconnect and replacement', async () => {
+    const f = started(); await f.hello()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let release!: (value: SessionSnapshot) => void
+    vi.mocked(f.core.agents.readSessions).mockImplementationOnce(snapshotReader(() => new Promise(resolve => { release = resolve })))
+    const pending = [f.port.appFocus('machine-1', 'agent', 'w').catch(() => {})]
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    for (let n = 1; n < 100; n++) pending.push(f.port.appFocus('machine-1', 'agent', 'w').catch(() => {}))
+    let refused = false
+    pending.push(f.port.appFocus('machine-1', 'agent', 'w').catch(() => { refused = true }))
+    try {
+      await Promise.resolve(); await Promise.resolve()
+      expect(refused).toBe(true)
+      expect(warn).toHaveBeenCalledWith('[wifi] WIFI_FOCUS_BACKPRESSURE')
+      f.port.disconnected()
+      const next = started(); await next.hello()
+      await expect(next.port.appFocus('machine-1', 'agent', 'w')).rejects.toThrow('WIFI_FOCUS_BACKPRESSURE')
+      release(snapshotFor({ agents: [agent], store: [], hasWindow: true })); await Promise.all(pending)
+      await next.port.resume({ focus: null })
+      await expect(next.port.appFocus('machine-1', 'agent', 'w')).resolves.toBeUndefined()
+    } finally { release(snapshotFor({ agents: [agent], store: [], hasWindow: true })); await Promise.all(pending); warn.mockRestore() }
+  })
+
+  it('expires a held focus visibly without authorizing its queued moves or freeing actual work', async () => {
+    const f = started(); await f.hello()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let release!: (value: SessionSnapshot) => void
+    vi.mocked(f.core.agents.readSessions).mockImplementationOnce(snapshotReader(() => new Promise(resolve => { release = resolve })))
+    vi.useFakeTimers()
+    let failed = ''
+    const moving = f.port.appFocus('machine-1', 'agent', 'w').catch(error => { failed = error.message })
+    await vi.advanceTimersByTimeAsync(0)
+    try {
+      await vi.advanceTimersByTimeAsync(15_000)
+      expect(failed).toBe('WIFI_FOCUS_TIMEOUT')
+      expect(warn).toHaveBeenCalledWith('[wifi] WIFI_FOCUS_TIMEOUT')
+    } finally { release(snapshotFor({ agents: [agent], store: [], hasWindow: true })); await moving; vi.useRealTimers(); warn.mockRestore() }
+  })
+
+  it('does not let an old focus deadline disconnect a replacement core generation', async () => {
+    const f = started(); await f.hello()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let release!: (value: SessionSnapshot) => void
+    vi.mocked(f.core.agents.readSessions).mockImplementationOnce(snapshotReader(() => new Promise(resolve => { release = resolve })))
+    vi.useFakeTimers()
+    const moving = f.port.appFocus('machine-1', 'agent', 'old').catch(error => error.message)
+    await vi.advanceTimersByTimeAsync(0)
+    f.port.disconnected()
+    const resuming = f.port.resume({ focus: null })
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(await moving).toBe('WIFI_FOCUS_TIMEOUT')
+    expect(warn).not.toHaveBeenCalled()
+    release(snapshotFor({ agents: [agent], store: [], hasWindow: true }))
+    await vi.advanceTimersByTimeAsync(0); await resuming
+    vi.useRealTimers(); warn.mockRestore()
+  })
+
+  it.each(['stopped', 'disconnected', 'replaced'] as const)('revokes a resume still waiting for observation readiness when %s', async change => {
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    const observe = vi.fn(() => ({ ready: held, deskReady: vi.fn(async () => true), scroll: vi.fn(() => true), close: vi.fn(), stop: vi.fn(async () => {}), barrier: vi.fn(async () => {}) }))
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    startWifiService(core, ports, { observeSessions: observe })
+    const port = ports.wifi!; running.push(port)
+    const start = vi.spyOn(peers.at(-1)!, 'start')
+    const resuming = port.resume({ focus: null })
+    await vi.waitFor(() => expect(observe).toHaveBeenCalledOnce())
+    if (change === 'stopped') await port.stop()
+    else {
+      port.disconnected()
+      if (change === 'replaced') {
+        observe.mockReturnValueOnce({ ready: Promise.resolve(), deskReady: vi.fn(async () => true), scroll: vi.fn(() => true), close: vi.fn(), stop: vi.fn(async () => {}), barrier: vi.fn(async () => {}) })
+        await port.resume({ focus: null })
+      }
+    }
+    const currentStarts = start.mock.calls.length
+    release(); await resuming
+    expect(start).toHaveBeenCalledTimes(currentStarts)
+  })
+
+  it('reports serving only while the optional component has its core connection', async () => {
+    const core = fakeCore({ dataDir }), ports = emptyPorts(), requests = startWifi(core, ports)
+    const wake = () => requests.wifi_serving!({}, { local: true, owner: true })
+    expect(await wake()).toEqual({ serving: true })
+    await ports.wifi!.resume({ focus: null })
+    ports.wifi!.disconnected()
+    expect(await wake()).toEqual({ serving: false })
+    await ports.wifi!.resume({ focus: null })
+    expect(await wake()).toEqual({ serving: true })
+    await ports.wifi!.stop()
+    expect(await wake()).toEqual({ serving: false })
+  })
+
+  it('keeps a same-connection read alive when a duplicate resume only supersedes its view', async () => {
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    startWifi(core, ports)
+    await ports.wifi!.resume({ focus: null })
+    let release!: (value: SessionSnapshot) => void, signal!: AbortSignal
+    vi.mocked(core.agents.readSessions).mockImplementationOnce((_scope, receive, closed) => {
+      signal = closed!
+      return snapshotReader(() => new Promise(resolve => { release = resolve }))(_scope, receive, closed)
+    })
+    const first = ports.wifi!.resume({ focus: null }), second = ports.wifi!.resume({ focus: null })
+    const both = Promise.allSettled([first, second])
+    const aborted = signal.aborted
+    release(snapshotFixture())
+    await both
+    expect(aborted).toBe(false)
+  })
+
+  it('starts only the latest resume when a second core resume arrives after the first view is read', async () => {
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    startWifi(core, ports)
+    await ports.wifi!.resume({ focus: null })
+    ports.wifi!.disconnected()
+    const start = vi.spyOn(peerFor(core), 'start')
+    const first = ports.wifi!.resume({ focus: null })
+    const second = Promise.resolve().then(() => ports.wifi!.resume({ focus: null }))
+    await Promise.all([first, second])
+    expect(start).toHaveBeenCalledOnce()
+  })
+
+  it('checks conditional focus only after preceding window moves and rejects malformed revisions', async () => {
+    let service!: AutonomousDeviceService
+    const core = fakeCore({ dataDir, agents: { readSessions: vi.fn(snapshotReader(async () => snapshotFor({ agents: [agent], store: [], hasWindow: true }))) } })
+    const ports = emptyPorts()
+    const requests = startWifi(core, ports, { service: options => service = new AutonomousDeviceService(options) })
+    await ports.wifi!.resume({ focus: null })
+    const revision = service.focusSnapshot().focusRevision
+    const check = (revision: unknown) => requests.wifi_focus_current!({ revision }, { local: true, owner: true })
+    expect(await check(revision)).toEqual({ current: true })
+    for (const value of [undefined, '', 'x'.repeat(129), 42, revision + 'stale']) expect(await check(value)).toEqual({ current: false })
+    let finish!: (value: SessionSnapshot) => void
+    vi.mocked(core.agents.readSessions).mockImplementationOnce(snapshotReader(() => new Promise(resolve => { finish = resolve })))
+    const moving = ports.wifi!.appFocus('machine-1', 'agent', 'window')
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    let settled = false
+    const checking = Promise.resolve(check(revision)).then(answer => { settled = true; return answer })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    finish(snapshotFor({ agents: [agent], store: [], hasWindow: true }))
+    await moving
+    expect(await checking).toEqual({ current: false })
+    expect(await check(service.focusSnapshot().focusRevision)).toEqual({ current: true })
+  })
+
+  it('does not apply a queued old focus after a new resume supplies the current epoch', async () => {
+    let service!: AutonomousDeviceService
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    const token = 'fixture-token-for-service-authority-32-bytes'
+    startWifi(core, ports, { service: options => service = new AutonomousDeviceService(options),
+      peer: { composition: 'services', port: 18474, token } })
+    await ports.wifi!.resume({ focus: null })
+    expect(vi.mocked(devicePeerConnection).mock.calls.at(-1)?.[0]).toMatchObject({
+      port: 18474, key: devicePeerKey('services', { HARNESSD_SERVICE_TOKEN: token }),
+    })
+    const moved = vi.spyOn(service, 'appFocus')
+    const old = ports.wifi!.appFocus('machine-1', null, 'old-window')
+    const resumed = ports.wifi!.resume({ focus: null })
+    await Promise.all([old, resumed])
+    expect(moved).not.toHaveBeenCalled()
+  })
+
+  it.each(['disconnect', 'resume', 'stop'] as const)('revokes a pending focus check on %s and never blesses its old completion', async change => {
+    let service!: AutonomousDeviceService
+    const core = fakeCore({ dataDir, agents: { readSessions: vi.fn(snapshotReader(async () => snapshotFor({ agents: [agent], store: [], hasWindow: true }))) } })
+    const ports = emptyPorts()
+    const requests = startWifi(core, ports, { service: options => service = new AutonomousDeviceService(options) })
+    await ports.wifi!.resume({ focus: null })
+    let finish!: (value: SessionSnapshot) => void
+    vi.mocked(core.agents.readSessions).mockImplementationOnce(snapshotReader(() => new Promise(resolve => { finish = resolve })))
+    const moving = ports.wifi!.appFocus('machine-1', null, 'window').catch(() => {})
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    const checking = requests.wifi_focus_current!({ revision: service.focusSnapshot().focusRevision }, { local: true, owner: true })
+    let resumed: Promise<void> | undefined
+    if (change === 'stop') await ports.wifi!.stop()
+    else { ports.wifi!.disconnected(); if (change === 'resume') resumed = ports.wifi!.resume({ focus: null }) }
+    finish(snapshotFor({ agents: [agent], store: [], hasWindow: true }))
+    await moving; await resumed
+    expect(await checking).toEqual({ current: false })
+  })
+
+  it('bounds failed observation reconnects and never retries input effects', async () => {
+    vi.useFakeTimers()
+    const listeners: QuestionListener[] = []
+    const observe = vi.fn((listener: QuestionListener) => {
+      listeners.push(listener)
+      if (listeners.length > 1) return { ready: Promise.reject(new Error('connection lost')), answer: vi.fn(async () => false), close: vi.fn() }
+      listener.begin('initial'); listener.end('initial')
+      return { ready: Promise.resolve(), answer: vi.fn(async () => true), close: vi.fn() }
+    })
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    startWifi(core, ports, { observeQuestions: observe })
+    await joinDevice(core)
+    listeners[0].unavailable('QUESTION_OBSERVATION_UNAVAILABLE')
+    await vi.advanceTimersByTimeAsync(250 + 500 + 1_000 + 2_000 + 5_000)
+    expect(observe).toHaveBeenCalledTimes(6)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(observe).toHaveBeenCalledTimes(6)
+    expect(core.turns.deliver).not.toHaveBeenCalled()
+    await ports.wifi!.stop()
+  })
+
+  it('cancels a pending reconnect on last departure and lets a real reconnect replace its timer', async () => {
+    vi.useFakeTimers()
+    const listeners: QuestionListener[] = [], close = vi.fn()
+    let service!: AutonomousDeviceService
+    const observe = vi.fn((listener: QuestionListener) => {
+      listeners.push(listener)
+      listener.begin(`g${listeners.length}`); listener.end(`g${listeners.length}`)
+      return { ready: Promise.resolve(), answer: vi.fn(async () => true), close }
+    })
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    startWifi(core, ports, { observeQuestions: observe, service: options => service = new AutonomousDeviceService(options) })
+    await joinDevice(core)
+    listeners[0].unavailable('QUESTION_OBSERVATION_UNAVAILABLE')
+    peerFor(core).drop('c1')
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(observe).toHaveBeenCalledTimes(1)
+    const begin = vi.spyOn(service, 'beginQuestions'), question = vi.spyOn(service, 'observeQuestion'), end = vi.spyOn(service, 'endQuestions')
+    listeners[0].begin('stale'); listeners[0].question('stale', {}); listeners[0].end('stale'); listeners[0].unavailable('QUESTION_OBSERVATION_UNAVAILABLE')
+    expect(begin).not.toHaveBeenCalled(); expect(question).not.toHaveBeenCalled(); expect(end).not.toHaveBeenCalled()
+    await joinDevice(core)
+    listeners[1].unavailable('QUESTION_OBSERVATION_BACKPRESSURE')
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(observe).toHaveBeenCalledTimes(2)
+    await joinDevice(core)
+    listeners[2].unavailable('QUESTION_OBSERVATION_UNAVAILABLE')
+    await joinDevice(core)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(observe).toHaveBeenCalledTimes(4)
+    await ports.wifi!.stop()
+  })
+
+  it('shares pending readiness across clients and ignores completion after the component stops', async () => {
+    let done!: () => void, listener!: QuestionListener, service!: AutonomousDeviceService
+    const close = vi.fn(), observe = vi.fn((heard: QuestionListener) => {
+      listener = heard
+      return { ready: new Promise<void>(resolve => { done = resolve }), answer: vi.fn(async () => true), close }
+    })
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    startWifi(core, ports, { observeQuestions: observe, service: options => service = new AutonomousDeviceService(options) })
+    for (const connId of ['c1', 'c2']) {
+      peerFor(core).session(connId, client)
+      await peerFor(core).request(connId, { type: 'hello', proto: 1, requestId: connId })
+    }
+    expect(observe).toHaveBeenCalledOnce()
+    await ports.wifi!.stop()
+    const end = vi.spyOn(service, 'endQuestions')
+    listener.end('late'); done()
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(sent(core)).toEqual([])
+    expect(end).not.toHaveBeenCalled()
+    expect(close).toHaveBeenCalledOnce()
+    await expect(ports.wifi!.resume({ focus: null })).rejects.toThrow('CORE_VIEW_UNAVAILABLE')
+  })
+
+  it('closes observation when its only pending hello leaves and never restores that departed audience', async () => {
+    let done!: () => void, listener!: QuestionListener
+    const close = vi.fn(), observe = vi.fn((heard: QuestionListener) => {
+      listener = heard
+      return { ready: new Promise<void>(resolve => { done = resolve }), answer: vi.fn(async () => true), close }
+    })
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    startWifi(core, ports, { observeQuestions: observe })
+    peerFor(core).session('pending', client)
+    await peerFor(core).request('pending', { type: 'hello', proto: 1, requestId: 'pending' })
+    expect(observe).toHaveBeenCalledOnce()
+    peerFor(core).drop('pending')
+    expect(close).toHaveBeenCalledOnce()
+    listener.begin('late'); listener.end('late'); done()
+    // All promise continuations from this completed fake transport run before the next turn.
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(peerFor(core).sent.some(frame => frame.type === 'joined')).toBe(false)
+    expect(sent(core)).toEqual([])
+    await ports.wifi!.stop()
+  })
+
+  it('closes a fresh restore observer when its last snapshot hello leaves before readiness', async () => {
+    let done!: () => void, listener!: QuestionListener
+    const close = vi.fn(), observe = vi.fn((heard: QuestionListener) => {
+      listener = heard
+      return { ready: new Promise<void>(resolve => { done = resolve }), answer: vi.fn(async () => true), close }
+    })
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    startWifi(core, ports, { observeQuestions: observe })
+    const peer = peerFor(core)
+    peer.sessions.set('restored', { connId: 'restored', identity: client.identity, incarnation: 'original', direct: true, hello: true })
+    await vi.waitFor(() => expect(observe).toHaveBeenCalledOnce())
+    peer.drop('restored')
+    expect(close).toHaveBeenCalledOnce()
+    listener.begin('late'); listener.end('late'); done()
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(peer.sent.some(frame => frame.type === 'joined')).toBe(false)
+    expect(peer.replies()).toEqual([])
+  })
+
+  it('refuses observation while core is absent and closes a synchronously refused observer before hello succeeds', async () => {
+    const close = vi.fn(), observe = vi.fn((listener: QuestionListener) => {
+      listener.unavailable('QUESTION_OBSERVATION_UNSUPPORTED')
+      return { ready: Promise.reject(new Error('unsupported')), answer: vi.fn(async () => false), close }
+    })
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    startWifi(core, ports, { observeQuestions: observe })
+    await ports.wifi!.resume({ focus: null })
+    ports.wifi!.disconnected()
+    peerFor(core).session('c1', client)
+    await peerFor(core).request('c1', { type: 'hello', proto: 1, requestId: 'absent' })
+    expect(observe).not.toHaveBeenCalled()
+    expect(sent(core)).toEqual([])
+    await ports.wifi!.resume({ focus: null })
+    await joinDevice(core)
+    expect(sent(core).at(-1)?.error?.code).toBe('QUESTION_STATE_UNAVAILABLE')
+    expect(close).toHaveBeenCalledOnce()
+    await ports.wifi!.stop()
+  })
+
+  it('owns one question observer for a real device, waits for its snapshot and replaces the former question card route', async () => {
+    let listener!: QuestionListener, done!: () => void
+    const close = vi.fn()
+    const observing = vi.mocked(observeQuestions).mockImplementationOnce((_where, heard) => {
+      listener = heard
+      return { ready: new Promise<void>(resolve => { done = resolve }), answer: vi.fn(async () => true), close }
+    })
+    const before = observing.mock.calls.length
+    const f = started({ agents: { readSessions: vi.fn(snapshotReader(async () => snapshotFor({ agents: [agent, { ...agent, agentId: 'unfocused' }], store: [], hasWindow: false }))) } })
+    const hello = f.hello()
+    await vi.waitFor(() => expect(observing.mock.calls.length).toBe(before + 1))
+    expect(sent(f.core).some(frame => frame.type === 'hello_result')).toBe(false)
+    listener.begin('g')
+    const question = { type: 'commander_question', agentId: 'unfocused', payload: { requestId: 'q', questions: [{ q: 'Continue?' }] } }
+    listener.question('g', question)
+    listener.end('g'); done()
+    expect(await hello).toMatchObject({ type: 'hello_result', proto: 1 })
+    const status = await f.ask({ type: 'status', machineId: 'machine-1', agentId: 'unfocused' })
+    expect(status.openQuestion).toMatchObject({ requestId: 'q' })
+    expect((await f.ask({ type: 'status', machineId: 'machine-1', agentId: 'unfocused' })).openQuestion).toMatchObject({ requestId: 'q' })
+    f.peer.drop('c1')
+    expect(close).toHaveBeenCalledOnce()
+    await f.port.stop()
+  })
+
+  it.each([null, { agentId: 'other', sessionId: 's1', engine: 'claude' }])('refuses input when the fresh agent read is %j', async resolved => {
+    const { core, port, hello, ask } = started({ conversations: { resolve: vi.fn(async () => resolved as never) } })
+    await hello()
+    const reply = await ask({ type: 'turn.send', machineId: 'machine-1', agentId: 'agent', idempotencyKey: 'missing', text: 'hello' })
+    expect(reply.receipt).toMatchObject({ state: 'rejected' })
+    expect(core.turns.deliver).not.toHaveBeenCalled()
+    await port.stop()
+  })
+
+  it('feeds inline input, delivery, and agent lifecycle facts to the receipt owner and releases subscriptions on stop', async () => {
+    const core = fakeCore({ dataDir, conversations: { resolve: vi.fn(async () => ({ ...agent, sessionId: 's1' } as never)) },
+      agents: { follow: vi.fn(() => () => {}), readSessions: vi.fn(snapshotReader(async () => snapshotFor({ agents: [agent], store: [], hasWindow: true }))) } })
+    const stopInput = vi.fn(), stopDelivery = vi.fn(), stopAgents = vi.fn()
+    vi.mocked(core.turns.onInput!).mockReturnValue(stopInput)
+    vi.mocked(core.turns.onDelivery).mockReturnValue(stopDelivery)
+    vi.mocked(core.agents.follow!).mockReturnValue(stopAgents)
+    let service!: AutonomousDeviceService
+    const ports = emptyPorts()
+    startWifi(core, ports, { service: options => service = new AutonomousDeviceService(options) })
+    await ports.wifi!.resume({ focus: null })
+    const request = { type: 'turn.send', requestId: randomUUID(), machineId: 'machine-1', agentId: 'agent', idempotencyKey: 'shared-facts', text: 'hello' }
+    const reply = await service.request('device', request)
+    expect(reply).toMatchObject({ receipt: { state: 'queued' } })
+    const deliveryId = vi.mocked(core.turns.deliver).mock.calls[0][2]
+    const input = vi.mocked(core.turns.onInput!).mock.calls[0][0]
+    const fact = { agentId: 'agent', deliveryId, sessionId: 's1', when: 'composer' as const, phase: 'dispatching' as const, content: 'hello' }
+    input(fact)
+    expect(service.needsTranscript('agent', 's1', 'claude')).toBe(true)
+    input(fact)
+    input({ ...fact, content: undefined })
+    input({ ...fact, deliveryId: undefined })
+    input({ ...fact, phase: 'written' })
+    vi.mocked(core.turns.onDelivery).mock.calls[0][0]({ sessionId: 'agent', deliveryId, state: 'unknown' })
+    ports.wifi!.disconnected()
+    expect(await service.request('device', request)).toMatchObject({ receipt: { state: 'unknown', error: { code: 'CORE_DISCONNECTED' } } })
+    vi.mocked(core.agents.follow!).mock.calls[0][0]({ kind: 'ended', agentId: 'agent' })
+    expect(service.needsTranscript('agent', 's1', 'claude')).toBe(false)
+    await ports.wifi!.stop()
+    expect(stopInput).toHaveBeenCalledOnce()
+    expect(stopDelivery).toHaveBeenCalledOnce()
+    expect(stopAgents).toHaveBeenCalledOnce()
+  })
+
+  it('submits and cancels through the process adapter, with the same bound context and live receipt authority', async () => {
+    const core = fakeCore({ dataDir, conversations: { resolve: vi.fn(async () => null) },
+      agents: { readSessions: vi.fn(snapshotReader(async () => snapshotFor({ agents: [agent], store: [], hasWindow: true }))) } })
+    let service!: AutonomousDeviceService
+    const ports = emptyPorts(), cancel = vi.fn()
+    const submit = vi.fn(async (_agentId: string, _text: string, _deliveryId: string, context: (agent: never) => void, current?: () => boolean) => {
+      expect(current!()).toBe(true)
+      context({ ...agent, sessionId: 's1' } as never)
+    })
+    startWifi(core, ports, { service: options => service = new AutonomousDeviceService(options), submit, cancel })
+    await ports.wifi!.resume({ focus: null })
+    await service.request('device', { type: 'turn.send', requestId: randomUUID(), machineId: 'machine-1', agentId: 'agent', idempotencyKey: 'adapter', text: 'hello' })
+    const deliveryId = submit.mock.calls[0][2]
+    expect(core.conversations.resolve).not.toHaveBeenCalled()
+    expect(core.turns.onInput).not.toHaveBeenCalled()
+    expect(core.turns.onDelivery).not.toHaveBeenCalled()
+    ports.wifi!.input({ agentId: 'agent', sessionId: 's1', deliveryId, when: 'composer', phase: 'dispatching', content: 'hello' })
+    expect(service.needsTranscript('agent', 's1', 'claude')).toBe(true)
+    service.revoke('device')
+    expect(cancel).toHaveBeenCalledWith(deliveryId)
+    expect(core.turns.cancelDelivery).not.toHaveBeenCalled()
+    await ports.wifi!.stop()
+  })
+
+  it('withdraws an input revoked while its fresh agent read is pending', async () => {
+    let release!: (value: never) => void
+    const core = fakeCore({ dataDir,
+      conversations: { resolve: vi.fn(() => new Promise<never>(done => { release = done })) },
+      agents: { readSessions: vi.fn(snapshotReader(async () => snapshotFor({ agents: [agent], store: [], hasWindow: true }))) },
+    })
+    let service!: AutonomousDeviceService
+    const ports = emptyPorts()
+    startWifi(core, ports, { service: options => service = new AutonomousDeviceService(options) })
+    await ports.wifi!.resume({ focus: null })
+    const sending = service.request('device', { type: 'turn.send', requestId: randomUUID(), machineId: 'machine-1', agentId: 'agent', idempotencyKey: 'revoked', text: 'hello' })
+    await vi.waitFor(() => expect(core.conversations.resolve).toHaveBeenCalledWith('agent'))
+    service.revoke('device')
+    release({ ...agent, sessionId: 's1' } as never)
+    expect(await sending).toMatchObject({ receipt: { state: 'unknown', error: { code: 'REVOKED' } } })
+    expect(core.turns.deliver).not.toHaveBeenCalled()
+    await ports.wifi!.stop()
+  })
+
+  it.each(['claude', 'codex', 'commandcode'])('interprets %s native boundaries in its own component', async engine => {
+    const core = fakeCore({ dataDir, agents: { readSessions: vi.fn(snapshotReader(async () => snapshotFor({ agents: [{ ...agent, engine }], store: [], hasWindow: true }))) } })
+    let service!: AutonomousDeviceService
+    const ports = emptyPorts()
+    startWifi(core, ports, { service: options => service = new AutonomousDeviceService(options) })
+    await ports.wifi!.resume({ focus: null })
+    const end = vi.spyOn(service, 'turnEnded'), start = vi.spyOn(service, 'turnStarted'), stream = vi.spyOn(service, 'stream')
+    const events = [{ type: 'turn_ended', payload: {} }, { type: 'turn_started', payload: { userMessage: 'next' } }] as never
+    await observed(core, events)
+    expect(end).toHaveBeenCalledTimes(engine === 'commandcode' ? 1 : 0)
+    expect(start).toHaveBeenCalledWith('agent', null)
+    expect(stream).toHaveBeenCalledWith('agent', events)
+    await ports.wifi!.stop()
+  })
+
+  it('answers a device hello over its current authenticated peer and announces that exact session', async () => {
     const { core, hello } = started()
     const answer = await hello()
     expect(answer).toMatchObject({ connId: 'c1', identity: 'device-1', frame: 'autonomous_device_result', type: 'hello_result', proto: 1, machineId: 'machine-1' })
-    expect(core.wifi.hello).toHaveBeenCalledWith('c1', 'device-1')
-    expect(core.wifi.joined).toHaveBeenCalled()
+    expect(peerFor(core).sent).toContainEqual(expect.objectContaining({ type: 'hello', connId: 'c1', identity: 'device-1', hello: true }))
+    expect(peerFor(core).sent).toContainEqual(expect.objectContaining({ type: 'joined', connId: 'c1', identity: 'device-1' }))
   })
 
   it('lists the agents as the core lists them now, each with its last recap', async () => {
     const { core, hello, ask } = started()
     vi.mocked(core.turns.recent).mockResolvedValue([{ recap: '  Fixed   the build ' }] as never)
     await hello()
-    expect((await ask({ type: 'agents.list' })).agents).toEqual([{ ...agent, machineId: 'machine-1', recap: 'Fixed the build' }])
-    expect(core.wifi.view).toHaveBeenCalled()
+    expect((await ask({ type: 'agents.list' })).agents).toEqual([{ ...agent, machineId: 'machine-1', recap: 'Fixed the build', packageId: null, workspace: null, runtime: 'ready' }])
+    expect(core.agents.readSessions).toHaveBeenCalled()
     expect((await ask({ type: 'recap', machineId: 'machine-1', agentId: 'agent', n: 2 })).turns).toEqual([{ recap: '  Fixed   the build ' }])
     expect(core.turns.recent).toHaveBeenLastCalledWith('agent', 2)
   })
@@ -75,119 +997,130 @@ describe('the Wi-Fi device, with the dials', () => {
     await hello()
     const reply = await ask({ type: 'turn.send', machineId: 'machine-1', agentId: 'agent', idempotencyKey: 'k1', text: 'hello' })
     expect(reply).toMatchObject({ status: 'accepted', receipt: { state: 'queued' } })
-    const deliveryId = vi.mocked(core.wifi.submit).mock.calls[0][2]
-    expect(core.wifi.submit).toHaveBeenCalledWith('agent', 'hello', deliveryId)
+    const deliveryId = vi.mocked(core.turns.deliver).mock.calls[0][2]
+    expect(core.turns.deliver).toHaveBeenCalledWith('agent', 'hello', deliveryId, { when: 'composer', current: expect.any(Function) })
     // The core typed it: the service reads the agent's transcript until the turn is proven.
-    port.dispatched('agent', deliveryId, 'hello', 's1')
-    expect(core.wifi.transcripts).not.toHaveBeenCalled()
-    port.transcript('agent', 's1', 'claude', '{"type":"user","message":{"content":"not ours"},"timestamp":"2026-10-06T00:00:00Z"}')
-    // An agent it never sent anything to: done with it at once, as of the one prompt the core told of.
-    port.dispatched('other', 'unknown-delivery', 'hi')
-    expect(core.wifi.transcripts).toHaveBeenCalledWith('other', 1)
-    port.transcript('other', 's2', 'claude', '{}')
-    expect(core.wifi.transcripts).toHaveBeenLastCalledWith('other', 1)
-    port.agentGone('agent')
-    expect(core.wifi.transcripts).toHaveBeenLastCalledWith('agent', 1)
-    port.agentGone('never-told')
-    expect(core.wifi.transcripts).toHaveBeenLastCalledWith('never-told', 0)
+    port.input({ agentId: 'agent', deliveryId, content: 'hello', sessionId: 's1', when: 'composer', phase: 'dispatching' })
+    evidenceByCore.get(core)!.observe('agent', 's1', 'claude', '{"type":"user","message":{"content":"not ours"},"timestamp":"2026-10-06T00:00:00Z"}')
+    port.input({ agentId: 'other', deliveryId: 'unknown-delivery', content: 'hi', when: 'composer', phase: 'dispatching' })
+    await observed(core, [{ type: 'agent_deleted', agentId: 'agent', payload: {} }])
+    await observed(core, [{ type: 'agent_deleted', agentId: 'never-told', payload: {} }])
+    expect(await ask({ type: 'turn.send', machineId: 'machine-1', agentId: 'agent', idempotencyKey: 'k1', text: 'hello' }))
+      .toMatchObject({ receipt: { state: 'unknown' } })
   })
 
-  it('tells the core which agents a device subscribed to before the subscription\'s answer leaves', async () => {
-    const { core, hello, ask } = started()
+  it.each(['error', 'tool', 'summary'])('fences session-addressed WiFi %s against the resolved session', async kind => {
+    const { core, peer, hello } = started()
     await hello()
-    vi.mocked(core.wifi.streams).mockClear()
-    const order: string[] = []
-    vi.mocked(core.wifi.streams).mockImplementation((ids) => { order.push(`streams ${ids.join(',')}`) })
-    vi.mocked(core.wifi.send).mockImplementation((_c, _i, _t, payload) => { order.push(String(payload.type)) })
-    await ask({ type: 'agent.subscribe', machineId: 'machine-1', agentId: 'agent' }).catch(() => {})
-    expect(order.slice(0, 2)).toEqual(['streams agent', 'agent.subscribe_result'])
-    // Told once: the next answer finds the same subscriptions.
-    await ask({ type: 'focus.get' })
-    expect(core.wifi.streams).toHaveBeenCalledTimes(1)
+    peer.sent.length = 0
+    const card = { type: 'commander_event' as const, agentId: 'agent', dbSessionId: 's1', payload: { kind, text: 'old' } }
+    await peer.card(card, null)
+    await vi.waitFor(() => expect(sent(core).filter(frame => frame.frame === 'autonomous_device_event')).toHaveLength(1))
+    peer.sent.length = 0
+    vi.mocked(core.conversations.resolve).mockResolvedValueOnce({ ...agent, sessionId: 'replacement' } as never)
+    await peer.card(card, null)
+    vi.mocked(core.conversations.resolve).mockResolvedValueOnce(null)
+    await peer.card(card, null)
+    await peer.card({ ...card, payload: { kind, text: 'current' } }, null)
+    await vi.waitFor(() => expect(sent(core).at(-1)?.payload).toMatchObject({ text: 'current' }))
+    expect(sent(core).filter(frame => frame.frame === 'autonomous_device_event')).toHaveLength(1)
+  })
+
+  it('contains a rejected card-session read in the existing peer handler and accepts a fresh connection', async () => {
+    const { core, peer, hello } = started(), warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await hello(); peer.sent.length = 0
+    vi.mocked(core.conversations.resolve).mockRejectedValueOnce(new Error('private resolver text'))
+    const card = { type: 'commander_event' as const, agentId: 'agent', dbSessionId: 's1', payload: { kind: 'error', text: 'old' } }
+    await peer.card(card, null)
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith('[wifi] PEER_HANDLER_FAILED'))
+    expect(sent(core)).toEqual([])
+    expect(warn.mock.calls.some(([line]) => String(line).includes('private'))).toBe(false)
+    peer.start()
+    await peer.card({ ...card, payload: { kind: 'error', text: 'fresh' } }, null)
+    await vi.waitFor(() => expect(sent(core).at(-1)?.payload).toMatchObject({ text: 'fresh' }))
+  })
+
+  it.each(['core', 'peer'] as const)('revokes a card whose session read crosses the %s connection lifetime', async end => {
+    const { core, peer, port, hello } = started()
+    await hello(); peer.sent.length = 0
+    let finish!: (value: never) => void
+    vi.mocked(core.conversations.resolve).mockImplementationOnce(() => new Promise(done => { finish = done }))
+    const card = { type: 'commander_event' as const, agentId: 'agent', dbSessionId: 's1', payload: { kind: 'error', text: 'old' } }
+    await peer.card(card, null)
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    if (end === 'core') { port.disconnected(); await port.resume({ focus: null }) }
+    else { await peer.stop(); peer.start() }
+    finish({ ...agent, sessionId: 's1' } as never)
+    await peer.card({ ...card, payload: { kind: 'error', text: 'fresh' } }, null)
+    await vi.waitFor(() => expect(sent(core).at(-1)?.payload).toMatchObject({ text: 'fresh' }))
+    expect(sent(core).filter(frame => frame.frame === 'autonomous_device_event' && frame.kind === 'agent.error').map(frame => frame.payload.text)).toEqual(['fresh'])
   })
 
   it('reads the turn\'s whole answer off a summary card, and passes the agents\' turns and live events on', async () => {
     const { core, port, hello } = started()
     await hello()
-    vi.mocked(core.wifi.send).mockClear()
-    port.card({ type: 'commander_event', agentId: 'agent', payload: { kind: 'summary', text: 'short' } }, 'the whole answer')
-    expect(sent(core).at(-1)).toMatchObject({ frame: 'autonomous_device_event', kind: 'turn.summary', payload: { text: 'short', fullText: 'the whole answer' } })
-    port.card({ type: 'commander_event', agentId: 'agent', payload: { kind: 'tool', text: 'Read' } })
+    peerFor(core).sent.length = 0
+    await peerFor(core).card({ type: 'commander_event', agentId: 'agent', dbSessionId: 's1', payload: { kind: 'summary', text: 'short' } }, 'the whole answer')
+    await vi.waitFor(() => expect(sent(core).at(-1)).toMatchObject({ frame: 'autonomous_device_event', kind: 'turn.summary', payload: { text: 'short', fullText: 'the whole answer' } }))
+    await observed(core, [{ type: 'commander_event', agentId: 'agent', payload: { kind: 'tool', text: 'Read' } }], 'core')
     expect(sent(core).at(-1)).toMatchObject({ kind: 'turn.tool' })
-    port.turnStarted('agent')
+    await observed(core, [{ type: 'turn_started', payload: { userMessage: 'hello' } }])
     expect(sent(core).at(-1)).toMatchObject({ kind: 'turn.started' })
-    port.turnEnded('agent', true)
+    await observed(core, [{ type: 'agent_activity', dbSessionId: 's1', payload: { cause: 'cancel', activity: { epoch: 'core', revision: 1 } } }])
     expect(sent(core).at(-1)).toMatchObject({ kind: 'turn.error' })
-    port.stream('agent', [{ type: 'turn_started', payload: {} } as unknown as LiveEvent])
     port.delivery({ deliveryId: 'nobody', sessionId: 'agent', state: 'delivered' })
-    port.inputStatus({ deliveryId: 'nobody', sessionId: 'agent', mode: 'queued', phase: 'waiting' } as never)
+    port.input({ deliveryId: 'nobody', agentId: 'agent', when: 'composer', phase: 'waiting_for_turn' })
     port.revealed('op', 'agent')
   })
 
-  it('moves the window\'s focus in order, against the agents as they are, and tells the core the revision before anything carries it', async () => {
-    const { core, port } = started()
-    const order: string[] = []
-    vi.mocked(core.wifi.focus).mockImplementation((revision) => { order.push(`focus ${revision}`) })
-    await port.appFocus('machine-1', 'agent', 'w1')
-    expect(core.wifi.view).toHaveBeenCalled()
-    expect(order).toEqual([expect.stringMatching(/^focus .+:1$/)])
-    await port.appFocus('machine-1', null, 'w1')
-    expect(order.at(-1)).toMatch(/:2$/)
+  it('applies window moves in order and keeps their revision in the component', async () => {
+    let service!: AutonomousDeviceService
+    const core = fakeCore({ dataDir, agents: { readSessions: vi.fn(snapshotReader(async () => snapshotFor({ agents: [agent], store: [], hasWindow: true }))) } })
+    const ports = emptyPorts()
+    startWifi(core, ports, { service: options => service = new AutonomousDeviceService(options) })
+    await ports.wifi!.resume({ focus: null })
+    const first = ports.wifi!.appFocus('machine-1', 'agent', 'w1')
+    const second = ports.wifi!.appFocus('machine-1', null, 'w1')
+    await Promise.all([first, second])
+    expect(service.focusSnapshot()).toMatchObject({ focus: null, focusRevision: expect.stringMatching(/:2$/) })
+    expect(core.agents.readSessions).toHaveBeenCalled()
   })
 
-  it('lets a focus move that fails cost that move alone, and the next one is applied', async () => {
-    const { core, port } = started()
-    vi.mocked(core.wifi.focus).mockImplementationOnce(() => { throw new Error('the core went away') })
-    await expect(port.appFocus('machine-1', 'agent', 'w1')).rejects.toThrow('the core went away')
-    await port.appFocus('machine-1', null, 'w1')
-    expect(core.wifi.focus).toHaveBeenLastCalledWith(expect.stringMatching(/:2$/))
-    // A move the core held for a restarted service fails the same way, and the service resumes.
-    vi.mocked(core.wifi.focus).mockImplementation((revision) => { if (revision.endsWith(':3')) throw new Error('not now') })
-    await port.resume({ sessions: [], helloed: [], focus: { machineId: 'machine-1', agentId: 'agent', connId: 'w2' } })
-    expect(core.wifi.ready).toHaveBeenCalled()
+  it('lets a failed focus move cost that move alone and applies the next one', async () => {
+    let service!: AutonomousDeviceService
+    const core = fakeCore({ dataDir, agents: { readSessions: vi.fn(snapshotReader(async () => snapshotFor({ agents: [agent], store: [], hasWindow: true }))) } })
+    const ports = emptyPorts()
+    startWifi(core, ports, { service: options => service = new AutonomousDeviceService(options) })
+    await ports.wifi!.resume({ focus: null })
+    vi.spyOn(service, 'appFocus').mockImplementationOnce(() => { throw new Error('focus unavailable') })
+    await expect(ports.wifi!.appFocus('machine-1', 'agent', 'w1')).rejects.toThrow('focus unavailable')
+    await ports.wifi!.appFocus('machine-1', 'agent', 'w1')
+    expect(service.focusSnapshot().focus?.agentId).toBe('agent')
+    vi.spyOn(service, 'appFocus').mockImplementationOnce(() => { throw new Error('focus unavailable') })
+    await ports.wifi!.resume({ focus: { machineId: 'machine-1', agentId: 'agent', connId: 'w2' } })
+    expect(peerFor(core).sent.some(frame => frame.type === 'ready')).toBe(true)
   })
 
-  it('says a device\'s request that fails, and answers the next', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const { core, port, hello } = started()
-    port.session('c1', client)
-    vi.mocked(core.wifi.send).mockImplementationOnce(() => { throw new Error('sealing failed') })
-    const [frame, opened] = sealed({ type: 'hello', proto: 1, requestId: randomUUID() })
-    await port.request('c1', frame, opened)
-    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith('[wifi] a device\'s request failed · Error'))
-    vi.mocked(core.wifi.send).mockImplementationOnce(() => { throw 'no session' })
-    const [again, openedAgain] = sealed({ type: 'hello', proto: 1, requestId: randomUUID() })
-    await port.request('c1', again, openedAgain)
-    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith('[wifi] a device\'s request failed · string'))
-    expect(await hello()).toMatchObject({ type: 'hello_result' })
-    warn.mockRestore()
-  })
-
-  it('serves the sessions a previous run served, told to resync, and lets go of those the core no longer holds', async () => {
-    const { core, port, hello } = started()
+  it('restores only current gateway hello sessions after a component connection restarts', async () => {
+    const { core, port, peer, hello } = started()
     await hello('stale')
-    vi.mocked(core.wifi.send).mockClear()
-    vi.mocked(core.wifi.hello).mockClear()
-    await port.resume({ sessions: [{ connId: 'c9', client }], helloed: [{ connId: 'c9', identity: 'device-1' }], focus: { machineId: 'machine-1', agentId: 'agent', connId: 'w' } })
-    // The stale session is let go of; the one the core holds is served on, and told to resync.
-    expect(core.wifi.hello).toHaveBeenCalledWith('stale', null)
-    expect(core.wifi.hello).toHaveBeenCalledWith('c9', 'device-1')
+    port.disconnected()
+    peer.sessions.clear()
+    peer.session('c9', client)
+    peer.sessions.set('c9', { ...peer.sessions.get('c9')!, hello: true })
+    peer.sent.length = 0
+    await port.resume({ focus: { machineId: 'machine-1', agentId: 'agent', connId: 'w' } })
+    await vi.waitFor(() => expect(peer.sent.some(frame => frame.type === 'ready')).toBe(true))
     expect(sent(core)).toContainEqual(expect.objectContaining({ connId: 'c9', frame: 'autonomous_device_event', type: 'resync', reason: 'instance_changed' }))
-    expect(core.wifi.joined).toHaveBeenCalled()
-    expect(core.wifi.ready).toHaveBeenCalled()
-    expect(core.wifi.watching).toHaveBeenCalledWith([])
-    expect(core.wifi.streams).toHaveBeenCalledWith([])
-    expect(core.wifi.focus).toHaveBeenCalled()
-    // A session this run already serves is served on as it is: not dropped, not told to resync again.
-    vi.mocked(core.wifi.send).mockClear()
-    vi.mocked(core.wifi.hello).mockClear()
-    await port.resume({ sessions: [{ connId: 'c9', client }], helloed: [{ connId: 'c9', identity: 'device-1' }], focus: null })
-    expect(core.wifi.hello).not.toHaveBeenCalled()
-    expect(sent(core).filter((m) => m.type === 'resync')).toEqual([])
-    // Nothing held, nothing restored, nobody to join.
-    vi.mocked(core.wifi.joined).mockClear()
-    await port.resume({ sessions: [], helloed: [], focus: null })
-    expect(core.wifi.joined).not.toHaveBeenCalled()
+    expect(peer.sent).toContainEqual(expect.objectContaining({ type: 'hello', connId: 'c9', hello: true }))
+    peer.sent.length = 0
+    await port.resume({ focus: null })
+    expect(sent(core).filter(frame => frame.type === 'resync')).toEqual([])
+    port.disconnected()
+    peer.sessions.clear()
+    await port.resume({ focus: null })
+    await vi.waitFor(() => expect(peer.sent.some(frame => frame.type === 'ready')).toBe(true))
+    expect(peer.sent.some(frame => frame.type === 'hello' || frame.type === 'joined')).toBe(false)
   })
 
   it('carries device add-ons end to end: what the device publishes, an agent\'s proposal sealed to it, and its decision', async () => {
@@ -198,7 +1131,7 @@ describe('the Wi-Fi device, with the dials', () => {
     expect(await ask({ type: 'addon.publish', values: [{ topic: 'room/presence', value: { someone: true } }] })).toMatchObject({ type: 'addon.publish_result', topics: 1 })
     expect(await http('GET', '/api/autonomous-device/addon/state'))
       .toMatchObject({ status: 200, body: { devices: [{ deviceId: 'device-1', online: true, topics: { 'room/presence': { value: { someone: true } } } }] } })
-    vi.mocked(core.wifi.send).mockClear()
+    peerFor(core).sent.length = 0
     const proposed = await http('POST', '/api/autonomous-device/addon/propose', { addon: 'glow', idempotencyKey: 'k', act: 'light', holdsMs: 5000, params: { colour: 'warm' } })
     const proposalId = proposed.body.proposal.proposalId as string
     expect(sent(core)).toEqual([expect.objectContaining({ connId: 'c1', identity: 'device-1', frame: 'autonomous_device_event', kind: 'addon.proposal',
@@ -206,7 +1139,7 @@ describe('the Wi-Fi device, with the dials', () => {
     expect(await ask({ type: 'addon.decision', proposalId, decision: 'dropped', reason: 'someone is talking' })).toMatchObject({ state: 'dropped' })
     expect(await http('GET', `/api/autonomous-device/addon/proposal?proposalId=${proposalId}`))
       .toMatchObject({ status: 200, body: { proposal: { proposalId, state: 'dropped', reason: 'someone is talking' } } })
-    port.revoked('device-1')
+    peerFor(core).revoke('device-1')
     expect(await http('GET', '/api/autonomous-device/addon/state')).toEqual({ status: 200, body: { devices: [] } })
     // Not its routes: the pairings are the gateway's.
     expect((await http('GET', '/api/autonomous-device/list')).status).toBe(404)
@@ -215,81 +1148,80 @@ describe('the Wi-Fi device, with the dials', () => {
 
   it('forgets a closed connection and an unpaired device, and answers a receipt', async () => {
     const { core, port, hello, ask, http } = started()
-    port.session('c1', { ...client, identity: KEY })
+    peerFor(core).session('c1', { ...client, identity: KEY })
     await ask({ type: 'hello', proto: 1 })
     await ask({ type: 'turn.send', machineId: 'machine-1', agentId: 'agent', idempotencyKey: 'k2', text: 'hi' })
     const receipt = (key: string) => http('GET', `/api/autonomous-device/receipt?deviceId=${encodeURIComponent(KEY)}&idempotencyKey=${key}`)
     expect(await receipt('k2')).toMatchObject({ status: 200, body: { receipt: { idempotencyKey: 'k2', state: 'queued' } } })
     expect(await receipt('nope')).toEqual({ status: 200, body: { receipt: null } })
-    port.revoked(KEY)
-    expect(core.wifi.cancel).toHaveBeenCalled()
+    peerFor(core).revoke(KEY)
+    expect(core.turns.cancelDelivery).toHaveBeenCalled()
     expect(await receipt('k2')).toEqual({ status: 200, body: { receipt: null } })
     await hello('c2')
-    port.dropped('c2')
-    expect(core.wifi.hello).toHaveBeenLastCalledWith('c2', null)
+    peerFor(core).drop('c2')
+    expect(peerFor(core).sessions.has('c2')).toBe(false)
     // A session the gateway no longer holds is sent nothing.
-    port.session('c3', client)
-    port.session('c3', null)
-    vi.mocked(core.wifi.send).mockClear()
-    const [frame, opened] = sealed({ type: 'hello', proto: 1, requestId: randomUUID() })
-    await port.request('c3', frame, opened)
-    expect(core.wifi.send).not.toHaveBeenCalled()
+    peerFor(core).session('c3', client)
+    peerFor(core).session('c3', null)
+    peerFor(core).sent.length = 0
+    await peerFor(core).request('c3', { type: 'hello', proto: 1, requestId: randomUUID() })
+    expect(sent(core)).toEqual([])
     await port.stop()
   })
 
   it('answers a request with the agents it last had when the core cannot be asked', async () => {
-    const view = vi.fn(async () => ({ agents: [agent], store: [], hasWindow: true }))
-    const { hello, ask } = started({ wifi: { view } })
+    const view = vi.fn(snapshotReader(async () => snapshotFor({ agents: [agent], store: [], hasWindow: true })))
+    const { hello, ask } = started({ agents: { readSessions: view } })
     await hello()
     view.mockRejectedValueOnce(new Error('the core went away'))
-    expect((await ask({ type: 'agents.list' })).agents).toEqual([{ ...agent, machineId: 'machine-1' }])
+    expect((await ask({ type: 'agents.list' })).agents).toEqual([{ ...agent, machineId: 'machine-1', packageId: null, workspace: null, runtime: 'ready' }])
   })
 
   it('reaches the core for a stop, an answer, a step along the desk, a stroke and the window\'s focus', async () => {
     const { core, hello, ask } = started()
     await hello()
     expect(await ask({ type: 'turn.stop', machineId: 'machine-1', agentId: 'agent', idempotencyKey: 's1' })).toMatchObject({ receipt: { state: 'completed' } })
-    expect(core.wifi.stop).toHaveBeenCalledWith('agent')
+    expect(cancelTurn).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'machine-1' }), 'agent', expect.any(Function), expect.any(AbortSignal), expect.anything())
+    expect(await ask({ type: 'focus.ensure', machineId: 'untrusted-other-machine' })).toMatchObject({ error: { code: 'INVALID_REQUEST' } })
+    expect(core.clients.sendWindow).not.toHaveBeenCalled()
     // No window took the ask: said at once.
-    vi.mocked(core.wifi.focusApp).mockReturnValueOnce(false)
+    vi.mocked(core.clients.sendWindow).mockReturnValueOnce(false)
     expect(await ask({ type: 'focus.ensure' })).toMatchObject({ error: { code: 'FOCUS_UNAVAILABLE' } })
-    expect(core.wifi.focusApp).toHaveBeenCalledWith('agent', expect.any(Number), expect.any(String))
+    expect(core.clients.sendWindow).toHaveBeenCalledWith({ target: { kind: 'first' }, frame: { type: 'device_focus', payload: { machineId: 'machine-1', agentId: 'agent', expiresAt: expect.any(Number), focusRevision: expect.any(String) } } })
     expect(await ask({ type: 'scroll', phase: 'down', dy: 1, velocity: 2 })).not.toHaveProperty('error')
-    expect(core.wifi.scroll).toHaveBeenCalledWith('down', 1, 2)
     const focus = (await ask({ type: 'focus.get' })).focusRevision
     expect(await ask({ type: 'focus.step', direction: 'next', idempotencyKey: 'f1', focusRevision: focus })).toMatchObject({ error: { code: 'NO_AGENTS' } })
-    expect(core.wifi.stepFocus).toHaveBeenCalledWith('next', undefined)
+    expect(stepDeviceDesk).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'machine-1' }), 'next', undefined, expect.any(Function), expect.any(AbortSignal))
   })
 
   it('gives the Store the agents the core listed, and makes and shows its agents through the core', async () => {
-    const core = fakeCore({ dataDir, wifi: { view: vi.fn(async () => ({ agents: [], store: [{ agentId: 'a' } as never], hasWindow: true })) } })
+    const core = fakeCore({ dataDir, agents: { readSessions: vi.fn(snapshotReader(async () => snapshotFor({ agents: [], store: [{ agentId: 'a' } as never], hasWindow: true }))) } })
     let given: Parameters<typeof createDeviceStore>[0] | undefined
     const ports = emptyPorts()
     startWifi(core, ports, { store: (options) => { given = options; return createDeviceStore(options) } })
     expect(given!.agents()).toEqual([])
     await ports.wifi!.appFocus('machine-1', null, 'w')
-    expect(given!.agents()).toEqual([{ agentId: 'a' }])
+    expect(given!.agents()).toEqual([{ agentId: 'a', machineId: 'machine-1', engine: 'claude', packageId: null, workspace: null, state: 'active', runtime: 'unavailable' }])
     await given!.create('autonomous/robot', 'claude', '/w')
-    expect(core.wifi.create).toHaveBeenCalledWith('autonomous/robot', 'claude', '/w')
+    expect(core.agents.create).toHaveBeenCalledExactlyOnceWith({ dsh: 'autonomous/robot', engine: 'claude', cwd: '/w',
+      prompt: null, name: null, bypassPermission: false, requireUnusedWorkspace: true })
     given!.reveal!('op', 'a')
-    expect(core.wifi.reveal).toHaveBeenCalledWith('op', 'a')
+    expect(core.clients.sendWindow).toHaveBeenCalledWith({ target: { kind: 'first' }, frame: { type: 'device_prepare_open', payload: { operationId: 'op', machineId: 'machine-1', agentId: 'a' } } })
   })
 
-  it('hands the core the device\'s answers to questions and the prompts its transcript proved started', async () => {
+  it('keeps transcript receipt evidence in the component and refuses an answer before its observation exists', async () => {
     const core = fakeCore({ dataDir })
     let given: ConstructorParameters<typeof AutonomousDeviceService>[0] | undefined
     startWifi(core, emptyPorts(), { service: (options) => { given = options; return new AutonomousDeviceService(options) } })
-    given!.inputConsumed!('agent', 'hello')
-    expect(core.wifi.started).toHaveBeenCalledWith('agent', 'hello')
-    expect(await given!.answer('agent', 'r', { q: 'yes' })).toBe(true)
-    expect(core.wifi.answer).toHaveBeenCalledWith('agent', 'r', { q: 'yes' })
+    expect(given!.inputConsumed).toBeUndefined()
+    expect(await given!.answer('agent', 'r', { q: 'yes' })).toBe(false)
   })
 
   it('gives up a pairing the device asked to give up, over its own session', async () => {
     const { core, hello, ask } = started()
     await hello()
     expect(await ask({ type: 'pair.revoke' })).toMatchObject({ revoked: true })
-    expect(core.wifi.unpaired).toHaveBeenCalledWith('device-1')
+    expect(peerFor(core).sent.at(-1)).toMatchObject({ type: 'revoke', identity: 'device-1', connId: 'c1' })
   })
 
   it('leaves the Wi-Fi device off, and the devices on, when its journal cannot be read', () => {
@@ -313,23 +1245,9 @@ describe('the Wi-Fi device, with the dials', () => {
     await port.stop()
     // A failure that is no refusal fails the request: its route answers for it as for a service that is down.
     const requests = startWifi(fakeCore({ dataDir }), emptyPorts(), {
-      service: () => ({ addons: { state: () => { throw new Error('broken') } } }) as unknown as AutonomousDeviceService,
+      service: options => { const service = new AutonomousDeviceService(options); vi.spyOn(service.addons, 'state').mockImplementation(() => { throw new Error('broken') }); return service },
     })
     await expect(requests.wifi_http!({ method: 'GET', target: '/api/autonomous-device/addon/state' }, { local: true, owner: true })).rejects.toThrow('broken')
   })
 
-  it('says a focus change that carries no revision to nobody', () => {
-    const emits: Array<(frame: Record<string, unknown>) => void> = []
-    const core = fakeCore({ dataDir })
-    const ports = emptyPorts()
-    startWifi(core, ports, {
-      service: (options) => {
-        emits.push((frame) => options.emit?.(frame as never))
-        return { focusSnapshot: () => ({ focus: null, focusRevision: 'x:0' }) } as unknown as AutonomousDeviceService
-      },
-    })
-    emits[0]({ type: 'event', kind: 'focus.changed', payload: {} })
-    emits[0]({ type: 'event', kind: 'focus.changed' })
-    expect(core.wifi.focus).not.toHaveBeenCalled()
-  })
 })

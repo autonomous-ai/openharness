@@ -35,6 +35,8 @@ export const PREPARE_FOLDER_MS = 60 * 60_000
 /** How long a worktree's review waits: under the 30 s Desktop gives a purge's review, so it hears why. A review is several
  *  git reads and a `du`; `git status` alone takes seconds on a large repository. */
 export const WORKTREE_REVIEW_MS = 25_000
+/** Optional instruction preparation must never keep an ordinary launch waiting on a hung component. */
+export const PREPARE_INSTRUCTIONS_MS = 5_000
 /** And its removal: the review it makes again, its turn in the repository (a worktree being added there can take ten
  *  minutes), then `git worktree remove`'s own 30 s. Asked and not answered in time, whether the worktree went is not
  *  known, and the core says so rather than that it was kept (`REMOVAL_UNKNOWN`). */
@@ -97,7 +99,7 @@ export function createWorkspacesLink(
   call: CallWorkspaces,
 ) {
   /** The process connected now said it makes folders: until it does, it is asked none of it. */
-  let folders = false
+  let folders = false, instructions = false
   /** [type]'s answer: `unasked` while the process has not said it makes folders, `unanswered` when it was asked and did
    *  not answer in time or went meanwhile, so what it was asked may have been done. */
   const ask = async (type: string, payload: Payload, waitMs: number): Promise<Payload | 'unasked' | 'unanswered'> => {
@@ -118,6 +120,11 @@ export function createWorkspacesLink(
       notify({ type: 'service_event', payload: { kind: 'nameBranches', agents: core.agents.live() } })
     },
     ready: () => folders,
+    prepareInstructions: async (workspace, engine) => {
+      if (!instructions || !path(workspace) || !text(engine, 64)) return false
+      const answer = await call('prepareInstructions', { workspace, engine }, PREPARE_INSTRUCTIONS_MS)
+      return answer.prepared === true
+    },
     prepareFolder: async (project, options) => {
       const answer = await ask('prepareFolder', { project, cloneFallback: options.cloneFallback }, PREPARE_FOLDER_MS)
       if (answer === 'unasked') return await WORKSPACES_OFF.prepareFolder(project, options)
@@ -153,12 +160,19 @@ export function createWorkspacesLink(
     /** The core's answers to the workspaces' questions (core/serviceLinks.ts `answer`, for `workspaces`). */
     answer(query: string, payload: Payload): Payload {
       if (query === 'branchNamed') return branchNamed(payload)
-      if (query === 'folders') { folders = true; return { ok: true } }
+      if (query === 'folders') { folders = true; instructions = payload.instructions === true; return { ok: true } }
       return { error: 'UNKNOWN_QUERY' }
     },
     /** The process's connection ended: the next one says again whether it makes folders. */
-    disconnected(): void { folders = false },
+    disconnected(): void { folders = false; instructions = false },
   }
 }
 
 export type WorkspacesLink = ReturnType<typeof createWorkspacesLink>
+
+/** Optional instruction failure cannot make an ordinary agent depend on workspaces. */
+export async function prepareWorkspaceInstructions(workspaces: WorkspacesPort | null, cwd: string | null | undefined, engine: string): Promise<void> {
+  if (!cwd) return
+  try { if (await (workspaces ?? WORKSPACES_OFF).prepareInstructions(cwd, engine)) return } catch { /* An optional preparation never refuses the launch. */ }
+  console.warn('[apis] TOOL_INSTRUCTIONS_UNAVAILABLE: Tool instructions could not be confirmed. Saved connections remain available through harness api.')
+}

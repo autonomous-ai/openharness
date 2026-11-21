@@ -17,7 +17,7 @@ import type { RegisteredSession } from './registry.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
 
 export interface KeepAbandonedConversationDeps {
-  stoppedAgents: Pick<StoppedAgentStore, 'save' | 'get' | 'list'>
+  stoppedAgents: Pick<StoppedAgentStore, 'save' | 'get' | 'query' | 'prepareSave'>
   /** Tells the windows of a stopped harness (BackendSocket.publishStoppedAgent). */
   publishStoppedAgent: (saved: RegisteredSession) => Promise<void>
 }
@@ -31,18 +31,32 @@ export function createKeepAbandonedConversation({ stoppedAgents, publishStoppedA
    * already kept is not kept again, though the agent's own record does not count, since it follows the
    * agent into its new conversation (bind.ts). Never in the way of the relaunch: a failure is only said.
    */
-  return (left: RegisteredSession): void => {
+  const running = new Map<string, Promise<void>>()
+  const keep = async (left: RegisteredSession): Promise<void> => {
     if (!left.sessionId) return
     try {
-      if (stoppedAgents.list().some((saved) => saved.agentId !== left.agentId && conversation(saved) === conversation(left))) return
+      stoppedAgents.prepareSave()
+      const archive = await stoppedAgents.query({ kind: 'conversations', ids: [left.sessionId], exceptAgentId: left.agentId, reservations: false,
+        scope: { engine: left.engine, codexHome: left.codexHome ?? null } })
+      if (archive.matches[0]) return
+      if (!archive.current()) throw new Error('The saved conversation catalog changed.')
       const kept: RegisteredSession = { ...left, agentId: randomUUID(), processIdentity: null }
-      stoppedAgents.save(kept)
-      const saved = stoppedAgents.get(kept.agentId)
+      await stoppedAgents.save(kept, undefined, archive.current)
+      const saved = await stoppedAgents.get(kept.agentId)
       if (saved) void publishStoppedAgent(saved).catch(() => {})
       console.log(`[agent] ${sid(left.agentId)} kept the conversation it left, ${sid(left.sessionId)}, as stopped harness ${sid(kept.agentId)}`)
     } catch (error) {
       console.warn(`[agent] ${sid(left.agentId)} could not keep the conversation it left, ${sid(left.sessionId)} · ${errorKind(error)}`)
     }
+  }
+  return (left: RegisteredSession): Promise<void> => {
+    left = structuredClone(left)
+    const key = conversation(left), pending = running.get(key)
+    if (pending) return pending
+    if (running.size >= 64) { console.warn('[agent] saved conversation queue is full'); return Promise.resolve() }
+    const task = keep(left).finally(() => { if (running.get(key) === task) running.delete(key) })
+    running.set(key, task)
+    return task
   }
 }
 

@@ -29,7 +29,7 @@ export function createTerminalOpener({ createBackend, recoverBackend, registry, 
       tmuxBackend: createBackend, registry, engine: 'terminal', cwd, spawnCwd: cwd,
       argv: () => [...argv], sessionLabel: `harness-shell-${randomUUID()}`, bypassPermission: false,
     })
-    if (!result.ok) return result
+    if (!result.ok) return { ok: false, error: result.error, detail: result.detail }
     await createBackend.releaseHold(result.spawned.runtime)
     const ready = registry.setLaunch(result.pending.agentId, { state: 'ready' })
     if (!ready) return { ok: false, error: 'TERMINAL_CLOSED' }

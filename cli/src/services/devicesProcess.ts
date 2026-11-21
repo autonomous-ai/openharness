@@ -21,18 +21,20 @@ import type { AppSwarms } from '../cable/cableSession.js'
 import type { RecentTurn } from '../cable/cableHost.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
 import { validUsage } from '../lib/agentUsageWire.js'
-import { AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, resolveAgent, TERMINALS_OFF, type CoreApi, type CorePorts, type DevicesPort, type ForkResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
-import type { RegisteredSession } from '../lib/registry.js'
+import { DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, TERMINALS_OFF, type CorePorts, type DevicesPort, type ForkResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
 import { accountLink } from './accountLink.js'
-import { startDevices, type DevicesDeps } from './devices.js'
+import { startDevices, type DevicesDeps, type DevicesCore, type DeviceSession } from './devices.js'
 import { listenForDevices, openDevicesListener } from './devicesListener.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess, type ServiceProcessOptions } from './process.js'
+import { readCoreSessionRecords, readSessionView } from './sessionSnapshot.js'
+import { boundedJsonBytes } from '../lib/boundedJsonBytes.js'
 import { processCoreApi, UNASKED } from './processCoreApi.js'
 import { harnessdEnv } from '../lib/harnessdEnv.js'
+import { publishDeviceDesk, type DeviceDesk } from './deviceDesk.js'
 
 /** An agent as the core lists it for the dial: with the name the apps show and the model it runs. */
-type Viewed = RegisteredSession & { displayName?: string; runtimeProfile?: string | null }
+type Viewed = DeviceSession
 
 /** What the core last said of this computer: what the dial reads in line. */
 interface View {
@@ -60,7 +62,6 @@ export interface DevicesServiceOptions {
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [])
 const object = (value: unknown): Record<string, unknown> => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {})
-const number = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) ? value : 0)
 
 /** The window that has the person's attention, as the core sent it; nothing for anything else. */
 function focusOf(value: unknown): WindowFocus {
@@ -80,35 +81,88 @@ function faultsOf(value: string | undefined): ReadonlySet<string> {
 
 export function runDevicesService(options: DevicesServiceOptions): ServiceProcess {
   const processEnv = options.processEnv ?? harnessdEnv()
+  const faults = faultsOf(processEnv.HARNESSD_TEST_FAULTS)
   let core: CoreConnection | null = null
+  let generation = 0, stopped = false
+  let desk: DeviceDesk | undefined
+  let deskOwner: { generation: number; machineId: string; revoke(): void } | null = null
   /** Whether a dial watches, as the cable last said: told again to every core this process connects to.
    *  A dial says hello as soon as its port opens, which is often before a core that just started has
    *  this process connected (2026-10-09, a user's log: hello 14:22:54.141, connected 14:22:54.525). Told
    *  only then, the notice was lost: the core made no cards for the dial, which showed Working for turns
    *  that had ended, and no recaps, until the next restart. */
   let dialWatching = false
-  let view: View = { agents: [], machine: { id: '', computerId: options.machineId, name: 'This machine' }, signedIn: false, environment: '', hasWindow: false }
+  const emptyView = (): View => ({ agents: [], machine: { id: '', computerId: options.machineId, name: 'This machine' }, signedIn: false, environment: '', hasWindow: false })
+  let view = emptyView()
+  const publishDesk = (): void => {
+    if (!core || !desk || !view.machine.id || view.machine.computerId !== options.machineId) {
+      deskOwner?.revoke(); deskOwner = null
+      return
+    }
+    if (deskOwner?.generation === generation && deskOwner.machineId === view.machine.id) return
+    deskOwner?.revoke()
+    const origin = core, epoch = generation, machineId = view.machine.id, direct = desk
+    deskOwner = { generation: epoch, machineId, revoke: publishDeviceDesk({ dataDir: options.dataDir, machineId, desk: {
+      // Wi-Fi can call this desk before a dial has ever read its startup view.
+      stepFocus: async (...args) => await refresh() ? direct.stepFocus(...args) : 'no_agents',
+      scroll: (...args) => direct.scroll(...args),
+    }, faults,
+      current: () => !stopped && generation === epoch && core === origin && view.machine.id === machineId,
+      hasWindow: () => view.hasWindow,
+    }) }
+  }
   /** One ask of the core's view at a time: the dial's tick and ⌘K asking together share it. */
-  let viewing: Promise<void> | null = null
-  const refresh = (): Promise<void> => {
-    if (viewing) return viewing
-    if (!core) return Promise.resolve()
-    const asking = core.query('view').then((answer) => {
-      if (!Array.isArray(answer.agents)) return
-      const machine = object(answer.machine)
-      view = {
-        agents: answer.agents as Viewed[],
-        machine: { id: text(machine.id), computerId: text(machine.computerId) || options.machineId, name: text(machine.name) || 'This machine' },
-        signedIn: answer.signedIn === true,
-        environment: text(answer.environment),
-        hasWindow: answer.hasWindow === true,
-      }
-    }).catch(() => { /* the core went away; its next connection is asked again */ }).finally(() => { viewing = null })
-    viewing = asking
-    return asking
+  let viewing: { generation: number; promise: Promise<boolean>; closed: AbortController } | null = null
+  const refresh = (): Promise<boolean> => {
+    if (viewing?.generation === generation) return viewing.promise
+    if (!core) return Promise.resolve(false)
+    const origin = core, epoch = generation
+    const pending = { generation: epoch, promise: Promise.resolve(false), closed: new AbortController() }
+    pending.promise = readSessionView((scope, receive, signal) => readCoreSessionRecords(origin, scope, receive, signal), 'advertised', header => {
+      const agents: Viewed[] = []
+      return { row: (member, budget) => {
+        if (stopped || generation !== epoch || core !== origin) throw new Error('SESSION_READ_UNAVAILABLE')
+        if (member[0] === 'gone') return
+        const [, agentId, sessionId, engine, registeredAt, transcriptPath, lastHookAt] = member
+        let row: Viewed
+        if (member[0] === 'registered') {
+          const [, , , , , , , active, cwd, storedDsh, launch, displayName, terminalAvailable, selectedModel] = member
+          if (!terminalAvailable) return
+          const [state, first, detail] = launch ?? []
+          const launching = state === undefined ? undefined : state === 'failed'
+            ? { state, error: first, ...(detail === false ? {} : { detail }) }
+            : state === 'held' ? { state, service: first, detail } : { state }
+          const session = { agentId, sessionId, engine, registeredAt, transcriptPath, lastHookAt,
+            active, cwd, ...(storedDsh === false ? {} : { dsh: storedDsh }), ...(launching ? { launch: launching } : {}),
+            displayName, runtimeProfile: selectedModel }
+          row = session
+        } else {
+          const [, , , , , , , displayName, selectedModel] = member
+          const session = { agentId, sessionId, engine, registeredAt, transcriptPath, lastHookAt, displayName, selectedModel, runtimeProfile: selectedModel }
+          row = session
+        }
+        budget.retain(boundedJsonBytes(row, budget.remaining)); agents.push(row)
+      }, value: (): View => ({ agents,
+        machine: { ...header.machine, computerId: header.machine.computerId || options.machineId, name: header.machine.name || 'This machine' },
+        signedIn: header.signedIn, environment: header.environment, hasWindow: header.hasWindow,
+      }) }
+    }, pending.closed.signal).then(next => {
+      if (stopped || generation !== epoch || core !== origin) return false
+      view = next
+      publishDesk()
+      return true
+    }).catch(() => false).finally(() => { if (viewing === pending) viewing = null })
+    viewing = pending
+    return pending.promise
   }
   /** What the devices end for a core that goes (services/devices.ts `onCoreGone`). */
   let coreGone: (() => void) | undefined
+  const disconnect = (): void => {
+    deskOwner?.revoke(); deskOwner = null
+    viewing?.closed.abort()
+    generation++; core = null; viewing = null; view = emptyView()
+    coreGone?.()
+  }
   const ask = async (query: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
     if (!core) throw new Error('the devices are not connected to the core')
     return core.query(query, payload)
@@ -120,21 +174,15 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
   const noticeListeners = new Set<(notice: BackendNotice) => void>()
   const unasked = processCoreApi(options.dataDir, 'devices')
   const account = accountLink((query, payload) => ask(query, payload))
-  const api: CoreApi = {
+  const api: DevicesCore = {
     dataDir: options.dataDir,
     conversations: unasked.conversations,
     // Terminals are launched by the core alone (#893).
     terminals: TERMINALS_OFF,
     machine: { id: () => view.machine.id, computerId: () => view.machine.computerId, name: () => view.machine.name },
     agents: {
-      all: () => view.agents,
-      live: () => view.agents,
       advertised: () => view.agents,
       displayName: (session) => (session as Viewed).displayName ?? '',
-      byAgent: (agentId) => view.agents.find((agent) => agent.agentId === agentId),
-      resolve: (id) => resolveAgent(view.agents, id),
-      terminalAvailable: () => true,
-      sync: () => {},
       runtimeModels: async (agentId) => ((await ask('models', { agentId })).models ?? []) as RuntimeModelOption[],
       runtimeProfile: (session) => (session as Viewed).runtimeProfile ?? null,
       setRuntime: (agentId, model, effort) => tell('setRuntime', { agentId, model, effort }),
@@ -153,11 +201,6 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
         const text = (await ask('activityText', { agentId })).text
         return typeof text === 'string' && text ? { text } : null
       },
-      // Whether harnesses work is asked by Agent Messages alone.
-      activity: UNASKED.activity,
-      summaries: UNASKED.summaries,
-      // The devices make no agent of their own and show no harness's viewer.
-      ...AGENT_ACTIONS_OFF,
     },
     turns: {
       send: (agentId, said) => tell('turn', { agentId, text: said }),
@@ -189,9 +232,7 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     },
     clients: {
       ...unasked.clients,
-      sendLocal: (frame) => tell('sendLocal', { frame }),
-      // Told, not asked: a bridge answers a window that has gone by its own deadline either way.
-      sendToWindow: (connId, frame) => { tell('sendToWindow', { connId, frame }); return core !== null },
+      sendWindow: delivery => { tell('window', { ...delivery }); return core !== null },
       hasWindow: () => view.hasWindow,
       devicesChanged: (payload) => tell('devicesChanged', payload),
       dialWatching: (watching) => {
@@ -206,19 +247,21 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     },
     daemon: DAEMON_UNKNOWN,
     // The Wi-Fi device beside the dials has a link of its own (services/wifiProcess.ts).
-    wifi: unasked.wifi,
   }
 
   const ports: CorePorts = emptyPorts()
+  let legacyCommands: ServiceRequests = {}
   const deps: DevicesDeps = {
     logsDir: env.HARNESS_LOGS_DIR,
     dialSerials: processEnv.HARNESS_DIAL_SERIALS?.split(',').map((serial) => serial.trim()).filter(Boolean),
     testDialPort: processEnv.HARNESSD_TEST_DIAL_PORT,
     cableDisabled: env.CABLE_DISABLE,
-    faults: faultsOf(processEnv.HARNESSD_TEST_FAULTS),
+    faults,
     refresh,
+    onDesk: direct => { deskOwner?.revoke(); deskOwner = null; desk = direct; publishDesk() },
     onCoreGone: (run) => { coreGone = run },
-    // Their own listener: the devices started inside the core's process are given none but on Windows (services/inline.ts).
+    onLegacyCommands: handlers => { legacyCommands = handlers },
+    // The service owns this authenticated listener; explicit inline Windows starts open the same door.
     listen: listenForDevices(options.dataDir, options.platform ?? process.platform, options.openListener ?? openDevicesListener),
   }
   const requests = (options.start ?? startDevices)(api, ports, deps)
@@ -240,7 +283,6 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     windowReply: ({ which, connId, machineId, reply }) =>
       port.windowReply(which === 'form' ? 'form' : which === 'visit' ? 'visit' : 'selection', text(connId), text(machineId), object(reply)),
     windowGone: ({ connId }) => port.windowGone(text(connId)),
-    scroll: ({ phase, dy, velocity }) => { if (phase === 'down' || phase === 'move' || phase === 'up') port.scroll(phase, number(dy), number(velocity)) },
     engines: ({ engines }) => port.engines(strings(engines)),
     commanders: ({ connected }) => port.commanders(connected === true),
     // The mod's poll whose client went before its answer (core/deviceHookCalls.ts): it ends.
@@ -263,14 +305,8 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
 
   const devices: ServiceRequests = {
     ...requests,
-    // What the core asks of the devices (core/devicesLink.ts), under types only the core sends: no client's
-    // request is routed here under these names (core/serviceLinks.ts routes the Devices tab's alone).
-    routeTask: async ({ text: task }) => ({ ...await port.routeTask(text(task)) }),
-    routeSend: async ({ agentId, text: task }) => ({ ...await port.routeSend(text(agentId), text(task)) }),
-    stepFocus: async ({ direction, currentAgentId }) => {
-      const step = await port.stepFocus(direction === 'previous' ? 'previous' : 'next', typeof currentAgentId === 'string' ? currentAgentId : undefined)
-      return step === 'no_agents' ? { step } : { ...step }
-    },
+    // Direct service-owned closures preserve old private port replies until 2026-12-16.
+    ...legacyCommands,
     // The mod's poll, checked and bounded by the core (core/deviceHookCalls.ts), and held here until a transcript takes it
     // or the hold runs out.
     inboxPoll: async ({ pollId, sessionId }) => ({ ...await port.inboxPoll({ pollId: text(pollId), sessionId: text(sessionId) }) }),
@@ -287,17 +323,17 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
       if (Object.hasOwn(heard, kind)) heard[kind](payload)
     },
     onConnected: (connection) => {
-      core = connection
+      if (stopped) return
+      if (core) disconnect()
+      generation++; core = { ...connection }
       if (dialWatching) tell('dialWatching', { watching: true })
       void refresh()
     },
-    onDisconnected: () => {
-      core = null
-      coreGone?.()
-    },
+    onDisconnected: disconnect,
   })
   return {
     stop: async () => {
+      stopped = true; disconnect()
       service.stop()
       // The serial ports first and on the way out: a port this process still held would make the next
       // devices process, and esptool, fail as if the hardware had died.

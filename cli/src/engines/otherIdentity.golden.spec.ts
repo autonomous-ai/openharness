@@ -129,7 +129,7 @@ beforeAll(async () => {
     hermes: await import('./hermes/contract.js'),
     cursorDiscovery: await import('../core/engines/cursorDiscovery.js'),
   }
-  m.registry.registry.load()
+  await m.registry.registry.load()
   golden = RECORD ? {} : JSON.parse(readFileSync(GOLDEN, 'utf8')) as Record<string, unknown>
 })
 
@@ -235,8 +235,9 @@ describe('where the core finds the other engines\' conversations', () => {
         register: (input: unknown) => { registered.push(input); return null }, setOpenclawStateDir: () => false,
       } as never,
       mirror: { inheritSummary: () => {} }, forgetSession: async () => {}, clients: { send: () => {} }, attachSession: async () => true,
+      captureReader: () => () => false,
       announceSession: () => {}, stoppedAgents: { save: () => {}, finishResume: () => {}, get: () => null } as never, syncRecapPool: () => {},
-      input: { forget: () => {}, awaitingConfirmation: () => false, waitsForPane: () => false, firstTaskWaiting: () => false, typeCommand: async () => false } as never, submitFirstTask: () => {}, deviceInput: { forget: () => {} } as never,
+      input: { forget: () => {}, awaitingConfirmation: () => false, waitsForPane: () => false, firstTaskWaiting: () => false, typeCommand: async () => false } as never, submitFirstTask: () => {},
       homes: { copilot: home('.copilot'), grok: home('.grok'), agy: home('.gemini', 'antigravity-cli') },
       // OpenClaw's TUI names its session on its screen alone: the footer under its status line, above its composer.
       capturePane: async (agentId: string) => agentId === 'agent-openclaw'

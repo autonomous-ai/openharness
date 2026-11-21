@@ -1,8 +1,9 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
-import { isMessagesBlock, isMessagesCommand, messagesCommand, MESSAGES_HOOK_SOURCE, writeMessagesHook } from './messagesHook.js'
+import { inspectHookFile, runHookPreparation } from './nativeHookFiles.js'
+import { isMessagesBlock, isMessagesCommand, messagesCommand, MESSAGES_HOOK_SOURCE } from './messagesHook.js'
 
 // How the watched path is changed: opened for writing in place, or a file renamed onto it.
 const disk = vi.hoisted(() => ({ watch: '', changes: [] as string[] }))
@@ -24,28 +25,32 @@ vi.mock('node:fs', async original => {
     },
   }
 })
+const writeMessagesHook = (root: string) => {
+  const file = join(root, 'hook.mjs')
+  return runHookPreparation([file], attempt => inspectHookFile(file, 0o700).replace(MESSAGES_HOOK_SOURCE, attempt))
+}
 const roots: string[] = []
-const scratch = () => { const root = mkdtempSync(join(tmpdir(), 'messages-hook-')); roots.push(root); return root }
+const scratch = () => { const root = realpathSync(mkdtempSync(join(tmpdir(), 'messages-hook-'))); roots.push(root); return root }
 afterEach(() => {
   disk.watch = ''
   disk.changes = []
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
 
-it('the save goes through a temporary file renamed onto the target, and the script stays 0700', () => {
+it('the save goes through a temporary file renamed onto the target, and the script stays 0700', async () => {
   const root = scratch()
   disk.watch = join(root, 'hook.mjs')
-  writeMessagesHook(root)
+  await writeMessagesHook(root)
   expect(disk.changes).toEqual(['rename'])
   expect(readFileSync(disk.watch, 'utf8')).toBe(MESSAGES_HOOK_SOURCE)
   if (process.platform !== 'win32') expect(statSync(disk.watch).mode & 0o777).toBe(0o700)
 })
 
-it('a file at the old temporary name is left alone', () => {
+it('a file at the old temporary name is left alone', async () => {
   const root = scratch()
   const planted = join(root, `hook.mjs.${process.pid}.tmp`)
   writeFileSync(planted, 'planted')
-  writeMessagesHook(root)
+  await writeMessagesHook(root)
   expect(readFileSync(planted, 'utf8')).toBe('planted')
   expect(readFileSync(join(root, 'hook.mjs'), 'utf8')).toBe(MESSAGES_HOOK_SOURCE)
 })

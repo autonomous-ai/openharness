@@ -23,11 +23,11 @@
  * minute. A claim older than the computer's last start is a dead master's, whatever has its pid now.
  */
 import { createHash } from 'node:crypto'
-import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { uptime } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { brotliDecompressSync } from 'node:zlib'
-import { sha256File } from './reexec.js'
+import { sha256File } from './bundleFingerprint.js'
 
 /** As scripts/lib/leanBlock.mjs writes it. Built in two pieces, so this file's own text never matches. */
 const MARKER = Buffer.from('/*@harness-' + 'lean:')
@@ -53,8 +53,13 @@ export interface LeanBundle {
 
 const sha256 = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex')
 
-/** The lean bundle [bundle] carries; null when it carries none, or one that does not match its checksum. */
-export function readLeanBundle(bundle: Buffer): LeanBundle | null {
+interface LeanRead {
+  maxPayloadBytes?: number
+  maxFiles?: number
+}
+
+/** The lean bundle [bundle] carries; null when absent, corrupt or outside its decode bounds. */
+export function readLeanBundle(bundle: Buffer, limits: LeanRead = {}): LeanBundle | null {
   const start = bundle.lastIndexOf(MARKER)
   if (start < 0) return null
   const end = bundle.indexOf(END, start + MARKER.length)
@@ -65,15 +70,23 @@ export function readLeanBundle(bundle: Buffer): LeanBundle | null {
   const expected = body.slice(0, colon)
   if (colon < 0 || !/^[0-9a-f]{64}$/.test(expected)) return null
   let payload: Buffer
-  try { payload = brotliDecompressSync(Buffer.from(body.slice(colon + 1), 'base64')) } catch { return null }
+  // The measured maximum is 12.61 MB / 471 files; each bound leaves more than ten times that headroom.
+  try { payload = brotliDecompressSync(Buffer.from(body.slice(colon + 1), 'base64'), { maxOutputLength: limits.maxPayloadBytes ?? 128 * 1024 * 1024 }) } catch { return null }
   if (sha256(payload) !== expected) return null
   let named: unknown
   try { named = JSON.parse(payload.toString('utf8')) } catch { return null }
   if (!named || typeof named !== 'object' || Array.isArray(named)) return null
+  const names = Object.keys(named)
+  if (names.length > (limits.maxFiles ?? 8192)) return null
   const files = new Map<string, Buffer>()
-  for (const [name, code] of Object.entries(named)) {
+  const folded = new Set<string>()
+  for (const name of names) {
+    const code = (named as Record<string, unknown>)[name]
     // Names become paths: nothing that could leave the folder, or be taken for a claim or scratch.
     if (!FILE_NAME.test(name) || typeof code !== 'string') return null
+    const key = name.toLowerCase()
+    if (folded.has(key)) return null
+    folded.add(key)
     files.set(name, Buffer.from(code, 'utf8'))
   }
   if (!files.has(LEAN_ENTRY)) return null
@@ -102,7 +115,7 @@ export function folderFingerprint(folder: string): string | null {
   if (!names.includes(LEAN_ENTRY)) return null
   const hash = createHash('sha256')
   try {
-    // A piece at a time, as cli.js is: before every process a master starts (./reexec.ts `sha256File`).
+    // A piece at a time, as cli.js is: before every process a master starts (./bundleFingerprint.ts).
     for (const name of names) hash.update(`${name}\0${sha256File(join(folder, name))}\n`)
   } catch {
     return null
@@ -120,6 +133,8 @@ export function releaseLeanClaim(entry: string, pid: number = process.pid): void
 export const LEAN_RECENT_MS = 60_000
 
 export interface LeanWrite {
+  /** One original master image this PID still executes while separately claiming a child cohort. */
+  keepMasterEntry?: string
   /** This master: what its claim is under. */
   pid?: number
   alive?: (pid: number) => boolean
@@ -130,23 +145,37 @@ export interface LeanWrite {
   bootedAt?: number
 }
 
-/** Whether [folder] holds every file of [lean], byte for byte. */
+/** Whether [folder] holds the verified bytes, without a whole allocation for a corrupt cached file. */
 function holds(folder: string, lean: LeanBundle): boolean {
   for (const [name, code] of lean.files) {
-    try { if (!readFileSync(join(folder, name)).equals(code)) return false } catch { return false }
+    try { if (sha256File(join(folder, name)) !== sha256(code)) return false } catch (error) {
+      // An uncertain open descriptor is not a cache mismatch to repair; its caller retains ownership.
+      if ((error as { code?: unknown }).code === 'bundle_fingerprint_close_unsettled') throw error
+      return false
+    }
   }
   return true
 }
 
 const removeQuietly = (path: string): void => { try { rmSync(path, { recursive: true, force: true }) } catch { /* the next master tries again */ } }
-const changedAt = (path: string): number => { try { return lstatSync(path).mtimeMs } catch { return 0 } }
+const changedAt = (path: string): number | null => { try { return lstatSync(path).mtimeMs } catch { return null } }
 
-/** The pids that claim [folder], with when each claimed it. */
-function claimsIn(folder: string): Array<{ pid: number; at: number }> {
-  return safeList(folder).flatMap((file) => {
+/** Null means ownership is unknown, never permission to replace or delete a complete image. */
+function claimsIn(folder: string): Array<{ pid: number; at: number }> | null {
+  let names: string[]
+  try { names = readdirSync(folder) } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    return code === 'ENOENT' || code === 'ENOTDIR' ? [] : null
+  }
+  const claims: Array<{ pid: number; at: number }> = []
+  for (const file of names) {
     const claim = CLAIM.exec(file)
-    return claim ? [{ pid: Number(claim[1]), at: changedAt(join(folder, file)) }] : []
-  })
+    if (!claim) continue
+    const at = changedAt(join(folder, file))
+    if (at === null) return null
+    claims.push({ pid: Number(claim[1]), at })
+  }
+  return claims
 }
 
 /** Claim [folder] for [claim], then check it holds [lean]: from the moment its bytes are found good, a
@@ -174,12 +203,15 @@ export function writeLeanBundle(dir: string, lean: LeanBundle, options: LeanWrit
   const claim = `.claim-${pid}`
   const name = lean.sha256.slice(0, 16)
   const folder = join(dir, name)
+  const keepFolder = options.keepMasterEntry ? resolve(dirname(options.keepMasterEntry)) : null
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   if (!claimed(folder, claim, lean)) {
     // Written whole, claimed, then renamed into place: a folder there is always complete and never
     // unclaimed, so two masters of one build starting at once (a second `harness start`) never see each
     // other's half, and no cleaner takes it between the rename and the claim.
     const scratch = join(dir, `${name}.${pid}.tmp`)
+    const priorScratch = claimsIn(scratch)
+    if (priorScratch === null || priorScratch.some((other) => other.pid !== pid && live(other))) throw new Error('LEAN_SCRATCH_CLAIMED')
     removeQuietly(scratch)
     try {
       mkdirSync(scratch, { mode: 0o700 })
@@ -199,35 +231,56 @@ export function writeLeanBundle(dir: string, lean: LeanBundle, options: LeanWrit
       } else {
         // One that changed on disk is replaced, and keeps the claims of the masters still running from
         // it. One starting a service from it in that instant finds no file and starts it from cli.js.
-        for (const other of claimsIn(folder)) {
-          if (other.pid !== pid && live(other)) writeFileSync(join(scratch, `.claim-${other.pid}`), '', { mode: 0o600 })
-        }
         const aside = join(dir, `${name}.${pid}.old`)
         try {
+          const claims = claimsIn(folder)
+          if (claims === null) throw new Error('LEAN_CLAIMS_UNAVAILABLE')
+          for (const other of claims) {
+            if (other.pid !== pid && live(other)) writeFileSync(join(scratch, `.claim-${other.pid}`), '', { mode: 0o600 })
+          }
+        } catch (copyError) {
+          removeQuietly(scratch)
+          throw copyError
+        }
+        try {
           renameSync(folder, aside)
-          renameSync(scratch, folder)
         } catch {
           removeQuietly(scratch)
           throw error
-        } finally {
-          removeQuietly(aside)
         }
+        try { renameSync(scratch, folder) } catch {
+          try { renameSync(aside, folder) } catch {
+            // Both copies are complete and claimed. Keep them until this owner is actually gone.
+            throw Object.assign(new Error('LEAN_RESTORE_FAILED'), { code: 'LEAN_RESTORE_FAILED' })
+          }
+          removeQuietly(scratch)
+          throw error
+        }
+        removeQuietly(aside)
       }
     }
   }
-  const settled = (path: string): boolean => now() - changedAt(path) >= LEAN_RECENT_MS
+  const settled = (path: string): boolean => {
+    const at = changedAt(path)
+    return at !== null && now() - at >= LEAN_RECENT_MS
+  }
   for (const entry of safeList(dir)) {
     const path = join(dir, entry)
     const scratch = SCRATCH.exec(entry)
     if (scratch) {
-      if (Number(scratch[1]) === pid || (!alive(Number(scratch[1])) && settled(path))) removeQuietly(path)
+      // A failed rollback leaves complete copies here, possibly the last one another master claims.
+      const claims = claimsIn(path)
+      if (claims === null) continue
+      const claimedElsewhere = claims.some((other) => other.pid !== pid && live(other))
+      if (!claimedElsewhere && (Number(scratch[1]) === pid || (!alive(Number(scratch[1])) && settled(path)))) removeQuietly(path)
       continue
     }
     if (!FOLDER.test(entry)) continue
     const claims = claimsIn(path)
+    if (claims === null) continue
     if (entry === name) {
       for (const other of claims) if (other.pid !== pid && !live(other)) removeQuietly(join(folder, `.claim-${other.pid}`))
-    } else if (!claims.some((other) => other.pid !== pid && live(other)) && settled(path)) {
+    } else if (resolve(path) !== keepFolder && !claims.some((other) => other.pid !== pid && live(other)) && settled(path)) {
       // A claim of this master's own on another folder is one it held before it re-executed on this one.
       removeQuietly(path)
     }

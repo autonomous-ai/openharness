@@ -1,3 +1,5 @@
+import { nativeFactory } from '../../testing/sessionFactories.js'
+import { localPendingCreationDiscovery } from '../../testing/pendingCreation.js'
 /** The real receipt → create → native hook proof → trust composition, with no real pane. */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -5,6 +7,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { CreateAgentDeps } from './create.js'
 import type { RegisteredSession } from '../../lib/registry.js'
+import type { TerminalCommand } from '../../lib/terminalTypes.js'
 import { writeExecutable } from '../../testing/executableFixture.js'
 
 const spawn = vi.hoisted(() => vi.fn())
@@ -42,49 +45,77 @@ afterEach(() => {
 })
 
 it('records Claude trust at its captured shell home when that shell omitted CLAUDE_CONFIG_DIR', async () => {
-  const { folderTrust } = await import('../../engines/launchPrep.js')
+  const { createFolderTrustPreparation } = await import('../../engines/folderTrustPreparation.js')
+  const { prepareNativeTrust } = await import('../../services/nativeSetupTrust.js')
   const selected = join(root, 'selected-home'); mkdirSync(selected)
   const config = join(selected, '.claude.json'); writeFileSync(config, '{}\n')
   const ambient = join(process.env.HOME!, '.claude.json'); writeFileSync(ambient, '{}\n')
-  expect(folderTrust('claude', null, { HOME: selected })!.record('/fixture/work')).toBe('trusted')
-  expect(JSON.parse(readFileSync(config, 'utf8')).projects['/fixture/work'].hasTrustDialogAccepted).toBe(true)
+  const cwd = join(root, 'workspace'); mkdirSync(cwd)
+  const prepare = createFolderTrustPreparation({ prepareTrust: async (input, _request, current) => prepareNativeTrust(input, current) })
+  expect(await prepare({ engine: 'claude', cwd, environment: { HOME: selected }, empty: true }, () => true)).toBe(true)
+  expect(JSON.parse(readFileSync(config, 'utf8')).projects[cwd].hasTrustDialogAccepted).toBe(true)
   expect(readFileSync(ambient, 'utf8')).toBe('{}\n')
 }, 30_000) // As the core gate gives every test: with each fsync 100 ms slower this took up to 6.5 s, past the default 5 s.
 
-it.each([true, false])('completes native Codex preparation before its dispatch claim with saved local authority %s', async local => {
+it.each([
+  { local: true, project: false, trust: 'ready' }, { local: false, project: false, trust: 'ready' },
+  { local: true, project: true, trust: 'ready' }, { local: false, project: true, trust: 'ready' },
+  { local: true, project: true, trust: 'unavailable' }, { local: true, project: true, trust: 'delayed' },
+])('completes native Codex preparation once before dispatch (local $local, project $project, trust $trust)', async ({ local, project, trust }) => {
   const { createAgentCreator } = await import('./create.js')
   const { createLaunchRequests } = await import('./launches.js')
   const { AgentCreationReceipts } = await import('../../lib/agentCreationReceipt.js')
-  const { inspectNativeLaunch } = await import('../../engines/nativeLaunch.js')
+  const { inspectNativeLaunch } = await import('../../testing/nativeSetupInProcess.js')
   const { projectsRoot } = await import('../../lib/projectFolder.js')
+  const { createFolderTrustPreparation } = await import('../../engines/folderTrustPreparation.js')
+  const { prepareNativeTrust } = await import('../../services/nativeSetupTrust.js')
   const cwd = join(projectsRoot(), 'workspace'); mkdirSync(cwd, { recursive: true })
   const config = join(process.env.CODEX_HOME!, 'config.toml')
   const pending = { agentId: 'fixture-agent', engine: 'codex', cwd, sessionId: '', runtimes: [] } as unknown as RegisteredSession
-  spawn.mockImplementation(async (options: { current(): boolean; argv(attempt: number): string[] }) => {
+  spawn.mockImplementation(async (options: { current(): boolean; argv: TerminalCommand }) => {
     expect(options.current()).toBe(true)
-    expect(readFileSync(config, 'utf8').includes('trust_level = "trusted"')).toBe(local)
-    expect(options.argv(1).join(' ')).toContain('original prompt')
+    expect(readFileSync(config, 'utf8').includes('trust_level = "trusted"')).toBe((local || project) && trust === 'ready')
+    const argv = typeof options.argv === 'function' ? options.argv() : options.argv
+    expect(options.current()).toBe(true)
+    expect(argv).toContain('original prompt')
     return { ok: true, pending, spawned: { runtime: { backend: 'tmux', paneId: '%fixture' } } }
   })
-  const creator = createAgentCreator({ native: (engine, source) => inspectNativeLaunch(engine, source),
+  const prepare = createFolderTrustPreparation({ prepareTrust: async (input, _request, current) => prepareNativeTrust(input, current) })
+  let release!: () => void
+  const delayed = new Promise<void>(resolve => { release = resolve })
+  const prepareFolderTrust = vi.fn<typeof prepare>(async (...args) => {
+    if (trust === 'ready') return prepare(...args)
+    if (trust === 'delayed') await delayed
+    return false
+  })
+  const creator = createAgentCreator({ native: (engine, source) => inspectNativeLaunch(engine, source), prepareFolderTrust,
     createBackend: {} as CreateAgentDeps['createBackend'], registry: {} as CreateAgentDeps['registry'],
     externalResume: async () => { throw Error('unexpected external resume') }, watchNewPane: async () => {},
-    announceSession: () => {}, attach: () => {}, prepareApiTools: () => {},
-    hookPort: 19473, hooksDisabled: false, installOpencodePlugin: async () => true,
+    announceSession: () => {}, attach: () => {}, prepareInstructions: async () => {},
+    hookPort: 19473, hooksDisabled: false,
     gridLaunchMachine: () => ({}) as never, buildGridLaunch: async () => { throw Error('unexpected grid') },
-    terminalHintMachineName: () => 'Fixture', blocksFolder: () => false, gridSetup: () => null, privateGridName: async () => null,
-    dshLaunch: { launch: async () => { throw Error('unexpected DSH') }, materialize: async () => { throw Error('unexpected DSH') } },
+    terminalHintMachineName: () => 'Fixture', blocksFolder: () => false,
+    dshLaunch: { context: async () => { throw Error('unused') }, describe: async () => { throw Error('unused') }, launch: async () => { throw Error('unexpected DSH') }, materialize: async () => { throw Error('unexpected DSH') } },
     syncProfileHome: async () => [],
   })
-  const receipts = new AgentCreationReceipts(join(root, 'receipts'))
-  const requests = createLaunchRequests({ receipts, createAgent: () => creator, prepareCreate: creator.prepare,
+  const discovery = localPendingCreationDiscovery(join(root, 'receipts'))
+  const receipts = new AgentCreationReceipts(join(root, 'receipts'), discovery.ensure)
+  const requests = createLaunchRequests({ nativeFactory, receipts, discovery, createAgent: () => creator, prepareCreate: creator.prepare,
     forkAgent: () => null, resumeAgent: () => null, restartAgent: () => null,
-    byAgent: () => pending, stoppedAgent: () => undefined, toProject: async () => ({ agentId: pending.agentId }) as never, modelTarget: async () => null,
-    workspaces: () => null })
+    byAgent: () => pending, stoppedAgent: async () => undefined, toProject: async () => ({ agentId: pending.agentId }) as never, modelTarget: async () => null,
+    workspaces: () => null, prepareFolderTrust })
   stop = requests.stop
   const replies: Record<string, unknown>[] = []
-  const input = { creationId: 'native_trust_fixture_1', engine: 'codex', cwd, bypassPermission: false, prompt: 'original prompt' }
-  await requests.create(input, { local }, result => { replies.push(result) })
+  const input = { creationId: 'native_trust_fixture_1', engine: 'codex',
+    ...(project ? { projectSource: 'new', projectName: 'fresh-project' } : { cwd }), bypassPermission: false, prompt: 'original prompt',
+    folderTrustAttempted: true } // Public input cannot suppress the core's own preparation.
+  const creating = requests.create(input, { local }, result => { replies.push(result) })
+  if (trust === 'delayed') {
+    await vi.waitFor(() => expect(prepareFolderTrust).toHaveBeenCalledOnce())
+    expect(spawn).not.toHaveBeenCalled()
+    release()
+  }
+  await creating
   // Past five seconds the receipt answers pending while the same preparation goes on (agentCreationReceipt.ts runIntent), as it
   // did in those runs; the client then asks what became of it.
   const status = async () => {
@@ -94,14 +125,18 @@ it.each([true, false])('completes native Codex preparation before its dispatch c
   }
   const settled = await vi.waitFor(async () => {
     const answer = await status()
-    expect(answer.state).not.toBe('pending')
+    // Before marker admission finishes, there is deliberately no primary receipt yet.
+    expect(['missing', 'pending']).not.toContain(answer.state)
     return answer
   }, { timeout: 40_000, interval: 200 })
+  // Receipt handling maps dispatch errors to unconfirmed; keep a failed pane-fixture assertion visible here.
+  if (spawn.mock.results[0]?.type === 'return') await spawn.mock.results[0].value
   expect(settled).toMatchObject({ state: 'created' })
   await vi.waitFor(() => expect(['created', 'pending']).toContain(replies[0]?.state))
   expect(spawn).toHaveBeenCalledOnce()
+  expect(prepareFolderTrust).toHaveBeenCalledTimes(local || project ? 1 : 0)
   await requests.create(input, { local: !local }, result => { replies.push(result) })
   await vi.waitFor(() => expect(replies[1]).toMatchObject({ state: 'created' }))
   expect(spawn).toHaveBeenCalledOnce()
-  expect(readFileSync(config, 'utf8').includes('trust_level = "trusted"')).toBe(local)
+  expect(readFileSync(config, 'utf8').includes('trust_level = "trusted"')).toBe((local || project) && trust === 'ready')
 }, 90_000) // Cold, this file's imports alone took up to 22.6 s in those runs.

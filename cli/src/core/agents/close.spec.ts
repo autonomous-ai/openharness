@@ -8,8 +8,10 @@ import { inspectCloseActivity, type CloseAgentServiceDeps } from '../../lib/clos
 import { projectDisplayName, type RegisteredSession } from '../../lib/registry.js'
 import { CLOSE_READ_RECONNECT_MS, createAgentClosing, createCloseRequests, type ClosingDeps } from './close.js'
 import * as TAKEOVER from '../../lib/__fixtures__/takeoverScreens.js'
+import { OpenTabProtection } from '../../lib/openTabProtection.js'
 import { builtinSqlite, closeSqliteHandles } from '../../lib/sqliteBuiltin.js'
 import { env } from '../../config/env.js'
+import { openclawUserRows } from '../../engines/others/storageRequests.js'
 import { nativeOpenFiles } from '../../lib/nativeConversation.js'
 
 vi.mock('../../lib/nativeConversation.js', async (real) => ({
@@ -44,6 +46,7 @@ function setup(over: Partial<ClosingDeps> = {}, advertised: RegisteredSession[] 
     stopAgent: vi.fn(async () => {}),
     announceSession: vi.fn(),
     engineReady: vi.fn(async () => {}),
+    userRowSince: (session, since) => openclawUserRows(session, since, Number.MAX_SAFE_INTEGER),
     ...over,
   }
   const closing = createAgentClosing(deps)
@@ -75,28 +78,38 @@ describe('closing agents no window shows', () => {
     expect(await at('screen')).toBe(false)
   })
 
-  it('knows a close of one already closed: not live, and kept stopped with the conversation the close names', () => {
+  it('knows a close of one already closed: not live, and kept stopped with the conversation the close names', async () => {
     const live = row({ agentId: 'live' })
     const kept = row({ agentId: 'kept', sessionId: 's-kept', registeredAt: 5 })
     const registry = { byAgent: vi.fn((id: string) => (id === 'live' ? live : undefined)) } as unknown as ClosingDeps['registry']
-    const stoppedAgents = { get: vi.fn((id: string) => (id === 'kept' || id === 'live' ? kept : null)), resumeReservedAt: vi.fn((_id: string): number | null => null) }
+    const stoppedAgents = { get: vi.fn(async (id: string) => (id === 'kept' || id === 'live' ? kept : null)), resumeReservedAt: vi.fn((_id: string): number | null => null) }
     const { close } = setup({ registry, stoppedAgents })
     const asked = (agentId: string, over: Record<string, string> = {}) => ({ agentId, sessionId: 's-kept', createdAt: new Date(5).toISOString(), mode: 'now' as const, ...over })
-    expect(close.closedAlready!(asked('kept'))).toBe(kept)
+    expect(await close.closedAlready!(asked('kept'))).toBe(kept)
     // Asked before its conversation was known: the creation alone.
-    expect(close.closedAlready!(asked('kept', { sessionId: '' }))).toBe(kept)
-    expect(close.closedAlready!(asked('kept', { sessionId: 's-other' }))).toBeNull()
-    expect(close.closedAlready!(asked('kept', { createdAt: new Date(6).toISOString() }))).toBeNull()
-    expect(close.closedAlready!(asked('live'))).toBeNull()
-    expect(close.closedAlready!(asked('gone'))).toBeNull()
+    expect(await close.closedAlready!(asked('kept', { sessionId: '' }))).toBe(kept)
+    expect(await close.closedAlready!(asked('kept', { sessionId: 's-other' }))).toBeNull()
+    expect(await close.closedAlready!(asked('kept', { createdAt: new Date(6).toISOString() }))).toBeNull()
+    expect(await close.closedAlready!(asked('live'))).toBeNull()
+    expect(await close.closedAlready!(asked('gone'))).toBeNull()
     // Being resumed: about to be live again, not closed.
     stoppedAgents.resumeReservedAt.mockReturnValueOnce(1)
-    expect(close.closedAlready!(asked('kept'))).toBeNull()
+    expect(await close.closedAlready!(asked('kept'))).toBeNull()
+    // A fresh archive read may yield to a new live owner or a newly reserved resume.
+    vi.mocked(registry.byAgent).mockReturnValueOnce(undefined).mockReturnValueOnce(live)
+    expect(await close.closedAlready!(asked('kept'))).toBeNull()
+    stoppedAgents.resumeReservedAt.mockReturnValueOnce(null).mockReturnValueOnce(1)
+    expect(await close.closedAlready!(asked('kept'))).toBeNull()
     // A record that cannot be read says nothing.
     stoppedAgents.get.mockImplementationOnce(() => { throw new Error('unreadable') })
-    expect(close.closedAlready!(asked('kept'))).toBeNull()
+    expect(await close.closedAlready!(asked('kept'))).toBeNull()
     // A core that keeps no stopped agents knows none closed.
-    expect(setup({ registry }).close.closedAlready!(asked('kept'))).toBeNull()
+    expect(await setup({ registry }).close.closedAlready!(asked('kept'))).toBeNull()
+  })
+
+  it('keeps an unavailable optional user-row reader unknown for an OpenClaw close', async () => {
+    const { close } = setup({ userRowSince: undefined })
+    expect(await close.conversationEmpty!(row({ engine: 'openclaw', sessionId: 'agent:main:plain' }))).toBe(false)
   })
 
   describe('what an agent is doing', () => {
@@ -221,6 +234,22 @@ describe('closing agents no window shows', () => {
   })
 
   describe('the checkpoint around a close', () => {
+    it('carries the retained native proof through terminal capture into publication', async () => {
+      const { deps, close } = setup()
+      const proof = { source: { path: '/selected.db', key: '1:2', database: '/declared.db' }, verify: vi.fn(), fresh: vi.fn() }
+      await close.checkpoint(row(), 'before', () => true, proof)
+      expect(vi.mocked(deps.sessionCheckpoints.save).mock.calls[0][1]?.databaseProof).toBe(proof)
+    })
+    it('carries the close cancellation fence through terminal capture to checkpoint publication', async () => {
+      const { deps, close } = setup()
+      let active = true
+      const current = () => active
+      await close.checkpoint(row(), 'before', current)
+      const options = vi.mocked(deps.sessionCheckpoints.save).mock.calls[0][1]!
+      expect(options.current).toBe(current)
+      active = false
+      expect(options.current!()).toBe(false)
+    })
     it('before: keeps two thousand lines of the pane with the conversation', async () => {
       const { deps, close } = setup()
       await close.checkpoint(row(), 'before')
@@ -240,6 +269,22 @@ describe('closing agents no window shows', () => {
   })
 
   describe('the cleanup preview', () => {
+    it('answers pending local membership as unavailable without inspecting or closing a session', async () => {
+      const session = row({ runtimes: [] })
+      const cleanupTabs = new OpenTabProtection({ machineId: () => 'machine', sessions: () => [session],
+        readDesk: async () => ({ status: 200, body: { success: true, data: { revision: 1, tabs: [] } } }) })
+      const { deps, closing } = setup({ cleanupTabs }, [session], session)
+      const inspect = vi.spyOn(closing.closeAgentService, 'request')
+      const replies: Record<string, unknown>[] = []
+      cleanupTabs.pendingWindow('window', true)
+      createCloseRequests({ cleanupPreview: closing.cleanupPreview, closeAgentService: () => closing.closeAgentService }).preview(result => { replies.push(result) })
+      await vi.waitFor(() => expect(replies).toEqual([{ error: 'TABS_UNAVAILABLE', detail: 'Could not check your open tabs. Nothing was closed.' }]))
+      expect(inspect).not.toHaveBeenCalled(); expect(deps.stopAgent).not.toHaveBeenCalled()
+      cleanupTabs.updateWindow('window', [session.agentId]); cleanupTabs.pendingWindow('window', false)
+      expect(await closing.cleanupPreview()).toEqual({ version: 1, agents: [], kept: 1 })
+      expect(inspect).not.toHaveBeenCalled()
+    })
+
     it('lists the hidden agents a close would take, as they are now, and counts the rest as kept', async () => {
       const shown = row({ agentId: 'shown' })
       const changing = row({ agentId: 'changing' })

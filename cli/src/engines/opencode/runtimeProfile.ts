@@ -7,7 +7,8 @@
  *   opencode-go/kimi-k3
  *   vibe/minimax/minimax-m3
  *
- * OpenCode has **no effort axis** — every option is `@auto`, and the label is the model alone.
+ * Older OpenCode lists only ids, so every option is `@auto`. OpenCode 2 adds named models and
+ * variants through `/api/model`; those variants are the effort choices.
  *
  * Switching is a picker (`/models`), but unlike Command Code's it accepts typed input, which is what
  * makes it safe to drive: type a filter, and act only once the list has narrowed to exactly ONE row.
@@ -65,7 +66,7 @@ function squash(value: string): string {
  * is identical either way — which is the point of sharing it, since a filter built by a second rule
  * would drift from the one the picker was measured against.
  */
-export function opencodeModelTarget(id: string): OpencodeModelTarget | null {
+export function opencodeModelTarget(id: string, name?: string): OpencodeModelTarget | null {
   const trimmed = id.trim()
   if (!/^[a-z0-9][\w.-]*\/[\w./-]+$/i.test(trimmed)) return null
   const slash = trimmed.indexOf('/')
@@ -80,6 +81,7 @@ export function opencodeModelTarget(id: string): OpencodeModelTarget | null {
     model,
     filter: `${words(leaf)} ${words(provider)}`.trim(),
     modelFilter: words(leaf),
+    ...(name ? { name, filter: `${words(name)} ${words(provider)}`.trim(), modelFilter: words(name) } : {}),
   }
 }
 
@@ -99,17 +101,15 @@ export function parseOpencodeApiModels(output: string): OpencodeModelTarget[] {
     if (!row || typeof row !== 'object') continue
     const { id, providerID, name, variants, enabled, status } = row as Record<string, unknown>
     if (typeof id !== 'string' || typeof providerID !== 'string' || enabled === false || (status && status !== 'active')) continue
-    const target = opencodeModelTarget(`${providerID}/${id}`)
+    const label = typeof name === 'string' && name.trim() && name.length <= 128 ? name.trim() : undefined
+    const target = opencodeModelTarget(`${providerID}/${id}`, label)
     if (!target || seen.has(target.id)) continue
     seen.add(target.id)
-    const label = typeof name === 'string' && name.trim() && name.length <= 128 ? name.trim() : null
     const efforts = Array.isArray(variants)
       ? variants.map((v) => (v as { id?: unknown })?.id).filter((v): v is string => typeof v === 'string' && /^[a-z][a-z0-9_-]{0,15}$/.test(v))
       : []
     targets.push({
       ...target,
-      // The picker filters on what it draws: the model's name, not its id's words.
-      ...(label ? { name: label, filter: `${words(label)} ${words(target.provider)}`.trim(), modelFilter: words(label) } : {}),
       efforts,
     })
   }

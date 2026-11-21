@@ -99,7 +99,7 @@ describe('live worker transport', () => {
     {}, page({ cursor: cursor({ serial: 3 }) }),
     page({ cursor: cursor({ turn: { identity: 'another:empty', turnOpen: false, continued: false } }) }),
     page({ cursor: cursor({ turn: { identity: 'binding:empty', turnOpen: true, continued: false, openedAt: 'soon' } as never }) }),
-    page({ frames: [{ raw: '', profile: true, observe: true, events: [], replay: false,
+    page({ frames: [{ raw: '', profile: true,  events: [], replay: false,
       turn: { identity: 'another:empty', turnOpen: false, continued: false } }] }),
   ])('refuses a malformed page or one from another binding', async answer => {
     const p = setup(() => ({ version: 1, answer }))
@@ -107,7 +107,7 @@ describe('live worker transport', () => {
   })
 
   it('takes a frame with at and over, and refuses an at that is no integer or an over that is not true', async () => {
-    const frame = (changes: Record<string, unknown>) => ({ raw: '', profile: true, observe: true, events: [], replay: false,
+    const frame = (changes: Record<string, unknown>) => ({ raw: '', profile: true,  events: [], replay: false,
       turn: { identity: 'binding:empty', turnOpen: false, continued: false }, ...changes }) as LivePage['frames'][number]
     const taken = page({ frames: [frame({ at: 1_763_341_200_000, over: true })] })
     expect(await setup(() => ({ version: 1, answer: taken })).port.pull(ask())).toEqual(taken)

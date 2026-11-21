@@ -17,7 +17,7 @@ import { cleanRestEntry, transport, type RestEntry, type Transport } from './res
 export const MAX_BYTES = 1024 * 1024
 /** A token is renewed this long before it expires, as Grid does. */
 export const REFRESH_MARGIN = 300
-export const CODE = /^[a-z0-9][a-z0-9_-]{0,47}$/
+export const CODE = /^(?!(?:constructor|prototype)$)[a-z0-9][a-z0-9_-]{0,47}$/
 /** Codes saved before the catalog followed Grid's, and Grid's code for them now. */
 export const RENAMED: Record<string, string> = { apollo: 'apollo_io', supermetrics_marketing: 'supermetrics' }
 
@@ -207,6 +207,26 @@ export function cleanToken(entry: unknown): Token {
   return result
 }
 
+/** Shared scalar-only OAuth client schema; unknown remote fields never reach hashing or persistence. */
+export function cleanClient(value: unknown, remote = false): Client | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const entry = value as Record<string, unknown>
+  try {
+    const client_id = text(entry.client_id)
+    if (!client_id || typeof entry.client_secret !== 'string') return undefined
+    const token_endpoint = cleanUrl(entry.token_endpoint)
+    if (remote && !token_endpoint.startsWith('https://')) return undefined
+    const registered_at = entry.registered_at ?? 0
+    if (typeof registered_at !== 'number' || !Number.isSafeInteger(registered_at) || registered_at < 0) return undefined
+    return {
+      client_id, client_secret: text(entry.client_secret), token_endpoint,
+      token_endpoint_auth_method: text(entry.token_endpoint_auth_method),
+      authorization_endpoint: entry.authorization_endpoint === undefined ? '' : cleanUrl(entry.authorization_endpoint),
+      redirect_uri: text(entry.redirect_uri, 2048), registered_at,
+    }
+  } catch { return undefined }
+}
+
 /** The Authorization value for a token, its scheme normalised as Grid does. */
 export function bearer(token: Token): string {
   const scheme = token.token_type || 'Bearer'
@@ -234,6 +254,28 @@ export interface Status {
   tools?: boolean
 }
 
+/** The same stored schema is read by synchronous bridge callers and async gateway synchronization. */
+export function tokensIn(document: Record<string, unknown>): Record<string, Token> {
+  const result: Record<string, Token> = {}
+  for (const [code, entry] of Object.entries(document)) {
+    if (!CODE.test(code)) continue
+    const name = RENAMED[code] ?? code
+    if (!(name in result)) result[name] = cleanToken(entry)
+  }
+  return result
+}
+
+export function removalsIn(document: Record<string, unknown>): Record<string, number> {
+  const result: Record<string, number> = {}
+  for (const [code, at] of Object.entries(document)) {
+    if (CODE.test(code) && typeof at === 'number' && Number.isSafeInteger(at) && at > 0) {
+      const name = RENAMED[code] ?? code
+      result[name] = Math.max(result[name] ?? 0, at)
+    }
+  }
+  return result
+}
+
 export class Store {
   readonly root: string
   constructor(root?: string, private readonly env: NodeJS.ProcessEnv = process.env) {
@@ -259,13 +301,7 @@ export class Store {
   }
 
   tokens(): Record<string, Token> {
-    const result: Record<string, Token> = {}
-    for (const [code, entry] of Object.entries(this.file('tokens.json'))) {
-      if (!CODE.test(code)) continue
-      const name = RENAMED[code] ?? code
-      if (!(name in result)) result[name] = cleanToken(entry)
-    }
-    return result
+    return tokensIn(this.file('tokens.json'))
   }
 
   token(code: string): Token | undefined {
@@ -310,11 +346,7 @@ export class Store {
 
   /** Connections disconnected here, and when (epoch seconds), for the account's other computers. */
   removed(): Record<string, number> {
-    const result: Record<string, number> = {}
-    for (const [code, at] of Object.entries(this.file('removed.json'))) {
-      if (CODE.test(code) && typeof at === 'number' && Number.isInteger(at) && at > 0) result[code] = at
-    }
-    return result
+    return removalsIn(this.file('removed.json'))
   }
 
   /** Call inside locked(). */
@@ -323,16 +355,17 @@ export class Store {
   }
 
   client(issuer: string): Client | undefined {
-    const entry = this.file('clients.json')[issuer]
-    return entry && typeof entry === 'object' ? entry as Client : undefined
+    return cleanClient(this.file('clients.json')[issuer])
   }
 
   saveClient(issuer: string, client: Client): void { locked(this.root, () => this.putClient(issuer, client)) }
 
   /** Call inside locked(). */
   putClient(issuer: string, client: Client): void {
-    const data = this.file('clients.json')
-    data[issuer] = client
+    const data: Record<string, unknown> = Object.assign(Object.create(null), this.file('clients.json'))
+    const checked = cleanClient(client)
+    if (!checked) throw new ConnectorError('Invalid connection client.')
+    data[issuer] = checked
     writePrivate(join(this.root, 'clients.json'), data)
   }
 

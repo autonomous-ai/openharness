@@ -7,8 +7,8 @@
  *
  * Told only names and states (`heard`), and what it hands on is the same (lib/hachiWake.ts builds the line from them).
  */
+import type { HachiDaemonMetric } from '../gateway/serviceMetrics.js'
 import { errorKind } from '../lib/log.js'
-import type { HachiDaemonMetric } from '../lib/serviceMetrics.js'
 import type { WakeItem, WakeState } from '../lib/hachiWake.js'
 
 export const WAKE_COALESCE_MS = 20_000

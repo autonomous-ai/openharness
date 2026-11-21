@@ -33,6 +33,23 @@ afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); vi.mocked(engineNow)
 // `preloadEngine`): before any pane of theirs is read, as here.
 beforeAll(async () => { for (const engine of OTHER_ENGINES) await loadEngine(engine) })
 
+describe('inline runtime display', () => {
+  it('copies both accepted facts and keeps absent or unbound sessions empty', () => {
+    const manager = new RuntimeProfileState(() => undefined), agent = session('openclaw')
+    expect(manager.display(agent)).toEqual({ selectedModel: null, workspace: null })
+    manager.hydrateEvidence(agent, [{ model: 'model', effort: 'auto', workspace: '/engine/workspace' }])
+    const expected = { selectedModel: manager.selectedModel(agent), workspace: '/engine/workspace' }
+    expect(expected.selectedModel).not.toBeNull()
+    const display = manager.display(agent)
+    expect(display).toEqual(expected)
+    display.selectedModel = 'caller changed'; display.workspace = '/caller/workspace'
+    expect(manager.display(agent)).toEqual(expected)
+    expect(manager.display({ ...agent, sessionId: '' })).toEqual({ selectedModel: null, workspace: null })
+    manager.forget(agent.sessionId)
+    expect(manager.display(agent)).toEqual({ selectedModel: null, workspace: null })
+  })
+})
+
 describe('another engine whose code could not be loaded', () => {
   it('contains a missing or throwing reader factory while core confirmation and cleanup still work', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})

@@ -9,7 +9,7 @@ import { ENUMERATION_ATTEMPTS } from './nativeFiles.js'
 import { createNativeInstallations, NATIVE_INSTALL_WORKER } from './nativeInstall.js'
 
 const fixture = vi.hoisted(() => ({ failSync: false, argv: [] as string[], onSync: undefined as undefined | (() => number | void), onDirectoryOpen: undefined as undefined | (() => void) }))
-vi.mock('../../lib/engineLaunch.js', () => ({ buildEngineInstallationArgv: () => fixture.argv }))
+vi.mock('./installationScript.js', () => ({ buildEngineInstallationArgv: () => fixture.argv }))
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
   return { ...actual,
@@ -64,6 +64,14 @@ it('does not reserve or dispatch after cancellation', async () => {
   expect(await install.ensure('opencode', recipe, environment, 'request', () => false)).toMatchObject({ complete: false })
   expect(existsSync(directory)).toBe(false)
   expect(install.dispatch).not.toHaveBeenCalled()
+})
+
+it('does not dispatch a prepared installation when its caller refuses commit', async () => {
+  const install = controller()
+  const authorize = vi.fn(async () => false)
+  expect(await install.ensure('opencode', recipe, environment, 'refused-commit', () => true, authorize)).toMatchObject({ complete: false })
+  expect(install.dispatch).not.toHaveBeenCalled()
+  expect(authorize).toHaveBeenCalledOnce()
 })
 
 it('reads installation obligations after reconstruction without creating a missing history', async () => {

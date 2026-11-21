@@ -171,11 +171,6 @@ export async function removeOrphanMovePanes(
   return { removed, unconfirmed: [...unconfirmed], keptPanes }
 }
 
-/** The line said of an agent `removeOrphanMovePanes` could not free, each time something would start its engine. */
-export function moveHeldLine(agentId: string): string {
-  return `[terminal] move ${agentId}: held until the next start: a pane its stopped move left was not confirmed closed`
-}
-
 type Bounded<T> = { done: true; value: T } | { done: false; reason: string }
 
 /** [work], or why it did not finish within [ms]: thrown, or still running. A step that overruns is abandoned, not

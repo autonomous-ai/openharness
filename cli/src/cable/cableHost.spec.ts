@@ -591,6 +591,22 @@ describe('DaemonCableHost.listAgentsFlat across machines, and the tab the dial g
     expect(focused.mock.calls.map((c) => c[1])).toEqual(['a1', 'a2', 'a1', 'a2', 'a1'])
   })
 
+  it('does not focus after a desk step loses its caller while the list is pending', async () => {
+    AGENTS.length = 0
+    AGENTS.push({ agentId: 'a1', registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude' })
+    const focused = vi.fn(), host = new DaemonCableHost(wiring({ focused }))
+    await settled(host); onTab(host, ['a1'])
+    const rows = await host.listAgents()
+    let release!: (value: typeof rows) => void, current = true
+    vi.spyOn(host, 'listAgents').mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    const step = host.stepFocus('next', undefined, () => current)
+    current = false; release(rows)
+    expect(await step).toBe('no_agents')
+    expect(focused).not.toHaveBeenCalled()
+    expect(await host.stepFocus('next', undefined, () => true)).toEqual({ machineId: 'mine', agentId: 'a1' })
+    expect(focused).toHaveBeenCalledExactlyOnceWith('mine', 'a1')
+  })
+
   it('steps onto a remote tile with that machine’s id, and reports an empty desk', async () => {
     AGENTS.length = 0
     AGENTS.push({ agentId: 'a1', registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude' })
@@ -857,6 +873,24 @@ describe('the dial with no window: this computer\'s agents', () => {
     // With a window the dial holds the tab, whose agents it may do everything with, as today.
     onTab(host, ['h1'])
     expect([host.capsOf('h1'), host.hostOf('h1')]).toEqual([undefined, undefined])
+  })
+
+  it('a departed step caller cannot mark an outside agent seen after its list finishes', async () => {
+    const markSeen = vi.fn(), focused = vi.fn()
+    const host = new DaemonCableHost(wiring({ sessions, focused }), fleetOf([]))
+    host.setRegistry(new HostRegistry([host.harness, { ...observed([observedAgent({ id: 'o1' })]), markSeen }]))
+    const outside = (await host.listAgents()).filter(agent => agent.id === 'o1')
+    expect(outside).toHaveLength(1)
+    let current = true, release!: (agents: typeof outside) => void
+    const list = vi.spyOn(host, 'listAgents').mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    const pending = host.stepFocus('next', undefined, () => current)
+    current = false; release(outside)
+    expect(await pending).toBe('no_agents')
+    expect(markSeen).not.toHaveBeenCalled(); expect(focused).not.toHaveBeenCalled()
+    list.mockResolvedValueOnce(outside)
+    expect(await host.stepFocus('previous', undefined, () => true)).toMatchObject({ agentId: 'o1' })
+    expect(markSeen).toHaveBeenCalledExactlyOnceWith('o1')
+    expect(focused).not.toHaveBeenCalled()
   })
 
   it('describes an agent the fleet never listed from the registry, so its summary and question carry a name', () => {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { namesTheDisk } from '../harnessd/supervisor.js'
@@ -7,25 +7,17 @@ import { errorKind } from './log.js'
 import type { registry as Registry } from './registry.js'
 import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
-const refuse = vi.hoisted(() => ({ code: undefined as string | undefined, directorySync: undefined as string | undefined }))
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
-vi.mock('node:fs/promises', async original => {
-  const actual = await deadline.slowSyncFsPromises(original)
-  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
-    if (refuse.code && /\/(registry|agent-names)\.json\..*\.tmp$/.test(String(args[0]))) {
-      throw Object.assign(new Error(`${refuse.code}: fixture, open '${String(args[0])}'`), { code: refuse.code })
+const refuse = vi.hoisted(() => ({ directorySync: undefined as string | undefined }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual, fsync: (fd: number, callback: (error: NodeJS.ErrnoException | null) => void) => {
+    if (refuse.directorySync && actual.fstatSync(fd).isDirectory()) {
+      callback(Object.assign(new Error(`${refuse.directorySync}: fixture private directory`), { code: refuse.directorySync }))
+      return
     }
-    return actual.open(...args)
-  } }
-})
-
-// After the rename: the folder's fsync, where the write is on disk but unconfirmed.
-vi.mock('./secureState.js', async original => {
-  const actual = await original<typeof import('./secureState.js')>()
-  return { ...actual, syncStateDirectory: (...args: Parameters<typeof actual.syncStateDirectory>) => {
-    if (refuse.directorySync) throw Object.assign(new Error(`${refuse.directorySync}: fixture, fsync '${args[0]}'`), { code: refuse.directorySync })
-    return actual.syncStateDirectory(...args)
+    actual.fsync(fd, callback)
   } }
 })
 // Loads the module graph once, before any hook's time limit: cold, it takes seconds on a loaded machine. Each test
@@ -34,6 +26,8 @@ await import('./registry.js')
 
 let directory: string
 let registry: typeof Registry
+let storage: typeof import('./sessionStorage.js')['sessionStorage']
+let fault: string
 let AtomicWriteUnconfirmed: typeof import('./secureState.js').AtomicWriteUnconfirmed
 const input = { agentId: 'persisted-agent', engine: 'claude' as const, tmuxPane: '%1',
   processIdentity: { pid: 101, executable: '/fixture/claude', startMarker: 'fixture-101' } }
@@ -42,34 +36,65 @@ beforeEach(async () => {
   deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS)
   vi.resetModules()
   directory = mkdtempSync(join(tmpdir(), 'registry-disk-'))
-  for (const key of ['ADAPTER_DATA_DIR', 'CLAUDE_PROJECTS_DIR', 'CODEX_HOME', 'CURSOR_HOME']) vi.stubEnv(key, directory)
+  for (const name of ['home', 'data', 'runtime']) mkdirSync(join(directory, name), { mode: 0o700 })
+  for (const [name, value] of Object.entries({ HOME: join(directory, 'home'), USERPROFILE: join(directory, 'home'),
+    ADAPTER_DATA_DIR: join(directory, 'data'), ADAPTER_RUNTIME_DIR: join(directory, 'runtime'),
+    CLAUDE_PROJECTS_DIR: join(directory, 'home', '.claude'), CODEX_HOME: join(directory, 'home', '.codex'), CURSOR_HOME: join(directory, 'home', '.cursor') })) vi.stubEnv(name, value)
+  fault = join(directory, 'fault.json')
+  const entry = join(directory, 'storage-fixture.mjs')
+  // Exercise the real child, framing and Registry classification. Only this private fixture's selected write fails.
+  writeFileSync(entry, `
+    import fs from 'node:fs/promises';
+    import { readFileSync } from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    import { childAdmissionFailure } from ${JSON.stringify(new URL('../harnessd/childAdmission.ts', import.meta.url).href)};
+    if (childAdmissionFailure(process.env, process.ppid, process.argv[1])) process.exit(2);
+    const open = fs.open;
+    fs.open = async (...args) => {
+      let selected;
+      try { selected = JSON.parse(readFileSync(${JSON.stringify(fault)}, 'utf8')); } catch {}
+      const temporary = /\\/(registry|agent-names)\\.json\\..*\\.tmp$/.test(String(args[0]));
+      const fail = () => { throw Object.assign(new Error(selected.code + ': fixture private write'), { code: selected.code }); };
+      if (temporary && selected?.stage === 'open') fail();
+      const handle = await open(...args);
+      if (temporary && selected) handle[selected.stage] = async () => fail();
+      return handle;
+    };
+    syncBuiltinESMExports();
+    (await import(${JSON.stringify(new URL('../storage/process.ts', import.meta.url).href)})).runSessionStorage();
+  `, { mode: 0o600 })
+  storage = (await import('./sessionStorage.js')).sessionStorage
+  const { fingerprint } = await import('../harnessd/bundleFingerprint.js')
+  // Source entry keeps the ordinary TSX loader while pinning this exact failure fixture.
+  ;(storage as unknown as { entry: () => unknown }).entry = () => ({ file: entry, sha256: fingerprint(entry)!, execArgv: ['--import', import.meta.resolve('tsx')] })
   registry = (await import('./registry.js')).registry
   AtomicWriteUnconfirmed = (await import('./secureState.js')).AtomicWriteUnconfirmed
-  registry.load()
+  await registry.load()
   await registry.openProcessAgent(input)
   await registry.flush()
 })
 afterEach(async () => {
-  refuse.code = undefined
+  rmSync(fault, { force: true })
   refuse.directorySync = undefined
-  await registry.flush().catch(() => {})
-  vi.unstubAllEnvs()
-  vi.restoreAllMocks()
-  rmSync(directory, { recursive: true, force: true })
+  try { await registry.flush().catch(() => {}) }
+  finally {
+    try { await storage.close() }
+    finally { vi.unstubAllEnvs(); vi.restoreAllMocks(); rmSync(directory, { recursive: true, force: true }) }
+  }
 })
 
 it.each(['EACCES', 'ENOSPC'])('a save refused with %s logs that code, and no path', async (code) => {
   const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-  refuse.code = code
+  writeFileSync(fault, JSON.stringify({ stage: 'open', code }))
   registry.setActive(input.agentId, false) // save(): logged, never thrown
   await registry.flush().catch(() => {})
   const lines = error.mock.calls.map((call) => call.map(String).join(' '))
-  expect(lines).toContain(`[registry] save failed · ${code}`)
+  expect(lines).toContain(`[registry] save failed · SessionStorageUnavailable ${code}`)
   expect(lines.join('\n')).not.toContain(directory)
 })
 
 it.each(['ENOSPC', 'EROFS'])('a strict save refused with %s keeps the disk code for the log, off the message', async (code) => {
-  refuse.code = code
+  writeFileSync(fault, JSON.stringify({ stage: 'open', code }))
   const failure = await registry.transaction(() => { registry.setActive(input.agentId, false) }).catch((error: Error) => error)
   expect(errorKind(failure)).toBe(`RegistryPersistenceUnavailable ${code}`)
   expect((failure as { code?: unknown }).code).toBeUndefined()
@@ -78,7 +103,7 @@ it.each(['ENOSPC', 'EROFS'])('a strict save refused with %s keeps the disk code 
 it('a names save refused with ENOSPC logs the type and the disk code', async () => {
   const error = vi.spyOn(console, 'error').mockImplementation(() => {})
   await registry.rename(input.agentId, 'Chosen name')
-  refuse.code = 'ENOSPC'
+  writeFileSync(fault, JSON.stringify({ stage: 'open', code: 'ENOSPC' }))
   // An inherited name has no request to answer: saveNames() logs its failure, never throws it.
   registry.inheritName(input.agentId, 'next-session')
   await registry.flush().catch(() => {})
@@ -91,7 +116,7 @@ it.each([
   ['EDQUOT', 'registry storage has no available space (EDQUOT)'],
   ['EROFS', 'registry storage is read-only (EROFS)'],
 ])('a strict save refused with %s says so in words the master reads as the disk', async (code, words) => {
-  refuse.code = code
+  writeFileSync(fault, JSON.stringify({ code, stage: 'writeFile' }), { mode: 0o600 })
   // The core's own startup save (core/main.ts): every row marked dormant, in one transaction.
   const failure = await registry.transaction(() => { registry.setActive(input.agentId, false) }).catch((error: Error) => error)
   expect(failure).toBeInstanceOf(Error)
@@ -100,9 +125,9 @@ it.each([
   expect((failure as Error).message).not.toContain(directory)
 })
 
-it.each([['EIO', 'registry storage write failed'], ['EACCES', 'registry storage access was refused']])(
+it.each([['EIO', 'registry storage write failed'], ['EACCES', 'registry storage access was refused'], ['EPERM', 'registry storage access was refused']])(
   'a save refused with %s still does not name the disk', async (code, words) => {
-    refuse.code = code
+    writeFileSync(fault, JSON.stringify({ code, stage: 'writeFile' }), { mode: 0o600 })
     const failure = await registry.transaction(() => { registry.setActive(input.agentId, false) }).catch((error: Error) => error)
     expect((failure as Error).message).toBe(`Registry persistence unavailable: ${words}`)
     expect(namesTheDisk((failure as Error).message)).toBe(false)
@@ -122,4 +147,15 @@ it.each([
     expect(namesTheDisk((failure as Error).message)).toBe(true)
     expect((failure as Error).message).not.toContain(directory)
   }
+})
+
+it.each(['open', 'chmod', 'sync'])('preserves the disk category when the child temporary %s fails', async stage => {
+  writeFileSync(fault, JSON.stringify({ code: 'ENOSPC', stage }), { mode: 0o600 })
+  const failure = await registry.transaction(() => { registry.setActive(input.agentId, false) }).catch((error: Error) => error)
+  expect((failure as Error).message).toBe('Registry persistence unavailable: registry storage has no available space (ENOSPC)')
+  expect(namesTheDisk((failure as Error).message)).toBe(true)
+  expect((failure as Error).message).not.toContain(directory)
+  rmSync(fault)
+  await registry.flush()
+  expect(await storage.read({ kind: 'registry' })).toMatchObject({ state: 'image' })
 })

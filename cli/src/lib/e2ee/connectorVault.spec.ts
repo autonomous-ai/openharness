@@ -1,12 +1,20 @@
 import { describe, expect, it } from 'vitest'
 import { b64e, newIdentity } from './core.js'
 import { MAX_RECIPIENTS, openVault, sealVault } from './connectorVault.js'
+import { VAULT_CIPHERTEXT_CHARS, VAULT_PLAINTEXT_BYTES } from '../connectors/vaultBounds.js'
 
 const a = newIdentity(), b = newIdentity(), c = newIdentity(), stranger = newIdentity()
 const pub = (id: { pub: Uint8Array }) => b64e(id.pub)
 const machines = new Set([pub(a), pub(b), pub(c)])
 
 describe('the connector vault envelope', () => {
+  it('bounds secret content before encrypting or decoding it', () => {
+    expect(() => sealVault('x'.repeat(VAULT_PLAINTEXT_BYTES + 1), a, [])).toThrow('vault limit')
+    const envelope = sealVault('synthetic', a, [])
+    expect(openVault({ ...envelope, ct: 'x'.repeat(VAULT_CIPHERTEXT_CHARS + 1) }, a, machines)).toBeNull()
+    expect(openVault({ ...envelope, keys: Array(65).fill('synthetic') }, a, machines)).toBeNull()
+    expect(openVault({ ...envelope, keys: Object.fromEntries(Array.from({ length: 65 }, (_, i) => [String(i), 'synthetic'])) }, a, machines)).toBeNull()
+  })
   it('opens on the sender and every machine it was sealed for, and on no other key', () => {
     const envelope = sealVault('{"linear":1}', a, [pub(b)])
     expect(Object.keys(envelope.keys).sort()).toEqual([pub(a), pub(b)].sort())

@@ -1,9 +1,18 @@
+import { storedGridFixture } from '../../testing/gridCredentials.js'
+import { gridLaunchInProcess } from '../../testing/gridLaunchInProcess.js'
+import { opencodeMajorVersion } from '../../engines/opencode/version.js'
+vi.mock('../../engines/opencode/version.js', () => ({ opencodeMajorVersion: vi.fn(async () => 1) }))
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { applyOpencodeSessionModel, parseOpencodeModelId, opencodeMajorVersion, opencodeV2TurnOpen } from '../../engines/launchControl.js'
+import { applyOpencodeSessionModel, parseOpencodeModelId, opencodeV2TurnOpen } from '../../engines/launchControl.js'
 import { isOpencodeV2 } from '../../engines/launchControl.js'
 import { binaryOnPath } from '../../lib/binaryOnPath.js'
 import { builtinSqlite } from '../../lib/sqliteBuiltin.js'
-import { validateLaunchOverrides } from '../../lib/launchOverrides.js'
+import { buildLaunchOverrides, validateLaunchOverrides, type LaunchOverridesDeps } from '../../lib/launchOverrides.js'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { ApiConnections } from '../../lib/apiConnections.js'
+import { gridLaunchThrough } from './launch.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { AgentRestartCoordinator, bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
 import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
@@ -59,7 +68,7 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RetargetDe
   const tmux = { name: 'tmux', holdOpen: vi.fn(), respawn: vi.fn(),
     clearEnv: vi.fn<NonNullable<TerminalBackend['clearEnv']>>(async () => ({ state: 'succeeded', dispatch: 'executed' })),
     releaseHold: vi.fn<TerminalBackend['releaseHold']>(async () => {}) }
-  const deps: RetargetDeps = {
+  const deps: RetargetDeps = { opencodeMajor: opencodeMajorVersion,
     sessionTurnOpen: vi.fn(() => false),
     purgeBusy: vi.fn(() => false),
     terminals: { backendFor: vi.fn((runtime: { backend: string }) => runtime.backend === 'tmux' ? tmux : undefined), instances: () => [tmux] } as unknown as RetargetDeps['terminals'],
@@ -77,7 +86,10 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RetargetDe
     runtimeProfiles: { selectedModel: vi.fn(() => 'runtime-v1:claude:opus') } as never,
     launchOverridesDeps: {} as never,
     acquireTerminalControl: vi.fn(() => release),
-    relaunchOverrides: vi.fn(async () => ({ ok: true, overrides: { gridLaunchRecord: { override: grid, webSearch: 'off' } } })) as never,
+    relaunchOverrides: vi.fn<RetargetDeps['relaunchOverrides']>(async (_session, source) => ({ ok: true, overrides: {
+      env: {}, extraArgs: [], clearEnv: [],
+      ...(source?.gridLaunch ? { gridLaunchRecord: { override: source.gridLaunch, webSearch: 'unsupported' as const } } : {}),
+    } })),
     downgradedPermission: vi.fn(async (_s, bypass: boolean) => ({ bypassPermission: bypass, permissionMode: null })) as never,
     agentReconciler: { holdRoute: vi.fn(() => releaseRoute) },
     restartJobs: { busy: vi.fn(() => false), cancel: vi.fn(), revision: () => 0 } as never,
@@ -93,6 +105,53 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RetargetDe
 }
 
 describe('retargeting an agent', () => {
+  it.each(['/work', null])('prepares optional values once for the final retarget owner with cwd %s before any stop', async cwd => {
+    const run = setup(agent({ cwd }))
+    const settings = { values: { instructions: 'owner optional', settings: null }, current: () => true }
+    const prepareSettings = vi.fn(async () => { expect(run.deps.paneSwapDeps).not.toHaveBeenCalled(); return settings })
+    const native = { current: () => true, prepareSettings } as never
+    vi.mocked(run.deps.relaunchOverrides).mockResolvedValue({ ok: true, overrides: { native, env: {}, extraArgs: [], clearEnv: [] } })
+    await run.retarget({ agentId: 'a1', grid: null })
+    expect(prepareSettings).toHaveBeenCalledOnce()
+    expect(run.deps.paneSwapDeps).toHaveBeenCalledWith(expect.any(Object), expect.any(Object), expect.objectContaining({ native, settings }), null, expect.any(Function))
+  })
+  it.each(['rotated', 'deleted', 'deleted after preflight'] as const)('Saved API freshness keeps retarget assignment consistent with a %s source', async state => {
+    const directory = mkdtempSync(join(tmpdir(), 'retarget-api-'))
+    try {
+      const store = new ApiConnections(directory)
+      const connection = store.save({ provider: 'custom', name: 'Previous API', baseUrl: 'https://old.example.test/v1', apiKey: 'FAKE-old-key' })
+      const target = { ...grid, networkId: `api:${connection.id}`, networkName: connection.name, baseUrl: connection.baseUrl, apiKey: 'FAKE-old-key' }
+      const launchOverridesDeps: LaunchOverridesDeps = {
+        machine: () => ({ hermesSystemManaged: false }),
+        gridLaunch: gridLaunchThrough(() => ({ gridLaunch: async input => gridLaunchInProcess(store)(input) })),
+        capabilities: async () => ({ sessionEnv: true }), writeGridConfigDir: vi.fn(), installCodexHooks: vi.fn(),
+        readCodexConfig: () => null,
+      }
+      const actual = await vi.importActual<typeof import('../../lib/launchOverrides.js')>('../../lib/launchOverrides.js')
+      vi.mocked(validateLaunchOverrides).mockImplementationOnce(actual.validateLaunchOverrides)
+      const row = agent()
+      const run = setup(row, { launchOverridesDeps, relaunchOverrides: async (session, source) => {
+        if (state === 'deleted after preflight') store.remove(connection.id)
+        else if (state === 'rotated') store.save({ ...connection, name: 'Current API', baseUrl: 'https://current.example.test/v1', apiKey: 'FAKE-current-key' })
+        return buildLaunchOverrides(launchOverridesDeps, session.engine, source!, session.agentId)
+      } })
+      if (state === 'deleted') store.remove(connection.id)
+      const result = await run.retarget({ agentId: row.agentId, grid: target })
+      if (state !== 'rotated') {
+        expect(result).toMatchObject({ ok: false, error: 'API_UNAVAILABLE' })
+        expect(run.deps.acquireTerminalControl).toHaveBeenCalledTimes(state === 'deleted' ? 0 : 1)
+        expect(run.deps.restartJobs.cancel).toHaveBeenCalledTimes(state === 'deleted' ? 0 : 1)
+        expect(restartAgent).not.toHaveBeenCalled()
+        expect(run.deps.registry.confirmLaunch).not.toHaveBeenCalled()
+      } else {
+        expect(result).toEqual({ ok: true })
+        expect(row.gridLaunch).toMatchObject({ baseUrl: 'https://current.example.test/v1', apiKey: 'FAKE-current-key' })
+        expect(row.grid).toEqual({ baseUrl: row.gridLaunch!.baseUrl, model: target.model })
+      }
+      expect(target.apiKey).toBe('FAKE-old-key')
+    } finally { rmSync(directory, { recursive: true, force: true }) }
+  })
+
   it('keeps the terminal held when a newer lifecycle follows confirmed retarget publication', async () => {
     const run = setup()
     const publish = vi.mocked(run.deps.registry.confirmLaunch).getMockImplementation()!
@@ -126,6 +185,12 @@ describe('retargeting an agent', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
   })
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
+
+  it('keeps the existing unknown-version retarget behavior when setup cannot answer', async () => {
+    const run = setup(agent({ engine: 'opencode' }), { opencodeMajor: async () => null })
+    expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: true })
+    expect(restartAgent).toHaveBeenCalledOnce()
+  })
 
   it('holds an unavailable native retarget before inspecting or mutating the pane', async () => {
     const held = { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: 'Waiting for native evidence.' } as const
@@ -197,14 +262,16 @@ describe('retargeting an agent', () => {
   it('keeps an admitted external conversation when its retarget resume fails', async () => {
     const actual = await vi.importActual<typeof import('../../lib/restartAgent.js')>('../../lib/restartAgent.js')
     vi.mocked(restartAgent).mockImplementationOnce(actual.restartAgent)
-    const respawn = vi.fn(async () => ({ ok: true }))
+    const dispatched: string[][] = []
+    const respawn = vi.fn(async (command: () => string[]) => { dispatched.push(command()); return { ok: true } })
     const keepAbandoned = vi.fn(), buildArgv = vi.fn(options => ['fixture-engine', options.resumeSessionId ?? 'fresh'])
     const run = setup(agent({ resumeOnly: true }), { paneSwapDeps: () => ({
       holdOpen: async () => ({ ok: true }), terminate: async () => 'gone', respawn,
       waitForProcess: async () => null, buildArgv, keepAbandoned, log: () => {},
     }) })
     expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: false, error: 'RESPAWN_FAILED' })
-    expect(respawn).toHaveBeenCalledExactlyOnceWith(['fixture-engine', 's1'])
+    expect(respawn).toHaveBeenCalledExactlyOnceWith(expect.any(Function))
+    expect(dispatched).toEqual([['fixture-engine', 's1']])
     expect(keepAbandoned).not.toHaveBeenCalled()
     expect(run.deps.registry.confirmLaunch).not.toHaveBeenCalled()
   })
@@ -377,8 +444,8 @@ describe('retargeting an agent', () => {
     // a move between a grid and its own login changes provider, so the conversation goes on in a fork of it.
     it.each([
       ['its own login onto a grid', agent({ engine: 'codex' }), grid, true],
-      ['a grid back to its own login', agent({ engine: 'codex', gridLaunch: grid }), null, true],
-      ['one grid to another (the same provider)', agent({ engine: 'codex', gridLaunch: grid }), { ...grid, networkId: 'g2' }, false],
+      ['a grid back to its own login', agent({ engine: 'codex', gridLaunch: storedGridFixture(grid) }), null, true],
+      ['one grid to another (the same provider)', agent({ engine: 'codex', gridLaunch: storedGridFixture(grid) }), { ...grid, networkId: 'g2' }, false],
     ] as const)('continues a Codex conversation moved from %s in a fork only when its provider changes', async (_how, row, to, forks) => {
       const run = setup(row)
       expect(await run.retarget({ agentId: 'a1', grid: to })).toEqual({ ok: true })
@@ -405,7 +472,7 @@ describe('retargeting an agent', () => {
 
     it('prepares the fork home on the engine on the path, with the grid\'s variables gone', async () => {
       vi.stubEnv('ANTHROPIC_BASE_URL', 'http://grid.local')
-      const run = setup(agent({ engine: 'codex', gridLaunch: grid, cwd: null }), {
+      const run = setup(agent({ engine: 'codex', gridLaunch: storedGridFixture(grid), cwd: null }), {
         relaunchOverrides: (async () => ({ ok: true, overrides: { env: {}, clearEnv: [] } })) as never,
       })
       await run.retarget({ agentId: 'a1', grid: null })
@@ -536,7 +603,7 @@ describe('retargeting an agent', () => {
       expect(restartAgent).toHaveBeenCalledWith({ engine: 'claude', sessionId: 's1' }, true, { isCurrent: expect.any(Function) })
       // No gateway: the row keeps the one it had, and the relaunched engine says it again (a hook, or Codex's argv).
       expect(run.deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({ processIdentity: expect.objectContaining({ pid: 2 }), grid: { baseUrl: grid.baseUrl, model: grid.model } }), expect.anything())
-      expect(run.deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({ gridLaunchRecord: { override: grid, webSearch: 'off' } }), expect.anything())
+      expect(run.deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({ gridLaunchRecord: { override: grid, webSearch: 'unsupported' } }), expect.anything())
       expect(run.deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({ subscriptionModel: 'opus' }), expect.anything())
       expect(run.deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.anything(), expect.anything())
       expect(run.deps.refreshGridAssignment).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1', launch: { state: 'ready' }, grid: { baseUrl: grid.baseUrl, model: grid.model } }))

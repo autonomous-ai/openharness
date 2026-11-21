@@ -40,7 +40,7 @@ import { launchedGrid, type GridAssignment } from './gridAssignmentWire.js'
 import type { LaunchOverrides } from './launchOverrides.js'
 import { matchesLaunchReceipt, RegistryOwnershipChanged, type AgentLaunch, type LaunchPublication, type ProcessIdentity, type RegisteredSession, type RegistryAuthority, type registry } from './registry.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
-import type { TerminalDispatchControl, TerminalRuntimeRef } from './terminalTypes.js'
+import type { TerminalDispatchControl, TerminalRuntimeRef, TerminalCommand } from './terminalTypes.js'
 import type { WindowsPaneLaunch } from './windows/engineStart.js'
 import { processAmong, sameProcessIdentity, sameTerminalPlacement, terminalInstanceId, terminalRouteKey } from './terminalRuntime.js'
 import { resumesConversation } from './resumeCapability.js'
@@ -49,7 +49,7 @@ import { errorKind } from './log.js'
 export interface RestoreLaunch {
   nativeToken?: string
   current?(): boolean
-  argv: string[]
+  argv: TerminalCommand
   env?: Record<string, string>
   /** Windows: the folder the engine starts in and the shell its pane becomes after it (lib/windows/engineStart.ts
    *  `windowsPaneLaunch`); elsewhere the launch script enters the folder and hands the pane on itself. */
@@ -103,7 +103,7 @@ export interface RestoreAgentsDeps {
   paneAllocations?: <T>(agentIds: readonly string[], operation: () => Promise<T>) => Promise<T>
   retainStopped?: (entry: RegisteredSession, paneAlive: boolean, authority?: RegistryAuthority) => Promise<LaunchPublication>
   /** Keeps a conversation the restore had to leave for a new one as a stopped harness (keepAbandonedConversation.ts). */
-  keepAbandoned?: (left: RegisteredSession) => void
+  keepAbandoned?: (left: RegisteredSession) => Promise<void>
 
   registry: {
     confirmLaunch: typeof registry.confirmLaunch
@@ -855,7 +855,8 @@ async function watchRestoredPane(
       }
       const dispatchCurrent = () => current() && launch.current?.() !== false
       return inPane(deps, entry, dispatchCurrent, async () => {
-        deps.keepAbandoned?.({ ...entry })
+        await deps.keepAbandoned?.({ ...entry })
+        if (!dispatchCurrent()) return false
         const owns = restoreOwner(deps, deps.registry.byAgent(agentId)!, !!deps.paneOperation)
         const spawned = await deps.respawn(runtime, launch, { current: dispatchCurrent })
         if (!owns()) return false
@@ -893,7 +894,8 @@ async function watchRestoredPane(
     return inPane(deps, entry, dispatchCurrent, async () => {
       // Preparation is confirmed before archiving or unbinding. A service outage preserves the
       // conversation held here, including when a refused resume falls back to a fresh launch.
-      deps.keepAbandoned?.({ ...entry })
+      await deps.keepAbandoned?.({ ...entry })
+      if (!dispatchCurrent()) return false
       deps.registry.inheritName(entry.sessionId, agentId)
       const publication = await deps.registry.confirmSessionUnbound(agentId, entry.sessionId, {
         current: dispatchCurrent, refresh: async () => {

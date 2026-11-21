@@ -17,6 +17,8 @@ export const FRAME_PART_VALUES = 16_384
 export const FRAME_PART_TOTAL_BYTES = 4 * 1024 * 1024
 export const FRAME_PART_ENTRIES = 4096
 
+export type LocalWindowPermissions = Readonly<Partial<Record<'all' | 'first' | 'connection', readonly string[]>>>
+
 export interface ServiceSpec {
   /** The process's name: what the master logs it as, and the hard link it is started through (`harnessd-<name>`,
    *  ./processName.ts). */
@@ -38,18 +40,26 @@ export interface ServiceSpec {
   hears?: Readonly<Record<string, readonly HeldAgentLife[]>>
   /** Display fields a service may publish, and row fields required while they are shown. */
   frameParts?: Readonly<Record<string, { fields: readonly string[]; having?: readonly string[] }>>
+  /** Local app delivery rights, bound to the authenticated service and selection. */
+  windows?: Readonly<Record<string, LocalWindowPermissions>>
+  /** Explicit shared reads; a component's private catch-all does not gain unrelated core queries. */
+  reads?: Readonly<Record<string, readonly string[]>>
+  /** Session factories owned by a service hosted here; fixed by the selected artifact. */
+  factories?: Readonly<Record<string, readonly string[]>>
+  /** Peer starts permitted over this host's physical master channel. No feature state is interpreted by master. */
+  wakes?: readonly string[]
 }
 
 /** The kinds of what happens to an agent that a service in its own process can be held (core/api.ts `AgentLife`): a stop
  *  a person or an agent made, a purge, and a new agent in the pane one ended in. */
-export type HeldAgentLife = 'stopped' | 'purged' | 'taken'
+export type HeldAgentLife = 'stopped' | 'purged' | 'taken' | 'input'
 
 /** A process the services run in: the services it hosts, and its memory budget. */
 export type ServiceHostSpec = Omit<ServiceSpec, 'name'>
 
 /**
  * The processes this build runs its services in, with their memory budgets: every one, unless
- * `HARNESSD_SERVICES` names a subset (`search,viewers`) or `none` (see `serviceSpecs`). A service that
+ * `HARNESSD_SERVICES` names a subset (`search,viewers`) or `none` (see `servicePlan.ts` `serviceSpecs`). A service that
  * is not out here runs inside the core's process, behind the service host's guard, as before.
  *
  * A process per risk, not per feature (docs/design/2026-10-06-core-boundary-next.md, "The target
@@ -60,6 +70,9 @@ export type ServiceHostSpec = Omit<ServiceSpec, 'name'>
  * would cost that four times.
  */
 export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
+  // Installation journals and executable probes cannot block core or unrelated edge services. Older cores
+  // prepare launches inline and never ask; this process costs nothing until its first setup request.
+  engineSetup: { services: ['engineSetup'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true, askedSince: 0 },
   // Engine workers have no older-core startup obligation: old cores run these facets inline and never ask.
   // Each holds at most four reads, a 128-entry pager and replies capped at 4 MiB. The heap limit
   // contains transient parsing; RSS additionally bounds file buffers outside V8's heap.
@@ -74,8 +87,8 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // Its file watches on every harness's workspace; the viewer servers it starts are processes of their
   // own, outside this budget. The Store beside them: its installs run git and the harnesses' toolchains
   // in their own processes too, and take minutes, which is what it must not spend in the core.
-  // Started only once something needs it (core/viewersWake.ts): a harness here, a Store or viewer request, or
-  // the release's own harnesses to put in place. It idled at about 96 MiB on every computer, and few harnesses
+  // Started only once something needs it (services/componentStartup.ts): a harness here, a Store or viewer request, or
+  // orphan viewer servers. Bundled consumers prepare on first use outside core. It idled at about 96 MiB on every computer, and few harnesses
   // have a viewer: 1 of 14 on one real machine, 2 of 35 on another (2026-10-12).
   viewers: { services: ['viewers', 'store'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 5,
     frameParts: { viewers: { fields: ['dsh', 'dshName', 'viewerUrl', 'viewerName', 'verdict'], having: ['dsh'] } } },
@@ -97,8 +110,9 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // (services/homeBridge.ts) runs one timer, a look at /proc every 10 minutes, only while ~/.harness bridges the old
   // paths after the move to the XDG folders on Linux, and nothing after.
   // A harness stopped while the host is down still closes the harnesses it started: held for the cleanup.
-  edge: { services: ['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps', 'windowNames', 'shell', 'connectors', 'sharedMachines', 'agentCleanup', 'messages', 'osDevice', 'goals', 'hachi', 'engineProbe', 'homeBridge'], heapLimitMiB: 384, rssLimitMiB: 768,
-    hears: { agentCleanup: ['stopped'] }, frameParts: { workspaces: { fields: ['project', 'gitContext'] } } },
+  edge: { services: ['workspaces', 'usage', 'monitor', 'paste', 'projects', 'handoff', 'recaps', 'windowNames', 'shell', 'connectors', 'sharedMachines', 'agentCleanup', 'messages', 'osDevice', 'goals', 'hachi', 'engineProbe', 'componentStartup', 'homeBridge'], heapLimitMiB: 384, rssLimitMiB: 768,
+    wakes: ['devices', 'wifi', 'models', 'gateway', 'viewers', 'orchestrator', 'sharing', 'cloud', 'agentBrowser'],
+    hears: { agentCleanup: ['stopped', 'input'] }, frameParts: { workspaces: { fields: ['project', 'gitContext'] } } },
   // The orchestrator (services/orchestratorProcess.ts), an experiment: started only once it is on, for a
   // saved project or a request (core/api.ts `EXPERIMENTS`). Its projects' files and the frames of their
   // Directors; the agents it runs are the core's.
@@ -112,7 +126,8 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   router: { services: ['router'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true },
   // Cloud agents (services/cloudProcess.ts), an experiment: started once one is on, for a saved harness or a
   // request. A timer and a bounded look per working harness, and each conversation read a file at a time.
-  cloud: { services: ['cloud'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true },
+  cloud: { services: ['cloud'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true,
+    factories: { cloud: ['fo', 'devin-cloud', 'cursor-cloud'] } },
   // Share, an experiment (services/sharingProcess.ts): its invitations, its observers' sessions and their
   // ciphers; the headless Chrome it captures a shared viewer in is a process of its own, outside this budget.
   sharing: { services: ['sharing'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true },
@@ -120,12 +135,12 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // the terminals' WebRTC channels and their queues. Network, crypto and pure-JS WebRTC, the attack surface,
   // where a fault costs the remote clients and nothing else (docs/design/2026-10-06-core-boundary-next.md).
   // Started as the core starts when it is signed in or anything is paired here, and otherwise by the first
-  // thing that needs it (core/gatewayWake.ts): about 75 MiB at idle a computer signed out with nothing
+  // thing that needs it (services/componentStartup.ts): about 75 MiB at idle a computer signed out with nothing
   // paired never pays.
-  gateway: { services: ['gateway'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 4 },
+  gateway: { services: ['gateway'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 4, hears: { gateway: ['input', 'purged'] } },
   // Grid's pictures, the Model Manager's catalog and the models found on this machine. Its downloads, model
   // servers and `grid` commands run in processes of their own, outside this budget. Started only once grid is
-  // in use here or a request needs it (core/modelsWake.ts): about 70 MiB at idle, which a computer that uses
+  // in use here or a request needs it (services/componentStartup.ts): about 70 MiB at idle, which a computer that uses
   // no grid never pays.
   models: { services: ['models'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 4 },
   // The devices (services/devicesProcess.ts): the dials on USB (pure-JS serial, a frame decoder whose buffer
@@ -133,12 +148,18 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // worker (a process of its own, outside this budget). Hardware that speaks whatever its firmware says:
   // what it costs, it costs here, never a session. The Wi-Fi device beside them (services/wifiProcess.ts),
   // on a link of its own: its receipts, its streams and its Store preparations. Started only once there is
-  // a device, or a request for one (core/devicesWake.ts): about 72 MiB at idle, which a computer with none
+  // a device, or a request for one (services/componentStartup.ts): about 72 MiB at idle, which a computer with none
   // never pays.
-  devices: { services: ['devices', 'wifi', 'machineAddons'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 4 },
+  devices: { services: ['devices', 'wifi', 'machineAddons'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 4,
+    reads: { devices: ['session_read_advertised'], wifi: ['session_read_registered'] },
+    windows: {
+      devices: { all: ['dial_open', 'dial_notification_read', 'dial_forked', 'dial_focus', 'dial_swarm', 'dial_scroll', 'dial_status', 'voice_route_request'],
+        connection: ['dial_selection', 'dial_visit', 'dial_form'] },
+      wifi: { first: ['device_focus', 'device_prepare_open'] },
+    } },
   // The agent browser (services/agentBrowserProcess.ts): its Podman calls, one `podman events` stream, an image build that
   // prints for minutes and a setup that waits on a password dialog. Chrome itself runs in Podman's containers, outside
-  // this budget. Started only once a browser is wanted here (core/agentBrowserLink.ts): a computer that never ticked
+  // this budget. Started only once a browser is wanted here (the shared stream declaration): a computer that never ticked
   // Browser never pays for it.
   // A purge and a pane's new agent are held for it while it is down: a deleted agent's login, and a pane's logins that go
   // with the pane (decision 19).
@@ -147,6 +168,31 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
 
 /** Every service this build can run outside the core's process: what `HARNESSD_SERVICES` names. */
 export const KNOWN_SERVICES: readonly string[] = Object.values(SERVICE_HOSTS).flatMap((host) => host.services)
+
+export type SessionFactoryOwner = Readonly<{ kind: 'native' }> | Readonly<{ kind: 'service'; service: string }>
+
+/** Core supplies its native catalogue, so the master loads no engine module for this build-owned lookup. */
+export function sessionFactoryOwners(nativeIds: readonly string[], hosts: Readonly<Record<string, ServiceHostSpec>> = SERVICE_HOSTS): (factory: unknown) => SessionFactoryOwner | undefined {
+  const owners: Record<string, SessionFactoryOwner> = Object.create(null)
+  const fail = (): never => { throw new Error('INVALID_SESSION_FACTORY_DECLARATION') }
+  const add = (factory: unknown, owner: SessionFactoryOwner): void => {
+    if (typeof factory !== 'string' || !/^[a-z][a-z0-9-]*$/.test(factory) || Object.hasOwn(owners, factory)) return fail()
+    owners[factory] = owner
+  }
+  const native = Object.freeze({ kind: 'native' as const })
+  for (const factory of nativeIds) add(factory, native)
+  const hosted = Object.values(hosts).flatMap(host => host.services)
+  for (const host of Object.values(hosts)) {
+    for (const [service, factories] of Object.entries(host.factories ?? {})) {
+      if (!host.services.includes(service) || hosted.filter(name => name === service).length !== 1
+        || !Array.isArray(factories) || !factories.length) fail()
+      const owner = Object.freeze({ kind: 'service' as const, service })
+      for (const factory of factories) add(factory, owner)
+    }
+  }
+  Object.freeze(owners)
+  return factory => typeof factory === 'string' ? owners[factory] : undefined
+}
 
 /** What the core holds for each service of [outOfProcess] while it is down (`hears`), by service. A service in the
  *  core's process is told as it happens, and none is held for it. */
@@ -157,17 +203,6 @@ export function heldAgentLife(outOfProcess: ReadonlySet<string>, hosts: Readonly
   }
   return held
 }
-
-/**
- * The updater's process (services/updaterProcess.ts): checks for a newer build of the CLI and of hn, and
- * downloads, verifies, canaries and stages it, then tells the master, which has the core hand over. Its own
- * process and never the core's: the core never downloads a build, and a core that cannot start (safe mode)
- * or a host whose services keep crashing must not stop the fix from arriving. Not one of `SERVICE_HOSTS`:
- * the core neither routes to it nor runs it, and `HARNESSD_SERVICES` does not turn it off; the master runs
- * it when it runs the installed copy with updates on (masterProcess.ts). It holds one download at a time.
- */
-export const UPDATER_HOST: ServiceHostSpec = { services: ['updater'], heapLimitMiB: 256, rssLimitMiB: 512 }
-export const UPDATER_PROCESS = 'updater' // the name the master runs it under: the one whose staged build counts
 
 /** How a master tells the core it starts which services it runs in their own processes. */
 export const SERVICE_PROCESSES_ENV = 'HARNESSD_SERVICE_PROCESSES'
@@ -186,11 +221,12 @@ export const ENGINE_RESUME_REPAIR_ENV = 'HARNESSD_ENGINE_RESUME_REPAIR'
 /**
  * What the other engines' worker serves, as a version: `<master pid>:<version>`. 1 is their history and last turn; 2
  * adds their live streams (engines/others/streams.ts), which a core under a master of 1 runs in its own process.
+ * 3 adds runtime controls; 4 adds storage inspection and checkpoint export.
  * A version only grows, each one serving what the ones before it did: a core asks the worker only for what the
  * version its master says covers, and reads the rest in its own process, as under a master from before the worker.
  */
 export const ENGINE_OTHERS_ENV = 'HARNESSD_ENGINE_OTHERS'
-export const ENGINE_OTHERS_VERSION = 2
+export const ENGINE_OTHERS_VERSION = 5
 
 /**
  * What a master puts in its core's environment about the services it runs in their own processes: the
@@ -238,30 +274,6 @@ export function servicesTheMasterRuns(env: NodeJS.ProcessEnv, known: readonly st
   if (env.HARNESSD_SUPERVISED !== '1' || !env.HARNESSD_SERVICE_TOKEN) return new Set()
   const said = env[SERVICE_PROCESSES_ENV] ?? env.HARNESSD_SERVICES ?? ''
   return new Set(said.split(',').map((name) => name.trim()).filter((name) => known.includes(name)))
-}
-
-/**
- * The processes to run the services in: every service this build knows, unless `HARNESSD_SERVICES`
- * names a subset, by service (`search,workspaces`) or by process (`edge`, every service it hosts); `none`
- * (or empty) runs them all inside the core's process, for debugging or a quick way back. Isolation is
- * the point of the split (one service failing costs only its process), so it is the default, not an
- * opt-in. Each process hosts the services named of its own, and is not started for none. A process
- * named as one of its services is named whole: `viewers` runs the viewers' process, the Store beside
- * them, as it ran the viewers' before the Store joined it. `HARNESSD_SERVICE_HEAP_LIMIT_MIB` gives every
- * one the same heap limit instead (tests, support). A process on demand (`onDemand`: an experiment's, the
- * devices', the viewers') waits for the core to ask for it; named in `HARNESSD_SERVICES`, it starts with the others.
- */
-export function serviceSpecs(env: NodeJS.ProcessEnv, hosts: Readonly<Record<string, ServiceHostSpec>>): ServiceSpec[] {
-  const named = env.HARNESSD_SERVICES === undefined ? null
-    : new Set(env.HARNESSD_SERVICES.split(',').map((name) => name.trim()).filter((name) => name && name !== 'none'))
-  const heap = Number(env.HARNESSD_SERVICE_HEAP_LIMIT_MIB)
-  return Object.entries(hosts).flatMap(([name, host]) => {
-    const services = host.services.filter((service) => !named || named.has(service) || named.has(name))
-    // A process on demand named outright runs from the start, as every service named does (a test, support).
-    const onDemand = host.onDemand && !named ? { onDemand: true } : {}
-    const { onDemand: _given, ...rest } = host
-    return services.length ? [{ name, ...rest, services, ...onDemand, ...(Number.isInteger(heap) && heap > 0 ? { heapLimitMiB: heap } : {}) }] : []
-  })
 }
 
 export function masterRunsEngineScreen(env: NodeJS.ProcessEnv, parentPid: number): boolean {

@@ -4,6 +4,7 @@ import type { ScreenReading } from '../engines/facets/screen.js'
 import type { RegisteredSession, registry as liveRegistry } from './registry.js'
 import { terminalRouteKey } from './terminalRuntime.js'
 import type { StopAgentOptions } from './stopAgentService.js'
+import type { DatabaseCheckpointProof } from './databaseCheckpoint.js'
 import { resumeMode } from './resumeCapability.js'
 import { sid } from './log.js'
 import { OPENCLAW_FIRST_TASK } from '../engines/openclaw/contract.js'
@@ -126,13 +127,13 @@ export interface CloseAgentServiceDeps {
   activity(s: RegisteredSession): Promise<CloseActivity>
   /** Cheap revocation after the final activity read, at each physical Stop boundary. */
   idleCurrent?(s: RegisteredSession): boolean
-  checkpoint(s: RegisteredSession, phase: 'before' | 'after'): Promise<void>
+  checkpoint(s: RegisteredSession, phase: 'before' | 'after', current?: () => boolean, databaseProof?: DatabaseCheckpointProof): Promise<void>
   stop(agentId: string, options: StopAgentOptions): Promise<void>
   changed(s: RegisteredSession): void
   openTabs?: { assertHidden(s: RegisteredSession): Promise<void>; isHidden(s: RegisteredSession): boolean }
   /** The record the conversation [request] names was kept as, when it is closed already: no longer live, and kept as
    *  stopped. Null when it is not. */
-  closedAlready?(request: AgentCloseRequest): RegisteredSession | null
+  closedAlready?(request: AgentCloseRequest): Promise<RegisteredSession | null>
   /** Whether its pane shows a question the engine asks before any conversation: the folder's trust, or an MCP server the
    *  folder brings (`trust_open`). */
   atStartupQuestion?(s: RegisteredSession): Promise<boolean>
@@ -219,7 +220,7 @@ export class CloseAgentService {
    * alone, `harness close` said "Its conversation is kept" of one kept with none.
    */
   private async changed(request: AgentCloseRequest): Promise<AgentCloseResult> {
-    const kept = request.mode === 'idle' || request.mode === 'now' || request.mode === 'inspect' ? this.deps.closedAlready?.(request) : null
+    const kept = request.mode === 'idle' || request.mode === 'now' || request.mode === 'inspect' ? await this.deps.closedAlready?.(request) : null
     if (!kept) return { error: 'AGENT_CHANGED' }
     return keptNone(kept) || await this.conversationEmpty(kept) ? { closed: true, withoutConversation: true } : { closed: true }
   }
@@ -287,6 +288,7 @@ export class CloseAgentService {
 
   private async attempt(request: AgentCloseRequest, target: string, revision: number, withoutConversation = false): Promise<AgentCloseResult> {
     let unkept = false
+    let saved: RegisteredSession | undefined
     let idleRevoked = false
     const current = () => {
       const s = this.deps.registry.byAgent(request.agentId)
@@ -352,10 +354,10 @@ export class CloseAgentService {
           if (this.deps.idleCurrent?.(latest) === false) idleRevoked = true
           return !idleRevoked
         },
-        checkpoint: async (s, phase) => {
-          // The record saved before the stop is the one a resume starts from.
-          if (phase === 'before' && (keptNone(s) || await this.conversationEmpty(s))) unkept = true
-          return this.deps.checkpoint(s, phase)
+        checkpoint: async (s, phase, databaseProof) => {
+          // Optional result wording must not spend a live native proof's budget or delay its checkpoint export.
+          if (phase === 'before') saved = { ...s, processIdentity: null }
+          return this.deps.checkpoint(s, phase, () => !!current(), databaseProof)
         },
         confirmUnusedConversation: async captured => {
           // A missing ID alone could be failed discovery of active work. Only
@@ -379,6 +381,8 @@ export class CloseAgentService {
         },
       })
       this.idleSince.delete(s.agentId)
+      // Both checkpoints and Stop are complete. The saved folder, never the stopped process's pid, supplies this fact.
+      if (saved && (keptNone(saved) || await this.conversationEmpty(saved))) unkept = true
       const closed: AgentCloseResult = unkept ? { closed: true, withoutConversation: true } : { closed: true }
       // Only a `count` close gets here with any running.
       return (background ?? 0) > 0 ? { ...closed, backgroundCommands: background } : closed

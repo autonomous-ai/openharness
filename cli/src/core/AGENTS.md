@@ -34,11 +34,13 @@ The core stays small and secure, in the code and at run time: read
 
 ## Where things are
 
+- Optional startup discovery is in `services/componentStartup.ts` in the existing edge process. Core
+  retains request/stream demand and signed-in session transport authority, not feature file paths or USB polling.
+
 - `agents/`: create, fork, restart, retarget, stop, resume, close, discovery, adoption, binding, the list.
-  `agents/cloud.ts`: agents a service owns, the cloud agents: listed with the rest from what the cloud
-  service publishes, their questions shown as a pane's are, the dial's turn cards made from what changes
-  (working, then what it said, in the card's two lines as the service worked them out), and New Harness, words, an answer, a rename and Stop Harness for one handed
-  to its port (`cloudLink.ts` when it runs in its own process).
+  `agents/sessionOwners.ts`: one presentation per service-owned session, with native ownership taking precedence.
+  Common facts arrive through bounded current-link staging (`agents/sessionOwnerStage.ts`); questions and prepared cards
+  are admitted against current owners. Operations reach the owning service through `sessionOwnerLink.ts`.
 - `transcripts/`: attach (bounded reads from the end), ingest, live tail, relaunch marks, normalizers.
   Claude Code/Codex live interpretation is injected through `Engine.live`; core keeps parser handles
   and immutable turn snapshots, never edits their engine state. Supervised Claude Code/Codex parsers
@@ -49,16 +51,18 @@ The core stays small and secure, in the code and at run time: read
   and the requests about a terminal itself (`requests.ts`: `terminal_info`, `theme_set`).
 - `engines/`: hook coordination, reader ports and live worker coordination. Claude Code/Codex
   history, last-turn reads, live parsing, runtime profiles/catalogs and screen interpretation run in supervised workers, and so do
-  the other fourteen engines' history and last turns, in one worker of their own (`engines/others/`); core passes snapshots,
+  the other fourteen engines' history, live parsing, pane/config profiles, screens and question navigation, plus ordinary terminal screen interpretation, in one worker
+  of their own (`engines/others/`), together with OpenCode's model control; the other thirteen remain view-only. Core passes snapshots,
   validates bounded replies, retains acknowledged cursors and owns binding/turn state. The explicit
   inline/older-master compatibility path is the only live parser or runtime profile implementation
   composition in core. Screen reads are bounded and fenced to the worker connection and session binding
-  ([screen boundary](../../../docs/design/2026-10-08-engine-screen.md)). Core keeps accepted profiles and control authority; native model drivers run in workers through [revocable control grants](../../../docs/design/2026-10-08-engine-model-control.md), and so does question navigation ([question control](../../../docs/design/2026-10-08-engine-question-control.md)). Whether a typed prompt was taken is read there too: core keeps the writer, every Enter and the verdict ([submission](../../../docs/design/2026-10-08-engine-submission.md)). Codex's shared app-server is spoken to from its worker under a stop grant; core keeps the process table, identity and the stop's decisions ([native control](../../../docs/design/2026-10-08-engine-native-control.md)). Their hooks never go to a worker: each engine declares them as data, and core applies the declaration in line with `engines/kit` mechanics (installing settings, refusing a delegated session, correcting a transcript, closing a turn on Stop; [hooks](../../../docs/design/2026-10-08-engine-hooks.md)). Nor does their launch: Codex's startup probe and retry, its own-login provider, folder trust and the resume repair are declared data too, which core applies in the pane's argv and script and in the engines' files before a spawn ([launch](../../../docs/design/2026-10-08-engine-launch.md)). See [runtime profiles](../../../docs/design/2026-10-08-engine-runtime.md).
+  ([screen boundary](../../../docs/design/2026-10-08-engine-screen.md)). Core keeps accepted profiles and control authority; native model drivers run in workers through [revocable control grants](../../../docs/design/2026-10-08-engine-model-control.md), and so does question navigation ([question control](../../../docs/design/2026-10-08-engine-question-control.md)). Whether a typed prompt was taken is read there too: core keeps the writer, every Enter and the verdict ([submission](../../../docs/design/2026-10-08-engine-submission.md)). Codex's shared app-server is spoken to from its worker under a stop grant; core keeps the process table, identity and the stop's decisions ([native control](../../../docs/design/2026-10-08-engine-native-control.md)). Mandatory hook admission, delegated-session rejection, transcript correction and Stop remain in core (`hookAuthority.ts`, `engines/hooks.ts`). Optional installation parsing and templates run in engineSetup; core selects destinations and publishes bounded candidates through the existing native-file reservation and exact-file proof ([file boundary](../../../docs/design/2026-11-16-engine-setup-files.md)). Capture, staging and publication still perform bounded filesystem I/O in core; this slice does not finish that isolation. Nor does their launch: Codex's startup probe and retry, its own-login provider, folder trust and the resume repair are declared data too, which core applies in the pane's argv and script and in the engines' files before a spawn ([launch](../../../docs/design/2026-10-08-engine-launch.md)). See [runtime profiles](../../../docs/design/2026-10-08-engine-runtime.md).
 - `input.ts`, `questions.ts`: messages into a pane; an agent's question and its answer. Core matches an answer to the
-  question on screen and holds the lease; Claude Code's and Codex's keys for each approved step come from their engine
-  worker through a revocable grant (`engines/questionControls.ts`).
-  `deviceInput.ts`: the pane writer lock every write takes, and a device's queued turns behind it.
-  `cardText.ts`: an engine's error, rewritten for a device's card.
+  question on screen and holds the lease; each engine's keys for an approved step come from its worker through
+  a revocable grant (`engines/questionControls.ts`).
+  `lib/sessionInput.ts`: one shared pane writer and bounded session queue for ordinary, whole-turn and correlated composer input.
+  Device admissions, receipt correlation and result evidence live in the device component process.
+  Raw failures follow the existing recaps lifecycle; device error text lives in `services/cardText.ts`.
 - `deliveries.ts`: delivered turns, the Wi-Fi device's, Agent Messages' and the orchestrator's: text written into an
   agent under a delivery id of its maker's, and what became of it, told back to that maker in its process.
 - `updateHandoff.ts`: the core handing over to a build the updater staged (exit 75, when the master asks),
@@ -70,14 +74,19 @@ The core stays small and secure, in the code and at run time: read
   services and the socket, and the one outside the 100% coverage: wiring only, run end to end. The
   services that run in their own processes by default it imports only dynamically, through
   `../services/inline.ts`, and only when one runs in this process instead.
-- `api.ts`: the contract with services, their ports, fallbacks and requests. `serviceHost.ts`: services
-  in this process. `serviceLinks.ts`: services in their own processes. `serviceRoutes.ts`: a route of the local
+- `windowFocus.ts`: the actual local windows' form/voice selection and final guarded apply, for every
+  explicit choice and disconnect. A component validates its own revision; it cannot apply a selection
+  after the target binding, validator or current window state changes. Local transport owns the
+  physical-socket check. This extracts the existing authority from `main.ts`, without a feature cache.
+- `api.ts`: the contract with services, their ports, fallbacks and requests. `serviceHost.ts`: shared failure identities and fallback values; the inline host is
+  `../services/inlineHost.ts`, loaded through `../services/inline.ts` only. `serviceLinks.ts`: services in their own processes. `serviceRoutes.ts`: a route of the local
   door a service answers (`SERVICE_HTTP_ROUTES`), handed on as it came once the door let it in, with the route's own
   methods, its writes' local header, whether only the daemon's own socket may ask it (`door`), its wait, the headers its
   answers carry, and its own answer while that service is down; and a window's frame a service answers
   (`SERVICE_WS_FRAMES`: ⌘K's), its answer sent back as the frame its route names. `usageOutcomes.ts`: what the usage report counts of a request, told the gateway raw; the gateway names it. `viewersLink.ts`: what the core
-  keeps of the viewers when they run in theirs. `viewerStreams.ts`: a client's viewer stream and rendered
-  frames, handed to the viewers, refused at once while they are down, and held while they first start. `workspacesLink.ts`: workspaces in
+  keeps of the viewers when they run in theirs, including bounded surface requests. `clientStreams.ts`: the shared
+  connection-owned relay for viewers and Browser, with private grants, service incarnations and bounded queues;
+  viewer traffic is held only while its service first starts. `workspacesLink.ts`: workspaces in
   theirs, which run the git the core runs none of: a create's folder and a purge's worktree, each asked with a deadline and
   read as typed data, and the made-up branches they name. `messagesLink.ts`: Agent Messages out of this process (the edge host): which of its deliveries may be
   written, as it last said, the few things it may ask (`MESSAGES_QUERIES`: the agents, this daemon, the account
@@ -112,20 +121,15 @@ The core stays small and secure, in the code and at run time: read
   (`core.account.accessToken`): the core calls no other host. `devicesLink.ts`: the devices in their own process (the dials, the window
   bridges, the fleet): what the core tells them, what it asks with a deadline and a fallback, and what it
   answers them. `observedHook.ts`: an agent outside a pane's hook event, checked, bounded and rate limited, then
-  handed to the devices and kept nowhere in the core. `wifi.ts`: the Wi-Fi device, as the core keeps it wherever its service runs (who said
-  hello, which transcripts and streams it follows, the focus revision, and the check on every answer it
-  sends a device); `wifiAgents.ts`: its doors into the core (the agents as it lists them, a prompt, an
-  agent made for a Store harness); `wifiLink.ts`: its service in the devices' process. `devicesWake.ts`: when
-  that process is asked for, once there is a device (a dial's port in /dev, a paired Wi-Fi device).
+  handed to the devices and kept nowhere in the core. `wifiLink.ts`: the Wi-Fi service's input facts and
+  window notifications, shared Create grant and remaining machine/recent reads. Transcript and event
+  observation, focus revision, relay sessions, hello state, held requests and presence live in the
+  gateway and devices processes; desk gestures use the component's local request door.
   `agentLife.ts`: what happens to agents (each look at a live one, its end, a stop, a purge, a pane's new agent), for the
   services that follow them (`CoreApi.agents.follow`, `follow_agents` from a service's process); it names no service, and
   holds for one in its own process only the kinds its process says it hears (`harnessd/services.ts` `hears`).
-  `agentBrowserLink.ts`: the agent browser in its own process: each browser's state as it last said, kept only for the
-  agents running here, and its viewers' streams passed on. `browserStreams.ts`: the core's side of a browser's
-  stream, and nothing of the stream itself: who may open one, whose each is, its own bounds (an open the service does
-  not answer, bytes a viewer has not read), and that it is closed when its service goes. The core starts no command
-  for a browser, reads none of a viewer's VNC bytes, and sends the service's screen frames on as they came.
-  `modelsWake.ts`: when models' process is asked for as the core starts, once grid is in use here.
-  `gatewayWake.ts`: when the gateway's process is asked for as the core starts, before it binds: signed in, or
-  anything paired here. `viewersWake.ts`: when the viewers' process (the viewers and the Store) is asked for: a
-  harness here, or as the core starts, the release's own harnesses to put in place or viewer servers to stop.
+  Browser admission and its runtime stay in `../services/agentBrowserRuntime.ts`; the core's shared relay reads no
+  Browser state, starts no browser command, and forwards validated binary buffers without reframing them.
+  Optional startup discovery lives in the edge host's `services/componentStartup.ts`. Core requests gateway
+  for signed-in session transport before binding; shared requests and agent stream declarations request
+  components as needed. Feature paths and the USB discovery timer stay outside core.

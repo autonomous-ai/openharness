@@ -1,3 +1,5 @@
+import { serviceSession } from '../testing/sessionSnapshot.js'
+import { deviceDeskFor, publishDeviceDesk } from './deviceDesk.js'
 // The devices (services/devices.ts): what the core tells them reaches the dial and the window bridges, what
 // they say reaches the core through its API alone, and the fleet failing costs the dial nothing.
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
@@ -24,9 +26,11 @@ import { MAX_TEXT, type OrcaChild, type OrcaReads, type OrcaTabs, type OrcaTermi
 import { AppRings } from '../cable/hosts/select.js'
 import { env } from '../config/env.js'
 import { routeVoiceTask } from '../lib/voiceRouter.js'
-import { DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, ServiceUnavailableError, type CoreApi, type CorePorts, type DevicesPort } from '../core/api.js'
+import { DEVICES_FALLBACKS, DEVICES_REQUESTS, SERVICE_WS_FRAMES, emptyPorts, ServiceUnavailableError, type Asker, type CoreApi, type CorePorts, type DevicesPort, type ServiceRequests } from '../core/api.js'
+import { createServiceLinks } from '../core/serviceLinks.js'
+import { createServiceRoutes } from '../core/serviceRoutes.js'
 import type { ObservedAsked, ObservedHookEvent } from '../core/observedHook.js'
-import { createServiceHost } from '../core/serviceHost.js'
+import { createServiceHost } from './inlineHost.js'
 import * as claudePlugin from '../devices/claudePlugin.js'
 import type { ClaudeRun } from '../devices/claudePlugin.js'
 import { DIAL_SKILL } from '../devices/dialSkill.js'
@@ -566,7 +570,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; storePackageFolder?: DevicesDeps['storePackageFolder']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; onDesk?: DevicesDeps['onDesk']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; storePackageFolder?: DevicesDeps['storePackageFolder']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const apps = over.orca ?? orca
   // None, and no read under way, unless the spec gives its own; null leaves the devices to read this computer's.
@@ -574,6 +578,7 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
   const ports: CorePorts = emptyPorts()
   const onExit = vi.fn()
   const gone: Array<() => void> = []
+  let legacy: ServiceRequests = {}
   const requests = startDevices(core, ports, {
     logsDir: join(dataDir, 'logs'),
     petsDir: join(dataDir, 'pets'),
@@ -583,6 +588,7 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     readUsage: over.readUsage,
     now: over.now,
     refresh: over.refresh,
+    onDesk: over.onDesk,
     orca: apps,
     orcaReads: over.orcaReads ?? inertOrcaReads,
     codex: over.codex ?? codex,
@@ -605,6 +611,7 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     log: (line) => { logs.push(line) },
     onExit,
     onCoreGone: (run) => { gone.push(run) },
+    onLegacyCommands: handlers => { legacy = handlers },
     listen: over.listen,
     tty: over.tty,
     // A `claude` that finds none unless the spec gives its own: no spec runs the developer's. null leaves it out.
@@ -642,7 +649,7 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
   // Stopped once the spec ends, as the process stops them: a dial left attached on real timers keeps its 60 s scan, which
   // would count in a later spec's scans.
   onTestFinished(() => port.stop())
-  return { core, ports, port, requests, onExit, gone, orcaHomes }
+  return { core, ports, port, requests, onExit, gone, legacy, orcaHomes }
 }
 
 const calls = (name: string) => seen.cable.calls.filter(([called]) => called === name).map(([, args]) => args)
@@ -759,7 +766,7 @@ describe('the devices, as the core starts them', () => {
     try {
       mkdirSync(join(dataDir, 'home-devices', 'pets'), { recursive: true })
       writeFileSync(join(dataDir, 'home-devices', 'pets', 'pets.json'), JSON.stringify({ all: 'b'.repeat(16), engines: {} }))
-      startDevices(fakeCore({ dataDir }), emptyPorts(), { logsDir: join(dataDir, 'logs'), cableDisabled: true, log: () => {}, onExit: vi.fn() })
+      startDevices(fakeCore({ dataDir }), emptyPorts(), { logsDir: join(dataDir, 'logs'), cableDisabled: true, raise: noDesktop, vscodeExtension: fakeVscode().deps, cursorExtension: fakeVscode({ editor: 'cursor' }).deps, log: () => {}, onExit: vi.fn() })
       expect(seen.host.pets!()!.mapping().all).toBe('b'.repeat(16))
     } finally {
       ;(env as { HARNESS_DEVICES_DIR: string }).HARNESS_DEVICES_DIR = was
@@ -786,7 +793,7 @@ describe('the devices, as the core starts them', () => {
   it('log to the console by default, and register the worker\'s stop on the process\'s exit', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const once = vi.spyOn(process, 'once').mockImplementation(() => process)
-    startDevices(fakeCore({ dataDir }), emptyPorts(), { logsDir: dataDir, cableDisabled: true })
+    startDevices(fakeCore({ dataDir }), emptyPorts(), { logsDir: dataDir, cableDisabled: true, raise: noDesktop, vscodeExtension: fakeVscode().deps, cursorExtension: fakeVscode({ editor: 'cursor' }).deps })
     expect(log).toHaveBeenCalledWith('[cable] disabled (CABLE_DISABLE=true) — the serial port is left alone')
     expect(once).toHaveBeenCalledWith('exit', expect.any(Function))
   })
@@ -1041,6 +1048,17 @@ describe('the dial\'s host, wired to the core', () => {
     expect(core.agents.fork).toHaveBeenCalledWith('a1')
   })
 
+  it('shares one window transport for a desk gesture and a bridge on its exact physical connection', () => {
+    const sendWindow = vi.fn(() => true)
+    start({ core: fakeCore({ dataDir, clients: { sendWindow } }) })
+    seen.host.focused!('remote-machine', 'agent')
+    seen.bridges.WindowSelection.wiring.send('physical-window', { op: 'begin' })
+    expect(sendWindow.mock.calls).toEqual([
+      [{ target: { kind: 'all' }, frame: { type: 'dial_focus', payload: { machineId: 'remote-machine', agentId: 'agent' } } }],
+      [{ target: { kind: 'connection', connId: 'physical-window' }, frame: { type: 'dial_selection', payload: { op: 'begin' } } }],
+    ])
+  })
+
   it('tells the windows on this computer what a hand at this desk did, and the owner\'s apps the device status', () => {
     const { core } = start()
     const w = seen.host
@@ -1055,7 +1073,7 @@ describe('the dial\'s host, wired to the core', () => {
     w.scrolled!('move', 4, 120)
     w.dialStatus!({ attached: true, fw: '1.2.3' })
     w.dialStatus!({ attached: false })
-    expect(vi.mocked(core.clients.sendLocal).mock.calls.map(([frame]) => frame)).toEqual([
+    expect(vi.mocked(core.clients.sendWindow).mock.calls.filter(([delivery]) => delivery.target.kind === 'all').map(([{ frame }]) => frame)).toEqual([
       { type: 'dial_open', payload: { machineId: 'm1', agentId: 'a1' } },
       { type: 'dial_open', payload: { machineId: 'm1', agentId: 'a1', reason: 'question' } },
       { type: 'dial_notification_read', payload: { machineId: 'm1', agentId: 'a1', readToken: 'tok' } },
@@ -1109,10 +1127,10 @@ describe('the window bridges, wired to the core', () => {
     selection.wiring.send('w1', { op: 'begin' })
     visit.wiring.send('w1', { op: 'open' })
     form.wiring.send('w1', { op: 'open' })
-    expect(vi.mocked(core.clients.sendToWindow).mock.calls).toEqual([
-      ['w1', { type: 'dial_selection', payload: { op: 'begin' } }],
-      ['w1', { type: 'dial_visit', payload: { op: 'open' } }],
-      ['w1', { type: 'dial_form', payload: { op: 'open' } }],
+    expect(vi.mocked(core.clients.sendWindow).mock.calls).toEqual([
+      [{ target: { kind: 'connection', connId: 'w1' }, frame: { type: 'dial_selection', payload: { op: 'begin' } } }],
+      [{ target: { kind: 'connection', connId: 'w1' }, frame: { type: 'dial_visit', payload: { op: 'open' } } }],
+      [{ target: { kind: 'connection', connId: 'w1' }, frame: { type: 'dial_form', payload: { op: 'open' } } }],
     ])
     form.wiring.log('form: opened')
     router.wiring.log('route: asked')
@@ -1120,7 +1138,7 @@ describe('the window bridges, wired to the core', () => {
     expect(router.wiring.hasWindow()).toBe(true)
     router.wiring.send('v1', 'fix it', undefined)
     router.wiring.send('v2', 'fix it', 'review')
-    expect(vi.mocked(core.clients.sendLocal).mock.calls.map(([frame]) => frame)).toEqual([
+    expect(vi.mocked(core.clients.sendWindow).mock.calls.filter(([delivery]) => delivery.target.kind === 'all').map(([{ frame }]) => frame)).toEqual([
       { type: 'voice_route_request', payload: { voiceId: 'v1', text: 'fix it' } },
       { type: 'voice_route_request', payload: { voiceId: 'v2', text: 'fix it', cmd: 'review' } },
     ])
@@ -1145,6 +1163,71 @@ describe('the window bridges, wired to the core', () => {
 })
 
 describe('what the windows say, reaching the dial', () => {
+  it('keeps same-session Cloud cards and refuses a session removed by a reentrant card observer', () => {
+    let present = true
+    const core = fakeCore({ dataDir, agents: { advertised: () => present ? [{ agentId: 'a1', sessionId: 's1' } as RegisteredSession] : [] } })
+    const devicesCore = { ...core, agents: { ...core.agents, serviceSessions: () => [{ agentId: 'cloud', sessionId: 'cloud' } as import('../lib/sessionOwnerWire.js').ServiceSessionRow] } }
+    const { port } = start({ core: devicesCore })
+    port.card({ type: 'commander_event', agentId: 'cloud', dbSessionId: 'cloud', payload: { kind: 'error', text: 'cloud failure' } })
+    expect(calls('turnError')).toEqual([['cloud', 'cloud failure']])
+    vi.spyOn((seen.dial as unknown as DaemonCableHost).harness, 'noteCard').mockImplementation(() => { present = false })
+    port.card({ type: 'commander_event', agentId: 'a1', dbSessionId: 's1', payload: { kind: 'error', text: 'old' } })
+    expect(calls('turnError')).toEqual([['cloud', 'cloud failure']])
+  })
+
+  it('keeps every same-session cable card and refuses unknown or malformed addressed cards', async () => {
+    const core = fakeCore({ dataDir, agents: { advertised: () => [{ agentId: 'a1', sessionId: 's1' } as RegisteredSession] } })
+    const { port } = start({ core })
+    const card = (kind: string) => ({ type: 'commander_event', agentId: 'a1', dbSessionId: 's1', payload: { kind, text: 'same', tier: 'list' } })
+    for (const kind of ['processing', 'tool', 'done', 'summary', 'error']) port.card(card(kind))
+    expect(seen.cable.calls.slice(1).map(([name]) => name)).toEqual(['turnStarted', 'turnStep', 'turnDone', 'summary', 'turnError'])
+    const count = seen.cable.calls.length
+    for (const patch of [{ agentId: 'gone' }, { agentId: 4 }, { dbSessionId: null }, { dbSessionId: '' }]) port.card({ ...card('error'), ...patch })
+    expect(seen.cable.calls).toHaveLength(count)
+    await port.stop()
+    const stopped = seen.cable.calls.length
+    port.card(card('error'))
+    expect(seen.cable.calls).toHaveLength(stopped)
+  })
+
+  it('fences session-addressed done and queued steps after delayed token work sees deletion', async () => {
+    let present = true, finish!: (value: { input: number; cached: number; output: number }) => void, n = 0
+    const core = fakeCore({ dataDir, agents: { advertised: () => present ? [{ agentId: 'a1', sessionId: 's1' } as RegisteredSession] : [] } })
+    const readUsage = vi.fn(() => ++n === 1 ? Promise.resolve({ input: 1, cached: 0, output: 1 })
+      : new Promise<{ input: number; cached: number; output: number }>(done => { finish = done }))
+    const { port } = start({ core, readUsage })
+    const card = (kind: string) => ({ type: 'commander_event', agentId: 'a1', dbSessionId: 's1', payload: { kind, text: 'old' } })
+    port.card(card('turn_started')); port.card(card('done')); port.card(card('tool'))
+    port.card({ type: 'commander_question_close', agentId: 'a1', payload: { requestId: 'drained' } })
+    present = false
+    finish({ input: 2, cached: 0, output: 2 })
+    await vi.waitFor(() => expect(calls('questionClose')).toEqual([['a1', 'drained']]))
+    expect(calls('turnDone')).toEqual([])
+    expect(calls('turnStats')).toEqual([])
+    expect(calls('turnStep')).toEqual([])
+  })
+
+  it('fences session-addressed cable cards at dispatch and after a held tier decision', async () => {
+    let sessionId = 's1', finish!: (decision: { tier: 'list'; by: string; detail: string; ms: number }) => void
+    const core = fakeCore({ dataDir, agents: { advertised: () => [{ agentId: 'a1', sessionId } as RegisteredSession] } })
+    const decideTier = vi.fn(() => new Promise<{ tier: 'list'; by: string; detail: string; ms: number }>(done => { finish = done }))
+    const { port } = start({ core, decideTier })
+    const card = (kind: string) => ({ type: 'commander_event', agentId: 'a1', dbSessionId: 's1', payload: { kind, text: 'old' } })
+    port.card(card('error'))
+    expect(calls('turnError')).toEqual([['a1', 'old']])
+    port.card(card('summary'))
+    expect(decideTier).toHaveBeenCalledOnce()
+    port.card(card('error'))
+    sessionId = 'replacement'
+    port.card({ ...card('error'), dbSessionId: 'replacement', payload: { kind: 'error', text: 'new' } })
+    finish({ tier: 'list', by: 'test', detail: '', ms: 0 })
+    await vi.waitFor(() => expect(calls('turnError').at(-1)).toEqual(['a1', 'new']))
+    expect(calls('summary')).toEqual([])
+    expect(calls('turnError')).toEqual([['a1', 'old'], ['a1', 'new']])
+    port.card(card('processing'))
+    expect(calls('turnStarted')).toEqual([])
+  })
+
   it('pushes a changed desk at once, and only a changed one, and says whether a tile is on screen', async () => {
     const { port } = start()
     port.desk(['a1', 'a2'], true)
@@ -1689,12 +1772,101 @@ describe('the other machines\' cards', () => {
 })
 
 describe('⌘K, the Wi-Fi device\'s borrowed walk, the voice router and stopping', () => {
+  it('keeps old private command results whole through direct service-owned closures', async () => {
+    const { legacy } = start()
+    const picked = { agentId: 'a', machineId: 'm', name: 'fixture', confidence: 1, reason: 'one agent', candidates: [], weighed: 1, machines: 1, via: 'one', extra: 'retained' }
+    seen.fleet!.answers.routeTask = async () => picked
+    expect(await legacy.routeTask({ text: 'fixture' }, WINDOW)).toEqual(picked)
+    expect(await legacy.routeTask({}, WINDOW)).toEqual(picked)
+    for (const result of [{ ok: true, machine: 'm', receipt: 'old-result' }, { ok: false, machine: 'm', reason: 'offline', receipt: 'old-refusal' }]) {
+      seen.fleet!.answers.routeSend = () => result
+      expect(await legacy.routeSend({ agentId: 'a', text: 'go' }, WINDOW)).toEqual(result)
+      expect(await legacy.routeSend({}, WINDOW)).toEqual(result)
+    }
+  })
+
+  it('refuses a raw remote wrapper even when its payload forges RPC provenance', async () => {
+    const { requests } = start()
+    const before = seen.fleet!.calls.length
+    for (const payload of [{ frame: 'route_task', payload: { text: 'private-sentinel' } },
+      { frame: 'route_task', payload: { text: 'private-sentinel' }, rpc: true, rpcRoute: true, asker: { rpcRoute: true } }]) {
+      expect(await requests.devices_ws(payload, { local: false, owner: true, connection: 'raw' })).toEqual({ error: 'LOCAL_ONLY' })
+    }
+    expect(seen.fleet!.calls).toHaveLength(before)
+  })
+
+  it('admits a cold three-command burst when the devices actually receive it, through the real adapter and service', async () => {
+    const { requests } = start()
+    const finish: Array<(answer: never) => void> = []
+    seen.fleet!.answers.routeTask = () => new Promise<never>(resolve => finish.push(resolve))
+    const links = createServiceLinks({ token: 'fixture', owned: { devices: DEVICES_REQUESTS }, answer: () => ({}), onDemand: new Set(['devices']) })
+    const routes = createServiceRoutes({ routes: [], frames: SERVICE_WS_FRAMES, linked: links, hosted: { route: () => false } })
+    const owner = { local: false, owner: true, connection: 'cold-owner' }
+    const replies: Record<string, unknown>[] = []
+    const request = () => new Promise<Record<string, unknown>>(resolve => {
+      routes.route('route_task', { text: 'fixture' }, owner, answer => { replies.push(answer); resolve(answer) })
+    })
+    const first = request(), second = request(), third = request()
+    expect(finish).toHaveLength(0)
+    expect(replies).toHaveLength(0)
+    const peer = links.accept('devices', 'fixture', { sendFrame: frame => {
+      queueMicrotask(() => {
+        void Promise.resolve(requests.devices_ws(frame.payload!, frame.asker as Asker)).then(answer => {
+          peer!.receive({ type: 'devices_ws_result', payload: { ...answer, requestId: frame.payload!.requestId } })
+        })
+      })
+      return true
+    } }, vi.fn())!
+    expect(await third).toEqual({ error: 'BUSY' })
+    expect(finish).toHaveLength(2)
+    for (const resolve of finish) resolve({ agentId: 'selected' } as never)
+    expect(await Promise.all([first, second])).toEqual([{ agentId: 'selected' }, { agentId: 'selected' }])
+    peer.closed()
+  })
+
+  it('answers the owner RPC in the service, preserving strict validation and task trimming', async () => {
+    const { requests } = start()
+    const owner = { local: false, owner: true, connection: 'owner', rpcRoute: true as const }
+    const rpc = (frame: string, payload: unknown, asker = owner) => requests.devices_ws({ frame, payload, rpc: true }, asker, never)
+    expect(await rpc('route_task', { text: '  fixture  ' })).toMatchObject({ agentId: 'a1', reason: 'fixture' })
+    for (const text of [undefined, 2, '', '  ', 'x'.repeat(16_001)]) expect(await rpc('route_task', { text })).toEqual({ error: 'INVALID_REQUEST' })
+    expect(await rpc('route_send', { agentId: 'a'.repeat(160), text: ` ${'x'.repeat(16_000)} ` })).toEqual({ ok: true })
+    for (const agentId of [undefined, 2, '', 'a'.repeat(161)]) expect(await rpc('route_send', { agentId, text: 'fixture' })).toEqual({ error: 'INVALID_REQUEST' })
+    expect(await rpc('route_send', { agentId: 'far', text: 'fixture' })).toEqual({ ok: false, machine: 'mac-mini', reason: 'the last request to it did not come back' })
+    expect(await rpc('agent_close', { agentId: 'a1' })).toEqual({ error: 'UNSUPPORTED' })
+    expect(await rpc('route_task', { text: 'fixture' }, { ...owner, owner: false })).toEqual({ error: 'OWNER_REQUIRED' })
+    expect(await requests.devices_ws({ frame: 'route_task', payload: { text: 'fixture' }, rpc: true }, { ...owner, guest: 'guest' }, never)).toEqual({ error: 'OWNER_REQUIRED' })
+    expect(await requests.devices_ws({ rpc: true }, owner)).toEqual({ error: 'UNSUPPORTED' })
+    expect(await rpc('route_task', [])).toEqual({ error: 'INVALID_REQUEST' })
+    expect(await rpc('route_task', 'private')).toEqual({ error: 'INVALID_REQUEST' })
+  })
+
+  it('retains owner admission through disconnect until actual settlement and refuses already-closed work', async () => {
+    const { requests } = start()
+    const answers: Array<(value: never) => void> = []
+    seen.fleet!.answers.routeTask = () => new Promise<never>((resolve) => { answers.push(resolve) })
+    const closed = new AbortController()
+    const rpc = (connection: string, signal = never) => requests.devices_ws({ frame: 'route_task', payload: { text: 'fixture' }, rpc: true }, { local: false, owner: true, connection, rpcRoute: true }, signal)
+    const one = rpc('owner', closed.signal), two = rpc('owner', closed.signal)
+    expect(await rpc('owner')).toEqual({ error: 'BUSY' })
+    const others = Array.from({ length: 6 }, (_, i) => rpc(`other-${i}`))
+    expect(await rpc('last')).toEqual({ error: 'BUSY' })
+    closed.abort()
+    expect(await rpc('owner')).toEqual({ error: 'BUSY' })
+    expect(await rpc('last')).toEqual({ error: 'BUSY' })
+    expect(await rpc('gone', AbortSignal.abort())).toEqual({ error: 'COMMAND_UNAVAILABLE', detail: 'This machine could not complete the command. Try again.' })
+    for (const answer of answers) answer({ agentId: 'a' } as never)
+    await Promise.all([one, two, ...others])
+    expect(await rpc('gone', AbortSignal.abort())).toEqual({ error: 'COMMAND_UNAVAILABLE', detail: 'This machine could not complete the command. Try again.' })
+    expect(answers).toHaveLength(8)
+  })
+
   it('route a typed task and its send through the fleet, saying why a send was refused', async () => {
-    const { port } = start()
-    expect(await port.routeTask('fix the parser')).toMatchObject({ agentId: 'a1', reason: 'fix the parser' })
-    expect(await port.routeSend('a1', 'go')).toEqual({ ok: true })
-    expect(await port.routeSend('far', 'go')).toMatchObject({ ok: false, machine: 'mac-mini' })
-    expect(await port.routeSend('nameless', 'go')).toMatchObject({ ok: false, machine: '' })
+    const { requests } = start()
+    expect(await requests.devices_ws({ frame: 'route_task', payload: { text: 'fix the parser' } }, WINDOW)).toMatchObject({ agentId: 'a1', reason: 'fix the parser' })
+    expect(await requests.devices_ws({ frame: 'route_send', payload: { agentId: 'a1', text: 'go' } }, WINDOW)).toEqual({ ok: true })
+    expect(await requests.devices_ws({ frame: 'route_send', payload: { agentId: 'far', text: 'go' } }, WINDOW)).toMatchObject({ ok: false, machine: 'mac-mini' })
+    expect(await requests.devices_ws({ frame: 'route_send', payload: { agentId: 'nameless', text: 'go' } }, WINDOW)).toMatchObject({ ok: false, machine: '' })
     expect(logs).toEqual(expect.arrayContaining([
       '[route] ⌘K → a1 · bytes=2',
       '[route] ⌘K → far · bytes=2 · REFUSED: the last request to it did not come back (mac-mini)',
@@ -1725,9 +1897,9 @@ describe('⌘K, the Wi-Fi device\'s borrowed walk, the voice router and stopping
   })
 
   it('answer ⌘K with no agent list when the fleet did not start, and the dial routes this computer itself', async () => {
-    const { port } = start({ faults: ['fleet'] })
-    expect(await port.routeTask('anything')).toMatchObject({ agentId: '', reason: 'no agent list yet', candidates: [] })
-    expect(await port.routeSend('a1', 'go')).toEqual({ ok: false, machine: '', reason: 'no agent list yet' })
+    const { port, requests } = start({ faults: ['fleet'] })
+    expect(await requests.devices_ws({ frame: 'route_task', payload: { text: 'anything' } }, WINDOW)).toMatchObject({ agentId: '', reason: 'no agent list yet', candidates: [] })
+    expect(await requests.devices_ws({ frame: 'route_send', payload: { agentId: 'a1', text: 'go' } }, WINDOW)).toEqual({ ok: false, machine: '', reason: 'no agent list yet' })
     expect(logs).toContain('[devices] fleet did not start · Error · the devices run without it')
     expect(seen.host.fleet!()).toBeNull()
     await port.stop()
@@ -1740,16 +1912,137 @@ describe('⌘K, the Wi-Fi device\'s borrowed walk, the voice router and stopping
     expect(() => seen.host.fleet!()!.knows('a1')).toThrow(ServiceUnavailableError)
   })
 
-  it('lend the Wi-Fi device the dial\'s walk and stroke', async () => {
-    const { core, port } = start()
+  it('serves declared desk probe and gestures without the core private port route', async () => {
+    const { core, port, requests } = start()
+    const machineId = core.machine.id()
+    expect(await requests.devices_ws({ frame: 'harness_device_step', payload: { probe: true, machineId, requestId: 'probe' } }, WINDOW, never))
+      .toEqual({ protocol: 1, machineId })
+    expect(core.clients.sendWindow).not.toHaveBeenCalled()
     port.desk(['a1', 'a2'], true)
     port.swarms({ active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: ['a1', 'a2'], panes: 2 }], tiles: [] })
     vi.mocked(core.agents.advertised).mockReturnValue([{ agentId: 'a1', registeredAt: 1, engine: 'claude' }, { agentId: 'a2', registeredAt: 2, engine: 'claude' }] as RegisteredSession[])
-    // The fleet's router is a stand-in here, so the walk is the host's own over the core's agents.
     seen.fleet!.fail = true
-    expect(await port.stepFocus('next', 'a1')).toEqual(expect.objectContaining({ agentId: 'a2' }))
-    port.scroll('down', 0, 0)
-    expect(vi.mocked(core.clients.sendLocal).mock.calls.map(([frame]) => frame.type)).toEqual(['dial_focus', 'dial_scroll'])
+    expect(await requests.devices_ws({ frame: 'harness_device_step', payload: { machineId, direction: 'next', currentAgentId: 'a1',
+      requestId: 'step', expiresAt: Date.now() + 5000 } }, WINDOW, never)).toMatchObject({ agentId: 'a2' })
+    await requests.devices_ws({ frame: 'harness_device_scroll', payload: { machineId, phase: 'down', dy: 2, velocity: 3 } }, WINDOW, never)
+    expect(vi.mocked(core.clients.sendWindow).mock.calls.map(([{ frame }]) => frame.type)).toEqual(['dial_focus', 'dial_scroll'])
+  })
+
+  it.each([
+    { local: false, owner: true, connection: 'remote' }, { local: true, owner: false, connection: 'local' },
+    { local: true, owner: true }, { ...WINDOW, rpcRoute: true as const },
+  ])('refuses undeclared desk authority %j', async asker => {
+    const { requests, core } = start()
+    expect(await requests.devices_ws({ frame: 'harness_device_step', payload: { machineId: core.machine.id(), probe: true, requestId: 'r' } }, asker, never))
+      .toEqual({ error: 'LOCAL_ONLY' })
+    expect(core.clients.sendWindow).not.toHaveBeenCalled()
+  })
+
+  it('refuses missing/closed authority, malformed requests and absent or foreign desk ownership', async () => {
+    const { requests, core, port } = start()
+    const payload = { frame: 'harness_device_step', payload: { machineId: core.machine.id(), probe: true, requestId: 'r' } }
+    expect(await requests.devices_ws(payload, WINDOW)).toEqual({ error: 'LOCAL_ONLY' })
+    const closed = new AbortController(); closed.abort()
+    expect(await requests.devices_ws(payload, WINDOW, closed.signal)).toEqual({ error: 'LOCAL_ONLY' })
+    expect(await requests.devices_ws({ ...payload, payload: { ...payload.payload, direction: 'next' } }, WINDOW, never)).toEqual({ error: 'INVALID_REQUEST' })
+    expect(await requests.devices_ws({ ...payload, payload: { ...payload.payload, machineId: 'foreign' } }, WINDOW, never)).toEqual({ error: 'DESK_UNAVAILABLE' })
+    await port.stop()
+    expect(await requests.devices_ws(payload, WINDOW, never)).toEqual({ error: 'LOCAL_ONLY' })
+    expect(deviceDeskFor(dataDir, core.machine.id())).toBeNull()
+  })
+
+  it('keeps scroll on existing window facts without a receiver membership refresh', async () => {
+    const refresh = vi.fn(async () => false), { requests, core, port } = start({ refresh })
+    ;(seen.dial as unknown as DaemonCableHost).dialShows({}, { name: 'api', app: 'Harness' }, 'a1')
+    const stroke = { frame: 'harness_device_scroll', payload: { machineId: core.machine.id(), phase: 'down', dy: 1, velocity: 2 } }
+    expect(await requests.devices_ws(stroke, WINDOW, never)).toEqual({ ok: true })
+    expect(refresh).not.toHaveBeenCalled()
+    vi.mocked(core.clients.hasWindow).mockReturnValue(false)
+    expect(await requests.devices_ws(stroke, WINDOW, never)).toEqual({ ok: false })
+    expect(core.clients.sendWindow).toHaveBeenCalledOnce()
+    await port.stop()
+    expect(await requests.devices_ws(stroke, WINDOW, never)).toEqual({ error: 'LOCAL_ONLY' })
+    expect(refresh).not.toHaveBeenCalled()
+  })
+
+  it('requires a successful refresh for step membership while a later request can recover', async () => {
+    const refresh = vi.fn(async () => false), { requests, core } = start({ refresh })
+    const step = { frame: 'harness_device_step', payload: { machineId: core.machine.id(), requestId: 'step', direction: 'next', expiresAt: Date.now() + 5000 } }
+    expect(await requests.devices_ws(step, WINDOW, never)).toEqual({ error: 'DESK_UNAVAILABLE' })
+    expect(core.clients.sendWindow).not.toHaveBeenCalled()
+    refresh.mockResolvedValue(true)
+    seen.fleet!.fail = true
+    expect(await requests.devices_ws(step, WINDOW, never)).toEqual({ step: 'no_agents' })
+    expect(refresh).toHaveBeenCalled()
+  })
+
+  it.each(['closed', 'replacement', 'machine', 'stop'] as const)('fences a desk effect when %s changes during its refresh', async change => {
+    let finish!: (fresh: boolean) => void
+    const refresh = () => new Promise<boolean>(resolve => { finish = resolve })
+    const { requests, core, port } = start({ refresh }), closed = new AbortController()
+    const answer = requests.devices_ws({ frame: 'harness_device_step', payload: { machineId: core.machine.id(), requestId: 'step', direction: 'next', expiresAt: Date.now() + 5000 } }, WINDOW, closed.signal)
+    let revoke = () => {}
+    if (change === 'closed') closed.abort()
+    if (change === 'replacement') revoke = publishDeviceDesk({ dataDir, machineId: core.machine.id(), current: () => true, hasWindow: () => true,
+      desk: { stepFocus: async () => 'no_agents', scroll: vi.fn() } })
+    if (change === 'machine') vi.mocked(core.machine.id).mockReturnValue('replacement')
+    if (change === 'stop') await port.stop()
+    finish(true)
+    expect(await answer).toEqual({ error: 'DESK_UNAVAILABLE' })
+    expect(core.clients.sendWindow).not.toHaveBeenCalled(); revoke()
+  })
+
+  it.each(['closed', 'expired'] as const)('rechecks %s after the actual desk list settles without a late focus', async change => {
+    vi.useFakeTimers()
+    const { requests, core, port } = start(), closed = new AbortController()
+    port.desk(['a1'], true)
+    port.swarms({ active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: ['a1'], panes: 1 }], tiles: [] })
+    let finish!: (rows: unknown[]) => void
+    seen.fleet!.answers.listAgentsFlat = () => new Promise(resolve => { finish = resolve }) as never
+    const result = requests.devices_ws({ frame: 'harness_device_step', payload: {
+      machineId: core.machine.id(), requestId: 'step', direction: 'next', expiresAt: Date.now() + 100,
+    } }, WINDOW, closed.signal)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(finish).toBeTypeOf('function')
+    if (change === 'closed') closed.abort(); else vi.setSystemTime(Date.now() + 101)
+    finish([{ id: 'a1' }])
+    expect(await result).toEqual({ error: 'DESK_UNAVAILABLE' })
+    expect(core.clients.sendWindow).not.toHaveBeenCalled()
+    await port.stop()
+  })
+
+  it('refuses expired or overlong step grants and reports unavailable windows without focus', async () => {
+    const { requests, core } = start()
+    const step = (expiresAt: number) => requests.devices_ws({ frame: 'harness_device_step', payload: {
+      machineId: core.machine.id(), requestId: 's', direction: 'previous', expiresAt,
+    } }, WINDOW, never)
+    expect(await step(Date.now() - 1)).toEqual({ error: 'DESK_TIMEOUT' })
+    expect(await step(Date.now() + 10000)).toEqual({ error: 'DESK_TIMEOUT' })
+    vi.mocked(core.clients.hasWindow).mockReturnValue(false)
+    seen.fleet!.fail = true
+    expect(await step(Date.now() + 5000)).toEqual({ step: 'no_app' })
+    expect(core.clients.sendWindow).not.toHaveBeenCalled()
+  })
+
+  it('keeps the component-only desk endpoint bound to its caller and stops it before late gestures', async () => {
+    let desk!: Parameters<NonNullable<DevicesDeps['onDesk']>>[0]
+    const { core, port } = start({ onDesk: direct => { desk = direct } })
+    port.desk(['a1'], true)
+    port.swarms({ active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: ['a1'], panes: 1 }], tiles: [] })
+    vi.mocked(core.agents.advertised).mockReturnValue([{ agentId: 'a1', registeredAt: 1, engine: 'claude' }] as RegisteredSession[])
+    seen.fleet!.fail = true
+    expect(await desk.stepFocus('next', undefined, () => false)).toBe('no_agents')
+    desk.scroll('move', 2, 3, () => false)
+    expect(core.clients.sendWindow).not.toHaveBeenCalled()
+    expect(await desk.stepFocus('next', undefined, () => true)).toMatchObject({ agentId: 'a1' })
+    desk.scroll('move', 2, 3, () => true)
+    expect(vi.mocked(core.clients.sendWindow).mock.calls.filter(([delivery]) => delivery.target.kind === 'all').map(([{ frame }]) => frame.type)).toEqual(['dial_focus', 'dial_scroll'])
+    await port.stop()
+    vi.mocked(core.clients.sendWindow).mockClear()
+    expect(await desk.stepFocus('next', undefined, () => true)).toBe('no_agents')
+    expect(port).not.toHaveProperty('stepFocus')
+    desk.scroll('move', 2, 3, () => true)
+    expect(core.clients.sendWindow).not.toHaveBeenCalled()
   })
 
   it('walk the cloud harnesses on the desk too, where the core offers them', async () => {
@@ -1757,9 +2050,9 @@ describe('⌘K, the Wi-Fi device\'s borrowed walk, the voice router and stopping
     port.desk(['a1', 'cloud_1'], true)
     port.swarms({ active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: ['a1', 'cloud_1'], panes: 2 }], tiles: [] })
     vi.mocked(core.agents.advertised).mockReturnValue([{ agentId: 'a1', registeredAt: 1, engine: 'claude' }] as RegisteredSession[])
-    core.agents.cloud = () => [{ agentId: 'cloud_1', registeredAt: 2, engine: 'fo' }] as unknown as RegisteredSession[]
+    core.agents.serviceSessions = () => [serviceSession('cloud_1', { registeredAt: 2, engine: 'fo' })]
     seen.fleet!.fail = true
-    expect(await port.stepFocus('next', 'a1')).toEqual(expect.objectContaining({ agentId: 'cloud_1' }))
+    expect(await deviceDeskFor(dataDir, core.machine.id())!.stepFocus('next', 'a1', () => true)).toEqual(expect.objectContaining({ agentId: 'cloud_1' }))
   })
 
   it('tell the voice router the engines here and whether a device watches, and stop everything', async () => {
@@ -2077,7 +2370,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     // As core/main.ts starts the devices in the core's own process: through the service host, which guards the port.
     const ports = emptyPorts()
     createServiceHost(ports, { log: () => {} }).start('devices', (core, started) => startDevices(core, started, {
-      logsDir: join(dataDir, 'logs'), cableDisabled: true, faults: new Set(['fleet']), log: () => {}, onExit: vi.fn(), orca, orcaReads: inertOrcaReads, codex,
+      logsDir: join(dataDir, 'logs'), cableDisabled: true, raise: noDesktop, vscodeExtension: fakeVscode().deps, cursorExtension: fakeVscode({ editor: 'cursor' }).deps, faults: new Set(['fleet']), log: () => {}, onExit: vi.fn(), orca, orcaReads: inertOrcaReads, codex,
     }), fakeCore({ dataDir }), DEVICES_FALLBACKS, DEVICES_REQUESTS)
     ports.devices!.observed(hook('session-start'))
     expect(await machineList(ports.devices!)).toMatchObject({ view: 'machine', agents: [{ id: ID, host: 'orca', caps: 's' }] })
@@ -2548,7 +2841,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
       // As core/main.ts starts the devices in the core's own process (HARNESSD_SERVICES=none, Harness OS): no listen.
       const ports = emptyPorts()
       createServiceHost(ports, { log: () => {} }).start('devices', (core, started) => startDevices(core, started, {
-        logsDir: join(dataDir, 'logs'), cableDisabled: true, faults: new Set(['fleet']), log: (line) => { logs.push(line) }, onExit: vi.fn(), orca, orcaReads: inertOrcaReads, codex,
+        logsDir: join(dataDir, 'logs'), cableDisabled: true, raise: noDesktop, vscodeExtension: fakeVscode().deps, cursorExtension: fakeVscode({ editor: 'cursor' }).deps, faults: new Set(['fleet']), log: (line) => { logs.push(line) }, onExit: vi.fn(), orca, orcaReads: inertOrcaReads, codex,
       }), fakeCore({ dataDir }), DEVICES_FALLBACKS, DEVICES_REQUESTS)
       const port = ports.devices!
       await twoApps(port)
@@ -2943,7 +3236,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
         host().scrolled('move', 8, 0)
         host().scrolled('up', 0, 0)
       }
-      const dialScrolls = (core: CoreApi) => vi.mocked(core.clients.sendLocal).mock.calls.map(([frame]) => frame)
+      const dialScrolls = (core: CoreApi) => vi.mocked(core.clients.sendWindow).mock.calls.map(([{ frame }]) => frame)
         .filter(({ type }) => type === 'dial_scroll')
       const TOUCH = [['down', 0], ['move', 8], ['up', 0]].map(([phase, dy]) => ({ type: 'dial_scroll', payload: { phase, dy, velocity: 0 } }))
 
@@ -3071,7 +3364,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(await caps()).toEqual([{ id: 'h1', caps: 'svfa' }])
     expect(await host().openAgent('h1')).toBeUndefined()
     expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', 'ai.autonomous.harness'], 10_000]])
-    const opens = () => vi.mocked(core.clients.sendLocal).mock.calls.map(([frame]) => frame).filter((frame) => frame.type === 'dial_open')
+    const opens = () => vi.mocked(core.clients.sendWindow).mock.calls.filter(([delivery]) => delivery.target.kind === 'all').map(([{ frame }]) => frame).filter((frame) => frame.type === 'dial_open')
     expect(opens()).toEqual([])
     port.swarms({ active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: [], panes: 0 }], tiles: [] })
     expect(opens()).toEqual([{ type: 'dial_open', payload: { machineId: host().localMachine().id, agentId: 'h1' } }])
@@ -3534,7 +3827,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       const folder = mkdtempSync('/tmp/hk-')
       onTestFinished(() => { rmSync(folder, { recursive: true, force: true }) })
       const server = createServer()
-      await new Promise<void>((resolve) => { server.listen(join(folder, 's'), resolve) })
+      await new Promise<void>((resolve, reject) => { server.once('error', reject).listen(join(folder, 's'), resolve) })
       onTestFinished(() => { server.close() })
       return { KITTY_WINDOW_ID: '5', KITTY_LISTEN_ON: `unix:${join(folder, 's')}` }
     }
@@ -3701,7 +3994,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       onTestFinished(() => { rmSync(folder, { recursive: true, force: true }) })
       const socket = join(folder, 's')
       const server = createServer()
-      await new Promise<void>((resolve) => { server.listen(socket, resolve) })
+      await new Promise<void>((resolve, reject) => { server.once('error', reject).listen(socket, resolve) })
       onTestFinished(() => { server.close() })
       writeFileSync(join(folder, 'f'), '')
       const { port } = startHere({ orca: mac })
@@ -4326,7 +4619,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     for (const dy of moves) host().scrolled('move', dy, 0)
     host().scrolled('up', 0, velocity)
   }
-  const dialScrolls = (core: CoreApi) => vi.mocked(core.clients.sendLocal).mock.calls.map(([frame]) => frame)
+  const dialScrolls = (core: CoreApi) => vi.mocked(core.clients.sendWindow).mock.calls.filter(([delivery]) => delivery.target.kind === 'all').map(([{ frame }]) => frame)
     .filter(({ type }) => type === 'dial_scroll')
   const toWindows = (phase: string, dy: number, velocity: number) => ({ type: 'dial_scroll', payload: { phase, dy, velocity } })
 
@@ -6602,7 +6895,7 @@ describe('the Notifications setting (docs/plans/2026-11-16-dial-agent-notify-des
     engine: 'claude', sessionId: 'sess-1', event, cwd: '/work/api', callerPid: 4242, transcriptPath: '/t/sess-1.jsonl',
     hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1' },
   })
-  const sentLocal = (core: CoreApi) => vi.mocked(core.clients.sendLocal).mock.calls.map(([frame]) => frame)
+  const sentLocal = (core: CoreApi) => vi.mocked(core.clients.sendWindow).mock.calls.filter(([delivery]) => delivery.target.kind === 'all').map(([{ frame }]) => frame)
   const statuses = (core: CoreApi) => sentLocal(core).filter((frame) => frame.type === 'dial_status')
   const summary = (port: DevicesPort, agentId: string, payload: Record<string, unknown>) =>
     port.card({ type: 'commander_event', agentId, payload: { kind: 'summary', text: 'done', ...payload } })
@@ -7377,7 +7670,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       const [restored] = ids()
       let view: RegisteredSession[] = []
       const core = fakeCore({ dataDir, agents: { advertised: vi.fn(() => view) } })
-      const second = await again(first, { core, refresh: async () => { view = H1 }, ...over })
+      const second = await again(first, { core, refresh: async () => { view = H1; return true }, ...over })
       seen.host.watching!(true)
       expect(host().listUnread()).toEqual([])
       before(second.port)
@@ -8023,7 +8316,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       for (const dy of moves) host().scrolled('move', dy, 0)
       host().scrolled('up', 0, velocity)
     }
-    const dialScrolls = (core: CoreApi) => vi.mocked(core.clients.sendLocal).mock.calls.map(([frame]) => frame)
+    const dialScrolls = (core: CoreApi) => vi.mocked(core.clients.sendWindow).mock.calls.map(([{ frame }]) => frame)
       .filter(({ type }) => type === 'dial_scroll')
     const toWindows = (phase: string, dy: number, velocity: number) => ({ type: 'dial_scroll', payload: { phase, dy, velocity } })
     const STATUS: [string, string[], number] = ['/opt/herdr-app/bin/herdr-app', ['status'], 2_000]
@@ -8388,11 +8681,12 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
     })
 
     it('the Wi-Fi device\'s stroke takes the same route', async () => {
-      const { core, port } = inHerdr()
+      let desk!: import('./deviceDesk.js').DeviceDesk
+      const { core } = inHerdr({ onDesk: value => { desk = value } })
       shows(await listedId())
-      port.scroll('down', 0, 0)
-      port.scroll('move', 8, 0)
-      port.scroll('up', 0, 0)
+      desk.scroll('down', 0, 0, () => true)
+      desk.scroll('move', 8, 0, () => true)
+      desk.scroll('up', 0, 0, () => true)
       await vi.waitFor(() => expect(orcaRuns).toEqual([STATUS, scrolled('t7', -1)]))
       expect(dialScrolls(core)).toEqual([])
     })
@@ -8400,7 +8694,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
     it('a throw on the scroll path is the part\'s, not the dial\'s', () => {
       const { core } = inHerdr()
       shows('h1')
-      vi.mocked(core.clients.sendLocal).mockImplementation(() => { throw new Error('send broken') })
+      vi.mocked(core.clients.sendWindow).mockImplementation(() => { throw new Error('send broken') })
       expect(() => host().scrolled('move', 8, 0)).not.toThrow()
       expect(logs).toContain('[devices] dial failed · Error')
     })
@@ -8410,7 +8704,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       screen.tab = 'tbzzzz'
       shows(await listedId())
       onTab(port)
-      vi.mocked(core.clients.sendLocal).mockImplementation(() => { throw new Error('send broken') })
+      vi.mocked(core.clients.sendWindow).mockImplementation(() => { throw new Error('send broken') })
       stroke([8])
       await vi.waitFor(() => expect(logs).toContain('[devices] dial failed · Error'))
       expect(scrollSaid()).toEqual([NOT_ON_SCREEN])
@@ -9025,7 +9319,7 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
     const h1 = { agentId: 'h1', registeredAt: 1, engine: 'opencode' }
     let view = [h1] as RegisteredSession[]
     const core = fakeCore({ dataDir, agents: { advertised: vi.fn(() => view) } })
-    const refresh = async () => { view = [{ ...h1, sessionId: SES }] as RegisteredSession[] }
+    const refresh = async () => { view = [{ ...h1, sessionId: SES }] as RegisteredSession[]; return true }
     const { oc, live, tell } = withOpencode({ core, refresh })
     oc.active = { [SES]: { type: 'busy' } }
     await live()
@@ -11090,7 +11384,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
     const ports = emptyPorts()
     startDevices(fakeCore({ dataDir }), ports, {
-      logsDir: join(dataDir, 'logs'), cableDisabled: true, faults: new Set(['fleet']), log: (line) => { logs.push(line) }, onExit: vi.fn(), orca, codex, herdr,
+      logsDir: join(dataDir, 'logs'), cableDisabled: true, raise: noDesktop, vscodeExtension: fakeVscode().deps, cursorExtension: fakeVscode({ editor: 'cursor' }).deps, faults: new Set(['fleet']), log: (line) => { logs.push(line) }, onExit: vi.fn(), orca, codex, herdr,
     })
     ports.devices!.observed(hook(1))
     seen.host.watching!(true)

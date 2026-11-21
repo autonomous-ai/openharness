@@ -107,6 +107,7 @@ const SCRIPTS: Record<string, Record<string, () => string>> = {
  *  autoload on: it may call any module (docs/windows-rules.md). */
 const NOT_IN_THE_TABLE: Record<string, string> = {
   'engines/kit/windowsInstall.ts': "an engine vendor's installer",
+  'engines/kit/__fixtures__/windowsInstall.2026-11-15.ts': "the frozen vendor-installer comparator used only by windowsInstall.spec.ts",
   'lib/gridInstall.ts': "grid's installer",
   'lib/flash.ts': 'the flasher, a script the website serves',
   'lib/windows/powershell.ts': 'the runner: each script is its caller\'s',

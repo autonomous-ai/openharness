@@ -8,12 +8,66 @@
  * The socket's two handlers stay bound there: `answer` (question_response) and `monitorActivity`.
  */
 import { AskQuestionController, QuestionWatcher, type QuestionAnswerPayload, type QuestionAnswerResult } from '../lib/questionController.js'
-import type { AutonomousDeviceInput } from './deviceInput.js'
-import { sid } from '../lib/log.js'
+import type { SessionInputController } from '../lib/sessionInput.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { TerminalControl } from './terminals/control.js'
+import { replayLegacyQuestions } from './questionObservation.js'
 
 type Frame = { type: string; agentId?: string; dbSessionId?: string; payload: Record<string, unknown> }
+
+export interface QuestionPresentation {
+  owner: object
+  key: string
+  requestId: string
+  frame: Frame
+  dial: boolean
+  remote: boolean
+}
+
+/** One presentation per owner; the existing request index shares its entry, never another frame. */
+export function createQuestionPresentations() {
+  const owners = new Map<string, QuestionPresentation>()
+  const requests = new Map<string, QuestionPresentation>()
+  const frames = function* (remote = false): IterableIterator<Frame> {
+    for (const entry of owners.values()) if (!remote || entry.remote) yield entry.frame
+  }
+  return {
+    openQuestions: {
+      get size() { return owners.size },
+      has: (key: string) => owners.has(key),
+      get: (key: string) => owners.get(key)?.frame,
+      values: () => frames(),
+    },
+    snapshot: (audience: 'local' | 'remote') => frames(audience === 'remote'),
+    current: (key: string) => owners.get(key),
+    request: (requestId: string) => requests.get(requestId),
+    set(owner: object, key: string, frame: Frame, audience: { dial: boolean; remote: boolean }, reinsert = false): boolean {
+      const requestId = frame.payload.requestId
+      if (typeof requestId !== 'string' || !requestId) return false
+      const prior = owners.get(key), collision = requests.get(requestId)
+      if (prior && prior.owner !== owner || collision && collision !== prior) return false
+      if (prior) requests.delete(prior.requestId)
+      // Native observations update in place; an explicitly retired/replaced service question moves last.
+      if (reinsert) owners.delete(key)
+      const entry = { owner, key, requestId, frame, ...audience }
+      owners.set(key, entry)
+      requests.set(requestId, entry)
+      return true
+    },
+    remove(owner: object, key: string, requestId: string): QuestionPresentation | undefined {
+      const current = owners.get(key)
+      if (!current || current.owner !== owner || current.requestId !== requestId) return undefined
+      owners.delete(key)
+      requests.delete(requestId)
+      return current
+    },
+  }
+}
+export type QuestionPresentations = ReturnType<typeof createQuestionPresentations>
+
+/** A close uses the identity of the accepted question, including when its owner is being removed. */
+export const questionClose = (frame: Frame): Frame => ({ type: 'commander_question_close', agentId: frame.agentId,
+  dbSessionId: frame.dbSessionId, payload: { requestId: frame.payload.requestId } })
 
 export interface QuestionDeps {
   questionControlFor: import('../lib/questionControl.js').QuestionControlFor
@@ -27,18 +81,16 @@ export interface QuestionDeps {
   clients: { sendCommander(frame: Frame): void; sendLocal(frame: Frame): void; sendRemote(frame: Frame): void }
   agentIdFor: (sessionId: string) => string
   sessionTurnOpen: (sessionId: string) => boolean
-  /** Whether anyone could answer right now: a device watching, a window on this computer, or an app away. */
-  someoneCanAnswer: () => boolean
-  /** Whether an agent's `harness wait` or `watch` follows [agentId] by what is pushed it (core/toolWatches.ts). */
-  followedByTool: (agentId: string) => boolean
-  deviceInput: Pick<AutonomousDeviceInput, 'setUserAction'>
+  /** Real app/tool observation scopes and the existing commander/cable audience. */
+  observed: (agentId: string) => boolean
+  input: Pick<SessionInputController, 'setUserAction'>
   /** The person is no longer waited on there: a question closed, or the pane read clear after a wait hook
    *  (core/turns/turnHooks.ts). */
   waitOver: (sessionId: string) => void
 }
 
 export function createQuestions({
-  questionControlFor, readQuestion, resolve, terminal, acquireTerminalControl, clients, agentIdFor, sessionTurnOpen, someoneCanAnswer, followedByTool, deviceInput,
+  questionControlFor, readQuestion, resolve, terminal, acquireTerminalControl, clients, agentIdFor, sessionTurnOpen, observed, input,
   waitOver,
 }: QuestionDeps) {
   const { captureTerminal, submitTerminal, keyTerminal } = terminal
@@ -76,14 +128,12 @@ export function createQuestions({
     return questions.answer(payload)
   }
   // What is still being asked, by session — handed to a window that connects later (openQuestions below).
-  const openQuestions = new Map<string, Record<string, unknown>>()
+  const presentations = createQuestionPresentations(), nativeOwner = {}
+  const openQuestions = presentations.openQuestions
   // The AskUserQuestions open by session, and when each was seen open: what lets the input close one for a person's message
   // (core/input.ts `beforeTeamWrite`). A permission prompt is not one.
   const pending = new Map<string, { openedAt: number; text: string }>()
   const pendingQuestion = (sessionId: string): { openedAt: number; text: string } | null => pending.get(sessionId) ?? null
-  // The same, of the questions this module asked, for an app away from this desk that connects later: the
-  // cloud agents' questions share `openQuestions` (core/agents/cloud.ts) and never go over the relay.
-  const askedRemotely = new Map<string, Frame>()
   const monitorActivity = (sessionId: string): 'needsInput' | 'working' | 'idle' => openQuestions.has(sessionId)
     ? 'needsInput' : sessionTurnOpen(sessionId) ? 'working' : 'idle'
   // Who hears that a question was asked or answered: the recaps, which do not announce a turn waiting on
@@ -96,13 +146,9 @@ export function createQuestions({
     readQuestion,
     // A tool cannot answer, but the agent waiting on this harness tells the person: with no window, dial or app here
     // the question was never looked for, and `harness wait` read the screen itself every 3 s to find it.
-    hasDevice: (sessionId) => someoneCanAnswer() || followedByTool(agentIdFor(sessionId)),
+    hasDevice: (sessionId) => observed(agentIdFor(sessionId)),
     isDriving: (sessionId) => questions.isDriving(sessionId),
     onQuestion: (sessionId, requestId, shaped, detail) => {
-      deviceInput.setUserAction(agentIdFor(sessionId), true)
-      questions.remember(requestId, sessionId)
-      if (!detail?.permission) pending.set(sessionId, { openedAt: Date.now(), text: shaped[0]?.q ?? '' })
-      showAwaitingAnswer(sessionId)
       const asked = {
         type: 'commander_question',
         agentId: agentIdFor(sessionId),
@@ -114,6 +160,14 @@ export function createQuestions({
           ...(detail?.permission ? { permission: { dialog: detail.dialog, resolution: 'desktop' } } : {}),
         },
       }
+      if (!presentations.set(nativeOwner, sessionId, asked, { dial: true, remote: true })) {
+        console.warn('[question] QUESTION_ID_CONFLICT'); return
+      }
+      input.setUserAction(agentIdFor(sessionId), true)
+      questions.remember(requestId, sessionId)
+      if (!detail?.permission) pending.set(sessionId, { openedAt: Date.now(), text: shaped[0]?.q ?? '' })
+      else pending.delete(sessionId)
+      showAwaitingAnswer(sessionId)
       heard?.('asked', sessionId, requestId)
       clients.sendCommander(asked)
       // ...and to the window on this computer. `sendCommander` is `webEligible: false`, so until this
@@ -127,33 +181,28 @@ export function createQuestions({
       // its pinned hash, since every app opens by the envelope. Only the owner's apps, and a guest's for the
       // guest's own harness (gateway.ts `broadcast`), can open it.
       clients.sendRemote(asked)
-      openQuestions.set(sessionId, asked)
-      askedRemotely.set(sessionId, asked)
-      console.log(`[question] ${sid(sessionId)} asking the user · question ${(shaped[0]?.q ?? '').length} chars · req=${requestId}`)
+      console.log('[question] asked')
     },
     // Answered somewhere else — the app, or the pane by hand. Every client drawing it is told to stop
     // waiting, down the SAME path the question itself took, so the dial and the WiFi device cannot
     // disagree about whether a question is still open.
     onQuestionGone: (sessionId, requestId) => {
+      const current = presentations.current(sessionId)
+      if (current && (current.owner !== nativeOwner || current.requestId !== requestId)) return
+      presentations.remove(nativeOwner, sessionId, requestId)
       heard?.('answered', sessionId, requestId)
       pending.delete(sessionId)
       waitOver(sessionId)
-      deviceInput.setUserAction(agentIdFor(sessionId), false)
-      const closed = {
-        type: 'commander_question_close',
-        agentId: agentIdFor(sessionId),
-        dbSessionId: sessionId,
-        payload: { requestId },
-      }
+      input.setUserAction(agentIdFor(sessionId), false)
+      const closed = questionClose(current?.frame ?? { type: 'commander_question', agentId: agentIdFor(sessionId),
+        dbSessionId: sessionId, payload: { requestId } })
       clients.sendCommander(closed)
       // Down the SAME two paths the question took, so no client is left drawing a dialog that another
       // one already answered. This is the mechanism behind "answer anywhere": the dial is cabled to
       // this very computer, so the dial and this window are always the same machine's audience.
       clients.sendLocal(closed)
       clients.sendRemote(closed)
-      openQuestions.delete(sessionId)
-      askedRemotely.delete(sessionId)
-      console.log(`[question] ${sid(sessionId)} answered elsewhere · closing on every client · req=${requestId}`)
+      console.log('[question] closed')
     },
     onClear: waitOver,
   })
@@ -163,13 +212,10 @@ export function createQuestions({
    * this computer is when it attaches (localWsServer.ts). Over the relay this reaches every app connected,
    * and each takes a question it already holds as the same wait continuing, never as news.
    */
-  const reannounceRemote = (): void => {
-    for (const asked of askedRemotely.values()) clients.sendRemote(asked)
-    const requestIds = [...askedRemotely.values()].map((asked) => (asked.payload as { requestId: string }).requestId)
-    clients.sendRemote({ type: 'commander_questions_open', payload: { requestIds } })
-  }
+  const snapshot = presentations.snapshot
+  const reannounceRemote = (): void => replayLegacyQuestions(snapshot('remote'), frame => clients.sendRemote(frame as Frame))
   const questionResponse = createQuestionResponse(answer)
-  return { questions, showAwaitingAnswer, answer, questionResponse, openQuestions, pendingQuestion, monitorActivity, hearQuestions, questionWatcher, reannounceRemote }
+  return { questions, showAwaitingAnswer, answer, questionResponse, openQuestions, presentations, pendingQuestion, monitorActivity, hearQuestions, questionWatcher, snapshot, reannounceRemote }
 }
 
 /**

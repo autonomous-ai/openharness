@@ -1,6 +1,7 @@
+import { UPDATER_HOST, serviceSpecs } from './servicePlan.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  ENGINE_LIVE_ENV, ENGINE_OTHERS_ENV, otherEnginesVersion, ENGINE_RUNTIME_ENV, ENGINE_SCREEN_ENV, ENGINE_MODEL_CONTROL_ENV, masterRunsEngineModelControl, ENGINE_QUESTION_CONTROL_ENV, masterRunsEngineQuestionControl, ENGINE_SUBMISSION_ENV, masterRunsEngineSubmission, ENGINE_NATIVE_CONTROL_ENV, masterRunsEngineNativeControl, ENGINE_BACKGROUND_JOB_ENV, masterRunsEngineBackgroundJob, ENGINE_PROVIDER_MOVE_ENV, masterRunsEngineProviderMove, ENGINE_RESUME_REPAIR_ENV, masterRunsEngineResumeRepair, heldAgentLife, KNOWN_SERVICES, SERVICE_HOSTS, SERVICE_PROCESSES_ENV, UPDATER_HOST, masterRunsLiveEngines, masterRunsEngineRuntime, masterRunsEngineScreen, serviceProcessesEnv, serviceSpecs, servicesTheMasterRuns,
+  ENGINE_LIVE_ENV, ENGINE_OTHERS_ENV, otherEnginesVersion, ENGINE_RUNTIME_ENV, ENGINE_SCREEN_ENV, ENGINE_MODEL_CONTROL_ENV, masterRunsEngineModelControl, ENGINE_QUESTION_CONTROL_ENV, masterRunsEngineQuestionControl, ENGINE_SUBMISSION_ENV, masterRunsEngineSubmission, ENGINE_NATIVE_CONTROL_ENV, masterRunsEngineNativeControl, ENGINE_BACKGROUND_JOB_ENV, masterRunsEngineBackgroundJob, ENGINE_PROVIDER_MOVE_ENV, masterRunsEngineProviderMove, ENGINE_RESUME_REPAIR_ENV, masterRunsEngineResumeRepair, heldAgentLife, KNOWN_SERVICES, SERVICE_HOSTS, SERVICE_PROCESSES_ENV, masterRunsLiveEngines, masterRunsEngineRuntime, masterRunsEngineScreen, serviceProcessesEnv, servicesTheMasterRuns,
   type ServiceSpec,
 } from './services.js'
 import { DEFAULT_SERVICE_OPTIONS, ServiceSupervisor, serviceOptions, type ServiceSupervisorDeps, type ServiceSupervisorOptions } from './serviceSupervisor.js'
@@ -14,7 +15,7 @@ class FakeService implements CoreHandle {
   private exitListeners: Array<(code: number | null, signal: NodeJS.Signals | null) => void> = []
   constructor(readonly pid: number | undefined, readonly spec: ServiceSpec, readonly env: Record<string, string>) {}
   readonly sent: unknown[] = []
-  send(message: unknown): void { this.sent.push(message) }
+  send(message: unknown, settled?: (delivered: boolean) => void): void { this.sent.push(message); settled?.(true) }
   kill(signal: NodeJS.Signals): void { this.kills.push(signal) }
   onMessage(listener: (message: unknown) => void): void { this.messageListeners.push(listener) }
   onExit(listener: (code: number | null, signal: NodeJS.Signals | null) => void): void { this.exitListeners.push(listener) }
@@ -65,6 +66,130 @@ describe('ServiceSupervisor', () => {
     lines = []
   })
   afterEach(() => vi.useRealTimers())
+
+  it('starts a declared peer once for the current component host without waiting for core binding', () => {
+    const edge: ServiceSpec & { wakes: readonly string[] } = { name: 'edge', services: ['componentStartup'], wakes: ['devices'], heapLimitMiB: 128, rssLimitMiB: 256 }
+    const supervisor = make([edge, { ...devices, onDemand: true }])
+    supervisor.start()
+    const sender = latest('edge')
+    sender.say({ type: 'harnessd:want', service: 'devices' })
+    sender.say({ type: 'harnessd:want', service: 'devices' })
+    expect(children.map(child => child.spec.name)).toEqual(['edge', 'devices'])
+    expect(supervisor.status().find(status => status.name === 'devices')?.state).toBe('starting')
+  })
+
+  it('does not let undeclared, replaced or ending component hosts start peers', () => {
+    const edge: ServiceSpec & { wakes: readonly string[] } = { name: 'edge', services: ['componentStartup'], wakes: ['devices'], heapLimitMiB: 128, rssLimitMiB: 256 }
+    const supervisor = make([edge, { ...devices, onDemand: true }, { ...search, onDemand: true }])
+    supervisor.start()
+    const previous = latest('edge')
+    previous.say({ type: 'harnessd:want', service: 'search' })
+    previous.say({ type: 'harnessd:want', service: '' })
+    previous.exit(1)
+    vi.advanceTimersByTime(options.initialBackoffMs)
+    previous.say({ type: 'harnessd:want', service: 'devices' })
+    expect(children.map(child => child.spec.name)).toEqual(['edge', 'edge'])
+    const current = latest('edge')
+    supervisor.stop(() => {})
+    current.say({ type: 'harnessd:want', service: 'devices' })
+    expect(children.map(child => child.spec.name)).toEqual(['edge', 'edge'])
+  })
+
+  it('tells a component host which declared peers are already started and which start later', () => {
+    const edge: ServiceSpec & { wakes: readonly string[] } = { name: 'edge', services: ['componentStartup'], wakes: ['devices'], heapLimitMiB: 128, rssLimitMiB: 256 }
+    const supervisor = make([edge, { ...devices, onDemand: true }, search])
+    supervisor.start()
+    const previous = latest('edge')
+    expect(previous.sent).toEqual([])
+    previous.say({ type: 'harnessd:watch-peers' })
+    expect(previous.sent).toEqual([{ type: 'harnessd:peers', available: ['devices'], started: [] }])
+    previous.say({ type: 'harnessd:watch-peers' })
+    supervisor.want('devices')
+    expect(previous.sent).toEqual([{ type: 'harnessd:peers', available: ['devices'], started: [] }, { type: 'harnessd:peer-started', service: 'devices' }])
+    previous.exit(1)
+    vi.advanceTimersByTime(options.initialBackoffMs)
+    const current = latest('edge')
+    expect(current).not.toBe(previous)
+    expect(current.sent).toEqual([])
+    current.say({ type: 'harnessd:watch-peers' })
+    expect(current.sent).toEqual([{ type: 'harnessd:peers', available: ['devices'], started: ['devices'] }])
+    expect(previous.sent).toHaveLength(2)
+  })
+
+  it('limits peer authority to declared peers present in this composition, refusing only once', () => {
+    const edge: ServiceSpec = { ...search, name: 'edge', services: ['componentStartup'], wakes: ['devices', 'missing', 'componentStartup'] }
+    const supervisor = make([edge, { ...devices, onDemand: true }, search])
+    supervisor.start()
+    const sender = latest('edge')
+    for (const service of ['missing', 'componentStartup', 'search']) sender.say({ type: 'harnessd:want', service })
+    sender.say({ type: 'harnessd:watch-peers' })
+    expect(sender.sent).toEqual([{ type: 'harnessd:peers', available: ['devices'], started: [] }])
+    latest('search').say({ type: 'harnessd:watch-peers' })
+    latest('search').say({ type: 'harnessd:want', service: 'devices' })
+    expect(lines.filter(line => line.includes('PEER_START_REFUSED'))).toHaveLength(2)
+    expect(children.map(child => child.spec.name)).toEqual(['edge', 'search'])
+  })
+
+  it.each(['throw', 'callback'])('reports %s peer delivery failure once without stopping core or another service', mode => {
+    const edge: ServiceSpec = { ...search, name: 'edge', services: ['componentStartup'], wakes: ['devices'] }
+    const supervisor = make([edge, { ...devices, onDemand: true }])
+    supervisor.start()
+    const sender = latest('edge')
+    sender.send = (_message, settled) => { if (mode === 'throw') throw new Error('private'); settled?.(false) }
+    sender.say({ type: 'harnessd:watch-peers' })
+    sender.say({ type: 'harnessd:want', service: 'devices' })
+    expect(lines.filter(line => line.includes('PEER_CHANNEL_UNAVAILABLE'))).toHaveLength(1)
+    expect(children.map(child => child.spec.name)).toEqual(['edge', 'devices'])
+    expect(sender.kills).toEqual([])
+  })
+
+  it('ignores failed deliveries belonging to a replaced or ending physical sender', () => {
+    const edge: ServiceSpec = { ...search, name: 'edge', services: ['componentStartup'], wakes: ['devices'] }
+    const supervisor = make([edge, { ...devices, onDemand: true }])
+    supervisor.start()
+    let previousDelivery: ((delivered: boolean) => void) | undefined
+    latest('edge').send = (_message, settled) => { previousDelivery = settled }
+    latest('edge').say({ type: 'harnessd:watch-peers' })
+    latest('edge').exit(1); vi.advanceTimersByTime(options.initialBackoffMs)
+    previousDelivery!(false)
+    let endingDelivery: ((delivered: boolean) => void) | undefined
+    latest('edge').send = (_message, settled) => { endingDelivery = settled }
+    latest('edge').say({ type: 'harnessd:watch-peers' })
+    supervisor.stop(() => {})
+    endingDelivery!(false)
+    supervisor.want('devices'); supervisor.unasked(1)
+    expect(lines.filter(line => line.includes('PEER_CHANNEL_UNAVAILABLE'))).toEqual([])
+    expect(children.map(child => child.spec.name)).toEqual(['edge', 'edge'])
+  })
+
+  it('backs off a refused spawn without inventing a child and stops its pending retry', () => {
+    const spawnService = vi.fn(() => null)
+    const supervisor = make([search], {}, {}, true, { spawnService })
+    expect(() => supervisor.start()).not.toThrow()
+    expect(supervisor.status()[0]).toMatchObject({ state: 'restarting', pid: null, lastExit: 'not started', restarts: 1 })
+    expect(spawnService).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(999)
+    expect(spawnService).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(1)
+    expect(spawnService).toHaveBeenCalledTimes(2)
+    expect(children).toEqual([])
+    const done = vi.fn()
+    supervisor.stop(done)
+    expect(done).toHaveBeenCalledOnce()
+    vi.advanceTimersByTime(10_000)
+    expect(spawnService).toHaveBeenCalledTimes(2)
+  })
+
+  it('pushes lifecycle changes with the actual child PID and then its confirmed absence', () => {
+    const observed: Array<number | null> = []
+    const supervisor = make([search], {}, {}, true, { changed: () => observed.push(supervisor.status()[0].pid) })
+    supervisor.start()
+    expect(observed.at(-1)).toBe(latest().pid)
+    supervisor.stop(() => {})
+    expect(observed.at(-1)).toBe(latest().pid)
+    latest().exit(0)
+    expect(observed.at(-1)).toBeNull()
+  })
 
   it('on Windows, asks each service to leave rather than signalling it, and ends it after the grace', () => {
     const supervisor = make([search], {}, {}, true, { stopByMessage: true })
@@ -334,6 +459,17 @@ describe('ServiceSupervisor', () => {
     expect(supervisor.status().map((status) => status.state)).toEqual(['stopped', 'stopped'])
   })
 
+  it('keeps setup off for older inline cores and starts its own process once a current core asks', () => {
+    const specs = serviceSpecs({}, SERVICE_HOSTS).filter(spec => spec.name === 'engineSetup')
+    const supervisor = make(specs)
+    supervisor.start()
+    for (const protocol of [0, 1, 2, 3, 4, 5, 6, 7]) supervisor.unasked(protocol)
+    expect(children).toHaveLength(0)
+    supervisor.want('engineSetup'); supervisor.want('engineSetup')
+    expect(children.map(child => child.spec.services)).toEqual([['engineSetup']])
+    expect(supervisor.status()[0]!.state).toBe('starting')
+  })
+
   it('leaves the new reader workers off for old cores that already read inline, and starts only the requested engine', () => {
     const specs = serviceSpecs({}, SERVICE_HOSTS).filter(spec => spec.name.startsWith('engine-'))
     expect(specs.map(spec => spec.name)).toEqual(['engine-claude', 'engine-codex', 'engine-others'])
@@ -538,7 +674,7 @@ describe('ServiceSupervisor', () => {
     const hosted = Object.values(SERVICE_HOSTS).flatMap((host) => host.services)
     expect(KNOWN_SERVICES).toEqual(hosted)
     expect(new Set(hosted).size).toBe(hosted.length)
-    expect(SERVICE_HOSTS.edge.services).toEqual(['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps', 'windowNames', 'shell', 'connectors', 'sharedMachines', 'agentCleanup', 'messages', 'osDevice', 'goals', 'hachi', 'engineProbe', 'homeBridge'])
+    expect(SERVICE_HOSTS.edge.services).toEqual(['workspaces', 'usage', 'monitor', 'paste', 'projects', 'handoff', 'recaps', 'windowNames', 'shell', 'connectors', 'sharedMachines', 'agentCleanup', 'messages', 'osDevice', 'goals', 'hachi', 'engineProbe', 'componentStartup', 'homeBridge'])
     // Agent Messages has no process of its own: one cost every computer it was on 62 MiB at idle (2026-10-12).
     expect(Object.keys(SERVICE_HOSTS)).not.toContain('messages')
   })
@@ -583,9 +719,18 @@ describe('ServiceSupervisor', () => {
 
 // What the core holds for a service in its own process while it is down (core/agentLife.ts): a harness's children left
 // open, a deleted conversation left searchable, a browser's logins left with an agent that ended.
+it('declares local-window permissions only for the actual devices and Wi-Fi senders', () => {
+  expect(Object.entries(SERVICE_HOSTS).filter(([, host]) => host.windows).map(([name]) => name)).toEqual(['devices'])
+  expect(SERVICE_HOSTS.devices.windows).toEqual({
+    devices: { all: ['dial_open', 'dial_notification_read', 'dial_forked', 'dial_focus', 'dial_swarm', 'dial_scroll', 'dial_status', 'voice_route_request'],
+      connection: ['dial_selection', 'dial_visit', 'dial_form'] },
+    wifi: { first: ['device_focus', 'device_prepare_open'] },
+  })
+})
+
 describe('what the core holds of agents for the services out of its process', () => {
   it('is each process\'s `hears`, by service, for the services out of the core\'s process only', () => {
-    expect(heldAgentLife(new Set(KNOWN_SERVICES))).toEqual({ search: ['purged'], agentCleanup: ['stopped'], agentBrowser: ['purged', 'taken'] })
+    expect(heldAgentLife(new Set(KNOWN_SERVICES))).toEqual({ search: ['purged'], agentCleanup: ['stopped', 'input'], agentBrowser: ['purged', 'taken'], gateway: ['input', 'purged'] })
     expect(heldAgentLife(new Set(['search', 'viewers']))).toEqual({ search: ['purged'] })
     expect(heldAgentLife(new Set())).toEqual({})
     // A process that hears nothing holds nothing, and one names only its own services.
@@ -600,15 +745,15 @@ describe('which services the core leaves to its master', () => {
 
   it('is what the master says it runs, told in a form a core from before the list reads too', () => {
     const specs = serviceSpecs({ HARNESSD_SERVICES: 'search,workspaces' }, SERVICE_HOSTS)
-    expect(serviceProcessesEnv(specs, 42)).toEqual({ [SERVICE_PROCESSES_ENV]: 'search,workspaces', HARNESSD_SERVICES: 'search,workspaces', [ENGINE_LIVE_ENV]: '42:1', [ENGINE_RUNTIME_ENV]: '42:1', [ENGINE_SCREEN_ENV]: '42:1', [ENGINE_MODEL_CONTROL_ENV]: '42:1', [ENGINE_QUESTION_CONTROL_ENV]: '42:1', [ENGINE_SUBMISSION_ENV]: '42:1', [ENGINE_NATIVE_CONTROL_ENV]: '42:1', [ENGINE_BACKGROUND_JOB_ENV]: '42:1', [ENGINE_PROVIDER_MOVE_ENV]: '42:1', [ENGINE_RESUME_REPAIR_ENV]: '42:1', [ENGINE_OTHERS_ENV]: '42:2' })
+    expect(serviceProcessesEnv(specs, 42)).toEqual({ [SERVICE_PROCESSES_ENV]: 'search,workspaces', HARNESSD_SERVICES: 'search,workspaces', [ENGINE_LIVE_ENV]: '42:1', [ENGINE_RUNTIME_ENV]: '42:1', [ENGINE_SCREEN_ENV]: '42:1', [ENGINE_MODEL_CONTROL_ENV]: '42:1', [ENGINE_QUESTION_CONTROL_ENV]: '42:1', [ENGINE_SUBMISSION_ENV]: '42:1', [ENGINE_NATIVE_CONTROL_ENV]: '42:1', [ENGINE_BACKGROUND_JOB_ENV]: '42:1', [ENGINE_PROVIDER_MOVE_ENV]: '42:1', [ENGINE_RESUME_REPAIR_ENV]: '42:1', [ENGINE_OTHERS_ENV]: '42:5' })
     // A process named as one of its services is named whole: the viewers' process runs the Store beside them.
     expect(serviceProcessesEnv(serviceSpecs({ HARNESSD_SERVICES: 'viewers' }, SERVICE_HOSTS), 42)).toMatchObject({ [SERVICE_PROCESSES_ENV]: 'viewers,store' })
     expect(serviceProcessesEnv(serviceSpecs({ HARNESSD_SERVICES: 'store' }, SERVICE_HOSTS), 42)).toMatchObject({ [SERVICE_PROCESSES_ENV]: 'store' })
     // By service, not by process: a core from before the edge host routes the services it knows of it.
     const hosted = serviceSpecs({ HARNESSD_SERVICES: 'edge' }, SERVICE_HOSTS)
-    expect(serviceProcessesEnv(hosted, 42)).toEqual({ [SERVICE_PROCESSES_ENV]: 'workspaces,usage,monitor,projects,handoff,recaps,windowNames,shell,connectors,sharedMachines,agentCleanup,messages,osDevice,goals,hachi,engineProbe,homeBridge', HARNESSD_SERVICES: 'workspaces,usage,monitor,projects,handoff,recaps,windowNames,shell,connectors,sharedMachines,agentCleanup,messages,osDevice,goals,hachi,engineProbe,homeBridge', [ENGINE_LIVE_ENV]: '42:1', [ENGINE_RUNTIME_ENV]: '42:1', [ENGINE_SCREEN_ENV]: '42:1', [ENGINE_MODEL_CONTROL_ENV]: '42:1', [ENGINE_QUESTION_CONTROL_ENV]: '42:1', [ENGINE_SUBMISSION_ENV]: '42:1', [ENGINE_NATIVE_CONTROL_ENV]: '42:1', [ENGINE_BACKGROUND_JOB_ENV]: '42:1', [ENGINE_PROVIDER_MOVE_ENV]: '42:1', [ENGINE_RESUME_REPAIR_ENV]: '42:1', [ENGINE_OTHERS_ENV]: '42:2' })
+    expect(serviceProcessesEnv(hosted, 42)).toEqual({ [SERVICE_PROCESSES_ENV]: 'workspaces,usage,monitor,paste,projects,handoff,recaps,windowNames,shell,connectors,sharedMachines,agentCleanup,messages,osDevice,goals,hachi,engineProbe,componentStartup,homeBridge', HARNESSD_SERVICES: 'workspaces,usage,monitor,paste,projects,handoff,recaps,windowNames,shell,connectors,sharedMachines,agentCleanup,messages,osDevice,goals,hachi,engineProbe,componentStartup,homeBridge', [ENGINE_LIVE_ENV]: '42:1', [ENGINE_RUNTIME_ENV]: '42:1', [ENGINE_SCREEN_ENV]: '42:1', [ENGINE_MODEL_CONTROL_ENV]: '42:1', [ENGINE_QUESTION_CONTROL_ENV]: '42:1', [ENGINE_SUBMISSION_ENV]: '42:1', [ENGINE_NATIVE_CONTROL_ENV]: '42:1', [ENGINE_BACKGROUND_JOB_ENV]: '42:1', [ENGINE_PROVIDER_MOVE_ENV]: '42:1', [ENGINE_RESUME_REPAIR_ENV]: '42:1', [ENGINE_OTHERS_ENV]: '42:5' })
     expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv(hosted, 42) }, known)]).toEqual(['workspaces', 'messages'])
-    expect(serviceProcessesEnv([], 42)).toEqual({ [SERVICE_PROCESSES_ENV]: '', HARNESSD_SERVICES: 'none', [ENGINE_LIVE_ENV]: '42:1', [ENGINE_RUNTIME_ENV]: '42:1', [ENGINE_SCREEN_ENV]: '42:1', [ENGINE_MODEL_CONTROL_ENV]: '42:1', [ENGINE_QUESTION_CONTROL_ENV]: '42:1', [ENGINE_SUBMISSION_ENV]: '42:1', [ENGINE_NATIVE_CONTROL_ENV]: '42:1', [ENGINE_BACKGROUND_JOB_ENV]: '42:1', [ENGINE_PROVIDER_MOVE_ENV]: '42:1', [ENGINE_RESUME_REPAIR_ENV]: '42:1', [ENGINE_OTHERS_ENV]: '42:2' })
+    expect(serviceProcessesEnv([], 42)).toEqual({ [SERVICE_PROCESSES_ENV]: '', HARNESSD_SERVICES: 'none', [ENGINE_LIVE_ENV]: '42:1', [ENGINE_RUNTIME_ENV]: '42:1', [ENGINE_SCREEN_ENV]: '42:1', [ENGINE_MODEL_CONTROL_ENV]: '42:1', [ENGINE_QUESTION_CONTROL_ENV]: '42:1', [ENGINE_SUBMISSION_ENV]: '42:1', [ENGINE_NATIVE_CONTROL_ENV]: '42:1', [ENGINE_BACKGROUND_JOB_ENV]: '42:1', [ENGINE_PROVIDER_MOVE_ENV]: '42:1', [ENGINE_RESUME_REPAIR_ENV]: '42:1', [ENGINE_OTHERS_ENV]: '42:5' })
     expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv(specs, 42) }, known)]).toEqual(['search', 'workspaces'])
     expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv([], 42) }, known)]).toEqual([])
     // What the master says wins over whatever HARNESSD_SERVICES the core inherited; names it does not know are its own.
@@ -707,7 +852,7 @@ describe('which services the core leaves to its master', () => {
 
   it('says which version of the other engines\' worker the master runs, from the actual supervising parent alone', () => {
     const env = { ...supervised, ...serviceProcessesEnv([], 42) }
-    expect(otherEnginesVersion(env, 42)).toBe(2)
+    expect(otherEnginesVersion(env, 42)).toBe(5)
     // A 1a master advertises history only: a new core must keep its live streams inline.
     expect(otherEnginesVersion({ ...env, [ENGINE_OTHERS_ENV]: '42:1' }, 42)).toBe(1)
     expect(otherEnginesVersion({ ...env, [ENGINE_OTHERS_ENV]: '42:7' }, 42)).toBe(7)
@@ -731,4 +876,10 @@ describe('which services the core leaves to its master', () => {
     expect([...servicesTheMasterRuns({ [SERVICE_PROCESSES_ENV]: 'search' }, known)]).toEqual([])
     expect([...servicesTheMasterRuns({ HARNESSD_SUPERVISED: '1', [SERVICE_PROCESSES_ENV]: 'search' }, known)]).toEqual([])
   })
+})
+
+
+it('declares the complete session snapshot only for the two actual readers', () => {
+  expect(Object.entries(SERVICE_HOSTS).filter(([, host]) => host.reads).map(([name]) => name)).toEqual(['devices'])
+  expect(SERVICE_HOSTS.devices.reads).toEqual({ devices: ['session_read_advertised'], wifi: ['session_read_registered'] })
 })

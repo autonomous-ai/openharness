@@ -84,7 +84,7 @@ beforeAll(async () => {
     hookServer: await import('../hookServer.js'),
     hookAuth: await import('../lib/hookAuth.js'),
   }
-  m.registry.registry.load()
+  await m.registry.registry.load()
   golden = RECORD ? {} : JSON.parse(readFileSync(GOLDEN, 'utf8')) as Record<string, unknown>
 })
 

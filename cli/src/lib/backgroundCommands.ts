@@ -6,7 +6,6 @@
  */
 
 import { claudeBackgroundCommands } from '../engines/claude/backgroundCommands.js'
-import { loadEngine, type InProcessModules } from '../engines/inProcess.js'
 import { processRows, type ProcessRow } from './processTable.js'
 import type { RegisteredSession } from './registry.js'
 import { sameProcessIdentity } from './terminalRuntime.js'
@@ -14,13 +13,14 @@ import { sameProcessIdentity } from './terminalRuntime.js'
 export interface BackgroundCommandsDeps {
   platform?: NodeJS.Platform
   rows?: () => Promise<ProcessRow[] | null>
-  hermes?: () => Promise<Pick<InProcessModules['hermes'], 'hermesBackgroundCommands' | 'hermesHomeForSession'> | null>
+  readHermes?: (session: BackgroundSession) => Promise<number | null>
 }
+export type BackgroundSession = Pick<RegisteredSession, 'engine' | 'agentId' | 'sessionId' | 'hermesHome' | 'processIdentity'>
 
 /** How many background commands [session]'s engine still runs; null when Harness cannot know. Never throws. */
 export async function backgroundCommands(
-  session: Pick<RegisteredSession, 'engine' | 'agentId' | 'sessionId' | 'hermesHome' | 'processIdentity'>,
-  { platform = process.platform, rows = processRows, hermes = () => loadEngine('hermes') }: BackgroundCommandsDeps = {},
+  session: BackgroundSession,
+  { platform = process.platform, rows = processRows, readHermes }: BackgroundCommandsDeps = {},
 ): Promise<number | null> {
   try {
     switch (session.engine) {
@@ -34,9 +34,8 @@ export async function backgroundCommands(
         return claudeBackgroundCommands(table.filter((row) => row.parentPid === engine.pid))
       }
       case 'hermes': {
-        const module = await hermes()
-        if (!module || !session.sessionId) return null
-        return await module.hermesBackgroundCommands(await module.hermesHomeForSession(session), session.sessionId)
+        if (!session.sessionId) return null
+        return await readHermes?.(session) ?? null
       }
       default:
         return null

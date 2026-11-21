@@ -71,7 +71,7 @@ export function runSqliteScript(Database: DatabaseConstructor, path: string, sta
 /**
  * The read itself, as CommonJS source, with one copy of the handle rules for both places it runs: this thread
  * ([readBuiltin]) and, in the core, the read threads (sqliteThread.ts), which load no module of ours: the bundle
- * carries them no file. Evaluated with `fs`, `url` and `Database` in scope, it returns `{ read, closeAll, idleWalStore }`.
+ * carries them no file. Evaluated with `fs`, `url` and `Database` in scope, it returns `{ read, closeAll, idleWalStore, drop }`.
  */
 export const NATIVE_READER = String.raw`
 const handles = new Map()
@@ -134,7 +134,8 @@ function open(dbPath, busyTimeoutMs) {
   handles.set(dbPath, { db, dev, ino, immutable, stamp, busyTimeoutMs: timeout })
   return db
 }
-function read(dbPath, sql, params, busyTimeoutMs) {
+function read(dbPath, sql, params, busyTimeoutMs, fresh = false) {
+  if (fresh) drop(dbPath)
   try {
     return { ok: true, rows: open(dbPath, busyTimeoutMs).prepare(sql).all(...params) }
   } catch (error) {
@@ -142,15 +143,16 @@ function read(dbPath, sql, params, busyTimeoutMs) {
     // "try again later" for a poller, and a handle that failed is not trusted again: the next call reopens from the path.
     drop(dbPath)
     return { ok: false, error }
-  }
+  } finally { if (fresh) drop(dbPath) }
 }
 function closeAll() { for (const path of [...handles.keys()]) drop(path) }
-return { read, closeAll, idleWalStore }
+return { read, closeAll, idleWalStore, drop }
 `
 
 interface NativeReader {
-  read(dbPath: string, sql: string, params: SqliteParam[], busyTimeoutMs: number): { ok: true; rows: SqliteRow[] } | { ok: false; error: unknown }
+  read(dbPath: string, sql: string, params: SqliteParam[], busyTimeoutMs: number, fresh?: boolean): { ok: true; rows: SqliteRow[] } | { ok: false; error: unknown }
   closeAll(): void
+  drop(dbPath: string): void
   idleWalStore(dbPath: string): boolean
 }
 const nativeReader = (Database: DatabaseConstructor | null): NativeReader =>
@@ -168,16 +170,22 @@ export function closeSqliteHandles(): void {
   for (const reader of readers.values()) reader.closeAll()
 }
 
+/** A checkpoint export must not reuse an immutable snapshot on coarse-timestamp filesystems. */
+export function closeSqliteHandle(dbPath: string): void {
+  for (const reader of readers.values()) reader.drop(dbPath)
+}
+
 export function readBuiltin(
   Database: DatabaseConstructor,
   dbPath: string,
   sql: string,
   params: SqliteParam[],
   busyTimeoutMs: number,
+  fresh = false,
 ): SqliteReadResult {
   let reader = readers.get(Database)
   if (!reader) readers.set(Database, reader = nativeReader(Database))
-  const result = reader.read(dbPath, sql, params, busyTimeoutMs)
+  const result = reader.read(dbPath, sql, params, busyTimeoutMs, fresh)
   if (result.ok) return { ok: true, rows: result.rows, via: 'builtin' }
   const error = result.error
   return { ok: false, reason: 'transient', error: error instanceof Error ? error : new Error(String(error)) }

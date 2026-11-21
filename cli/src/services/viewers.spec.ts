@@ -1,3 +1,4 @@
+import type { ViewersRuntime, ViewersRuntimeSlot } from './viewers.js'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
@@ -7,7 +8,9 @@ import { installedDsh } from '../dsh/installed.js'
 import { dshViewerName } from '../dsh/manifest.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { startViewers } from './viewers.js'
+import { startViewers, viewerStreamEndpoint } from './viewers.js'
+import { createServiceClientStreams } from './clientStreams.js'
+import { CLIENT_STREAMS } from '../lib/clientStreamContract.js'
 
 const built = vi.hoisted(() => ({ ledger: [] as any[], viewers: [] as any[], verdicts: [] as any[], order: [] as string[], forwarders: [] as any[], surfaces: [] as any[] }))
 // The streams and the rendered surfaces are tested where they live (lib/viewerForwarder.spec.ts,
@@ -72,10 +75,10 @@ function setup(live: RegisteredSession | null = agent(), terminalAvailable = tru
   const core = fakeCore({
     agents: { byAgent: vi.fn(() => live ?? undefined), terminalAvailable: vi.fn(() => terminalAvailable), sync: vi.fn(), publishFrame: vi.fn(), follow },
   })
-  const ports = emptyPorts()
+  const ports: ViewersRuntimeSlot = { viewers: null }
   startViewers(core, ports)
   const published = (session: RegisteredSession = agent()) => { heard({ kind: 'running', session }); return vi.mocked(core.agents.publishFrame!).mock.calls.at(-1)?.[1] }
-  return { published, core, port: ports.viewers as ViewersPort, ledger: built.ledger[0], viewers: built.viewers[0], verdicts: built.verdicts[0], forwarder: built.forwarders[0], surfaces: built.surfaces[0],
+  return { published, core, port: ports.viewers as ViewersRuntime, ledger: built.ledger[0], viewers: built.viewers[0], verdicts: built.verdicts[0], forwarder: built.forwarders[0], surfaces: built.surfaces[0],
     follow, unfollow, attach: (session: RegisteredSession) => heard({ kind: 'running', session }), detach: (agentId: string) => heard({ kind: 'ended', agentId }), heard: (event: AgentLife) => heard(event) }
 }
 
@@ -280,15 +283,40 @@ describe('the DSH viewers service', () => {
   })
 
   describe('a viewer served to a client over its connection', () => {
+    it('routes the private grant through the actual component endpoint and closes only its refused forwarding stream', () => {
+      const { core, port, forwarder, surfaces } = setup()
+      const notice = vi.fn(), bridge = createServiceClientStreams(CLIENT_STREAMS.find(spec => spec.service === 'viewers')!, () => viewerStreamEndpoint(port))
+      core.clients.streamFrame = bridge.frame
+      bridge.connected({ query: async () => ({ ok: true }), notice })
+      bridge.event({ kind: 'client_stream', grant: 'private-grant', connection: 'c1', type: 'viewer_request',
+        payload: { streamId: 'private-grant', agentId: 'a1', path: '/' }, asker: { local: true, owner: true } })
+      expect(forwarder.handle).toHaveBeenCalledExactlyOnceWith('c1', 'viewer_request', { streamId: 'private-grant', agentId: 'a1', path: '/' })
+      expect(forwarder.deps.send('c1', 'viewer_response', { streamId: 'private-grant', status: 200 })).toBe(true)
+      expect(notice).toHaveBeenCalledWith('client_stream', { grant: 'private-grant', type: 'viewer_response', payload: { streamId: 'private-grant', status: 200 } })
+      bridge.event({ kind: 'client_stream_refused', grant: 'private-grant' })
+      expect(forwarder.handle).toHaveBeenLastCalledWith('c1', 'viewer_close', { streamId: 'private-grant', error: 'Viewer connection closed' })
+      bridge.event({ kind: 'client_stream_refused', grant: 'unknown-grant' })
+      expect(forwarder.handle).toHaveBeenCalledTimes(2)
+      expect(forwarder.deps.send('c1', 'viewer_data', { streamId: 'private-grant', data: 'AA==' })).toBe(false)
+      bridge.event({ kind: 'client_stream_control', grant: null, payload: { route: 'direct' } })
+      expect(bridge.binary(Uint8Array.of(1))).toBe(false)
+      bridge.closed('c1')
+      expect(forwarder.closeConnection).toHaveBeenCalledWith('c1')
+      expect(surfaces.closeConnection).toHaveBeenCalledWith('c1')
+      bridge.disconnected()
+      expect(forwarder.closeAll).toHaveBeenCalledOnce()
+      expect(surfaces.closeAll).toHaveBeenCalledOnce()
+    })
+
     it('streams from the agent\'s viewer, and answers the one connection that asked through the core', () => {
       const { core, port, forwarder } = setup()
       expect(port.stream('c1', 'viewer_request', { streamId: 's1' })).toBe(true)
       expect(forwarder.handle).toHaveBeenCalledWith('c1', 'viewer_request', { streamId: 's1' })
       // Only the viewer this service allocated, as the windows' pane forwards to it.
       expect(forwarder.deps.target('a1')).toBe('http://127.0.0.1:9/a1')
-      vi.mocked(core.clients.viewerFrame).mockReturnValueOnce(true)
+      vi.mocked(core.clients.streamFrame).mockReturnValueOnce(true)
       expect(forwarder.deps.send('c1', 'viewer_response', { streamId: 's1' })).toBe(true)
-      expect(core.clients.viewerFrame).toHaveBeenCalledWith('c1', 'viewer_response', { streamId: 's1' })
+      expect(core.clients.streamFrame).toHaveBeenCalledWith('c1', 'viewer_response', { streamId: 's1' })
     })
 
     it('renders a frame of it for a client, from the same viewer', async () => {

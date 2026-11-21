@@ -42,6 +42,67 @@ const ops = (run: ReturnType<typeof setup>) => run.answers.op.mock.calls.map(([p
 describe('the other engines\' streams, as the core holds them', () => {
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
+  it('reports readiness only for a current installed reader without an unfinished open, close or Stop', async () => {
+    let stopping: Promise<void> | undefined
+    const run = setup({ stopping: () => stopping })
+    expect(run.streams.ready('s1')).toBe(false)
+    await run.streams.open(row(), OPEN)
+    expect(run.streams.ready('s1')).toBe(true)
+    let finishOpen!: (reply: Record<string, unknown>) => void
+    run.answers.open.mockImplementationOnce(() => new Promise(resolve => { finishOpen = resolve }))
+    const replacing = run.streams.open(row(), OPEN)
+    expect(run.streams.has('s1')).toBe(true)
+    expect(run.streams.ready('s1')).toBe(false)
+    finishOpen(ok(opened())); await replacing
+    expect(run.streams.ready('s1')).toBe(true)
+    let finishClose!: (reply: Record<string, unknown>) => void
+    run.answers.op.mockImplementationOnce(() => new Promise(resolve => { finishClose = resolve }))
+    run.streams.get('s1')!.closeTurn('cancel')
+    expect(run.streams.ready('s1')).toBe(false)
+    finishClose(ok({ frames: [], events: [], turn: turn('closed', false) }))
+    await vi.waitFor(() => expect(run.streams.ready('s1')).toBe(true))
+    const stop = stopReservation(); stopping = stop.promise
+    expect(run.streams.ready('s1')).toBe(false)
+    stopping = undefined; stop.resolve()
+    run.sessions.delete('s1'); expect(run.streams.ready('s1')).toBe(false)
+    run.sessions.set('s1', row('s1', 'grok')); expect(run.streams.ready('s1')).toBe(false)
+    run.sessions.set('s1', row()); expect(run.streams.ready('s1')).toBe(true)
+    run.streams.forget('s1'); expect(run.streams.ready('s1')).toBe(false)
+    run.streams.stop()
+  })
+
+  it('does not mistake retained or recovering worker state for a ready reader', async () => {
+    const run = setup()
+    await run.streams.open(row(), OPEN)
+    run.streams.disconnected()
+    expect(run.streams.has('s1')).toBe(true); expect(run.streams.ready('s1')).toBe(false)
+    let finish!: (reply: Record<string, unknown>) => void
+    run.answers.open.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    run.streams.connected()
+    expect(run.streams.ready('s1')).toBe(false)
+    finish(ok(opened()))
+    await vi.waitFor(() => expect(run.streams.ready('s1')).toBe(true))
+    run.streams.unavailable(row())
+    expect(run.streams.ready('s1')).toBe(false)
+    run.streams.stop(); expect(run.streams.ready('s1')).toBe(false)
+  })
+
+  it('does not report a held wait or a worker-lost stream as ready', async () => {
+    const held = stopReservation()
+    const run = setup({ log: line => { if (line.includes('delivery held')) held.resolve() } })
+    await run.streams.open(row(), OPEN)
+    expect(run.streams.ready('s1')).toBe(true)
+    run.waits[0]({})
+    await held.promise
+    expect(run.streams.ready('s1')).toBe(false)
+    await vi.waitFor(() => expect(run.waits).toHaveLength(2))
+    const token = run.answers.open.mock.calls[0][0].token as string
+    run.waits[1](ok({ pages: [], lost: [token] }))
+    await vi.waitFor(() => expect(run.deps.reattach).toHaveBeenCalled())
+    expect(run.streams.has('s1')).toBe(true); expect(run.streams.ready('s1')).toBe(false)
+    run.streams.stop()
+  })
+
   it('opens a stream, takes the frames it made as it opened, and waits for the rest with one request', async () => {
     const run = setup()
     run.answers.open.mockResolvedValueOnce(ok(opened({ frames: [frame(1), frame(2, { offset: 40 })], offset: 20 })))

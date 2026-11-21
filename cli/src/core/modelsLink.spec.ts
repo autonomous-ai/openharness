@@ -4,7 +4,9 @@ import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { createModelsLink, glancesIn } from './modelsLink.js'
 import { ServiceUnavailableError } from './serviceHost.js'
+import { gridLaunchThrough } from './agents/launch.js'
 import type { ServiceFrame } from './serviceLinks.js'
+import { storedGridFixture } from '../testing/gridCredentials.js'
 
 const RELAY = 'https://fixture.invalid/g/net-own/relay/v1'
 const LAUNCH = { networkId: 'net-own', networkName: 'mine', baseUrl: RELAY, apiKey: 'fixture-key', model: 'Small-Q4' }
@@ -21,6 +23,19 @@ function setup(answers: Record<string, Record<string, unknown>> = {}, agents: Re
 }
 
 describe('models in its own process, as the core reaches it', () => {
+  it('accepts only the exact selected private credential reference from models', async () => {
+    const override = storedGridFixture(LAUNCH)
+    const request = { engine: 'claude' as const, override, machine: { hermesSystemManaged: false } }
+    const answer = { ok: true, override, launch: { env: {}, args: [], webSearch: 'unavailable' } }
+    expect(await gridLaunchThrough(() => setup({ gridLaunch: answer }).port)(request)).toEqual(answer)
+    for (const changed of [storedGridFixture(LAUNCH), LAUNCH]) {
+      expect(await gridLaunchThrough(() => setup({ gridLaunch: { ...answer, override: changed } }).port)(request))
+        .toMatchObject({ ok: false, error: 'GRID_UNAVAILABLE' })
+    }
+    expect(await gridLaunchThrough(() => setup({ gridLaunch: answer }).port)({ ...request, override: LAUNCH }))
+      .toMatchObject({ ok: false, error: 'GRID_UNAVAILABLE' })
+  })
+
   describe('what a frame and a keystroke read: the glances models last told', () => {
     it('answers no note before models has said anything, and the note its last glance gives after', async () => {
       const { link, port } = setup()
@@ -73,16 +88,6 @@ describe('models in its own process, as the core reaches it', () => {
   })
 
   describe('what the core asks models when it needs it', () => {
-    it('grid set-up: what models answered, or unavailable', async () => {
-      const ready = { status: 'converged', name: 'mine', detail: 'ok' }
-      const { call, port } = setup({ ensure: ready })
-      expect(await port.ensure({ ownGrid: true })).toEqual(ready)
-      expect(call).toHaveBeenCalledWith('ensure', { ownGrid: true })
-      await expect(setup().port.ensure()).rejects.toBeInstanceOf(ServiceUnavailableError)
-      await expect(setup({ ensure: { requestId: 'x' } }).port.ensure()).rejects.toBeInstanceOf(ServiceUnavailableError)
-      await expect(setup({ ensure: { error: 'SERVICE_FAILED', service: 'models' } }).port.ensure()).rejects.toBeInstanceOf(ServiceUnavailableError)
-    })
-
     it('a new agent\'s target, checked as any launch is; none when models found none or said something else', async () => {
       const { call, port } = setup({ launchTarget: { target: LAUNCH } })
       expect(await port.launchTarget({ model: 'Small-Q4', grid: 'mine' })).toEqual(LAUNCH)
@@ -109,19 +114,18 @@ describe('models in its own process, as the core reaches it', () => {
       await expect(setup({ gridAssignments: {} }).port.gridAssignments(processes)).rejects.toBeInstanceOf(ServiceUnavailableError)
     })
 
-    it("a grid or saved-API launch, as models built it and checked as far as the core hands it on; unavailable when it is not one", async () => {
+    it("transports grid or saved-API replies; the launch caller refuses unusable contributions", async () => {
       const request = { engine: 'claude' as const, override: LAUNCH, machine: { hermesSystemManaged: false }, refresh: true }
-      const launch = { env: { ANTHROPIC_MODEL: 'Small-Q4' }, args: ['--x'], webSearch: 'on', sessionModel: 'grid/Small-Q4' }
+      const launch = { env: { ANTHROPIC_MODEL: 'Small-Q4' }, args: ['--mcp-config', '{}'], webSearch: 'on' }
       const built = { ok: true, launch, override: LAUNCH }
       const { call, port } = setup({ gridLaunch: built })
       expect(await port.gridLaunch(request)).toEqual(built)
       expect(call).toHaveBeenCalledWith('gridLaunch', request)
-      const files = { envVar: 'OPENCODE_CONFIG', files: [{ name: 'opencode.json', content: '{}' }], pointAt: 'opencode.json', links: [{ name: 'auth.json', target: '/a' }] }
-      const withFiles = { ...built, launch: { ...launch, configDir: files }, apiBase: RELAY }
-      expect(await setup({ gridLaunch: withFiles }).port.gridLaunch(request)).toEqual(withFiles)
-      expect(await setup({ gridLaunch: { ...built, launch: { ...launch, configDir: { envVar: 'PI', files: [] } } } }).port.gridLaunch(request)).toMatchObject({ ok: true })
-      const flag = { ...built, launch: { ...launch, configDir: { arg: '-e', files: [{ name: 'grid-provider.ts', content: '' }], pointAt: 'grid-provider.ts' } } }
-      expect(await setup({ gridLaunch: flag }).port.gridLaunch(request)).toEqual(flag)
+      const files = { envVar: 'OPENCODE_CONFIG', files: [{ name: 'opencode.json', content: '{}' }], pointAt: 'opencode.json' }
+      const withFiles = { ...built, launch: { ...launch, env: { GRID_API_KEY: 'synthetic' }, args: [], sessionModel: 'grid/Small-Q4', configDir: files }, apiBase: RELAY }
+      expect(await setup({ gridLaunch: withFiles }).port.gridLaunch({ ...request, engine: 'opencode' })).toEqual(withFiles)
+      const flag = { ...built, launch: { ...launch, env: { GRID_API_KEY: 'synthetic' }, args: [], configDir: { arg: '-e', files: [{ name: 'grid-provider.ts', content: '' }], pointAt: 'grid-provider.ts' } } }
+      expect(await setup({ gridLaunch: flag }).port.gridLaunch({ ...request, engine: 'pi' })).toEqual(flag)
       const refused = { ok: false, error: 'GRID_ENGINE_UNSUPPORTED', detail: 'no grid for amp', apiBase: RELAY }
       expect(await setup({ gridLaunch: refused }).port.gridLaunch(request)).toEqual(refused)
       expect(await setup({ gridLaunch: { ok: false, error: 'API_UNAVAILABLE', detail: 'gone' } }).port.gridLaunch(request)).toEqual({ ok: false, error: 'API_UNAVAILABLE', detail: 'gone' })
@@ -139,7 +143,8 @@ describe('models in its own process, as the core reaches it', () => {
         { ...built, launch: { ...launch, configDir: { files: [] } } }, { ...built, launch: { ...launch, configDir: { ...files, arg: '-e' } } },
         { ...built, launch: { ...launch, configDir: { arg: 7, files: [] } } },
       ]
-      for (const answer of unusable) await expect(setup({ gridLaunch: answer }).port.gridLaunch(request), JSON.stringify(answer)).rejects.toBeInstanceOf(ServiceUnavailableError)
+      for (const answer of unusable) expect(await gridLaunchThrough(() => setup({ gridLaunch: answer }).port)(request), JSON.stringify(answer))
+        .toMatchObject({ ok: false, error: 'GRID_UNAVAILABLE', unavailable: 'models' })
       await expect(setup().port.gridLaunch(request)).rejects.toBeInstanceOf(ServiceUnavailableError)
     })
 

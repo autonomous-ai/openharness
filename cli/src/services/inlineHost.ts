@@ -1,0 +1,306 @@
+import { errorKind } from '../lib/log.js'
+/**
+ * Hosting services in the core's process so that a failing one cannot take the core down with it
+ * (docs/design/2026-10-03-harnessd.md, the core boundary). In process, a service shares the core's
+ * heap and event loop; this is the isolation a function boundary can give, and a service moved out
+ * of process gets the rest.
+ *
+ * - **Start.** A service whose start throws is left off: its port stays null, it is logged, and the
+ *   core starts without it.
+ * - **Calls.** Every call into a port is guarded. One that throws, or whose promise rejects, is logged
+ *   and answered with that member's fallback, so the core's caller (the event funnel, restore, a
+ *   frame being built) carries on. A member whose fallback is `FAIL` answers a request: its failure
+ *   goes back to that one request, which the socket answers with an error.
+ * - **Requests.** A service answers the apps through the requests it declares when it is started;
+ *   its start returns their handlers, and the socket asks `route` before its own switch, so a feature
+ *   adds a request without touching the socket. While the service is off they are answered
+ *   `SERVICE_UNAVAILABLE`, never `UNSUPPORTED`, which the apps read as "update the CLI": that is why
+ *   the types are declared before the start that could fail. A handler that throws or rejects is
+ *   answered `SERVICE_FAILED`, and counts as a failure of the service like a call into its port.
+ * - **Switching off.** A service that fails `maxFailures` times within `windowMs` is switched off
+ *   for the rest of the daemon's life: it is stopped when its port can stop, its port goes null, the
+ *   core's calls answer their fallbacks without reaching it, its requests are answered unavailable,
+ *   and the `onOff` handlers unbind what clients reach it through. A restart of the daemon starts it
+ *   again.
+ */
+import { FAIL, readFallback, ServiceUnavailableError, SERVICE_REQUESTS_MAX, type Asker, type CoreApi, type CorePorts, type PortFallbacks, type ServiceRequest, type ServiceRequests } from '../core/api.js'
+import type { SessionOwnerCore } from '../lib/sessionOwnerWire.js'
+
+export interface ServiceHostOptions {
+  /** Composition alone binds a session door to this exact existing stop owner. Components receive only the bound door. */
+  bindOwners?: (service: string, identity: object, current: () => boolean) => SessionOwnerCore | undefined
+  /** Failures within `windowMs` that switch a service off. */
+  maxFailures?: number
+  windowMs?: number
+  now?: () => number
+  log?: (line: string) => void
+  /**
+   * Faults to inject, for the end-to-end suite only (`HARNESSD_TEST_FAULTS`): `name` makes that
+   * service's start throw, `name.member` makes that member throw on every call.
+   */
+  faults?: ReadonlySet<string>
+}
+
+type PortName = keyof CorePorts
+type Port<K extends PortName> = NonNullable<CorePorts[K]>
+type Member = (...args: unknown[]) => unknown
+
+
+
+export function createServiceHost(ports: CorePorts, options: ServiceHostOptions = {}) {
+  const maxFailures = options.maxFailures ?? 5
+  const windowMs = options.windowMs ?? 60_000
+  const now = options.now ?? Date.now
+  const log = options.log ?? ((line: string) => console.warn(line))
+  const faults = options.faults ?? new Set<string>()
+  const off = new Set<string>()
+  const failures = new Map<string, number[]>()
+  const offHandlers = new Map<string, Array<() => void>>()
+  const stoppers = new Map<string, () => void>()
+  /** The service that answers each request type, and its handler once it has started. */
+  const owners = new Map<string, { service: string; answer: ServiceRequest | null; active: { count: number }; expired: number }>()
+  /** The requests still being answered, each with the connection that asked: what its closing aborts. */
+  const answering = new Map<AbortController, { connection: string | undefined; type: string; expired: boolean }>()
+
+  const inject = (target: string): void => {
+    if (faults.has(target)) throw new Error(`injected fault: ${target}`)
+  }
+
+  const switchOff = (name: string, failed: number): void => {
+    if (off.has(name)) return
+    off.add(name)
+    if (Object.hasOwn(ports, name)) ports[name as PortName] = null
+    log(`[services] ${name} switched off after ${failed} failures in ${Math.round(windowMs / 1000)}s · it stays off until the daemon restarts`)
+    for (const handler of [stoppers.get(name), ...offHandlers.get(name) ?? []]) {
+      try { handler?.() } catch (error) { log(`[services] switching ${name} off: ${errorKind(error)}`) }
+    }
+  }
+
+  const failed = (name: string, member: string, error: unknown): void => {
+    log(`[services] ${name}.${member} failed · ${errorKind(error)}`)
+    const at = now()
+    const recent = (failures.get(name) ?? []).filter((t) => at - t < windowMs)
+    recent.push(at)
+    failures.set(name, recent)
+    if (recent.length >= maxFailures) switchOff(name, recent.length)
+  }
+
+  const guard = <P extends object>(name: string, port: P, fallbacks: PortFallbacks<P>): P => {
+    const guarded: Record<string, Member> = {}
+    for (const [member, fallback] of Object.entries(fallbacks) as Array<[string, unknown]>) {
+      const { deferred, value } = readFallback(fallback)
+      const answer = (cause?: unknown): unknown => {
+        if (value === FAIL) {
+          const error = new ServiceUnavailableError(name, cause)
+          if (deferred) return Promise.reject(error)
+          throw error
+        }
+        return deferred ? Promise.resolve(value) : value
+      }
+      guarded[member] = (...args: unknown[]): unknown => {
+        if (off.has(name)) return answer()
+        let result: unknown
+        try {
+          inject(`${name}.${member}`)
+          result = ((port as unknown as Record<string, Member>)[member]).apply(port, args)
+        } catch (error) {
+          failed(name, member, error)
+          return answer(error)
+        }
+        if (!deferred) return result
+        return Promise.resolve(result).catch((error: unknown) => {
+          failed(name, member, error)
+          return answer(error)
+        })
+      }
+    }
+    return guarded as unknown as P
+  }
+
+  /** Take the request types a service declares, before its start: a type another service answers is a
+   *  mistake in the code, and leaves this one off rather than taking the other's requests. */
+  const claim = (name: string, requests: readonly string[]): void => {
+    for (const type of requests) {
+      const owner = owners.get(type)
+      if (owner) throw new Error(`${type} is answered by ${owner.service}`)
+    }
+    const active = { count: 0 }
+    for (const type of requests) owners.set(type, { service: name, answer: null, active, expired: 0 })
+  }
+
+  /** Install a started service's handlers: exactly the types it declared, no more and no fewer. */
+  const install = (name: string, requests: readonly string[], answers: ServiceRequests | void): void => {
+    const given = Object.keys(answers ?? {})
+    const undeclared = given.filter((type) => !requests.includes(type))
+    const unanswered = requests.filter((type) => !given.includes(type))
+    if (undeclared.length) throw new Error(`it answers ${undeclared.join(', ')} without declaring ${undeclared.length > 1 ? 'them' : 'it'}`)
+    if (unanswered.length) throw new Error(`it declares ${unanswered.join(', ')} without answering ${unanswered.length > 1 ? 'them' : 'it'}`)
+    for (const type of requests) owners.get(type)!.answer = (answers as ServiceRequests)[type]
+  }
+
+  const didNotStart = (name: string, error: unknown): void => {
+    off.add(name)
+    if (Object.hasOwn(ports, name)) ports[name as PortName] = null
+    log(`[services] ${name} did not start · ${errorKind(error)} · the core runs without it`)
+  }
+
+  /** One execution owner for routed requests and bounded composition-root calls. */
+  const route = (type: string, payload: Record<string, unknown>, asker: Asker,
+    reply: (result: Record<string, unknown>) => void, waitMs?: number): boolean => {
+    const owner = owners.get(type)
+    if (!owner) return false
+    const { service, answer } = owner
+    if (off.has(service) || !answer) {
+      reply({ error: 'SERVICE_UNAVAILABLE', service, retryable: false })
+      return true
+    }
+    if (owner.active.count >= SERVICE_REQUESTS_MAX) {
+      log(`[services] ${service} SERVICE_REQUESTS_FULL`)
+      reply({ error: 'SERVICE_UNAVAILABLE', service, retryable: true })
+      return true
+    }
+    let replied = false, deadline: ReturnType<typeof setTimeout> | undefined
+    const replyOnce = (value: Record<string, unknown>): void => {
+      if (replied) return
+      replied = true
+      if (deadline) clearTimeout(deadline)
+      reply(value)
+    }
+    const failedWith = (error: unknown): void => {
+      if (replied) return
+      failed(service, type, error)
+      replyOnce({ error: 'SERVICE_FAILED', service })
+    }
+    // Aborted when its connection closes (`closeConnection`); a request with none is its own, never closed.
+    const closed = new AbortController()
+    const entry = { connection: asker.connection, type, expired: false }
+    answering.set(closed, entry)
+    owner.active.count++
+    const settled = (): void => {
+      answering.delete(closed)
+      owner.active.count--
+      if (entry.expired) owner.expired--
+    }
+    if (waitMs !== undefined) deadline = setTimeout(() => {
+      entry.expired = true
+      owner.expired++
+      log(`[services] ${service}.${type} timed out · SERVICE_DEADLINE`)
+      // Revoke reply authority before abort listeners can synchronously re-enter the host.
+      replyOnce({ error: 'SERVICE_UNAVAILABLE', service, retryable: true })
+      closed.abort()
+    }, waitMs).unref()
+    let result: ReturnType<ServiceRequest>
+    try {
+      inject(`${service}.${type}`)
+      result = answer(payload, asker, closed.signal)
+    } catch (error) {
+      settled()
+      failedWith(error)
+      return true
+    }
+    void Promise.resolve(result).then((value) => {
+      if (typeof value === 'object' && value !== null) replyOnce(value)
+      else failedWith(new Error(`${type} was answered with no reply`))
+    }, failedWith).finally(settled)
+    return true
+  }
+
+  return {
+    /** Guard a service-owned boundary without adding a component port to core. */
+    guard,
+    /**
+     * Start one service. It fills its own port (`ports[name]`) in a staging copy; what it filled is
+     * installed guarded, and anything else it wrote is ignored. A service that leaves its port null
+     * has said why itself and is simply off. `requests` are the types it answers for the apps; its
+     * start returns their handlers.
+     */
+    start<K extends PortName>(
+      name: K,
+      start: (core: CoreApi, ports: CorePorts) => ServiceRequests | void,
+      core: CoreApi,
+      fallbacks: PortFallbacks<Port<K>>,
+      requests: readonly string[] = [],
+    ): void {
+      const staging: CorePorts = { ...ports, [name]: null }
+      let answers: ServiceRequests | void
+      let stop: (() => unknown) | undefined
+      const revoke = (): void => { if (stoppers.get(name) === stopOwner) stoppers.delete(name) }
+      const stopOwner = (): void => { revoke(); void Promise.resolve(stop?.()).catch(() => {}) }
+      try {
+        claim(name, requests)
+        // The existing stop owner is this instance's authority, including while its constructor runs.
+        stoppers.set(name, stopOwner)
+        inject(name)
+        answers = start({ ...core, owners: options.bindOwners?.(name, stopOwner, () => stoppers.get(name) === stopOwner && !off.has(name)), clients: { ...core.clients, sendWindow: delivery =>
+          stoppers.get(name) === stopOwner && !off.has(name) ? core.clients.sendWindow(delivery) : false,
+        } }, staging)
+      } catch (error) {
+        revoke()
+        didNotStart(name, error)
+        return
+      }
+      const port = staging[name] as Port<K> | null
+      if (!port) {
+        revoke()
+        off.add(name)
+        ports[name] = null
+        return
+      }
+      try {
+        install(name, requests, answers)
+      } catch (error) {
+        revoke()
+        didNotStart(name, error)
+        return
+      }
+      const rawStop = (port as unknown as { stop?: () => unknown }).stop
+      if (typeof rawStop === 'function') stop = () => rawStop.call(port)
+      else revoke()
+      const guarded = guard<Port<K>>(name, port, fallbacks)
+      const guardedStop = (guarded as unknown as { stop?: () => unknown }).stop
+      if (typeof guardedStop === 'function') {
+        // Revoke before stop itself can call a retained API. Later starts never revive this owner.
+        ;(guarded as unknown as { stop(): unknown }).stop = () => { revoke(); return guardedStop() }
+      }
+      ports[name] = guarded as CorePorts[K]
+    },
+    /**
+     * Start a service the core never calls: it has no port, and only answers the apps' `requests`.
+     * Most features are this.
+     */
+    serve(name: string, start: (core: CoreApi) => ServiceRequests, core: CoreApi, requests: readonly string[]): void {
+      try {
+        if (Object.hasOwn(ports, name)) throw new Error('it has a port: start it with start()')
+        claim(name, requests)
+        inject(name)
+        install(name, requests, start(core))
+      } catch (error) {
+        didNotStart(name, error)
+      }
+    },
+    route,
+    /** A deadline ends the caller's wait, never the actual handler's admission charge. */
+    call(type: string, payload: Record<string, unknown>, asker: Asker, waitMs: number): Promise<Record<string, unknown>> {
+      if (owners.get(type)?.expired) {
+        return Promise.resolve({ error: 'SERVICE_UNAVAILABLE', retryable: true })
+      }
+      return new Promise(resolve => {
+        if (!route(type, payload, asker, resolve, waitMs)) resolve({ error: 'SERVICE_UNAVAILABLE', retryable: true })
+      })
+    },
+    /** A connection closed: abort what it asked that is still being answered. Its answers go nowhere. */
+    closeConnection(connection: string): void {
+      for (const [closed, entry] of answering) if (entry.connection === connection) closed.abort()
+    },
+    /** Run `handler` once, when `name` is switched off. */
+    onOff(name: string, handler: () => void): void {
+      offHandlers.set(name, [...offHandlers.get(name) ?? [], handler])
+    },
+    /** Whether `name` is off: it did not start, or it was switched off. */
+    isOff(name: string): boolean {
+      return off.has(name)
+    },
+  }
+}
+
+export type ServiceHost = ReturnType<typeof createServiceHost>

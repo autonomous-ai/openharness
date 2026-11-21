@@ -3,7 +3,7 @@ import { parseRuntimeProfile } from './runtimeProfileWire.js'
 export { parseRuntimeProfile } from './runtimeProfileWire.js'
 import { launchFlagsOf } from './launchFlags.js'
 import type { RegisteredSession } from './registry.js'
-import type { ProfileEvidence, RuntimeFor, RuntimeProfile, RuntimeModelOption, RuntimeState, RuntimeField, RuntimeControl, RuntimeCatalogModel } from '../engines/facets/runtime.js'
+import type { ProfileEvidence, RuntimeFor, RuntimeProfile, RuntimeModelOption, RuntimeState, RuntimeField, RuntimeControl, RuntimeCatalogModel, RuntimeDisplay } from '../engines/facets/runtime.js'
 import type { InlineRuntimeContext, InlineRuntimeReader } from '../engines/facets/inlineRuntime.js'
 export type { RuntimeProfile, RuntimeModelOption, RuntimeState, RuntimeField } from '../engines/facets/runtime.js'
 import { applyProfileEvidence, encodeRuntimeProfile, fillConfiguredEffort, record, showEffort, stripAnsi, transcriptFields, RUNTIME_EFFORTS } from '../engines/kit/runtime.js'
@@ -305,11 +305,9 @@ export class RuntimeProfileState {
     try { return await operation() } finally { this.suppressNotifications-- }
   }
 
-  /** The engine's own workspace for this session, when its records named one (the frame's `workspace`): OpenClaw's
-   *  session header. Asked of every frame, so it reads only what is kept: building a frame never loads an engine's code. */
-  workspace(session: RegisteredSession): string | null {
-    if (this.unbound(session.sessionId)) return null
-    return this.workspaces.get(session.sessionId) ?? null
+  display(session: RegisteredSession): RuntimeDisplay {
+    return { selectedModel: this.selectedModel(session),
+      workspace: this.unbound(session.sessionId) ? null : this.workspaces.get(session.sessionId) ?? null }
   }
 
   selectedModel(session: RegisteredSession): string | null {
@@ -450,7 +448,9 @@ export class RuntimeProfileState {
   }
 
   async codexCatalog(session: RegisteredSession): Promise<RuntimeCatalogModel[]> {
-    return this.runtimeFor(session.engine)?.catalog?.(session) ?? []
+    const runtime = this.runtimeFor(session.engine)
+    if (runtime) return runtime.catalog?.(session) ?? []
+    return (await this.reader(session.engine))?.modelCatalog?.(session) ?? []
   }
 
   private scheduleChanged(sessionId: string): void {

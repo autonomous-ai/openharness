@@ -1,23 +1,19 @@
 /**
  * Input: everything the core writes into an agent's pane. Messages, delivered turns and keys go through one
- * controller (`SessionInputController`, a per-pane queue while a turn is busy); the Harness device's own
- * route (`AutonomousDeviceInput`) owns the pane writer lock, and every write from the controller takes it
- * first (`legacyWrite`), so a person answering on a device and the core never interleave in one pane.
+ * controller (`SessionInputController`, the shared writer and a per-pane queue while a turn is busy).
+ * Correlated composer input retains that writer until the engine proves the composer available.
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 5: docs/design/2026-10-03-harnessd.md);
  * what it reaches in the registry, the terminal, the deliveries and device features and the clients is passed
- * in. The two controllers' dependencies are built by `sessionInputDeps` and `deviceInputDeps`, each given
- * the other controller lazily: each one calls into the other.
+ * in. Every message uses the same session input operation; optional callers keep their receipts elsewhere.
  */
-import { AutonomousDeviceInput, type DeviceInputDeps } from './deviceInput.js'
-import type { WifiFeed } from './wifi.js'
-import { deviceErrorText } from './cardText.js'
+import type { SessionFailure } from './api.js'
 import { adaptSlashCommand } from '../lib/goalCommand.js'
 import { errorKind, sid } from '../lib/log.js'
 import type { LiveEvent } from '../engines/kit/events.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { MoveGate } from '../lib/hostMove/gate.js'
-import { OPENCLAW_NOT_READY, SessionInputController, type MessageReceipt, type SessionInputDelivery, type SessionInputDeps } from '../lib/sessionInput.js'
+import { OPENCLAW_NOT_READY, SessionInputController, type MessageReceipt, type SessionInputDelivery, type SessionInputDeps, type SessionInputProgress, type SessionInputRequest } from '../lib/sessionInput.js'
 import { passingHold } from '../lib/messageHolds.js'
 import { pasteComesAsKeys, pasteOnScreen } from '../lib/pasteOnScreen.js'
 import type { ScreenReader } from '../lib/screenReader.js'
@@ -35,19 +31,19 @@ export interface InputDeps {
   /** Claude Code's and Codex's reading of a prompt typed into their pane, from their worker (core/engines/submissions.ts). */
   submission: SubmissionReader
   resolve: (id: string) => RegisteredSession | undefined
-  byAgent: (agentId: string) => RegisteredSession | undefined
+  activity?: (sessionId: string) => { epoch: string; revision: number } | undefined
   terminal: Pick<TerminalControl, 'captureTerminal' | 'validateTerminal' | 'submitTerminalAction' | 'keyTerminalAction' | 'pinTerminalControl'>
   /** The turns delivered under a caller's own id (core/deliveries.ts): the Wi-Fi device's, Agent Messages', the orchestrator's. */
   deliveries: {
     /** A delivery settled: its caller hears of it. */
     settled: (event: SessionInputDelivery) => void
+    input?: (event: SessionInputProgress) => void
     /** Whether Agent Messages still wants one of its typed (`team:`) deliveries written. */
     canWrite: (deliveryId: string) => boolean
   }
-  /** The Wi-Fi device's service, wherever it runs (core/wifi.ts). */
-  device: () => Pick<WifiFeed, 'delivery' | 'inputDispatched' | 'inputStatus' | 'agentGone'> | undefined
-  /** The app (`send`) and the dial (`sendCommander`). */
-  clients: { send(frame: Frame): void; sendCommander(frame: Frame): void }
+  /** The app's unmodified session frames. */
+  clients: { send(frame: Frame): void }
+  failure(failure: SessionFailure): void
   agentIdFor: (sessionId: string) => string
   /** Command Code's turn opened on our paste, from outside its transcript, in its worker (core/engines/otherStreams.ts). */
   openTurn: (sessionId: string, text: string) => Promise<LiveEvent[]>
@@ -68,15 +64,16 @@ export interface InputDeps {
   /** Whether an engine's reader is starting: null when there is nothing to wait for, else whether it came up within its start
    *  wait (core/serviceLinks.ts `whenStarting`). */
   engineStarting?: (engine: string) => Promise<boolean> | null
+  launchRevision?: (agentId: string) => number
   /** An agent's frame changed outside the registry (its `waitingFor`): pushed to every window again. */
   sync?: (id: string) => void
   /** An agent's first task on its row (lib/registry.ts): moved back from typed to waiting untyped before its OpenClaw box
-   *  is cleared (`untypeFirstTask`), true once saved; typed again when that clear did not empty the box (`takeFirstTask`),
-   *  the task once saved; and let go once a turn took it (`firstTaskTaken`), true once saved. */
+   *  is cleared (`untypeFirstTask`), true once saved; typed again when that clear did not empty the box (`retypeFirstTask`),
+   *  true once saved; and let go once a turn took it (`firstTaskTaken`), true once saved. */
   firstTask?: {
     untype(agentId: string, text: string): Promise<boolean>
-    retype(agentId: string): Promise<string | null>
-    taken(agentId: string): Promise<boolean>
+    retype(agentId: string, text: string): Promise<boolean>
+    taken(agentId: string, text?: string): Promise<boolean>
   }
 }
 
@@ -94,7 +91,8 @@ export interface InputDeps {
  * it so.
  */
 export function messageWriter({ readScreen, resolve, terminal: { captureTerminal, validateTerminal, submitTerminalAction }, promptTyped }: Pick<InputDeps, 'resolve' | 'terminal' | 'promptTyped' | 'readScreen'>) {
-  return async (id: string, text: string, hold?: (session: RegisteredSession, screen: ScreenReading | null, capture: string | null) => string | null): Promise<TerminalActionResult> => {
+  return async (id: string, text: string, hold?: (session: RegisteredSession, screen: ScreenReading | null, capture: string | null) => string | null, current: () => boolean = () => true, onPaste?: () => void): Promise<TerminalActionResult> => {
+    if (!current()) return terminalActionNotStarted('caller_gone')
     const session = resolve(id)
     if (!session) return terminalActionNotStarted('terminal agent is unavailable')
     // The engine first, then its screen. A check of the engine can wait, seconds, for an answer: a probe
@@ -103,14 +101,20 @@ export function messageWriter({ readScreen, resolve, terminal: { captureTerminal
     // prompt opened meanwhile, or a new engine's first screen, took the paste and its Enter. An engine
     // not there is refused as a lease is, which the caller asks again.
     if (!await validateTerminal(session)) return terminalActionNotStarted(TERMINAL_LEASE_REFUSED)
+    if (!current()) return terminalActionNotStarted('caller_gone')
     const capture = await captureTerminal(id)
+    if (!current()) return terminalActionNotStarted('caller_gone')
     const screen = await readScreen(session, capture)
+    if (!current()) return terminalActionNotStarted('caller_gone')
     if (!screen) return terminalActionNotStarted(hold?.(session, null, capture) ?? 'screen_unreadable')
     const reason = hold?.(session, screen, capture) ?? screen.messageHold
     if (reason) return terminalActionNotStarted(reason)
     promptTyped?.(session, capture, screen)
+    onPaste?.()
     return submitTerminalAction(id, text, {
+      allowed: current,
       beforeEnter: async () => {
+        if (!current()) return 'caller_gone'
         if (pasteComesAsKeys(session.engine)) {
           const landed = await pasteOnScreen(async () => {
             const now = await captureTerminal(id)
@@ -127,6 +131,7 @@ export function messageWriter({ readScreen, resolve, terminal: { captureTerminal
           // the reading's fence refuses.
           const capture = await captureTerminal(id)
           const next = await readScreen(launchBound(session, resolve(id)), capture)
+          if (!current()) return 'caller_gone'
           const before = next ? next.messageHold : 'screen_unreadable'
           if (before === 'popup_open') return null
           if (!before) return null
@@ -180,23 +185,22 @@ async function readTeamHold(deps: Pick<InputDeps, 'readScreen' | 'shortTurns' | 
   return { capture, screen, hold: paneHold(screen) }
 }
 
-/** What `SessionInputController` is given: every write takes the device's pane lock first. */
+/** What `SessionInputController` is given: every write takes its shared pane writer first. */
 export function sessionInputDeps(
   deps: InputDeps,
-  deviceInput: () => Pick<AutonomousDeviceInput, 'legacyWrite'>,
 ): SessionInputDeps {
-  const { resolve, terminal, deliveries, device, clients, agentIdFor, openTurn, emit, firstTask } = deps
+  const { resolve, terminal, deliveries, clients, agentIdFor, openTurn, emit, firstTask } = deps
   const { captureTerminal, validateTerminal, keyTerminalAction } = terminal
   const writeMessage = messageWriter(deps)
   return {
     ...(deps.moveGate ? { moveGate: deps.moveGate } : {}),
     ...(firstTask ? {
       untypeFirstTask: (id: string, text: string) => firstTask.untype(id, text),
-      retypeFirstTask: async (id: string, text: string) => await firstTask.retype(id) === text,
+      retypeFirstTask: (id: string, text: string) => firstTask.retype(id, text),
       // The frame read starting from the row's typed task until now: the windows hear it no longer is. One the row keeps,
       // OpenClaw's store or the binding pass's bound settles (core/agents/bind.ts).
-      onFirstTaskTaken: (id: string) => {
-        void firstTask.taken(id).then((taken) => { if (taken) deps.sync?.(id) },
+      onFirstTaskTaken: (id: string, text?: string) => {
+        void (text === undefined ? firstTask.taken(id) : firstTask.taken(id, text)).then((taken) => { if (taken) deps.sync?.(id) },
           (error: unknown) => console.error(`[agent] ${sid(id)} first task typed kept · ${errorKind(error)}`))
       },
     } : {}),
@@ -204,33 +208,38 @@ export function sessionInputDeps(
     submission: deps.submission,
     getSession: (id) => resolve(id),
     onDelivery: (event) => {
-      device()?.delivery(event)
       deliveries.settled(event)
+    },
+    onInput: (event) => {
+      const activity = event.phase === 'dispatching' && event.sessionId && resolve(event.agentId)?.sessionId === event.sessionId
+        ? deps.activity?.(event.sessionId) : undefined
+      deliveries.input?.({ ...event, ...(activity ? { activity: { epoch: activity.epoch, revision: activity.revision } } : {}) })
     },
     beforeTeamWrite: async (session) => (await readTeamHold(deps, session)).hold,
     validateRuntime: validateTerminal,
-    // Typed into the pane as it stands, a draft or a running turn included (an OpenClaw's, only once it can send), under
-    // the pane's write lock.
-    inject: (id, text) => deviceInput().legacyWrite(id, () => writeMessage(id, text, openclawHold)),
-    injectCommand: (id, line) => deviceInput().legacyWrite(id, () => writeMessage(id, line, commandHold)),
+    // Both messages and engine commands use the shared writer and retain the caller's authority.
+    inject: (id, text, current, onPaste) => writeMessage(id, text, openclawHold, current, onPaste),
+    injectCommand: (id, line, current) => writeMessage(id, line, commandHold, current),
     // An Agent Messages turn waits for a ready composer, and for its mailbox to still want it written.
-    injectTeam: (id, text, deliveryId) => deviceInput().legacyWrite(id, async () => {
+    injectTeam: async (id, text, deliveryId, current, onPaste) => {
       if (!resolve(id)) return terminalActionNotStarted('team_waiting_unavailable')
       return writeMessage(id, text, (_session, screen) => paneHold(screen)
-        ?? (deliveries.canWrite(deliveryId) ? null : 'team_waiting_control'))
-    }),
-    sendKey: (id, key) => deviceInput().legacyWrite(id, () => keyTerminalAction(id, key)),
+        ?? (deliveries.canWrite(deliveryId) ? null : 'team_waiting_control'), current, onPaste)
+    },
+    sendKey: keyTerminalAction,
     capture: captureTerminal,
     engineStarting: (session) => deps.engineStarting?.(session.engine) ?? null,
+    launchRevision: deps.launchRevision,
     // The app hears that the message waits, and why: it shows the agent as starting until the message is typed or refused (`error`).
     onWaitChanged: (id) => deps.sync?.(id),
     onWaiting: (sessionId, reason) => {
       clients.send({ type: 'message_waiting', agentId: agentIdFor(sessionId), dbSessionId: sessionId, payload: { reason } })
     },
     onError: (sessionId, message) => {
-      clients.send({ type: 'error', agentId: agentIdFor(sessionId), dbSessionId: sessionId, payload: { message } })
+      const agentId = agentIdFor(sessionId)
+      clients.send({ type: 'error', agentId, dbSessionId: sessionId, payload: { message } })
       const engine = resolve(sessionId)?.engine
-      clients.sendCommander({ type: 'commander_event', agentId: agentIdFor(sessionId), dbSessionId: sessionId, payload: { kind: 'error', text: deviceErrorText(message, engine) } })
+      deps.failure({ agentId, sessionId, ...(engine ? { engine } : {}), message })
     },
     // Command Code writes its transcript only once the turn is OVER, so a turn that calls no tool has
     // nothing to announce it: measured on 1.28.4, "hi" produced turn_started and turn_ended 1ms apart
@@ -250,41 +259,9 @@ export function sessionInputDeps(
   }
 }
 
-/** What `AutonomousDeviceInput` is given: the terminal directly, and the controller for queued input. */
-export function deviceInputDeps(
-  deps: InputDeps,
-  input: () => Pick<SessionInputController, 'acquireControl' | 'submit' | 'cancelDelivery'>,
-): DeviceInputDeps {
-  const { resolve, byAgent, terminal, device } = deps
-  const { captureTerminal, validateTerminal, keyTerminalAction } = terminal
-  return {
-    getSession: id => resolve(id),
-    validateRuntime: validateTerminal,
-    // The Device holds the pane's write lock itself while it writes.
-    inject: messageWriter(deps),
-    sendKey: keyTerminalAction,
-    capture: captureTerminal,
-    submission: deps.submission,
-    // Whatever a message is not typed into, the Device's waits for it to close, rather than be refused.
-    isAwaitingUser: async session => {
-      const pane = await captureTerminal(session.agentId)
-      const screen = await deps.readScreen(session, pane)
-      return pane === null || !screen || screen.messageHold !== null
-    },
-    acquireControl: id => input().acquireControl(id, { forAnswer: true }),
-    legacySubmit: (id, text, deliveryId) => input().submit(id, text, deliveryId),
-    legacyCancel: id => input().cancelDelivery(id),
-    onDelivery: event => device()?.delivery(event),
-    onDispatch: (id, deliveryId, text) => device()?.inputDispatched(id, deliveryId, text, byAgent(id)?.sessionId),
-    onInputStatus: event => device()?.inputStatus(event),
-    onForget: id => device()?.agentGone(id),
-  }
-}
-
 export function createInput(deps: InputDeps) {
   const { resolve, terminal: { pinTerminalControl } } = deps
-  const input: SessionInputController = new SessionInputController(sessionInputDeps(deps, () => deviceInput))
-  const deviceInput: AutonomousDeviceInput = new AutonomousDeviceInput(deviceInputDeps(deps, () => input))
+  const input: SessionInputController = new SessionInputController(sessionInputDeps(deps))
   const acquireTerminalControl = (id: string, opts?: { forAnswer?: boolean }): (() => void) | null => {
     const agentId = resolve(id)?.agentId ?? id
     const releaseInput = input.acquireControl(agentId, opts)
@@ -313,7 +290,7 @@ export function createInput(deps: InputDeps) {
     }
     return true
   }
-  const submitAgent = (id: string, content: string, deliveryId?: string, receipt?: MessageReceipt): void => {
+  const submitAgent = (id: string, content: string, deliveryId?: string, receipt?: MessageReceipt, request?: SessionInputRequest): void => {
     const record = resolve(id)
     const sessionId = record?.sessionId ?? id
     const engine = record?.engine ?? 'claude'
@@ -328,10 +305,11 @@ export function createInput(deps: InputDeps) {
     }
     if (log) console.log(`[msg] ${sid(sessionId)} recv · engine=${engine} · bytes=${Buffer.byteLength(adapted, 'utf8')}`)
     const target = record?.agentId ?? sessionId
-    input.submit(target, adapted, deliveryId, receipt)
+    input.submitInput(target, { when: deliveryId ? 'turn' : 'composer', ...request, content: adapted, deliveryId, receipt })
   }
+  const submitInput = (id: string, request: SessionInputRequest): void => submitAgent(id, request.content, request.deliveryId, request.receipt, request)
   const messageRequest = createMessageRequest((id, content, receipt) => submitAgent(id, content, undefined, receipt), deps.typed)
-  return { input, deviceInput, acquireTerminalControl, submitAgent, messageRequest }
+  return { input, acquireTerminalControl, submitAgent, submitInput, messageRequest }
 }
 
 /**

@@ -8,7 +8,7 @@ const saved = { agentId: 'saved-agent', sessionId: 'original-conversation', engi
 function fixture() {
   return {
     live: vi.fn((): RegisteredSession | undefined => undefined),
-    saved: vi.fn(() => saved),
+    saved: vi.fn(async () => saved),
     current: vi.fn(() => true),
     checkLive: vi.fn(async (): Promise<RuntimeCheck> => ({ state: 'alive' })),
     retain: vi.fn(async (_entry: RegisteredSession) => {}),
@@ -19,6 +19,22 @@ function fixture() {
 }
 
 describe('Enter resumes stopped work', () => {
+  it('refuses a selection cancelled while its saved archive is being read', async () => {
+    const deps = fixture()
+    let release!: (row: RegisteredSession) => void
+    deps.saved.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    const opening = resumeStoppedAgent(deps)
+    expect(deps.saved).toHaveBeenCalledOnce()
+    deps.current.mockReturnValue(false)
+    release(saved)
+    await expect(opening).resolves.toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+    expect(deps.live).not.toHaveBeenCalled()
+    expect(deps.checkLive).not.toHaveBeenCalled()
+    expect(deps.retain).not.toHaveBeenCalled()
+    expect(deps.canLaunch).not.toHaveBeenCalled()
+    expect(deps.launch).not.toHaveBeenCalled()
+  })
+
   it('attaches an already live harness without launching or stopping it', async () => {
     const deps = fixture()
     deps.live.mockReturnValue(saved)
@@ -40,7 +56,7 @@ describe('Enter resumes stopped work', () => {
     { ...saved, engine: 'devin' as const, sessionId: '' },
   ])('resumes without a conversation rather than refusing the harness', async entry => {
     const deps = fixture()
-    deps.saved.mockReturnValue(entry)
+    deps.saved.mockResolvedValue(entry)
     await expect(resumeStoppedAgent(deps)).resolves.toMatchObject({ ok: true })
     expect(deps.launch).toHaveBeenCalledExactlyOnceWith(entry, undefined)
   })
@@ -48,7 +64,7 @@ describe('Enter resumes stopped work', () => {
   it('reopens the conversation of an engine that keeps one, whatever its vendor', async () => {
     const deps = fixture()
     const entry = { ...saved, engine: 'opencode' as const }
-    deps.saved.mockReturnValue(entry)
+    deps.saved.mockResolvedValue(entry)
     await expect(resumeStoppedAgent(deps)).resolves.toMatchObject({ ok: true })
     expect(deps.launch).toHaveBeenCalledExactlyOnceWith(entry, 'original-conversation')
   })
@@ -290,18 +306,18 @@ describe('exact conversation readiness', () => {
 
 describe('resume refusal and readiness edge cases', () => {
   it('reports a missing saved identity', async () => {
-    const deps = fixture(); deps.saved.mockReturnValue(null as any)
+    const deps = fixture(); deps.saved.mockResolvedValue(null as any)
     expect(await resumeStoppedAgent(deps)).toMatchObject({ error: 'AGENT_NOT_FOUND' })
   })
   // 4 on Oct 26: an app resumed from a list that still showed a deleted harness, or one whose conversation another
   // harness had taken over (stoppedAgents `supersede`). The conversation is still found by search.
   it('says where to find the conversation when the saved harness is gone', async () => {
-    const deps = fixture(); deps.saved.mockReturnValue(null as any)
+    const deps = fixture(); deps.saved.mockResolvedValue(null as any)
     expect(await resumeStoppedAgent(deps)).toMatchObject({ error: 'AGENT_NOT_FOUND', detail: 'This harness is no longer on this '
       + 'machine: it was deleted, or another harness now has its conversation. Search for the conversation to open it where it is now.' })
   })
   it('opens a shell without a conversation id', async () => {
-    const deps = fixture(); const shell = { ...saved, engine: 'terminal' as const, sessionId: '' }; deps.saved.mockReturnValue(shell)
+    const deps = fixture(); const shell = { ...saved, engine: 'terminal' as const, sessionId: '' }; deps.saved.mockResolvedValue(shell)
     expect(await resumeStoppedAgent(deps)).toMatchObject({ ok: true }); expect(deps.launch).toHaveBeenCalledWith(shell, undefined)
   })
   it.each(['during check', 'row replacement', 'during retain', 'during launch check'] as const)('does not launch after %s', async when => {

@@ -138,7 +138,7 @@ export type TrustContract = { home: LaunchHome; file: string } & (
    * A JSON object whose `projects` map a folder to its entry, trusted where `accepted` is true. A trusted
    * folder's trust covers every folder below it. A new entry starts as `entry`.
    */
-  | { format: 'json'; projects: string; accepted: string; entry: Readonly<Record<string, unknown>> }
+  | { format: 'json'; projects: string; accepted: string; entry: Readonly<Record<string, unknown>>; repositoryBoundary: string }
   /** A TOML table per folder, `[<table>."<folder>"]`, trusted where its `key` is `value`. Exact folders only. */
   | { format: 'toml'; table: string; key: string; value: string }
 )
@@ -190,46 +190,6 @@ export interface ResumeRepairContract {
 }
 
 /**
- * How an engine is told to add a line to the pull requests it opens: a harness another agent started says so
- * (lib/agentAttribution.ts). Applied by kit/attribution.ts on each launch of one, its relaunches included. The
- * person's choices stay theirs: the engine's own line is kept beside it, an instruction of theirs is never
- * replaced, and where they hid the engine's attribution nothing is added.
- */
-export type AttributionContract = SettingAttribution | InstructionAttribution
-
-/**
- * An engine with a setting for the text it adds to a pull request, in JSON settings files that a settings object
- * on its command line overrides key by key (Claude Code's `attribution.pr` and `--settings`, 2.1.296). The
- * setting's text replaces the engine's own line, so it is given the line the engine would have added, then ours.
- */
-export interface SettingAttribution {
-  kind: 'setting'
-  /** The person's settings files, lowest precedence first: `file` in `home`, then each of `folder` in the harness's folder. */
-  home: LaunchHome
-  file: string
-  folder: readonly string[]
-  /** The setting: an object at `key` whose `field` is the pull request's text. `false` at `key` hides every line. */
-  key: string
-  field: string
-  /**
-   * An older setting that, `false`, hides every line while `key` sets none of `until` (Claude Code's
-   * `includeCoAuthoredBy`). Setting `field` would end that and bring back the engine's commit line, so a person
-   * who set it gets nothing added.
-   */
-  legacy?: { key: string; until: readonly string[] }
-  /** The engine's own line, where the person set no text. */
-  own: string
-  /** The argv; `{settings}` is the settings object, as JSON. */
-  args: readonly string[]
-  /**
-   * The same line as an instruction (`{line}`), told with Harness's instructions (`harnessInstructions` `append`)
-   * whenever the setting is given: a setting is only a default, which the agent drops once its task spells out the
-   * pull request's body.
-   */
-  instruction?: string
-}
-
-/**
  * The engine's status line, which Harness's own command takes over at every launch to record the plan's rate limits
  * the engine reports there (hook/statusline.mjs, kit/statusLine.ts), then runs the person's own status line command,
  * so they see what they saw before. Claude Code's `statusLine` (2.1.316: `type: 'command'`, `command`, `padding`,
@@ -247,14 +207,8 @@ export interface StatusLineContract {
   args: readonly string[]
 }
 
-/**
- * An engine with no setting for its attribution's text, which it gives its model as an instruction (Codex 0.162.1:
- * `<git_attribution>` in the developer message), and which takes more instructions in a config key `-c` sets
- * (`developer_instructions`). `-c` replaces the person's own value, so theirs comes first and ours after it; one
- * that cannot be read exactly, or one a folder's own config sets, is left alone and nothing is added.
- */
-export interface InstructionAttribution {
-  kind: 'instruction'
+/** Instructions in the engine's own config, preserved before a launch adds its optional instructions. */
+export interface InstructionConfig {
   /** The person's config: `file` in the agent's profile, else the home `home` names. */
   home: LaunchHome
   file: string
@@ -262,8 +216,6 @@ export interface InstructionAttribution {
   folder: string
   /** The top-level key the instructions are in. */
   key: string
-  /** What the model is told; `{line}` is the line. */
-  instruction: string
   /** The argv; `{value}` is the instructions, as a JSON string, which TOML reads as the same string. */
   args: readonly string[]
 }
@@ -308,19 +260,13 @@ export interface EngineLaunch {
   /** Recorded with `trust`, for the same folders (kit/inheritedMcp.ts). */
   inheritedMcp?: InheritedMcpContract
   resumeRepair?: ResumeRepairContract
-  attribution?: AttributionContract
   statusLine?: StatusLineContract
-  /** How the engine is told, as it starts, that it runs in Harness and how to use it (lib/agentAttribution.ts). */
+  /** How the engine is told, as it starts, that it runs in Harness and how to use it (services/nativeLaunchSettings.ts). */
   harnessInstructions?: HarnessInstructionsContract
 }
 
-/**
- * Where an engine takes a few lines of instructions on its command line: appended to its system prompt (`append`,
- * Claude Code's `--append-system-prompt`; `{text}` is the text), or beside its attribution instruction, in the one
- * config value both live in (`attribution`, Codex's `developer_instructions`: a second `-c` of the same key would
- * replace the first, and the person's own value).
- */
-export type HarnessInstructionsContract = ({ kind: 'append'; args: readonly string[] } | { kind: 'attribution' }) & {
-  /** Said after Harness's instructions to this engine's agents alone: what about the engine changes how they use them. */
+/** The declared literal flags for optional instructions prepared by engineSetup. */
+export type HarnessInstructionsContract = ({ kind: 'append'; args: readonly string[] } | { kind: 'config'; config: InstructionConfig }) & {
+  /** Said after Harness's instructions to this engine's agents alone. */
   also?: string
 }

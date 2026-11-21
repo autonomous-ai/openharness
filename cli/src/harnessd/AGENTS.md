@@ -12,7 +12,9 @@ It keeps the core and the services running, and nothing else.
    `ServiceSupervisorDeps`), so every decision is a unit test with fake timers. 100% coverage per file
    (`npm run test:harnessd`).
 3. **The spawn protocol only grows** (`protocol.ts`): messages are added, never changed or removed, and
-   unknown ones are ignored, because during an update an older master supervises a newer core.
+   unknown ones are ignored. Private worker composition additionally requires positive cohort admission:
+   a new core refuses an unproven retained old master before effects, letting pending-update probation restore
+   the previous complete runtime. Public client compatibility is unchanged (core plan, 2026-11-18 Design).
 4. **The core is always restarted; a service may be parked.** Never let a failing service stop the
    core or the master.
 5. **Platform supervision is opt-in** (`platform.ts`, `harness service install`): launchd or systemd runs the
@@ -59,8 +61,11 @@ It keeps the core and the services running, and nothing else.
    and exit 75 counts as a crash. The master itself still makes no network call. Every core this
    master starts hears `HARNESSD_UPDATES=master`; a core under a master from before that runs the updater
    beside itself, in its own process (`../core/updaterBeside.ts`).
-10. **A process on demand starts only when the core asks** (`onDemand` in `SERVICE_HOSTS`, `services.ts`).
-   The core sends `harnessd:want` for one of its services; from then on it is kept running like any other.
+10. **A process on demand starts when core or a declared component host asks** (`onDemand` in `SERVICE_HOSTS`, `services.ts`).
+   The core sends `harnessd:want` for one of its services. A current component host may ask only for peers
+   declared in its `wakes` and present in this composition; from then on the master keeps them running.
+   Component hosts subscribe once with `harnessd:watch-peers`, receiving a bounded available/started snapshot
+   and subsequent start notices. No feature files, discovery timers or restart policy move into the master.
    A core that speaks an older protocol than the process's `askedSince` never asks, so `unasked` starts it
    as that core binds. Making a process on demand bumps `HARNESSD_PROTOCOL` and sets `askedSince` to it.
    A `want` is heard before the core binds too: a core signed in asks for the gateway as it starts, so the
@@ -73,3 +78,14 @@ It keeps the core and the services running, and nothing else.
    process the core starts (the updater beside it, a master it hands over to, the master's probe) is given
    it explicitly. The core also unsets them from a tmux server an earlier boot started
    (`TmuxBackend.unsetServerEnvironment`).
+
+12. **Admit private worker code before it runs.** The parent's executed contract/plan and the selected cohort
+    are separate from its own original bundle fingerprint. Probe and packaged children execute the same claimed
+    immutable payload. A modern full-CLI fallback is frozen and keeps the canonical helper identity explicitly;
+    retained legacy inline composition requires a verified legacy lean core. This narrow safety requirement
+    supersedes rule 7's mutable-CLI fallback. Missing proof is refusal, never feature disappearance or a new-core
+    legacy fallback. A service spawn refused before a PID exists uses the existing bounded retry/park owner.
+    Claims remain held until actual child/probe exits; timeout is a termination request, never proof of reap.
+    The first import of every bundle, lean and source CLI entry is the generic admission guard; it loads no
+    feature catalogue and runs before configuration/runtime effects. Private contract changes bump the executed
+    literal; host/capability plan changes must update its machine-checked stamp.

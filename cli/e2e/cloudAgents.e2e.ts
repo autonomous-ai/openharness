@@ -30,7 +30,7 @@ class FakeDevin {
   detail: string | null = 'working'
   /** A test's status stands: the scripted question and finish do not replace it. */
   hold = false
-  private messages: Array<{ event_id: string; source: string; message: string; created_at: string }> = []
+  readonly messages: Array<{ event_id: string; source: string; message: string; created_at: string }> = []
   private pulls: Array<{ pr_url: string; pr_state: string }> = []
 
   async start(): Promise<this> {
@@ -83,13 +83,20 @@ class FakeDevin {
 }
 
 const cloudStarts = (d: IsolatedDaemon) => [...d.log().matchAll(/\[harnessd\] service cloud started/g)].length
+const cloudConnections = (d: IsolatedDaemon) => d.log().split('\n').filter(line => line.includes('[services] cloud connected')).length
+const cards = (client: LocalClient, agentId: string) => client.frames.flatMap(frame => {
+  const card = frame.type === 'session_event' ? frame.payload?.frame : null
+  return card?.type === 'commander_event' && card.agentId === agentId ? [card as Frame] : []
+})
 
 describe('cloud agents on the real daemon', () => {
   let daemon: IsolatedDaemon | undefined
   let devin: FakeDevin | undefined
   afterEach(async () => {
-    await daemon?.close(); daemon = undefined
-    await devin?.close(); devin = undefined
+    const cleanup = await Promise.allSettled([daemon?.close(), devin?.close()])
+    daemon = undefined; devin = undefined
+    const errors = cleanup.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+    if (errors.length) throw new AggregateError(errors, 'Cloud fixture cleanup did not settle')
   })
 
   it('a Devin Cloud harness: made, listed with no pane, asked, answered, finished with its pull request, stopped, and watched again after a restart', async () => {
@@ -105,7 +112,7 @@ describe('cloud agents on the real daemon', () => {
     mkdirSync(vault.root, { recursive: true, mode: 0o700 })
     vault.save('devin', { access_token: 'cog_e2e', token_type: 'Bearer', source: 'custom', label: 'Devin', transport: 'none', api_entry: { origin: devin.base } })
     await d.start()
-    const client = await LocalClient.connect(d)
+    const client = await LocalClient.connect(d, { eventsProtocol: 1 })
     fake.status = 'new'
     fake.detail = null
 
@@ -129,35 +136,59 @@ describe('cloud agents on the real daemon', () => {
 
     const question = await asked
     expect(question).toMatchObject({ agentId: agent.id, payload: { questions: [{ q: 'Which branch should I base it on?', canText: true }] } })
+    await client.waitFor(frame => frame.type === 'session_event' && frame.payload?.frame?.agentId === agent.id
+      && frame.payload?.frame?.payload?.kind === 'summary', 30_000, 'the component-prepared question card')
+    expect(cards(client, agent.id).map(card => card.payload?.kind)).toEqual(['processing', 'summary'])
+    expect(cards(client, agent.id)[1]).toMatchObject({ dbSessionId: agent.id, payload: { notification: null } })
     const listed = (await client.request<{ agents: Array<Record<string, any>> }>('agents_list', {})).agents.find((row) => row.id === agent.id)
     expect(listed).toMatchObject({ location: 'cloud', cloud: { place: "Devin's cloud", state: 'needs_input', providerStatus: { status: 'running', detail: 'waiting_for_user' } } })
 
-    const finished = client.next((frame: Frame) => frame.type === 'agent_synced' && frame.payload?.agent?.id === agent.id && frame.payload.agent.cloud?.state === 'idle', 60_000, 'the harness to finish')
+    const finished = client.next((frame: Frame) => frame.type === 'session_event' && frame.payload?.frame?.type === 'agent_synced'
+      && frame.payload.frame.payload?.agent?.id === agent.id && frame.payload.frame.payload?.agent?.cloud?.state === 'idle', 60_000, 'the harness to finish')
     // Answered as the dial and the windows answer any agent's question: under the question's own id.
-    const answered = client.next((frame: Frame) => frame.type === 'question_response_result' && frame.payload?.requestId === question.payload.requestId, 30_000, 'the answer\'s result')
-    client.send('question_response', { requestId: question.payload.requestId, agentId: agent.id, answers: { answer: 'main' } })
+    const answered = client.next((frame: Frame) => frame.type === 'question_response_result' && frame.payload?.requestId === question.payload!.requestId, 30_000, 'the answer\'s result')
+    client.send('question_response', { requestId: question.payload!.requestId, agentId: agent.id, answers: { answer: 'main' } })
     expect((await answered).payload).toMatchObject({ ok: true })
     expect(devin.sent).toEqual(['main'])
-    const done = (await finished).payload.agent
+    const done = (await finished).payload!.frame.payload.agent
     expect(done.cloud.links).toContainEqual({ label: 'Pull request #42', url: 'https://github.com/acme/api/pull/42' })
     expect(done.cloud).toMatchObject({ state: 'idle', providerStatus: { status: 'running', detail: 'finished' } })
+    await client.waitFor(frame => frame.type === 'session_event' && frame.payload?.frame?.agentId === agent.id
+      && frame.payload?.frame?.payload?.notification?.kind === 'done', 30_000, 'one prepared completion card')
+    const completedCards = () => cards(client, agent.id).filter(card => card.payload?.notification?.kind === 'done')
+    expect(completedCards()).toHaveLength(1)
+    expect(completedCards()[0]).toMatchObject({ dbSessionId: agent.id, name: agent.name,
+      payload: { kind: 'summary', notification: { id: `${agent.id}:4`, kind: 'done' } } })
 
     const transcript = await client.request<{ messages: Array<{ from: string; text: string }> }>('cloud_transcript', { agentId: agent.id })
     expect(transcript.messages.map((message) => [message.from, message.text])).toEqual([
       ['person', 'fix the flaky login test'], ['agent', 'Which branch should I base it on?'], ['person', 'main'], ['agent', 'Opened #42. Tests pass.'],
     ])
+    // Reap only this daemon's verified Cloud child. The surviving core must neither restart nor replay a completion.
+    const corePid = d.corePid(), connections = cloudConnections(d), [cloudPid] = d.servicePids('cloud')
+    expect(cloudPid).toBeTypeOf('number')
+    process.kill(cloudPid, 'SIGKILL')
+    await until('the owned Cloud child to exit', () => !IsolatedDaemon.alive(cloudPid) || null, 15_000)
+    await until('the replacement Cloud component to connect', () => cloudConnections(d) > connections || null, 30_000)
+    expect(d.corePid()).toBe(corePid)
+    const restored = await client.request<{ messages: Array<{ from: string; text: string }> }>('cloud_transcript', { agentId: agent.id })
+    expect(restored.messages).toEqual(transcript.messages)
+    // The component reply follows its initial publication on the same service connection.
+    expect(completedCards()).toHaveLength(1)
     // Asleep, and a stop by request, stay stopped. A message in the transcript does not make either one finished.
     fake.hold = true
     fake.status = 'suspended'
     fake.detail = 'inactivity'
     fake.messages.push({ event_id: 'e-sleep', source: 'devin', message: 'Still working through the tests.', created_at: '2026-10-11T10:04:00Z' })
-    const slept = client.next((frame: Frame) => frame.type === 'agent_synced' && frame.payload?.agent?.id === agent.id && frame.payload.agent.cloud?.providerStatus?.detail === 'inactivity', 60_000, 'asleep after inactivity')
+    const slept = client.next((frame: Frame) => frame.type === 'session_event' && frame.payload?.frame?.type === 'agent_synced'
+      && frame.payload.frame.payload?.agent?.id === agent.id && frame.payload.frame.payload?.agent?.cloud?.providerStatus?.detail === 'inactivity', 60_000, 'asleep after inactivity')
     expect(await client.request('cloud_send', { agentId: agent.id, text: 'are you still there?' })).toMatchObject({ ok: true })
-    expect((await slept).payload.agent.cloud).toMatchObject({ state: 'stopped', activity: 'Devin went to sleep after inactivity.', providerStatus: { status: 'suspended', detail: 'inactivity' } })
+    expect((await slept).payload!.frame.payload.agent.cloud).toMatchObject({ state: 'stopped', activity: 'Devin went to sleep after inactivity.', providerStatus: { status: 'suspended', detail: 'inactivity' } })
     fake.detail = 'user_request'
-    const halted = client.next((frame: Frame) => frame.type === 'agent_synced' && frame.payload?.agent?.id === agent.id && frame.payload.agent.cloud?.providerStatus?.detail === 'user_request', 60_000, 'stopped by request')
+    const halted = client.next((frame: Frame) => frame.type === 'session_event' && frame.payload?.frame?.type === 'agent_synced'
+      && frame.payload.frame.payload?.agent?.id === agent.id && frame.payload.frame.payload?.agent?.cloud?.providerStatus?.detail === 'user_request', 60_000, 'stopped by request')
     expect(await client.request('cloud_send', { agentId: agent.id, text: 'stop there' })).toMatchObject({ ok: true })
-    expect((await halted).payload.agent.cloud).toMatchObject({ state: 'stopped', activity: 'The session was stopped by request.', providerStatus: { status: 'suspended', detail: 'user_request' } })
+    expect((await halted).payload!.frame.payload.agent.cloud).toMatchObject({ state: 'stopped', activity: 'The session was stopped by request.', providerStatus: { status: 'suspended', detail: 'user_request' } })
 
     expect(await client.request('agent_delete', { agentId: agent.id })).toMatchObject({ deleted: true })
     expect(devin.archived).toBe(1)
@@ -217,8 +248,8 @@ describe('cloud agents on the real daemon', () => {
       expect(question).toMatchObject({ agentId: agent.id, payload: { questions: [{ q: 'They have two times.\n1) 9:30\n2) 11:00\nWhich one?', options: ['9:30', '11:00'] }] } })
       expect(calls.map((call) => call.tool)).toEqual(['ask_fo', 'get_fo_reply', 'get_fo_reply'])
       expect(new Set(calls.map((call) => call.key))).toEqual(new Set(['wak_e2e']))
-      const answered = client.next((frame: Frame) => frame.type === 'question_response_result' && frame.payload?.requestId === question.payload.requestId, 30_000, 'the answer\'s result')
-      client.send('question_response', { requestId: question.payload.requestId, agentId: agent.id, answers: { answer: '9:30' } })
+      const answered = client.next((frame: Frame) => frame.type === 'question_response_result' && frame.payload?.requestId === question.payload!.requestId, 30_000, 'the answer\'s result')
+      client.send('question_response', { requestId: question.payload!.requestId, agentId: agent.id, answers: { answer: '9:30' } })
       expect((await answered).payload).toMatchObject({ ok: true })
       expect(calls.at(-1)).toMatchObject({ tool: 'ask_fo', args: { message: '9:30', conversation_id: 'c1' } })
       const booked = await until('Fo\'s booking', async () => {

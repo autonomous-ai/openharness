@@ -106,12 +106,14 @@ export function createTerminalControl({ resolve, terminals, refused }: TerminalC
   const submitTerminal = async (target: string, text: string, options?: SubmitOptions): Promise<boolean> => {
     return terminalActionSucceeded(await submitTerminalAction(target, text, options))
   }
-  const typeTerminal = async (target: string, text: string): Promise<boolean> => {
+  const typeTerminal = async (target: string, text: string, allowed?: () => boolean): Promise<boolean> => {
     const session = terminalSession(target)
     if (!session) return false
     const lease = await leasedTerminal(session)
     if (!lease) return false
-    const succeeded = terminalActionSucceeded(await terminals.typeLiteralLease(lease.value, text, () => !refused?.(session.agentId)))
+    const current = () => !refused?.(session.agentId) && allowed?.() !== false
+    if (!current()) return false
+    const succeeded = terminalActionSucceeded(await terminals.typeLiteralLease(lease.value, text, current))
     if (!succeeded && pinnedControls.has(session.agentId)) invalidateTerminalControl(session.agentId)
     return succeeded
   }

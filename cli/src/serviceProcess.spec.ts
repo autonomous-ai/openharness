@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SERVICE_RUNNERS, startServiceProcess, type ServiceProcessOptions } from './serviceProcess.js'
 import type { ServiceHost, ServiceHostOptions, ServiceProcess } from './services/process.js'
-import { KNOWN_SERVICES, UPDATER_HOST } from './harnessd/services.js'
+import { KNOWN_SERVICES } from './harnessd/services.js'
+import { UPDATER_HOST } from './harnessd/servicePlan.js'
 
 const local = vi.hoisted(() => ({ socket: '/data/daemon-18473.sock' as string | null }))
 vi.mock('./lib/localSocket.js', async (real) => ({ ...await real<object>(), unixSocketPath: () => local.socket }))
@@ -90,7 +91,21 @@ describe('a service in its own process', () => {
     expect(stops.usage).toHaveBeenCalledOnce()
   })
 
-  it('leaves off a service that cannot start and runs the others; with none started it exits 1, as a lone one did', async () => {
+  it('starts Windows services before the core has published its pipe, letting their connections discover it', async () => {
+    local.socket = null
+    const seen: ServiceProcessOptions[] = []
+    const runners = new Map([['search', async () => (options: ServiceProcessOptions) => {
+      seen.push(options)
+      return { stop: () => {} }
+    }]])
+    const { host, hosted } = fakeHost()
+    const exit = (code: number): never => { throw new Error(`exit ${code}`) }
+    await startServiceProcess('search', { runners, host, exit, platform: 'win32' } as Parameters<typeof startServiceProcess>[1])
+    expect(seen).toEqual([expect.objectContaining({ socketPath: '' })])
+    expect(hosted[0].services).toHaveLength(1)
+  })
+
+  it('leaves off a service that cannot start and runs the others; with none started it fails as a lone one did', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const exit = vi.fn((code: number): never => { throw new Error(`exit ${code}`) })
     const fails = async () => () => { throw new Error('injected fault: usage') }
@@ -118,7 +133,7 @@ describe('a service in its own process', () => {
     // One name it does not know refuses the process: its master is from another build.
     await expect(startServiceProcess('search,nope', { exit })).rejects.toThrow('exit 2')
     local.socket = null
-    await expect(startServiceProcess('search', { exit })).rejects.toThrow('exit 2')
+    await expect(startServiceProcess('search', { exit, platform: 'linux' })).rejects.toThrow('exit 2')
     expect(error.mock.calls.map((call) => call[0])).toEqual([
       '[service] nope: no such service in this build',
       '[service] (none): no such service in this build',
@@ -141,10 +156,10 @@ describe('a service in its own process', () => {
     ])
     const { host, hosted } = fakeHost()
     local.socket = null
-    await startServiceProcess('updater', { runners, host, exit })
+    await startServiceProcess('updater', { runners, host, exit, platform: 'linux' })
     expect(seen).toEqual([expect.objectContaining({ socketPath: '' })])
     expect(hosted[0].options).toEqual({ name: 'updater', services: ['updater'] })
-    await expect(startServiceProcess('updater,search', { runners, host, exit })).rejects.toThrow('exit 2')
+    await expect(startServiceProcess('updater,search', { runners, host, exit, platform: 'linux' })).rejects.toThrow('exit 2')
     expect(error).toHaveBeenCalledWith('[service] updater,search: the core has no local socket to reach')
   })
 })

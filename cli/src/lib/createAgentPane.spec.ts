@@ -4,20 +4,24 @@ import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 import type { TerminalActionResult, TerminalCreateRequest, TerminalCreateResult, TmuxRuntimeRef } from './terminalTypes.js'
 import { createAndRegisterPane } from './createAgentPane.js'
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 
 // A full disk, for the registry's own files only: the save's temporary file cannot be created.
 const refuse = vi.hoisted(() => ({ code: undefined as string | undefined }))
-vi.mock('node:fs/promises', async original => {
-  const actual = await original<typeof import('node:fs/promises')>()
-  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual, open: (...args: Parameters<typeof actual.open>) => {
     if (refuse.code && /\/registry\.json\..*\.tmp$/.test(String(args[0]))) {
-      throw Object.assign(new Error(`${refuse.code}: fixture, open '${String(args[0])}'`), { code: refuse.code })
+      const error = Object.assign(new Error('fixture temporary reservation failed'), { code: refuse.code })
+      queueMicrotask(() => args[args.length - 1] instanceof Function && (args[args.length - 1] as (error: Error) => void)(error))
+      return
     }
     return actual.open(...args)
   } }
 })
 
 let dataDir = ''
+const modules: Array<{ registry: typeof import('./registry.js')['registry']; storage: import('./sessionStorage.js').SessionStorage }> = []
 
 // Mirrors lib/registry.spec.ts's loadRegistryModule(): a fresh registry module per test, backed by
 // its own temp state dir, so pre-seeded runtimeIndex collisions never leak between tests.
@@ -27,7 +31,9 @@ async function loadRegistryModule() {
   process.env.CLAUDE_PROJECTS_DIR = dataDir
   process.env.CODEX_HOME = dataDir
   process.env.CURSOR_HOME = dataDir
-  return import('./registry.js')
+  const loaded = await import('./registry.js')
+  modules.push({ registry: loaded.registry, storage: (await import('./sessionStorage.js')).sessionStorage })
+  return loaded
 }
 
 const succeeded = (paneId: string): TerminalCreateResult<TmuxRuntimeRef> =>
@@ -37,7 +43,7 @@ const succeeded = (paneId: string): TerminalCreateResult<TmuxRuntimeRef> =>
 function fakeTmux(results: Array<TerminalCreateResult<TmuxRuntimeRef>>) {
   let call = 0
   return {
-    create: vi.fn(async () => results[Math.min(call++, results.length - 1)]!),
+    create: vi.fn(async (_request: TerminalCreateRequest) => results[Math.min(call++, results.length - 1)]!),
     kill: vi.fn(async (): Promise<TerminalActionResult> => ({ state: 'succeeded', dispatch: 'executed' })),
   }
 }
@@ -47,18 +53,23 @@ describe('createAndRegisterPane', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'adapter-registry-'))
   })
 
-  afterEach(() => {
+  afterEach(async () => {
     refuse.code = undefined
-    rmSync(dataDir, { recursive: true, force: true })
+    const owned = modules.splice(0)
+    const flushed = await Promise.allSettled(owned.map(({ registry }) => registry.flush({ exiting: true })))
+    const closed = await Promise.allSettled(owned.map(({ storage }) => closeSessionStorageFixture(storage)))
     delete process.env.ADAPTER_DATA_DIR
     delete process.env.CLAUDE_PROJECTS_DIR
     delete process.env.CODEX_HOME
     delete process.env.CURSOR_HOME
+    const errors = [...flushed, ...closed].filter(value => value.status === 'rejected').map(value => value.reason)
+    if (errors.length) throw new AggregateError(errors, 'create fixture cleanup failed')
+    rmSync(dataDir, { recursive: true, force: true })
   })
 
   it('registers on the first attempt when the pane is unclaimed', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     const tmuxBackend = fakeTmux([succeeded('%1')])
 
     const result = await createAndRegisterPane({
@@ -73,7 +84,7 @@ describe('createAndRegisterPane', () => {
 
   it('starts an explicit-argv terminal in its folder without evaluating its arguments', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     const tmuxBackend = fakeTmux([succeeded('%1')])
     const argv = ['/bin/zsh', '/work/a script', '$(touch injected)', 'a; echo b', '']
     const result = await createAndRegisterPane({
@@ -81,27 +92,29 @@ describe('createAndRegisterPane', () => {
       spawnCwd: '/work/project with spaces', sessionLabel: 'harness-shell-1', argv: () => argv,
     })
     expect(result.ok).toBe(true)
-    expect(tmuxBackend.create).toHaveBeenCalledWith({ label: 'harness-shell-1', cwd: '/work/project with spaces', command: argv })
+    expect(tmuxBackend.create).toHaveBeenCalledWith({ label: 'harness-shell-1', cwd: '/work/project with spaces', command: expect.any(Function) })
+    const command = tmuxBackend.create.mock.calls[0]![0].command
+    expect(typeof command === 'function' ? command() : command).toEqual(argv)
   })
 
   it('starts a Windows engine in its workspace with its hand-off, and an explicit folder still wins', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     const tmuxBackend = fakeTmux([succeeded('%1'), succeeded('%2'), succeeded('%3')])
     const afterExit = { command: ['pwsh.exe', '-NoLogo'], env: { HARNESS_ENGINE_COMMAND: 'claude' } }
     await createAndRegisterPane({ tmuxBackend, registry, engine: 'claude', cwd: 'C:\\work', sessionLabel: 'harness-claude-1', argv: () => ['claude.exe'],
       paneLaunch: { cwd: 'C:\\work', afterExit, clearInherited: ['ANTHROPIC_API_KEY'] } })
-    expect(tmuxBackend.create).toHaveBeenLastCalledWith({ label: 'harness-claude-1', cwd: 'C:\\work', command: ['claude.exe'], afterExit, clearInherited: ['ANTHROPIC_API_KEY'] })
+    expect(tmuxBackend.create).toHaveBeenLastCalledWith({ label: 'harness-claude-1', cwd: 'C:\\work', command: expect.any(Function), afterExit, clearInherited: ['ANTHROPIC_API_KEY'] })
     await createAndRegisterPane({ tmuxBackend, registry, engine: 'claude', cwd: '/w', spawnCwd: '/elsewhere', sessionLabel: 'harness-claude-2', argv: () => ['claude'],
       paneLaunch: { cwd: '/w' } })
-    expect(tmuxBackend.create).toHaveBeenLastCalledWith({ label: 'harness-claude-2', cwd: '/elsewhere', command: ['claude'] })
+    expect(tmuxBackend.create).toHaveBeenLastCalledWith({ label: 'harness-claude-2', cwd: '/elsewhere', command: expect.any(Function) })
     await createAndRegisterPane({ tmuxBackend, registry, engine: 'claude', cwd: '/w', sessionLabel: 'harness-claude-3', argv: () => ['claude'], paneLaunch: {} })
-    expect(tmuxBackend.create).toHaveBeenLastCalledWith({ label: 'harness-claude-3', cwd: homedir(), command: ['claude'] })
+    expect(tmuxBackend.create).toHaveBeenLastCalledWith({ label: 'harness-claude-3', cwd: homedir(), command: expect.any(Function) })
   })
 
   it('retries past a stale registration collision and succeeds on the next pane', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     // Simulates a stale entry from a previous tmux-server generation already holding %1.
     ;(await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%1' }], cwd: '/tmp/other' }))
     const tmuxBackend = fakeTmux([succeeded('%1'), succeeded('%2')])
@@ -122,17 +135,17 @@ describe('createAndRegisterPane', () => {
     const { registry } = await loadRegistryModule()
     // Loaded after the reset, so its one-time launch files land in this test's data folder.
     const { buildEngineLaunchArgv, launchAttempts } = await import('./engineLaunch.js')
-    registry.load()
+    await registry.load()
     ;(await registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%1' }], cwd: '/tmp/other' }))
     const panes = fakeTmux([succeeded('%1'), succeeded('%2')])
     // Each pane's POSIX shell sources its launch file, whose first line removes it (engineLaunch.ts `sourcedOnce`). The
     // retry once got the same file and its shell said "no such file or directory" (CI, cli/e2e/scale.e2e.ts, 2026-11-19).
     const sourced: boolean[] = []
     const tmuxBackend = { ...panes, create: async (request: TerminalCreateRequest) => {
-      const file = request.command?.map(arg => /^\. '(.+)'$/s.exec(arg)?.[1]).find(Boolean)
+      const file = (typeof request.command === 'function' ? request.command() : request.command)?.map(arg => /^\. '(.+)'$/s.exec(arg)?.[1]).find(Boolean)
       sourced.push(!!file && existsSync(file))
       if (file) rmSync(file, { force: true })
-      return panes.create()
+      return panes.create(request)
     } }
 
     const build = () => buildEngineLaunchArgv('codex', { cwd: '/tmp/demo' }, '/bin/sh', undefined, 'grid', null)
@@ -147,7 +160,7 @@ describe('createAndRegisterPane', () => {
 
   it('gives up with REGISTRATION_FAILED after 3 attempts when every pane collides', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     for (const paneId of ['%1', '%2', '%3']) {
       ;(await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId }], cwd: '/tmp/other' }))
     }
@@ -170,7 +183,7 @@ describe('createAndRegisterPane', () => {
     const { registry } = await loadRegistryModule()
     // Loaded after the reset, so it tells a storage refusal by the registry's own copy of the error classes.
     const { createAndRegisterPane } = await import('./createAgentPane.js')
-    registry.load()
+    await registry.load()
     refuse.code = 'ENOSPC'
     const tmuxBackend = fakeTmux([succeeded('%1'), succeeded('%2'), succeeded('%3')])
 
@@ -188,7 +201,7 @@ describe('createAndRegisterPane', () => {
   it('a create whose pending row cannot be saved says whether its pane closed', async () => {
     const { registry } = await loadRegistryModule()
     const { createAndRegisterPane } = await import('./createAgentPane.js')
-    registry.load()
+    await registry.load()
     refuse.code = 'ENOSPC'
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const said = () => warn.mock.calls.map(([line]) => String(line)).filter(line => line.startsWith('[agent] create claude not saved'))
@@ -212,7 +225,7 @@ describe('createAndRegisterPane', () => {
 
   it('a pending admission the storage refuses rejects with the storage category, and a taken route still answers null', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     expect(await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%1' }], cwd: '/tmp/other' })).not.toBeNull()
     expect(await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%1' }] })).toBeNull()
     refuse.code = 'ENOSPC'
@@ -222,7 +235,7 @@ describe('createAndRegisterPane', () => {
 
   it('a pending or resumed admission that fails says what kind of error it was, and nothing the error carries', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     const said = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
       refuse.code = 'ENOSPC'
@@ -255,7 +268,7 @@ describe('createAndRegisterPane', () => {
 
   it('records the named agent and the requested name on the row it opens', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     const tmuxBackend = fakeTmux([succeeded('%1')])
 
     const result = await createAndRegisterPane({
@@ -271,7 +284,7 @@ describe('createAndRegisterPane', () => {
 
   it('records which harness here started it, only when another agent did', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     const started = await createAndRegisterPane({
       tmuxBackend: fakeTmux([succeeded('%1')]), registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-1',
       argv: () => ['claude'], startedBy: 'agent', parentAgentId: 'lead-1',
@@ -286,7 +299,7 @@ describe('createAndRegisterPane', () => {
 
   it('records a Browser on from the start on the row it opens', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     const ticked = await createAndRegisterPane({
       tmuxBackend: fakeTmux([succeeded('%1')]), registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-1',
       argv: () => ['claude'], browser: true,
@@ -300,7 +313,7 @@ describe('createAndRegisterPane', () => {
 
   it('a first task goes onto the row the pane is registered as', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     const openPendingAgent = vi.spyOn(registry, 'openPendingAgent')
     await createAndRegisterPane({
       tmuxBackend: fakeTmux([succeeded('%1')]), registry, engine: 'openclaw', cwd: '/tmp/demo', sessionLabel: 'harness-openclaw-1',
@@ -316,7 +329,7 @@ describe('createAndRegisterPane', () => {
 
   it('a local launch\'s folder goes on its row', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     const openPendingAgent = vi.spyOn(registry, 'openPendingAgent')
     const local = await createAndRegisterPane({
       tmuxBackend: fakeTmux([succeeded('%1')]), registry, engine: 'openclaw', cwd: '/tmp/demo', sessionLabel: 'harness-openclaw-1',
@@ -333,7 +346,7 @@ describe('createAndRegisterPane', () => {
 
   it('does not retry a tmux spawn failure', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     const openPendingAgent = vi.spyOn(registry, 'openPendingAgent')
     const tmuxBackend = fakeTmux([{ state: 'failed', dispatch: 'not_started', reason: 'tmux is unavailable' }])
 

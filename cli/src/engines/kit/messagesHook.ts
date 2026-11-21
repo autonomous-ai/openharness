@@ -20,10 +20,8 @@
  * sub-agent's tool call carries its own `agent_id`, and a Codex sub-agent's another session: neither takes the
  * agent's messages.
  */
-import { mkdirSync, readFileSync } from 'node:fs'
 import { basename, isAbsolute, join } from 'node:path'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
-import { atomicWriteFile } from '../../lib/secureState.js'
 import type { HookBlock } from './notifyHooks.js'
 
 /** What marks the block as Agent Messages' own, whichever folder its command names. */
@@ -124,12 +122,4 @@ export function isMessagesCommand(value: unknown): boolean {
 /** Whether a block is Agent Messages' own. */
 export function isMessagesBlock(block: HookBlock): boolean {
   return Array.isArray(block?.hooks) && block.hooks.some(hook => hook?.type === 'command' && isMessagesCommand(hook.command))
-}
-
-/** Write the script where the command runs it, when it is not already there as it should be. */
-export function writeMessagesHook(root: string): void {
-  const file = join(root, 'hook.mjs')
-  try { if (readFileSync(file, 'utf8') === MESSAGES_HOOK_SOURCE) return } catch { /* not written yet */ }
-  mkdirSync(root, { recursive: true, mode: 0o700 })
-  atomicWriteFile(file, MESSAGES_HOOK_SOURCE, 'cache', { mode: 0o700 })
 }

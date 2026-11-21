@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { AUTONOMOUS_DEVICE_CAPABILITIES, AutonomousDeviceService, type AutonomousDeviceFrame } from './service.js'
+import type { AgentView } from '../../core/api.js'
 
 // Legacy-engine fixture retains the original lifecycle contract; native evidence has its own results suite.
 function fixture(now?: () => number, fullAnswer?: string) {
@@ -13,6 +14,99 @@ function fixture(now?: () => number, fullAnswer?: string) {
 }
 
 describe('Autonomous device local-agent service', () => {
+  it('keeps a non-native receipt tied to its actual dispatch session across lifecycle catch-up', async () => {
+    const f = fixture()
+    await f.service.request('device', f.send())
+    const deliveryId = f.service.receipt('device', 'intent1')!.deliveryId
+    f.service.inputProgress({ agentId: 'agent', deliveryId, when: 'composer', phase: 'dispatching', sessionId: 'original',
+      content: 'hello', activity: { epoch: 'boot', revision: 10 } })
+    f.service.delivery({ sessionId: 'agent', deliveryId, state: 'started' })
+    f.service.agentLife({ kind: 'running', session: { agentId: 'agent', sessionId: 'replacement' } as AgentView })
+    f.service.turnEnded('agent', { sessionId: 'original', epoch: 'boot', revision: 11 })
+    expect(f.service.receipt('device', 'intent1')).toMatchObject({ state: 'unknown', error: { code: 'AGENT_GONE' } })
+    expect(f.submit).toHaveBeenCalledOnce()
+  })
+  it('reconciles question generations in place, deduplicates replay and refuses stale state while disconnected', async () => {
+    const f = fixture()
+    const status = () => f.service.request('device', { type: 'status', requestId: randomUUID(), machineId: 'machine', agentId: 'agent' })
+    const question = { type: 'commander_question', agentId: 'agent', payload: { requestId: 'q', questions: [{ q: 'Which?' }] } }
+    f.service.beginQuestions('first')
+    f.service.observeQuestion('first', question)
+    expect(await status()).toMatchObject({ error: { code: 'QUESTION_STATE_UNAVAILABLE' } })
+    f.service.endQuestions('first')
+    expect((await status()).openQuestion).toEqual({ requestId: 'q', questions: [{ q: 'Which?' }] })
+    f.service.beginQuestions('second')
+    f.service.observeQuestion('second', question)
+    f.service.observeQuestion('second', { type: 'commander_question_close', agentId: 'agent', payload: { requestId: 'old' } })
+    f.service.endQuestions('second')
+    expect(f.events.filter(event => event.kind === 'question.open')).toHaveLength(1)
+    expect((await status()).openQuestion).toMatchObject({ requestId: 'q' })
+    f.service.questionsUnavailable()
+    expect(await status()).toMatchObject({ error: { code: 'QUESTION_STATE_UNAVAILABLE' } })
+    f.service.beginQuestions('third')
+    f.service.endQuestions('second')
+    expect(await status()).toMatchObject({ error: { code: 'QUESTION_STATE_UNAVAILABLE' } })
+    f.service.endQuestions('third')
+    expect((await status()).openQuestion).toBeNull()
+    expect(f.events.filter(event => event.kind === 'question.close')).toHaveLength(1)
+  })
+
+  it('preserves live content changes under the same question ID and deduplicates only identical replay', () => {
+    const f = fixture()
+    const question = (options: string[], permission?: Record<string, unknown>) => ({ type: 'commander_question', agentId: 'agent', payload: {
+      requestId: 'cloud_q_same', questions: [{ q: 'Select', options }], ...(permission ? { permission } : {}),
+    } })
+    f.service.beginQuestions('g')
+    f.service.observeQuestion('g', question(['A']))
+    f.service.observeQuestion('g', question(['A']))
+    f.service.observeQuestion('g', question(['B']))
+    f.service.observeQuestion('g', question(['B'], { dialog: 'Confirm?', resolution: 'desktop' }))
+    f.service.endQuestions('g')
+    f.service.beginQuestions('reconnect')
+    f.service.observeQuestion('reconnect', question(['B'], { dialog: 'Confirm?', resolution: 'desktop' }))
+    f.service.endQuestions('reconnect')
+    expect(f.events.filter(event => event.kind === 'question.open')).toHaveLength(3)
+  })
+
+  it('retains only the four binding facts needed by an input receipt', async () => {
+    const f = fixture()
+    await f.service.request('device', f.send())
+    const deliveryId = f.service.receipt('device', 'intent1')!.deliveryId
+    const context = { agentId: 'agent', sessionId: 'session', engine: 'claude' as const, cliVersion: '1.0.0',
+      runtime: { snapshot: 'unrelated agent data' } }
+    f.service.inputContext(deliveryId, context)
+    const entry = (Reflect.get(f.service, 'deliveries') as Map<string, object>).get(deliveryId)!
+    const retained = (Reflect.get(f.service, 'inputContexts') as WeakMap<object, object>).get(entry)
+    expect(retained).toEqual({ agentId: 'agent', sessionId: 'session', engine: 'claude', cliVersion: '1.0.0' })
+  })
+
+  it('bounds live native reservations in the component without evicting or replaying unknown work', async () => {
+    const submit = vi.fn()
+    const service = new AutonomousDeviceService({ machineId: 'machine', serverInstanceId: 'instance',
+      agents: () => ['agent', 'other'].map(agentId => ({ agentId, name: 'Project', engine: 'claude', state: 'idle' })),
+      submit, stop: async () => true, answer: async () => true, cancelDelivery: () => false, recent: () => [] })
+    const request = (index: number) => ({ type: 'turn.send', requestId: randomUUID(), machineId: 'machine',
+      agentId: index % 2 ? 'other' : 'agent', text: `input ${index}`, idempotencyKey: `intent${index}` })
+    for (let index = 0; index < 64; index++) await service.request('device', request(index))
+    const first = service.receipt('device', 'intent0')!
+    service.delivery({ sessionId: 'agent', deliveryId: first.deliveryId, state: 'unknown', reason: 'dispatch_ambiguous' })
+    expect(await service.request('device', request(64))).toMatchObject({ error: { code: 'BACKPRESSURE' } })
+    expect(submit).toHaveBeenCalledTimes(64)
+    expect(await service.request('device', request(0))).toMatchObject({ status: 'duplicate', receipt: { state: 'unknown', deliveryId: first.deliveryId } })
+    expect(submit).toHaveBeenCalledTimes(64)
+    service.coreDisconnected()
+    service.agentLife({ kind: 'ended', agentId: 'agent' })
+    // Same component generation, even after losing the core and agent: its unknown admissions stay reserved.
+    expect(await service.request('device', request(64))).toMatchObject({ error: { code: 'BACKPRESSURE' } })
+    expect(submit).toHaveBeenCalledTimes(64)
+    // Proven refusal releases a live reservation; uncertainty never does.
+    const second = service.receipt('device', 'intent1')!
+    service.delivery({ sessionId: 'other', deliveryId: second.deliveryId, state: 'rejected', reason: 'queue_full' })
+    expect(await service.request('device', request(64))).toMatchObject({ status: 'accepted' })
+    expect(submit).toHaveBeenCalledTimes(65)
+    expect(service.receipt('device', 'intent0')).toMatchObject({ state: 'unknown', deliveryId: first.deliveryId })
+  })
+
   it('ensures focus through the desktop once for concurrent enables', async () => {
     const requestAppFocus = vi.fn(() => true)
     const submit = vi.fn()
@@ -245,18 +339,19 @@ describe('Autonomous device local-agent service', () => {
   })
   it('correlates completion only to the delivery whose start was observed', async () => {
     const f = fixture(); await f.service.request('device', f.send())
-    f.service.turnEnded('agent')
+    f.service.turnEnded('agent', null)
     expect(f.service.receipt('device', 'intent1')?.state).toBe('queued')
+    f.service.inputProgress({ agentId: 'agent', sessionId: 'session', deliveryId: f.submit.mock.calls[0][2], when: 'composer', phase: 'dispatching', activity: { epoch: 'core', revision: 1 } })
     f.service.delivery({ deliveryId: f.submit.mock.calls[0][2], sessionId: 'agent', state: 'started' })
-    f.service.turnEnded('agent')
+    f.service.turnEnded('agent', { sessionId: 'session', epoch: 'core', revision: 2 })
     expect(f.service.receipt('device', 'intent1')).toMatchObject({ state: 'completed', turnId: expect.any(String) })
   })
   it('resyncs an old instance and replays only newer events for the current one', () => {
     const f = fixture(); f.service.event('agents.changed', undefined, {})
     const send = vi.fn()
-    f.service.replay({ serverInstanceId: 'old', cursor: 500 }, send)
+    f.service.replay({ serverInstanceId: 'old', cursor: 500 }, frames => () => { for (const frame of frames) send(structuredClone(frame)) })
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'resync', reason: 'instance_changed' }))
-    send.mockClear(); f.service.replay({ serverInstanceId: f.service.serverInstanceId, cursor: 0 }, send)
+    send.mockClear(); f.service.replay({ serverInstanceId: f.service.serverInstanceId, cursor: 0 }, frames => () => { for (const frame of frames) send(structuredClone(frame)) })
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'event', eventId: 1 }))
   })
   it('preserves permission metadata through status and reconnect without changing legacy fields', async () => {
@@ -269,10 +364,10 @@ describe('Autonomous device local-agent service', () => {
     const status = () => f.service.request('device', { type: 'status', requestId: randomUUID(), machineId: 'machine', agentId: 'agent' })
     expect((await status()).openQuestion).toEqual({ requestId: 'permission1', questions, permission })
     const replay = vi.fn()
-    f.service.replay({ serverInstanceId: f.service.serverInstanceId, cursor: 0 }, replay)
+    f.service.replay({ serverInstanceId: f.service.serverInstanceId, cursor: 0 }, frames => () => { for (const frame of frames) replay(structuredClone(frame)) })
     expect(replay).toHaveBeenCalledWith(opened)
     replay.mockClear()
-    f.service.replay({ serverInstanceId: f.service.serverInstanceId, cursor: opened.eventId }, replay)
+    f.service.replay({ serverInstanceId: f.service.serverInstanceId, cursor: opened.eventId }, frames => () => { for (const frame of frames) replay(structuredClone(frame)) })
     expect(replay).not.toHaveBeenCalled()
     f.service.commander({ type: 'commander_question_close', agentId: 'agent', payload: { requestId: 'older' } })
     expect((await status()).openQuestion).not.toBeNull()

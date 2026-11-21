@@ -1,3 +1,5 @@
+import { nativeFactory } from '../../testing/sessionFactories.js'
+import { localPendingCreationDiscovery } from '../../testing/pendingCreation.js'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -5,12 +7,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installedDsh } from '../../dsh/installed.js'
 import { dshSupportedEngines } from '../../dsh/manifest.js'
 import { loadEngine } from '../../engines/inProcess.js'
-import { opencodeMajorVersion } from '../../engines/launchControl.js'
-import type { NativeLaunchResult } from '../../engines/nativeLaunch.js'
+import { opencodeMajorVersion } from '../../engines/opencode/version.js'
+import type { AgentEngine } from '../../engines/types.js'
+import { unsupportedNativeLaunchModelFlag, type NativeLaunchResult } from '../../engines/nativeLaunch.js'
 import { createNativeLaunchPreparer } from '../../engines/prepareNativeLaunch.js'
 import { AgentCreationReceiptError, AgentCreationReceipts, creationFingerprint, type AgentCreationOutcome } from '../../lib/agentCreationReceipt.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
-import { MAX_FIRST_PROMPT_CHARS, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent, unsupportedLaunchModelFlag } from '../../lib/engineLaunch.js'
+import { MAX_FIRST_PROMPT_CHARS, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent } from '../../lib/engineLaunch.js'
 import { parseGridLaunchOverride } from '../../lib/gridLaunchWire.js'
 import { parseNewAgentModel } from '../../lib/newAgentModel.js'
 import { parseProjectFolder, prepareNewFolder, ProjectFolderError, type GitProjectFolder } from '../../lib/projectFolder.js'
@@ -31,21 +34,18 @@ vi.mock('../../engines/kit/windowsFiles.js', async (real) => {
   const actual = await real<typeof import('../../engines/kit/windowsFiles.js')>()
   return { ...actual, hostPlatform: () => host.win32 ? 'win32' : actual.hostPlatform() }
 })
-// The engines' folder trust (engines/launchPrep.ts), one spy per engine.
+// The optional trust preparation port, one spy per engine.
 const trust = vi.hoisted(() => ({
   claudeTrusts: vi.fn((_path: string) => false), codexTrusts: vi.fn((_path: string, _profile?: string | null) => false),
   preTrustClaudeProject: vi.fn((_path: string): unknown => undefined), preTrustCodexProject: vi.fn((_path: string, _profile?: string | null): unknown => undefined),
 }))
 const { claudeTrusts, codexTrusts, preTrustClaudeProject, preTrustCodexProject } = trust
-vi.mock('../../engines/launchPrep.js', () => ({ folderTrust: (engine: string, profile?: string | null) => engine === 'claude'
-    ? { trusts: (path: string) => trust.claudeTrusts(path), record: (path: string) => trust.preTrustClaudeProject(path) }
-    : engine === 'codex' ? { trusts: (path: string) => trust.codexTrusts(path, profile), record: (path: string) => trust.preTrustCodexProject(path, profile) } : null }))
 // OpenCode's version probe is its own code, loaded for an OpenCode launch alone; a test may say it could not be.
 vi.mock('../../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
 })
-vi.mock('../../engines/launchControl.js', async (real) => ({ ...await real<object>(), opencodeMajorVersion: vi.fn(() => 1) }))
+vi.mock('../../engines/opencode/version.js', async (real) => ({ ...await real<object>(), opencodeMajorVersion: vi.fn(() => 1) }))
 vi.mock('../../lib/newAgentModel.js', async (real) => ({
   ...await real<object>(), parseNewAgentModel: vi.fn(() => ({ state: 'absent' })),
 }))
@@ -57,7 +57,6 @@ vi.mock('../../lib/engineLaunch.js', async (real) => ({
   supportsFirstPrompt: vi.fn(() => true), supportsNamedAgent: vi.fn(() => true),
   permissionModeFlags: vi.fn(() => ['--flag']), permissionModeApproves: vi.fn(() => false),
   // The engine's own --help is never run by a spec.
-  unsupportedLaunchModelFlag: vi.fn(async () => null),
 }))
 vi.mock('../../lib/projectFolder.js', async (real) => {
   const actual = await real<typeof import('../../lib/projectFolder.js')>()
@@ -90,6 +89,8 @@ afterEach(() => {
   vi.resetAllMocks()
 })
 
+const probeLaunchModel = vi.fn<NonNullable<LaunchRequestDeps['probeLaunchModel']>>(async () => null)
+
 function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: CreateAgent | null; fork?: ForkAgent | null; resume?: ResumeAgent | null; restart?: RestartAgent | null } = {}) {
   const create = launches.create === undefined ? vi.fn(async () => ({ ok: true as const, session: session('new-agent') })) : launches.create
   const fork = launches.fork === undefined ? vi.fn(async () => ({ ok: true as const, session: session('forked'), level: 'native' as const })) : launches.fork
@@ -98,13 +99,28 @@ function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: Creat
   const known = new Map([['new-agent', session('new-agent')], ['forked', session('forked')], ['a1', session('a1')]])
   // Workspaces in the edge host, which make every folder git makes (services/workspaces.ts).
   const workspaces = { ...WORKSPACES_OFF, ready: vi.fn(() => true), prepareFolder: vi.fn(async (project: GitProjectFolder, _options: { cloneFallback: boolean }) => gitFolder(project)) }
-  const deps: LaunchRequestDeps = {
-    receipts: new AgentCreationReceipts(join(dir, `receipts-${++stores}`)),
+  const receiptDirectory = join(dir, `receipts-${++stores}`)
+  const discovery = localPendingCreationDiscovery(receiptDirectory)
+  const deps: LaunchRequestDeps = { nativeFactory, probeLaunchModel, opencodeMajor: opencodeMajorVersion,
+    receipts: new AgentCreationReceipts(receiptDirectory, discovery.ensure), discovery,
     createAgent: () => create, forkAgent: () => fork, resumeAgent: () => resume, restartAgent: () => restart,
     byAgent: (id) => known.get(id), toProject: vi.fn(async (s: RegisteredSession) => frameOf(s)),
     modelTarget: resolveNewAgentModel,
-    stoppedAgent: () => undefined,
+    describeDsh: async (dsh, engine) => {
+      const installed = installedDsh(dsh)
+      if (!installed) return { ok: false, error: 'INVALID_DSH', detail: `${dsh} is not installed on this machine` }
+      const engines = dshSupportedEngines(installed.manifest)
+      return { ok: true, id: installed.id, name: installed.manifest.name, permissionMode: null,
+        refusal: installed.manifest.kind === 'viewer' ? `${dsh} is a viewer package, not an agent`
+          : engines.includes(engine) ? null : `${dsh} supports ${engines.join(', ')}; ${engine} is not compatible` }
+    },
+    stoppedAgent: async () => undefined,
     workspaces: () => workspaces,
+    prepareFolderTrust: async ({ engine, cwd, profile, source }) => {
+      if (engine === 'claude' && (!source || claudeTrusts(source))) preTrustClaudeProject(cwd)
+      if (engine === 'codex' && (!source || codexTrusts(source, profile))) preTrustCodexProject(cwd, profile)
+      return true
+    },
     ...over,
   }
   const requests = createLaunchRequests(deps)
@@ -122,6 +138,50 @@ function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: Creat
 }
 
 describe('agent_create, refused before any pane exists', () => {
+  it('refuses a known engine absent from native factory ownership before preparation', async () => {
+    const ownership = { nativeFactory: (_value: unknown): _value is AgentEngine => false }
+    const run = setup({ ...ownership })
+    expect(await run.ask({ engine: 'claude', cwd: '/fixture/work' })).toEqual({ error: 'INVALID_ENGINE' })
+    expect(parseProjectFolder).not.toHaveBeenCalled()
+    expect(run.create).not.toHaveBeenCalled()
+  })
+
+  it.each(['native-create-v1', 'model-create-v1'])('holds %s outside native factory ownership before recovery effects', async kind => {
+    let prepare!: Parameters<typeof pendingLaunches.createPendingLaunches>[0]['prepare']
+    const factory = pendingLaunches.createPendingLaunches
+    vi.spyOn(pendingLaunches, 'createPendingLaunches').mockImplementation(deps => { prepare = deps.prepare; return factory(deps) })
+    const ownership = { nativeFactory: (_value: unknown): _value is AgentEngine => false }
+    const prepareCreate = vi.fn<NonNullable<LaunchRequestDeps['prepareCreate']>>().mockResolvedValue({ ok: false, error: 'FIXTURE' })
+    resolveNewAgentModel.mockResolvedValue(null)
+    setup({ ...ownership, prepareCreate })
+    expect(await prepare({ kind, local: true, label: 'harness-claude-fixture',
+      input: { engine: 'claude', cwd: '/fixture/work', grid: null }, selection: { grid: 'fixture-grid', model: 'm' } },
+    { id: CREATION, current: () => true, hold: vi.fn() })).toBeNull()
+    expect(resolveNewAgentModel).not.toHaveBeenCalled()
+    expect(prepareCreate).not.toHaveBeenCalled()
+    expect(prepareNewFolder).not.toHaveBeenCalled()
+  })
+
+  it('admits a package from Store facts without opening its index in core', async () => {
+    vi.mocked(installedDsh).mockImplementationOnce(() => { throw Error('core opened the package index') })
+    const describeDsh = vi.fn(async () => ({ ok: true, id: 'acme/current', name: 'Notes', permissionMode: null, refusal: null }))
+    const run = setup({ describeDsh } as Partial<LaunchRequestDeps>)
+    expect(await run.ask({ engine: 'claude', cwd: '/w', dsh: 'acme/former' })).toHaveProperty('agent')
+    expect(describeDsh).toHaveBeenCalledWith('acme/former', 'claude')
+    expect(installedDsh).not.toHaveBeenCalled()
+    expect(run.create).toHaveBeenCalledWith(expect.objectContaining({ dsh: 'acme/current' }))
+  })
+
+  it('reports an old or unavailable Store without consulting a local package index', async () => {
+    vi.mocked(installedDsh).mockImplementationOnce(() => { throw Error('core opened the package index') })
+    const describeDsh = vi.fn(async () => ({ ok: false, error: 'DSH_UNAVAILABLE', unavailable: 'store', detail: 'Waiting for Store.' }))
+    const run = setup({ describeDsh } as Partial<LaunchRequestDeps>)
+    expect(await run.ask({ engine: 'claude', cwd: '/w', dsh: 'acme/notes' })).toMatchObject({ error: 'DSH_UNAVAILABLE' })
+    expect(run.create).not.toHaveBeenCalled()
+    expect(await run.ask({ engine: 'claude', cwd: '/w' })).toHaveProperty('agent')
+    expect(installedDsh).not.toHaveBeenCalled()
+  })
+
   it('keeps a selected model pending before native preparation, then dispatches its fresh resolution once', async () => {
     vi.mocked(parseNewAgentModel).mockReturnValue({ state: 'ok', selection: { model: 'fixture-model', grid: 'fixture-grid' } })
     const grid = { networkId: 'fixture', networkName: 'Fixture', baseUrl: 'http://fixture.invalid', apiKey: 'fixture' }
@@ -360,6 +420,14 @@ describe('agent_create, refused before any pane exists', () => {
     expect(create).not.toHaveBeenCalled()
   })
 
+  it('keeps unknown-version request validation when setup cannot answer', async () => {
+    const { ask, create } = setup()
+    vi.mocked(opencodeMajorVersion).mockResolvedValueOnce(null)
+    await ask({ engine: 'opencode', cwd: '/w', agent: 'reviewer' })
+    expect(supportsNamedAgent).toHaveBeenLastCalledWith('opencode', null)
+    expect(create).toHaveBeenCalledOnce()
+  })
+
   it('validates a named OpenCode launch without optional code', async () => {
     const { ask, create } = setup()
     vi.mocked(loadEngine).mockResolvedValue(null)
@@ -458,18 +526,51 @@ describe('agent_create, launched', () => {
 
   it('refuses a launch model before any receipt when the installed engine lacks a flag, and proceeds when it has them', async () => {
     const { ask, create, deps } = setup()
-    vi.mocked(unsupportedLaunchModelFlag).mockResolvedValueOnce('--effort')
+    vi.mocked(probeLaunchModel).mockResolvedValueOnce('--effort')
     expect(await ask({ engine: 'claude', cwd: '/w', creationId: CREATION, model: 'opus', effort: 'high' }))
       .toMatchObject({ error: 'LAUNCH_MODEL_UNSUPPORTED', detail: expect.stringContaining('--effort') })
-    expect(unsupportedLaunchModelFlag).toHaveBeenCalledWith('claude', { model: 'opus', effort: 'high' })
+    expect(probeLaunchModel).toHaveBeenCalledWith('claude', { model: 'opus', effort: 'high' })
     expect(create).not.toHaveBeenCalled()
     expect(deps.receipts.has(CREATION, 'any')).toBe(false)
     expect(deps.receipts.pendingIntent(CREATION)).toBeFalsy()
     // The same creation id is then free to start the agent without them.
-    vi.mocked(unsupportedLaunchModelFlag).mockResolvedValueOnce(null)
+    vi.mocked(probeLaunchModel).mockResolvedValueOnce(null)
     await ask({ engine: 'claude', cwd: '/w', creationId: CREATION, model: 'opus', effort: 'high' })
     await vi.waitFor(() => expect(create).toHaveBeenCalledOnce())
     expect(vi.mocked(create!).mock.calls[0][0]).toMatchObject({ launchModel: { model: 'opus', effort: 'high' } })
+  })
+
+  it('keeps an unavailable model preflight unknown instead of falsely refusing it', async () => {
+    const { ask, create } = setup({ probeLaunchModel: undefined })
+    await ask({ engine: 'claude', cwd: '/w', model: 'opus', effort: 'high' })
+    expect(create).toHaveBeenCalledOnce()
+  })
+
+  it.each(['no shell', 'Windows'] as const)('keeps the model preflight unknown for %s, so the request still reaches native creation', async mode => {
+    const launch = await import('../../lib/engineLaunch.js')
+    const shell = mode === 'no shell' ? vi.spyOn(launch, 'interactiveEngineShell').mockReturnValueOnce(null) : null
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    const probe = vi.fn(async () => ({ code: 0, stdout: '--version', stderr: '' }))
+    try {
+      const run = setup({ probeLaunchModel: async (engine, model) => {
+        if (mode === 'Windows') Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+        try { return await unsupportedNativeLaunchModelFlag(engine, model, { probe }) }
+        finally { Object.defineProperty(process, 'platform', platform) }
+      } })
+      await run.ask({ engine: 'claude', cwd: '/w', model: 'opus', effort: 'high' })
+      expect(run.create).toHaveBeenCalledOnce()
+      expect(probe).not.toHaveBeenCalled()
+    } finally { shell?.mockRestore(); Object.defineProperty(process, 'platform', platform) }
+  })
+
+  it('uses the selected-executable setup observation before claiming a model launch receipt', async () => {
+    const probeLaunchModel = vi.fn(async () => '--effort')
+    const { ask, create, deps } = setup({ probeLaunchModel } as Partial<LaunchRequestDeps>)
+    expect(await ask({ engine: 'claude', cwd: '/w', creationId: CREATION, model: 'opus', effort: 'high' }))
+      .toMatchObject({ error: 'LAUNCH_MODEL_UNSUPPORTED', detail: expect.stringContaining('--effort') })
+    expect(probeLaunchModel).toHaveBeenCalledExactlyOnceWith('claude', { model: 'opus', effort: 'high' })
+    expect(create).not.toHaveBeenCalled()
+    expect(deps.receipts.pendingIntent(CREATION)).toBeFalsy()
   })
 
   it('refuses a launch model its engine cannot take, a malformed one, and one beside a grid or a resumed conversation', async () => {
@@ -543,8 +644,147 @@ describe('agent_create, launched', () => {
 })
 
 describe('agent_create with a receipt', () => {
+
+  it.each(['CREATION_CONFLICT', 'CREATION_STORAGE_FAILED'] as const)('preserves an asynchronous %s refusal after marker admission', async code => {
+    const run = setup({ prepareCreate: vi.fn<NonNullable<LaunchRequestDeps['prepareCreate']>>() })
+    vi.spyOn(run.deps.receipts, 'runIntent').mockRejectedValueOnce(new AgentCreationReceiptError(code))
+    const result = await new Promise(resolve => { void run.requests.create({ creationId: CREATION, engine: 'claude', cwd: '/fixture/work' }, { local: true }, resolve) })
+    expect(result).toEqual({ error: code })
+    expect(run.deps.prepareCreate).not.toHaveBeenCalled(); expect(run.create).not.toHaveBeenCalled()
+  })
+
+  const answer = (run: ReturnType<typeof setup>, payload: Record<string, unknown>): Promise<Record<string, unknown>> =>
+    new Promise((resolve, reject) => { void run.requests.create(payload, { local: true }, resolve).catch(reject) })
+
+  it.each([
+    { native: false, missing: false }, { native: true, missing: false },
+    { native: false, missing: true }, { native: true, missing: true },
+  ])('preserves canonical receipt identity when Store cannot resolve an alias: %j', async ({ native, missing }) => {
+    let unavailable = false
+    const refusal = { ok: false as const, error: missing ? 'INVALID_DSH' : 'DSH_UNAVAILABLE', detail: 'Package identity is unavailable.' }
+    const describeDsh = vi.fn<NonNullable<LaunchRequestDeps['describeDsh']>>(async dsh => unavailable ? refusal
+      : { ok: true, id: dsh === 'fixture/other' ? dsh : 'fixture/current', name: 'Fixture', permissionMode: null, refusal: null })
+    const dispatch = vi.fn(async () => ({ ok: true as const, session: session('new-agent') }))
+    const run = setup({ describeDsh, ...(native ? { prepareCreate: async () => ({ ok: true as const, dispatch }) } : {}) }, { create: dispatch })
+    const input = { engine: 'claude', cwd: '/fixture/work', dsh: 'fixture/former', creationId: CREATION }
+    const original = await answer(run, input)
+    expect(original).toMatchObject({ creationId: CREATION, state: 'created' })
+    unavailable = true
+    expect(await answer(run, input)).toMatchObject({ error: refusal.error, detail: refusal.detail })
+    expect(await run.status({ creationId: CREATION })).toEqual(original)
+    expect(await answer(run, { ...input, dsh: 'fixture/current' })).toEqual(original)
+    expect(await answer(run, { ...input, prompt: 'changed request' })).toMatchObject({ error: refusal.error })
+    expect(await answer(run, { ...input, dsh: 'fixture/other' })).toMatchObject({ error: refusal.error })
+    expect(dispatch).toHaveBeenCalledOnce()
+    unavailable = false
+    expect(await answer(run, input)).toEqual(original)
+    expect(await answer(run, { ...input, prompt: 'changed request' })).toEqual({ error: 'CREATION_CONFLICT' })
+    expect(await answer(run, { ...input, dsh: 'fixture/other' })).toEqual({ error: 'CREATION_CONFLICT' })
+    expect(dispatch).toHaveBeenCalledOnce()
+  })
+
+  it.each(['legacy', 'native', 'model'] as const)('admits no unstable alias receipt during a Store outage: %s', async kind => {
+    let unavailable = true
+    const describeDsh = vi.fn<NonNullable<LaunchRequestDeps['describeDsh']>>(async () => unavailable
+      ? { ok: false, error: 'DSH_UNAVAILABLE', detail: 'Waiting for Store.' }
+      : { ok: true, id: 'fixture/current', name: 'Fixture', permissionMode: null, refusal: null })
+    const dispatch = vi.fn(async () => ({ ok: true as const, session: session('new-agent') }))
+    const prepareCreate = vi.fn<NonNullable<LaunchRequestDeps['prepareCreate']>>(async () => ({ ok: true, dispatch }))
+    const run = setup({ describeDsh, ...(kind === 'native' ? { prepareCreate } : {}) }, { create: dispatch })
+    if (kind === 'model') {
+      vi.mocked(parseNewAgentModel).mockReturnValue({ state: 'ok', selection: { model: 'fixture-model', grid: 'fixture-grid' } })
+      resolveNewAgentModel.mockResolvedValue({ networkId: 'fixture-grid' } as never)
+    }
+    const input = { engine: 'claude', cwd: '/fixture/work', dsh: 'fixture/former', creationId: CREATION }
+    expect(await answer(run, input)).toMatchObject({ error: 'DSH_UNAVAILABLE' })
+    expect(run.deps.receipts.status(CREATION)).toEqual({ state: 'missing' })
+    expect(run.deps.receipts.pendingIntent(CREATION)).toBeNull()
+    expect(prepareCreate).not.toHaveBeenCalled()
+    expect(dispatch).not.toHaveBeenCalled()
+    unavailable = false
+    expect(await answer(run, input)).toMatchObject({ state: 'created', agent: { id: 'new-agent' } })
+    expect(await answer(run, input)).toMatchObject({ state: 'created', agent: { id: 'new-agent' } })
+    expect(dispatch).toHaveBeenCalledOnce()
+  })
+
+  it.each(['pending', 'cancelled', 'tombstone'] as const)('keeps a matching canonical %s receipt authoritative during a Store outage', async state => {
+    let unavailable = false
+    const describeDsh = vi.fn<NonNullable<LaunchRequestDeps['describeDsh']>>(async () => unavailable
+      ? { ok: false, error: 'DSH_UNAVAILABLE', detail: 'Waiting for Store.' }
+      : { ok: true, id: 'fixture/current', name: 'Fixture', permissionMode: null, refusal: null })
+    const prepareCreate = vi.fn<NonNullable<LaunchRequestDeps['prepareCreate']>>(async () => ({ ok: false,
+      error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: 'Waiting for native preparation.' }))
+    const run = setup({ describeDsh, prepareCreate })
+    const input = { engine: 'claude', cwd: '/fixture/work', dsh: 'fixture/current', creationId: CREATION }
+    if (state === 'tombstone') run.deps.receipts.cancelIntent(CREATION)
+    else {
+      expect(await answer(run, input)).toMatchObject({ state: 'pending' })
+      if (state === 'cancelled') run.deps.receipts.cancelIntent(CREATION)
+    }
+    unavailable = true
+    expect(await answer(run, input)).toMatchObject({ creationId: CREATION, state: state === 'pending' ? 'pending' : 'cancelled' })
+    expect(run.create).not.toHaveBeenCalled()
+  })
+
+  it('refuses a package before admitting a receipt when the Store description port is absent', async () => {
+    const prepareCreate = vi.fn()
+    const run = setup({ describeDsh: undefined, prepareCreate })
+    expect(await answer(run, { engine: 'claude', cwd: '/fixture/work', dsh: 'fixture/former', creationId: CREATION }))
+      .toMatchObject({ error: 'DSH_UNAVAILABLE' })
+    expect(run.deps.receipts.status(CREATION)).toEqual({ state: 'missing' })
+    expect(prepareCreate).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { error: new AgentCreationReceiptError('CREATION_STORAGE_FAILED'), code: 'CREATION_STORAGE_FAILED' },
+    { error: new Error('fixture storage failure'), code: 'INTERNAL' },
+  ])('preserves receipt read failures while Store is unavailable: $code', async ({ error, code }) => {
+    const prepareCreate = vi.fn()
+    const run = setup({ describeDsh: undefined, prepareCreate })
+    vi.spyOn(run.deps.receipts, 'has').mockImplementation(() => { throw error })
+    expect(await answer(run, { engine: 'claude', cwd: '/fixture/work', dsh: 'fixture/former', creationId: CREATION }))
+      .toEqual({ error: code })
+    expect(prepareCreate).not.toHaveBeenCalled()
+  })
+
+  it.each(['description', 'folder'] as const)('does not dispatch a project whose native owner changes during its %s await', async stage => {
+    let current = true, capturedNative = false
+    const prepareCreate = vi.fn()
+    const prepareEngine = vi.fn<NonNullable<LaunchRequestDeps['prepareEngine']>>(async () => {
+      capturedNative = true
+      return { ok: true, launch: { current: () => current, environment: {} } as never }
+    })
+    const describeDsh = vi.fn<NonNullable<LaunchRequestDeps['describeDsh']>>(async () => {
+      if (capturedNative && stage === 'description') current = false
+      return { ok: true, id: 'fixture/current', name: 'Fixture', permissionMode: null, refusal: null }
+    })
+    vi.mocked(prepareNewFolder).mockImplementation(async () => { if (stage === 'folder') current = false; return '/projects/prepared' })
+    const prepareFolderTrust = vi.fn()
+    const run = setup({ describeDsh, prepareCreate, prepareEngine, prepareFolderTrust })
+    expect(await answer(run, { engine: 'claude', dsh: 'fixture/current', projectSource: 'new', projectName: 'Fixture', creationId: CREATION }))
+      .toMatchObject({ creationId: CREATION, state: 'unconfirmed' })
+    expect(prepareCreate).not.toHaveBeenCalled()
+    expect(prepareFolderTrust).not.toHaveBeenCalled()
+    expect(run.create).not.toHaveBeenCalled()
+    if (stage === 'description') expect(prepareNewFolder).not.toHaveBeenCalled()
+  })
+
+  it('refuses an incompatible package before admitting a project receipt', async () => {
+    const prepareCreate = vi.fn(), prepareEngine = vi.fn()
+    const describeDsh = vi.fn<NonNullable<LaunchRequestDeps['describeDsh']>>(async () => ({
+      ok: true, id: 'fixture/current', name: 'Fixture', permissionMode: null, refusal: 'Fixture is a viewer package, not an agent',
+    }))
+    const run = setup({ describeDsh, prepareCreate, prepareEngine })
+    expect(await answer(run, { engine: 'claude', dsh: 'fixture/current', projectSource: 'new', creationId: CREATION }))
+      .toEqual({ error: 'INVALID_DSH', detail: 'Fixture is a viewer package, not an agent' })
+    expect(run.deps.receipts.status(CREATION)).toEqual({ state: 'missing' })
+    expect(prepareNewFolder).not.toHaveBeenCalled()
+    expect(prepareEngine).not.toHaveBeenCalled()
+    expect(prepareCreate).not.toHaveBeenCalled()
+  })
+
   it('keeps a temporary model outage pending across receipt readers instead of completing it as failed', async () => {
-    const { ask, create, replies, status } = setup()
+    const { ask, create, replies, status, deps } = setup()
     vi.mocked(parseNewAgentModel).mockReturnValue({ state: 'ok', selection: { model: 'fixture-model', grid: 'fixture-grid' } })
     resolveNewAgentModel.mockRejectedValueOnce(new Error('fixture models disconnected'))
     await ask({ engine: 'claude', cwd: '/fixture/work', creationId: CREATION })
@@ -552,7 +792,7 @@ describe('agent_create with a receipt', () => {
     expect(create).not.toHaveBeenCalled()
     expect(replies[0]).toMatchObject({ creationId: CREATION, state: 'pending', held: { service: 'models', detail: expect.any(String) } })
     expect(await status({ creationId: CREATION })).toMatchObject({ state: 'pending', held: { service: 'models' } })
-    const recovered = new AgentCreationReceipts(join(dir, `receipts-${stores}`))
+    const recovered = new AgentCreationReceipts(join(dir, `receipts-${stores}`), deps.discovery.ensure)
     expect(recovered.status(CREATION)).toMatchObject({ state: 'pending', held: { service: 'models' } })
   })
 
@@ -563,7 +803,7 @@ describe('agent_create with a receipt', () => {
     resolveNewAgentModel.mockRejectedValueOnce(new Error('disconnected'))
     await ask({ engine: 'claude', cwd, prompt: 'Keep this task', creationId: CREATION }, false)
     await vi.waitFor(() => expect(replies).toHaveLength(1))
-    const recovered = createLaunchRequests({ ...deps, receipts: new AgentCreationReceipts(join(dir, `receipts-${stores}`)) })
+    const recovered = createLaunchRequests({ opencodeMajor: opencodeMajorVersion, ...deps, receipts: new AgentCreationReceipts(join(dir, `receipts-${stores}`), deps.discovery.ensure) })
     stopRequests.push(recovered.stop)
     const target = { networkId: 'fixture-grid', networkName: 'Fixture', baseUrl: 'http://fixture.invalid/v1', apiKey: 'rotated-key' }
     resolveNewAgentModel.mockResolvedValue(target)
@@ -727,7 +967,7 @@ describe('agent_create with a receipt', () => {
     vi.spyOn(Date, 'now').mockImplementation(() => clock)
     const dispatch = vi.fn(async () => ({ ok: true as const, session: session('new-agent') }))
     const prepareCreate = vi.fn<NonNullable<LaunchRequestDeps['prepareCreate']>>(async () => ({ ok: true, dispatch }))
-    const prepareEngine = vi.fn<NonNullable<LaunchRequestDeps['prepareEngine']>>(async () => ({ ok: true, launch: {} as never }))
+    const prepareEngine = vi.fn<NonNullable<LaunchRequestDeps['prepareEngine']>>(async () => ({ ok: true, launch: { current: () => true, environment: {} } as never }))
     const { ask, replies, requests, deps, workspaces } = setup({ prepareCreate, prepareEngine })
     workspaces.ready.mockReturnValue(false)
     await ask({ engine: 'claude', projectSource: 'worktree', gitSource: '/work/repo', branchRef: 'refs/heads/main', creationId: CREATION })
@@ -743,7 +983,7 @@ describe('agent_create with a receipt', () => {
     clock += 3_000; await requests.recover()
     await vi.waitFor(() => expect(deps.receipts.status(CREATION)).toEqual({ state: 'created', agentId: 'new-agent' }))
     expect(workspaces.prepareFolder).toHaveBeenCalledOnce()
-    expect(prepareCreate).toHaveBeenCalledWith(expect.objectContaining({ cwd: join(root.projects, 'worktrees', 'repo', 'feature') }), expect.anything(), { local: true })
+    expect(prepareCreate).toHaveBeenCalledWith(expect.objectContaining({ cwd: join(root.projects, 'worktrees', 'repo', 'feature') }), expect.anything(), { local: true, folderTrustAttempted: true })
     // A new empty folder is the core's own, and never waits for them.
     workspaces.ready.mockReturnValue(false)
     await ask({ engine: 'claude', projectSource: 'new', creationId: `${CREATION}-new` })
@@ -756,7 +996,7 @@ describe('agent_create with a receipt', () => {
     let clock = Date.now()
     vi.spyOn(Date, 'now').mockImplementation(() => clock)
     const prepareCreate = vi.fn<NonNullable<LaunchRequestDeps['prepareCreate']>>(async () => ({ ok: true, dispatch: vi.fn() }))
-    const prepareEngine = vi.fn<NonNullable<LaunchRequestDeps['prepareEngine']>>(async () => ({ ok: true, launch: {} as never }))
+    const prepareEngine = vi.fn<NonNullable<LaunchRequestDeps['prepareEngine']>>(async () => ({ ok: true, launch: { current: () => true, environment: {} } as never }))
     const { ask, requests, deps, workspaces } = setup({ prepareCreate, prepareEngine })
     workspaces.ready.mockReturnValue(false)
     await ask({ engine: 'claude', projectSource: 'worktree', gitSource: '/work/repo', branchRef: 'refs/heads/main', creationId: CREATION })
@@ -810,7 +1050,7 @@ describe('agent_create with a receipt', () => {
     const installing = { ok: false as const, error: 'NATIVE_LAUNCH_HELD' as const, unavailable: 'native' as const, installing: true as const,
       detail: 'Installing Codex. The harness starts once it is installed.' }
     const prepareEngine = vi.fn<NonNullable<LaunchRequestDeps['prepareEngine']>>().mockResolvedValueOnce(installing)
-      .mockResolvedValue({ ok: true, launch: {} as never })
+      .mockResolvedValue({ ok: true, launch: { current: () => true, environment: {} } as never })
     const dispatch = vi.fn(async () => ({ ok: true as const, session: session('new-agent') }))
     const prepareCreate = vi.fn<NonNullable<LaunchRequestDeps['prepareCreate']>>(async () => ({ ok: true, dispatch }))
     const { ask, replies, create, deps } = setup({ prepareCreate, prepareEngine })
@@ -824,9 +1064,29 @@ describe('agent_create with a receipt', () => {
     expect(prepareEngine).toHaveBeenCalledWith('codex', expect.objectContaining({ prompt: 'Reply with pong' }), expect.objectContaining({ id: CREATION }))
     expect(prepareNewFolder).toHaveBeenCalledOnce()
     expect(prepareCreate).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/projects/prepared', prompt: 'Reply with pong' }),
-      expect.objectContaining({ id: CREATION, label: expect.stringMatching(/^harness-codex-/) }), { local: true })
+      expect.objectContaining({ id: CREATION, label: expect.stringMatching(/^harness-codex-/) }), { local: true, folderTrustAttempted: true })
     expect(dispatch).toHaveBeenCalledOnce()
     expect(create).not.toHaveBeenCalled()
+  })
+
+  it('awaits project trust and does not launch when the claimed authority changes during it', async () => {
+    let prepare!: Parameters<typeof pendingLaunches.createPendingLaunches>[0]['prepare']
+    const factory = pendingLaunches.createPendingLaunches
+    vi.spyOn(pendingLaunches, 'createPendingLaunches').mockImplementation(deps => { prepare = deps.prepare; return factory(deps) })
+    let current = true
+    const prepareCreate = vi.fn()
+    const prepareFolderTrust = vi.fn<NonNullable<LaunchRequestDeps['prepareFolderTrust']>>(async (_input, active) => {
+      expect(active()).toBe(true)
+      await Promise.resolve(); current = false; return false
+    })
+    setup({ prepareCreate, prepareFolderTrust })
+    const ready = await prepare({ kind: 'native-create-v1', input: { engine: 'codex', cwd: '' },
+      projectFolder: { source: 'new', name: 'scratch1' }, label: 'harness-codex-fixture', local: true },
+      { id: CREATION, current: () => current, hold: vi.fn() })
+    expect(typeof ready).toBe('function')
+    expect(await (ready as () => Promise<AgentCreationOutcome>)()).toEqual({ state: 'unconfirmed' })
+    expect(prepareFolderTrust).toHaveBeenCalledWith(expect.objectContaining({ engine: 'codex', cwd: '/projects/prepared', empty: true }), expect.any(Function))
+    expect(prepareCreate).not.toHaveBeenCalled()
   })
 
   it('makes no folder for a new project cancelled while its engine was being made ready', async () => {
@@ -834,7 +1094,7 @@ describe('agent_create with a receipt', () => {
     const factory = pendingLaunches.createPendingLaunches
     vi.spyOn(pendingLaunches, 'createPendingLaunches').mockImplementation(deps => { prepare = deps.prepare; return factory(deps) })
     let current = true
-    const prepareEngine = vi.fn<NonNullable<LaunchRequestDeps['prepareEngine']>>(async () => { current = false; return { ok: true, launch: {} as never } })
+    const prepareEngine = vi.fn<NonNullable<LaunchRequestDeps['prepareEngine']>>(async () => { current = false; return { ok: true, launch: { current: () => true, environment: {} } as never } })
     setup({ prepareCreate: vi.fn(), prepareEngine })
     expect(await prepare({ kind: 'native-create-v1', input: { engine: 'codex', cwd: '' }, projectFolder: { source: 'new', name: 'scratch1' },
       label: 'harness-codex-fixture', local: true }, { id: CREATION, current: () => current, hold: vi.fn() })).toBeNull()
@@ -893,7 +1153,7 @@ describe('agent_create with a receipt', () => {
     vi.spyOn(Date, 'now').mockImplementation(() => clock)
     const missing: NativeLaunchResult = { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: 'Not installed',
       install: { command: 'fixture-installer', source: 'fixture', executable: { names: ['codex'] } }, environment: { HOME: '/fixture/home' } }
-    const inspect = vi.fn(async (): Promise<NativeLaunchResult> => downloading ? missing : { ok: true, launch: {} as never })
+    const inspect = vi.fn(async (): Promise<NativeLaunchResult> => downloading ? missing : { ok: true, launch: { current: () => true, environment: {} } as never })
     const ensure = vi.fn()
     // Read as it is asked: an attempt keeps the answer it was given, whatever the test says after.
     const downloadingNow = vi.fn(async () => downloading)
@@ -943,8 +1203,8 @@ describe('agent_create with a receipt', () => {
     vi.mocked(preTrustClaudeProject).mockImplementationOnce(() => { throw new Error('config locked') }).mockImplementationOnce(() => { throw 'busy' })
     await launch({ engine: 'claude', projectSource: 'new' }, 6)
     await launch({ engine: 'claude', projectSource: 'new' }, 7)
-    expect(console.warn).toHaveBeenCalledWith('[agent] pre-trust skipped · claude · Error')
-    expect(console.warn).toHaveBeenCalledWith('[agent] pre-trust skipped · claude · string')
+    expect(console.warn).toHaveBeenCalledWith('[trust] FOLDER_TRUST_UNAVAILABLE · Error')
+    expect(console.warn).toHaveBeenCalledWith('[trust] FOLDER_TRUST_UNAVAILABLE · string')
     expect(claudeTrusts).toHaveBeenCalledWith('/repo')
     // A worktree workspaces answered anywhere but where Harness makes worktrees is not trusted, its repository trusted or
     // not: the folder is their word, and a trust above it would cover every repository there.
@@ -996,8 +1256,8 @@ describe('agent_create with a receipt', () => {
     vi.mocked(preTrustCodexProject).mockImplementationOnce(() => { throw new Error('config locked') }).mockImplementationOnce(() => { throw 'busy' })
     await launch({ engine: 'codex', cwd: empty }, true, 9)
     await launch({ engine: 'codex', cwd: empty }, true, 10)
-    expect(warn).toHaveBeenCalledWith('[agent] pre-trust skipped · codex · Error')
-    expect(warn).toHaveBeenCalledWith('[agent] pre-trust skipped · codex · string')
+    expect(warn).toHaveBeenCalledWith('[trust] FOLDER_TRUST_UNAVAILABLE · Error')
+    expect(warn).toHaveBeenCalledWith('[trust] FOLDER_TRUST_UNAVAILABLE · string')
   })
 
   it('resolves a model picked by name inside the receipt, and holds it when it cannot be read', async () => {
@@ -1012,9 +1272,9 @@ describe('agent_create with a receipt', () => {
   })
 
   it('says why a receipt could not be kept, and answers INTERNAL when the answer cannot be put together', async () => {
-    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
+    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
     expect(await storage.ask({ engine: 'claude', cwd: '/w', creationId: CREATION })).toStrictEqual({ error: 'CREATION_STORAGE_FAILED' })
-    const broken = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
+    const broken = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
     expect(await broken.ask({ engine: 'claude', cwd: '/w', creationId: CREATION })).toStrictEqual({ error: 'INTERNAL' })
     const frameless = setup({ toProject: vi.fn(async () => { throw new Error('no frame') }) })
     await frameless.ask({ engine: 'claude', cwd: '/w', creationId: CREATION })
@@ -1049,6 +1309,8 @@ describe('durable model request validation', () => {
 
   it('reports a current installation refusal after the model becomes available', async () => {
     const { ask, replies, create } = setup()
+    // Admission can name this package; it disappears while the model is being resolved.
+    vi.mocked(installedDsh).mockReturnValueOnce({ id: 'acme/notes', manifest: { kind: 'agent', name: 'Notes' } } as never)
     vi.mocked(parseNewAgentModel).mockReturnValue({ state: 'ok', selection: { model: 'm', grid: 'fixture-grid' } })
     resolveNewAgentModel.mockResolvedValue({ networkId: 'resolved' } as never)
     await ask({ engine: 'claude', cwd: '/w', dsh: 'acme/notes', creationId: CREATION })
@@ -1131,15 +1393,15 @@ describe('agent_create_status', () => {
   })
 
   it('says why a receipt could not be read', async () => {
-    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), run: vi.fn(), status: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
+    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), run: vi.fn(), status: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
     expect(await storage.status({ creationId: CREATION })).toStrictEqual({ error: 'CREATION_STORAGE_FAILED' })
-    const broken = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), run: vi.fn(), status: vi.fn(() => { throw new Error('bug') }) } })
+    const broken = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), run: vi.fn(), status: vi.fn(() => { throw new Error('bug') }) } })
     expect(await broken.status({ creationId: CREATION })).toStrictEqual({ error: 'INTERNAL' })
   })
 
   it('tells the host why when the status read fails on a permissions problem (task #3861)', async () => {
     const detail = 'The creation folder ~/.harness/cli/data/agent-creations is not usable by this account (permissions).'
-    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), run: vi.fn(), status: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED', detail) }) } })
+    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), run: vi.fn(), status: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED', detail) }) } })
     expect(await storage.status({ creationId: CREATION })).toStrictEqual({ error: 'CREATION_STORAGE_FAILED', detail })
   })
 })
@@ -1211,9 +1473,9 @@ describe('agent_resume and agent_restart', () => {
   })
 
   it('say why a receipt could not be kept, and INTERNAL when the answer cannot be put together', async () => {
-    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
+    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
     expect(await storage.relaunch('agent_restart', { agentId: 'a1', creationId: CREATION })).toStrictEqual({ error: 'CREATION_STORAGE_FAILED' })
-    const broken = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
+    const broken = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
     expect(await broken.relaunch('agent_restart', { agentId: 'a1', creationId: CREATION })).toStrictEqual({ error: 'INTERNAL' })
     const frameless = setup({ toProject: vi.fn(async () => { throw new Error('no frame') }) })
     await frameless.relaunch('agent_restart', { agentId: 'a1', creationId: CREATION })
@@ -1297,7 +1559,7 @@ describe('agent_restart with launchArgs', () => {
   it('resumes a stopped agent with them: its engine is read from the stopped store', async () => {
     const stopped = { ...session('a1'), engine: 'codex' as const }
     const resume = vi.fn(async () => ({ ok: true as const, session: stopped, resumed: true }))
-    const run = setup({ byAgent: () => undefined, stoppedAgent: (id) => id === 'a1' ? stopped : undefined }, { resume })
+    const run = setup({ byAgent: () => undefined, stoppedAgent: async (id) => id === 'a1' ? stopped : undefined }, { resume })
     // Codex's own -c is the owner's to use; a key Harness sets is not, and the engine is the stopped row's.
     expect(await run.relaunch('agent_resume', { agentId: 'a1', launchArgs: '-c model=x' })).toMatchObject({ error: 'INVALID_LAUNCH_ARGS' })
     expect(await run.relaunch('agent_resume', { agentId: 'a1', launchArgs: '-c model_reasoning_effort=high' })).toMatchObject({ resumed: true })
@@ -1377,9 +1639,9 @@ describe('agent_fork', () => {
   })
 
   it('says why a receipt could not be kept, and INTERNAL when the answer cannot be put together', async () => {
-    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_CONFLICT') }) } })
+    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_CONFLICT') }) } })
     expect(await storage.forkAsk({ agentId: 'a1', creationId: CREATION })).toStrictEqual({ error: 'CREATION_CONFLICT' })
-    const broken = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
+    const broken = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
     expect(await broken.forkAsk({ agentId: 'a1', creationId: CREATION })).toStrictEqual({ error: 'INTERNAL' })
     const frameless = setup({ toProject: vi.fn(async () => { throw new Error('no frame') }) })
     await frameless.forkAsk({ agentId: 'a1', creationId: CREATION })
@@ -1520,7 +1782,7 @@ describe('agent_create_status and agent_create_cancel, by who created the launch
   it('treats a receipt written before creators were recorded as the owner\'s, and keeps a guest\'s across a restart', async () => {
     const run = withGuests()
     await guestMade(run, KIM)
-    const reloaded = createLaunchRequests({ ...run.deps, receipts: new AgentCreationReceipts(join(dir, `receipts-${stores}`)) })
+    const reloaded = createLaunchRequests({ opencodeMajor: opencodeMajorVersion, ...run.deps, receipts: new AgentCreationReceipts(join(dir, `receipts-${stores}`), run.deps.discovery.ensure) })
     stopRequests.push(reloaded.stop)
     const reread = async (guest: string | undefined, id: string) => {
       const answer = vi.fn(); await reloaded.createStatus({ creationId: id }, guest ? { local: false, guest } : { local: true }, answer); return answer.mock.calls.at(-1)![0]

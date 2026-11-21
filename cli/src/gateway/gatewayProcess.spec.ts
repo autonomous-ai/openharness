@@ -9,12 +9,13 @@ import type { GatewayEvents, GatewayOps, GatewayPort, WindowRelay } from '../cor
 import { createGatewayLink } from '../core/gatewayLink.js'
 import { GATEWAY_CALLS } from '../lib/gatewayWire.js'
 import { RelayConnectError } from '../lib/relayFrames.js'
-import { TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBinary.js'
+import { encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBinary.js'
 import type { CoreConnection, ServiceProcessOptions } from '../services/process.js'
 import { b64e, newIdentity } from '../lib/e2ee/core.js'
 import { runGatewayService } from './gatewayProcess.js'
 import type { GatewayHost, StartedGateway } from './start.js'
 import { TabSessions } from './tabKey.js'
+import { countUsage } from './usageEvents.js'
 
 const STREAM = '00000000-0000-4000-8000-000000000002'
 const alice = newIdentity(), bob = newIdentity()
@@ -25,15 +26,18 @@ function stubGateway() {
     usage: vi.fn(), usageCounter: vi.fn(), connect: vi.fn(), serveThisComputerOnly: vi.fn(), holdRequests: vi.fn(), openRequests: vi.fn(), connected: vi.fn(() => true),
     broadcast: vi.fn(), commander: vi.fn(), user: vi.fn(), reply: vi.fn(), target: vi.fn(() => true), terminal: vi.fn(() => true),
     terminalBinary: vi.fn(() => true), observer: vi.fn(() => true), windowOpened: vi.fn(), localClients: vi.fn(), local: vi.fn(async () => {}),
-    device: vi.fn(() => true), deviceClient: vi.fn(), stop: vi.fn(async () => {}),
+    stop: vi.fn(async () => {}),
   } satisfies GatewayPort
   const answer = { status: 200, body: { ok: true } }
+  const legacyConnectorVault = {
+      seal: vi.fn(async (plaintext: string) => { if (!plaintext) throw new Error('nothing to seal'); return { sealed: plaintext } }),
+      open: vi.fn(async (envelope: unknown) => ((envelope as { sealed?: string })?.sealed ? { plaintext: (envelope as { sealed: string }).sealed, complete: true } : null)),
+    }
   const ops = {
     accessToken: vi.fn(async () => 'never asked: the process answers the core from its own renewal'),
     backend: vi.fn(async (_method: string, _path: string, _body?: unknown) => answer),
     machines: vi.fn(async (_fallback?: boolean) => answer), mintGridName: vi.fn(async (): Promise<string | null> => 'private-grid'),
     status: vi.fn(async () => ({ fingerprint: 'AB12', pairs: [], pending: null })),
-    wifiService: vi.fn(), revokeIdentity: vi.fn(),
     account: vi.fn(), reachable: vi.fn(),
     lane: {
       hello: vi.fn(async (machineId: string) => ({ type: 'e2e_hello', machineId })), welcome: vi.fn(async () => true),
@@ -44,10 +48,8 @@ function stubGateway() {
       publicKey: vi.fn(async () => 'cHVi'),
       signWelcome: vi.fn(async (_m: string, shareId: string) => { if (shareId === 'bad') throw new Error('not a welcome to an observer'); return 'c2ln' }),
     },
-    connectorVault: {
-      seal: vi.fn(async (plaintext: string) => { if (!plaintext) throw new Error('nothing to seal'); return { sealed: plaintext } }),
-      open: vi.fn(async (envelope: unknown) => ((envelope as { sealed?: string })?.sealed ? { plaintext: (envelope as { sealed: string }).sealed, complete: true } : null)),
-    },
+    connectorSync: vi.fn(async () => ({ shared: true })),
+
     tabKey: new TabSessions(() => alice, () => 'alice-mac'),
     tabRelay: { open: vi.fn(async () => {}), send: vi.fn(async (_tab: string, to: string) => to === 'alice-mac'), close: vi.fn() },
     sharedTrust: vi.fn(async (desired: { pins?: unknown[]; keys?: unknown[] }) => {
@@ -67,8 +69,11 @@ function stubGateway() {
       return session
     }),
   } satisfies WindowRelay
-  const requests = { gateway_http: vi.fn(async (payload: Record<string, unknown>) => ({ status: 200, body: { devices: [], asked: payload.target } })) }
-  return { port, ops, windowRelay, requests, sessions, stop: vi.fn(async () => {}) }
+  const requests = {
+    gateway_http: vi.fn(async (payload: Record<string, unknown>) => ({ status: 200, body: { devices: [], asked: payload.target } })),
+    gateway_ws: vi.fn(async () => ({ handled: false })),
+  }
+  return { port, ops, legacyConnectorVault, windowRelay, requests, sessions, stop: vi.fn(async () => {}) }
 }
 
 function wire() {
@@ -86,10 +91,11 @@ function wire() {
   const heard = {
     frame: vi.fn(), binary: vi.fn(), client: vi.fn(), disconnected: vi.fn(), observer: vi.fn(), toLocal: vi.fn(), status: vi.fn(),
     linkDown: vi.fn(), commanders: vi.fn(), commanderJoined: vi.fn(), meta: vi.fn(), notice: vi.fn(), revoked: vi.fn(), busy: vi.fn(),
-    device: vi.fn(), deviceRevoked: vi.fn(), toWindows: vi.fn(), tabFrame: vi.fn(),
-    browserRoute: vi.fn(), browserRouteLost: vi.fn(), browserTransportError: vi.fn(),
+    toWindows: vi.fn(), tabFrame: vi.fn(),
+    streamControl: vi.fn(),
   }
   const backend = vi.fn(async () => ({ status: 200, body: { data: { acct: 'a' } } }))
+  const wifiServing = vi.fn(async () => true)
   const link = createGatewayLink({
     events: heard as unknown as GatewayEvents,
     notify: (frame) => { options.onEvent!(frame.payload as Record<string, unknown>); return true },
@@ -99,7 +105,7 @@ function wire() {
       try { return { ...await options.requests[type](payload, { local: true, owner: true }) } } catch { return { error: 'SERVICE_FAILED' } }
     },
     start: () => ({ machineId: 'machine-1', computerId: 'computer-1', autonomousEnv: 'prod', signedIn: true, account: { machineId: 'machine-1', signIn: null } }),
-    backend, wifiServing: async () => true,
+    backend, wifiServing,
   })
   const core: CoreConnection = {
     query: (query, payload = {}) => link.answer(query, payload),
@@ -108,17 +114,108 @@ function wire() {
   }
   const connect = () => { options.onConnected!(core); link.connected() }
   const disconnect = () => { options.onDisconnected!(); link.disconnected() }
-  return { link, heard, gateways, hosts, connect, disconnect, tokens, backend, options: () => options, service, linkStop }
+  return { link, heard, gateways, hosts, core, connect, disconnect, tokens, backend, wifiServing, options: () => options, service, linkStop }
 }
 
 describe('the gateway\'s process, spoken to by the core', () => {
+  it('binds pane answers to the original core and gateway while keeping physical callback credit process-owned', async () => {
+    const w = wire()
+    const query = vi.spyOn(w.core, 'query')
+    query.mockImplementation(async name => name === 'follow_agents' ? { agents: [] } : { agentId: 'a1', guest: true })
+    w.connect()
+    const first = w.hosts[0]
+    expect(await first.agents!.ofPane!('%1')).toEqual({ agentId: 'a1', guest: true })
+    let answer!: (value: Record<string, unknown>) => void
+    query.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    const pending = first.agents!.ofPane!('%1')
+    w.disconnect()
+    w.connect()
+    answer({ agentId: 'stale-agent' })
+    expect(await pending).toBeNull()
+    const calls = query.mock.calls.length
+    expect(await first.agents!.ofPane!('%1')).toBeNull()
+    expect(query).toHaveBeenCalledTimes(calls)
+    expect(w.hosts[1].callbackReplay).toBe(first.callbackReplay)
+    expect(await w.hosts[1].agents!.ofPane!('%1')).toEqual({ agentId: 'a1', guest: true })
+    await w.service.stop()
+  })
+
+  it('passes browser provenance and cancellation intact, and returns unavailable after gateway loss', async () => {
+    const w = wire()
+    const request = w.options().requests.gateway_ws!
+    const frame = { frame: 'browser_callback', payload: { url: 'http://localhost:1/callback' } }
+    const asker = { local: false, owner: true, connection: 'phone-1' }
+    const closed = new AbortController().signal
+    expect(await request(frame, asker, closed)).toEqual({ error: 'SERVICE_UNAVAILABLE' })
+    w.connect()
+    expect(await request(frame, asker, closed)).toEqual({ handled: false })
+    expect(w.gateways[0].requests.gateway_ws).toHaveBeenCalledWith(frame, asker, closed)
+    w.disconnect()
+    expect(await request(frame, asker, closed)).toEqual({ error: 'SERVICE_UNAVAILABLE' })
+    await w.service.stop()
+  })
+
+  it('delivers current input facts without replaying an old source to a replacement gateway', async () => {
+    const w = wire()
+    vi.spyOn(w.core, 'query').mockResolvedValue({ agents: [] })
+    w.connect()
+    const first = vi.fn(), second = vi.fn()
+    const unfollow = w.hosts[0].agents!.follow!(first)
+    const fact = { kind: 'input', agentId: 'a1', startedByAgent: false, source: { connection: 'phone-1', clientKind: 'phone' } }
+    w.options().onEvent!({ kind: 'agent', event: fact })
+    expect(first).toHaveBeenCalledWith(fact)
+    unfollow()
+    w.disconnect()
+    w.connect()
+    w.hosts[1].agents!.follow!(second)
+    expect(second).not.toHaveBeenCalled()
+    w.options().onEvent!({ kind: 'agent', event: { ...fact, source: { connection: 'phone-2', clientKind: 'phone' } } })
+    expect(first).toHaveBeenCalledOnce()
+    expect(second).toHaveBeenCalledOnce()
+    await w.service.stop()
+  })
+
+  it('keeps service counters under recorder admission even when provenance is malformed', () => {
+    const w = wire(), counted: string[] = []
+    w.connect()
+    const gateway = w.gateways[0]
+    gateway.port.usage.mockImplementation(event => countUsage(event, metric => counted.push(metric), () => {}))
+    const receive = (payload: Record<string, unknown>) => w.options().onEvent!({ kind: 'usageCounter', ...payload })
+    receive({ service: 'hachi', metric: 'hachi_wake_done' })
+    receive({ service: 'agentBrowser', metric: 'agent_browser_failed_podman_old' })
+    receive({ service: 'agentBrowser', metric: 'hachi_wake_done' })
+    receive({ service: 'hachi', metric: 'ui_desktop_hachi_opened' })
+    for (const service of [null, 1, {}, 'unknown']) receive({ service, metric: 'hachi_wake_done' })
+    receive({ service: 'hachi', metric: null })
+    expect(counted).toEqual(['hachi_wake_done', 'agent_browser_failed_podman_old'])
+    expect(gateway.port.usageCounter).not.toHaveBeenCalled()
+    receive({ metric: 'create_failed' })
+    expect(gateway.port.usageCounter).toHaveBeenCalledExactlyOnceWith('create_failed')
+  })
+
+  it('binds wake admission and delayed readiness to the originating gateway and core connection', async () => {
+    const w = wire()
+    w.connect()
+    let finish!: (value: boolean) => void
+    w.wifiServing.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const old = w.hosts[0].wifiServing!()
+    expect(w.wifiServing).toHaveBeenCalledOnce()
+    w.disconnect(); w.connect()
+    finish(true)
+    expect(await old).toBe(false)
+    expect(await w.hosts[0].wifiServing!()).toBe(false)
+    expect(w.wifiServing).toHaveBeenCalledOnce()
+    expect(await w.hosts[1].wifiServing!()).toBe(true)
+    expect(w.wifiServing).toHaveBeenCalledTimes(2)
+    await w.service.stop()
+  })
+
   it('builds the gateway only when a core says start, with what the core holds, and again on each start', async () => {
     const w = wire()
     w.link.port.holdRequests()
     w.link.port.connect()
     w.link.port.localClients({ desktop: 1, tui: 2 })
     w.link.ops.reachable(['m2'])
-    w.link.ops.wifiService(true)
     expect(w.gateways).toHaveLength(0)
     w.connect()
     expect(w.gateways).toHaveLength(1)
@@ -127,7 +224,6 @@ describe('the gateway\'s process, spoken to by the core', () => {
     expect(gateway.port.holdRequests).toHaveBeenCalled()
     expect(gateway.port.localClients).toHaveBeenCalledWith({ desktop: 1, tui: 2 })
     expect(gateway.ops.reachable).toHaveBeenCalledWith(['m2'])
-    expect(gateway.ops.wifiService).toHaveBeenCalledWith(true)
     expect(gateway.port.connect).toHaveBeenCalled()
     w.link.port.usage?.({ kind: 'observed', payload: { measure: 'collector_days' } })
     expect(gateway.port.usage).toHaveBeenCalledWith({ kind: 'observed', payload: { measure: 'collector_days' } })
@@ -221,17 +317,12 @@ describe('the gateway\'s process, spoken to by the core', () => {
     w.link.port.reply('phone-1', 'agents_list', 'r-1', { agents: [] })
     w.link.port.target('phone-1', 'viewer_data', { a: 1 })
     w.link.port.terminal('phone-1', 'terminal_ready', { streamId: STREAM })
-    w.link.port.terminalBinary('phone-1', clear)
+    w.link.port.terminalBinary('phone-1', encodeTerminalLocal(clear)!)
     w.link.port.observer('observer:1', 'observer_frame', { b: 2 })
     w.link.port.windowOpened('tui')
     await w.link.port.local('local:w', { type: 'e2ee_pairings_list', payload: {} })
-    w.link.port.device('phone-1', 'autonomous_device_result', { c: 3 })
-    w.link.port.deviceClient('phone-1', 'P')
-    w.link.port.deviceClient('phone-1', null)
-    w.link.ops.revokeIdentity('P')
     w.link.ops.account({ machineId: 'machine-1', signIn: { epoch: 'e', adopted: false, at: 1 } })
     w.link.ops.reachable(null)
-    w.link.ops.wifiService(false)
     await w.link.stop()
     expect(port.broadcast).toHaveBeenCalledWith({ type: 'turn_started' })
     expect(port.broadcast).toHaveBeenCalledWith({ type: 'turn_started', agentId: 'guests' }, 'kim@acme.io')
@@ -240,17 +331,13 @@ describe('the gateway\'s process, spoken to by the core', () => {
     expect(port.reply).toHaveBeenCalledWith('phone-1', 'agents_list', 'r-1', { agents: [] })
     expect(port.target).toHaveBeenCalledWith('phone-1', 'viewer_data', { a: 1 })
     expect(port.terminal).toHaveBeenCalledWith('phone-1', 'terminal_ready', { streamId: STREAM })
-    expect(port.terminalBinary).toHaveBeenCalledWith('phone-1', clear)
+    expect(port.terminalBinary).toHaveBeenCalledWith('phone-1', encodeTerminalLocal(clear))
     expect(port.observer).toHaveBeenCalledWith('observer:1', 'observer_frame', { b: 2 })
     expect(port.windowOpened).toHaveBeenCalledWith('tui')
     expect(port.local).toHaveBeenCalledWith('local:w', { type: 'e2ee_pairings_list', payload: {} })
-    expect(port.device).toHaveBeenCalledWith('phone-1', 'autonomous_device_result', { c: 3 })
-    expect(port.deviceClient.mock.calls).toEqual([['phone-1', 'P'], ['phone-1', null]])
     const { ops } = w.gateways[0]
-    expect(ops.revokeIdentity).toHaveBeenCalledWith('P')
     expect(ops.account).toHaveBeenCalledWith({ machineId: 'machine-1', signIn: { epoch: 'e', adopted: false, at: 1 } })
     expect(ops.reachable).toHaveBeenCalledWith(null)
-    expect(ops.wifiService).toHaveBeenLastCalledWith(false)
     // Stopped: what the core says after is for no gateway, and is dropped.
     expect(w.gateways[0].stop).toHaveBeenCalled()
     w.link.port.broadcast({ type: 'after' })
@@ -276,16 +363,14 @@ describe('the gateway\'s process, spoken to by the core', () => {
     events.notice({ type: 'zoo_changed', revision: 4 })
     events.revoked()
     events.busy()
-    events.device('dial-1', { type: 'autonomous_device_request' }, { type: 'hello' })
-    events.deviceRevoked('P')
     events.toWindows({ type: 'device_keys_changed', payload: {} })
     events.tabFrame({ sharedTabId: 'a1b2c3d4e5f6a1b2c3d4e5f6', closed: { code: 4403, reason: 'Not in this shared tab' } })
-    events.browserRoute('s-1', 'turn')
-    events.browserRouteLost('s-2')
-    events.browserTransportError()
+    events.streamControl('agentBrowser', 's-1', { route: 'turn' })
+    events.streamControl('agentBrowser', 's-2', { route: null })
+    events.streamControl('agentBrowser', null, { kind: 'transport_error' })
     const { heard } = w
     expect(heard.frame).toHaveBeenCalledWith('phone-1', { type: 'message' }, 'p2p', 'web')
-    expect(heard.binary).toHaveBeenCalledWith('phone-1', clear)
+    expect(heard.binary).toHaveBeenCalledWith('phone-1', clear, encodeTerminalLocal(clear))
     expect(heard.client).toHaveBeenCalledWith('phone-1', { role: 'device', label: 'Dial', identity: 'P', direct: true })
     expect(heard.disconnected).toHaveBeenCalledWith('phone-1')
     expect(heard.observer).toHaveBeenCalledWith('observer:1', 'observer_hello', { a: 1 })
@@ -298,13 +383,11 @@ describe('the gateway\'s process, spoken to by the core', () => {
     expect(heard.notice).toHaveBeenCalledWith({ type: 'zoo_changed', revision: 4 })
     expect(heard.revoked).toHaveBeenCalled()
     expect(heard.busy).toHaveBeenCalled()
-    expect(heard.device).toHaveBeenCalledWith('dial-1', { type: 'autonomous_device_request' }, { type: 'hello' })
-    expect(heard.deviceRevoked).toHaveBeenCalledWith('P')
     expect(heard.toWindows).toHaveBeenCalledWith({ type: 'device_keys_changed', payload: {} })
     expect(heard.tabFrame).toHaveBeenCalledWith({ sharedTabId: 'a1b2c3d4e5f6a1b2c3d4e5f6', closed: { code: 4403, reason: 'Not in this shared tab' } })
-    expect(heard.browserRoute).toHaveBeenCalledWith('s-1', 'turn')
-    expect(heard.browserRouteLost).toHaveBeenCalledWith('s-2')
-    expect(heard.browserTransportError).toHaveBeenCalledTimes(1)
+    expect(heard.streamControl).toHaveBeenCalledWith('agentBrowser', 's-1', { route: 'turn' })
+    expect(heard.streamControl).toHaveBeenCalledWith('agentBrowser', 's-2', { route: null })
+    expect(heard.streamControl).toHaveBeenCalledWith('agentBrowser', null, { kind: 'transport_error' })
   })
 
   it('answers the core\'s calls from the gateway it runs, and 503 with none running', async () => {
@@ -415,17 +498,23 @@ describe('the gateway\'s process, spoken to by the core', () => {
     }
   })
 
-  it('seals and opens the account\'s connections with the identity it holds, and none while it is not running', async () => {
+  it('keeps old-core vault RPC only in the gateway and gives the new core metadata only', async () => {
     const w = wire()
-    const vault = w.link.ops.connectorVault
-    await expect(vault.seal('{}')).rejects.toThrow(/not running/)
-    expect(await vault.open({ sealed: '{}' })).toBeNull()
+    const call = (payload: Record<string, unknown>) => w.options().requests[GATEWAY_CALLS.connectorVault](payload, { local: true, owner: true })
+    expect(await call({ op: 'seal', plaintext: '{}' })).toEqual({ error: 'CONNECTORS_SYNC_UNAVAILABLE' })
+    await expect(w.link.ops.connectorSync(true)).rejects.toThrow('CONNECTORS_SYNC_UNAVAILABLE')
     w.connect()
-    expect(await vault.seal('{"v":1}')).toEqual({ sealed: '{"v":1}' })
-    expect(await vault.open({ sealed: '{"v":1}' })).toEqual({ plaintext: '{"v":1}', complete: true })
-    expect(await vault.open({ other: 1 })).toBeNull()
-    await expect(vault.seal('')).rejects.toThrow('nothing to seal')
-    expect(await w.options().requests[GATEWAY_CALLS.connectorVault]({ op: 'nothing' }, { local: true, owner: true })).toEqual({ error: 'UNKNOWN_OP' })
+    expect(await w.link.ops.connectorSync(true)).toEqual({ shared: true })
+    expect(await call({ op: 'sync', refresh: true, requestId: 'wire-request' })).toEqual({ shared: true })
+    expect(await call({ op: 'sync', refresh: true, requestId: {} })).toEqual({ error: 'UNKNOWN_OP' })
+    expect(await call({ op: 'sync', refresh: true, requestId: 'x'.repeat(129) })).toEqual({ error: 'UNKNOWN_OP' })
+    expect(await call({ op: 'seal', plaintext: '{"v":1}' })).toEqual({ envelope: { sealed: '{"v":1}' } })
+    expect(await call({ op: 'open', envelope: { sealed: '{"v":1}' } })).toEqual({ plaintext: '{"v":1}', complete: true })
+    expect(await call({ op: 'open', envelope: { other: 1 } })).toEqual({})
+    expect(await call({ op: 'seal', plaintext: '' })).toEqual({ error: 'nothing to seal' })
+    expect(await call({ op: 'nothing' })).toEqual({ error: 'UNKNOWN_OP' })
+    expect(await call({ op: 'sync', refresh: 'yes' })).toEqual({ error: 'UNKNOWN_OP' })
+    expect(await call({ op: 'sync', refresh: true, plaintext: 'synthetic' })).toEqual({ error: 'UNKNOWN_OP' })
   })
 
   it('makes the trust stores hold what sharing asks, only the parts it sent, valid peers only', async () => {

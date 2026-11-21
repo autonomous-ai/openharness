@@ -1,7 +1,6 @@
 /** Exact-resume lifecycle shared by the daemon and its isolated acceptance tests. */
 import { transcriptSize, type RelaunchMarks } from '../core/transcripts/relaunch.js'
 import { isTerminalEngine } from '../engines/types.js'
-import { installedDsh } from '../dsh/installed.js'
 import { engineKeepsTranscriptFile, matchesLaunchReceipt, registry as liveRegistry, type LaunchPublication, type RegisteredSession, type RegistryAuthority } from './registry.js'
 import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
 import { materializeResumeTranscript } from '../engines/resumeTranscript.js'
@@ -11,10 +10,10 @@ import type { StoppedAgentStore } from './stoppedAgents.js'
 import { resumeStoppedAgent, waitForResumedAgent, resumeChanged, resumeUnconfirmed, RESUME_READINESS_BUDGET_MS } from './resumeStoppedAgent.js'
 import { checkPidRuntime } from './deleteAgentFallback.js'
 import { checkSessionRuntime, resolvePaneEngineProcess } from './paneEngineProcess.js'
-import { engineBin, enginePathOverride } from './engineBin.js'
-import { engineInstallRecipe } from './engineInstall.js'
+import { engineBin } from './engineBin.js'
 import type { ClearBackgroundJob } from '../engines/facets/backgroundJob.js'
-import { buildEngineLaunchArgv, dropPermissionFlagIfUnsupported, engineLaunchEnv, permissionModeApproves, permissionModeFlags, refusePermissionFlagIfUnsupported } from './engineLaunch.js'
+import { buildEngineCommandArgv, buildEngineLaunchArgv, dropPermissionFlagIfUnsupported, engineLaunchEnv, permissionModeApproves, permissionModeFlags, refusePermissionFlagIfUnsupported } from './engineLaunch.js'
+import { launchSettingsArgs } from '../engines/kit/launchValues.js'
 import { workspaceMissing } from './workspaceCheck.js'
 import { buildHarnessSessionLabel } from './harnessSessionLabel.js'
 import { createAndRegisterPane, type CreateAgentPaneDeps } from './createAgentPane.js'
@@ -50,7 +49,7 @@ export interface ResumeAgentServiceDeps {
   prepareSessionResume(session: RegisteredSession, current: () => boolean): Promise<boolean>
   /** Stops a Claude Code background job holding the session before `--resume`, in its worker (core/engines/backgroundJobs.ts). */
   stopBackgroundJob?: ClearBackgroundJob
-  refreshGridWebSearch(agentId: string, overrides: LaunchOverrides): void
+  refreshGridWebSearch(agentId: string, overrides: LaunchOverrides, current?: () => boolean): Promise<void>
   clearDeleted(agentId: string): void
   /** A look at the resumed agent, for the services that follow agents (core/agentLife.ts `running`): its harness's viewer
    *  and its browser come back with it. */
@@ -267,6 +266,8 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       return !registry.bySession(saved.sessionId) && (await checkPidRuntime(saved)).state === 'gone'
     },
     launch: async (saved, resumeSessionId) => {
+      // The selected archive object owns its exact read proof; launch choices below are copies.
+      const archiveSelection = saved
       // As a create with no backend ready answers (core/agents/create.ts).
       if (!createBackend) return { ok: false, error: noBackendCode }
       // An explicit change is checked before allocating anything, and is persisted with the
@@ -277,7 +278,6 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         saved = { ...saved, ...choice }
       }
       if (saved.grid && !saved.gridLaunch) return { ok: false, error: 'GRID_CREDENTIAL_REQUIRED', detail: 'The saved provider configuration is unavailable.' }
-      if (saved.dsh && !installedDsh(saved.dsh)) return { ok: false, error: 'INVALID_DSH', detail: 'Install this harness from the Harness Store before resuming it.' }
       if (!saved.cwd) return { ok: false, error: 'CWD_NOT_FOUND', detail: 'The saved project folder is no longer available.' }
       const cwd = saved.cwd
       const missing = workspaceMissing(cwd)
@@ -311,7 +311,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         if (transcript) saved = { ...saved, transcriptPath: transcript.path }
         let sourceError: unknown
         const sourceCurrent = () => {
-          if (!current() || sourceError) return false
+          if (!current() || !stoppedAgents.current(archiveSelection) || sourceError) return false
           if (saved.sessionId && registry.bySession(saved.sessionId)) {
             sourceError = new IdentityReadUnavailable('another live harness owns this conversation')
             return false
@@ -320,13 +320,15 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           catch (error) { sourceError = error; return false }
         }
         const built = await relaunchOverrides(saved, launchArgs ? { ...saved, launchArgs } : saved, sourceCurrent)
+        const settings = built.ok ? await built.overrides.native?.prepareSettings?.(cwd, sourceCurrent) : null
         if (sourceError) throw sourceError
         transcript?.verify()
-        if (!built.ok) return built
+        if (!built.ok) return built.error === 'DSH_NOT_INSTALLED'
+          ? { ok: false, error: 'INVALID_DSH', detail: 'Install this harness from the Harness Store before resuming it.' } : built
         if (!current()) return resumeChanged
         if (permissionMode !== undefined) {
           const refusal = await refusePermissionFlagIfUnsupported(saved.engine,
-            { permissionMode, bypassPermission: permissionModeApproves(permissionMode) }, undefined, built.overrides.native)
+            { permissionMode, bypassPermission: permissionModeApproves(permissionMode) }, built.overrides.native)
           if (!sourceCurrent()) return resumeChanged
           if (refusal) return { ok: false, ...refusal }
         }
@@ -362,7 +364,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           bypassPermission: saved.bypassPermission === true,
         }
         const { choice: permission, droppedFlag, nativeHold } = permissionMode === undefined
-          ? await dropPermissionFlagIfUnsupported(saved.engine, savedPermission, undefined, built.overrides.native)
+          ? await dropPermissionFlagIfUnsupported(saved.engine, savedPermission, built.overrides.native)
           : { choice: savedPermission, droppedFlag: null }
         transcript?.verify()
         if (!current()) return resumeChanged
@@ -388,6 +390,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           transcript?.verify()
           if (!current()) return resumeChanged
         }
+        const selectedArgs = launchSettingsArgs(saved.engine, extraArgs, settings)
         const options = {
           ...(built.overrides.native ? { native: built.overrides.native } : {}),
           resumeSessionId,
@@ -395,15 +398,22 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           bypassPermission: permission.bypassPermission === true,
           ...(permission.permissionMode ? { permissionMode: permission.permissionMode } : {}),
           cwd,
-          ...(extraArgs.length ? { extraArgs } : {}),
+          ...(selectedArgs.length ? { extraArgs: selectedArgs } : {}),
           ...(ownerArgs?.length ? { ownerArgs } : {}),
           ...(clearEnv.length ? { clearEnv } : {}),
           ...(launchEnv.HARNESS_DSH ? { harnessNode: true } : {}),
-          installIfMissing: enginePathOverride(saved.engine) ? undefined : engineInstallRecipe(saved.engine),
         }
         // Windows refuses a batch-file engine whose arguments cmd.exe would read (windows/launch.ts): this row alone.
-        let argv: string[]
-        try { argv = buildEngineLaunchArgv(saved.engine, options) } catch (error) { return windowsLaunchRefusal(error) }
+        let windowsArgv: string[] | undefined
+        try {
+          buildEngineCommandArgv(saved.engine, options)
+          if (process.platform === 'win32') windowsArgv = buildEngineLaunchArgv(saved.engine, options)
+        } catch (error) { return windowsLaunchRefusal(error) }
+        const held = windowsArgv !== undefined && isWindowsHeldPane(windowsArgv)
+        const argv = held ? windowsArgv! : () => {
+          const selectedArgs = launchSettingsArgs(saved.engine, extraArgs, settings)
+          return buildEngineLaunchArgv(saved.engine, { ...options, extraArgs: selectedArgs.length ? selectedArgs : undefined })
+        }
         // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).
         const paneEnv = { ...launchEnv, ...engineLaunchEnv(saved.engine, built.overrides.native) }
         transcript?.verify()
@@ -426,9 +436,9 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           maxAttempts: 1,
           engine: saved.engine,
           sessionLabel: buildHarnessSessionLabel(saved.engine),
-          argv: () => argv,
+          argv,
           // Windows: the workspace to start in and the shell the pane becomes after the engine (windows/engineStart.ts).
-          paneLaunch: windowsPaneLaunch(saved.engine, { ...options, held: isWindowsHeldPane(argv) }),
+          paneLaunch: windowsPaneLaunch(saved.engine, { ...options, held }),
           ...(Object.keys(paneEnv).length ? { env: paneEnv } : {}),
         })
         if (sourceError) throw sourceError
@@ -452,7 +462,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           return resumeChanged
         }
         if (!matchesLaunchReceipt(registry.byAgent(pending.agentId), pending)) return resumeChanged
-        refreshGridWebSearch(pending.agentId, built.overrides)
+        await refreshGridWebSearch(pending.agentId, built.overrides, current)
         const refreshed = registry.byAgent(pending.agentId)
         // Admission replies are detached. Only the two launch metadata fields above may have changed.
         if (!current() || !refreshed || !matchesLaunchReceipt(refreshed, { ...pending,

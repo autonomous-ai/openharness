@@ -1,5 +1,8 @@
+import { storedGridFixture } from './testing/gridCredentials.js'
+import { createClientStreams } from './core/clientStreams.js'
 import { removeRegistryAgent } from './testing/registryFixtures.js'
-import { USAGE_FALLBACKS } from './core/api.js'
+import { SERVICE_WS_FRAMES, USAGE_FALLBACKS } from './core/api.js'
+import { createServiceRoutes } from './core/serviceRoutes.js'
 import * as gitPullRequest from './lib/gitPullRequest.js'
 import * as sessionGitPullRequest from './lib/sessionGitPullRequest.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -10,13 +13,15 @@ import { fileURLToPath } from 'url'
 import { BackendSocket } from './backendSocket.js'
 import { dispatchDown, gatewayOf, relaySocket, upstreamOf } from './testing/relaySocket.js'
 import { AGENT_OPENED_THROTTLE_MS } from './core/agents/update.js'
-import { deviceAgentListItem, deviceAgentRow } from './core/agents/list.js'
+import { deviceAgentListItem as projectDeviceAgent, deviceAgentRow } from './core/agents/list.js'
+import { deviceFactory } from './testing/sessionFactories.js'
 import { wholeHistoryPage } from './engines/others/transcripts.js'
 import { grokMessagesToEvents } from './engines/grok/normalizer.js'
 import { bindAgentList, bindAgentUpdate, bindCancelRequest, bindLaunchRequests, bindCloseRequests, bindMessageRequest, bindPurgeRequest, bindQuestionResponse, bindStopRequest, bindTerminalRequests, prepared, preparingWorkspaces } from './testing/socketCore.js'
 import { emptyPorts, MODELS_FALLBACKS, MODELS_OFF, MONITOR_FALLBACKS, type ModelsPort, type UsageEvent } from './core/api.js'
 import { countUsage } from './gateway/usageEvents.js'
-import { createServiceHost, ServiceUnavailableError } from './core/serviceHost.js'
+import { ServiceUnavailableError } from './core/serviceHost.js'
+import { createServiceHost } from './services/inlineHost.js'
 import { MODELS_REQUESTS, startModels } from './services/models.js'
 import { SHELL_REQUESTS, startShell } from './services/shell.js'
 import { USAGE_REQUESTS, startUsage } from './services/usage.js'
@@ -41,7 +46,7 @@ import * as scmProjects from './scm/scmProjects.js'
 import * as machineResources from './lib/machineResources.js'
 import * as projectFolder from './lib/projectFolder.js'
 import * as projectPreview from './lib/projectPreview.js'
-import * as opencodeVersion from './engines/launchControl.js'
+import * as opencodeVersion from './engines/opencode/version.js'
 import { randomUUID } from 'node:crypto'
 import { fakeGridAnswers, installFakeGrid, type FakeGrid } from './lib/__fixtures__/fakeGrid.js'
 import { clearGridMcpUrlCache } from './lib/gridMcpUrl.js'
@@ -49,6 +54,11 @@ import { LocalModels } from './lib/localModels.js'
 import { STRICT_DOWN_TYPES, encryptDownFrame, encryptDownFrameFor, encryptRpcResult } from './lib/e2ee/applicationFrames.js'
 import { CloseAgentService } from './lib/closeAgentService.js'
 import { env } from './config/env.js'
+import * as builtins from './dsh/builtins.js'
+import * as transcriptActivity from './lib/transcriptActivity.js'
+import { createFrameParts } from './core/frameParts.js'
+
+const deviceAgentListItem = (value: unknown) => projectDeviceAgent(value, deviceFactory)
 
 describe('safe session close RPC', () => {
   it('seals cleanup previews and passes the open-tab condition to Close', async () => {
@@ -243,6 +253,7 @@ describe('reviewed permanent deletion RPCs', () => {
 describe('local model lifecycle RPCs', () => {
   afterEach(() => vi.restoreAllMocks())
   it('a slow catalog never blocks terminal or agent inventory, and errors stay redacted', async () => {
+    vi.spyOn(builtins, 'ensureBundledModelManager').mockReturnValue(true)
     const socket = relaySocket('fixture')
     bindAgentList(socket)
     socket.setHarnessGridName('home')
@@ -424,11 +435,47 @@ describe('agent_update opened: one "last used" for every app', () => {
 })
 
 describe('viewer forwarding authentication', () => {
+  it('never logs the contents of a directly submitted service frame wrapper, including forged routing markers', async () => {
+    const socket = relaySocket('fixture')
+    socket.serviceRouter = (_type, _payload, _asker, reply) => { reply({ error: 'LOCAL_ONLY' }); return true }
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
+    const clear = { type: 'devices_ws', payload: { requestId: 'raw', rpc: true, rpcRoute: true, selectedModel: 'private-wrapper-sentinel', frame: 'route_task', payload: { text: 'private-wrapper-sentinel' } } }
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue(clear)
+    vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({ type: 'devices_ws_result', payload: { __e2e: 'sealed' } })
+    const logged = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const was = env.LOG_FRAMES
+    try {
+      env.LOG_FRAMES = true
+      await dispatchDown(socket, { type: 'devices_ws', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }, 'remote')
+      expect(JSON.stringify(logged.mock.calls)).not.toContain('private-wrapper-sentinel')
+    } finally { env.LOG_FRAMES = was; await socket.stop() }
+  })
+
+  it('keeps same-connection input moving while a declared owner command waits and keeps the reply id first', async () => {
+    const socket = relaySocket('token')
+    const frames: unknown[] = []
+    socket.registerLocalClient('local:owner', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
+    let finish!: (answer: Record<string, unknown>) => void
+    const routes = createServiceRoutes({ routes: [], frames: SERVICE_WS_FRAMES,
+      linked: { route: (_type, _payload, _asker, reply) => { finish = reply; return true } }, hosted: { route: () => false } })
+    socket.serviceRouter = routes.route
+    const input = vi.fn(async () => true)
+    socket.setTerminalStreamManager({ handleFrame: input, stop: vi.fn(async () => {}) } as unknown as TerminalStreamManager)
+    await dispatchDown(socket, { type: 'route_task', payload: { requestId: 'original', text: 'fixture' } }, 'local:owner')
+    expect(frames).toEqual([])
+    await dispatchDown(socket, { type: 'terminal_input', payload: { text: 'typed meanwhile' } }, 'local:owner')
+    expect(input).toHaveBeenCalledExactlyOnceWith('local:owner', 'terminal_input', { text: 'typed meanwhile' }, undefined)
+    finish({ agentId: 'picked', requestId: 'forged' })
+    await vi.waitFor(() => expect(frames).toHaveLength(1))
+    expect(JSON.stringify(frames[0])).toBe('{"type":"route_task_result","payload":{"requestId":"original","agentId":"picked"}}')
+    await socket.stop()
+  })
+
   it('routes a sealed service request with its connection, who asked, and nothing in the clear', async () => {
     const socket = relaySocket('token')
     const routed: Array<{ type: string; asker: unknown }> = []
     socket.serviceRouter = (type, _payload, asker, reply) => { routed.push({ type, asker }); reply({ memories: [] }); return true }
-    const ownerCommands = vi.spyOn(socket.ownerCommands, 'request')
     vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
     const role = vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
     const clear = { type: 'memory_snapshot', payload: { requestId: 'one' } }
@@ -446,14 +493,14 @@ describe('viewer forwarding authentication', () => {
       { type: 'memory_snapshot', asker: { local: false, owner: false, accountOwner: false, connection: 'remote', requestId: 'one' } },
       { type: 'memory_snapshot', asker: { local: false, owner: true, accountOwner: false, connection: 'remote', requestId: 'one' } },
     ])
-    expect(ownerCommands).not.toHaveBeenCalled()
     expect(sealedReply).toHaveBeenCalledWith('remote', 'memory_snapshot_result', 'one', { memories: [] })
     await socket.stop()
   })
 
   it.each(['route_task', 'route_send'])('requires a sealed owner session for %s', async type => {
     const socket = relaySocket('token'), internals = socket as any
-    const request = vi.spyOn(socket.ownerCommands, 'request').mockResolvedValue({ ok: true })
+    const request = vi.fn((_type, _payload, asker, reply) => { reply(asker.owner ? { ok: true } : { error: 'OWNER_REQUIRED' }); return true })
+    socket.serviceRouter = request
     vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
     const role = vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
     const clear = { type, payload: { requestId: 'one', text: 'fixture task' } }
@@ -464,10 +511,11 @@ describe('viewer forwarding authentication', () => {
     const sealed = { type, payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }
     role.mockReturnValue('device')
     await dispatchDown(socket, sealed, 'remote')
-    expect(request).not.toHaveBeenCalled()
+    expect(request).toHaveBeenCalledWith(type, clear.payload, expect.objectContaining({ owner: false, local: false }), expect.any(Function))
+    request.mockClear()
     role.mockReturnValue('web')
     await dispatchDown(socket, sealed, 'remote')
-    expect(request).toHaveBeenCalledWith('remote', type, clear.payload)
+    expect(request).toHaveBeenCalledWith(type, clear.payload, expect.objectContaining({ owner: true, local: false, connection: 'remote', requestId: 'one' }), expect.any(Function))
     expect(sealedReply).toHaveBeenCalledWith('remote', `${type}_result`, 'one', { ok: true })
     await socket.stop()
   })
@@ -476,7 +524,7 @@ describe('viewer forwarding authentication', () => {
     const socket = relaySocket('token')
     const internals = socket as any
     const request = vi.fn(async () => ({ data: 'jpeg' }))
-    socket.viewerStreams = { frame: vi.fn(), surface: request, closed: vi.fn(), closedAll: vi.fn() }
+    socket.viewerSurface = request
     vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
     const role = vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
     const clear = { type: 'viewer_surface', payload: { requestId: 'one', surfaceId: 'surface', agentId: 'a', op: 'frame' } }
@@ -498,25 +546,39 @@ describe('viewer forwarding authentication', () => {
     // With nothing to render it, the surface is answered unavailable rather than left unanswered.
     const local = vi.fn(() => true)
     socket.registerLocalClient('local:none', { sendFrame: local, sendBinary: () => true })
-    socket.viewerStreams = null
+    socket.viewerSurface = null
     await dispatchDown(socket, { ...clear, payload: { ...clear.payload, requestId: 'two' } }, 'local:none')
     await vi.waitFor(() => expect(local).toHaveBeenCalledWith({ type: 'viewer_surface_result', payload: { requestId: 'two', error: 'VIEWER_UNAVAILABLE' } }))
     await socket.unregisterLocalClient('local:viewer')
     await socket.stop()
   })
 
+  it('keeps session browser callbacks on the target route and preserves immediate unavailable refusal', async () => {
+    const socket = relaySocket('token')
+    const local = vi.fn(() => true), gateway = gatewayOf(socket)
+    socket.registerLocalClient('local:callback', { sendFrame: local, sendBinary: () => true })
+    expect(socket.sendTargetFrame('local:callback', 'browser_open', { url: 'https://example.invalid' })).toBe(true)
+    expect(local).toHaveBeenCalledWith({ type: 'browser_open', payload: { url: 'https://example.invalid' } }, undefined)
+    const target = vi.spyOn(gateway, 'target').mockReturnValue(false)
+    const terminal = vi.spyOn(gateway, 'terminal')
+    expect(socket.sendTargetFrame('remote', 'browser_open', { url: 'https://example.invalid' })).toBe(false)
+    expect(target).toHaveBeenCalledWith('remote', 'browser_open', { url: 'https://example.invalid' }, undefined)
+    expect(terminal).not.toHaveBeenCalled()
+    await socket.stop()
+  })
+
   it('hands a viewer stream\'s answers to the one connection that opened it, and ends its streams as connections go', async () => {
     const socket = relaySocket('token')
-    const streams = { frame: vi.fn(), surface: vi.fn(), closed: vi.fn(), closedAll: vi.fn() }
-    socket.viewerStreams = streams
+    const streams = { handles: vi.fn(() => true), frame: vi.fn(), surface: vi.fn(), closed: vi.fn(), closedAll: vi.fn() }
+    socket.clientStreams = streams as unknown as ReturnType<typeof createClientStreams>
     const local = vi.fn(() => true)
     socket.registerLocalClient('local:viewer', { sendFrame: local, sendBinary: () => true })
-    expect(socket.sendViewerFrame('local:viewer', 'viewer_response', { streamId: 's1', status: 200 })).toBe(true)
-    expect(local).toHaveBeenCalledWith({ type: 'viewer_response', payload: { streamId: 's1', status: 200 } })
+    expect(socket.sendStreamFrame('viewers', 'local:viewer', 'viewer_response', { streamId: 's1', status: 200 })).toBe(true)
+    expect(local).toHaveBeenCalledWith({ type: 'viewer_response', payload: { streamId: 's1', status: 200 } }, { service: 'viewers', direction: 'client', final: false })
     // A remote connection's go through the gateway, which says whether it could take them.
     const target = vi.spyOn(gatewayOf(socket), 'target').mockReturnValue(false)
-    expect(socket.sendViewerFrame('remote', 'viewer_data', { streamId: 's1', data: 'AA==' })).toBe(false)
-    expect(target).toHaveBeenCalledWith('remote', 'viewer_data', { streamId: 's1', data: 'AA==' })
+    expect(socket.sendStreamFrame('viewers', 'remote', 'viewer_data', { streamId: 's1', data: 'AA==' })).toBe(false)
+    expect(target).toHaveBeenCalledWith('remote', 'viewer_data', { streamId: 's1', data: 'AA==' }, { service: 'viewers', direction: 'client', final: false })
     await socket.unregisterLocalClient('local:viewer')
     expect(streams.closed).toHaveBeenCalledWith('local:viewer')
     socket.fromGateway.client('r1', { role: 'web', label: null, identity: 'PUB', direct: false })
@@ -525,16 +587,19 @@ describe('viewer forwarding authentication', () => {
     await socket.fromGateway.disconnected('r2')
     expect(streams.closed).toHaveBeenCalledWith('r2')
     socket.fromGateway.linkDown()
-    expect(streams.closedAll).toHaveBeenCalledTimes(1)
+    expect(streams.closed.mock.calls.filter(call => call.length === 0)).toHaveLength(0)
     await socket.stop()
-    expect(streams.closedAll).toHaveBeenCalledTimes(2)
+    expect(streams.closed.mock.calls.filter(call => call.length === 0)).toHaveLength(1)
   })
 
   it('requires encryption and a web-role session remotely, while permitting trusted local clients', async () => {
     const socket = relaySocket('token')
     const internals = socket as any
     const handle = vi.fn()
-    socket.viewerStreams = { frame: handle, surface: vi.fn(), closed: vi.fn(), closedAll: vi.fn() }
+    socket.clientStreams = createClientStreams({ disabled: () => false, wake: () => {}, send: () => true, sendBinary: () => false,
+      endpoint: () => ({ frame: event => { handle(event.connection, event.type, event.payload); return true }, binary: () => false, closed: () => {}, control: () => {}, refused: () => {} }),
+    })
+    socket.clientStreams.connected('viewers'); socket.clientStreams.serving('viewers')
     const role = vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
     const frame = { type: 'viewer_request', payload: { streamId: 'v', agentId: 'a' } }
     const unwrap = vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue(frame)
@@ -547,10 +612,10 @@ describe('viewer forwarding authentication', () => {
     expect(handle).not.toHaveBeenCalled()
     role.mockReturnValue('web')
     await dispatchDown(socket, encrypted, 'remote')
-    expect(handle).toHaveBeenCalledWith('remote', 'viewer_request', frame.payload)
+    expect(handle).toHaveBeenCalledWith('remote', 'viewer_request', { ...frame.payload, streamId: expect.any(String) })
     socket.registerLocalClient('local:viewer', { sendFrame: () => true, sendBinary: () => true })
     await dispatchDown(socket, frame, 'local:viewer')
-    expect(handle).toHaveBeenCalledWith('local:viewer', 'viewer_request', frame.payload)
+    expect(handle).toHaveBeenCalledWith('local:viewer', 'viewer_request', { ...frame.payload, streamId: expect.any(String) })
     handle.mockClear()
     await dispatchDown(socket, { type: 'viewer_arbitrary', payload: {} }, 'local:viewer')
     expect(handle).not.toHaveBeenCalled()
@@ -667,18 +732,6 @@ vi.mock('node:fs', async (real) => {
 vi.mock('./lib/gridAttach.js', async (real) => ({
   ...await real<object>(),
   createGridAccess: () => ({ ensure: async () => ({ status: 'converged', name: null, detail: 'set up already' }) }),
-}))
-// Never the person's real ~/.claude.json or ~/.codex/config.toml: creating an agent records folder trust,
-// and an unmocked run of these specs used to write test paths into the developer's own config.
-const claudeTrust = vi.hoisted(() => ({
-  claudeTrusts: vi.fn((_path: string) => false), codexTrusts: vi.fn((_path: string, _profile?: string | null) => false),
-  preTrustClaudeProject: vi.fn((_path: string) => 'trusted' as const), preTrustCodexProject: vi.fn((_path: string, _profile?: string | null) => 'trusted' as const),
-}))
-vi.mock('./engines/launchPrep.js', async (real) => ({
-  ...await real<object>(),
-  folderTrust: (engine: string, profile?: string | null) => engine === 'claude'
-    ? { trusts: (path: string) => claudeTrust.claudeTrusts(path), record: (path: string) => claudeTrust.preTrustClaudeProject(path) }
-    : engine === 'codex' ? { trusts: (path: string) => claudeTrust.codexTrusts(path, profile), record: (path: string) => claudeTrust.preTrustCodexProject(path, profile) } : null,
 }))
 
 function parseSent(ws: InstanceType<typeof wsMock.MockWebSocket>): Array<Record<string, unknown>> {
@@ -1171,7 +1224,7 @@ describe('BackendSocket outbound queue', () => {
     socket.registerLocalClient('local:hn', { sendFrame: (frame) => { frames.push(frame as Record<string, unknown>); return true }, sendBinary: () => true })
     socket.handleLocalFrame('local:hn', { type: 'terminal_info', payload: { requestId: 'i-1', agentId: 'no-such-agent' } })
     await vi.waitFor(() => expect(frames).toContainEqual({ type: 'terminal_info_result', payload: { requestId: 'i-1', error: 'AGENT_NOT_FOUND' } }))
-    expect(handleFrame).toHaveBeenCalledWith('local:hn', 'terminal_info', expect.objectContaining({ agentId: 'no-such-agent' }))
+    expect(handleFrame).toHaveBeenCalledWith('local:hn', 'terminal_info', expect.objectContaining({ agentId: 'no-such-agent' }), undefined)
     // A terminal frame the streams take, or one nobody knows, is not answered here.
     socket.handleLocalFrame('local:hn', { type: 'terminal_resize', payload: { requestId: 'r-1', streamId: 's' } })
     socket.handleLocalFrame('local:hn', { type: 'terminal_unknown', payload: { requestId: 'u-1' } })
@@ -2226,29 +2279,29 @@ describe('BackendSocket outbound queue', () => {
   })
 
   it.each([
-    { name: 'a new empty folder', project: { projectSource: 'new' }, sourceTrusted: false, trusts: true },
-    { name: 'a clone', project: { projectSource: 'remote', repositoryUrl: 'owner/repo' }, sourceTrusted: false, trusts: false },
-    { name: 'the person\'s own repo (branch)', project: { projectSource: 'branch', gitSource: '/work/repo', branchRef: 'refs/heads/feature' }, sourceTrusted: true, trusts: false },
-    { name: 'a worktree of an untrusted repo', project: { projectSource: 'worktree', gitSource: '/work/repo', branchRef: 'refs/heads/main' }, sourceTrusted: false, trusts: false },
-    { name: 'a worktree of a repo Claude already trusts', project: { projectSource: 'worktree', gitSource: '/work/repo', branchRef: 'refs/heads/main' }, sourceTrusted: true, trusts: true },
-  ])('records Claude trust for $name: $trusts', async ({ project, sourceTrusted, trusts }) => {
-    // Only a folder the daemon made empty, or a worktree of a repo already trusted, is trusted for the person.
+    { name: 'a new empty folder', project: { projectSource: 'new' }, preparedTrust: true, prepares: true },
+    { name: 'a clone', project: { projectSource: 'remote', repositoryUrl: 'owner/repo' }, preparedTrust: false, prepares: false },
+    { name: 'the person\'s own repo (branch)', project: { projectSource: 'branch', gitSource: '/work/repo', branchRef: 'refs/heads/feature' }, preparedTrust: false, prepares: false },
+    { name: 'a worktree whose source is untrusted', project: { projectSource: 'worktree', gitSource: '/work/repo', branchRef: 'refs/heads/main' }, preparedTrust: false, prepares: true },
+    { name: 'a worktree whose source is trusted', project: { projectSource: 'worktree', gitSource: '/work/repo', branchRef: 'refs/heads/main' }, preparedTrust: true, prepares: true },
+  ])('asks the trust component only for eligible folders: $name', async ({ project, preparedTrust, prepares }) => {
+    // Core decides eligibility; the component interprets the source's native trust.
     const socket = relaySocket('token')
     // A worktree is made where Harness makes them; the other folders' places do not matter to their trust.
     const folder = project.projectSource === 'worktree' ? join(projectFolder.projectsRoot(), 'worktrees', 'repo', 'prepared') : '/work/prepared'
-    bindLaunchRequests(socket, { workspaces: preparingWorkspaces(async () => prepared(folder)) })
+    const prepareFolderTrust = vi.fn(async () => preparedTrust)
+    bindLaunchRequests(socket, { workspaces: preparingWorkspaces(async () => prepared(folder)), prepareFolderTrust })
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:trust', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
     vi.spyOn(projectFolder, 'prepareNewFolder').mockResolvedValue(folder)
-    vi.mocked(claudeTrust.claudeTrusts).mockReturnValue(sourceTrusted)
-    vi.mocked(claudeTrust.preTrustClaudeProject).mockClear()
     socket.onCreateAgent = vi.fn(async () => ({ ok: false as const, error: 'TMUX_UNAVAILABLE' }))
     try {
       socket.handleLocalFrame('local:trust', { type: 'agent_create', payload: { requestId: 'r', creationId: randomUUID(), engine: 'claude', ...project } })
       await vi.waitFor(() => expect(socket.onCreateAgent).toHaveBeenCalled())
-      if (trusts) expect(claudeTrust.preTrustClaudeProject).toHaveBeenCalledExactlyOnceWith(folder)
-      else expect(claudeTrust.preTrustClaudeProject).not.toHaveBeenCalled()
-      if (project.projectSource === 'worktree') expect(claudeTrust.claudeTrusts).toHaveBeenCalledWith('/work/repo')
+      if (prepares) expect(prepareFolderTrust).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        engine: 'claude', cwd: folder, ...(project.projectSource === 'new' ? { empty: true } : { source: '/work/repo' }),
+      }), expect.any(Function))
+      else expect(prepareFolderTrust).not.toHaveBeenCalled()
     } finally {
       await socket.unregisterLocalClient('local:trust')
       await socket.stop()
@@ -2259,7 +2312,7 @@ describe('BackendSocket outbound queue', () => {
     { name: 'an empty workspace the app just made', contents: [] as string[], nested: false, trusts: true },
     { name: 'a workspace that already has something', contents: ['Makefile'], nested: false, trusts: false },
     { name: 'an empty folder outside the projects root', contents: [] as string[], nested: true, trusts: false },
-  ])('records Claude trust for $name: $trusts', async ({ contents, nested, trusts }) => {
+  ])('asks for empty-workspace trust for $name: $trusts', async ({ contents, nested, trusts }) => {
     // A plain cwd on the LOCAL machine is the desktop handing over a workspace it just made. Trust is
     // recorded only on evidence (the readdir) and only directly inside the projects root: trust inherits
     // downward, so an empty folder the person merely browsed to would cover everything cloned under it.
@@ -2269,15 +2322,15 @@ describe('BackendSocket outbound queue', () => {
     for (const item of contents) writeFileSync(join(dir, item), 'x')
     vi.spyOn(projectFolder, 'projectsRoot').mockReturnValue(root)
     const socket = relaySocket('token')
-    bindLaunchRequests(socket)
+    const prepareFolderTrust = vi.fn(async () => true)
+    bindLaunchRequests(socket, { prepareFolderTrust })
     socket.registerLocalClient('local:cwd-trust', { sendFrame: () => true, sendBinary: () => true })
-    vi.mocked(claudeTrust.preTrustClaudeProject).mockClear()
     socket.onCreateAgent = vi.fn(async () => ({ ok: false as const, error: 'TMUX_UNAVAILABLE' }))
     try {
       socket.handleLocalFrame('local:cwd-trust', { type: 'agent_create', payload: { requestId: 'r', creationId: randomUUID(), engine: 'claude', cwd: dir } })
       await vi.waitFor(() => expect(socket.onCreateAgent).toHaveBeenCalled())
-      if (trusts) expect(claudeTrust.preTrustClaudeProject).toHaveBeenCalledExactlyOnceWith(dir)
-      else expect(claudeTrust.preTrustClaudeProject).not.toHaveBeenCalled()
+      if (trusts) expect(prepareFolderTrust).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ engine: 'claude', cwd: dir, empty: true }), expect.any(Function))
+      else expect(prepareFolderTrust).not.toHaveBeenCalled()
     } finally {
       await socket.unregisterLocalClient('local:cwd-trust')
       await socket.stop()
@@ -2285,7 +2338,7 @@ describe('BackendSocket outbound queue', () => {
     }
   })
 
-  it('does NOT record Claude trust for an empty workspace named by a relayed frame', async () => {
+  it('does not ask for trust for an empty workspace named by a relayed frame', async () => {
     // agent_create is not backend-only, so a relay frame is E2EE-unwrapped and reaches the same pre-trust
     // path. Everything else about this frame would qualify — the folder is empty AND in the projects root —
     // so the LOCAL gate is the only thing refusing it.
@@ -2294,7 +2347,8 @@ describe('BackendSocket outbound queue', () => {
     mkdirSync(dir)
     vi.spyOn(projectFolder, 'projectsRoot').mockReturnValue(root)
     const socket = relaySocket('token')
-    bindLaunchRequests(socket)
+    const prepareFolderTrust = vi.fn(async () => true)
+    bindLaunchRequests(socket, { prepareFolderTrust })
     const internals = socket as unknown as {
       e2ee: { unwrapDown: (connId: string, frame: unknown) => unknown }
       dispatchDown: (frame: unknown, connId: string, transport: string) => Promise<void>
@@ -2302,13 +2356,12 @@ describe('BackendSocket outbound queue', () => {
     vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue({
       type: 'agent_create', payload: { requestId: 'r', creationId: randomUUID(), engine: 'claude', cwd: dir },
     })
-    vi.mocked(claudeTrust.preTrustClaudeProject).mockClear()
     socket.onCreateAgent = vi.fn(async () => ({ ok: false as const, error: 'TMUX_UNAVAILABLE' }))
     try {
       await dispatchDown(socket, { type: 'agent_create', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }, 'web-1', 'relay')
       // The create ran, so the pre-trust branch was reached and declined — not skipped earlier by the gate.
       await vi.waitFor(() => expect(socket.onCreateAgent).toHaveBeenCalled())
-      expect(claudeTrust.preTrustClaudeProject).not.toHaveBeenCalled()
+      expect(prepareFolderTrust).not.toHaveBeenCalled()
     } finally {
       await socket.stop()
       rmSync(root, { recursive: true, force: true })
@@ -2435,6 +2488,30 @@ describe('BackendSocket outbound queue', () => {
     await socket.stop()
   })
 
+  it('keeps first-window delivery local, skips tools and advances past a failed physical sink', async () => {
+    const socket = relaySocket('token')
+    const tool = vi.fn(() => true), failed = vi.fn(() => true), good = vi.fn(() => true), later = vi.fn(() => true)
+    const frame = { type: 'device_prepare_open', payload: { machineId: 'local', operationId: 'op', agentId: 'a' } }
+    socket.registerLocalClient('local:tool', { sendFrame: tool, sendBinary: () => true }, { tool: true })
+    tool.mockClear()
+    expect(socket.sendFirstLocal(frame)).toBe(false)
+    expect(tool).not.toHaveBeenCalled()
+    socket.registerLocalClient('local:failed', { sendFrame: failed, sendBinary: () => true })
+    socket.registerLocalClient('local:good', { sendFrame: good, sendBinary: () => true })
+    socket.registerLocalClient('local:later', { sendFrame: later, sendBinary: () => true })
+    failed.mockClear().mockReturnValue(false); good.mockClear(); later.mockClear()
+    expect(socket.sendFirstLocal(frame)).toBe(true)
+    expect(failed).toHaveBeenCalledExactlyOnceWith(frame)
+    expect(good).toHaveBeenCalledExactlyOnceWith(frame)
+    expect(tool).not.toHaveBeenCalled()
+    expect(later).not.toHaveBeenCalled()
+    expect(socket.sendFirstLocal(frame)).toBe(true)
+    expect(failed).toHaveBeenCalledOnce()
+    expect(good).toHaveBeenCalledTimes(2)
+    for (const id of ['local:tool', 'local:failed', 'local:good', 'local:later']) await socket.unregisterLocalClient(id)
+    await socket.stop()
+  })
+
   it('hands a blocked agent to the window without putting the question on the cloud leg', async () => {
     const socket = relaySocket('token')
     expect(socket.hasLocalClient()).toBe(false)
@@ -2499,12 +2576,12 @@ describe('BackendSocket outbound queue', () => {
       compressed: false,
     }
     await socket.handleLocalBinary('local:terminal', clear)
-    expect(handleBinary).toHaveBeenCalledWith('local:terminal', clear)
+    expect(handleBinary).toHaveBeenCalledWith('local:terminal', clear, expect.any(Function))
     expect(socket.sendTerminalBinaryTo('local:terminal', clear)).toBe(true)
     expect(decodeTerminalLocal(binary[0])).toEqual(clear)
     // A frame its maker framed already (a browser stream's screen, core/browserStreams.ts) goes to a window as it is.
     const framed = encodeTerminalLocal(clear)!
-    expect(socket.sendTerminalLocalFrameTo('local:terminal', framed)).toBe(true)
+    expect(socket.sendStreamBinary('agentBrowser', 'local:terminal', framed)).toBe(true)
     expect(binary[1]).toBe(framed)
 
     socket.connect()
@@ -3038,10 +3115,10 @@ describe('agent_restart RPC', () => {
 
   it('lists stopped work only on request, without exposing old routes or launch credentials', async () => {
     const { socket, frames } = localSocket()
-    const saved = { ...BASE_SESSION, gridLaunch: { apiKey: 'fixture-private-key' } } as RegisteredSession
+    const saved = { ...BASE_SESSION, gridLaunch: storedGridFixture({ networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://grid.invalid/v1', apiKey: 'fixture-private-key' }) } as RegisteredSession
     vi.spyOn(registry, 'advertised').mockReturnValue([])
     vi.spyOn(registry, 'list').mockReturnValue([])
-    vi.spyOn(stoppedAgents, 'available').mockReturnValue([saved])
+    vi.spyOn(stoppedAgents, 'available').mockResolvedValue([saved])
     socket.handleLocalFrame('local:restart', { type: 'agents_list', payload: { requestId: 'live' } })
     socket.handleLocalFrame('local:restart', { type: 'agents_list', payload: { requestId: 'all', includeStopped: true } })
     await vi.waitFor(() => expect(frames.filter(frame => frame.type === 'agents_list_result')).toHaveLength(2))
@@ -3057,7 +3134,7 @@ describe('agent_restart RPC', () => {
     const { socket, frames } = localSocket()
     vi.spyOn(registry, 'advertised').mockReturnValue([BASE_SESSION])
     vi.spyOn(registry, 'list').mockReturnValue([BASE_SESSION])
-    vi.spyOn(stoppedAgents, 'available').mockReturnValue([{ ...BASE_SESSION, agentId: 'stopped' }])
+    vi.spyOn(stoppedAgents, 'available').mockResolvedValue([{ ...BASE_SESSION, agentId: 'stopped' }])
     const resources = vi.fn(async () => ({ sampledAt: new Date().toISOString(), agents: [{ agentId: 'agent-1', memoryBytes: 123, cpuPercent: 2, processCount: 1 }] }))
     bindAgentList(socket, { harnessResourcesReader: resources, monitorActivityProvider: sessionId => sessionId === BASE_SESSION.sessionId ? 'needsInput' : 'idle' })
     for (const [requestId, monitor] of [['plain', false], ['monitor', true]] as const) {
@@ -3746,13 +3823,54 @@ describe('the models lists pushed to the windows', () => {
   })
 
   // `agents_list`, the launch replies and the updates build frames here; only pushed frames carried it (E2E 2026-11-10).
-  it('carries the engine\'s own workspace in every frame it builds', async () => {
+  it('keeps the app caller\'s terminal and parts epoch capture while reading names after transcript work', async () => {
+    const socket = relaySocket('token')
+    const agent = { agentId: 'a-facts', sessionId: 's-facts', engine: 'claude', cwd: '/tmp', runtimes: [],
+      registeredAt: 1, active: true, defaultName: 'Before read', transcriptPath: null, model: 'stored-model' } as unknown as RegisteredSession
+    let epoch = 'first', available = false
+    const core = fakeCore({ agents: { byAgent: id => id === agent.agentId ? agent : undefined } })
+    const parts = createFrameParts({ core, epoch: () => epoch, hosts: { fixture: {
+      services: ['fixture'], heapLimitMiB: 1, rssLimitMiB: 0, frameParts: { fixture: { fields: ['dsh', 'dshName'] } },
+    } } })
+    const publisher = parts.scope('fixture', core)
+    publisher.agents.publishFrame!({ ...agent, frameEpoch: epoch }, { dsh: 'first/id', dshName: 'First' })
+    socket.framePartsProvider = session => parts.forFrame(session)
+    Object.assign(socket, { runtimeDisplayProvider: () => ({ selectedModel: 'runtime-selected', workspace: null }) })
+    const terminal = vi.spyOn(registry, 'terminalAvailable').mockImplementation(() => available)
+    let release!: (value: number) => void
+    const reading = vi.spyOn(transcriptActivity, 'transcriptActivityAt').mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    try {
+      const pending = socket.toProject(agent)
+      expect(reading).toHaveBeenCalledOnce()
+      agent.defaultName = 'After read'; available = true; epoch = 'replacement'
+      publisher.agents.publishFrame!({ ...agent, frameEpoch: epoch }, { dsh: 'replacement/id', dshName: 'Replacement' })
+      release(1)
+      expect(await pending).toMatchObject({ name: 'After read', terminal: { available: false },
+        selectedModel: 'runtime-selected', dsh: null, dshName: null })
+      expect(await socket.toProject(agent)).toMatchObject({ name: 'After read', terminal: { available: true },
+        selectedModel: 'runtime-selected', dsh: 'replacement/id', dshName: 'Replacement' })
+      expect(await socket.toStoppedProject(agent)).toMatchObject({ name: 'After read', status: 'stopped',
+        terminal: { available: false, primary: '', runtimes: [] }, selectedModel: 'stored-model', viewerUrl: null, forkable: false })
+    } finally { reading.mockRestore(); terminal.mockRestore(); await socket.stop() }
+  })
+
+  it('carries model and workspace from the runtime display projection in every live frame', async () => {
     const socket = relaySocket('token')
     const agent = { agentId: 'a-ws', sessionId: 'agent:main:plain', engine: 'openclaw', cwd: '/tmp', runtimes: [], registeredAt: 1, active: true } as unknown as RegisteredSession
-    expect((await socket.toProject(agent)).workspace).toBeUndefined()
-    socket.workspaceProvider = (s) => (s.sessionId === 'agent:main:plain' ? '/root/.openclaw/workspace' : null)
-    expect((await socket.toProject(agent)).workspace).toBe('/root/.openclaw/workspace')
-    await socket.stop()
+    try {
+      const absent = await socket.toProject(agent)
+      expect(absent.selectedModel).toBeNull()
+      expect(absent.workspace).toBeUndefined()
+      const display = vi.fn((): { selectedModel: string | null; workspace: string | null } => ({ selectedModel: 'runtime-v1:a-ws:openclaw:model@auto', workspace: '/root/.openclaw/workspace' }))
+      Object.assign(socket, { runtimeDisplayProvider: display })
+      expect(await socket.toProject(agent)).toMatchObject({ selectedModel: 'runtime-v1:a-ws:openclaw:model@auto', workspace: '/root/.openclaw/workspace' })
+      expect(display).toHaveBeenCalledOnce()
+      expect(display).toHaveBeenCalledWith(agent)
+      display.mockReturnValue({ selectedModel: null, workspace: null })
+      const empty = await socket.toProject(agent)
+      expect(empty.selectedModel).toBeNull()
+      expect(empty.workspace).toBeUndefined()
+    } finally { await socket.stop() }
   })
 
   // `harness show/ps/wait/watch` read agents_list, whose frames are built here: they say starting as pushed ones do.
@@ -4006,7 +4124,7 @@ describe('agent_recent replies', () => {
   async function recentReplyFor(role: 'web' | 'device') {
     const socket = relaySocket('token')
     // The recaps module's answer (core/turns/recaps.ts); what this checks is the socket's fitting of it.
-    socket.agentRecentProvider = () => ({ agentId: 'a1', events, asks: ['which llama.cpp build is this?'] })
+    socket.agentRecentProvider = async () => ({ agentId: 'a1', events, asks: ['which llama.cpp build is this?'] })
     socket.connect()
     const ws = wsMock.instances.at(-1)!
     ws.open()
@@ -4538,6 +4656,19 @@ describe('opening the app', () => {
     for (const id of ['local:a', 'local:b2', 'local:c']) await socket.unregisterLocalClient(id)
     socket.registerLocalClient('local:again', sink)
     expect(opened).toEqual(['desktop', 'tui', 'desktop'])
+  })
+
+  it('forwards a service observation through the existing gateway recorder without duplicate inline counts', () => {
+    const socket = new BackendSocket('fixture'), counted: string[] = []
+    const usage = vi.fn((event: UsageEvent) => countUsage(event, metric => counted.push(metric), () => {}))
+    socket.useGateway({ holdRequests: () => {}, serveThisComputerOnly: () => {}, localClients: () => {}, usage } as never)
+    const report = socket.reportUsage
+    report({ kind: 'service', service: 'agentBrowser', metric: 'agent_browser_failed_podman_old' })
+    socket.reportUsage({ kind: 'service', service: 'hachi', metric: 'hachi_wake_done' })
+    socket.reportUsage({ kind: 'service', service: 'agentBrowser', metric: 'hachi_wake_done' })
+    socket.reportUsage({ kind: 'service', service: 'hachi', metric: 'unrecognized_counter' })
+    expect(usage).toHaveBeenCalledTimes(4)
+    expect(counted).toEqual(['agent_browser_failed_podman_old', 'hachi_wake_done'])
   })
 
   it('counts hn\'s own observations from hn alone, as fixed counters', async () => {

@@ -75,9 +75,13 @@ type Manager = InstanceType<Awaited<ReturnType<typeof loadCore>>['RuntimeProfile
 async function loadCore() {
   const { RuntimeProfileState } = await import('../lib/runtimeProfileState.js')
   const { RuntimeProfileController } = await import('../lib/runtimeControl.js')
+  const { createModelControls } = await import('../core/engines/modelControls.js')
+  const { modelControlFor } = await import('./modelControls.js')
   const { encodeRuntimeProfile } = await import('../engines/kit/runtime.js')
+  const { createRuntimeTransport } = await import('../core/engines/runtimeTransport.js')
+  const { otherRuntimeRequests } = await import('./others/runtimeRequests.js')
   const { createOtherStreams } = await import('./others/streams.js')
-  return { RuntimeProfileState, RuntimeProfileController, encodeRuntimeProfile, createOtherStreams }
+  return { RuntimeProfileState, RuntimeProfileController, createModelControls, modelControlFor, encodeRuntimeProfile, createRuntimeTransport, otherRuntimeRequests, createOtherStreams }
 }
 let core: Awaited<ReturnType<typeof loadCore>>
 const configReads = new Set<Promise<boolean>>()
@@ -130,11 +134,33 @@ function check(key: string, produced: unknown): void {
 }
 
 /** Every pane, for `engine`, each read by a fresh session: what it reports changed, and the state after it. */
-function readPanes(engine: Engine, panes: string[], m: Manager = manager()): unknown[] {
-  return panes.map((pane, i) => {
-    const s = sessionOf(engine, `pane-${i}`)
-    return [m.ingestPane(s, pane, true), stateOf(m, s)]
-  })
+const workers = new WeakMap<Manager, ReturnType<Awaited<ReturnType<typeof loadCore>>['createRuntimeTransport']>>()
+function worker(m: Manager) {
+  let transport = workers.get(m)
+  if (!transport) {
+    const served = core.otherRuntimeRequests({ query: async () => ({ error: 'SERVICE_UNAVAILABLE' }) })
+    transport = core.createRuntimeTransport({ call: async (_service, method, payload) =>
+      await served.requests[method](payload, { owner: true, local: true }) as Record<string, unknown> })
+    transport.connected('engine-others'); workers.set(m, transport)
+  }
+  return transport
+}
+async function readPanes(engine: Engine, panes: string[], m: Manager = manager()): Promise<unknown[]> {
+  const output: unknown[] = []
+  for (const [i, pane] of panes.entries()) {
+    const s = sessionOf(engine, `pane-${i}`), state = m.getState(s.sessionId)
+    const changed = m.ingestPane(s, pane, true), expected = stateOf(m, s)
+    const actual = await worker(m).read(engine, { session: s, state }, { kind: 'pane', text: pane })
+    expect({ state: actual.state, selected: actual.selectedModel }, `${engine} pane ${i}`).toEqual(expected)
+    output.push([changed, expected])
+  }
+  return output
+}
+async function ingestConfig(m: Manager, s: RegisteredSession): Promise<boolean> {
+  const state = m.getState(s.sessionId), changed = await m.ingestConfig(s, true), expected = stateOf(m, s)
+  const actual = await worker(m).read(s.engine, { session: s, state }, { kind: 'config' })
+  expect({ state: actual.state, selected: actual.selectedModel }, `${s.engine} config`).toEqual(expected)
+  return changed
 }
 
 /** The engines' own programs, as the catalogs run them: each prints what the case puts in its output file. */
@@ -220,7 +246,7 @@ describe('the other engines\' runtime profiles, through the core', () => {
 
   for (const engine of ENGINES) {
     it(`${engine}: every pane, every transcript, and a switch`, async () => {
-      check(`${engine} panes`, readPanes(engine, panes))
+      check(`${engine} panes`, await readPanes(engine, panes))
       for (const transcript of transcripts) {
         const evidence = await workerEvidence(engine, transcript.lines)
         const m = manager()
@@ -236,8 +262,18 @@ describe('the other engines\' runtime profiles, through the core', () => {
       const m = manager()
       const s = sessionOf(engine, 'switch')
       const keys: unknown[] = []
+      const controls = core.createModelControls({
+        handles: () => false, inline: core.modelControlFor, resolve: () => s,
+        call: async () => { throw new Error('No remote model worker in this fixture') },
+        catalog: session => m.codexCatalog(session), capture: async () => '',
+        text: async (target, text) => { keys.push(['text', target, text]); return true },
+        literal: async (target, text) => { keys.push(['literal', target, text]); return true },
+        key: async (target, key) => { keys.push(['key', target, key]); return true },
+        waitForModel: (id, ms) => m.waitForModel(id, ms), waitForProfile: (id, ms) => m.waitForProfile(id, ms),
+        confirmEffort: (id, effort) => m.confirmEffort(id, effort),
+      })
       const controller = new core.RuntimeProfileController({
-        modelControlFor: () => undefined,
+        modelControlFor: controls.forSession,
         readScreen: async () => null,
         manager: m as never,
         getSession: () => s,
@@ -269,7 +305,7 @@ describe('the other engines\' runtime profiles, through the core', () => {
         if (text === null) rmSync(path, { force: true }); else writeFileSync(path, text)
         const m = manager()
         const s = sessionOf(engine, 'config')
-        results.push([await m.ingestConfig(s, true), stateOf(m, s)])
+        results.push([await ingestConfig(m, s), stateOf(m, s)])
       }
       rmSync(file(''), { force: true })
       check(`${engine} config`, results)
@@ -283,8 +319,8 @@ describe('the other engines\' runtime profiles, through the core', () => {
       for (const [i, catalog] of [null, ...strings[file]!].entries()) {
         output(engine, catalog)
         const m = manager()
-        const warmed = await m.ingestConfig(sessionOf(engine, 'warm'), true)
-        check(`${engine} catalog #${i}: ${catalog === null ? 'none' : sha(catalog).slice(0, 12)}`, { warmed, panes: readPanes(engine as Engine, theirs, m) })
+        const warmed = await ingestConfig(m, sessionOf(engine, 'warm'))
+        check(`${engine} catalog #${i}: ${catalog === null ? 'none' : sha(catalog).slice(0, 12)}`, { warmed, panes: await readPanes(engine as Engine, theirs, m) })
       }
       output(engine, null)
     }

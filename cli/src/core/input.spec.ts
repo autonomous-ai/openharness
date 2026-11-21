@@ -3,13 +3,11 @@ import { inlineSubmission } from '../testing/inlineSubmission.js'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { AutonomousDeviceInput } from './deviceInput.js'
-import { deviceErrorText } from './cardText.js'
 import type { RegisteredSession } from '../lib/registry.js'
-import type { SessionInputDelivery } from '../lib/sessionInput.js'
+import type { SessionInputController, SessionInputDelivery } from '../lib/sessionInput.js'
 import { TERMINAL_LEASE_REFUSED, type ProcessIdentity, type TerminalActionResult } from '../lib/terminalTypes.js'
 import { CLAUDE_REWIND_LIST, CODEX_BROWSING_SCROLLBACK } from '../lib/__fixtures__/rewindPickers.js'
-import { createInput, createMessageRequest, deviceInputDeps, messageWriter, sessionInputDeps, type InputDeps } from './input.js'
+import { createInput, createMessageRequest, messageWriter, sessionInputDeps, type InputDeps } from './input.js'
 import { createShortTurnGuard } from './turns/shortTurnGuard.js'
 import { createScreens } from './engines/screens.js'
 import { screenFor } from '../engines/screens.js'
@@ -23,6 +21,12 @@ const CLAUDE_PERMISSION = fixture('permission-claude.txt')
 const COMMANDCODE_PERMISSION = fixture('permission-commandcode.txt')
 /** A Claude Code composer that is empty and idle: ready for a team write. */
 const READY_PANE = '────────────\n❯\n────────────\n  ? for shortcuts'
+
+function pending<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => { resolve = done })
+  return { promise, resolve }
+}
 
 const agents = new Map<string, RegisteredSession>([
   ['a1', { agentId: 'a1', sessionId: 's1', engine: 'claude' } as RegisteredSession],
@@ -48,7 +52,6 @@ function deps(over: Partial<InputDeps> = {}) {
     readScreen: readInlineScreen,
     submission: inlineSubmission,
     resolve: (id) => agents.get(id),
-    byAgent: (agentId) => agents.get(agentId),
     terminal: {
       captureTerminal: vi.fn(async () => pane),
       validateTerminal: vi.fn(async () => true),
@@ -59,9 +62,9 @@ function deps(over: Partial<InputDeps> = {}) {
     deliveries: {
       settled: vi.fn((event: SessionInputDelivery) => { calls.push(`delivery settled ${event.deliveryId}`) }),
       canWrite: vi.fn(() => true),
+      input: vi.fn(),
     },
-    device: () => device,
-    clients: { send: vi.fn(), sendCommander: vi.fn() },
+    clients: { send: vi.fn() }, failure: vi.fn(),
     agentIdFor: (sessionId) => agents.get(sessionId)?.agentId ?? sessionId,
     openTurn: normalizer.openTurn,
     emit: vi.fn(),
@@ -70,22 +73,47 @@ function deps(over: Partial<InputDeps> = {}) {
   return { deps: base, calls, device, normalizer, setPane: (next: string | null) => { pane = next } }
 }
 
-/** A device pane lock that runs each write at once and remembers whose pane it was. */
-const lock = (calls: string[]): Pick<AutonomousDeviceInput, 'legacyWrite'> => ({
-  legacyWrite: <T,>(id: string, write: () => Promise<T>): Promise<T> => {
-    calls.push(`lock ${id}`)
-    return write()
-  },
-})
-
 const delivery = (deliveryId: string) => ({ deliveryId }) as unknown as SessionInputDelivery
 
 describe('the session input controller\'s dependencies', () => {
   afterEach(() => vi.restoreAllMocks())
 
+  it('copies the current activity stamp at dispatch for the concrete operation session', () => {
+    const activity = { epoch: 'core', revision: 7, state: 'idle', validForMs: 0 }
+    const run = deps({ activity: () => activity } as unknown as Partial<InputDeps>)
+    const input = sessionInputDeps(run.deps)
+    input.onInput!({ agentId: 'a1', deliveryId: 'd', sessionId: 's1', phase: 'dispatching', when: 'composer', content: 'hello' })
+    activity.revision = 8
+    expect(run.deps.deliveries.input).toHaveBeenCalledWith(expect.objectContaining({ activity: { epoch: 'core', revision: 7 } }))
+    input.onInput!({ agentId: 'a1', deliveryId: 'other', sessionId: 'replaced', phase: 'dispatching', when: 'composer' })
+    expect(vi.mocked(run.deps.deliveries.input!).mock.lastCall![0]).not.toHaveProperty('activity')
+  })
+
+  it.each(['entry', 'validation', 'capture', 'screen', 'enter'])('refuses a writer whose caller leaves during %s', async boundary => {
+    const run = deps()
+    let current = boundary !== 'entry'
+    const originalRead = run.deps.readScreen
+    if (boundary === 'validation') vi.mocked(run.deps.terminal.validateTerminal).mockImplementationOnce(async () => { current = false; return true })
+    if (boundary === 'capture') vi.mocked(run.deps.terminal.captureTerminal).mockImplementationOnce(async () => { current = false; return READY_PANE })
+    let reads = 0
+    run.deps.readScreen = async (...args) => {
+      const screen = await originalRead(...args)
+      if (++reads === (boundary === 'enter' ? 2 : 1) && ['screen', 'enter'].includes(boundary)) current = false
+      return screen
+    }
+    vi.mocked(run.deps.terminal.submitTerminalAction).mockImplementationOnce(async (_id, _text, options) => {
+      expect(await options!.beforeEnter!()).toBe('caller_gone')
+      return { state: 'unknown', dispatch: 'possibly_executed', reason: 'caller_gone' }
+    })
+    const result = await messageWriter(run.deps)('a1', 'caller text', undefined, () => current)
+    expect(result).toMatchObject({ reason: 'caller_gone', dispatch: boundary === 'enter' ? 'possibly_executed' : 'not_started' })
+    expect(run.deps.terminal.submitTerminalAction).toHaveBeenCalledTimes(boundary === 'enter' ? 1 : 0)
+    if (boundary === 'entry') expect(run.deps.terminal.validateTerminal).not.toHaveBeenCalled()
+  })
+
   it('finds a session and checks its pane through what it was given', async () => {
     const { deps: given } = deps()
-    const wired = sessionInputDeps(given, () => lock([]))
+    const wired = sessionInputDeps(given)
     expect(wired.getSession('s1')?.agentId).toBe('a1')
     expect(wired.validateRuntime).toBe(given.terminal.validateTerminal)
     expect(wired.capture).toBe(given.terminal.captureTerminal)
@@ -97,7 +125,7 @@ describe('the session input controller\'s dependencies', () => {
     const shortTurns = createShortTurnGuard({ now: () => at, log: () => {} })
     for (let i = 0; i < 10; i++) { shortTurns.started('s1', 'a1'); at += 1_000; shortTurns.ended('s1') }
     const { deps: given } = deps({ shortTurns })
-    const wired = sessionInputDeps(given, () => lock([]))
+    const wired = sessionInputDeps(given)
     expect(await wired.beforeTeamWrite!(agents.get('a1')!, 'team:service:messages:d1')).toBe('team_waiting_control')
     expect(given.terminal.captureTerminal).not.toHaveBeenCalled()
     expect(await wired.beforeTeamWrite!(agents.get('cx')!, 'team:service:messages:d2')).toBeNull()
@@ -108,24 +136,27 @@ describe('the session input controller\'s dependencies', () => {
   it('asks whether an engine\'s reader is starting, and tells the app a message waits for it', async () => {
     const starting = Promise.resolve(true)
     const { deps: given } = deps({ engineStarting: (engine) => engine === 'claude' ? starting : null })
-    const wired = sessionInputDeps(given, () => lock([]))
+    const revision = vi.fn(() => 7)
+    const wired = sessionInputDeps({ ...given, launchRevision: revision })
+    expect(wired.launchRevision!('a1')).toBe(7)
+    expect(revision).toHaveBeenCalledWith('a1')
     expect(wired.engineStarting!({ ...agents.get('a1')!, engine: 'claude' })).toBe(starting)
     expect(wired.engineStarting!({ ...agents.get('a1')!, engine: 'codex' })).toBeNull()
-    expect(sessionInputDeps(deps().deps, () => lock([])).engineStarting!(agents.get('a1')!)).toBeNull()
+    expect(sessionInputDeps(deps().deps).engineStarting!(agents.get('a1')!)).toBeNull()
     const sync = vi.fn()
-    sessionInputDeps(deps({ sync }).deps, () => lock([])).onWaitChanged!('a1')
+    sessionInputDeps(deps({ sync }).deps).onWaitChanged!('a1')
     expect(sync).toHaveBeenCalledWith('a1')
-    sessionInputDeps(deps().deps, () => lock([])).onWaitChanged!('a1')
+    sessionInputDeps(deps().deps).onWaitChanged!('a1')
     wired.onWaiting!('s1', 'engine_starting')
     expect(given.clients.send).toHaveBeenCalledWith({ type: 'message_waiting', agentId: 'a1', dbSessionId: 's1', payload: { reason: 'engine_starting' } })
   })
 
   it('moves a first task back to wait on its row and back to typed, and lets it go once a turn took it, through what it was given', async () => {
     const untype = vi.fn(async () => true)
-    const retype = vi.fn(async (agentId: string) => agentId === 'oc' ? 'Say hello' : null)
+    const retype = vi.fn(async (agentId: string, text: string) => agentId === 'oc' && text === 'Say hello')
     const taken = vi.fn(async () => true)
     const sync = vi.fn()
-    const wired = sessionInputDeps(deps({ firstTask: { untype, retype, taken }, sync }).deps, () => lock([]))
+    const wired = sessionInputDeps(deps({ firstTask: { untype, retype, taken }, sync }).deps)
     expect(await wired.untypeFirstTask!('oc', 'Say hello')).toBe(true)
     // Typed again only as the controller asked for it: another task, or none, is not its own.
     expect(await wired.retypeFirstTask!('oc', 'Say hello')).toBe(true)
@@ -135,7 +166,7 @@ describe('the session input controller\'s dependencies', () => {
     await vi.waitFor(() => expect(sync).toHaveBeenCalledWith('oc'))
     expect(untype.mock.calls).toEqual([['oc', 'Say hello']])
     expect(taken.mock.calls).toEqual([['oc']])
-    const none = sessionInputDeps(deps().deps, () => lock([]))
+    const none = sessionInputDeps(deps().deps)
     expect('untypeFirstTask' in none || 'retypeFirstTask' in none || 'onFirstTaskTaken' in none).toBe(false)
   })
 
@@ -144,44 +175,41 @@ describe('the session input controller\'s dependencies', () => {
     const sync = vi.fn()
     const taken = vi.fn<(agentId: string) => Promise<boolean>>()
     taken.mockResolvedValueOnce(false).mockRejectedValueOnce(new TypeError('disk full'))
-    const wired = sessionInputDeps(deps({ firstTask: { untype: vi.fn(), retype: vi.fn(), taken }, sync }).deps, () => lock([]))
+    const wired = sessionInputDeps(deps({ firstTask: { untype: vi.fn(), retype: vi.fn(), taken }, sync }).deps)
     wired.onFirstTaskTaken!('oc')
     wired.onFirstTaskTaken!('oc')
     await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[agent] oc first task typed kept · TypeError'))
     expect(sync).not.toHaveBeenCalled()
     // With no windows to push to, nothing is pushed.
     taken.mockResolvedValueOnce(true)
-    sessionInputDeps(deps({ firstTask: { untype: vi.fn(), retype: vi.fn(), taken } }).deps, () => lock([])).onFirstTaskTaken!('oc')
+    sessionInputDeps(deps({ firstTask: { untype: vi.fn(), retype: vi.fn(), taken } }).deps).onFirstTaskTaken!('oc')
     await vi.waitFor(() => expect(taken).toHaveBeenCalledTimes(3))
   })
 
   it('hands the controller the move gate when it was given one, and none otherwise', () => {
     const { deps: given } = deps()
-    expect('moveGate' in sessionInputDeps(given, () => lock([]))).toBe(false)
+    expect('moveGate' in sessionInputDeps(given)).toBe(false)
     const moveGate = { held: () => false } as unknown as NonNullable<InputDeps['moveGate']>
-    expect(sessionInputDeps({ ...given, moveGate }, () => lock([])).moveGate).toBe(moveGate)
+    expect(sessionInputDeps({ ...given, moveGate }).moveGate).toBe(moveGate)
   })
 
-  it('tells the device of a delivery first, then its caller; its caller alone without a device', () => {
+  it('tells the shared delivery route once', () => {
     const one = deps()
-    sessionInputDeps(one.deps, () => lock([])).onDelivery!(delivery('d1'))
-    expect(one.calls).toEqual(['device delivery d1', 'delivery settled d1'])
-    const two = deps({ device: () => undefined })
-    sessionInputDeps(two.deps, () => lock([])).onDelivery!(delivery('d2'))
-    expect(two.calls).toEqual(['delivery settled d2'])
+    sessionInputDeps(one.deps).onDelivery!(delivery('d1'))
+    expect(one.calls).toEqual(['delivery settled d1'])
   })
 
-  it('writes and keys through the device\'s pane lock', async () => {
+  it('provides the guarded message writer and key operation to the input owner', async () => {
     const { deps: given, calls } = deps()
-    const wired = sessionInputDeps(given, () => lock(calls))
+    const wired = sessionInputDeps(given)
     expect(await wired.inject('a1', 'hello')).toBe(ok)
     expect(await wired.sendKey('a1', 'enter')).toBe(ok)
-    expect(calls).toEqual(['lock a1', 'submit a1 hello', 'lock a1', 'key a1 enter'])
+    expect(calls).toEqual(['submit a1 hello', 'key a1 enter'])
   })
 
   it('types a message only into a pane it has read in the pane\'s lock and found ready for one', async () => {
     const run = deps()
-    const wired = sessionInputDeps(run.deps, () => lock(run.calls))
+    const wired = sessionInputDeps(run.deps)
     run.setPane(CLAUDE_PERMISSION)
     expect(await wired.inject('a1', 'hello')).toEqual({ state: 'failed', dispatch: 'not_started', reason: 'permission_open' })
     run.setPane(CLAUDE_REWIND_LIST)
@@ -191,7 +219,7 @@ describe('the session input controller\'s dependencies', () => {
     run.setPane(COMMANDCODE_PERMISSION)
     expect(await wired.inject('cc', 'hello')).toEqual({ state: 'failed', dispatch: 'not_started', reason: 'permission_open' })
     // Nothing written, each read inside the lock.
-    expect(run.calls).toEqual(['lock a1', 'lock a1', 'lock cx', 'lock cc'])
+    expect(run.calls).toEqual([])
     // Claude Code's and Codex's panes are typed into only when read and their composer is on screen; another
     // engine's pane that cannot be read is written as before; an agent that is not there, not at all.
     run.setPane(null)
@@ -211,7 +239,7 @@ describe('the session input controller\'s dependencies', () => {
     const openclawPane = (name: string) => readFileSync(new URL(`../engines/openclaw/__fixtures__/${name}`, import.meta.url), 'utf8')
     const notReady = { state: 'failed', dispatch: 'not_started', reason: 'openclaw_not_ready' }
     const run = deps()
-    const wired = sessionInputDeps(run.deps, () => lock(run.calls))
+    const wired = sessionInputDeps(run.deps)
     for (const pane of ['screen-history-failed.txt', 'screen-history-refused.txt', 'screen-starting-up.txt', 'screen-sending.txt', 'screen-no-gateway.txt']) {
       run.setPane(openclawPane(pane))
       expect(await wired.inject('oc', 'hi'), pane).toEqual(notReady)
@@ -219,7 +247,7 @@ describe('the session input controller\'s dependencies', () => {
     run.setPane(null)
     expect(await wired.inject('oc', 'hi')).toEqual(notReady)
     const unread = deps({ readScreen: async () => null })
-    expect(await sessionInputDeps(unread.deps, () => lock([])).inject('oc', 'hi')).toEqual(notReady)
+    expect(await sessionInputDeps(unread.deps).inject('oc', 'hi')).toEqual(notReady)
     run.setPane(openclawPane('screen-plain.txt'))
     expect(await wired.inject('oc', 'hi')).toBe(ok)
     expect([...run.calls, ...unread.calls].filter((call) => call.startsWith('submit'))).toEqual(['submit oc hi'])
@@ -261,7 +289,7 @@ describe('the session input controller\'s dependencies', () => {
 
   it('reads the pane after its engine has answered, so a dialog opened during the wait is seen', async () => {
     const run = deps()
-    const wired = sessionInputDeps(run.deps, () => lock(run.calls))
+    const wired = sessionInputDeps(run.deps)
     const order: string[] = []
     // The check that waits for the engine (a probe timed out, a restart recording its engine), and a
     // permission prompt that opens while it waits.
@@ -448,7 +476,7 @@ describe('the session input controller\'s dependencies', () => {
 
   it('writes a team turn only into a ready pane whose delivery still holds control', async () => {
     const run = deps()
-    const wired = sessionInputDeps(run.deps, () => lock(run.calls))
+    const wired = sessionInputDeps(run.deps)
     expect(await wired.injectTeam!('nobody', 'hi', 'd1')).toEqual({ state: 'failed', dispatch: 'not_started', reason: 'team_waiting_unavailable' })
     run.setPane(null)
     expect(await wired.injectTeam!('a1', 'hi', 'd1')).toEqual({ state: 'failed', dispatch: 'not_started', reason: 'team_waiting_unavailable' })
@@ -461,29 +489,44 @@ describe('the session input controller\'s dependencies', () => {
 
   it('holds team and device writes when an otherwise readable screen has no worker evidence', async () => {
     const run = deps({ readScreen: async () => null })
-    const wired = sessionInputDeps(run.deps, () => lock(run.calls))
+    const wired = sessionInputDeps(run.deps)
     expect(await wired.beforeTeamWrite!(agents.get('a1')!)).toBe('team_waiting_unavailable')
     expect(await wired.inject('a1', 'hello')).toMatchObject({ dispatch: 'not_started', reason: 'screen_unreadable' })
     expect(await wired.injectTeam!('a1', 'hello', 'delivery')).toMatchObject({ dispatch: 'not_started', reason: 'team_waiting_unavailable' })
-    const device = deviceInputDeps(run.deps, () => ({ acquireControl: vi.fn(), submit: vi.fn(), cancelDelivery: vi.fn() }))
-    expect(await device.isAwaitingUser!(agents.get('a1')!)).toBe(true)
     expect(run.deps.terminal.submitTerminalAction).not.toHaveBeenCalled()
     expect(run.deps.terminal.keyTerminalAction).not.toHaveBeenCalled()
   })
 
-  it('reports an error to the app and, in the device\'s words, to the dial', () => {
+  it('publishes the raw input error and hands its failure facts to the component without constructing a card', () => {
+    const failure = vi.fn(), { deps: given } = deps({ failure })
+    const clients = { ...given.clients, sendCommander: vi.fn() }
+    sessionInputDeps({ ...given, clients }).onError('s1', 'The agent did not accept the message. Please try again.')
+    expect(given.clients.send).toHaveBeenCalledExactlyOnceWith({ type: 'error', agentId: 'a1', dbSessionId: 's1',
+      payload: { message: 'The agent did not accept the message. Please try again.' } })
+    expect(failure).toHaveBeenCalledExactlyOnceWith({ agentId: 'a1', sessionId: 's1', engine: 'claude',
+      message: 'The agent did not accept the message. Please try again.' })
+    expect(vi.mocked(given.clients.send).mock.invocationCallOrder[0]).toBeLessThan(failure.mock.invocationCallOrder[0])
+    expect(clients.sendCommander).not.toHaveBeenCalled()
+  })
+
+  it('keeps the captured app address when its publication reenters a changed binding and the engine is absent', () => {
+    let agentId = 'before'
+    const { deps: given } = deps({ agentIdFor: () => agentId, resolve: () => undefined })
+    vi.mocked(given.clients.send).mockImplementation(() => { agentId = 'after' })
+    sessionInputDeps(given).onError('session', 'raw')
+    expect(given.failure).toHaveBeenCalledExactlyOnceWith({ agentId: 'before', sessionId: 'session', message: 'raw' })
+  })
+
+  it('reports an error to the app and its raw facts to the lifecycle', () => {
     const { deps: given } = deps()
-    sessionInputDeps(given, () => lock([])).onError('s1', 'the pane is gone')
+    sessionInputDeps(given).onError('s1', 'the pane is gone')
     expect(given.clients.send).toHaveBeenCalledWith({ type: 'error', agentId: 'a1', dbSessionId: 's1', payload: { message: 'the pane is gone' } })
-    expect(given.clients.sendCommander).toHaveBeenCalledWith({
-      type: 'commander_event', agentId: 'a1', dbSessionId: 's1',
-      payload: { kind: 'error', text: deviceErrorText('the pane is gone', 'claude') },
-    })
+    expect(given.failure).toHaveBeenCalledWith({ agentId: 'a1', sessionId: 's1', engine: 'claude', message: 'the pane is gone' })
   })
 
   it('opens a Command Code turn on our own paste, in its worker, and nobody else\'s', async () => {
     const { deps: given, normalizer } = deps()
-    const wired = sessionInputDeps(given, () => lock([]))
+    const wired = sessionInputDeps(given)
     for (const id of ['a1', 'nobody', 'cc-new', 'cc-none']) wired.onSubmitted!(id, 'hi')
     await Promise.resolve(); await Promise.resolve()
     expect(given.emit).not.toHaveBeenCalled()
@@ -497,7 +540,7 @@ describe('the session input controller\'s dependencies', () => {
   // until the binding pass had read the run's timer change.
   it('says an OpenClaw works from our own paste of a message, and nobody else', () => {
     const sending = vi.fn()
-    const wired = sessionInputDeps(deps({ sending }).deps, () => lock([]))
+    const wired = sessionInputDeps(deps({ sending }).deps)
     for (const id of ['a1', 'nobody', 'cc']) wired.onSubmitted!(id, 'hi')
     expect(sending).not.toHaveBeenCalled()
     wired.onSubmitted!('oc', 'hi')
@@ -505,89 +548,220 @@ describe('the session input controller\'s dependencies', () => {
   })
 })
 
-describe('the device input\'s dependencies', () => {
-  it('reaches the terminal directly, its messages through the one writer', async () => {
-    const { deps: given } = deps()
-    const wired = deviceInputDeps(given, () => ({ acquireControl: vi.fn(), submit: vi.fn(), cancelDelivery: vi.fn() }))
-    expect(wired.getSession('a1')?.sessionId).toBe('s1')
-    expect(wired.validateRuntime).toBe(given.terminal.validateTerminal)
-    expect(wired.sendKey).toBe(given.terminal.keyTerminalAction)
-    expect(wired.capture).toBe(given.terminal.captureTerminal)
-    // Its writes are read first, as every message's is.
-    expect(await wired.inject('a1', 'hello')).toBe(ok)
-    expect(given.terminal.captureTerminal).toHaveBeenCalledWith('a1')
-  })
-
-  it('waits for the person when the pane cannot be read or asks a question', async () => {
-    const run = deps()
-    const wired = deviceInputDeps(run.deps, () => ({ acquireControl: vi.fn(), submit: vi.fn(), cancelDelivery: vi.fn() }))
-    run.setPane(null)
-    expect(await wired.isAwaitingUser!(agents.get('a1')!)).toBe(true)
-    run.setPane(READY_PANE)
-    expect(await wired.isAwaitingUser!(agents.get('a1')!)).toBe(false)
-  })
-
-  it('waits for the person while anything a message is not typed into is open', async () => {
-    const run = deps()
-    const wired = deviceInputDeps(run.deps, () => ({ acquireControl: vi.fn(), submit: vi.fn(), cancelDelivery: vi.fn() }))
-    run.setPane(CLAUDE_PERMISSION)
-    expect(await wired.isAwaitingUser!(agents.get('a1')!)).toBe(true)
-    run.setPane(CLAUDE_REWIND_LIST)
-    expect(await wired.isAwaitingUser!(agents.get('a1')!)).toBe(true)
-    run.setPane(CODEX_BROWSING_SCROLLBACK)
-    expect(await wired.isAwaitingUser!(agents.get('cx')!)).toBe(true)
-  })
-
-  it('hands queued input to the controller, answering control included', () => {
-    const { deps: given } = deps()
-    const controller = { acquireControl: vi.fn(() => null), submit: vi.fn(), cancelDelivery: vi.fn(() => true) }
-    const wired = deviceInputDeps(given, () => controller)
-    wired.acquireControl('a1')
-    wired.legacySubmit('a1', 'hi', 'd1')
-    expect(wired.legacyCancel('d1')).toBe(true)
-    expect(controller.acquireControl).toHaveBeenCalledWith('a1', { forAnswer: true })
-    expect(controller.submit).toHaveBeenCalledWith('a1', 'hi', 'd1')
-    expect(controller.cancelDelivery).toHaveBeenCalledWith('d1')
-  })
-
-  it('tells the device service what happened, when there is one', () => {
-    const run = deps()
-    const wired = deviceInputDeps(run.deps, () => ({ acquireControl: vi.fn(), submit: vi.fn(), cancelDelivery: vi.fn() }))
-    const status = { agentId: 'a1' } as unknown as Parameters<NonNullable<typeof wired.onInputStatus>>[0]
-    wired.onDelivery(delivery('d1'))
-    wired.onDispatch!('a1', 'd1', 'hi')
-    wired.onDispatch!('nobody', 'd2', 'hi')
-    wired.onInputStatus(status)
-    wired.onForget!('a1')
-    expect(run.device.delivery).toHaveBeenCalledTimes(1)
-    expect(run.device.inputDispatched.mock.calls).toEqual([['a1', 'd1', 'hi', 's1'], ['nobody', 'd2', 'hi', undefined]])
-    expect(run.device.inputStatus).toHaveBeenCalledWith(status)
-    expect(run.device.agentGone).toHaveBeenCalledWith('a1')
-    const none = deviceInputDeps(deps({ device: () => undefined }).deps, () => ({ acquireControl: vi.fn(), submit: vi.fn(), cancelDelivery: vi.fn() }))
-    expect(() => {
-      none.onDelivery(delivery('d3'))
-      none.onDispatch!('a1', 'd3', 'hi')
-      none.onInputStatus(status)
-      none.onForget!('a1')
-    }).not.toThrow()
-  })
-})
-
 describe('createInput', () => {
-  afterEach(() => vi.restoreAllMocks())
+  afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
 
-  it('wires the two controllers to each other: a queued write takes the device lock, a device answer takes queue control', async () => {
+  it.each([undefined, 'tracked'])('releases completed input content and caller authority (%s)', async deliveryId => {
+    vi.useFakeTimers()
+    const run = deps(), inputs = createInput(run.deps)
+    const current = () => true
+    inputs.submitInput('a1', { content: 'content retained only while pending', when: deliveryId ? 'turn' : 'composer', deliveryId, current })
+    await vi.advanceTimersByTimeAsync(0)
+    const states = Reflect.get(inputs.input, 'states') as Map<string, { operation?: unknown; awaitingContent: string | null }>
+    expect(states.get('a1')!.operation).toBeDefined()
+    inputs.input.onTurnStarted('a1', 'content retained only while pending')
+    expect(states.get('a1')!.awaitingContent).toBeNull()
+    expect(states.get('a1')!.operation).toBeUndefined()
+    inputs.input.forget('a1')
+  })
+
+  it('shares one eight-item queue between ordinary messages and correlated composer input', async () => {
+    vi.useFakeTimers()
     const run = deps()
     const inputs = createInput(run.deps)
-    const lockWrite = vi.spyOn(inputs.deviceInput, 'legacyWrite')
-    const acquire = vi.spyOn(inputs.input, 'acquireControl')
-    // What each controller was given (its constructor's dependencies) reaches the other one.
-    const given = (controller: object) => (controller as unknown as { deps: Record<string, (...args: unknown[]) => unknown> }).deps
-    expect(await given(inputs.input).inject('a1', 'hello')).toBe(ok)
-    expect(lockWrite).toHaveBeenCalledWith('a1', expect.any(Function))
-    const release = given(inputs.deviceInput).acquireControl('a1') as (() => void) | null
-    expect(acquire).toHaveBeenCalledWith('a1', { forAnswer: true })
+    const release = inputs.acquireTerminalControl('a1')!
+    const receipts = Array.from({ length: 5 }, () => vi.fn())
+    for (let index = 0; index < 4; index++) {
+      inputs.messageRequest({ agentId: 'a1', content: `ordinary ${index}` }, receipts[index])
+      inputs.submitInput('a1', { content: `correlated ${index}`, deliveryId: `delivery-${index}`, when: 'composer' })
+    }
+    inputs.messageRequest({ agentId: 'a1', content: 'ninth input' }, receipts[4])
+    expect(receipts[4]).toHaveBeenCalledWith('queue_full')
+    expect(run.deps.terminal.submitTerminalAction).not.toHaveBeenCalled()
+    inputs.input.forget('a1')
+    release()
+  })
+
+  it('keeps original caller authority through validation and through the actual Enter guard', async () => {
+    vi.useFakeTimers()
+    let current = true
+    const validation = pending<boolean>()
+    const run = deps()
+    vi.mocked(run.deps.terminal.validateTerminal).mockImplementationOnce(() => validation.promise)
+    const inputs = createInput(run.deps)
+    inputs.submitInput('a1', { content: 'revoked before paste', when: 'composer', deliveryId: 'first', current: () => current })
+    current = false
+    validation.resolve(true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.deps.terminal.submitTerminalAction).not.toHaveBeenCalled()
+    expect(run.deps.deliveries.settled).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'first', state: 'rejected', reason: 'caller_gone' }))
+    expect(run.deps.clients.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'error' }))
+    current = true
+    let allowed!: () => boolean
+    let beforeEnter!: () => Promise<string | null>
+    vi.mocked(run.deps.terminal.submitTerminalAction).mockImplementationOnce(async (_id, _text, options) => {
+      allowed = options!.allowed!
+      beforeEnter = options!.beforeEnter!
+      current = false
+      expect(allowed()).toBe(false)
+      expect(await beforeEnter()).toBe('caller_gone')
+      return { state: 'unknown', dispatch: 'possibly_executed', reason: 'caller_gone' }
+    })
+    inputs.submitInput('a1', { content: 'revoked after paste', when: 'composer', deliveryId: 'second', current: () => current })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.deps.deliveries.settled).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'second', state: 'unknown' }))
+    expect(run.deps.terminal.keyTerminalAction).not.toHaveBeenCalled()
+    inputs.input.forget('a1')
+  })
+
+  it('requires fresh composer evidence after a turn event, even when its text is identical', async () => {
+    vi.useFakeTimers()
+    const run = deps()
+    let draft: 'pending' | 'clear' = 'pending'
+    run.deps.submission = { ...inlineSubmission, read: vi.fn(async () => ({ draft: draft === 'pending', composer: true, nativeDraft: draft })) }
+    const inputs = createInput(run.deps)
+    inputs.submitInput('a1', { content: 'same words', when: 'composer', deliveryId: 'first' })
+    await vi.advanceTimersByTimeAsync(0)
+    inputs.submitInput('a1', { content: 'next words', when: 'composer', deliveryId: 'second' })
+    inputs.input.onTurnStarted('a1', 'same words')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.deps.terminal.submitTerminalAction).toHaveBeenCalledTimes(1)
+    expect(run.deps.deliveries.settled).not.toHaveBeenCalledWith(expect.objectContaining({ state: 'started' }))
+    draft = 'clear'
+    inputs.input.onTurnStarted('a1', 'same words')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(vi.mocked(run.deps.terminal.submitTerminalAction).mock.calls.map(call => call[1])).toEqual(['same words', 'next words'])
+    inputs.input.forget('a1')
+  })
+
+  it('writes an ordinary window message with no component attached', async () => {
+    vi.useFakeTimers()
+    const run = deps(), inputs = createInput(run.deps)
+    inputs.messageRequest({ agentId: 'a1', content: 'from the window' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.deps.terminal.submitTerminalAction).toHaveBeenCalledWith('a1', 'from the window', expect.any(Object))
+    inputs.input.forget('a1')
+  })
+
+  it('resumes an ordinary message already validating before the next native device input', async () => {
+    vi.useFakeTimers()
+    const run = deps(), validation = pending<boolean>(), native = pending<TerminalActionResult>()
+    vi.mocked(run.deps.terminal.validateTerminal).mockImplementationOnce(() => validation.promise)
+    vi.mocked(run.deps.terminal.submitTerminalAction).mockImplementationOnce(() => native.promise)
+    const inputs = createInput(run.deps)
+    inputs.messageRequest({ agentId: 'a1', content: 'from the window' })
+    inputs.submitInput('a1', { content: 'device A', deliveryId: 'device-A', when: 'composer' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.deps.terminal.submitTerminalAction).toHaveBeenCalledWith('a1', 'device A', expect.any(Object))
+    validation.resolve(true)
+    await vi.advanceTimersByTimeAsync(0)
+    inputs.submitInput('a1', { content: 'device B', deliveryId: 'device-B', when: 'composer' })
+    expect(run.deps.terminal.submitTerminalAction).toHaveBeenCalledTimes(1)
+    native.resolve(ok)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(vi.mocked(run.deps.terminal.submitTerminalAction).mock.calls.map((call) => call[1]))
+      .toEqual(['device A', 'from the window'])
+    inputs.input.onTurnStarted('a1', 'from the window')
+    await vi.advanceTimersByTimeAsync(100)
+    expect(vi.mocked(run.deps.terminal.submitTerminalAction).mock.calls.map((call) => call[1]))
+      .toEqual(['device A', 'from the window', 'device B'])
+    inputs.input.forget('a1')
+  })
+
+  it('holds an old native write through forget without releasing new control or writing an old waiting message', async () => {
+    vi.useFakeTimers()
+    let session = agents.get('a1')!
+    const run = deps({ resolve: () => session })
+    const validation = pending<boolean>(), native = pending<TerminalActionResult>()
+    vi.mocked(run.deps.terminal.validateTerminal).mockImplementationOnce(() => validation.promise)
+    vi.mocked(run.deps.terminal.submitTerminalAction).mockImplementationOnce(() => native.promise)
+    const inputs = createInput(run.deps)
+    inputs.messageRequest({ agentId: 'a1', content: 'old waiting message' })
+    inputs.submitInput('a1', { content: 'old native write', deliveryId: 'old-device', when: 'composer' })
+    await vi.advanceTimersByTimeAsync(0)
+    validation.resolve(true)
+    await vi.advanceTimersByTimeAsync(0)
+    // The composition root forgets shared input before the device's active dispatch.
+    inputs.input.forget('a1')
+    session = { ...session, sessionId: 'new-session' }
+    const release = inputs.acquireTerminalControl('a1')!
     expect(release).toBeTypeOf('function')
+    inputs.submitInput('a1', { content: 'new native write', deliveryId: 'new-device', when: 'composer' })
+    await vi.advanceTimersByTimeAsync(100)
+    expect(run.deps.terminal.submitTerminalAction).toHaveBeenCalledTimes(1)
+    native.resolve(ok)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(inputs.input.controlHeld('a1')).toBe(true)
+    expect(run.deps.terminal.submitTerminalAction).toHaveBeenCalledTimes(1)
+    release()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(vi.mocked(run.deps.terminal.submitTerminalAction).mock.calls.map((call) => call[1]))
+      .toEqual(['old native write', 'new native write'])
+    inputs.input.forget('a1')
+  })
+
+  it.each(['composer', 'personal'])('wakes recreated input after the old %s write actually settles', async kind => {
+    vi.useFakeTimers()
+    let session = agents.get('a1')!
+    const run = deps({ resolve: () => session }), writing = pending<TerminalActionResult>()
+    vi.mocked(run.deps.terminal.submitTerminalAction).mockImplementationOnce(() => writing.promise)
+    const inputs = createInput(run.deps)
+    if (kind === 'composer') inputs.submitInput('a1', { content: 'old write', deliveryId: 'old', when: 'composer' })
+    else inputs.messageRequest({ agentId: 'a1', content: 'old write' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.deps.terminal.submitTerminalAction).toHaveBeenCalledTimes(1)
+    inputs.input.forget('a1')
+    session = { ...session, sessionId: 'replacement-session' }
+    inputs.submitInput('a1', { content: 'replacement write', deliveryId: 'replacement', when: 'composer' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.deps.terminal.submitTerminalAction).toHaveBeenCalledTimes(1)
+    writing.resolve(ok)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(vi.mocked(run.deps.terminal.submitTerminalAction).mock.calls.map(call => call[1]))
+      .toEqual(['old write', 'replacement write'])
+    inputs.input.forget('a1')
+  })
+
+  it('retains a possibly pasted composer after caller revocation and a rejected write until fresh evidence clears it', async () => {
+    vi.useFakeTimers()
+    let current = true, draft: 'pending' | 'clear' = 'pending'
+    const run = deps(), writing = pending<TerminalActionResult>()
+    run.deps.submission = { ...inlineSubmission, read: vi.fn(async () => ({ draft: draft === 'pending', composer: true, nativeDraft: draft })) }
+    vi.mocked(run.deps.terminal.submitTerminalAction).mockImplementationOnce(async () => {
+      await writing.promise
+      throw new Error('reader failed after paste')
+    })
+    const inputs = createInput(run.deps)
+    inputs.submitInput('a1', { content: 'uncertain write', deliveryId: 'uncertain', when: 'composer', current: () => current })
+    await vi.advanceTimersByTimeAsync(0)
+    inputs.submitInput('a1', { content: 'next write', deliveryId: 'next', when: 'composer' })
+    current = false
+    writing.resolve(ok)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.deps.deliveries.settled).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'uncertain', state: 'unknown' }))
+    expect(run.deps.terminal.submitTerminalAction).toHaveBeenCalledTimes(1)
+    inputs.input.onTurnStarted('a1', 'uncertain write')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.deps.terminal.submitTerminalAction).toHaveBeenCalledTimes(1)
+    expect(run.deps.terminal.keyTerminalAction).not.toHaveBeenCalled()
+    draft = 'clear'
+    inputs.input.onTurnStarted('a1', 'uncertain write')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(vi.mocked(run.deps.terminal.submitTerminalAction).mock.calls.map(call => call[1]))
+      .toEqual(['uncertain write', 'next write'])
+    inputs.input.forget('a1')
+  })
+
+  it('lets an answer take control while correlated input waits on a question', async () => {
+    vi.useFakeTimers()
+    const run = deps(), inputs = createInput(run.deps)
+    run.setPane(CLAUDE_PERMISSION)
+    inputs.submitInput('a1', { content: 'waiting', deliveryId: 'waiting', when: 'composer' })
+    await vi.advanceTimersByTimeAsync(0)
+    const release = inputs.acquireTerminalControl('a1', { forAnswer: true })
+    expect(release).toBeTypeOf('function')
+    expect(run.deps.terminal.submitTerminalAction).not.toHaveBeenCalled()
+    inputs.input.forget('a1')
     release!()
   })
 
@@ -624,12 +798,12 @@ describe('createInput', () => {
     })
     const run = deps({
       resolve: (id) => id === 'oc' ? row : agents.get(id),
-      firstTask: { untype: vi.fn(async () => true), retype: vi.fn(async () => null), taken },
+      firstTask: { untype: vi.fn(async () => true), retype: vi.fn(async () => false), taken },
       sync: (id) => { starting.push(agentStarting(row, inputs.input.firstTaskWaiting(id), Date.now())) },
     })
     run.setPane(readFileSync(new URL('../engines/openclaw/__fixtures__/screen-plain.txt', import.meta.url), 'utf8'))
     const inputs = createInput(run.deps)
-    inputs.input.expectFirstTask('oc')
+    inputs.input.expectFirstTask('oc', 'Say hello')
     inputs.input.submitFirstTask('oc', 'Say hello')
     await vi.waitFor(() => expect(inputs.input.awaitingConfirmation('oc')).toBe(true))
     inputs.input.onTurnStarted('oc', 'Say hello')
@@ -641,35 +815,35 @@ describe('createInput', () => {
   it('lets an agent\'s typed first task go from its row once a turn takes it', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const taken = vi.fn(async () => true)
-    const run = deps({ firstTask: { untype: vi.fn(async () => true), retype: vi.fn(async () => null), taken } })
+    const run = deps({ firstTask: { untype: vi.fn(async () => true), retype: vi.fn(async () => false), taken } })
     run.setPane(readFileSync(new URL('../engines/openclaw/__fixtures__/screen-plain.txt', import.meta.url), 'utf8'))
     const { input } = createInput(run.deps)
-    input.expectFirstTask('oc')
+    input.expectFirstTask('oc', 'Say hello')
     input.submitFirstTask('oc', 'Say hello')
     await vi.waitFor(() => expect(input.awaitingConfirmation('oc')).toBe(true))
     input.onTurnStarted('oc', 'Say hello')
-    expect(taken.mock.calls).toEqual([['oc']])
+    expect(taken.mock.calls).toEqual([['oc', 'Say hello']])
     input.forget('oc')
   })
 
   it('submits a message under the agent\'s id, adapting a slash command its engine lacks', () => {
     const inputs = createInput(deps().deps)
-    const submit = vi.spyOn(inputs.input, 'submit').mockImplementation(() => {})
+    const submit = vi.spyOn(inputs.input, 'submitInput').mockImplementation(() => {})
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     inputs.submitAgent('s1', 'hello', 'd1')
     inputs.submitAgent('cc', '/loop fix it')
     inputs.submitAgent('nobody', 'hi')
     expect(submit.mock.calls).toEqual([
-      ['a1', 'hello', 'd1', undefined],
-      ['cc', 'fix it', undefined, undefined],
-      ['nobody', 'hi', undefined, undefined],
+      ['a1', { content: 'hello', deliveryId: 'd1', receipt: undefined, when: 'turn' }],
+      ['cc', { content: 'fix it', deliveryId: undefined, receipt: undefined, when: 'composer' }],
+      ['nobody', { content: 'hi', deliveryId: undefined, receipt: undefined, when: 'composer' }],
     ])
     expect(log.mock.calls.flat().filter((line) => String(line).includes('slash-command adapted'))).toHaveLength(1)
   })
 
   it('logs a held delivery once, not once for every retry of the same delivery id', () => {
     const inputs = createInput(deps().deps)
-    vi.spyOn(inputs.input, 'submit').mockImplementation(() => {})
+    vi.spyOn(inputs.input, 'submitInput').mockImplementation(() => {})
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     // The backend retries a held delivery every second under the same id.
     inputs.submitAgent('s1', 'hello', 'd1')
@@ -709,10 +883,10 @@ describe('message', () => {
   it('writes what a person typed into the agent the frame names, and reads no tab an older window still names', () => {
     const typed = vi.fn()
     const inputs = createInput({ ...deps().deps, typed })
-    const submit = vi.spyOn(inputs.input, 'submit').mockImplementation(() => {})
+    const submit = vi.spyOn(inputs.input, 'submitInput').mockImplementation(() => {})
     vi.spyOn(console, 'log').mockImplementation(() => {})
     inputs.messageRequest({ content: 'hello', agentId: 's1', tabId: 'swarm-a' })
-    expect(submit.mock.calls).toEqual([['a1', 'hello', undefined, undefined]])
+    expect(submit.mock.calls).toEqual([['a1', { content: 'hello', deliveryId: undefined, receipt: undefined, when: 'composer' }]])
     // The person sent it: a harness another agent started is theirs from then on (services/agentCleanup.ts).
     expect(typed).toHaveBeenCalledWith('s1')
   })
@@ -740,11 +914,11 @@ describe('message', () => {
     expect(receipt).toHaveBeenCalledTimes(2)
 
     const inputs = createInput(deps().deps)
-    const into = vi.spyOn(inputs.input, 'submit').mockImplementation(() => {})
+    const into = vi.spyOn(inputs.input, 'submitInput').mockImplementation(() => {})
     vi.spyOn(console, 'log').mockImplementation(() => {})
     inputs.messageRequest({ content: 'hello', agentId: 's1' }, receipt)
     inputs.messageRequest({ content: 'hello', agentId: 's1', inputContext: 'conversation-input-context' }, receipt)
-    expect(into.mock.calls).toEqual([['a1', 'hello', undefined, receipt], ['a1', 'hello', undefined, receipt]])
+    expect(into.mock.calls).toEqual([['a1', { content: 'hello', deliveryId: undefined, receipt, when: 'composer' }], ['a1', { content: 'hello', deliveryId: undefined, receipt, when: 'composer' }]])
   })
 })
 
@@ -763,10 +937,10 @@ describe('every route a message takes to a pane', () => {
       (run) => expect(run.deps.deliveries.settled).toHaveBeenCalledWith(refused('orchestrator-1', 'permission_open'))],
     ['Agent Messages', 'a1', (inputs) => inputs.submitAgent('a1', 'from a teammate', 'team:1'),
       (run) => expect(run.deps.deliveries.settled).toHaveBeenCalledWith(refused('team:1', 'team_waiting_user'))],
-    ['the Device, to Claude Code', 'a1', (inputs) => inputs.deviceInput.submit('a1', 'from the device', 'device-1'),
-      (run) => expect(run.device.inputStatus).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'device-1', phase: 'waiting_for_user' }))],
-    ['the Device, to an engine it queues for', 'cc', (inputs) => inputs.deviceInput.submit('cc', 'from the device', 'device-2'),
-      (run) => expect(run.device.delivery).toHaveBeenCalledWith(refused('device-2', 'permission_open'))],
+    ['the Device, to Claude Code', 'a1', (inputs) => inputs.submitInput('a1', { content: 'from the device', deliveryId: 'device-1', when: 'composer' }),
+      (run) => expect(run.deps.deliveries.input).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'device-1', phase: 'waiting_for_user' }))],
+    ['the Device, to an engine it queues for', 'cc', (inputs) => inputs.submitInput('cc', { content: 'from the device', deliveryId: 'device-2', when: 'composer' }),
+      (run) => expect(run.deps.deliveries.settled).toHaveBeenCalledWith(refused('device-2', 'permission_open'))],
   ]
 
   it.each(routes)('%s: types nothing into a permission prompt, and says why', async (_route, agent, send, told) => {
@@ -776,7 +950,6 @@ describe('every route a message takes to a pane', () => {
     send(inputs)
     await vi.waitFor(() => told(run))
     expect(run.deps.terminal.submitTerminalAction).not.toHaveBeenCalled()
-    inputs.deviceInput.forget(agent)
     inputs.input.forget(agent)
   })
 
@@ -785,7 +958,6 @@ describe('every route a message takes to a pane', () => {
     const inputs = createInput(run.deps)
     send(inputs)
     await vi.waitFor(() => expect(run.deps.terminal.submitTerminalAction).toHaveBeenCalledTimes(1))
-    inputs.deviceInput.forget(agent)
     inputs.input.forget(agent)
   })
 

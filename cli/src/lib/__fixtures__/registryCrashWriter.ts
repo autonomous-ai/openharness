@@ -1,7 +1,7 @@
 // A real writer is killed at a reported persistence boundary; no application acknowledgement is sent.
 import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { basename, join } from 'node:path'
-import { performance } from 'node:perf_hooks'
+import { fileURLToPath } from 'node:url'
 const require = createRequire(import.meta.url)
 const fs = require('node:fs') as typeof import('node:fs')
 const io = require('node:fs/promises') as typeof import('node:fs/promises')
@@ -22,15 +22,30 @@ io.open = (async (...args: Parameters<typeof io.open>) => {
 }) as typeof io.open
 const sync = fs.fsyncSync
 fs.fsyncSync = fd => { if (phase === 'published' && fs.fstatSync(fd).isDirectory()) halt(phase); sync(fd) }
+const asyncSync = fs.fsync
+fs.fsync = ((fd: number, callback: (error: NodeJS.ErrnoException | null) => void) => {
+  if (phase === 'published' && fs.fstatSync(fd).isDirectory()) halt(phase)
+  asyncSync(fd, callback)
+}) as typeof fs.fsync
 syncBuiltinESMExports()
-const { registryFileLock, prepareRegistryImage } = await import('../registryPersistence.js')
-const expires = performance.now() + 10_000
-const deadline = { expires, check: () => { if (performance.now() >= expires) throw new Error('fixture expired') } }
-await registryFileLock(directory, deadline, async checkOwner => {
-  const rows = JSON.parse(fs.readFileSync(file, 'utf8'))
-  rows[0].title = 'peer crash metadata'
-  const prepared = await prepareRegistryImage(file, JSON.stringify(rows, null, 2), deadline)
+const { RegistryWriteQueue, registryFileLock } = await import('../registryPersistence.js')
+const { prepareSessionPublication } = await import('../sessionPublication.js')
+const { SessionStorage } = await import('../sessionStorage.js')
+const { fingerprint } = await import('../../harnessd/bundleFingerprint.js')
+const entry = fileURLToPath(new URL('../../storage/entry.ts', import.meta.url))
+const storage = new SessionStorage(directory, () => ({ file: entry, sha256: fingerprint(entry)!, execArgv: ['--import', import.meta.resolve('tsx')] }))
+await new RegistryWriteQueue().run(deadline => registryFileLock(directory, deadline, async checkOwner => {
+  const source = await storage.retain({ kind: 'registry' })
+  if (source.image.state !== 'image' || !source.image.json) throw new Error('fixture image unavailable')
+  const rows = source.image.value as Array<{ title: string }>
+  rows[0]!.title = 'peer crash metadata'
+  const prepared = await prepareSessionPublication(storage, { kind: 'registry' }, source, rows, deadline)
   if (phase === 'prepared') halt(phase)
-  checkOwner(); prepared.publish()
+  checkOwner(); prepared.publish(() => {})
+  const syncing = prepared.sync()
+  if (syncing) await syncing
+  prepared.finish(); deadline.markAdmitted()
+  await prepared.settle(); await source.release(); await storage.close()
+  if (phase === 'confirmed') halt(phase)
   throw new Error('crash checkpoint was not reached')
-})
+}))

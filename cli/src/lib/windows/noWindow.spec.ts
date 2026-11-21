@@ -10,6 +10,7 @@ const SOURCE = fileURLToPath(new URL('../..', import.meta.url))
 /** The only places a process may still start detached on Windows, and why that opens no window (docs/windows-rules.md, rule 1). */
 const ALLOWED: Record<string, string> = {
   'lib/ptyHost/launch.ts': 'the pty host must outlive the daemon, and what it starts runs in its own pseudo console',
+  'engines/kit/setupProbe.ts': 'a bounded cleanup runner must survive setup death; the actual probe starts hidden through ownProcessGroup',
   'engines/kit/windowsInstall.ts': 'a runner that must outlive the daemon, and starts the installer itself with windowsHide',
   'engines/kit/nativeInstall.ts': 'macOS and Linux only: Windows takes createWindowsInstallations (core/main.ts)',
   'services/osDevice.ts': 'nmcli and the like, on Harness OS: never on Windows',

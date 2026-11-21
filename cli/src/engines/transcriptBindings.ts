@@ -45,7 +45,14 @@ export function transcriptRootEvidence(engine: AgentEngine, profile?: string, sn
     if (!location.info.isDirectory()) return nativeUnavailable('a transcript root is not a directory')
     return [{ original: path, ...location }]
   })
-  return { directories, verify(): void { files.verify(); ownSnapshot?.verify() } }
+  return { directories, verify(): void { files.verify(); ownSnapshot?.verify() },
+    // Initialization may yield between rows. Keep original route identity, not
+    // the elapsed work budget of the turn that first inspected these roots.
+    retain(): () => void {
+      const verify = files.paths.retain()
+      return () => { verify(); ownSnapshot?.verify() }
+    },
+  }
 }
 
 /** A deterministic engine locator can precede its directories. Retain the first

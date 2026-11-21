@@ -1,5 +1,6 @@
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fsyncSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
+import { fsync, fsyncSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type { registry as Registry } from './registry.js'
@@ -9,11 +10,10 @@ import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 // another writer's real changes still land, local real changes still write, and the file keeps its format.
 vi.mock('fs', async (importOriginal) => {
   const fs = await importOriginal<typeof import('fs')>()
-  return { ...fs, fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync), mkdirSync: vi.fn(fs.mkdirSync) }
+  return { ...fs, fsync: vi.fn(fs.fsync), fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync), mkdirSync: vi.fn(fs.mkdirSync) }
 })
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
-vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
 // Loads the module graph once, before any hook's time limit: cold, it takes seconds on a loaded machine. Each test
 // still imports fresh modules (vi.resetModules), now from the warm transform cache.
 await import('./registry.js')
@@ -23,6 +23,7 @@ let directory: string
 let file: string
 let registry: typeof Registry
 const loaded: Array<typeof Registry> = []
+const stores = new Set<typeof import('./sessionStorage.js')['sessionStorage']>()
 const input = {
   agentId: 'observed-agent', engine: 'claude' as const, tmuxPane: '%31', cwd: '/fixture/project',
   processIdentity: { pid: 1031, executable: '/fixture/claude', startMarker: 'fixture-1031' },
@@ -54,8 +55,9 @@ async function observe(on: typeof Registry = registry, identity: Row = { ...inpu
 
 async function freshRegistry(): Promise<typeof Registry> {
   vi.resetModules()
+  stores.add(deadline.slowSessionStorage((await import('./sessionStorage.js')).sessionStorage))
   const next = (await import('./registry.js')).registry
-  next.load()
+  await next.load()
   loaded.push(next)
   return next
 }
@@ -71,8 +73,9 @@ beforeEach(async () => {
   directory = mkdtempSync(join(tmpdir(), 'registry-fingerprint-'))
   file = join(directory, 'registry.json')
   for (const key of ['ADAPTER_DATA_DIR', 'CLAUDE_PROJECTS_DIR', 'CODEX_HOME', 'CURSOR_HOME']) vi.stubEnv(key, directory)
+  stores.add(deadline.slowSessionStorage((await import('./sessionStorage.js')).sessionStorage))
   registry = (await import('./registry.js')).registry
-  registry.load()
+  await registry.load()
   loaded.push(registry)
   expect((await registry.openProcessAgent(input))).not.toBeNull()
   clearCounts()
@@ -81,7 +84,12 @@ beforeEach(async () => {
 
 afterEach(async () => {
   const writes = await Promise.allSettled(loaded.map(current => current.flush({ exiting: true })))
+  const closed = await Promise.allSettled([...stores].map(closeSessionStorageFixture))
+  stores.clear()
+  const failures = closed.filter(result => result.status === 'rejected').map(result => result.reason)
+  if (failures.length) throw new AggregateError(failures, 'fingerprint fixture cleanup failed')
   vi.mocked(fsyncSync).mockReset()
+  vi.mocked(fsync).mockReset()
   vi.useRealTimers()
   vi.unstubAllEnvs()
   vi.restoreAllMocks()
@@ -168,7 +176,7 @@ describe('key-order-insensitive row comparison', () => {
 
   it('keeps the saved file format: two-space JSON in insertion order, never sorted keys', async () => {
     // One load first, so the row carries load()'s own normalisation (dshRuntime, gridWebSearch).
-    registry.load()
+    await registry.load()
     await observe()
     const [saved] = readRows()
     expect(readFileSync(file, 'utf8')).toBe(JSON.stringify([saved], null, 2))
@@ -176,7 +184,7 @@ describe('key-order-insensitive row comparison', () => {
     expect(Object.keys(saved.processIdentity as Row)).toEqual(['pid', 'executable', 'startMarker'])
     // A file another writer ordered differently is written back in that order, not canonicalised.
     writeRows([reversedDeep(saved)])
-    registry.load()
+    await registry.load()
     await observe()
     const [written] = readRows()
     expect(readFileSync(file, 'utf8')).toBe(JSON.stringify([written], null, 2))
@@ -194,7 +202,7 @@ describe('key-order-insensitive row comparison', () => {
       tmuxPane: '%31',
     }])
     clearCounts()
-    registry.load()
+    await registry.load()
     await observe()
     expect(registryWrites()).toBe(1)
     const row = registry.byAgent(input.agentId)!
@@ -232,6 +240,7 @@ describe('key-order-insensitive row comparison', () => {
     expect(registryWrites()).toBe(0)
     expect(lockAttempts()).toBe(0)
     expect(fsyncSync).not.toHaveBeenCalled()
+    expect(fsync).not.toHaveBeenCalled()
     const expected = { gateway: 'ori', grid: { baseUrl: 'https://relay.example/v1', model: null } }
     expect(readRows()[0]).toMatchObject(expected)
     expect(first.byAgent(input.agentId)).toMatchObject(expected)

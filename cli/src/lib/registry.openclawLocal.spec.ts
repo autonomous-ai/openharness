@@ -1,3 +1,4 @@
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -8,7 +9,6 @@ import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
-vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
 vi.mock('./bootId.js', async original => ({ ...await original<object>(), currentBootId: () => 'fixture-boot', bootChanged: () => false }))
 vi.mock('./processLiveness.js', async original => ({ ...await original<object>(),
   processLockIdentity: () => ({ startMarker: 'fixture-start', generationMarker: 'fixture-generation' }), lockOwnerAlive: () => true,
@@ -16,6 +16,8 @@ vi.mock('./processLiveness.js', async original => ({ ...await original<object>()
 
 const SESSION = 'agent:main:harness-1'
 const runtimes = [{ backend: 'tmux' as const, paneId: '%1' }]
+const stores = new Set<typeof import('./sessionStorage.js')['sessionStorage']>()
+const instances = new Set<typeof import('./registry.js')['registry']>()
 let root: string
 beforeEach(() => {
   // No test here means the write deadline to pass: how fast this machine writes the registry never fails them.
@@ -24,9 +26,21 @@ beforeEach(() => {
   vi.stubEnv('ADAPTER_DATA_DIR', root)
   for (const level of ['log', 'warn', 'error'] as const) vi.spyOn(console, level).mockImplementation(() => {})
 })
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.resetModules(); rmSync(root, { recursive: true, force: true }) })
+afterEach(async () => {
+  let settled = false
+  try {
+    await Promise.allSettled([...instances].map(registry => registry.flush({ exiting: true })))
+    const closed = await Promise.allSettled([...stores].map(closeSessionStorageFixture))
+    const failures = closed.filter(result => result.status === 'rejected').map(result => result.reason)
+    if (failures.length) throw new AggregateError(failures, 'registry fixture cleanup failed')
+    settled = true
+  } finally {
+    instances.clear(); stores.clear(); vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.resetModules()
+    if (settled) rmSync(root, { recursive: true, force: true })
+  }
+})
 
-async function load() { vi.resetModules(); const mod = await import('./registry.js'); mod.registry.load(); return mod }
+async function load() { vi.resetModules(); stores.add(deadline.slowSessionStorage((await import('./sessionStorage.js')).sessionStorage)); const mod = await import('./registry.js'); instances.add(mod.registry); await mod.registry.load(); return mod }
 const disk = (): RegisteredSession[] => JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))
 async function pending() {
   const { registry, strictPersistedRow } = await load()

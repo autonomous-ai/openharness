@@ -2,15 +2,20 @@ import { closeSync, fstatSync, mkdtempSync, openSync, readFileSync, readdirSync,
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { inspectHookFile, runHookPreparation } from './nativeHookFiles.js'
+import { inspectHookFile, runHookPreparation, type HookPreparationAttempt } from './nativeHookFiles.js'
 
-const disk = vi.hoisted(() => ({ held: true, pending: new Map<number, (error: Error | null) => void>() }))
-vi.mock('node:fs', async original => ({ ...await original<typeof import('node:fs')>(),
+const disk = vi.hoisted(() => ({ held: true, pending: new Map<number, (error: Error | null) => void>(),
+  onStat: undefined as ((path: string) => void) | undefined }))
+vi.mock('node:fs', async original => {
+  const fs = await original<typeof import('node:fs')>()
+  return { ...fs,
+  lstatSync: (...args: Parameters<typeof fs.lstatSync>) => { disk.onStat?.(String(args[0])); return fs.lstatSync(...args) },
   fsync: (fd: number, done: (error: Error | null) => void) => {
     if (disk.held) disk.pending.set(fd, done)
     else queueMicrotask(() => done(null))
   },
-}))
+  }
+})
 let root: string
 const drain = async () => { for (let n = 0; n < 80; n++) await Promise.resolve() }
 async function release() {
@@ -24,7 +29,72 @@ beforeEach(() => {
   disk.held = true
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
 })
-afterEach(async () => { await release(); vi.useRealTimers(); rmSync(root, { recursive: true, force: true }) })
+afterEach(async () => { disk.onStat = undefined; await release(); vi.useRealTimers(); rmSync(root, { recursive: true, force: true }) })
+
+it.each(['before dispatch', 'after flush'] as const)('refuses changed caller file evidence %s before publishing', async boundary => {
+  const file = join(root, 'hooks'), dependency = join(root, 'dependency')
+  writeFileSync(file, 'before'); writeFileSync(dependency, 'captured')
+  const evidence = inspectHookFile(dependency), work = vi.fn((attempt: HookPreparationAttempt) => inspectHookFile(file).replace('after', attempt))
+  const prepared = runHookPreparation([file], work, { verify: evidence.verify }).catch(error => error)
+  if (boundary === 'after flush') { await drain(); expect(disk.pending.size).toBe(1) }
+  writeFileSync(dependency, 'newer')
+  await release()
+  expect(await prepared).toEqual(expect.objectContaining({ message: expect.stringMatching(/changed/) }))
+  expect(readFileSync(file, 'utf8')).toBe('before')
+  if (boundary === 'before dispatch') expect(work).not.toHaveBeenCalled()
+})
+
+it('checks caller file evidence again after its own route reads and before allowing the next effect', async () => {
+  const file = join(root, 'hooks'), dependency = join(root, 'dependency')
+  writeFileSync(file, 'before'); writeFileSync(dependency, 'captured')
+  const evidence = inspectHookFile(dependency)
+  let reachedEffect = false
+  const outcome = await runHookPreparation([file], async attempt => {
+    disk.onStat = path => {
+      if (path !== file) return
+      disk.onStat = undefined
+      writeFileSync(dependency, 'newer')
+    }
+    attempt.verify()
+    reachedEffect = true
+  }, { verify: evidence.verify }).catch(error => error)
+  expect(outcome).toEqual(expect.objectContaining({ message: expect.stringMatching(/changed/) }))
+  expect(reachedEffect).toBe(false)
+})
+
+it.each(['join', 'settle'] as const)('keeps caller file dependencies through a %s wait', async kind => {
+  const file = join(root, 'hooks'), dependency = join(root, 'dependency')
+  writeFileSync(file, 'before'); writeFileSync(dependency, 'captured')
+  const evidence = inspectHookFile(dependency), confirmed = vi.fn(), work = vi.fn(async () => true)
+  const previous = runHookPreparation([file], attempt => inspectHookFile(file).replace('original', attempt), { identity: 'original' }).catch(error => error)
+  await drain()
+  const waiting = runHookPreparation([file], work, { identity: kind === 'join' ? 'original' : 'replacement',
+    settleConflicts: kind === 'settle', verify: evidence.verify, confirmed }).catch(error => error)
+  await drain()
+  writeFileSync(dependency, 'newer')
+  await release(); await previous
+  expect(await waiting).toEqual(expect.objectContaining({ message: expect.stringMatching(/changed/) }))
+  expect(work).not.toHaveBeenCalled()
+  expect(confirmed).not.toHaveBeenCalled()
+})
+
+it.each(['join', 'settle'] as const)('refuses stale caller dependencies before entering a %s wait', async kind => {
+  const file = join(root, 'hooks'), dependency = join(root, 'dependency')
+  writeFileSync(file, 'before'); writeFileSync(dependency, 'captured')
+  const evidence = inspectHookFile(dependency), work = vi.fn(async () => true)
+  const previous = runHookPreparation([file], attempt => inspectHookFile(file).replace('original', attempt), { identity: 'original' }).catch(error => error)
+  await drain(); writeFileSync(dependency, 'newer')
+  let refusal: unknown
+  const waiting = runHookPreparation([file], work, { identity: kind === 'join' ? 'original' : 'replacement',
+    settleConflicts: kind === 'settle', verify: evidence.verify }).catch(error => { refusal = error })
+  try {
+    await drain()
+    expect(refusal).toEqual(expect.objectContaining({ message: expect.stringMatching(/changed/) }))
+    expect(work).not.toHaveBeenCalled()
+  } finally { await release(); await waiting; await previous }
+  // Refusing an invalid waiter must not revoke the original writer.
+  expect(readFileSync(file, 'utf8')).toBe('original')
+})
 
 it('keeps the event loop available and retains the descriptor and reservation after its reply deadline', async () => {
   const file = join(root, 'hooks'); writeFileSync(file, 'before')
@@ -189,4 +259,114 @@ it('retains the joining caller’s alias in its final launch proof', async () =>
   expect(proof.current()).toBe(true)
   unlinkSync(alias); symlinkSync(other, alias)
   expect(proof.current()).toBe(false)
+})
+
+const settlement = { settleConflicts: true }
+it('waits for actual conflicting I/O settlement after its caller timed out, then captures its own files', async () => {
+  const file = join(root, 'hooks'); writeFileSync(file, 'before')
+  const previous = runHookPreparation([file], attempt => inspectHookFile(file).replace('obsolete', attempt), { timeoutMs: 10 }).catch(error => error)
+  await drain()
+  const fd = [...disk.pending.keys()][0]
+  await vi.advanceTimersByTimeAsync(10)
+  expect((await previous).message).toMatch(/deadline/)
+  const work = vi.fn(async (attempt: HookPreparationAttempt) => {
+    expect(readFileSync(file, 'utf8')).toBe('before')
+    await inspectHookFile(file).replace('launch', attempt)
+    return true
+  })
+  let answered = false
+  const launch = runHookPreparation([file], work, { ...settlement, timeoutMs: 100 }).catch(error => error).finally(() => { answered = true })
+  await drain()
+  expect(answered).toBe(false)
+  expect(work).not.toHaveBeenCalled()
+  expect(fstatSync(fd).isFile()).toBe(true)
+  await release()
+  expect(await launch).toBe(true)
+  expect(work).toHaveBeenCalledOnce()
+  expect(readFileSync(file, 'utf8')).toBe('launch')
+})
+
+it.each(['owner', 'alias'] as const)('rechecks the original %s after conflicting work actually settles', async change => {
+  const file = join(root, 'hooks'), alias = join(root, 'alias'), other = join(root, 'other')
+  writeFileSync(file, 'before'); writeFileSync(other, 'foreign'); symlinkSync(file, alias)
+  const previous = runHookPreparation([file], attempt => inspectHookFile(file).replace('obsolete', attempt)).catch(error => error)
+  await drain()
+  let current = true
+  const work = vi.fn(async () => true)
+  const launch = runHookPreparation([alias], work, { ...settlement, current: () => current }).catch(error => error)
+  await drain()
+  if (change === 'owner') current = false
+  else { unlinkSync(alias); symlinkSync(other, alias) }
+  await release(); await previous
+  expect((await launch).message).toMatch(/changed/)
+  expect(work).not.toHaveBeenCalled()
+  expect(readFileSync(file, 'utf8')).toBe('before')
+  expect(readFileSync(other, 'utf8')).toBe('foreign')
+})
+
+it('bounds a launch settlement wait without releasing the old descriptor or starting new work', async () => {
+  const file = join(root, 'hooks'); writeFileSync(file, 'before')
+  const previous = runHookPreparation([file], attempt => inspectHookFile(file).replace('obsolete', attempt)).catch(error => error)
+  await drain()
+  const fd = [...disk.pending.keys()][0], work = vi.fn(async () => true)
+  const launch = runHookPreparation([file], work, { ...settlement, timeoutMs: 5 }).catch(error => error)
+  await vi.advanceTimersByTimeAsync(5)
+  expect((await launch).message).toMatch(/deadline/)
+  expect(fstatSync(fd).isFile()).toBe(true)
+  expect(work).not.toHaveBeenCalled()
+  await expect(runHookPreparation([file], work)).rejects.toThrow(/still owns/)
+  await release(); await previous
+  expect(readFileSync(file, 'utf8')).toBe('before')
+})
+
+it('uses the existing sixteen-waiter bound and makes only one fresh reservation after settlement', async () => {
+  const file = join(root, 'hooks'); writeFileSync(file, 'before')
+  const previous = runHookPreparation([file], attempt => inspectHookFile(file).replace('obsolete', attempt)).catch(error => error)
+  await drain()
+  const work = vi.fn(async () => true)
+  const waiting = Array.from({ length: 16 }, () => runHookPreparation([file], work, settlement).catch(error => error))
+  await expect(runHookPreparation([file], work, settlement)).rejects.toThrow(/waiters.*occupied/)
+  await release(); await previous
+  const answers = await Promise.all(waiting)
+  expect(answers.filter(answer => answer === true)).toHaveLength(1)
+  expect(work).toHaveBeenCalledOnce()
+})
+
+
+it('spends the original deadline across settlement and its own publication', async () => {
+  const file = join(root, 'hooks'); writeFileSync(file, 'before')
+  const previous = runHookPreparation([file], attempt => inspectHookFile(file).replace('obsolete', attempt)).catch(error => error)
+  await drain()
+  const work = vi.fn((attempt: HookPreparationAttempt) => inspectHookFile(file).replace('launch', attempt))
+  const launch = runHookPreparation([file], work, { ...settlement, timeoutMs: 10 }).catch(error => error)
+  await vi.advanceTimersByTimeAsync(6)
+  const [fd, finish] = [...disk.pending.entries()][0]
+  disk.pending.delete(fd); finish(null)
+  await drain()
+  expect(work).toHaveBeenCalledOnce()
+  expect(disk.pending.size).toBe(1)
+  await vi.advanceTimersByTimeAsync(4)
+  expect((await launch).message).toMatch(/deadline/)
+  expect(readFileSync(file, 'utf8')).toBe('before')
+  await release(); await previous
+  expect(readFileSync(file, 'utf8')).toBe('before')
+})
+
+it.each(['settle', 'join'] as const)('keeps sixteen expired %s waiters charged until their underlying promise settles', async kind => {
+  const file = join(root, 'hooks'); writeFileSync(file, 'before')
+  const previous = runHookPreparation([file], attempt => inspectHookFile(file).replace('original', attempt), { identity: 'original', timeoutMs: 1_000 }).catch(error => error)
+  await drain()
+  const work = vi.fn(async () => true)
+  const options = { timeoutMs: 5, ...(kind === 'join' ? { identity: 'original' } : settlement) }
+  const waiting = Array.from({ length: 16 }, () => runHookPreparation([file], work, options).catch(error => error))
+  await vi.advanceTimersByTimeAsync(5)
+  expect((await Promise.all(waiting)).every(error => /deadline/.test(error.message))).toBe(true)
+  expect(disk.pending.size).toBe(1)
+  const overflow = runHookPreparation([file], work, options).catch(error => error)
+  await vi.advanceTimersByTimeAsync(5)
+  expect((await overflow).message).toMatch(/waiters.*occupied/)
+  expect(work).not.toHaveBeenCalled()
+  await release(); await previous
+  expect(await runHookPreparation([file], work, options)).toBe(true)
+  expect(work).toHaveBeenCalledOnce()
 })

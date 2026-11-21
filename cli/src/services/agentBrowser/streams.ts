@@ -23,9 +23,9 @@ import { errorKind, sid } from '../../lib/log.js'
 import type { AGENT_BROWSER_CLOSE_REASONS, ProductUsageMetric } from '../../lib/productUsageContract.js'
 import { TERMINAL_BINARY_HEADER_BYTES, TerminalBinaryKind, type TerminalBinaryClear } from '../../lib/terminalBinary.js'
 
-/** The route a remote viewer's stream took, as the gateway says it (core/api.ts `StreamRoute`). */
+/** The route a remote viewer's stream took, as the gateway says it. */
 export type StreamRoute = 'direct' | 'turn' | 'relay'
-/** Who asked to open a stream, as the core established it: whether they may (core/api.ts `mayOpenBrowser`), and
+/** Who asked to open a stream, as the service established it from core's authenticated caller, and
  *  whether they are a window on this computer, whose stream is direct. */
 export interface StreamAsker { allowed: boolean; local: boolean }
 
@@ -170,7 +170,7 @@ export class BrowserStreamManager {
   }
 
   /** A viewer's bytes, which the core passes on only from the connection it holds the stream for
-   *  (core/browserStreams.ts). */
+   *  (core/clientStreams.ts). */
   input(streamId: string, bytes: Uint8Array): void {
     const stream = this.streams.get(streamId)
     if (!stream) return

@@ -21,6 +21,35 @@ describe('AgentStreams', () => {
   beforeEach(() => { vi.useFakeTimers() })
   afterEach(() => { vi.useRealTimers() })
 
+  it('bounds open-turn records across agents and explicitly ends affected streams when the budget is lost', () => {
+    const h = hub()
+    h.streams.subscribe('device', 'agent', 60, ALL)
+    h.streams.ingest('agent', [{ type: 'turn_started', payload: { userMessage: 'first' } }, text('retained')])
+    for (let index = 0; index < 1024; index++) h.streams.ingest(`other-${index}`, [{ type: 'turn_started', payload: { userMessage: '' } }])
+    expect(h.sent.some(item => item.frame.kind === 'stream.end' && (item.frame.payload as any).reason === 'unavailable')).toBe(true)
+    expect(h.streams.count()).toBe(0)
+    expect(() => h.streams.subscribe('device', 'agent', 60, ALL)).toThrow(expect.objectContaining({ code: 'SESSION_EVENTS_UNAVAILABLE' }))
+    h.streams.ingest('agent', [text('partial after the gap'), { type: 'turn_ended', payload: {} }])
+    expect(h.sent.some(item => item.frame.kind === 'stream.final')).toBe(false)
+    h.streams.ingest('agent', [{ type: 'turn_started', payload: { userMessage: 'fresh' } }, text('complete')])
+    h.streams.subscribe('device', 'agent', 60, ALL)
+    h.streams.ingest('agent', [{ type: 'turn_ended', payload: {} }])
+    expect(h.sent.at(-1)!.frame).toMatchObject({ kind: 'stream.final', payload: { text: 'complete' } })
+  })
+
+  it('bounds retained answer bytes independently of turn count and releases a completed turn', () => {
+    const h = hub(), answer = 'x'.repeat(16_388)
+    h.streams.subscribe('device', 'agent-0', 60, ALL)
+    for (let index = 0; index < 1023; index++) h.streams.ingest(`agent-${index}`, [{ type: 'turn_started', payload: { userMessage: '' } }, text(answer)])
+    h.streams.ingest('agent-0', [{ type: 'turn_ended', payload: {} }])
+    h.streams.subscribe('device', 'agent-1', 60, ALL)
+    h.streams.ingest('agent-1023', [{ type: 'turn_started', payload: { userMessage: '' } }, text(answer)])
+    expect(h.sent.some(item => item.frame.kind === 'stream.end' && (item.frame.payload as any).reason === 'unavailable')).toBe(false)
+    h.streams.ingest('agent-1024', [{ type: 'turn_started', payload: { userMessage: '' } }, text(answer)])
+    expect(h.sent.some(item => item.frame.kind === 'stream.end' && (item.frame.payload as any).reason === 'unavailable')).toBe(true)
+    expect(h.streams.count()).toBe(0)
+  })
+
   it('sends nothing for an agent nobody subscribed to', () => {
     const h = hub()
     h.streams.ingest('agent', [{ type: 'turn_started', payload: { userMessage: 'hi' } }, toolStart, text('a'), toolEnd, { type: 'turn_ended', payload: {} }])
@@ -122,21 +151,22 @@ describe('agent.subscribe over the device RPC', () => {
   function fixture() {
     const identities: Record<string, string> = { a: 'device-a', b: 'device-b' }
     const send = vi.fn()
-    const crypto = { sessionRole: () => 'device' as const, sessionIdentity: (c: string) => identities[c] ?? null,
-      unwrapDown: (_c: string, frame: Record<string, unknown>) => ({ ...frame, payload: (frame.payload as { __e2e: unknown }).__e2e }),
-      wrapTarget: (_c: string, type: string, payload: Record<string, unknown>) => ({ type, payload: { __e2e: payload } }) }
+    const proof = (connId: string) => ({ identity: identities[connId], incarnation: 'session', peerEpoch: 'peer' })
     let relay: AutonomousDeviceRelay | undefined
     const service = new AutonomousDeviceService({ machineId: 'machine', agents: () => [{ agentId: 'agent', name: 'Agent', engine: 'codex', state: 'idle' }],
       submit: vi.fn(), cancelDelivery: () => true, stop: async () => true, answer: async () => true, recent: () => [],
       emit: (frame, deviceId) => relay?.emit(frame, deviceId) })
-    relay = new AutonomousDeviceRelay(crypto, send, service, 'machine')
+    relay = new AutonomousDeviceRelay(proof, send, service, 'machine', (connId, captured, frames, allowed, hello) => () => {
+      if (hello) send(connId, { type: 'autonomous_device_result', payload: hello }, captured)
+      for (const frame of frames) if (allowed(frame)) send(connId, { type: 'autonomous_device_event', payload: frame }, captured)
+    })
     const request = async (conn: string, payload: Record<string, unknown>) => {
       const requestId = randomUUID()
-      await relay!.handle(conn, { type: 'autonomous_device_request', payload: { __e2e: { requestId, ...payload } } })
-      return send.mock.calls.map(([, f]) => (f as { payload: { __e2e: Record<string, unknown> } }).payload.__e2e).find(r => r.requestId === requestId)!
+      await relay!.handle(conn, proof(conn), { requestId, ...payload })
+      return send.mock.calls.map(([, frame]) => frame.payload as Record<string, unknown>).find(reply => reply.requestId === requestId)!
     }
-    const streamFrames = (conn: string) => send.mock.calls.filter(([c, f]) => c === conn && typeof (f as { payload: { __e2e: { kind?: string } } }).payload.__e2e.kind === 'string'
-      && (f as { payload: { __e2e: { kind: string } } }).payload.__e2e.kind.startsWith('stream.')).map(([, f]) => (f as { payload: { __e2e: AutonomousDeviceFrame } }).payload.__e2e)
+    const streamFrames = (conn: string) => send.mock.calls.filter(([c, frame]) => c === conn &&
+      typeof frame.payload.kind === 'string' && frame.payload.kind.startsWith('stream.')).map(([, frame]) => frame.payload as AutonomousDeviceFrame)
     return { relay, service, request, streamFrames, send }
   }
   const target = { machineId: 'machine', agentId: 'agent' }
@@ -181,7 +211,7 @@ describe('agent.subscribe over the device RPC', () => {
     expect(await f.request('a', { type: 'agent.unsubscribe', subscriptionId: again.subscriptionId })).toMatchObject({ unsubscribed: true })
 
     await f.request('a', { type: 'agent.subscribe', ...target })
-    f.relay.drop('a')
+    f.relay.drop('a', 'session')
     f.service.stream('agent', [toolStart])
     expect(f.streamFrames('a').map(e => e.kind)).toEqual(['stream.end', 'stream.end'])
   })

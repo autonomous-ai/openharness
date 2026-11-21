@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
-import type { LaunchOverridesResult } from '../../lib/launchOverrides.js'
+import type { LaunchOverrides, LaunchOverridesResult } from '../../lib/launchOverrides.js'
 import { createRestoreLaunch } from './restoreLaunch.js'
 import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
 import { createLaunchHelpers } from './launch.js'
@@ -14,11 +14,26 @@ const setup = () => {
     workspaceMissing: vi.fn((): { error: string; detail: string } | null => null),
     relaunchOverrides: vi.fn(async (): Promise<LaunchOverridesResult> => built),
     downgradedPermission: vi.fn(async () => ({ bypassPermission: false })),
-    prepareSessionResume: vi.fn(async (_entry: RegisteredSession, _current: () => boolean) => {}), refreshGridWebSearch: vi.fn(),
+    prepareSessionResume: vi.fn(async (_entry: RegisteredSession, _current: () => boolean) => {}),
+    refreshGridWebSearch: vi.fn(async (_agentId: string, _overrides: LaunchOverrides, _current: () => boolean) => {}),
     launch: vi.fn(() => ({ argv: ['engine'] })),
   }
   return { deps, build: createRestoreLaunch(deps) }
 }
+
+it.each([undefined, false] as const)('prepares optional values once for the final restore or move owner, prepare=%s', async prepare => {
+  const { deps, build } = setup()
+  const settings = { values: { instructions: 'optional owner', settings: null }, current: () => true }
+  const prepareSettings = vi.fn(async () => settings)
+  const native = { current: () => true, prepareSettings } as unknown as NativeLaunch
+  deps.relaunchOverrides.mockResolvedValue({ ok: true, overrides: { ...built.overrides, native } })
+  const row = { ...entry, cwd: prepare === false ? null : '/workspace' }
+  const result = await build(row, { current: () => true, prepare, resumeSessionId: 'conversation' })
+  expect(prepareSettings).toHaveBeenCalledExactlyOnceWith(row.cwd, expect.any(Function))
+  expect(deps.launch).toHaveBeenCalledWith(row, expect.any(Object), expect.objectContaining({ native, settings }), expect.any(Object))
+  if ('argv' in result && result.deferred) await result.deferred.prepare()
+  expect(prepareSettings).toHaveBeenCalledOnce()
+})
 
 describe('a guest\'s harness at boot', () => {
   it('is never relaunched as the owner: refused before a workspace or service is touched', async () => {
@@ -79,8 +94,10 @@ describe('a launch built without preparation', () => {
     expect(launch.deferred.permission).toEqual({ bypassPermission: true, permissionMode: 'plan' })
     await launch.deferred.prepare()
     expect(deps.prepareSessionResume).toHaveBeenCalledWith(entry, expect.any(Function))
-    expect(deps.refreshGridWebSearch).toHaveBeenCalledWith('agent', built.overrides)
+    expect(deps.refreshGridWebSearch).toHaveBeenCalledWith('agent', built.overrides, expect.any(Function))
     expect(deps.relaunchOverrides).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(deps.prepareSessionResume).mock.lastCall![1]()).toBe(true)
+    expect(deps.refreshGridWebSearch.mock.lastCall![2]()).toBe(true)
     // A preparation that fails says so to its caller, which falls back (hostMove/moveAgent.ts).
     deps.prepareSessionResume.mockRejectedValueOnce(new Error('rollout unreadable'))
     await expect(launch.deferred!.prepare()).rejects.toThrow('rollout unreadable')
@@ -99,9 +116,20 @@ describe('a launch built without preparation', () => {
     let waiting = true
     await launch.deferred.prepare(() => waiting)
     const holds = vi.mocked(deps.prepareSessionResume).mock.lastCall![1]
+    const gridHolds = deps.refreshGridWebSearch.mock.lastCall![2]
     expect(holds()).toBe(true)
+    expect(gridHolds()).toBe(true)
     waiting = false
     expect(holds()).toBe(false)
+    expect(gridHolds()).toBe(false)
+  })
+
+  it('does not dispatch after durable Grid refresh revokes the restore owner', async () => {
+    const { deps, build } = setup()
+    let current = true
+    deps.refreshGridWebSearch.mockImplementation(async () => { current = false })
+    expect(await build(entry, { current: () => current })).toEqual({ cancelled: true })
+    expect(deps.launch).not.toHaveBeenCalled()
   })
 
   it('writes no grid for a move that stopped holding while its history was prepared', async () => {
@@ -139,10 +167,10 @@ describe('restore preparation keeps session authority in core', () => {
     if (projection === 'dead process') live.processIdentity = null
     if (projection === 'terminal fallback') { requested.engine = 'terminal'; requested.sessionId = '' }
     if (projection === 'fresh fallback') live.launch = { state: 'starting' }
-    const apiNotes = vi.fn()
+    const apiNotes = vi.fn(async () => {})
     const helpers = createLaunchHelpers({
       authority: createLaunchAuthority({ byAgent: () => live, revision: () => 1, cancelled: () => false }),
-      prepareApiTools: apiNotes, setGridLaunch: vi.fn(), prepareResume: async () => ({ repairedItems: 0 }),
+      prepareInstructions: apiNotes, setGridLaunch: vi.fn(), prepareResume: async () => ({ repairedItems: 0 }),
       launchOverridesDeps: { machine: () => ({ hermesSystemManaged: false }), gridLaunch: vi.fn(),
         capabilities: async () => ({ sessionEnv: true }), writeGridConfigDir: vi.fn(), installCodexHooks: vi.fn(async () => true), readCodexConfig: () => null },
     })
@@ -157,10 +185,10 @@ describe('restore preparation keeps session authority in core', () => {
     const live = { ...entry, engine: 'claude', dsh: 'fixture/tools', active: true, processIdentity: null,
       runtimes: [{ backend: 'tmux', paneId: '%7' }],
     } as RegisteredSession
-    const apiNotes = vi.fn()
+    const apiNotes = vi.fn(async () => {})
     const helpers = createLaunchHelpers({
       authority: createLaunchAuthority({ byAgent: () => live, revision: () => 1, cancelled: () => false }),
-      prepareApiTools: apiNotes, setGridLaunch: vi.fn(), prepareResume: async () => ({ repairedItems: 0 }),
+      prepareInstructions: apiNotes, setGridLaunch: vi.fn(), prepareResume: async () => ({ repairedItems: 0 }),
       launchOverridesDeps: { machine: () => ({ hermesSystemManaged: false }), gridLaunch: vi.fn(),
         capabilities: async () => ({ sessionEnv: true }), writeGridConfigDir: vi.fn(), installCodexHooks: vi.fn(async () => true), readCodexConfig: () => null,
         dshLaunch: async () => { live.permissionMode = 'ask'; return { ok: true, launch: { env: {}, args: [] } } } },
@@ -179,7 +207,7 @@ describe('restore preparation keeps session authority in core', () => {
     const { deps, build } = setup()
     expect(await build(entry, { resumeSessionId, current: () => true })).toEqual({ argv: ['engine'], grid: null })
     expect(deps.prepareSessionResume).toHaveBeenCalledTimes(resumeSessionId ? 1 : 0)
-    expect(deps.refreshGridWebSearch).toHaveBeenCalledWith('agent', built.overrides)
+    expect(deps.refreshGridWebSearch).toHaveBeenCalledWith('agent', built.overrides, expect.any(Function))
     expect(deps.launch).toHaveBeenCalledWith(entry, { resumeSessionId, agentId: 'agent' }, built.overrides, { bypassPermission: false })
   })
 
@@ -192,7 +220,7 @@ describe('restore preparation keeps session authority in core', () => {
     let current = true
     const replacement = { transcript: 'new turn', tail: 42, grid: 'new grid' }
     deps.prepareSessionResume.mockImplementation(async () => { replacement.transcript = 'repaired old turn'; replacement.tail = 0 })
-    deps.refreshGridWebSearch.mockImplementation(() => { replacement.grid = 'old grid' })
+    deps.refreshGridWebSearch.mockImplementation(async () => { replacement.grid = 'old grid' })
     const result = build(entry, { resumeSessionId: 'conversation', current: () => current })
     await vi.waitFor(() => expect(stage === 'Store' ? deps.relaunchOverrides : deps.downgradedPermission).toHaveBeenCalled())
     current = false

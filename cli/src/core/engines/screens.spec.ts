@@ -32,6 +32,21 @@ describe('core screen evidence', () => {
     t.inline.mockReturnValueOnce(Promise.resolve(undefined) as never)
     expect(await t.screen.read(t.row, capture)).toBeNull()
   })
+  it('keeps the terminal no-capture reading behind the worker and final session fence', async () => {
+    const t = setup()
+    t.row.engine = 'terminal'
+    const pending = t.screen.read(t.row, null)
+    expect(t.remote).toHaveBeenCalledWith('terminal', null)
+    expect(await pending).toEqual(t.answer)
+    expect(t.inline).not.toHaveBeenCalled()
+    let finish!: (value: typeof t.answer) => void
+    t.remote.mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    const replaced = t.screen.read(t.row, null)
+    t.row.tmuxPane = '%replaced'
+    finish(t.answer)
+    expect(await replaced).toBeNull()
+  })
+
   it('refuses missing, oversized or foreign captures before consulting an adapter', async () => {
     const t = setup()
     expect(await t.screen.read(t.row, null)).toBeNull()

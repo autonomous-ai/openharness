@@ -2,12 +2,15 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import type { RegisteredSession, registry as Registry } from './registry.js'
+import type { SessionStorage } from './sessionStorage.js'
 import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 type Row = Record<string, unknown>
 const io = vi.hoisted(() => ({ file: '', published: false, failDirectorySync: false,
-  durable: [] as Row[][], prepare: undefined as undefined | (() => Promise<void>) }))
+  durable: [] as Row[][], prepared: [] as Row[][], prepare: undefined as undefined | (() => Promise<void>),
+  durability: undefined as undefined | (() => Promise<void>) }))
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
   const record = () => {
@@ -28,11 +31,20 @@ vi.mock('node:fs', async original => {
       actual.fsyncSync(fd)
       if (publication) record()
     },
+    fsync: (fd: number, callback: (error: NodeJS.ErrnoException | null) => void) => {
+      const publication = io.published && actual.fstatSync(fd).isDirectory()
+      if (publication && io.failDirectorySync) { queueMicrotask(() => callback(new Error('fixture directory durability unavailable'))); return }
+      actual.fsync(fd, error => {
+        if (!error && publication) record()
+        const held = !error && publication ? io.durability?.() : undefined
+        if (held) void held.then(() => callback(error), callback)
+        else callback(error)
+      })
+    },
   }
 })
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
-vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original, { afterSync: async () => { await io.prepare?.() } }))
 vi.mock('./bootId.js', async original => ({ ...await original<object>(),
   currentBootId: () => 'fixture-boot', bootChanged: () => false,
 }))
@@ -45,6 +57,7 @@ const plan = { id: '12345678-1234-1234-1234-123456789012', identity: 'fixture-ow
   requestedAt: 1790900000000, state: 'waiting' as const }
 let root = ''
 let registry: typeof Registry | undefined, release: (() => void) | undefined
+let storage: SessionStorage | undefined
 const accepted: Promise<unknown>[] = []
 const disk = (): Row[] => JSON.parse(readFileSync(io.file, 'utf8')) as Row[]
 const row = (rows: Row[], id = A) => rows.find(value => value.agentId === id)!
@@ -76,12 +89,41 @@ function holdPreparation() {
   return { entered: () => within(entered, 'prepared image arrival'), release: resume }
 }
 
+function holdEquality() {
+  let enter!: () => void, resume!: () => void
+  const entered = new Promise<void>(resolve => { enter = resolve })
+  const held = new Promise<void>(resolve => { resume = resolve })
+  release = resume
+  const equal = storage!.equal.bind(storage!)
+  let intercepted = false
+  vi.spyOn(storage!, 'equal').mockImplementation(async proof => {
+    if (proof.document.kind === 'registry' && !intercepted) {
+      intercepted = true; enter(); await within(held, 'exact equality release')
+    }
+    return equal(proof)
+  })
+  return { entered: () => within(entered, 'exact equality arrival'), release: resume }
+}
+
+function holdDurability() {
+  let enter!: () => void, resume!: () => void
+  const entered = new Promise<void>(resolve => { enter = resolve })
+  const held = new Promise<void>(resolve => { resume = resolve })
+  release = resume
+  io.durability = async () => {
+    io.durability = undefined
+    enter()
+    await within(held, 'directory durability release')
+  }
+  return { entered: () => within(entered, 'directory durability arrival'), release: resume }
+}
+
 beforeEach(async () => {
   // No test here means the write deadline to pass: how fast this machine writes the registry never fails them.
   deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS)
   vi.resetModules()
-  registry = undefined; release = undefined; accepted.length = 0
-  io.published = false; io.failDirectorySync = false; io.durable = []; io.prepare = undefined
+  registry = undefined; storage = undefined; release = undefined; accepted.length = 0
+  io.published = false; io.failDirectorySync = false; io.durable = []; io.prepared = []; io.prepare = undefined; io.durability = undefined
   root = mkdtempSync(join(tmpdir(), 'registry-persistence-cost-'))
   for (const folder of ['home', 'data', 'runtime']) mkdirSync(join(root, folder), { mode: 0o700 })
   for (const [key, value] of Object.entries({ HOME: join(root, 'home'), USERPROFILE: join(root, 'home'),
@@ -90,8 +132,21 @@ beforeEach(async () => {
     CODEX_HOME: join(root, 'home', '.codex'), CURSOR_HOME: join(root, 'home', '.cursor') })) vi.stubEnv(key, value)
   io.file = join(root, 'data', 'registry.json')
   writeFileSync(join(root, 'data', 'engine-homes.json'), '{}', { mode: 0o600 })
+  storage = (await import('./sessionStorage.js')).sessionStorage
+  const owned = storage, prepare = owned.prepare.bind(owned)
+  vi.spyOn(owned, 'prepare').mockImplementation(async (...args) => {
+    // The child owns encoding and file sync. Hold its actual image before parent publication.
+    const prepared = await prepare(...args)
+    try {
+      if (args[0].kind === 'registry') {
+        io.prepared.push(JSON.parse(readFileSync(join(owned.root, prepared.temporary), 'utf8')) as Row[])
+        await io.prepare?.()
+      }
+      return prepared
+    } catch (error) { await owned.discard(prepared); throw error }
+  })
   registry = (await import('./registry.js')).registry
-  registry.load()
+  await registry.load()
   for (const [index, agentId] of [A, B].entries()) {
     expect(await registry.openProcessAgent({ agentId, engine: 'claude', tmuxPane: `%${index + 1}`,
       processIdentity: { pid: 1001 + index, executable: '/fixture/claude', startMarker: `fixture-${index}` },
@@ -100,16 +155,19 @@ beforeEach(async () => {
   const live = registry.byAgent(A)!
   live.launchArgs = ['--before']; live.browser = true
   await registry.flush()
-  io.durable = []
+  io.durable = []; io.prepared = []
 })
 
 afterEach(async () => {
-  io.prepare = undefined; release?.(); release = undefined
+  io.prepare = undefined; io.durability = undefined; release?.(); release = undefined
   io.failDirectorySync = false
   let settled = false
   try {
-    await within(Promise.allSettled(accepted), 'accepted caller cleanup', 10_000)
-    if (registry) await within(registry.flush({ exiting: true }), 'registry cleanup', 10_000)
+    const failures: unknown[] = []
+    try { await within(Promise.allSettled(accepted), 'accepted caller cleanup', 10_000) } catch (error) { failures.push(error) }
+    try { if (registry) await within(registry.flush({ exiting: true }), 'registry cleanup', 10_000) } catch (error) { failures.push(error) }
+    try { if (storage) await within(storage.close(), 'storage cleanup', 10_000) } catch (error) { failures.push(error) }
+    if (failures.length) throw new AggregateError(failures, 'persistence fixture cleanup failed')
     settled = true
   } finally {
     vi.restoreAllMocks(); vi.unstubAllEnvs()
@@ -132,6 +190,218 @@ it('fingerprints each unchanged row once while preserving the exact durable byte
   expect(owners).toBe(0)
 })
 
+it('flushes an unchanged image without copying rows or publishing different bytes', async () => {
+  const live = registry!.byAgent(A)!, peer = registry!.byAgent(B)!, before = readFileSync(io.file, 'utf8')
+  const clone = vi.spyOn(globalThis, 'structuredClone')
+  await registry!.flush()
+  const copied = clone.mock.calls.filter(([value]) => isPersistedRow(value)).length
+  clone.mockRestore()
+  expect(readFileSync(io.file, 'utf8')).toBe(before)
+  expect(registry!.byAgent(A)).toBe(live)
+  expect(registry!.byAgent(B)).toBe(peer)
+  expect(io.prepared).toEqual([])
+  expect(io.durable).toEqual([])
+  expect(copied).toBe(0)
+})
+
+it('refreshes the selected credential witness after an identical legacy image replacement without copying rows', async () => {
+  const apiKey = randomUUID()
+  expect(await registry!.setGridLaunch(A, { override: { networkId: 'fixture-grid', networkName: 'Fixture',
+    baseUrl: 'https://grid.example.test/relay/v1', apiKey, model: 'fixture-model' }, webSearch: 'on' })).toBe(true)
+  const live = registry!.byAgent(A)!, before = live.gridLaunch!.credential.source
+  const bytes = readFileSync(io.file), replacement = io.file + '.fixture-replacement'
+  writeFileSync(replacement, bytes, { mode: 0o600 })
+  const actual = await vi.importActual<typeof import('node:fs')>('node:fs')
+  actual.renameSync(replacement, io.file)
+  io.durable = []; io.prepared = []
+  const clone = vi.spyOn(globalThis, 'structuredClone')
+  await registry!.flush()
+  const copied = clone.mock.calls.filter(([value]) => isPersistedRow(value)).length
+  clone.mockRestore()
+  expect(copied).toBe(0)
+  expect(readFileSync(io.file).equals(bytes)).toBe(true)
+  expect(live.gridLaunch!.credential.source).not.toEqual(before)
+  expect((await storage!.resolveSelected(live.gridLaunch!)).apiKey === apiKey).toBe(true)
+  expect(JSON.stringify(live).includes(apiKey)).toBe(false)
+  expect(io.durable).toEqual([])
+  expect(io.prepared).toEqual([])
+})
+
+it('persists a direct last-row mutation without an additional full fingerprint pass', async () => {
+  const live = registry!.byAgent(B)!, first = row(disk(), A)
+  live.launchArgs = ['--direct-last-row']
+  const stringify = vi.spyOn(JSON, 'stringify')
+  await registry!.flush()
+  const fingerprints = stringify.mock.calls.filter(([value, replacer]) => isPersistedRow(value) && typeof replacer === 'function').length
+  stringify.mockRestore()
+  expect(registry!.byAgent(B)).toBe(live)
+  expect(row(disk(), B).launchArgs).toEqual(['--direct-last-row'])
+  expect(row(disk(), A)).toEqual(first)
+  expect(io.prepared).toEqual(io.durable)
+  expect(io.durable).toHaveLength(1)
+  expect(fingerprints).toBeLessThanOrEqual(8)
+})
+
+it('preserves nested launch metadata from the actual pending caller across unchanged and directly edited flushes', async () => {
+  const id = 'cost-pending-metadata'
+  expect(await registry!.openPendingAgent({ agentId: id, engine: 'claude',
+    runtimes: [{ backend: 'tmux', paneId: '%3' }], cwd: '/fixture/pending',
+    grid: { baseUrl: 'https://grid.example.test/v1', model: 'captured' },
+    scmLaunchRecord: { kind: 'git' }, launchModel: { model: 'opus', effort: 'high' },
+    forkedFrom: { agentId: A, name: 'fixture parent', sessionId: 'fixture-history', transcriptPath: '/fixture/history.jsonl' },
+  })).not.toBeNull()
+  const live = registry!.byAgent(id)!, saved = row(disk(), id)
+  io.durable = []; io.prepared = []
+  await registry!.flush()
+  expect(row(disk(), id)).toEqual(saved)
+  expect(io.durable).toEqual([])
+  live.grid!.model = 'edited'
+  live.launchModel!.effort = 'low'
+  live.forkedFrom!.name = 'edited parent'
+  await registry!.flush()
+  expect(row(disk(), id)).toMatchObject({ grid: { baseUrl: 'https://grid.example.test/v1', model: 'edited' },
+    launchModel: { model: 'opus', effort: 'low' }, scmLaunch: { kind: 'git' },
+    forkedFrom: { agentId: A, name: 'edited parent', sessionId: 'fixture-history', transcriptPath: '/fixture/history.jsonl' } })
+  expect(registry!.byAgent(id)).toBe(live)
+  expect(io.durable).toHaveLength(1)
+})
+
+it('preserves nested historical JSON from a late writer and persists its later direct edit', async () => {
+  const images = disk()
+  row(images, B).historical = JSON.parse('{"constructor":"literal","__proto__":{"nested":[null,true,{"z":2,"a":1}]}}')
+  writeFileSync(io.file, JSON.stringify(images), { mode: 0o600 })
+  await registry!.flush()
+  const live = registry!.byAgent(B)! as RegisteredSession & { historical: { __proto__: { nested: unknown[] } } }
+  expect(live.historical).toEqual(row(images, B).historical)
+  expect(Object.getPrototypeOf(live.historical)).toBe(Object.prototype)
+  io.durable = []; io.prepared = []
+  await registry!.flush()
+  expect(io.durable).toEqual([])
+  live.historical.__proto__.nested.push({ edited: true })
+  await registry!.flush()
+  expect((row(disk(), B).historical as typeof live.historical).__proto__.nested).toEqual([null, true, { z: 2, a: 1 }, { edited: true }])
+  expect(registry!.byAgent(B)).toBe(live)
+  expect(io.durable).toHaveLength(1)
+})
+
+it('keeps the unchanged flush snapshot while a direct live edit arrives during exact equality', async () => {
+  const live = registry!.byAgent(A)!, before = readFileSync(io.file, 'utf8')
+  const held = holdEquality()
+  const flushing = track(registry!.flush())
+  await held.entered()
+  live.launchArgs!.push('--after-flush-snapshot')
+  held.release()
+  await flushing
+  expect(readFileSync(io.file, 'utf8')).toBe(before)
+  expect(io.durable).toEqual([])
+  await registry!.flush()
+  expect(row(disk()).launchArgs).toEqual(['--before', '--after-flush-snapshot'])
+  expect(registry!.byAgent(A)).toBe(live)
+  expect(io.durable).toHaveLength(1)
+})
+
+it('captures a fresh live edit when a late legacy writer makes the awaited equality miss', async () => {
+  const live = registry!.byAgent(A)!, held = holdEquality()
+  const flushing = track(registry!.flush())
+  await held.entered()
+  const peer = disk()
+  row(peer, B).title = 'late peer title'
+  writeFileSync(io.file, JSON.stringify(peer), { mode: 0o600 })
+  live.launchArgs!.push('--during-peer-proof')
+  held.release()
+  await flushing
+  expect(row(io.prepared[0], A).launchArgs).toEqual(['--before', '--during-peer-proof'])
+  expect(row(disk(), A).launchArgs).toEqual(['--before', '--during-peer-proof'])
+  expect(row(disk(), B).title).toBe('late peer title')
+  expect(registry!.byAgent(A)).toBe(live)
+  expect(io.durable).toHaveLength(1)
+})
+
+it('reads one exact equality proof before retaining a peer-only changed image', async () => {
+  const peer = disk()
+  row(peer, B).title = 'peer-only title'
+  writeFileSync(io.file, JSON.stringify(peer), { mode: 0o600 })
+  const equal = vi.spyOn(storage!, 'equal'), retain = vi.spyOn(storage!, 'retain')
+  await registry!.flush()
+  expect(row(disk(), B).title).toBe('peer-only title')
+  expect(registry!.byAgent(B)!.title).toBe('peer-only title')
+  expect(io.durable).toHaveLength(1)
+  expect(retain.mock.calls.filter(([document]) => document.kind === 'registry')).toHaveLength(1)
+  expect(equal).toHaveBeenCalledTimes(1)
+})
+
+it('retains the captured path when names change during the preceding names read', async () => {
+  await registry!.rename(A, 'fixture named')
+  const retain = storage!.retain.bind(storage!)
+  let inherited = false
+  vi.spyOn(storage!, 'retain').mockImplementation(async (...args) => {
+    const source = await retain(...args)
+    if (args[0].kind === 'names' && !inherited) {
+      inherited = true
+      registry!.inheritName(A, B)
+    }
+    return source
+  })
+  const before = readFileSync(io.file, 'utf8'), clone = vi.spyOn(globalThis, 'structuredClone')
+  await registry!.flush()
+  const copied = clone.mock.calls.filter(([value]) => isPersistedRow(value)).length
+  clone.mockRestore()
+  expect(inherited).toBe(true)
+  expect(copied).toBe(2)
+  expect(JSON.parse(readFileSync(join(root, 'data', 'agent-names.json'), 'utf8'))).toMatchObject({ [A]: 'fixture named', [B]: 'fixture named' })
+  expect(registry!.displayName(registry!.byAgent(B)!)).toBe('fixture named')
+  expect(readFileSync(io.file, 'utf8')).toBe(before)
+  expect(io.durable).toEqual([])
+})
+
+it.each(['transaction', 'exit'] as const)('keeps full row capture for unchanged %s observations', async operation => {
+  const live = registry!.byAgent(A)!, before = readFileSync(io.file, 'utf8')
+  const clone = vi.spyOn(globalThis, 'structuredClone')
+  if (operation === 'exit') await registry!.flush({ exiting: true })
+  else await registry!.transaction(() => {
+    const { cwd, touchedAt } = live
+    registry!.setCwd(A, '/fixture/reverted-observation')
+    live.cwd = cwd; live.touchedAt = touchedAt
+  })
+  const copied = clone.mock.calls.filter(([value]) => isPersistedRow(value)).length
+  clone.mockRestore()
+  expect(copied).toBe(2)
+  expect(readFileSync(io.file, 'utf8')).toBe(before)
+  expect(io.durable).toEqual([])
+})
+
+it('retains strict repeated intent publication even when its rows are already equal', async () => {
+  await registry!.setClosePlan(A, plan)
+  io.durable = []; io.prepared = []
+  const clone = vi.spyOn(globalThis, 'structuredClone')
+  const receipt = await registry!.setClosePlan(A, plan)
+  const copied = clone.mock.calls.filter(([value]) => isPersistedRow(value)).length
+  clone.mockRestore()
+  expect(copied).toBeGreaterThanOrEqual(2)
+  expect(receipt?.closePlan).toEqual(plan)
+  expect(row(disk()).closePlan).toEqual(plan)
+  expect(io.durable).toHaveLength(1)
+})
+
+it.skipIf(process.platform === 'win32')('captures and reconciles an unconfirmed image instead of accepting equal bytes', async () => {
+  const { AtomicWriteUnconfirmed } = await import('./secureState.js')
+  io.failDirectorySync = true
+  await expect(track(registry!.setClosePlan(A, plan))).rejects.toBeInstanceOf(AtomicWriteUnconfirmed)
+  expect(row(disk()).closePlan).toEqual(plan)
+  expect(registry!.byAgent(A)!.closePlan).toBeUndefined()
+  io.failDirectorySync = false
+  io.prepared = []
+  const clone = vi.spyOn(globalThis, 'structuredClone'), equal = vi.spyOn(storage!, 'equal')
+  await registry!.flush()
+  const copied = clone.mock.calls.filter(([value]) => isPersistedRow(value)).length
+  clone.mockRestore()
+  expect(copied).toBeGreaterThanOrEqual(2)
+  expect(equal).not.toHaveBeenCalled()
+  expect(row(disk())).not.toHaveProperty('closePlan')
+  expect(io.prepared).toHaveLength(1)
+  expect(io.durable).toHaveLength(1)
+})
+
 it('avoids repeated row comparisons and unused owner captures in a changed save and flush', async () => {
   const live = registry!.byAgent(A)!, peer = row(disk(), B)
   const stringify = vi.spyOn(JSON, 'stringify')
@@ -139,17 +409,106 @@ it('avoids repeated row comparisons and unused owner captures in a changed save 
   await registry!.flush()
   const fingerprints = stringify.mock.calls.filter(([value, replacer]) => isPersistedRow(value) && typeof replacer === 'function').length
   const owners = stringify.mock.calls.filter(([value, replacer]) => isOwnershipRecord(value) && typeof replacer === 'function').length
-  const images = stringify.mock.calls.filter(([value, replacer, space]) => Array.isArray(value)
-    && value.length > 0 && value.every(isPersistedRow) && replacer === null && space === 2).length
   stringify.mockRestore()
   expect(registry!.byAgent(A)).toBe(live)
   expect(registry!.byProcess('claude', live.processIdentity!)).toBe(live)
   expect(row(disk())).toMatchObject({ cwd: '/fixture/changed', launchArgs: ['--before'] })
   expect(row(disk(), B)).toEqual(peer)
   expect(io.durable).toHaveLength(1)
-  expect(images).toBe(1)
+  expect(io.prepared).toEqual(io.durable)
   expect(fingerprints).toBeLessThanOrEqual(12)
   expect(owners).toBe(0)
+})
+
+it('does not canonically serialize an unchanged peer again for either fresh live rebase', async () => {
+  const live = registry!.byAgent(A)!, peer = registry!.byAgent(B)!, savedPeer = row(disk(), B)
+  const serialize = JSON.stringify
+  let peerFingerprints = 0
+  const stringify = vi.spyOn(JSON, 'stringify').mockImplementation((value, replacer, space) => {
+    if (io.prepared.length && isPersistedRow(value) && value.agentId === B && typeof replacer === 'function') peerFingerprints++
+    return serialize(value, replacer, space)
+  })
+  try {
+    expect(registry!.setCwd(A, '/fixture/rebase-comparison')).toBe(true)
+    await registry!.flush()
+  } finally { stringify.mockRestore() }
+  expect(row(disk())).toMatchObject({ cwd: '/fixture/rebase-comparison', launchArgs: ['--before'] })
+  expect(row(disk(), B)).toEqual(savedPeer)
+  expect(registry!.byAgent(A)).toBe(live)
+  expect(registry!.byProcess('claude', live.processIdentity!)).toBe(live)
+  expect(registry!.byAgent(B)).toBe(peer)
+  expect(registry!.byProcess('claude', peer.processIdentity!)).toBe(peer)
+  expect(io.durable).toHaveLength(1)
+  expect(io.prepared).toEqual(io.durable)
+  // One comparison installs the durable baseline; one belongs to the explicit following flush.
+  expect(peerFingerprints).toBeLessThanOrEqual(2)
+})
+
+it.each(['omitted nested value', 'credential witness'] as const)('preserves canonical equality after a live %s changes during preparation', async change => {
+  const apiKey = randomUUID()
+  if (change === 'credential witness') {
+    expect(await registry!.setGridLaunch(B, { override: { networkId: 'fixture-grid', networkName: 'Fixture',
+      baseUrl: 'https://grid.example.test/relay/v1', apiKey, model: 'fixture-model' }, webSearch: 'on' })).toBe(true)
+  } else {
+    registry!.byAgent(B)!.grid = { baseUrl: 'https://grid.example.test/v1', model: 'captured' }
+    await registry!.flush()
+  }
+  io.prepared = []; io.durable = []
+  const peer = registry!.byAgent(B)!, savedPeer = row(disk(), B)
+  const held = holdPreparation()
+  expect(registry!.setCwd(A, '/fixture/canonical-fallback')).toBe(true)
+  const pending = track(registry!.flush())
+  await held.entered()
+  if (change === 'credential witness') {
+    const source = peer.gridLaunch!.credential.source
+    if (source.kind !== 'image') throw new Error('fixture expected an image witness')
+    peer.gridLaunch!.credential.source = { kind: 'image', proof: { ...source.proof, identity: source.proof.identity + '0' } }
+  } else {
+    // Different insertion order and an extra undefined property still have the same JSON meaning.
+    peer.grid = { model: 'captured', baseUrl: 'https://grid.example.test/v1', omitted: undefined } as typeof peer.grid
+  }
+  const serialize = JSON.stringify
+  let peerFingerprints = 0
+  const stringify = vi.spyOn(JSON, 'stringify').mockImplementation((value, replacer, space) => {
+    if (isPersistedRow(value) && value.agentId === B && typeof replacer === 'function') peerFingerprints++
+    return serialize(value, replacer, space)
+  })
+  try {
+    held.release()
+    await pending
+  } finally { stringify.mockRestore() }
+  expect(registry!.byAgent(B)).toBe(peer)
+  expect(registry!.byProcess('claude', peer.processIdentity!)).toBe(peer)
+  expect(row(disk(), B)).toEqual(savedPeer)
+  expect(io.durable).toHaveLength(1)
+  expect(io.prepared).toEqual(io.durable)
+  // Both live rebases must fall back to canonical equality, followed by baseline and flush checks.
+  expect(peerFingerprints).toBe(4)
+  if (change === 'credential witness') {
+    expect((await storage!.resolveSelected(peer.gridLaunch!)).apiKey === apiKey).toBe(true)
+    expect(JSON.stringify(peer).includes(apiKey)).toBe(false)
+  }
+})
+
+it.skipIf(process.platform === 'win32')('reads fresh nested peer edits again after actual directory durability', async () => {
+  const peer = registry!.byAgent(B)!
+  peer.launchArgs = ['--before']
+  await registry!.flush()
+  io.prepared = []; io.durable = []
+  const held = holdDurability()
+  expect(registry!.setCwd(A, '/fixture/durable-rebase')).toBe(true)
+  const pending = track(registry!.flush())
+  await held.entered()
+  expect(row(io.durable[0], B).launchArgs).toEqual(['--before'])
+  peer.launchArgs.push('--during-durability')
+  held.release()
+  await pending
+  expect(registry!.byAgent(B)).toBe(peer)
+  expect(registry!.byProcess('claude', peer.processIdentity!)).toBe(peer)
+  expect(peer.launchArgs).toEqual(['--before', '--during-durability'])
+  expect(row(disk(), B).launchArgs).toEqual(peer.launchArgs)
+  expect(io.durable).toHaveLength(2)
+  expect(io.prepared).toEqual(io.durable)
 })
 
 it('admits a durable owner without temporary property-pair arrays for its canonical row comparisons', async () => {
@@ -224,8 +583,52 @@ it('reuses private normalization across admission checks and unchanged prepared 
   expect(saved.slice(0, 2)).toEqual(previous)
   expect(saved[2]).toEqual(opened!.entry)
   expect(io.durable).toEqual([saved])
-  // Eighteen before prepared-row reuse: all three unchanged prepared rows were parsed again.
-  expect(normalizations).toBeLessThanOrEqual(15)
+  // Fifteen after prepared-row reuse: both source rows were still normalized for the index and merge.
+  expect(normalizations).toBeLessThanOrEqual(11)
+})
+
+it.each(['registeredAt', 'touchedAt', 'lastHookAt', 'lastTranscriptAt'] as const)(
+  'keeps per-call historical clock normalization when source %s is absent', async field => {
+    const image = disk(), missing = row(image, B), started = Date.now()
+    delete missing[field]
+    writeFileSync(io.file, JSON.stringify(image), { mode: 0o600 })
+    const { validTerminalRuntime } = await import('./registry.js'), filter = Array.prototype.filter
+    let normalizations = 0
+    const filtered = vi.spyOn(Array.prototype, 'filter').mockImplementation(function (this: unknown[], predicate, thisArg) {
+      if (predicate === validTerminalRuntime && (this[0] as { paneId?: string })?.paneId === '%2') normalizations++
+      return filter.call(this, predicate, thisArg)
+    })
+    try { registry!.setCwd(A, '/fixture/changed'); await registry!.flush() }
+    finally { filtered.mockRestore() }
+    expect(normalizations).toBeGreaterThanOrEqual(3)
+    expect(row(disk(), B)[field]).toBeGreaterThanOrEqual(started)
+    expect(row(disk(), A).cwd).toBe('/fixture/changed')
+  })
+
+it('validates a changed candidate independently even when it keeps the source runtime array', async () => {
+  const live = registry!.byAgent(A)!, before = readFileSync(io.file, 'utf8'), project = live.projectDir
+  ;(live as unknown as Row).projectDir = 42
+  try {
+    await expect(registry!.flush()).rejects.toThrow('registry storage write failed')
+    expect(readFileSync(io.file, 'utf8')).toBe(before)
+    expect(io.prepared).toEqual([])
+  } finally { live.projectDir = project }
+})
+
+it('reuses source normalization with a numeric legacy updatedAt and preserves its exact time', async () => {
+  const image = disk(), legacy = row(image, B), stamp = legacy.touchedAt
+  legacy.updatedAt = stamp; delete legacy.touchedAt
+  writeFileSync(io.file, JSON.stringify(image), { mode: 0o600 })
+  const { validTerminalRuntime } = await import('./registry.js'), filter = Array.prototype.filter
+  let normalizations = 0
+  const filtered = vi.spyOn(Array.prototype, 'filter').mockImplementation(function (this: unknown[], predicate, thisArg) {
+    if (predicate === validTerminalRuntime && (this[0] as { paneId?: string })?.paneId === '%2') normalizations++
+    return filter.call(this, predicate, thisArg)
+  })
+  try { registry!.setCwd(A, '/fixture/changed'); await registry!.flush() }
+  finally { filtered.mockRestore() }
+  expect(normalizations).toBe(1)
+  expect(row(disk(), B)).toMatchObject({ updatedAt: stamp, touchedAt: stamp })
 })
 
 it('rejects a live row made invalid after preparation instead of reusing its earlier normalized owner', async () => {
@@ -407,6 +810,17 @@ it('copies only the two pre-await row images for a changed observation and its p
   expect(rowsCopied).toBeLessThanOrEqual(4)
 })
 
+it('keeps installed rows independent after copying a shared mutable Grid assignment', async () => {
+  const first = registry!.byAgent(A)!, second = registry!.byAgent(B)!
+  first.grid = second.grid = { baseUrl: 'https://grid.example.test/v1', model: 'captured' }
+  await registry!.flush()
+  expect(row(disk(), A).grid).toEqual(row(disk(), B).grid)
+  expect(first.grid).not.toBe(second.grid)
+  first.grid!.model = 'first-only'
+  expect(second.grid!.model).toBe('captured')
+  expect(row(disk(), A).grid).toEqual({ baseUrl: 'https://grid.example.test/v1', model: 'captured' })
+})
+
 it('keeps the captured strict image immutable and durably rebases nested alias edits and deletion', async () => {
   const live = registry!.byAgent(A)!, held = holdPreparation(), candidate: RegisteredSession['closePlan'] = { ...plan }
   const closing = track(registry!.setClosePlan(A, candidate))
@@ -548,4 +962,25 @@ it.skipIf(process.platform === 'win32')('refuses a successful strict receipt whe
   expect(registry!.byAgent(A)).toBe(live)
   expect(live.closePlan).toBeUndefined()
   expect(recoveryFingerprints).toBeLessThanOrEqual(4)
+})
+
+it.each(['normalization', 'publication'] as const)('preserves an absent legacy Grid launch through %s', async phase => {
+  const first = registry!.byAgent(A)!, second = registry!.byAgent(B)!
+  delete first.gridLaunch
+  second.gridLaunch = null
+  if (phase === 'normalization') {
+    const { strictPersistedRow } = await import('./registry.js')
+    const saved = { ...disk().find(row => row.agentId === A)! }
+    delete saved.gridLaunch
+    expect(strictPersistedRow(saved)).not.toHaveProperty('gridLaunch')
+  } else {
+    await registry!.flush()
+    expect(registry!.byAgent(A)).not.toHaveProperty('gridLaunch')
+    expect(registry!.byAgent(B)?.gridLaunch).toBeNull()
+    expect(disk().find(row => row.agentId === A)).not.toHaveProperty('gridLaunch')
+    expect(disk().find(row => row.agentId === B)?.gridLaunch).toBeNull()
+    await registry!.load()
+    expect(registry!.byAgent(A)).not.toHaveProperty('gridLaunch')
+    expect(registry!.byAgent(B)?.gridLaunch).toBeNull()
+  }
 })

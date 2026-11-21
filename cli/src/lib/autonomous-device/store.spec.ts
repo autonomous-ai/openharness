@@ -23,7 +23,7 @@ function fixture(installed = true) {
     create: vi.fn(async () => {
       agents.push({ agentId: 'agent1', machineId: 'mac', packageId: pkg.packageId, workspace: '/projects/airplane', engine: 'claude', state: 'idle', runtime: 'ready' })
       return { state: 'created' as const, agentId: 'agent1' }
-    }), agents: () => agents, reveal: vi.fn(),
+    }), agents: () => agents, agentsCurrent: vi.fn(() => true), reveal: vi.fn(),
   }
   const store = new AutonomousDeviceStore(deps)
   const prepare = (key = 'airplane', extra: Record<string, unknown> = {}) => store.request('lamp', request('agent.prepare', {
@@ -37,6 +37,28 @@ function fixture(installed = true) {
   return { deps, pkg, agents, store, prepare, settled, id, directory }
 }
 describe('device Store durable preparation', () => {
+  it.each(['missing', 'package', 'workspace'] as const)('waits for current evidence, then refuses a genuinely %s prepared agent', async changed => {
+    const f = fixture()
+    f.deps.agentsCurrent.mockReturnValue(false)
+    const id = f.id(await f.prepare())
+    const receipts = new AgentCreationReceipts(join(f.directory, 'creations'))
+    await vi.waitFor(() => expect(receipts.status(id)).toEqual({ state: 'created', agentId: 'agent1' }))
+    expect(f.store.get('lamp', id)).toMatchObject({ state: 'running', phase: 'launch', error: null })
+    expect(f.deps.reveal).not.toHaveBeenCalled()
+    f.deps.agentsCurrent.mockReturnValue(true)
+    expect(f.store.get('lamp', id)).toMatchObject({ state: 'ready', error: null })
+    expect(f.deps.reveal).toHaveBeenCalledWith(id, 'agent1')
+    f.deps.reveal.mockClear(); f.deps.agentsCurrent.mockReturnValue(false)
+    if (changed === 'missing') f.agents.length = 0
+    else if (changed === 'package') f.agents[0].packageId = 'replacement/package'
+    else f.agents[0].workspace = '/replacement'
+    f.store.get('lamp', id)
+    expect(f.deps.reveal).not.toHaveBeenCalled()
+    f.deps.agentsCurrent.mockReturnValue(true)
+    expect(f.store.get('lamp', id)).toMatchObject({ state: 'needs_user_action', error: { code: 'AGENT_UNAVAILABLE' } })
+    await f.prepare()
+    expect(f.deps.create).toHaveBeenCalledOnce()
+  })
   it('reveals before readiness, retries delivery, and persists the UI ack across restart', async () => {
     const f = fixture()
     f.deps.create.mockImplementationOnce(async () => {

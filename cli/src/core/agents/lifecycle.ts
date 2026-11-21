@@ -8,7 +8,7 @@ import type { clearDeleted as clearDeletedFn, markDeleted as markDeletedFn } fro
 import { PurgeAgentService, type PurgeDeps } from '../../lib/purgeAgentService.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import { createResumeAgentService, type ResumeAgentServiceDeps } from '../../lib/resumeAgentService.js'
-import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
+import { moveHeldLine } from '../../lib/hostMove/held.js'
 import type { SessionCheckpointStore } from '../../lib/sessionCheckpoint.js'
 import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
 import { AgentStopError, createStopAgentService, type StopAgentServiceDeps } from '../../lib/stopAgentService.js'
@@ -21,6 +21,7 @@ import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 export interface LifecycleDeps {
   settlePane?: StopAgentServiceDeps['settlePane']
   cancelExternal?: StopAgentServiceDeps['cancelExternal']
+  paneInfo?: StopAgentServiceDeps['paneInfo']
   registry: typeof registry
   stoppedAgents: StoppedAgentStore
   restartJobs: StopAgentServiceDeps['restartJobs']
@@ -82,7 +83,7 @@ export interface LifecycleDeps {
 export const TOLD_NOT_ERASED = 'Harness could not erase what this harness was told, so nothing was deleted.'
 
 export function createAgentLifecycle({
-  registry, stoppedAgents, restartJobs, createBackend, noBackendCode, backendFor, agentReconciler, forgetSession, markDeleted, clearDeleted, stopNative, settlePane, cancelExternal,
+  registry, stoppedAgents, restartJobs, createBackend, noBackendCode, backendFor, agentReconciler, forgetSession, markDeleted, clearDeleted, stopNative, settlePane, cancelExternal, paneInfo,
   sessionCheckpoints, mirror, forgetTold, scrubCreated, workspaces, send, pinnedControls, retainExitedSession, announceSession,
   relaunchOverrides, prepareSessionResume, stopBackgroundJob, refreshGridWebSearch, attach, attachSession, relaunchMarks, stopped, purged, atFolderTrust, atEmptyComposer, moveHeld,
 }: LifecycleDeps) {
@@ -93,7 +94,7 @@ export function createAgentLifecycle({
    */
   const stopJobs = new Map<string, Promise<void>>()
   const stop = createStopAgentService({
-    registry, stoppedAgents, restartJobs, stopJobs, backendFor, agentReconciler,
+    registry, stoppedAgents, restartJobs, stopJobs, backendFor, agentReconciler, paneInfo,
     forgetSession, markDeleted, clearDeleted, stopNative, settlePane, cancelExternal,
   })
   /**
@@ -106,7 +107,7 @@ export function createAgentLifecycle({
     return stop(target, options).then(() => { stopped?.(agentId) })
   }
   const purgeAgentService = new PurgeAgentService({
-    live: id => registry.byAgent(id), sessions: () => [...registry.list(), ...stoppedAgents.list()],
+    live: id => registry.byAgent(id), liveSessions: () => registry.list(),
     worktrees: () => workspaces() ?? WORKSPACES_OFF,
     stopped: stoppedAgents, checkpoints: sessionCheckpoints, stop: stopAgent,
     restarting: id => restartJobs.busy(id) || stopJobs.has(id),
@@ -130,20 +131,20 @@ export function createAgentLifecycle({
     retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume, stopBackgroundJob,
     refreshGridWebSearch, clearDeleted, attach, attachSession, relaunchMarks,
   })
-  const resumeAgent: ResumeAgent = (id, permissionMode, launchArgs) => {
+  const resumeAgent: ResumeAgent = async (id, permissionMode, launchArgs) => {
     // A pane a stopped move left may still run this conversation's engine, which no record names (its pid was never
     // the row's), so a resume would find the engine gone and start a second one beside it: not this start.
-    const heldId = (stoppedAgents.get(id) ?? registry.byAgent(id))?.agentId ?? id
+    const saved = await stoppedAgents.get(id)
+    const selected = saved ?? registry.byAgent(id)
+    const heldId = selected?.agentId ?? id
     if (moveHeld?.(heldId)) {
       console.warn(moveHeldLine(heldId))
       return Promise.resolve({ ok: false, error: 'AGENT_BUSY', detail: 'This harness is held until the daemon restarts.' })
     }
-    return resumeChecked(id, permissionMode, launchArgs)
+    if (selected?.guest) return GUEST_HARNESS_REFUSAL
+    if (purgeAgentService.busy(id) || purgeAgentService.blocksFolder(selected?.cwd)) return { ok: false, error: 'AGENT_BUSY' }
+    return resume(id, permissionMode, launchArgs)
   }
-  const resumeChecked: ResumeAgent = (id, permissionMode, launchArgs) => (stoppedAgents.get(id) ?? registry.byAgent(id))?.guest
-    ? Promise.resolve(GUEST_HARNESS_REFUSAL)
-    : purgeAgentService.busy(id) || purgeAgentService.blocksFolder(stoppedAgents.get(id)?.cwd)
-      ? Promise.resolve({ ok: false, error: 'AGENT_BUSY' }) : resume(id, permissionMode, launchArgs)
   return { stopJobs, stopAgent, purgeAgentService, resumeAgent }
 }
 

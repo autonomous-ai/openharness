@@ -18,6 +18,7 @@ import type { LastTurnText } from '../lib/normalize.js'
 import { processCoreApi } from './processCoreApi.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { createRecaps } from './recaps.js'
+import { env } from '../config/env.js'
 
 export interface RecapsServiceOptions {
   dataDir: string
@@ -78,7 +79,7 @@ export function runRecapsService(options: RecapsServiceOptions): ServiceProcess 
       const answer = await core.query('lastTurn', { sessionId })
       return answer.turn && typeof answer.turn === 'object' ? answer.turn as LastTurnText : null
     },
-  }), { changed: tell })
+  }), { changed: tell, peer: { composition: 'services', port: env.PORT, token: options.token } })
 
   const run = options.run ?? runServiceProcess
   const link = run({
@@ -94,12 +95,12 @@ export function runRecapsService(options: RecapsServiceOptions): ServiceProcess 
     },
     onConnected: (connection) => {
       core = connection
+      recaps.connected()
       told.clear()
       for (const sessionId of recaps.mirror.sessions()) tell(sessionId)
     },
-    onDisconnected: () => { core = null },
+    onDisconnected: () => { core = null; void recaps.port.stop() },
   })
-  // A stop, an update and a handover all stop this process through its host (services/process.ts `hostServices`):
-  // the recaps' saves are not flushed, so the last one is, before the process goes.
-  return { stop: () => { recaps.mirror.saveBeforeStop(); return link.stop() } }
+  // Flush the final cache before disconnecting, then settle the device-presence owner.
+  return { stop: async () => { recaps.mirror.saveBeforeStop(); link.stop(); await recaps.port.stop() } }
 }

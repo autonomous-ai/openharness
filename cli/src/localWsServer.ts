@@ -1,6 +1,11 @@
+import { errorKind } from './lib/log.js'
+import { createClientStreamQueue, type ClientStreamQuota } from './lib/clientStreamQueue.js'
+import { CLIENT_STREAM_QUEUE_BYTES } from './lib/clientStreamContract.js'
 import { randomUUID } from 'node:crypto'
 import type { AppSwarms } from './cable/cableSession.js'
-import { notificationReadToken, type UnreadNotification } from './lib/notificationRead.js'
+import type { LegacyDeviceWindowSnapshot } from './lib/legacyDeviceWindowState.js'
+import { createLegacyDeviceWindowLoader } from './lib/legacyDeviceWindowLoader.js'
+import type { UnreadNotification } from './lib/notificationRead.js'
 import type http from 'node:http'
 import type { Socket } from 'node:net'
 import { WebSocket, WebSocketServer, type RawData } from 'ws'
@@ -10,8 +15,12 @@ import { isTrustedLocal, pipeProofOf } from './lib/localSocket.js'
 import { PIPE_PROOF_HEADER } from './lib/windows/pipeAuth.js'
 import { localCredentialMatches } from './lib/localCredential.js'
 import { peerIsThisAccount, type PeerAccount } from './lib/peerAccount.js'
-import type { Frame, LocalClientSink } from './backendSocket.js'
+import type { Frame, LocalClientSink, LocalSendQuota } from './backendSocket.js'
+import { replayLegacyQuestions, questionFrameBytes, QUESTION_OBSERVATION_BYTES, QUESTION_OBSERVATION_CONNECTION_FRAMES, QUESTION_OBSERVATION_FRAMES } from './core/questionObservation.js'
+import { boundedJsonBytes } from './lib/boundedJsonBytes.js'
+import { SESSION_EVENT_BYTES, SESSION_EVENT_SEND_BYTES, SESSION_EVENT_CONNECTION_FRAMES, SESSION_EVENT_FRAMES, SESSION_EVENT_DRAIN_MS } from './lib/sessionEvents.js'
 import {
+  clientStreamLocalFrame,
   decodeTerminalLocal,
   TERMINAL_BINARY_VERSION,
   TERMINAL_LOCAL_PASTE_MAX_PAYLOAD_BYTES,
@@ -41,10 +50,10 @@ import { LOCAL_JSON_MAX_BYTES } from './lib/localJsonLimit.js'
 export interface LocalWsBackend {
   /** `tool`: `harness pair` or the harnessd MCP server — answered like any local client, never presence.
    *  `watch`: what a tool asked to be sent as it changes; a window is sent it anyway. */
-  registerLocalClient: (connId: string, sink: LocalClientSink, opts?: { tool?: boolean; surface?: 'tui'; watch?: readonly 'dial'[] }) => boolean
+  registerLocalClient: (connId: string, sink: LocalClientSink, opts?: { tool?: boolean; surface?: 'tui'; watch?: readonly 'dial'[]; questionProtocol?: 1; eventsProtocol?: 1 }) => boolean
   unregisterLocalClient: (connId: string) => Promise<void>
   handleLocalFrame: (connId: string, frame: Frame) => void
-  handleLocalBinary: (connId: string, frame: TerminalBinaryClear) => Promise<void>
+  handleLocalBinary: (connId: string, frame: TerminalBinaryClear, raw?: Uint8Array) => Promise<void>
   /** The agent this window has focused, or null — which of its terminals gets the short output window. */
   setLocalTerminalFocus?: (connId: string, agentId: string | null, visibleAgents?: readonly string[]) => void
   /** hn's `product_observe`, from a connection on this computer's own socket bound to this machine. */
@@ -75,8 +84,10 @@ export interface LocalWsServerOptions {
   localClient?: () => { kind: string; name: string; machineId?: string } | null
   /** The desktop app opened an agent's terminal — which agent, and on which machine. Lets the dial follow
    *  the window, so the two screens stay one desk. */
-  /** Explicit app focus, including a live empty workspace, for device routing. */
-  onAppFocusState?: (machineId: string, agentId: string | null, connId: string, expectedRevision?: string) => unknown
+  /** Explicit focus applies synchronously. A conditional check returns its final guarded apply so
+   *  physical-window validation, state mutation and dial forwarding share one synchronous stack. */
+  onAppFocusState?: (machineId: string, agentId: string | null, connId: string, expectedRevision?: string) =>
+    boolean | void | Promise<false | (() => boolean)>
   /** A registered desktop connection closed. Never interpret this as live empty-workspace focus. */
   onAppDisconnect?: (machineId: string, connId: string) => void
   onDevicePrepareOpened?: (operationId: string, agentId: string) => void
@@ -95,6 +106,8 @@ export interface LocalWsServerOptions {
   onAppSwarms?: (swarms: AppSwarms | null) => void
   /** Tab membership for cleanup, scoped to the reporting window, including local utility tabs. */
   onAppTabAgents?: (connection: string, agentIds: string[] | null) => void
+  /** A local tab report is admitted but cannot yet establish membership for destructive cleanup. */
+  onAppTabPending?: (connection: string, pending: boolean) => void
   /** Handlers for declared service frames; unrelated traffic stays on the terminal path. */
   serviceFrames?: ReadonlyMap<string, (connId: string, frame: Frame) => Promise<Frame | null>>
   /** The dial right now, sent to a window, or a tool that asked for the dial, the moment it connects — it may have
@@ -110,7 +123,7 @@ export interface LocalWsServerOptions {
   onDialSettings?: (id: string, patch: Record<string, unknown>) => void
   /** Questions still waiting on the user, as the `commander_question` frames that announced them. A window
    *  that connects after one was asked is handed them, so a terminal opened late still sees who is blocked. */
-  openQuestions?: () => Frame[]
+  openQuestions?: () => Iterable<Frame>
   /** The core's end of its out-of-process services (core/serviceLinks.ts): a `machine_select` with
    *  `role: "service"` is handed here, and the connection is the service's from then on. */
   services?: {
@@ -127,6 +140,8 @@ const DAEMON_RESULT: Record<string, string> = { daemon_act: 'daemon_act_result',
 
 export interface LocalWsServer {
   close: () => Promise<void>
+  /** Dated compatibility state, absent until an old client first reports its desk. */
+  legacyDeviceSnapshot(): LegacyDeviceWindowSnapshot | undefined
   /** Exact local socket, including sockets viewing a remote machine; never relayed. */
   sendToWindow: (connId: string, frame: Frame) => boolean
 }
@@ -165,52 +180,6 @@ function jsonFrame(raw: RawData, maxBytes = LOCAL_JSON_MAX_BYTES): (Frame & { ty
   }
 }
 
-/**
- * The window's swarm list, checked field by field. Anything that is not an id, a name and a list of
- * agent ids is dropped rather than trusted — the same stance app_panes takes with its ids — and a
- * payload with no usable swarm at all is treated as not sent.
- */
-function appSwarmsFrom(payload: unknown): AppSwarms | null {
-  if (!payload || typeof payload !== 'object') return null
-  const p = payload as Record<string, unknown>
-  const rows = Array.isArray(p.swarms) ? p.swarms : []
-  const swarms: AppSwarms['swarms'] = []
-  for (const row of rows) {
-    if (!row || typeof row !== 'object') continue
-    const r = row as Record<string, unknown>
-    if (typeof r.id !== 'string' || !r.id || typeof r.name !== 'string') continue
-    const agentIds = Array.isArray(r.agentIds)
-      ? r.agentIds.filter((id): id is string => typeof id === 'string' && id !== '')
-      : []
-    // A window that predates this field says nothing about its tiles, and the honest reading of that
-    // silence is the old one: as many tiles as agents. That keeps an older app behaving exactly as it
-    // does today rather than having its tabs vanish from the dial for the opposite reason.
-    const panes = typeof r.panes === 'number' && Number.isFinite(r.panes) && r.panes >= 0
-      ? Math.min(Math.floor(r.panes), 999)
-      : agentIds.length
-    swarms.push({ id: r.id, name: r.name.slice(0, 80), agentIds, panes })
-    if (swarms.length === 24) break   // the window's own ceiling
-  }
-  if (swarms.length === 0) return null
-  const active = typeof p.active === 'string' && swarms.some((s) => s.id === p.active) ? p.active : swarms[0].id
-  // Absent from a window that predates the field, and absent is the honest answer: the far side falls
-  // back to deriving a shape from the count, which is what it did before any window sent one.
-  const tiles: AppSwarms['tiles'] = []
-  for (const row of Array.isArray(p.tiles) ? p.tiles : []) {
-    if (!row || typeof row !== 'object') continue
-    const t = row as Record<string, unknown>
-    const n = (v: unknown): number | null =>
-      typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(1000, Math.round(v))) : null
-    const x1 = n(t.x1), y1 = n(t.y1), x2 = n(t.x2), y2 = n(t.y2)
-    // A tile with no area is not a tile. Dropping it here rather than on the device keeps the far
-    // side's rule simple: every row it receives is drawable.
-    if (x1 === null || y1 === null || x2 === null || y2 === null || x2 <= x1 || y2 <= y1) continue
-    tiles.push({ x1, y1, x2, y2, agentId: typeof t.agentId === 'string' ? t.agentId : '' })
-    if (tiles.length === 24) break   // the window's own ceiling, same as the rows above
-  }
-  return { active, swarms, tiles }
-}
-
 /** [raw]'s length in bytes, with nothing copied or made: it is read for every message. */
 function rawBytes(raw: RawData): number {
   if (Array.isArray(raw)) { let total = 0; for (const part of raw) total += part.byteLength; return total }
@@ -243,6 +212,7 @@ function withLocalClient(frame: Frame, localClient: LocalWsServerOptions['localC
 export const LOCAL_WS_CLOSE_GRACE_MS = 1_000
 
 export function attachLocalWsServer(server: http.Server, options: LocalWsServerOptions): LocalWsServer {
+  const streamQueue = createClientStreamQueue()
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: MAX_WS_MESSAGE_BYTES,
@@ -260,11 +230,14 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
   // background terminal attachments on ANY of those connections must not overwrite that selection.
   const explicitFocusClients = new Set<string>()
   const windowSinks = new Map<string, LocalClientSink>()
-  // The desktop reports the same desk on one connection per machine. Losing a
-  // remote relay must not erase the desk while another connection still holds it.
-  // Map order records the latest announcement, including a replacement socket.
-  const paneRosters = new Map<string, { ids: string[]; foreground: boolean }>()
-  const swarmRosters = new Map<string, AppSwarms>()
+  // A separate declared class on this physical send owner, shared by all observation connections.
+  const questionBudget = { bytes: 0, frames: 0, peakBytes: 0, peakFrames: 0 }
+  const eventBudget = { bytes: 0, frames: 0, peakBytes: 0, peakFrames: 0 }
+  const legacyDeviceState = createLegacyDeviceWindowLoader({ hooks: options,
+    live: connection => windowSinks.has(connection),
+    pending: (connection, pending) => options.onAppTabPending?.(connection, pending),
+    refused: (connection, reason) => { windowSinks.get(connection)?.sendFrame({ type: 'local_protocol_error', payload: { error: reason } }) },
+  })
 
   const onUpgrade = (req: http.IncomingMessage, socket: Socket, head: Buffer): void => {
     const path = (req.url ?? '').split('?')[0]
@@ -323,28 +296,119 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     // fixed for the life of the connection — set once, beside `selected`.
     let boundMachineId: string | null = null
     let relay: WindowRelaySession | null = null
-    /** Whether this connection ever reported a tile roster — only then is clearing it ours to do. */
-    let sentPanes = false
-    let sentSwarms = false
     let chain = Promise.resolve()
     /** Set when this connection is one of the core's services, not a window. */
     let serviceLink: { receive(frame: Frame): void; receiveBinary(bytes: Uint8Array): void; closed(): void } | null = null
+    // Ownership records only: ws owns each actual write. Logical unregister never clears these callbacks.
+    const observationSends = new Set<(sent: boolean) => void>()
+    const observations = {
+      questions: { pending: 0, frames: 0, bytes: 0, refused: 0 },
+      events: { pending: 0, frames: 0, bytes: 0, refused: 0 },
+      records: { pending: 0, frames: 0, bytes: 0, refused: 0 },
+    }
+    let eventDeadline: ReturnType<typeof setTimeout> | undefined
+    ws.once('close', () => {
+      clearTimeout(eventDeadline)
+      for (const settled of observationSends) settled(false)
+      for (const kind of ['questions', 'events', 'records'] as const) {
+        const stats = observations[kind], budget = kind === 'events' ? eventBudget : questionBudget
+        if (stats.frames || stats.refused) console.log(`[${kind === 'questions' ? 'question-observation' : kind === 'events' ? 'session-events' : 'session-read'}] closed · frames=${stats.frames} bytes=${stats.bytes} peakBytes=${budget.peakBytes} peakFrames=${budget.peakFrames} refused=${stats.refused}`)
+      }
+    })
 
+    const refusedStream = (quota: ClientStreamQuota): false => {
+      if (quota.direction === 'service' || quota.final) {
+        // Revoke authority now. Actual queued bytes stay charged until the physical socket releases them.
+        serviceLink?.closed()
+        serviceLink = null
+        close(1013, 'Stream queue full')
+      }
+      return false
+    }
+    const queued = streamQueue.connection()
+    ws.once('close', () => queued.close())
     const sink: LocalClientSink = {
-      sendFrame: (frame) => {
-        if (ws.readyState !== WebSocket.OPEN) return false
-        try { ws.send(JSON.stringify(frame)); return true } catch { return false }
+      sendFrame: (frame: Frame, quota?: LocalSendQuota, settled?: (sent: boolean) => void) => {
+        if (ws.readyState !== WebSocket.OPEN) { settled?.(false); return false }
+        if (quota && 'kind' in quota) {
+          const questions = quota.kind !== 'events', budget = questions ? questionBudget : eventBudget
+          const stats = observations[quota.kind]
+          const limit = questions ? QUESTION_OBSERVATION_BYTES : SESSION_EVENT_BYTES
+          const total = questions ? QUESTION_OBSERVATION_BYTES : SESSION_EVENT_SEND_BYTES
+          const connectionFrames = questions ? QUESTION_OBSERVATION_CONNECTION_FRAMES : SESSION_EVENT_CONNECTION_FRAMES
+          const totalFrames = questions ? QUESTION_OBSERVATION_FRAMES : SESSION_EVENT_FRAMES
+          const prefix = quota.kind === 'records' ? 'SESSION_READ' : questions ? 'QUESTION_OBSERVATION' : 'SESSION_EVENTS'
+          let bytes: number | null
+          try { bytes = questions ? questionFrameBytes(frame, limit) : boundedJsonBytes(frame, limit) } catch { bytes = null }
+          if (bytes === null || budget.bytes + bytes > total || stats.pending >= connectionFrames || budget.frames >= totalFrames) {
+            stats.refused++
+            const reason = `${prefix}_${bytes === null ? 'TOO_LARGE' : 'BACKPRESSURE'}`
+            console.warn(`[${quota.kind === 'records' ? 'session-read' : questions ? 'question-observation' : 'session-events'}] ${reason}`)
+            close(1013, reason)
+            settled?.(false)
+            return false
+          }
+          budget.bytes += bytes
+          budget.frames++
+          budget.peakBytes = Math.max(budget.peakBytes, budget.bytes)
+          budget.peakFrames = Math.max(budget.peakFrames, budget.frames)
+          stats.pending++; stats.frames++; stats.bytes += bytes
+          if (!questions && !eventDeadline) {
+            eventDeadline = setTimeout(() => {
+              console.warn('[session-events] SESSION_EVENTS_DRAIN_TIMEOUT')
+              close(1013, 'SESSION_EVENTS_DRAIN_TIMEOUT')
+            }, SESSION_EVENT_DRAIN_MS)
+            eventDeadline.unref?.()
+          }
+          let done = false
+          const finish = (sent: boolean): void => {
+            if (done) return
+            done = true
+            observationSends.delete(finish)
+            budget.bytes -= bytes
+            budget.frames--; stats.pending--
+            if (!questions && !stats.pending) { clearTimeout(eventDeadline); eventDeadline = undefined }
+            settled?.(sent)
+          }
+          observationSends.add(finish)
+          try {
+            ws.send(JSON.stringify(frame), error => { finish(!error); if (error) close(1013, `${prefix}_UNAVAILABLE`) })
+            return true
+          } catch { finish(false); close(1013, `${prefix}_UNAVAILABLE`); return false }
+        }
+        let release: (() => void) | null | undefined
+        try {
+          const serialized = JSON.stringify(frame)
+          if (!quota) { ws.send(serialized); return true }
+          if (ws.bufferedAmount > CLIENT_STREAM_QUEUE_BYTES) return refusedStream(quota)
+          release = queued.reserve(quota, Buffer.byteLength(serialized))
+          if (release === null) return refusedStream(quota)
+          ws.send(serialized, (error) => { release!(); if (error) ws.terminate() })
+          return true
+        } catch { release?.(); return false }
       },
-      sendBinary: (frame) => {
+      sendBinary: (frame, quota) => {
         if (ws.readyState !== WebSocket.OPEN) return false
-        try { ws.send(frame, { binary: true }); return true } catch { return false }
+        let release: (() => void) | null | undefined
+        try {
+          if (!quota) { ws.send(frame, { binary: true }); return true }
+          if (ws.bufferedAmount > CLIENT_STREAM_QUEUE_BYTES) return refusedStream(quota)
+          release = queued.reserve(quota, frame.length)
+          if (release === null) return refusedStream(quota)
+          ws.send(frame, { binary: true }, (error) => { release!(); if (error) ws.terminate() })
+          return true
+        } catch { release?.(); return false }
       },
+      close: (code, reason) => close(code, reason),
     }
     // A reading cursor belongs to this physical desk. A terminal's upstream
     // event feed cannot manufacture device gestures; only sendToWindow can.
     const terminalSink: LocalClientSink = {
       ...sink,
-      sendFrame: (frame) => frame.type === 'dial_selection' || frame.type === 'dial_visit' || frame.type === 'dial_form' || sink.sendFrame(frame),
+      sendFrame: (frame: Frame, quota?: LocalSendQuota, settled?: (sent: boolean) => void) => {
+        if (frame.type === 'dial_selection' || frame.type === 'dial_visit' || frame.type === 'dial_form') { settled?.(false); return true }
+        return quota && 'kind' in quota ? sink.sendFrame(frame, quota, settled) : sink.sendFrame(frame, quota)
+      },
     }
 
     const close = (code: number, reason: string): void => {
@@ -398,7 +462,10 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         // Outside text: only names this daemon knows are kept. A window's is never read: it is sent the dial anyway.
         const watch: readonly 'dial'[] = tool && Array.isArray(payload.watch) && payload.watch.includes('dial') ? ['dial'] : []
         // `harness tui` says so; every other window is the desktop app. Each is its own presence.
-        const registration = tool ? { tool: true, watch } : payload.client === 'tui' ? { surface: 'tui' as const } : {}
+        const registration = { ...(tool ? { tool: true, watch } : payload.client === 'tui' ? { surface: 'tui' as const } : {}),
+          ...(payload.questionProtocol === 1 ? { questionProtocol: 1 as const } : {}),
+          ...(payload.eventsProtocol === 1 ? { eventsProtocol: 1 as const } : {}),
+        }
         if (!options.backend.registerLocalClient(connId, terminalSink, registration)) {
           close(1011, 'local registration failed')
           return
@@ -415,20 +482,15 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
             e2ee: false,
             // A tool's frame only: the window's handshake parser is shared with the relay path (below).
             ...(tool ? { features: [...LOCAL_TOOL_FEATURES] } : {}),
+            ...(payload.questionProtocol === 1 ? { questionProtocol: 1 } : {}),
+            ...(payload.eventsProtocol === 1 ? { eventsProtocol: 1 } : {}),
           },
         })
         // Right after, not inside `connected`: the window's handshake parser is shared with the
         // relay path, and a field it does not expect is a field it has to learn to ignore. A tool that did not
         // ask for the dial is not told it.
         if (options.dialStatus && (!tool || watch.includes('dial'))) sink.sendFrame({ type: 'dial_status', payload: options.dialStatus() })
-        if (options.openQuestions) {
-          const open = options.openQuestions()
-          for (const asked of open) sink.sendFrame(asked)
-          // Then which questions are open at all, so a window that was here before (its link
-          // dropped) lets go of one answered meanwhile. Sent even when there are none.
-          const requestIds = open.map((f) => (f.payload as { requestId?: unknown } | undefined)?.requestId).filter((id): id is string => typeof id === 'string')
-          sink.sendFrame({ type: 'commander_questions_open', payload: { requestIds } })
-        }
+        if (options.openQuestions && payload.questionProtocol !== 1) replayLegacyQuestions(options.openQuestions(), frame => { sink.sendFrame(frame) })
         return
       }
       // Not this daemon's own machine — relay to backend for the other machines this same
@@ -527,92 +589,16 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
           }
           return
         }
-        // THE APP MOVED — tell whoever wants to follow it, before the frame is dispatched either way.
-        // Sniffed here rather than in the backend socket because that path never sees a RELAYED machine's
-        // frames: those are forwarded upstream a few lines below and would be invisible, which is exactly
-        // the case that matters — the dial has to follow the window onto ANOTHER machine too.
-        // The window's tile ROSTER. Consumed here like `app_focus` — it describes
-        // a screen at this desk, not anything the machine could act on.
-        //
-        // It carries every agent the window has open, INCLUDING ones belonging
-        // to other machines, and the app sends the same list to every daemon it
-        // is connected to. That is deliberate: the dial is served by whichever
-        // daemon owns the cable, and only a full picture lets that one decide
-        // whether a finished turn is already in front of the person.
-        if (!isBinary && options.onAppPanes) {
-          if (parsed?.type === 'app_panes') {
-            const payload = parsed.payload as Record<string, unknown> | undefined
-            const raw = payload?.agentIds
-            const ids = Array.isArray(raw) ? raw.filter((id): id is string => typeof id === 'string' && id !== '') : []
-            // Absent from a window that predates the field. TRUE then, which is
-            // what every such window meant: it only ever sent this list while it
-            // was up, and reading absence as "behind something" would start
-            // announcing work that is in plain sight.
-            const foreground = payload?.foreground !== false
-            sentPanes = true
-            paneRosters.delete(connId)
-            paneRosters.set(connId, { ids, foreground })
-            options.onAppPanes(ids, foreground)
-            return
-          }
-        }
-        // THE WINDOW LOOKED AT A HARNESS. Consumed here like `app_focus` and the
-        // roster above — it describes a pair of eyes at this desk, not anything
-        // the machine could act on, so it never goes on the wire.
-        //
-        // The dial takes a notification away when a row is TAPPED; the window
-        // takes it away when the tab holding that harness comes to the front.
-        // Two gestures, and each has to reach the other screen or the badge and
-        // the pill part company the first time either is used. This is the half
-        // the window owns; the dial's half already travels as `agent.open`.
-        if (!isBinary && options.onAgentSeen) {
-          if (parsed?.type === 'agent_seen') {
-            const agentId = (parsed.payload as Record<string, unknown> | undefined)?.agentId
-            const rawToken = (parsed.payload as Record<string, unknown> | undefined)?.readToken
-            const readToken = notificationReadToken(rawToken)
-            // Invalid versioned receipts must not become unversioned clears.
-            if (rawToken !== undefined && !readToken) return
-            if (typeof agentId === 'string' && agentId) options.onAgentSeen(agentId, readToken)
-            return
-          }
-        }
-        // EVERYTHING THE WINDOW STILL HAS UNREAD. Consumed here like the roster and the focus — it
-        // describes a screen at this desk, never anything a machine could act on.
-        //
-        // The dial keeps its drawer in RAM and loses it to any reboot, while this window does not.
-        // Held here so a cable attaching later can be handed the list without a round trip to a window
-        // that may be busy.
-        if (!isBinary && options.onAppUnread) {
-          if (parsed?.type === 'app_unread') {
-            const raw = (parsed.payload as Record<string, unknown> | undefined)?.items
-            const items = Array.isArray(raw)
-              ? raw.flatMap((row) => {
-                  const item = row as Record<string, unknown> | null
-                  const agentId = item?.agentId
-                  const machineId = item?.machineId
-                  const text = typeof item?.text === 'string' ? item.text : ''
-                  return typeof agentId === 'string' && agentId && typeof machineId === 'string'
-                    ? [{ agentId, machineId, question: item?.question === true, text,
-                        ...(notificationReadToken(item?.readToken) ? { readToken: notificationReadToken(item?.readToken) } : {}) }]
-                    : []
-                })
-              : []
-            options.onAppUnread(items)
-            return
-          }
-        }
-        if (!isBinary && options.onAppSwarms) {
-          if (parsed?.type === 'app_swarms') {
-            const swarms = appSwarmsFrom(parsed.payload)
-            if (swarms) {
-              sentSwarms = true
-              swarmRosters.delete(connId)
-              swarmRosters.set(connId, swarms)
-              options.onAppSwarms(swarms)
-              options.onAppTabAgents?.(connId, swarms.swarms.flatMap(s => s.agentIds))
-            }
-            return
-          }
+        // Existing Desktop clients do not replay after a Devices restart. Their compatibility owner
+        // loads only on the first desk frame; the core retains no separate parser or copy.
+        if (parsed && (
+          parsed.type === 'app_panes' && options.onAppPanes
+          || parsed.type === 'app_swarms' && options.onAppSwarms
+          || parsed.type === 'app_unread' && options.onAppUnread
+          || parsed.type === 'agent_seen' && options.onAgentSeen)) {
+          // A bounded FIFO keeps notification order across windows without blocking terminal input.
+          legacyDeviceState.receive(connId, parsed, binaryBytes(raw))
+          return
         }
         // A frame a service answers (core/api.ts `SERVICE_WS_FRAMES`): ⌘K's pick and its send, and the window's answer to a
         // spoken task. Consumed here like app_focus, on a connection relayed to another machine too: each describes a hand
@@ -683,9 +669,19 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
                 options.backend.setLocalTerminalFocus?.(connId, agentId, visible)
               }
               const revision = (parsed.payload as Record<string, unknown>)?.focusRevision
-              if (options.onAppFocusState?.(boundMachineId, agentId, connId,
-                typeof revision === 'string' ? revision : undefined) === false) return
-              if (agentId) options.onAppFocus?.(boundMachineId, agentId)
+              const machine = boundMachineId
+              const failed = (): void => { console.warn('[local-ws] FOCUS_VALIDATION_UNAVAILABLE') }
+              try {
+                const validation = options.onAppFocusState?.(machine, agentId, connId,
+                  typeof revision === 'string' ? revision : undefined)
+                if (validation instanceof Promise) {
+                  // Never put this wait on the dispatch chain: a later explicit choice must win now.
+                  void validation.then(apply => {
+                    if (ws.readyState !== WebSocket.OPEN || windowSinks.get(connId) !== sink || boundMachineId !== machine) return
+                    if (apply && apply() && agentId) options.onAppFocus?.(machine, agentId)
+                  }).catch(failed)
+                } else if (validation !== false && agentId) options.onAppFocus?.(machine, agentId)
+              } catch { failed() }
             }
             // Focus is local desk state and must never be forwarded to a remote machine.
             return
@@ -726,9 +722,12 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         }
 
         if (isBinary) {
-          const frame = decodeTerminalLocal(binaryBytes(raw))
+          const bytes = binaryBytes(raw)
+          const frame = clientStreamLocalFrame(bytes) ?? decodeTerminalLocal(bytes)
           if (!frame) { close(4400, 'invalid terminal frame'); return }
-          return options.backend.handleLocalBinary(connId, frame)
+          // Terminal input keeps its bounded per-stream lane. A slow paste must not hold Cancel or another pane.
+          void options.backend.handleLocalBinary(connId, frame, bytes).catch(() => close(1011, 'local dispatch failed'))
+          return
         }
         if (!parsed) { close(4400, 'invalid json frame'); return }
         options.backend.handleLocalFrame(connId, parsed)
@@ -751,24 +750,11 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
       heartbeat.stop()
       const wasWindow = windowSinks.delete(connId)
       explicitFocusClients.delete(connId)
-      if (wasWindow && boundMachineId) options.onAppDisconnect?.(boundMachineId, connId)
-      // Only the latest reporter can change the desk on close. If another
-      // socket still reports a window, restore its latest state; the last
-      // window going away is what empties the device's panes and tabs.
-      if (sentPanes) {
-        const latest = [...paneRosters.keys()].at(-1) === connId
-        paneRosters.delete(connId)
-        if (latest) {
-          const remaining = [...paneRosters.values()].at(-1)
-          options.onAppPanes?.(remaining?.ids ?? [], remaining?.foreground ?? false)
-        }
+      legacyDeviceState.closed(connId)
+      if (wasWindow && boundMachineId) {
+        try { options.onAppDisconnect?.(boundMachineId, connId) }
+        catch (caughtFailure) { console.warn(('[local-ws] APP_DISCONNECT_FAILED') + ' · ' + errorKind(caughtFailure)) }
       }
-      if (sentSwarms) {
-        const latest = [...swarmRosters.keys()].at(-1) === connId
-        swarmRosters.delete(connId)
-        if (latest) options.onAppSwarms?.([...swarmRosters.values()].at(-1) ?? null)
-      }
-      if (sentSwarms) options.onAppTabAgents?.(connId, null)
       if (serviceLink) { serviceLink.closed(); serviceLink = null }
       else if (relay) { relay.detach(); relay = null }
       else if (selected) void options.backend.unregisterLocalClient(connId)
@@ -779,8 +765,10 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
   })
 
   return {
+    legacyDeviceSnapshot: () => legacyDeviceState.snapshot(),
     sendToWindow: (connId, frame) => windowSinks.get(connId)?.sendFrame(frame) ?? false,
     close: async () => {
+      legacyDeviceState.stop()
       for (const each of servers) each.off('upgrade', onUpgrade)
       for (const client of wss.clients) client.close(1001, 'server shutting down')
       // A client that does not answer the close (a suspended `hn`, a window whose process is hung) held

@@ -6,7 +6,7 @@
  * (docs/design/2026-10-08-engine-launch.md): the Codex pane script's owned-process probe and startup retry,
  * its own-login provider, and the two engines' harness context and environment flags.
  *
- * The shapes are the callers': create (a first prompt, a harness, a grid, an install when missing), the
+ * The shapes are the callers': create (a first prompt, a harness, a grid; native installation already settled), the
  * adoption of a terminal's conversation (resume, waiting out its turn), fork, restart and its fresh fallback,
  * restore, resume, retarget onto a grid, every permission mode, a Codex profile (CODEX_HOME), a moved engine
  * home, an engine at an overridden path (npm's Codex wrapper), a remote Codex server's flag passed through,
@@ -33,7 +33,6 @@ import { env } from '../config/env.js'
 import { harnessAdapter, HARNESS_ADAPTERS } from '../dsh/adapters.js'
 import { DSH_SESSION_ENV, harnessEnvToClear } from '../dsh/launch.js'
 import { baseNode } from '../harnessd/baseNode.js'
-import { engineInstallRecipe } from '../lib/engineInstall.js'
 import {
   buildEngineCommandArgv, buildEngineLaunchArgv, PERMISSION_MODES, supportsFirstPrompt, type LaunchCommandOptions,
 } from '../lib/engineLaunch.js'
@@ -41,6 +40,10 @@ import { GRID_CONFLICTING_ENV_VARS, type GridLaunchOverride } from '../lib/gridL
 import { buildLaunchOverrides, type LaunchOverridesDeps, type LaunchSource } from '../lib/launchOverrides.js'
 import { ENGINES, type AgentEngine } from './types.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
+import { renderLaunchSettings } from '../services/nativeLaunchSettings.js'
+import { launchSettingsArgs } from './kit/launchValues.js'
+import { LAUNCH_LOCATION_VARIABLES, nativeHookLocations } from './kit/nativeLocations.js'
+import { launchContract } from './launches.js'
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/launch-argv.golden.json', import.meta.url))
 const RECORD = process.env.RECORD_LAUNCH_GOLDEN === '1'
@@ -67,7 +70,6 @@ const CLEAR_GRID = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', ...harnessEnvToClear(
 /** A caller's options, as each one assembles them (core/agents/create.ts, fork.ts, restart.ts, swap.ts,
  *  lib/resumeAgentService.ts, the restore in core/main.ts). `null` for a shape this engine cannot take. */
 function shapes(engine: AgentEngine): Record<string, LaunchCommandOptions | null> {
-  const install = engineInstallRecipe(engine)
   const prompt = supportsFirstPrompt(engine)
   return {
     'new': { agentId: AGENT },
@@ -83,20 +85,19 @@ function shapes(engine: AgentEngine): Record<string, LaunchCommandOptions | null
     'fork with a prompt': prompt ? { forkSessionId: 'src-0001', firstPrompt: PROMPT } : null,
     'grid argv': { extraArgs: GRID_ARGS, clearEnv: CLEAR_GRID },
     'remote server argv passed through': { extraArgs: REMOTE_ARGS },
-    'install first': { installFirst: 'npm install -g example-engine' },
     'create': {
       agentId: AGENT, bypassPermission: true, permissionMode: Object.keys(PERMISSION_MODES[engine] ?? {})[0], extraArgs: GRID_ARGS,
-      installIfMissing: install, clearEnv: CLEAR_GRID, cwd: CWD, harnessNode: true,
+      clearEnv: CLEAR_GRID, cwd: CWD, harnessNode: true,
       ...(prompt ? { firstPrompt: PROMPT } : {}), terminalHint: { machineName: 'studio-mac' },
     },
-    'create, plain': { agentId: AGENT, bypassPermission: true, installIfMissing: install, clearEnv: harnessEnvToClear(undefined), cwd: CWD, terminalHint: { machineName: 'studio-mac' } },
+    'create, plain': { agentId: AGENT, bypassPermission: true, clearEnv: harnessEnvToClear(undefined), cwd: CWD, terminalHint: { machineName: 'studio-mac' } },
     'adopt, waiting out the turn': {
-      bypassPermission: true, resumeSessionId: 'sess-0001', installIfMissing: install, clearEnv: harnessEnvToClear(undefined), cwd: CWD,
+      bypassPermission: true, resumeSessionId: 'sess-0001', clearEnv: harnessEnvToClear(undefined), cwd: CWD,
       waitForPid: { pid: 4242, name: 'Codex "cli"; rm -rf' },
     },
     'adopt, now, carrying on': prompt ? { bypassPermission: true, resumeSessionId: 'sess-0001', firstPrompt: 'continue', cwd: CWD } : null,
     'fork shape': {
-      agentId: AGENT, clearEnv: harnessEnvToClear(undefined), bypassPermission: true, extraArgs: ['-c', 'model_provider="openai"'], installIfMissing: install,
+      agentId: AGENT, clearEnv: harnessEnvToClear(undefined), bypassPermission: true, extraArgs: ['-c', 'model_provider="openai"'],
       cwd: CWD, forkSessionId: 'src-0001', ...(prompt ? { firstPrompt: PROMPT } : {}),
     },
     'restart': {
@@ -104,12 +105,11 @@ function shapes(engine: AgentEngine): Record<string, LaunchCommandOptions | null
     },
     'restart, fresh fallback': { agentId: AGENT, bypassPermission: false, cwd: CWD, extraArgs: GRID_ARGS, clearEnv: CLEAR_GRID },
     'restore': {
-      agentId: AGENT, resumeSessionId: 'sess-0001', bypassPermission: true, installIfMissing: install, cwd: CWD,
+      agentId: AGENT, resumeSessionId: 'sess-0001', bypassPermission: true, cwd: CWD,
       extraArgs: ['-c', 'model_provider="openai"'], clearEnv: harnessEnvToClear(undefined), harnessNode: true,
     },
     'resume service': {
       agentId: AGENT, resumeSessionId: 'sess-0001', bypassPermission: false, permissionMode: 'ask', cwd: CWD, clearEnv: harnessEnvToClear(undefined),
-      installIfMissing: install,
     },
     'retarget onto a grid': { agentId: AGENT, bypassPermission: true, resumeSessionId: 'sess-0001', cwd: CWD, extraArgs: GRID_ARGS, clearEnv: CLEAR_GRID },
   }
@@ -408,7 +408,8 @@ const CODEX_CONFIGS: Record<string, string | null> = {
 
 async function overridesCases(): Promise<Record<string, unknown>> {
   const cases: Record<string, unknown> = {}
-  const run = async (engine: AgentEngine, source: LaunchSource, config: string | null = null, deps: Partial<LaunchOverridesDeps> = {}) => {
+  const run = async (engine: AgentEngine, source: LaunchSource, config: string | null = null,
+    { settingsSources = {}, ...deps }: Partial<LaunchOverridesDeps> & { settingsSources?: Record<string, string> } = {}) => {
     const calls: string[] = []
     const result = await buildLaunchOverrides({
       machine: () => ({ hermesSystemManaged: false, opencodeMajor: null }), gridLaunch: gridLaunchInProcess(),
@@ -425,6 +426,22 @@ async function overridesCases(): Promise<Record<string, unknown>> {
       },
       ...deps,
     }, engine, source, 'agent-0001')
+    // The record compares final launch values. Optional interpretation now comes from setup, after base overrides.
+    if (result.ok && (engine === 'claude' || engine === 'codex')) {
+      const environment = { HOME: homedir(), ...Object.fromEntries(Object.entries(result.overrides.env)
+        .filter(([name]) => LAUNCH_LOCATION_VARIABLES.includes(name as typeof LAUNCH_LOCATION_VARIABLES[number]))) }
+      const homes = nativeHookLocations(environment)
+      const rule = launchContract(engine)?.statusLine
+      const paths = [join(dataDir, 'agent-settings.json'), ...(rule ? [join(homes.CLAUDE_HOME, rule.file),
+        ...(source.cwd ? rule.folder.map(file => join(source.cwd!, file)) : [])] : [])]
+      const captured = new Map(paths.map(file => [file, settingsSources[file] ?? null]))
+      const prepared = renderLaunchSettings({ purpose: 'launchSettings', version: 2, engine, environment,
+        cwd: source.cwd ?? null, runtimeNode: baseNode(process.execPath), platform: process.platform as 'darwin' | 'linux',
+        gitBash: null, owner: null,
+      }, dataDir, file => captured.get(file) ?? null)
+      expect(prepared).not.toBeNull()
+      result.overrides.extraArgs = launchSettingsArgs(engine, result.overrides.extraArgs, { values: prepared!.values, current: () => true })
+    }
     return JSON.parse(placeholders(JSON.stringify({ result, calls })))
   }
   for (const engine of ['claude', 'codex', 'opencode', 'pi'] as const) {
@@ -459,9 +476,8 @@ async function overridesCases(): Promise<Record<string, unknown>> {
   cases['codex · profile · the profile\'s file'] = await run('codex', { codexHome: profile }, null, { readCodexConfig: undefined })
   cases['codex · profile without a file'] = await run('codex', { codexHome: join(root, 'no-such-profile') }, null, { readCodexConfig: undefined })
   rmSync(join(daemonHome, 'config.toml'))
-  // Started by another agent: the pull request line last, from the person's settings as each engine reads them
-  // (lib/agentAttribution.ts, kit/attribution.ts), and none for an engine with no way to say it.
-  const settings = (files: Record<string, string>) => ({ readAttribution: (path: string) => files[path.split(homedir()).join('<home>')] ?? null })
+  // Origin and retired attribution preferences never add branding; final optional settings are prepared separately.
+  const settings = (settingsSources: Record<string, string>) => ({ settingsSources })
   for (const engine of ['claude', 'codex', 'opencode'] as const) {
     cases[`${engine} · started by an agent`] = await run(engine, { startedBy: 'agent', cwd: '/work/app' }, null, settings({}))
     cases[`${engine} · started by an agent, a harness on a grid as a named agent`] = await run(engine,

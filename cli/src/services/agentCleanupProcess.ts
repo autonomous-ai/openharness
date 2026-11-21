@@ -85,7 +85,9 @@ export function runAgentCleanupService(options: AgentCleanupServiceOptions): Ser
     onEvent: (payload) => {
       if (follow.heard(payload)) return
       if (typeof payload.agentId !== 'string' || !payload.agentId) return
-      if (payload.kind === 'typed') cleanup.port.typed(payload.agentId)
+      // Private adapter for cores from before shared input observations; retire at least 30 days after
+      // the first published CLI containing this change. The release establishes the retirement date.
+      if (payload.kind === 'typed') cleanup.typed(payload.agentId)
       // A core from before stops were told as what happens to agents (2026-11-15) tells one so: what it started still
       // closes with it. Delete on or after 2026-12-18.
       else if (payload.kind === 'closed') follow.heard({ kind: 'agent', event: { kind: 'stopped', agentId: payload.agentId } })

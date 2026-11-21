@@ -1,8 +1,14 @@
+import { sessionFrame, type SessionFacts } from '../../lib/sessionPresentation.js'
+import { OWNER_DOWN as CLOUD_DOWN, OWNER_REPLY_DOWN as CLOUD_REPLY_DOWN, type SessionOwnerPort as CloudPort } from '../../lib/sessionOwnerWire.js'
+import { createQuestionPresentations } from '../questions.js'
+import { cloudFactory } from '../../testing/sessionFactories.js'
+import { cloudQuestionClose, prepareCloudQuestion } from '../../cloud/questions.js'
 import { describe, expect, it, vi } from 'vitest'
-import { CLOUD_DOWN, type CloudPort } from '../api.js'
-import type { CloudHarness } from '../../lib/cloudAgents.js'
-import { createCloudAgents } from './cloud.js'
+
+import { CLOUD_AGENT_IDS, cloudAgentFrame, type CloudHarness } from '../../lib/cloudAgents.js'
+import { createCloudOwners } from '../../testing/cloudOwners.js'
 import { cloudCard } from '../../cloud/service.js'
+import { emptyPresentation, prepareCloudCards } from '../../cloud/cards.js'
 
 /** A row as the cloud service publishes it: what it said, and those words as a card reads them (cloud/service.ts). */
 const harness = (over: Partial<CloudHarness> = {}): CloudHarness => {
@@ -15,24 +21,82 @@ const harness = (over: Partial<CloudHarness> = {}): CloudHarness => {
 
 function setup(port: CloudPort | null = null) {
   const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }
-  const openQuestions = new Map<string, Record<string, unknown>>()
-  const deviceInput = { setUserAction: vi.fn() }
-  const cloud = createCloudAgents({ port: () => port, clients, openQuestions, deviceInput, log: () => {} })
-  return { cloud, clients, openQuestions, deviceInput }
+  const questions = createQuestionPresentations(), openQuestions = questions.openQuestions
+  const cloud = createCloudOwners({ ownsFactory: cloudFactory, native: () => false, port: () => port, clients, questions, log: () => {} })
+  return { cloud, clients, openQuestions }
+}
+
+/** The component's real transition producer feeding the core's private publication boundary. */
+function preparedSetup() {
+  const test = setup(), publish = test.cloud.doors.publish
+  let accepted = emptyPresentation()
+  test.cloud.doors.publish = rows => {
+    const prepared = prepareCloudCards(rows, accepted)
+    const result = publish(rows, prepared.cards)
+    accepted = prepared.next
+    return result
+  }
+  return test
 }
 
 const port = (): CloudPort & { [K in keyof CloudPort]: ReturnType<typeof vi.fn> } => ({
-  create: vi.fn(async () => ({ ok: true as const, agent: { id: 'cloud_2' } })),
+  create: vi.fn(async () => ({ agent: cloudAgentFrame(harness({ agentId: 'cloud_2', agent: 'fo' })) })),
   deliver: vi.fn(async () => ({ ok: true as const })),
   answer: vi.fn(async () => ({ ok: true as const })),
-  rename: vi.fn(async () => ({ ok: true as const })),
-  stopHarness: vi.fn(async () => ({ ok: true as const, detail: 'Fo keeps working on its own.' })),
+  rename: vi.fn(async (agentId: string, name: string, before: SessionFacts) => ({ agent: sessionFrame({ ...before, name }), renamed: { type: 'agent_renamed' as const, payload: { agentId, name, engine: before.engine } } })),
+  stopHarness: vi.fn(async () => ({ deleted: true as const, detail: 'Fo keeps working on its own.' })),
 })
 
 describe('agents a service owns', () => {
+  it('does not synthesize a feature card from a published agent state', () => {
+    const { cloud, clients } = setup()
+    cloud.doors.publish([harness()])
+    cloud.doors.publish([harness({ state: 'idle', said: 'Finished.' })])
+    expect(clients.sendCommander.mock.calls.filter(([frame]) => frame.type === 'commander_event')).toEqual([])
+  })
+
+  it('admits the whole prepared batch against its published owners before emitting any change', () => {
+    const { cloud, clients } = setup()
+    const card = { type: 'commander_event' as const, agentId: 'cloud_1', dbSessionId: 'cloud_1',
+      name: 'fix it', payload: { kind: 'summary', recap: 'Prepared', text: 'By component' } }
+    const next = [harness({ state: 'idle' }), harness({ agentId: 'cloud_2', state: 'idle' })]
+    const invalid: unknown[] = [null, {}, [null], [{ ...card, type: 'agent_create' }],
+      [{ ...card, agentId: 7 }], [{ ...card, agentId: 'terminal', dbSessionId: 'terminal' }],
+      [{ ...card, dbSessionId: 'other' }], [{ ...card, name: 'Other name' }],
+      [{ ...card, payload: null }], [{ ...card, payload: 'text' }], [{ ...card, payload: [] }],
+      [card, card], [card, card, card]]
+    for (const batch of invalid) {
+      cloud.doors.publish(next, batch as never)
+      expect(cloud.frames()).toEqual([])
+      expect(clients.send).not.toHaveBeenCalled()
+      expect(clients.sendCommander).not.toHaveBeenCalled()
+    }
+    cloud.doors.publish(next, [card])
+    expect(clients.sendCommander).toHaveBeenNthCalledWith(2, card)
+    expect(cloud.frames()).toHaveLength(2)
+    clients.send.mockClear(); clients.sendCommander.mockClear()
+    cloud.doors.publish([], [card])
+    expect(cloud.frames()).toHaveLength(2)
+    expect(clients.send).not.toHaveBeenCalled()
+    expect(clients.sendCommander).not.toHaveBeenCalled()
+  })
+
+  it('shares current eligible membership and exact single-row formatting with the existing dial list', () => {
+    const { cloud } = setup()
+    cloud.doors.publish([harness({ agentId: 'cloud_b' }), harness({ agentId: 'cloud_a', state: 'stopped' }), harness({ agentId: 'cloud_c' })])
+    expect([...cloud.dialIds()]).toEqual(['cloud_b', 'cloud_c'])
+    expect([...cloud.dialIds()].map(id => cloud.dialRow(id))).toEqual(cloud.dialRows())
+    expect(cloud.dialRow('missing')).toBeUndefined(); expect(cloud.dialRow('cloud_a')).toBeUndefined()
+    cloud.doors.publish([harness({ agentId: 'cloud_c', name: 'Current', updatedAt: '2026-11-18T00:00:00.000Z' })])
+    expect(cloud.dialRow('cloud_b')).toBeUndefined()
+    expect([...cloud.dialIds()]).toEqual(['cloud_c'])
+    expect(cloud.dialRow('cloud_c')).toEqual(cloud.dialRows()[0])
+    expect(cloud.dialRow('cloud_c')).toMatchObject({ displayName: 'Current', lastHookAt: Date.parse('2026-11-18T00:00:00.000Z') })
+  })
+
   it('lists what the service publishes and tells every client what changed', () => {
     const { cloud, clients } = setup()
-    cloud.doors.publish([harness(), { agentId: 'not-cloud' }, null] as never)
+    cloud.doors.publish([harness()])
     expect(cloud.owns('cloud_1')).toBe(true)
     expect(cloud.frames()).toMatchObject([{ id: 'cloud_1', location: 'cloud', engine: 'devin-cloud', terminal: { available: false } }])
     expect(clients.send).toHaveBeenCalledWith({ type: 'agent_synced', payload: { agent: expect.objectContaining({ id: 'cloud_1' }) } })
@@ -51,13 +115,13 @@ describe('agents a service owns', () => {
     expect(cloud.activity('cloud_1')).toBe('Reading code')
     expect(cloud.activity('cloud_2')).toBeNull()
     expect(cloud.activity('cloud_9')).toBeNull()
-    cloud.doors.publish('nonsense' as never)
+    cloud.doors.publish([])
     expect(clients.send).toHaveBeenCalledWith({ type: 'agent_deleted', payload: { agentId: 'cloud_1' } })
     expect(cloud.owns('cloud_1')).toBe(false)
   })
 
   it('makes the dial\'s turn cards from what changes: working, then what it said, as a terminal agent\'s turn', () => {
-    const { cloud, clients } = setup()
+    const { cloud, clients } = preparedSetup()
     const cards = () => clients.sendCommander.mock.calls.map(([frame]) => frame).filter((frame) => frame.type === 'commander_event')
     // New and working: the tile is told, since it is idle until it is.
     cloud.doors.publish([harness({ agent: 'fo', name: 'trip', said: null })])
@@ -122,7 +186,7 @@ describe('agents a service owns', () => {
   // The card's two lines are the cloud service's to work out (the audit of 2026-11-12): the core reads no markdown a
   // maker's agent wrote, and shows what it is handed.
   it('shows the card its service worked out, never one of its own making, and none where the service sent none', () => {
-    const { cloud, clients } = setup()
+    const { cloud, clients } = preparedSetup()
     const cards = () => clients.sendCommander.mock.calls.map(([frame]) => frame).filter((frame) => frame.type === 'commander_event')
     cloud.doors.publish([harness({ agent: 'fo', state: 'working' })])
     cloud.doors.publish([harness({ agent: 'fo', state: 'idle', said: '## Booked\n\nBooked for **9:30**.', card: { recap: 'the service\'s headline', text: 'the service\'s text' }, messages: 2 })])
@@ -130,27 +194,15 @@ describe('agents a service owns', () => {
     expect(cloud.recent('cloud_1')).toEqual([{ kind: 'summary', recap: 'the service\'s headline', text: 'the service\'s text', fullText: '## Booked\n\nBooked for **9:30**.' }])
   })
 
-  // Delete with the fallback, on or after 2026-12-13 (core/agents/cloud.ts `recapOf`).
-  it('shows the words of a service from before 2026-11-13, which sends no card, as they are: one line, cut, no markdown read', () => {
-    const { cloud, clients } = setup()
-    const said = `## Booked\n\nBooked for **9:30**. ${'More. '.repeat(60)}`
-    // No card named at all: a row as that service sends it.
-    const { card: _none, ...older } = harness({ state: 'idle', said, messages: 2 })
-    cloud.doors.publish([harness({ state: 'working' })])
-    cloud.doors.publish([older])
-    const card = clients.sendCommander.mock.calls.map(([frame]) => frame.payload).at(-1)
-    const line = said.replace(/\s+/g, ' ').trim()
-    expect(card).toMatchObject({ kind: 'summary', recap: line.slice(0, 180), text: line.slice(0, 250) })
-    expect(card.recap.startsWith('## Booked Booked for **9:30**.')).toBe(true)
-    expect(cloud.recent('cloud_1')).toEqual([{ kind: 'summary', recap: line.slice(0, 180), text: line.slice(0, 250), fullText: said.trim() }])
-    // Words that are only space are no words (lib/cloudAgents.ts keeps none), so nothing is shown for them.
-    const { cloud: quiet } = setup()
-    quiet.doors.publish([{ ...harness({ state: 'idle' }), said: ' \n ' }])
-    expect(quiet.recent('cloud_1')).toEqual([])
+  it('does not interpret missing component cards in the current private cohort', () => {
+    const { cloud } = setup()
+    cloud.doors.publish([harness({ state: 'idle', said: 'Legacy words', card: undefined })])
+    expect(cloud.recent('cloud_1')).toEqual([])
+    expect(cloud.said('cloud_1')).toBe('Legacy words')
   })
 
   it('shows nothing for words its service says hold nothing to show, as before: done, and no card of the raw words', () => {
-    const { cloud, clients } = setup()
+    const { cloud, clients } = preparedSetup()
     cloud.doors.publish([harness({ state: 'working' })])
     cloud.doors.publish([harness({ state: 'idle', said: '**  **', messages: 2 })])
     expect(clients.sendCommander.mock.calls.map(([frame]) => frame.payload).at(-1)).toEqual({ kind: 'done', text: 'done' })
@@ -159,31 +211,50 @@ describe('agents a service owns', () => {
   })
 
   it('shows its questions where questions show, and closes them', () => {
-    const { cloud, clients, openQuestions, deviceInput } = setup()
+    const { cloud, clients, openQuestions } = setup()
     cloud.doors.publish([harness()])
-    cloud.doors.ask('cloud_none', 'cloud_q_1', { text: 'Which?', choices: [] })
-    cloud.doors.ask('cloud_1', 'q_1', { text: 'Which?', choices: [] })
+    cloud.doors.ask('cloud_none', 'cloud_q_1', prepareCloudQuestion('cloud_none', 'cloud_q_1', { text: 'Which?', choices: [] }))
+    cloud.doors.ask('cloud_1', '', prepareCloudQuestion('cloud_1', '', { text: 'Which?', choices: [] }))
     expect(clients.sendLocal).not.toHaveBeenCalled()
-    cloud.doors.ask('cloud_1', 'cloud_q_1', { text: 'Which branch?', choices: ['main', '', 3, 'dev'] as never })
+    cloud.doors.ask('cloud_1', 'cloud_q_1', prepareCloudQuestion('cloud_1', 'cloud_q_1', { text: 'Which branch?', choices: ['main', '', 3, 'dev'] as never }))
     const asked = { type: 'commander_question', agentId: 'cloud_1', dbSessionId: 'cloud_1',
       payload: { requestId: 'cloud_q_1', questions: [{ key: 'answer', q: 'Which branch?', options: ['main', 'dev'], multi: false, canText: true }], notification: { id: 'cloud_q_1', kind: 'needsYou' } } }
     expect(clients.sendLocal).toHaveBeenCalledWith(asked)
     expect(clients.sendCommander).toHaveBeenCalledWith(asked)
     expect(openQuestions.get('cloud_1')).toEqual(asked)
-    expect(deviceInput.setUserAction).toHaveBeenCalledWith('cloud_1', true)
     // One with no choices is the windows' alone: the dial's question screen takes no words.
     clients.sendCommander.mockClear()
-    cloud.doors.ask('cloud_1', 'cloud_q_2', { text: 'Sure?', choices: 'x' as never })
+    cloud.doors.ask('cloud_1', 'cloud_q_2', prepareCloudQuestion('cloud_1', 'cloud_q_2', { text: 'Sure?', choices: 'x' as never }))
     expect(clients.sendLocal).toHaveBeenLastCalledWith(expect.objectContaining({ payload: expect.objectContaining({ questions: [expect.objectContaining({ options: [] })] }) }))
-    expect(clients.sendCommander).not.toHaveBeenCalled()
-    cloud.doors.unask('cloud_1', 'cloud_q_2')
+    expect(clients.sendCommander).toHaveBeenLastCalledWith(cloudQuestionClose('cloud_1', 'cloud_q_1'))
+    clients.sendCommander.mockClear()
+    cloud.doors.unask('cloud_1', 'cloud_q_2', cloudQuestionClose('cloud_1', 'cloud_q_2'))
     expect(clients.sendCommander).not.toHaveBeenCalled()
     expect(clients.sendLocal).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'commander_question_close', payload: { requestId: 'cloud_q_2' } }))
-    cloud.doors.unask('cloud_1', 'cloud_q_9')
-    cloud.doors.unask('cloud_1', 'cloud_q_1')
-    expect(clients.sendLocal).toHaveBeenLastCalledWith({ type: 'commander_question_close', agentId: 'cloud_1', dbSessionId: 'cloud_1', payload: { requestId: 'cloud_q_1' } })
+    cloud.doors.unask('cloud_1', 'cloud_q_9', cloudQuestionClose('cloud_1', 'cloud_q_9'))
+    cloud.doors.unask('cloud_1', 'cloud_q_1', cloudQuestionClose('cloud_1', 'cloud_q_1'))
+    expect(clients.sendLocal).toHaveBeenLastCalledWith(cloudQuestionClose('cloud_1', 'cloud_q_2'))
     expect(openQuestions.has('cloud_1')).toBe(false)
-    expect(deviceInput.setUserAction).toHaveBeenLastCalledWith('cloud_1', false)
+  })
+
+  it('does not select a provider factory absent from its declared ownership', () => {
+    const service = port()
+    const ownership = { ownsFactory: vi.fn(() => false) }
+    const cloud = createCloudOwners({ ...ownership, native: () => false, port: () => service,
+      clients: { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }, questions: createQuestionPresentations() })
+    expect(cloud.create({ engine: 'fo', prompt: 'fixture' })).toBeNull()
+    expect(service.create).not.toHaveBeenCalled()
+  })
+
+  it.each(CLOUD_AGENT_IDS)('keeps declared %s on its existing port, including while unavailable', async agent => {
+    const service = port(), payload = { engine: agent, prompt: 'fixture' }
+    const reply = { agent: cloudAgentFrame(harness({ agent })) }
+    service.create.mockResolvedValueOnce(reply)
+    expect(await setup(service).cloud.create(payload)).toEqual(reply)
+    expect(service.create).toHaveBeenCalledExactlyOnceWith(payload)
+    const unavailable = setup().cloud.create(payload)
+    expect(unavailable).not.toBeNull()
+    expect(await unavailable).toEqual(CLOUD_REPLY_DOWN)
   })
 
   it('hands New Harness, words, an answer and Stop for its agents to the service, and nothing else', async () => {
@@ -191,10 +262,10 @@ describe('agents a service owns', () => {
     const { cloud } = setup(service)
     cloud.doors.publish([harness()])
     expect(cloud.create({ engine: 'claude' })).toBeNull()
-    expect(await cloud.create({ engine: 'fo', prompt: 'x' })).toEqual({ agent: { id: 'cloud_2' } })
-    service.create.mockResolvedValueOnce({ ok: false, error: 'NOT_CONNECTED', detail: 'Connect Fo' })
+    expect(await cloud.create({ engine: 'fo', prompt: 'x' })).toEqual({ agent: cloudAgentFrame(harness({ agentId: 'cloud_2', agent: 'fo' })) })
+    service.create.mockResolvedValueOnce({ error: 'NOT_CONNECTED', detail: 'Connect Fo' })
     expect(await cloud.create({ engine: 'fo' })).toEqual({ error: 'NOT_CONNECTED', detail: 'Connect Fo' })
-    service.create.mockResolvedValueOnce({ ok: false, error: 'X' })
+    service.create.mockResolvedValueOnce({ error: 'X' })
     expect(await cloud.create({ engine: 'fo' })).toEqual({ error: 'X' })
 
     expect(cloud.deliver('a1', 'hi')).toBeNull()
@@ -203,16 +274,16 @@ describe('agents a service owns', () => {
 
     expect(cloud.answer({ requestId: 'q_pane' })).toBeNull()
     expect(cloud.answer({})).toBeNull()
-    cloud.doors.ask('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] })
+    cloud.doors.ask('cloud_1', 'cloud_q_1', prepareCloudQuestion('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] }))
     expect(await cloud.answer({ requestId: 'cloud_q_1', answers: { answer: 'main', other: 3 } })).toEqual({ ok: true })
     expect(service.answer).toHaveBeenCalledWith('cloud_1', 'cloud_q_1', { answer: 'main' })
-    service.answer.mockResolvedValueOnce({ ok: false, error: 'STALE_QUESTION', detail: 'gone' }).mockResolvedValueOnce({ ok: false, error: 'BUSY' })
+    service.answer.mockResolvedValueOnce({ ok: false, error: 'STALE_QUESTION', detail: 'gone' }).mockResolvedValueOnce({ ok: false, error: 'ANSWER_FAILED', detail: '' })
     expect(await cloud.answer({ requestId: 'cloud_q_1', answers: 'x' })).toEqual({ ok: false, error: 'STALE_QUESTION', detail: 'gone' })
     expect(await cloud.answer({ requestId: 'cloud_q_1' })).toEqual({ ok: false, error: 'ANSWER_FAILED', detail: '' })
 
     expect(cloud.stop('a1')).toBeNull()
     expect(await cloud.stop('cloud_1')).toEqual({ deleted: true, detail: 'Fo keeps working on its own.' })
-    service.stopHarness.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: false, error: 'CLOUD_FAILED', detail: 'down' }).mockResolvedValueOnce({ ok: false, error: 'X' })
+    service.stopHarness.mockResolvedValueOnce({ deleted: true }).mockResolvedValueOnce({ error: 'CLOUD_FAILED', detail: 'down' }).mockResolvedValueOnce({ error: 'X' })
     expect(await cloud.stop('cloud_1')).toEqual({ deleted: true })
     expect(await cloud.stop('cloud_1')).toEqual({ error: 'CLOUD_FAILED', detail: 'down' })
     expect(await cloud.stop('cloud_1')).toEqual({ error: 'X' })
@@ -227,13 +298,13 @@ describe('agents a service owns', () => {
     expect(cloud.update({ agentId: 'a1', name: 'x' })).toBeNull()
     expect(cloud.update({})).toBeNull()
     expect(await cloud.update({ agentId: 'cloud_1', name: '  Trip planning  ' })).toEqual({ agent: expect.objectContaining({ id: 'cloud_1', name: 'Trip planning' }) })
-    expect(service.rename).toHaveBeenCalledWith('cloud_1', 'Trip planning')
+    expect(service.rename).toHaveBeenCalledWith('cloud_1', 'Trip planning', expect.objectContaining({ id: 'cloud_1', engine: 'fo', name: 'hi' }))
     const renamed = { type: 'agent_renamed', payload: { agentId: 'cloud_1', name: 'Trip planning', engine: 'fo' } }
     expect(clients.send).toHaveBeenCalledWith(renamed)
     expect(clients.sendCommander).toHaveBeenCalledWith(renamed)
     expect(await cloud.update({ agentId: 'cloud_1', name: ' ' })).toEqual({ error: 'MISSING_NAME' })
     expect(await cloud.update({ agentId: 'cloud_1', name: 3 })).toEqual({ error: 'MISSING_NAME' })
-    service.rename.mockResolvedValueOnce({ ok: false, error: 'UNKNOWN_AGENT', detail: 'gone' }).mockResolvedValueOnce({ ok: false, error: 'X' })
+    service.rename.mockResolvedValueOnce({ error: 'UNKNOWN_AGENT', detail: 'gone' }).mockResolvedValueOnce({ error: 'X' })
     expect(await cloud.update({ agentId: 'cloud_1', name: 'y' })).toEqual({ error: 'UNKNOWN_AGENT', detail: 'gone' })
     expect(await cloud.update({ agentId: 'cloud_1', name: 'y' })).toEqual({ error: 'X' })
     // An app opening it: its frame as it stands, nothing told.
@@ -256,7 +327,7 @@ describe('agents a service owns', () => {
     cloud.doors.publish([harness()])
     expect(await cloud.create({ engine: 'devin-cloud' })).toEqual({ error: 'SERVICE_UNAVAILABLE', detail: CLOUD_DOWN.detail })
     expect(await cloud.deliver('cloud_1', 'x')).toEqual(CLOUD_DOWN)
-    cloud.doors.ask('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] })
+    cloud.doors.ask('cloud_1', 'cloud_q_1', prepareCloudQuestion('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] }))
     expect(await cloud.answer({ requestId: 'cloud_q_1' })).toEqual({ ok: false, error: 'ANSWER_FAILED', detail: CLOUD_DOWN.detail })
     expect(await cloud.stop('cloud_1')).toEqual({ error: 'SERVICE_UNAVAILABLE', detail: CLOUD_DOWN.detail })
     expect(await cloud.update({ agentId: 'cloud_1', name: 'x' })).toEqual({ error: 'SERVICE_UNAVAILABLE', detail: CLOUD_DOWN.detail })
@@ -264,10 +335,10 @@ describe('agents a service owns', () => {
 
   it('logs a question by default', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    const cloud = createCloudAgents({ port: () => null, clients: { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }, openQuestions: new Map(), deviceInput: { setUserAction: vi.fn() } })
+    const cloud = createCloudOwners({ ownsFactory: cloudFactory, native: () => false, port: () => null, clients: { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }, questions: createQuestionPresentations() })
     cloud.doors.publish([harness()])
-    cloud.doors.ask('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] })
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('[cloud] cloud_1 asking'))
+    cloud.doors.ask('cloud_1', 'cloud_q_1', prepareCloudQuestion('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] }))
+    expect(log).toHaveBeenCalledWith('[sessions] question accepted')
     log.mockRestore()
   })
 })

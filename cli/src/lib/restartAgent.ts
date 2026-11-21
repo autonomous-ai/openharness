@@ -99,8 +99,8 @@ export interface RestartAgentDeps {
   holdOpen: () => Promise<{ ok: boolean; reason?: string }>
   /** Validate + SIGTERM/SIGKILL the saved process. Same contract as `terminateDeletedAgent`. */
   terminate: (checkAfterMs?: number) => Promise<TerminateOutcome>
-  /** `tmux respawn-pane -k` (or the pty host's `respawn`, the same in place) with a fully-built argv. */
-  respawn: (argv: string[]) => Promise<{ ok: boolean; reason?: string }>
+  /** `tmux respawn-pane -k` (or the pty host's `respawn`, the same in place) with its owner-built command, selected only at dispatch. */
+  respawn: (command: () => string[]) => Promise<{ ok: boolean; reason?: string }>
   /** Why `respawn` would be refused here (a tmux too old for what the relaunch needs), asked before
    *  anything is stopped; null when it would try. Left out, never refused. */
   respawnRefusal?: () => Promise<string | null>
@@ -126,7 +126,7 @@ export interface RestartAgentDeps {
   launchRefusal?: (opts: RelaunchArgvOptions) => string | null
   log: (message: string) => void
   /** Keeps the conversation the fresh fallback left as a stopped harness (keepAbandonedConversation.ts). */
-  keepAbandoned?: () => void
+  keepAbandoned?: () => Promise<void>
 }
 
 /** Outcomes that mean the old process is confirmed gone — safe to respawn over the pane (or, for a move, to start
@@ -190,8 +190,9 @@ export async function restartAgent(
   }
   const spawnAndWait = async (withResume: boolean): Promise<ProcessIdentity | null> => {
     if (!current()) return null
-    const argv = deps.buildArgv({ bypassPermission, ...(!withResume ? {} : preparedFork ? { resumeSessionId: preparedFork } : reopen(resumeSessionId)) })
-    const spawned = await deps.respawn(argv)
+    const options = { bypassPermission, ...(!withResume ? {} : preparedFork ? { resumeSessionId: preparedFork } : reopen(resumeSessionId)) }
+    const command = () => deps.buildArgv(options)
+    const spawned = await deps.respawn(command)
     if (!current()) return null
     if (!spawned.ok) {
       deps.log(`[restart] ${session.engine} respawn-pane failed: ${spawned.reason ?? 'unknown reason'}`)
@@ -220,6 +221,7 @@ export async function restartAgent(
   }
   // The agent works on in a new conversation; the one it was in, which the engine could not reopen, is
   // kept as a stopped harness to read and to resume once it can (round 24). A /clear keeps nothing.
-  if (resumeSessionId && !resumed) deps.keepAbandoned?.()
+  if (resumeSessionId && !resumed) await deps.keepAbandoned?.()
+  if (!current()) return changed
   return { ok: true, processIdentity: identity, resumed }
 }

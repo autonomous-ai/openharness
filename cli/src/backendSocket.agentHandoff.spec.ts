@@ -171,7 +171,7 @@ describe('agent_handoff_prepare on the local socket', () => {
     const held = deferred<Result>()
     provider.mockReturnValue(held.promise)
     ask(good())
-    socket.agentRecentProvider = () => ({ agentId: 'a1', events: [], asks: [] })
+    socket.agentRecentProvider = async () => ({ agentId: 'a1', events: [], asks: [] })
     socket.handleLocalFrame('local:w', { type: 'agent_recent', payload: { requestId: 'fast', agentId: 'a1' } })
     await vi.waitFor(() => expect(frames.some((f) => f.type === 'agent_recent_result')).toBe(true))
     expect(replies()).toHaveLength(0)

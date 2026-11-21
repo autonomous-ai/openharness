@@ -1,12 +1,13 @@
-/** Registry preparation may wait; its final authority check and publication may not yield. */
-import { closeSync, constants, fstatSync, lstatSync, openSync, opendirSync, readSync, renameSync, rmdirSync, unlinkSync } from 'node:fs'
+/** Directory durability may wait; publication and final admission each keep their own no-yield fence. */
+import { constants, renameSync, fstatSync, lstatSync, openSync, opendirSync, readSync, rmdirSync, unlinkSync } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
-import { AtomicWriteUnconfirmed, insideWindowsRoots, requireWindowsStateFile, syncStateDirectory, windowsStateRoots } from './secureState.js'
+import { AtomicWriteUnconfirmed, closeStateDirectoryIterator, closeStateFileDescriptor, closeStateFileHandle, insideWindowsRoots,
+  requireWindowsStateFile, StateFileCleanupUnconfirmed, stateFileCustodyHealthy, windowsStateRoots } from './secureState.js'
 import { lockStartMarker, processExists } from './processLiveness.js'
 import { psEnv } from './childLocale.js'
 import { ownProcessGroup } from './windows/noWindow.js'
@@ -41,9 +42,23 @@ export class RegistryPersistenceUnavailable extends Error {
   }
 }
 
+/** The row is admitted; its caller must not undo the launch as if publication were refused. */
+export class RegistryCleanupUnavailable extends RegistryPersistenceUnavailable {
+  constructor(override readonly cause: unknown) {
+    super('admitted write cleanup failed; restart required')
+    this.name = 'RegistryCleanupUnavailable'
+  }
+}
+
 export interface RegistryWriteDeadline {
   readonly expires: number
   check(): void
+  beginPublication(): void
+  markPublished(): void
+  markAdmitted(): void
+  /** An uncertain close owns at most this one descriptor and writer until the process exits. */
+  failClosed(): never
+  readonly failedClose: boolean
   /** Result delivery may finish first; this one cleanup keeps the writer occupied until actual settlement. */
   retain?: (cleanup: Promise<void>) => void
 }
@@ -52,11 +67,14 @@ export interface RegistryWriteDeadline {
 export class RegistryWriteQueue {
   private active = false
   private closed = false
+  private failedClose = false
   private settlement: Promise<void> = Promise.resolve()
   private closing: Promise<void> | undefined
   private readonly waiting: Array<() => Promise<void>> = []
 
   assertOpen(): void {
+    stateFileCustodyHealthy()
+    if (this.failedClose) throw new RegistryPersistenceUnavailable('directory close failed; restart required')
     if (this.closed) throw new RegistryPersistenceUnavailable('registry is closing')
   }
 
@@ -80,14 +98,22 @@ export class RegistryWriteQueue {
   private enqueue<T>(apply: (deadline: RegistryWriteDeadline) => Promise<T>, expires: number): Promise<T> {
     if (this.waiting.length >= CAPACITY) return Promise.reject(new RegistryPersistenceUnavailable('write queue is full'))
     return new Promise<T>((resolve, reject) => {
-      let expired = false, running = false
+      let expired = false, running = false, published = false, admitted = false
       let cleanup: Promise<void> | undefined
       const retain = (pending: Promise<void>) => {
         if (cleanup) throw new RegistryPersistenceUnavailable('duplicate write cleanup')
         cleanup = pending
       }
+      const failure = (reason: string) => published
+        ? new AtomicWriteUnconfirmed(new RegistryPersistenceUnavailable(reason), false)
+        : admitted ? new RegistryCleanupUnavailable(new RegistryPersistenceUnavailable(reason)) : new RegistryPersistenceUnavailable(reason)
       const check = () => {
-        if (expired || performance.now() >= expires) throw new RegistryPersistenceUnavailable('write deadline exceeded')
+        if (expired || performance.now() >= expires) throw failure('write deadline exceeded')
+      }
+      const failClosed = (): never => {
+        this.failedClose = true
+        console.error('[registry] directory close failed; restart required')
+        throw failure('directory close failed; restart required')
       }
       const timer = setTimeout(() => {
         expired = true
@@ -95,18 +121,51 @@ export class RegistryWriteQueue {
           const index = this.waiting.indexOf(run)
           if (index !== -1) this.waiting.splice(index, 1)
         }
-        reject(new RegistryPersistenceUnavailable('write deadline exceeded'))
+        reject(failure('write deadline exceeded'))
       }, Math.max(0, expires - performance.now()))
       const run = async () => {
         running = true
         measure('queue', expires - REGISTRY_WRITE_DEADLINE_MS, this.waiting.length)
-        try { check(); resolve(await apply({ expires, check, retain })) }
-        catch (error) { reject(error) }
+        const queue = this
+        try {
+          check()
+          const result = await apply({ expires, check, retain, failClosed,
+            beginPublication: () => {
+              if (published) throw failure('previous publication remains unconfirmed')
+              admitted = false
+              check()
+            },
+            markPublished: () => { published = true; admitted = false },
+            markAdmitted: () => { if (published) admitted = true; published = false },
+            get failedClose() { return queue.failedClose },
+          })
+          if (this.failedClose) throw failure('directory close failed; restart required')
+          resolve(result)
+        }
+        catch (error) {
+          // A caller may wrap a failed close; the shared custody latch still owns this writer and shutdown.
+          try { stateFileCustodyHealthy() } catch (cleanupError) {
+            this.failedClose = true
+            console.error(`[registry] state file cleanup unconfirmed; restart required · ${errorKind(cleanupError)}`)
+          }
+          // A cleanup failure cannot undo an already visible, unadmitted rename.
+          // Keep the caller's uncertain result even when discard or source release is what failed last.
+          reject(published && !(error instanceof AtomicWriteUnconfirmed) ? new AtomicWriteUnconfirmed(error, false)
+            : admitted && !(error instanceof RegistryCleanupUnavailable) ? new RegistryCleanupUnavailable(error) : error)
+        }
         finally {
           clearTimeout(timer)
+          // A thrown close cannot establish descriptor ownership. Never admit another write or a clean handoff.
+          if (this.failedClose) await new Promise<void>(() => {})
           // The durable result is already known. Cleanup still owns admission,
           // and its rejection is observed without replacing that result.
-          await cleanup?.catch((error) => console.warn(`[registry] write cleanup failed · ${errorKind(error)}`))
+          await cleanup?.catch(async error => {
+            console.warn(`[registry] write cleanup failed · ${errorKind(error)}`)
+            if (error instanceof StateFileCleanupUnconfirmed) {
+              this.failedClose = true
+              await new Promise<void>(() => {})
+            }
+          })
         }
       }
       this.waiting.push(run)
@@ -149,22 +208,26 @@ async function privateDescriptor(handle: FileHandle, directory: boolean, maxByte
 }
 
 export async function privateRegistryDirectory(directory: string): Promise<void> {
+  stateFileCustodyHealthy()
   await fs.mkdir(directory, { recursive: true, mode: 0o700 })
   if (process.platform === 'win32') {
     if (!(await fs.stat(directory)).isDirectory()) throw new Error('state directory has unsafe owner or type')
     await windowsRoot(directory)
     return
   }
+  stateFileCustodyHealthy()
   const handle = await fs.open(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
-  try { await privateDescriptor(handle, true) } finally { await handle.close() }
+  try { await privateDescriptor(handle, true) } finally { await closeStateFileHandle(handle) }
 }
 
-export async function readPrivateRegistryFile(file: string, maxBytes = Number.MAX_SAFE_INTEGER): Promise<string> {
+export async function readPrivateRegistryOwner(file: string, maxBytes = OWNER_BYTES): Promise<string> {
+  stateFileCustodyHealthy()
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > OWNER_BYTES) throw new Error('invalid owner read limit')
   if (process.platform === 'win32') await windowsRoot(file)
+  stateFileCustodyHealthy()
   const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
   try {
     const size = await privateDescriptor(handle, false, maxBytes)
-    if (maxBytes === Number.MAX_SAFE_INTEGER) return await handle.readFile('utf8')
     const limit = maxBytes + 1
     let bytes = Buffer.alloc(Math.min(size + 1, limit))
     let offset = 0
@@ -182,49 +245,9 @@ export async function readPrivateRegistryFile(file: string, maxBytes = Number.MA
     if (offset > maxBytes) throw new Error('state file exceeds its size limit')
     return bytes.toString('utf8', 0, offset)
   }
-  finally { await handle.close() }
+  finally { await closeStateFileHandle(handle) }
 }
 
-async function harden(file: string): Promise<void> {
-  try {
-    if (process.platform === 'win32') await windowsRoot(file)
-    const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
-    try { await privateDescriptor(handle, false) } finally { await handle.close() }
-  } catch (error) { if (!missing(error)) throw error }
-}
-
-export async function prepareRegistryImage(file: string, contents: string, deadline: RegistryWriteDeadline) {
-  deadline.check()
-  await harden(file)
-  deadline.check()
-  const started = performance.now()
-  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
-  let renamed = false
-  try {
-    const handle = await fs.open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600)
-    try {
-      deadline.check()
-      await handle.writeFile(contents)
-      deadline.check()
-      await handle.chmod(0o600)
-      deadline.check()
-      await handle.sync()
-      deadline.check()
-    } finally { await handle.close() }
-    deadline.check()
-  } catch (error) { await fs.rm(temporary, { force: true }); throw error }
-  finally { measure('prepare', started) }
-  return {
-    publish(): void {
-      deadline.check()
-      const started = performance.now()
-      try { renameSync(temporary, file); renamed = true; syncStateDirectory(dirname(file)) }
-      catch (error) { if (renamed) throw new AtomicWriteUnconfirmed(error); throw error }
-      finally { measure('publish', started) }
-    },
-    async discard(): Promise<void> { if (!renamed) await fs.rm(temporary, { force: true }) },
-  }
-}
 
 async function startMarker(pid: number, budget: number): Promise<string | null> {
   if (process.platform === 'linux') {
@@ -259,8 +282,9 @@ function parseOwner(contents: string): Owner | null {
 }
 
 async function readOwner(file: string): Promise<Owner | null> {
-  try { return parseOwner(await readPrivateRegistryFile(file, OWNER_BYTES)) }
+  try { return parseOwner(await readPrivateRegistryOwner(file)) }
   catch (error) {
+    if (error instanceof StateFileCleanupUnconfirmed) throw error
     if (missing(error)) return null
     throw new RegistryPersistenceUnavailable('registry lock owner could not be read safely')
   }
@@ -268,6 +292,7 @@ async function readOwner(file: string): Promise<Owner | null> {
 
 /** This bounded read and the following removal/publication are one no-yield ownership fence. */
 function readOwnerNow(file: string): { owner: Owner | null; modified: number } {
+  stateFileCustodyHealthy()
   try {
     if (process.platform === 'win32') requireWindowsStateFile(file)
     const handle = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
@@ -285,8 +310,9 @@ function readOwnerNow(file: string): { owner: Owner | null; modified: number } {
       }
       if (offset > OWNER_BYTES) throw new Error('oversized owner file')
       return { owner: parseOwner(bytes.toString('utf8', 0, offset)), modified: stat.mtimeMs }
-    } finally { closeSync(handle) }
+    } finally { closeStateFileDescriptor(handle) }
   } catch (error) {
+    if (error instanceof StateFileCleanupUnconfirmed) throw error
     if (missing(error)) return { owner: null, modified: 0 }
     throw new RegistryPersistenceUnavailable('registry lock owner could not be read safely')
   }
@@ -312,6 +338,7 @@ function removeLockNow(lock: string, identity: { ino: number; dev: number }, exp
       || Date.now() - Math.max(stat.mtimeMs, current.modified) <= OWNERLESS_MS) return false
   // A protocol lock contains at most one file. Read at most two entries;
   // unexpected state must never turn core cleanup into a recursive walk.
+  stateFileCustodyHealthy()
   const directory = opendirSync(lock, { bufferSize: 1 })
   try {
     const first = directory.readSync()
@@ -319,7 +346,7 @@ function removeLockNow(lock: string, identity: { ino: number; dev: number }, exp
       console.warn('[registry] lock cleanup refused unexpected contents')
       return false
     }
-  } finally { directory.closeSync() }
+  } finally { closeStateDirectoryIterator(directory) }
   if (!lockNow(lock, identity)) return false
   const final = readOwnerNow(join(lock, 'owner.json'))
   if (expected ? !final.owner || !sameOwner(final.owner, expected)
@@ -343,7 +370,8 @@ async function removeTemporaryLock(folder: string): Promise<void> {
 }
 
 /** Kept byte/protocol compatible with the last thirty days' synchronous writers. */
-export async function registryFileLock<T>(directory: string, deadline: RegistryWriteDeadline,
+export async function registryFileLock<T>(directory: string,
+  deadline: Pick<RegistryWriteDeadline, 'expires' | 'check'> & Partial<Pick<RegistryWriteDeadline, 'retain' | 'failedClose'>>,
   apply: (checkOwner: () => void) => Promise<T>): Promise<T> {
   const started = performance.now()
   const expires = Math.min(deadline.expires, started + LOCK_MS)
@@ -372,18 +400,22 @@ export async function registryFileLock<T>(directory: string, deadline: RegistryW
       if (stat.ino !== identity.ino || stat.dev !== identity.dev) return
       const owner = await readOwner(ownerFile)
       if (owner?.token === token && owner.pid === process.pid) removeLockNow(lock, identity, owner)
-    } catch (error) { console.warn(`[registry] lock cleanup refused an unsafe owner · ${errorKind(error)}`) }
+    } catch (error) {
+      if (error instanceof StateFileCleanupUnconfirmed) throw error
+      console.warn(`[registry] lock cleanup refused an unsafe owner · ${errorKind(error)}`)
+    }
   }
   // Built aside with its owner in it, then renamed into place. Made with mkdir and filled after, a core killed in
   // between left a lock with no owner, which the next core waited 5 s for, past its 2 s budget: master.e2e.ts on
   // Linux CI (run 44406838335, shard 7). Built once and kept through every busy turn, as each build is an fsync (a full
   // drive flush on macOS); its owner names no time, so it is as true on the last turn as on the first.
   const temporary = `${lock}.${process.pid}.${randomUUID()}.tmp`
-  let built = false
+  let built = false, uncertainClose = false
   try {
     await fs.mkdir(temporary, { mode: 0o700 })
     built = true
     check()
+    stateFileCustodyHealthy()
     const handle = await fs.open(join(temporary, 'owner.json'), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600)
     try {
       check()
@@ -392,7 +424,7 @@ export async function registryFileLock<T>(directory: string, deadline: RegistryW
       check()
       await handle.sync()
       check()
-    } finally { await handle.close() }
+    } finally { await closeStateFileHandle(handle) }
     for (;;) {
       check()
       // A rename replaces an empty folder on macOS and Linux, so look first, and rename at once, with no wait between:
@@ -412,7 +444,7 @@ export async function registryFileLock<T>(directory: string, deadline: RegistryW
         measure('lock', started)
         try { return await apply(checkOwner) }
         finally {
-          const cleanup = removeOwned()
+          const cleanup = deadline.failedClose ? Promise.resolve() : removeOwned()
           if (deadline.retain) deadline.retain(cleanup)
           else await cleanup
           created = false
@@ -436,7 +468,7 @@ export async function registryFileLock<T>(directory: string, deadline: RegistryW
         if (!ownerStat.isFile() || ownerStat.isSymbolicLink() || (ownerUid !== null && ownerStat.uid !== ownerUid)
           || (process.platform !== 'win32' && (ownerStat.mode & 0o777) !== 0o600)) throw new RegistryPersistenceUnavailable('registry lock owner has unsafe owner, mode, or type')
         owner = await readOwner(ownerFile) ?? undefined
-      } catch (error) { if (error instanceof RegistryPersistenceUnavailable) throw error }
+      } catch (error) { if (error instanceof RegistryPersistenceUnavailable || error instanceof StateFileCleanupUnconfirmed) throw error }
       check()
       if (!(Number(owner?.pid) > 0 && owner?.token)) {
         if (Date.now() - since > OWNERLESS_MS && lockIdentity) {
@@ -452,13 +484,14 @@ export async function registryFileLock<T>(directory: string, deadline: RegistryW
             check()
             if (lockIdentity && removeLockNow(lock, lockIdentity, current)) continue
           }
-        } catch (error) { if (error instanceof RegistryPersistenceUnavailable) throw error }
+        } catch (error) { if (error instanceof RegistryPersistenceUnavailable || error instanceof StateFileCleanupUnconfirmed) throw error }
       }
       check()
       await new Promise(resolve => setTimeout(resolve, Math.min(WAIT_MS, Math.max(1, expires - performance.now()))))
     }
   } catch (error) {
-    if (!entered && created) await removeOwned()
+    uncertainClose = error instanceof StateFileCleanupUnconfirmed
+    if (!entered && created && !uncertainClose && !deadline.failedClose) await removeOwned()
     throw error
-  } finally { if (built) await removeTemporaryLock(temporary) }
+  } finally { if (built && !uncertainClose && !deadline.failedClose) await removeTemporaryLock(temporary) }
 }

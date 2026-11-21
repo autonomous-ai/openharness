@@ -1,14 +1,14 @@
 import type { ServiceRequests } from '../../core/api.js'
 import { RuntimeProfileControlError, type EngineModelControl } from '../facets/modelControl.js'
-import type { ReaderEngine } from './protocol.js'
 import { createModelControlHost } from './modelControlHost.js'
-import { modelControlCheck, modelControlEnvelope, modelControlInput, modelControlToken,
+import { type ModelControlEngine, modelControlCheck, modelControlEnvelope, modelControlInput, modelControlToken,
   MODEL_CONTROL_APPLY, MODEL_CONTROL_CAPABILITIES, MODEL_CONTROL_CHECK_MS, MODEL_CONTROL_HOST, MODEL_CONTROL_IN_FLIGHT,
   MODEL_CONTROL_QUERY_MS, MODEL_CONTROL_VALIDATE, MODEL_CONTROL_VERSION, MODEL_CONTROL_WAIT_MS } from './modelControlProtocol.js'
 
 const loadControl = {
   claude: async () => (await import('../claude/modelControl.js')).modelControl,
   codex: async () => (await import('../codex/modelControl.js')).modelControl,
+  opencode: async () => (await import('../opencode/modelControl.js')).modelControl,
 }
 export interface ModelControlRequestDeps {
   query(query: string, payload: Record<string, unknown>): Promise<Record<string, unknown>>
@@ -16,7 +16,7 @@ export interface ModelControlRequestDeps {
   recycle?: () => void
 }
 
-export function engineModelControlRequests(engine: ReaderEngine, deps: ModelControlRequestDeps): ServiceRequests {
+export function engineModelControlRequests(engine: ModelControlEngine, deps: ModelControlRequestDeps): ServiceRequests {
   let loaded: Promise<EngineModelControl> | null = null
   let pending = 0
   const failure = (error: string) => ({ version: MODEL_CONTROL_VERSION, error })

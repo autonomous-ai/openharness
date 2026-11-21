@@ -8,6 +8,11 @@ import { hostPlatform } from './windowsFiles.js'
 export const nativeFileKey = (info: Pick<BigIntStats, 'dev' | 'ino'>) => `${info.dev}:${info.ino}`
 const identity = (info: BigIntStats | null) => info && `${nativeFileKey(info)}:${info.mode}:${info.uid}`
 const version = (info: BigIntStats) => `${identity(info)}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
+// Live evidence already owns native fields; string encodings belong only to saved facts.
+const sameIdentity = (a: BigIntStats | null, b: BigIntStats | null): boolean => a === null || b === null ? a === b
+  : a.dev === b.dev && a.ino === b.ino && a.mode === b.mode && a.uid === b.uid
+const sameVersion = (a: BigIntStats, b: BigIntStats): boolean => sameIdentity(a, b)
+  && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs
 /** Saved evidence outlives a reboot, and st_dev does not: macOS numbers /dev/diskN as disks appear at boot, so one
  * restart moved a user's data volume from 1,4 to 1,7 and held every launch for good (2026-10-16). Saved identities
  * and versions lead with st_dev; they are compared without it. */
@@ -16,8 +21,9 @@ type Part = { info: BigIntStats | null; target?: string }
 type Location = { path: string; info: BigIntStats } | null
 /** Immutable route facts can cross a service boundary; timestamps matter for aliases, not sibling churn. */
 export type NativePathFact = { path: string; identity: string | null; alias?: { target: string; version: string } }
-export function verifyNativePathFacts(facts: readonly NativePathFact[]): void {
-  const budget = new NativeEvidenceBudget()
+export function verifyNativePathFacts(facts: readonly NativePathFact[], budget = new NativeEvidenceBudget(),
+  devices?: Map<string, bigint | null>, checkFile?: (path: string, info: BigIntStats | null) => void,
+  changedFact?: (path: string, info: BigIntStats) => void): void {
   if (!facts.length || facts.length > 256) return nativeUnavailable('the retained route exceeds its limit')
   for (const fact of facts) {
     budget.step()
@@ -26,16 +32,29 @@ export function verifyNativePathFacts(facts: readonly NativePathFact[]): void {
     }
     let info: BigIntStats | null, target: string | undefined
     try {
-      info = lstatSync(fact.path, { bigint: true })
-      if (info.isSymbolicLink()) target = readlinkSync(fact.path)
+      info = lstatSync(fact.path, { bigint: true, throwIfNoEntry: false }) ?? null
+      if (info?.isSymbolicLink()) target = readlinkSync(fact.path)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return nativeUnavailable('the retained route became unreadable')
       info = null
     }
+    // Saved facts cross reboots; two passes of one live fence must also keep the device stable.
+    if (devices) {
+      const device = info?.dev ?? null
+      if (devices.has(fact.path) && devices.get(fact.path) !== device) {
+        // Name a changed leaf through its caller before the generic refusal. A
+        // returning callback cannot authorize the mismatched fact.
+        if (info !== null) changedFact?.(fact.path, info)
+        return nativeUnavailable('the retained route changed during preparation')
+      }
+      devices.set(fact.path, device)
+    }
     if (withoutDevice(identity(info)) !== withoutDevice(fact.identity)
       || (fact.alias && (!info || withoutDevice(version(info)) !== withoutDevice(fact.alias.version) || target !== fact.alias.target))) {
+      if (info !== null) changedFact?.(fact.path, info)
       return nativeUnavailable('the retained route changed during preparation')
     }
+    checkFile?.(fact.path, info)
   }
 }
 
@@ -66,14 +85,16 @@ export class NativePaths {
   }
 
   /** Eager binding and hook admission share exactly the same bounded ancestry rules. */
-  resolveSync(path: string, missingOkay = false): Location {
+  resolveSync(path: string, missingOkay = false, directories?: Map<string, BigIntStats>): Location {
     const steps = this.walk(path, missingOkay)
     let next = steps.next()
     while (!next.done) {
       let proof: Part
       try {
-        const info = lstatSync(next.value, { bigint: true })
-        proof = { info, ...(info.isSymbolicLink() ? { target: readlinkSync(next.value) } : {}) }
+        // A source pass shares only provisional directory reads; snapshot()/verify() still read every fact afresh.
+        const info = directories?.get(next.value) ?? lstatSync(next.value, { bigint: true, throwIfNoEntry: false }) ?? null
+        if (directories && directories.size < 256 && info?.isDirectory()) directories.set(next.value, info)
+        proof = { info, ...(info?.isSymbolicLink() ? { target: readlinkSync(next.value) } : {}) }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') proof = { info: null }
         else return nativeUnavailable('a native location could not be inspected')
@@ -85,6 +106,38 @@ export class NativePaths {
 
   snapshot(): NativePathFact[] {
     this.verify()
+    return this.facts()
+  }
+
+  /** Publication checks sibling routes at one fence. Verify common ancestors once, after every walk,
+   * so a later sibling cannot replace an earlier route before that route's final check. */
+  static snapshots(group: readonly NativePaths[]): NativePathFact[][] {
+    if (!group.length || group.length > 32) return nativeUnavailable('the native route group exceeds its limit')
+    // A single destination has no shared facts; the measured union allocation only adds cost.
+    if (group.length === 1) {
+      if (!group[0].parts.size) return nativeUnavailable('the native route group is incomplete')
+      return [group[0].snapshot()]
+    }
+    const parts = new Map<string, Part>()
+    let budget = group[0].budget
+    for (const paths of group) {
+      if (!paths.parts.size || paths.windows !== group[0].windows) return nativeUnavailable('the native route group is incomplete')
+      if (paths.budget.remaining() < budget.remaining()) budget = paths.budget
+      for (const [path, part] of paths.parts) {
+        paths.budget.step()
+        const previous = parts.get(path)
+        if (previous && (!sameIdentity(previous.info, part.info) || previous.target !== part.target
+          || (part.target !== undefined && !sameVersion(previous.info!, part.info!)))) {
+          return nativeUnavailable('a native route changed between grouped observations')
+        }
+        parts.set(path, part)
+      }
+    }
+    verifyParts(parts, budget)
+    return group.map(paths => paths.facts())
+  }
+
+  private facts(): NativePathFact[] {
     return [...this.parts].map(([path, part]) => ({ path, identity: identity(part.info),
       ...(part.target !== undefined ? { alias: { target: part.target, version: version(part.info!) } } : {}) }))
   }
@@ -99,11 +152,24 @@ export class NativePaths {
     this.budget.step()
     const separator = this.windows ? '\\' : '/'
     const retained = [...this.parts].filter(([path]) => path !== removedPath && !path.startsWith(removedPath + separator))
-    return () => {
-      const fresh = new NativePaths(new NativeEvidenceBudget(), this.windows ? 'win32' : 'linux')
-      for (const [path, part] of retained) fresh.parts.set(path, part)
-      fresh.verify()
-    }
+    return this.retainParts(retained)
+  }
+
+  /** An operation never crosses reboot: retain device identity too, with a fresh budget for every fence. */
+  retain(): () => void {
+    this.verify()
+    return this.retainParts([...this.parts])
+  }
+
+  /** Copy observed facts. A new generation must fork its original base, before sidecars were added. */
+  fork(budget: NativeEvidenceBudget): NativePaths {
+    const next = new NativePaths(budget, this.windows ? 'win32' : 'linux')
+    for (const [path, part] of this.parts) next.parts.set(path, part)
+    return next
+  }
+
+  private retainParts(retained: [string, Part][]): () => void {
+    return () => verifyParts(retained, new NativeEvidenceBudget())
   }
 
   private *walk(path: string, missingOkay: boolean): Generator<string, Location, Part> {
@@ -199,23 +265,29 @@ export class NativePaths {
   /** No asynchronous work follows the caller's last header fence. Unrelated directory
    * contents may change; replacing an ordinary ancestor or any alias may not. */
   verify(): void {
-    for (const [path, before] of this.parts) {
-      this.budget.step()
-      let now: BigIntStats | null
-      try { now = lstatSync(path, { bigint: true }) }
-      catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') now = null
-        else return nativeUnavailable('a native location became unreadable')
-      }
-      let target: string | undefined
-      if (before.target !== undefined && now?.isSymbolicLink()) {
-        try { target = readlinkSync(path) } catch { return nativeUnavailable('a native alias became unreadable') }
-      }
-      if (identity(now) !== identity(before.info)
-        || (before.target !== undefined && (!now || version(now) !== version(before.info!)
-          || target !== before.target))) {
-        return nativeUnavailable('a native path or alias changed during inspection')
-      }
+    verifyParts(this.parts, this.budget)
+  }
+}
+
+function verifyParts(parts: Iterable<[string, Part]>, budget: NativeEvidenceBudget): void {
+  for (const [path, before] of parts) {
+    budget.step()
+    let now: BigIntStats | null
+    // Missing sidecars/configs are ordinary evidence. Keep the fresh syscall,
+    // without allocating an ENOENT stack on every Close/Resume fence.
+    try { now = lstatSync(path, { bigint: true, throwIfNoEntry: false }) ?? null }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') now = null
+      else return nativeUnavailable('a native location became unreadable')
+    }
+    let target: string | undefined
+    if (before.target !== undefined && now?.isSymbolicLink()) {
+      try { target = readlinkSync(path) } catch { return nativeUnavailable('a native alias became unreadable') }
+    }
+    if (!sameIdentity(now, before.info)
+      || (before.target !== undefined && (!now || !sameVersion(now, before.info!)
+        || target !== before.target))) {
+      return nativeUnavailable('a native path or alias changed during inspection')
     }
   }
 }

@@ -597,14 +597,21 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     // A pre-G host drops `seed` silently, which would look like a pane that kept its scrollback: refuse instead.
     if (request.seed !== undefined && !client.features.includes(SEED_FEATURE)) return terminalActionNotStarted('this host cannot seed a pane')
     if (request.current?.() === false) return terminalActionNotStarted('The harness changed before pane dispatch')
-    try { const prepared = request.onDispatch?.(); if (prepared) await prepared }
+    const initialCommand = request.command
+    let command: string[] | undefined
+    try {
+      const pending = request.onDispatch?.()
+      if (pending) await pending
+      if (request.current?.() === false || this.disposed || this.draining || this.client !== client) return terminalActionNotStarted('The harness changed before pane dispatch')
+      command = typeof initialCommand === 'function' ? initialCommand() : initialCommand
+    }
     catch (error) { return terminalActionNotStarted(error instanceof Error ? error.message : 'Pane dispatch could not be committed') }
     if (request.current?.() === false || this.disposed || this.draining || this.client !== client) return terminalActionNotStarted('The harness changed before pane dispatch')
     // Held from the start, as tmux's remain-on-exit at create: an engine that exits at once still leaves
     // its error readable. The agent services release it once the pane is a real agent (`releaseHold`).
     const result = await client.call({
       op: 'create',
-      command: request.command?.length ? request.command : defaultCommand(this.platform),
+      command: command?.length ? command : defaultCommand(this.platform),
       ...(request.cwd ? { cwd: request.cwd } : {}),
       ...(request.env && Object.keys(request.env).length ? { env: request.env } : {}),
       cols: CREATE_COLS,
@@ -620,7 +627,7 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     })
     if (result.state !== 'ok') {
       const action = actionOf(result) as TerminalCreateResult<PtyRuntimeRef>
-      return action.state === 'failed' ? { ...action, reason: windowsBlockedReason(request.command ?? [], action.reason) } : action
+      return action.state === 'failed' ? { ...action, reason: windowsBlockedReason(command ?? [], action.reason) } : action
     }
     // Recorded here, before any other await: an exit that overtook this reply is released by the client
     // on the next turn (client.ts), and must find the pane known.
@@ -827,13 +834,20 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     if (!client) return terminalActionNotStarted(UNAVAILABLE)
     if (request.expectedHeldToken && !/^[a-f0-9-]{36}$/.test(request.expectedHeldToken)) return terminalActionNotStarted('invalid waiting pane identity')
     if (request.current?.() === false) return terminalActionNotStarted('The harness changed before pane dispatch')
-    try { const prepared = request.onDispatch?.(); if (prepared) await prepared }
+    const initialCommand = request.command
+    let command: string[]
+    try {
+      const pending = request.onDispatch?.()
+      if (pending) await pending
+      if (request.current?.() === false || this.disposed || this.clientFor(runtime) !== client) return terminalActionNotStarted('The harness changed before pane dispatch')
+      command = typeof initialCommand === 'function' ? initialCommand() : initialCommand
+    }
     catch (error) { return terminalActionNotStarted(error instanceof Error ? error.message : 'Pane dispatch could not be committed') }
     if (request.current?.() === false || this.disposed || this.clientFor(runtime) !== client) return terminalActionNotStarted('The harness changed before pane dispatch')
     const result = await client.call({
       op: 'respawn',
       pane: runtime.paneId,
-      command: request.command,
+      command,
       ...(request.cwd ? { cwd: request.cwd } : {}),
       ...(request.env && Object.keys(request.env).length ? { env: request.env } : {}),
       ...(request.expectedHeldToken ? { expectedHeldToken: request.expectedHeldToken } : {}),

@@ -1,3 +1,4 @@
+import { fingerprint, sha256File } from './bundleFingerprint.js'
 import { createHash, randomBytes } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -6,8 +7,8 @@ import { join } from 'node:path'
 import type { ChildProcess } from 'node:child_process'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  HANDOVER_CUTOFF_MARGIN_MS, HANDOVER_CUTOFF_MS, HANDOVER_POLL_MS, HANDOVER_STOP_BUDGET_MS, HANDOVER_WAIT_MS, PROBE_ANSWER, PROBE_COMMAND, PROBE_HANDOVER, PROBE_TIMEOUT_MS, REEXEC_LIMIT, RESUME_ENV, createReexec, decodeResume, encodeResume, fingerprint,
-  mayClaimPidFile, readHandoverClaimant, readMarker, recoverFailedReexec, removeMarker, runProbe, sha256File, sweepHandovers, takeBackHandover, takeHandover,
+  HANDOVER_CUTOFF_MARGIN_MS, HANDOVER_CUTOFF_MS, HANDOVER_POLL_MS, HANDOVER_STOP_BUDGET_MS, HANDOVER_WAIT_MS, PROBE_ANSWER, PROBE_COMMAND, PROBE_HANDOVER, PROBE_TIMEOUT_MS, REEXEC_LIMIT, RESUME_ENV, createReexec, decodeResume, encodeResume,
+  mayClaimPidFile, readHandoverClaimant, readMarker, recoverFailedReexec, removeMarker, runProbe, sweepHandovers, takeBackHandover, takeHandover,
   writeMarker, type HandOverDeps, type ProbeResult, type ReexecDeps,
 } from './reexec.js'
 import type { ReexecOutcome, ResumeState } from './supervisor.js'
@@ -195,6 +196,46 @@ describe('the probe', () => {
     expect(await runProbe(join(dir, 'no-node'), [], process.env).result).toEqual({ ok: false, detail: expect.stringContaining('ENOENT') })
   })
 
+  it('reports a synchronous spawn failure before a probe PID exists as refusal', async () => {
+    const running = runProbe('node', [], {}, 100, () => { throw new Error('UNKNOWN') })
+    expect(await running.result).toEqual({ ok: false, detail: 'probe process could not start' })
+    expect(() => running.cancel()).not.toThrow()
+  })
+
+  it('reports only a positive exact supported worker contract from a successful probe', async () => {
+    const modern = `${PROBE_ANSWER} · protocol 7 · vtest · ${PROBE_HANDOVER} · worker-cohort 1 ${'a'.repeat(64)}`
+    const legacy = `${PROBE_ANSWER} · protocol 5 · vtest`
+    for (const [answer, worker] of [
+      [modern, { kind: 'modern', contract: 1, plan: 'a'.repeat(64) }],
+      [legacy, { kind: 'legacy' }],
+      [`${legacy} · ${PROBE_HANDOVER}`, { kind: 'legacy' }],
+      [`${PROBE_ANSWER} · protocol 8 · vfuture`, undefined],
+      [`${legacy} · worker-cohort 2 unknown`, undefined],
+      [`prefix ${legacy}`, undefined],
+    ] as const) {
+      const result = await runProbe(process.execPath, [script(`console.log(${JSON.stringify(answer)})`)], process.env).result
+      expect(result).toMatchObject({ ok: true, detail: answer })
+      expect((result as { worker?: unknown }).worker).toEqual(worker)
+    }
+  })
+
+  it('bounds combined probe output and refuses an oversized affirmative answer', async () => {
+    const file = script(`console.log(${JSON.stringify(PROBE_ANSWER)}); process.stdout.write('x'.repeat(70_000)); setInterval(() => {}, 1000)`)
+    expect(await runProbe(process.execPath, [file], process.env).result).toEqual({ ok: false, detail: 'probe output exceeds 65536 bytes' })
+  })
+
+  it('keeps an oversized probe owned when its termination request throws', async () => {
+    const stdout = new EventEmitter(), stderr = new EventEmitter()
+    const kill = vi.fn(() => { throw new Error('owned probe has not closed yet') })
+    const child = Object.assign(new EventEmitter(), { stdout, stderr, kill }) as unknown as ChildProcess
+    const running = runProbe('node', [], {}, 1_000, () => child)
+    stdout.emit('data', Buffer.alloc(65_537))
+    stderr.emit('data', Buffer.from('more'))
+    expect(kill).toHaveBeenCalledTimes(1)
+    child.emit('close', null, 'SIGKILL')
+    expect(await running.result).toEqual({ ok: false, detail: 'probe output exceeds 65536 bytes' })
+  })
+
   it('gives up on one that does not answer in time, and can be abandoned', async () => {
     const hung = script('setInterval(() => {}, 1000)')
     expect(await runProbe(process.execPath, [hung], process.env, 300).result).toEqual({ ok: false, detail: 'no answer within 300 ms' })
@@ -204,6 +245,21 @@ describe('the probe', () => {
     expect(PROBE_TIMEOUT_MS).toBeGreaterThanOrEqual(10_000)
   })
 
+  it('keeps probe ownership after its deadline until the child actually closes', async () => {
+    const child = Object.assign(new EventEmitter(), { stdout: null, stderr: null, kill: vi.fn() }) as unknown as ChildProcess
+    vi.useFakeTimers()
+    try {
+      const finished = vi.fn()
+      const running = runProbe('node', [], {}, 100, () => child)
+      void running.result.then(finished)
+      await vi.advanceTimersByTimeAsync(100)
+      expect(child.kill).toHaveBeenCalledWith('SIGKILL')
+      expect(finished).not.toHaveBeenCalled()
+      child.emit('close', null, 'SIGKILL')
+      expect(await running.result).toEqual({ ok: false, detail: 'no answer within 100 ms' })
+    } finally { vi.useRealTimers() }
+  })
+
   it('survives a child that has no output to read and cannot be killed', async () => {
     const child = Object.assign(new EventEmitter(), { stdout: null, stderr: null, kill: () => { throw new Error('ESRCH') } }) as unknown as ChildProcess
     vi.useFakeTimers()
@@ -211,6 +267,7 @@ describe('the probe', () => {
       const running = runProbe('node', [], {}, 100, () => child)
       running.cancel()
       vi.advanceTimersByTime(100)
+      child.emit('close', 0, null)
       expect(await running.result).toEqual({ ok: false, detail: 'no answer within 100 ms' })
       child.emit('close', 0, null)
     } finally { vi.useRealTimers() }
@@ -268,19 +325,304 @@ describe('re-executing', () => {
     expect(calls).toEqual([])
   })
 
-  it('keeps this master where this Node cannot re-execute, and says so once', () => {
-    const { reexec } = make({ execve: null })
+  it('prepares and probes the initial packaged own cohort, then reuses its admission until it changes', async () => {
+    onDisk = 'old'
+    const prepareProbe = vi.fn(() => '/owned/cohort-cli.mjs')
+    const prepareChildren = vi.fn(() => true)
+    const { reexec } = make({ prepareProbe, prepareChildren } as Partial<ReexecDeps>)
     reexec(state(), (outcome) => outcomes.push(outcome))
+    expect(outcomes).toEqual([])
+    expect(prepareProbe).not.toHaveBeenCalled()
+    stopped[0]()
+    expect(prepareProbe).toHaveBeenCalledExactlyOnceWith('old')
+    expect(probes[0].args).toEqual(['--flag', '/owned/cohort-cli.mjs', PROBE_COMMAND])
+    await settle({ ok: true, detail: 'admitted' })
+    expect(prepareChildren).toHaveBeenCalledExactlyOnceWith('old', { ok: true, detail: 'admitted' })
+    expect(outcomes).toEqual(['same'])
     reexec(state(), (outcome) => outcomes.push(outcome))
-    expect(outcomes).toEqual(['kept', 'kept'])
-    expect(calls).toEqual(['[harnessd] the bundle on disk is newer than this master, but this Node cannot re-execute a process: the master keeps its code until it restarts'])
+    expect(outcomes).toEqual(['same', 'same'])
+    expect(prepareProbe).toHaveBeenCalledTimes(1)
   })
 
-  it('keeps this master after re-executing again and again without a core coming up', () => {
-    const { reexec } = make()
-    reexec(state({ unproven: REEXEC_LIMIT }), (outcome) => outcomes.push(outcome))
+  it('waits for owned preparation to close before probing or admitting the candidate', async () => {
+    let prepared!: (path: string | null) => void
+    const task = { result: new Promise<string | null>(resolve => { prepared = resolve }), cancel: vi.fn() }
+    const admit = vi.fn(() => true)
+    const { reexec } = make({ execve: null, prepareProbe: (() => task) as never, prepareChildren: admit })
+    reexec(state(), outcome => outcomes.push(outcome))
+    stopped[0]()
+    expect(probes).toEqual([])
+    expect(admit).not.toHaveBeenCalled()
+    expect(outcomes).toEqual([])
+    prepared('/owned/cohort-cli.mjs')
+    await new Promise(resolve => setImmediate(resolve))
+    expect(probes[0].args).toEqual(['--flag', '/owned/cohort-cli.mjs', PROBE_COMMAND])
+    await settle({ ok: true, detail: 'prepared and admitted' })
     expect(outcomes).toEqual(['kept'])
-    expect(calls).toEqual([`[harnessd] this master re-executed ${REEXEC_LIMIT} times without a core coming up — keeping its code; something keeps rewriting the bundle`])
+  })
+
+  it('keeps shutdown pending until the cancelled preparer actually closes', async () => {
+    let closed!: (path: string | null) => void
+    const task = { result: new Promise<string | null>(resolve => { closed = resolve }), cancel: vi.fn() }
+    const running = make({ execve: null, prepareProbe: (() => task) as never, prepareChildren: () => true })
+    running.reexec(state(), outcome => outcomes.push(outcome)); stopped[0]()
+    stopping = true
+    running.cancel()
+    const settled = vi.fn()
+    running.settled(settled)
+    expect(task.cancel).toHaveBeenCalledTimes(1)
+    expect(settled).not.toHaveBeenCalled()
+    expect(probes).toEqual([])
+    closed(null)
+    await new Promise(resolve => setImmediate(resolve))
+    expect(settled).toHaveBeenCalledExactlyOnceWith(false)
+    expect(outcomes).toEqual([])
+    expect(calls).not.toContain('start children')
+  })
+
+  it('owns failed-exec reacquisition through cancellation before any child restarts', async () => {
+    let closed!: (path: string | null) => void
+    const task = { result: new Promise<string | null>(resolve => { closed = resolve }), cancel: vi.fn() }
+    const prepare = vi.fn().mockReturnValueOnce('/owned/cohort-cli.mjs').mockReturnValue(task)
+    const running = make({ prepareProbe: prepare, prepareChildren: () => true,
+      execve: () => { throw new Error('exec refused before replacement') } })
+    running.reexec(state(), outcome => outcomes.push(outcome)); stopped[0]()
+    await settle({ ok: true, detail: 'first proof' })
+    expect(prepare).toHaveBeenCalledTimes(2)
+    expect(outcomes).toEqual([])
+    stopping = true; running.cancel()
+    const settled = vi.fn(); running.settled(settled)
+    expect(task.cancel).toHaveBeenCalledTimes(1)
+    expect(settled).not.toHaveBeenCalled()
+    closed(null)
+    await new Promise(resolve => setImmediate(resolve))
+    expect(settled).toHaveBeenCalledExactlyOnceWith(false)
+    expect(calls).not.toContain('start children')
+  })
+
+  it.each(['continue', 'stop', 'drift'])('settles the second failed-exec probe once before %s', async ending => {
+    let prepared!: (path: string | null) => void
+    const task = { result: new Promise<string | null>(resolve => { prepared = resolve }), cancel: vi.fn() }
+    const prepare = vi.fn().mockReturnValueOnce('/owned/first.mjs').mockReturnValue(task)
+    const execve = vi.fn(() => { throw new Error('exec refused before replacement') }), admit = vi.fn(() => true)
+    const running = make({ prepareProbe: prepare, prepareChildren: admit, execve })
+    running.reexec(state(), outcome => outcomes.push(outcome)); stopped[0]()
+    await settle({ ok: true, detail: 'first proof' })
+    prepared('/owned/second.mjs')
+    await new Promise(resolve => setImmediate(resolve))
+    expect(probes).toHaveLength(2)
+    expect(probes[1].env).toEqual(probes[0].env)
+    expect(execs).toHaveLength(0)
+    expect(execve).toHaveBeenCalledTimes(1)
+    const settled = vi.fn()
+    if (ending === 'stop') {
+      stopping = true; running.cancel(); running.settled(settled)
+      expect(probes[1].cancelled).toBe(true)
+      expect(settled).not.toHaveBeenCalled()
+    }
+    if (ending === 'drift') onDisk = 'another publication'
+    await settle({ ok: true, detail: 'second proof' })
+    expect(execve).toHaveBeenCalledTimes(1)
+    expect(outcomes).toEqual(ending === 'stop' ? [] : [ending === 'continue' ? 'kept' : 'unsupported'])
+    expect(calls.filter(call => call === 'start children')).toHaveLength(ending === 'continue' ? 1 : 0)
+    expect(admit).toHaveBeenCalledTimes(ending === 'continue' ? 1 : 0)
+    if (ending === 'stop') expect(settled).toHaveBeenCalledExactlyOnceWith(false)
+  })
+
+  it('keeps disk-limited preparation separate from a refused worker cohort', () => {
+    const prepareChildren = vi.fn(() => true)
+    const { reexec } = make({ execve: null, prepareProbe: () => { throw new Error('worker_artifact_storage_unavailable') }, prepareChildren })
+    reexec(state(), outcome => outcomes.push(outcome))
+    expect(() => stopped[0]()).not.toThrow()
+    expect(outcomes).toEqual(['storage-unavailable'])
+    expect(probes).toEqual([])
+    expect(prepareChildren).not.toHaveBeenCalled()
+    expect(calls).not.toContain('start children')
+  })
+
+  it.each(['storage', 'other', 'stopping'] as const)('settles an asynchronous preparer failure without starting children: %s', async failure => {
+    let reject!: (error: Error) => void
+    const task = { result: new Promise<string | null>((_resolve, fail) => { reject = fail }), cancel: vi.fn() }
+    const admit = vi.fn(() => true)
+    const running = make({ prepareProbe: () => task, prepareChildren: admit })
+    running.reexec(state(), outcome => outcomes.push(outcome)); stopped[0]()
+    if (failure === 'stopping') { stopping = true; running.cancel() }
+    reject(new Error(failure === 'other' ? 'fixture failure' : 'worker_artifact_storage_unavailable'))
+    await new Promise(resolve => setImmediate(resolve))
+    expect(outcomes).toEqual(failure === 'stopping' ? [] : [failure === 'storage' ? 'storage-unavailable' : 'unsupported'])
+    expect(probes).toEqual([])
+    expect(admit).not.toHaveBeenCalled()
+    expect(calls).not.toContain('start children')
+  })
+
+  it('refuses an unexpected synchronous preparation error without an unhandled exception', () => {
+    const running = make({ prepareProbe: () => { throw new Error('private failure') }, prepareChildren: () => true })
+    running.reexec(state(), outcome => outcomes.push(outcome))
+    expect(() => stopped[0]()).not.toThrow()
+    expect(outcomes).toEqual(['unsupported'])
+    expect(calls.join(' ')).not.toContain('private failure')
+  })
+
+  it('never probes or starts a packaged candidate when immutable preparation refuses it', () => {
+    const prepareChildren = vi.fn(() => true)
+    const { reexec } = make({ execve: null, prepareProbe: () => null, prepareChildren } as Partial<ReexecDeps>)
+    reexec(state(), (outcome) => outcomes.push(outcome))
+    stopped[0]()
+    expect(outcomes).toEqual(['unsupported'])
+    expect(probes).toEqual([])
+    expect(prepareChildren).not.toHaveBeenCalled()
+    expect(calls).not.toContain('start children')
+  })
+
+  it('refuses a probe owner that throws before starting its child', () => {
+    const { reexec } = make({ execve: null, prepareChildren: () => true,
+      probe: () => { throw new Error('UNKNOWN before PID') } })
+    reexec(state(), outcome => outcomes.push(outcome))
+    stopped[0]()
+    expect(outcomes).toEqual(['unsupported'])
+    expect(calls).not.toContain('start children')
+  })
+
+  it('reaps the previous bundle before keeping a master that cannot re-execute, and says so once', () => {
+    const { reexec, replacing } = make({ execve: null })
+    reexec(state(), (outcome) => outcomes.push(outcome))
+    expect(outcomes).toEqual([])
+    expect(replacing()).toBe(true)
+    expect(calls.at(-1)).toBe('stop children')
+    stopped[0]()
+    expect(outcomes).toEqual(['kept'])
+    expect(replacing()).toBe(false)
+    expect(calls.at(-1)).toBe('start children')
+    // A core restart on the same bundle keeps its surviving workers.
+    reexec(state(), (outcome) => outcomes.push(outcome))
+    expect(outcomes).toEqual(['kept', 'kept'])
+    expect(stopped).toHaveLength(1)
+    expect(calls.filter((line) => line.includes('cannot re-execute'))).toHaveLength(1)
+    expect(probes).toEqual([])
+  })
+
+  it('reaps the previous bundle even at the unproven re-execution limit', () => {
+    const { reexec, replacing } = make()
+    reexec(state({ unproven: REEXEC_LIMIT }), (outcome) => outcomes.push(outcome))
+    expect(outcomes).toEqual([])
+    expect(replacing()).toBe(true)
+    expect(calls.at(-1)).toBe('stop children')
+    stopped[0]()
+    expect(outcomes).toEqual(['kept'])
+    expect(replacing()).toBe(false)
+    expect(calls.at(-1)).toBe('start children')
+    reexec(state({ unproven: REEXEC_LIMIT }), (outcome) => outcomes.push(outcome))
+    expect(outcomes).toEqual(['kept', 'kept'])
+    expect(stopped).toHaveLength(1)
+    expect(probes).toEqual([])
+  })
+
+  it('reaps a kept newer cohort when rollback selects this master\'s own bundle', () => {
+    const { reexec, replacing } = make({ execve: null })
+    reexec(state(), (outcome) => outcomes.push(outcome))
+    expect(stopped).toHaveLength(1)
+    stopped[0]()
+    onDisk = 'old'
+    reexec(state(), (outcome) => outcomes.push(outcome))
+    expect(outcomes).toEqual(['kept'])
+    expect(replacing()).toBe(true)
+    expect(stopped).toHaveLength(2)
+    stopped[1]()
+    expect(outcomes).toEqual(['kept', 'same'])
+    expect(replacing()).toBe(false)
+    reexec(state(), (outcome) => outcomes.push(outcome))
+    expect(outcomes).toEqual(['kept', 'same', 'same'])
+    expect(stopped).toHaveLength(2)
+    expect(calls.filter((line) => line === 'start children')).toHaveLength(2)
+  })
+
+  it('reaps children restarted after a refused probe before rollback to its own bundle', async () => {
+    const { reexec } = make()
+    reexec(state(), (outcome) => outcomes.push(outcome))
+    stopped[0]()
+    await settle({ ok: false, detail: 'no' })
+    onDisk = 'old'
+    reexec(state(), (outcome) => outcomes.push(outcome))
+    expect(outcomes).toEqual(['refused'])
+    expect(stopped).toHaveLength(2)
+    stopped[1]()
+    expect(outcomes).toEqual(['refused', 'same'])
+  })
+
+  it('never restarts kept children or a core when shutdown begins during their reap', () => {
+    const { reexec } = make({ execve: null })
+    reexec(state(), (outcome) => outcomes.push(outcome))
+    stopping = true
+    expect(stopped).toHaveLength(1)
+    stopped[0]()
+    expect(outcomes).toEqual([])
+    expect(calls).not.toContain('start children')
+  })
+
+  it('reaps and refuses a cohort whose selected bundle cannot be fingerprinted', () => {
+    const { reexec } = make({ prepareChildren: () => true })
+    onDisk = null
+    reexec(state(), (outcome) => outcomes.push(outcome))
+    expect(outcomes).toEqual([])
+    stopped[0]()
+    expect(outcomes).toEqual(['unsupported'])
+    expect(calls).not.toContain('start children')
+    reexec(state(), (outcome) => outcomes.push(outcome))
+    stopping = true
+    stopped[1]()
+    expect(outcomes).toEqual(['unsupported'])
+  })
+
+  it('positively admits a kept cohort after reaping, including at the re-execution limit', async () => {
+    for (const limited of [false, true]) {
+      const admitted = vi.fn(() => true)
+      const worker = { kind: 'modern' as const, contract: 1, plan: 'a'.repeat(64) }
+      const before = probes.length
+      const { reexec } = make({ ...(limited ? {} : { execve: null }), prepareChildren: admitted })
+      reexec(state({ unproven: limited ? REEXEC_LIMIT : 0 }), (outcome) => outcomes.push(outcome))
+      expect(probes).toHaveLength(before)
+      stopped.at(-1)!()
+      expect(probes.at(-1)!.env).toMatchObject({ HARNESSD_SERVICES: 'none', HARNESSD_SERVICE_PROCESSES: '' })
+      await settle({ ok: true, detail: 'supported', worker })
+      expect(admitted).toHaveBeenLastCalledWith('new', { ok: true, detail: 'supported', worker })
+      expect(outcomes.at(-1)).toBe('kept')
+      onDisk = 'old'
+      reexec(state(), (outcome) => outcomes.push(outcome))
+      stopped.at(-1)!()
+      expect(admitted).toHaveBeenLastCalledWith('old', undefined)
+      expect(outcomes.at(-1)).toBe('same')
+      onDisk = 'new'
+    }
+  })
+
+  it('starts no children when retained-cohort admission or its probe fails', async () => {
+    for (const ok of [true, false]) {
+      const admitted = vi.fn(() => false)
+      const { reexec, replacing } = make({ execve: null, prepareChildren: admitted })
+      reexec(state(), (outcome) => outcomes.push(outcome))
+      stopped.at(-1)!()
+      await settle({ ok, detail: 'unproven' })
+      expect(outcomes.at(-1)).toBe('unsupported')
+      expect(replacing()).toBe(false)
+      expect(admitted).toHaveBeenCalledTimes(ok ? 1 : 0)
+    }
+    expect(calls).not.toContain('start children')
+  })
+
+  it('refuses drift during reap or probe before spawning or re-executing any candidate', async () => {
+    for (const executable of [false, true]) for (const during of ['reap', 'probe']) {
+      onDisk = 'new'
+      const admitted = vi.fn(() => true)
+      const { reexec } = make({ ...(executable ? {} : { execve: null }), prepareChildren: admitted })
+      reexec(state(), (outcome) => outcomes.push(outcome))
+      if (during === 'reap') onDisk = 'changed'
+      stopped.at(-1)!()
+      if (during === 'probe') { onDisk = 'changed'; await settle({ ok: true, detail: 'supported' }) }
+      expect(outcomes.at(-1)).toBe('unsupported')
+      expect(admitted).not.toHaveBeenCalled()
+    }
+    expect(calls).not.toContain('start children')
+    expect(execs).toEqual([])
   })
 
   it('stops its children, probes the bundle, leaves its marker and replaces itself, handing its state on', async () => {
@@ -294,7 +636,7 @@ describe('re-executing', () => {
     expect(probes[0].env.KEEP).toBe('1')
     await settle({ ok: true, detail: PROBE_ANSWER })
     expect(calls.at(-1)).toBe(`marker ${JSON.stringify({ pid: 4242, from: 'old', to: 'new', at: 1_000 })}`)
-    expect(execs).toEqual([{ file: '/opt/node', args: ['/opt/node', '--flag', '/opt/cli.js', '__harnessd'], env: probes[0].env }])
+    expect(execs).toEqual([{ file: '/opt/node', args: ['/opt/node', '--flag', '/opt/cli.js', '__harnessd'], env: { KEEP: '1', [RESUME_ENV]: probes[0].env[RESUME_ENV] } }])
     expect(outcomes).toEqual([])
   })
 
@@ -367,6 +709,20 @@ describe('re-executing', () => {
     await settle({ ok: true, detail: PROBE_ANSWER })
     expect(outcomes).toEqual(['kept', 'kept'])
     expect(calls).toContain('[harnessd] could not leave the re-execution marker (string) — keeping this master')
+  })
+
+  it('does not finish a stopping master until its cancelled probe has actually settled', async () => {
+    const reexec = make()
+    reexec.reexec(state(), (outcome) => outcomes.push(outcome))
+    stopped[0]()
+    stopping = true
+    reexec.cancel()
+    const ended = vi.fn()
+    reexec.settled(ended)
+    expect(ended).not.toHaveBeenCalled()
+    await settle({ ok: false, detail: 'cancelled and reaped' })
+    expect(ended).toHaveBeenCalledExactlyOnceWith(false)
+    expect(outcomes).toEqual([])
   })
 
   it('does nothing more once the master is stopping, at any step, and abandons its probe', async () => {

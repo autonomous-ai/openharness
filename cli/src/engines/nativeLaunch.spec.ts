@@ -1,11 +1,13 @@
 import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { inspectNativeLaunch } from './nativeLaunch.js'
+import { inspectNativeLaunch as inspect, unsupportedNativeLaunchModelFlag } from './nativeLaunch.js'
+import { nativeSetupProbes } from '../services/nativeSetup.js'
+const inspectNativeLaunch: typeof inspect = (engine, source, deps) => inspect(engine, source, { setup: nativeSetupProbes, ...deps })
 import { captureLaunchExecutable } from './kit/launchExecutable.js'
 import { LAUNCH_LOCATION_VARIABLES, nativeHookLocations } from './kit/nativeLocations.js'
-import { engineHooks } from './hooks.js'
+import { engineHookInstallations as engineHooks } from './nativeHookSetup.js'
+import * as hooks from './nativeHookSetup.js'
 import { HookPreparationHeld, HookScriptMissing } from './kit/hookHeld.js'
-import * as hooks from './nativeHooks.js'
 import { buildEngineLaunchArgv } from '../lib/engineLaunch.js'
 import { shellSingleQuote } from '../lib/shellQuote.js'
 import { launchScriptOf } from '../testing/launchScript.js'
@@ -23,13 +25,65 @@ vi.mock('node:child_process', () => ({ execFile: (command: string, args: string[
   if (fixture.stalled) fixture.pending.push(settle); else queueMicrotask(settle)
   return { stdin: { end: vi.fn(), destroy: vi.fn() } }
 } }))
-vi.mock('./hooks.js', () => ({ engineHooks: { claude: { installIn: vi.fn(async () => fixture.hooks) }, codex: { installIn: vi.fn(async () => fixture.hooks) } } }))
-vi.mock('./nativeHooks.js', () => Object.fromEntries(['installOpencodePlugin', 'installHermesHooks', 'installCursorHooks',
+vi.mock('./nativeHookSetup.js', () => ({ engineHookInstallations: { claude: { installIn: vi.fn(async () => fixture.hooks) }, codex: { installIn: vi.fn(async () => fixture.hooks) } }, ...Object.fromEntries(['installOpencodePlugin', 'installHermesHooks', 'installCursorHooks',
   'installCommandCodeHooks', 'installDevinHooks', 'installAmpPlugin', 'installKiloPlugin', 'installGrokHooks', 'installAgyHooks', 'installCopilotHooks', 'installPiExtension',
-].map(name => [name, vi.fn(async () => fixture.hooks)])))
+].map(name => [name, vi.fn(async () => fixture.hooks)])) }))
 let installs = 0
 beforeEach(() => { fixture.identity = `install-${++installs}`; fixture.current = true; fixture.hooks = true; fixture.version = '2.0.0'; fixture.help = '--auto --permission-mode --approve-for-me'; fixture.calls = []; fixture.pending = []; fixture.stalled = false; fixture.failed = false; fixture.environments = []; fixture.exit = 0; fixture.stderr = '' })
 afterEach(() => { vi.clearAllMocks(); vi.unstubAllEnvs() })
+
+it('holds native inspection when its setup dependency is absent', async () => {
+  expect(await inspect('codex')).toMatchObject({ ok: false, unavailable: 'native', detail: 'Waiting for engine setup.' })
+  expect(captureLaunchExecutable).not.toHaveBeenCalled()
+})
+
+it('holds a capture with no confirmed HOME before any engine probe', async () => {
+  vi.mocked(captureLaunchExecutable).mockResolvedValueOnce({ state: 'ready',
+    executable: { command: '/fixture/engine', identity: 'no-home', current: () => true }, environment: { PATH: '/fixture/bin' } })
+  expect(await inspectNativeLaunch('codex')).toMatchObject({ ok: false, detail: 'Waiting to confirm native engine locations.' })
+  expect(fixture.calls).toEqual([])
+})
+
+it('refuses an OpenClaw runtime failure even when it has no special Node diagnostic', async () => {
+  const setup = { ...nativeSetupProbes, probe: async () => ({ code: 1, stdout: '', stderr: 'Runtime failed.' }) }
+  expect(await inspectNativeLaunch('openclaw', {}, { setup })).toMatchObject({ ok: false, refusal: 'ENGINE_CANNOT_RUN',
+    detail: 'OpenClaw is installed but cannot run: Runtime failed.' })
+})
+
+it('keeps an engine without hook or optional-settings contracts independent of both', async () => {
+  const result = await inspectNativeLaunch('openclaw')
+  if (!result.ok) throw Error(result.detail)
+  expect(await result.launch.prepareHooks(19473, () => true)).toBe(true)
+  expect(await result.launch.prepareSettings!('/fixture/work', () => true)).toBeNull()
+})
+
+it('refuses stale or excess retained proofs without changing selected authority', async () => {
+  const result = await inspectNativeLaunch('codex')
+  if (!result.ok) throw Error(result.detail)
+  expect(result.launch.retain!({ files: [], current: () => false })).toBe(false)
+  for (let index = 0; index < 16; index++) expect(result.launch.retain!({ files: [], current: () => true })).toBe(true)
+  expect(result.launch.retain!({ files: [], current: () => true })).toBe(false)
+  expect(result.launch.proofs).toHaveLength(16)
+  fixture.current = false
+  expect(result.launch.retain!({ files: [], current: () => true })).toBe(false)
+})
+
+it('ignores unrelated clear keys and refuses a relative replacement profile before hooks', async () => {
+  const result = await inspectNativeLaunch('codex')
+  if (!result.ok) throw Error(result.detail)
+  expect(await result.launch.prepareHooks(0, () => true, {}, ['UNRELATED_OPTION'])).toBe(true)
+  expect(result.launch.environment.HOME).toBe('/fixture/home')
+  expect(await result.launch.prepareHooks(19473, () => true, { CODEX_HOME: 'relative' })).toBe(false)
+  expect(engineHooks.codex.installIn).not.toHaveBeenCalled()
+})
+
+it('holds native preparation when an installer rejects with a non-Error failure', async () => {
+  const result = await inspectNativeLaunch('codex')
+  if (!result.ok) throw Error(result.detail)
+  vi.mocked(engineHooks.codex.installIn).mockRejectedValueOnce('fixture publication refused')
+  expect(await result.launch.prepareHooks(19473, () => true)).toBe(false)
+  expect(result.launch.current()).toBe(false)
+})
 
 it('needs no executable, hooks or probes for a terminal', async () => {
   const prepared = await inspectNativeLaunch('terminal')
@@ -497,5 +551,63 @@ describe('the startup probe on Windows', () => {
     const codex = await inspectNativeLaunch('codex')
     expect(codex.ok && codex.launch.startupArgs).toBeUndefined()
     expect(fixture.calls).toEqual(['/fixture/engine'])
+  })
+})
+
+it('retains immutable installer recipe and location snapshots in the explicit inline path', async () => {
+  const recipe = { command: 'original', source: 'fixture', executable: { names: ['original'], homeRelativePaths: ['bin/original'], absolutePaths: ['/original'] } }
+  const environment = { HOME: '/fixture/original', PATH: '/fixture/bin' }
+  vi.mocked(captureLaunchExecutable).mockResolvedValueOnce({ state: 'install', recipe, environment })
+  const result = await inspectNativeLaunch('codex')
+  recipe.command = 'changed'; recipe.executable.names[0] = 'changed'; recipe.executable.homeRelativePaths[0] = 'changed'; recipe.executable.absolutePaths[0] = '/changed'; environment.HOME = '/changed'
+  expect(result).toMatchObject({ install: { command: 'original', executable: { names: ['original'], homeRelativePaths: ['bin/original'], absolutePaths: ['/original'] } }, environment: { HOME: '/fixture/original' } })
+  if (result.ok) throw Error('fixture was ready')
+  expect(Object.isFrozen(result.install)).toBe(true); expect(Object.isFrozen(result.install!.executable.names)).toBe(true); expect(Object.isFrozen(result.environment)).toBe(true)
+})
+
+it('retains the inline executable values independently of the provider object', async () => {
+  const executable = { command: '/fixture/approved', identity: 'immutable-inline', current: () => true }
+  vi.mocked(captureLaunchExecutable).mockResolvedValueOnce({ state: 'ready', executable, environment: { HOME: '/fixture/home', PATH: '/fixture/bin' } })
+  const result = await inspectNativeLaunch('claude')
+  executable.command = '/fixture/substituted'; executable.identity = 'changed'
+  expect(result.ok).toBe(true)
+  if (!result.ok) throw Error('fixture was held')
+  expect(result.launch.executable?.command).toBe('/fixture/approved'); expect(result.launch.executable?.identity).toBe('immutable-inline')
+  expect(Object.isFrozen(result.launch.executable)).toBe(true)
+})
+
+
+describe('selected executable model preflight', () => {
+  it.each([
+    ['--model --effort', '', null],
+    ['', '--model --effort', null],
+    ['--model --effortful', '', '--effort'],
+    ['--models --effort', '', '--model'],
+  ] as const)('interprets exact declared flags from both output streams: %s %s', async (stdout, stderr, missing) => {
+    const probe = vi.fn(async () => ({ code: 0, stdout, stderr }))
+    expect(await unsupportedNativeLaunchModelFlag('claude', { model: 'opus', effort: 'high' }, { probe })).toBe(missing)
+    expect(probe).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ command: '/fixture/engine', current: expect.any(Function) }), 'help',
+      { HOME: '/fixture/home', PATH: '/fixture/bin', CODEX_HOME: '/fixture/codex', CLAUDE_CONFIG_DIR: '/fixture/claude', HERMES_HOME: '/fixture/hermes' })
+    expect(fixture.calls).toEqual([])
+  })
+
+  it('does not capture or probe a model with no declared flags', async () => {
+    const probe = vi.fn()
+    expect(await unsupportedNativeLaunchModelFlag('claude', { model: 'default', effort: 'default' }, { probe })).toBeNull()
+    expect(captureLaunchExecutable).not.toHaveBeenCalled()
+    expect(probe).not.toHaveBeenCalled()
+  })
+
+  it.each(['held', 'stale before', 'stale after', 'missing', 'empty', 'nonzero', 'rejected'] as const)('makes no unsupported claim on %s proof', async mode => {
+    if (mode === 'held') vi.mocked(captureLaunchExecutable).mockResolvedValueOnce({ state: 'held', detail: 'Unavailable' })
+    if (mode === 'stale before') fixture.current = false
+    const probe = vi.fn(async () => {
+      if (mode === 'rejected') throw Error('fixture unavailable')
+      if (mode === 'stale after') fixture.current = false
+      return mode === 'missing' ? null : { code: mode === 'nonzero' ? 1 : 0, stdout: mode === 'empty' ? '' : '--version', stderr: '' }
+    })
+    expect(await unsupportedNativeLaunchModelFlag('claude', { model: 'opus', effort: null }, { probe })).toBeNull()
+    if (mode === 'held' || mode === 'stale before') expect(probe).not.toHaveBeenCalled()
+    else expect(probe).toHaveBeenCalledOnce()
   })
 })

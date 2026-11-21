@@ -1,3 +1,4 @@
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
@@ -7,7 +8,6 @@ import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
-vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
 // Loads the module graph once, before any hook's time limit: cold, it takes seconds on a loaded machine. Each test
 // still imports fresh modules (vi.resetModules), now from the warm transform cache.
 await import('./registry.js')
@@ -17,6 +17,7 @@ const id = 'hermes-agent'
 const processIdentity = { pid: 1041, executable: '/fixture/hermes', startMarker: 'fixture-1041' }
 const bind = { engine: 'hermes' as const, tmuxPane: '%41', cwd: '/fixture/project', processIdentity }
 
+const stores = new Set<typeof import('./sessionStorage.js')['sessionStorage']>()
 let directory: string
 let file: string
 let registry: typeof Registry
@@ -25,9 +26,10 @@ const instances = new Set<typeof Registry>()
 const readRows = () => JSON.parse(readFileSync(file, 'utf8'))
 async function reload(): Promise<typeof Registry> {
   vi.resetModules()
+  stores.add(deadline.slowSessionStorage((await import('./sessionStorage.js')).sessionStorage))
   const reloaded = (await import('./registry.js')).registry
   instances.add(reloaded)
-  reloaded.load()
+  await reloaded.load()
   return reloaded
 }
 
@@ -43,10 +45,17 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  for (const instance of instances) await instance.flush({ exiting: true }).catch(() => {})
-  instances.clear()
-  vi.restoreAllMocks(); vi.unstubAllEnvs()
-  rmSync(directory, { recursive: true, force: true })
+  let settled = false
+  try {
+    await Promise.allSettled([...instances].map(registry => registry.flush({ exiting: true })))
+    const closed = await Promise.allSettled([...stores].map(closeSessionStorageFixture))
+    const failures = closed.filter(result => result.status === 'rejected').map(result => result.reason)
+    if (failures.length) throw new AggregateError(failures, 'registry fixture cleanup failed')
+    settled = true
+  } finally {
+    instances.clear(); stores.clear(); vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.resetModules()
+    if (settled) rmSync(directory, { recursive: true, force: true })
+  }
 })
 
 it('keeps the mark with the home through a save, a load and a rebind', async () => {

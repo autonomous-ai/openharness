@@ -60,11 +60,12 @@ describe('a signed-in daemon', () => {
     }), { mode: 0o600 })
     await d.start()
     await until('the daemon to connect as the machine\'s node', () => backend!.nodeUp(MACHINE.machineId) || null, 60_000, 250)
+    const client = await LocalClient.connect(d, { machineId: MACHINE.machineId })
+    expect(Array.isArray((await client.request('dsh_list', {}, 60_000)).dsh)).toBe(true)
     for (const service of SERVICES) {
       await until(`${service} to be taken by the core`, () => d.log().includes(`[service ${service}] connected to the core`) || null, 30_000, 250)
     }
     expect(d.log()).not.toContain('service refused')
-    const client = await LocalClient.connect(d, { machineId: MACHINE.machineId })
     for (const engine of ['claude', 'codex'] as const) {
       const agent = await create(d, client, engine, `signed-in-${engine}`)
       await turn(client, agent.id, `a ${engine} turn about the pangolin`)

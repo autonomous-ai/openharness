@@ -20,9 +20,9 @@
  * connection it holds the stream for. It says it takes streams each
  * time it connects (`streams`): a core is told nothing it did not ask to know.
  */
-import type { Asker, BrowserRoute, CoreApi, CorePorts } from '../core/api.js'
+import type { CoreApi } from '../core/api.js'
+import { CLIENT_STREAMS, type ClientStreamEndpoint } from '../lib/clientStreamContract.js'
 import { errorKind } from '../lib/log.js'
-import { decodeTerminalLocal, TerminalBinaryKind } from '../lib/terminalBinary.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { createFramePublisher } from './framePublisher.js'
@@ -31,6 +31,8 @@ import { followLink, type FollowLink } from './followLink.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { agentsIn, isSession, processCoreApi } from './processCoreApi.js'
 import { turnsLink } from './turnsLink.js'
+import { createServiceClientStreams } from './clientStreams.js'
+import { browserStreamEndpoint, type BrowserRuntimeSlot } from './agentBrowserRuntime.js'
 
 type Payload = Record<string, unknown>
 type Ask = (query: string, payload: Payload) => Promise<Payload>
@@ -55,7 +57,6 @@ export interface AgentBrowserServiceOptions {
   start?: typeof startAgentBrowser
 }
 
-const ROUTES: ReadonlySet<string> = new Set(['direct', 'turn', 'relay'])
 
 /** What a core from before agents were followed (2026-11-15) tells this process, as what happens to agents now: an agent
  *  whose Browser is on runs, one stopped, one purged, a pane's new agent. Delete on or after 2026-12-18. */
@@ -87,10 +88,10 @@ export function agentBrowserCoreApi(dataDir: string, ask: Ask, deliveries: Retur
     ...api,
     clients: {
       ...api.clients,
-      browserFrame: (connId, type, payload) => sinks.frame(connId, type, payload),
+      streamFrame: (connId, type, payload) => sinks.frame(connId, type, payload),
       // Framed by the service already. Taken by the link, or not: what the viewer's transport refuses after it comes back
       // as `stream_refused`.
-      browserBytes: (frame) => sinks.bytes(frame),
+      streamBytes: (frame) => sinks.bytes(frame),
     },
     agents: {
       ...api.agents,
@@ -122,24 +123,17 @@ export function runAgentBrowserService(options: AgentBrowserServiceOptions): Ser
     if (core) return link.turns.deliver(agentId, text, deliveryId, opts)
     queueMicrotask(() => link.heard({ kind: 'delivery', event: { deliveryId, sessionId: agentId, state: 'rejected', reason: 'no_core' } }))
   } } }
-  const ports: Pick<CorePorts, 'agentBrowser'> = { agentBrowser: null }
+  const ports: BrowserRuntimeSlot = { agentBrowser: null }
   // Every agent as it starts and ends here, and a purge and a pane's new agent, held for it while it is down.
   const follow = followLink({ frames: true })
   let legacyMove: ((from: string, session: RegisteredSession, on: boolean) => Promise<boolean>) | undefined
   /** What each browser last showed: a new core, or the same one after this link dropped, hears all of it again. */
   const publisher = createFramePublisher((session, fields) => ({ query: 'browser_state', payload: { agentId: session.agentId, ...(fields.browser ? { state: fields.browser } : {}) } }))
-  /** The connections that asked anything of a stream and are still open. The core that goes forgets every stream it
-   *  held (core/browserStreams.ts `gone`), so each is told ended here: an exec left piping a still screen would hold
+  /** The core that goes forgets every stream it held, so the shared adapter tells each ended here: an exec left piping a still screen would hold
    *  one of its browser's few viewer places for good. */
-  const viewers = new Set<string>()
-  const sinks: StreamSinks = {
-    frame: (connId, type, payload) => {
-      if (!core?.notice) return false
-      core.notice('stream_frame', { connId, type, payload })
-      return true
-    },
-    bytes: frame => core?.sendBinary?.(frame) ?? false,
-  }
+  let endpoint: ClientStreamEndpoint | null = null
+  const streamLink = createServiceClientStreams(CLIENT_STREAMS.find(spec => spec.service === 'agentBrowser')!, () => endpoint)
+  const sinks: StreamSinks = { frame: streamLink.frame, bytes: streamLink.bytes }
   const api = publisher.scope(agentBrowserCoreApi(options.dataDir, ask, deliveries, sinks, follow))
   const requests = (options.start ?? startAgentBrowser)(api, ports, {
     followed: () => follow.ready(FOLLOWED_WAIT_MS),
@@ -165,6 +159,7 @@ export function runAgentBrowserService(options: AgentBrowserServiceOptions): Ser
     },
   })
   const port = ports.agentBrowser!
+  endpoint = browserStreamEndpoint(port)
   const service = (options.run ?? runServiceProcess)({
     name: 'agentBrowser',
     socketPath: options.socketPath,
@@ -172,7 +167,7 @@ export function runAgentBrowserService(options: AgentBrowserServiceOptions): Ser
     token: options.token,
     requests,
     onEvent: (payload) => {
-      if (deliveries.heard(payload) || follow.heard(payload)) return
+      if (streamLink.event(payload) || deliveries.heard(payload) || follow.heard(payload)) return
       const older = olderAgentEvent(payload)
       if (older) return void follow.heard({ kind: 'agent', event: older })
       if (payload.kind === 'moved') {
@@ -194,36 +189,14 @@ export function runAgentBrowserService(options: AgentBrowserServiceOptions): Ser
         }).catch((error: unknown) => { console.log(`agent browser ${session.agentId}: browser_move_failed (no_answer) · ${errorKind(error)}`) })
         return
       }
-      if (payload.kind === 'stream') {
-        const { connId, type, asker } = payload
-        if (typeof connId !== 'string' || typeof type !== 'string') return
-        viewers.add(connId)
-        // Who asked comes with an open alone: an ack and a close are the stream's own.
-        port.stream(connId, type, payload.payload && typeof payload.payload === 'object' ? payload.payload as Payload : {}, asker && typeof asker === 'object' ? asker as Asker : undefined)
-        return
-      }
-      if (payload.kind === 'stream_route') {
-        const { streamId, route } = payload
-        if (typeof streamId === 'string' && (route === null || ROUTES.has(route as string))) port.streamRoute(streamId, route as BrowserRoute | null)
-        return
-      }
-      if (payload.kind === 'stream_transport_error') return port.streamTransportError()
-      if (payload.kind === 'stream_refused' && typeof payload.streamId === 'string') port.streamRefused(payload.streamId)
     },
-    // A viewer's keys and mouse, for its stream.
-    onBinary: (bytes) => {
-      const frame = decodeTerminalLocal(bytes)
-      if (frame?.kind === TerminalBinaryKind.browser) port.streamInput(frame.streamId, frame.bytes)
-    },
-    onConnectionClosed: (connId) => {
-      if (viewers.delete(connId)) port.streamClosed(connId)
-    },
+    onBinary: streamLink.binary,
+    onConnectionClosed: streamLink.closed,
     onConnected: (connection) => {
       connectionGeneration++
       core = connection
       publisher.connected(connection)
-      // Said to each core it connects to: it takes viewers' streams (core/agentBrowserLink.ts `streams`).
-      void ask('streams', {}).catch(() => {})
+      streamLink.connected(connection)
       void follow.connected(connection.query)
     },
     onDisconnected: () => {
@@ -231,8 +204,7 @@ export function runAgentBrowserService(options: AgentBrowserServiceOptions): Ser
       core = null
       publisher.disconnected()
       follow.disconnected()
-      for (const connId of viewers) port.streamClosed(connId)
-      viewers.clear()
+      streamLink.disconnected()
     },
   })
   return { stop: () => { port.stop(); return service.stop() } }

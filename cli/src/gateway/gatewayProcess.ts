@@ -25,6 +25,11 @@ import { backendHttpBase } from '../lib/backendHttpBase.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from '../services/process.js'
 import { startGateway, type StartedGateway } from './start.js'
 import { sharedPeers } from './sharedTrust.js'
+import { env } from '../config/env.js'
+import { VaultStore } from '../lib/connectors/vaultStore.js'
+import { connectorsDir } from '../lib/connectors/store.js'
+import { followLink } from '../services/followLink.js'
+import { createCallbackReplay } from './callbackReplay.js'
 
 type Payload = Record<string, unknown>
 
@@ -47,14 +52,16 @@ const record = (value: unknown): Payload => (value && typeof value === 'object' 
 export function runGatewayService(options: GatewayServiceOptions): ServiceProcess {
   let core: CoreConnection | null = null
   let running: StartedGateway | null = null
+  const follow = followLink({})
+  const callbackReplay = createCallbackReplay()
   /** The windows on the core's side working on other machines through this gateway, by the core's id. */
   const windows = new Map<string, WindowRelaySession>()
 
   const notice = (kind: string, payload: Payload = {}): void => { core?.notice?.(kind, payload) }
   const events: GatewayEvents = {
     frame: (connId, frame, transport, role) => notice('frame', { connId, frame, transport, role }),
-    binary: (connId, clear) => {
-      const local = encodeTerminalLocal(clear)
+    binary: (connId, clear, raw) => {
+      const local = raw ?? encodeTerminalLocal(clear)
       const bytes = local && encodeGatewayBinary(GatewayBinary.remote, connId, local)
       if (bytes) core?.sendBinary?.(bytes)
     },
@@ -70,23 +77,21 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     notice: (backendNotice) => notice('notice', { notice: backendNotice }),
     revoked: () => notice('revoked'),
     busy: () => notice('busy'),
-    device: (connId, frame, opened) => notice('device', { connId, frame, opened }),
-    deviceRevoked: (identity) => notice('deviceRevoked', { identity }),
     toWindows: (frame) => notice('toWindows', { frame }),
     tabFrame: (event) => notice('tabFrame', { event }),
-    browserRoute: (streamId, route) => notice('browserRoute', { streamId, route }),
-    browserRouteLost: (streamId) => notice('browserRouteLost', { streamId }),
-    browserTransportError: () => notice('browserTransportError'),
+    streamControl: (service, streamId, payload) => notice('clientStreamControl', { service, streamId, payload }),
   }
 
   /** This process renews the account's sign-in (lib/authRefresh.ts): one manager, so every start of the gateway and the
    *  core's asks share a renewal in flight. Until the core audit of 2026-11-12 the core renewed it, and this asked it. */
   const tokens = options.tokens ?? new AuthSessionManager(backendHttpBase())
+  const connectorStore = new VaultStore(connectorsDir())
 
   /** The gateway stopped: its link closed, its windows' sessions let go. Not waited on here: what comes after it
    *  on the link (a new `start`) must not wait for the old link's goodbye. The process's own stop waits for it. */
   let pendingStart: Payload | null = null
   const stop = (): Promise<void> => {
+    follow.disconnected()
     pendingStart = null
     const was = running
     running = null
@@ -97,8 +102,19 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
 
   const begin = (payload: Payload): void => {
     void stop()
+    const original = core
     const started = (options.start ?? startGateway)({
-      events,
+      events, connectorStore, callbackReplay,
+      agents: {
+        follow: follow.follow,
+        ofPane: async pane => {
+          if (!original || core !== original || running !== started) return null
+          const answer = await original.query('agent_of_pane', { pane }).catch(() => null)
+          return core === original && running === started && typeof answer?.agentId === 'string'
+            ? { agentId: answer.agentId, guest: answer.guest === true } : null
+        },
+      },
+      peer: { composition: 'services', port: env.PORT, token: options.token },
       machineId: text(payload.machineId),
       computerId: text(payload.computerId),
       autonomousEnv: text(payload.autonomousEnv) || 'prod',
@@ -108,14 +124,18 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
       machines: (state) => notice('machines', { ...state }),
       account: (payload.account as GatewayAccount | null) ?? { machineId: null, signIn: null },
       // Only the core can ask for the Wi-Fi device's process (core/gatewayLink.ts `wifi_serving`).
-      wifiServing: async () => (await core?.query('wifi_serving').catch(() => null))?.serving === true,
+      wifiServing: async () => {
+        if (!original || core !== original || running !== started) return false
+        const answer = await original.query('wifi_serving').catch(() => null)
+        return core === original && running === started && answer?.serving === true
+      },
     })
     running = started
+    if (original) void follow.connected((query, payload) => original.query(query, payload))
     // Held first, so that nothing the link brings in is answered before the core is ready.
     if (payload.requestsOpen === false) started.port.holdRequests()
     started.port.localClients(localWindowsOf(payload.localClients))
     if (Array.isArray(payload.reachable)) started.ops.reachable(payload.reachable as string[])
-    if (payload.wifiService === true) started.ops.wifiService(true)
     if (payload.dial === 'connect') started.port.connect()
     else if (payload.dial === 'local') started.port.serveThisComputerOnly()
   }
@@ -158,6 +178,7 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
    * overtake it. What takes time (a window's dial) runs on, and says when it is done.
    */
   const onEvent = (payload: Payload): void => {
+    if (follow.heard(payload)) return
     const kind = text(payload.kind)
     // The core says start as it takes the link, a frame before it says `connected`: started then, the first
     // dial would ask the core for a token on a link this process does not know is up yet, and wait a second
@@ -171,7 +192,13 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     const connId = text(payload.connId)
     switch (kind) {
       case 'usage': port.usage?.(payload.event as UsageEvent); return
-      case 'usageCounter': port.usageCounter?.(payload.metric as ProductUsageMetric); return
+      case 'usageCounter':
+        if ('service' in payload) {
+          if (typeof payload.service === 'string' && typeof payload.metric === 'string') {
+            port.usage?.({ kind: 'service', service: payload.service, metric: payload.metric })
+          }
+        } else port.usageCounter?.(payload.metric as ProductUsageMetric)
+        return
       case 'connect': port.connect(); return
       case 'thisComputerOnly': port.serveThisComputerOnly(); return
       case 'hold': port.holdRequests(); return
@@ -192,10 +219,6 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
       case 'windowOpened': port.windowOpened(windowSurfaceOf(payload.surface)); return
       case 'localClients': port.localClients(localWindowsOf(payload.windows)); return
       case 'localFrame': void port.local(connId, record(payload.frame)); return
-      case 'device': port.device(connId, text(payload.type), record(payload.payload)); return
-      case 'deviceClient': port.deviceClient(connId, typeof payload.identity === 'string' ? payload.identity : null); return
-      case 'wifiService': ops.wifiService(payload.on === true); return
-      case 'revokeIdentity': ops.revokeIdentity(text(payload.identity)); return
       case 'account': ops.account(payload.account as GatewayAccount); return
       case 'reachable': ops.reachable(Array.isArray(payload.machineIds) ? payload.machineIds as string[] : null); return
       case 'windowSend': void windows.get(text(payload.id))?.send(record(payload.frame)); return
@@ -215,7 +238,7 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     const clear = decoded && decodeTerminalLocal(decoded.bytes)
     if (!decoded || !clear) return
     if (decoded.kind === GatewayBinary.window) void windows.get(decoded.id)?.sendBinary(clear)
-    else running?.port.terminalBinary(decoded.id, clear)
+    else running?.port.terminalBinary(decoded.id, decoded.bytes)
   }
 
   /** What the core asks of the gateway (`GatewayOps`), each answered from its gateway once that has started. */
@@ -236,6 +259,8 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
       if (!running) throw new Error('the gateway has not started')
       return running.requests.gateway_http!(p, asker)
     },
+    gateway_ws: (p: Payload, asker: Asker, closed?: AbortSignal) =>
+      running?.requests.gateway_ws?.(p, asker, closed) ?? { error: 'SERVICE_UNAVAILABLE' },
     // The fleet's lane's sessions (gateway/lane.ts). Each is answered from what it holds at once, so they
     // are taken in the order the core sent them.
     [GATEWAY_CALLS.lane]: async (p: Payload): Promise<Payload> => {
@@ -277,8 +302,18 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     },
     // The account's connected services (lib/e2ee/connectorVault.ts): an envelope sealed, or one opened.
     [GATEWAY_CALLS.connectorVault]: async (p: Payload): Promise<Payload> => {
-      const vault = ops().connectorVault
       try {
+        if (p.op === 'sync') {
+          if (typeof p.refresh !== 'boolean'
+            || (p.requestId !== undefined && (typeof p.requestId !== 'string' || p.requestId.length > 128))
+            || Object.keys(p).some(key => !['op', 'refresh', 'requestId'].includes(key))) return { error: 'UNKNOWN_OP' }
+          const answer = await ops().connectorSync(p.refresh)
+          return { shared: answer.shared }
+        }
+        // Old-core compatibility: retain for at least 30 days after the first published CLI release containing
+        // this adapter; record that release-derived retirement date before removal. The new core has no vault operation.
+        if (!running) return { error: 'CONNECTORS_SYNC_UNAVAILABLE' }
+        const vault = running.legacyConnectorVault
         if (p.op === 'seal') return { envelope: await vault.seal(text(p.plaintext)) }
         if (p.op === 'open') { const opened = await vault.open(p.envelope); return opened === null ? {} : { ...opened } }
         return { error: 'UNKNOWN_OP' }
@@ -315,8 +350,11 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     // (health_cli_unclean_restart, 69 to 170 on 2026-10-16, production counters).
     stop: async () => {
       const stopping = stop()
+      const callbacksStopped = callbackReplay.stop().then(() => null, () => new Error('CALLBACK_CLOSE_TIMEOUT'))
       await service.stop()
       await stopping
+      const callbackFailure = await callbacksStopped
+      if (callbackFailure) throw callbackFailure
     },
   }
 }

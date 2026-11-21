@@ -10,7 +10,7 @@ import type { ProcessView, RunningProcess } from '../../lib/sessionSearch/extern
 import { createExternalSessions } from '../../services/externalSessions.js'
 import { createExternalResumes, type ExternalResumeDeps } from './externalResume.js'
 import { stopExternalOwner } from './externalOwner.js'
-import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
+import { moveHeldLine } from '../../lib/hostMove/held.js'
 vi.mock('./externalOwner.js', () => ({ stopExternalOwner: vi.fn(async () => false) }))
 
 const cwd = mkdtempSync(join(tmpdir(), 'external-resume-'))
@@ -29,7 +29,8 @@ const defer = <T>() => { let resolve!: (value: T) => void; const promise = new P
 
 function setup() {
   const rows = new Map<string, RegisteredSession>(), panes = new Map<string, string>()
-  let next = 0, cancelled = false
+  let next = 0, cancelled = false, archiveVersion = 0
+  let stoppedRows: Array<{ sessionId: string }> = []
   const conflict: ExternalResumeDeps['registry']['externalConflict'] = (ids, except) => [...rows.values()].find(row => row.agentId !== except && externalReservations(row).some(id => ids.includes(id)))
   const registry: ExternalResumeDeps['registry'] = {
     byAgent: id => rows.get(id), list: () => [...rows.values()], externalConflict: conflict,
@@ -56,7 +57,7 @@ function setup() {
   const create = vi.fn<NonNullable<ExternalResumeDeps['backend']>['create']>(async request => {
     if (request.current?.() === false) return { state: 'failed', dispatch: 'not_started', reason: 'cancelled' }
     const paneId = `%${++paneSequence}`
-    panes.set(paneId, request.command!.at(-1)!)
+    panes.set(paneId, (typeof request.command === 'function' ? request.command() : request.command)!.at(-1)!)
     return { state: 'succeeded', dispatch: 'executed', runtime: { backend: 'tmux', paneId } }
   })
   const killHeld = vi.fn<NonNullable<NonNullable<ExternalResumeDeps['backend']>['killHeld']>>(async (runtime, token, current) => {
@@ -68,7 +69,11 @@ function setup() {
     registry, backend: { create, killHeld }, inspect, generation: () => 1,
     // Each pane's own backend: here the one adoption panes open on, while there is one.
     backendFor: vi.fn(() => deps.backend ?? undefined),
-    stopped: vi.fn(() => []), cancelled: () => cancelled,
+    stoppedQuery: vi.fn(async (query: Parameters<ExternalResumeDeps['stoppedQuery']>[0]) => {
+      const version = archiveVersion
+      return { witness: String(version), matches: query.kind === 'conversations' ? query.ids.map(id => stoppedRows.some(row => row.sessionId === id)) : [false],
+        current: () => version === archiveVersion }
+    }), cancelled: () => cancelled,
     waiting: vi.fn(async row => panes.get(row.tmuxPane) === row.externalResume?.token),
     preflight: vi.fn(async () => null), announce: vi.fn(), launch: vi.fn(),
     forget: vi.fn(async id => { expect(rows.has(id)).toBe(false) }),
@@ -85,8 +90,16 @@ function setup() {
     if (!result.ok) throw new Error(result.error)
     return result.session.agentId
   }
-  return { deps, registry, rows, panes, inspect, create, killHeld, controller, stage, cancelWork: () => { cancelled = true } }
+  return { deps, registry, rows, panes, inspect, create, killHeld, controller, stage, setStopped: (rows: Array<{ sessionId: string }>) => { stoppedRows = rows; archiveVersion++ }, cancelWork: () => { cancelled = true } }
 }
+
+it('refuses a new adoption when its archive witness is already stale after the awaited query', async () => {
+  const test = setup()
+  vi.mocked(test.deps.stoppedQuery).mockResolvedValueOnce({ witness: 'fixture', matches: [false], current: () => false })
+  expect(await test.controller.create(input())).toMatchObject({ ok: false, error: 'CORE_NOT_READY' })
+  expect(test.create).not.toHaveBeenCalled()
+  expect(test.registry.openPendingAgent).not.toHaveBeenCalled()
+})
 
 it.each(['conversation', 'cancelled', 'signal owner'] as const)('holds external effects when %s changes during durable preparation', async change => {
   const test = setup()
@@ -301,7 +314,7 @@ it.each(['binding', 'stopped'] as const)('a new %s fences signals even after the
   vi.mocked(test.deps.stopOwner!).mockImplementation(async (_owner, control) => {
     expect(await control.same()).toBe(true)
     if (kind === 'binding') test.rows.set('other', { agentId: 'other', sessionId: 'conversation' } as RegisteredSession)
-    else vi.mocked(test.deps.stopped).mockReturnValue([{ sessionId: 'conversation' }])
+    else test.setStopped([{ sessionId: 'conversation' }])
     expect(control.current()).toBe(false)
     await expect(control.beforeSignal?.('SIGTERM')).rejects.toThrow('Signal intent could not be saved')
     return false
@@ -403,10 +416,10 @@ it('does not begin stopping an owner when the quitting journal cannot commit', a
 
 it('reserves stopped conversations before any pane exists and cleans up an allocation whose durable claim fails', async () => {
   const test = setup()
-  vi.mocked(test.deps.stopped).mockReturnValue([{ sessionId: 'conversation' }])
+  test.setStopped([{ sessionId: 'conversation' }])
   expect(await test.controller.create(input())).toMatchObject({ error: 'SESSION_IN_HARNESS' })
   expect(test.create).not.toHaveBeenCalled()
-  vi.mocked(test.deps.stopped).mockReturnValue([])
+  test.setStopped([])
   vi.mocked(test.registry.openPendingAgent).mockResolvedValue(null)
   expect(await test.controller.create(input())).toMatchObject({ ok: false })
   expect(test.panes.size).toBe(0)
@@ -418,7 +431,7 @@ it('opens and cancels an adoption on a ptyhost pane through that pane\'s own bac
   const test = setup(); test.inspect.mockResolvedValue(externalUnavailable())
   const pty = { backend: 'ptyhost' as const, instance: 'p1', paneId: '%3' }
   test.create.mockImplementationOnce(async request => {
-    test.panes.set(pty.paneId, request.command!.at(-1)!)
+    test.panes.set(pty.paneId, (typeof request.command === 'function' ? request.command() : request.command)!.at(-1)!)
     return { state: 'succeeded', dispatch: 'executed', runtime: pty }
   })
   const id = await test.stage(); await test.controller.settled()

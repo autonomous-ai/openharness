@@ -14,8 +14,8 @@ function events(): { [K in keyof GatewayEvents]: ReturnType<typeof vi.fn> } {
   return {
     frame: vi.fn(), binary: vi.fn(), client: vi.fn(), disconnected: vi.fn(), observer: vi.fn(), toLocal: vi.fn(), status: vi.fn(),
     linkDown: vi.fn(), commanders: vi.fn(), commanderJoined: vi.fn(), meta: vi.fn(), notice: vi.fn(), revoked: vi.fn(), busy: vi.fn(),
-    device: vi.fn(), deviceRevoked: vi.fn(), toWindows: vi.fn(), tabFrame: vi.fn(),
-    browserRoute: vi.fn(), browserRouteLost: vi.fn(), browserTransportError: vi.fn(),
+    toWindows: vi.fn(), tabFrame: vi.fn(),
+    streamControl: vi.fn(),
   }
 }
 
@@ -61,7 +61,6 @@ describe('the gateway in its own process, as the core sees it', () => {
     link.port.connect()
     link.port.holdRequests()
     link.port.localClients({ desktop: 1, tui: 1 })
-    link.ops.wifiService(true)
     link.ops.account({ machineId: 'm1', signIn: null })
     link.ops.reachable(['m2'])
     expect(sent).toEqual([])
@@ -69,7 +68,7 @@ describe('the gateway in its own process, as the core sees it', () => {
     expect(kinds()).toEqual(['start'])
     expect(sent[0]).toEqual({
       kind: 'start', machineId: 'm1', computerId: 'c1', autonomousEnv: 'prod', signedIn: true,
-      requestsOpen: false, dial: 'connect', localClients: { desktop: 1, tui: 1 }, wifiService: true, reachable: ['m2'],
+      requestsOpen: false, dial: 'connect', localClients: { desktop: 1, tui: 1 }, reachable: ['m2'],
     })
     link.port.openRequests()
     link.port.serveThisComputerOnly()
@@ -83,9 +82,8 @@ describe('the gateway in its own process, as the core sees it', () => {
     expect(link.port.connected()).toBe(false)
     expect(link.port.target('phone-1', 'viewer_data', {})).toBe(false)
     expect(link.port.terminal('phone-1', 'terminal_ready', {})).toBe(false)
-    expect(link.port.terminalBinary('phone-1', bytesOf('hi'))).toBe(false)
+    expect(link.port.terminalBinary('phone-1', encodeTerminalLocal(bytesOf('hi'))!)).toBe(false)
     expect(link.port.observer('observer:1', 'observer_frame', {})).toBe(false)
-    expect(link.port.device('dial-1', 'autonomous_device_event', {})).toBe(false)
     link.notice({ kind: 'status', connected: true })
     register(link, 'phone-1')
     expect(link.port.connected()).toBe(true)
@@ -96,17 +94,15 @@ describe('the gateway in its own process, as the core sees it', () => {
     expect(link.port.target('phone-1', 'viewer_data', { a: 1 })).toBe(true)
     expect(link.port.terminal('phone-1', 'terminal_ready', { streamId: STREAM })).toBe(true)
     expect(link.port.observer('observer:1', 'observer_frame', { b: 2 })).toBe(true)
-    expect(link.port.device('phone-1', 'autonomous_device_result', { c: 3 })).toBe(true)
-    link.port.deviceClient('phone-1', 'PUB')
     link.port.windowOpened('tui')
     link.port.usageCounter?.('create_requests')
     link.port.usage?.({ kind: 'observed', payload: { measure: 'collector_days' } })
     await link.port.local('local:w', { type: 'e2ee_pairings_list', payload: {} })
-    expect(link.port.terminalBinary('phone-1', bytesOf('hi'))).toBe(true)
+    expect(link.port.terminalBinary('phone-1', encodeTerminalLocal(bytesOf('hi'))!)).toBe(true)
     // An id the binary frame cannot carry: refused, never sent half-framed.
     register(link, 'x'.repeat(300))
-    expect(link.port.terminalBinary('x'.repeat(300), bytesOf('hi'))).toBe(false)
-    expect(kinds().slice(1)).toEqual(['broadcast', 'commander', 'user', 'reply', 'target', 'terminal', 'observer', 'device', 'deviceClient', 'windowOpened', 'usageCounter', 'usage', 'localFrame'])
+    expect(link.port.terminalBinary('x'.repeat(300), encodeTerminalLocal(bytesOf('hi'))!)).toBe(false)
+    expect(kinds().slice(1)).toEqual(['broadcast', 'commander', 'user', 'reply', 'target', 'terminal', 'observer', 'windowOpened', 'usageCounter', 'usage', 'localFrame'])
     expect(sent[4]).toEqual({ kind: 'reply', connId: 'phone-1', type: 'agents_list', requestId: 'r-1', payload: { agents: [] } })
     const framed = decodeGatewayBinary(binary[0])!
     expect(framed).toMatchObject({ kind: GatewayBinary.remote, id: 'phone-1' })
@@ -115,15 +111,24 @@ describe('the gateway in its own process, as the core sees it', () => {
     expect(kinds().at(-1)).toBe('stop')
   })
 
+  it('carries service provenance on the bounded counter frame', () => {
+    const { link, sent } = setup()
+    link.connected()
+    link.port.usage?.({ kind: 'service', service: 'agentBrowser', metric: 'agent_browser_failed_podman_old' })
+    expect(sent.at(-1)).toEqual({ kind: 'usageCounter', service: 'agentBrowser', metric: 'agent_browser_failed_podman_old' })
+  })
+
   it('drops optional measurement before relay traffic and never wakes a stopped gateway', () => {
     const { link, kinds, setBuffered, want } = setup()
     link.port.usageCounter?.('create_requests')
+    link.port.usage?.({ kind: 'service', service: 'hachi', metric: 'hachi_wake_done' })
     expect(kinds()).toEqual([])
     expect(want).not.toHaveBeenCalled()
     link.connected()
     setBuffered(GATEWAY_USAGE_BUFFER_LIMIT)
     link.port.usageCounter?.('create_requests')
     link.port.usage?.({ kind: 'observed', payload: { measure: 'collector_days' } })
+    link.port.usage?.({ kind: 'service', service: 'hachi', metric: 'hachi_wake_done' })
     link.port.broadcast({ type: 'turn_started' })
     expect(kinds()).toEqual(['start', 'broadcast'])
     // About a guest's harness: the gateway is told whose, to seal it for that guest's sessions.
@@ -141,7 +146,7 @@ describe('the gateway in its own process, as the core sees it', () => {
     setBuffered(GATEWAY_BUFFER_LIMIT + 1)
     link.port.broadcast({ type: 'text_delta' })
     link.port.commander({ type: 'commander_event' })
-    expect(link.port.terminalBinary('phone-1', bytesOf('hi'))).toBe(false)
+    expect(link.port.terminalBinary('phone-1', encodeTerminalLocal(bytesOf('hi'))!)).toBe(false)
     expect(kinds()).toEqual(['start'])
     expect(log).toHaveBeenCalledTimes(1)
     tick(61_000)
@@ -151,6 +156,24 @@ describe('the gateway in its own process, as the core sees it', () => {
     // What is not bulk (a reply) still goes: it is one frame, and the client is waiting for it.
     link.port.reply('phone-1', 'agents_list', 'r', {})
     expect(kinds()).toEqual(['start', 'reply'])
+  })
+
+  it('leaves stream backlog refusal to the physical sink so a final close cannot silently disappear', () => {
+    const { link, kinds, binary, setBuffered, setWritable, log } = setup()
+    link.connected()
+    link.notice({ kind: 'status', connected: true })
+    register(link, 'phone-1')
+    setBuffered(GATEWAY_BUFFER_LIMIT + 1)
+    const quota = { service: 'viewers', direction: 'client' } as const
+    expect(link.port.target('phone-1', 'viewer_data', {}, quota)).toBe(true)
+    expect(link.port.terminal('phone-1', 'agent_browser_close', {}, { ...quota, final: true })).toBe(true)
+    expect(link.port.terminalBinary('phone-1', encodeTerminalLocal(bytesOf('hi'))!, quota)).toBe(true)
+    expect(kinds()).toEqual(['start', 'target', 'terminal'])
+    expect(binary).toHaveLength(1)
+    expect(log).not.toHaveBeenCalled()
+    setWritable(false)
+    expect(link.port.target('phone-1', 'viewer_closed', {}, { ...quota, final: true })).toBe(false)
+    expect(kinds().at(-1)).toBe('target')
   })
 
   it('hands the core what the gateway tells it, read as data', () => {
@@ -177,17 +200,14 @@ describe('the gateway in its own process, as the core sees it', () => {
     link.notice({ kind: 'toWindows', frame: { type: 'device_key_added' } })
     link.notice({ kind: 'tabFrame', event: { sharedTabId: 'a1b2c3d4e5f6a1b2c3d4e5f6', from: { machineId: 'alice-mac', userId: 'u' }, payload: { a: 1 }, extra: 'x' } })
     link.notice({ kind: 'tabFrame', event: { from: { machineId: 'alice-mac', userId: 'u' } } })
-    link.notice({ kind: 'browserRoute', streamId: 's-1', route: 'direct' })
-    link.notice({ kind: 'browserRoute', streamId: 's-2', route: 'p2p' })
-    link.notice({ kind: 'browserRoute', streamId: '', route: 'relay' })
-    link.notice({ kind: 'browserRouteLost', streamId: 's-3' })
-    link.notice({ kind: 'browserRouteLost' })
-    link.notice({ kind: 'browserTransportError' })
+    link.notice({ kind: 'clientStreamControl', service: 'agentBrowser', streamId: 's-1', payload: { route: 'direct' } })
+    link.notice({ kind: 'clientStreamControl', service: 'agentBrowser', streamId: null, payload: { kind: 'transport_error' } })
+    link.notice({ kind: 'clientStreamControl', service: 7, streamId: 's-1' })
+    link.notice({ kind: 'clientStreamControl', service: 'viewers', streamId: 7 })
     link.notice({ kind: 'mystery' })
-    // A route it does not know is not a route: the stream is paced as a relayed one until it closes.
-    expect(heard.browserRoute.mock.calls).toEqual([['s-1', 'direct']])
-    expect(heard.browserRouteLost.mock.calls).toEqual([['s-3']])
-    expect(heard.browserTransportError).toHaveBeenCalledTimes(1)
+    expect(heard.streamControl.mock.calls).toEqual([
+      ['agentBrowser', 's-1', { route: 'direct' }], ['agentBrowser', null, { kind: 'transport_error' }],
+    ])
     expect(heard.frame.mock.calls).toEqual([['phone-1', { type: 'message' }, 'p2p', 'web'], ['dial-1', {}, 'relay', 'device']])
     expect(heard.client).toHaveBeenCalledWith('phone-1', null)
     expect(heard.disconnected).toHaveBeenCalledWith('phone-1')
@@ -201,8 +221,6 @@ describe('the gateway in its own process, as the core sees it', () => {
     expect(heard.notice).toHaveBeenCalledWith({ type: 'desk_changed', revision: 3 })
     expect(heard.revoked).toHaveBeenCalled()
     expect(heard.busy).toHaveBeenCalled()
-    expect(heard.device.mock.calls).toEqual([['dial-1', { type: 'autonomous_device_request' }, { type: 'hello' }], ['dial-1', { type: 'autonomous_device_request' }, null]])
-    expect(heard.deviceRevoked).toHaveBeenCalledWith('PUB')
     expect(heard.toWindows).toHaveBeenCalledWith({ type: 'device_key_added' })
     // What a shared tab's relay said, read as the shape it must be; one that names no tab is not handed on.
     expect(heard.tabFrame.mock.calls).toEqual([[{ sharedTabId: 'a1b2c3d4e5f6a1b2c3d4e5f6', from: { machineId: 'alice-mac', userId: 'u' }, payload: { a: 1 } }]])
@@ -214,7 +232,7 @@ describe('the gateway in its own process, as the core sees it', () => {
     link.binary(encodeGatewayBinary(GatewayBinary.remote, 'phone-1', local)!)
     link.binary(encodeGatewayBinary(GatewayBinary.remote, 'phone-1', new Uint8Array([1, 2]))!)
     link.binary(new Uint8Array([9, 9]))
-    expect(heard.binary.mock.calls).toEqual([['phone-1', bytesOf('ls\r')]])
+    expect(heard.binary.mock.calls).toEqual([['phone-1', bytesOf('ls\r'), encodeTerminalLocal(bytesOf('ls\r'))]])
   })
 
   it('a gateway that goes takes the relay with it: every remote client, the link and the devices watching', async () => {
@@ -277,14 +295,12 @@ describe('the gateway in its own process, as the core sees it', () => {
     const { link, sent, kinds, want } = setup()
     // What only says how things stand asks for nothing: it is told in the start.
     link.port.localClients({ desktop: 1, tui: 0 })
-    link.ops.wifiService(false)
     expect(want).not.toHaveBeenCalled()
     // A window's E2EE request: asked for, and held.
     void link.port.local('conn-1', { type: 'e2ee_pairings_list', payload: { requestId: 'r1' } })
     expect(want).toHaveBeenCalledTimes(1)
     void link.port.local('conn-2', { type: 'phone_pair', payload: { requestId: 'r2' } })
     link.port.connect()
-    link.ops.wifiService(true)
     expect(want).toHaveBeenCalledTimes(1)
     expect(sent).toEqual([])
     link.connected()
@@ -299,14 +315,10 @@ describe('the gateway in its own process, as the core sees it', () => {
     expect(want).toHaveBeenCalledTimes(1)
   })
 
-  it('is asked for by a sign-in\'s dial and by the Wi-Fi device\'s service, each once', () => {
+  it('is asked for by a sign-in\'s dial once', () => {
     const dialed = setup()
     dialed.link.port.connect()
     expect(dialed.want).toHaveBeenCalledTimes(1)
-    const wifi = setup()
-    wifi.link.ops.wifiService(true)
-    wifi.link.port.connect()
-    expect(wifi.want).toHaveBeenCalledTimes(1)
   })
 
   it('lets go of what waited when it does not start in time, the oldest first when too much waits', async () => {
@@ -421,27 +433,19 @@ describe('the gateway in its own process, as the core sees it', () => {
     }
   })
 
-  it('asks the gateway to seal and open the account\'s connections, and says none is sealed while it cannot answer', async () => {
-    let answer: Record<string, unknown> = { envelope: { v: 1 } }
+  it('requests metadata-only connector sync and refuses unavailable or malformed replies', async () => {
+    let answer: Record<string, unknown> = { shared: true, plaintext: 'synthetic-not-to-core' }
     const { link, call } = setup({ call: async () => answer })
-    expect(await link.ops.connectorVault.seal('{}')).toEqual({ v: 1 })
-    expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.connectorVault, { op: 'seal', plaintext: '{}' }, LANE_WAIT_MS)
-    answer = { error: 'the device key log is frozen' }
-    await expect(link.ops.connectorVault.seal('{}')).rejects.toThrow('frozen')
-    for (const error of ['SERVICE_UNAVAILABLE', undefined]) {
-      answer = error ? { error } : {}
-      await expect(link.ops.connectorVault.seal('{}')).rejects.toThrow(/not running/)
+    expect(await link.ops.connectorSync(true)).toEqual({ shared: true })
+    expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.connectorVault, { op: 'sync', refresh: true }, 16_000)
+    answer = { shared: false }
+    expect(await link.ops.connectorSync(false)).toEqual({ shared: false })
+    expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.connectorVault, { op: 'sync', refresh: false }, 16_000)
+    for (const invalid of [{ error: 'synthetic-private-error' }, {}, { shared: 'yes' }, { shared: true, error: 'frozen' }]) {
+      answer = invalid
+      await expect(link.ops.connectorSync(true)).rejects.toThrow('CONNECTORS_SYNC_UNAVAILABLE')
     }
-    answer = { plaintext: '{"v":1}', complete: true }
-    expect(await link.ops.connectorVault.open({ v: 1 })).toEqual({ plaintext: '{"v":1}', complete: true })
-    expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.connectorVault, { op: 'open', envelope: { v: 1 } }, LANE_WAIT_MS)
-    answer = { plaintext: 'x' }
-    expect(await link.ops.connectorVault.open({})).toEqual({ plaintext: 'x', complete: false })
-    answer = {}
-    expect(await link.ops.connectorVault.open({})).toBeNull()
-    // Sealed by or for no machine of the account: said as such, so the connectors service writes over it.
-    answer = { stranded: true }
-    expect(await link.ops.connectorVault.open({})).toEqual({ stranded: true })
+    expect('connectorVault' in link.ops).toBe(false)
   })
 
   it('asks the gateway to hold what sharing trusts, and says it could not while the gateway is not running', async () => {
@@ -590,9 +594,8 @@ describe('the gateway in its own process, as the core sees it', () => {
   it('tells the gateway what the core learns for it', () => {
     const { link, sent } = setup()
     link.connected()
-    link.ops.revokeIdentity('PUB')
     link.ops.reachable(null)
-    expect(sent.slice(1)).toEqual([{ kind: 'revokeIdentity', identity: 'PUB' }, { kind: 'reachable', machineIds: null }])
+    expect(sent.slice(1)).toEqual([{ kind: 'reachable', machineIds: null }])
   })
 
   // The core audit of 2026-11-12, decision 4: the gateway renews the sign-in, and the core, which calls no other host,

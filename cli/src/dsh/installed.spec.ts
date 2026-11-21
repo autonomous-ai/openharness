@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import * as fs from 'node:fs'
+const actualFs = await vi.importActual<typeof import('node:fs')>('node:fs')
 import { env } from '../config/env.js'
 import {
   awaitsSetup, dshInstallDir, dshRootDir, installedDsh, invalidateInstalledDsh, isBrokenDsh, listDshState, listInstalledDsh, markSetup,
@@ -20,6 +22,7 @@ vi.mock('node:fs', async original => {
     ? (flags & (actual.constants.O_WRONLY | actual.constants.O_RDWR)) !== 0
     : typeof flags === 'string' && /[wa+]/.test(flags)
   return { ...actual,
+    readFileSync: vi.fn(actual.readFileSync),
     openSync: (...args: Parameters<typeof actual.openSync>) => {
       if (typeof args[0] === 'string' && writing(args[1])) disk.writes.push(args[0])
       return actual.openSync(...args)
@@ -103,6 +106,32 @@ describe('the installed index', () => {
     expect(readFileSync(indexFile(), 'utf8').endsWith('\n')).toBe(true)
   })
 
+  it('serializes different-package index mutations without losing a concurrent row', () => {
+    writeInstalledIndex([])
+    const original = actualFs.readFileSync
+    let second: unknown
+    let raced = false
+    const read = vi.spyOn(fs, 'readFileSync').mockImplementation(((path: any, ...args: any[]) => {
+      const value = original(path, ...args as [any])
+      if (String(path) === indexFile() && !raced) {
+        raced = true
+        try { upsertInstalledRecord(record('beta/two')) } catch (error) { second = error }
+      }
+      return value
+    }) as typeof fs.readFileSync)
+    try { upsertInstalledRecord(record('alpha/one')) } finally { read.mockRestore() }
+    expect(second).toMatchObject({ message: expect.stringContaining('DSH_INDEX_BUSY') })
+    upsertInstalledRecord(record('beta/two'))
+    expect(readInstalledIndex().map(row => row.id)).toEqual(['alpha/one', 'beta/two'])
+  })
+  it('releases the index lock and temporary output after a failed publication', () => {
+    const rename = vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => { throw Error('disk full') })
+    try { expect(() => upsertInstalledRecord(record('alpha/one'))).toThrow('disk full') } finally { rename.mockRestore() }
+    expect(fs.readdirSync(dshRootDir())).toEqual([])
+    upsertInstalledRecord(record('beta/two'))
+    expect(readInstalledIndex().map(row => row.id)).toEqual(['beta/two'])
+  })
+
   it('removes a row and says whether there was one', () => {
     writeInstalledIndex([record('acme/a'), record('acme/b')])
     expect(removeInstalledRecord('acme/a')).toBe(true)
@@ -175,6 +204,18 @@ describe('the installed index', () => {
     expect(setupsPending()).toBe(0)
     writeInstalledIndex(records)
     expect(setupsPending()).toBe(2)
+  })
+
+  it('holds the index lock while reading the records to mark setup', () => {
+    writeInstalledIndex([record('acme/a')])
+    let locked = false
+    vi.mocked(fs.readFileSync).mockImplementation((...args: Parameters<typeof fs.readFileSync>) => {
+      if (args[0] === indexFile()) locked = fs.existsSync(join(dshRootDir(), '.lock-installed-index'))
+      return actualFs.readFileSync(...args)
+    })
+    markSetup('acme/a', 'pending')
+    expect(locked).toBe(true)
+    expect(readInstalledIndex()[0]?.setup).toBe('pending')
   })
 
   it('markSetup with null removes the field', () => {

@@ -2,13 +2,18 @@ import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { emptyPorts, type RecapSession, type TurnLifecycle } from '../core/api.js'
+import { emptyPorts, RECAPS_BUFFER_LIMIT, type RecapSession, type TurnLifecycle } from '../core/api.js'
 import { DONE_QUIET_MS } from '../lib/agentNotifications.js'
 import { SUBAGENT_IDLE_MS, type CommanderMirrorOpts } from '../lib/commander.js'
 import { deriveTurnSummary } from '../lib/deviceRecap.js'
 import type { LiveEvent } from '../lib/normalize.js'
 import type { TierDecision, TierInput } from '../lib/notifyTier.js'
 import { fakeCore } from '../testing/fakeCore.js'
+import { devicePeerPresence } from '../lib/autonomous-device/peerPresence.js'
+
+vi.mock('../lib/autonomous-device/peerPresence.js', () => ({ devicePeerPresence: vi.fn(options => ({
+  start: vi.fn(), stop: vi.fn(async () => options.changed(false, false)), card: vi.fn(() => true),
+})) }))
 
 const { createRecaps, startRecaps } = await import('./recaps.js')
 
@@ -41,10 +46,119 @@ describe('the recaps', () => {
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
   })
 
-  it('starts in the core\'s process behind its port', () => {
+  it('formats raw session failure facts and publishes the same error once to WiFi and cable even without watchers', () => {
+    const f = setup({ peer: { composition: 'services', port: 23456, token: 't'.repeat(32) } })
+    const peer = vi.mocked(devicePeerPresence).mock.results.at(-1)!.value
+    f.tell({ kind: 'failure', failure: { agentId: 'a1', sessionId: 's1', engine: 'codex',
+      message: 'Raw failure and its trace', failureSummary: "You've hit your usage limit. Visit https://example.invalid/credits or try again at Friday." } }, nobody)
+    const card = { type: 'commander_event', agentId: 'a1', dbSessionId: 's1', payload: { kind: 'error', text: 'Codex usage limit reached — try again Friday.' } }
+    expect(peer.card).toHaveBeenCalledExactlyOnceWith(card, undefined)
+    expect(f.core.clients.turnCard).toHaveBeenCalledExactlyOnceWith(card)
+    expect(f.core.clients.turnSummary).not.toHaveBeenCalled()
+    expect(f.recaps.mirror.sessions()).not.toContain('s1')
+  })
+
+  it('preserves empty summaries, missing engines and captured addresses without retaining or replaying failures', () => {
+    const f = setup()
+    f.tell({ kind: 'failure', failure: { agentId: 'a1', sessionId: 's1', message: 'raw', failureSummary: '' } }, nobody)
+    f.tell({ kind: 'failure', failure: { agentId: 'a2', sessionId: 's2', message: 'plain failure' } }, nobody)
+    expect(vi.mocked(f.core.clients.turnCard).mock.calls.map(([frame]) => [frame.agentId, frame.dbSessionId, frame.payload.text]))
+      .toEqual([['a1', 's1', ''], ['a2', 's2', 'plain failure']])
+    f.tell({ kind: 'rejoined', working: [] })
+    expect(f.core.clients.turnCard).toHaveBeenCalledTimes(2)
+    expect(f.recaps.mirror.sessions()).toEqual([])
+  })
+
+  it('keeps cable delivery when the peer refuses its bounded write, and captures the error before reentrant delivery', () => {
+    const f = setup({ peer: { composition: 'services', port: 23456, token: 't'.repeat(32) } })
+    const peer = vi.mocked(devicePeerPresence).mock.results.at(-1)!.value
+    peer.card.mockReturnValue(false)
+    const failure = { agentId: 'a1', sessionId: 's1', message: 'original' }
+    vi.mocked(f.core.clients.turnCard).mockImplementation(() => { failure.agentId = 'replacement'; failure.sessionId = 's2'; failure.message = 'new' })
+    f.tell({ kind: 'failure', failure }, nobody)
+    const card = { type: 'commander_event', agentId: 'a1', dbSessionId: 's1', payload: { kind: 'error', text: 'original' } }
+    expect(peer.card).toHaveBeenCalledExactlyOnceWith(card, undefined)
+    expect(f.core.clients.turnCard).toHaveBeenCalledExactlyOnceWith(card)
+  })
+
+  it('refuses malformed or oversized failure facts before formatting and accepts the next valid notice', () => {
+    const f = setup(), warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const failure = { agentId: 'a1', sessionId: 's1', message: 'raw' }
+    const invalid = [null, {}, { ...failure, agentId: 4 }, { ...failure, agentId: '' }, { ...failure, sessionId: 4 },
+      { ...failure, sessionId: '' }, { ...failure, message: 4 }, { ...failure, engine: 4 }, { ...failure, failureSummary: 4 },
+      { ...failure, message: 'x'.repeat(RECAPS_BUFFER_LIMIT) }]
+    for (const value of invalid) f.tell({ kind: 'failure', failure: value } as never, nobody)
+    expect(f.core.clients.turnCard).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledTimes(invalid.length)
+    expect(warn.mock.calls.every(([line]) => line === '[recaps] FAILURE_INVALID')).toBe(true)
+    f.tell({ kind: 'failure', failure }, nobody)
+    expect(f.core.clients.turnCard).toHaveBeenCalledOnce()
+    expect(f.recaps.mirror.sessions()).toEqual([])
+  })
+
+  it('captures the full text paired with the exact summary before a reentrant core card publication changes it', () => {
+    const f = setup({ peer: { composition: 'services', port: 23456, token: 't'.repeat(32) } })
+    const options = vi.mocked(devicePeerPresence).mock.calls.at(-1)![0]
+    const peer = vi.mocked(devicePeerPresence).mock.results.at(-1)!.value
+    options.changed(true, false)
+    let text = 'this completed turn'
+    vi.spyOn(f.recaps.mirror, 'lastFullText').mockImplementation(() => text)
+    vi.mocked(f.core.clients.turnCard).mockImplementation(() => { text = 'a later turn' })
+    const frame = { type: 'commander_event' as const, agentId: 'a1', dbSessionId: 's1', payload: { kind: 'summary', text: 'short' } }
+    f.opts.send(frame)
+    expect(peer.card).toHaveBeenCalledExactlyOnceWith(frame, 'this completed turn')
+    expect(f.core.clients.turnCard).toHaveBeenCalledExactlyOnceWith(frame)
+  })
+
+  it('keeps local-only cards and the cable processing sentence off the Wi-Fi peer', () => {
+    const f = setup({ peer: { composition: 'services', port: 23456, token: 't'.repeat(32) } })
+    vi.mocked(devicePeerPresence).mock.calls.at(-1)![0].changed(true, false)
+    const peer = vi.mocked(devicePeerPresence).mock.results.at(-1)!.value
+    for (const kind of ['tool_end', 'turn_started', 'reply_text']) f.opts.send({ type: 'commander_event', agentId: 'a1', dbSessionId: 's1', payload: { kind, text: 'local' } })
+    const processing = { type: 'commander_event' as const, agentId: 'a1', dbSessionId: 's1', payload: { kind: 'processing', text: 'Working', update: 'cable sentence' } }
+    f.opts.send(processing)
+    expect(peer.card).toHaveBeenCalledExactlyOnceWith({ ...processing, payload: { kind: 'processing', text: 'Working' } }, undefined)
+    expect(f.core.clients.turnCard).toHaveBeenCalledTimes(4)
+    expect(f.core.clients.turnCard).toHaveBeenLastCalledWith(processing)
+  })
+
+  it('starts in the core\'s process behind its port', async () => {
     const ports = emptyPorts()
     startRecaps(fakeCore({ dataDir: temp() }), ports)
     expect(ports.recaps?.recaps('nobody')).toBeNull()
+    const peer = vi.mocked(devicePeerPresence).mock.results.at(-1)!.value
+    expect(peer.start).toHaveBeenCalledOnce()
+    await ports.recaps?.stop()
+    expect(peer.stop).toHaveBeenCalledOnce()
+  })
+
+  it('owns Wi-Fi presence separately from core watchers and releases it on disable/re-enable', async () => {
+    const f = setup({ peer: { composition: 'services', port: 23456, token: 't'.repeat(32) } })
+    const options = vi.mocked(devicePeerPresence).mock.calls.at(-1)![0]
+    const peer = vi.mocked(devicePeerPresence).mock.results.at(-1)!.value
+    const replay = vi.spyOn(f.recaps.mirror, 'replayAll')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    options.failed('PEER_UNAVAILABLE')
+    expect(warn).toHaveBeenCalledExactlyOnceWith('[recaps] PEER_UNAVAILABLE')
+    f.tell({ kind: 'beat', session: s1, working: false }, nobody)
+    expect(f.opts.hasDevice()).toBe(false)
+    f.recaps.connected()
+    options.changed(true, true)
+    expect(f.opts.hasDevice()).toBe(true)
+    expect(replay).toHaveBeenCalledOnce()
+    f.tell({ kind: 'beat', session: s1, working: false }, nobody)
+    expect(f.opts.hasDevice()).toBe(true)
+    options.changed(true, false)
+    expect(replay).toHaveBeenCalledOnce()
+    await f.recaps.port.stop()
+    expect(f.opts.hasDevice()).toBe(false)
+    f.recaps.connected()
+    expect(peer.start).toHaveBeenCalledTimes(2)
+    options.changed(true, true)
+    expect(replay).toHaveBeenCalledTimes(2)
+    f.tell({ kind: 'beat', session: s1, working: false }, watching)
+    await f.recaps.port.stop()
+    expect(f.opts.hasDevice()).toBe(true)
   })
 
   it('cuts a turn\'s recap from its final answer, sends the card and the apps\' recap, and keeps it for the core to read', async () => {

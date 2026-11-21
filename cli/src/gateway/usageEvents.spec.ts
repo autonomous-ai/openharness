@@ -9,7 +9,8 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createUsageOutcomes, MEASURED_REQUESTS } from '../core/usageOutcomes.js'
-import type { ProductUsageMetric } from '../lib/productUsageContract.js'
+import { PRODUCT_USAGE_AGENT_BROWSER_METRICS, type ProductUsageMetric } from '../lib/productUsageContract.js'
+import { HACHI_DAEMON_METRICS } from './serviceMetrics.js'
 import { messageReceipt, productObservation, productUsageIntent, productUsageLaunch, productUsageRequest, productUsageSource,
   type ProductUsageLaunchSignal } from '../lib/productUsageSignals.js'
 import type { MessageOutcome } from '../lib/sessionInput.js'
@@ -156,5 +157,42 @@ describe('the usage counters, named in the gateway', () => {
     expect(Object.keys(was).length).toBeGreaterThan(50)
     expect(was).toMatchObject({ launch_started: 6, launch_created: 3, launch_refused: 1 })
     expect(now).toEqual(was)
+  })
+})
+
+
+it('does not count a later receipt twice after the first message outcome', () => {
+  const counted: string[] = []
+  const usage = createUsageOutcomes({ send: event => countUsage(event, metric => counted.push(metric), () => {}), now: () => 1 })
+  const measured = usage.request('message', {}, APP)!
+  const requested = counted.length
+  measured.receipt('started')
+  const first = [...counted]
+  expect(first.length).toBeGreaterThan(requested)
+  measured.receipt('started')
+  expect(counted).toEqual(first)
+  // A sender cannot duplicate a recorded outcome by forwarding its later receipt again.
+  countUsage({ kind: 'answer', request: { type: 'message', local: true, tool: false, role: null },
+    answer: { message: 'started' }, first: false, elapsedMs: 1 }, metric => counted.push(metric), () => {})
+  expect(counted).toEqual(first)
+})
+
+describe('service counters at the recorder', () => {
+  it('records the complete declared vocabulary only for its authenticated originating feature', () => {
+    const seen: string[] = []
+    const count = (service: string, metric: string) => countUsage({ kind: 'service', service, metric }, name => seen.push(name), () => { throw new Error('not a launch') })
+    for (const metric of PRODUCT_USAGE_AGENT_BROWSER_METRICS) count('agentBrowser', metric)
+    for (const service of ['hachi', 'goals', 'agentCleanup']) for (const metric of HACHI_DAEMON_METRICS) count(service, metric)
+    expect(seen).toEqual([...PRODUCT_USAGE_AGENT_BROWSER_METRICS, ...HACHI_DAEMON_METRICS, ...HACHI_DAEMON_METRICS, ...HACHI_DAEMON_METRICS])
+    const recorded = [...seen]
+    for (const service of ['', 'other', 'agentBrowser', 'hachi', 'goals', 'agentCleanup']) {
+      for (const metric of ['ui_desktop_hachi_switch_on', 'launch_hachi_started_claude', 'hachi_person_turn_days', 'create_requests', 'PRIVATE_CANARY', 'agent_browser_made_up']) count(service, metric)
+    }
+    count('hachi', 'agent_browser_failed_podman_old')
+    count('agentBrowser', 'hachi_wake_done')
+    count('other', 'hachi_wake_done')
+    count('other', 'agent_browser_failed_podman_old')
+    expect(seen).toEqual(recorded)
+    expect([...PRODUCT_USAGE_AGENT_BROWSER_METRICS, ...HACHI_DAEMON_METRICS].every(name => /^[a-z0-9_]{1,128}$/.test(name))).toBe(true)
   })
 })

@@ -1,3 +1,5 @@
+import { storedGridFixture, fixtureGridOverride } from '../testing/gridCredentials.js'
+import { storedGridLaunch, type StoredGridLaunch } from './sessionStorageWire.js'
 import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { describe, expect, it, vi } from 'vitest'
 import { createRestoreLaunch } from '../core/agents/restoreLaunch.js'
@@ -24,7 +26,7 @@ const GRID: GridLaunchOverride = {
 
 const identity = (pid: number): ProcessIdentity => ({ pid, executable: 'claude', startMarker: `start ${pid}` })
 
-function row(overrides: Partial<RegisteredSession> = {}): RegisteredSession {
+function row(overrides: Omit<Partial<RegisteredSession>, 'gridLaunch'> & { gridLaunch?: GridLaunchOverride | StoredGridLaunch | null } = {}): RegisteredSession {
   return {
     schemaVersion: 2,
     active: false,
@@ -49,6 +51,7 @@ function row(overrides: Partial<RegisteredSession> = {}): RegisteredSession {
     lastHookAt: 1,
     lastTranscriptAt: 1,
     ...overrides,
+    gridLaunch: overrides.gridLaunch ? storedGridLaunch(overrides.gridLaunch) ? overrides.gridLaunch : storedGridFixture(overrides.gridLaunch) : null,
   }
 }
 
@@ -250,7 +253,7 @@ function harness(rows: RegisteredSession[], opts: { livePanes?: string[]; aliveP
       const grid = entry.gridLaunch
       const launch: RestoreLaunch = {
         argv: [entry.engine, ...(o.resumeSessionId ? ['--resume', o.resumeSessionId] : []), ...(grid ? ['--grid', grid.networkId] : [])],
-        ...(grid ? { env: { GRID_API_KEY: grid.apiKey } } : entry.codexHome ? { env: { CODEX_HOME: entry.codexHome } } : {}),
+        ...(grid ? { env: { GRID_API_KEY: fixtureGridOverride(grid)!.apiKey } } : entry.codexHome ? { env: { CODEX_HOME: entry.codexHome } } : {}),
       }
       return launch
     },
@@ -263,7 +266,7 @@ function harness(rows: RegisteredSession[], opts: { livePanes?: string[]; aliveP
       return { ok: true, runtime: { backend: 'tmux', paneId: h.nextPane.shift() ?? '%99' } }
     },
     respawn: async (runtime, launch, control) => {
-      note(`respawn:${runtime.paneId}:${launch.argv.join(' ')}`)
+      note(`respawn:${runtime.paneId}:${(typeof launch.argv === 'function' ? launch.argv() : launch.argv).join(' ')}`)
       h.launched.push({ agentId: 'respawn', launch })
       h.respawns++
       await control?.onDispatch?.()
@@ -336,7 +339,7 @@ describe('restore ownership across asynchronous work', () => {
     h.deps.probeProcess = () => probe.promise
     await restoreAgents(h.deps)
     const swap = createPaneSwap({ restartJobs, byAgent: h.deps.registry.byAgent,
-      prepareSessionResume: async () => {}, keepAbandonedConversation: () => {}, stopNative: async () => {} })
+      prepareSessionResume: async () => {}, keepAbandonedConversation: async () => {}, stopNative: async () => {} })
     expect(swap.restartJobs).toBe(restartJobs)
     probe.resolve(identity(8))
     await settled(h, 1, 1)
@@ -828,7 +831,7 @@ describe('restoreAgents — which agents get a pane back', () => {
       workspaceMissing: () => null,
       relaunchOverrides: async () => ({ ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [] } }),
       downgradedPermission: async () => ({ bypassPermission: false }),
-      prepareSessionResume: async () => {}, refreshGridWebSearch: () => {},
+      prepareSessionResume: async () => {}, refreshGridWebSearch: async () => {},
       launch: (entry) => {
         if (entry.agentId === 'agent-a') throw new WindowsBatchLaunchRefused('claude', 'C:\\tools\\claude.cmd')
         return { argv: [entry.engine, '--resume', entry.sessionId] }
@@ -936,7 +939,7 @@ describe('restoreAgents — held until the service a launch asks is ready', () =
     expect(summary.restored).toEqual(['own'])
     // One ask of models, for the first; the second waits without one, in a new pane since its own went.
     expect(h.launches.filter((l) => l.agentId !== 'own')).toEqual([{ agentId: 'first' }])
-    expect(h.launched.find((l) => l.agentId === 'second')?.launch.argv[0]).toBe('wait')
+    expect(h.launched.find((l) => l.agentId === 'second')?.launch.argv).toMatchObject({ 0: 'wait' })
     expect(h.rows.get('first')?.launch).toEqual(HELD)
     expect(h.rows.get('second')?.launch).toEqual(HELD)
   })
@@ -1123,7 +1126,7 @@ describe('restoreAgents — waiting for the engine', () => {
   it('keeps the conversation the fresh launch leaves, before it is unbound', async () => {
     const h = harness([row()])
     const kept: Array<{ agentId: string; sessionId: string; unbound: boolean }> = []
-    h.deps.keepAbandoned = (left) => { kept.push({ agentId: left.agentId, sessionId: left.sessionId, unbound: h.calls.includes('unbind:session-a') }) }
+    h.deps.keepAbandoned = async (left) => { kept.push({ agentId: left.agentId, sessionId: left.sessionId, unbound: h.calls.includes('unbind:session-a') }) }
     h.probes.set('%0', [null, null, identity(9)])
     h.states.set('%0', [{ dead: true }, { dead: false }])
 
@@ -1236,7 +1239,7 @@ describe('restoreAgents — waiting for the engine', () => {
 })
 
 describe('restoreAgents — terminals', () => {
-  const terminal = (overrides: Partial<RegisteredSession> = {}) =>
+  const terminal = (overrides: Omit<Partial<RegisteredSession>, 'gridLaunch'> & { gridLaunch?: GridLaunchOverride | null } = {}) =>
     row({ agentId: 'term-1', engine: 'terminal', terminalHost: true, sessionId: '', boundAt: null, ...overrides })
 
   it('leaves a terminal whose pane is still there alone — a shell has no engine process to look for', async () => {
@@ -1301,7 +1304,7 @@ describe('restoreAgents — terminals', () => {
     expect(summary).toEqual({ restored: ['term-1'], skipped: [], failed: [], held: [], unsurveyed: [] })
     expect(h.calls[0]).toBe('releaseEngine:term-1')
     expect(h.launches).toEqual([{ agentId: 'term-1' }])
-    expect(h.launched[1].launch.argv[0]).toBe('terminal')
+    expect(h.launched[1].launch.argv).toMatchObject({ 0: 'terminal' })
     expect(h.rows.get('term-1')).toMatchObject({ engine: 'terminal', launch: { state: 'ready' } })
   })
 
@@ -1322,7 +1325,7 @@ describe('restoreAgents — terminals', () => {
   it('reopens the terminal, never a fresh engine, when the conversation it was resuming is refused', async () => {
     const h = harness([terminal({ engine: 'opencode', sessionId: 'ses_gone', boundAt: 1 })])
     const kept: string[] = []
-    h.deps.keepAbandoned = (left) => { kept.push(left.sessionId) }
+    h.deps.keepAbandoned = async (left) => { kept.push(left.sessionId) }
     h.states.set('%0', [{ dead: true }])
     const summary = await restoreAgents(h.deps)
     expect(summary.restored).toEqual(['term-1'])

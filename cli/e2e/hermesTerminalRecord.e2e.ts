@@ -17,7 +17,6 @@ const OLDER = 'Hermes Agent v0.21.5 (2026.10.7)'
 const BLOCK = '# machine-adapter: session discovery'
 const PERSON = 'model: anthropic/claude\nterminal:\n  client_env_passthrough: ["MY_VAR"]\n'
 const TUI = 'display:\n  interface: tui\n'
-const REMOVED = "[hooks] removed Harness's Hermes hooks → "
 
 type Agent = { id: string; sessionId?: string; status?: string; launch?: { state: string }; identityHold?: string }
 type Saved = { agentId: string; sessionId: string; cwd: string | null; hermesHome?: string | null; hermesHomeDerived?: true; lastHookAt: number }
@@ -116,15 +115,13 @@ it('binds a Hermes v0.23 from its terminal record, follows /new, and writes no h
   const allowlist = join(r.home, 'shell-hooks-allowlist.json')
   expect(JSON.parse(readFileSync(allowlist, 'utf8')).approvals).toHaveLength(2)
   r.hermes()
-  let mark = r.d.log().length
   await r.d.start()
   await until('the hook removed', () => readFileSync(r.config, 'utf8') === PERSON || null, 15_000)
   await until('its approvals removed', () => JSON.parse(readFileSync(allowlist, 'utf8')).approvals.length === 0 || null, 15_000)
-  await logged(r.d, mark, `${REMOVED}${r.config}`)
 
   const c = await r.connect()
   const cwd = r.folder('p1')
-  mark = r.d.log().length
+  const mark = r.d.log().length
   const a = await create(r, c, cwd)
   // Typed before the pass binds, as a person does in the first seconds of a launch: the conversation still shows it.
   r.tell({ say: 'hello' })
@@ -163,7 +160,12 @@ it('follows a resumed Hermes through /new without failing it', async () => {
   const a = await create(r, c, r.folder('p1'))
   await boundTo(c, a.agentId, a.started.session)
   r.tell({ say: 'before the stop' })
-  expect((await c.request('agent_delete', { agentId: a.agentId }, 60_000)).error).toBeUndefined()
+  // The script append queues work in the fake; Stop must not race the database write it triggers.
+  // Concurrent native-store changes correctly hold Stop (lib/databaseClose.spec.ts).
+  await until('the message saved before Stop', async () =>
+    JSON.stringify(await c.request('session_get', { sessionId: a.agentId }, 30_000)).includes('before the stop') || null, 30_000, 250)
+  const stopped = await c.request('agent_delete', { agentId: a.agentId }, 60_000)
+  expect(stopped.error, JSON.stringify(stopped)).toBeUndefined()
   await until('the agent to be stopped', async () => (await row(c, a.agentId))?.status === 'stopped' || null, 60_000, 250)
 
   const resumed = await startedAgain(r.home, async () =>
@@ -234,7 +236,6 @@ it('keeps an older Hermes\'s hook', async () => {
   r.hermes({ version: OLDER })
   await r.d.start()
   await hookIn(r.d, r.config)
-  expect(r.d.log()).not.toContain(REMOVED)
 })
 
 it('keeps the hook of a home set to the TUI', async () => {
@@ -243,7 +244,6 @@ it('keeps the hook of a home set to the TUI', async () => {
   writeFileSync(r.config, PERSON + TUI)
   await r.d.start()
   const installed = await hookIn(r.d, r.config)
-  expect(r.d.log()).not.toContain(REMOVED)
   const c = await r.connect()
   const a = await create(r, c, r.folder('p1'))
   // The fake runs no hook: the repair binds it.
@@ -260,14 +260,15 @@ it('follows a Hermes that only has a HOME of its own, and starts it again in tha
   r.hermes({ home: folder })
   await r.d.start()
   const c = await r.connect()
-  const mark = r.d.log().length
   const a = await create(r, c, r.folder('p1'), own)
   expect(recorded(own, a.started.terminal!)).toBe(a.started.session)
   await boundTo(c, a.agentId, a.started.session)
   // In no sandbox, the store its process holds open is the home it really uses: it is not marked.
   await until('the home on the saved row', () => saved(r.d, a.agentId)?.hermesHome === own || null, 15_000)
   expect(saved(r.d, a.agentId)?.hermesHomeDerived).toBeUndefined()
-  await logged(r.d, mark, `${REMOVED}${ownConfig}`)
+  await until('the obsolete hook and approvals removed from the own home', () =>
+    readFileSync(ownConfig, 'utf8') === PERSON
+      && JSON.parse(readFileSync(join(own, 'shell-hooks-allowlist.json'), 'utf8')).approvals.length === 0 || null, 15_000)
   expect(readFileSync(ownConfig, 'utf8')).toBe(PERSON)
 
   // Started again, it is handed that home as HERMES_HOME, as a `HERMES_HOME=/x hermes` typed by hand would be.
@@ -306,7 +307,9 @@ describe.runIf(process.platform === 'linux' && unshareWorks())('in a sandbox', (
     await boundTo(c, a.agentId, a.started.session)
     await until('the home marked on the saved row', () => saved(r.d, a.agentId)?.hermesHomeDerived || null, 15_000)
     expect(saved(r.d, a.agentId)?.hermesHome).toBe(own)
-    await logged(r.d, mark, `${REMOVED}${ownConfig}`)
+    await until('the obsolete hook and approvals removed from the own home', () =>
+      readFileSync(ownConfig, 'utf8') === PERSON
+        && JSON.parse(readFileSync(join(own, 'shell-hooks-allowlist.json'), 'utf8')).approvals.length === 0 || null, 15_000)
     expect(readFileSync(ownConfig, 'utf8')).toBe(PERSON)
     await logged(r.d, mark, 'hermes runs in a sandbox · followed from its terminal record')
     expect(r.d.log().slice(mark).split('hermes runs in a sandbox · followed from its terminal record')).toHaveLength(2)

@@ -1,4 +1,5 @@
 import * as esbuild from 'esbuild'
+import { workerPreparer } from './scripts/lib/workerPreparer.mjs'
 import { readdirSync, statSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { readDshRegistry } from './scripts/lib/dshRegistry.mjs'
@@ -6,6 +7,7 @@ import { readOrcaPluginBundle } from './scripts/lib/orcaPluginBundle.mjs'
 import { readVscodeExtensionBundle } from './scripts/lib/vscodeExtensionBundle.mjs'
 import { readBuiltinBundle, readHachiBundle, readHarnessMonitorBundle, readMemoriesBundle, readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
 import { fileURLToPath } from 'node:url'
+const artifactPreparer = await workerPreparer()
 const modelManagerBundle = JSON.stringify(readModelManagerBundle(fileURLToPath(new URL('../store/agents/autonomous-grid', import.meta.url))))
 const devicesBundle = JSON.stringify(readBuiltinBundle(fileURLToPath(new URL('../store/agents/devices', import.meta.url)), ['harness.json', 'AGENTS.md', 'LICENSE', 'template']))
 const harnessMonitorBundle = JSON.stringify(readHarnessMonitorBundle(fileURLToPath(new URL('../store/agents/harness-monitor', import.meta.url))))
@@ -47,6 +49,7 @@ try {
     outExtension: { '.js': '.js' },
     define: {
       __ADAPTER_VERSION__: JSON.stringify(version),
+      __WORKER_ARTIFACT_PREPARER__: JSON.stringify(artifactPreparer),
       __DSH_REGISTRY__: JSON.stringify(dshRegistry),
       __MODEL_MANAGER_BUNDLE__: JSON.stringify(modelManagerBundle),
       __DEVICES_BUNDLE__: JSON.stringify(devicesBundle),

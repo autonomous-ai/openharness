@@ -187,7 +187,8 @@ describe('Agent Messages in its own process', () => {
       const theCore = fakeCore({
         dataDir: root,
         daemon: { command: 'harness', port: 1, machineId: () => TEST_ACCOUNT.machineId, autonomousEnv: 'prod' },
-        agents: { live: () => [{ ...agent('lead'), tmuxPane: '%1', runtimes: [{ backend: 'tmux' as const, paneId: '%1' }], active: true }], displayName: () => 'lead', terminalAvailable: () => true, dsh: () => null },
+        agents: { live: () => [{ ...agent('lead'), tmuxPane: '%1', runtimes: [{ backend: 'tmux' as const, paneId: '%1' }], active: true }], displayName: () => 'lead', terminalAvailable: () => true, dsh: () => null,
+          facts: s => ({ displayName: s.agentId, terminalAvailable: true, parts: {} }) },
         account: { backend, identity: async () => ({ accountId: 'u-alice', email: 'alice@x.io' }), signedIn: () => true,
           tabKey: new TabSessions(() => identity, () => TEST_ACCOUNT.machineId), tabRelay: relay },
       })
@@ -228,7 +229,8 @@ describe('Agent Messages in its own process', () => {
       const theCore = fakeCore({
         dataDir: root,
         daemon: { command: 'harness', port: 1, machineId: () => TEST_ACCOUNT.machineId, autonomousEnv: 'prod' },
-        agents: { live: () => [{ ...agent('lead'), tmuxPane: '%1', runtimes: [{ backend: 'tmux' as const, paneId: '%1' }], active: true }], displayName: () => 'lead', terminalAvailable: () => true, dsh: () => null },
+        agents: { live: () => [{ ...agent('lead'), tmuxPane: '%1', runtimes: [{ backend: 'tmux' as const, paneId: '%1' }], active: true }], displayName: () => 'lead', terminalAvailable: () => true, dsh: () => null,
+          facts: s => ({ displayName: s.agentId, terminalAvailable: true, parts: {} }) },
         account: { backend, signedIn: () => true },
       })
       const { runServiceProcess } = await import('./process.js')
@@ -269,7 +271,8 @@ describe('Agent Messages in its own process', () => {
       const theCore = fakeCore({
         dataDir: root,
         daemon: { command: 'harness', port: 1, machineId: () => TEST_ACCOUNT.machineId, autonomousEnv: 'prod' },
-        agents: { live: () => live, displayName: (s) => s.agentId, terminalAvailable: () => true, dsh: () => null },
+        agents: { live: () => live, displayName: (s) => s.agentId, terminalAvailable: () => true, dsh: () => null,
+          facts: s => ({ displayName: s.agentId, terminalAvailable: true, parts: {} }) },
         account: { backend, signedIn: () => true },
       })
       const link = createMessagesLink({ core: theCore, notify: () => true })

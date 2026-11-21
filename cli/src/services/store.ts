@@ -9,8 +9,11 @@
  * the apps show in the create dialog. Agents already running from a harness that is removed keep running:
  * their processes hold what they need.
  */
+import { errorKind } from '../lib/log.js'
 import type { CoreApi, CorePorts, ServiceRequests } from '../core/api.js'
 import { storeLaunchPort } from './storeLaunch.js'
+import { storeLaunchContext } from './storeContext.js'
+import { HACHI_ID } from '../dsh/builtinIds.js'
 import { ensureBundledCoreHarnesses } from '../dsh/builtins.js'
 import { agentSettingsPath, readAgentSettings } from '../lib/agentSettings.js'
 import { watchSettingFile } from '../messages/settingWatch.js'
@@ -38,11 +41,28 @@ const DEFAULTS: StoreDeps = { prepare: ensureBundledCoreHarnesses, setupAgain, r
 const internal = (error: unknown): Record<string, unknown> =>
   ({ error: 'INTERNAL', detail: error instanceof Error ? error.message : String(error) })
 
-export function startStore(core: CoreApi, deps: StoreDeps = DEFAULTS): ServiceRequests {
+/** A partial startup retries only when something uses Store. Successful starts scan no more. */
+export type StorePreparation = ((id?: string) => boolean) & { ready(): boolean; invalidate(): void }
+export function createStorePreparation(core: Pick<CoreApi, 'dataDir'>, prepare = ensureBundledCoreHarnesses): StorePreparation {
+  let prepared = false
+  let hachi: boolean | undefined
+  const ensure = (id?: string): boolean => {
+    const enabled = readAgentSettings(core.dataDir).hachi
+    if (enabled !== hachi) { prepared = false; hachi = enabled }
+    if (!prepared) {
+      try { prepared = prepare({ hachi: enabled }) }
+      catch (caughtFailure) { console.warn(('[store] BUNDLED_PREPARATION_FAILED') + ' · ' + errorKind(caughtFailure)) }
+    }
+    return prepared || (id === HACHI_ID && !enabled)
+  }
+  return Object.assign(ensure, { ready: () => prepared, invalidate: () => { prepared = false } })
+}
+
+export function startStore(core: CoreApi, deps: StoreDeps = DEFAULTS, prepare = createStorePreparation(core, deps.prepare)): ServiceRequests {
   // Release-owned harnesses follow this build; setup belongs to the Store in either process mode.
   const hachiOn = (): boolean => readAgentSettings(core.dataDir).hachi
   let hachi = hachiOn()
-  deps.prepare({ hachi })
+  prepare()
   // After Harness's folder moved, each harness's setup runs again at its new folder, once the built-ins are in place.
   // It takes minutes, and no request waits for it. Said by its code: what was thrown names a path in the person's home.
   void deps.setupAgain().catch((error: unknown) => console.warn(`[dsh] setting harnesses up again stopped · ${
@@ -50,10 +70,11 @@ export function startStore(core: CoreApi, deps: StoreDeps = DEFAULTS): ServiceRe
   // Hachi turned on while the Store runs is put in place at once: the person's first ⇧⌘H creates it and must not wait
   // for the Store's next start. Only the turn from off to on prepares: the file is written for every setting, and the
   // watch says it may have changed once more as it starts. Turned off, an installed Hachi stays, with its goals and
-  // conversation. The watch keeps no process alive, and the Store has no stop of its own: it ends with its process.
+  // conversation. The watch keeps no process alive; inline composition closes it with that Store instance.
   deps.watch(agentSettingsPath(core.dataDir), () => {
     const now = hachiOn()
-    if (now && !hachi) deps.prepare({ hachi: true })
+    if (now !== hachi) prepare.invalidate()
+    if (now && !hachi) prepare()
     hachi = now
   })
   return {
@@ -81,18 +102,36 @@ export function startStore(core: CoreApi, deps: StoreDeps = DEFAULTS): ServiceRe
   }
 }
 
-export function startStoreInCore(core: CoreApi, ports: CorePorts, prepared?: () => void): ServiceRequests {
-  const requests = startStore(core)
-  const launch = storeLaunchPort()
+export function startStoreInCore(core: CoreApi, ports: CorePorts, prepared?: () => void,
+  prepare = createStorePreparation(core)): ServiceRequests {
+  const lifetime = new AbortController()
+  const requests = startStore(core, { ...DEFAULTS, watch: (path, changed) => {
+    const stop = DEFAULTS.watch(path, changed)
+    lifetime.signal.addEventListener('abort', stop, { once: true })
+    return stop
+  } }, prepare)
+  const launch = storeLaunchPort(undefined, undefined, prepare, setup => {
+    const machineId = core.daemon.machineId()
+    return storeLaunchContext({ dataDir: core.dataDir, port: core.daemon.port, machineId }, setup,
+      () => !lifetime.signal.aborted && core.daemon.machineId() === machineId, lifetime.signal,
+      undefined, () => core.account.privateGridName())
+  })
   ports.store = {
+    stop: () => lifetime.abort(),
+    dshContext: request => launch.dshContext(request),
+    dshDescribe: async request => {
+      const answer = await launch.dshDescribe(request)
+      if (prepare.ready()) prepared?.()
+      return answer
+    },
     dshMaterialize: async request => {
       const answer = await launch.dshMaterialize(request)
-      if (answer.ok || !answer.unavailable) prepared?.()
+      if ((answer.ok || !answer.unavailable) && prepare.ready()) prepared?.()
       return answer
     },
     dshLaunch: async request => {
       const answer = await launch.dshLaunch(request)
-      if (answer.ok || !answer.unavailable) prepared?.()
+      if ((answer.ok || !answer.unavailable) && prepare.ready()) prepared?.()
       return answer
     },
   }

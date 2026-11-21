@@ -24,10 +24,10 @@
  *
  * Everything that touches the operating system is injected (`ReexecDeps`).
  */
-import { spawn, type ChildProcess } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { closeSync, linkSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { captureChild, type CaptureStart, type OwnedTask } from './childCapture.js'
+import { linkSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
+import { readWorkerProbe, type WorkerProbe } from './workerContract.js'
 import { errorKind } from '../lib/log.js'
 import { PROBE_ANSWER, PROBE_COMMAND, PROBE_HANDOVER, PROBE_TIMEOUT_MS } from './protocol.js'
 import { signedExitCode, type ExitReason, type ReexecOutcome, type ResumeState } from './supervisor.js'
@@ -43,39 +43,6 @@ export { PROBE_ANSWER, PROBE_COMMAND, PROBE_HANDOVER, PROBE_TIMEOUT_MS } from '.
  * update that is rolled back takes two (onto the bundle, and back), each brought up a core or tried.
  */
 export const REEXEC_LIMIT = 3
-
-/** The piece of a file `sha256File` holds at a time: one, for every call (why is on `sha256File`). */
-const HASH_PIECE = Buffer.allocUnsafe(64 * 1024)
-
-/**
- * The sha256 of the file at [path], read a piece at a time. A master hashes cli.js, 6.5 MB, and every
- * file of its lean bundle before each process it starts (./leanServices.ts), eight of them as it boots:
- * read whole, each read was a buffer the size of the file, and at idle a master still held 35 to 45 MiB
- * of them, which a collection would have freed but none came (measured 2026-10-06).
- *
- * Every call reads through the same piece. With a piece of its own per call, a check of the lean folder
- * allocated 64 KiB per file, and the folder grew from 236 files to 393: about 25 MiB at each check. They
- * were freed, but the allocator kept the pages, so the master stayed as high as the collections' timing
- * had let it climb: 88 to 99 MiB resident on Linux and 101 to 111 on macOS, against the 100 MiB
- * e2e/lean.e2e.ts holds it under, which failed at 100.4 on 2026-11-14. Through one piece it is 75.3 MiB
- * on Linux (the median was 95.6) and 76.6 on macOS (108.6), the same in every run (Node 24.22.2, measured
- * 2026-11-14). The reads are synchronous, so no two calls ever hold the piece at once.
- */
-export function sha256File(path: string): string {
-  const hash = createHash('sha256')
-  const fd = openSync(path, 'r')
-  try {
-    for (let read = readSync(fd, HASH_PIECE); read > 0; read = readSync(fd, HASH_PIECE)) hash.update(HASH_PIECE.subarray(0, read))
-  } finally {
-    closeSync(fd)
-  }
-  return hash.digest('hex')
-}
-
-/** A file's sha256: which bundle a master runs, or which is on disk; null when it cannot be read. */
-export function fingerprint(path: string): string | null {
-  try { return sha256File(path) } catch { return null }
-}
 
 const EXIT_REASONS: readonly ExitReason[] = ['crashed', 'hung', 'did-not-bind', 'not-ready', 'memory', 'update', 'stopped']
 
@@ -269,39 +236,24 @@ export interface ProbeResult {
   detail: string
   /** The bundle's master says it takes a handover (`PROBE_HANDOVER`); left out, it does not. */
   handover?: true
+  /** Positive executed worker contract; absent output is never an inline fallback decision. */
+  worker?: WorkerProbe
 }
 
 /** Run a bundle's master probe: `node <flags> <bundle> __harnessd-probe`, which must answer in time. */
 export function runProbe(
   nodePath: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs = PROBE_TIMEOUT_MS,
-  start: (file: string, args: string[], env: NodeJS.ProcessEnv) => ChildProcess = (file, argv, environment) => spawn(file, argv, { env: environment, stdio: ['ignore', 'pipe', 'pipe'] }),
-): { result: Promise<ProbeResult>; cancel(): void } {
-  const child = start(nodePath, args, env)
-  // Apart: a bundle from before probes answers with its usage on stdout and the reason on stderr.
-  let out = ''
-  let err = ''
-  child.stdout?.on('data', (chunk: Buffer) => { out += chunk.toString('utf8') })
-  child.stderr?.on('data', (chunk: Buffer) => { err += chunk.toString('utf8') })
-  const lastLine = (text: string): string => { const lines = text.trim().split('\n'); return lines[lines.length - 1].trim() }
-  const result = new Promise<ProbeResult>((resolve) => {
-    let settled = false
-    const done = (ok: boolean, detail: string, handover = false) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      resolve({ ok, detail, ...(handover ? { handover: true } : {}) })
-    }
-    const timer = setTimeout(() => {
-      try { child.kill('SIGKILL') } catch { /* gone */ }
-      done(false, `no answer within ${timeoutMs} ms`)
-    }, timeoutMs)
-    child.on('error', (error) => done(false, error.message))
-    child.on('close', (code, signal) => {
-      const ok = code === 0 && out.includes(PROBE_ANSWER)
-      done(ok, lastLine(err) || lastLine(out) || (signal ? `signal ${signal}` : `exit ${signedExitCode(code)}`), ok && out.includes(PROBE_HANDOVER))
-    })
-  })
-  return { result, cancel: () => { try { child.kill('SIGKILL') } catch { /* gone */ } } }
+  start?: CaptureStart,
+): OwnedTask<ProbeResult> {
+  const running = captureChild(nodePath, args, env, timeoutMs, start)
+  return { cancel: running.cancel, result: running.result.then(({ code, signal, out, err, failure }) => {
+    if (failure) return { ok: false, detail: failure }
+    const lastLine = (text: string): string => { const lines = text.trim().split('\n'); return lines[lines.length - 1].trim() }
+    const ok = code === 0 && out.includes(PROBE_ANSWER)
+    const worker = ok ? readWorkerProbe(out) : undefined
+    return { ok, detail: lastLine(err) || lastLine(out) || (signal ? `signal ${signal}` : `exit ${signedExitCode(code)}`),
+      ...(ok && out.includes(PROBE_HANDOVER) ? { handover: true as const } : {}), ...(worker ? { worker } : {}) }
+  }) }
 }
 
 export interface ReexecDeps {
@@ -326,6 +278,10 @@ export interface ReexecDeps {
   stopChildren(done: () => void): void
   /** Start them again, when this master carries on as itself. */
   startChildren(): void
+  /** Select a positively supported child layout, only after the previous children are reaped. */
+  prepareChildren?(bundle: string, probe?: ProbeResult): boolean
+  /** Packaged children: claim immutable probe bytes after reap, even on this master's first own cohort. */
+  prepareProbe?(bundle: string): string | null | OwnedTask<string | null>
   writeMarker(marker: ReexecMarker): void
   removeMarker(): void
   /** The master is stopping: nothing is replaced or restarted then. */
@@ -398,7 +354,11 @@ export function createReexec(deps: ReexecDeps): {
   settled(done: (handedOver: boolean) => void): void
 } {
   let warned = false
+  // A retained master may already have restarted its children on another bundle. Returning to its own
+  // code after rollback must reap those children too; the master's fingerprint does not identify them.
+  let childrenBundle = deps.prepareProbe ? null : deps.own
   let probe: { cancel(): void } | null = null
+  let probing: Promise<unknown> | null = null
   let replacing = false
   let handing: Promise<void> | null = null
   let handedOver = false
@@ -582,42 +542,112 @@ export function createReexec(deps: ReexecDeps): {
   return {
     reexec: (state, proceed) => {
       const next = deps.current()
-      if (next === null || next === deps.own) { proceed('same'); return }
-      if (!deps.execve && !deps.handOver) {
-        if (!warned) deps.log('[harnessd] the bundle on disk is newer than this master, but this Node cannot re-execute a process: the master keeps its code until it restarts')
-        warned = true
-        proceed('kept')
-        return
-      }
-      if (state.unproven >= REEXEC_LIMIT) {
-        deps.log(`[harnessd] this master re-executed ${state.unproven} times without a core coming up — keeping its code; something keeps rewriting the bundle`)
-        proceed('kept')
+      if (next === null) {
+        if (!deps.prepareChildren) { proceed('same'); return }
+        replacing = true
+        deps.stopChildren(() => {
+          if (deps.stopping()) return
+          childrenBundle = null
+          replacing = false
+          deps.log('[harnessd] the selected bundle cannot be fingerprinted — refusing to start its children')
+          proceed('unsupported')
+        })
         return
       }
       const now = deps.now()
       const env = { ...deps.env, [RESUME_ENV]: encodeResume({ ...state, reexecs: state.reexecs + 1, unproven: state.unproven + 1 }) }
       const args = [...deps.execArgv, deps.scriptPath]
-      // Called only once the master is known not to be stopping: its children come back, and its core.
-      const carryOn = (outcome: ReexecOutcome) => {
+      let checked: ProbeResult | undefined
+      const carryOn = (outcome: ReexecOutcome): void => {
+        if (outcome === 'storage-unavailable') {
+          childrenBundle = null; replacing = false; proceed(outcome); return
+        }
+        if (deps.prepareChildren && (outcome === 'refused' || deps.current() !== next || !deps.prepareChildren(next, checked))) {
+          childrenBundle = null
+          replacing = false
+          deps.log('[harnessd] the selected bundle has no admitted worker cohort — refusing to start its children')
+          proceed('unsupported')
+          return
+        }
+        childrenBundle = next
         replacing = false
         deps.startChildren()
         proceed(outcome)
+      }
+      const check = (done: (result: ProbeResult) => void): void => {
+        const run = (script: string | null): void => {
+          if (deps.stopping()) return
+          if (script === null) { done({ ok: false, detail: 'immutable execution artifact unavailable' }); return }
+          let running: ReturnType<ReexecDeps['probe']>
+          try { running = deps.probe([...deps.execArgv, script, PROBE_COMMAND], { ...env, HARNESSD_SERVICES: 'none', HARNESSD_SERVICE_PROCESSES: '' }) } catch {
+            done({ ok: false, detail: 'probe process could not start' }); return
+          }
+          probe = running
+          probing = running.result
+          void running.result.then(result => {
+            probe = null; probing = null
+            if (deps.stopping()) return
+            checked = result
+            done(result)
+          })
+        }
+        const failed = (error: unknown): void => {
+          if (deps.stopping()) return
+          if (error instanceof Error && error.message === 'worker_artifact_storage_unavailable') {
+            carryOn('storage-unavailable'); return
+          }
+          done({ ok: false, detail: 'immutable execution artifact unavailable' })
+        }
+        let prepared: ReturnType<NonNullable<ReexecDeps['prepareProbe']>>
+        try { prepared = deps.prepareProbe ? deps.prepareProbe(next) : deps.scriptPath }
+        catch (error) { failed(error); return }
+        if (prepared === null || typeof prepared === 'string') { run(prepared); return }
+        probe = prepared
+        probing = prepared.result
+        void prepared.result.then(script => {
+          probe = null; probing = null
+          run(script)
+        }, error => {
+          probe = null; probing = null
+          failed(error)
+        })
+      }
+      // Ordinary core restarts keep surviving workers. A changed cohort always waits for actual reap.
+      const keep = (outcome: ReexecOutcome): void => {
+        if (next === childrenBundle) { proceed(outcome); return }
+        replacing = true
+        deps.stopChildren(() => {
+          if (deps.stopping()) return
+          if (!deps.prepareChildren || (next === deps.own && !deps.prepareProbe)) { carryOn(outcome); return }
+          if (deps.current() !== next) { carryOn('refused'); return }
+          check((result) => carryOn(result.ok ? outcome : 'refused'))
+        })
+      }
+      if (next === deps.own) { keep('same'); return }
+      if (!deps.execve && !deps.handOver) {
+        if (!warned) deps.log('[harnessd] the bundle on disk is newer than this master, but this Node cannot re-execute a process: the master keeps its code until it restarts')
+        warned = true
+        keep('kept')
+        return
+      }
+      if (state.unproven >= REEXEC_LIMIT) {
+        deps.log(`[harnessd] this master re-executed ${state.unproven} times without a core coming up — keeping its code; something keeps rewriting the bundle`)
+        keep('kept')
+        return
       }
       deps.log('[harnessd] the bundle on disk is not this master\'s code — re-executing on it')
       replacing = true
       deps.stopChildren(() => {
         if (deps.stopping()) return
-        const running = deps.probe([...args, PROBE_COMMAND], env)
-        probe = running
-        void running.result.then((result) => {
+        if (deps.prepareChildren && deps.current() !== next) { carryOn('refused'); return }
+        check((result) => {
           const { ok, detail } = result
-          probe = null
-          if (deps.stopping()) return
           if (!ok) {
             deps.log(`[harnessd] the new bundle's master did not answer its probe (${detail}) — keeping this master`)
             carryOn('refused')
             return
           }
+          if (deps.prepareChildren && deps.current() !== next) { carryOn('refused'); return }
           if (deps.handOver) {
             if (!result.handover) {
               deps.log('[harnessd] the new bundle\'s master cannot take a handover — keeping this master')
@@ -656,7 +686,9 @@ export function createReexec(deps: ReexecDeps): {
             // Only what `process.execve` refuses before it begins: arguments it cannot take.
             deps.removeMarker()
             deps.log(`[harnessd] could not re-execute this master (${errorKind(error)}) — keeping it`)
-            carryOn('kept')
+            // Preparation released its claim before exec. Reacquire and prove it once, without another exec.
+            if (deps.prepareProbe) check(result => carryOn(result.ok ? 'kept' : 'refused'))
+            else carryOn('kept')
           }
         })
       })
@@ -664,9 +696,9 @@ export function createReexec(deps: ReexecDeps): {
     cancel: () => { probe?.cancel(); probe = null },
     replacing: () => replacing,
     settled: (done) => {
-      if (!handing) { done(handedOver); return }
-      const decided = (): void => done(handedOver)
-      void handing.then(decided, decided)
+      const pending = [probing, handing].filter((running): running is Promise<unknown> => running !== null)
+      if (!pending.length) { done(handedOver); return }
+      void Promise.allSettled(pending).then(() => done(handedOver))
     },
   }
 }

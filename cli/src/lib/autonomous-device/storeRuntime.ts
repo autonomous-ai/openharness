@@ -1,7 +1,7 @@
 /** Narrow adapter onto the SAME Store, project preparation and engine creator used by Desktop.
  * Never passes device frames to BackendSocket's generic dispatcher. It runs with the Wi-Fi device's
  * service, in the devices' process (services/wifi.ts): the agents it reads and the one it creates are the
- * core's (`CoreApi.wifi.view` and `create`, core/wifiAgents.ts).
+ * component's (`services/wifiView.ts`); creation still uses `CoreApi.wifi.create`.
  */
 import { realpathSync, statSync } from 'node:fs'
 import { join } from 'node:path'
@@ -48,6 +48,8 @@ export interface DeviceStoreOptions {
   machineId: string
   /** Every agent with the Store's evidence on it, as the core last listed them. */
   agents(): StoreAgent[]
+  /** Whether that complete list still covers the current component and its known mutations. */
+  agentsCurrent(): boolean
   /** The core starts the agent, with the device's fixed launch arguments, unless another works in `cwd`. */
   create(packageId: string, engine: string, cwd: string): Promise<ForkResult>
   reveal?: (operationId: string, agentId: string) => void
@@ -58,6 +60,7 @@ export function createDeviceStore(options: DeviceStoreOptions): AutonomousDevice
     directory: join(options.dataDir, 'device-preparations'), machineId: options.machineId, reveal: options.reveal,
     packages: deviceStorePackages,
     agents: () => options.agents(),
+    agentsCurrent: () => options.agentsCurrent(),
     install: async (id, progress) => {
       const pkg = (await deviceStorePackages()).find(p => p.packageId === id)
       if (!pkg?.installAllowed) return { ok: false, error: 'PACKAGE_REVIEW_REQUIRED', detail: 'Review this package and its dependencies in Harness Store first.' }

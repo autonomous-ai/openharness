@@ -2,6 +2,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { SessionStorage } from '../lib/sessionStorage.js'
+import { closeSessionStorageFixture } from './sessionStorageFixture.js'
 import { RegistryWriteQueue } from '../lib/registryPersistence.js'
 
 // Stands in for the host's clock before the helper binds it, so a test sees every wait that reaches the host.
@@ -17,14 +19,14 @@ const deadline = await vi.hoisted(() => import('./registryDeadline.js'))
 
 const DEADLINE_MS = 5_000
 let root = ''
+let storage: SessionStorage | undefined
 beforeEach(() => { host.waits.length = 0; root = mkdtempSync(join(tmpdir(), 'registry-deadline-')) })
-afterEach(() => { vi.restoreAllMocks(); rmSync(root, { recursive: true, force: true }) })
+afterEach(async () => { if (storage) await closeSessionStorageFixture(storage); storage = undefined; vi.restoreAllMocks(); rmSync(root, { recursive: true, force: true }) })
 
 async function syncRegistryImage(): Promise<void> {
-  const fs = await deadline.slowSyncFsPromises(() => import('node:fs/promises'))
-  const handle = await fs.open(join(root, 'registry.json.x.tmp'), 'w')
-  try { await handle.writeFile('{}'); await handle.sync() }
-  finally { await handle.close() }
+  storage ??= deadline.slowSessionStorage(new SessionStorage(root))
+  const prepared = await storage.prepare({ kind: 'registry' }, null, [])
+  await storage.discard(prepared)
 }
 
 // By who arms it, not by its bound: the time a write has left (confirmLaunch's second attempt, a new pane's budget).
@@ -150,4 +152,9 @@ it('runs every timer it fires, and throws a failing one on its own afterwards', 
   expect(after).toHaveBeenCalledOnce()
   expect(thrown).toHaveLength(1)
   expect(thrown[0]).toThrow('fixture timer failed')
+})
+
+it('refuses to instrument the same preparation twice', () => {
+  storage = deadline.slowSessionStorage(new SessionStorage(root))
+  expect(() => deadline.slowSessionStorage(storage!)).toThrow('already instrumented')
 })

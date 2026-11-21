@@ -8,7 +8,8 @@ import { createAgentLifecycle, createPurgeRequest, createStopRequest, TOLD_NOT_E
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 import { WORKSPACES_OFF, type WorkspacesPort } from '../api.js'
-import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
+import { stoppedFixture } from '../../testing/stoppedFixture.js'
+import { moveHeldLine } from '../../lib/hostMove/held.js'
 
 vi.mock('../../lib/stopAgentService.js', async (real) => ({ ...await real<object>(), createStopAgentService: vi.fn(() => vi.fn(async () => {})) }))
 vi.mock('../../lib/resumeAgentService.js', async (real) => ({
@@ -34,7 +35,7 @@ function setup(over: Partial<LifecycleDeps> = {}) {
       list: vi.fn(() => [row()]),
       deleteSavedNames: vi.fn(),
     } as unknown as LifecycleDeps['registry'],
-    stoppedAgents: { list: vi.fn(() => [row({ agentId: 'a2' })]), get: vi.fn(() => undefined) } as unknown as LifecycleDeps['stoppedAgents'],
+    stoppedAgents: { ...stoppedFixture(), list: vi.fn(async () => [row({ agentId: 'a2' })]), get: vi.fn(async () => null) } as unknown as LifecycleDeps['stoppedAgents'],
     restartJobs: { busy: vi.fn(() => false) } as unknown as LifecycleDeps['restartJobs'],
     createBackend: null,
     backendFor: vi.fn(() => undefined),
@@ -119,7 +120,7 @@ describe('stopping, purging and resuming an agent', () => {
       const { deps, lifecycle, purge } = setup()
       expect(purge.live('a1')).toEqual(row())
       expect(deps.registry.byAgent).toHaveBeenCalledWith('a1')
-      expect(purge.sessions()).toEqual([row(), row({ agentId: 'a2' })])
+      expect(purge.liveSessions()).toEqual([row()])
       expect(purge.stopped).toBe(deps.stoppedAgents)
       expect(purge.checkpoints).toBe(deps.sessionCheckpoints)
       expect(purge.stop).toBe(lifecycle.stopAgent)
@@ -175,7 +176,7 @@ describe('stopping, purging and resuming an agent', () => {
       const { deps, lifecycle } = setup({
         purged,
         registry: { byAgent: vi.fn(() => undefined), list: vi.fn(() => []), deleteSavedNames: vi.fn() } as unknown as LifecycleDeps['registry'],
-        stoppedAgents: { list: vi.fn(() => [closed]), get: vi.fn((id: string) => (id === 'a1' ? closed : undefined)),
+        stoppedAgents: { ...stoppedFixture(() => [closed]), list: vi.fn(async () => [closed]),
           beginResume: vi.fn(() => 'held'), finishResume: vi.fn(), remove: vi.fn() } as unknown as LifecycleDeps['stoppedAgents'],
         sessionCheckpoints: { deletionFiles: vi.fn(() => []) } as never,
       })
@@ -201,7 +202,7 @@ describe('stopping, purging and resuming an agent', () => {
       const closed = row({ engine: 'openclaw', sessionId: 'k2', registeredAt: 7 })
       const { deps, lifecycle } = setup({
         registry: { byAgent: vi.fn(() => undefined), list: vi.fn(() => []), deleteSavedNames: vi.fn() } as unknown as LifecycleDeps['registry'],
-        stoppedAgents: { list: vi.fn(() => [closed]), get: vi.fn((id: string) => (id === 'a1' ? closed : undefined)),
+        stoppedAgents: { ...stoppedFixture(() => [closed]), list: vi.fn(async () => [closed]),
           beginResume: vi.fn(() => 'held'), finishResume: vi.fn(), remove: vi.fn() } as unknown as LifecycleDeps['stoppedAgents'],
         sessionCheckpoints: { deletionFiles: vi.fn(() => []) } as never,
         forgetTold: vi.fn(async () => false),

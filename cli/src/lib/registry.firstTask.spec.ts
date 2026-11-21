@@ -1,3 +1,4 @@
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 import { releaseRegistryEngine } from '../testing/registryFixtures.js'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -8,7 +9,6 @@ import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
-vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
 vi.mock('./bootId.js', async original => ({ ...await original<object>(), currentBootId: () => 'fixture-boot', bootChanged: () => false }))
 vi.mock('./processLiveness.js', async original => ({ ...await original<object>(),
   processLockIdentity: () => ({ startMarker: 'fixture-start', generationMarker: 'fixture-generation' }), lockOwnerAlive: () => true,
@@ -18,6 +18,7 @@ const TASK = 'Fix the parser'
 const SESSION = 'agent:main:harness-1'
 const runtimes = [{ backend: 'tmux' as const, paneId: '%1' }]
 const instances = new Set<typeof import('./registry.js')['registry']>()
+const stores = new Set<typeof import('./sessionStorage.js')['sessionStorage']>()
 let root: string
 let lines: string[]
 beforeEach(() => {
@@ -30,9 +31,21 @@ beforeEach(() => {
     vi.spyOn(console, level).mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(' ')) })
   }
 })
-afterEach(async () => { for (const instance of instances) await instance.flush({ exiting: true }).catch(() => {}); instances.clear(); vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.resetModules(); rmSync(root, { recursive: true, force: true }) })
+afterEach(async () => {
+  let settled = false
+  try {
+    await Promise.allSettled([...instances].map(registry => registry.flush({ exiting: true })))
+    const closed = await Promise.allSettled([...stores].map(closeSessionStorageFixture))
+    const failures = closed.filter(result => result.status === 'rejected').map(result => result.reason)
+    if (failures.length) throw new AggregateError(failures, 'registry fixture cleanup failed')
+    settled = true
+  } finally {
+    instances.clear(); stores.clear(); vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.resetModules()
+    if (settled) rmSync(root, { recursive: true, force: true })
+  }
+})
 
-async function load() { vi.resetModules(); const mod = await import('./registry.js'); instances.add(mod.registry); mod.registry.load(); return mod }
+async function load() { vi.resetModules(); stores.add(deadline.slowSessionStorage((await import('./sessionStorage.js')).sessionStorage)); const mod = await import('./registry.js'); instances.add(mod.registry); await mod.registry.load(); return mod }
 const disk = (): RegisteredSession[] => JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))
 async function pending() {
   const { registry, strictPersistedRow } = await load()
@@ -104,6 +117,73 @@ it('confirming it removes the typed task, once', async () => {
   expect(await registry.firstTaskTaken(row.agentId)).toBe(false)
   expect(await registry.firstTaskTaken('gone')).toBe(false)
   expect((await registry.takeFirstTask(row.agentId))).toBeNull()
+})
+
+it('keeps the first task when its launch authority is withdrawn during preparation', async () => {
+  const { registry, row } = await bound()
+  const publication = await import('./sessionPublication.js')
+  const prepare = publication.prepareSessionPublication
+  let current = true
+  vi.spyOn(publication, 'prepareSessionPublication').mockImplementationOnce(async (...args) => {
+    const prepared = await prepare(...args)
+    current = false
+    return prepared
+  })
+  await expect(registry.takeFirstTask(row.agentId, { current: () => current })).rejects.toThrow()
+  expect(registry.byAgent(row.agentId)?.firstTask).toBe(TASK)
+  expect(disk()[0].firstTask).toBe(TASK)
+})
+
+it('returns a consumed task receipt when a hold arrives during source release', async () => {
+  const { registry, row } = await bound()
+  const { sessionStorage: storage } = await import('./sessionStorage.js')
+  const retain = storage.retain.bind(storage)
+  vi.spyOn(storage, 'retain').mockImplementationOnce(async (...args) => {
+    const source = await retain(...args)
+    const release = source.release.bind(source)
+    source.release = async () => {
+      await release()
+      registry.setIdentityHold(row.agentId, 'Gateway unavailable')
+    }
+    return source
+  })
+  await expect(registry.takeFirstTask(row.agentId)).resolves.toBe(TASK)
+  expect(disk()[0]).not.toHaveProperty('firstTask')
+  expect(registry.byAgent(row.agentId)?.identityHold).toBe('Gateway unavailable')
+})
+
+it('restores an unconfirmed removal when its authority is withdrawn during settlement', async () => {
+  const { registry, row } = await bound()
+  const publication = await import('./sessionPublication.js')
+  const prepare = publication.prepareSessionPublication
+  let current = true
+  vi.spyOn(publication, 'prepareSessionPublication').mockImplementationOnce(async (...args) => {
+    const prepared = await prepare(...args)
+    const settle = prepared.settle.bind(prepared)
+    prepared.settle = async () => { await settle(); current = false }
+    return prepared
+  })
+  await expect(registry.takeFirstTask(row.agentId, { current: () => current })).rejects.toThrow()
+  expect(registry.byAgent(row.agentId)?.firstTask).toBe(TASK)
+  expect(disk()[0]).not.toHaveProperty('firstTask')
+  await registry.flush()
+  expect(disk()[0].firstTask).toBe(TASK)
+  expect(registry.byAgent(row.agentId)?.firstTask).toBe(TASK)
+})
+
+it('keeps an admitted removal when its source release fails', async () => {
+  const { registry, row } = await bound()
+  const { sessionStorage: storage } = await import('./sessionStorage.js')
+  const retain = storage.retain.bind(storage)
+  vi.spyOn(storage, 'retain').mockImplementationOnce(async (...args) => {
+    const source = await retain(...args)
+    const release = source.release.bind(source)
+    source.release = async () => { await release(); throw new Error('fixture release failure') }
+    return source
+  })
+  await expect(registry.takeFirstTask(row.agentId)).rejects.toThrow('admitted write cleanup failed; restart required')
+  expect(registry.byAgent(row.agentId)).not.toHaveProperty('firstTask')
+  expect(disk()[0]).not.toHaveProperty('firstTask')
 })
 
 it('an unbound agent keeps its task', async () => {
@@ -280,4 +360,46 @@ it('the next daemon reads a typed task over an untyped one, and drops a malforme
     expect(untyped).not.toHaveProperty('firstTaskTyped')
     expect(untyped.firstTask).toBe(TASK)
   }
+})
+
+it('retypes only the exact untyped task, durably, without consuming a replacement', async () => {
+  const { registry, row } = await bound()
+  expect(await registry.retypeFirstTask(row.agentId, 'Different')).toBe(false)
+  expect(disk()[0].firstTask).toBe(TASK)
+  expect(await registry.retypeFirstTask(row.agentId, TASK)).toBe(true)
+  expect(disk()[0].firstTaskTyped?.text).toBe(TASK)
+  expect(await registry.retypeFirstTask(row.agentId, TASK)).toBe(false)
+  expect(await registry.retypeFirstTask('gone', TASK)).toBe(false)
+})
+
+it.each(['owner', 'launch'] as const)('does not retype a %s replaced while it waits for a transaction', async change => {
+  const { registry, row } = await bound()
+  let retyped!: Promise<boolean | Error>
+  await registry.transaction(async () => {
+    retyped = registry.retypeFirstTask(row.agentId, TASK).catch((error: Error) => error)
+    const live = registry.byAgent(row.agentId)!
+    if (change === 'owner') live.processIdentity = { pid: 42, startMarker: 'replacement', executable: 'openclaw' }
+    else live.launch = { state: 'starting' }
+  })
+  expect(await retyped).toBeInstanceOf(Error)
+  expect(registry.byAgent(row.agentId)?.firstTask).toBe(TASK)
+  expect(registry.byAgent(row.agentId)?.firstTaskTyped).toBeUndefined()
+})
+
+it.each([true, false])('only one retype or handover wins when retype first is %s', async retypeFirst => {
+  const { registry, row } = await bound()
+  const retype = () => registry.retypeFirstTask(row.agentId, TASK)
+  const handover = () => registry.afterTransaction(() => registry.takeFirstTask(row.agentId))
+  const answers = await Promise.all(retypeFirst ? [retype(), handover()] : [handover(), retype()])
+  expect(answers).toEqual(retypeFirst ? [true, null] : [TASK, false])
+  expect(disk()[0].firstTaskTyped?.text).toBe(TASK)
+})
+
+it('confirms exact task text even when its clear already returned it to the untyped row', async () => {
+  const { registry, row } = await bound()
+  expect(await registry.firstTaskTaken(row.agentId, undefined, 'Different')).toBe(false)
+  expect(disk()[0].firstTask).toBe(TASK)
+  expect(await registry.firstTaskTaken(row.agentId, undefined, TASK)).toBe(true)
+  expect(disk()[0]).not.toHaveProperty('firstTask')
+  expect(disk()[0]).not.toHaveProperty('firstTaskTyped')
 })

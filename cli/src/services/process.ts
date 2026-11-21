@@ -13,10 +13,16 @@
  */
 import { existsSync } from 'node:fs'
 import WebSocket from 'ws'
-import type { Asker, ServiceRequests } from '../core/api.js'
+import { env as config } from '../config/env.js'
+import type { Asker, ReadRecord, ServiceRequests } from '../core/api.js'
 import { heartbeatInterval, type MasterChannel } from '../harnessd/coreLink.js'
 import { isMasterMessage } from '../harnessd/protocol.js'
 import { harnessdEnv } from '../lib/harnessdEnv.js'
+import { RECORD_READ_BYTES, RECORD_READ_ID_BYTES, RECORD_READ_REQUEST_BYTES, RECORD_READ_TIMEOUT_MS } from '../lib/recordReadWire.js'
+import { boundedJsonBytes } from '../lib/boundedJsonBytes.js'
+import { serviceConnector } from './localConnection.js'
+
+const connectLocal = serviceConnector({ dataDir: config.ADAPTER_DATA_DIR, port: config.PORT })
 import { errorKind } from '../lib/log.js'
 
 type Payload = Record<string, unknown>
@@ -25,6 +31,8 @@ type Payload = Record<string, unknown>
 export interface CoreConnection {
   /** Ask the core something (`service_query`); rejects when the connection goes before it answers. */
   query(query: string, payload?: Payload): Promise<Payload>
+  /** Complete records on this physical connection; a failed partial read is never a result. */
+  read?(query: string, payload: Payload, receive: (record: ReadRecord<unknown, unknown>) => void, signal?: AbortSignal): Promise<void>
   /** Tell the core something without asking (`service_notice`): the gateway's remote clients and what
    *  they sent. Dropped when the connection is going. */
   notice?(kind: string, payload?: Payload): void
@@ -34,7 +42,7 @@ export interface CoreConnection {
 
 export interface ServiceProcessOptions {
   name: string
-  /** The core's local socket. */
+  /** The core's Unix socket; empty on Windows, which discovers its authenticated pipe per connection. */
   socketPath: string
   /** This machine, as the core's `machine_select` expects it. */
   machineId: string
@@ -53,7 +61,7 @@ export interface ServiceProcessOptions {
    *  service that keeps something of its own per connection, an agent browser's viewers' streams. A throw is logged. */
   onConnectionClosed?: (connection: string) => void
   env?: NodeJS.ProcessEnv
-  connect?: (url: string) => WebSocket
+  connect?: (url: string, signal: AbortSignal) => WebSocket | Promise<WebSocket>
   log?: (line: string) => void
   /** The reconnect delay starts here and doubles to `maxBackoffMs`. */
   initialBackoffMs?: number
@@ -187,6 +195,8 @@ export function heldOffFile(env: NodeJS.ProcessEnv, name: string): string | null
 
 /** How often a held-off service looks again (`heldOffFile`). */
 const HELD_OFF_POLL_MS = 200
+/** Endpoint discovery, WebSocket upgrade and service registration share one bound. */
+const CONNECT_TIMEOUT_MS = 10_000
 
 /** One service in its process: its own link to the core, answering what the core routes to it. */
 export function runServiceProcess(options: ServiceProcessOptions): ServiceProcess {
@@ -195,7 +205,7 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
   // As a service whose start throws: it is not run, and, alone in its process, the process ends and the
   // master decides whether to try again.
   if (faults.start) throw new Error(`injected fault: ${options.name}`)
-  const connect = options.connect ?? ((url: string) => new WebSocket(url))
+  const connect = options.connect ?? connectLocal
   const log = options.log ?? ((line: string) => console.log(line))
   const initialBackoffMs = options.initialBackoffMs ?? 250
   const maxBackoffMs = options.maxBackoffMs ?? 5_000
@@ -204,9 +214,15 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
   let backoff = initialBackoffMs
   let socket: WebSocket | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let connectionTimer: ReturnType<typeof setTimeout> | null = null
+  let attempt: AbortController | null = null
+  let reportedFailure = false
   let queries = 0
   /** The core took this connection (`connected`): only then does its end mean the service was cut off. */
   let opened = false
+  type Reading = { ws: WebSocket; id: string; done: boolean; generation?: string; count?: number; index: number;
+    receive(record: ReadRecord<unknown, unknown>): void; finish(error?: string, close?: boolean): void }
+  let reading: Reading | undefined
   const pending = new Map<string, { resolve: (payload: Payload) => void; reject: (error: Error) => void }>()
   /** The requests being answered, each with the connection that asked (`Asker.connection`): what that
    *  connection closing aborts, and what the core going aborts all of, since nobody is left to answer. */
@@ -223,6 +239,38 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
       pending.set(requestId, { resolve, reject })
       send({ type: 'service_query', payload: { ...payload, query, requestId } })
     }),
+    read: (query, payload, receive, signal) => new Promise<void>((resolve, reject) => {
+      const ws = socket
+      if (stopped || !ws || !opened || ws.readyState !== WebSocket.OPEN || signal?.aborted) { reject(new Error('READ_UNAVAILABLE')); return }
+      if (reading) { reject(new Error('READ_BUSY')); return }
+      const requestId = `${options.name}-${++queries}`
+      const validId = (id: string): boolean => !!id && Buffer.byteLength(id) <= RECORD_READ_ID_BYTES
+      if (!validId(query) || !validId(requestId) || boundedJsonBytes(payload, RECORD_READ_REQUEST_BYTES) === null) { reject(new Error('READ_UNAVAILABLE')); return }
+      const request = { type: 'service_read', payload: { ...payload, query, requestId } }
+      if (boundedJsonBytes(request, RECORD_READ_REQUEST_BYTES) === null) { reject(new Error('READ_UNAVAILABLE')); return }
+      const cancel = (): void => {
+        if (socket === ws) try { ws.send(JSON.stringify({ type: 'service_read_cancel', payload: { requestId } })) } catch { /* close retires the read */ }
+        entry.finish('READ_UNAVAILABLE', true)
+      }
+      const entry: Reading = { ws, id: requestId, done: false, index: 0, receive,
+        finish: (error, close = false) => {
+          if (entry.done) return
+          entry.done = true
+          clearTimeout(deadline)
+          signal?.removeEventListener('abort', cancel)
+          // An ambiguous transfer keeps this physical connection unavailable until its actual close.
+          if (!close && reading === entry) reading = undefined
+          if (error) reject(new Error(error)); else resolve()
+          if (close && socket === ws) { log(`[service ${options.name}] READ_UNAVAILABLE`); ws.terminate() }
+        },
+      }
+      const deadline = setTimeout(() => entry.finish('READ_TIMEOUT', true), RECORD_READ_TIMEOUT_MS)
+      deadline.unref?.()
+      reading = entry
+      signal?.addEventListener('abort', cancel, { once: true })
+      try { ws.send(JSON.stringify(request)) }
+      catch { entry.finish('READ_UNAVAILABLE', true) }
+    }),
     notice: (kind, payload = {}) => send({ type: 'service_notice', payload: { ...payload, kind } }),
     sendBinary: (bytes) => {
       if (!socket || socket.readyState !== WebSocket.OPEN) return false
@@ -230,16 +278,20 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
     },
   }
 
-  const onFrame = (raw: WebSocket.RawData, isBinary = false): void => {
+  const onFrame = (ws: WebSocket, raw: WebSocket.RawData, isBinary = false): void => {
     if (isBinary) {
       try { options.onBinary?.(raw instanceof Buffer ? new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength) : new Uint8Array(Buffer.concat(raw as Buffer[]))) }
       catch (error) { log(`[service ${options.name}] binary frame failed · ${errorKind(error)}`) }
       return
     }
-    let frame: { type?: unknown; payload?: Payload; asker?: { local?: unknown; owner?: unknown; accountOwner?: unknown; guest?: unknown; machine?: unknown; connection?: unknown; requestId?: unknown; door?: unknown } }
-    try { frame = JSON.parse(raw.toString()) as typeof frame } catch { return }
+    let frame: { type?: unknown; payload?: Payload; asker?: { local?: unknown; owner?: unknown; accountOwner?: unknown; guest?: unknown; machine?: unknown; connection?: unknown; requestId?: unknown; rpcRoute?: unknown; door?: unknown } }
+    let wire: string
+    try { wire = raw.toString(); frame = JSON.parse(wire) as typeof frame } catch { return }
     const payload = frame.payload ?? {}
     if (frame.type === 'connected') {
+      if (connectionTimer) clearTimeout(connectionTimer)
+      connectionTimer = null
+      reportedFailure = false
       backoff = initialBackoffMs
       opened = true
       log(`[service ${options.name}] connected to the core`)
@@ -261,6 +313,36 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
       for (const [closed, asked] of answering) if (asked === payload.connection) closed.abort()
       if (typeof payload.connection !== 'string') return
       try { options.onConnectionClosed?.(payload.connection) } catch (error) { log(`[service ${options.name}] connection closed failed · ${errorKind(error)}`) }
+      return
+    }
+    if (typeof frame.type === 'string' && frame.type.startsWith('service_read_')) {
+      const entry = reading
+      if (!entry || entry.ws !== ws) { ws.terminate(); return }
+      if (entry.done) return
+      const invalid = (): void => entry.finish('READ_UNAVAILABLE', true)
+      const bytes = Buffer.byteLength(wire)
+      if (bytes > RECORD_READ_BYTES || payload.requestId !== entry.id) { invalid(); return }
+      if (frame.type === 'service_read_error') {
+        if (typeof payload.code !== 'string' || !['READ_NOT_DECLARED', 'READ_BUSY', 'READ_UNAVAILABLE', 'SESSION_READ_TOO_LARGE'].includes(payload.code)) { invalid(); return }
+        entry.finish(payload.code); return
+      }
+      const count = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0
+      try {
+        if (frame.type === 'service_read_begin') {
+          if (entry.generation !== undefined || typeof payload.generation !== 'string' || !payload.generation
+            || Buffer.byteLength(payload.generation) > RECORD_READ_ID_BYTES || !count(payload.count)) { invalid(); return }
+          entry.generation = payload.generation; entry.count = payload.count
+          entry.receive({ type: 'begin', payload: { header: payload.header, count: payload.count } })
+        } else if (entry.generation === undefined || payload.generation !== entry.generation) invalid()
+        else if (frame.type === 'service_read_row') {
+          if (payload.index !== entry.index || entry.index >= entry.count!) { invalid(); return }
+          entry.receive({ type: 'row', payload: { index: entry.index++, value: payload.value } })
+        } else if (frame.type === 'service_read_end') {
+          if (payload.count !== entry.count || entry.index !== entry.count) { invalid(); return }
+          entry.receive({ type: 'end', payload: { count: entry.count! } })
+          entry.finish()
+        } else invalid()
+      } catch { invalid() }
       return
     }
     if (frame.type === 'service_query_result') {
@@ -286,6 +368,7 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
       ...(machineOf(frame.asker?.machine) ? { machine: machineOf(frame.asker?.machine)! } : {}),
       ...(typeof frame.asker?.connection === 'string' ? { connection: frame.asker.connection } : {}),
       ...(typeof frame.asker?.requestId === 'string' ? { requestId: frame.asker.requestId } : {}),
+      ...(frame.asker?.rpcRoute === true ? { rpcRoute: true as const } : {}),
       // Asked through the local door over the daemon's own socket (core/serviceRoutes.ts): what only that socket may ask.
       ...(frame.asker?.door === 'socket' ? { door: 'socket' as const } : {}),
     }
@@ -305,51 +388,88 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
       })
       .then((result) => {
         answering.delete(closed)
-        send({ type: `${type}_result`, payload: { ...result, requestId } })
+        if (!stopped && !attempt?.signal.aborted && socket === ws) send({ type: `${type}_result`, payload: { ...result, requestId } })
       })
   }
 
   const heldOff = heldOffFile(env, options.name)
+  const reportFailure = (code: string): void => {
+    if (reportedFailure || stopped) return
+    reportedFailure = true
+    log(`[service ${options.name}] ${code}`)
+  }
+  const ended = (owner: AbortController, code = 1006): void => {
+    if (attempt !== owner) return
+    reading?.finish('READ_UNAVAILABLE')
+    reading = undefined
+    owner.abort()
+    attempt = null
+    if (connectionTimer) clearTimeout(connectionTimer)
+    connectionTimer = null
+    const wasOpen = opened
+    socket = null
+    opened = false
+    for (const [id, waiting] of pending) { pending.delete(id); waiting.reject(new Error('the core went away')) }
+    for (const closed of answering.keys()) closed.abort()
+    if (wasOpen) {
+      try { options.onDisconnected?.() } catch (error) { log(`[service ${options.name}] disconnect failed · ${errorKind(error)}`) }
+    } else reportFailure('SERVICE_CONNECT_UNAVAILABLE')
+    if (stopped) return
+    const delay = code === REFUSED ? Math.max(backoff, refusedBackoffMs) : backoff
+    backoff = Math.min(backoff * 2, maxBackoffMs)
+    reconnectTimer = setTimeout(() => { reconnectTimer = null; dial() }, delay)
+  }
   // Only ever run at start and from the reconnect timer, which `stop` clears.
   const dial = (): void => {
     if (heldOff && existsSync(heldOff)) {
       reconnectTimer = setTimeout(() => { reconnectTimer = null; dial() }, HELD_OFF_POLL_MS)
       return
     }
-    const ws = connect(`ws+unix://${options.socketPath}:/api/local-ws`)
-    socket = ws
-    ws.on('open', () => {
-      // Through `send`, which a socket failing as it opens cannot turn into a crash: `close` follows.
-      send({ type: 'machine_select', payload: {
-        machineId: options.machineId, localProtocolVersion: 1, role: 'service', service: options.name, token: options.token,
-      } })
-    })
-    ws.on('message', (raw, isBinary) => onFrame(raw, isBinary))
-    ws.on('error', () => { /* `close` follows, and reconnects */ })
-    ws.on('close', (code: number) => {
-      // A new socket is dialled only after this one closes, so this is always the current one.
-      const wasOpen = socket === ws && opened
-      socket = null
-      opened = false
-      for (const [id, waiting] of pending) { pending.delete(id); waiting.reject(new Error('the core went away')) }
-      // The core that asked is gone, and every connection it routed with it: nobody can read these answers.
-      for (const closed of answering.keys()) closed.abort()
-      if (wasOpen) {
-        try { options.onDisconnected?.() } catch (error) { log(`[service ${options.name}] disconnect failed · ${errorKind(error)}`) }
+    const owner = new AbortController()
+    attempt = owner
+    connectionTimer = setTimeout(() => {
+      connectionTimer = null
+      reportFailure('SERVICE_CONNECT_TIMEOUT')
+      owner.abort()
+      socket?.terminate()
+      // Discovery still owns its slot until it settles; a timeout cannot multiply a stuck OS read.
+    }, CONNECT_TIMEOUT_MS)
+    const attached = (ws: WebSocket): void => {
+      ws.on('error', () => { /* close follows, including a refused pipe proof */ })
+      ws.on('close', (code: number) => ended(owner, code))
+      if (stopped || owner.signal.aborted) {
+        if (ws.readyState === WebSocket.CLOSED) ended(owner)
+        else ws.terminate()
+        return
       }
-      if (stopped) return
-      // Refused: this core does not run the service out of its process, as a core from before it did under
-      // a newer master, for as long as the two differ. Asked again every few seconds, it only filled both
-      // logs; once a minute still finds a core that takes it.
-      const delay = code === REFUSED ? Math.max(backoff, refusedBackoffMs) : backoff
-      backoff = Math.min(backoff * 2, maxBackoffMs)
-      reconnectTimer = setTimeout(() => { reconnectTimer = null; dial() }, delay)
-    })
+      socket = ws
+      ws.on('open', () => {
+        if (stopped || owner.signal.aborted || socket !== ws) return
+        send({ type: 'machine_select', payload: {
+          machineId: options.machineId, localProtocolVersion: 1, role: 'service', service: options.name, token: options.token,
+        } })
+      })
+      ws.on('message', (raw, isBinary) => {
+        if (!stopped && !owner.signal.aborted && socket === ws) onFrame(ws, raw, isBinary)
+      })
+    }
+    try {
+      const next = connect(`ws+unix://${options.socketPath}:/api/local-ws`, owner.signal)
+      if (next instanceof Promise) void next.then(attached, () => ended(owner))
+      else attached(next)
+    } catch {
+      ended(owner)
+    }
   }
 
   const stop = (): void => {
     if (stopped) return
     stopped = true
+    reading?.finish('READ_UNAVAILABLE')
+    reading = undefined
+    attempt?.abort()
+    if (connectionTimer) clearTimeout(connectionTimer)
+    connectionTimer = null
     if (reconnectTimer) clearTimeout(reconnectTimer)
     try { socket?.close() } catch { /* already closed */ }
   }

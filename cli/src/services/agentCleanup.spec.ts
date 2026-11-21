@@ -74,6 +74,16 @@ function setup(sessions: RegisteredSession[], quietFor: Record<string, number | 
 const settle = () => new Promise((done) => setTimeout(done, 0))
 
 describe('closing the harnesses a closed harness started', () => {
+  it('protects a person-joined child through the shared input observation before a parent stop', async () => {
+    const joined = kid('joined'), untouched = kid('untouched')
+    const { hub, closeStarted } = setup([joined, untouched])
+    hub.input(joined, { connId: 'phone', kind: 'phone' })
+    hub.input(row('untouched'), { connId: 'other', kind: 'desktop' })
+    hub.stopped('lead')
+    await settle()
+    expect(closeStarted.mock.calls).toEqual([['untouched', 'now']])
+  })
+
   it('hears only a stop: a purge, a pane taken or a run closes nothing, nor a stop once it is stopped', async () => {
     const { cleanup, closeStarted, hub } = setup([kid('a')])
     hub.purged('lead', ['s-lead'])
@@ -133,7 +143,7 @@ describe('closing the harnesses a closed harness started', () => {
 
   it('leaves one the person typed into: it is theirs now', async () => {
     const { cleanup, stopped, closeStarted } = setup([kid('joined'), kid('left')])
-    cleanup.port.typed('s-joined')
+    cleanup.typed('s-joined')
     stopped('lead')
     await settle()
     expect(closeStarted.mock.calls).toEqual([['left', 'now']])
@@ -291,8 +301,8 @@ describe('closing a harness another agent started once it has sat idle', () => {
   it('never closes one the person typed or pasted into, even across a restart', async () => {
     const sessions = [kid('joined')]
     const first = setup(sessions, { joined: 10 * IDLE_CLOSE_MS })
-    first.cleanup.port.typed('joined')
-    first.cleanup.port.typed('joined')
+    first.cleanup.typed('joined')
+    first.cleanup.typed('joined')
     await first.cleanup.look()
     first.advance(IDLE_CLOSE_MS)
     await first.cleanup.look()
@@ -307,9 +317,9 @@ describe('closing a harness another agent started once it has sat idle', () => {
 
   it('keeps nothing for the person\'s own harness, and an id the core named that it does not list', async () => {
     const { cleanup } = setup([row('mine')])
-    cleanup.port.typed('mine')
+    cleanup.typed('mine')
     expect(() => readFileSync(joinedPath(dir), 'utf8')).toThrow()
-    cleanup.port.typed('started-elsewhere')
+    cleanup.typed('started-elsewhere')
     expect(JSON.parse(readFileSync(joinedPath(dir), 'utf8')).joined).toEqual({ 'started-elsewhere': NOW })
   })
 
@@ -500,7 +510,7 @@ describe('what the cleanup keeps and how it runs', () => {
     stopped('p')
     await settle()
     expect(closeStarted.mock.calls).toEqual([['bad', 'now']])
-    cleanup.port.typed('newest')
+    cleanup.typed('newest')
     const kept = JSON.parse(readFileSync(joinedPath(dir), 'utf8')).joined
     expect(Object.keys(kept)).toHaveLength(JOINED_MAX)
     expect(kept.old).toBeUndefined()
@@ -521,14 +531,14 @@ describe('what the cleanup keeps and how it runs', () => {
     const core = fakeCore({ dataDir: join(blocked, 'data') })
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const log = vi.fn()
-    createAgentCleanup(core, { log, every: () => () => {} }).port.typed('kid')
+    createAgentCleanup(core, { log, every: () => () => {} }).typed('kid')
     expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[agent-cleanup\] could not keep which harnesses the person joined: E[A-Z]+$/))
   })
 
   it('a torn agent-cleanup.json is set aside, not written over', () => {
     writeFileSync(joinedPath(dir), '{"')
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    setup([]).cleanup.port.typed('kid')
+    setup([]).cleanup.typed('kid')
     expect(readFileSync(`${joinedPath(dir)}.unreadable`, 'utf8')).toBe('{"')
     expect(JSON.parse(readFileSync(joinedPath(dir), 'utf8'))).toEqual({ version: 1, joined: { kid: NOW } })
     expect(warn).toHaveBeenCalledWith('[state] agent-cleanup.json could not be read (not valid JSON); kept as agent-cleanup.json.unreadable, starting empty.')
@@ -536,25 +546,25 @@ describe('what the cleanup keeps and how it runs', () => {
 
   // Read as none, the next join would forget every harness the person joined before, and cleanup could close them.
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('an agent-cleanup.json this account cannot read is not written over', () => {
-    setup([]).cleanup.port.typed('kid')
+    setup([]).cleanup.typed('kid')
     const before = readFileSync(joinedPath(dir), 'utf8')
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     chmodSync(joinedPath(dir), 0o000)
-    try { setup([]).cleanup.port.typed('other') } finally { chmodSync(joinedPath(dir), 0o600) }
+    try { setup([]).cleanup.typed('other') } finally { chmodSync(joinedPath(dir), 0o600) }
     expect(readFileSync(joinedPath(dir), 'utf8')).toBe(before)
   })
 
   it('the save goes through a temporary file renamed onto the target', () => {
     const { cleanup } = setup([])
     disk.events = []
-    cleanup.port.typed('kid')
+    cleanup.typed('kid')
     expect(touching(joinedPath(dir))).toEqual([['rename', '<tmp>', joinedPath(dir)]])
   })
 
   it('a file at the old temporary name is left alone', () => {
     const old = `${joinedPath(dir)}.tmp`
     writeFileSync(old, 'not ours')
-    setup([]).cleanup.port.typed('kid')
+    setup([]).cleanup.typed('kid')
     expect(readFileSync(old, 'utf8')).toBe('not ours')
   })
 
@@ -576,7 +586,7 @@ describe('what the cleanup keeps and how it runs', () => {
     vi.useFakeTimers()
     const ports = emptyPorts()
     startAgentCleanup(fakeCore({ dataDir: dir }), ports)
-    expect(ports.agentCleanup).toMatchObject({ typed: expect.any(Function), forgetTold: expect.any(Function), stop: expect.any(Function) })
+    expect(ports.agentCleanup).toMatchObject({ forgetTold: expect.any(Function), stop: expect.any(Function) })
     ports.agentCleanup!.stop()
   })
 

@@ -15,7 +15,7 @@
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -23,6 +23,9 @@ import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
+import { parse as parseToml } from 'smol-toml'
+import { hooks as codexHooksContract } from '../src/engines/codex/hookContract.js'
+import { reviewRecords } from '../src/engines/kit/hookReview.js'
 import { HARNESS_ENTRIES, xdgRoots } from '../src/config/harnessHome.js'
 import { systemdUnit, SYSTEMD_UNIT } from '../src/harnessd/platform.js'
 import { BRIDGE_FILE, REAL_ENTRIES } from '../src/homeMove/bridge.js'
@@ -393,10 +396,14 @@ describe.runIf(process.platform === 'linux')('the move of ~/.harness to the XDG 
     // New agents get the new paths, and Codex's are recorded as reviewed: it asks nothing.
     const fresh = [await create(h, moved, 'claude', 'new-claude'), await create(h, moved, 'codex', 'new-codex')]
     for (const agent of fresh) await moved.turn(agent.id, `a new ${agent.engine}`)
-    expect(s.log()).toContain("recorded Harness's own Codex hooks as reviewed")
     const codexHooks = read(join(h.d.env.CODEX_HOME!, 'hooks.json'))
     expect(codexHooks).toContain(join(h.data, 'cli', 'notify.mjs'))
     expect(codexHooks).not.toContain(`${h.legacy}/`)
+    const hooksFile = realpathSync(join(h.d.env.CODEX_HOME!, 'hooks.json'))
+    const required = reviewRecords(codexHooksContract.settings!.reviewed!, hooksFile, JSON.parse(codexHooks))
+    expect(required.size).toBeGreaterThan(0)
+    const config = parseToml(read(join(h.d.env.CODEX_HOME!, 'config.toml'))) as { hooks?: { state?: Record<string, { trusted_hash?: string }> } }
+    for (const [key, hash] of required) expect(config.hooks?.state?.[key]?.trusted_hash, key).toBe(hash)
     moved.close()
     // Nothing is in the bridge but what its service puts in its two real folders: the route record, and hard links to
     // the connections bridge's socket and the shim.

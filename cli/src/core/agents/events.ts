@@ -29,7 +29,7 @@ export interface AgentEventDeps {
   terminalAvailable: (agentId: string) => boolean
   resolve: (target: string) => RegisteredSession | undefined
   /** A stopped agent's archived record (stoppedAgents.get), which may throw while it is being removed. */
-  stopped: (agentId: string) => RegisteredSession | null
+  stopped: (agentId: string) => Promise<RegisteredSession | null>
   project: (s: RegisteredSession) => Promise<AgentFrame>
 }
 
@@ -47,14 +47,14 @@ export function createAgentEvents({ sink, terminalAvailable, resolve, stopped, p
     sink()?.send({ type: 'agent_renamed', payload: { agentId: s.agentId, name, engine: s.engine } })
     if (opts.device !== false) sink()?.sendCommander({ type: 'agent_renamed', payload: { agentId: s.agentId, name, engine: s.engine } })
   }
-  const onTokenUsageChanged = (target: TokenUsageTarget): void => {
+  const onTokenUsageChanged = async (target: TokenUsageTarget): Promise<void> => {
     const current = resolve(target.agentId)
     if (current && usageTargetKey(current) === usageTargetKey(target)) {
       if (terminalAvailable(current.agentId)) syncSession(current, { device: false })
       return
     }
     try {
-      const saved = stopped(target.agentId)
+      const saved = await stopped(target.agentId)
       if (saved && usageTargetKey(saved) === usageTargetKey(target)) {
         void sink()?.publishStoppedAgent(saved).catch(() => {})
       }

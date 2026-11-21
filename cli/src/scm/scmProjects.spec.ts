@@ -12,7 +12,8 @@ import { GitScmProject } from './gitScmProject.js'
 import {
   describeScmProject, detectScmProject, forgetScmProject, renameScmProject, scmByKind, scmProjects,
 } from './scmProjects.js'
-import { prepareInstructionWrites, prepareScmWrite, scmLaunchEnv } from './launch.js'
+import { scmLaunchEnv } from './launch.js'
+import { prepareInstructionWrites, prepareScmWrite } from './instructionWrites.js'
 import { parseScmLaunchRecord, type ScmDetectResult, type ScmProject } from './types.js'
 
 const exec = promisify(execFile)
@@ -109,9 +110,9 @@ describe('the SCM seam, with git as its only implementation', { timeout: 30_000 
     expect(asked).toEqual([[repo, PROJECT_INSTRUCTION_FILES]])
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
-      const failing = { kind: 'git', prepareWrite: async () => { throw new Error('locked') } }
+      const failing = { kind: 'git', prepareWrite: async () => { throw new Error('/private/project has secret content') } }
       await expect(prepareInstructionWrites(repo, [failing as unknown as ScmProject])).resolves.toBeUndefined()
-      expect(warn).toHaveBeenCalledWith('[scm] could not prepare instruction files for writing · Error')
+      expect(warn.mock.calls).toEqual([['[scm] INSTRUCTION_PREPARATION_FAILED · Error']])
     } finally { warn.mockRestore() }
   })
 

@@ -2,10 +2,10 @@ import { readFileSync } from 'node:fs'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { probeEngines } from './engineProbe.js'
 import { engineAccount } from './engineAccount.js'
-import { commandAvailableInInteractiveShell, commandOutputInInteractiveShell } from './engineLaunch.js'
+import { commandAvailableInInteractiveShell, commandOutputInInteractiveShell } from '../engines/kit/interactiveProbe.js'
 
 vi.mock('./engineAccount.js', () => ({ engineAccount: vi.fn() }))
-vi.mock('./engineLaunch.js', () => ({ commandAvailableInInteractiveShell: vi.fn(), commandOutputInInteractiveShell: vi.fn() }))
+vi.mock('../engines/kit/interactiveProbe.js', () => ({ commandAvailableInInteractiveShell: vi.fn(), commandOutputInInteractiveShell: vi.fn() }))
 vi.mock('./engineBin.js', () => ({
   engineBin: (engine: string) => engine === 'terminal' ? '' : engine,
   enginePathOverride: () => undefined,

@@ -153,6 +153,7 @@ export class Outside {
    */
   static async start(d: IsolatedDaemon, folder: string, hints: Record<string, string>, app?: FakeApp,
     { shell = false } = {}): Promise<Outside> {
+    await d.hooksInstalled(['claude'])
     const { tab, pid, shellPid } = await Outside.open(d, folder, hints, app, shell)
     // Its conversation, as its SessionStart hook named it once that hook had run.
     const started = new RegExp(`claude pid=${pid} SessionStart\\(startup\\) session=(\\S+) ran`)

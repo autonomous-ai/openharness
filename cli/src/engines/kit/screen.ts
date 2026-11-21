@@ -2,7 +2,8 @@ import { stripVTControlCharacters } from 'node:util'
 import type { AgentEngine } from '../types.js'
 import type { ComposerState, MessageHold, PaneInspection, PaneModal, PaneView, ScreenReading } from '../facets/screen.js'
 import { claudeWindowsComposer, inspectPane } from './pane.js'
-import { isApprovalDialog, parseQuestionPane } from './questionPane.js'
+import { parseQuestionPane } from './questionPane.js'
+import { isApprovalDialog } from '../../lib/questionApproval.js'
 const HOLDS: Record<NonNullable<PaneModal>, MessageHold> = {
   rewind: 'rewind_picker_open', transcript: 'transcript_open', search: 'search_open', trust: 'trust_open',
   update: 'update_prompt_open', model: 'model_prompt_open', sign_in: 'sign_in_open', permission: 'permission_open', menu: 'menu_open',

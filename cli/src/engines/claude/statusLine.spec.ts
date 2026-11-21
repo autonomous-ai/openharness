@@ -12,10 +12,9 @@ import { join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../../config/env.js'
-import { joinedInstructions } from '../../lib/agentAttribution.js'
+import { joinedInstructions } from '../kit/launchValues.js'
 import { claudeReportPath, readClaudeReport } from '../../lib/quotaReports.js'
-import { agentInstructionArgs } from '../launches.js'
-import { statusLineSetting } from '../kit/statusLine.js'
+import { preparedStatusLine } from '../kit/statusLine.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { launch as claudeLaunch } from './launch.js'
 
@@ -170,10 +169,15 @@ describe.skipIf(!posix)('a Claude launch\'s status line (a POSIX shell line)', (
     expect(args.filter((arg) => arg === '--settings')).toHaveLength(1)
     return JSON.parse(args[args.indexOf('--settings') + 1]!) as Record<string, any>
   }
-  const said = { instructions: null, prLine: null }
+  const statusArgs = (place: { cwd: string | null; environment: { HOME: string; CLAUDE_CONFIG_DIR: string }; read: (path: string) => string | null }) => {
+    const setting = preparedStatusLine(claudeLaunch.statusLine!, { home: place.environment.CLAUDE_CONFIG_DIR,
+      personal: place.environment.HOME, cwd: place.cwd, read: place.read }, env.ADAPTER_DATA_DIR,
+      managedNodePath(), () => SCRIPT, process.platform, null)
+    return setting ? ['--settings', JSON.stringify(setting)] : []
+  }
 
   it('carries one --settings whose status line runs the script, with the owner\'s own command passed along', () => {
-    const settings = settingsOf(agentInstructionArgs('claude', said,
+    const settings = settingsOf(statusArgs(
       place({ [`${CONFIG}/settings.json`]: JSON.stringify({ statusLine: { type: 'command', command: 'echo owner-line', padding: 2 } }) })))
     expect(settings.statusLine).toMatchObject({ type: 'command', padding: 2 })
     const command = settings.statusLine.command as string
@@ -188,25 +192,19 @@ describe.skipIf(!posix)('a Claude launch\'s status line (a POSIX shell line)', (
       '/work/app/.claude/settings.json': JSON.stringify({ statusLine: { type: 'command', command: 'project-line' } }),
       '/work/app/.claude/settings.local.json': JSON.stringify({ statusLine: { type: 'command', command: 'local-line' } }),
     }
-    expect(settingsOf(agentInstructionArgs('claude', said, place(files))).statusLine.command).toContain(`--then ${b64('local-line')}`)
+    expect(settingsOf(statusArgs( place(files))).statusLine.command).toContain(`--then ${b64('local-line')}`)
   })
 
   it('passes no owner\'s command where they set none', () => {
-    const settings = settingsOf(agentInstructionArgs('claude', said, place({})))
+    const settings = settingsOf(statusArgs( place({})))
     expect(settings.statusLine.type).toBe('command')
     expect(settings.statusLine.command).toContain('statusline.mjs')
     expect(settings.statusLine.command).not.toContain('--then')
   })
 
-  it('merges with the pull request setting into one --settings', () => {
-    const settings = settingsOf(agentInstructionArgs('claude', { instructions: null, prLine: 'LINE' }, place({})))
-    expect(settings.attribution.pr).toContain('LINE')
-    expect(settings.statusLine.command).toContain('statusline.mjs')
-  })
-
   it('merges with every other --settings of the launch', () => {
     const guard = { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'another' }] }] } }
-    const told = agentInstructionArgs('claude', said, place({}))
+    const told = statusArgs( place({}))
     const args = joinedInstructions('claude', ['--agent', 'x', '--settings', JSON.stringify(guard), ...told])
     const settings = settingsOf(args)
     expect(settings.hooks).toEqual(guard.hooks)
@@ -215,7 +213,7 @@ describe.skipIf(!posix)('a Claude launch\'s status line (a POSIX shell line)', (
   })
 
   it.skipIf(!posix)('runs, as Claude Code runs it, to a report and the owner\'s line', () => {
-    const command = settingsOf(agentInstructionArgs('claude', said,
+    const command = settingsOf(statusArgs(
       place({ [`${CONFIG}/settings.json`]: JSON.stringify({ statusLine: { type: 'command', command: 'echo owner-line' } }) }))).statusLine.command as string
     const result = spawnSync(command, { shell: true, input: JSON.stringify(STATUS), encoding: 'utf8', timeout: 15_000, env: { ...process.env, CLAUDE_CONFIG_DIR: configDir } })
     expect(result.stdout).toBe('owner-line\n')
@@ -228,6 +226,8 @@ describe.skipIf(!posix)('a Claude launch\'s status line (a POSIX shell line)', (
 // it, so a Windows agent reports its quota and the person sees their line as before.
 describe('a Claude launch\'s status line on Windows', () => {
   const CONTRACT = claudeLaunch.statusLine!
+  const statusLineSetting = (contract: typeof CONTRACT, captured: Parameters<typeof preparedStatusLine>[1], dir: string, platform: NodeJS.Platform, bash: () => string | null) =>
+    preparedStatusLine(contract, captured, dir, managedNodePath(), () => join(dir, 'statusline', 'statusline.mjs'), platform, bash())
   const HOME = '/home/jo/.claude'
   const BASH = 'C:\\Program Files\\Git\\bin\\bash.exe'
   const files = (statusLine?: Record<string, unknown>) => ({ home: HOME, personal: '/home/jo', cwd: null,

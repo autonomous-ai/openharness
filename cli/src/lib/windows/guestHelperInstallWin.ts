@@ -7,7 +7,7 @@
  */
 import { userInfo } from 'node:os'
 import { dirname } from 'node:path'
-import { ptyHostBinary } from '../ptyHost/launch.js'
+import { ptyHostBinary } from '../ptyHost/binary.js'
 import { managedNodePath } from '../nodeRuntime.js'
 import { runGuestCommand, type GuestRunner } from '../guestRunner.js'
 import { WHOAMI_USER_ARGS, windowsUserSid } from './whoami.js'

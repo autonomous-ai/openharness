@@ -1,3 +1,4 @@
+import { opencodeMajorVersion } from '../engines/opencode/version.js'
 /**
  * The core's launch paths, wired as core/main.ts wires them, over a machine a spec chooses: create, every relaunch
  * (restart, resume, restore and fork share `relaunchOverrides`), retarget's check before it touches a pane and the
@@ -10,12 +11,10 @@
 import { createLaunchHelpers, gridLaunchThrough } from '../core/agents/launch.js'
 import { createAgentCreator, type CreateAgentDeps } from '../core/agents/create.js'
 import { createAgentForker, type ForkAgentDeps } from '../core/agents/fork.js'
-import { installedDsh } from '../dsh/installed.js'
 import { dshThrough } from '../core/agents/dshThrough.js'
 import { createStoreLink } from '../core/storeLink.js'
 import { storeLaunchPort } from '../services/storeLaunch.js'
 import { dshLaunchRequestIn, dshMaterializeRequestIn } from '../services/storeProcess.js'
-import { gridLaunchAnswerIn } from '../core/modelsLink.js'
 import { ApiConnections } from '../lib/apiConnections.js'
 import { ApiConnectionMetadata } from '../lib/apiConnectionMetadata.js'
 import { prepareApiInstructions } from '../lib/apiInstructions.js'
@@ -28,6 +27,10 @@ import type { AgentEngine } from '../engines/types.js'
 import type { TerminalBackendCapabilities } from '../lib/terminalTypes.js'
 import { gridLaunchRequestIn } from '../services/modelsProcess.js'
 import { gridLaunchInProcess } from './gridLaunchInProcess.js'
+import { inspectNativeLaunch } from './nativeSetupInProcess.js'
+import { createRestoreLaunch } from '../core/agents/restoreLaunch.js'
+import { restoreLaunchComposition } from './restoreLaunchComposition.js'
+import type { LaunchOverridesResult } from '../lib/launchOverrides.js'
 
 export interface LaunchWorld {
   /** The data folder: saved APIs, and the config directories written for file-configured engines. */
@@ -41,22 +44,24 @@ export interface LaunchWorld {
   setGridLaunch: (agentId: string, record: unknown) => void
   /** This account's private grid, as the socket knows it (BackendSocket.gridName). */
   gridName?: () => string | null
+  /** The Models context request made by Store, including its Model Manager setup request. */
+  gridContext?: (setup: boolean) => Promise<{ privateGrid: string | null }>
   /** Where Harness makes project folders here (lib/projectFolder.ts `projectsRoot`, the core's): the saved APIs' note
    *  goes only into one. Named by each spec, so no launch reads the home of whoever runs it. */
   projectsRoot: string
 }
 
 /** What `create` needs besides the launch: the spec's stubs for the pane, the registry and the rest. */
-export type CreateRest = Omit<CreateAgentDeps, 'gridLaunchMachine' | 'prepareApiTools' | 'buildGridLaunch' | 'dshLaunch'>
+export type CreateRest = Omit<CreateAgentDeps, 'gridLaunchMachine' | 'prepareInstructions' | 'buildGridLaunch' | 'dshLaunch'>
 /** What `fork` needs besides the launch. */
-export type ForkRest = Omit<ForkAgentDeps, 'prepareApiTools' | 'relaunchOverrides' | 'gridName' | 'dshLaunch'>
+export type ForkRest = Omit<ForkAgentDeps, 'prepareInstructions' | 'relaunchOverrides' | 'gridName' | 'dshLaunch'>
 
 export function launchShapes(world: LaunchWorld) {
   const savedApis = new ApiConnections(world.dataDir)
-  // What the core reads for the note (core/main.ts): the list without keys, never the store.
+  // The workspace component's note writer: synthetic projects have an explicit root, never this machine's home.
   const savedApiList = new ApiConnectionMetadata(world.dataDir)
   const gridName = world.gridName ?? (() => null)
-  const prepareApiTools = (cwd: string | null | undefined, engine: string): void => {
+  const prepareInstructions = async (cwd: string | null | undefined, engine: string): Promise<void> => {
     if (!cwd) return
     try { prepareApiInstructions(savedApiList, cwd, engine, world.projectsRoot) }
     catch { console.warn('[apis] Tool instructions could not be added. Saved connections remain available through harness api.') }
@@ -71,13 +76,13 @@ export function launchShapes(world: LaunchWorld) {
     gridLaunch: async (request) => {
       const asked = gridLaunchRequestIn(wire(request))
       if (!asked) throw new Error('models could not read the launch it was asked for')
-      const answer = gridLaunchAnswerIn(wire(await models(asked)))
-      if (!answer) throw new Error('the core could not read the launch models built')
-      return answer
+      return wire(await models(asked))
     },
   }))
-  const store = storeLaunchPort()
-  const link = createStoreLink({ clients: { dshInstallStatus: () => {} } } as never, () => {}, async (type, payload) => {
+  const store = storeLaunchPort(undefined, undefined, undefined, world.gridContext ?? (async () => ({ privateGrid: gridName() })))
+  const link = createStoreLink({ clients: { dshInstallStatus: () => {} } } as never, async (type, payload) => {
+    if (type === 'dshContext') return wire(await store.dshContext(payload as never))
+    if (type === 'dshDescribe') return wire(await store.dshDescribe(payload as never))
     if (type === 'dshMaterialize') {
       const request = dshMaterializeRequestIn(wire(payload))
       if (!request) throw new Error('Store could not read the workspace request')
@@ -87,9 +92,11 @@ export function launchShapes(world: LaunchWorld) {
     if (!request) throw new Error('Store could not read the launch request')
     return wire(await store.dshLaunch(request))
   })
-  const dshLaunch = dshThrough({ store: () => link.port, nameOf: id => installedDsh(id)?.manifest.name,
+  const dshLaunch = dshThrough({ store: () => link.port, nameOf: () => undefined,
     account: () => ({ privateGrid: gridName() }) })
   const launchOverridesDeps: LaunchOverridesDeps = {
+    native: (engine, source) => inspectNativeLaunch(engine, source),
+    prepareNative: (native, current, environment, clear) => native.prepareHooks(0, current, environment, clear),
     machine: world.machine,
     gridLaunch,
     writeGridConfigDir,
@@ -100,13 +107,23 @@ export function launchShapes(world: LaunchWorld) {
   }
   const helpers = createLaunchHelpers({
     authority: () => () => true,
-    prepareApiTools, launchOverridesDeps,
+    prepareInstructions, launchOverridesDeps,
     setGridLaunch: world.setGridLaunch as never, prepareResume: async () => ({ repairedItems: 0 }),
   })
   return {
-    create: (rest: CreateRest) => createAgentCreator({ ...rest, gridLaunchMachine: world.machine, buildGridLaunch: gridLaunch, prepareApiTools, dshLaunch }),
+    create: (rest: CreateRest) => createAgentCreator({ native: (engine, source) => inspectNativeLaunch(engine, source),
+      ...rest, syncProfileHome: rest.syncProfileHome ?? (async () => []), gridLaunchMachine: world.machine, buildGridLaunch: gridLaunch, prepareInstructions, dshLaunch }),
     relaunch: (session: RegisteredSession, source?: LaunchSource) => helpers.relaunchOverrides(session, source),
-    fork: (rest: ForkRest) => createAgentForker({ ...rest, prepareApiTools, relaunchOverrides: helpers.relaunchOverrides, gridName, dshLaunch }),
+    finalRelaunch: async (session: RegisteredSession, built: LaunchOverridesResult) => {
+      const restore = createRestoreLaunch({
+        workspaceMissing: () => null, relaunchOverrides: async () => built.ok ? { ...built, overrides: { ...built.overrides } } : built,
+        downgradedPermission: (row, native) => helpers.downgradedPermission(row, false, 'restore', native),
+        prepareSessionResume: async () => {}, refreshGridWebSearch: async () => {}, launch: restoreLaunchComposition,
+      })
+      return restore(session, { current: () => true, prepare: false })
+    },
+    fork: (rest: ForkRest) => createAgentForker({ native: (engine, source) => inspectNativeLaunch(engine, source),
+      prepareNative: launchOverridesDeps.prepareNative, opencodeMajor: opencodeMajorVersion, ...rest, prepareInstructions, relaunchOverrides: helpers.relaunchOverrides, gridName, dshLaunch }),
     validate: (engine: AgentEngine, source: LaunchSource) => validateLaunchOverrides(launchOverridesDeps, engine, source),
     /** The line retarget logs once a move onto a grid succeeded. */
     retargetLine: (engine: AgentEngine, overrides: LaunchOverrides): string | null => overrides.gridLaunchRecord
@@ -120,6 +137,6 @@ export function launchShapes(world: LaunchWorld) {
     },
     leavingGrid: (engine: AgentEngine) => gridEnvVarNames(engine),
     gridCapable: () => gridCapableEngines(),
-    apiTools: prepareApiTools,
+    apiTools: prepareInstructions,
   }
 }

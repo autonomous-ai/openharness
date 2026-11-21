@@ -1,7 +1,7 @@
 /**
- * The local door's routes and the local WebSocket's frames that a service answers (core/api.ts `SERVICE_HTTP_ROUTES`,
+ * The local door's routes, window frames and authenticated RPCs that a service answers (core/api.ts `SERVICE_HTTP_ROUTES`,
  * `SERVICE_WS_FRAMES`). Once the door has let a request in (hookServer.ts: the private socket or loopback, the
- * credential, Host and Origin), or a window's connection is open (localWsServer.ts), it goes to the service its route
+ * credential, Host and Origin), a window's connection is open (localWsServer.ts), or an RPC's asker is established (backendSocket.ts), it goes to the service its route
  * names, as the request that route is, wherever that service runs, and the service's answer is written as it gave it.
  * Generic: what the core holds of a route is where it goes, which methods it takes, which of them write and whether only
  * the daemon's own socket may ask it, how long it waits, the headers its answers carry, and what it answers while its
@@ -31,8 +31,8 @@ export interface ServiceRoutesDeps {
   /** The services in their own processes (core/serviceLinks.ts), which bound the wait themselves: the route's, from when
    *  the request is sent, after the start of a service on demand that was not running. */
   linked: ServiceRouter
-  /** The services in this process (core/serviceHost.ts), whose handlers nothing else bounds: the route's wait is kept here. */
-  hosted: ServiceRouter
+  /** The services in this process (services/inlineHost.ts), whose handlers nothing else bounds: the route's wait is kept here. */
+  hosted?: ServiceRouter
   log?: (line: string) => void
   setTimer?: (run: () => void, ms: number) => unknown
   clearTimer?: (timer: unknown) => void
@@ -65,7 +65,7 @@ export function createServiceRoutes(deps: ServiceRoutesDeps) {
       if (deps.linked.route(type, payload, asker, resolve, waitMs)) return
       timer = setTimer(() => resolve(null), waitMs)
       const reply = (result: Record<string, unknown>): void => { clearTimer(timer); resolve(result) }
-      if (!deps.hosted.route(type, payload, asker, reply)) reply({ error: 'SERVICE_UNAVAILABLE' })
+      if (!deps.hosted?.route(type, payload, asker, reply)) reply({ error: 'SERVICE_UNAVAILABLE' })
     } catch (error) {
       if (timer !== undefined) clearTimer(timer)
       log(`[services] ${type} SERVICE_REQUEST_FAILED · ${errorKind(error)}`)
@@ -98,10 +98,27 @@ export function createServiceRoutes(deps: ServiceRoutesDeps) {
       })
     },
   ] as const))
+  const requests = new Map((deps.frames ?? []).filter(route => route.rpc).map(route => [route.frame, route]))
 
   return {
     /** Only declared frame types reach a handler; replies retain the originating connection and request id. */
     frames,
+    /** The same declared routes over RPC. Identity comes from the transport; a payload cannot make an owner. */
+    route(type: string, payload: Record<string, unknown>, asker: Asker, reply: (result: Record<string, unknown>) => void): boolean {
+      const route = requests.get(type)
+      if (!route) return false
+      if (route.rpc === 'local' && !asker.local) { reply({ error: 'LOCAL_ONLY' }); return true }
+      if (!asker.owner || asker.guest !== undefined) { reply({ error: 'OWNER_REQUIRED' }); return true }
+      void ask(route.type, route.waitMs, { frame: type, payload }, { ...asker, rpcRoute: true }).then(answer => {
+        // Expected command refusals belong to the service. Only a failed transport/host uses the old route fallback.
+        const result = answer && answer.error !== 'SERVICE_UNAVAILABLE' && answer.error !== 'SERVICE_FAILED' ? answer : route.unanswered ?? {}
+        if (Object.hasOwn(result, 'requestId')) {
+          const { requestId: _ignored, ...body } = result
+          reply(body)
+        } else reply(result)
+      })
+      return true
+    },
     /** The answer to [request] on [path] (its query left out), or null when no service answers that path and method.
      *  [localOk]: the request carries the local header, which a route's write needs; [socket]: it came over the daemon's
      *  own socket, which a socket's route needs. Its body is read after both. */
@@ -116,7 +133,7 @@ export function createServiceRoutes(deps: ServiceRoutesDeps) {
         if (answer && Number.isInteger(answer.status) && (answer.status as number) >= 200 && (answer.status as number) <= 599 && isRecord(answer.body)) {
           return headed(route, { status: answer.status as number, body: answer.body }, answer.headers)
         }
-        // Down, slow or failing is said where it is seen (core/serviceLinks.ts, core/serviceHost.ts); an answer that is
+        // Down, slow or failing is said where it is seen (core/serviceLinks.ts, services/inlineHost.ts); an answer that is
         // none is a service's mistake, said here.
         if (answer && typeof answer.error !== 'string') log(`[services] ${route.type} was answered with no HTTP answer: answered ${route.unanswered.status} instead`)
         return headed(route, route.unanswered)

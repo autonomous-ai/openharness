@@ -1,10 +1,39 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { TurnDelivery } from '../core/api.js'
-import { deliveryIn, turnsLink } from './turnsLink.js'
+import { deliveryIn, inputIn, turnsLink } from './turnsLink.js'
 
 const flush = () => new Promise((settle) => setTimeout(settle, 0))
 
 describe('delivered turns from a service in its own process', () => {
+  it('uses the versioned shared operation for an explicit scheduling request and never falls back on refusal', async () => {
+    const query = vi.fn(async () => ({ error: 'UNKNOWN_QUERY' })), heard = vi.fn()
+    const link = turnsLink(query)
+    link.turns.onDelivery(heard)
+    link.turns.deliver('a', 'hello', 'd', { when: 'composer' })
+    await vi.waitFor(() => expect(heard).toHaveBeenCalledWith({ deliveryId: 'd', sessionId: 'a', state: 'rejected', reason: 'UNKNOWN_QUERY' }))
+    expect(query.mock.calls).toEqual([['input', { agentId: 'a', text: 'hello', deliveryId: 'd', version: 1, when: 'composer' }]])
+  })
+
+  it('accepts only bounded, well-formed generic input facts', () => {
+    const event = { agentId: 'a', deliveryId: 'd', when: 'composer', phase: 'dispatching', sessionId: 's', duringTurn: true, content: 'hello' }
+    expect(inputIn({ kind: 'input', event })).toEqual(event)
+    const activity = { epoch: 'core', revision: 8 }
+    const copied = inputIn({ kind: 'input', event: { ...event, activity } })
+    activity.revision = 9
+    expect(copied?.activity).toEqual({ epoch: 'core', revision: 8 })
+    for (const activity of [null, [], {}, { epoch: '' }, { epoch: 'x'.repeat(129), revision: 1 },
+      { epoch: 'core', revision: -1 }, { epoch: 'core', revision: Infinity }, { epoch: 'core', revision: 0.5 }]) {
+      expect(inputIn({ kind: 'input', event: { ...event, activity } })).toBeNull()
+    }
+    expect(inputIn({ kind: 'input', event: { agentId: 'a', deliveryId: 'd', when: 'turn', phase: 'written' } }))
+      .toEqual({ agentId: 'a', deliveryId: 'd', when: 'turn', phase: 'written' })
+    for (const payload of [{}, { kind: 'input' }, { kind: 'other', event }]) expect(inputIn(payload)).toBeNull()
+    for (const bad of [{ agentId: '' }, { deliveryId: 'x'.repeat(201) }, { when: 'native' }, { phase: 'started' },
+      { sessionId: 5 }, { sessionId: 'x'.repeat(201) }, { duringTurn: 'yes' }, { content: 42 }, { content: 'x'.repeat(24 * 1024 + 1) }]) {
+      expect(inputIn({ kind: 'input', event: { ...event, ...bad } })).toBeNull()
+    }
+  })
+
   it('asks the core to write a delivery and to take one back, and hears whether it could', async () => {
     const query = vi.fn(async (q: string) => (q === 'cancel_delivery' ? { cancelled: true } : {}))
     const link = turnsLink(query)

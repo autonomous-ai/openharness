@@ -1,0 +1,52 @@
+# Current-main integration for the daemon core extraction
+
+The extraction branch integrates main `75424f53183e3e5ad8abc0e01ef0d7fd554fb616` after the Devices legacy-state move (`5df325a95a`). Main changed Linux root selection, hook installation, launch retries, Devices routing and failure logging. Those changes must reach the extracted owners without restoring optional code in core.
+
+## Design
+
+This integration adds no persisted customer data, query, account authority, dependency or feature. Growth, concurrency, read cost, audience and identity retain the extraction designs. The worker-plan hash includes main's edge home bridge; the private contract remains version 7. Public clients retain the existing compatibility paths. Linux's hook migration uses bounded setup rendering and final native-file publication. A retry builds its launch file only when the terminal dispatches, after its current-authority checks. A held Windows command remains byte-identical. Rollback remains the immutable-cohort selection and custody protocol already described in the core plan.
+
+Failures retain their named states and now include only `errorKind` in diagnostic lines. Raw command arguments, paths and exception messages are not logged. Paste retains its failure reply as structured state, separately from the diagnostic line. Runtime logging introduces no I/O or timers on the successful path. Platforms: macOS validation here; Linux migration fixtures simulate roots in private homes; actual Linux acceptance remains pending and native Windows is deferred by the owner. Mobile is outside this task.
+
+## Integration evidence
+
+All 113 conflicting files and 190 conflict hunks were reviewed against both sides. Existing core Browser modules remain deleted; their behavior is in gateway. Component startup, optional inline composition, common service-session presentation, storage-child preparation and the legacy Devices ordering boundary remain extracted.
+
+- Deferred launch-factory regression: actual RED `20261119T093457.557530Z-69477`, then all 145 engine-launch cases pass in `20261119T093631.183199Z-70998`. Two obsolete pane expectations in that batch were corrected later.
+- Initial caller integration: `20261119T093842.723041Z-73896`, 1,343 passing cases, 11 failures and one migration setup failure. These failures are retained, not counted as acceptance.
+- Corrected caller batch: `20261119T094605.823077Z-82377`, 976 passing cases and five failures. Hook deadline/late-publication cases pass after the fixture retains every live deadline instead of overwriting the registry deadline with a completed child request's timer.
+- Moved probe privacy: the first fixture failed before reaching refusal (`20261119T094457.693770Z-81200`); corrected actual RED `20261119T094529.807738Z-81648` shows the private argument/path in the log. The subsequent batch passes the corrected regression.
+- Main's failure-log architecture check finds 70 sites across the extracted graph. Raw-error logging is replaced, fixed failure codes gain failure kinds, and finite reply classifications select literals rather than forwarding exception text.
+- `20261119T095138.748665Z-88117`: types pass; architecture, failure-log checks, Create and actual-child disk-failure checks pass (237 cases overall). One remaining hook-migration expectation assumed the default Claude home; it now checks the explicitly selected profile's projects directory.
+
+The merge is a source checkpoint, not release acceptance. Full combined coverage, packaged native behavior, final performance comparisons and independent review remain open. Earlier cost holds in the core plan are unchanged.
+
+## Final main update
+
+The integration includes `36c1bac7aa` (Devices locates the same tmux as core) and `a38553f5f6` (bounded long voice delivery). Runtime and test merges are automatic; the only conflict is the Devices documentation row. Resolution retains component-owned startup discovery and adds main's tmux lookup description. The cohosted-focus correction remains in `devicesProcess.ts`, outside core. Final local gates cover the combined source; the added long-transcript native case is selected alongside Wi-Fi acceptance. No backend source differs from this main revision.
+
+## CI transport and complete source declarations
+
+Automatic run `44530493668` could not start `ci/required`: Linux rejected the 144,972-character `CI_NEEDS` environment string with `Argument list too long`. Its duplicated plan alone was already 130,763 characters. Both gates now read complete JSON from quoted stdin in the workflow script. No job, changed path or local receipt is dropped, and plan/source identity and draft checks are unchanged. A path containing shell commands or a heredoc delimiter stays JSON data.
+
+The full local process run `20261119T132231.248345Z-18949` ran 430 tests, with two failing cross-read subtests and one Git environment error. The benchmark's unit test now names the exact TypeScript workload it imports, and that file is declared for selection and evidence reuse. Existing connector-home and model-name test strings are documented as fixture data. Git 2.39 ignored `GIT_NO_LAZY_FETCH` in the partial-clone fixture; the installed Apple Git 2.50 runs that check correctly. These corrections change CI and test metadata only.
+
+`20261119T132914.447212Z-36082` passes all 108 affected CI tests and all 39 local-receipt tests. Five new transport tests cover a plan with 3,000 paths, rejected required jobs and literal shell-shaped path text; the first four tests failed before the transport change. Pinned actionlint v1.7.12 also passes. Unchanged process cases from the earlier full run remain recorded there; final automatic CI still runs the full process suite.
+
+## OpenCode and moved installation history
+
+Main `f6cf1d6e20` adds OpenCode 2 table/fork recognition, Linux installation-history relocation and the same Hachi clock correction. The relocation change merges into the existing engine setup owner. The OpenCode SQL change conflicts with the extraction's explicit refusal of database deletion: no subprocess has safe final deletion authority across every retained core/rollback. Preserve that refusal and move the new table/fork knowledge into the monitor's read-only history-size component. No database writer or vendor SQL returns to core.
+
+Design: no new state, migration, authority or timer. The monitor retains its existing bounded request and read-only database access. Its estimate includes the selected conversation's known attachment links, parts, instructions, inbox and schedules; shared blob bytes stay unowned and uncounted. Forks and unknown referencing schemas retain an unknown estimate. Database deletion still returns `STORAGE_PURGE_AUTHORITY_UNAVAILABLE` before stopping an agent or changing records. The tests preserve both conversations and shared blobs. Platforms are the existing shared TypeScript path with Mac verification and Linux CI; native Windows remains deferred. Source-scoped acceptance before this merge is retained, and affected source must be validated again.
+
+The two new OpenCode monitor callers fail before the adaptation (`20261119T134959.995093Z-85176`, unknown size instead of 230 bytes). The integrated source passes all 141 callers across purge, native installation, Hachi and architecture, and TypeScript (`20261119T135111.470717Z-86386`). The frozen pre-merge candidate `557f4cb1c2` passes all eleven required CLI gates (`20261119T133814.445008Z-54307`), both ordinary native disk-full cases (`20261119T134222.825535Z-64243`) and the V9 baseline/candidate smoke. V9 was not timed: this main integration requires freshly built, matched inputs. The local PR receipt validator requires the exact final commit; the old eleven-gate fence cannot be relabeled for this merge.
+
+## Devices integration after main moved again
+
+Main `b516e598d2` adds default Orca plugin setup in the existing Devices process. GitHub withheld automatic PR CI while its conflict remained. Resolve only the shared documentation row and the caller test helper: keep edge-owned startup discovery and the extracted desk callback, and add main's Orca plugin test dependency. Runtime Devices changes merge without conflicts. None of main's changed runtime files is in the default eager core inventory; no feature code returns to core. This integration adds no new state or policy beyond the already merged Devices design. Its affected callers, architecture and native Orca/Wi-Fi checks still need verification. The new Device app changes are main's own source, outside this refactor's product changes.
+
+The clean `af6ba9a6ec` checkpoint passes all eleven exact-head local gates (`20261119T135638.379171Z-92274`, 560.5 seconds) and is published with `hold`. Native workflow `44541245954` runs that validated source. Its results must be attributed to that source; later Devices integration needs its own affected acceptance.
+
+V10 froze `f6cf1d6e20` and `af6ba9a6ec`, built both and passed both smoke cases with owned cleanup. The timed run passes the first baseline setup and controls phases, then refuses Resume because its retained V7 helper still pins the older `75424f5318`/`b93fceea72` commits. This is a benchmark metadata error, before Resume measurements. The whole V10 packet is failed, no paired performance result is accepted, and all child groups, guardians, private nodes and environments were removed. Correct the source pins in a new frozen harness; preserve the workload, one baseline reattachment and zero candidate reattachments, and validate the pins during preparation. V7–V10 files and failed receipts remain unchanged.
+
+The combined Devices integration passes 1,126 callers in ten files and TypeScript (`20261119T141610.097887Z-33774`, 46.5 seconds overall). Architecture passes with the same default core inventory. Remote native workflow `44541245954` has passed its macOS full-disk job on `af6ba9a6ec`; the eight Linux shards are still running at this checkpoint. Current `main` was rechecked as `b516e598d2` before this merge was committed.

@@ -1,15 +1,36 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { HandoffDeps } from '../lib/agentHandoff.js'
+import type { HandoffWiring } from '../lib/handoffDiscovery.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { CONVERSATIONS_OFF } from './api.js'
 import { answerConversationQuery, conversationReads } from './conversationQueries.js'
 import { handoffSessionFact } from '../lib/handoffAuthority.js'
 
+const create = vi.hoisted(() => vi.fn())
+vi.mock('./handoffDependencies.js', () => ({ createHandoffDependencies: create }))
+const readsOf = (deps: HandoffDeps) => {
+  create.mockReturnValueOnce(deps)
+  return conversationReads({ registry: { resolve: () => null },
+    stopped: { get: async (id: string) => (await deps.resolve(id)) ?? null } } as unknown as HandoffWiring, '/private-fixture/handoff')
+}
+
 const session = { agentId: 'retained', sessionId: 's1', engine: 'claude' } as RegisteredSession
 const source = { engine: 'claude', sessionId: 's1', transcriptPath: '/claude/s1.jsonl' }
 
 describe('the conversation reads the handoff asks of the core', () => {
+  it('bounds a shared single-agent resolve and discards an answer after its original connection ends', async () => {
+    let resolve!: (value: typeof session) => void
+    let connected = true
+    const core = fakeCore({ conversations: { resolve: vi.fn(() => new Promise<typeof session>(done => { resolve = done })) } })
+    const authority = { current: () => connected, ownsRequest: () => false }
+    for (const id of ['', 'a'.repeat(201)]) expect(await answerConversationQuery(core, 'resolve', { id }, authority)).toEqual({ error: 'BAD_QUERY' })
+    expect(core.conversations.resolve).not.toHaveBeenCalled()
+    const pending = answerConversationQuery(core, 'resolve', { id: 'retained' }, authority)
+    connected = false; resolve(session)
+    expect(await pending).toEqual({ error: 'SERVICE_UNAVAILABLE' })
+  })
+
   it('has explicit empty fallbacks, including a refused transcript path', async () => {
     const reads = CONVERSATIONS_OFF
     expect(await reads.resolve('a')).toBeNull()
@@ -28,7 +49,7 @@ describe('the conversation reads the handoff asks of the core', () => {
   })
 
   it('reads retained agents and their recaps now, and discovers from the core record alone', async () => {
-    const d = deps(), reads = conversationReads(d)
+    const d = deps(), reads = readsOf(d)
     expect(await reads.resolve('retained')).toEqual(session)
     expect(await reads.resolve('missing')).toBeNull()
     expect(await reads.recentAsks('s', 20)).toEqual(['ask'])
@@ -47,12 +68,12 @@ describe('the conversation reads the handoff asks of the core', () => {
   })
 
   it('withholds live and stopped launch credentials from the handoff while discovery keeps the authoritative row', async () => {
-    const override = { networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic-handoff-canary' }
+    const override = storedGridFixture({ networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic-handoff-canary' })
     const live = { ...session, agentId: 'live', gridLaunch: override }
     const stopped = { ...session, agentId: 'stopped', gridLaunch: override }
     const records = [live, stopped]
     const d = { ...deps(), resolve: vi.fn(id => records.find(row => row.agentId === id) ?? null) }
-    const reads = conversationReads(d)
+    const reads = readsOf(d)
     const core = fakeCore({ conversations: reads })
     for (const original of records) {
       const view = await reads.resolve(original.agentId)
@@ -61,7 +82,7 @@ describe('the conversation reads the handoff asks of the core', () => {
       expect(Object.hasOwn(view!, 'gridLaunch')).toBe(false)
       expect(handoffSessionFact(view!)).toEqual(handoffSessionFact(original))
       const reply = await answerConversationQuery(core, 'resolve', { id: original.agentId })
-      expect(JSON.stringify(reply)).not.toContain(override.apiKey)
+      expect(JSON.stringify(reply)).not.toContain(override.credential.binding)
       await reads.discover(original.agentId)
       expect(d.discoverSession).toHaveBeenLastCalledWith(original)
       expect(vi.mocked(d.discoverSession!).mock.lastCall?.[0]).toBe(original)
@@ -74,18 +95,18 @@ describe('the conversation reads the handoff asks of the core', () => {
 
   it('keeps missing and optional data empty instead of guessing a conversation or a path', async () => {
     const d = deps()
-    const reads = conversationReads({ ...d, lastFullText: () => undefined, recaps: undefined, discoverSession: undefined, findTranscript: undefined, transcriptOk: undefined })
+    const reads = readsOf({ ...d, lastFullText: () => undefined, recaps: undefined, discoverSession: undefined, findTranscript: undefined, transcriptOk: undefined })
     expect(await reads.lastFullText('s')).toBeNull()
     expect(await reads.recaps('s', 5)).toEqual([])
     expect(await reads.discover('retained')).toBeNull()
     expect(await reads.findTranscript('claude', 's', {})).toBeNull()
     expect(await reads.transcriptOk('claude', '/x', null)).toBe(false)
-    expect(await conversationReads({ ...d, discoverSession: async () => ({ engine: 'claude', sessionId: 's', transcriptPath: null }) }).discover('retained'))
+    expect(await readsOf({ ...d, discoverSession: async () => ({ engine: 'claude', sessionId: 's', transcriptPath: null }) }).discover('retained'))
       .toEqual({ engine: 'claude', sessionId: 's', transcriptPath: null })
   })
 
   it('answers only the declared read queries, preserving all arguments', async () => {
-    const core = fakeCore({ conversations: conversationReads(deps()) })
+    const core = fakeCore({ conversations: readsOf(deps()) })
     const ask = (query: string, payload: Record<string, unknown>) => answerConversationQuery(core, query, payload)
     expect(await ask('resolve', { id: 'retained' })).toEqual({ value: session })
     expect(await ask('discover', { id: 'retained' })).toEqual({ value: source })
@@ -111,7 +132,7 @@ describe('the conversation reads the handoff asks of the core', () => {
 it('publishes only with a live core-owned originating request and preserves held failures', async () => {
   const { HandoffError } = await import('../lib/handoffAuthority.js')
   await expect(CONVERSATIONS_OFF.publish({} as never, { current: () => true })).rejects.toThrow()
-  const empty = conversationReads({ resolve: () => null, readHistory: () => undefined, recentAsks: () => [], lastFullText: () => undefined })
+  const empty = readsOf({ resolve: () => null, readHistory: () => undefined, recentAsks: () => [], lastFullText: () => undefined })
   await expect(empty.publish({} as never, { current: () => true })).rejects.toMatchObject({ code: 'HANDOFF_UNAVAILABLE' })
   const request = { agentId: 'a', changeId: '1'.repeat(32), targetEngine: 'claude' }
   const prepared = { request }, ownsRequest = vi.fn(() => true)
@@ -119,7 +140,8 @@ it('publishes only with a live core-owned originating request and preserves held
     if (!permit.current(request)) throw new HandoffError('HANDOFF_UNAVAILABLE')
     return { cwd: '/work', file: null, gitRepo: false, degraded: [] }
   })
-  const core = fakeCore({ conversations: { publish } })
+  const core = fakeCore({ conversations: readsOf({ resolve: () => null, readHistory: () => undefined,
+    recentAsks: () => [], lastFullText: () => undefined, publish }) })
   const payload = { prepared, originRequestId: 'routed-request' }, authority = { ownsRequest }
   expect(await answerConversationQuery(core, 'publish', payload, authority)).toEqual({ value: { cwd: '/work', file: null, gitRepo: false, degraded: [] } })
   expect(ownsRequest).toHaveBeenCalledWith('routed-request', 'agent_handoff_prepare', request)
@@ -131,3 +153,4 @@ it('publishes only with a live core-owned originating request and preserves held
   publish.mockRejectedValueOnce(new Error('private failure detail'))
   expect(await answerConversationQuery(core, 'publish', payload, authority)).toEqual({ error: 'HANDOFF_UNAVAILABLE', held: true, retryable: true })
 })
+import { storedGridFixture } from '../testing/gridCredentials.js'

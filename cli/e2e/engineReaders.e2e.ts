@@ -1,7 +1,8 @@
 /** Private daemon/home/tmux; real supervised reader processes and the engines' recorded wire format. */
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { TerminalBinaryKind } from '../src/lib/terminalBinary.js'
 import { LocalClient } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { alive, harnessdProcesses } from './harness/endurance.js'
@@ -31,8 +32,8 @@ describe('Claude Code and Codex readers in their own processes', () => {
   let daemon: IsolatedDaemon | undefined
   let client: LocalClient | undefined
   afterEach(async () => { client?.close(); await daemon?.close(); client = undefined; daemon = undefined })
-  async function fresh(env: Record<string, string> = {}) {
-    const d = daemon = await IsolatedDaemon.create({ env: { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000', ...env } })
+  async function fresh(env: Record<string, string> = {}, noMaster = false) {
+    const d = daemon = await IsolatedDaemon.create({ noMaster, env: { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000', ...env } })
     onTestFailed(() => console.log(d.log()))
     await d.start()
     client = await LocalClient.connect(d)
@@ -50,13 +51,37 @@ describe('Claude Code and Codex readers in their own processes', () => {
     const catalog = await c.request('models_list', { agentId: agent.id }, 15_000)
     expect(catalog.error, JSON.stringify(catalog)).toBeUndefined()
     expect(catalog.models.some((option: { id: string }) => option.id === selected)).toBe(true)
+    expect(JSON.stringify((await history(c, agent)).events)).toContain(`inline-profile-${engine}`)
+    const listed = await c.request('sessions_list', { agentId: agent.id }, 15_000)
+    expect(listed.sessions[0]).toMatchObject({ id: agent.sessionId })
+    expect(listed.sessions[0].messageCount).toBeGreaterThan(0)
     expect(readerPid(d, engine)).toBeUndefined()
     expect(d.coresStarted()).toBe(1)
   })
 
+  it.each<{ label: string; env: Record<string, string>; noMaster: boolean }>([
+    { label: 'one isolated reader with the other services inline', env: { HARNESSD_SERVICES: 'engine-claude' }, noMaster: false },
+    { label: 'the explicit no-master compatibility path', env: { HARNESS_NO_MASTER: '1', HARNESSD_SERVICES: 'none' }, noMaster: true },
+  ])('keeps history and line counts working with $label', async ({ env, noMaster }) => {
+    const { d, c } = await fresh(env, noMaster)
+    const core = d.corePid()
+    const agent = await create(d, c, 'claude')
+    await turn(c, agent, 'history-with-inline-components')
+    const answer = await history(c, agent)
+    expect(answer.error, JSON.stringify(answer)).toBeUndefined()
+    expect(JSON.stringify(answer.events)).toContain('history-with-inline-components')
+    const listed = await c.request('sessions_list', { agentId: agent.id }, 15_000)
+    expect(listed.sessions[0]).toMatchObject({ id: agent.sessionId })
+    expect(listed.sessions[0].messageCount).toBeGreaterThan(0)
+    if (noMaster) expect(readerPid(d, 'claude')).toBeUndefined()
+    else expect(alive(readerPid(d, 'claude')!)).toBe(true)
+    expect(d.corePid()).toBe(core)
+    await turn(c, agent, 'still-usable-after-history')
+  })
+
   // #4146: before a resume, the `claude agents --json` that finds a `claude --bg` job holding the session is run by Claude
   // Code's worker, never by the core; only explicit inline mode runs it in the core.
-  it.each([['its worker', {}], ['the core, in explicit inline mode', { HARNESSD_SERVICES: 'none' }]] as const)(
+  it.each<[string, Record<string, string>]>([['its worker', {}], ['the core, in explicit inline mode', { HARNESSD_SERVICES: 'none' }]])(
     'asks whether a background job holds a Claude Code session it resumes from %s', async (_where, env) => {
       const { d, c } = await fresh(env)
       const agent = await create(d, c, 'claude')
@@ -164,6 +189,54 @@ describe('Claude Code and Codex readers in their own processes', () => {
     await ended
     await turn(c, agent, `screen-recovered-${engine}`)
     expect(alive(bound.processIdentity.pid)).toBe(true)
+    expect(d.coresStarted()).toBe(1)
+  })
+
+  it.skipIf(process.platform === 'win32').each(['worker', 'inline'] as const)('terminal screen %s preserves inspection and terminal input isolation', async mode => {
+    const { d, c } = await fresh({ SHELL: '/bin/bash', HARNESSD_SERVICE_HEARTBEAT_TIMEOUT_MS: '60000',
+      ...(mode === 'inline' ? { HARNESSD_SERVICES: 'none' } : {}) })
+    const cwd = join(d.projectsDir, 'terminal-screen'); mkdirSync(cwd)
+    const opened = await c.request('agent_create', { engine: 'terminal', cwd }, 60_000)
+    expect(opened.error, JSON.stringify(opened)).toBeUndefined()
+    const agentId = opened.agent.id
+    const requestId = 'terminal-screen-input'
+    const attached = c.next(frame => ['terminal_ready', 'terminal_error'].includes(frame.type)
+      && frame.payload?.requestId === requestId, 30_000, 'terminal input stream')
+    c.send('terminal_open', { requestId, protocolVersion: 3, agentId, cols: 100, rows: 30 })
+    const ready = await attached
+    expect(ready.type, JSON.stringify(ready)).toBe('terminal_ready')
+    let sequence = 0
+    const write = async (name: string) => {
+      // Shell keystrokes use the existing terminal stream. Agent messages require an engine process.
+      c.sendBinary({ kind: TerminalBinaryKind.input, streamId: ready.payload!.streamId, seq: sequence++, compressed: false,
+        bytes: Buffer.from(`printf '1 background task\\n'; printf verified > ${name}.txt\r`) })
+      await until('the shell command to complete', () => {
+        const path = join(cwd, `${name}.txt`)
+        return existsSync(path) && readFileSync(path, 'utf8') === 'verified' || null
+      }, 30_000, 50)
+      expect(readFileSync(join(cwd, `${name}.txt`), 'utf8')).toBe('verified')
+    }
+    // Close inspection actually reads the terminal screen; it never writes or closes the pane in inspect mode.
+    const inspect = () => c.request('agent_close', { agentId, sessionId: opened.agent.sessionId,
+      createdAt: opened.agent.createdAt, mode: 'inspect' }, 25_000)
+    await write('before')
+    expect(await inspect()).toMatchObject({ activity: 'working' })
+    const worker = harnessdProcesses(d).get('engine-others'), core = d.corePid()
+    if (mode === 'worker') {
+      expect(worker).toBeDefined()
+      process.kill(worker!, 'SIGSTOP')
+      try {
+        const reading = inspect()
+        void reading.catch(() => {})
+        await write('during-reader-outage')
+        expect(await reading).toMatchObject({ activity: 'unknown' })
+        expect((await rows(c)).some(row => row.id === agentId)).toBe(true)
+        expect(d.corePid()).toBe(core)
+      } finally { process.kill(worker!, 'SIGCONT') }
+    } else expect(worker).toBeUndefined()
+    await write('after')
+    expect(await inspect()).toMatchObject({ activity: 'working' })
+    expect(d.corePid()).toBe(core)
     expect(d.coresStarted()).toBe(1)
   })
 

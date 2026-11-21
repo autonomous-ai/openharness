@@ -1,4 +1,5 @@
 import type { Socket } from 'node:net'
+import { once } from 'node:events'
 import http from 'node:http'
 import net, { type AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -210,6 +211,30 @@ describe('local CLI WebSocket', () => {
     }
   })
 
+  it('keeps exact desk normalization behind the legacy compatibility door', async () => {
+    const backend = new FakeBackend(), panes = vi.fn(), unread = vi.fn(), tabs = vi.fn(), routed = vi.fn(async () => null)
+    const ws = new WebSocket(await start(backend, { onAppPanes: panes, onAppUnread: unread, onAppSwarms: tabs,
+      serviceFrames: new Map(['app_panes', 'app_unread', 'app_swarms'].map(type => [type, routed])) }))
+    try {
+      await onceOpen(ws)
+      const connected = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+      await connected
+      ws.send(JSON.stringify({ type: 'app_panes', payload: { agentIds: ['active', '', 7] } }))
+      ws.send(JSON.stringify({ type: 'app_unread', payload: { items: [{ agentId: 'active', machineId, text: 'Synthetic recap' }, { agentId: '' }] } }))
+      ws.send(JSON.stringify({ type: 'app_swarms', payload: { active: 'missing', swarms: [{ id: 'tab', name: 'Tab', agentIds: ['active', 7] }], tiles: [] } }))
+      ws.send(JSON.stringify({ type: 'terminal_resize', payload: { streamId, cols: 90, rows: 25 } }))
+      await vi.waitFor(() => expect(backend.frames.at(-1)?.type).toBe('terminal_resize'))
+      // First-use interpretation is asynchronous and does not hold terminal traffic.
+      await vi.waitFor(() => {
+        expect(panes).toHaveBeenCalledExactlyOnceWith(['active'], true)
+        expect(unread).toHaveBeenCalledExactlyOnceWith([{ agentId: 'active', machineId, question: false, text: 'Synthetic recap' }])
+        expect(tabs).toHaveBeenCalledExactlyOnceWith({ active: 'tab', swarms: [{ id: 'tab', name: 'Tab', agentIds: ['active'], panes: 1 }], tiles: [] })
+      })
+      expect(routed).not.toHaveBeenCalled()
+    } finally { ws.close() }
+  })
+
   it('keeps notification identities on the local read and snapshot paths', async () => {
     const backend = new FakeBackend(), seen = vi.fn(), unread = vi.fn()
     const ws = new WebSocket(await start(backend, { onAgentSeen: seen, onAppUnread: unread }))
@@ -381,6 +406,26 @@ describe('local CLI WebSocket', () => {
     ws.close()
   })
 
+  it.each([false, true])('preserves ordinary tool replay and lets a capable observer opt out (%s)', async capable => {
+    const asked = { type: 'commander_question', agentId: 'a1', payload: { requestId: 'q_1', questions: [] } }
+    const snapshot = vi.fn(() => [asked])
+    const ws = new WebSocket(await start(new FakeBackend(), { openQuestions: snapshot }))
+    await onceOpen(ws)
+    const frames: Frame[] = []
+    const got = new Promise<void>(resolve => ws.on('message', raw => {
+      const frame = JSON.parse(raw.toString()) as Frame
+      frames.push(frame)
+      if (capable ? frame.type === 'connected' : frame.type === 'commander_questions_open') resolve()
+    }))
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, tool: true,
+      ...(capable ? { questionProtocol: 1 } : {}) } }))
+    await got
+    expect(snapshot).toHaveBeenCalledTimes(capable ? 0 : 1)
+    expect((frames[0].payload as Record<string, unknown>).questionProtocol).toBe(capable ? 1 : undefined)
+    expect(frames.map(frame => frame.type)).toEqual(capable ? ['connected'] : ['connected', 'commander_question', 'commander_questions_open'])
+    ws.close()
+  })
+
   it('consumes validated preparation UI acknowledgements locally', async () => {
     const backend = new FakeBackend(), opened = vi.fn()
     const ws = new WebSocket(await start(backend, { onDevicePrepareOpened: opened }))
@@ -514,7 +559,7 @@ describe('local CLI WebSocket', () => {
   })
 
   it.each(['local binary', 'remote JSON', 'remote binary'] as const)(
-    'keeps later messages behind an unfinished %s operation', async (kind) => {
+    'orders %s at its owning queue', async (kind) => {
       const backend = new FakeBackend(), pending = gate(), entered = gate()
       const trace: string[] = []
       const first = async () => {
@@ -554,12 +599,16 @@ describe('local CLI WebSocket', () => {
       }
       ws.send(JSON.stringify({ type: 'agents_list', payload: { requestId: 'second' } }))
       await entered.promise
-      // Let the real socket deliver the queued frame while the first operation is held open.
-      await new Promise((resolve) => setTimeout(resolve, 20))
-      expect(trace).toEqual(['first started'])
-      pending.resolve()
-      await vi.waitFor(() => expect(trace).toEqual(['first started', 'first finished', 'second']))
-      ws.close()
+      try {
+        // A pong proves the socket consumed both earlier frames, without a timing sleep. Local binary
+        // work belongs to the shared input queue; only the remote relay keeps its own transport FIFO.
+        const pong = once(ws, 'pong', { signal: AbortSignal.timeout(5_000) })
+        ws.ping(); await pong
+        expect(trace).toEqual(remote ? ['first started'] : ['first started', 'second'])
+        pending.resolve()
+        await vi.waitFor(() => expect(trace).toEqual(remote
+          ? ['first started', 'first finished', 'second'] : ['first started', 'second', 'first finished']))
+      } finally { pending.resolve(); ws.close() }
     },
   )
 
@@ -1026,7 +1075,7 @@ describe('local CLI WebSocket', () => {
     server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
     local = attachLocalWsServer(server, {
       machineId, backend,
-      onAppFocusState: (machine, agent, conn) => states.push({ machine, agent, conn }),
+      onAppFocusState: (machine, agent, conn) => { states.push({ machine, agent, conn }) },
       onAppDisconnect: disconnected,
     })
     await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
@@ -1047,6 +1096,30 @@ describe('local CLI WebSocket', () => {
     ws.close()
     await vi.waitFor(() => expect(disconnected).toHaveBeenCalledExactlyOnceWith(machineId, states[0].conn))
     expect(states).toHaveLength(2)
+  })
+
+  it('clears window membership and unregisters when optional disconnect notification throws', async () => {
+    const backend = new FakeBackend(), tabs = vi.fn()
+    const logged = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const url = await start(backend, {
+      onAppTabAgents: tabs,
+      onAppSwarms: () => {},
+      onAppDisconnect: () => { throw new Error('private device failure') },
+    })
+    const ws = new WebSocket(url)
+    try {
+      await onceOpen(ws)
+      const connected = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+      await connected
+      ws.send(JSON.stringify({ type: 'app_swarms', payload: { swarms: [{ id: 'tab', name: 'Tab', agentIds: ['agent'] }] } }))
+      await vi.waitFor(() => expect(tabs).toHaveBeenCalledWith(backend.connId, ['agent']))
+      ws.close()
+      await vi.waitFor(() => expect(backend.unregisters).toContain(backend.connId))
+      expect(tabs).toHaveBeenLastCalledWith(backend.connId, null)
+      expect(local!.legacyDeviceSnapshot()?.swarms).toBeNull()
+      expect(logged).toHaveBeenCalledExactlyOnceWith('[local-ws] APP_DISCONNECT_FAILED · Error')
+    } finally { ws.terminate(); logged.mockRestore() }
   })
 
   it('keeps Find on the live desktop when a background or replaced socket closes', async () => {
@@ -1161,6 +1234,107 @@ describe('local CLI WebSocket', () => {
     expect(dial).not.toHaveBeenCalled()
     expect(backend.frames.map((frame) => frame.type)).toEqual(['terminal_open'])
     ws.close()
+  })
+
+  it.each(['refused', 'superseded', 'closed'] as const)('does not apply a %s asynchronous focus validation or delay an explicit choice', async outcome => {
+    const backend = new FakeBackend(), dial = vi.fn(), applied = vi.fn()
+    let finish!: () => void, current: string | null = null
+    const pending = new Promise<void>(resolve => { finish = resolve })
+    const focus = vi.fn((_machine: string, agent: string | null, _conn: string, revision?: string) => {
+      if (!revision) { current = agent; return }
+      const before = current
+      return pending.then(() => outcome === 'refused' ? false as const : () => {
+        if (current !== before) return false
+        current = agent; applied(); return true
+      })
+    })
+    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
+    local = attachLocalWsServer(server, { machineId, backend, onAppFocusState: focus, onAppFocus: dial })
+    await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
+    const ws = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`)
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+    await connected
+    try {
+      ws.send(JSON.stringify({ type: 'app_focus', payload: { agentId: 'automatic', focusRevision: 'old:0' } }))
+      await vi.waitFor(() => expect(focus).toHaveBeenCalledOnce())
+      expect(dial).not.toHaveBeenCalled()
+      if (outcome === 'superseded') {
+        ws.send(JSON.stringify({ type: 'app_focus', payload: { agentId: 'explicit' } }))
+        await vi.waitFor(() => expect(dial).toHaveBeenCalledExactlyOnceWith(machineId, 'explicit'))
+      } else if (outcome === 'closed') {
+        ws.close()
+        await vi.waitFor(() => expect(backend.unregisters).toHaveLength(1))
+      }
+      finish()
+      await pending
+      // A later ordinary frame is an ordered dispatch witness, not a sleep.
+      if (outcome !== 'closed') {
+        ws.send(JSON.stringify({ type: 'terminal_open', payload: { agentId: 'background' } }))
+        await vi.waitFor(() => expect(backend.frames).toHaveLength(1))
+      }
+      expect(applied).not.toHaveBeenCalled()
+      expect(dial).toHaveBeenCalledTimes(outcome === 'superseded' ? 1 : 0)
+    } finally { finish(); ws.close() }
+  })
+
+  it('applies a current asynchronous focus on its original physical window and fixed machine binding', async () => {
+    const backend = new FakeBackend(), dial = vi.fn(), applied = vi.fn(() => true), pending = gate()
+    const focus = vi.fn(() => pending.promise.then(() => applied))
+    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
+    local = attachLocalWsServer(server, { machineId, backend, onAppFocusState: focus, onAppFocus: dial })
+    await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
+    const ws = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`)
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+    await connected
+    try {
+      ws.send(JSON.stringify({ type: 'app_focus', payload: { agentId: 'automatic', focusRevision: 'current:1' } }))
+      await vi.waitFor(() => expect(focus).toHaveBeenCalledOnce())
+      expect(dial).not.toHaveBeenCalled()
+      // Established sockets never select again. The ordinary backend receives this frame unchanged;
+      // it cannot replace this physical connection's bound machine.
+      ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId: 'other-machine', localProtocolVersion: 1 } }))
+      await vi.waitFor(() => expect(backend.frames).toHaveLength(1))
+      pending.resolve()
+      await vi.waitFor(() => expect(dial).toHaveBeenCalledExactlyOnceWith(machineId, 'automatic'))
+      expect(applied).toHaveBeenCalledOnce()
+      expect(applied.mock.invocationCallOrder[0]).toBeLessThan(dial.mock.invocationCallOrder[0]!)
+    } finally { pending.resolve(); ws.close() }
+  })
+
+  it.each(['rejected', 'thrown'] as const)('contains a %s focus validator failure and leaves explicit focus usable', async failure => {
+    const backend = new FakeBackend(), dial = vi.fn(), logged = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let reject!: (error: Error) => void
+    const pending = new Promise<never>((_resolve, fail) => { reject = fail })
+    // The assertion below tests production's visible failure; keep a failing RED's orphan rejection
+    // from masking that assertion with a second test-runner error.
+    void pending.catch(() => {})
+    const focus = vi.fn((_machine: string, _agent: string | null, _conn: string, revision?: string) => {
+      if (!revision) return
+      if (failure === 'thrown') throw new Error('private validator detail')
+      return pending
+    })
+    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
+    local = attachLocalWsServer(server, { machineId, backend, onAppFocusState: focus, onAppFocus: dial })
+    await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
+    const ws = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`)
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+    await connected
+    try {
+      ws.send(JSON.stringify({ type: 'app_focus', payload: { agentId: 'automatic', focusRevision: 'current:1' } }))
+      await vi.waitFor(() => expect(focus).toHaveBeenCalledOnce())
+      if (failure === 'rejected') reject(new Error('private validator detail'))
+      await vi.waitFor(() => expect(logged).toHaveBeenCalledWith('[local-ws] FOCUS_VALIDATION_UNAVAILABLE'))
+      expect(dial).not.toHaveBeenCalled()
+      ws.send(JSON.stringify({ type: 'app_focus', payload: { agentId: 'explicit' } }))
+      await vi.waitFor(() => expect(dial).toHaveBeenCalledExactlyOnceWith(machineId, 'explicit'))
+      expect(logged.mock.calls.flat().join(' ')).not.toContain('private validator detail')
+    } finally { ws.close(); logged.mockRestore() }
   })
 
   it('tells this daemon\'s terminals which one is focused, even when the dial refuses the move', async () => {

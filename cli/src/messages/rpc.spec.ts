@@ -3,10 +3,10 @@ import { createServer, type Server } from 'node:http'
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { listenLocalSocket, localSocketPath, pipeProofOf } from '../lib/localSocket.js'
-import { NOT_RUNNING, SANDBOXED } from '../lib/unreachable.js'
+import { NOT_RUNNING, SANDBOXED, START_OUTSIDE } from '../lib/unreachable.js'
 import { newPipePath, PIPE_PROOF_HEADER } from '../lib/windows/pipeAuth.js'
 import { createMessagesRpc, messagesRpc, RefusedError } from './rpc.js'
 
@@ -19,6 +19,8 @@ let behave: Behave
 const PORT = 47_000 + Math.floor(Math.random() * 1000)
 
 beforeEach(async () => {
+  vi.stubEnv('CODEX_SANDBOX', undefined)
+  vi.stubEnv('CODEX_SANDBOX_NETWORK_DISABLED', undefined)
   dir = mkdtempSync(join(tmpdir(), 'rpc-'))
   server = createServer()
   wss = new WebSocketServer({ server, path: '/api/local-ws' })
@@ -26,6 +28,7 @@ beforeEach(async () => {
   await new Promise<void>((done) => server.listen(localSocketPath(dir, PORT)!, done))
 })
 afterEach(async () => {
+  vi.unstubAllEnvs()
   for (const client of wss.clients) client.terminate()
   await new Promise((done) => wss.close(done))
   await new Promise((done) => server.close(done))
@@ -137,7 +140,8 @@ function pipeFixture(): { path: string; close: () => void } {
 // On a shared Windows PC the configured port may be another user's daemon: `harness send` must neither reach it nor
 // hand it this user's local credential (agentClient/daemon.ts `connectSocket` keeps the agent verbs off it too).
 describe('one Agent Messages request on Windows', () => {
-  it.each([false, true])('never sends the local credential to TCP when the daemon pipe is unavailable (dataDir=%s)', async (withDataDir) => {
+  it.each([false, true].flatMap(dataDir => [false, true].map(sandbox => ({ dataDir, sandbox }))))('never sends the local credential to TCP when the daemon pipe is unavailable ($dataDir, sandbox=$sandbox)', async ({ dataDir: withDataDir, sandbox }) => {
+    vi.stubEnv('CODEX_SANDBOX', sandbox ? 'seatbelt' : undefined)
     const tcp = new WebSocketServer({ host: '127.0.0.1', port: 0 })
     let received = 0
     let credentialSeen: string | string[] | undefined
@@ -152,7 +156,7 @@ describe('one Agent Messages request on Windows', () => {
         .catch((error: unknown) => error)
       expect(received).toBe(0)
       expect(credentialSeen).toBeUndefined()
-      expect(result).toMatchObject({ code: 'DAEMON_UNREACHABLE', message: NOT_RUNNING })
+      expect(result).toMatchObject({ code: 'DAEMON_UNREACHABLE', message: withDataDir && sandbox ? START_OUTSIDE : NOT_RUNNING })
     } finally {
       for (const client of tcp.clients) client.terminate()
       await new Promise((done) => tcp.close(done))

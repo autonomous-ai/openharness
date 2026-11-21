@@ -66,7 +66,7 @@ describe('the devices\' process, once there is a device', () => {
     // What a window says on every change goes on with no one to hear it: kept, and told once they start.
     window.send('app_panes', { agentIds: [], foreground: true })
     const first = await plug(file, 'E2E-A', 'e2:e0:00:00:00:0a')
-    expect(d.log()).toContain('[devices] a dial\'s port is there: asking for the devices\' process')
+    expect(d.log()).toContain('[startup] devices: a dial port')
     expect(starts(d)).toBe(1)
     await first.dial.next((m) => m.t === 'agents.end', 30_000, 'the agent list')
     // Unplugged and plugged in again: the same process, which a dial no longer there does not stop.

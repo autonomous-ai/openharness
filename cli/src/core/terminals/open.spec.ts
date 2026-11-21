@@ -28,7 +28,8 @@ describe('the core terminal launch call', () => {
       tmuxBackend: deps.createBackend, registry: deps.registry, engine: 'terminal', cwd: '/work/project',
       spawnCwd: '/work/project', argv: expect.any(Function), sessionLabel: expect.stringMatching(/^harness-shell-[\da-f-]+$/), bypassPermission: false,
     })
-    const paneArgv = vi.mocked(createAndRegisterPane).mock.calls[0]![0].argv(1)
+    const command = vi.mocked(createAndRegisterPane).mock.calls[0]![0].argv
+    const paneArgv = typeof command === 'function' ? command() : command
     expect(paneArgv).toEqual(argv)
     expect(paneArgv).not.toBe(argv)
     expect(deps.createBackend!.releaseHold).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%42' })
@@ -55,7 +56,7 @@ describe('the core terminal launch call', () => {
   })
   it('preserves a failed launch and never announces it', async () => {
     const { deps, open } = setup()
-    vi.mocked(createAndRegisterPane).mockResolvedValueOnce({ ok: false, error: 'SPAWN_FAILED', detail: 'gone' })
+    vi.mocked(createAndRegisterPane).mockResolvedValueOnce({ ok: false, error: 'SPAWN_FAILED', detail: 'gone', notStarted: true })
     expect(await open({ argv: ['/bin/sh'], cwd: '/work' })).toEqual({ ok: false, error: 'SPAWN_FAILED', detail: 'gone' })
     expect(deps.createBackend!.releaseHold).not.toHaveBeenCalled()
     expect(deps.announceSession).not.toHaveBeenCalled()

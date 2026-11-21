@@ -4,7 +4,7 @@ import { runtimeFor } from '../runtime.js'
 import { blankRuntimeState, encodeRuntimeProfile, transcriptFields } from '../kit/runtime.js'
 import { engineRuntimeRequests } from './runtimeRequests.js'
 import { RUNTIME_CAPABILITIES, RUNTIME_IN_FLIGHT, RUNTIME_READ, RUNTIME_REPLY_BYTES, RUNTIME_WAIT_MS,
-  runtimeAnswer, runtimeContext, runtimeOperation, type RuntimeOperation } from './runtimeProtocol.js'
+  runtimeAnswer, runtimeContext, runtimeOperation, type RuntimeOperation, type RuntimeAnswer } from './runtimeProtocol.js'
 
 const who = { owner: true, local: true }
 const context = (engine: 'claude' | 'codex' = 'claude'): RuntimeContext => ({
@@ -223,4 +223,20 @@ describe('runtime worker contract', () => {
     expect(runtimeAnswer({ ...good, effortAllowed: true }, ctx, { kind: 'effort', model: 'opus', effort: 'high', listed: null })).toBe(true)
     expect(runtimeOperation({ kind: 'effort', model: 'opus', effort: 'high', listed: null })).not.toBeNull()
   })
+})
+
+
+it('carries ignored observations only for pane/config and never combines them with refresh', async () => {
+  const ctx = context()
+  const reader = { ...runtimeFor('claude')!, pane: async () => false as const, config: async () => false as const }
+  const worker = engineRuntimeRequests('claude', { load: async () => reader, recycle: vi.fn() })
+  for (const kind of ['pane', 'config'] as const) {
+    const operation = kind === 'pane' ? { kind, text: 'ignored' } : { kind }
+    const reply = await worker[RUNTIME_READ]({ version: 1, context: ctx, operation }, who) as { answer: RuntimeAnswer }
+    expect(reply.answer.observed).toBe(false)
+    expect(runtimeAnswer(reply.answer, ctx, operation)).toBe(true)
+    expect(runtimeAnswer({ ...reply.answer, observed: true }, ctx, operation)).toBe(false)
+    expect(runtimeAnswer({ ...reply.answer, refreshConfig: true }, ctx, operation)).toBe(false)
+    expect(runtimeAnswer(reply.answer, ctx, { kind: 'describe' })).toBe(false)
+  }
 })

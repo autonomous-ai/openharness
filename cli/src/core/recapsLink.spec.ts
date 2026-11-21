@@ -21,6 +21,13 @@ function setup() {
 }
 
 describe('the recaps in their own process, as the core sees them', () => {
+  it('leaves external service shutdown with its master when an inline host stops its port', async () => {
+    const { deps, link } = setup()
+    await link.port.stop()
+    expect(deps.notify).not.toHaveBeenCalled()
+    expect(deps.call).not.toHaveBeenCalled()
+  })
+
   it('tells each lifecycle event as a notification it never waits on, holding a purge and a rebound until heard', () => {
     const { deps, link } = setup()
     link.port.lifecycle({ kind: 'events', session: s1, events: [], replay: false }, watchers)
@@ -31,6 +38,23 @@ describe('the recaps in their own process, as the core sees them', () => {
       [{ type: 'service_event', payload: { kind: 'lifecycle', event: { kind: 'purged', sessionId: 's1' }, watchers } }, { untilDelivered: true }],
       [{ type: 'service_event', payload: { kind: 'lifecycle', event: { kind: 'rebound', from: 's1', to: 's2' }, watchers } }, { untilDelivered: true }],
     ])
+  })
+
+  it('admits failure notices only when their complete encoded bytes fit with the pending socket bytes', () => {
+    const { deps, link, back } = setup()
+    const event = { kind: 'failure' as const, failure: { agentId: 'a1', sessionId: 's1', message: 'failure' } }
+    const frame = { type: 'service_event', payload: { kind: 'lifecycle', event, watchers } }
+    const bytes = Buffer.byteLength(JSON.stringify(frame))
+    back(RECAPS_BUFFER_LIMIT - bytes)
+    link.port.lifecycle(event as never, watchers)
+    expect(deps.notify).toHaveBeenCalledExactlyOnceWith(frame, {})
+    back(RECAPS_BUFFER_LIMIT - bytes + 1)
+    link.port.lifecycle(event as never, watchers)
+    back(0)
+    link.port.lifecycle({ ...event, failure: { ...event.failure, message: 'x'.repeat(RECAPS_BUFFER_LIMIT) } } as never, watchers)
+    expect(deps.notify).toHaveBeenCalledTimes(1)
+    link.port.lifecycle(event as never, watchers)
+    expect(deps.notify).toHaveBeenCalledTimes(2)
   })
 
   it('drops what would pile up on a process that reads nothing, says so once a minute, and never a purge', () => {

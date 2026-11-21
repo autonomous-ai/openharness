@@ -44,9 +44,17 @@ async function setup(git = false) {
     exclude: old && { path: exclusion, before: old.text, after: handoffExcludeText(old.text), version: old.version, route: old.route } }
   const rows = new Map([[row.agentId, row]])
   const deps = { directory: data, resolve: (id: string) => rows.get(id), ownedByOther: () => false, isRecentlyDeleted: () => false }
-  const permit = { current: () => true }, publish = createHandoffPublisher(deps)
-  return { prepared, permit, publish, deps, rows, exclusion, create: () => createHandoffPublisher(deps) }
+  const authority = { ...deps, authority: async () => ({ resolve: (id: string) => authority.resolve(id), ownedByOther: () => authority.ownedByOther(), current: () => true }) }
+  const permit = { current: () => true }, publish = createHandoffPublisher(authority)
+  return { prepared, permit, publish, deps: authority, rows, exclusion, create: () => createHandoffPublisher(authority) }
 }
+
+it('refuses publication when its original archive witness changed during the child answer', async () => {
+  const ctx = await setup()
+  ctx.deps.authority = async () => ({ resolve: ctx.deps.resolve, ownedByOther: ctx.deps.ownedByOther, current: () => false })
+  await expect(ctx.publish(ctx.prepared, ctx.permit)).rejects.toThrow()
+  expect(fs.existsSync(join(cwd, ctx.prepared.result.file!))).toBe(false)
+})
 
 /** A .gitignore an earlier publication left: one this publication did not write, so it flushes it (a file it wrote was
  *  flushed as it was written, and is not flushed again). */

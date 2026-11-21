@@ -16,10 +16,7 @@ export interface DshLaunch {
 
 /** Clear every inherited session fact that this launch does not explicitly provide. This includes
  * all context for Coding and an old account's private grid when the new harness has none. */
-export const DSH_SESSION_ENV = ['HARNESS_DSH', 'HARNESS_DSH_DIR', 'HARNESS_WORKSPACE', 'HARNESS_CONTEXT_FILE', 'HARNESS_SKILLS_DIR', 'HARNESS_PRIVATE_GRID'] as const
-export function harnessEnvToClear(launchEnv: Record<string, string> = {}): string[] {
-  return DSH_SESSION_ENV.filter(name => !Object.hasOwn(launchEnv, name))
-}
+export { DSH_SESSION_ENV, harnessEnvToClear } from './sessionEnv.js'
 
 /** Facts about the signed-in account a harness is told rather than left to guess or ask. */
 export interface DshAccount {

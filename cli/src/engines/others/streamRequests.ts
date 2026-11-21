@@ -22,6 +22,9 @@ const OPS: readonly StreamOp[] = ['close', 'abort', 'cancel', 'open', 'drain', '
 const id = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 200
 /** What a Task hook's input may hold: Cursor's own, as its hook sent it, bounded. */
 const TASK_INPUT_BYTES = 256 * 1024
+const HERMES_HOME_ENTRIES = 512
+const HERMES_HOME_BYTES = 1024 * 1024
+const HERMES_HOME_TTL_MS = 30_000
 
 function openOf(payload: Record<string, unknown>): StreamOpen | null {
   const s = payload.session, resume = payload.resume
@@ -52,6 +55,37 @@ export function otherStreamRequests(deps: OtherStreamRequestDeps): ServiceReques
   const fromCore = (payload: Record<string, unknown>, asker: Parameters<ServiceRequests[string]>[1]): boolean =>
     asker.owner && asker.local && asker.connection === undefined && payload.version === STREAM_VERSION
   const answer = (value: Record<string, unknown>) => parts.send({ version: STREAM_VERSION, answer: value })
+  // Repeated null-home history reads cost an extra indexed query after the attachment fix. Keep successful reader
+  // hints here, never in the native registry: fixed expiry also lets a moved store be discovered again.
+  const hermesHomes = new Map<string, { home: string; expiresAt: number; bytes: number }>()
+  let hermesHomeBytes = 0
+  const forgetHome = (sessionId: string): void => {
+    const previous = hermesHomes.get(sessionId)
+    if (previous) { hermesHomes.delete(sessionId); hermesHomeBytes -= previous.bytes }
+  }
+  const rememberedHome = (sessionId: string, now: number): string | undefined => {
+    const previous = hermesHomes.get(sessionId)
+    if (!previous) return undefined
+    if (previous.expiresAt > now) return previous.home
+    forgetHome(sessionId)
+    return undefined
+  }
+  const discoverHome = async (sessionId: string, closed?: AbortSignal): Promise<string | null> => {
+    const started = performance.now()
+    const previous = rememberedHome(sessionId, started)
+    if (previous) return previous
+    const { findHermesHomeForSession } = await import('../hermes/home.js')
+    const home = await findHermesHomeForSession(sessionId)
+    const expiresAt = started + HERMES_HOME_TTL_MS, now = performance.now()
+    if (home && readerPath(home) && !closed?.aborted && expiresAt > now && !rememberedHome(sessionId, now)) {
+      const bytes = 2 * (sessionId.length + home.length)
+      while (hermesHomes.size >= HERMES_HOME_ENTRIES || hermesHomeBytes + bytes > HERMES_HOME_BYTES) {
+        forgetHome(hermesHomes.keys().next().value!)
+      }
+      hermesHomes.set(sessionId, { home, expiresAt, bytes }); hermesHomeBytes += bytes
+    }
+    return home
+  }
   /** One wait at a time: the core's next one ends the last, answered with nothing. */
   let waiting: { done: (answer: Record<string, unknown>) => void } | null = null
   const pages = (): Record<string, unknown> => {
@@ -84,7 +118,7 @@ export function otherStreamRequests(deps: OtherStreamRequestDeps): ServiceReques
   })
 
   return {
-    [STREAM_STORE]: async (payload, asker) => {
+    [STREAM_STORE]: async (payload, asker, closed) => {
       const session = payload.session
       if (!fromCore(payload, asker) || !record(session) || !id(session.sessionId)
         || !['hermes', 'openclaw'].includes(session.engine as string)
@@ -92,12 +126,12 @@ export function otherStreamRequests(deps: OtherStreamRequestDeps): ServiceReques
         || (session.pid !== undefined && !(Number.isSafeInteger(session.pid) && (session.pid as number) >= 0))) return failure('ENGINE_INVALID_REQUEST')
       try {
         if (session.engine === 'hermes') {
-          const { findHermesHomeForSession, sameHermesHome } = await import('../hermes/home.js')
+          const { sameHermesHome } = await import('../hermes/home.js')
           if (session.hermesHome) return answer({ store: hermesDbPath(session.hermesHome as string) })
           // `hermesHome: null` means the default home on every Hermes path. #4342 moved this lookup here and answered the
           // default home too, so the core recorded it on an attach during a stop and the stop's identity check refused the
           // Close (#4361). Only a profile home the row did not know is news to the core.
-          const found = await findHermesHomeForSession(session.sessionId)
+          const found = await discoverHome(session.sessionId, closed)
           const store = hermesDbPath(found ?? env.HERMES_HOME)
           return answer(found && !sameHermesHome(found, env.HERMES_HOME) ? { store, home: found } : { store })
         }

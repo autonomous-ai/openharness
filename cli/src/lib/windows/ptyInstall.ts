@@ -14,7 +14,7 @@
  */
 import { copyFileSync, existsSync, linkSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
-import { VERSION_DIR } from '../ptyHost/launch.js'
+import { VERSION_DIR } from '../ptyHost/binary.js'
 import { atomicWriteFile, jsonArray, readState, requireState } from '../secureState.js'
 import { isSingleSegment, readPointer, writePointer } from './installLayout.js'
 import { PTY_PAYLOAD_FILES, PtyPayloadRefused, type PreparedPty } from './ptyPayload.js'

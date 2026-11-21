@@ -5,7 +5,7 @@
  * daemon restart, across a resume and across a compaction. Requests that cannot be served are
  * answered, never crashed on.
  */
-import { mkdirSync, readdirSync, rmSync } from 'node:fs'
+import { mkdirSync, readdirSync, rmSync, type Dirent } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -46,8 +46,8 @@ const answered = (from: number, to: number, turnFrom = from) => asked(from, to).
 function transcriptsOf(daemon: IsolatedDaemon, sessionId: string): string[] {
   const found: string[] = []
   const walk = (dir: string): void => {
-    let entries: ReturnType<typeof readdirSync<{ withFileTypes: true }>>
-    try { entries = readdirSync(dir, { withFileTypes: true }) as never } catch { return }
+    let entries: Dirent[]
+    try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return }
     for (const entry of entries) {
       const path = join(dir, String(entry.name))
       if (entry.isDirectory()) walk(path)

@@ -10,12 +10,32 @@
  * to be `unknown`: it may have been written, and nothing here can tell.
  */
 import type { CoreApi, TurnDelivery } from '../core/api.js'
+import type { SessionInputProgress } from '../lib/sessionInput.js'
 import { errorKind } from '../lib/log.js'
 
 type Payload = Record<string, unknown>
 type DeliveryTurns = Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery'>
 
 const STATES: ReadonlySet<string> = new Set(['queued', 'delivered', 'started', 'rejected', 'unknown'])
+const INPUT_PHASES = new Set(['waiting_for_writer', 'waiting_for_user', 'waiting_for_turn', 'dispatching', 'written', 'composer_available', 'unconfirmed'])
+
+/** No malformed or unbounded service fact enters a component's receipt state. */
+export function inputIn(payload: Payload): SessionInputProgress | null {
+  const event = payload.kind === 'input' && payload.event && typeof payload.event === 'object' ? payload.event as Payload : null
+  const id = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 200
+  if (!event || !id(event.agentId) || !id(event.deliveryId) || !['composer', 'turn'].includes(String(event.when))
+    || !INPUT_PHASES.has(String(event.phase)) || event.sessionId !== undefined && (typeof event.sessionId !== 'string' || event.sessionId.length > 200)
+    || event.duringTurn !== undefined && typeof event.duringTurn !== 'boolean'
+    || event.activity !== undefined && (!event.activity || typeof event.activity !== 'object' || Array.isArray(event.activity)
+      || typeof (event.activity as Payload).epoch !== 'string' || !(event.activity as Payload).epoch || String((event.activity as Payload).epoch).length > 128
+      || !Number.isSafeInteger((event.activity as Payload).revision) || Number((event.activity as Payload).revision) < 0)
+    || event.content !== undefined && (typeof event.content !== 'string' || Buffer.byteLength(event.content) > 24 * 1024)) return null
+  return { agentId: event.agentId, deliveryId: event.deliveryId, when: event.when as SessionInputProgress['when'],
+    phase: event.phase as SessionInputProgress['phase'], ...(event.sessionId === undefined ? {} : { sessionId: event.sessionId as string }),
+    ...(event.duringTurn === undefined ? {} : { duringTurn: event.duringTurn as boolean }),
+    ...(event.activity === undefined ? {} : { activity: { epoch: (event.activity as Payload).epoch as string, revision: (event.activity as Payload).revision as number } }),
+    ...(event.content === undefined ? {} : { content: event.content as string }) }
+}
 
 /** A delivery's progress as the core sent it, or null when it is not one. */
 export function deliveryIn(payload: Payload): TurnDelivery | null {
@@ -44,7 +64,8 @@ export function turnsLink(query: (query: string, payload: Payload) => Promise<Pa
   const turns: DeliveryTurns = {
     deliver: (agentId, text, deliveryId, options) => {
       // `quiet`: a core older than this process ignores it, and the turn it starts tells as any turn does.
-      void query('deliver', { agentId, text, deliveryId, ...(options?.quiet ? { quiet: true } : {}) }).then(
+      void query(options?.when ? 'input' : 'deliver', { agentId, text, deliveryId,
+        ...(options?.when ? { version: 1, when: options.when } : {}), ...(options?.quiet ? { quiet: true } : {}) }).then(
         (answer) => { if (typeof answer.error === 'string') tell({ deliveryId, sessionId: agentId, state: 'rejected', reason: answer.error }) },
         () => tell({ deliveryId, sessionId: agentId, state: 'unknown', reason: 'The core did not confirm this delivery.' }),
       )

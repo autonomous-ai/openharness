@@ -9,7 +9,7 @@
  */
 import { execFile } from 'node:child_process'
 import type { PtyHostClient } from '../ptyHost/client.js'
-import { ptyHostBinary } from '../ptyHost/launch.js'
+import { ptyHostBinary } from '../ptyHost/binary.js'
 import { patientExec, type ExecDone, type PatientExecOptions } from '../patientExec.js'
 import type { ProcessRow } from '../processTable.js'
 

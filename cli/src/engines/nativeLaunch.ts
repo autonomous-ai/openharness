@@ -1,28 +1,33 @@
 /** Eager preparation shared by every way core starts a native engine. */
-import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { engineName } from '../lib/agentNames.js'
 import { failureReason } from '../lib/failureReason.js'
-import { errorKind } from '../lib/log.js'
-import { permissionFlagToVerify, type PermissionLaunchChoice } from '../lib/engineLaunch.js'
+import { launchModelArgs, type LaunchModel } from '../lib/launchModel.js'
+import { interactiveEngineShell, permissionFlagToVerify, type PermissionLaunchChoice } from '../lib/engineLaunch.js'
 import type { EngineInstallRecipe } from '../lib/engineInstall.js'
-import { patientDeadline } from '../lib/patientExec.js'
-import { windowsEngineArgv } from '../lib/windows/launch.js'
-import { engineHooks } from './hooks.js'
-import * as hooks from './nativeHooks.js'
+import { engineHookInstallations as engineHooks } from './nativeHookSetup.js'
+import * as hooks from './nativeHookSetup.js'
+import { LAUNCH_LOCATION_VARIABLES } from './kit/nativeLocations.js'
+import { captureLaunchExecutable } from './kit/launchExecutable.js'
+import type { NativeSetup, NativeSetupProbes } from './kit/nativeSetup.js'
+import { errorKind } from '../lib/log.js'
 import { HookPreparationHeld, HookScriptMissing } from './kit/hookHeld.js'
-import { captureLaunchExecutable, LAUNCH_LOCATION_VARIABLES } from './kit/launchExecutable.js'
 import { homeIsNetworkOrDevice, networkHomeSentence } from './kit/homeAdoption.js'
 import { startupOwnedFlag } from './kit/launchStartup.js'
 import { launchContract } from './launches.js'
 import type { HookPreparationProof } from './kit/nativeHookFiles.js'
-import { nativeHookLocations, nativeProcessEnvironment, type NativeHookOptions } from './kit/nativeLocations.js'
-import { parseMajor, type NativeExecutableSnapshot } from './kit/nativeVersion.js'
-import { OPENCLAW_LAUNCH, OPENCLAW_RUNTIME_PROBE, openclawRuntimeState } from './openclaw/contract.js'
+import { nativeHookLocations, type NativeHookOptions } from './kit/nativeLocations.js'
+import { parseMajor, type NativeExecutableSnapshot } from './kit/versionData.js'
+import { OPENCLAW_LAUNCH, openclawRuntimeState } from './openclaw/contract.js'
 import { OPENCODE_VERSION } from './opencode/contract.js'
 import { type AgentEngine, isTerminalEngine } from './types.js'
+import { prepareLaunchSettings, type PreparedLaunchSettings } from './kit/nativeLaunchSettings.js'
+import { readAuthSession } from '../lib/authSession.js'
+import { managedNodePath } from '../lib/nodeRuntime.js'
+import { claudeCodeGitBash } from '../lib/windows/claudeCodeGitBash.js'
+import { env } from '../config/env.js'
 
 export interface NativeLaunchSource extends PermissionLaunchChoice {
   codexHome?: string | null
@@ -53,6 +58,7 @@ export interface NativeLaunch {
   ready?(): boolean
   current(): boolean
   prepareHooks(port: number, current: () => boolean, environment?: Readonly<Record<string, string>>, clear?: readonly string[]): Promise<boolean>
+  prepareSettings?(cwd: string | null, current: () => boolean): Promise<PreparedLaunchSettings | null>
   permission(choice: PermissionLaunchChoice): Promise<'supported' | 'unsupported' | 'unknown'>
 }
 export type NativeLaunchResult =
@@ -70,78 +76,6 @@ const cannotRun = (engine: AgentEngine, reason: string): Extract<NativeLaunchRes
 const noNative: NativeLaunch = {
   opencodeMajor: null, environment: {}, proofs: [], current: () => true,
   prepareHooks: async () => true, permission: async () => 'supported',
-}
-
-let probes = 0
-/** What a probe's child said, once it exited by itself. A kill at its deadline, a signal, an output limit or a
- *  child that never started is no answer at all: null. */
-interface ProbeOutput { code: number; stdout: string; stderr: string }
-/** Slots follow actual subprocess settlement, including deadline and output-limit kills. */
-async function read(executable: string, args: readonly string[], environment: Readonly<Record<string, string>>): Promise<ProbeOutput | null> {
-  if (probes >= 8) return null
-  probes++
-  return new Promise(done => {
-    let settled = false, answered = false
-    let cancelDeadline = () => {}
-    let drain: ReturnType<typeof setTimeout> | undefined
-    const answer = (output: ProbeOutput | null) => { if (!answered) { answered = true; done(output) } }
-    let child: ReturnType<typeof execFile>
-    try {
-      // Windows starts an npm shim's script under node, never the shim through cmd.exe, which Node refuses to run
-      // without a shell (lib/windows/launch.ts); elsewhere [executable] as it is.
-      const [program, ...programArgs] = windowsEngineArgv('the engine', [executable, ...args], { environment: nativeProcessEnvironment(environment) })
-      // Node's timeout can discard unread output after a core stall, then
-      // report exit 0. Keep its pipes and use discovery's patient deadline.
-      child = execFile(program!, programArgs, {
-        env: nativeProcessEnvironment(environment), encoding: 'utf8', killSignal: 'SIGKILL', maxBuffer: 64 * 1024, windowsHide: true,
-      }, (error, stdout, stderr) => {
-        settled = true; probes--; cancelDeadline(); clearTimeout(drain)
-        // A numeric code is the child's own exit status. A spawn failure, a signal or the output
-        // limit leaves a string or null there, and says nothing about the executable itself. A child that
-        // exited by itself as its deadline passed answered all the same: only a live one is killed below.
-        const code = !error ? 0 : typeof (error as { code?: unknown }).code === 'number' ? (error as { code: number }).code : null
-        answer(code === null ? null : { code, stdout: stdout ?? '', stderr: stderr ?? '' })
-      })
-    } catch { probes--; answer(null); return }
-    if (!settled) cancelDeadline = patientDeadline(5_000, () => {
-      // An exited wrapper may leave a descendant holding its pipes. Signal
-      // only our still-live child, then close our pipe ends after a short drain.
-      try { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL') } catch { /* The reply still holds. */ }
-      drain = setTimeout(() => {
-        child.stdin?.destroy(); child.stdout?.destroy(); child.stderr?.destroy()
-        // An uninterruptible child retains its slot until the actual callback.
-        answer(null)
-      }, 250)
-    })
-    child.stdin?.end()
-  })
-}
-
-/** Each engine executable's help, by the file's identity (its path, inode, size and times: kit/nativeVersion.ts) and the
- *  PATH it runs under. Its help, and that it runs at all, are facts about the installed file, not one launch: launches that
- *  ask together share one probe, and a held pass of many agents (a restore) never meets the probes' cap, nor does a
- *  relaunch or fork ask twice. Not keyed on the homes: help does not read them, and an agent's own home would bring the
- *  cap back. Only help the engine printed is kept, for a minute: an engine can break around its unchanged
- *  file (its Node uninstalled), and a launch after that is refused with its reason again. No answer or a failure is asked
- *  again. A new install, an upgrade or a finished download is a new identity, asked afresh. */
-const helps = new Map<string, { help: Promise<ProbeOutput | null>; at: number }>()
-const HELP_LIFE_MS = 60_000
-/** At most this many installs, each under the PATH it runs with; beyond it the oldest goes. */
-const HELP_LIMIT = 32
-function helpOf(executable: NativeExecutableSnapshot, environment: Readonly<Record<string, string>>,
-  args: readonly string[] = ['--help']): Promise<ProbeOutput | null> {
-  const key = `${executable.identity}\0${environment.PATH ?? ''}\0${args.join(' ')}`, at = performance.now()
-  const known = helps.get(key)
-  if (known && at - known.at < HELP_LIFE_MS) return known.help
-  helps.delete(key)
-  const help = read(executable.command, args, environment)
-  if (helps.size >= HELP_LIMIT) helps.delete(helps.keys().next().value!)
-  helps.set(key, { help, at })
-  void help.then(output => {
-    const printed = output?.code === 0 && `${output.stdout}${output.stderr}`.trim() && executable.current()
-    if (!printed && helps.get(key)?.help === help) helps.delete(key)
-  })
-  return help
 }
 
 /** The location variables every engine's homes derive from. */
@@ -166,14 +100,24 @@ const ENGINE_LOCATIONS: Partial<Record<string, readonly string[]>> = {
 
 /** Probe only. No settings, workspace, model or process mutation occurs here. */
 export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLaunchSource = {},
-  deps: { confirmHome?: (engine: 'claude' | 'codex', home: string) => void } = {},
+  deps: { setup?: NativeSetupProbes & Pick<NativeSetup, 'prepareFiles' | 'prepareSettings'>; confirmHome?: (engine: 'claude' | 'codex', home: string) => void } = {},
 ): Promise<NativeLaunchResult> {
   if (isTerminalEngine(engine)) return { ok: true, launch: { ...noNative, environment: {}, proofs: [] } }
   source = { ...source }
+  if (!deps.setup) return waiting('Waiting for engine setup.')
+  const setup = deps.setup
   const captured = await captureLaunchExecutable(engine)
   if (captured.state === 'held') return waiting(captured.detail)
-  if (captured.state === 'install') return { ...waiting(`Waiting for ${engine} to be installed before preparing its launch.`), install: captured.recipe, environment: captured.environment }
-  const { executable } = captured
+  if (captured.state === 'install') {
+    const evidence = captured.recipe.executable
+    const install = Object.freeze({ ...captured.recipe, executable: Object.freeze({ ...evidence,
+      names: Object.freeze([...evidence.names]),
+      ...(evidence.homeRelativePaths ? { homeRelativePaths: Object.freeze([...evidence.homeRelativePaths]) } : {}),
+      ...(evidence.absolutePaths ? { absolutePaths: Object.freeze([...evidence.absolutePaths]) } : {}),
+    }) })
+    return { ...waiting(`Waiting for ${engine} to be installed before preparing its launch.`), install, environment: Object.freeze({ ...captured.environment }) }
+  }
+  const executable = Object.freeze({ ...captured.executable })
   const selected: Record<string, string> = Object.fromEntries(Object.entries(captured.environment).filter((entry): entry is [string, string] => entry[1] !== undefined))
   if (source.codexHome) selected.CODEX_HOME = source.codexHome
   if (source.claudeHome) selected.CLAUDE_CONFIG_DIR = source.claudeHome
@@ -198,7 +142,7 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
   const implicitHome = engine === 'claude' && !source.claudeHome
     && initialHomes.CLAUDE_PROJECTS_DIR === join(initialHomes.CLAUDE_HOME, 'projects') ? initialHomes.CLAUDE_HOME
     : engine === 'codex' && !source.codexHome ? initialHomes.CODEX_HOME : null
-  const output = engine === 'opencode' ? await read(executable.command, OPENCODE_VERSION.args, environment) : null
+  const output = engine === 'opencode' ? await setup.probe(executable, 'version', environment) : null
   // The version is read from standard output only, as it always was; help below reads both streams.
   const opencodeMajor = output?.code !== 0 ? null : parseMajor(OPENCODE_VERSION, output.stdout)
   if (output && output.code !== 0 && executable.current()) return cannotRun(engine, failureReason(`${output.stderr}\n${output.stdout}`, `it exited with status ${output.code}`))
@@ -206,7 +150,7 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
   if (engine === 'opencode' && opencodeMajor === null) return waiting('Waiting to confirm the selected OpenCode executable’s version.')
   // OpenClaw moves itself onto another Node it can find; on none, its TUI refuses to start. A creation is refused with
   // the named state rather than opening a pane that says so and exits. No answer is no evidence: the launch goes on.
-  const runtime = engine === 'openclaw' ? await read(executable.command, OPENCLAW_RUNTIME_PROBE, environment) : null
+  const runtime = engine === 'openclaw' ? await setup.probe(executable, 'runtime', environment) : null
   const runtimeState = runtime ? openclawRuntimeState(`${runtime.stderr}\n${runtime.stdout}`) : null
   if (runtime && executable.current() && (runtimeState || runtime.code !== 0)) {
     if (!runtimeState) return cannotRun(engine, failureReason(`${runtime.stderr}\n${runtime.stdout}`, `it exited with status ${runtime.code}`))
@@ -220,7 +164,7 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
   // never exiting: every launch then held at "permission flags" for good (a customer, 2026-11-10; reproduced on
   // Windows 11, 2026-11-11). Claude Code says `2.1.322 (Claude Code)`. No answer is no evidence: the launch goes on.
   if (engine === 'claude' && process.platform === 'win32') {
-    const version = await helpOf(executable, environment, ['--version'])
+    const version = await setup.probe(executable, 'versionHelp', environment)
     const said = `${version?.stdout ?? ''}\n${version?.stderr ?? ''}`
     if (version?.code === 0 && said.trim() && !said.includes('Claude Code') && executable.current()) {
       return { ...waiting(notClaudeCode(executable.command, said)), refusal: 'ENGINE_CANNOT_RUN' }
@@ -231,7 +175,7 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
   const owned = process.platform === 'win32' ? startupOwnedFlag(launchContract(engine)) : null
   let startupArgs: readonly string[] | undefined
   if (owned) {
-    const help = await helpOf(executable, environment)
+    const help = await setup.probe(executable, 'help', environment)
     if (help && help.code !== 0 && executable.current()) return cannotRun(engine, failureReason(`${help.stderr}\n${help.stdout}`, `it exited with status ${help.code}`))
     if (!help || help.code !== 0 || !`${help.stdout}${help.stderr}`.trim()) return waiting('Waiting to confirm the selected executable’s startup options.')
     startupArgs = Object.freeze(helpLists(`${help.stdout}\n${help.stderr}`, owned.flag) ? [owned.flag] : [])
@@ -248,6 +192,26 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
     ...(openclawLocal ? { openclawLocal } : {}),
     get environment() { return selectedEnvironment },
     get proofs() { return [...dependencies, ...proofs] },
+    async prepareSettings(cwd, ownerCurrent) {
+      if (engine !== 'claude' && engine !== 'codex') return null
+      const selectedRevision = revision, selected = selectedEnvironment
+      const identity = () => {
+        const session = readAuthSession()
+        return session?.machineId ? { machineId: session.machineId,
+          ...(session.signInAcct ? { accountId: session.signInAcct } : {}),
+          ...(session.signInEpoch ? { epoch: session.signInEpoch } : {}) } : null
+      }
+      const owner = identity(), ownerKey = JSON.stringify(owner)
+      // Required native proof can recover after another hook preparation; optional values from that old revision cannot.
+      const optionalCurrent = () => valid && !preparing && selectedRevision === revision && selected === selectedEnvironment
+        && ownerCurrent() && JSON.stringify(identity()) === ownerKey
+      return prepareLaunchSettings(engine, selected, cwd, setup, {
+        runtimeNode: managedNodePath(),
+        platform: process.platform as 'darwin' | 'linux' | 'win32',
+        gitBash: process.platform === 'win32' ? claudeCodeGitBash({ env: selected }) : null,
+        owner, current: optionalCurrent, nativeCurrent: current,
+      })
+    },
     retain(proof) {
       if (!current() || dependencies.length >= 16 || !proof.current()) return false
       dependencies.push(proof); return true
@@ -269,12 +233,12 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
         if (Object.entries(chosen).some(([key, path]) => key !== 'PATH' && path && (!isAbsolute(path) || path.includes('\0') || path.length > 4096))) return false
         const homes = nativeHookLocations(chosen)
         const confirmed: HookPreparationProof[] = []
-        const options: NativeHookOptions = { environment: chosen,
+        const options: NativeHookOptions = { environment: chosen, setup, settleConflicts: true,
           current: () => preparing && revision === attemptRevision && executable.current() && owner() && dependenciesCurrent(),
           confirmed: proof => confirmed.push(proof) }
         const home = engine === 'codex' ? homes.CODEX_HOME : engine === 'claude' ? homes.CLAUDE_HOME : homes.HERMES_HOME
         const installed = port === 0 ? true : engine === 'claude' || engine === 'codex' ? await engineHooks[engine].installIn(port, home, options)
-          : engine === 'hermes' ? await hooks.installHermesHooks(port, home, { ...options, executable })
+          : engine === 'hermes' ? await hooks.installHermesHooks(port, home, { ...options, executable, setup })
           : engine === 'opencode' ? await hooks.installOpencodePlugin(port, { ...executable, major: opencodeMajor! }, options)
           : await installers[engine]?.(port, options) ?? true
         if (!installed || !executable.current() || !owner() || [...dependencies, ...confirmed].some(proof => !proof.current())) return false
@@ -307,7 +271,7 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
       if (!current()) return 'unknown'
       const observedRevision = revision
       failed = null
-      const probe = await helpOf(executable, selectedEnvironment)
+      const probe = await setup.probe(executable, 'help', selectedEnvironment)
       if (!probe || !current() || observedRevision !== revision) return 'unknown'
       if (probe.code !== 0) { failed = failureReason(`${probe.stderr}\n${probe.stdout}`, `it exited with status ${probe.code}`); return 'unknown' }
       // Help on either stream, as the shell probe reads it (`2>&1`, lib/engineLaunch.ts). OpenCode
@@ -344,4 +308,21 @@ const installers: Partial<Record<AgentEngine, (port: number, options: NativeHook
   cursor: hooks.installCursorHooks, commandcode: hooks.installCommandCodeHooks, devin: hooks.installDevinHooks,
   amp: hooks.installAmpPlugin, kilo: hooks.installKiloPlugin, grok: hooks.installGrokHooks, agy: hooks.installAgyHooks,
   copilot: hooks.installCopilotHooks, pi: hooks.installPiExtension,
+}
+
+/** Model selection is refused before receipt admission, using the same selected executable and setup owner as launch. */
+export async function unsupportedNativeLaunchModelFlag(engine: AgentEngine, model: LaunchModel,
+  setup: Pick<NativeSetupProbes, 'probe'>): Promise<string | null> {
+  const flags = [...new Set(launchModelArgs(engine, model).filter(arg => arg.startsWith('--')))]
+  // The former shell preflight was unknown on Windows and without a usable shell. Keep that admission behavior.
+  if (!flags.length || !interactiveEngineShell()) return null
+  const captured = await captureLaunchExecutable(engine)
+  if (captured.state !== 'ready' || !captured.executable.current()) return null
+  const environment = Object.freeze(Object.fromEntries(Object.entries(captured.environment)
+    .filter((entry): entry is [string, string] => entry[1] !== undefined)))
+  const result = await setup.probe(captured.executable, 'help', environment).catch(() => null)
+  if (!result || result.code !== 0 || !captured.executable.current()) return null
+  const help = `${result.stdout}\n${result.stderr}`
+  if (!help.trim()) return null
+  return flags.find(flag => !helpLists(help, flag)) ?? null
 }

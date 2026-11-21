@@ -4,7 +4,7 @@ import type { RegisteredSession } from '../lib/registry.js'
 import type { WorktreeReview } from '../lib/worktreeDeletion.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { WORKSPACES_OFF } from './api.js'
-import { createWorkspacesLink, PREPARE_FOLDER_MS, WORKTREE_REMOVE_MS, WORKTREE_REVIEW_MS } from './workspacesLink.js'
+import { createWorkspacesLink, PREPARE_FOLDER_MS, WORKTREE_REMOVE_MS, WORKTREE_REVIEW_MS, PREPARE_INSTRUCTIONS_MS, prepareWorkspaceInstructions } from './workspacesLink.js'
 
 const agent = (agentId = 'a1', over: Partial<RegisteredSession> = {}) =>
   ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: `/h/worktrees/repo/${agentId}`, title: 'Fix the login page', ...over }) as RegisteredSession
@@ -20,7 +20,7 @@ function setup(connected = true) {
   const core = fakeCore({
     agents: {
       live: vi.fn(() => live),
-      all: vi.fn(() => [...live, stopped]),
+      all: vi.fn(async () => [...live, stopped]),
       byAgent: vi.fn((agentId: string) => live.find((session) => session.agentId === agentId)),
     },
   })
@@ -52,7 +52,7 @@ describe('workspaces in their own process, as the core tells them', () => {
   // neither asks the process to sweep nor lists every folder in use for one.
   it('never tells the process to sweep, and lists no folders for one', () => {
     const { link, port, core } = setup()
-    expect(Object.keys(port)).toEqual(['stop', 'nameBranches', 'ready', 'prepareFolder', 'describeWorkspace', 'reviewWorktree', 'removeWorktree'])
+    expect(Object.keys(port)).toEqual(['stop', 'nameBranches', 'ready', 'prepareInstructions', 'prepareFolder', 'describeWorkspace', 'reviewWorktree', 'removeWorktree'])
     port.stop()
     expect(link.answer('agents', {})).toEqual({ error: 'UNKNOWN_QUERY' })
     expect(core.agents.all).not.toHaveBeenCalled()
@@ -189,5 +189,51 @@ describe('the git workspaces do for the core', () => {
       expect(await asking(bad).port.removeWorktree(review, target, [], false)).toEqual(unknown)
     }
     expect(warn).toHaveBeenCalledWith('[workspaces] removeWorktree: an answer the core cannot read, taken as not answered')
+  })
+})
+
+
+describe('optional workspace instructions', () => {
+  afterEach(() => vi.restoreAllMocks())
+  it('asks only a process that advertises instructions and forgets the capability on disconnect', async () => {
+    const { port, link, call } = setup()
+    expect(await port.prepareInstructions('/work', 'claude')).toBe(false)
+    link.answer('folders', {})
+    expect(await port.prepareInstructions('/work', 'claude')).toBe(false)
+    expect(call).not.toHaveBeenCalled()
+    link.answer('folders', { instructions: true })
+    for (const [workspace, engine] of [['relative', 'claude'], ['/work', ''], ['/work', 'x'.repeat(65)]]) expect(await port.prepareInstructions(workspace, engine)).toBe(false)
+    expect(call).not.toHaveBeenCalled()
+    call.mockResolvedValue({ prepared: true })
+    expect(await port.prepareInstructions('/work', 'claude')).toBe(true)
+    expect(call).toHaveBeenCalledExactlyOnceWith('prepareInstructions', { workspace: '/work', engine: 'claude' }, PREPARE_INSTRUCTIONS_MS)
+    for (const answer of [{}, { prepared: 'yes' }, { error: 'SERVICE_UNAVAILABLE' }, { prepared: false }]) {
+      call.mockResolvedValue(answer)
+      expect(await port.prepareInstructions('/work', 'claude')).toBe(false)
+    }
+    link.disconnected()
+    call.mockClear()
+    expect(await port.prepareInstructions('/work', 'claude')).toBe(false)
+    expect(call).not.toHaveBeenCalled()
+  })
+
+  it('keeps ordinary launches usable while missing, malformed or failing and logs no personal data', async () => {
+    const log = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const prepareInstructions = vi.fn(async () => true)
+    const port = { ...WORKSPACES_OFF, prepareInstructions }
+    for (const cwd of [null, undefined, '']) await prepareWorkspaceInstructions(port, cwd, 'claude')
+    expect(prepareInstructions).not.toHaveBeenCalled()
+    await prepareWorkspaceInstructions(port, '/private/work', 'claude')
+    expect(log).not.toHaveBeenCalled()
+    prepareInstructions.mockResolvedValueOnce(false).mockRejectedValueOnce(Error('secret file path'))
+    await prepareWorkspaceInstructions(port, '/private/work', 'claude')
+    await prepareWorkspaceInstructions(port, '/private/work', 'claude')
+    await prepareWorkspaceInstructions(null, '/private/work', 'claude')
+    expect(log).toHaveBeenCalledTimes(3)
+    for (const [line] of log.mock.calls) {
+      expect(line).toContain('TOOL_INSTRUCTIONS_UNAVAILABLE')
+      expect(line).not.toContain('/private/work')
+      expect(line).not.toContain('secret')
+    }
   })
 })

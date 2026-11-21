@@ -16,13 +16,13 @@ export function createHomeAdoptions(deps: HomeAdoptionDeps) {
   const installs = new Map<string, [SessionStoreEngine, string]>()
   const installed = new Set<string>()
   const inFlight = new Set<string>()
-  const failures = new Map<string, string>()
+  const failures = new Map<string, { reason: string; ready: boolean }>()
   let catalogHold: string | null = null
   const progress = (): void => {
     if (closed) return
-    const held = catalogHold ?? failures.values().next().value ?? (inFlight.size ? 'Waiting for hook installation in an adopted home.' : null)
+    const held = catalogHold ?? failures.values().next().value?.reason ?? (inFlight.size ? 'Waiting for hook installation in an adopted home.' : null)
     if (held !== reported) { reported = held; deps.held(held) }
-    if ((restoring || requests.size || [...installs.keys()].some(key => !inFlight.has(key))) && !timer) {
+    if ((restoring || requests.size || [...failures].some(([key, failure]) => !failure.ready && !inFlight.has(key))) && !timer) {
       timer = setTimeout(() => { timer = undefined; retry() }, 1_000)
       timer.unref()
     }
@@ -32,8 +32,29 @@ export function createHomeAdoptions(deps: HomeAdoptionDeps) {
     if (!installed.has(key)) installs.set(key, [engine, home])
   }
   const reason = (error: unknown): string => error instanceof Error ? error.message : String(error)
+  const drain = (): void => {
+    if (closed || inFlight.size) return
+    for (const [key, [engine, home]] of installs) {
+      const failed = failures.get(key)
+      if (failed && !failed.ready) continue
+      if (failed) failed.ready = false
+      const confirm = () => { installed.add(key); installs.delete(key); failures.delete(key) }
+      try {
+        const result = deps.install(engine, home)
+        if (!result) { confirm(); continue }
+        inFlight.add(key)
+        void result.then(() => {
+          if (!closed) confirm()
+        }, error => { if (!closed) failures.set(key, { reason: reason(error), ready: false }) }).finally(() => {
+          inFlight.delete(key); drain(); progress()
+        })
+        break
+      } catch (error) { failures.set(key, { reason: reason(error), ready: false }) }
+    }
+  }
   const retry = (): void => {
     if (closed) return
+    for (const failure of failures.values()) failure.ready = true
     let held: string | null = null
     for (const [key, environment] of requests) {
       try {
@@ -51,20 +72,7 @@ export function createHomeAdoptions(deps: HomeAdoptionDeps) {
       } catch (error) { held ??= reason(error) }
     }
     catalogHold = held
-    for (const [key, [engine, home]] of installs) {
-      if (inFlight.has(key)) continue
-      const confirm = () => { installed.add(key); installs.delete(key); failures.delete(key) }
-      try {
-        const result = deps.install(engine, home)
-        if (!result) { confirm(); continue }
-        inFlight.add(key)
-        void result.then(() => {
-          if (!closed) confirm()
-        }, error => { if (!closed) failures.set(key, reason(error)) }).finally(() => {
-          inFlight.delete(key); progress()
-        })
-      } catch (error) { failures.set(key, reason(error)) }
-    }
+    drain()
     progress()
   }
 

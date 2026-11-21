@@ -27,22 +27,24 @@ try {
       writeFileSync(join(directory, `${row.agentId}.json`), JSON.stringify({ version: 1, session: row }), { mode: 0o600 })
     }
     const store = new StoppedAgentStore(directory)
-    const started = performance.now()
-    if (store.list().length !== count) throw new Error('Cold catalog mismatch')
-    const coldMs = performance.now() - started
-    for (let i = 0; i < 5; i++) store.available([])
-    const cpu = process.cpuUsage()
-    const samples: number[] = []
-    for (let i = 0; i < 60; i++) {
-      const start = performance.now()
-      const rows = store.available([])
-      if (rows.length !== count || rows.some(row => row.active || !row.sessionId)) throw new Error('Warm catalog mismatch')
-      samples.push(performance.now() - start)
-    }
-    const used = process.cpuUsage(cpu)
-    samples.sort((a, b) => a - b)
-    summaries.push({ count, coldMs, reads: samples.length, warmMedianMs: samples[29], warmP95Ms: samples[56],
-      warmMaxMs: samples[59], cpuMs: (used.user + used.system) / 1000 })
+    try {
+      const started = performance.now()
+      if ((await store.list()).length !== count) throw new Error('Cold catalog mismatch')
+      const coldMs = performance.now() - started
+      for (let i = 0; i < 5; i++) await store.available([])
+      const cpu = process.cpuUsage()
+      const samples: number[] = []
+      for (let i = 0; i < 60; i++) {
+        const start = performance.now()
+        const rows = await store.available([])
+        if (rows.length !== count || rows.some(row => row.active || !row.sessionId)) throw new Error('Warm catalog mismatch')
+        samples.push(performance.now() - start)
+      }
+      const used = process.cpuUsage(cpu)
+      samples.sort((a, b) => a - b)
+      summaries.push({ count, coldMs, reads: samples.length, warmMedianMs: samples[29], warmP95Ms: samples[56],
+        warmMaxMs: samples[59], cpuMs: (used.user + used.system) / 1000 })
+    } finally { await store.close() }
   }
   const result = { kind: 'synthetic-saved-session-catalog', node: process.version,
     platform: process.platform, arch: process.arch, summaries,

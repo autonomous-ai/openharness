@@ -39,7 +39,7 @@ afterEach(() => { disk.watch = ''; disk.changes = [] })
 
 // What every case writes and logs is engines/hookInstallers.golden.spec.ts; these are the kit's own edges.
 let root = ''
-beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'hook-settings-')) })
+beforeEach(() => { root = realpathSync(mkdtempSync(join(tmpdir(), 'hook-settings-'))) })
 afterEach(() => {
   vi.restoreAllMocks()
   rmSync(root, { recursive: true, force: true })

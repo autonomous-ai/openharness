@@ -98,7 +98,8 @@ export function unixSocketPath(dataDir: string, port: number, platform: NodeJS.P
  * Where a client reaches the daemon on `port` of this data directory, or null where there is nothing to reach. That
  * is its Unix socket; on Windows, the pipe the running daemon recorded in `daemon-<port>.json`, a new name on each
  * start. Reaching that pipe is no trust: every request there proves the daemon's token (lib/windows/pipeAuth.ts).
- * A caller that needs a filesystem socket (`ws+unix://`, the services) uses unixSocketPath.
+ * A caller that needs a filesystem socket (`ws+unix://`) uses unixSocketPath. Services on Windows instead
+ * rediscover and authenticate the pipe through daemonPipe and pipeWebSocket on each connection.
  */
 export function localSocketPath(dataDir: string, port: number, platform: NodeJS.Platform = process.platform): string | null {
   return platform === 'win32' ? readDaemonRecord(dataDir, configuredPortOf(dataDir, port, platform), platform)?.pipe ?? null : unixSocketPath(dataDir, port, platform)

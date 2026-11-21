@@ -228,7 +228,8 @@ describe('the other engines\' readers in their worker', () => {
     const requests = setup().requests
     const run = vi.fn(() => ({ stop: vi.fn() }))
     expect(runOtherEngines({ ...opts, requests, run }).stop).toBeTypeOf('function')
-    expect(run).toHaveBeenLastCalledWith({ name: 'engine-others', socketPath: opts.socketPath, machineId: opts.machineId, token: opts.token, requests, onDisconnected: expect.any(Function) })
+    expect(run).toHaveBeenLastCalledWith({ name: 'engine-others', socketPath: opts.socketPath, machineId: opts.machineId, token: opts.token, requests,
+      onConnected: expect.any(Function), onDisconnected: expect.any(Function) })
     expect(runOtherEngines(opts).stop).toBeTypeOf('function')
   })
 })

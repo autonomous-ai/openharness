@@ -19,7 +19,7 @@ import { ROUTE_COMMAND_TYPES, PAIR_REQUESTS, PLATE_REQUEST, PLATE_RESULT, rpcRes
 // (lib/relayFrames.ts), which load no cipher; this stays the one place every extension is listed.
 export { ROUTE_COMMAND_TYPES, PAIR_REQUESTS, PLATE_REQUEST, PLATE_RESULT, rpcResultType }
 
-/** An agent browser's stream (core/browserStreams.ts): JSON control beside its binary `browser` kind. Pairwise sealed
+/** An agent browser's stream: JSON control beside its binary `browser` kind. Pairwise sealed
  * both ways, so the relay routes them by type and connection and never sees the agent, the stream or the reason.
  * Not `browser_open`: that is a pane's BROWSER shim opening a URL (agentClient/openUrl.ts). */
 export const AGENT_BROWSER_DOWN_TYPES = new Set(['agent_browser_open', 'agent_browser_ack', 'agent_browser_close'])
@@ -50,7 +50,7 @@ const MACHINE_REQUESTS = new Set([...SHELL_REQUESTS, 'agent_purge', 'agent_workt
   // agent's own commands (`agent_browser_run`) are answered to a local asker only, so they are on no list here.
   'agent_browser_available', 'agent_browser_retry', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test',
   'agent_browser_start', 'agent_browser_stop', 'agent_browser_window',
-  // A sign-in a phone caught for a page a harness's program opened (core/terminals/browser.ts): it holds the code.
+  // A sign-in a phone caught for a page a harness's program opened (gateway/browser.ts): it holds the code.
   'browser_callback',
   // Another of the owner's machines following harnesses here (gateway/harnessWatch.ts): their ids and what they do.
   'harness_watch', ...ROUTE_COMMAND_TYPES])
@@ -124,7 +124,7 @@ const SEALED_REPLIES = new Set([
   // move onto a model, and a terminal handed between machines (refused over the relay).
   'dsh_list_result', 'dsh_install_result', 'dsh_update_result', 'dsh_remove_result',
   'engines_probe_result', 'grid_models_list_result', 'claude_login_status_result', 'agent_retarget_result',
-  'remote_terminal_handoff_result',
+  'remote_terminal_handoff_result', 'cancel_result',
 ])
 export const encryptRpcResult = (type: string): boolean =>
   ENCRYPTED_RPC_RESULT_TYPES.has(type) || MACHINE_RESULTS.has(type) || FLEET_RESULTS.has(type) || SHARE_RESULT_TYPES.has(type)

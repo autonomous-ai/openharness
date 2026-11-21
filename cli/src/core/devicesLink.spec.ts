@@ -3,7 +3,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { createDevicesLink, DEVICES_WAIT_MS, INBOX_CALL_MS, ROUTE_TASK_WAIT_MS, type DevicesState } from './devicesLink.js'
+import { createDevicesLink, DEVICES_WAIT_MS, INBOX_CALL_MS, type DevicesState } from './devicesLink.js'
 
 const STATE: DevicesState = {
   desk: ['a1'], foreground: true, swarms: null, unread: [], focus: { voice: null, form: null }, engines: ['claude'], commanders: false,
@@ -45,7 +45,6 @@ describe('what the core tells the devices', () => {
     port.windowFocus({ voice: null, form: null })
     port.windowReply('form', 'w1', 'm1', { ok: true })
     port.windowGone('w1')
-    port.scroll('move', 2, 9)
     port.engines(['codex'])
     port.commanders(true)
     expect(sent.map((frame) => frame.payload)).toEqual([
@@ -60,7 +59,6 @@ describe('what the core tells the devices', () => {
       { kind: 'windowFocus', focus: { voice: null, form: null } },
       { kind: 'windowReply', which: 'form', connId: 'w1', machineId: 'm1', reply: { ok: true } },
       { kind: 'windowGone', connId: 'w1' },
-      { kind: 'scroll', phase: 'move', dy: 2, velocity: 9 },
       { kind: 'engines', engines: ['codex'] },
       { kind: 'commanders', connected: true },
     ])
@@ -95,29 +93,9 @@ describe('what the core tells the devices', () => {
 })
 
 describe('what the core asks of the devices', () => {
-  it('asks ⌘K and the Wi-Fi device\'s step under their own types, with deadlines', async () => {
-    const answer = { agentId: 'a1', machineId: 'm1', name: 'api', confidence: 1, reason: 'r', candidates: [], weighed: 1, machines: 1, via: 'model' }
-    const { call, port } = link(answer)
-    expect(await port.routeTask('fix it')).toEqual(answer)
-    expect(call).toHaveBeenLastCalledWith('routeTask', { text: 'fix it' }, ROUTE_TASK_WAIT_MS)
-    call.mockResolvedValueOnce({ ok: false, machine: 'mac-mini', reason: 'gone' })
-    expect(await port.routeSend('a1', 'go')).toEqual({ ok: false, machine: 'mac-mini', reason: 'gone' })
-    expect(call).toHaveBeenLastCalledWith('routeSend', { agentId: 'a1', text: 'go' }, DEVICES_WAIT_MS)
-    call.mockResolvedValueOnce({ machineId: 'm1', agentId: 'a2' })
-    expect(await port.stepFocus('next', 'a1')).toEqual({ machineId: 'm1', agentId: 'a2' })
-    expect(call).toHaveBeenLastCalledWith('stepFocus', { direction: 'next', currentAgentId: 'a1' }, DEVICES_WAIT_MS)
-    call.mockResolvedValueOnce({ step: 'no_agents' })
-    expect(await port.stepFocus('previous')).toBe('no_agents')
-    expect(call).toHaveBeenLastCalledWith('stepFocus', { direction: 'previous' }, DEVICES_WAIT_MS)
-    call.mockResolvedValueOnce({ machineId: 7 })
-    expect(await port.stepFocus('next')).toEqual({ machineId: '', agentId: '' })
-  })
-
-  it('answers with the port\'s fallbacks when they are down, slow or failing: ⌘K says so, the walk finds no desk', async () => {
-    const { port } = link({ error: 'SERVICE_UNAVAILABLE', service: 'devices', retryable: true })
-    expect(await port.routeTask('fix it')).toMatchObject({ agentId: '', reason: 'the devices service is unavailable', candidates: [] })
-    expect(await port.routeSend('a1', 'go')).toEqual({ ok: false, machine: '', reason: 'the devices service is unavailable' })
-    expect(await port.stepFocus('next')).toBe('no_agents')
+  it('keeps desk effects out of the private core port', () => {
+    const { port } = link()
+    expect(port).not.toHaveProperty('stepFocus'); expect(port).not.toHaveProperty('scroll')
   })
 
   // The dial only shows a waiting prompt (docs/specs/2026-11-13-device-claude-orca.md): nothing asks the devices for an approval.
@@ -146,25 +124,8 @@ describe('what the core asks of the devices', () => {
 })
 
 describe('what the devices ask of the core', () => {
-  it('is this computer\'s agents as the dial lists them, with what the dial reads in line', async () => {
-    const agent = { agentId: 'a1', engine: 'claude' } as RegisteredSession
-    const { core, devices } = link()
-    vi.mocked(core.agents.advertised).mockReturnValue([agent])
-    vi.mocked(core.agents.displayName).mockReturnValue('api')
-    vi.mocked(core.agents.runtimeProfile).mockReturnValue('runtime-v1:s:claude:opus@high')
-    expect(await devices.answer('view', {})).toEqual({
-      agents: [{ ...agent, displayName: 'api', runtimeProfile: 'runtime-v1:s:claude:opus@high' }],
-      machine: { id: 'machine-1', computerId: 'computer-1', name: 'This machine' },
-      signedIn: true, environment: 'prod', hasWindow: true,
-    })
-  })
-
-  it('lists the cloud harnesses after this computer\'s agents, as the dial lists agents', async () => {
-    const row = { agentId: 'cloud_1', engine: 'fo', displayName: 'haircut', registeredAt: 1 } as unknown as RegisteredSession
-    const core = fakeCore({ agents: { cloud: () => [row] } })
-    const devices = createDevicesLink({ core, notify: () => true, call: vi.fn(), state: () => STATE })
-    vi.mocked(core.agents.advertised).mockReturnValue([{ agentId: 'a1', engine: 'claude' } as RegisteredSession])
-    expect(((await devices.answer('view', {})) as { agents: Array<{ agentId: string }> }).agents.map((agent) => agent.agentId)).toEqual(['a1', 'cloud_1'])
+  it('retires the private feature view in the positively admitted worker cohort', async () => {
+    expect(await link().devices.answer('view', {})).toEqual({ error: 'UNKNOWN_QUERY' })
   })
 
   it('is the core\'s own doors and the sign-in, asked when they need them', async () => {
@@ -223,8 +184,7 @@ describe('what the devices tell the core', () => {
     expect(core.turns.stop).toHaveBeenCalledWith('a1')
     expect(vi.mocked(core.questions.answer).mock.calls).toEqual([['a1', 'r1', { q: 'Coffee' }], ['a1', 'r1', {}]])
     expect(vi.mocked(core.agents.setRuntime).mock.calls).toEqual([['a1', 'opus', 'high'], ['a1', undefined, undefined]])
-    expect(vi.mocked(core.clients.sendLocal).mock.calls).toEqual([[{ type: 'dial_focus', payload: { agentId: 'a1' } }]])
-    expect(vi.mocked(core.clients.sendToWindow).mock.calls).toEqual([['w1', { type: 'dial_form', payload: {} }]])
+    expect(core.clients.sendWindow).not.toHaveBeenCalled() // old component-specific routes are retired
     expect(core.clients.devicesChanged).toHaveBeenCalledWith({ status: { attached: true }, revision: 2 })
   })
 

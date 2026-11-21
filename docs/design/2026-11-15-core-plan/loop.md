@@ -57,6 +57,44 @@ Run `tools/repair-bench.mts` with `SRC=$PWD/src MB=200 REPAIR=1 npx tsx <path>` 
 2. `lib/registry.ts` save under its lock: `fsyncSync` x3 plus `rmSync` of the lock, 80 ms (PR 4).
 3. When these go, tighten the bound in `e2e/resumeRepair.e2e.ts` (now `< 1_000` ms) towards 100.
 
+### Resume publication: keep file reclamation off core (17 November)
+
+The unchanged 200 MiB repair test failed at `9391b72698`: its final rename held the core's main
+thread for 349.25 ms. One instrumented reproduction measured 302.53 ms, of which `renameSync` took
+296.60 ms of thread CPU. Replacing the source's last link reclaimed the old file synchronously.
+The 233 metadata reads took 2.805 ms in total. The original 50 ms limit remains unchanged.
+
+Design, reviewed by the coordinator before code:
+
+- Growth: retain one read-only descriptor for the original inode per existing active repair, at most
+  two. Publication starts asynchronous close; its actual callback releases the existing slot. An
+  uncertain close keeps its slot until process exit, preventing repeated descriptor leaks.
+- Concurrency: open with the existing no-follow/nonblocking native-file flags, verify the descriptor's
+  identity and complete version against the captured source, then repeat source/path/current fences.
+  The descriptor stays open through backup publication, rename and `setTail` in the same synchronous
+  turn. Caller expiry or worker death cannot release it. Every return/throw follows the same close path.
+- Read cost: one bounded open and metadata check, no body read, extra history copy, polling or new map.
+- Scale: the existing two-slot limit bounds cleanup at 10x load. A pending callback makes a new repair
+  busy; a failed close emits `RESUME_REPAIR_CLEANUP_FAILED; restart required` and never retries its fd.
+- Compatibility: no request, response, staging filename, journal or native-history format changes.
+  Old/new workers and cores retain their current contracts. No compatibility expiry is introduced.
+- Migration/rollback: none; the same immutable backup and atomically replaced history remain on disk.
+  Core crash closes the pin through the OS without changing either published name.
+- Audience: the existing authenticated owner/CoreApi boundary is unchanged; a worker still cannot
+  publish or select an unchecked source.
+- Identity: the existing source/root/header checks and the pinned exact inode remain authoritative.
+  No person's login or process environment is read.
+- Failure: a pin-open/identity failure leaves history untouched and reports the existing unavailable
+  outcome. Staging expiry/release can still make publication refuse safely. Cleanup failure is named
+  and retains capacity; neither caller completion nor deadline is evidence that cleanup finished.
+- Platforms: TypeScript core on macOS, Linux and Windows. Use portable Node open/close operations and
+  the existing platform-aware native-file flags; actual Windows/Linux validation remains required.
+
+Validation: red-first caller tests for pinned publication, held close capacity, descriptor mismatch,
+authority loss after acquiring the pin and uncertain close; existing failure/cancellation/cleanup
+tests; the unchanged 200 MiB/50 ms test in a quiet slot; focused 100% coverage and types. The private
+diagnostic profile is attribution evidence, not an uninstrumented performance acceptance result.
+
 ### PR 2 (core-loop-2): the repair in Codex's worker (engine-codex)
 
 Goal: the worker reads and rewrites the rollout body. Core retains only the existing bounded native header identity proof and publication authority.
@@ -315,7 +353,37 @@ recorded; none is relabeled as the accepted final comparison.
   file).
 - Show save time before and after (a bench of N saves, and the loop hold during them).
 
+#### Startup native proof, 17 November continuation
+
+The coordinator approved the [initialization Design](../2026-11-17-registry-initialization.md)
+before runtime edits. The measured 1,600-row native proof/recheck batch becomes
+independent no-yield row commitments, yielding between rows behind initialization
+admission. Original root/catalog guards remain at final installation; later native
+effects still earn fresh proof. Previously admitted writers drain against the old
+complete view before private initialization begins; new mutations are refused
+immediately, and no staged rows are exposed. Both product callers await load;
+core readiness still follows its separate durable dormant transaction.
+
+Initialization and shutdown wait for required migration publication and actual
+writer settlement. A newer peer image cannot be quarantined as the old corrupt
+image. The whole-image read, JSON parse, schema/fingerprint passes, unbounded
+image growth and per-row synchronous worst cases remain explicit residuals.
+Author validation passed 68 focused and 285 selected caller cases with actual
+exit 0, plus TypeScript. The preceding sandbox probe failure remains recorded.
+Independent review, fixed cost, native lifecycle and combined gate acceptance
+belong to the coordinator; this is not a completed performance acceptance claim.
+
 ### PR 5 (core-loop-5): create receipts are deleted
+
+Continuation review (18 November): no finite retry lifetime is established yet, so age-based deletion is not
+approved. `AgentCreationReceipts` promises that an old retry never becomes a fresh launch. Desktop's community
+launcher restores `community.launch.<requestId>` from its persistent store and reuses that creation ID
+(`desktop/lib/community/fork_controller.dart`); `AgentCreationAttempt` itself has no expiry. The CLI ledger's
+half-hour pending display window is not a server-side expiry of creation authority. A deleted receipt would make
+the same valid ID eligible to launch again. Preserve existing receipts until a versioned expiry/admission contract
+or positive retirement proof closes that gap. Moving completed receipts out of recurring pending-work scans can
+proceed separately, with old-writer discovery and crash recovery proved; it must not silently evict deduplication
+authority. The deletion proposal below remains an unresolved design task, not an implementation instruction.
 
 - `lib/agentCreationReceipt.ts` `AgentCreationReceipts` (class at line 105): one file per creation id, never deleted.
   `pendingIntents()` (line 328) walks the whole folder with `opendir`; `core/agents/pendingLaunches.ts:96-123` scans it

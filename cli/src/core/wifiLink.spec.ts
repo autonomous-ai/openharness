@@ -13,59 +13,71 @@ function link() {
 }
 
 describe('the Wi-Fi device in the devices\' process, as the core sees it', () => {
+  const safeCreate = { engine: 'claude', cwd: '/workspace', dsh: 'fixture/package', prompt: null, name: null,
+    bypassPermission: false, requireUnusedWorkspace: true }
+  it('uses the shared ID-only creator with the existing empty launch capability', async () => {
+    const { wifi, core } = link()
+    vi.mocked(core.agents.create).mockResolvedValue({ ok: true, agentId: 'created' })
+    expect(await wifi.answer('create', { ...safeCreate, grid: { account: 'other' }, codexHome: '/other', claudeHome: '/other',
+      agent: 'other', permissionMode: 'approve', launchModel: { model: 'other' } }, () => true)).toEqual({ ok: true, agentId: 'created' })
+    expect(core.agents.create).toHaveBeenCalledExactlyOnceWith(safeCreate)
+  })
+
+  it.each([
+    { packageId: 'legacy', engine: 'claude', cwd: '/workspace' },
+    ...[undefined, false, 'true', 1].map(requireUnusedWorkspace => ({ ...safeCreate, requireUnusedWorkspace })),
+    ...['relative', '/bad\npath', '/' + 'a'.repeat(4096)].map(cwd => ({ ...safeCreate, cwd })),
+    ...[true, undefined].map(bypassPermission => ({ ...safeCreate, bypassPermission })),
+    ...['task', undefined].map(prompt => ({ ...safeCreate, prompt })),
+    ...['name', undefined].map(name => ({ ...safeCreate, name })),
+  ])('refuses malformed or broader private create authority %#', async payload => {
+    const { wifi, core } = link()
+    expect(await wifi.answer('create', payload, () => true)).toEqual({ ok: false, error: 'INVALID_REQUEST' })
+    expect(core.agents.create).not.toHaveBeenCalled()
+  })
+
+  it('requires the current authenticated connection immediately before admitting create', async () => {
+    const { wifi, core } = link()
+    expect(await wifi.answer('create', safeCreate, () => false)).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })
+    expect(await wifi.answer('create', safeCreate)).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })
+    expect(core.agents.create).not.toHaveBeenCalled()
+  })
+  it('forwards shared input facts and disconnects without legacy interpretation', () => {
+    const { wifi, sent } = link()
+    const progress = { agentId: 'a', deliveryId: 'd', when: 'composer' as const, phase: 'written' as const }
+    wifi.port.input(progress)
+    wifi.port.disconnected()
+    expect(sent).toEqual([
+      { type: 'service_event', payload: { kind: 'input', event: progress } },
+      { type: 'service_event', payload: { kind: 'disconnected' } },
+    ])
+  })
+
   it('tells it everything as notices, in the order the core said it', async () => {
     const { wifi, sent, kinds } = link()
-    const client = { role: 'device' as const, label: 'Desk', identity: 'id', direct: false }
-    wifi.port.session('c', client)
-    await wifi.port.request('c', { type: 'autonomous_device_request' }, { payload: { type: 'hello' } })
-    wifi.port.dropped('c')
-    wifi.port.revoked('id')
-    await wifi.port.resume({ sessions: [{ connId: 'c', client }], helloed: [], focus: null })
-    wifi.port.card({ type: 'commander_event' })
-    wifi.port.card({ type: 'commander_event' }, 'whole')
-    wifi.port.turnStarted('a')
-    wifi.port.turnEnded('a', true)
-    wifi.port.stream('a', [])
-    wifi.port.transcript('a', 's', 'claude', 'line')
+    await wifi.port.resume({ focus: null })
     wifi.port.delivery({ deliveryId: 'd', sessionId: 'a', state: 'delivered' })
-    wifi.port.dispatched('a', 'd', 'hi')
-    wifi.port.dispatched('a', 'd', 'hi', 's')
-    wifi.port.inputStatus({ deliveryId: 'd' } as never)
-    wifi.port.agentGone('a')
     await wifi.port.appFocus('m', null, 'w')
     wifi.port.revealed('op', 'a')
     await wifi.port.stop()
-    expect(kinds()).toEqual(['session', 'request', 'dropped', 'revoked', 'resume', 'card', 'card', 'turnStarted', 'turnEnded', 'stream',
-      'transcript', 'delivery', 'dispatched', 'dispatched', 'inputStatus', 'agentGone', 'appFocus', 'revealed'])
-    expect(sent[0].payload).toEqual({ kind: 'session', connId: 'c', client })
-    expect(sent[5].payload).toEqual({ kind: 'card', frame: { type: 'commander_event' } })
-    expect(sent[6].payload).toEqual({ kind: 'card', frame: { type: 'commander_event' }, fullText: 'whole' })
-    expect(sent[12].payload).toEqual({ kind: 'dispatched', agentId: 'a', deliveryId: 'd', text: 'hi' })
-    expect(sent[13].payload).toMatchObject({ sessionId: 's' })
+    expect(kinds()).toEqual(['resume', 'delivery', 'appFocus', 'revealed'])
+    expect(sent[0].payload).toEqual({ kind: 'resume', focus: null })
   })
 
   it('answers what it asks through the core\'s Wi-Fi doors', async () => {
     const { wifi, core } = link()
     expect(await wifi.answer('machine', {})).toEqual({ id: 'machine-1' })
-    expect(await wifi.answer('view', {})).toEqual({ agents: [], store: [], hasWindow: true })
+    expect(await wifi.answer('view', {})).toEqual({ error: 'UNKNOWN_QUERY' })
     vi.mocked(core.turns.recent).mockResolvedValueOnce([{ recap: 'done' }] as never)
     expect(await wifi.answer('recent', { agentId: 'a', n: 1 })).toEqual({ turns: [{ recap: 'done' }] })
     expect(core.turns.recent).toHaveBeenLastCalledWith('a', 1)
     await wifi.answer('recent', { agentId: 7 })
     expect(core.turns.recent).toHaveBeenLastCalledWith('', 3)
-    expect(await wifi.answer('stop', { agentId: 'a' })).toEqual({ ok: true })
-    expect(await wifi.answer('answer', { agentId: 'a', questionRequestId: 'r', answers: { q: 'yes' }, requestId: 'the-link-s-own' })).toEqual({ ok: true })
-    expect(core.wifi.answer).toHaveBeenLastCalledWith('a', 'r', { q: 'yes' })
-    await wifi.answer('answer', { agentId: 'a', questionRequestId: 'r', answers: ['no'] })
-    expect(core.wifi.answer).toHaveBeenLastCalledWith('a', 'r', {})
-    expect(await wifi.answer('create', { packageId: 'p', engine: 'claude', cwd: '/w' })).toEqual({ ok: false, error: 'UNSUPPORTED' })
-    expect(await wifi.answer('stepFocus', { direction: 'previous', currentAgentId: 'a' })).toEqual({ step: 'no_agents' })
-    expect(core.wifi.stepFocus).toHaveBeenLastCalledWith('previous', 'a')
-    vi.mocked(core.wifi.stepFocus).mockResolvedValueOnce({ machineId: 'm', agentId: 'b' })
-    expect(await wifi.answer('stepFocus', { direction: 'next' })).toEqual({ machineId: 'm', agentId: 'b' })
-    expect(core.wifi.stepFocus).toHaveBeenLastCalledWith('next', undefined)
-    expect(await wifi.answer('submit', { agentId: 'a', text: 'hi', deliveryId: 'd' })).toEqual({})
-    expect(core.wifi.submit).toHaveBeenCalledWith('a', 'hi', 'd')
+    expect(await wifi.answer('stop', { agentId: 'a' })).toEqual({ error: 'UNKNOWN_QUERY' })
+    expect(await wifi.answer('answer', {})).toEqual({ error: 'UNKNOWN_QUERY' })
+    expect(await wifi.answer('create', { packageId: 'p', engine: 'claude', cwd: '/w' }, () => true)).toEqual({ ok: false, error: 'INVALID_REQUEST' })
+    expect(await wifi.answer('stepFocus', {})).toEqual({ error: 'UNKNOWN_QUERY' })
+    expect(await wifi.answer('submit', { agentId: 'a', text: 'hi', deliveryId: 'd' })).toEqual({ error: 'UNKNOWN_QUERY' })
     expect(await wifi.answer('nothing', {})).toEqual({ error: 'UNKNOWN_QUERY' })
   })
 
@@ -73,6 +85,8 @@ describe('the Wi-Fi device in the devices\' process, as the core sees it', () =>
     const { wifi, core, log } = link()
     wifi.notice({ kind: 'cancel', deliveryId: 'd' })
     wifi.notice({ kind: 'started', agentId: 'a', text: 'hi' })
+    expect(log).toHaveBeenCalledWith('[services] wifi said cancel, which the core does not hear')
+    expect(log).toHaveBeenCalledWith('[services] wifi said started, which the core does not hear')
     wifi.notice({ kind: 'scroll', phase: 'move', dy: 3, velocity: 9 })
     wifi.notice({ kind: 'scroll', phase: 'fling', dy: 3 })
     wifi.notice({ kind: 'scroll', phase: 'up', dy: 'far' })
@@ -88,23 +102,8 @@ describe('the Wi-Fi device in the devices\' process, as the core sees it', () =>
     wifi.notice({ kind: 'transcripts', agentId: 'a', seen: 2 })
     wifi.notice({ kind: 'watching', agentIds: ['a', 4] })
     wifi.notice({ kind: 'streams', agentIds: 'a' })
-    expect(core.wifi.cancel).toHaveBeenCalledWith('d')
-    expect(core.wifi.started).toHaveBeenCalledWith('a', 'hi')
-    expect(core.wifi.scroll).toHaveBeenCalledTimes(2)
-    expect(core.wifi.scroll).toHaveBeenCalledWith('move', 3, 9)
-    expect(core.wifi.scroll).toHaveBeenLastCalledWith('up', 0, 0)
-    expect(core.wifi.focusApp).toHaveBeenCalledWith('a', 5, 'r')
-    expect(core.wifi.reveal).toHaveBeenCalledWith('op', 'a')
-    expect(core.wifi.send).toHaveBeenCalledWith('c', 'id', 'autonomous_device_result', { ok: true })
-    expect(core.wifi.hello).toHaveBeenCalledWith('c', 'id')
-    expect(core.wifi.hello).toHaveBeenLastCalledWith('c', null)
-    expect(core.wifi.joined).toHaveBeenCalled()
-    expect(core.wifi.ready).toHaveBeenCalled()
-    expect(core.wifi.unpaired).toHaveBeenCalledWith('id')
-    expect(core.wifi.focus).toHaveBeenCalledWith('r')
-    expect(core.wifi.transcripts).toHaveBeenCalledWith('a', 2)
-    expect(core.wifi.watching).toHaveBeenCalledWith(['a'])
-    expect(core.wifi.streams).toHaveBeenCalledWith([])
+    expect(core.clients.sendWindow).not.toHaveBeenCalled()
+    for (const kind of ['focusApp', 'reveal', 'send', 'hello', 'joined', 'ready', 'unpaired', 'focus', 'transcripts', 'watching', 'streams']) expect(log).toHaveBeenCalledWith(`[services] wifi said ${kind}, which the core does not hear`)
     wifi.notice({ kind: 'toString' })
     wifi.notice({})
     expect(log).toHaveBeenCalledWith('[services] wifi said toString, which the core does not hear')

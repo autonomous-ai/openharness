@@ -77,11 +77,12 @@ export function pipeRequest(target: PipeTarget, request: PipeRequest): Promise<P
  * credential: on Windows that credential never goes to a port, whose listener may be another OS user's or a stale
  * daemon's.
  */
-export function pipeWebSocket(target: PipeTarget, path = '/api/local-ws'): WebSocket {
+export function pipeWebSocket(target: PipeTarget, path = '/api/local-ws', limits: { maxPayload?: number; handshakeTimeout?: number } = {}): WebSocket {
   const nonce = newPipeNonce(target.pipe)
   const socket = new WebSocket(`ws://localhost${path}`, {
     createConnection: () => net.connect(target.pipe),
     headers: { [PIPE_AUTH_HEADER]: pipeAuthValue(target.token, nonce) },
+    ...limits,
   })
   // A squatter can accept the upgrade after the recorded daemon died. Its 101 is rejected before WebSocket's
   // `open`, so a caller that sends its first frame on `open` sends it nothing.

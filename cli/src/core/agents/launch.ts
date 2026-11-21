@@ -9,7 +9,7 @@ import type { NativeLaunch } from '../../engines/nativeLaunch.js'
  */
 import { join } from 'node:path'
 import { env } from '../../config/env.js'
-import { repairedItemsName } from '../../engines/launchPrep.js'
+import { repairedItemsName } from '../../engines/launches.js'
 import { REPAIR_LIMITS, type HistoryRepair, type ResumeSource, type Unrepaired } from '../../engines/facets/resumeRepair.js'
 import { bringPiSessionHome } from '../../lib/piSessionHome.js'
 import { gridConfigRoot } from '../../lib/gridConfigDir.js'
@@ -17,8 +17,8 @@ import { dropPermissionFlagIfUnsupported } from '../../lib/engineLaunch.js'
 import { gridUnavailable, type GridLaunchAnswer, type GridLaunchRequest } from '../../lib/gridLaunchWire.js'
 import { buildLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps, type LaunchOverridesResult, type LaunchSource } from '../../lib/launchOverrides.js'
 import type { ModelsPort } from '../api.js'
+import { gridLaunchAnswerIn } from '../modelsLink.js'
 import { errorKind, sid } from '../../lib/log.js'
-import { prepareInstructionWrites } from '../../scm/launch.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 
 /**
@@ -29,9 +29,12 @@ import type { registry, RegisteredSession } from '../../lib/registry.js'
  */
 export function gridLaunchThrough(models: () => Pick<ModelsPort, 'gridLaunch'>) {
   return async (request: GridLaunchRequest): Promise<GridLaunchAnswer> => {
-    let answer: GridLaunchAnswer
+    const captured = { ...request, override: { ...request.override }, machine: { ...request.machine } }
+    let answer: unknown
     try { answer = await models().gridLaunch(request) } catch { return gridUnavailable(request.engine, request.override) }
-    return answer
+    const checked = gridLaunchAnswerIn(answer, captured)
+    if (!checked) console.warn('[models] LAUNCH_CONTRIBUTION_REFUSED')
+    return checked ?? gridUnavailable(request.engine, request.override)
   }
 }
 
@@ -48,15 +51,15 @@ const UNREPAIRED: Record<Unrepaired, string> = {
 export interface LaunchHelperDeps {
   /** Capture dispatch authority before a service can yield to Stop or a replacement binding. */
   authority: (agentId: string) => () => boolean
-  /** Writes the saved APIs' tool instructions into the agent's folder before it launches. */
-  prepareApiTools: (cwd: string | null | undefined, engine: string) => void
+  /** Optional workspace instructions, prepared by the workspace component before launch. */
+  prepareInstructions: (cwd: string | null | undefined, engine: string) => Promise<void>
   launchOverridesDeps: LaunchOverridesDeps
   setGridLaunch: typeof registry.setGridLaunch
   /** The publication coordinator moves the tail in the same turn as its atomic replacement. */
   prepareResume: (source: ResumeSource, current: () => boolean) => Promise<HistoryRepair>
 }
 
-export function createLaunchHelpers({ authority, prepareApiTools, launchOverridesDeps, setGridLaunch, prepareResume }: LaunchHelperDeps) {
+export function createLaunchHelpers({ authority, prepareInstructions, launchOverridesDeps, setGridLaunch, prepareResume }: LaunchHelperDeps) {
   // Whatever the source (the row itself, or a grid override the desktop just sent), the agent's DSH,
   // workspace, named agent and who started it come from the row: a retarget must not silently drop the harness
   // the agent is, or bring a pane opened as `harness-compute` back as a general session.
@@ -74,9 +77,8 @@ export function createLaunchHelpers({ authority, prepareApiTools, launchOverride
     if (!result.ok && (result.unavailable || result.error === 'AGENT_CHANGED')) return result
     // Saved-API instructions remain available after an ordinary semantic refusal, as before.
     // A missing dependency or revoked operation must leave these files untouched.
-    await prepareInstructionWrites(session.cwd)
+    await prepareInstructions(session.cwd, session.engine)
     if (!current()) return changed
-    prepareApiTools(session.cwd, session.engine)
     if (result.ok && session.externalResume?.request.engine === session.engine) {
       result.overrides.extraArgs.push(...session.externalResume.session?.launchArgs ?? [])
     }
@@ -91,8 +93,9 @@ export function createLaunchHelpers({ authority, prepareApiTools, launchOverride
    * does not go through here — its override is new, and it records the pair itself once the move
    * has succeeded.
    */
-  const refreshGridWebSearch = (agentId: string, overrides: LaunchOverrides): void => {
-    if (overrides.gridLaunchRecord) setGridLaunch(agentId, overrides.gridLaunchRecord)
+  const refreshGridWebSearch = async (agentId: string, overrides: LaunchOverrides, current: () => boolean = () => true): Promise<void> => {
+    const selected = authority(agentId)
+    if (overrides.gridLaunchRecord) await setGridLaunch(agentId, overrides.gridLaunchRecord, { current: () => current() && selected() })
   }
 
   /**
@@ -118,7 +121,7 @@ export function createLaunchHelpers({ authority, prepareApiTools, launchOverride
     const { choice, droppedFlag, nativeHold } = await dropPermissionFlagIfUnsupported(session.engine, {
       permissionMode: session.permissionMode ?? null,
       bypassPermission,
-    }, undefined, native)
+    }, native)
     if (droppedFlag) {
       console.warn(`[agent] ${what} ${sid(session.agentId)} · ${session.engine} does not take ${droppedFlag}`
         + ` · starting in Ask · update ${session.engine} to get ${session.permissionMode ?? 'Auto'} back`)

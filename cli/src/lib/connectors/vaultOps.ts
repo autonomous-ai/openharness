@@ -1,19 +1,16 @@
 /**
- * The core's side of the account's connected services (lib/connectors/vaultSync.ts): one `connector_vault` op answered
- * with the account the core holds. Apart from the sync itself, which writes agents' configs, so that the core loads none
- * of the connections' code (core/connectorsQueries.ts).
+ * Gateway-local account vault operations. No core module imports this secret-bearing boundary.
  */
 
 type Payload = Record<string, unknown>
 
-/** The account as the core holds it: the backend, signed in, and the gateway's sealing. */
+/** The gateway's signed-in backend and local encryption authority. */
 export interface VaultAccount {
   backend(method: string, path: string, body?: unknown): Promise<{ status: number, body: Record<string, unknown> }>
   connectorVault: { seal(plaintext: string): Promise<Record<string, unknown>>, open(envelope: unknown): Promise<{ plaintext: string, complete: boolean } | { stranded: true } | null> }
 }
 
-/** One `connector_vault` op answered with the core's account (core/connectorsQueries.ts, and the
- *  connectors service in the core's process): `read`, `write`, `seal`, `open`. */
+/** Local synchronization operations and the gateway-only old-core compatibility adapter. */
 export async function answerVaultOp(account: VaultAccount, payload: Payload): Promise<Payload> {
   try {
     switch (payload.op) {
@@ -26,7 +23,7 @@ export async function answerVaultOp(account: VaultAccount, payload: Payload): Pr
       }
       default: return { error: 'UNKNOWN_OP' }
     }
-  } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) }
+  } catch {
+    return { error: 'CONNECTORS_SYNC_UNAVAILABLE' }
   }
 }

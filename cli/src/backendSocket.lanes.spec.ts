@@ -6,7 +6,7 @@
  * an upload's control frames stay in line with its chunks, and a stream's bookkeeping is never queued.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { TerminalStreamManager } from './lib/terminalStreamManager.js'
+import type { TerminalInputAdmission, TerminalStreamManager } from './lib/terminalStreamManager.js'
 import { TerminalBinaryKind, type TerminalBinaryClear } from './lib/terminalBinary.js'
 import { env } from './config/env.js'
 import { relaySocket } from './testing/relaySocket.js'
@@ -35,16 +35,24 @@ function streamsOn() {
   const seen: string[] = []
   const holds = new Map<string, Promise<void>>()
   const hold = (what: string) => { const g = gate(); holds.set(what, g.opened); return g.open }
-  const handleFrame = vi.fn(async (_connId: string, type: string, payload: Record<string, unknown>) => {
-    const what = `${type}:${String(payload.streamId ?? '')}`
-    seen.push(what)
-    await holds.get(what)
+  const handleFrame = vi.fn(async (_connId: string, type: string, payload: Record<string, unknown>, admission?: TerminalInputAdmission) => {
+    const run = async () => {
+      const what = `${type}:${String(payload.streamId ?? '')}`
+      seen.push(what)
+      await holds.get(what)
+    }
+    if (admission) await admission(run, () => seen.push('refused'))
+    else await run()
     return true
   })
-  const handleBinary = vi.fn(async (_connId: string, frame: TerminalBinaryClear) => {
-    const what = `${kindName(frame.kind)}:${frame.streamId}:${frame.seq}`
-    seen.push(what)
-    await holds.get(what)
+  const handleBinary = vi.fn(async (_connId: string, frame: TerminalBinaryClear, admission?: TerminalInputAdmission) => {
+    const run = async () => {
+      const what = `${kindName(frame.kind)}:${frame.streamId}:${frame.seq}`
+      seen.push(what)
+      await holds.get(what)
+    }
+    if (admission) await admission(run, () => seen.push('refused'))
+    else await run()
   })
   socket.setTerminalStreamManager({
     handleFrame, handleBinary,
@@ -161,27 +169,24 @@ describe('a stream\'s acknowledgements and heartbeats', () => {
 })
 
 describe('an upload\'s begin and cancel', () => {
-  it('stay in line with the chunks already waiting in their stream', async () => {
-    // A cancel and a new begin let past the old upload's chunks took those chunks into the new upload.
+  it('reach the manager while an old chunk is held in its stream lane', async () => {
+    // The real manager captures generations before admission; the lane must not hold revocation behind I/O.
     const { socket, seen, hold, frame, binary } = streamsOn()
     const chunkDone = hold(`imagePaste:${STREAM_A}:0`)
-    void binary(input(STREAM_A, 0, TerminalBinaryKind.imagePaste))
-    void binary(input(STREAM_A, 1, TerminalBinaryKind.imagePaste))
-    void frame('terminal_chunked_upload_cancel', { streamId: STREAM_A })
-    void frame('terminal_chunked_upload_begin', { streamId: STREAM_A, requestId: 'u-2' })
-    await settle()
-    expect(seen).toEqual([`imagePaste:${STREAM_A}:0`])
+    const first = binary(input(STREAM_A, 0, TerminalBinaryKind.imagePaste))
+    await binary(input(STREAM_B, 0))
+    const second = binary(input(STREAM_A, 1, TerminalBinaryKind.imagePaste))
+    await frame('terminal_chunked_upload_cancel', { streamId: STREAM_A })
+    await frame('terminal_chunked_upload_begin', { streamId: STREAM_A, requestId: 'u-2' })
+    expect(seen).toEqual([`imagePaste:${STREAM_A}:0`, `input:${STREAM_B}:0`,
+      `terminal_chunked_upload_cancel:${STREAM_A}`, `terminal_chunked_upload_begin:${STREAM_A}`])
     chunkDone()
-    await vi.waitFor(() => expect(seen).toEqual([
-      `imagePaste:${STREAM_A}:0`,
-      `imagePaste:${STREAM_A}:1`,
-      `terminal_chunked_upload_cancel:${STREAM_A}`,
-      `terminal_chunked_upload_begin:${STREAM_A}`,
-    ]))
+    await Promise.all([first, second])
+    expect(seen.at(-1)).toBe(`imagePaste:${STREAM_A}:1`)
     await socket.stop()
   })
 
-  it('from a window on this computer keep the window\'s own line, which its bytes never waited in', async () => {
+  it('from a window on this computer use the same immediate authorized begin dispatch', async () => {
     const { socket, seen } = streamsOn()
     socket.registerLocalClient('local:window', { sendFrame: () => true, sendBinary: () => true })
     socket.handleLocalFrame('local:window', { type: 'terminal_chunked_upload_begin', payload: { streamId: STREAM_A, requestId: 'u-1' } })

@@ -28,7 +28,7 @@ const STATE_MODULES: readonly string[] = [
   'lib/runtimeInstall.ts',
   'lib/engineLaunch.ts',
   'lib/windows/hermesLaunch.ts',
-  'lib/browserShim.ts',
+  'services/browserShim.ts',
   'lib/uninstall/deps.ts',
   'lib/hostTheme.ts',
   'lib/computerIdentity.ts',

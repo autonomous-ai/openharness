@@ -29,7 +29,7 @@ async function rpc(type: string, payload: Record<string, unknown> = {}) {
 
 it('lists the stopped conversation before the native engine is launched', async () => {
   vi.spyOn(registry, 'advertised').mockReturnValue([])
-  vi.spyOn(stoppedAgents, 'available').mockReturnValue([{ agentId: 'saved' } as RegisteredSession])
+  vi.spyOn(stoppedAgents, 'available').mockResolvedValue([{ agentId: 'saved' } as RegisteredSession])
   vi.spyOn(socket, 'toStoppedProject').mockResolvedValue({ id: 'saved', status: 'stopped' } as AgentFrame)
   expect(await rpc('agents_list', { includeStopped: true })).toMatchObject({ agents: [{ id: 'saved', status: 'stopped' }] })
 })

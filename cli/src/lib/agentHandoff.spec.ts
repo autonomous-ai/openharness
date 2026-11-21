@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { publishHandoff } from './handoffPublication.js'
 import { handoffSessionFact, HandoffError as PublicationError } from './handoffAuthority.js'
 import { conversationReads } from '../core/conversationQueries.js'
+import type { HandoffWiring } from './handoffDiscovery.js'
 import { redactSecretsInText } from './redactSecrets.js'
 import { LOADED_HANDOFF_MS, LOADED_HANDOFF_TEST_MS } from '../testing/handoffLimits.js'
 import type { LiveEvent } from './normalize.js'
@@ -1146,7 +1147,10 @@ describe('prepareAgentHandoff: a fork that has no history of its own yet', () =>
     const records = [parentOf(parentTranscript(), { gridLaunch: override }), forkOf({ gridLaunch: override })]
     const original = structuredClone(records)
     const authority = forkDeps(records)
-    const reads = conversationReads(authority)
+    const reads = conversationReads({
+      registry: { resolve: (id: string) => id === records[1].agentId ? records[1] : null },
+      stopped: { get: async (id: string) => id === records[0].agentId ? records[0] : null },
+    } as HandoffWiring, root)
     const resolved: RegisteredSession[] = []
     const result = await prepareAgentHandoff({ ...authority,
       resolve: async id => { const view = await reads.resolve(id); if (view) resolved.push(view); return view },

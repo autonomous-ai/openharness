@@ -17,7 +17,7 @@ import { PROBE_ANSWER } from './harnessd/reexec.js'
 import { KNOWN_SERVICES, SERVICE_HOSTS } from './harnessd/services.js'
 
 const CLI_ROOT = fileURLToPath(new URL('..', import.meta.url))
-// The updater, beside the services the core knows: the master runs it (harnessd/services.ts `UPDATER_HOST`).
+// The updater, beside the services the core knows: the master runs it (harnessd/servicePlan.ts `UPDATER_HOST`).
 const ROLES = ['master', 'core', ...KNOWN_SERVICES, 'updater']
 const RUNNER: Record<string, string> = { master: 'masterProcess', core: 'core-coreProcess' }
 for (const name of [...KNOWN_SERVICES, 'updater']) RUNNER[name] = `${name}Process`
@@ -111,14 +111,10 @@ describe('the lean bundle a release carries', () => {
     expect([...loads('core')].filter((name) => files.get(name)!.includes(marker))).toEqual([])
   })
 
-  it('loads native hook declarations eagerly without importing the optional compatibility entry', () => {
-    const core = loads('core')
-    // This is native source data written into Amp's plugin file, not Amp's optional transcript reader.
-    // Readiness and launch must not depend on an import() before the core can install that file.
+  it('keeps vendor hook templates outside default core while retaining setup and explicit compatibility code', () => {
     const declaration = 'Mirrors this Amp thread to the machine adapter'
-    expect([...core].filter(name => files.get(name)!.includes(declaration))).toHaveLength(1)
-    expect([...core].some(name => name.startsWith('core-hooks-'))).toBe(false)
-    expect([...files.keys()].some(name => name.startsWith('core-hooks-'))).toBe(true)
+    expect([...files.values()].some(code => code.includes(declaration))).toBe(true)
+    expect([...loads('core')].some(name => files.get(name)!.includes(declaration))).toBe(false)
   })
 
   it('keeps rollout parsing and rewriting outside the default core bundle closure', () => {
@@ -126,6 +122,21 @@ describe('the lean bundle a release carries', () => {
     expect([...files.values()].some(code => code.includes(repair))).toBe(true)
     expect([...loads('core')].some(name => files.get(name)!.includes(repair))).toBe(false)
   })
+
+  it('keeps inline service hosting and shared-machine response parsing out of the loaded core bundle', () => {
+    // Existing implementation literals, paired with caller and source-closure checks; no production marker is added.
+    for (const marker of ['it stays off until the daemon restarts', 'The Harness backend could not be reached. Try again in a moment.']) {
+      expect([...files.values()].some(code => code.includes(marker)), marker).toBe(true)
+      expect([...loads('core')].some(name => files.get(name)!.includes(marker)), marker).toBe(false)
+    }
+  })
+  it.each(['PtyHostClient', 'HostMover', 'QuietClock', 'createGuestHostBackend', 'FrameReader', 'TmuxBackend', 'TmuxControlStream'])(
+    'loads the terminal host %s only after its backend is selected', (name) => {
+      // The release build keeps these implementation names; both presence and absence are checked.
+      const marker = JSON.stringify(name)
+      expect([...files].some(([file, code]) => file.startsWith('core-') && code.includes(marker))).toBe(true)
+      expect([...loads('core')].some(file => files.get(file)!.includes(marker))).toBe(false)
+    })
 
   it('gives the core its own code and none of the CLI\'s commands, which parsing cli.js cost it', () => {
     const core = loads('core')

@@ -4,6 +4,12 @@ import type { GridGlance } from '../lib/gridAnnotation.js'
 import type { CoreConnection, ServiceProcessOptions } from './process.js'
 import type { GridLaunchAnswer, GridLaunchRequest } from '../lib/gridLaunchWire.js'
 import { gridLaunchRequestIn, modelsCoreApi, runModelsService } from './modelsProcess.js'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createSessionImageCodec } from '../storage/sessionImage.js'
+import type { StoredGridLaunch } from '../lib/sessionStorageWire.js'
 
 // The real default reaches a real socket and this process's own channel: never in a test.
 vi.mock('./process.js', () => ({ runServiceProcess: vi.fn(() => ({ stop: vi.fn() })) }))
@@ -18,7 +24,6 @@ const glance = (state: 'awake' | 'asleep'): GridGlance => ({ id: 'net-own', view
 /** Models that read no grid: its port, every member a fake, and the apps' requests it answers. */
 function fakeModels() {
   const port = {
-    ensure: vi.fn(async () => ({ status: 'converged' as const, name: 'mine', detail: 'ok' })),
     annotation: vi.fn(() => null),
     prewarm: vi.fn(),
     launchTarget: vi.fn(async () => LAUNCH),
@@ -67,10 +72,28 @@ describe('models in its own process', () => {
     return { models, api: api!, options: options!, service, handle, setGlances: (next: GridGlance[]) => { glances = next }, changed: () => changed() }
   }
 
+  it('resolves a selected durable reference only inside the models process composition', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'models-credential-')), canary = randomUUID()
+    let resolver!: (reference: StoredGridLaunch) => Promise<import('../lib/gridLaunchWire.js').GridLaunchOverride>
+    try {
+      writeFileSync(join(directory, 'registry.json'), JSON.stringify([{ agentId: 'selected', registeredAt: 1, gridLaunch: { ...LAUNCH, apiKey: canary } }]), { mode: 0o600 })
+      const image = await createSessionImageCodec(directory).read({ kind: 'registry' })
+      if (image.state !== 'image' || !image.json) throw new Error('fixture image unavailable')
+      const reference = (image.value as Array<{ gridLaunch: StoredGridLaunch }>)[0].gridLaunch
+      expect(JSON.stringify(reference).includes(canary)).toBe(false)
+      const { handle } = setup({ dataDir: directory, start: (_core, ports, resolve) => {
+        resolver = resolve!
+        ports.models = fakeModels().port
+        return {}
+      } })
+      try { expect((await resolver(reference)).apiKey === canary).toBe(true) } finally { handle.stop() }
+    } finally { rmSync(directory, { recursive: true, force: true }) }
+  })
+
   it('reaches the core as `models`, answering the apps\' requests and the core\'s port calls, and stops with its link', () => {
     const { models, options, handle, service } = setup()
     expect(options).toMatchObject({ name: 'models', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
-    expect(Object.keys(options.requests).sort()).toEqual(['apiTarget', 'ensure', 'gridAssignments', 'gridLaunch', 'grid_models_list', 'launchTarget', 'lists', 'moveTarget', 'privateGridName'])
+    expect(Object.keys(options.requests).sort()).toEqual(['apiTarget', 'gridAssignments', 'gridLaunch', 'grid_models_list', 'launchTarget', 'lists', 'moveTarget', 'privateGridName'])
     expect(options.requests.grid_models_list).toBe(models.requests.grid_models_list)
     handle.stop()
     expect(service.stop).toHaveBeenCalled()
@@ -84,9 +107,6 @@ describe('models in its own process', () => {
   it('answers the core\'s port calls through the port, as the core\'s process would', async () => {
     const { models, options } = setup()
     const asker = { local: true, owner: true }
-    expect(await options.requests.ensure!({ ownGrid: true }, asker)).toEqual({ status: 'converged', name: 'mine', detail: 'ok' })
-    await options.requests.ensure!({}, asker)
-    expect(models.port.ensure.mock.calls).toEqual([[{ ownGrid: true }], [{ ownGrid: false }]])
     expect(await options.requests.launchTarget!({ model: 'Small-Q4', grid: 'mine' }, asker)).toEqual({ target: LAUNCH })
     expect(await options.requests.launchTarget!({ model: 7 }, asker)).toEqual({ target: LAUNCH })
     expect(models.port.launchTarget.mock.calls).toEqual([[{ model: 'Small-Q4', grid: 'mine' }], [{ model: '', grid: '' }]])
@@ -108,6 +128,10 @@ describe('models in its own process', () => {
     expect(await options.requests.gridLaunch!({ engine: 'claude', override: 'nope', machine }, asker))
       .toEqual({ ok: false, error: 'INVALID_GRID', detail: 'This launch could not be read.' })
     expect(models.port.gridLaunch).toHaveBeenCalledOnce()
+    for (const answer of [null, [], 'not a reply']) {
+      models.port.gridLaunch.mockResolvedValueOnce(answer as never)
+      expect(await options.requests.gridLaunch!({ engine: 'claude', override: LAUNCH, machine }, asker)).toEqual({})
+    }
     expect(await options.requests.gridAssignments!({ processes: [] }, asker)).toEqual({ assignments: [] })
     expect(await options.requests.gridAssignments!({ processes: 'invalid' }, asker)).toEqual({ error: 'INVALID_PROCESSES' })
     expect(await options.requests.apiTarget!({ connectionId: 'openrouter', model: 'q' }, asker)).toEqual({ target: LAUNCH, apiBase: RELAY })
@@ -252,7 +276,7 @@ describe('the core API models runs on in its own process', () => {
 
   it('has no agents of its own and drives none: what models never asks answers as nothing', async () => {
     const { ask, api } = asking({})
-    expect([api.agents.all(), api.agents.live(), api.agents.advertised(), api.agents.displayName({} as never)]).toEqual([[], [], [], ''])
+    expect([(await api.agents.all()), api.agents.live(), api.agents.advertised(), api.agents.displayName({} as never)]).toEqual([[], [], [], ''])
     expect([api.agents.byAgent('a1'), api.agents.resolve('a1'), api.agents.terminalAvailable('a1'), api.agents.runtimeProfile({} as never)]).toEqual([undefined, undefined, false, null])
     api.agents.sync({} as never)
     api.agents.setRuntime('a1')
@@ -265,7 +289,7 @@ describe('the core API models runs on in its own process', () => {
     expect(api.transcripts.databaseHistory({} as never)).toBeUndefined()
     expect(await api.transcripts.lastTurn('s1')).toBeNull()
     api.clients.viewerChanged('a1')
-    expect(api.clients.viewerFrame('c1', 'viewer_data', {})).toBe(false)
+    expect(api.clients.streamFrame('c1', 'viewer_data', {})).toBe(false)
     api.clients.dshInstallStatus({})
     api.clients.windows({ type: 'orchestrator_changed', payload: {} })
     expect(api.clients.observer('observer:x', 'observer_frame', {})).toBe(false)
@@ -315,6 +339,9 @@ describe('a grid launch the core asks models to build, as models reads it', () =
   const machine = { hermesSystemManaged: true }
 
   it('takes the engine, the launch, the machine and a relaunch as the core sent them', () => {
+    expect(gridLaunchRequestIn({ engine: 'grok', override: LAUNCH, machine: { ...machine, grokHome: '/home/grok' } }))
+      .toMatchObject({ machine: { grokHome: '/home/grok' } })
+    expect(gridLaunchRequestIn({ engine: 'grok', override: LAUNCH, machine: { ...machine, grokHome: 7 } })).toBeNull()
     expect(gridLaunchRequestIn({ engine: 'codex', override: LAUNCH, machine })).toEqual({ engine: 'codex', override: LAUNCH, machine })
     expect(gridLaunchRequestIn({ engine: 'opencode', override: LAUNCH, machine: { ...machine, opencodeMajor: null }, refresh: true }))
       .toEqual({ engine: 'opencode', override: LAUNCH, machine: { ...machine, opencodeMajor: null }, refresh: true })

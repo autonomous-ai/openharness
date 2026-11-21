@@ -53,7 +53,10 @@ describe.skipIf(!ON)('a full disk', () => {
     if (volume) {
       rmSync(join(volume, 'filler'), { force: true }); rmSync(join(volume, 'filler-tail'), { force: true })
     }
+    const data = daemon?.dataDir
     await daemon?.close(); daemon = undefined
+    // Each case owns a separate daemon; its retained immutable images are not the next case's workload.
+    if (data) rmSync(data, { recursive: true, force: true })
   })
 
   afterAll(() => {

@@ -15,8 +15,6 @@ vi.mock('../engines/inProcess.js', async (real) => {
 import { encodeRuntimeProfile, parseRuntimeProfile, RuntimeProfileManager } from './runtimeProfile.js'
 import {
   inspectRuntimePane,
-  parseCursorModelPicker,
-  parseCursorParameterRows,
   paneModal,
   RuntimeProfileController,
   RuntimeProfileControlError,
@@ -429,36 +427,7 @@ describe('runtime pane parsing', () => {
     expect(parseCodexPicker(stale)).toBeNull()
   })
 
-  it('parses the gated Cursor picker and parameter rows by meaning', () => {
-    const picker = [
-      ' Available models                                    Max mode: OFF',
-      ' Filter:',
-      '    Auto',
-      ' →  GPT-5.6 Sol              272K Medium (Tab to modify)',
-      ' Type to filter • Enter to select • Tab to edit',
-    ].join('\n')
-    expect(parseCursorModelPicker(picker)).toEqual({ selectedFamily: 'GPT-5.6 Sol' })
 
-    const parameters = [
-      ' GPT-5.6 Sol — Edit Parameters',
-      '  Context',
-      '  → ● 272K ✓',
-      '    ○ 1M',
-      '  Reasoning',
-      '    ○ None',
-      '    ● Medium ✓',
-      '    ○ Extra High',
-      '    ◯ Fast',
-    ].join('\n')
-    expect(parseCursorParameterRows(parameters)).toEqual([
-      { kind: 'context', value: '272k', selected: true, cursor: true, index: 0 },
-      { kind: 'context', value: '1m', selected: false, cursor: false, index: 1 },
-      { kind: 'reasoning', value: 'none', selected: false, cursor: false, index: 2 },
-      { kind: 'reasoning', value: 'medium', selected: true, cursor: false, index: 3 },
-      { kind: 'reasoning', value: 'xhigh', selected: false, cursor: false, index: 4 },
-      { kind: 'fast', value: 'true', selected: false, cursor: false, index: 5 },
-    ])
-  })
 })
 
 describe('RuntimeProfileController', () => {
@@ -1036,10 +1005,7 @@ describe('RuntimeProfileController', () => {
   })
 
   it('refuses to drive an engine the owner made view-only', async () => {
-    // Switching is Claude and Codex only (owner, 2026-07-31). This replaces two tests that drove Cursor's
-    // picker end to end: setCursor and the other per-engine drivers are still in the code, deliberately —
-    // this policy has already flipped twice — but nothing can reach them while the gate is shut, so what
-    // is worth asserting now is the refusal, and that it costs the user's pane nothing.
+    // Switching remains Claude and Codex only (owner, 2026-07-31): a refusal costs the pane nothing.
     const value = session('cursor')
     const manager = new RuntimeProfileManager()
     manager.hydrate(value, [])
@@ -1063,16 +1029,15 @@ describe('RuntimeProfileController', () => {
     expect(sendText).not.toHaveBeenCalled()
   })
 
-  it('refuses a switch of another engine whose code could not be loaded, before any key or the input lock', async () => {
-    // Behind the gate above today; were it to open again, a driver must not press keys it cannot read the
-    // answer to.
-    const value = session('opencode')
+  it('refuses another engine without a supported native driver, before any key or the input lock', async () => {
+    // A catalog alone does not authorize typing: a supported driver must exist too.
+    const value = session('cursor')
     const manager = new RuntimeProfileManager()
     manager.hydrate(value, [])
-    const target = encodeRuntimeProfile({ sessionId: 'h1', engine: 'opencode', model: 'vibe/minimax-m3', effort: 'auto' })
+    const target = encodeRuntimeProfile({ sessionId: 'h1', engine: 'cursor', model: 'vibe/minimax-m3', effort: 'auto' })
     vi.spyOn(manager, 'supportsControl').mockResolvedValue(true)
     vi.spyOn(manager, 'modelsForSession').mockResolvedValue([{ id: target, displayName: 'MiniMax M3' }])
-    vi.mocked(loadEngine).mockResolvedValueOnce(null as never)
+    vi.mocked(loadEngine).mockClear()
     const sendKey = vi.fn().mockResolvedValue(true)
     const acquireInput = vi.fn(() => () => undefined)
     const controller = new RuntimeProfileController({
@@ -1080,7 +1045,7 @@ describe('RuntimeProfileController', () => {
       sendText: vi.fn().mockResolvedValue(true), sendKey, sendLiteral: vi.fn().mockResolvedValue(true), acquireInput,
     })
     await expect(controller.setProfile('s1', target)).rejects.toMatchObject({ code: 'UNSUPPORTED_CLI_VERSION' })
-    expect(loadEngine).toHaveBeenCalledWith('opencode')
+    expect(loadEngine).not.toHaveBeenCalled()
     expect(acquireInput).not.toHaveBeenCalled()
     expect(sendKey).not.toHaveBeenCalled()
   })

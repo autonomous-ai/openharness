@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { answerAgentQuery } from './agentQueries.js'
+import { snapshotFixture } from '../testing/sessionSnapshot.js'
+import { answerAgentQuery, answerSessionRead } from './agentQueries.js'
 import { usageTarget } from '../lib/agentUsageWire.js'
 
 const agent = (agentId: string, over: Partial<RegisteredSession> = {}) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: `/work/${agentId}`, ...over }) as RegisteredSession
@@ -9,10 +10,10 @@ const agent = (agentId: string, over: Partial<RegisteredSession> = {}) => ({ age
 describe('what a service in its own process may ask the core of the agents', () => {
   const live = [agent('a1'), agent('a2')]
   const stopped = [agent('a3', { active: false })]
-  const core = fakeCore({ agents: { all: () => [...live, ...stopped], live: () => live, advertised: () => [live[0]], displayName: (session: RegisteredSession) => `name of ${session.agentId}` } })
+  const core = fakeCore({ agents: { all: async () => [...live, ...stopped], live: () => live, advertised: () => [live[0]], displayName: (session: RegisteredSession) => `name of ${session.agentId}` } })
 
-  it('every agent, live then stopped, with the name the apps show for it', () => {
-    expect(answerAgentQuery(core, 'agents')).toEqual({ agents: [...live, ...stopped].map((session) => ({ ...session, displayName: `name of ${session.agentId}` })) })
+  it('every agent, live then stopped, with the name the apps show for it', async () => {
+    expect(await answerAgentQuery(core, 'agents')).toEqual({ agents: [...live, ...stopped].map((session) => ({ ...session, displayName: `name of ${session.agentId}` })) })
   })
 
   it('the live agents, and those the apps are shown', () => {
@@ -27,7 +28,7 @@ describe('what a service in its own process may ask the core of the agents', () 
   it('returns usage only for the exact live or stopped read target', async () => {
     const saved = agent('a', { transcriptPath: '/fixture/session', registeredAt: 1 })
     const target = usageTarget(saved)
-    const core = fakeCore({ agents: { all: () => [saved] } })
+    const core = fakeCore({ agents: { all: async () => [saved] } })
     expect(await answerAgentQuery(core, 'agentUsage')).toEqual({ error: 'STALE_USAGE_TARGET' })
     expect(await answerAgentQuery(core, 'agentUsage', { target: { ...target, cwd: '/different' } })).toEqual({ error: 'STALE_USAGE_TARGET' })
     expect(await answerAgentQuery(core, 'agentUsage', { target })).toEqual({ target, value: null })
@@ -35,20 +36,22 @@ describe('what a service in its own process may ask the core of the agents', () 
     expect(await answerAgentQuery(core, 'agentUsage', { target })).toMatchObject({ value: { totalTokens: 4 } })
   })
 
-  it('hands on one of the counters a service may count (Hachi\'s, the agent browser\'s), and refuses any other name', () => {
-    const count = vi.fn()
-    const core = fakeCore({ count })
-    expect(answerAgentQuery(core, 'count', { metric: 'hachi_wake_done' })).toEqual({ ok: true })
-    expect(answerAgentQuery(core, 'count', { metric: 'agent_browser_failed_podman_old' })).toEqual({ ok: true })
-    expect(count.mock.calls).toEqual([['hachi_wake_done'], ['agent_browser_failed_podman_old']])
-    // The App's, the launch twins and the person's days are counted where they happen, never by a service.
-    for (const metric of ['ui_desktop_hachi_switch_on', 'launch_hachi_started_claude', 'hachi_person_turn_days', 'create_requests', 'agent_browser_made_up', 'PRIVATE_CANARY', 7]) {
-      expect(answerAgentQuery(core, 'count', { metric })).toEqual({ error: 'INVALID_REQUEST' })
+  it('forwards one bounded observation with authenticated provenance, never a payload-selected source', () => {
+    const report = vi.fn(), count = vi.fn(), core = fakeCore({ count })
+    const origin = { service: 'agentBrowser', report }
+    expect(answerAgentQuery(core, 'count', { metric: 'agent_browser_failed_podman_old', service: 'hachi', private: 'CANARY' }, origin)).toEqual({ ok: true })
+    expect(report).toHaveBeenCalledExactlyOnceWith({ kind: 'service', service: 'agentBrowser', metric: 'agent_browser_failed_podman_old' })
+    expect(count).not.toHaveBeenCalled()
+    // Admission belongs to the recorder; acknowledgement does not promise a stored counter.
+    expect(answerAgentQuery(core, 'count', { metric: 'unrecognized_counter' }, origin)).toEqual({ ok: true })
+    for (const metric of ['', 'x'.repeat(129), 'PRIVATE_CANARY', 'a-b', 'a\n', 7, null]) {
+      expect(answerAgentQuery(core, 'count', { metric }, origin)).toEqual({ error: 'INVALID_REQUEST' })
     }
-    expect(answerAgentQuery(core, 'count')).toEqual({ error: 'INVALID_REQUEST' })
-    expect(count).toHaveBeenCalledTimes(2)
-    // A core that offers no counter takes it and counts nothing.
-    expect(answerAgentQuery(fakeCore(), 'count', { metric: 'hachi_turns_person' })).toEqual({ ok: true })
+    expect(answerAgentQuery(core, 'count', {}, origin)).toEqual({ error: 'INVALID_REQUEST' })
+    expect(report).toHaveBeenCalledTimes(2)
+    // No reporting owner: work remains available and no inline counter is invoked instead.
+    expect(answerAgentQuery(core, 'count', { metric: 'hachi_turns_person' })).toEqual({ ok: true })
+    expect(count).not.toHaveBeenCalled()
   })
 
   // `harness browser` in an agent's pane names it so (core/api.ts `ofPane`), held to the command's parents' pids.
@@ -81,9 +84,48 @@ describe('what a service in its own process may ask the core of the agents', () 
 
   // An attempt's end once read an agent's usage fresh, for the backend's costs, which went with backend S8 (#3908).
   it('answers no fresh usage read', async () => {
-    const core = fakeCore({ agents: { all: () => [...live, ...stopped], live: () => live } })
+    const core = fakeCore({ agents: { all: async () => [...live, ...stopped], live: () => live } })
     core.usageFresh = vi.fn(async () => ({ totalTokens: 9, updatedAt: '2026-10-29T00:00:00Z' }))
     expect(await answerAgentQuery(core, 'agentUsageFresh', { agentId: 'a1' })).toEqual({ error: 'UNKNOWN_QUERY' })
     expect(core.usageFresh).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('shared session read admission', () => {
+  it('serves only its two declared readers and checks exact connection at every event and after await', async () => {
+    const core = fakeCore(), current = vi.fn(() => true), controller = new AbortController()
+    const receive = vi.fn((_record, settled) => { settled(true); return true })
+    for (const [service, scope] of [['devices', 'advertised'], ['wifi', 'registered']]) {
+      await answerSessionRead(core, service, `session_read_${scope}`, receive, controller.signal, { current })
+    }
+    expect(vi.mocked(core.agents.readSessions).mock.calls.map(([scope]) => scope)).toEqual(['advertised', 'registered'])
+    for (const [service, query] of [['devices', 'session_read_registered'], ['wifi', 'session_read_advertised'], ['devices', 'session_snapshot'], ['wifi', 'session_snapshot']]) {
+      await expect(answerSessionRead(core, service, query, receive, controller.signal, { current })).rejects.toThrow('READ_NOT_DECLARED')
+    }
+    expect(receive.mock.calls.map(([record]) => record.type)).toEqual(['begin', 'end', 'begin', 'end'])
+    for (const service of ['messages', 'gateway', 'unknown', '__proto__']) {
+      for (const query of ['session_snapshot', 'session_read_registered', 'session_read_advertised']) {
+        await expect(answerSessionRead(core, service, query, receive, controller.signal, { current })).rejects.toThrow('READ_NOT_DECLARED')
+      }
+    }
+    await expect(answerSessionRead(core, 'devices', 'view', receive, controller.signal, { current })).rejects.toThrow('READ_NOT_DECLARED')
+    await expect(answerSessionRead(core, 'devices', 'session_read_advertised', receive, controller.signal, {})).rejects.toThrow('SESSION_READ_UNAVAILABLE')
+    current.mockReturnValue(false)
+    await expect(answerSessionRead(core, 'devices', 'session_read_advertised', receive, controller.signal, { current })).rejects.toThrow('SESSION_READ_UNAVAILABLE')
+    current.mockReturnValue(true)
+    let release!: () => void
+    vi.mocked(core.agents.readSessions).mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    const old = answerSessionRead(core, 'wifi', 'session_read_registered', receive, controller.signal, { current })
+    current.mockReturnValue(false); release()
+    await expect(old).rejects.toThrow('SESSION_READ_UNAVAILABLE')
+    current.mockReturnValue(true)
+    vi.mocked(core.agents.readSessions).mockImplementationOnce(async (_scope, send) => {
+      current.mockReturnValue(false)
+      const settled = vi.fn()
+      expect(send({ type: 'end', payload: { count: 0 } }, settled)).toBe(false)
+      expect(settled).toHaveBeenCalledWith(false)
+    })
+    await expect(answerSessionRead(core, 'wifi', 'session_read_registered', receive, controller.signal, { current })).rejects.toThrow('SESSION_READ_UNAVAILABLE')
   })
 })

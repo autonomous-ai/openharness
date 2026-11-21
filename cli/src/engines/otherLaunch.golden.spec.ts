@@ -1,3 +1,5 @@
+import { nativeFactory } from '../testing/sessionFactories.js'
+import { localPendingCreationDiscovery } from '../testing/pendingCreation.js'
 /**
  * How the core asks which OpenCode is installed when an agent is asked for as a named agent, recorded from main
  * before OpenCode's version probe left the core's static imports (docs/design/2026-10-08-other-engines-out-of-
@@ -67,14 +69,18 @@ describe('which OpenCode the core asks for, for a named agent', () => {
       const { createLaunchRequests } = await import('../core/agents/launches.js')
       const { AgentCreationReceipts } = await import('../lib/agentCreationReceipt.js')
       const asked: unknown[] = []
-      const requests = createLaunchRequests({
-        receipts: new AgentCreationReceipts(join(root, 'data', `receipts-${++receipts}`)),
+      const { opencodeMajorVersion } = await import('./opencode/version.js')
+      const receiptDirectory = join(root, 'data', `receipts-${++receipts}`)
+      const discovery = localPendingCreationDiscovery(receiptDirectory)
+      const requests = createLaunchRequests({ nativeFactory,
+        discovery, opencodeMajor: opencodeMajorVersion,
+        receipts: new AgentCreationReceipts(receiptDirectory, discovery.ensure),
         createAgent: () => async (request) => {
           asked.push({ engine: request.engine, agent: request.agent, name: request.name })
           return { ok: false, error: 'RECORDED' }
         },
         forkAgent: () => null, resumeAgent: () => null, restartAgent: () => null,
-        byAgent: () => undefined, stoppedAgent: () => undefined, toProject: async () => ({}) as never, modelTarget: async () => null as never,
+        byAgent: () => undefined, stoppedAgent: async () => undefined, toProject: async () => ({}) as never, modelTarget: async () => null as never,
         workspaces: () => null,
       })
       const results: unknown[] = []

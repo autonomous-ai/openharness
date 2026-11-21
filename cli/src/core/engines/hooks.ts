@@ -4,13 +4,13 @@
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 12: docs/design/2026-10-03-harnessd.md).
  */
-import { engineHooks } from '../../engines/hooks.js'
+import { engineHookInstallations as engineHooks } from '../../engines/nativeHookSetup.js'
 import { sessionStoreContracts } from '../../engines/sessionStoreContracts.js'
 import { chooseHookAgent, type HookServerHandlers } from '../../hookServer.js'
 import { confirmHomes, recoverEngineHomes } from '../../lib/engineHomes.js'
 import { createHomeAdoptions } from './homeAdoptions.js'
-import * as nativeHooks from '../../engines/nativeHooks.js'
-import { missingHookScript } from '../../engines/kit/notifyHooks.js'
+import * as nativeHooks from '../../engines/nativeHookSetup.js'
+import { missingHookScript } from '../../engines/kit/hookScript.js'
 import type { NativeHookOptions } from '../../engines/kit/nativeLocations.js'
 import type { OpencodeLaunchSnapshot } from '../../engines/launchControl.js'
 import { errorKind, sid } from '../../lib/log.js'
@@ -262,11 +262,13 @@ export function createEngineHooks(deps: EngineHookDeps) {
  * from 1.x to 2.x under a running daemon, and its new TUI must not find the old server plugin. Installation
  * never depends on loading its optional interpreter.
  */
-export async function installOpencodePluginBeforeSpawn(port: number, snapshot?: OpencodeLaunchSnapshot): Promise<boolean> {
-  return await (snapshot ? nativeHooks.installOpencodePlugin(port, snapshot) : nativeHooks.installOpencodePlugin(port)) !== false
+export async function installOpencodePluginBeforeSpawn(port: number, snapshot?: OpencodeLaunchSnapshot, setup?: NativeHookOptions['setup']): Promise<boolean> {
+  return await (setup ? nativeHooks.installOpencodePlugin(port, snapshot, { setup })
+    : snapshot ? nativeHooks.installOpencodePlugin(port, snapshot) : nativeHooks.installOpencodePlugin(port)) !== false
 }
 
 export interface InstallEngineHooksOptions {
+  setup?: NativeHookOptions['setup']
   /** Only these engines' hooks (`HOOK_INSTALL_ENGINES`); every engine's when absent. */
   only?: ReadonlySet<string> | null
   /** The daemon's own environment, for the homes it moves; `process.env` when absent. */
@@ -307,7 +309,7 @@ const OTHER_INSTALLERS: Array<[string, (port: number, options: NativeHookOptions
  * `settled` observes this initial pass, never readiness. It does not reject.
  */
 export function installEngineHooks(port: number, options: InstallEngineHooksOptions = {}): { close(): void; settled: Promise<void> } {
-  const pending: Promise<void>[] = []
+  let settled = Promise.resolve()
   const hookStep = (vendor: string, install: () => void | boolean | Promise<unknown>): void => {
     if (options.only && !options.only.has(vendor)) return
     const skipped = (why: string) => { console.warn(`[hooks] ${vendor} install skipped · ${why}`) }
@@ -315,13 +317,11 @@ export function installEngineHooks(port: number, options: InstallEngineHooksOpti
     // An installer stopped by a missing notify.mjs has said so in its own line (kit/notifyHooks.ts hooksNotInstalled); a
     // generic second line for the same failure only buried it (#3954 review).
     const unavailable = () => { if (!missingHookScript(vendor)) skipped('native hook preparation is unavailable') }
-    try {
-      const result = install()
-      if (result === false) unavailable()
-      else if (result && typeof result !== 'boolean') pending.push(result.then(answer => {
-        if (answer === false) unavailable()
-      }, failed))
-    } catch (error) { failed(error) }
+    // The setup process has eight slots; the thirteen-family pass must not exhaust them on a cold import.
+    settled = settled.then(async () => {
+      if (!adoptions.current()) return
+      try { if (await install() === false) unavailable() } catch (error) { failed(error) }
+    })
   }
   // The homes the person moved (lib/engineHomes.ts, by each engine's declared session store) get the hooks
   // too: every one adopted before, those the daemon's own environment names, and those of the login shell
@@ -332,7 +332,7 @@ export function installEngineHooks(port: number, options: InstallEngineHooksOpti
     confirm: confirmHomes,
     install: async (engine, home) => {
       if (options.only && !options.only.has(engine)) return
-      if (!await engineHooks[engine].installIn(port, home, { current: adoptions.current })) throw new Error(`${sessionStoreContracts[engine].product} hook preparation is unavailable`)
+      if (!await engineHooks[engine].installIn(port, home, { current: adoptions.current, retainConflicts: true, ...(options.setup ? { setup: options.setup } : {}) })) throw new Error(`${sessionStoreContracts[engine].product} hook preparation is unavailable`)
       console.log(`[hooks] ${sessionStoreContracts[engine].product} hooks installed in its adopted home`)
     },
     held: reason => {
@@ -342,8 +342,8 @@ export function installEngineHooks(port: number, options: InstallEngineHooksOpti
   })
   adoptions.submit(options.environment ?? process.env)
   void options.loginShell?.then(adoptions.submit, error => console.warn(`[hooks] login-shell homes unavailable · ${errorKind(error)}`))
-  const nativeOptions = { current: adoptions.current }
+  const nativeOptions = { current: adoptions.current, retainConflicts: true, ...(options.setup ? { setup: options.setup } : {}) }
   for (const [engine, hooks] of Object.entries(engineHooks)) hookStep(engine, () => hooks.install(port, nativeOptions))
   for (const [vendor, install] of OTHER_INSTALLERS) hookStep(vendor, () => install(port, nativeOptions))
-  return { close: adoptions.close, settled: Promise.all(pending).then(() => {}) }
+  return { close: adoptions.close, settled }
 }

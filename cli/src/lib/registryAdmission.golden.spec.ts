@@ -5,16 +5,25 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from './registry.js'
+import type { SessionStorage } from './sessionStorage.js'
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
-vi.mock('node:child_process', () => {
+vi.mock('node:child_process', async original => {
+  const actual = await original<typeof import('node:child_process')>()
   const forbidden = () => { throw Error('Host binaries are forbidden in the registration golden') }
   return { exec: forbidden, execSync: forbidden,
     execFile: (command: string, args: string[], _options: unknown, done: (error: null, value: string) => void) => {
       if (command !== 'ps' || JSON.stringify(args) !== JSON.stringify(['-p', String(process.pid), '-o', 'lstart='])) forbidden()
       done(null, 'fixture-start')
     }, execFileSync: forbidden,
-    spawn: forbidden, spawnSync: forbidden, fork: forbidden }
+    spawn: (command: string, args: string[], options: import('node:child_process').SpawnOptions) => {
+      const entry = fileURLToPath(new URL('../storage/entry.ts', import.meta.url))
+      if (command !== process.execPath || JSON.stringify(args) !== JSON.stringify(['--import', import.meta.resolve('tsx'), entry, '__storage'])
+        || options.env?.ADAPTER_DATA_DIR !== process.env.ADAPTER_DATA_DIR || options.env?.HOME !== process.env.HOME
+        || !Array.isArray(options.stdio) || options.stdio[3] !== 'ipc') forbidden()
+      return actual.spawn(command, args, options)
+    }, spawnSync: forbidden, fork: forbidden }
 })
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 vi.mock('./loginShellEnv.js', () => ({ loginShellEnvironment: () => ({}) }))
@@ -23,7 +32,6 @@ vi.mock('./processLiveness.js', async original => ({ ...await original<object>()
   processLockIdentity: () => ({ startMarker: 'fixture-start', generationMarker: 'fixture-generation' }), lockOwnerAlive: () => true,
 }))
 const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
-vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
 // No case here means the write deadline to pass: how fast this machine writes the registry never changes the golden.
 beforeEach(() => { deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS) })
 afterEach(() => { vi.restoreAllMocks() })
@@ -55,6 +63,7 @@ it.each(['linux', 'darwin'])('preserves healthy registration and transfers on %s
   }
   const log = vi.spyOn(console, 'log').mockImplementation(() => {})
   let owned: typeof import('./registry.js')['registry'] | undefined
+  let ownedStorage: SessionStorage | undefined
   try {
     Object.defineProperty(process, 'platform', { ...descriptor, value: platform })
     vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-10-10T00:00:00Z') })
@@ -71,6 +80,7 @@ it.each(['linux', 'darwin'])('preserves healthy registration and transfers on %s
     write(codex, meta(A)); write(child, meta(CHILD, { subagent: { thread_spawn: { parent_thread_id: A, depth: 1 } } }))
     for (const id of [B, C]) write(claude(id), JSON.stringify({ type: 'user', cwd: root, sessionId: id, isSidechain: false }) + '\n')
     vi.resetModules()
+    ownedStorage = deadline.slowSessionStorage((await import('./sessionStorage.js')).sessionStorage)
     const { registry } = await import('./registry.js')
     owned = registry
     for (const [index, engine] of (['claude', 'codex', 'terminal'] as const).entries()) {
@@ -96,6 +106,7 @@ it.each(['linux', 'darwin'])('preserves healthy registration and transfers on %s
     ;(await import('./engineHomes.js')).resetEngineHomes()
   } finally {
     await owned?.flush({ exiting: true }).catch(() => {})
+    if (ownedStorage) await closeSessionStorageFixture(ownedStorage)
     log.mockRestore(); vi.useRealTimers(); vi.unstubAllEnvs(); vi.resetModules()
     Object.defineProperty(process, 'platform', descriptor)
     rmSync(root, { recursive: true, force: true })

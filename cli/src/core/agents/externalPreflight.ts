@@ -1,5 +1,5 @@
 /** Verify a resumable launch before asking an external terminal to quit. */
-import { engineHooks } from '../../engines/hooks.js'
+import { engineHookInstallations as engineHooks } from '../../engines/nativeHookSetup.js'
 import { hooksHeldDetail } from '../../engines/kit/hooksHeldDetail.js'
 import { buildEngineCommandArgv, refusePermissionFlagIfUnsupported } from '../../lib/engineLaunch.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
@@ -25,7 +25,7 @@ export function createExternalPreflight(deps: {
     if (inspected && !inspected.ok) return inspected
     const native = inspected?.ok ? inspected.launch : undefined
     const current = () => owner() && native?.current() !== false
-    const refused = await refusePermissionFlagIfUnsupported(row.engine, row, undefined, native)
+    const refused = await refusePermissionFlagIfUnsupported(row.engine, row, native)
     if (!current()) return changed
     if (refused) return refused
     if (native && !await native.prepareHooks(deps.hooksDisabled ? 0 : deps.hookPort, owner)) return { detail: hooksHeldDetail(row.engine, 'Waiting to confirm the external conversation’s native hooks.') }

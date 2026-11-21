@@ -1,3 +1,5 @@
+import { nativeFactory } from '../../testing/sessionFactories.js'
+import { localPendingCreationDiscovery } from '../../testing/pendingCreation.js'
 /** Public launch receipts and dispatch inputs, recorded from main before durable retry changes. */
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -16,10 +18,6 @@ vi.mock('node:child_process', () => {
 vi.mock('../../engines/inProcess.js', async original => ({ ...await original<object>(),
   loadEngine: () => { throw Error('Launch requests cannot load an optional interpreter') },
 }))
-vi.mock('../../engines/launchPrep.js', () => ({ folderTrust: (engine: string, profile: string | null) => ({
-  trusts: () => false,
-  record: (path: string) => fixture.events.push(['trust', engine, profile, path]),
-}) }))
 vi.mock('../../lib/projectFolder.js', async original => ({ ...await original<object>(),
   projectsRoot: () => join(fixture.root, 'projects'),
   // A new project's empty folder, the one the core still makes itself (git's folders are the workspaces service's).
@@ -63,14 +61,15 @@ it.each(['linux', 'darwin'])('preserves healthy launch requests and durable rece
         await new Promise<void>(done => { finish = done })
         return { ok: true as const, session, level: 'native' as const, resumed: operation === 'resume' }
       }
-      const deps: LaunchRequestDeps = {
-        receipts: new AgentCreationReceipts(directory),
+      const discovery = localPendingCreationDiscovery(directory)
+      const deps: LaunchRequestDeps = { nativeFactory,
+        receipts: new AgentCreationReceipts(directory, discovery.ensure), discovery,
         createAgent: () => input => dispatch('create', input),
         forkAgent: () => input => dispatch('fork', input),
         resumeAgent: () => (agentId, permissionMode) => dispatch('resume', { agentId, permissionMode }),
         restartAgent: () => agentId => dispatch('restart', { agentId }),
         byAgent: agentId => agentId === session.agentId ? session : undefined,
-        stoppedAgent: () => undefined,
+        stoppedAgent: async () => undefined,
         // The frame formatter is another boundary; retain recognizable fields
         // to detect a wrong agent or a dropped reply without invoking services.
         toProject: async row => ({ id: row.agentId, engine: row.engine, cwd: row.cwd } as unknown as AgentFrame),
@@ -79,6 +78,9 @@ it.each(['linux', 'darwin'])('preserves healthy launch requests and durable rece
           return { networkId: 'fixture-grid', networkName: 'Fixture', baseUrl: 'http://fixture.invalid/v1', apiKey: 'fixture-key', model: 'fixture-model' }
         },
         workspaces: () => null,
+        prepareFolderTrust: async ({ engine, profile, cwd }) => {
+          fixture.events.push(['trust', engine, profile, cwd]); return true
+        },
       }
       const requests = createLaunchRequests(deps)
       const payload: Record<string, unknown> = kind === 'fork'
@@ -100,7 +102,7 @@ it.each(['linux', 'darwin'])('preserves healthy launch requests and durable rece
       await vi.waitFor(() => expect(replies).toHaveLength(3))
       await invoke() // A duplicate after completion only returns the receipt.
       await vi.waitFor(() => expect(replies).toHaveLength(4))
-      const recovered = createLaunchRequests({ ...deps, receipts: new AgentCreationReceipts(directory) })
+      const recovered = createLaunchRequests({ ...deps, receipts: new AgentCreationReceipts(directory, discovery.ensure) })
       await recovered.createStatus({ creationId }, { local: true }, reply)
       expect(fixture.events.filter(value => Array.isArray(value) && value[0] === 'dispatch')).toHaveLength(1)
       const key = `${platform}:${kind}`

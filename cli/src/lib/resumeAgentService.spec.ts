@@ -1,7 +1,8 @@
 import { removeRegistryAgent } from '../testing/registryFixtures.js'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { createResumeAgentService, type ResumeAgentServiceDeps } from './resumeAgentService.js'
 import { RESUME_READINESS_BUDGET_MS, resumeChanged, waitForResumedAgent } from './resumeStoppedAgent.js'
@@ -15,8 +16,8 @@ import { StoppedAgentStore } from './stoppedAgents.js'
 import { AgentRestartCoordinator } from './restartAgent.js'
 import { checkPidRuntime } from './deleteAgentFallback.js'
 import { checkSessionRuntime, resolvePaneEngineProcess } from './paneEngineProcess.js'
-import { windowsAfterExit, windowsPaneLaunch } from './windows/engineStart.js'
-import { buildEngineLaunchArgv, dropPermissionFlagIfUnsupported, engineLaunchEnv, refusePermissionFlagIfUnsupported } from './engineLaunch.js'
+import { windowsAfterExit, windowsPaneLaunch, windowsHeldPaneArgv } from './windows/engineStart.js'
+import { buildEngineCommandArgv, buildEngineLaunchArgv, dropPermissionFlagIfUnsupported, engineLaunchEnv, refusePermissionFlagIfUnsupported } from './engineLaunch.js'
 import { engineBin, enginePathOverride } from './engineBin.js'
 import { installedDsh } from '../dsh/installed.js'
 import { createLaunchHelpers } from '../core/agents/launch.js'
@@ -26,11 +27,14 @@ import type { TerminalInventoryResult } from './terminalTypes.js'
 import { WindowsBatchLaunchRefused } from './windows/launch.js'
 import { NATIVE_LAUNCH_MARKER } from './nativePaneHold.js'
 import { AtomicWriteUnconfirmed } from './secureState.js'
+import type { GridLaunchOverride } from './gridLaunchWire.js'
+import { sessionStorage } from './sessionStorage.js'
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 
 const publication = vi.hoisted(() => ({
   agent: '', wait: undefined as undefined | (() => Promise<void>), release: undefined as undefined | (() => void),
   temporary: '', published: false, failSync: 0, cleanupWait: undefined as undefined | (() => Promise<void>),
-  retire: false,
+  retire: false, pending: false, directoryWait: undefined as undefined | (() => Promise<void>),
 }))
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
@@ -43,29 +47,45 @@ vi.mock('node:fs', async original => {
       throw Object.assign(Error('fixture directory sync failed'), { code: 'EIO' })
     }
     return actual.fsyncSync(fd)
+  }, fsync: (fd: number, callback: (error: NodeJS.ErrnoException | null) => void) => {
+    const selected = publication.published && actual.fstatSync(fd).isDirectory()
+    const wait = selected ? publication.directoryWait : undefined
+    if (wait) publication.directoryWait = undefined
+    actual.fsync(fd, error => { void (wait?.() ?? Promise.resolve()).then(() => {
+      if (selected && publication.failSync) {
+        publication.failSync--
+        callback(Object.assign(Error('fixture directory sync failed'), { code: 'EIO' }))
+      } else callback(error)
+    }, callback) })
   } }
 })
 vi.mock('node:fs/promises', async original => {
   const actual = await original<typeof import('node:fs/promises')>()
   return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
-    const handle = await actual.open(...args), write = handle.writeFile.bind(handle), sync = handle.sync.bind(handle), read = handle.read.bind(handle)
-    let ready = false
-    handle.writeFile = async (...values) => {
-      if (String(args[0]).includes('registry.json.') && String(args[0]).endsWith('.tmp')) {
-        const rows = JSON.parse(String(values[0])) as RegisteredSession[]
-        ready = !!publication.agent && (publication.retire ? !rows.some(row => row.agentId === publication.agent)
-          : rows.some(row => row.agentId === publication.agent && row.launch?.state === 'ready'))
-        if (ready) publication.temporary = String(args[0])
-      }
-      return write(...values)
-    }
-    handle.sync = async () => { await sync(); if (ready) await publication.wait?.() }
+    const handle = await actual.open(...args), read = handle.read.bind(handle)
     handle.read = (async (...options: Parameters<typeof handle.read>) => {
       const result = await read(...options)
       if (publication.published && String(args[0]).endsWith('registry.json.lock/owner.json')) await publication.cleanupWait?.()
       return result
     }) as typeof handle.read
     return handle
+  } }
+})
+vi.mock('./sessionPublication.js', async original => {
+  const actual = await original<typeof import('./sessionPublication.js')>()
+  return { ...actual, prepareSessionPublication: async (...args: Parameters<typeof actual.prepareSessionPublication>) => {
+    const prepared = await actual.prepareSessionPublication(...args)
+    if (args[1].kind === 'registry') {
+      const rows = prepared.value as RegisteredSession[]
+      const ready = !!publication.agent && (publication.retire ? !rows.some(row => row.agentId === publication.agent)
+        : rows.some(row => row.agentId === publication.agent && row.launch?.state === (publication.pending ? 'starting' : 'ready')))
+      if (ready) {
+        publication.temporary = (args[0] as unknown as { preparation: { reservation: { temporary: string } } }).preparation.reservation.temporary
+        publication.temporary = join(args[0].root, publication.temporary)
+        await publication.wait?.()
+      }
+    }
+    return prepared
   } }
 })
 
@@ -87,6 +107,7 @@ vi.mock('./paneEngineProcess.js', () => ({ checkSessionRuntime: vi.fn(), resolve
 // machines. Its own behaviour is covered in `engineLaunch.spec.ts`.
 vi.mock('./engineLaunch.js', async importOriginal => ({
   ...(await importOriginal<typeof import('./engineLaunch.js')>()),
+  buildEngineCommandArgv: vi.fn(() => ['fixture-engine']),
   buildEngineLaunchArgv: vi.fn(() => ['fixture-engine']),
   engineLaunchEnv: vi.fn(() => undefined),
   dropPermissionFlagIfUnsupported: vi.fn(async (_engine: unknown, choice: unknown) => ({ choice, droppedFlag: null })),
@@ -133,7 +154,12 @@ async function live(extra: Partial<RegisteredSession> = {}) {
   const admitted = (await registry.resumePendingAgent(saved, extra.runtimes ?? [{ backend: 'tmux', paneId: pane }]))!
   return Object.assign(registry.byAgent(admitted.agentId)!, extra)
 }
-function rewrite(extra: Partial<RegisteredSession>) { saved = { ...saved, ...extra }; rmSync(join(dir, 'saved', `${saved.agentId}.json`)); deps.stoppedAgents.save(saved) }
+async function rewrite(extra: Omit<Partial<RegisteredSession>, 'gridLaunch'> & { gridLaunch?: GridLaunchOverride | null }) {
+  // Simulate the legacy disk writer; current core reads the resulting projected row through storage.
+  const file = join(env.ADAPTER_DATA_DIR, 'stopped-agents', `${saved.agentId}.json`), value = JSON.parse(readFileSync(file, 'utf8'))
+  writeFileSync(file, JSON.stringify({ ...value, session: { ...value.session, ...extra } }), { mode: 0o600 })
+  saved = (await deps.stoppedAgents.get(saved.agentId))!
+}
 function start() { return createResumeAgentService(deps)(saved.agentId) }
 function deferred<T>() { let resolve!: (v: T) => void; const promise = new Promise<T>(r => { resolve = r }); return { promise, resolve } }
 
@@ -170,7 +196,7 @@ it('retains allocation uncertainty when transcript verification fails inside the
 })
 
 it.each(['gone', 'unknown', 'dead', 'exited'] as const)('keeps a resumed shell unconfirmed when final publication sees it %s', async state => {
-  rewrite({ engine: 'terminal', sessionId: '', transcriptPath: '' })
+  await rewrite({ engine: 'terminal', sessionId: '', transcriptPath: '' })
   paneState.mockResolvedValue(state === 'gone' || state === 'unknown' ? state : { dead: state === 'dead', engineExit: state === 'exited' ? 1 : null })
   expect(await start()).toMatchObject({ ok: false, error: 'RESUME_UNCONFIRMED' })
   expect(releaseHold).not.toHaveBeenCalled()
@@ -228,7 +254,7 @@ it.each(['process', 'route', 'home', 'backend'] as const)('discards a prior-exit
   expect(create).not.toHaveBeenCalled()
   expect(result).toMatchObject({ ok: false, error: 'AGENT_BUSY' })
   expect(registry.byAgent(saved.agentId)).toMatchObject(replacement)
-  expect(deps.stoppedAgents.get(saved.agentId)?.processIdentity).toEqual(identity)
+  expect((await deps.stoppedAgents.get(saved.agentId))?.processIdentity).toEqual(identity)
 })
 
 it('does not retire a new native binding that commits while prior-exit inventory waits', async () => {
@@ -252,7 +278,7 @@ it('does not retire a new native binding that commits while prior-exit inventory
   expect(deps.retainExitedSession).not.toHaveBeenCalled()
   expect(create).not.toHaveBeenCalled()
   expect(registry.byAgent(saved.agentId)?.sessionId).toBe(sessionId)
-  expect(deps.stoppedAgents.get(saved.agentId)?.sessionId).toBe(saved.sessionId)
+  expect((await deps.stoppedAgents.get(saved.agentId))?.sessionId).toBe(saved.sessionId)
 })
 
 it('does not dispatch after the prior engine-exit rename has unconfirmed durability', async () => {
@@ -262,7 +288,7 @@ it('does not dispatch after the prior engine-exit rename has unconfirmed durabil
   expect(publication.published).toBe(true)
   expect(create).not.toHaveBeenCalled()
   expect(releaseHold).not.toHaveBeenCalled()
-  expect(deps.stoppedAgents.get(saved.agentId)?.sessionId).toBe(saved.sessionId)
+  expect((await deps.stoppedAgents.get(saved.agentId))?.sessionId).toBe(saved.sessionId)
 })
 
 it.each(['another owner', 'source changed'] as const)('refuses a launch whose source authority changes during overrides: %s', async change => {
@@ -300,9 +326,9 @@ beforeEach(async () => {
   const original = (await registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%8' }], cwd: dir }))!
   saved = { ...original, sessionId: 'original-session', transcriptPath: join(dir, 'history.jsonl'), processIdentity: identity, launch: { state: 'ready' } }
   ;(await removeRegistryAgent(registry, original.agentId))
-  const store = new StoppedAgentStore(join(dir, 'saved'))
-  store.save(saved)
-  create.mockReset().mockResolvedValue({ state: 'succeeded', runtime: { backend: 'tmux', paneId: pane } })
+  const store = new StoppedAgentStore()
+  await store.save(saved)
+  create.mockReset().mockImplementation(async request => { await request.onDispatch?.(); if (typeof request.command === 'function') request.command(); return { state: 'succeeded', runtime: { backend: 'tmux', paneId: pane } } })
   kill.mockReset().mockResolvedValue({ state: 'succeeded' })
   vi.mocked(controlTranscriptEvidence).mockImplementation((_engine, _id, path) => ({ path, verify: vi.fn() }))
   vi.mocked(materializeResumeTranscript).mockReset().mockImplementation(async (_engine, _id, path) => path)
@@ -310,7 +336,7 @@ beforeEach(async () => {
   vi.mocked(refusePermissionFlagIfUnsupported).mockReset().mockResolvedValue(null)
   vi.mocked(installedDsh).mockReturnValue(undefined)
   inventory.mockReset().mockResolvedValue(listed(pane))
-  ptyCreate.mockReset().mockResolvedValue({ state: 'succeeded', runtime: pty })
+  ptyCreate.mockReset().mockImplementation(async request => { await request.onDispatch?.(); if (typeof request.command === 'function') request.command(); return { state: 'succeeded', runtime: pty } })
   ptyKill.mockReset().mockResolvedValue({ state: 'succeeded' })
   ptyPaneState.mockReset().mockResolvedValue({ dead: false })
   ptyReleaseHold.mockReset().mockResolvedValue(undefined)
@@ -328,13 +354,20 @@ beforeEach(async () => {
     registry, stoppedAgents: store, createBackend: tmuxTerminal, backendFor: runtime => runtime.backend === 'tmux' ? tmuxTerminal : undefined,
     restartJobs: new AgentRestartCoordinator(),
     stopJobs: new Map(), pinnedControls: new Set(),
-    retainExitedSession: vi.fn(async (row, alive, authority) => { store.save(row); return registry.confirmEngineExit(row.agentId, alive ? 'successor' : 'remove', authority) }),
+    retainExitedSession: vi.fn(async (row, alive, authority) => { await store.save(row); return registry.confirmEngineExit(row.agentId, alive ? 'successor' : 'remove', authority) }),
     announceSession: vi.fn(), relaunchOverrides: vi.fn(async () => ({ ok: true as const, overrides: { env: {}, extraArgs: [], clearEnv: [] } })),
     prepareSessionResume: vi.fn(), stopBackgroundJob: vi.fn(async () => {}), refreshGridWebSearch: vi.fn(), clearDeleted: vi.fn(), attach: vi.fn(),
     attachSession: vi.fn(async () => true),
   }
 })
-afterEach(async () => { publication.wait = undefined; publication.release?.(); publication.release = undefined; publication.agent = ''; publication.temporary = ''; publication.published = false; publication.failSync = 0; publication.cleanupWait = undefined; publication.retire = false; vi.useRealTimers(); for (const row of registry.list()) (await removeRegistryAgent(registry, row.agentId)); await registry.flush(); rmSync(dir, { recursive: true, force: true }) })
+afterEach(async () => { publication.wait = undefined; publication.release?.(); publication.release = undefined; publication.agent = ''; publication.temporary = ''; publication.published = false; publication.failSync = 0; publication.cleanupWait = undefined; publication.retire = false; publication.pending = false; publication.directoryWait = undefined; vi.useRealTimers(); for (const row of registry.list()) (await removeRegistryAgent(registry, row.agentId)); await registry.flush(); await deps.stoppedAgents.close(); rmSync(join(env.ADAPTER_DATA_DIR, 'stopped-agents'), { recursive: true, force: true }); rmSync(dir, { recursive: true, force: true }) })
+
+afterAll(async () => {
+  const outcomes = await Promise.allSettled([registry.flush()])
+  outcomes.push(...await Promise.allSettled([closeSessionStorageFixture(sessionStorage)]))
+  const failures = outcomes.filter(result => result.status === 'rejected').map(result => result.reason)
+  if (failures.length) throw new AggregateError(failures, 'resume catalog fixture cleanup failed')
+})
 
 it.each(['stop', 'binding'] as const)('keeps the terminal hold when %s revokes Resume during backend release', async change => {
   const entered = deferred<void>(), waiting = deferred<void>()
@@ -361,25 +394,25 @@ describe('resuming a stopped harness with new launch words', () => {
   const resumeWith = (launchArgs?: string[], mode?: string) => createResumeAgentService(deps)(saved.agentId, mode, launchArgs)
 
   it('builds the launch with them, applies them to the argv, and the resumed row keeps them', async () => {
-    rewrite({ launchArgs: ['--old'] })
+    await rewrite({ launchArgs: ['--old'] })
     vi.mocked(deps.relaunchOverrides).mockImplementation(async (_row, source) => ({ ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [], ownerArgs: source.launchArgs } }))
     expect(await resumeWith(WORDS)).toMatchObject({ ok: true, session: { launchArgs: WORDS } })
     expect(deps.relaunchOverrides).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ agentId: saved.agentId, launchArgs: WORDS }), expect.any(Function))
     expect(buildEngineLaunchArgv).toHaveBeenCalledWith('codex', expect.objectContaining({ ownerArgs: WORDS }))
     expect(registry.byAgent(saved.agentId)?.launchArgs).toEqual(WORDS)
-    registry.load()
+    await registry.load()
     expect(registry.byAgent(saved.agentId)?.launchArgs).toEqual(WORDS)
   })
 
   it('clears them with an empty list', async () => {
-    rewrite({ launchArgs: ['--old'] })
+    await rewrite({ launchArgs: ['--old'] })
     expect(await resumeWith([])).toMatchObject({ ok: true })
     expect(deps.relaunchOverrides).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ launchArgs: [] }), expect.any(Function))
     expect(registry.byAgent(saved.agentId)?.launchArgs).toBeUndefined()
   })
 
   it('without them, relaunches from the saved row and leaves its words as they were', async () => {
-    rewrite({ launchArgs: ['--old'] })
+    await rewrite({ launchArgs: ['--old'] })
     expect(await resumeWith()).toMatchObject({ ok: true })
     expect(deps.relaunchOverrides).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ launchArgs: ['--old'] }), expect.any(Function))
     expect(registry.byAgent(saved.agentId)?.launchArgs).toEqual(['--old'])
@@ -387,25 +420,25 @@ describe('resuming a stopped harness with new launch words', () => {
 
   // The new row exists as soon as the pane does, but the words are only the record's once the engine is confirmed.
   it('saves nothing when the engine does not come back, and the retained row keeps the words that last worked', async () => {
-    rewrite({ launchArgs: ['--old'] })
+    await rewrite({ launchArgs: ['--old'] })
     ;(await live())
     vi.mocked(resolvePaneEngineProcess).mockResolvedValue(null)
     paneState.mockResolvedValueOnce({ dead: false, engineExit: 1 } as any).mockResolvedValueOnce('gone')
     expect(await resumeWith(WORDS)).toMatchObject({ ok: false, error: 'RESUME_FAILED' })
-    expect(deps.stoppedAgents.get(saved.agentId)?.launchArgs).toEqual(['--old'])
+    expect((await deps.stoppedAgents.get(saved.agentId))?.launchArgs).toEqual(['--old'])
   })
 
   it('saves nothing when the launch is refused before a pane exists', async () => {
-    rewrite({ launchArgs: ['--old'] })
+    await rewrite({ launchArgs: ['--old'] })
     vi.mocked(deps.relaunchOverrides).mockResolvedValue({ ok: false, error: 'GRID_UNAVAILABLE', detail: 'x' })
     expect(await resumeWith(WORDS)).toMatchObject({ ok: false, error: 'GRID_UNAVAILABLE' })
     expect(create).not.toHaveBeenCalled()
-    expect(deps.stoppedAgents.get(saved.agentId)?.launchArgs).toEqual(['--old'])
+    expect((await deps.stoppedAgents.get(saved.agentId))?.launchArgs).toEqual(['--old'])
     expect(registry.byAgent(saved.agentId)).toBeUndefined()
   })
 
   it('keeps the terminal engine\'s resume, which has no launch to confirm, saving them as well', async () => {
-    rewrite({ engine: 'terminal' })
+    await rewrite({ engine: 'terminal' })
     expect(await resumeWith(WORDS)).toMatchObject({ ok: true })
     expect(registry.byAgent(saved.agentId)?.launchArgs).toEqual(WORDS)
   })
@@ -430,27 +463,53 @@ describe('resuming a stopped harness with new launch words', () => {
 })
 
 describe('the grid a resumed harness is on', () => {
+  it('resumes from a fresh exact credential after the displayed stopped catalog becomes old', async () => {
+    const previousKey = randomUUID(), currentKey = randomUUID()
+    const grid = { baseUrl: 'https://grid.example.test/v1', model: 'fixture-model' }
+    const launch = { ...grid, networkId: 'fixture', networkName: 'Display Grid' }
+    await rewrite({ grid, gridLaunch: { ...launch, apiKey: previousKey } })
+    const displayed = (await deps.stoppedAgents.available([]))[0]
+    const displayGrant = { current: deps.stoppedAgents.current(displayed), credential: Object.hasOwn(displayed, 'gridLaunch') }
+    const file = join(env.ADAPTER_DATA_DIR, 'stopped-agents', `${saved.agentId}.json`)
+    const raw = JSON.parse(readFileSync(file, 'utf8'))
+    writeFileSync(file, JSON.stringify({ ...raw, session: { ...raw.session, title: 'Current archive',
+      gridLaunch: { ...launch, apiKey: currentKey } } }), { mode: 0o600 })
+    vi.mocked(deps.relaunchOverrides).mockImplementationOnce(async (_row, source, current) => {
+      expect(current()).toBe(true)
+      expect(source.title).toBe('Current archive')
+      const resolved = await sessionStorage.resolveSelected(source.gridLaunch!)
+      expect(resolved.apiKey === currentKey && resolved.apiKey !== previousKey).toBe(true)
+      expect(current()).toBe(true)
+      return { ok: true, overrides: { env: { GRID_API_KEY: resolved.apiKey }, extraArgs: [], clearEnv: [] } }
+    })
+    expect(await start()).toMatchObject({ ok: true })
+    expect(create.mock.calls.some(([request]) => request.env?.GRID_API_KEY === currentKey)).toBe(true)
+    expect(create.mock.calls.some(([request]) => request.env?.GRID_API_KEY === previousKey)).toBe(false)
+    expect(displayGrant).toEqual({ current: false, credential: false })
+  })
+
   // The saved API's endpoint as saved now: the record a relaunch refreshes (apiModels.ts `refreshApiLaunch`).
   const override = { networkId: 'api', networkName: 'Saved', baseUrl: 'https://saved.example/now/v1', apiKey: 'k', model: 'm' }
-  const savedOnGrid = () => rewrite({ grid: { baseUrl: 'https://saved.example/then/v1', model: 'm' },
-    gridLaunch: { ...override, baseUrl: 'https://saved.example/then/v1' } })
+  const savedOnGrid = async () => (await rewrite({ grid: { baseUrl: 'https://saved.example/then/v1', model: 'm' },
+    gridLaunch: { ...override, baseUrl: 'https://saved.example/then/v1' } }))
 
   it('announces the refreshed web-search status in the first detached resume frame', async () => {
-    savedOnGrid()
-    rewrite({ gridWebSearch: 'unsupported' })
+    await savedOnGrid()
+    await rewrite({ gridWebSearch: 'unsupported' })
     vi.mocked(deps.relaunchOverrides).mockResolvedValueOnce({ ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [],
       gridLaunchRecord: { override, webSearch: 'on' } } })
-    vi.mocked(deps.refreshGridWebSearch).mockImplementation((id, options) => { registry.setGridLaunch(id, options.gridLaunchRecord ?? null) })
+    vi.mocked(deps.refreshGridWebSearch).mockImplementation(async (id, options) => { await registry.setGridLaunch(id, options.gridLaunchRecord ?? null) })
     expect(await start()).toMatchObject({ ok: true })
     const first = vi.mocked(deps.announceSession).mock.calls[0]![0]
     expect(first.gridWebSearch).toBe('on')
-    expect(first.gridLaunch).toEqual(override)
+    expect(first.gridLaunch).toMatchObject({ networkId: override.networkId, baseUrl: override.baseUrl, credential: { version: 1 } })
+    expect(Object.hasOwn(first.gridLaunch!, 'apiKey')).toBe(false)
     const { agentFrame } = await import('./agentFrame.js')
     expect((await agentFrame(first, { selectedModel: null, terminalAvailable: true })).grid?.webSearch).toBe('on')
   })
 
   it('does not announce or attach a different owner after refreshing resume metadata', async () => {
-    vi.mocked(deps.refreshGridWebSearch).mockImplementationOnce(id => { registry.byAgent(id)!.sessionId = 'replacement-conversation' })
+    vi.mocked(deps.refreshGridWebSearch).mockImplementationOnce(async id => { registry.byAgent(id)!.sessionId = 'replacement-conversation' })
     expect(await start()).toEqual(resumeChanged)
     expect(deps.announceSession).not.toHaveBeenCalled()
     expect(deps.attach).not.toHaveBeenCalled()
@@ -478,7 +537,7 @@ describe('the grid a resumed harness is on', () => {
     let missing = false
     const byAgent = registry.byAgent.bind(registry)
     const lookup = vi.spyOn(registry, 'byAgent').mockImplementation(id => missing && id === saved.agentId ? undefined : byAgent(id))
-    vi.mocked(deps.refreshGridWebSearch).mockImplementationOnce(() => {
+    vi.mocked(deps.refreshGridWebSearch).mockImplementationOnce(async () => {
       if (change === 'cancelled') deps.restartJobs.cancel(saved.agentId)
       else missing = true
     })
@@ -491,7 +550,7 @@ describe('the grid a resumed harness is on', () => {
   })
 
   it('is its launch record\'s, as this launch refreshed it, written with its process', async () => {
-    savedOnGrid()
+    await savedOnGrid()
     vi.mocked(deps.relaunchOverrides).mockResolvedValueOnce({ ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [],
       gridLaunchRecord: { override, webSearch: 'on' } } })
     expect(await start()).toMatchObject({ ok: true })
@@ -499,14 +558,15 @@ describe('the grid a resumed harness is on', () => {
   })
 
   it('is none for a launch with no record, whatever grid the saved row had', async () => {
-    savedOnGrid()
+    await savedOnGrid()
     expect(await start()).toMatchObject({ ok: true })
     expect(registry.byAgent(saved.agentId)?.grid).toBeNull()
   })
 
   it('is the launch record\'s on the row when an allocation the launch left unconfirmed is checked again', async () => {
     // The launch wrote its record on the row (`refreshGridWebSearch`), and its engine was not confirmed then.
-    ;(await live({ grid: { baseUrl: 'https://saved.example/then/v1', model: 'm' }, gridLaunch: override }))
+    ;(await live({ grid: { baseUrl: 'https://saved.example/then/v1', model: 'm' } }))
+    await registry.setGridLaunch(saved.agentId, { override, webSearch: 'unsupported' })
     expect(await start()).toMatchObject({ ok: true })
     expect(create).not.toHaveBeenCalled()
     expect(registry.byAgent(saved.agentId)?.grid).toEqual({ baseUrl: 'https://saved.example/now/v1', model: 'm' })
@@ -550,10 +610,10 @@ describe('production resume handler', () => {
   })
 
   it('composes stopped resume with real launch preparation before any live row exists', async () => {
-    const apiNotes = vi.fn()
+    const apiNotes = vi.fn(async () => {})
     const helpers = createLaunchHelpers({
       authority: createLaunchAuthority({ byAgent: id => registry.byAgent(id), revision: id => deps.restartJobs.revision(id), cancelled: id => deps.stopJobs.has(id) }),
-      prepareApiTools: apiNotes, setGridLaunch: vi.fn(), prepareResume: async () => ({ repairedItems: 0 }),
+      prepareInstructions: apiNotes, setGridLaunch: vi.fn(), prepareResume: async () => ({ repairedItems: 0 }),
       launchOverridesDeps: { machine: () => ({ hermesSystemManaged: false }), gridLaunch: vi.fn(),
         capabilities: async () => ({ sessionEnv: true }), writeGridConfigDir: vi.fn(), installCodexHooks: vi.fn(async () => true), readCodexConfig: () => null },
     })
@@ -565,7 +625,7 @@ describe('production resume handler', () => {
   })
 
   it.each(['auto', 'ask'])('resumes the same conversation with an explicit %s permission choice', async permissionMode => {
-    rewrite({ engine: 'opencode', permissionMode: permissionMode === 'auto' ? 'ask' : 'auto' })
+    await rewrite({ engine: 'opencode', permissionMode: permissionMode === 'auto' ? 'ask' : 'auto' })
     vi.mocked(deps.relaunchOverrides).mockResolvedValue({ ok: true, overrides: {
       env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: 'custom/kept', permission: 'ask', mcp: { custom: { enabled: true } } }) },
       extraArgs: [], clearEnv: [],
@@ -579,14 +639,50 @@ describe('production resume handler', () => {
     expect(JSON.parse(create.mock.calls[0][0].env.OPENCODE_CONFIG_CONTENT)).toEqual({
       model: 'custom/kept', permission: permissionMode === 'auto' ? 'allow' : 'ask', mcp: { custom: { enabled: true } },
     })
-    registry.load()
+    await registry.load()
     expect(registry.byAgent(saved.agentId)?.permissionMode).toBe(permissionMode)
   })
 
+  it('keeps the exact Windows held argv and omits an engine handoff on Resume', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    const held = windowsHeldPaneArgv('fixture waiting', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')
+    try {
+      // Keep the real fixture registry on this OS; only the pure launch/metadata turn uses Windows rules.
+      vi.mocked(buildEngineCommandArgv).mockImplementationOnce(() => {
+        Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+        return ['fixture-engine']
+      })
+      vi.mocked(buildEngineLaunchArgv).mockReturnValueOnce(held)
+      create.mockImplementationOnce(async request => {
+        Object.defineProperty(process, 'platform', platform)
+        await request.onDispatch?.()
+        return { state: 'succeeded', runtime: { backend: 'tmux', paneId: pane } }
+      })
+      expect(await start()).toMatchObject({ ok: true })
+      expect(create.mock.calls[0][0].command).toBe(held)
+      expect(create.mock.calls[0][0]).not.toHaveProperty('afterExit')
+      expect(buildEngineLaunchArgv).toHaveBeenCalledOnce()
+    } finally { Object.defineProperty(process, 'platform', platform) }
+  })
+
+  it.each(['dispatch', 'refusal'] as const)('publishes no Resume script before backend %s', async outcome => {
+    create.mockImplementationOnce(async request => {
+      expect(buildEngineLaunchArgv).not.toHaveBeenCalled()
+      expect(typeof request.command).toBe('function')
+      if (outcome === 'refusal') return { state: 'failed', dispatch: 'not_started', reason: 'fixture refusal' }
+      await request.onDispatch?.()
+      request.command()
+      return { state: 'succeeded', dispatch: 'executed', runtime: { backend: 'tmux', paneId: pane } }
+    })
+    expect(await start()).toMatchObject({ ok: outcome === 'dispatch' })
+    expect(buildEngineLaunchArgv).toHaveBeenCalledTimes(outcome === 'dispatch' ? 1 : 0)
+  })
+
   it('carries the captured native launch and token through permission, argv and registration', async () => {
+    const prepareSettings = vi.fn(async () => ({ values: { instructions: 'owner optional', settings: null }, current: () => true }))
     const native: NativeLaunch = { token: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', opencodeMajor: null,
       environment: {}, proofs: [], current: vi.fn(() => true),
-      prepareHooks: vi.fn(async () => true), permission: vi.fn(async () => 'supported' as const) }
+      prepareHooks: vi.fn(async () => true), permission: vi.fn(async () => 'supported' as const), prepareSettings }
     vi.mocked(deps.relaunchOverrides).mockResolvedValue({ ok: true,
       overrides: { env: {}, extraArgs: [], clearEnv: [], native } })
     const starting = vi.fn()
@@ -595,11 +691,16 @@ describe('production resume handler', () => {
     })
     create.mockImplementationOnce(async request => {
       expect(request.current()).toBe(true)
+      expect(prepareSettings).toHaveBeenCalledOnce()
+      await request.onDispatch?.()
+      if (typeof request.command === 'function') request.command()
       return { state: 'succeeded', runtime: { backend: 'tmux', paneId: pane } }
     })
     expect(await start()).toMatchObject({ ok: true, resumed: true })
-    expect(dropPermissionFlagIfUnsupported).toHaveBeenCalledWith('codex', expect.any(Object), undefined, native)
+    expect(dropPermissionFlagIfUnsupported).toHaveBeenCalledWith('codex', expect.any(Object), native)
     expect(buildEngineLaunchArgv).toHaveBeenCalledWith('codex', expect.objectContaining({ native }))
+    expect(prepareSettings).toHaveBeenCalledOnce()
+    expect(vi.mocked(buildEngineLaunchArgv).mock.lastCall![1]?.extraArgs).toContain('developer_instructions="owner optional"')
     expect(starting).toHaveBeenCalledExactlyOnceWith(native.token)
   })
 
@@ -617,7 +718,7 @@ describe('production resume handler', () => {
     expect(buildEngineLaunchArgv).not.toHaveBeenCalled()
     expect(registry.byAgent(saved.agentId)).toBeUndefined()
     expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).toBeNull()
-    expect(deps.stoppedAgents.get(saved.agentId)).toMatchObject({ sessionId: saved.sessionId, transcriptPath: saved.transcriptPath })
+    expect((await deps.stoppedAgents.get(saved.agentId))).toMatchObject({ sessionId: saved.sessionId, transcriptPath: saved.transcriptPath })
   })
 
   it.each(['native', 'cancel'] as const)('rechecks %s authority at terminal dispatch and releases an unstarted reservation', async reason => {
@@ -637,7 +738,7 @@ describe('production resume handler', () => {
     expect(kill).not.toHaveBeenCalled()
     expect(registry.byAgent(saved.agentId)).toBeUndefined()
     expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).toBeNull()
-    expect(deps.stoppedAgents.get(saved.agentId)?.sessionId).toBe(saved.sessionId)
+    expect((await deps.stoppedAgents.get(saved.agentId))?.sessionId).toBe(saved.sessionId)
   })
 
   it('notes where the relaunched engine\'s writing begins, after the history is prepared and before the launch', async () => {
@@ -662,16 +763,16 @@ describe('production resume handler', () => {
   })
 
   it('refuses an unsupported explicit permission choice before allocating a pane', async () => {
-    rewrite({ engine: 'opencode', permissionMode: 'ask' })
+    await rewrite({ engine: 'opencode', permissionMode: 'ask' })
     expect(await createResumeAgentService(deps)(saved.agentId, 'full')).toMatchObject({ error: 'INVALID_PERMISSION_MODE' })
     vi.mocked(refusePermissionFlagIfUnsupported).mockResolvedValue({ error: 'CODEX_CLI_TOO_OLD', detail: 'Update OpenCode.' })
     expect(await createResumeAgentService(deps)(saved.agentId, 'auto')).toMatchObject({ error: 'CODEX_CLI_TOO_OLD' })
     expect(create).not.toHaveBeenCalled()
-    expect(deps.stoppedAgents.get(saved.agentId)?.permissionMode).toBe('ask')
+    expect((await deps.stoppedAgents.get(saved.agentId))?.permissionMode).toBe('ask')
   })
 
   it('does not claim a permission change when Open attaches to a running process', async () => {
-    rewrite({ engine: 'opencode', permissionMode: 'ask' })
+    await rewrite({ engine: 'opencode', permissionMode: 'ask' })
     ;(await live({ resumeOnly: undefined, permissionMode: 'ask' }))
     vi.mocked(checkPidRuntime).mockResolvedValue({ state: 'alive' })
     expect(await createResumeAgentService(deps)(saved.agentId, 'auto')).toMatchObject({ error: 'PERMISSION_CHANGE_REQUIRES_STOP' })
@@ -681,7 +782,7 @@ describe('production resume handler', () => {
 
   // Its browser and its login were kept while it was stopped: the resume is a look at it, which starts it again.
   it('looks at the resumed agent for the services that follow agents, its row as it was saved', async () => {
-    rewrite({ browser: true })
+    await rewrite({ browser: true })
     expect(await createResumeAgentService(deps)(saved.agentId)).toMatchObject({ ok: true })
     expect(deps.attach).toHaveBeenCalledWith(expect.objectContaining({ agentId: saved.agentId, browser: true }))
   })
@@ -696,17 +797,17 @@ describe('production resume handler', () => {
   })
 
   it.each(['claude', 'codex'] as const)('resumes exact %s conversation on a new route and persists it', async engine => {
-    rewrite({ engine, codexHome: '/profile', permissionMode: 'plan', bypassPermission: true, dsh: 'fixture' })
+    await rewrite({ engine, codexHome: '/profile', permissionMode: 'plan', bypassPermission: true, dsh: 'fixture' })
     vi.mocked(installedDsh).mockReturnValue({} as any)
     vi.mocked(enginePathOverride).mockReturnValue('/fixture/bin')
     vi.mocked(deps.relaunchOverrides).mockResolvedValue({ ok: true, overrides: { env: { CODEX_HOME: '/profile', HARNESS_DSH: 'fixture' }, extraArgs: ['--fixture'], clearEnv: ['OLD'] } })
     const result = await start()
     expect(result).toMatchObject({ ok: true, resumed: true, session: { agentId: saved.agentId, sessionId: saved.sessionId, tmuxPane: pane, launch: { state: 'ready' } } })
-    expect(buildEngineLaunchArgv).toHaveBeenCalledWith(engine, expect.objectContaining({ resumeSessionId: saved.sessionId, cwd: dir, permissionMode: 'plan', bypassPermission: true, extraArgs: ['--fixture'], clearEnv: ['OLD'], harnessNode: true, installIfMissing: undefined }))
+    expect(buildEngineLaunchArgv).toHaveBeenCalledWith(engine, expect.objectContaining({ resumeSessionId: saved.sessionId, cwd: dir, permissionMode: 'plan', bypassPermission: true, extraArgs: ['--fixture'], clearEnv: ['OLD'], harnessNode: true }))
     expect(create).toHaveBeenCalledTimes(1)
     expect(create.mock.calls[0][0].env).toEqual({ CODEX_HOME: '/profile', HARNESS_DSH: 'fixture' })
     expect(deps.attach).toHaveBeenCalledTimes(1)
-    expect(deps.stoppedAgents.get(saved.agentId)?.sessionId).toBe(saved.sessionId)
+    expect((await deps.stoppedAgents.get(saved.agentId))?.sessionId).toBe(saved.sessionId)
     expect(deps.stoppedAgents.beginResume(saved.agentId)).not.toBeNull()
     const disk = JSON.parse(readFileSync(join(env.ADAPTER_DATA_DIR, 'registry.json'), 'utf8'))
     expect(JSON.stringify(disk)).toContain(saved.sessionId)
@@ -715,13 +816,13 @@ describe('production resume handler', () => {
   it('resumes a database-backed engine on its id alone, with no transcript to demand', async () => {
     // opencode/kilo/hermes/devin keep the conversation in SQLite; requiring a transcript file here
     // refused a resume that works, and refused it AFTER the harness had been paused.
-    rewrite({ engine: 'opencode', transcriptPath: '' })
+    await rewrite({ engine: 'opencode', transcriptPath: '' })
     expect(await start()).toMatchObject({ ok: true, resumed: true, session: { launch: { state: 'ready' } } })
     expect(buildEngineLaunchArgv).toHaveBeenCalledWith('opencode', expect.objectContaining({ resumeSessionId: saved.sessionId }))
   })
 
   it('stops a live `claude --bg` job on the exact session before building the resume argv', async () => {
-    rewrite({ engine: 'claude' })
+    await rewrite({ engine: 'claude' })
     expect(await start()).toMatchObject({ ok: true, resumed: true })
     expect(deps.stopBackgroundJob).toHaveBeenCalledWith('claude', expect.objectContaining({
       bin: engineBin('claude'), sessionId: saved.sessionId,
@@ -738,7 +839,7 @@ describe('production resume handler', () => {
   })
 
   it('builds nothing when the resume is cancelled while the background job stops', async () => {
-    rewrite({ engine: 'claude' })
+    await rewrite({ engine: 'claude' })
     vi.mocked(deps.stopBackgroundJob!).mockImplementationOnce(async () => { deps.restartJobs.cancel(saved.agentId) })
     expect(await start()).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
     expect(buildEngineLaunchArgv).not.toHaveBeenCalled()
@@ -746,7 +847,7 @@ describe('production resume handler', () => {
   })
 
   it('never checks for a background job on a fresh or fork launch (no resumeSessionId)', async () => {
-    rewrite({ engine: 'claude', sessionId: '' })
+    await rewrite({ engine: 'claude', sessionId: '' })
     await start()
     expect(deps.stopBackgroundJob).not.toHaveBeenCalled()
   })
@@ -758,7 +859,7 @@ describe('production resume handler', () => {
   })
 
   it('skips the background-job check for a DSH agent: its pane may run on a different host', async () => {
-    rewrite({ engine: 'claude', dsh: { id: 'fixture-dsh', url: 'https://example.test' } as any })
+    await rewrite({ engine: 'claude', dsh: { id: 'fixture-dsh', url: 'https://example.test' } as any })
     vi.mocked(installedDsh).mockReturnValue(true as any)
     await start()
     expect(deps.stopBackgroundJob).not.toHaveBeenCalled()
@@ -768,7 +869,7 @@ describe('production resume handler', () => {
     // `native` is the captured launch for every ordinary LOCAL Claude run (launchOverrides.ts), not a
     // signal the pane is elsewhere — it must not turn this off. `launchEnv` here stands in for what
     // launchOverrides.ts really produces: `native.environment` (its CLAUDE_CONFIG_DIR) merged in already.
-    rewrite({ engine: 'claude' })
+    await rewrite({ engine: 'claude' })
     const native: NativeLaunch = { token: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', opencodeMajor: null,
       environment: { CLAUDE_CONFIG_DIR: '/native/claude-home' }, proofs: [], current: vi.fn(() => true),
       prepareHooks: vi.fn(async () => true), permission: vi.fn(async () => 'supported' as const) }
@@ -783,7 +884,7 @@ describe('production resume handler', () => {
   it('marks an engine with no startup hook ready off its own process', async () => {
     // muse never hooks, so nothing else would ever leave this row `starting` — it would read as
     // "Starting" for ever and keep discovery out of the pane.
-    rewrite({ engine: 'muse' })
+    await rewrite({ engine: 'muse' })
     vi.mocked(resolvePaneEngineProcess).mockResolvedValue(identity)
     expect(await start()).toMatchObject({ ok: true, session: { launch: { state: 'ready' } } })
   })
@@ -796,7 +897,7 @@ describe('production resume handler', () => {
     expect(result).toMatchObject({ ok: true, session: { processIdentity: identity, launch: { state: 'ready' } } })
     expect(registry.byAgent(saved.agentId)?.processIdentity).toEqual(identity)
     expect(deps.announceSession).toHaveBeenLastCalledWith(expect.objectContaining({ processIdentity: identity }))
-    registry.load()
+    await registry.load()
     expect(registry.byAgent(saved.agentId)?.processIdentity).toEqual(identity)
   })
 
@@ -824,7 +925,7 @@ describe('production resume handler', () => {
 
   it('attaches nothing for a resume that started a new conversation: the engine has yet to name it', async () => {
     // A stopped harness that never had a conversation resumes into a new one.
-    rewrite({ sessionId: '', transcriptPath: '' })
+    await rewrite({ sessionId: '', transcriptPath: '' })
     vi.mocked(resolvePaneEngineProcess).mockResolvedValue(identity)
     expect(await start()).toMatchObject({ ok: true, resumed: false, session: { launch: { state: 'ready' } } })
     expect(deps.attachSession).not.toHaveBeenCalled()
@@ -837,7 +938,7 @@ describe('production resume handler', () => {
   })
 
   it('opens a retained terminal as a new shell without a vendor resume argument', async () => {
-    rewrite({ engine: 'terminal', sessionId: '', transcriptPath: '' })
+    await rewrite({ engine: 'terminal', sessionId: '', transcriptPath: '' })
     expect(await start()).toMatchObject({ ok: true, resumed: true, session: { engine: 'terminal', launch: { state: 'ready' } } })
     expect(buildEngineLaunchArgv).toHaveBeenCalledWith('terminal', expect.objectContaining({ resumeSessionId: undefined }))
     expect(deps.prepareSessionResume).not.toHaveBeenCalled()
@@ -859,24 +960,24 @@ describe('production resume handler', () => {
   })
   it.each([
     ['missing tmux', () => { noBackend() }, 'TMUX_UNAVAILABLE'],
-    ['missing provider', () => rewrite({ grid: { baseUrl: 'https://fixture.invalid', model: null }, gridLaunch: null }), 'GRID_CREDENTIAL_REQUIRED'],
-    ['missing DSH', () => rewrite({ dsh: 'missing' }), 'INVALID_DSH'],
-    ['missing cwd', () => rewrite({ cwd: null }), 'CWD_NOT_FOUND'],
-    ['removed cwd', () => rewrite({ cwd: join(dir, 'gone') }), 'CWD_NOT_FOUND'],
-    ['file cwd', () => { const file = join(dir, 'file'); writeFileSync(file, 'file'); rewrite({ cwd: file }) }, 'CWD_NOT_FOUND'],
-    ['missing transcript', () => rewrite({ transcriptPath: '' }), 'RESUME_UNAVAILABLE'],
+    ['missing provider', async () => (await rewrite({ grid: { baseUrl: 'https://fixture.invalid', model: null }, gridLaunch: null })), 'GRID_CREDENTIAL_REQUIRED'],
+    ['missing DSH', async () => { await rewrite({ dsh: 'missing' }); vi.mocked(deps.relaunchOverrides).mockResolvedValue({ ok: false, error: 'DSH_NOT_INSTALLED', detail: 'missing' }) }, 'INVALID_DSH'],
+    ['missing cwd', async () => (await rewrite({ cwd: null })), 'CWD_NOT_FOUND'],
+    ['removed cwd', async () => (await rewrite({ cwd: join(dir, 'gone') })), 'CWD_NOT_FOUND'],
+    ['file cwd', async () => { const file = join(dir, 'file'); writeFileSync(file, 'file'); await rewrite({ cwd: file }) }, 'CWD_NOT_FOUND'],
+    ['missing transcript', async () => (await rewrite({ transcriptPath: '' })), 'RESUME_UNAVAILABLE'],
     ['invalid transcript', () => vi.mocked(controlTranscriptEvidence).mockImplementation(() => { throw new IdentityReadUnavailable('fixture source unavailable') }), 'IDENTITY_UNAVAILABLE'],
     ['old process alive', () => vi.mocked(checkPidRuntime).mockResolvedValue({ state: 'alive' }), 'AGENT_BUSY'],
     ['old process unknown', () => vi.mocked(checkPidRuntime).mockResolvedValue({ state: 'unknown', reason: 'fixture' }), 'AGENT_BUSY'],
   ] as const)('refuses %s without allocating or losing history', async (_label, setup, error) => {
-    setup(); expect(await start()).toMatchObject({ ok: false, error }); expect(create).not.toHaveBeenCalled()
-    expect(deps.stoppedAgents.get(saved.agentId)?.agentId).toBe(saved.agentId)
+    await setup(); expect(await start()).toMatchObject({ ok: false, error }); expect(create).not.toHaveBeenCalled()
+    expect((await deps.stoppedAgents.get(saved.agentId))?.agentId).toBe(saved.agentId)
   })
   it('answers a launch Windows refuses by its reason, opening nothing and keeping the stopped harness', async () => {
-    vi.mocked(buildEngineLaunchArgv).mockImplementationOnce(() => { throw new WindowsBatchLaunchRefused('codex', 'C:\\tools\\codex.cmd') })
+    vi.mocked(buildEngineCommandArgv).mockImplementationOnce(() => { throw new WindowsBatchLaunchRefused('codex', 'C:\\tools\\codex.cmd') })
     expect(await start()).toEqual({ ok: false, error: 'ENGINE_LAUNCH_REFUSED', detail: expect.stringContaining('codex.cmd is a batch file') })
     expect(create).not.toHaveBeenCalled()
-    expect(deps.stoppedAgents.get(saved.agentId)?.agentId).toBe(saved.agentId)
+    expect((await deps.stoppedAgents.get(saved.agentId))?.agentId).toBe(saved.agentId)
     expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).toBeNull()
   })
   it('sends a native launch\'s marker in the pane env on Windows, where the argv has no /usr/bin/env', async () => {
@@ -901,7 +1002,7 @@ describe('production resume handler', () => {
     deps.noBackendCode = 'PTY_HOST_UNAVAILABLE'
     expect(await start()).toEqual({ ok: false, error: 'PTY_HOST_UNAVAILABLE' })
     expect(create).not.toHaveBeenCalled()
-    expect(deps.stoppedAgents.get(saved.agentId)?.agentId).toBe(saved.agentId)
+    expect((await deps.stoppedAgents.get(saved.agentId))?.agentId).toBe(saved.agentId)
   })
   it('does not rewrite a profile while an earlier allocation is unconfirmed', async () => {
     deps.stoppedAgents.beginResume(saved.agentId)
@@ -913,7 +1014,7 @@ describe('production resume handler', () => {
   // refused before it looked at anything.
   it('takes over a reservation older than the readiness budget', async () => {
     deps.stoppedAgents.beginResume(saved.agentId)
-    const held = join(dir, 'saved', `${saved.agentId}.resume`)
+    const held = join(env.ADAPTER_DATA_DIR, 'stopped-agents', `${saved.agentId}.resume`)
     const stale = Date.now() - RESUME_READINESS_BUDGET_MS - 60_000
     utimesSync(held, new Date(stale), new Date(stale))
     expect(await start()).toMatchObject({ ok: true })
@@ -1026,15 +1127,15 @@ describe('production resume handler', () => {
     expect(await start()).toMatchObject({ ok: false, error: 'IDENTITY_UNAVAILABLE' })
     expect(create).not.toHaveBeenCalled()
     expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).toBeNull()
-    expect(deps.stoppedAgents.get(saved.agentId)?.sessionId).toBe(saved.sessionId)
+    expect((await deps.stoppedAgents.get(saved.agentId))?.sessionId).toBe(saved.sessionId)
   })
 
-  it.each(['permission', 'argv'] as const)('checks cancellation after %s preparation before allocating a pane', async phase => {
+  it.each(['permission', 'command preflight'] as const)('checks cancellation after %s preparation before allocating a pane', async phase => {
     if (phase === 'permission') vi.mocked(dropPermissionFlagIfUnsupported).mockImplementationOnce(async (_engine, choice) => {
       deps.restartJobs.cancel(saved.agentId)
       return { choice, droppedFlag: null }
     })
-    else vi.mocked(buildEngineLaunchArgv).mockImplementationOnce(() => { deps.restartJobs.cancel(saved.agentId); return ['fixture-engine'] })
+    else vi.mocked(buildEngineCommandArgv).mockImplementationOnce(() => { deps.restartJobs.cancel(saved.agentId); return ['fixture-engine'] })
     expect(await start()).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
     expect(create).not.toHaveBeenCalled()
     expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).toBeNull()
@@ -1046,7 +1147,7 @@ describe('production resume handler', () => {
     await expect(start()).rejects.toBe(failure)
     expect(create).not.toHaveBeenCalled()
     expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).toBeNull()
-    expect(deps.stoppedAgents.get(saved.agentId)?.sessionId).toBe(saved.sessionId)
+    expect((await deps.stoppedAgents.get(saved.agentId))?.sessionId).toBe(saved.sessionId)
   })
 
   it('cancels a tmux allocation without registering or reusing its pane', async () => {
@@ -1071,7 +1172,7 @@ describe('production resume handler', () => {
     expect(deps.stoppedAgents.resumeReservedAt(saved.agentId) === null).toBe(outcome === 'confirmed')
   })
   it('serializes two saved identities for the same conversation', async () => {
-    const second = { ...saved, agentId: 'alias' }; deps.stoppedAgents.save(second)
+    const second = { ...saved, agentId: 'alias' }; await deps.stoppedAgents.save(second)
     const build = deferred<any>(); vi.mocked(deps.relaunchOverrides).mockReturnValue(build.promise)
     const resume = createResumeAgentService(deps); const one = resume(saved.agentId)
     await vi.waitFor(() => expect(deps.relaunchOverrides).toHaveBeenCalledTimes(1))
@@ -1083,7 +1184,7 @@ describe('production resume handler', () => {
 
 describe('existing runtime and readiness verification', () => {
   it.each(['claude', 'terminal'] as const)('attaches a verified live %s without a new pane', async engine => {
-    if (engine === 'terminal') rewrite({ engine, sessionId: '', transcriptPath: '' })
+    if (engine === 'terminal') await rewrite({ engine, sessionId: '', transcriptPath: '' })
     ;(await live({ engine, resumeOnly: undefined, launch: { state: 'ready' } })); vi.mocked(checkPidRuntime).mockResolvedValue({ state: 'alive' })
     expect(await start()).toMatchObject({ ok: true }); expect(create).not.toHaveBeenCalled()
     if (engine === 'claude') expect(checkSessionRuntime).toHaveBeenCalledWith(tmuxTerminal, expect.objectContaining({ agentId: saved.agentId }), { backend: 'tmux', paneId: pane })
@@ -1152,7 +1253,7 @@ describe('existing runtime and readiness verification', () => {
     expect(deps.retainExitedSession).not.toHaveBeenCalled(); expect(create).not.toHaveBeenCalled()
   })
   it('resumes a missing shell', async () => {
-    rewrite({ engine: 'terminal', sessionId: '', transcriptPath: '' }); (await live({ resumeOnly: undefined, launch: { state: 'ready' } }))
+    await rewrite({ engine: 'terminal', sessionId: '', transcriptPath: '' }); (await live({ resumeOnly: undefined, launch: { state: 'ready' } }))
     inventory.mockResolvedValue(listed())
     expect(await start()).toMatchObject({ ok: true }); expect(create).toHaveBeenCalledTimes(1)
   })
@@ -1200,7 +1301,7 @@ describe('existing runtime and readiness verification', () => {
     // discovery, and the desk reads its own resume receipt as unknown.
     expect(registry.byAgent(saved.agentId)?.launch).toEqual({ state: 'ready' })
     // The reservation is released, so the next Enter is not refused by `beginResume`.
-    expect(existsSync(join(dir, 'saved', `${saved.agentId}.resume`))).toBe(false)
+    expect(existsSync(join(env.ADAPTER_DATA_DIR, 'stopped-agents', `${saved.agentId}.resume`))).toBe(false)
     expect(create).not.toHaveBeenCalled()
   })
   it('does not re-verify a live process that reported another conversation', async () => {
@@ -1218,17 +1319,17 @@ describe('existing runtime and readiness verification', () => {
     await inspected.promise
     expect(replied).toBe(false)
     expect(await result).toMatchObject({ ok: true })
-    // No process, then ready, then the fresh proof at durable publication.
-    expect(resolvePaneEngineProcess).toHaveBeenCalledTimes(3)
+    // No process, then ready, and fresh proof at both sides of asynchronous durability.
+    expect(resolvePaneEngineProcess).toHaveBeenCalledTimes(process.platform === 'win32' ? 3 : 4)
   })
   it('honors a stop requested as the newly allocated runtime is announced', async () => {
     vi.mocked(deps.announceSession).mockImplementation(() => deps.restartJobs.cancel(saved.agentId))
     expect(await start()).toMatchObject({ error: 'AGENT_CHANGED' })
-    expect(deps.stoppedAgents.get(saved.agentId)?.sessionId).toBe(saved.sessionId)
+    expect((await deps.stoppedAgents.get(saved.agentId))?.sessionId).toBe(saved.sessionId)
     expect(deps.stoppedAgents.beginResume(saved.agentId)).toBeNull()
   })
   it.each([true, false])('cancels while clearing remain-on-exit, terminal=%s', async terminal => {
-    if (terminal) rewrite({ engine: 'terminal', sessionId: '', transcriptPath: '' })
+    if (terminal) await rewrite({ engine: 'terminal', sessionId: '', transcriptPath: '' })
     releaseHold.mockImplementation(async () => { deps.restartJobs.cancel(saved.agentId) })
     expect(await start()).toMatchObject({ error: 'AGENT_CHANGED' })
   })
@@ -1256,7 +1357,7 @@ describe('existing runtime and readiness verification', () => {
     if (mode === 'cancel process probe') vi.mocked(checkPidRuntime).mockImplementation(async () => { deps.restartJobs.cancel(saved.agentId); return { state: 'gone', reason: 'fixture' } })
     if (mode === 'cancel pane probe') paneState.mockImplementationOnce(async () => { deps.restartJobs.cancel(saved.agentId); return 'gone' })
     expect(await start()).toMatchObject({ ok: false })
-    expect(create).not.toHaveBeenCalled(); expect(deps.stoppedAgents.get(saved.agentId)).not.toBeNull()
+    expect(create).not.toHaveBeenCalled(); expect((await deps.stoppedAgents.get(saved.agentId))).not.toBeNull()
   })
   it.each([
     ['gone', false], ['unknown', true],
@@ -1310,7 +1411,7 @@ describe('resume edges the desk sees', () => {
     ['plan', false, 'plan'],
     [undefined, true, 'Auto'],
   ] as const)('resumes in Ask when the engine no longer takes the saved %s flag, and says how to get it back', async (mode, bypass, named) => {
-    rewrite({ permissionMode: mode, bypassPermission: bypass })
+    await rewrite({ permissionMode: mode, bypassPermission: bypass })
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.mocked(dropPermissionFlagIfUnsupported).mockResolvedValueOnce({
       choice: { permissionMode: null, bypassPermission: false }, droppedFlag: '--permission-mode',
@@ -1333,14 +1434,15 @@ describe('resume on the pty host', () => {
     expect(await start()).toMatchObject({ ok: true, resumed: true, session: { agentId: saved.agentId, runtimes: [pty] } })
     expect(ptyCreate).toHaveBeenCalledOnce()
     expect(buildEngineLaunchArgv).toHaveBeenCalledWith('codex', expect.objectContaining({ resumeSessionId: saved.sessionId }))
-    expect(ptyCreate.mock.calls[0][0].command).toEqual(['fixture-engine'])
+    expect(ptyCreate.mock.calls[0][0].command).toBeTypeOf('function')
+    expect(vi.mocked(buildEngineLaunchArgv).mock.results.at(-1)!.value).toEqual(['fixture-engine'])
     expect(resolvePaneEngineProcess).toHaveBeenCalledWith(ptyTerminal, pty, 'codex')
     expect(ptyReleaseHold).toHaveBeenCalledWith(pty, expect.any(Function))
     tmuxUntouched()
   })
 
   it('opens a stopped shell in a new pty host pane', async () => {
-    rewrite({ engine: 'terminal', sessionId: '', transcriptPath: '' })
+    await rewrite({ engine: 'terminal', sessionId: '', transcriptPath: '' })
     expect(await start()).toMatchObject({ ok: true, session: { runtimes: [pty], launch: { state: 'ready' } } })
     expect(ptyReleaseHold).toHaveBeenCalledWith(pty, expect.any(Function))
     tmuxUntouched()
@@ -1450,7 +1552,7 @@ it('refuses resumed authority when a peer changes the selected durable row', asy
   const peer = Reflect.construct(registry.constructor, []) as typeof registry
   const plan = { id: '12345678-1234-1234-1234-123456789012', identity: 'fixture-conversation', requestedAt: Date.now(), state: 'waiting' as const }
   vi.mocked(resolvePaneEngineProcess).mockImplementationOnce(async () => {
-    peer.load()
+    await peer.load()
     await peer.setClosePlan(saved.agentId, plan)
     return identity
   }).mockResolvedValue(identity)
@@ -1468,7 +1570,7 @@ it('refuses resumed authority when a peer changes the selected durable row', asy
 })
 
 it.each(['codex', 'terminal'] as const)('retains resumed authority for %s after post-rename uncertainty until the same candidate is confirmed', async engine => {
-  if (engine === 'terminal') rewrite({ engine: 'terminal', sessionId: '', transcriptPath: '' })
+  if (engine === 'terminal') await rewrite({ engine: 'terminal', sessionId: '', transcriptPath: '' })
   publication.agent = saved.agentId; publication.failSync = 2
   if (engine === 'terminal') vi.mocked(resolvePaneEngineProcess).mockRejectedValue(Error('a terminal has no engine process to probe'))
   else vi.mocked(resolvePaneEngineProcess).mockResolvedValue(identity)
@@ -1516,4 +1618,59 @@ it('preserves unrelated observations made while resumed authority waits in the q
   registry.updateTitle(saved.sessionId, 'New title while queued')
   try { held.resolve(); await first; expect(await confirmation).toMatchObject({ state: 'confirmed', entry: { title: 'New title while queued' } }) }
   finally { held.resolve(); await first; await confirmation }
+})
+
+it.skipIf(process.platform === 'win32')('keeps the actual pending Resume pane and reservation after its renamed allocation expires', async () => {
+  const arrived = deferred<void>(), held = deferred<void>()
+  publication.agent = saved.agentId; publication.pending = true
+  publication.release = () => held.resolve()
+  publication.directoryWait = async () => { arrived.resolve(); await held.promise }
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  const result = start().catch(error => error)
+  expect(await Promise.race([arrived.promise.then(() => 'directory'), result.then(() => 'settled')])).toBe('directory')
+  expect(create).toHaveBeenCalledOnce()
+  expect(kill).not.toHaveBeenCalled()
+  expect(releaseHold).not.toHaveBeenCalled()
+  expect(deps.announceSession).not.toHaveBeenCalled()
+  expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).not.toBeNull()
+  await vi.advanceTimersByTimeAsync(5_000)
+  await result
+  expect(kill).not.toHaveBeenCalled()
+  expect((await result).constructor.name).toBe('AtomicWriteUnconfirmed')
+  expect(await result).toMatchObject({ retryable: false })
+  held.resolve(); vi.useRealTimers()
+  await registry.flush()
+  expect(create).toHaveBeenCalledOnce()
+  expect(kill).not.toHaveBeenCalled()
+  expect(releaseHold).not.toHaveBeenCalled()
+  expect(deps.announceSession).not.toHaveBeenCalled()
+  expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).not.toBeNull()
+})
+
+it('keeps an admitted Resume pane and reservation when source cleanup fails before launch completion', async () => {
+  const { sessionStorage } = await import('./sessionStorage.js')
+  const retain = sessionStorage.retain.bind(sessionStorage)
+  let failed = false
+  const intercept = vi.spyOn(sessionStorage, 'retain').mockImplementation(async document => {
+    const source = await retain(document)
+    return { ...source, release: async () => {
+      await source.release()
+      if (!failed && document.kind === 'registry' && registry.byAgent(saved.agentId)?.launch?.state === 'starting') {
+        failed = true
+        throw Error('fixture admitted source cleanup failed')
+      }
+    } }
+  })
+  try {
+    const error = await start().catch(error => error)
+    expect(failed).toBe(true)
+    expect(kill).not.toHaveBeenCalled()
+    expect(error.constructor.name).toBe('RegistryCleanupUnavailable')
+    expect(error).not.toBeInstanceOf(AtomicWriteUnconfirmed)
+    expect(registry.byAgent(saved.agentId)?.runtimes).toEqual([{ backend: 'tmux', paneId: pane }])
+    expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).not.toBeNull()
+    expect(releaseHold).not.toHaveBeenCalled()
+    expect(deps.announceSession).not.toHaveBeenCalled()
+    expect(create).toHaveBeenCalledOnce()
+  } finally { intercept.mockRestore() }
 })

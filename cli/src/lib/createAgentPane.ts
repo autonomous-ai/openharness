@@ -10,7 +10,8 @@
  * always lands on an unclaimed route without needing to wait for anything. A tmux spawn failure
  * (`SPAWN_FAILED`/`TMUX_UNAVAILABLE`) is a different, not-obviously-transient problem and is
  * returned immediately — only the registration race is retried. A storage refusal is neither a taken route nor tmux's:
- * its one pane is closed and it is answered at once as `PERSISTENCE_UNCONFIRMED`.
+ * its one pane is closed and it is answered at once as `PERSISTENCE_UNCONFIRMED`. An already-renamed,
+ * unconfirmed row keeps its pane and propagates uncertainty to the launch receipt instead.
  */
 import { homedir } from 'node:os'
 import type { AgentEngine } from '../engines/types.js'
@@ -18,9 +19,9 @@ import type { GridLaunchRecord } from './gridLaunchWire.js'
 import type { ScmLaunchRecord } from '../scm/types.js'
 import type { ForkOrigin, RegisteredSession } from './registry.js'
 import type { TerminalBackend } from './terminalBackend.js'
-import type { TerminalCreateResult, TerminalRuntimeRef } from './terminalTypes.js'
+import type { TerminalCreateResult, TerminalRuntimeRef, TerminalDispatchControl, TerminalCommand } from './terminalTypes.js'
 import { terminalRouteKey } from './terminalRuntime.js'
-import { RegistryPersistenceUnavailable } from './registryPersistence.js'
+import { RegistryCleanupUnavailable, RegistryPersistenceUnavailable } from './registryPersistence.js'
 import { AtomicWriteUnconfirmed } from './secureState.js'
 import type { ExternalResumeIntent } from './externalResume.js'
 import type { WindowsPaneLaunch } from './windows/engineStart.js'
@@ -75,10 +76,7 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
   label?: string | null
   /** Base tmux session name (`-s`). Retries append `-r<attempt>` — see module doc. */
   sessionLabel: string
-  /** The pane's command, built for each attempt (1 first): an engine launch reads its script from a one-time file that
-   *  the pane's shell removes as it reads it (engineLaunch.ts `sourcedOnce`), so a retry needs a file of its own. Handed
-   *  the first attempt's, a retry ran a file already gone and its pane died with status 127 (CI, cli/e2e/scale.e2e.ts). */
-  argv: (attempt: number) => string[]
+  argv: TerminalCommand
   /** Explicit-argv terminals start here; engine wrappers still enter cwd after rc files. */
   spawnCwd?: string
   /** Windows: the folder the engine starts in (it has no wrapper to enter one) and the shell the pane becomes when it
@@ -125,13 +123,15 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
   openclawLocal?: string
   /** Rechecked by the backend after its gates and immediately before process dispatch. */
   current?: () => boolean
-  onDispatch?: () => void | Promise<void>
+  onDispatch?: TerminalDispatchControl['onDispatch']
   maxAttempts?: number
 }
 
 export type CreateAgentPaneResult<Ref extends TerminalRuntimeRef = TerminalRuntimeRef> =
   | { ok: true; spawned: TerminalCreateResult<Ref> & { state: 'succeeded' }; pending: RegisteredSession }
-  | { ok: false; error: 'TMUX_UNAVAILABLE' | 'SPAWN_FAILED' | 'REGISTRATION_FAILED' | 'PERSISTENCE_UNCONFIRMED'; detail: string }
+  | { ok: false; error: 'TMUX_UNAVAILABLE' | 'SPAWN_FAILED' | 'REGISTRATION_FAILED' | 'PERSISTENCE_UNCONFIRMED'; detail: string
+      /** The first backend attempt proves no native command was sent. Later retries cannot make this claim. */
+      notStarted?: true }
 
 export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = TerminalRuntimeRef>(
   deps: CreateAgentPaneDeps<Ref>,
@@ -147,7 +147,7 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
       ...(deps.paneLaunch?.afterExit ? { afterExit: deps.paneLaunch.afterExit } : {}),
       ...(deps.paneLaunch?.clearInherited?.length ? { clearInherited: deps.paneLaunch.clearInherited } : {}),
       label,
-      command: deps.argv(attempt),
+      command: deps.argv,
       ...(deps.current ? { current: deps.current } : {}),
       ...(deps.onDispatch ? { onDispatch: deps.onDispatch } : {}),
       // The caller's own variables win over the pane's PATH rule (lib/windows/engineStart.ts `windowsPaneLaunch`).
@@ -156,7 +156,8 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
     if (spawned.state !== 'succeeded') {
       console.warn(`[agent] create ${deps.engine} failed · tmux could not open a pane · ${spawned.reason ?? ''}`)
       const missing = spawned.reason === 'tmux is unavailable'
-      return { ok: false, error: missing ? 'TMUX_UNAVAILABLE' : 'SPAWN_FAILED', detail: spawned.reason }
+      return { ok: false, error: missing ? 'TMUX_UNAVAILABLE' : 'SPAWN_FAILED', detail: spawned.reason,
+        ...(attempt === 1 && spawned.dispatch === 'not_started' ? { notStarted: true as const } : {}) }
     }
     let pending: RegisteredSession | null
     try {
@@ -190,8 +191,11 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
         ...(deps.openclawLocal ? { openclawLocal: deps.openclawLocal } : {}),
       })
     } catch (error) {
+      // A visible pending row may still own this pane. Killing it does not durably undo that
+      // publication, and returning a refusal would mark Create's receipt failed instead of unconfirmed.
+      if (error instanceof AtomicWriteUnconfirmed || error instanceof RegistryCleanupUnavailable) throw error
       const closed = await deps.tmuxBackend.kill(spawned.runtime)
-      if (!(error instanceof RegistryPersistenceUnavailable || error instanceof AtomicWriteUnconfirmed)) throw error
+      if (!(error instanceof RegistryPersistenceUnavailable)) throw error
       console.warn(`[agent] create ${deps.engine} not saved · pane ${spawned.runtime.paneId} `
         + (closed?.state === 'succeeded' ? 'closed' : `close ${closed?.state ?? 'unknown'}`) + ` · ${errorKind(error)}`)
       return { ok: false, error: 'PERSISTENCE_UNCONFIRMED', detail: error.message }

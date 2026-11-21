@@ -21,6 +21,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
+import sys
 import time
 import zipfile
 
@@ -196,7 +197,7 @@ DEPENDS = {
                 "desktop/lib/measurement/", "mobile/lib/measurement/",
                 "provider/reference-provider/", "tests/fixtures/"),
     "cli": ("backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts", "desktop/",
-            "cli/e2e/harness/", "devices/harness-device/firmware/main/ui/habitat/focus_faces.c",
+            "cli/e2e/harness/", "cli/e2e/ownerCommandsBench.e2e.ts", "devices/harness-device/firmware/main/ui/habitat/focus_faces.c",
             "devices/harness-device/firmware/test/vectors/", "docs/contracts/", "mobile/", "pty/", "store/", "tui/"),
     "companions": ("cli/", "docs/research/2026-09-30-memory-batch-extraction-cases.json",
                    "docs/research/2026-09-30-memory-extraction-cases.json"),
@@ -267,7 +268,7 @@ PR_READS = {
     # store/: the dsh specs read its agents, viewers and starter (the scan skips it: a path outside every component).
     # focus_faces.c: roundGlyphs.spec.ts holds the daemon's copy of the dial's glyph table to the firmware's.
     "cli": ("backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts",
-            "cli/e2e/harness/", "desktop/assets/connector-icons/",
+            "cli/e2e/harness/", "cli/e2e/ownerCommandsBench.e2e.ts", "desktop/assets/connector-icons/",
             "desktop/lib/connectors/connector_icons.dart", "desktop/lib/measurement/product_health_contract.dart",
             "desktop/test/viewer/deviceAck.vectors.json", "desktop/test/viewer/deviceHistory.vectors.json",
             "devices/harness-device/firmware/main/ui/habitat/focus_faces.c",
@@ -357,9 +358,9 @@ NOT_READS = {
        for source in ("cli/e2e/harness/realBackend.ts", "cli/scripts/box-claim-e2e.ts", "cli/scripts/local-stack-peer.ts",
                       "cli/scripts/remote-viewers-stack.ts", "cli/scripts/share-harness-e2e.ts")},
     "cli/src/engines/__fixtures__/other-runtime.golden.json": ("test data: a model name", {"provider/"}),
-    "cli/src/lib/connectors/call.spec.ts": ("test data: files in a temporary home", {"docs/"}),
     "cli/src/lib/sessionSearch/turns.spec.ts": ("test data: a tool call's file path", {"desktop/"}),
     "cli/src/lib/handoffChangedFiles.spec.ts": ("test data: changed file names", {"docs/"}),
+    "cli/src/lib/connectors/call.spec.ts": ("test data: files in a temporary home", {"docs/"}),
     "cli/src/lib/opencodeOneShot.spec.ts": ("test data: a model name", {"provider/"}),
     "cli/src/lib/runtimeProfile.spec.ts": ("test data: a model name", {"provider/"}),
     "cli/src/lib/transcriptReader.spec.ts": ("test data: a tool result's text", {"devices/"}),
@@ -1258,11 +1259,12 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.verify:
-        plan = json.loads(os.environ["CI_PLAN"])
+        needs = json.load(sys.stdin)
+        plan = json.loads(needs["plan"]["outputs"]["plan"])
         if (git(Path.cwd(), "rev-parse", "HEAD") != os.environ["CI_SOURCE_SHA"]
                 or git(Path.cwd(), "rev-parse", "HEAD^{tree}") != plan.get("tree")):
             raise ValueError("CI gate checkout differs from the planned source")
-        record = verify(plan, json.loads(os.environ["CI_NEEDS"]), os.environ["CI_SOURCE_SHA"])
+        record = verify(plan, needs, os.environ["CI_SOURCE_SHA"])
     else:
         event_name = os.environ["GITHUB_EVENT_NAME"]
         # Read-only Actions lookups with a one-minute budget; any failure reruns as before.

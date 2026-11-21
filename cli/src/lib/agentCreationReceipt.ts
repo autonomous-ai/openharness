@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { opendir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
+import { closeStateFileDescriptor, readPrivateStateFile, secureStateDirectory, stateFileCustodyHealthy, StateFileCleanupUnconfirmed, syncStateDirectory } from './secureState.js'
 import type { LaunchModel } from './launchModel.js'
 
 export type AgentCreationOutcome =
@@ -41,6 +41,10 @@ type IntentReceipt = {
 } | { version: 2; cancelled: true }
 type IntentClaim = { fingerprint: string; token: string; kind: 'dispatch' | 'cancel' }
 type IntentResult = { fingerprint: string; token: string; outcome: AgentCreationOutcome }
+type IntentPreparation = (request: Record<string, unknown>, authority: CreationAuthority) => Promise<(() => Promise<AgentCreationOutcome>) | null>
+type InFlightCreation = { fingerprint: string; result: Promise<AgentCreationStatus> }
+type ReceiptDirectoryOwner = { verify(): void; close(): void }
+type MarkerAdmission = { entry: InFlightCreation; directory: ReceiptDirectoryOwner; checksum: string | null; transferred: boolean }
 
 type Receipt = {
   version: 1
@@ -70,6 +74,7 @@ export class AgentCreationReceiptError extends Error {
  *  (stone7890's Mac, 11-06: root-owned, so every start waited for hours on a bare code). Harness never changes a person's folder
  *  permissions: the owner of this computer does, and the words say how. */
 function storageFailure(directory: string, error: unknown): AgentCreationReceiptError {
+  if (error instanceof StateFileCleanupUnconfirmed) throw error
   const { code, message } = error as { code?: string; message?: string }
   const permissions = code === 'EACCES' || code === 'EPERM' || /unsafe owner|writable/.test(message ?? '')
   if (!permissions) return new AgentCreationReceiptError('CREATION_STORAGE_FAILED')
@@ -103,13 +108,13 @@ export function creationFingerprint(value: unknown): string {
  * age: even an old retry must not silently become a fresh launch.
  */
 export class AgentCreationReceipts {
-  private readonly inFlight = new Map<string, { fingerprint: string; result: Promise<AgentCreationStatus> }>()
+  private readonly inFlight = new Map<string, InFlightCreation>()
   // A failed outcome write must not forget an agent we already know was created.
   // The on-disk reservation still prevents a duplicate after a later restart.
   private readonly unsaved = new Map<string, Receipt>()
   private readonly intentResults = new Map<string, IntentResult>()
 
-  constructor(private readonly directory: string) {}
+  constructor(private readonly directory: string, private readonly ensurePending?: (id: string) => Promise<void>) {}
 
   /** An existing ID is consulted before mutable installation checks. A fresh
    * legacy request still gets its original, correctable validation refusal. */
@@ -198,14 +203,65 @@ export class AgentCreationReceipts {
    * journalled preparation. It MUST NOT signal or dispatch the agent process.
    * It hands back that effect only when all dependencies are ready. */
   runIntent(id: string, fingerprint: string, request: Record<string, unknown>, held: CreationHold,
-    prepare: (request: Record<string, unknown>, authority: CreationAuthority) => Promise<(() => Promise<AgentCreationOutcome>) | null>,
+    prepare: IntentPreparation,
+  ): Promise<AgentCreationStatus> {
+    return this.continueIntent(id, fingerprint, request, held, prepare)
+  }
+
+  private continueIntent(id: string, fingerprint: string, request: Record<string, unknown>, held: CreationHold,
+    prepare: IntentPreparation, admission?: MarkerAdmission,
   ): Promise<AgentCreationStatus> {
     const running = this.inFlight.get(id)
-    if (running) {
+    if (running && running !== admission?.entry) {
       if (running.fingerprint !== fingerprint) throw new AgentCreationReceiptError('CREATION_CONFLICT')
       return running.result
     }
+    if (admission) {
+      if (running !== admission.entry) throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED')
+      admission.directory.verify()
+    }
     let receipt = this.read(id)
+    if (receipt) {
+      if (receipt.version === 2 && 'cancelled' in receipt) return Promise.resolve(this.intentStatus(id, receipt))
+      if (receipt.fingerprint !== fingerprint) throw new AgentCreationReceiptError('CREATION_CONFLICT')
+      // A marker admission is not the owner of a legacy writer's in-flight effect.
+      if (receipt.version === 1) return Promise.resolve(receipt.outcome.state === 'pending' ? { state: 'unconfirmed' } : receipt.outcome)
+      const before = this.intentStatus(id, receipt, false)
+      if (before.state !== 'pending') return Promise.resolve(before)
+    }
+    if (admission?.checksum && (!receipt || receipt.version !== 2 || receipt.checksum !== admission.checksum)) {
+      throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED')
+    }
+    if (this.ensurePending && !admission) {
+      // The existing map also owns the bounded marker phase; duplicates never enqueue another marker write.
+      if (this.inFlight.size >= 64) throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED')
+      const savedRequest = receipt ? receipt.request : structuredClone(request)
+      const savedHold = { ...(receipt ? receipt.held : held) }
+      const intended = { version: 2, fingerprint, request: savedRequest, held: savedHold,
+        checksum: creationFingerprint({ fingerprint, request: savedRequest, held: savedHold }) }
+      if (Buffer.byteLength(JSON.stringify(intended)) > 262_144) throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED')
+      if (!receipt) {
+        try { secureStateDirectory(this.directory, false) }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw storageFailure(this.directory, error)
+          this.ensureDirectory()
+        }
+      }
+      const directory = this.holdDirectory()
+      const entry = { fingerprint } as InFlightCreation
+      const own: MarkerAdmission = { entry, directory, checksum: receipt?.checksum ?? null, transferred: false }
+      entry.result = Promise.resolve().then(() => this.ensurePending!(id)).catch(error => {
+        if (error instanceof StateFileCleanupUnconfirmed) throw error
+        console.warn('[creation] CREATION_INDEX_UNAVAILABLE')
+        throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED')
+      }).then(() => this.continueIntent(id, fingerprint, savedRequest, savedHold, prepare, own)).finally(() => {
+        // Preparation takes the original directory owner and its own lifetime; a logical reply cannot free it.
+        if (!own.transferred) directory.close()
+        if (this.inFlight.get(id) === entry) this.inFlight.delete(id)
+      })
+      this.inFlight.set(id, entry)
+      return entry.result
+    }
     if (!receipt) {
       const intended: IntentReceipt = { version: 2, fingerprint, request: structuredClone(request), held: { ...held },
         checksum: creationFingerprint({ fingerprint, request, held }) }
@@ -220,7 +276,8 @@ export class AgentCreationReceipts {
     if (before.state !== 'pending') return Promise.resolve(before)
     // Decode our own durable bytes, not a caller's later-mutated request object.
     const saved = receipt
-    const directory = this.holdDirectory()
+    const directory = admission?.directory ?? this.holdDirectory()
+    if (admission) admission.transferred = true
     const currentReceipt = (): IntentReceipt => {
       directory.verify()
       const current = this.read(id)
@@ -317,31 +374,11 @@ export class AgentCreationReceipts {
     return status
   }
 
-  /** Streaming recovery never loads an unbounded directory into the core. Old
-   * receipts and terminal tombstones stay authoritative, but are not scheduled. */
+  /** A child-selected ID is only a hint: re-read its authority before scheduling it. */
   pendingIntent(id: string): PendingCreationIntent | null {
     const receipt = this.read(id)
     if (receipt?.version !== 2 || 'cancelled' in receipt || this.intentStatus(id, receipt, false).state !== 'pending') return null
     return { id, fingerprint: receipt.fingerprint, request: receipt.request, held: receipt.held }
-  }
-
-  async *pendingIntents(): AsyncGenerator<PendingCreationIntent | null> {
-    // A scan only reads: the core runs one every minute, and making the folder here fsynced its parent every time
-    // (#3880). No folder is no intent; a folder that is not safe to read still fails, as a read does.
-    try { secureStateDirectory(this.directory, false) }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
-      throw storageFailure(this.directory, error)
-    }
-    const entries = await opendir(this.directory)
-    for await (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith('.json')) { yield null; continue }
-      const id = entry.name.slice(0, -5)
-      if (!validCreationId(id)) { yield null; continue }
-      try {
-        yield this.pendingIntent(id)
-      } catch { yield null /* Corrupt evidence remains held; one bad ID cannot block its siblings. */ }
-    }
   }
 
   /** A deleted harness gives up the request (task text, folder) of every intent that made it. The receipt stays, its
@@ -384,7 +421,7 @@ export class AgentCreationReceipts {
     }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-      throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED')
+      throw storageFailure(this.directory, error)
     }
   }
 
@@ -438,7 +475,7 @@ export class AgentCreationReceipts {
       this.ensureDirectory()
       const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
       opened = true
-      try { writeFileSync(fd, bytes); fsyncSync(fd) } finally { closeSync(fd) }
+      try { writeFileSync(fd, bytes); fsyncSync(fd) } finally { closeStateFileDescriptor(fd) }
       try { linkSync(temporary, file) }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false
@@ -455,7 +492,10 @@ export class AgentCreationReceipts {
       const value = JSON.parse(readPrivateStateFile(join(this.directory, `${id}.hold`), 16_384))
       if (value.checksum === receipt.checksum && typeof value.held?.service === 'string' && value.held.service.length <= 128
         && typeof value.held.detail === 'string' && value.held.detail.length <= 2000) return value.held
-    } catch { /* Missing or damaged status cannot grant or revoke dispatch. */ }
+    } catch (error) {
+      if (error instanceof StateFileCleanupUnconfirmed) throw error
+      // Missing or damaged presentation cannot grant or revoke dispatch.
+    }
     return receipt.held
   }
 
@@ -468,7 +508,7 @@ export class AgentCreationReceipts {
       writeFileSync(fd, JSON.stringify(value)); fsyncSync(fd)
       renameSync(temporary, target); this.syncDirectory()
     } finally {
-      if (fd !== undefined) { closeSync(fd); rmSync(temporary, { force: true }) }
+      if (fd !== undefined) { closeStateFileDescriptor(fd); rmSync(temporary, { force: true }) }
     }
   }
 
@@ -477,6 +517,7 @@ export class AgentCreationReceipts {
   }
 
   private holdDirectory(): { verify(): void; close(): void } {
+    stateFileCustodyHealthy()
     let fd: number | undefined
     try {
       fd = openSync(this.directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
@@ -488,11 +529,11 @@ export class AgentCreationReceipts {
             if (!current.isDirectory() || current.dev !== identity.dev || current.ino !== identity.ino) throw new Error('Replaced receipt directory')
           } catch { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }
         },
-        close: () => closeSync(fd!),
+        close: () => closeStateFileDescriptor(fd!),
       }
-    } catch {
-      if (fd !== undefined) closeSync(fd)
-      throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED')
+    } catch (error) {
+      if (fd !== undefined) closeStateFileDescriptor(fd)
+      throw storageFailure(this.directory, error)
     }
   }
 
@@ -569,7 +610,7 @@ export class AgentCreationReceipts {
       const fd = openSync(writing, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
       opened = true
       try { writeFileSync(fd, JSON.stringify(receipt)); fsyncSync(fd) }
-      finally { closeSync(fd) }
+      finally { closeStateFileDescriptor(fd) }
       if (!exclusive) renameSync(writing, file)
       syncStateDirectory(dirname(file), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
     } finally {

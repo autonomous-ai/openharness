@@ -25,7 +25,7 @@ export interface ServiceProcessOptions {
 type Runner = (options: ServiceProcessOptions) => ServiceProcess
 
 /** The processes the master runs that speak only to it, never to the core: they need no local socket. */
-const BESIDE_THE_CORE: ReadonlySet<string> = new Set(['updater'])
+const BESIDE_THE_CORE: ReadonlySet<string> = new Set(['updater', 'componentStartup'])
 
 /** Every service this build can run in its own process, and how to load its runner alone. */
 export const SERVICE_RUNNERS: ReadonlyMap<string, () => Promise<Runner>> = new Map<string, () => Promise<Runner>>([
@@ -37,8 +37,11 @@ export const SERVICE_RUNNERS: ReadonlyMap<string, () => Promise<Runner>> = new M
   ['workspaces', async () => (await import('./services/workspacesProcess.js')).runWorkspacesService],
   ['usage', async () => (await import('./services/usageProcess.js')).runUsageService],
   ['monitor', async () => (await import('./services/monitorProcess.js')).runMonitorService],
+  ['paste', async () => (await import('./services/pasteProcess.js')).runPasteService],
+  ['componentStartup', async () => (await import('./services/componentStartupProcess.js')).runComponentStartupService],
   ['projects', async () => (await import('./services/projectsProcess.js')).runProjectsService],
   ['windowNames', async () => (await import('./services/windowNamesProcess.js')).runWindowNamesService],
+  ['engineSetup', async () => (await import('./services/engineSetupProcess.js')).runEngineSetupService],
   ['engineProbe', async () => (await import('./services/engineProbeProcess.js')).runEngineProbeService],
   ['goals', async () => (await import('./services/goalsProcess.js')).runGoalsService],
   ['hachi', async () => (await import('./services/hachiProcess.js')).runHachiService],
@@ -73,6 +76,7 @@ export interface ServiceProcessDeps {
   /** The process the services run in; swapped in tests for one that touches no channel, signal or exit. */
   host?: (options: ServiceHostOptions) => ServiceHost
   exit?: (code: number) => never
+  platform?: NodeJS.Platform
 }
 
 /**
@@ -96,7 +100,9 @@ export async function startServiceProcess(named: string | undefined, deps: Servi
   }
   // The updater never reaches the core: it tells the master. Without a socket (a data folder too deep for
   // one) it still runs, or that machine would never get the update that fixes it.
-  if (!socketPath && names.some((name) => !BESIDE_THE_CORE.has(name))) {
+  // Windows connections discover the authenticated pipe after the core publishes it; services may
+  // start before that record exists and reconnect through the same bounded path after every restart.
+  if (!socketPath && (deps.platform ?? process.platform) !== 'win32' && names.some((name) => !BESIDE_THE_CORE.has(name))) {
     console.error(`[service] ${names.join(',')}: the core has no local socket to reach`)
     return exit(2)
   }

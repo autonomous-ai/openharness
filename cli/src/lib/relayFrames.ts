@@ -39,7 +39,7 @@ export type DownTransport = 'relay' | 'local' | 'p2p'
  * the second could fake an answer to its own append — neither is anything a client should be sending.
  *
  * `agent_browser_transport_error` is the relay saying it dropped one of this machine's browser frames
- * (core/browserStreams.ts): forged, it would close every relayed browser stream here.
+ * (the shared stream relay): forged, it would close every relayed browser stream here.
  */
 export const BACKEND_ONLY_DOWN_TYPES = new Set(['machine_meta', 'machine_revoked', 'desk_changed', 'zoo_changed', 'machines_changed', 'device_keys_changed', 'connectors_changed', 'devlog_append_result', 'agent_browser_transport_error'])
 
@@ -75,7 +75,7 @@ export class RelayConnectError extends Error {
  */
 export const DAEMON_LOCAL_ONLY_TYPES: ReadonlySet<string> = new Set(['device_key_added', 'device_key_removed', 'device_conflict', 'device_keys_changed'])
 
-/** ⌘K's task delivery, which the devices answer (lib/ownerCommands.ts): the owner's commands, sealed and the
+/** ⌘K's task delivery, which the devices answer (services/ownerCommands.ts): the owner's commands, sealed and the
  *  owner's only. */
 export const ROUTE_COMMAND_TYPES: ReadonlySet<string> = new Set(['route_task', 'route_send'])
 /** The pair brain, machine to machine (daemons/BRAIN.md): retired, and refused (lib/e2ee/applicationFrames.ts). */

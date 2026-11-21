@@ -1,3 +1,5 @@
+import { decodeTerminalLocal, encodeTerminalLocal } from '../lib/terminalBinary.js'
+type BrowserRoute = 'direct' | 'turn' | 'relay'
 /**
  * The gateway: everything between this machine and a remote client (docs/design/2026-10-06-core-boundary-next.md,
  * "Relay and E2EE — its own process", step 10). It holds the backend link (gateway/upstream.ts), the E2EE
@@ -14,7 +16,7 @@
  * E2EE_REQUIRED. backendSocket.spec.ts and gateway/gateway.spec.ts hold each of them.
  */
 import { env } from '../config/env.js'
-import type { BrowserRoute, GatewayEvents, GatewayPort, RemoteRole, RemoteTransport, UsageEvent } from '../core/api.js'
+import type { GatewayEvents, GatewayPort, RemoteRole, RemoteTransport, UsageEvent } from '../core/api.js'
 import { countUsage } from './usageEvents.js'
 import { launchErrorCode, type ProductUsageLaunchSignal } from '../lib/productUsageSignals.js'
 import type { LaunchErrorCode, ProductUsageMetric } from '../lib/productUsageContract.js'
@@ -39,8 +41,18 @@ import {
   type TerminalP2pSignal,
 } from '../lib/terminalP2p.js'
 import { UpstreamLink } from './upstream.js'
+import type { DevicePeerSession } from '../lib/autonomous-device/peerProtocol.js'
+import type { DeviceSessionProof } from '../lib/autonomous-device/relay.js'
 
 type Frame = Record<string, unknown>
+
+/** The component link receives opened device bodies only. Ordinary remote-client authority stays with the core. */
+export interface GatewayDevicePeer {
+  session(session: DevicePeerSession): void
+  dropped(connId: string, incarnation: string): void
+  request(connId: string, proof: DeviceSessionProof, opened: Frame): void
+  revoked(identity: string): void
+}
 
 /** Agent browser opens a client may have waiting on its P2P channel: four viewers a browser, with room. */
 const BROWSER_PENDING_OPENS_MAX = 32
@@ -121,7 +133,7 @@ export class RelayGateway implements GatewayPort {
   private readonly browserPendingOpens = new Map<string, Set<string>>()
   /**
    * Each client's agent browser streams, and the route each opened on, kept apart from the terminal's `p2pStreams`:
-   * a terminal survives a move between wires through its resync and keyframe, and VNC has neither (core/browserStreams.ts).
+   * a terminal survives a move between wires through its resync and keyframe, and VNC has neither.
    * A stream keeps its route until it closes; when the route goes, the stream ends.
    */
   private readonly browserStreams = new Map<string, Map<string, BrowserRoute>>()
@@ -159,14 +171,16 @@ export class RelayGateway implements GatewayPort {
   private localWindows: LocalWindows = { desktop: 0, tui: 0 }
   private readonly directDeviceSinks = new Map<string, (frame: Frame) => void>()
   private readonly directDevicePins = new Map<string, string>()
-  /** The Wi-Fi device sessions whose app said hello to the device service (in the core), by connection:
+  /** The Wi-Fi device sessions whose app said hello to the devices component, by connection:
    *  the ones told, sealed, that they were unpaired (`onIdentityRevoked`). */
-  private readonly deviceClients = new Map<string, string>()
+  private readonly deviceClients = new Map<string, DeviceSessionProof & { joinedEpoch?: string }>()
+  devicePeer: GatewayDevicePeer | null = null
 
   /** Answers the trust group's roster exchange (`group_sync`); null until the daemon wires it. */
   groupSync: { handle: (peerPub: string, payload: Record<string, unknown>) => Record<string, unknown> } | null = null
   /** The account's device key log grew (lib/e2ee/deviceLogSyncer.ts): re-read it from this machine's head. */
   onDeviceKeysChanged: (() => void) | null = null
+  onConnectorsChanged: ((revision: number) => void) | null = null
   /** This machine's key was taken out of the account's device key log (`machine_revoked` says so). */
   onDeviceRemoved: ((pub: string) => void) | null = null
   /** Whether [pub] is this machine's own device key. Set, a `machine_revoked` naming another key (an earlier
@@ -219,11 +233,15 @@ export class RelayGateway implements GatewayPort {
           // Trusted only because this machine is shared: that account's guest, never the owner.
           ...(peer?.shared ? { guest: peer.sharedWith ?? '' } : {}),
         })
+        if (role === 'device') this.devicePeer?.session({ connId, identity, incarnation: this.e2ee.sessionIncarnation(connId)!,
+          direct: this.directDeviceSinks.has(connId), hello: false })
       },
-      onSessionDropped: (connId) => {
+      onSessionDropped: (connId, incarnation, role) => {
         this.forgetRoutes(connId)
         this.forgetBrowserStreams(connId)
         this.core.client(connId, null)
+        if (this.deviceClients.get(connId)?.incarnation === incarnation) this.deviceClients.delete(connId)
+        if (role === 'device') this.devicePeer?.dropped(connId, incarnation)
       },
       onPeerLinked: (peer) => {
         // The mutual half of a password link: a machine that proved this one's password is pinned back,
@@ -394,6 +412,9 @@ export class RelayGateway implements GatewayPort {
     return peer?.shared ? (peer.sharedWith ?? '') : undefined
   }
 
+  /** Stable identity of a current authenticated peer, for gateway-owned one-use callbacks. */
+  peerIdentity(connId: string): string | null { return this.e2ee.sessionIdentity(connId) ?? null }
+
   /** A DEVICE-audience frame (commanderEligible, not web). User/data frames are group-encrypted (E2EE)
    *  here so the backend relays only ciphertext; system/presence frames pass through. */
   commander(frame: Frame): void {
@@ -455,7 +476,9 @@ export class RelayGateway implements GatewayPort {
 
   /** Pairwise-encrypted binary terminal output/keyframe. The hop prefix exposes
    * only connId and direction to the opaque backend relay. */
-  terminalBinary(connId: string, clear: TerminalBinaryClear): boolean {
+  terminalBinary(connId: string, raw: Uint8Array): boolean {
+    const clear = decodeTerminalLocal(raw)
+    if (!clear) return false
     if (clear.kind === TerminalBinaryKind.browser) return this.browserBinary(connId, clear)
     const clientFrame = this.e2ee.wrapTerminalBinary(connId, clear)
     if (!clientFrame) return false
@@ -574,7 +597,7 @@ export class RelayGateway implements GatewayPort {
       if (env.TYPING_TRACE && (clear.kind === TerminalBinaryKind.input || clear.kind === TerminalBinaryKind.paste)) {
         console.log(`[typing] in conn=${sid(connId)} stream=${sid(clear.streamId)} ${clear.kind === TerminalBinaryKind.paste ? 'paste' : `seq=${clear.seq}`} ${clear.bytes.length}B via=${via}`)
       }
-      void Promise.resolve(this.core.binary(connId, clear)).catch((err) => {
+      void Promise.resolve(this.core.binary(connId, clear, encodeTerminalLocal(clear) ?? undefined)).catch((err) => {
         console.error('[backend] binary terminal dispatch failed:', errorKind(err))
       })
     } catch (err) {
@@ -766,7 +789,7 @@ export class RelayGateway implements GatewayPort {
     // The relay dropped one of this machine's browser frames over its budget (backend lib/adapterWs.ts). It cannot
     // say whose: the stream is inside the ciphertext.
     if (type === 'agent_browser_transport_error') {
-      this.core.browserTransportError()
+      this.core.streamControl('agentBrowser', null, { kind: 'transport_error' })
       return
     }
 
@@ -803,6 +826,7 @@ export class RelayGateway implements GatewayPort {
     // re-reads and merges them. Backend-only, like desk_changed.
     if (type === 'connectors_changed') {
       const revision = (typeof frame.payload === 'object' && frame.payload !== null ? (frame.payload as { revision?: unknown }).revision : undefined)
+      this.onConnectorsChanged?.(typeof revision === 'number' ? revision : 0)
       this.core.notice({ type, revision: typeof revision === 'number' ? revision : 0 })
       return
     }
@@ -1048,7 +1072,7 @@ export class RelayGateway implements GatewayPort {
     for (const streamId of lost) browser!.delete(streamId)
     if (browser?.size === 0) this.browserStreams.delete(connId)
     console.warn(`[terminal-p2p] conn=${sid(connId)} fallback=relay reason=${reason}${lost.length ? ` browser_streams_closed=${lost.length}` : ''}`)
-    for (const streamId of lost) this.core.browserRouteLost(streamId)
+    for (const streamId of lost) this.core.streamControl('agentBrowser', streamId, { streamId, route: null })
   }
 
   // ── agent browser streams, each on the route it opened on ─────────────────────────────────────────
@@ -1083,7 +1107,7 @@ export class RelayGateway implements GatewayPort {
         let streams = this.browserStreams.get(connId)
         if (!streams) { streams = new Map(); this.browserStreams.set(connId, streams) }
         streams.set(streamId, route)
-        this.core.browserRoute(streamId, route)
+        this.core.streamControl('agentBrowser', streamId, { streamId, route })
       }
     } else {
       const streams = this.browserStreams.get(connId)
@@ -1113,7 +1137,7 @@ export class RelayGateway implements GatewayPort {
     }
     const packet = sealed ? encodeTerminalHop(TerminalHopDirection.up, connId, sealed) : null
     if (packet && this.link.sendBinary(packet)) return true
-    this.core.browserRouteLost(clear.streamId)
+    this.core.streamControl('agentBrowser', clear.streamId, { streamId: clear.streamId, route: null })
     return false
   }
 
@@ -1148,35 +1172,66 @@ export class RelayGateway implements GatewayPort {
   }
 
   /**
-   * A Wi-Fi device's request, for the device service's relay in the core (lib/autonomous-device/relay.ts),
+   * A Wi-Fi device's request, for the devices component's relay (lib/autonomous-device/relay.ts),
    * opened here under the session that sealed it. Opened only when the relay would open it (a device's
    * session, a sealed frame, no session id beside it), so its replay window moves exactly as it did when
    * the relay opened the frame itself.
    */
   private async deviceRequest(connId: string, frame: Frame): Promise<void> {
-    const opens = !!this.e2ee.sessionIdentity(connId) && this.e2ee.sessionRole(connId) === 'device' && isWrapped(frame.payload) && frame.dbSessionId === undefined
-    await this.core.device(connId, frame, opens ? this.e2ee.unwrapDown(connId, frame) : null)
+    const identity = this.e2ee.sessionIdentity(connId), incarnation = this.e2ee.sessionIncarnation(connId)
+    if (frame.type !== 'autonomous_device_request' || !identity || !incarnation || this.e2ee.sessionRole(connId) !== 'device'
+      || !isWrapped(frame.payload) || frame.dbSessionId !== undefined) return
+    const opened = this.e2ee.unwrapDown(connId, frame)
+    if (opened) this.devicePeer?.request(connId, { identity, incarnation }, { payload: opened.payload })
   }
 
   /** The device service's answer or event for one Wi-Fi device session, sealed to it. */
-  device(connId: string, type: string, payload: Record<string, unknown>): boolean {
+  device(connId: string, type: string, payload: Record<string, unknown>, proof: DeviceSessionProof): boolean {
+    if (!proof || !this.deviceCurrent(connId, proof)) return false
     const wrapped = this.e2ee.wrapTarget(connId, type, payload)
     if (!wrapped) return false
     this.sendTo(connId, wrapped)
     return true
   }
 
-  deviceClient(connId: string, identity: string | null): void {
-    if (identity) this.deviceClients.set(connId, identity)
-    else this.deviceClients.delete(connId)
+  deviceCurrent(connId: string, proof: DeviceSessionProof): boolean {
+    return this.e2ee.sessionRole(connId) === 'device' && this.e2ee.sessionIdentity(connId) === proof.identity
+      && this.e2ee.sessionIncarnation(connId) === proof.incarnation
+  }
+
+  deviceClient(connId: string, proof: DeviceSessionProof, hello: boolean): boolean {
+    if (!this.deviceCurrent(connId, proof)) return false
+    if (hello) this.deviceClients.set(connId, { identity: proof.identity, incarnation: proof.incarnation })
+    else if (this.deviceClients.get(connId)?.incarnation === proof.incarnation) this.deviceClients.delete(connId)
+    return true
+  }
+
+  deviceSessions(): DevicePeerSession[] {
+    return this.e2ee.deviceSessions().map(session => ({ ...session, direct: this.directDeviceSinks.has(session.connId),
+      hello: this.deviceClients.get(session.connId)?.identity === session.identity
+        && this.deviceClients.get(session.connId)?.incarnation === session.incarnation }))
+  }
+
+  deviceJoined(connId: string, proof: DeviceSessionProof, epoch: string): boolean {
+    const hello = this.deviceClients.get(connId)
+    if (!hello || hello.incarnation !== proof.incarnation || hello.identity !== proof.identity || !this.deviceCurrent(connId, proof)) return false
+    hello.joinedEpoch = epoch
+    return true
+  }
+  deviceJoinsPending(epoch: string): boolean {
+    for (const [connId, hello] of this.deviceClients) if (hello.joinedEpoch === epoch && this.deviceCurrent(connId, hello)) return true
+    return false
+  }
+  clearDeviceJoins(epoch: string): void {
+    for (const hello of this.deviceClients.values()) if (hello.joinedEpoch === epoch) delete hello.joinedEpoch
   }
 
   /** The Wi-Fi device sessions on a direct link whose app said hello, each still its identity's device's session:
    *  what `harness autonomous-device status` counts. */
   directDeviceSessions(): number {
     let count = 0
-    for (const [connId, identity] of this.deviceClients) {
-      if (this.directDeviceSinks.has(connId) && this.e2ee.sessionRole(connId) === 'device' && this.e2ee.sessionIdentity(connId) === identity) count++
+    for (const [connId, proof] of this.deviceClients) {
+      if (this.directDeviceSinks.has(connId) && this.deviceCurrent(connId, proof)) count++
     }
     return count
   }
@@ -1184,25 +1239,25 @@ export class RelayGateway implements GatewayPort {
   /**
    * App-side revoke: tell the device while its authenticated session still exists (the E2eeManager drops
    * the session right after this), so it clears its own pin instead of showing "paired / disconnected"
-   * forever. The device service's relay did this itself when it shared this process; the core is now a
+   * forever. The device service's relay did this itself when it shared this process; it is now a
    * frame away, and the session would be gone by the time it answered, so the gateway sends the same frame
    * to the same sessions here, and the service hears of the unpairing once they are gone. Best-effort: a
    * device that is offline learns it on reconnect, when its e2e_hello gets e2e_denied.
    */
   private deviceUnpaired(identity: string): void {
     for (const [connId, client] of [...this.deviceClients]) {
-      if (client !== identity) continue
+      if (client.identity !== identity) continue
       this.deviceClients.delete(connId)
-      if (this.e2ee.sessionIdentity(connId) !== identity || this.e2ee.sessionRole(connId) !== 'device') continue
+      if (!this.deviceCurrent(connId, client)) continue
       const event = { type: 'pair.revoke', machineId: this.machineId }
       try {
         deviceDump.record('out', 'rpc', connId, { type: 'autonomous_device_event', payload: event })
-        this.device(connId, 'autonomous_device_event', event)
+        this.device(connId, 'autonomous_device_event', event, client)
       } catch { /* Local removal must proceed regardless. */ }
     }
     // After the sessions are dropped, which the manager does once this returns: the service's relay then
     // finds none left to tell, and only forgets the identity.
-    setImmediate(() => this.core.deviceRevoked(identity))
+    setImmediate(() => this.devicePeer?.revoked(identity))
   }
 
   // ── the pairings, for the daemon's own commands (`harness pair`, `unpair`, `remote-password`, …) ──

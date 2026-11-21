@@ -1,8 +1,7 @@
+import { hookPreparationFiles } from './hookPreparationFiles.js'
 /** Native plugin bytes are engine declarations. Installing them never loads an interpreter. */
-import { mkdirSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { HookPreparationHeld, type HookPreparationFiles, type HookFilePublication, type HookPreparationAttempt, type HookPreparationOptions } from './nativeHookFiles.js'
 import { errorKind } from '../../lib/log.js'
-import { HookPreparationHeld, directoryChanged, inspectHookFile, type HookFilePublication, runHookPreparation, type HookPreparationAttempt, type HookPreparationOptions } from './nativeHookFiles.js'
 import { HookScriptMissing } from './hookHeld.js'
 
 export interface NativePlugin {
@@ -21,8 +20,8 @@ export function nativePluginSource(rule: NativePlugin, values: NativePluginValue
 }
 
 /** Observe every destination before a multi-file installation changes any of them. */
-export function prepareNativePlugin(rule: NativePlugin, values: NativePluginValues): PreparedNativePlugin {
-  const source = nativePluginSource(rule, values), observed = inspectHookFile(rule.file)
+export function prepareNativePlugin(rule: NativePlugin, values: NativePluginValues, files: HookPreparationFiles = hookPreparationFiles()): PreparedNativePlugin {
+  const source = nativePluginSource(rule, values), observed = files.inspect(rule.file)
   const current = observed.content === source
   // The generated first line declares this managed artifact's engine and owner.
   // An occupied path without that declaration belongs to its author.
@@ -36,23 +35,23 @@ export function prepareNativePlugin(rule: NativePlugin, values: NativePluginValu
     observed.verify()
     for (const directory of current ? [] : rule.directories ?? []) {
       attempt.verify(); attempt.check()
-      const created = mkdirSync(directory.path, { recursive: true, mode: directory.mode })
-      if (created) directoryChanged(attempt, dirname(created))
+      files.directory(directory.path, directory.mode, attempt)
     }
     const published = await observed.replace(source, attempt)
-    console.log(current ? rule.messages.current : rule.messages.installed.replace('{file}', () => rule.file))
-    if (!current) for (const line of rule.messages.after) console.log(line)
+    files.report('log', current ? rule.messages.current : rule.messages.installed.replace('{file}', () => rule.file))
+    if (!current) for (const line of rule.messages.after) files.report('log', line)
     return published
   } }
 }
 
 export async function installNativePlugin(rule: NativePlugin, values: NativePluginValues, options: HookPreparationOptions = {}): Promise<boolean> {
-  try { return await runHookPreparation([rule.file], async attempt => {
-    const published = await prepareNativePlugin(rule, values).commit(attempt)
+  const files = hookPreparationFiles(options)
+  try { return await files.run([rule.file], async attempt => {
+    const published = await prepareNativePlugin(rule, values, files).commit(attempt)
     published.verify(); return true
   }, { ...options, identity: nativePluginSource(rule, values) }) }
   // A hold's reason is fixed words (hookHeld.ts); HookScriptMissing's names a path, so that one is said by its kind.
-  catch (err) { console.error(rule.messages.failed, err instanceof HookPreparationHeld && !(err instanceof HookScriptMissing) ? err.reason : errorKind(err)); return false }
+  catch (err) { files.report('error', rule.messages.failed, err instanceof HookPreparationHeld && !(err instanceof HookScriptMissing) ? err.reason : errorKind(err)); return false }
 }
 
 export interface NativePluginRemoval {
@@ -63,8 +62,8 @@ export interface NativePluginRemoval {
   failed: string
 }
 
-export function prepareNativePluginRemoval(rule: NativePluginRemoval): PreparedNativePlugin {
-  const observed = inspectHookFile(rule.file), source = observed.content
+export function prepareNativePluginRemoval(rule: NativePluginRemoval, files: HookPreparationFiles = hookPreparationFiles()): PreparedNativePlugin {
+  const observed = files.inspect(rule.file), source = observed.content
   if (source !== null && !(source.startsWith(rule.prefix) && source.includes(rule.contains))) {
     throw new HookPreparationHeld('the incompatible plugin path contains another author’s file')
   }
@@ -72,16 +71,17 @@ export function prepareNativePluginRemoval(rule: NativePluginRemoval): PreparedN
   return { verify: observed.verify, commit: async attempt => {
     attempt.check()
     const removed = await observed.remove(attempt)
-    if (source !== null) console.log(rule.removed)
+    if (source !== null) files.report('log', rule.removed)
     return removed
   } }
 }
 
 /** The engine may discover an older incompatible plugin. Remove only our artifact. */
 export async function removeNativePlugin(rule: NativePluginRemoval): Promise<boolean> {
-  try { return await runHookPreparation([rule.file], async attempt => {
+  const files = hookPreparationFiles()
+  try { return await files.run([rule.file], async attempt => {
     const removed = await prepareNativePluginRemoval(rule).commit(attempt)
     removed.verify(); return true
   }, { identity: JSON.stringify(rule) }) }
-  catch (err) { console.error(rule.failed, err instanceof HookPreparationHeld && !(err instanceof HookScriptMissing) ? err.reason : errorKind(err)); return false }
+  catch (err) { files.report('error', rule.failed, err instanceof HookPreparationHeld && !(err instanceof HookScriptMissing) ? err.reason : errorKind(err)); return false }
 }

@@ -22,9 +22,16 @@ import { paneReadIdentity } from '../transcripts/readIdentity.js'
 import { createBinding, statBirthMs, type BindDeps, type RegisteredMeta } from './bind.js'
 import { agentStarting } from '../../lib/agentFrame.js'
 import { createInput, type InputDeps } from '../input.js'
+import { SessionInputController } from '../../lib/sessionInput.js'
 import type { TerminalActionResult } from '../../lib/terminalTypes.js'
 import { readInlineScreen } from '../../testing/inlineScreen.js'
 import { inlineSubmission } from '../../testing/inlineSubmission.js'
+
+const deferred = () => {
+  let resolve!: () => void
+  const promise = new Promise<void>(done => { resolve = done })
+  return { promise, resolve }
+}
 
 vi.mock('../../engines/identities.js', () => ({ transcriptOf: vi.fn(), processSessionOf: vi.fn() }))
 vi.mock('../../engines/cursor/contract.js', async (real) => ({ ...await real<object>(), cursorDataDir: () => '/cursor' }))
@@ -102,12 +109,12 @@ function setup(over: Partial<BindDeps> = {}) {
     forgetSession: vi.fn(),
     clients: { send: vi.fn() },
     attachSession: vi.fn(async () => true),
+    captureReader: vi.fn(() => () => false),
     announceSession: vi.fn(),
-    stoppedAgents: { save: vi.fn(), finishResume: vi.fn(), get: vi.fn(() => null) },
+    stoppedAgents: { save: vi.fn(), finishResume: vi.fn(), get: vi.fn(async () => null) },
     syncRecapPool: vi.fn(),
     input: { forget: vi.fn(), awaitingConfirmation: vi.fn(() => false), waitsForPane: vi.fn(() => false), firstTaskWaiting: vi.fn(() => false), typeCommand: vi.fn(async () => true), expectFirstTask: vi.fn(), ownsBox: vi.fn(() => false), adoptTypedFirstTask: vi.fn(() => false), firstTaskConfirmed: vi.fn() },
     submitFirstTask: vi.fn(),
-    deviceInput: { forget: vi.fn() },
     homes: { copilot: '/copilot', grok: '/grok', agy: '/agy' },
     capturePane: vi.fn(async () => null),
     activityRevision: vi.fn(() => 1),
@@ -127,6 +134,18 @@ function registered(run: ReturnType<typeof setup>, entry: RegisteredSession, met
 }
 
 describe('binding a registered session to its agent', () => {
+  it.each(['archive lookup', 'archive save', 'owner settlement'] as const)('does not attach a binding replaced during %s', async phase => {
+    const owners = { settle: vi.fn(async () => []) }
+    const run = setup({ owners }), entry = agent({ resumeOnly: true })
+    const replace = () => { run.byAgent.set('a1', agent({ sessionId: 'replacement' })) }
+    if (phase === 'archive lookup') vi.mocked(run.deps.stoppedAgents.get).mockImplementationOnce(async () => { replace(); return null })
+    if (phase === 'archive save') vi.mocked(run.deps.stoppedAgents.save).mockImplementationOnce(async () => { replace() })
+    if (phase === 'owner settlement') owners.settle.mockImplementationOnce(async () => { replace(); return [] })
+    await registered(run, entry, meta({ isNew: true }))
+    expect(run.deps.attachSession).not.toHaveBeenCalled()
+    expect(run.deps.announceSession).not.toHaveBeenCalled()
+  })
+
   it.each(['rebound', 'evicted', 'orphaned'] as const)('stops attachment when %s cleanup replaces the selected binding', async phase => {
     const run = setup(), entry = agent()
     vi.mocked(run.deps.forgetSession).mockImplementationOnce(async () => { run.byAgent.set('a1', agent({ sessionId: 'replacement' })) })
@@ -174,7 +193,7 @@ describe('binding a registered session to its agent', () => {
     run.byAgent.set('a1', entry)
     await registered(run, entry, meta({ isNew: true }))
     expect(run.deps.attachSession).toHaveBeenCalledWith(entry, true, false, false)
-    expect(run.deps.stoppedAgents.save).toHaveBeenCalledWith(entry)
+    expect(run.deps.stoppedAgents.save).toHaveBeenCalledWith(entry, expect.any(Function))
     expect(run.deps.syncRecapPool).toHaveBeenCalled()
     expect(run.deps.registry.inheritName).toHaveBeenCalledWith('a1', 's1')
     expect(run.deps.announceSession).toHaveBeenCalledWith(entry)
@@ -187,7 +206,7 @@ describe('binding a registered session to its agent', () => {
   // A conversation new to this harness takes it from any stopped harness it came from (conversationOwners.ts).
   it('settles who owns a newly bound conversation, and only a newly bound one; a failure never stops the bind', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const owners = { settle: vi.fn(() => []) }
+    const owners = { settle: vi.fn(async () => []) }
     const run = setup({ owners })
     const entry = agent({ boundAt: Date.parse('2026-10-04T10:00:00Z') })
     await registered(run, entry, meta({ isNew: true }))
@@ -221,10 +240,12 @@ describe('binding a registered session to its agent', () => {
   })
 
   it('completes a resumed binding while its optional attachment stays pending', async () => {
-    const run = setup({ attachSession: vi.fn(() => new Promise<boolean>(() => {})) })
+    const entered = deferred()
+    const run = setup({ attachSession: vi.fn(() => { entered.resolve(); return new Promise<boolean>(() => {}) }) })
     const entry = agent({ resumeOnly: true })
     void registered(run, entry, meta({ isNew: true }))
-    expect(run.deps.stoppedAgents.save).toHaveBeenCalledWith(entry)
+    await entered.promise
+    expect(run.deps.stoppedAgents.save).toHaveBeenCalledWith(entry, expect.any(Function))
     expect(run.deps.stoppedAgents.finishResume).toHaveBeenCalledWith('a1')
     expect(run.deps.registry.inheritName).toHaveBeenCalledWith('a1', 's1')
     expect(run.deps.announceSession).toHaveBeenCalledWith(entry)
@@ -233,10 +254,12 @@ describe('binding a registered session to its agent', () => {
   })
 
   it.each([true, false])('ignores a superseded attachment completing with %s', async attached => {
+    const entered = deferred()
     let finish!: (attached: boolean) => void
-    const run = setup({ attachSession: vi.fn(() => new Promise<boolean>(resolve => { finish = resolve })) })
+    const run = setup({ attachSession: vi.fn(() => new Promise<boolean>(resolve => { finish = resolve; entered.resolve() })) })
     const first = agent()
     const pending = registered(run, first, meta({ isNew: true }))
+    await entered.promise
     vi.mocked(run.deps.attachSession).mockResolvedValueOnce(true)
     // Mutate the row as the real registry does while the first attachment is still reading.
     first.sessionId = 's2'
@@ -255,10 +278,13 @@ describe('binding a registered session to its agent', () => {
 
   it('does not start an optional reader if the binding changes during the transcript birth read', async () => {
     const run = setup()
+    const announced = deferred()
+    vi.mocked(run.deps.clients.send).mockImplementation(() => { announced.resolve() })
     const home = mkdtempSync(join(tmpdir(), 'binding-stat-')); dirs.push(home)
     const path = join(home, 'transcript.jsonl'); writeFileSync(path, '{}\n')
     const entry = agent({ transcriptPath: path })
     const pending = registered(run, entry, meta({ isNew: true }))
+    await announced.promise
     entry.sessionId = 'replacement'
     await pending
     expect(run.deps.attachSession).not.toHaveBeenCalled()
@@ -318,7 +344,7 @@ describe('binding a registered session to its agent', () => {
     expect(run.deps.registry.confirmSessionUnbound).not.toHaveBeenCalled()
     expect(entry.sessionId).toBe('s1')
     expect(run.deps.announceSession).toHaveBeenCalledWith(entry)
-    expect(run.deps.stoppedAgents.save).toHaveBeenCalledWith(entry)
+    expect(run.deps.stoppedAgents.save).toHaveBeenCalledWith(entry, expect.any(Function))
     expect(run.deps.clients.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'session_synced' }))
   })
 
@@ -395,13 +421,13 @@ describe('binding a registered session to its agent', () => {
     writeFileSync(born, '{}\n')
     // A resume keeps the row's original registeredAt, so the transcript reads as born after its agent.
     const resumed = agent({ transcriptPath: born, registeredAt: Date.now() - 60_000, resumeOnly: true } as Partial<RegisteredSession>)
-    vi.mocked(run.deps.stoppedAgents.get).mockReturnValue(agent({ sessionId: 's1' }))
+    vi.mocked(run.deps.stoppedAgents.get).mockResolvedValue(agent({ sessionId: 's1' }))
     await registered(run, resumed, meta())
     expect(run.deps.stoppedAgents.get).toHaveBeenCalledWith('a1')
     // `/clear` after the resume: a session the stopped record does not hold.
     await registered(run, { ...resumed, sessionId: 's2' }, meta())
     // A resumed row with no stopped record left to compare against.
-    vi.mocked(run.deps.stoppedAgents.get).mockReturnValue(null)
+    vi.mocked(run.deps.stoppedAgents.get).mockResolvedValue(null)
     await registered(run, resumed, meta())
     expect(vi.mocked(run.deps.attachSession).mock.calls.map((call) => call[3])).toEqual([false, true, true])
   })
@@ -587,7 +613,7 @@ describe('binding a running process to its session', () => {
       expect(rows[0]!.sessionId).toBe('')
       expect(rows[1]!.sessionId).toBe('found')
       expect(run.deps.registry.register).toHaveBeenCalledOnce()
-      expect(run.deps.stoppedAgents.save).toHaveBeenCalledExactlyOnceWith(rows[1])
+      expect(run.deps.stoppedAgents.save).toHaveBeenCalledExactlyOnceWith(rows[1], expect.any(Function))
       expect(onRemoved).not.toHaveBeenCalled(); expect(onDormant).not.toHaveBeenCalled()
       expect(onProbeStatus).toHaveBeenCalledWith({ ready: true, error: null })
       expect(console.log).toHaveBeenCalledWith(`[discovery] held binding held · ${kind}`)
@@ -633,7 +659,7 @@ describe('binding a running process to its session', () => {
         expect(rows[1]!.sessionId).toBe('sibling')
         expect(onProbeStatus).toHaveBeenCalledWith({ ready: true, error: null })
         expect(onRemoved).not.toHaveBeenCalled(); expect(onDormant).not.toHaveBeenCalled()
-        expect(run.deps.stoppedAgents.save).toHaveBeenCalledExactlyOnceWith(rows[1])
+        expect(run.deps.stoppedAgents.save).toHaveBeenCalledExactlyOnceWith(rows[1], expect.any(Function))
         expect(console.log).toHaveBeenCalledWith('[discovery] held binding held · Error')
         vi.mocked(continuationOf).mockResolvedValue({ sessionId: 'resumed', transcriptPath: '/t/resumed.jsonl' })
         await run.binding.bindObservedAgent(held)
@@ -879,7 +905,6 @@ describe('binding a running process to its session', () => {
       vi.mocked(run.deps.registry.register).mockResolvedValue({ entry: agent({ sessionId: 'r' }), ...meta({ isNew: true }) } as never)
       await run.binding.bindObservedAgent(observed({ resumeSessionId: 'r' } as Partial<DiscoveredTerminalAgent>))
       expect(run.deps.input.forget).toHaveBeenCalledWith('old')
-      expect(run.deps.deviceInput.forget).toHaveBeenCalledWith('old')
       expect(run.deps.announceSession).toHaveBeenCalledWith(previous)
       expect(run.deps.attachSession).toHaveBeenCalled()
     })
@@ -887,11 +912,11 @@ describe('binding a running process to its session', () => {
 
   describe('a repair', () => {
     it('keeps a stopped parent out of an unbound fork\'s fallback discovery', async () => {
-      const owners = { settle: vi.fn(() => []) }, run = setup({ owners })
+      const owners = { settle: vi.fn(async () => []) }, run = setup({ owners })
       const parent = agent({ agentId: 'parent-agent', sessionId: 'parent', active: false })
       const fork = agent({ sessionId: '', forkedFrom: { agentId: parent.agentId, name: 'Parent', sessionId: parent.sessionId } })
       vi.mocked(run.deps.registry.byProcess).mockReturnValue(fork)
-      vi.mocked(run.deps.stoppedAgents.get).mockReturnValue(parent)
+      vi.mocked(run.deps.stoppedAgents.get).mockResolvedValue(parent)
       vi.mocked(findLiveSession).mockImplementation(async (_engine, _cwd, _start, options) =>
         options?.excludedSessionId === parent.sessionId ? null : { sessionId: parent.sessionId, transcriptPath: '/parent' })
       await run.binding.bindObservedAgent(observed())
@@ -1010,7 +1035,7 @@ describe('binding a running process to its session', () => {
       const seen = hermes({ cwd: '/data/work/p1' })
       await run.binding.bindObservedAgent(seen)
       expect(follow).toHaveBeenCalledExactlyOnceWith(entry, { ...seen, sandboxed: false },
-        { current: expect.any(Function), mayClaim: expect.any(Function), hold: expect.any(Function) })
+        { current: expect.any(Function), mayClaim: expect.any(Function), hold: expect.any(Function), refresh: false })
       expect(findLiveSession).not.toHaveBeenCalled()
       expect(run.deps.registry.register).toHaveBeenCalledWith(expect.objectContaining({ engine: 'hermes', sessionId: 'S', hermesHome: '/data/agents/a1/.hermes',
         cwd: '/data/work/p1', source: 'hermes-terminal', hookEvent: 'HermesTerminal', runtimes: seen.runtimes,
@@ -1040,7 +1065,6 @@ describe('binding a running process to its session', () => {
       follow.mockResolvedValue({ sessionId: 'S' })
       await run.binding.bindObservedAgent(hermes())
       expect(run.deps.input.forget).toHaveBeenCalledWith('old')
-      expect(run.deps.deviceInput.forget).toHaveBeenCalledWith('old')
       expect(run.deps.announceSession).toHaveBeenCalledWith(previous)
     })
 
@@ -1075,8 +1099,17 @@ describe('binding a running process to its session', () => {
       await run.binding.bindObservedAgent(hermes())
       expect(run.deps.registry.register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: 'S', source: 'hermes-terminal', hookEvent: 'HermesTerminal' }), { current: expect.any(Function) })
       expect(said()).toEqual([])
-      // The confirmation binds the row (`boundAt`), so the attach the resume started gave up on it (attach.ts).
-      expect(run.deps.attachSession).toHaveBeenCalledExactlyOnceWith(confirmed, false, false, false)
+      expect(run.deps.attachSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: 'S' }), false, false, false)
+      expect(run.deps.clients.send).not.toHaveBeenCalled()
+    })
+
+    it('commits a different native conversation while the previous reader still owns its hold', async () => {
+      const { run } = withRecord({ sessionId: 'old', identityHold: OTHER_ENGINE_STATES.unavailable })
+      vi.mocked(run.deps.followsLive).mockReturnValue(true)
+      follow.mockResolvedValue({ sessionId: 'new' })
+      await run.binding.bindObservedAgent(hermes())
+      expect(run.deps.registry.register).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'new', source: 'hermes-terminal' }), { current: expect.any(Function) })
+      expect(run.deps.attachSession).toHaveBeenCalledOnce()
     })
 
     it.each([["the resume's, of the row before it", true], ["a hook's, of the row it confirmed", false]] as const)(
@@ -1509,7 +1542,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       readScreen: readInlineScreen,
       submission: inlineSubmission,
       resolve: rows,
-      byAgent: rows,
+      failure: vi.fn(),
       terminal: {
         captureTerminal: vi.fn(async () => shown()),
         validateTerminal: vi.fn(async () => true),
@@ -1518,7 +1551,6 @@ describe('binding an OpenClaw pane, read from its screen', () => {
         pinTerminalControl: vi.fn(() => () => {}),
       },
       deliveries: { settled: vi.fn(), canWrite: vi.fn(() => true) },
-      device: () => undefined,
       clients,
       agentIdFor: (sessionId) => rows(sessionId)?.agentId ?? sessionId,
       openTurn: async () => [],
@@ -1908,7 +1940,6 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       readScreen: readInlineScreen,
       submission: inlineSubmission,
       resolve: rows,
-      byAgent: rows,
       terminal: {
         captureTerminal: vi.fn(async () => shown),
         validateTerminal: vi.fn(async () => true),
@@ -1917,8 +1948,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
         pinTerminalControl: vi.fn(() => () => {}),
       },
       deliveries: { settled: vi.fn(), canWrite: vi.fn(() => true) },
-      device: () => undefined,
-      clients: { send: vi.fn(), sendCommander: vi.fn() },
+      clients: { send: vi.fn() }, failure: vi.fn(),
       agentIdFor: (sessionId) => rows(sessionId)?.agentId ?? sessionId,
       openTurn: async () => [],
       emit: vi.fn(),
@@ -2026,6 +2056,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       return said
     }
     const logged = () => vi.mocked(console.log).mock.calls.flat().map(String)
+
 
     it('holds once the Gateway has been gone 10 s, and says so once', async () => {
       expect(await passes([0, LOST], [5, LOST], [10, LOST], [15, LOST])).toEqual([undefined, undefined, NO_GATEWAY, NO_GATEWAY])
@@ -2170,7 +2201,9 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     /** The pane bound to `agent:main:plain` with its first task on the row, its stream attached. */
     const handing = (shown: () => string, over: Partial<BindDeps> = {}) => {
       const run = setup({ capturePane: vi.fn(async () => shown()), openclawPaneRead: vi.fn(() => true), ...over })
-      vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:plain', firstTask: TASK }))
+      const row = pane({ sessionId: 'agent:main:plain', firstTask: TASK })
+      run.byAgent.set('a1', row)
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
       return run
     }
 
@@ -2183,7 +2216,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       // The person's own message to the agent, where its confirmation arrives (core/turns/funnel.ts): no delivery id.
       expect(vi.mocked(run.deps.submitFirstTask).mock.calls).toEqual([['a1', TASK]])
       expect(run.deps.registry.afterTransaction).toHaveBeenCalledOnce()
-      expect(run.deps.registry.takeFirstTask).toHaveBeenCalledWith('a1')
+      expect(run.deps.registry.takeFirstTask).toHaveBeenCalledWith('a1', { current: expect.any(Function) })
       expect(vi.mocked(run.deps.registry.takeFirstTask).mock.invocationCallOrder[0])
         .toBeLessThan(vi.mocked(run.deps.submitFirstTask).mock.invocationCallOrder[0])
       expect(console.log).toHaveBeenCalledWith('[agent] a1 first task handed over')
@@ -2199,7 +2232,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       vi.mocked(run.deps.registry.takeFirstTask).mockResolvedValue(TASK)
       await run.binding.bindObservedAgent(tui())
       await vi.waitFor(() => expect(run.deps.submitFirstTask).toHaveBeenCalled())
-      expect(vi.mocked(run.deps.input.expectFirstTask).mock.calls).toEqual([['a1']])
+      expect(vi.mocked(run.deps.input.expectFirstTask).mock.calls).toEqual([['a1', TASK]])
       expect(vi.mocked(run.deps.input.expectFirstTask).mock.invocationCallOrder[0])
         .toBeLessThan(vi.mocked(run.deps.registry.takeFirstTask).mock.invocationCallOrder[0])
     })
@@ -2271,7 +2304,8 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       const run = handing(() => ready)
       vi.mocked(run.deps.registry.takeFirstTask).mockImplementation(() => { throw failure })
       await run.binding.bindObservedAgent(tui())
-      await vi.waitFor(() => expect(error).toHaveBeenCalledWith(`[agent] a1 first task kept · ${kind}`))
+      await vi.waitFor(() => expect(error).toHaveBeenCalledWith(`[agent] a1 first task handoff failed · ${kind}`))
+      expect(run.deps.registry.setLaunch).not.toHaveBeenCalled()
       expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
     })
 
@@ -2301,10 +2335,180 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       await vi.waitFor(() => expect(run.deps.submitFirstTask).toHaveBeenCalledWith('a1', TASK))
     })
 
+    it.each(['removed', 'rebound', 'held', 'failed', 'replacement task', 'deleted'] as const)('does not remove a first task when its owner is %s before the transaction commits', async change => {
+      let commit = () => {}
+      const run = handing(() => ready)
+      vi.mocked(run.deps.registry.afterTransaction).mockImplementation(((action: () => unknown) =>
+        new Promise(resolve => { commit = () => resolve(action()) })) as never)
+      await run.binding.bindObservedAgent(tui())
+      const row = run.byAgent.get('a1')!
+      if (change === 'removed') run.byAgent.delete('a1')
+      else if (change === 'rebound') row.sessionId = 'agent:main:other'
+      else if (change === 'held') row.identityHold = OPENCLAW_STATES.noGateway
+      else if (change === 'replacement task') row.firstTask = 'A new task'
+      else if (change === 'deleted') vi.mocked(isRecentlyDeleted).mockReturnValue(true)
+      else row.launch = { state: 'failed', error: 'FIRST_TASK_NOT_TAKEN' }
+      commit()
+      await new Promise(resolve => setImmediate(resolve))
+      expect(run.deps.registry.takeFirstTask).not.toHaveBeenCalled()
+      expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
+    })
+
+    it('does not type a first task if its launch changes during its durable removal', async () => {
+      let saved!: (task: string) => void
+      const run = handing(() => ready)
+      vi.mocked(run.deps.registry.takeFirstTask).mockImplementation(() => new Promise(resolve => { saved = resolve }))
+      await run.binding.bindObservedAgent(tui())
+      await vi.waitFor(() => expect(run.deps.registry.takeFirstTask).toHaveBeenCalledOnce())
+      run.byAgent.get('a1')!.launch = { state: 'failed', error: 'FIRST_TASK_NOT_TAKEN' }
+      saved(TASK)
+      await new Promise(resolve => setImmediate(resolve))
+      expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
+    })
+
+    it.each(['held', 'ready'] as const)('reports a consumed task that cannot be handed to its still-current %s launch', async change => {
+      let saved!: (task: string) => void
+      const run = handing(() => ready)
+      const row = run.byAgent.get('a1')!
+      row.launch = { state: 'starting' }
+      vi.mocked(run.deps.registry.takeFirstTask).mockImplementationOnce(() => new Promise(resolve => { saved = resolve }))
+      await run.binding.bindObservedAgent(tui())
+      await vi.waitFor(() => expect(run.deps.registry.takeFirstTask).toHaveBeenCalledOnce())
+      delete row.firstTask
+      row.evidenceRevision = (row.evidenceRevision ?? 0) + 1
+      if (change === 'held') row.identityHold = OPENCLAW_STATES.noGateway
+      else row.launch = { state: 'ready' }
+      saved(TASK)
+      await new Promise(resolve => setImmediate(resolve))
+      expect(row.launch).toMatchObject({ state: 'failed', error: 'FIRST_TASK_NOT_TAKEN' })
+      expect(run.deps.input.forget).toHaveBeenCalledWith('a1')
+      expect(run.deps.announceSession).toHaveBeenCalledWith(row)
+      expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
+    })
+
+    it('reports a consumed task when storage release fails after its removal', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      const run = handing(() => ready)
+      const row = run.byAgent.get('a1')!
+      vi.mocked(run.deps.registry.takeFirstTask).mockImplementationOnce(async () => {
+        delete row.firstTask
+        throw new Error('source release failed after durable publication')
+      })
+      await run.binding.bindObservedAgent(tui())
+      await vi.waitFor(() => expect(row.launch).toMatchObject({ state: 'failed', error: 'FIRST_TASK_NOT_TAKEN' }))
+      expect(run.deps.input.forget).toHaveBeenCalledWith('a1')
+      expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
+    })
+
+    it('reports a latched registry that cannot save the consumed-task failure', async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const run = handing(() => ready)
+      vi.mocked(run.deps.registry.takeFirstTask).mockImplementationOnce(async () => {
+        delete run.byAgent.get('a1')!.firstTask
+        throw new Error('cleanup unconfirmed')
+      })
+      vi.mocked(run.deps.registry.setLaunch).mockImplementation(() => { throw new Error('registry requires restart') })
+      await run.binding.bindObservedAgent(tui())
+      await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[agent] a1 first task outcome unavailable · Error'))
+      expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
+    })
+
+    it.each(['retry', 'overlap'] as const)('keeps first-task withdrawal owned by the latest matching handoff (%s)', async mode => {
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      const run = handing(() => ready), row = run.byAgent.get('a1')!
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+        getSession: () => row, validateRuntime: async () => true, inject: async () => true,
+        sendKey: async () => true, capture: async () => ready, onError: vi.fn(),
+      })
+      vi.mocked(run.deps.input.expectFirstTask).mockImplementation((id, content) => controller.expectFirstTask(id, content))
+      if (mode === 'retry') {
+        vi.mocked(run.deps.registry.takeFirstTask).mockRejectedValueOnce(new Error('not saved'))
+        await run.binding.bindObservedAgent(tui())
+        await new Promise(resolve => setImmediate(resolve))
+        expect(controller.firstTaskWaiting('a1')).toBe(true)
+        let finish!: (task: string) => void
+        vi.mocked(run.deps.registry.takeFirstTask).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+        await run.binding.bindObservedAgent(tui())
+        await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+        run.binding.whileChanging(() => true)
+        delete row.firstTask
+        finish(TASK)
+        await new Promise(resolve => setImmediate(resolve))
+        expect(controller.firstTaskWaiting('a1')).toBe(false)
+        expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
+      } else {
+        const commits: Array<() => void> = []
+        vi.mocked(run.deps.registry.afterTransaction).mockImplementation(((action: () => unknown) =>
+          new Promise(resolve => { commits.push(() => resolve(action())) })) as never)
+        await run.binding.bindObservedAgent(tui())
+        row.evidenceRevision = (row.evidenceRevision ?? 0) + 1
+        await run.binding.bindObservedAgent(tui())
+        expect(commits).toHaveLength(2)
+        commits[0]()
+        await new Promise(resolve => setImmediate(resolve))
+        expect(controller.firstTaskWaiting('a1')).toBe(true)
+        vi.mocked(run.deps.registry.takeFirstTask).mockImplementationOnce(async () => { delete row.firstTask; return TASK })
+        commits[1]()
+        await vi.waitFor(() => expect(run.deps.submitFirstTask).toHaveBeenCalledWith('a1', TASK))
+        expect(controller.firstTaskWaiting('a1')).toBe(true)
+      }
+      controller.forget('a1')
+    })
+
+    it.each([
+      ['before removal', 'changing'], ['after removal', 'changing'], ['after removal', 'deleted'],
+    ] as const)('withdraws a first-task handoff when a lifecycle takes ownership %s (%s)', async (at, change) => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const run = handing(() => ready)
+      const row = run.byAgent.get('a1')!
+      const withdraw = vi.fn()
+      vi.mocked(run.deps.input.expectFirstTask).mockReturnValue(withdraw)
+      let finish!: () => void
+      if (at === 'before removal') {
+        vi.mocked(run.deps.registry.afterTransaction).mockImplementation(((action: () => unknown) =>
+          new Promise(resolve => { finish = () => resolve(action()) })) as never)
+      } else {
+        vi.mocked(run.deps.registry.takeFirstTask).mockImplementationOnce(() => new Promise(resolve => {
+          finish = () => { delete row.firstTask; row.evidenceRevision = 1; row.identityHold = OPENCLAW_STATES.noGateway; resolve(TASK) }
+        }))
+      }
+      await run.binding.bindObservedAgent(tui())
+      await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+      if (change === 'changing') run.binding.whileChanging(() => true)
+      else vi.mocked(isRecentlyDeleted).mockReturnValue(true)
+      finish()
+      await new Promise(resolve => setImmediate(resolve))
+      if (at === 'before removal') expect(run.deps.registry.takeFirstTask).not.toHaveBeenCalled()
+      expect(run.deps.registry.setLaunch).not.toHaveBeenCalled()
+      expect(run.deps.input.forget).not.toHaveBeenCalled()
+      expect(withdraw).toHaveBeenCalledOnce()
+      expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
+    })
+
+    it.each(['removed', 'rebound', 'replacement task'] as const)('does not fail a replacement after a consumed task is %s', async change => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      let saved!: (task: string) => void
+      const run = handing(() => ready)
+      const row = run.byAgent.get('a1')!
+      vi.mocked(run.deps.registry.takeFirstTask).mockImplementationOnce(() => new Promise(resolve => { saved = resolve }))
+      await run.binding.bindObservedAgent(tui())
+      await vi.waitFor(() => expect(run.deps.registry.takeFirstTask).toHaveBeenCalledOnce())
+      delete row.firstTask
+      if (change === 'removed') run.byAgent.delete('a1')
+      else if (change === 'rebound') row.sessionId = 'agent:main:other'
+      else { row.evidenceRevision = 2; row.firstTask = 'A new task' }
+      saved(TASK)
+      await new Promise(resolve => setImmediate(resolve))
+      expect(run.deps.registry.setLaunch).not.toHaveBeenCalled()
+      expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
+      expect(warn).toHaveBeenCalledWith('[agent] a1 first task not handed over · launch changed')
+    })
+
     it('a pane that moved to another key binds it, and hands the task to that session once its stream is up', async () => {
       // `/new` before the task was typed: the pane shows a session the agent is not bound to yet.
       const other = ready.replace(/session plain/g, 'session other')
       const run = handing(() => other)
+      run.byAgent.clear()
       vi.mocked(run.deps.registry.register).mockResolvedValue({ entry: pane({ sessionId: 'agent:main:other', firstTask: TASK }), ...meta({ isNew: true }) } as never)
       vi.mocked(run.deps.registry.takeFirstTask).mockResolvedValue(TASK)
       await run.binding.bindObservedAgent(tui())
@@ -2373,6 +2577,42 @@ describe('binding an OpenClaw pane, read from its screen', () => {
         await vi.waitFor(() => expect(run.deps.submitFirstTask).toHaveBeenCalledWith('a1', TASK))
         expect(run.deps.openclawStateDir).toHaveBeenCalledWith(7714)
         expect(run.deps.submitFirstTask).toHaveBeenCalledOnce()
+      })
+
+      it.each(['removed', 'rebound', 'held', 'failed', 'changing', 'deleted'] as const)('discards the attached pane reading after its agent is %s', async change => {
+        const { run, row } = streaming({ identityHold: OPENCLAW_STATES.noGateway })
+        let finish!: (value: string) => void
+        vi.mocked(run.deps.capturePane).mockResolvedValueOnce(ready).mockImplementationOnce(() =>
+          new Promise(resolve => { finish = resolve }))
+        await run.binding.bindObservedAgent(tui())
+        await vi.waitFor(() => expect(run.deps.capturePane).toHaveBeenCalledTimes(2))
+        const reads = vi.mocked(run.deps.openclawPaneRead).mock.calls.length
+        if (change === 'removed') run.byAgent.delete('a1')
+        else if (change === 'rebound') row.sessionId = 'agent:main:other'
+        else if (change === 'held') row.identityHold = OPENCLAW_STATES.noGateway
+        else if (change === 'changing') run.binding.whileChanging(() => true)
+        else if (change === 'deleted') vi.mocked(isRecentlyDeleted).mockReturnValue(true)
+        else row.launch = { state: 'failed', error: 'FIRST_TASK_NOT_TAKEN' }
+        finish(ready)
+        await new Promise(resolve => setImmediate(resolve))
+        expect(run.deps.openclawPaneRead).toHaveBeenCalledTimes(reads)
+        expect(run.deps.input.expectFirstTask).not.toHaveBeenCalled()
+        expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
+      })
+
+      it.each(['changing', 'deleted'] as const)('does not begin an attached handoff while its agent is %s', async change => {
+        const { run } = streaming({ identityHold: OPENCLAW_STATES.noGateway })
+        vi.mocked(run.deps.attachSession).mockImplementationOnce(async () => {
+          if (change === 'changing') run.binding.whileChanging(() => true)
+          else vi.mocked(isRecentlyDeleted).mockReturnValue(true)
+          return true
+        })
+        await run.binding.bindObservedAgent(tui())
+        await new Promise(resolve => setImmediate(resolve))
+        expect(run.deps.attachSession).toHaveBeenCalledOnce()
+        expect(run.deps.capturePane).toHaveBeenCalledOnce()
+        expect(run.deps.input.expectFirstTask).not.toHaveBeenCalled()
+        expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
       })
 
       it('a box that holds text once the stream is up keeps the task for a later pass', async () => {
@@ -2457,13 +2697,37 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
     })
 
-    it('a pass that reads anything else starts the count again', async () => {
+    it('a transient pane reading preserves the recovery spacing and count', async () => {
+      await pass(0)
+      await pass(5, screen('screen-banner'))
+      await pass(6)
+      expect(typed()).toEqual([SESSION])
+    })
+
+    it('a pass that reads ready history starts the count again', async () => {
       for (const [loads, second] of [0, 20, 40, 60, 80].entries()) await pass(second, failedTimes(loads + 1))
       expect(typed()).toHaveLength(5)
       await pass(85, screen('screen-plain'))
       await pass(86)
       expect(typed()).toHaveLength(6)
       expect(logged().at(-1)).toBe(tries(1)[0])
+    })
+
+    it('a new TUI process starts a new history-recovery episode', async () => {
+      for (const [loads, second] of [0, 20, 40, 60, 80].entries()) await pass(second, failedTimes(loads + 1))
+      expect(typed()).toHaveLength(5)
+      vi.setSystemTime(START + 85_000)
+      await run.binding.bindObservedAgent(tui({ processIdentity: { pid: 8815, startMarker: new Date(START + 81_000).toISOString(), executable: 'openclaw' } }))
+      expect(typed()).toHaveLength(6)
+    })
+
+    it('a confirmed Gateway outage starts a new history-recovery episode', async () => {
+      for (const [loads, second] of [0, 20, 40, 60, 80].entries()) await pass(second, failedTimes(loads + 1))
+      const lost = screen('screen-plain').replace(' connected | idle', ' gateway disconnected: connect ECONNREFUSED 127.0.0.1:18789 | idle')
+      await pass(85, lost)
+      await pass(96, lost)
+      await pass(97)
+      expect(typed()).toHaveLength(6)
     })
 
     it('types nothing into a box that holds text: the person\'s, or a message OpenClaw refused', async () => {
@@ -2570,6 +2834,40 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     }
     const logged = () => vi.mocked(console.log).mock.calls.flat().map(String)
 
+    it('failed-launch cleanup cannot take a replacement launch task after the transaction', async () => {
+      let commit = () => {}
+      vi.mocked(run.deps.registry.afterTransaction).mockImplementation(((action: () => unknown) =>
+        new Promise(resolve => { commit = () => resolve(action()) })) as never)
+      await pass(0)
+      await pass(180)
+      row.launch = { state: 'starting' }
+      row.firstTask = 'A new task'
+      commit()
+      await new Promise(resolve => setImmediate(resolve))
+      expect(run.deps.registry.takeFirstTask).not.toHaveBeenCalled()
+      expect(row.firstTask).toBe('A new task')
+    })
+
+    it('does not remove a task when the failed launch has no surviving owner', async () => {
+      vi.mocked(run.deps.registry.setLaunch).mockReturnValue(null)
+      await pass(0)
+      await pass(180)
+      expect(run.deps.registry.takeFirstTask).not.toHaveBeenCalled()
+    })
+
+    it('keeps failed-launch cleanup valid across a hold of the same owner', async () => {
+      let commit = () => {}
+      vi.mocked(run.deps.registry.afterTransaction).mockImplementation(((action: () => unknown) =>
+        new Promise(resolve => { commit = () => resolve(action()) })) as never)
+      await pass(0)
+      await pass(180)
+      row.identityHold = OPENCLAW_STATES.noGateway
+      row.evidenceRevision = (row.evidenceRevision ?? 0) + 1
+      commit()
+      await new Promise(resolve => setImmediate(resolve))
+      expect(run.deps.registry.takeFirstTask).toHaveBeenCalledOnce()
+    })
+
     it('a task still on the row 3 minutes after its TUI started fails the launch, comes off the row, and is never typed', async () => {
       vi.mocked(run.deps.openclawPaneRead).mockReturnValue(true)
       vi.mocked(run.deps.registry.takeFirstTask).mockResolvedValue(TASK)
@@ -2579,7 +2877,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(await pass(180, ready)).toBe(true)
       expect(row.launch).toEqual(FAILED)
       expect(run.deps.registry.setLaunch).toHaveBeenCalledOnce()
-      await vi.waitFor(() => expect(run.deps.registry.takeFirstTask).toHaveBeenCalledWith('a1'))
+      await vi.waitFor(() => expect(run.deps.registry.takeFirstTask).toHaveBeenCalledWith('a1', { current: expect.any(Function) }))
       expect(run.deps.registry.afterTransaction).toHaveBeenCalledOnce()
       expect(run.deps.input.forget).toHaveBeenCalledWith('a1')
       expect(run.deps.announceSession).toHaveBeenCalledWith(row)
@@ -2620,7 +2918,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       row.sessionId = ''
       expect(await pass(0)).toBe(false)
       expect(await pass(180)).toBe(true)
-      await vi.waitFor(() => expect(run.deps.registry.takeFirstTask).toHaveBeenCalledWith('a1'))
+      await vi.waitFor(() => expect(run.deps.registry.takeFirstTask).toHaveBeenCalledWith('a1', { current: expect.any(Function) }))
       expect(vi.mocked(run.deps.registry.setLaunch).mock.invocationCallOrder[0])
         .toBeLessThan(vi.mocked(run.deps.registry.afterTransaction).mock.invocationCallOrder[0])
     })
@@ -2778,7 +3076,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       const within = (at: number | null | undefined, since: number, until = Infinity) => at != null && at > since && at <= until
       run = setup({
         openclawPaneRead: vi.fn(() => true),
-        openclawUserRowSince: vi.fn(async (_key: string, _pane: unknown, since: number, _openFiles?: unknown, until?: number) =>
+        openclawUserRowSince: vi.fn(async (_key: string, _pane: unknown, since: number, until?: number) =>
           userRow === null ? null : within(userRow, since, until) || within(laterRow, since, until)),
       })
       row = pane({ sessionId: 'agent:main:plain', registeredAt: LAUNCHED, openclawStateDir: '/h/.openclaw', firstTaskTyped: { text: TASK, at: START - 5_000 } })
@@ -2788,7 +3086,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       // confirmation or a forget ends it, and none is adopted while one is.
       vi.mocked(run.deps.input.firstTaskWaiting).mockImplementation((id) => awaited.has(id))
       vi.mocked(run.deps.input.adoptTypedFirstTask).mockImplementation((id) => !awaited.has(id) && !!awaited.add(id))
-      vi.mocked(run.deps.input.expectFirstTask).mockImplementation((id) => { awaited.add(id) })
+      vi.mocked(run.deps.input.expectFirstTask).mockImplementation((id) => { awaited.add(id); return () => { awaited.delete(id) } })
       vi.mocked(run.deps.input.firstTaskConfirmed).mockImplementation((id) => { awaited.delete(id) })
       vi.mocked(run.deps.input.forget).mockImplementation((id) => { awaited.delete(id) })
       // As the registry does (registry.ts): the mark leaves the row once confirmed, only the one typed at [at] when given, or
@@ -2817,7 +3115,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       for (const second of [0, 5, 10]) await pass(second, running)
       expect(vi.mocked(run.deps.input.adoptTypedFirstTask).mock.calls).toEqual([['a1', TASK]])
       expect(run.deps.openclawUserRowSince).toHaveBeenCalledTimes(3)
-      expect(run.deps.openclawUserRowSince).toHaveBeenCalledWith('agent:main:plain', { pid: 7714, stateDir: '/h/.openclaw' }, START - 5_000, undefined, undefined)
+      expect(run.deps.openclawUserRowSince).toHaveBeenCalledWith('agent:main:plain', { pid: 7714, stateDir: '/h/.openclaw' }, START - 5_000, undefined)
       expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
       expect(run.deps.registry.afterTransaction).not.toHaveBeenCalled()
       expect(run.deps.input.typeCommand).not.toHaveBeenCalled()
@@ -2844,7 +3142,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(starting()).toBe(false)
       // Asked since it was typed, then up to its adoption once adopted. Settled: a later pass asks nothing.
       await pass(10, ready)
-      expect(vi.mocked(run.deps.openclawUserRowSince).mock.calls.map(([, , since, , until]) => [since, until]))
+      expect(vi.mocked(run.deps.openclawUserRowSince).mock.calls.map(([, , since, until]) => [since, until]))
         .toEqual([[START - 5_000, undefined], [START - 5_000, START]])
     })
 
@@ -3080,6 +3378,18 @@ describe('binding an OpenClaw pane, read from its screen', () => {
         expect(run.deps.registry.firstTaskTaken).not.toHaveBeenCalled()
       })
 
+      it.each([false, null])('a late %s answer starts no further key read after the pass budget ends', async answer => {
+        row.earlierSessionIds = ['agent:main:older', 'agent:main:oldest']
+        vi.mocked(run.deps.openclawUserRowSince).mockImplementationOnce(() => new Promise(resolve => setTimeout(resolve, 5_000, answer)))
+        const passing = pass(0, ready)
+        await vi.advanceTimersByTimeAsync(1_000)
+        await passing
+        expect(run.deps.input.adoptTypedFirstTask).toHaveBeenCalledWith('a1', TASK)
+        await vi.advanceTimersByTimeAsync(4_000)
+        expect(run.deps.openclawUserRowSince).toHaveBeenCalledOnce()
+        expect(run.deps.registry.firstTaskTaken).not.toHaveBeenCalled()
+      })
+
       it('is asked again only once its read ended', async () => {
         void pass(0, ready)
         await vi.advanceTimersByTimeAsync(1_000)
@@ -3109,11 +3419,23 @@ describe('binding an OpenClaw pane, read from its screen', () => {
         .toEqual(['agent:main:plain', 'agent:main:k1', 'agent:main:k2', 'agent:main:k3'])
     })
 
+    it('asks earlier keys one at a time, leaving storage capacity for a concurrent checkpoint', async () => {
+      row.earlierSessionIds = ['agent:main:k1', 'agent:main:k2', 'agent:main:k3']
+      let release!: (answer: boolean) => void
+      vi.mocked(run.deps.openclawUserRowSince).mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+      const passing = pass(0, ready)
+      await vi.waitFor(() => expect(run.deps.openclawUserRowSince).toHaveBeenCalled())
+      expect(run.deps.openclawUserRowSince).toHaveBeenCalledOnce()
+      release(false)
+      await passing
+      expect(run.deps.openclawUserRowSince).toHaveBeenCalledTimes(4)
+    })
+
     it('a key that cannot say leaves it to the others: a row before its adoption under one settles it', async () => {
       row.earlierSessionIds = ['agent:main:older']
       const answer = vi.mocked(run.deps.openclawUserRowSince).getMockImplementation()!
-      vi.mocked(run.deps.openclawUserRowSince).mockImplementation(async (key, pane, since, openFiles, until) =>
-        key === 'agent:main:older' ? null : answer(key, pane, since, openFiles, until))
+      vi.mocked(run.deps.openclawUserRowSince).mockImplementation(async (key, pane, since, until) =>
+        key === 'agent:main:older' ? null : answer(key, pane, since, until))
       await pass(0, ready)
       userRow = START - 1_000
       await pass(5, ready)

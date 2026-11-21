@@ -48,7 +48,7 @@ export function searchCoreApi(
     terminals: TERMINALS_OFF,
     machine: UNASKED.machine,
     agents: {
-      all: agents,
+      all: async () => agents(),
       live: () => agents().filter((agent) => agent.active),
       displayName: (session) => (session as { displayName?: string }).displayName ?? '',
       byAgent: (agentId) => agents().find((agent) => agent.agentId === agentId),
@@ -81,9 +81,8 @@ export function searchCoreApi(
       ...ACCOUNT_BACKEND_OFF,
       ...UNASKED.account,
     },
-    clients: { viewerChanged: () => {}, viewerFrame: () => false, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {}, windows: () => {}, observer: () => false, ...UNASKED.clients },
+    clients: { viewerChanged: () => {}, streamFrame: () => false, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {}, windows: () => {}, observer: () => false, ...UNASKED.clients },
     daemon: DAEMON_UNKNOWN,
-    wifi: UNASKED.wifi,
   }
 }
 

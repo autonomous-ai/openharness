@@ -8,6 +8,7 @@ import type { AgentEngine } from '../engines/types.js'
 import type { HandoffDeps } from './agentHandoff.js'
 import { isSubagentTranscript } from './subagentTranscript.js'
 import type { RecentRecap } from './recapReads.js'
+import type { StoppedAgentStore } from './stoppedAgents.js'
 import type { RegisteredSession } from './registry.js'
 import type { RepairedSession } from './sessionRepair.js'
 import type { TurnSource } from './sessionSearch/sessionTurns.js'
@@ -25,7 +26,7 @@ export interface DiscoveryDeps {
   current?(agentId: string): RegisteredSession | null | undefined
   observed?(session: RegisteredSession, found: TurnSource | null): void
   /** Another agent, running or stopped, already holds this session. Must answer true when it cannot tell. */
-  ownedByOther(sessionId: string, agentId: string): boolean
+  ownedByOther(sessionId: string, agentId: string): boolean | Promise<boolean>
   isRecentlyDeleted(sessionId: string): boolean
 }
 
@@ -53,7 +54,10 @@ export function sessionDiscovery(deps: DiscoveryDeps): (session: RegisteredSessi
       if (!found) { deps.observed?.(session, null); return null }
       const path = found.transcriptPath
       if (!found.sessionId || !path || isSubagentTranscript(path)
-        || deps.isRecentlyDeleted(found.sessionId) || deps.ownedByOther(found.sessionId, session.agentId)) throw new HandoffError('IDENTITY_UNAVAILABLE')
+        || deps.isRecentlyDeleted(found.sessionId) || await deps.ownedByOther(found.sessionId, session.agentId)) throw new HandoffError('IDENTITY_UNAVAILABLE')
+      const latest = deps.current?.(session.agentId)
+      if (!deps.isLive(session.agentId) || deps.current && (!latest || latest.identityHold
+        || handoffSessionFact(latest).fingerprint !== handoffSessionFact(session).fingerprint)) throw new HandoffError('IDENTITY_UNAVAILABLE')
       const source = { engine: session.engine, sessionId: found.sessionId, transcriptPath: path }
       deps.observed?.(session, source)
       return source
@@ -81,27 +85,15 @@ export function sessionDiscovery(deps: DiscoveryDeps): (session: RegisteredSessi
 
 export interface OwnershipDeps {
   bySession(sessionId: string): { agentId: string } | null | undefined
-  /** The ids of every stopped record on disk, readable or not. */
-  stoppedIds(): string[]
-  /** One stopped record; throws when it cannot be read. */
-  stopped(agentId: string): { agentId: string; sessionId: string } | null
+  query: StoppedAgentStore['query']
 }
 
-/**
- * Does an agent other than `agentId` hold `sessionId`, running or stopped? Fails closed, record by record: a
- * stopped record that cannot be read (or is unusable) might be the holder, so it counts as one. (The store's
- * `list()` skips such records silently, which would fail open.)
- */
-export function ownedByOther(deps: OwnershipDeps, sessionId: string, agentId: string): boolean {
+/** Archive content is searched privately; the last synchronous witness keeps an awaited answer honest. */
+export async function ownedByOther(deps: OwnershipDeps, sessionId: string, agentId: string): Promise<boolean> {
   try {
+    const archive = await deps.query({ kind: 'conversations', ids: [sessionId], exceptAgentId: agentId, reservations: false })
     const owner = deps.bySession(sessionId)
-    if (owner && owner.agentId !== agentId) return true
-    for (const id of deps.stoppedIds()) {
-      if (id === agentId) continue
-      const record = deps.stopped(id)
-      if (!record || (record.sessionId === sessionId && record.agentId !== agentId)) return true
-    }
-    return false
+    return !archive.current() || archive.matches[0] || !!owner && owner.agentId !== agentId
   } catch { return true }
 }
 
@@ -114,7 +106,7 @@ export interface HandoffWiring {
     byAgent(id: string): unknown
     bySession(sessionId: string): { agentId: string } | null | undefined
   }
-  stopped: { get(id: string): RegisteredSession | null; ids(): string[] }
+  stopped: Pick<StoppedAgentStore, 'get' | 'query' | 'current'>
   /** The recaps, as the core reads them back (core/turns/recaps.ts). */
   mirror: {
     recentAsks(sessionId: string, n?: number): string[]
@@ -149,9 +141,7 @@ export function handoffProviderDeps(w: HandoffWiring): HandoffDeps {
       processSession: w.processSession,
       isLive: (id) => !!w.registry.byAgent(id),
       current: (id) => w.registry.resolve(id),
-      ownedByOther: (sid, id) => ownedByOther({
-        bySession: (s) => w.registry.bySession(s), stoppedIds: () => w.stopped.ids(), stopped: (s) => w.stopped.get(s),
-      }, sid, id),
+      ownedByOther: (sid, id) => ownedByOther({ bySession: id => w.registry.bySession(id), query: query => w.stopped.query(query) }, sid, id),
       isRecentlyDeleted: (sid) => w.isRecentlyDeleted(sid),
     }),
     findTranscript: (engine, sid, opts) => w.findResumedTranscript(engine, sid, opts),

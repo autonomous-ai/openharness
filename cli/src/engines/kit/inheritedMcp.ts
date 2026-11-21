@@ -16,10 +16,12 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> => type
 
 /** The file's JSON object; null for none, or anything but an object. */
 function readObject(file: string): Record<string, unknown> | null {
-  try {
-    const value: unknown = JSON.parse(readFileSync(file, 'utf8'))
-    return isPlainObject(value) ? value : null
-  } catch { return null }
+  try { return mcpObject(readFileSync(file, 'utf8')) } catch { return null }
+}
+
+export function mcpObject(text: string | null): Record<string, unknown> | null {
+  if (text === null) return null
+  try { const value: unknown = JSON.parse(text); return isPlainObject(value) ? value : null } catch { return null }
 }
 
 const names = (value: unknown): string[] => (Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [])
@@ -43,17 +45,12 @@ export function recordInheritedMcp(contract: InheritedMcpContract, folder: strin
   const servers = inherited(contract, folder)
   if (!servers.length) return []
   const user = readObject(join(userHome, contract.user.file)) ?? {}
-  if (user[contract.user.approveAll] === true) return []
-  const decided = new Set([...names(user[contract.user.approved]), ...names(user[contract.user.rejected])])
   const file = join(folder, contract.settings)
   const exists = existsSync(file)
   const settings = exists ? readObject(file) : {}
-  // A settings file Harness cannot read is the person's to fix: it is left exactly as it is.
-  if (settings === null) return []
-  const rejected = names(settings[contract.rejected])
-  const fresh = servers.filter((name) => !decided.has(name) && !rejected.includes(name))
-  if (!fresh.length) return []
-  const text = JSON.stringify({ ...settings, [contract.rejected]: [...rejected, ...fresh] }, null, 2)
+  const prepared = prepareInheritedMcp(contract, servers, user, settings)
+  if (!prepared) return []
+  const { text, fresh } = prepared
   if (exists) replaceConfigFile(file, text)
   else {
     mkdirSync(dirname(file), { recursive: true })
@@ -62,4 +59,18 @@ export function recordInheritedMcp(contract: InheritedMcpContract, folder: strin
     renameSync(tmp, file)
   }
   return fresh
+}
+
+/** Shared with setup: only the native default negative answer is added. */
+export function prepareInheritedMcp(contract: InheritedMcpContract, servers: readonly string[], user: Record<string, unknown>,
+  settings: Record<string, unknown> | null): { text: string; fresh: string[] } | null {
+  if (user[contract.user.approveAll] === true) return null
+  const decided = new Set([...names(user[contract.user.approved]), ...names(user[contract.user.rejected])])
+  // A settings file Harness cannot read is the person's to fix: it is left exactly as it is.
+  if (settings === null) return null
+  const rejected = names(settings[contract.rejected])
+  const fresh = servers.filter((name) => !decided.has(name) && !rejected.includes(name))
+  if (!fresh.length) return null
+  const text = JSON.stringify({ ...settings, [contract.rejected]: [...rejected, ...fresh] }, null, 2)
+  return { text, fresh }
 }

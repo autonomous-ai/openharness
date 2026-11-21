@@ -40,7 +40,7 @@ it.each([
   ['pi', '.pi/agent/extensions/launcher-register.ts'], ['amp', '.config/amp/plugins/launcher-register.ts'],
   ['hermes', '.hermes/config.yaml'], ['commandcode', '.commandcode/settings.json'], ['devin', '.config/devin/config.json'],
 ] as [AgentEngine, string][])('prepares %s at the captured home even after daemon environment drift', async (engine, relative) => {
-  const { inspectNativeLaunch } = await import('./nativeLaunch.js')
+  const { inspectNativeLaunch } = await import('../testing/nativeSetupInProcess.js')
   const result = await inspectNativeLaunch(engine)
   expect(result.ok).toBe(true)
   if (!result.ok) throw Error(result.detail)
@@ -55,7 +55,7 @@ it.each([
 })
 
 it('prepares redirected model homes and bakes that exact home into notifications', async () => {
-  const { inspectNativeLaunch } = await import('./nativeLaunch.js')
+  const { inspectNativeLaunch } = await import('../testing/nativeSetupInProcess.js')
   for (const [engine, variable, relative] of [['grok', 'GROK_HOME', 'hooks/harness.json'], ['pi', 'PI_CODING_AGENT_DIR', 'extensions/launcher-register.ts']] as const) {
     const result = await inspectNativeLaunch(engine)
     if (!result.ok) throw Error(result.detail)
@@ -68,7 +68,7 @@ it('prepares redirected model homes and bakes that exact home into notifications
 })
 
 it('keeps overlapping OpenCode preparation isolated by selected config root', async () => {
-  const { inspectNativeLaunch } = await import('./nativeLaunch.js')
+  const { inspectNativeLaunch } = await import('../testing/nativeSetupInProcess.js')
   const a = await inspectNativeLaunch('opencode'), b = await inspectNativeLaunch('opencode')
   if (!a.ok || !b.ok) throw Error('Private executable was not prepared')
   const roots = [join(root, 'opencode-a'), join(root, 'opencode-b')]
@@ -79,7 +79,7 @@ it('keeps overlapping OpenCode preparation isolated by selected config root', as
 })
 
 it('pins overridden locations even when the owner disabled hook installation', async () => {
-  const { inspectNativeLaunch } = await import('./nativeLaunch.js')
+  const { inspectNativeLaunch } = await import('../testing/nativeSetupInProcess.js')
   const result = await inspectNativeLaunch('grok')
   if (!result.ok) throw Error(result.detail)
   const selected = join(root, 'disabled-grok')
@@ -88,14 +88,28 @@ it('pins overridden locations even when the owner disabled hook installation', a
   expect(existsSync(selected)).toBe(false)
 })
 
-it('keeps Claude settings separate from a daemon transcript-root override', async () => {
+it.each([undefined, ''])('keeps Claude settings separate from a transcript-root override with config=%s', async config => {
+  vi.stubEnv('CLAUDE_CONFIG_DIR', config)
   const archive = join(root, 'archive', 'projects')
   vi.stubEnv('CLAUDE_PROJECTS_DIR', archive)
-  const { inspectNativeLaunch } = await import('./nativeLaunch.js')
+  const { inspectNativeLaunch } = await import('../testing/nativeSetupInProcess.js')
   const result = await inspectNativeLaunch('claude')
   if (!result.ok) throw Error(result.detail)
   expect(await result.launch.prepareHooks(19473, () => true)).toBe(true)
   expect(existsSync(join(home, '.claude/settings.json'))).toBe(true)
   expect(existsSync(join(root, 'archive/settings.json'))).toBe(false)
   expect(readFileSync(join(home, '.claude/settings.json'), 'utf8')).toContain(`--claude-projects-dir '${archive}'`)
+})
+
+it('keeps an explicit Claude profile’s settings and transcript root together', async () => {
+  const archive = join(root, 'archive', 'projects'), profile = join(root, 'explicit-profile')
+  vi.stubEnv('CLAUDE_PROJECTS_DIR', archive)
+  const { inspectNativeLaunch } = await import('../testing/nativeSetupInProcess.js')
+  const result = await inspectNativeLaunch('claude', { claudeHome: profile })
+  if (!result.ok) throw Error(result.detail)
+  expect(await result.launch.prepareHooks(19473, () => true)).toBe(true)
+  expect(result.launch.current()).toBe(true)
+  expect(existsSync(join(home, '.claude', 'settings.json'))).toBe(false)
+  expect(readFileSync(join(profile, 'settings.json'), 'utf8')).toContain(`--claude-projects-dir '${join(profile, 'projects')}'`)
+  expect(readFileSync(join(profile, 'settings.json'), 'utf8')).not.toContain(`--claude-projects-dir '${archive}'`)
 })

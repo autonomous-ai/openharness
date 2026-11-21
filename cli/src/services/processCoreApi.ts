@@ -1,3 +1,4 @@
+import { OWNER_FAILURES, type OwnerFailure, type OwnerResult, type SessionOwnerCore } from '../lib/sessionOwnerWire.js'
 import { usageTarget, usageTargetKey, usageSnapshot, validUsage, validUsageTarget } from '../lib/agentUsageWire.js'
 /**
  * The core API a light service runs on in its own process (the edge host: usage, the monitor, the project
@@ -14,7 +15,7 @@ import { usageTarget, usageTargetKey, usageSnapshot, validUsage, validUsageTarge
  * each asked of the core over its link (`ask`). The agents it reads come as the apps are shown them (`service_query shown`): each with its
  * name, whether its terminal is there and its harness's viewer.
  */
-import { CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, OBSERVER_KEY_OFF, resolveAgent, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, WIFI_OFF, type AgentView, type CloudCore, type CoreApi, type DaemonAddress, type TerminalWatch } from '../core/api.js'
+import { LOCAL_WINDOW_OFF, AGENT_ACTIONS_OFF, CONNECTOR_SYNC_OFF, CONVERSATIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, OBSERVER_KEY_OFF, resolveAgent, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, type AgentView, type CoreApi, type DaemonAddress, type TerminalWatch } from '../core/api.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { turnsLink } from './turnsLink.js'
 
@@ -74,8 +75,7 @@ export const UNASKED = {
   /** What only Agent Messages asks: one line on what each harness does. */
   summaries: async (): Promise<Record<string, string>> => ({}),
   account: { signedIn: () => false, environment: () => '', machines: async () => ({ status: 503, body: {} }) },
-  clients: { sendLocal: () => {}, sendToWindow: () => false, hasWindow: () => false, devicesChanged: () => {}, dialWatching: () => {}, turnCard: () => {}, turnSummary: () => {} },
-  wifi: WIFI_OFF,
+  clients: { sendWindow: LOCAL_WINDOW_OFF, hasWindow: () => false, devicesChanged: () => {}, dialWatching: () => {}, turnCard: () => {}, turnSummary: () => {} },
   /** What only the recaps ask (services/recapsProcess.ts): a turn's final answer. */
   lastTurn: async () => null,
 } satisfies {
@@ -84,8 +84,7 @@ export const UNASKED = {
   activity: CoreApi['agents']['activity']
   summaries: CoreApi['agents']['summaries']
   account: Pick<CoreApi['account'], 'signedIn' | 'environment' | 'machines'>
-  clients: Pick<CoreApi['clients'], 'sendLocal' | 'sendToWindow' | 'hasWindow' | 'devicesChanged' | 'dialWatching' | 'turnCard' | 'turnSummary'>
-  wifi: CoreApi['wifi']
+  clients: Pick<CoreApi['clients'], 'sendWindow' | 'hasWindow' | 'devicesChanged' | 'dialWatching' | 'turnCard' | 'turnSummary'>
   lastTurn: CoreApi['transcripts']['lastTurn']
 }
 
@@ -114,8 +113,11 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
     machine: UNASKED.machine,
     agents: {
       // The stopped agents are never sent to these services: none of them reads one.
-      all: live,
+      all: async () => live(),
       live,
+      // Existing wire rows do not prove a coherent name/membership/publication capture.
+      facts: AGENT_ACTIONS_OFF.facts,
+      readSessions: AGENT_ACTIONS_OFF.readSessions,
       displayName: (session) => (session as ShownAgent).displayName ?? '',
       byAgent: (agentId) => live().find((session) => session.agentId === agentId),
       resolve: (id) => resolveAgent(live(), id),
@@ -175,7 +177,7 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       tabKey: TAB_KEY_OFF,
       tabRelay: TAB_RELAY_OFF,
       // The connectors service asks the core for these itself (core/connectorsQueries.ts); no other seals.
-      connectorVault: CONNECTOR_VAULT_OFF,
+      connectorSync: CONNECTOR_SYNC_OFF,
       privateGridName: async () => null,
       machineName: () => null,
       backend,
@@ -192,7 +194,7 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       ...UNASKED.account,
     },
     clients: {
-      viewerChanged: () => {}, viewerFrame: () => false, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {},
+      viewerChanged: () => {}, streamFrame: () => false, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {},
       windows: (frame) => { void ask?.('windows', { frame }).catch(() => {}) },
       // A goal Hachi closed, for every window of the account (core/agentQueries.ts `hachi_goal_done`). One the core
       // cannot take now is lost, as a count is: the goal is closed and kept, and its notice is a courtesy.
@@ -212,19 +214,35 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       machineId: () => daemon().machineId(),
       get autonomousEnv() { return daemon().autonomousEnv },
     },
-    wifi: UNASKED.wifi,
     // Hachi's daemon counters, handed to the core (core/agentQueries.ts `count`), which refuses any other name. A count
     // the core cannot take now is lost: counters are measures, never state.
     count: (metric) => { void ask?.('count', { metric }).catch(() => {}) },
-    // The cloud agents' doors (core/experimentQueries.ts): told to the core in order, never waited on. A core
-    // that is not connected hears it all again when it is (services/cloudProcess.ts `republish`). A question's
-    // id travels as `questionId`: `requestId` is the query's own, which the link writes over.
-    ...(ask ? {
-      cloud: {
-        publish: (harnesses) => { void ask('cloud_publish', { harnesses }).catch(() => {}) },
-        ask: (agentId, requestId, question) => { void ask('cloud_ask', { agentId, questionId: requestId, question }).catch(() => {}) },
-        unask: (agentId, requestId) => { void ask('cloud_unask', { agentId, questionId: requestId }).catch(() => {}) },
-      } satisfies CloudCore,
-    } : {}),
+    // The component owns recovery; every private stage waits for its actual admission result.
+    ...(ask ? { owners: ownerCore(ask) } : {}),
+  }
+}
+
+
+/** No implicit success: malformed or missing acknowledgements keep the component unavailable. */
+function ownerCore(ask: (query: string, payload: Payload) => Promise<Payload>): SessionOwnerCore {
+  const result = (answer: Payload): OwnerResult => {
+    if (answer.ok === true) return { ok: true }
+    if (answer.ok === false && OWNER_FAILURES.includes(answer.error as OwnerFailure)) return { ok: false, error: answer.error as OwnerFailure }
+    throw new Error('SESSION_OWNER_UNAVAILABLE')
+  }
+  return {
+    begin: async value => result(await ask('session_owner_begin', { ...value })),
+    append: async value => result(await ask('session_owner_append', { ...value })),
+    end: async transfer => result(await ask('session_owner_end', { transfer })),
+    cancel: async transfer => result(await ask('session_owner_cancel', { transfer })),
+    checkpoint: async factory => {
+      const answer = await ask('session_owner_checkpoint', { factory })
+      if (typeof answer.fingerprint === 'string' && /^[a-f0-9]{64}$/.test(answer.fingerprint)) return { fingerprint: answer.fingerprint }
+      const refused = result(answer)
+      if (!refused.ok) return refused
+      throw new Error('SESSION_OWNER_UNAVAILABLE')
+    },
+    ask: async (agentId, requestId, question) => result(await ask('session_owner_ask', { agentId, questionId: requestId, question })),
+    unask: async (agentId, requestId, close) => result(await ask('session_owner_unask', { agentId, questionId: requestId, close })),
   }
 }

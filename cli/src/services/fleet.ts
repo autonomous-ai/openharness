@@ -14,7 +14,7 @@
  * It reads the core only through `CoreApi`.
  */
 import { env } from '../config/env.js'
-import { FAIL, later, type CoreApi, type PortFallbacks, type RouteAnswer, type SendResult, type ForkResult } from '../core/api.js'
+import { FAIL, later, type PortFallbacks, type RouteAnswer, type SendResult, type ForkResult } from '../core/api.js'
 import { DeviceFleet } from '../device/deviceFleet.js'
 import { DeviceLink } from '../device/deviceLink.js'
 import type { MachineListCache } from '../device/machineList.js'
@@ -23,6 +23,7 @@ import { routeVoiceTask, type RouterAgent, type RouterContinuity } from '../lib/
 import type { CableAgent, CableMachine, CableMachineSource } from '../cable/cableSession.js'
 import type { FleetEvent } from '../cable/machineFleet.js'
 import type { AnswerReceipt, ReviewedAnswer } from '../cable/questionInbox.js'
+import type { DevicesCore } from './devices.js'
 import { FleetRouter } from './fleetRouter.js'
 
 /** A fork and where it was asked: `asked` is false for a refusal made before asking anyone (an agent
@@ -128,7 +129,7 @@ export interface FleetDeps {
 
 /** Start the fleet: what ⌘K and the dial reach it through. The router itself is returned beside it, for
  *  this service's own tests; nothing else holds it. */
-export function startFleet(core: CoreApi, deps: FleetDeps): { fleet: Fleet; router: FleetRouter } {
+export function startFleet(core: DevicesCore, deps: FleetDeps): { fleet: Fleet; router: FleetRouter } {
   // Three independent things, on purpose. The LIST is a REST read that works while the backend socket is
   // down; `local` is derived from the computer id and needs no network at all; and the LANE is a device
   // socket that only exists while the dial is actually looking at another machine.
@@ -176,7 +177,7 @@ export function startFleet(core: CoreApi, deps: FleetDeps): { fleet: Fleet; rout
     machineName: () => core.machine.name(),
     machineId: () => core.machine.id(),
     computerId: () => core.machine.computerId(),
-    sessions: () => [...core.agents.advertised(), ...core.agents.cloud?.() ?? []],
+    sessions: () => [...core.agents.advertised(), ...core.agents.serviceSessions?.() ?? []],
     refresh: deps.refresh,
     displayName: (session) => core.agents.displayName(session),
     runtimeProfile: (session) => core.agents.runtimeProfile(session),

@@ -9,16 +9,13 @@
  * Moved verbatim out of `runForeground` (the core boundary, step 11: docs/design/2026-10-03-harnessd.md).
  */
 import { randomUUID } from 'node:crypto'
+import { launchSettingsArgs } from '../../engines/kit/launchValues.js'
 import { statSync } from 'node:fs'
 import type { BackendSocket } from '../../backendSocket.js'
-import { installedDsh } from '../../dsh/installed.js'
-import { harnessEnvToClear } from '../../dsh/launch.js'
-import type { DshThrough } from './dshThrough.js'
-import * as opencodeLaunch from '../../engines/launchControl.js'
+import { harnessEnvToClear } from '../../dsh/sessionEnv.js'
+import { captureDshWorkspace, type DshThrough } from './dshThrough.js'
 import type { TurnRecaps } from '../turns/recaps.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
-import { enginePathOverride } from '../../lib/engineBin.js'
-import { engineInstallRecipe } from '../../lib/engineInstall.js'
 import { buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, launchAttempts, namedAgentArgs, refusePermissionFlagIfUnsupported, supportsNamedAgent, typedFirstPrompt } from '../../lib/engineLaunch.js'
 import { forkName, planFork } from '../../lib/forkAgent.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
@@ -26,7 +23,7 @@ import { projectDisplayName, type registry, type RegisteredSession } from '../..
 import type { TerminalBackend } from '../../lib/terminalBackend.js'
 import { windowsLaunchRefusal } from '../../lib/windows/launch.js'
 import { isWindowsHeldPane, windowsPaneLaunch } from '../../lib/windows/engineStart.js'
-import { prepareInstructionWrites, scmLaunchEnv } from '../../scm/launch.js'
+import { scmLaunchEnv } from '../../scm/launch.js'
 import type { createLaunchHelpers } from './launch.js'
 import { mergedLaunchEnv } from './launchEnv.js'
 import type { createPaneWatcher } from './newPane.js'
@@ -42,6 +39,7 @@ import { OPENCLAW_LOCAL } from '../../engines/openclaw/contract.js'
 type ForkAgent = NonNullable<BackendSocket['onForkAgent']>
 
 export interface ForkAgentDeps {
+  opencodeMajor?: () => Promise<number | null>
   native?: (engine: AgentEngine, source: NativeLaunchSource, authority: LaunchAuthority) => Promise<NativeLaunchResult>
   prepareNative?: LaunchOverridesDeps['prepareNative']
   authority?: (agentId: string) => () => boolean
@@ -58,17 +56,17 @@ export interface ForkAgentDeps {
   announceSession: (session: RegisteredSession) => void
   /** A look at the new agent, for the services that follow agents (core/agentLife.ts `running`). */
   attach: (session: RegisteredSession) => void
-  prepareApiTools: (cwd: string | null | undefined, engine: string) => void
+  prepareInstructions: (cwd: string | null | undefined, engine: string) => Promise<void>
   /** What a restart or a resume relaunches the row with (launch.ts): its own login, model and profile. */
   relaunchOverrides: ReturnType<typeof createLaunchHelpers>['relaunchOverrides']
   /** This account's private grid, as the socket knows it (BackendSocket.gridName). */
   gridName: () => string | null
-  dshLaunch: Pick<DshThrough, 'launch'>
+  dshLaunch: Pick<DshThrough, 'describe' | 'launch'>
 }
 
-export function createAgentForker({
+export function createAgentForker({ opencodeMajor,
   native: inspectNative, prepareNative, authority: captureAuthority,
-  createBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, mirror, pendingForkInherit, watchNewPane, announceSession, attach, prepareApiTools, relaunchOverrides, gridName, dshLaunch,
+  createBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, mirror, pendingForkInherit, watchNewPane, announceSession, attach, prepareInstructions, relaunchOverrides, gridName, dshLaunch,
 }: ForkAgentDeps) {
   const prepare = async ({ agentId, name, prompt }: Parameters<ForkAgent>[0], authority: LaunchAuthority): Promise<LaunchPreparation<Awaited<ReturnType<ForkAgent>>>> => {
     const ownsSource = captureAuthority?.(agentId) ?? (() => true)
@@ -103,7 +101,6 @@ export function createAgentForker({
     }
     const plan = planFork({ engine, sessionId: source.sessionId, name: sourceName, cwd: source.cwd }, memory, prompt)
     if (!plan.ok) return { ok: false, error: plan.error, detail: plan.detail }
-    const opencode = engine === 'opencode' ? opencodeLaunch : null
 
     const label = authority.label
     const inspected = await inspectNative?.(engine, source, { ...authority, current: owner })
@@ -116,26 +113,31 @@ export function createAgentForker({
     let dshArgs: string[] = []
     let dshLabel: string | undefined
     if (source.dsh) {
-      const installed = installedDsh(source.dsh)
-      if (!installed) return { ok: false, error: 'INVALID_DSH', detail: `${source.dsh} is no longer installed on this machine` }
+      const workspace = await captureDshWorkspace(source.cwd)
+      if (!current()) return changed
+      if (!workspace) return { ok: false, error: 'CWD_NOT_FOUND' }
+      const installed = await dshLaunch.describe(source.dsh, engine)
+      if (!current()) return changed
+      // Keep the fork's existing refusal when the Store confirms its package was removed.
+      if (!installed.ok) return installed.error === 'INVALID_DSH'
+        ? { ...installed, detail: `${source.dsh} is no longer installed on this machine` } : installed
       // Narrowed above; a closure would lose that, so the checked values are named here.
       const cwd = source.cwd
       const prepared = await dshLaunch.launch({ dsh: source.dsh, workspace: cwd, engine, key: label,
-        account: { privateGrid: gridName() }, forkOf: { agentId: source.agentId, dshRuntime: source.dshRuntime ?? null } })
+        account: { privateGrid: gridName() }, forkOf: { agentId: source.agentId, dshRuntime: source.dshRuntime ?? null } }, { workspace })
       if (!current()) return changed
       if (!prepared.ok) return { ok: false, error: prepared.error, detail: prepared.detail,
         ...(prepared.unavailable ? { unavailable: prepared.unavailable } : {}) }
       dshEnv = prepared.launch.env
       dshArgs = prepared.launch.args
-      dshLabel = installed.manifest.name
+      dshLabel = installed.name
     }
     // The row's own login, model and profile, as a restart and a resume relaunch it (launch.ts): a Codex
     // agent moved back off a grid names its provider again (`-c model_provider=…`, `ownProvider` in
     // engines/codex/launch.ts) and the model it had before the grid (`-m`), and a profile gets
     // its hooks. A fork was launched without any of them, and came back on Codex's default model where a
     // restart of its source came back on the source's own (e2e/forks.e2e.ts). The harness and the named
-    // agent are the fork's own (a new runtime, above and below), so they are not rebuilt here. A fork is started by
-    // whoever forks it, not by the agent that started its source: its pull requests carry no line for that.
+    // agent are the fork's own (a new runtime, above and below), so they are not rebuilt here.
     const built = await relaunchOverrides(source, { ...source, dsh: null, agent: null, startedBy: null }, owner, native, label)
     if (!current()) return changed
     if (!built.ok) return built
@@ -145,24 +147,25 @@ export function createAgentForker({
     }
     if (!current()) return changed
     const dispatchCurrent = () => current() && built.overrides.native?.current() !== false
-    const installIfMissing = enginePathOverride(engine) ? undefined : engineInstallRecipe(engine)
+    const settings = built.overrides.native?.prepareSettings
+      ? await built.overrides.native.prepareSettings(source.cwd, owner) : built.overrides.settings
+    if (!dispatchCurrent()) return changed
     // Same guard as a relaunch (`buildLaunchOverrides`): an opencode agent recorded on v1 forks on v2
     // as a general session rather than handing the v2 TUI an `--agent` it exits on.
-    const forkMajor = built.overrides.native ? built.overrides.native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null
+    const forkMajor = built.overrides.native ? built.overrides.native.opencodeMajor : engine === 'opencode' ? await opencodeMajor?.() ?? null : null
     const extraArgs = [...built.overrides.extraArgs, ...dshArgs, ...(source.agent && supportsNamedAgent(engine, forkMajor) ? namedAgentArgs(engine, source.agent, forkMajor) : [])]
     const firstPrompt = plan.level === 'native' ? (prompt ?? undefined) : plan.firstPrompt
     // An engine that takes it typed gets it on its row instead, typed once its pane is ready (core/agents/bind.ts).
     const firstTask = typedFirstPrompt(engine, firstPrompt)
     // The fork's own id, chosen before its pane, as create chooses one (engineLaunch.ts `agentId`).
     const forkId = randomUUID()
-    const launchOptions = {
+    const baseOptions = {
       agentId: forkId,
       ...(built.overrides.native ? { native: built.overrides.native } : {}),
       clearEnv: harnessEnvToClear(dshEnv),
       bypassPermission: source.bypassPermission ?? false,
       ...(source.permissionMode ? { permissionMode: source.permissionMode } : {}),
       extraArgs: extraArgs.length ? extraArgs : undefined,
-      installIfMissing,
       cwd: source.cwd,
       harnessNode: source.dsh ? true : undefined,
       ...(plan.level === 'native' ? { forkSessionId: plan.forkSessionId } : {}),
@@ -170,23 +173,36 @@ export function createAgentForker({
     }
     // Same refusal as create: the clone inherits the source's permission mode, and an engine that
     // has since been downgraded would hand back a pane of help text instead of a harness.
-    const forkRefusal = await refusePermissionFlagIfUnsupported(engine, launchOptions, undefined, built.overrides.native)
+    const forkRefusal = await refusePermissionFlagIfUnsupported(engine, baseOptions, built.overrides.native)
     if (!dispatchCurrent()) return changed
     if (forkRefusal) {
       console.warn(`[agent] fork refused · ${engine} · ${forkRefusal.detail}`)
       return { ok: false, ...forkRefusal }
     }
-    await prepareInstructionWrites(source.cwd)
+    await prepareInstructions(source.cwd, engine)
     if (!dispatchCurrent()) return changed
-    prepareApiTools(source.cwd, engine)
     // Windows refuses a batch-file engine whose arguments cmd.exe would read (lib/windows/launch.ts), before any pane.
-    let command: string[], argv: string[]
     try {
-      command = buildEngineCommandArgv(engine, launchOptions)
-      argv = buildEngineLaunchArgv(engine, launchOptions)
+      buildEngineCommandArgv(engine, { ...baseOptions, extraArgs: launchSettingsArgs(engine, extraArgs, settings) })
     } catch (error) { return windowsLaunchRefusal(error) }
     return { ok: true, dispatch: async () => {
     if (!dispatchCurrent()) return changed
+    const launchOptions = baseOptions
+    let command: string[], windowsArgv: string[] | undefined
+    try {
+      command = buildEngineCommandArgv(engine, launchOptions)
+      // Windows has no launch script: preserve its pure preflight and exact held-command identity.
+      if (process.platform === 'win32') windowsArgv = buildEngineLaunchArgv(engine,
+        { ...launchOptions, extraArgs: launchSettingsArgs(engine, extraArgs, settings) })
+    } catch (error) { return windowsLaunchRefusal(error) }
+    const held = windowsArgv !== undefined && isWindowsHeldPane(windowsArgv)
+    const prepareCommand = () => {
+      const selectedArgs = launchSettingsArgs(engine, extraArgs, settings)
+      const selected = { ...baseOptions, extraArgs: selectedArgs.length ? selectedArgs : undefined }
+      command = buildEngineCommandArgv(engine, selected)
+      return buildEngineLaunchArgv(engine, selected)
+    }
+    const argv = held ? windowsArgv! : prepareCommand
     const result = await createAndRegisterPane({
       current: dispatchCurrent, agentId: forkId, ...(built.overrides.native ? { nativeToken: built.overrides.native.token } : {}),
       tmuxBackend: createBackend,
@@ -194,9 +210,9 @@ export function createAgentForker({
       engine,
       cwd: source.cwd,
       sessionLabel: label,
-      argv: launchAttempts(argv, () => buildEngineLaunchArgv(engine, launchOptions)),
+      argv: launchAttempts(argv, prepareCommand),
       // Windows: the workspace to start in and the shell the pane becomes after the engine (lib/windows/engineStart.ts).
-      paneLaunch: windowsPaneLaunch(engine, { ...launchOptions, held: isWindowsHeldPane(argv) }),
+      paneLaunch: windowsPaneLaunch(engine, { ...launchOptions, held }),
       // The SCM's environment last, after the harness context's, as at create and relaunch.
       // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).
       env: mergedLaunchEnv(mergedLaunchEnv(mergedLaunchEnv(Object.keys(built.overrides.env).length ? built.overrides.env : undefined, dshEnv),
@@ -232,7 +248,7 @@ export function createAgentForker({
     if (source.sessionId) pendingForkInherit.set(pending.agentId, source.sessionId)
     announceSession(pending)
     attach(pending)
-    void watchNewPane(engine, pending, spawned, command, installIfMissing)
+    void watchNewPane(engine, pending, spawned, command, built.overrides.native?.executable)
     console.log(`[agent] fork pane open · ${engine} · ${plan.level} · ${source.agentId} → ${pending.agentId}`)
     return { ok: true, session: pending, level: plan.level }
     } }

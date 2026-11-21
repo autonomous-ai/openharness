@@ -290,7 +290,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     for (const [key, value] of variables) args.push('-e', `${key}=${value}`)
     // Trailing args after this point become the session's shell-command. tmux execs them directly
     // (no shell interposed) when given as separate argv elements, so no quoting/escaping is needed.
-    if (request.command?.length) args.push(...this.ownedCommand(features, owner, request.command))
+    const commandAt = args.length, initialCommand = typeof request.command === 'function' ? request.command : request.command && [...request.command]
     // Pane options where tmux has them, so these go with the pane wherever the person moves it and never
     // change the rest of a window of theirs; the agent's own new window before tmux 3.0.
     const scope = paneOptionScope(features)
@@ -320,10 +320,17 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     // attaches (tmuxControlGate.ts).
     const result = await inTmuxRoom('notify', async (): Promise<{ error: ExecError | null; stdout: string; stderr: string }> => {
       if (request.current?.() === false) return { error: Object.assign(new Error('The harness changed before pane dispatch'), { code: 'HARNESS_CANCELLED' }), stdout: '', stderr: '' }
-      try { const prepared = request.onDispatch?.(); if (prepared) await prepared }
+      let command: string[] | undefined
+      try {
+        const pending = request.onDispatch?.()
+        if (pending) await pending
+        if (request.current?.() === false) throw new Error('The harness changed before pane dispatch')
+        command = typeof initialCommand === 'function' ? initialCommand() : initialCommand
+      }
       catch (error) { return { error: Object.assign(error instanceof Error ? error : new Error('Pane dispatch could not be committed'), { code: 'HARNESS_CANCELLED' }), stdout: '', stderr: '' } }
       return new Promise<{ error: ExecError | null; stdout: string; stderr: string }>((resolve) => {
       if (request.current?.() === false) { resolve({ error: Object.assign(new Error('The harness changed before pane dispatch'), { code: 'HARNESS_CANCELLED' }), stdout: '', stderr: '' }); return }
+      if (command?.length) args.splice(commandAt, 0, ...this.ownedCommand(features, owner, command))
       const done: ExecDone = (error, stdout, stderr) => resolve({ error: error as ExecError | null, stdout, stderr })
       if (variables.length) runScript(args, 5_000, done)
       else run('tmux', args, { timeout: 5_000 }, done)
@@ -399,18 +406,26 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     if (request.cwd) args.push('-c', request.cwd)
     for (const [key, value] of variables) args.push('-e', `${key}=${value}`)
     // A respawn replaces the pane's start command, which carries its tag before tmux 3.0 (`create`).
-    args.push('-t', runtime.paneId, ...this.ownedCommand(features, this.owner(), request.command))
-    const commands = [...setup, args]
+    args.push('-t', runtime.paneId)
+    const owner = this.owner()
+    const initialCommand = typeof request.command === 'function' ? request.command : [...request.command]
+    let selected: string[]
     if (request.expectedHeldToken && !/^[a-f0-9-]{36}$/.test(request.expectedHeldToken)) return terminalActionNotStarted('invalid waiting pane identity')
-    const command = request.expectedHeldToken
-      ? ['if-shell', '-F', '-t', runtime.paneId, heldPaneFormat(request.expectedHeldToken),
-        commands.map(parts => parts.map(tmuxWord).join(' ')).join('; '), 'display-message -p adoption-mismatch']
-      : commands.flatMap((parts, index) => index ? [';', ...parts] : parts)
     if (request.current?.() === false) return terminalActionNotStarted('The harness changed before pane dispatch')
-    try { const prepared = request.onDispatch?.(); if (prepared) await prepared }
+    try {
+      const pending = request.onDispatch?.()
+      if (pending) await pending
+      if (request.current?.() === false) return terminalActionNotStarted('The harness changed before pane dispatch')
+      selected = typeof initialCommand === 'function' ? initialCommand() : initialCommand
+    }
     catch (error) { return terminalActionNotStarted(error instanceof Error ? error.message : 'Pane dispatch could not be committed') }
     const result = await new Promise<{ error: NodeJS.ErrnoException | null; stderr: string }>((resolve) => {
       if (request.current?.() === false) { resolve({ error: Object.assign(new Error('The harness changed before pane dispatch'), { code: 'HARNESS_CANCELLED' }), stderr: '' }); return }
+      const commands = [...setup, [...args, ...this.ownedCommand(features, owner, selected)]]
+      const command = request.expectedHeldToken
+        ? ['if-shell', '-F', '-t', runtime.paneId, heldPaneFormat(request.expectedHeldToken),
+          commands.map(parts => parts.map(tmuxWord).join(' ')).join('; '), 'display-message -p adoption-mismatch']
+        : commands.flatMap((parts, index) => index ? [';', ...parts] : parts)
       const done: ExecDone = (error, stdout, stderr) => resolve({
         error: stdout.trim() === 'adoption-mismatch' ? Object.assign(new Error('The waiting pane changed'), { code: 'HARNESS_CANCELLED' }) : error as NodeJS.ErrnoException | null,
         stderr,

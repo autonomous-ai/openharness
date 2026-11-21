@@ -6,10 +6,12 @@
  */
 import type { ApiConnections } from '../lib/apiConnections.js'
 import { refreshApiFor } from '../lib/apiModels.js'
-import { answerGridLaunch } from '../lib/gridLaunch.js'
+import { answerSelectedGridLaunch } from '../lib/gridLaunch.js'
+import { sessionStorage } from '../lib/sessionStorage.js'
 import type { GridLaunchAnswer, GridLaunchOverride, GridLaunchRequest } from '../lib/gridLaunchWire.js'
+import { fixtureGridOverride } from './gridCredentials.js'
 
 export function gridLaunchInProcess(savedApis?: ApiConnections): (request: GridLaunchRequest) => Promise<GridLaunchAnswer> {
   const refresh = savedApis ? refreshApiFor(savedApis) : (override: GridLaunchOverride) => ({ override })
-  return async (request) => answerGridLaunch(request, refresh)
+  return async (request) => answerSelectedGridLaunch(request, refresh, async reference => fixtureGridOverride(reference) ?? sessionStorage.resolveSelected(reference))
 }

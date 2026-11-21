@@ -11,7 +11,7 @@ import { ownProcessGroup } from '../src/lib/windows/noWindow.js'
 const directory = mkdtempSync(join(tmpdir(), 'registry-profile-'))
 for (const key of ['ADAPTER_DATA_DIR', 'CLAUDE_PROJECTS_DIR', 'CODEX_HOME', 'CURSOR_HOME']) process.env[key] = directory
 const { registry } = await import('../src/lib/registry.js')
-registry.load()
+await registry.load()
 const samples: Record<string, unknown>[] = []
 const sample = async (name: string, work: () => unknown) => {
   const start = performance.now(), cpu = process.cpuUsage()

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { bridgeKey, bridgePort, bridgeSocketPath, harnessKey, readBridgePipe, saveBridgePort } from '../lib/connectors/agents.js'
 import { randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { request as httpRequest } from 'node:http'
 import { connect, createServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -132,47 +132,66 @@ describe('the connectors service', () => {
     // Signed out, the gateway's list is empty and nothing reaches the network.
     // The core is signed in to the account, so a connection made here is shared with its computers.
     expect(await requests.connectors!({ action: 'list' }, OWNER)).toMatchObject({ signed_in: false, shared: true })
-    expect(await startConnectors(fakeCore(), emptyPorts(), { env, vaultPort: null }).connectors!({ action: 'list' }, OWNER))
+    expect(await startConnectors(fakeCore(), emptyPorts(), { env, connectorSync: null }).connectors!({ action: 'list' }, OWNER))
       .toMatchObject({ shared: false })
   })
 
-  it('keeps the connections the account\'s when signed in: reads them now and again at each notice that may change them', async () => {
-    const backend = vi.fn(async (_method: string, _path: string) => ({ status: 200, body: { success: true, data: { revision: 0, envelope: null } } }))
-    let hear: (notice: BackendNotice) => void = () => {}
-    const core = fakeCore({ account: { backend, onNotice: vi.fn((listener: (notice: BackendNotice) => void) => { hear = listener; return () => {} }) } as never })
-    startConnectors(core, emptyPorts(), { env, port: 0 })
-    await vi.waitFor(() => expect(backend).toHaveBeenCalledWith('GET', '/api/connector-vault'))
-    const reads = () => backend.mock.calls.filter(([, path]) => path === '/api/connector-vault').length
-    const before = reads()
-    hear({ type: 'connectors_changed', revision: 4 })
-    await vi.waitFor(() => expect(reads()).toBe(before + 1))
-    hear({ type: 'device_keys_changed' })
-    await vi.waitFor(() => expect(reads()).toBe(before + 2))
-    hear({ type: 'desk_changed', revision: 1 })
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(reads()).toBe(before + 2)
-  })
-
-  it('exchanges the account\'s connections before a Refresh lists them, and lists at once without one', async () => {
-    const backend = vi.fn(async (_method: string, _path: string) => ({ status: 200, body: { success: true, data: { revision: 0, envelope: null } } }))
-    const requests = startConnectors(fakeCore({ account: { backend } as never }), emptyPorts(), { env, port: 0 })
-    await vi.waitFor(() => expect(backend).toHaveBeenCalledWith('GET', '/api/connector-vault'))
-    const reads = () => backend.mock.calls.filter(([, path]) => path === '/api/connector-vault').length
-    const before = reads()
-    await requests.connectors!({ action: 'list' }, OWNER)
-    expect(reads()).toBe(before)
-    expect(await requests.connectors!({ action: 'list', sync: true }, OWNER)).toMatchObject({ shared: true })
-    expect(reads()).toBe(before + 1)
-    // Kept to this computer: nothing to exchange, the list all the same.
-    expect(await startConnectors(fakeCore(), emptyPorts(), { env, vaultPort: null }).connectors!({ action: 'list', sync: true }, OWNER))
+  it('requests only status for lists and waits for an explicit gateway refresh', async () => {
+    let finish!: () => void
+    const pending = new Promise<void>(resolve => { finish = resolve })
+    const connectorSync = vi.fn(async (refresh: boolean) => { if (refresh) await pending; return { shared: true } })
+    const core = fakeCore({ account: { connectorSync } } as never)
+    const requests = startConnectors(core, emptyPorts(), { env, port: 0 })
+    expect(await requests.connectors!({ action: 'list' }, OWNER)).toMatchObject({ shared: true })
+    expect(connectorSync).toHaveBeenCalledWith(false)
+    let done = false
+    const refresh = Promise.resolve(requests.connectors!({ action: 'list', sync: true }, OWNER)).then(answer => { done = true; return answer })
+    expect(connectorSync).toHaveBeenLastCalledWith(true)
+    expect(done).toBe(false)
+    finish()
+    expect(await refresh).toMatchObject({ shared: true })
+    expect(core.account.backend).not.toHaveBeenCalled()
+    connectorSync.mockRejectedValueOnce(new Error('synthetic-private-error'))
+    expect(await requests.connectors!({ action: 'list', sync: true }, OWNER)).toEqual({ error: 'CONNECTORS_FAILED', detail: 'Connections could not sync. Try again.' })
+    connectorSync.mockRejectedValueOnce(new Error('offline'))
+    expect(await requests.connectors!({ action: 'list' }, OWNER)).toMatchObject({ shared: false })
+    expect(await startConnectors(fakeCore(), emptyPorts(), { env, connectorSync: null }).connectors!({ action: 'list', sync: true }, OWNER))
       .toMatchObject({ shared: false })
   })
 
   it('keeps them on this computer alone while signed out', async () => {
     const backend = vi.fn(async () => ({ status: 200, body: {} }))
-    startConnectors(fakeCore({ account: { backend, signedIn: () => false } as never }), emptyPorts(), { env, port: 0 })
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    const requests = startConnectors(fakeCore({ account: { backend, signedIn: () => false } as never }), emptyPorts(), { env, port: 0 })
+    expect(await requests.connectors({ action: 'list', sync: true }, OWNER)).toMatchObject({ shared: false })
     expect(backend).not.toHaveBeenCalled()
+  })
+
+  it('projects gateway metadata notices only when the usable tool set changes and retries a failed read', () => {
+    let notice!: (value: BackendNotice) => void
+    const core = fakeCore({ account: { onNotice: (listener: typeof notice) => { notice = listener; return () => {} } } } as never)
+    const vault = new Store(join(home, 'store'), env)
+    const config = join(home, '.claude.json')
+    writeFileSync(config, '{}')
+    startConnectors(core, emptyPorts(), { env, vault, port: 0 })
+    const token = { access_token: 'synthetic', source: 'custom' as const, mcp_entry: { url: 'https://synthetic.example/mcp', headers: {} } }
+    vault.save('linear', token)
+    notice({ type: 'machines_changed', reason: 'fixture' })
+    expect(JSON.parse(readFileSync(config, 'utf8')).mcpServers).toBeUndefined()
+    vi.spyOn(vault, 'tokens').mockImplementationOnce(() => { throw new Error('temporary fixture read failure') })
+    notice({ type: 'connectors_changed', revision: 1 })
+    expect(JSON.parse(readFileSync(config, 'utf8')).mcpServers).toBeUndefined()
+    notice({ type: 'connectors_changed', revision: 1 })
+    expect(JSON.parse(readFileSync(config, 'utf8')).mcpServers.linear).toBeDefined()
+    const projected = statSync(join(vault.root, 'projections.json')).ino
+    vault.save('linear', { ...token, access_token: 'synthetic-renewed' })
+    notice({ type: 'connectors_changed', revision: 2 })
+    expect(statSync(join(vault.root, 'projections.json')).ino).toBe(projected)
+    vault.save('account_only', { source: 'custom', access_token: 'synthetic-api', api_entry: { origin: 'https://synthetic.example' } })
+    notice({ type: 'connectors_changed', revision: 3 })
+    expect(statSync(join(vault.root, 'projections.json')).ino).toBe(projected)
+    vault.disconnect('linear')
+    notice({ type: 'connectors_changed', revision: 4 })
+    expect(JSON.parse(readFileSync(config, 'utf8')).mcpServers?.linear).toBeUndefined()
   })
 
   it('reads this process\'s environment when given none', () => {
@@ -390,7 +409,7 @@ describe('the connectors service', () => {
       const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
       // The default try every 5 s, as the daemon runs it.
-      startConnectors(fakeCore(), emptyPorts(), { vault, env: free, offered: async () => ({}), vaultPort: null, holderIsMine })
+      startConnectors(fakeCore(), emptyPorts(), { vault, env: free, offered: async () => ({}), connectorSync: null, holderIsMine })
       const told = (text: string) => said.mock.calls.flat().join('\n').split(text).length - 1
       const savedPort = () => bridgePort(free, new Store(join(home, 'store'), free))
       return { holder, taken, said, told, savedPort }
@@ -502,7 +521,7 @@ describe('the connectors service', () => {
       mkdirSync(vault.root, { recursive: true, mode: 0o700 })
       writeFileSync(join(vault.root, 'harness-key.json'), JSON.stringify({ key: 'harness-key-placeholder' }), { mode: 0o600 })
       const agentKey = bridgeKey(vault)
-      const port = await startedOnAnyPort({ vault, env, offered: async () => ({}), retryMs: 20, vaultPort: null })
+      const port = await startedOnAnyPort({ vault, env, offered: async () => ({}), retryMs: 20, connectorSync: null })
       expect(vault.file('bridge.json').key).toBe(agentKey)
       expect(vault.file('bridge.json').keyRetiresAt).toBeUndefined()
       expect(vault.file('harness-key.json').key).toBe('harness-key-placeholder')
@@ -519,7 +538,7 @@ describe('the connectors service', () => {
     it('with neither key on file, refuses everyone, an empty key included', async () => {
       const vault = longVault()
       const agentKey = bridgeKey(vault)
-      const port = await startedOnAnyPort({ vault, env, offered: async () => ({}), retryMs: 20, vaultPort: null })
+      const port = await startedOnAnyPort({ vault, env, offered: async () => ({}), retryMs: 20, connectorSync: null })
       rmSync(join(vault.root, 'bridge.json'), { force: true })
       rmSync(join(vault.root, 'harness-key.json'), { force: true })
       expect(await status(port, '/x/connections')).toBe(404)
@@ -538,7 +557,7 @@ describe('the connectors service', () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
       let asked = 0
       try {
-        startConnectors(fakeCore(), emptyPorts(), { vault, env: free, offered: async () => ({}), vaultPort: null, holderIsMine: async () => { asked++; return true } })
+        startConnectors(fakeCore(), emptyPorts(), { vault, env: free, offered: async () => ({}), connectorSync: null, holderIsMine: async () => { asked++; return true } })
         await vi.advanceTimersByTimeAsync(3_600_000)
         expect(asked).toBeGreaterThanOrEqual(700)
       } finally {
@@ -558,7 +577,7 @@ describe('the connectors service', () => {
     const behindLink = JSON.stringify({ key: 'k'.repeat(40) })
     writeFileSync(join(elsewhere, 'bridge.json'), behindLink, { mode: 0o600 })
     symlinkSync(elsewhere, root)
-    const port = await startedOnAnyPort({ vault: new Store(root, env), env, offered: async () => ({}), retryMs: 20, vaultPort: null })
+    const port = await startedOnAnyPort({ vault: new Store(root, env), env, offered: async () => ({}), retryMs: 20, connectorSync: null })
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('could not replace Harness\'s key'))
     let answer = ''
     for (let n = 0; n < 40 && !answer; n++) {
@@ -578,7 +597,7 @@ describe('the connectors service', () => {
       // It hangs up on each probe of the service's (localSocket.ts refuseLiveSocket), so close() waits on none.
       const holder = createServer(socket => socket.destroy())
       await new Promise<void>(resolve => holder.listen(path, resolve))
-      startConnectors(fakeCore(), emptyPorts(), { vault, env, port: 0, offered: async () => ({}), retryMs: 10, vaultPort: null })
+      startConnectors(fakeCore(), emptyPorts(), { vault, env, port: 0, offered: async () => ({}), retryMs: 10, connectorSync: null })
       const said = () => warn.mock.calls.filter(([line]) => String(line).includes('socket is not listening'))
       await vi.waitFor(() => expect(vi.mocked(serveBridgeSocket).mock.calls.length).toBeGreaterThanOrEqual(3))
       expect(said()).toHaveLength(1)
@@ -596,7 +615,7 @@ describe('the connectors service', () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       vi.mocked(serveBridgeSocket).mockRejectedValueOnce('a plain reason')
       const vault = new Store(join(shortHome(), 'p'), env), path = join(vault.root, 'bridge.sock')
-      startConnectors(fakeCore(), emptyPorts(), { vault, env, port: 0, offered: async () => ({}), retryMs: 10, vaultPort: null })
+      startConnectors(fakeCore(), emptyPorts(), { vault, env, port: 0, offered: async () => ({}), retryMs: 10, connectorSync: null })
       await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining('trying again: string')))
       // Its retry goes on and listens: waited for, or it would make the folder again after this test's cleanup.
       await vi.waitFor(() => new Promise<void>((resolve, reject) => { const client = connect(path, () => { client.destroy(); resolve() }); client.once('error', reject) }))

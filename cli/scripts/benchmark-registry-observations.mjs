@@ -36,7 +36,7 @@ if (process.argv[2] === '--worker') {
   syncBuiltinESMExports()
   reset()
   const { registry } = await import(pathToFileURL(bundle).href)
-  registry.load()
+  await registry.load()
   const inputs = Array.from({ length: count }, (_, i) => ({
     agentId: `fixture-agent-${i}`, engine: 'claude', tmuxPane: `%${i}`, cwd: '/fixture/project',
     processIdentity: { pid: 10000 + i, executable: '/fixture/claude', startMarker: `fixture-${i}` },

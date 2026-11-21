@@ -14,6 +14,7 @@
  * does, so it is opt-in: `DISKFULL=1 npm run test:e2e -- updateHostile`.
  */
 import { execFileSync } from 'node:child_process'
+import { daemonOwnsProcesses } from './harness/daemonOwnership.js'
 import { createHash } from 'node:crypto'
 import {
   existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, truncateSync, writeFileSync,
@@ -26,6 +27,7 @@ import { LocalClient, type Frame } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { atVersion, withFault } from './harness/release.js'
 import { fillVolume } from './harness/fullDisk.js'
+import { readLeanBundle } from '../src/harnessd/leanBundle.js'
 
 const FIRST = '43.0.1'
 const DISKFULL = process.env.DISKFULL === '1' && process.platform === 'darwin'
@@ -215,7 +217,11 @@ class Installed {
         ...env,
       },
     })
-    await this.daemon.start()
+    try { await this.daemon.start() }
+    catch (cause) {
+      // Suite setup has no active test artifact directory. Keep its boot evidence before afterAll removes the home.
+      throw new Error(`Installed test daemon did not start:\n${this.daemon.log().slice(-12_000)}`, { cause })
+    }
     expect(await this.status()).toMatchObject({ version: first, harnessd: { masterVersion: first } })
     const client = await LocalClient.connect(this.daemon)
     try {
@@ -304,9 +310,7 @@ class Installed {
   /** The master, one core and its services as the master's children, and nothing else running this install: no orphan, no probe left. */
   async nothingOrphaned(): Promise<void> {
     const master = this.daemon.pid!
-    const own = (one: { pid: number; ppid: number; command: string }) =>
-      one.pid === master || (one.ppid === master && / __(?:run|service \S+)$/.test(one.command))
-    await until('only the master and its own children', () => this.daemonProcesses().every(own), 15_000, 200)
+    await until('only the master, its children and the core’s storage child', () => daemonOwnsProcesses(this.daemonProcesses(), master), 15_000, 200)
     expect(this.daemonProcesses().filter((one) => one.command.endsWith(' __run'))).toHaveLength(1)
   }
 
@@ -507,6 +511,8 @@ describe.skipIf(!DISKFULL)('an update on a disk that fills', () => {
   let volume = ''
   let machine: Installed
   const filler = () => join(volume, 'filler')
+  const crashing = () => join(scratch, 'crashing-core')
+  const crashNow = () => join(scratch, 'crash-now')
   const lock = () => join(machine.daemon.dataDir, 'adapter.spawn.lock')
 
   /** Gives back this much room. */
@@ -526,21 +532,34 @@ describe.skipIf(!DISKFULL)('an update on a disk that fills', () => {
   const releaseLock = (): void => { rmSync(lock(), { recursive: true, force: true }) }
 
   beforeAll(async () => {
-    for (let patch = 1; patch <= 5; patch++) releases.add(`44.0.${patch}`, patch === 5 ? CRASHES_AS_A_CORE : '')
+    // Reach the selected candidate before filling: a refused preparation cannot establish a bad core.
+    const gatedCrash = `if(process.argv[2]==="__run"){const f=await import('node:fs');f.writeFileSync(process.env.HARNESS_E2E_CRASHING_CORE,String(process.pid));const end=setTimeout(()=>process.exit(78),60000);await new Promise(r=>{const t=setInterval(()=>{if(f.existsSync(process.env.HARNESS_E2E_CRASH_NOW)){clearInterval(t);clearTimeout(end);r()}},20)});process.exit(3)}`
+    for (let patch = 1; patch <= 5; patch++) releases.add(`44.0.${patch}`, patch === 5 ? gatedCrash : '')
     // Short names: the daemon's socket lives in the data folder, and a Unix socket's path has a
     // 104-byte limit on macOS that a long temporary folder alone nearly uses up.
     scratch = mkdtempSync(join(tmpdir(), 'hu-'))
     volume = join(scratch, 'v')
     mkdirSync(volume)
     const image = join(scratch, 'u.dmg')
-    execFileSync('hdiutil', ['create', '-size', '96m', '-fs', 'HFS+', '-volname', 'hutest', '-type', 'UDIF', image], { stdio: 'pipe' })
+    // Keep every fixture release within the one-minute cleanup grace. Each immutable image carries
+    // the full CLI plus its decoded lean files, and reexec keeps a separate lean master image.
+    // The install also needs current/backup/canary files. A measured five-release run missed
+    // the per-release master images (13.75 MiB each), exhausting the fixture before deliberate filling.
+    const block = (bytes: number) => Math.ceil(bytes / 4096) * 4096
+    const layouts = [...releases.cli.values()].map(bytes => ({ full: block(bytes.length),
+      lean: [...readLeanBundle(bytes)!.files.values()].reduce((sum, file) => sum + block(file.length), 0) }))
+    const payloads = layouts.reduce((sum, layout) => sum + layout.full + 2 * layout.lean, 0)
+    const installed = 3 * Math.max(...layouts.map(layout => layout.full))
+    // 16 MiB covers HFS+ journal/metadata and the small mutable daemon state, before deliberate ENOSPC.
+    const sizeMiB = Math.ceil((payloads + installed) / (1024 * 1024)) + 16
+    execFileSync('hdiutil', ['create', '-size', `${sizeMiB}m`, '-fs', 'HFS+', '-volname', 'hutest', '-type', 'UDIF', image], { stdio: 'pipe' })
     execFileSync('hdiutil', ['attach', image, '-mountpoint', volume, '-nobrowse', '-noverify', '-noautoopen'], { stdio: 'pipe' })
     server = new UpdateServer(releases, '44.0.1')
     await server.start()
     machine = new Installed(releases, server, join(volume, 'c'))
     const data = join(volume, 'd')
     mkdirSync(data)
-    await machine.boot('44.0.1', data)
+    await machine.boot('44.0.1', data, { HARNESS_E2E_CRASHING_CORE: crashing(), HARNESS_E2E_CRASH_NOW: crashNow() })
   }, 300_000)
 
   // A scenario that fails part way must not leave the next one a full disk or a held lock.
@@ -616,7 +635,7 @@ describe.skipIf(!DISKFULL)('an update on a disk that fills', () => {
     // room the core starts and the update simply stays up, which is right and is not this test (a slow macOS
     // runner, 2026-10-12).
     await until('the master to try the new bundle again for want of room', () => { fillVolume(volume); return count(machine.log().slice(from), 'had no room to start') >= 2 }, 150_000, 100)
-    expect(machine.log().slice(from)).toMatch(/could not start on the new bundle for want of room on the disk \([^\n]*ENOSPC/)
+    expect(machine.log().slice(from)).toMatch(/worker_artifact_storage_unavailable|could not start on the new bundle for want of room on the disk \([^\n]*ENOSPC/)
     expect(machine.log().slice(from)).not.toContain('the updated core failed')
     expect(IsolatedDaemon.alive(master), 'the master outlives a full disk in the middle of an update').toBe(true)
     machine.holds('44.0.4')
@@ -632,8 +651,12 @@ describe.skipIf(!DISKFULL)('an update on a disk that fills', () => {
     const before = (await machine.version())!
     const rejectedBefore = machine.rejected()
     server.offer = { version: '44.0.5' }
-    await until('the core to stage 44.0.5', () => machine.log().slice(from).includes('[update] staged 44.0.5'), 90_000, 50)
+    await until('the prepared 44.0.5 core to reach its crash gate', () => existsSync(crashing()) || null, 90_000, 50)
+    const candidate = Number(readFileSync(crashing(), 'utf8'))
+    expect(IsolatedDaemon.alive(candidate)).toBe(true)
     fillVolume(volume)
+    // This gate lives outside the full volume; its release permits the already-running core to fail.
+    writeFileSync(crashNow(), '')
     await until('the rollback', () => machine.log().slice(from).includes('the updated core failed (code 3) — rolled back'), 150_000)
     await until(`the core back on ${before}`, async () => (await machine.version()) === before, 150_000, 250)
     unfill()

@@ -27,7 +27,7 @@ const settle = () => new Promise((resolve) => setImmediate(resolve))
 
 function setup(live: RegisteredSession[] = [], all: RegisteredSession[] = live, current: RegisteredSession | null = live[0] ?? null) {
   const core = fakeCore({
-    agents: { live: vi.fn(() => live), all: vi.fn(() => all), byAgent: vi.fn(() => current ?? undefined), sync: vi.fn() },
+    agents: { live: vi.fn(() => live), all: vi.fn(async () => all), byAgent: vi.fn(() => current ?? undefined), sync: vi.fn() },
   })
   const ports = emptyPorts()
   startWorkspaces(core, ports)
@@ -96,10 +96,16 @@ describe('the workspaces service', () => {
     })
   })
 
+  it('stopping workspaces refuses later instruction preparation', async () => {
+    const { port } = setup()
+    port.stop()
+    expect(await port.prepareInstructions('/work', 'claude')).toBe(false)
+  })
+
   // #4166: it swept clean, week-idle worktrees twice a day when the core said, the ones their person chose to keep too.
   it('removes no worktree on its own: only a purge the core asks for removes one', () => {
     const { core, port } = setup([agent({ cwd: '/h/live' })])
-    expect(Object.keys(port)).toEqual(['stop', 'nameBranches', 'ready', 'prepareFolder', 'describeWorkspace', 'reviewWorktree', 'removeWorktree'])
+    expect(Object.keys(port)).toEqual(['stop', 'nameBranches', 'ready', 'prepareFolder', 'prepareInstructions', 'describeWorkspace', 'reviewWorktree', 'removeWorktree'])
     expect(core.agents.all).not.toHaveBeenCalled()
     expect(worktrees.removeWorktree).not.toHaveBeenCalled()
   })

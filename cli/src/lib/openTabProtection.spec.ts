@@ -24,9 +24,24 @@ it('keeps another window’s tabs when one window disconnects', async () => {
   guard.updateWindow('two', null)
   await expect(guard.assertHidden(session('companion'))).resolves.toBeUndefined()
 })
+it('refuses cleanup while a local roster is unknown and preserves other windows when it settles', async () => {
+  const { guard } = fixture()
+  guard.updateWindow('known', ['companion'])
+  guard.pendingWindow('loading', true)
+  await expect(guard.assertHidden(session('hidden'))).rejects.toMatchObject({ code: 'TABS_UNAVAILABLE' })
+  expect(() => guard.isHidden(session('hidden'))).toThrow('Could not check your open tabs')
+  guard.updateWindow('loading', ['background'])
+  guard.pendingWindow('loading', false)
+  await expect(guard.assertHidden(session('background'))).rejects.toMatchObject({ code: 'SESSION_IN_TAB' })
+  guard.pendingWindow('closing', true); guard.pendingWindow('closing', false)
+  await expect(guard.assertHidden(session('companion'))).rejects.toMatchObject({ code: 'SESSION_IN_TAB' })
+  await expect(guard.assertHidden(session('hidden'))).resolves.toBeUndefined()
+})
 it.each([
   { status: 503, body: {} },
   { status: 200, body: { success: true, data: {} } },
+  { status: 200, body: { success: true, data: { revision: 2, tabs: [null] } } },
+  { status: 200, body: { success: true, data: { revision: 2, tabs: [{}] } } },
   { status: 200, body: { success: true, data: { revision: 2, tabs: [{ panes: [{}] }] } } },
 ])('refuses cleanup when the shared workspace cannot be read completely', async reply => {
   const { guard, setReply } = fixture(); setReply(reply)

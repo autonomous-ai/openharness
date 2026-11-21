@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
-import { emptyPorts, WORKSPACES_FALLBACKS, WORKSPACES_OFF, type CorePorts, type SearchPort, type ViewersPort, type WorkspacesPort } from './api.js'
-import { createServiceHost, FAIL, later, ServiceUnavailableError, testFaults, type PortFallbacks } from './serviceHost.js'
+import { emptyPorts, WORKSPACES_FALLBACKS, WORKSPACES_OFF, type CoreApi, type CorePorts, type WifiPort, type SearchPort, type ViewersPort, type WorkspacesPort } from './api.js'
+import { FAIL, later, ServiceUnavailableError, testFaults, type PortFallbacks } from './serviceHost.js'
+import { createServiceHost } from '../services/inlineHost.js'
 
 // A port whose members cover every shape: sync and async, value and FAIL fallbacks, a stop.
 class FakeSearch {
@@ -23,7 +24,7 @@ const SEARCH = {
 const testPort = (h: { ports: CorePorts }): TestPort => h.ports.search as unknown as TestPort
 const VIEWERS: PortFallbacks<ViewersPort> = {
   forwardingUrl: null, stop: later(undefined),
-  stream: false, surface: later({}), closed: undefined,
+  surface: later({}),
 }
 /** The viewer streams' members, which these tests never call. */
 const STREAMS = { stream: vi.fn(() => true), surface: vi.fn(async () => ({})), closed: vi.fn() }
@@ -42,6 +43,217 @@ function startSearch(h: ReturnType<typeof host>, port: Partial<TestPort> = new F
 
 describe('hosting services so one that fails cannot take the core down', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
+
+  it('revokes an inline window sender before stop and never revives it for a new instance with the same service name', async () => {
+    const h = host(), sendWindow = vi.fn(() => true)
+    const core = fakeCore({ clients: { sendWindow } })
+    const captured: CoreApi[] = []
+    const seenAtStop: boolean[] = []
+    const delivery = { target: { kind: 'first' as const }, frame: { type: 'device_focus', payload: {} } }
+    const start = (owned: CoreApi, ports: CorePorts): void => {
+      captured.push(owned)
+      ports.wifi = { stop: async () => { seenAtStop.push(owned.clients.sendWindow(delivery)) } } as WifiPort
+    }
+    const fallback = { stop: later(undefined) } as PortFallbacks<WifiPort>
+    h.services.start('wifi', start, core, fallback)
+    expect(captured[0].clients.sendWindow(delivery)).toBe(true)
+    const oldPort = h.ports.wifi!
+    await oldPort.stop()
+    expect(seenAtStop).toEqual([false])
+    expect(captured[0].clients.sendWindow(delivery)).toBe(false)
+    h.services.start('wifi', start, core, fallback)
+    expect(captured[0].clients.sendWindow(delivery)).toBe(false)
+    await oldPort.stop() // A late stop from the old instance cannot revoke its replacement.
+    expect(captured[1].clients.sendWindow(delivery)).toBe(true)
+    await h.ports.wifi!.stop()
+    expect(seenAtStop).toEqual([false, false, false])
+    expect(sendWindow).toHaveBeenCalledTimes(2)
+  })
+
+  it.each(['throw', 'no-port', 'bad-answers', 'no-stop'] as const)('revokes window delivery from an incomplete inline start: %s', mode => {
+    const h = host(), sendWindow = vi.fn(() => true), core = fakeCore({ clients: { sendWindow } })
+    const delivery = { target: { kind: 'first' as const }, frame: { type: 'device_focus', payload: {} } }
+    let retained!: CoreApi
+    h.services.start('wifi', (owned, ports) => {
+      retained = owned
+      expect(owned.clients.sendWindow(delivery)).toBe(true)
+      if (mode === 'throw') throw new Error('startup failed')
+      if (mode !== 'no-port') ports.wifi = (mode === 'no-stop' ? {} : { stop: async () => {} }) as WifiPort
+      if (mode === 'bad-answers') return { undeclared: () => ({}) }
+    }, core, { stop: later(undefined) } as PortFallbacks<WifiPort>)
+    expect(retained.clients.sendWindow(delivery)).toBe(false)
+    expect(sendWindow).toHaveBeenCalledOnce()
+  })
+
+  it('revokes the inline sender before a failure stop and leaves it off during later startup', async () => {
+    const h = host({ maxFailures: 1 }), sendWindow = vi.fn(() => true), core = fakeCore({ clients: { sendWindow } })
+    const delivery = { target: { kind: 'first' as const }, frame: { type: 'device_focus', payload: {} } }
+    let retained!: CoreApi
+    const stopped = vi.fn()
+    h.services.start('wifi', (owned, ports) => {
+      retained = owned
+      ports.wifi = { stop: async () => { stopped(owned.clients.sendWindow(delivery)); throw new Error('stop failed') } } as unknown as WifiPort
+      return { fail: () => { throw new Error('handler failed') } }
+    }, core, { stop: later(undefined) } as PortFallbacks<WifiPort>, ['fail'])
+    expect(retained.clients.sendWindow(delivery)).toBe(true)
+    h.services.route('fail', {}, { local: true, owner: true }, vi.fn())
+    expect(stopped).toHaveBeenCalledExactlyOnceWith(false)
+    expect(retained.clients.sendWindow(delivery)).toBe(false)
+    h.services.start('wifi', (owned, ports) => {
+      expect(owned.clients.sendWindow(delivery)).toBe(false)
+      ports.wifi = { stop: async () => {} } as WifiPort
+    }, core, { stop: later(undefined) } as PortFallbacks<WifiPort>)
+    expect(sendWindow).toHaveBeenCalledOnce()
+    await Promise.resolve()
+  })
+
+  it('retains failure-stop revocation when no stop member is exposed to core callers', () => {
+    const h = host({ maxFailures: 1 }), core = fakeCore(), real = new FakeSearch()
+    const delivery = { target: { kind: 'all' as const }, frame: { type: 'dial_status', payload: {} } }
+    let retained!: CoreApi
+    h.services.start('search', (owned, ports) => {
+      retained = owned; ports.search = real
+      return { fail: () => { throw new Error('failed') } }
+    }, core, { touch: undefined } as PortFallbacks<SearchPort>, ['fail'])
+    expect(h.ports.search).not.toHaveProperty('stop')
+    expect(retained.clients.sendWindow(delivery)).toBe(true)
+    h.services.route('fail', {}, { local: true, owner: true }, vi.fn())
+    expect(retained.clients.sendWindow(delivery)).toBe(false)
+    expect(real.calls).toEqual(['stop'])
+  })
+
+  describe('bounded inline calls', () => {
+    const asker = { local: true, owner: true }
+    it.each(['route', 'call'] as const)('bounds actual handlers across request types before a deadline through %s', async entry => {
+      vi.useFakeTimers()
+      const h = host(), finish: Array<(value: Record<string, unknown>) => void> = []
+      const handler = vi.fn(() => new Promise<Record<string, unknown>>(resolve => finish.push(resolve)))
+      h.services.serve('bounded', () => ({ first: handler, second: handler }), fakeCore(), ['first', 'second'])
+      const replies: Record<string, unknown>[] = []
+      const ask = (type: string): void => {
+        if (entry === 'route') h.services.route(type, {}, asker, result => replies.push(result))
+        else void h.services.call(type, {}, asker, 1_000).then(result => replies.push(result))
+      }
+      try {
+        for (let n = 0; n < 100; n++) ask(n % 2 ? 'first' : 'second')
+        ask('second')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(handler).toHaveBeenCalledTimes(100)
+        expect(replies).toEqual([{ error: 'SERVICE_UNAVAILABLE', service: 'bounded', retryable: true }])
+        expect(h.lines).toContain('[services] bounded SERVICE_REQUESTS_FULL')
+      } finally {
+        for (const done of finish) done({ ok: true })
+        await vi.advanceTimersByTimeAsync(0)
+      }
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('keeps a second service available while the first owns one hundred actual handlers', async () => {
+      vi.useFakeTimers()
+      const h = host(), finish: Array<(value: Record<string, unknown>) => void> = []
+      const held = vi.fn(() => new Promise<Record<string, unknown>>(resolve => finish.push(resolve)))
+      h.services.serve('bounded', () => ({ hold: held, another: held }), fakeCore(), ['hold', 'another'])
+      h.services.serve('independent', () => ({ read: () => ({ ok: true }) }), fakeCore(), ['read'])
+      try {
+        for (let n = 0; n < 100; n++) h.services.route('hold', {}, asker, () => {})
+        const refused: Record<string, unknown>[] = []
+        h.services.route('another', {}, asker, result => refused.push(result))
+        expect(refused).toEqual([{ error: 'SERVICE_UNAVAILABLE', service: 'bounded', retryable: true }])
+        expect(held).toHaveBeenCalledTimes(100)
+        expect(await h.services.call('read', {}, asker, 1_000)).toEqual({ ok: true })
+      } finally {
+        for (const done of finish) done({ ok: true })
+        await vi.advanceTimersByTimeAsync(0)
+      }
+    })
+
+    it('retains the same service charge after timeout and connection abort until actual settlement', async () => {
+      vi.useFakeTimers()
+      const h = host(), requests: Array<{ signal: AbortSignal; finish(value: Record<string, unknown>): void }> = []
+      const held = vi.fn((_payload, _asker, signal?: AbortSignal) => new Promise<Record<string, unknown>>(finish => requests.push({ signal: signal!, finish })))
+      h.services.serve('bounded', () => ({ timed: held, routed: held, next: held }), fakeCore(), ['timed', 'routed', 'next'])
+      try {
+        const timed = Array.from({ length: 50 }, () => h.services.call('timed', {}, { ...asker, connection: 'window' }, 10))
+        for (let n = 0; n < 50; n++) h.services.route('routed', {}, { ...asker, connection: 'window' }, () => {})
+        await vi.advanceTimersByTimeAsync(10)
+        expect((await Promise.all(timed)).every(result => result.error === 'SERVICE_UNAVAILABLE')).toBe(true)
+        h.services.closeConnection('window')
+        expect(requests.every(request => request.signal.aborted)).toBe(true)
+        const replies: Record<string, unknown>[] = []
+        h.services.route('next', {}, asker, result => replies.push(result))
+        expect(replies).toEqual([{ error: 'SERVICE_UNAVAILABLE', service: 'bounded', retryable: true }])
+        expect(held).toHaveBeenCalledTimes(100)
+        requests[0].finish({ late: true })
+        await vi.advanceTimersByTimeAsync(0)
+        h.services.route('next', {}, asker, result => replies.push(result))
+        expect(held).toHaveBeenCalledTimes(101)
+        h.services.route('next', {}, asker, result => replies.push(result))
+        expect(held).toHaveBeenCalledTimes(101)
+        requests[100].finish({ current: true })
+        await vi.advanceTimersByTimeAsync(0)
+        expect(replies).toEqual([
+          { error: 'SERVICE_UNAVAILABLE', service: 'bounded', retryable: true },
+          { error: 'SERVICE_UNAVAILABLE', service: 'bounded', retryable: true }, { current: true },
+        ])
+      } finally {
+        for (const request of requests) request.finish({ settled: true })
+        await vi.advanceTimersByTimeAsync(0)
+      }
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('answers unavailable and failed calls without leaving a deadline', async () => {
+      vi.useFakeTimers()
+      const h = host()
+      expect(await h.services.call('missing', {}, asker, 15_000)).toMatchObject({ error: 'SERVICE_UNAVAILABLE' })
+      h.services.serve('broken', () => ({ broken: () => { throw new Error('failed') } }), fakeCore(), ['broken'])
+      expect(await h.services.call('broken', {}, asker, 15_000)).toMatchObject({ error: 'SERVICE_FAILED' })
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it.each(['resolve', 'reject'])('revokes a timed-out reply but keeps actual handler admission until late %s', async late => {
+      vi.useFakeTimers()
+      const h = host(), requests: Array<{ signal: AbortSignal; finish(value: Record<string, unknown>): void; fail(error: Error): void }> = []
+      const handler = vi.fn((_payload, _asker, signal?: AbortSignal) => new Promise<Record<string, unknown>>((finish, fail) => requests.push({ signal: signal!, finish, fail })))
+      h.services.serve('wake', () => ({ wifi_serving: handler, wifi_other: () => ({ ok: true }) }), fakeCore(), ['wifi_serving', 'wifi_other'])
+      const answer = h.services.call('wifi_serving', {}, asker, 15_000)
+      await vi.advanceTimersByTimeAsync(15_000)
+      expect(await answer).toMatchObject({ error: 'SERVICE_UNAVAILABLE', retryable: true })
+      expect(requests[0].signal.aborted).toBe(true)
+      expect(h.lines).toContain('[services] wake.wifi_serving timed out · SERVICE_DEADLINE')
+      for (let n = 0; n < 20; n++) expect(await h.services.call('wifi_serving', {}, asker, 15_000)).toMatchObject({ error: 'SERVICE_UNAVAILABLE' })
+      expect(handler).toHaveBeenCalledOnce()
+      expect(await h.services.call('wifi_other', {}, asker, 15_000)).toEqual({ ok: true })
+      h.services.closeConnection('old-gateway')
+      expect(await h.services.call('wifi_serving', {}, { ...asker, connection: 'replacement-gateway' }, 15_000)).toMatchObject({ error: 'SERVICE_UNAVAILABLE' })
+      if (late === 'resolve') requests[0].finish({ serving: true })
+      else requests[0].fail(new Error('late handler failure'))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(h.lines).toEqual(['[services] wake.wifi_serving timed out · SERVICE_DEADLINE'])
+      expect(await answer).toMatchObject({ error: 'SERVICE_UNAVAILABLE' })
+      const next = h.services.call('wifi_serving', {}, asker, 15_000)
+      expect(handler).toHaveBeenCalledTimes(2)
+      requests[1].finish({ serving: true })
+      expect(await next).toEqual({ serving: true })
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('preserves concurrent in-deadline calls and keeps each deadline and reply separate', async () => {
+      vi.useFakeTimers()
+      const h = host(), finish: Array<(value: Record<string, unknown>) => void> = []
+      h.services.serve('roster', () => ({ sharing_roster: () => new Promise<Record<string, unknown>>(resolve => finish.push(resolve)) }), fakeCore(), ['sharing_roster'])
+      const first = h.services.call('sharing_roster', {}, asker, 100)
+      const second = h.services.call('sharing_roster', {}, asker, 200)
+      expect(finish).toHaveLength(2)
+      await vi.advanceTimersByTimeAsync(100)
+      expect(await first).toMatchObject({ error: 'SERVICE_UNAVAILABLE' })
+      finish[1]({ roster: [] })
+      expect(await second).toEqual({ roster: [] })
+      finish[0]({ roster: ['late'] })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(vi.getTimerCount()).toBe(0)
+    })
+  })
 
   describe('starting', () => {
     it('installs the port a service fills, guarded, with every call reaching it as made', async () => {

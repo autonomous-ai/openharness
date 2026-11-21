@@ -1,6 +1,7 @@
+import { hookPreparationFiles } from './hookPreparationFiles.js'
 /** Eager mechanics for native JSON hook schemas; unreadable settings are never empty settings. */
 import { command, requireHookScript, isNamedHold, hooksNotInstalled, hooksNotOnWindows, identitySettings, isManagedHook, isManagedHookCommand, foreignHookBlocks, type HookRunner, type Settings, type HookBlock } from './notifyHooks.js'
-import { HookPreparationHeld, inspectHookFile, runHookPreparation } from './nativeHookFiles.js'
+import { HookPreparationHeld } from './nativeHookFiles.js'
 import { HookScriptMissing } from './hookHeld.js'
 import type { NativeHookOptions } from './nativeLocations.js'
 import { errorKind } from '../../lib/log.js'
@@ -39,13 +40,14 @@ export async function installNativeHookSettings(rule: NativeHookSettings, port: 
   // hookSettings.ts, so a POSIX install is POSIX whatever the host.
   const ours = (entry: Entry) => isManagedHookCommand(entry?.command, platform)
   const isOurs = (block: HookBlock): boolean => Array.isArray(block?.hooks) && block.hooks.some(hook => isManagedHook(hook, platform))
+  const files = hookPreparationFiles(options)
   try {
     // Inside the try: a path the engine's Windows runner would misread is refused here (quoteHookCommand), and that is
     // a failed install with its reason, not a rejection (B4.1 review).
     requireHookScript(rule.engine)
     const cmd = command(port, rule.engine, undefined, undefined, options.environment, platform === 'win32' ? rule.win32Runner! : 'bash')
-    return await runHookPreparation([rule.file], async attempt => {
-      const observed = inspectHookFile(rule.file)
+    return await files.run([rule.file], async attempt => {
+      const observed = files.inspect(rule.file)
       const parsed: unknown = observed.content === null ? {} : JSON.parse(observed.content)
       if (!object(parsed)) throw new HookPreparationHeld('the settings do not have the declared object shape')
       let changed = false
@@ -90,15 +92,15 @@ export async function installNativeHookSettings(rule: NativeHookSettings, port: 
       }
       const published = await observed.replace(changed ? JSON.stringify(parsed, null, 2) + '\n' : observed.content!, attempt)
       published.verify()
-      console.log(changed ? rule.messages.installed.replace('{file}', () => rule.file) : rule.messages.current)
-      if (changed && rule.messages.after) console.log(rule.messages.after)
+      files.report('log', changed ? rule.messages.installed.replace('{file}', () => rule.file) : rule.messages.current)
+      if (changed && rule.messages.after) files.report('log', rule.messages.after)
       return true
     }, { ...options, identity: JSON.stringify([identitySettings(rule, platform), port, cmd]) })
   } catch (error) {
     // A hold's reason is fixed words (hookHeld.ts); HookScriptMissing's names a path, so that one is said by its kind.
     const held = error instanceof HookPreparationHeld && !(error instanceof HookScriptMissing) ? error.reason : errorKind(error)
-    if (isNamedHold(error, platform)) console.error(`${hooksNotInstalled(rule.engine)} · ${held}`)
-    else console.error(rule.messages.failed, held)
+    if (isNamedHold(error, platform)) files.report('error', `${hooksNotInstalled(rule.engine)} · ${held}`)
+    else files.report('error', rule.messages.failed, held)
     return false
   }
 }

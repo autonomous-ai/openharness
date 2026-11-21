@@ -10,10 +10,12 @@ import { buildLaunchOverrides, prepareLaunchOverrides, validateLaunchOverrides, 
 import { DSH_SESSION_ENV } from '../dsh/launch.js'
 import { GRID_CONFLICTING_ENV_VARS, GRID_KEY_VAR, type GridLaunchOverride } from './gridLaunch.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
-import { HARNESS_INSTRUCTIONS } from './agentAttribution.js'
+import { HARNESS_INSTRUCTIONS } from '../services/nativeLaunchSettings.js'
 import { writeMachineMcp } from './machineMcp.js'
-import { missingHookScript } from '../engines/kit/notifyHooks.js'
+import { missingHookScript } from '../engines/kit/hookScript.js'
 import type { NativeLaunch } from '../engines/nativeLaunch.js'
+import { ApiConnections } from './apiConnections.js'
+import { gridLaunchThrough } from '../core/agents/launch.js'
 
 const GRID: GridLaunchOverride = {
   networkId: 'grid-abc',
@@ -25,12 +27,11 @@ const GRID: GridLaunchOverride = {
 
 // OpenCode's version probe is its own code, loaded for an OpenCode launch alone; a test may say it could not be.
 // Harness's status line rides every Claude launch beside what these pin (engines/claude/statusLine.spec.ts, the launch golden).
-vi.mock('../engines/kit/statusLine.js', async (original) => ({ ...await original<object>(), statusLineSetting: () => null }))
 vi.mock('../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
 })
-vi.mock('../engines/kit/notifyHooks.js', async (real) => ({ ...await real<object>(), missingHookScript: vi.fn(() => null) }))
+vi.mock('../engines/kit/hookScript.js', async (real) => ({ ...await real<object>(), missingHookScript: vi.fn(() => null) }))
 
 function deps(overrides: Partial<LaunchOverridesDeps> = {}) {
   const calls: string[] = []
@@ -47,9 +48,7 @@ function deps(overrides: Partial<LaunchOverridesDeps> = {}) {
   return { d, calls }
 }
 
-// A Claude Code or Codex launch is told how to use Harness (lib/agentAttribution.ts) once the account lets agents start
-// agents, and a harness another agent started adds its pull request line once the account has that on: both off by
-// default, so each relaunch below shows only what it is about. Each has its own describe, which turns it on.
+// Retired PR attribution preferences remain readable on disk but add nothing to launch overrides.
 afterEach(() => { rmSync(agentSettingsPath(env.ADAPTER_DATA_DIR), { force: true }); signedOutForTest() })
 
 // Review of #3954: a resume or relaunch held by a missing notify.mjs said "Waiting to confirm…", which waiting never changes.
@@ -209,6 +208,24 @@ describe('buildLaunchOverrides — a relaunch comes back where the agent was', (
     expect(await validateLaunchOverrides(d, 'pi', { gridLaunch: null, codexHome: '/x' })).toEqual({ ok: true })
     expect(await validateLaunchOverrides(deps().d, 'pi', { gridLaunch: GRID })).toEqual({ ok: true })
     expect(calls).toEqual([])
+  })
+
+  it('Saved API freshness names the current connection in preflight and refuses its deletion', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'preflight-api-'))
+    try {
+      const store = new ApiConnections(directory)
+      const connection = store.save({ provider: 'custom', name: 'Previous name', baseUrl: 'https://old.example.test/v1', apiKey: 'FAKE-old-key' })
+      const gridLaunch = { ...GRID, networkId: `api:${connection.id}`, networkName: connection.name, baseUrl: connection.baseUrl }
+      const { d, calls } = deps({
+        gridLaunch: gridLaunchThrough(() => ({ gridLaunch: async input => gridLaunchInProcess(store)(input) })),
+        capabilities: async () => ({ sessionEnv: false }),
+      })
+      store.save({ ...connection, name: 'Current name', apiKey: 'FAKE-current-key' })
+      expect(await validateLaunchOverrides(d, 'claude', { gridLaunch })).toMatchObject({ error: 'TMUX_TOO_OLD_FOR_GRID', detail: expect.stringContaining('Current name') })
+      store.remove(connection.id)
+      expect(await validateLaunchOverrides(d, 'claude', { gridLaunch })).toMatchObject({ error: 'API_UNAVAILABLE' })
+      expect(calls).toEqual([])
+    } finally { rmSync(directory, { recursive: true, force: true }) }
   })
 
   it('a Codex profile gets its CODEX_HOME, its hooks and its own provider, and clears inherited harness context', async () => {
@@ -388,36 +405,28 @@ describe('buildLaunchOverrides — retired PR branding', () => {
   const retiredPrLine = '🤝 Started by another agent in [Harness](https://harness.autonomous.ai) — agents that run agents.'
   it('leaves native attribution alone even when an old account enabled Harness branding', async () => {
     setAgentSettingsForTest(env.ADAPTER_DATA_DIR, { pullRequestLine: true })
-    const read = vi.fn(() => '{"attribution":{"pr":"Mine"}}')
     for (const engine of ['claude', 'codex', 'opencode'] as const) {
-      const own = await buildLaunchOverrides(deps({ readAttribution: read }).d, engine, { startedBy: 'agent', cwd: '/workspace' }, 'a')
-      const personal = await buildLaunchOverrides(deps({ readAttribution: read }).d, engine, { startedBy: null, cwd: '/workspace' }, 'a')
+      const own = await buildLaunchOverrides(deps().d, engine, { startedBy: 'agent', cwd: '/workspace' }, 'a')
+      const personal = await buildLaunchOverrides(deps().d, engine, { startedBy: null, cwd: '/workspace' }, 'a')
       expect(own).toEqual(personal)
       expect(JSON.stringify(own)).not.toContain(retiredPrLine)
-      const grid = await buildLaunchOverrides(deps({ readAttribution: read }).d, engine, { startedBy: 'agent', gridLaunch: GRID, cwd: null }, 'a')
+      const grid = await buildLaunchOverrides(deps().d, engine, { startedBy: 'agent', gridLaunch: GRID, cwd: null }, 'a')
       expect(JSON.stringify(grid)).not.toContain(retiredPrLine)
     }
-    expect(read).not.toHaveBeenCalled()
   })
 })
 
-describe('buildLaunchOverrides — every harness is told how to use Harness', () => {
-  it('on every relaunch, beside its grid\'s own prompt for Claude Code and in the one instructions value for Codex', async () => {
-    setAgentSettingsForTest(env.ADAPTER_DATA_DIR, { agentsStartAgents: true, pullRequestLine: true })
-    const own = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', { startedBy: null, cwd: '/w' }, 'a')
-    expect(own).toMatchObject({ ok: true, overrides: { extraArgs: ['--append-system-prompt', HARNESS_INSTRUCTIONS] } })
-    const grid = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', { startedBy: 'agent', gridLaunch: GRID, cwd: null }, 'a')
-    expect(grid.ok).toBe(true)
-    if (!grid.ok) return
-    const args = grid.overrides.extraArgs
-    expect(args.filter((arg) => arg === '--append-system-prompt')).toHaveLength(1)
-    expect(args[args.indexOf('--append-system-prompt') + 1]).toMatch(new RegExp(`\\n\\n${HARNESS_INSTRUCTIONS.slice(0, 30)}`))
-    const codex = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'codex', { startedBy: 'agent', cwd: null }, 'a')
-    expect(codex.ok).toBe(true)
-    if (!codex.ok) return
-    expect(codex.overrides.extraArgs.filter((arg) => arg.startsWith('developer_instructions='))).toHaveLength(1)
-    expect(codex.overrides.extraArgs.at(-1)).toContain('You are running in Harness')
-    expect(codex.overrides.extraArgs.at(-1)).not.toContain('Started by another agent in [Harness]')
+describe('buildLaunchOverrides — optional preparation belongs to the final launch owner', () => {
+  it('does not prepare optional values before a caller finishes its selected native environment', async () => {
+    const prepareSettings = vi.fn(async () => ({ values: { instructions: HARNESS_INSTRUCTIONS, settings: null }, current: () => true }))
+    const launch: NativeLaunch = { environment: { HOME: '/fixture/home' }, proofs: [], current: () => true,
+      opencodeMajor: null, permission: async () => 'supported', prepareHooks: async () => true, prepareSettings }
+    const own = await buildLaunchOverrides(deps({ native: async () => ({ ok: true, launch }) }).d, 'claude', { cwd: '/w' }, 'a')
+    expect(own.ok).toBe(true)
+    expect(prepareSettings).not.toHaveBeenCalled()
+    if (!own.ok) throw Error('fixture held')
+    expect(own.overrides.extraArgs).toEqual([])
+    expect(own.overrides.settings).toBeUndefined()
   })
 })
 
@@ -427,19 +436,19 @@ describe('buildLaunchOverrides — machine MCP servers (#1872)', () => {
   it('carries the person\'s servers on every relaunch, beside a grid\'s own, before what Harness tells the agent', async () => {
     writeMachineMcp({ lamp: { command: 'lamp-mcp', args: ['--lamp', 'lamp-75c9'], engines: [], projects: [] } })
     setAgentSettingsForTest(env.ADAPTER_DATA_DIR, { agentsStartAgents: true })
-    const own = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', { startedBy: null, cwd: '/w' }, 'a')
+    const own = await buildLaunchOverrides(deps().d, 'claude', { startedBy: null, cwd: '/w' }, 'a')
     expect(own).toMatchObject({ ok: true, overrides: { extraArgs: [
       `--mcp-config=${JSON.stringify({ mcpServers: { lamp: { type: 'stdio', command: 'lamp-mcp', args: ['--lamp', 'lamp-75c9'] } } })}`,
-      '--append-system-prompt', HARNESS_INSTRUCTIONS] } })
-    const grid = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', { startedBy: null, gridLaunch: GRID, cwd: null }, 'a')
+] } })
+    const grid = await buildLaunchOverrides(deps().d, 'claude', { startedBy: null, gridLaunch: GRID, cwd: null }, 'a')
     expect(grid.ok).toBe(true)
     if (!grid.ok) return
     // On a grid too, as its own `--mcp-config=`: a grid's web tools, when it has them, keep theirs.
     expect(grid.overrides.extraArgs.some((arg) => arg.startsWith('--mcp-config={"mcpServers":{"lamp"'))).toBe(true)
-    const codex = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'codex', { startedBy: null, cwd: null }, 'a')
+    const codex = await buildLaunchOverrides(deps().d, 'codex', { startedBy: null, cwd: null }, 'a')
     expect(codex.ok && codex.overrides.extraArgs).toEqual(expect.arrayContaining(['mcp_servers.lamp.command="lamp-mcp"', 'mcp_servers.lamp.args=["--lamp","lamp-75c9"]']))
     expect(JSON.stringify(codex)).not.toContain('approval_mode')
-    const hermes = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'hermes', { startedBy: null, cwd: null }, 'a')
+    const hermes = await buildLaunchOverrides(deps().d, 'hermes', { startedBy: null, cwd: null }, 'a')
     expect(JSON.stringify(hermes)).not.toContain('lamp-mcp')
   })
 
@@ -447,7 +456,7 @@ describe('buildLaunchOverrides — machine MCP servers (#1872)', () => {
     // A relaunch's source is the agent's registry row (core/agents/launch.ts), its `browser` flag among the rest.
     const row = { startedBy: null, cwd: null, browser: true as const }
     for (const engine of ['claude', 'codex'] as const) {
-      const relaunch = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, engine, row, 'a')
+      const relaunch = await buildLaunchOverrides(deps().d, engine, row, 'a')
       expect(relaunch.ok).toBe(true)
       const argv = relaunch.ok ? relaunch.overrides.extraArgs.join(' ') : ''
       for (const word of ['browser-mcp', 'mcp_servers.browser', '"browser"']) expect(argv).not.toContain(word)
@@ -457,8 +466,8 @@ describe('buildLaunchOverrides — machine MCP servers (#1872)', () => {
   it('hands the owner\'s saved launch flags over in a slot of their own, leaving the other arguments exactly as they were', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'overrides-agent-'))
     const source = { startedBy: null, cwd }
-    const plain = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', source, 'a', () => true)
-    const flagged = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', { ...source, launchArgs: ['--chrome'] }, 'a', () => true)
+    const plain = await buildLaunchOverrides(deps().d, 'claude', source, 'a', () => true)
+    const flagged = await buildLaunchOverrides(deps().d, 'claude', { ...source, launchArgs: ['--chrome'] }, 'a', () => true)
     if (!plain.ok || !flagged.ok) throw new Error('Fixture launch failed')
     expect(flagged.overrides.ownerArgs).toEqual(['--chrome'])
     expect(flagged.overrides.extraArgs).toEqual(plain.overrides.extraArgs)
@@ -468,7 +477,7 @@ describe('buildLaunchOverrides — machine MCP servers (#1872)', () => {
   // Each launch checks the saved words again (a row edited by hand, or a flag a later release refuses): none is applied.
   it('applies none of the saved launch flags when one is now refused, and says so once with the agent and why', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
-    const built = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude',
+    const built = await buildLaunchOverrides(deps().d, 'claude',
       { startedBy: null, cwd: null, launchArgs: ['--chrome', '--settings', 'x'] }, 'agent-12345678-rest', () => true)
     if (!built.ok) throw new Error('Fixture launch failed')
     expect(built.overrides.ownerArgs ?? []).toEqual([])

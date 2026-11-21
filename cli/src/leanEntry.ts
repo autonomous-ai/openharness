@@ -10,8 +10,10 @@
  * (masterProcess.ts `startMasterFromBundle`) and starts the services from it. The core has an entry of
  * its own, built apart (leanCoreEntry.ts), and the CLI always runs from cli.js.
  */
+import './harnessd/childEntry.js'
 import './lib/connectWait.js'
 import { fileURLToPath } from 'node:url'
+import { LEAN_CORE_SCRIPT_ENV } from './harnessd/protocol.js'
 
 const [, , command, name] = process.argv
 if (command === '__harnessd') {
@@ -30,6 +32,7 @@ if (command === '__harnessd') {
   delete process.env[master.LEAN_FINGERPRINT_ENV]
   master.startMaster({
     scriptPath: bundle,
+    packaged: true,
     serviceScriptPath: fileURLToPath(import.meta.url),
     ...(bundleFingerprint ? { bundleFingerprint } : {}),
     ...(leanFingerprint ? { leanFingerprint } : {}),
@@ -37,6 +40,10 @@ if (command === '__harnessd') {
 } else if (command === '__harnessd-probe') {
   process.exitCode = (await import('./masterProcess.js')).probeThisMaster()
 } else if (command === '__service') {
+  // Helpers belong to the CLI this verified lean bundle came from, as they do for the lean core.
+  const cli = process.env[LEAN_CORE_SCRIPT_ENV]
+  delete process.env[LEAN_CORE_SCRIPT_ENV]
+  if (cli) process.argv[1] = cli
   await (await import('./serviceProcess.js')).startServiceProcess(name)
 } else {
   console.error(`[harnessd] the lean bundle runs harnessd's master and its services; ${command ?? 'nothing'} is the CLI's (cli.js)`)

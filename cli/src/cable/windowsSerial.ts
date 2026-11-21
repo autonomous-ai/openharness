@@ -15,7 +15,7 @@ import { Duplex } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { env } from '../config/env.js'
 import { errorKind } from '../lib/log.js'
-import { currentPtyVersion } from '../lib/ptyHost/launch.js'
+import { currentPtyVersion } from '../lib/ptyHost/binary.js'
 // serial.ts imports this file too. The two ids are read inside functions only, never while the modules load.
 import { DIAL_PRODUCT_ID, DIAL_VENDOR_ID, type DialPort } from './serial.js'
 

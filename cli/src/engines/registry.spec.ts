@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { engineReaderRequests } from './worker/process.js'
 import { createEngineReaders } from '../core/engines/readers.js'
 import { expect, it } from 'vitest'
-import { engineTranscriptFor } from './transcripts.js'
+import { createInlineHistory } from './transcripts.js'
 import { engineFor } from './registry.js'
 import { createHistory } from '../core/transcripts/history.js'
 import { createLastTurnReader } from '../core/transcripts/lastTurn.js'
@@ -28,7 +28,8 @@ it.each(['inline', 'worker'])('preserves recorded history, cursors and last-turn
       const requests = engineReaderRequests(engine as 'claude' | 'codex')
       const port = createEngineReaders({ isolated: new Set([`engine-${engine}`]), call: async (_service, type, payload) => await requests[type](JSON.parse(JSON.stringify(payload)), { owner: true, local: true }) })
       port.connected(`engine-${engine}`)
-      const deps = { readerFor: mode === 'worker' ? port.forEngine : engineTranscriptFor, resolve: () => session, stopped: () => [], pages: new TranscriptPager(), storeOf: async () => null }
+      const inline = createInlineHistory()
+      const deps = { readerFor: mode === 'worker' ? port.forEngine : inline.forEngine, resolve: () => session, stopped: async () => [], lineCount: inline.lineCount, storeOf: async () => null }
       const history = createHistory(deps)
       const digest = (value: Record<string, unknown>) => {
         const { timestamp, ...stable } = value

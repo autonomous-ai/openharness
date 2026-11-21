@@ -12,27 +12,20 @@ import { realpathSync, statSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { BackendSocket } from '../../backendSocket.js'
-import type { ConnectorsPort, ModelsPort } from '../api.js'
-import { MODEL_MANAGER_ID } from '../../dsh/builtinIds.js'
-import { installedDsh } from '../../dsh/installed.js'
-import { harnessEnvToClear, type DshAccount } from '../../dsh/launch.js'
-import { dshPinnedPermissionMode } from '../../dsh/manifest.js'
-import { incompatibleHarnessEngine } from '../../dsh/compatibility.js'
+import type { ConnectorsPort } from '../api.js'
+import type { DshAccount } from '../../dsh/launch.js'
+import { harnessEnvToClear } from '../../dsh/sessionEnv.js'
 import type { DshThrough } from './dshThrough.js'
-import * as opencodeLaunch from '../../engines/launchControl.js'
 import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
 import { OPENCLAW_LOCAL } from '../../engines/openclaw/contract.js'
 import { engineLabel } from '../../lib/agentNames.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
-import { enginePathOverride } from '../../lib/engineBin.js'
-import { engineInstallRecipe } from '../../lib/engineInstall.js'
 import {
   buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, permissionModeApproves, permissionModeFlags,
   launchAttempts, refusePermissionFlagIfUnsupported, supportsFirstPrompt, supportsNamedAgent, typedFirstPrompt, NamedAgentUnsupportedError,
 } from '../../lib/engineLaunch.js'
+import { joinedInstructions, launchSettingsArgs } from '../../engines/kit/launchValues.js'
 import { errorKind } from '../../lib/log.js'
-import { setUpWithin } from '../../lib/setUpWithin.js'
-import { agentLaunchArgs, joinedInstructions } from '../../lib/agentAttribution.js'
 import { machineMcpLaunchArgs } from '../../lib/machineMcp.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import { describeGridLaunch, gridConfigHandOff, gridConflictingEnvToClear, type GridLaunchAnswer, type GridLaunchMachine, type GridLaunchRequest, type GridWebSearchStatus } from '../../lib/gridLaunchWire.js'
@@ -42,10 +35,8 @@ import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import type { LaunchAuthority, LaunchPreparation } from '../../lib/launchPreparation.js'
 import type { publishGridConfigDir } from '../../lib/publishedGridConfig.js'
 import { nativeHookLocations } from '../../engines/kit/nativeLocations.js'
-import { engineHooks } from '../../engines/hooks.js'
 import { hooksHeldDetail } from '../../engines/kit/hooksHeldDetail.js'
-import { HookPreparationHeld } from '../../engines/kit/hookHeld.js'
-import { folderTrust } from '../../engines/launchPrep.js'
+import type { PrepareFolderTrust } from '../../engines/folderTrustPreparation.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
 import { NativeFiles } from '../../engines/kit/nativeFiles.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
@@ -53,14 +44,9 @@ import type { TerminalBackend } from '../../lib/terminalBackend.js'
 import { windowsLaunchRefusal } from '../../lib/windows/launch.js'
 import { isWindowsHeldPane, windowsPaneLaunch } from '../../lib/windows/engineStart.js'
 import { tmuxTooOldForSessionEnv } from '../../lib/tmuxVersion.js'
-import { prepareInstructionWrites, scmLaunchEnv } from '../../scm/launch.js'
+import { scmLaunchEnv } from '../../scm/launch.js'
 import { mergedLaunchEnv } from './launchEnv.js'
 import type { createPaneWatcher } from './newPane.js'
-
-/** How long creating a Model Manager waits for grid to be set up before its workspace asks grid which
- *  grid is this account's. Short: the app gives the whole create 20s, and a first install takes minutes.
- *  Past it the set-up carries on, and the agent's own `harness grid setup` waits for it. */
-const MODEL_MANAGER_GRID_WAIT_MS = 8_000
 
 type CreateAgent = NonNullable<BackendSocket['onCreateAgent']>
 
@@ -80,14 +66,12 @@ export interface CreateAgentDeps {
   announceSession: (session: RegisteredSession) => void
   /** A look at the new agent, for the services that follow agents (core/agentLife.ts `running`). */
   attach: (session: RegisteredSession) => void
-  prepareApiTools: (cwd: string | null | undefined, engine: string) => void
+  prepareInstructions: (cwd: string | null | undefined, engine: string) => Promise<void>
+  prepareFolderTrust?: PrepareFolderTrust
   /** The hook server's port, which installed engine hooks post to. */
   hookPort: number
   /** Whether engine hooks are installed at all (DISABLE_HOOK_INSTALL). */
   hooksDisabled: boolean
-  /** OpenCode's plugin, installed again before an OpenCode spawn (core/engines/hooks.ts
-   *  `installOpencodePluginBeforeSpawn`): eager, independent of optional interpretation. */
-  installOpencodePlugin: (port: number) => Promise<boolean>
   /** The facts about this machine a launch of `engine` needs (lib/gridLaunch.ts). */
   gridLaunchMachine: (engine: AgentEngine, native?: NativeLaunch) => GridLaunchMachine | Promise<GridLaunchMachine>
   /** A grid or saved-API launch, built by the models service (core/agents/launch.ts `gridLaunchThrough`): the core
@@ -96,11 +80,7 @@ export interface CreateAgentDeps {
   terminalHintMachineName: () => string
   /** Whether a folder is being purged (PurgeAgentService.blocksFolder). */
   blocksFolder: (cwd: string) => boolean | undefined
-  /** Grid set-up, when this daemon can do it: the models service's (core/api.ts `ModelsPort.ensure`), null
-   *  while it is off. */
-  gridSetup: () => ModelsPort['ensure'] | null
-  privateGridName: () => Promise<string | null>
-  dshLaunch: Pick<DshThrough, 'materialize' | 'launch'>
+  dshLaunch: Pick<DshThrough, 'describe' | 'context' | 'materialize' | 'launch'>
   /** A profile home's MCP config written with the connections' entries, by connected services (core/api.ts
    *  `ConnectorsPort`): bounded, and answered nothing while they are off, failing or slow. Never rejects. */
   syncProfileHome: ConnectorsPort['syncProfileHome']
@@ -117,14 +97,17 @@ function hooksHeld(engine: string, waiting: string) {
 
 export function createAgentCreator({
   native: inspectNative, publishConfig, createBackend: initialBackend, recoverBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, externalResume, watchNewPane, announceSession, attach,
-  prepareApiTools, hookPort, hooksDisabled, installOpencodePlugin, gridLaunchMachine, buildGridLaunch, terminalHintMachineName, blocksFolder,
-  gridSetup, privateGridName, dshLaunch, syncProfileHome,
+  prepareInstructions, prepareFolderTrust, hookPort, hooksDisabled, gridLaunchMachine, buildGridLaunch, terminalHintMachineName, blocksFolder,
+  dshLaunch, syncProfileHome,
 }: CreateAgentDeps) {
-  const prepare = async (input: Parameters<CreateAgent>[0], authority: LaunchAuthority, context?: { local: boolean }): Promise<LaunchPreparation<Awaited<ReturnType<CreateAgent>>>> => {
+  const prepare = async (input: Parameters<CreateAgent>[0], authority: LaunchAuthority,
+    context?: { local: boolean; folderTrustAttempted?: true }): Promise<LaunchPreparation<Awaited<ReturnType<CreateAgent>>>> => {
+    const requireUnusedWorkspace = input.requireUnusedWorkspace === true
     if (input.resumeSessionId) return { ok: true, dispatch: () => externalResume(input) }
     const stale = () => ({ ok: false as const, error: 'LAUNCH_AUTHORITY_CHANGED', unavailable: 'launch', detail: 'Waiting for the original launch request’s authority.' })
     if (!authority.current()) return stale()
-    let { engine, cwd, bypassPermission, permissionMode, grid, codexHome, claudeHome, dsh, prompt, name, agent, scmLaunchRecord, startedBy, parentAgentId, launchModel, browser } = input
+    let { engine, cwd, bypassPermission, permissionMode, grid: requestedGrid, codexHome, claudeHome, dsh, prompt, name, agent, scmLaunchRecord, startedBy, parentAgentId, launchModel, browser } = input
+    let grid: GridLaunchRequest['override'] | null = requestedGrid
     const openclawLocal = input.openclawLocal ?? undefined
     // Checked again here: a saved launch runs later, and a run without its folder never falls back to the shared one.
     if (openclawLocal && !isFolder(openclawLocal)) return { ok: false, error: 'OPENCLAW_FOLDER_GONE', detail: OPENCLAW_LOCAL.folderGone }
@@ -135,28 +118,52 @@ export function createAgentCreator({
     }
     if (!createBackend) return { ok: false, error: noBackendCode }
     if (blocksFolder(cwd)) return { ok: false, error: 'WORKTREE_BUSY' }
-    const workspaceIdentity = () => { const info = statSync(cwd); return `${info.dev}:${info.ino}:${realpathSync(cwd)}` }
-    let originalWorkspace: string
+    const workspaceIdentity = () => { const info = statSync(cwd), directory = realpathSync(cwd); return { identity: `${info.dev}:${info.ino}:${directory}`, directory } }
+    let originalWorkspace: ReturnType<typeof workspaceIdentity>
     try {
       if (!statSync(cwd).isDirectory()) return { ok: false, error: 'CWD_NOT_FOUND' }
       originalWorkspace = workspaceIdentity()
     } catch {
       return { ok: false, error: 'CWD_NOT_FOUND' }
     }
+    const workspaceRefusal = (): { ok: false; error: string } | null => {
+      if (!requireUnusedWorkspace) return null
+      let target: ReturnType<typeof workspaceIdentity>
+      try { target = workspaceIdentity() } catch { return { ok: false, error: 'CWD_CHANGED' } }
+      if (target.identity !== originalWorkspace.identity) return { ok: false, error: 'CWD_CHANGED' }
+      // Repeated sessions in one folder need one filesystem lookup per synchronous scan. The
+      // scratch bound never limits membership: later distinct paths are still checked, uncached.
+      const seen = new Set<string>()
+      for (const row of registry.rows()) {
+        const path = row.cwd
+        if (!path || seen.has(path)) continue
+        if (seen.size < 1024) seen.add(path)
+        let canonical: string
+        try { canonical = realpathSync(path) } catch { canonical = path }
+        if (canonical === target.directory) return { ok: false, error: 'WORKSPACE_IN_USE' }
+      }
+      return null
+    }
+    const occupied = workspaceRefusal()
+    if (occupied) return occupied
     // The local Desktop already made this workspace. Observe emptiness before any
     // preparation writes, but grant trust only after its dependencies are ready.
-    const trustEmptyProject = context?.local === true && !dsh && dirname(cwd) === projectsRoot()
+    const trustEmptyProject = context?.local === true && !context.folderTrustAttempted && !dsh && dirname(cwd) === projectsRoot()
       && await readdir(cwd).then(names => names.length === 0, () => false)
     if (!authority.current()) return stale()
     // A harness can pin its permission mode (`dshPinnedPermissionMode`): the Grid harness starts model
     // servers, which Codex's sandbox would start without a GPU. Pinned before anything reads the mode,
     // and recorded on the row like a chosen one, so a relaunch keeps it.
-    const pinnedDsh = dsh ? installedDsh(dsh) : null
-    const pinnedMode = pinnedDsh ? dshPinnedPermissionMode(pinnedDsh.manifest) : null
+    const description = dsh ? await dshLaunch.describe(dsh, engine) : null
+    if (!authority.current()) return stale()
+    if (description && !description.ok) return description
+    const pinnedDsh = description
+    const pinnedMode = pinnedDsh?.permissionMode
     if (pinnedMode && permissionModeFlags(engine, pinnedMode)) {
       permissionMode = pinnedMode
       bypassPermission = permissionModeApproves(pinnedMode)
     }
+    if (!inspectNative && !isTerminalEngine(engine)) return hooksHeld(engine, 'Waiting for engine setup.')
     const inspected = await inspectNative?.(engine, { ...input, permissionMode, bypassPermission }, authority)
     // An engine that ran and failed, or whose install for this request failed, is refused with its own
     // reason. Held, a creation retried every two seconds and could start, task and all, whenever the
@@ -179,14 +186,13 @@ export function createAgentCreator({
     // `--auto`). Refuse before opening a pane — this is a launch somebody is waiting on, and Ask
     // works today. Codex has been checked this way since it gained `--approve-for-me`; every other
     // engine with a permission flag was not, and carried the same failure.
-    const refusal = await refusePermissionFlagIfUnsupported(engine, { permissionMode, bypassPermission }, undefined, native)
+    const refusal = await refusePermissionFlagIfUnsupported(engine, { permissionMode, bypassPermission }, native)
     if (!current()) return stale()
     if (refusal) {
       console.warn(`[agent] create refused · ${engine} · ${refusal.detail}`)
       return { ok: false, ...refusal }
     }
     // Native version and model control are eager; optional readers never decide whether a launch can proceed.
-    const opencode = engine === 'opencode' ? opencodeLaunch : null
     // Harness-created sessions are easy to distinguish from a user's organic tmux sessions while
     // retaining the engine and a collision-resistant creation suffix for diagnostics. Computed
     // before the grid block because a file-configured engine keys its config directory on it.
@@ -202,16 +208,14 @@ export function createAgentCreator({
     let dshLabel: string | undefined
     /** What the harness is told about the signed-in account (its private grid), not left to guess. */
     let dshAccount: DshAccount = {}
-    const installed = dsh ? installedDsh(dsh) : undefined
     if (dsh) {
-      if (!installed) return { ok: false, error: 'INVALID_DSH', detail: `${dsh} is not installed on this machine` }
-      if (installed.manifest.kind === 'viewer') return { ok: false, error: 'INVALID_DSH', detail: `${dsh} is a viewer package, not an agent` }
-      const refusal = incompatibleHarnessEngine(dsh, installed.manifest, engine)
+      const installed = pinnedDsh!
+      const refusal = installed.refusal
       if (refusal) {
         return { ok: false, error: 'INVALID_DSH', detail: refusal }
       }
       if (!(await createBackend.capabilities()).sessionEnv) {
-        const detail = `${tmuxTooOldForSessionEnv('a new session')} — so ${installed.manifest.name} `
+        const detail = `${tmuxTooOldForSessionEnv('a new session')} — so ${installed.name} `
           + `could not tell ${engine} which harness it is. Upgrade tmux.`
         console.warn(`[agent] create ${dsh} refused · ${detail}`)
         return { ok: false, error: 'TMUX_TOO_OLD_FOR_DSH', detail }
@@ -221,30 +225,25 @@ export function createAgentCreator({
     // refusal rather than a fallback — an agent silently started on the engine's own login spends the
     // wrong account and looks identical to one that worked. Asked of models before a harness's workspace is
     // laid out or trusted: a create refused here leaves the folder as it was.
-    const built = grid ? await buildGridLaunch({ engine, override: grid, machine: await gridLaunchMachine(engine, native) }) : null
+    const built = grid ? await buildGridLaunch({ engine, override: grid, machine: await gridLaunchMachine(engine, native), refresh: true }) : null
     if (!current()) return stale()
     if (built && !built.ok) {
       console.warn(`[agent] create ${engine} refused · ${built.detail}`)
       return built
     }
+    // Models may have refreshed a Saved API. Keep the resulting launch and its record together;
+    // the input remains the original request, including when a durable receipt owns it.
+    if (built) grid = built.override
     if (dsh) {
       // Checked above: a harness that is not installed was refused before models was asked.
-      const harness = installed!
-      // The Model Manager is grid in use, however it was made (the Store, New Harness, `harness new`, the
-      // models picker): grid is set up before the workspace asks it which grid is this account's.
-      const ensureGrid = gridSetup()
-      if (harness.id === MODEL_MANAGER_ID && ensureGrid) {
-        const setUp = await setUpWithin(() => ensureGrid({ ownGrid: true }), MODEL_MANAGER_GRID_WAIT_MS)
-        if (setUp === 'pending') console.log(`[dsh] ${dsh} · grid is still being set up; the agent waits for it with \`harness grid setup\``)
-      }
+      const harness = pinnedDsh!
       try {
-        dshAccount = { privateGrid: await privateGridName().catch(() => null) }
+        const context = await dshLaunch.context({ dsh, engine })
         if (!current()) return stale()
-        // Asked BEFORE the template goes in: afterwards every folder has content.
-        // Not there yet is empty; unreadable is not — trust is only ever granted on evidence.
-        const emptyBefore = await readdir(cwd).then((names) => names.length === 0,
-          (error: NodeJS.ErrnoException) => error.code === 'ENOENT')
-        if (!current()) return stale()
+        if (!context.ok) return context
+        dshAccount = context.account
+        const occupied = workspaceRefusal()
+        if (occupied) return occupied
         const materialized = await dshLaunch.materialize({ dsh, workspace: cwd, account: dshAccount, engine, key: label })
         if (!current()) return stale()
         if (!materialized.ok) {
@@ -253,27 +252,22 @@ export function createAgentCreator({
         }
         for (const warning of materialized.warnings) console.warn(`[dsh] ${dsh} materialize · ${warning}`)
         console.log(`[dsh] ${dsh} materialized ${cwd} · created ${materialized.created.length} · kept ${materialized.kept.length}`)
-        // The template just went into an EMPTY folder: everything in it is the harness's, and Claude Code
-        // need not ask. Laid into a folder that already held something — a clone, the person's own repo —
-        // it proves nothing about the rest, so trust stays the person's call (engines/kit/folderTrust.ts).
-        if (emptyBefore && materialized.created.some((item) => item.startsWith('template'))) {
-          try {
-            // In the agent's own profile when it has one: that config.toml is the one a Codex agent reads.
-            folderTrust(engine, engine === 'claude' ? claudeHome : codexHome)?.record(cwd)
-          } catch (error) { console.warn(`[dsh] pre-trust skipped · ${engine} · ${errorKind(error)}`) }
-        }
+        // Store's template label is not proof of its final contents: another writer may have
+        // added work while materialization or init awaited. Keep the engine's own question.
+        if (materialized.created.some(item => item.startsWith('template'))) console.warn('[trust] TEMPLATE_TRUST_UNCONFIRMED')
       } catch (error) {
         const detail = `could not prepare the workspace for ${dsh} · ${error instanceof Error ? error.message : error}`
         console.warn(`[agent] create ${dsh} refused · could not prepare the workspace for ${dsh} · ${errorKind(error)}`)
         return { ok: false, error: 'DSH_MATERIALIZE_FAILED', detail }
       }
-      const prepared = await dshLaunch.launch({ dsh, workspace: cwd, engine, key: label, account: dshAccount })
+      const prepared = await dshLaunch.launch({ dsh, workspace: cwd, engine, key: label, account: dshAccount },
+        { ids: [harness.id, dsh], workspace: originalWorkspace.directory })
       if (!current()) return stale()
       if (!prepared.ok) return { ok: false, error: prepared.error, detail: prepared.detail,
         ...(prepared.unavailable ? { unavailable: prepared.unavailable } : {}) }
       dshEnv = prepared.launch.env
       dshArgs = prepared.launch.args
-      dshLabel = harness.manifest.name
+      dshLabel = harness.name
     }
     let gridLaunch: { env: Record<string, string>; args: string[]; webSearch: GridWebSearchStatus } | undefined
     if (grid && built?.ok) {
@@ -298,9 +292,8 @@ export function createAgentCreator({
           gridLaunch.args = [...gridLaunch.args, ...handOff.args]
         } catch (error) {
           const detail = `could not write ${engine}'s grid configuration · ${error instanceof Error ? error.message : error}`
-          // A held publication's reason is fixed words (engines/kit/hookHeld.ts): it says what holds it.
-          console.warn(`[agent] create ${engine} refused · could not write ${engine}'s grid configuration · ${error instanceof HookPreparationHeld ? error.reason : errorKind(error)}`)
-          return { ok: false, error: 'GRID_CONFIG_FAILED', detail, ...(native ? { unavailable: 'native' } : {}) }
+          console.warn(`[agent] create ${engine} refused · could not write ${engine}'s grid configuration · ${errorKind(error)}`)
+          return { ok: false, error: 'GRID_CONFIG_FAILED', detail, unavailable: 'native' }
         }
       }
       // Named in the log because the pane itself gives nothing away: the engine looks exactly like a
@@ -309,46 +302,34 @@ export function createAgentCreator({
     }
     if (!current()) return stale()
     if (trustEmptyProject) {
+      const trustCurrent = () => {
+        try { return current() && workspaceIdentity().identity === originalWorkspace.identity } catch { return false }
+      }
       try {
         // A clone or user edit can arrive while dependencies are being prepared.
         // Trust only the same physical workspace, still empty at the write boundary.
         const files = new NativeFiles()
-        const empty = files.entries(cwd).length === 0
+        const eligible = files.entries(cwd).length === 0
         if (!current()) return stale()
-        if (empty && workspaceIdentity() === originalWorkspace) {
+        if (eligible && workspaceIdentity().identity === originalWorkspace.identity) {
           files.verify()
           const environment = native ? { ...native.environment, ...gridLaunch?.env, ...dshEnv } : undefined
           const profile = engine === 'codex' && environment ? nativeHookLocations(environment).CODEX_HOME : engine === 'claude' ? claudeHome : codexHome
-          folderTrust(engine, profile, environment)?.record(cwd)
+          await prepareFolderTrust?.({ engine, cwd, profile, environment, empty: true }, trustCurrent)
         }
-      } catch (error) { console.warn(`[agent] pre-trust skipped · ${engine} · ${errorKind(error)}`) }
+      } catch (caughtFailure) { console.warn(('[trust] FOLDER_TRUST_UNAVAILABLE') + ' · ' + errorKind(caughtFailure)) }
+      if (!trustCurrent()) return stale()
     }
+    if (!current()) return stale()
     if (native && !await native.prepareHooks(hooksDisabled ? 0 : hookPort, authority.current,
       { ...gridLaunch?.env, ...dshEnv }, gridLaunch ? gridConflictingEnvToClear(gridLaunch) : [])) return hooksHeld(engine, 'Waiting to confirm the engine’s native hooks.')
     // Harness configuration can change the profile after executable discovery. Binding and Resume
     // must retain the home the prepared child will actually use.
     if (engine === 'codex' && native) codexHome = nativeHookLocations(native.environment).CODEX_HOME
-    // A Codex agent pointed at a profile OTHER than this machine's default reads hooks.json from
-    // THAT folder, not the one `harness login` already installed into — without this, such an agent
-    // fires no hook at all (no SessionStart/UserPromptSubmit/Stop) and never streams a single event.
-    // Idempotent, so paying this on every create against an already-set-up profile is free.
-    if (!native && codexHome && !hooksDisabled && !await engineHooks.codex.installIn(hookPort, codexHome)) return hooksHeld('codex', 'Waiting to confirm Codex’s hooks in the selected profile.')
     // An agent on a profile home reads that home's MCP config, not the default's: it gets the connections there too,
     // before it starts. Written in the edge host; one that does not answer in time leaves the config as it is.
     const profileHome = engine === 'claude' ? claudeHome : engine === 'codex' ? codexHome : null
     if (profileHome && (engine === 'claude' || engine === 'codex')) await syncProfileHome(engine, profileHome)
-    // OpenCode may have upgraded from 1.x to 2.x while this daemon was running. Its new TUI must
-    // not discover our old server plugin; the cached version probe changes with the executable.
-    // Native installation is eager. A plugin is how this engine tells the daemon its session.
-    if (!native && engine === 'opencode' && !hooksDisabled && !await installOpencodePlugin(hookPort)) {
-      const detail = 'OpenCode\'s plugin installer could not be loaded'
-      console.warn(`[agent] create opencode refused · ${detail}`)
-      return { ok: false, error: 'ENGINE_UNAVAILABLE', detail }
-    }
-    // Do not start a second interactive login shell merely to ask whether the engine is installed.
-    // The pane's own shell performs the same check before exec, and installs only when necessary.
-    // This removes ~1s of shell startup from the click-to-terminal critical path.
-    const installIfMissing = enginePathOverride(engine) ? undefined : engineInstallRecipe(engine)
     // Clearing the vendor credentials this launch does NOT set is part of pointing an agent at a
     // grid, not an extra. An engine chooses its provider from whatever it can see, and an inherited
     // key wins on its own terms — OpenCode picked Anthropic over a grid it had been handed, and said
@@ -358,14 +339,12 @@ export function createAgentCreator({
     // The named agent takes the same argv slot on every relaunch (`buildLaunchOverrides` appends it
     // from the row's `agent`, after the grid's and the DSH's argv, exactly as here). The engine was
     // checked for a contract at the wire (AGENT_UNSUPPORTED, opencode v2 included), so this cannot throw.
-    // A harness another agent started says so in the pull requests it opens (lib/agentAttribution.ts), last, as every
-    // relaunch appends it (`buildLaunchOverrides`), and read from the person's settings where this launch reads them.
-    // What Harness tells the agent (its instructions, and the pull request line for one another agent started), last.
-    const told = agentLaunchArgs(engine, startedBy, { cwd, profile: codexHome, environment: native?.environment })
+    const settings = await native?.prepareSettings?.(cwd, authority.current)
+    if (!current()) return stale()
     // The person's machine MCP servers (lib/machineMcp.ts, #1872), beside the grid's and their own: read at each launch,
     // as every relaunch reads them again (`buildLaunchOverrides`).
     const machineMcp = machineMcpLaunchArgs(engine, cwd)
-    const extraArgs = joinedInstructions(engine, [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...machineMcp, ...told])
+    const extraArgs = joinedInstructions(engine, [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native?.opencodeMajor ?? null) : []), ...machineMcp])
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).
     const firstPrompt = prompt
@@ -373,40 +352,58 @@ export function createAgentCreator({
     const firstTask = typedFirstPrompt(engine, firstPrompt ?? undefined)
     // Chosen before the pane, so the launch can name its session after the agent (engineLaunch.ts `agentId`).
     const agentId = randomUUID()
-    const launchOptions = { agentId, ...(native ? { native } : {}), bypassPermission, ...(permissionMode ? { permissionMode } : {}), extraArgs: extraArgs.length ? extraArgs : undefined, installIfMissing, clearEnv, cwd, harnessNode: dsh ? true : undefined, ...(firstPrompt ? { firstPrompt } : {}), ...(launchModel ? { launchModel } : {}), terminalHint: { machineName: terminalHintMachineName() } }
+    const baseOptions = { agentId, ...(native ? { native } : {}), bypassPermission, ...(permissionMode ? { permissionMode } : {}), extraArgs: extraArgs.length ? extraArgs : undefined, clearEnv, cwd, harnessNode: dsh ? true : undefined, ...(firstPrompt ? { firstPrompt } : {}), ...(launchModel ? { launchModel } : {}), terminalHint: { machineName: terminalHintMachineName() } }
     // Windows refuses a batch-file engine whose arguments cmd.exe would read (lib/windows/launch.ts), before any pane.
-    let command: string[], argv: string[]
     try {
-      command = buildEngineCommandArgv(engine, launchOptions)
-      argv = buildEngineLaunchArgv(engine, launchOptions)
+      buildEngineCommandArgv(engine, { ...baseOptions, extraArgs: launchSettingsArgs(engine, extraArgs, settings) })
     } catch (error) { return windowsLaunchRefusal(error) }
     // A tmux route is enough to stream its screen. Register it before looking for a process so both
-    // loopback and relayed Desktop clients can attach while the login shell/installer is still busy.
+    // loopback and relayed Desktop clients can attach while the login shell is still busy.
     // `tmuxBackend` exists whenever the CONFIG lists tmux — it is never a probe of the binary, so a
     // daemon that cannot resolve `tmux` at all (a login context whose PATH lacks Homebrew's bin, the
     // usual shape after a reboot) is reported as `TMUX_UNAVAILABLE` too, distinctly from a tmux that
     // answered and refused (`SPAWN_FAILED`) — see createAgentPane.ts. Registration itself is retried
     // there: a stale registry entry from a previous tmux-server generation occasionally collides with
     // a freshly-minted pane id, and that collision clears on its own on the very next pane.
-    await prepareInstructionWrites(cwd)
-    if (!current()) return stale()
-    prepareApiTools(cwd, engine)
+    await prepareInstructions(cwd, engine)
     // Mutually exclusive with a grid (backendSocket.ts refuses the two together): a chosen Codex
     // profile becomes the new session's CODEX_HOME (its session store's variable, lib/engineHomes.ts
     // `profileEnvironment`), the same `-e` mechanism a grid's own env rides.
     if (!current()) return stale()
     return { ok: true, dispatch: async () => {
     if (!current()) return stale()
+    const launchOptions = baseOptions
+    let command: string[], windowsArgv: string[] | undefined
+    try {
+      command = buildEngineCommandArgv(engine, launchOptions)
+      // Windows has no launch script: preserve its pure preflight and exact held-command identity.
+      if (process.platform === 'win32') windowsArgv = buildEngineLaunchArgv(engine,
+        { ...launchOptions, extraArgs: launchSettingsArgs(engine, extraArgs, settings) })
+    } catch (error) { return windowsLaunchRefusal(error) }
+    const held = windowsArgv !== undefined && isWindowsHeldPane(windowsArgv)
+    const prepareCommand = () => {
+      const selectedArgs = launchSettingsArgs(engine, extraArgs, settings)
+      const selected = { ...baseOptions, extraArgs: selectedArgs.length ? selectedArgs : undefined }
+      command = buildEngineCommandArgv(engine, selected)
+      return buildEngineLaunchArgv(engine, selected)
+    }
+    const argv = held ? windowsArgv! : prepareCommand
+    let dispatchRefusal: ReturnType<typeof workspaceRefusal> = null
     const result = await createAndRegisterPane({
       current, agentId, ...(native ? { nativeToken: native.token } : {}),
+      ...(requireUnusedWorkspace ? { onDispatch: () => {
+        // Synchronous: the backend does not yield between this scan and its final command send.
+        dispatchRefusal = workspaceRefusal()
+        if (dispatchRefusal) throw new Error(dispatchRefusal.error)
+      } } : {}),
       tmuxBackend: createBackend,
       registry,
       engine,
       cwd,
       sessionLabel: label,
-      argv: launchAttempts(argv, () => buildEngineLaunchArgv(engine, launchOptions)),
+      argv: launchAttempts(argv, prepareCommand),
       // Windows: the workspace to start in and the shell the pane becomes after the engine (lib/windows/engineStart.ts).
-      paneLaunch: windowsPaneLaunch(engine, { ...launchOptions, held: isWindowsHeldPane(argv) }),
+      paneLaunch: windowsPaneLaunch(engine, { ...launchOptions, held }),
       // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).
       env: mergedLaunchEnv(freshHarnessEnvironment(engine, mergedLaunchEnv(mergedLaunchEnv(gridLaunch?.env ?? (codexHome ? profileEnvironment(engine, codexHome) : undefined), dshEnv),
         mergedLaunchEnv(scmLaunchEnv(scmLaunchRecord), native?.environment)), !!grid,
@@ -430,7 +427,7 @@ export function createAgentCreator({
       ...(firstTask ? { firstTask } : {}),
       ...(openclawLocal ? { openclawLocal } : {}),
     })
-    if (!result.ok) return { ok: false, error: result.error, detail: result.detail }
+    if (!result.ok) return result.notStarted && dispatchRefusal ? dispatchRefusal : { ok: false, error: result.error, detail: result.detail }
     const { spawned, pending } = result
     // A terminal is ready the moment its pane is: there is no engine process to wait for, and the
     // shell exiting is the person closing it — so `remain-on-exit` comes off now, and the pane going
@@ -445,7 +442,7 @@ export function createAgentCreator({
     announceSession(pending)
     attach(pending)
 
-    void watchNewPane(engine, pending, spawned, command, installIfMissing, undefined)
+    void watchNewPane(engine, pending, spawned, command, native?.executable)
     console.log(`[agent] create pane open · ${engine} · agent ${pending.agentId}`)
     return { ok: true, session: pending }
     } }

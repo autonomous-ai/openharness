@@ -1,9 +1,14 @@
+import { startSettledRecords, QUESTION_OBSERVATION_BYTES, QUESTION_OBSERVATION_TIMEOUT_MS } from './questionObservation.js'
+import { boundedJsonBytes } from '../lib/boundedJsonBytes.js'
+import type { LocalWindowPermissions } from '../harnessd/services.js'
+import type { ClientStreamQuota } from '../lib/clientStreamQueue.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
 import type { PreparedHandoff, HandoffPermit, HandoffOutcome } from '../lib/handoffAuthority.js'
 import type { AgentTokenUsage, AgentUsageTarget } from '../lib/agentUsageWire.js'
-import type { CloudHarness } from '../lib/cloudAgents.js'
-import type { SharedTrustPeer } from '../lib/sharedMachinesPort.js'
+import { OWNER_DOWN, OWNER_REPLY_DOWN, OWNER_ANSWER_DOWN, type SessionOwnerCore, type SessionOwnerPort, type ServiceSessionRow } from '../lib/sessionOwnerWire.js'
+import type { SharedTrustPeer } from '../lib/sharedMachinesAccount.js'
 import type { GridAssignmentProcess, GridAssignmentAnswer } from '../lib/gridAssignmentWire.js'
+import type { QuestionAnswerResult } from '../lib/questionController.js'
 /**
  * The boundary the services stand on (docs/design/2026-10-03-harnessd.md, "The core boundary"):
  * `CoreApi` is what a service may ask of the core, and `CorePorts` is what the core asks of services.
@@ -22,21 +27,19 @@ import type { AgentEngine } from '../engines/types.js'
 import type { ObservedEvent } from './observedHook.js'
 import type { AppSwarms } from '../cable/cableSession.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
-import type { AutonomousDeviceAgent, AutonomousDeviceDelivery } from '../lib/autonomous-device/service.js'
-import type { StoreAgent } from '../lib/autonomous-device/store.js'
-import type { DshLaunchAnswer, DshLaunchRequest, DshMaterializeAnswer, DshMaterializeRequest } from '../dsh/launchWire.js'
-import type { AgentDshContext } from '../lib/agentFrame.js'
-import type { GridAccess } from '../lib/gridAttach.js'
+import type { AutonomousDeviceDelivery } from '../lib/autonomous-device/service.js'
+import type { DshContextAnswer, DshDescribeAnswer, DshDescribeRequest, DshLaunchRequest, DshMaterializeAnswer, DshMaterializeRequest } from '../dsh/launchWire.js'
+import type { AgentDshContext, AgentFacts } from '../lib/agentFrame.js'
 import type { createHarnessResourcesReader } from '../lib/harnessResources.js'
 import type { createHarnessStorageReader } from '../lib/harnessTelemetry.js'
 import type { AgentGridTarget, GridAnnotation } from '../lib/gridAnnotation.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
 import { GRID_FLEET_MAX_TIMEOUT_MS } from '../lib/gridFleetProtocol.js'
-import type { GridLaunchAnswer, GridLaunchOverride, GridLaunchRequest } from '../lib/gridLaunchWire.js'
+import type { GridLaunchOverride, GridLaunchRequest } from '../lib/gridLaunchWire.js'
 import type { NewAgentModel } from '../lib/newAgentModel.js'
 import type { LastTurnText, LiveEvent } from '../engines/kit/events.js'
 import type { SessionRecaps } from '../lib/recapReads.js'
-import type { SessionInputDelivery } from '../lib/sessionInput.js'
+import type { SessionInputDelivery, SessionInputProgress } from '../lib/sessionInput.js'
 import type { AgentCloseRequest, AgentCloseResult } from '../lib/closeAgentService.js'
 import type { GitProjectFolder } from '../lib/projectFolder.js'
 import type { WorkspaceInspection, WorkspaceTarget, WorktreeReview } from '../lib/worktreeDeletion.js'
@@ -48,10 +51,9 @@ import { externalUnavailable, type ExternalSessionAnswer, type ExternalSessionRe
 import type { SessionSearchIndex } from '../lib/sessionSearch/indexer.js'
 import type { StoppedAgentStore } from '../lib/stoppedAgents.js'
 import type { TerminalBinaryClear } from '../lib/terminalBinary.js'
-import { VIEWER_UP_TYPES } from '../lib/viewerFrames.js'
-import type { DeviceInputStatus } from './deviceInput.js'
 import type { DeviceHookPort } from './deviceHookCalls.js'
 import { FAIL, later, readFallback, ServiceUnavailableError, type PortFallbacks } from './serviceHost.js'
+export { SERVICE_REQUESTS_MAX } from './serviceHost.js'
 
 /** The mod's poll, as the core hands it to the devices: a service reads these types here alone. */
 export type { DeviceHookPort, InboxAnswer, InboxPoll } from './deviceHookCalls.js'
@@ -102,6 +104,41 @@ export function agentView(session: RegisteredSession): AgentView {
   const { gridLaunch: _gridLaunch, ...view } = session
   return view
 }
+
+/** Fixed private records avoid repeating property names and equal package strings for every member. */
+export type SessionReadLaunch = readonly [state: 'starting' | 'ready']
+  | readonly [state: 'failed', error: string, detail: string | false]
+  | readonly [state: 'held', service: string, detail: string]
+export type SessionReadRegistered = readonly [source: 'registered', agentId: string, sessionId: string, engine: string,
+  registeredAt: number, transcriptPath: string | null, lastHookAt: number, active: boolean, cwd: string | null,
+  storedDsh: string | null | false, launch: SessionReadLaunch | null, displayName: string, terminalAvailable: boolean,
+  selectedModel: string | null, turnRunning: boolean,
+  /** false: absent; true: exactly the stored string; otherwise the distinct published string. */ publishedDsh: string | boolean]
+export type SessionReadService = readonly [source: 'service', agentId: string, sessionId: string, engine: string,
+  registeredAt: number, transcriptPath: string | null, lastHookAt: number, displayName: string, selectedModel: string | null]
+export interface SessionReadHeader {
+  version: 2
+  machine: { id: string; computerId: string; name: string }
+  signedIn: boolean
+  environment: string
+  hasWindow: boolean
+}
+export type SessionReadValue = SessionReadRegistered | SessionReadService
+  | readonly [kind: 'gone', source: 'registered' | 'service', agentId: string]
+export type ReadRecord<Header = Record<string, unknown>, Row = Record<string, unknown>> =
+  | { type: 'begin'; payload: { header: Header; count: number } }
+  | { type: 'row'; payload: { index: number; value: Row } }
+  | { type: 'end'; payload: { count: number } }
+export type ReadReceiver<Header = Record<string, unknown>, Row = Record<string, unknown>> =
+  (record: ReadRecord<Header, Row>, settled: (sent: boolean) => void) => boolean
+export type SessionReadScope = 'registered' | 'advertised'
+export type SessionReadReceiver = ReadReceiver<SessionReadHeader, SessionReadValue>
+/** Provisional logical retention budgets, separate from actual transport credits and measured heap cost. */
+export const SESSION_READ_MEMBERS_BYTES = 8 * 1024 * 1024
+export const SESSION_READ_HEADER_BYTES = 64 * 1024
+export const SESSION_READ_VIEW_BYTES = 64 * 1024 * 1024
+export const SESSION_READ_OFF = async (): Promise<void> => { throw new Error('SESSION_READ_UNAVAILABLE') }
+
 
 /** Read-only conversation facts for the handoff in the edge host. Each lookup asks the core now;
  * a stopped record is never replaced by a stale live-agent list in another process. */
@@ -162,9 +199,13 @@ export interface CoreApi {
   conversations: ConversationReads
   agents: {
     /** Every agent on this machine: the live ones, then the stopped ones. */
-    all(): AgentView[]
+    all(): Promise<AgentView[]>
     /** The live agents. */
     live(): AgentView[]
+    /** Complete facts for the selected existing membership; rejects when unavailable or too large. */
+    readSessions(scope: SessionReadScope, receive: SessionReadReceiver, signal?: AbortSignal): Promise<void>
+    /** Current registered display facts; unavailable without their owning core's synchronous reader. */
+    facts(session: RegisteredSession): AgentFacts | null
     /** The name the apps show for an agent. */
     displayName(session: RegisteredSession): string
     /** A live agent, by its agent id. */
@@ -173,10 +214,8 @@ export interface CoreApi {
     resolve(id: string): AgentView | undefined
     /** The live agents the apps are shown. */
     advertised(): AgentView[]
-    /** The running cloud harnesses (core/agents/cloud.ts) as rows an agent list reads: an id, a start, an
-     *  engine and a name, with no pane, transcript or process. Only the lists that show them ask (the dial,
-     *  the fleet); absent where a core or process offers none. */
-    cloud?(): AgentView[]
+    /** Declared service-owned sessions, with no native terminal, transcript or filesystem authority. */
+    serviceSessions?(): ServiceSessionRow[]
     /** Whether the agent's terminal is attached: a frame without one reads to the apps as "agent gone". */
     terminalAvailable(agentId: string): boolean
     /** Send the agent's frame to the apps again. */
@@ -239,6 +278,8 @@ export interface CoreApi {
   count?(metric: ProductUsageMetric): void
   /** A device's or another machine's turns for an agent on this one: the doors the web and the hooks use. */
   turns: {
+    /** Exact open-turn state; absent outside the owning core, never inferred from an activity lease. */
+    running?(sessionId: string): boolean
     /** Deliver text into a live agent. */
     send(agentId: string, text: string): void
     /** Stop a live agent's turn. */
@@ -260,6 +301,8 @@ export interface CoreApi {
     /** Hear what becomes of each delivery: queued, written, its turn started, refused and why, or past
      *  knowing. Returns how to stop hearing. */
     onDelivery(listener: (event: TurnDelivery) => void): () => void
+    /** Bounded input facts, without promising a correlated turn from composer evidence. */
+    onInput?(listener: (event: SessionInputProgress) => void): () => void
   }
   questions: {
     /** Answer a live agent's question, keyed by the question keys it asked with. */
@@ -295,8 +338,8 @@ export interface CoreApi {
     /** Shared tabs' relay: a socket per shared tab, held by the gateway (`TabRelay`); what it hears is
      *  `GatewayEvents.tabFrame`, which the core hands to Agent Messages. */
     tabRelay: TabRelay
-    /** The account's connected services, sealed and opened by the gateway for its machines (`ConnectorVault`). */
-    connectorVault: ConnectorVault
+    /** Whether account connector sharing is enabled, and a bounded explicit synchronization. */
+    connectorSync: ConnectorSync
     /** Whether this computer holds an account: a sign-in or sign-out restarts the daemon. */
     signedIn(): boolean
     /** The account's environment (`prod`, …), which the backend checks every request against. */
@@ -323,20 +366,11 @@ export interface CoreApi {
   clients: {
     /** An agent's viewer moved: the windows' viewer panes forward to the new one. */
     viewerChanged(agentId: string): void
-    /** A frame of a viewer stream for the one connection that opened it (`viewer_response`, `viewer_data`,
-     *  `viewer_ack`, `viewer_end`, `viewer_close`): false when it cannot reach that connection. Only those
-     *  types; the core drops any other. */
-    viewerFrame(connId: string, type: string, payload: Record<string, unknown>): boolean
-    /** A frame of a browser's stream for the connection that opened it (`agent_browser_open_result`,
-     *  `agent_browser_close`): only those types, and only to the connection the core holds that open or that stream
-     *  for (core/browserStreams.ts). False otherwise, or when it could not reach it. Absent, with `browserBytes`, where
-     *  the core offers a service none: only the agent browser streams. */
-    browserFrame?(connId: string, type: string, payload: Record<string, unknown>): boolean
-    /** A browser stream's screen bytes as the agent browser frames them: a terminal's plain frame of kind browser
-     *  (lib/terminalBinary.ts `encodeTerminalLocal`), which names its stream. The core sends it as it came to the
-     *  connection it holds the stream for: false when it holds it for none, when it is no such frame, or when that
-     *  connection's transport refused it, which ends the stream. */
-    browserBytes?(frame: Uint8Array): boolean
+    /** The component's scoped stream adapter; an unscoped API cannot send a stream frame. Core derives the
+     *  recipient from its private grant and restores public IDs only at the client's transport. */
+    streamFrame(connId: string, type: string, payload: Record<string, unknown>): boolean
+    /** An already framed stream payload, forwarded unchanged through the same service scope. */
+    streamBytes?(frame: Uint8Array): boolean
     /** The account's grid has a name: the models picker answers with it at once. */
     gridNamed(name: string): void
     /** What the models picker lists may have changed (a local model started or stopped, grid set up):
@@ -351,12 +385,9 @@ export interface CoreApi {
     /** A frame for one of Share's observers, sealed by Share itself, to the relay through the gateway; false
      *  when it could not be handed over. */
     observer(connId: string, type: string, payload: Record<string, unknown>): boolean
-    /** A frame from the devices for every window on this computer, never the cloud: what a hand at this
-     *  desk did. Only `DEVICE_WINDOW_FRAMES`; the core drops any other. */
-    sendLocal(frame: DeviceWindowFrame): void
-    /** A window bridge's ask, to one window on this computer; false when it is gone. Only
-     *  `DEVICE_BRIDGE_FRAMES`. */
-    sendToWindow(connId: string, frame: DeviceBridgeFrame): boolean
+    /** A declared frame to local windows. The owning service selects all, first or one physical connection.
+     *  Acceptance is a handoff, not the app's acknowledgement; unscoped APIs cannot send. */
+    sendWindow(delivery: LocalWindowDelivery): boolean
     /** Whether a window on this computer is attached. */
     hasWindow(): boolean
     /** The devices on this computer changed (`harness_devices_changed`): the windows and the owner's apps
@@ -379,67 +410,22 @@ export interface CoreApi {
    *  serves and the machine it serves as. An experiment writes them into the prompts of the agents it runs
    *  (`… orchestrator --port 18473 --machine …`). */
   daemon: DaemonAddress
-  /** The cloud agents' doors into the core (services/cloud.ts): absent from a core or a process that offers them none. */
-  cloud?: CloudCore
-  /** The Wi-Fi device's doors into the core (services/wifi.ts): each one call it made when it ran here. */
-  wifi: {
-    /** What it lists and reads in line (`WifiView`), asked again before each request it answers. */
-    view(): Promise<WifiView>
-    /** A device's prompt into a live agent, through the pane's write lock, as delivery `deliveryId`. Settles
-     *  once the lock has taken it: what it said of the prompt meanwhile is the reply's to carry. */
-    submit(agentId: string, text: string, deliveryId: string): Promise<void>
-    /** A queued delivery the device no longer stands behind (it was unpaired). */
-    cancel(deliveryId: string): void
-    /** The agent's transcript shows the device's prompt began its turn: the pane's lock moves on. */
-    started(agentId: string, text: string): void
-    /** Stop a live agent's turn; resolves whether it stopped. */
-    stop(agentId: string): Promise<boolean>
-    /** Answer a live agent's question, never a permission dialog; resolves whether the terminal took it. */
-    answer(agentId: string, requestId: string, answers: Record<string, string>): Promise<boolean>
-    /** Start an agent for an installed Store harness in `cwd`, with the device's fixed, safe launch
-     *  arguments; refused when another agent works there. */
-    create(packageId: string, engine: string, cwd: string): Promise<ForkResult>
-    /** Move the window's focus one agent along the desk, the dial's way; 'no_app' without a window. */
-    stepFocus(direction: 'next' | 'previous', currentAgentId?: string): Promise<{ machineId: string; agentId: string } | 'no_agents' | 'no_app'>
-    /** A stroke on the device's glass for the window's terminal; false without a window. */
-    scroll(phase: 'down' | 'move' | 'up', dy: number, velocity: number): boolean
-    /** Ask the window to select an agent (`device_focus`); false without a window. */
-    focusApp(agentId: string, expiresAt: number, focusRevision: string): boolean
-    /** Ask the window to open the agent a Store preparation made (`device_prepare_open`). */
-    reveal(operationId: string, agentId: string): void
-    /** An answer or event for one device session, sealed to it by the gateway, if the session is still
-     *  that identity's device. */
-    send(connId: string, identity: string, type: string, payload: Record<string, unknown>): void
-    /** Which identity's app said hello on a session (null: it left): the core counts it as watching. */
-    hello(connId: string, identity: string | null): void
-    /** A device said hello: what the agents are doing is sent again for it. */
-    joined(): void
-    /** It is built and serving: the gateway may connect the devices' direct links, which a service that
-     *  could not be built would leave unanswered. */
-    ready(): void
-    /** A device asked to be unpaired, over its session: its pairing goes. */
-    unpaired(identity: string): void
-    /** The focus revision, as it changes: a window's stale selection is refused against it. */
-    focus(revision: string): void
-    /** It no longer reads this agent's transcript, as of the `seen`th prompt the core told it of. */
-    transcripts(agentId: string, seen: number): void
-    /** The agents whose transcripts it reads, said as it starts. */
-    watching(agentIds: string[]): void
-    /** The agents a device subscribed to: their tools' events are sent too, not only the answer's text. */
-    streams(agentIds: string[]): void
-  }
+  /** Bound only by the host to the current authenticated service instance. */
+  owners?: SessionOwnerCore
 }
 
-/** An agent to create, as an experiment asks for one (the orchestrator's Director and specialists). */
+/** An ID-only session create for components; launch identity stays with the core. */
 export interface AgentCreateRequest {
   engine: AgentEngine
   cwd: string
   /** The harness to create it as, installed here; null for the engine alone. */
   dsh: string | null
   /** The message it opens with, already submitted. */
-  prompt: string
-  name: string
+  prompt: string | null
+  name: string | null
   bypassPermission: boolean
+  /** Current registered workspace absence, rechecked before native dispatch; not a pending reservation. */
+  requireUnusedWorkspace?: true
 }
 
 /** See `CoreApi.daemon`. */
@@ -528,27 +514,16 @@ export interface TabRelay {
 /** A process with no relay of the core's: it opens nothing and sends nothing. */
 export const TAB_RELAY_OFF: TabRelay = { open: async () => {}, send: async () => false, close: () => {} }
 
-/**
- * The account's connected services sealed for its machines (lib/e2ee/connectorVault.ts), by the gateway,
- * which holds this machine's identity and reads the device key log: `seal` makes an envelope for every
- * machine of the account's log (not suspended, not pending), `open` reads one only if such a machine
- * signed it, and answers null otherwise. `complete` says it was sealed for every such machine: one that
- * is not misses a machine added since, and is sealed again. The envelope is opaque JSON for the backend.
- */
-export interface ConnectorVault {
-  seal(plaintext: string): Promise<Record<string, unknown>>
-  open(envelope: unknown): Promise<{ plaintext: string, complete: boolean } | { stranded: true } | null>
-}
-/** A process with no key of the core's: it seals and opens nothing. */
-export const CONNECTOR_VAULT_OFF: ConnectorVault = {
-  seal: () => Promise.reject(new Error('no key: this process holds no E2EE identity')),
-  open: async () => null,
-}
+/** Metadata-only account synchronization; connector credentials remain inside the gateway. */
+export type ConnectorSync = (refresh: boolean) => Promise<{ shared: boolean }>
+export const CONNECTOR_SYNC_OFF: ConnectorSync = async () => { throw new Error('CONNECTORS_SYNC_UNAVAILABLE') }
 
 /** A service in its own process that acts on no agent: it creates none and reads no harness's frame. */
-export const AGENT_ACTIONS_OFF: Pick<CoreApi['agents'], 'create' | 'dsh'> = {
+export const AGENT_ACTIONS_OFF: Pick<CoreApi['agents'], 'readSessions' | 'create' | 'dsh' | 'facts'> = {
+  readSessions: SESSION_READ_OFF,
   create: async () => ({ ok: false, error: 'SERVICE_UNAVAILABLE' }),
   dsh: () => null,
+  facts: () => null,
 }
 
 /** The account signed in here, as Agent Messages' shared tabs name their owner and members by it. */
@@ -573,14 +548,14 @@ export function accountIdentity(backend: CoreApi['account']['backend']): () => P
 }
 
 /** The account as a service that reads no backend, hears no notice and signs nothing has it. */
-export const ACCOUNT_BACKEND_OFF: Pick<CoreApi['account'], 'backend' | 'identity' | 'onNotice' | 'observerKey' | 'tabKey' | 'tabRelay' | 'connectorVault'> = {
+export const ACCOUNT_BACKEND_OFF: Pick<CoreApi['account'], 'backend' | 'identity' | 'onNotice' | 'observerKey' | 'tabKey' | 'tabRelay' | 'connectorSync'> = {
   backend: async () => ({ status: 503, body: { error: 'SERVICE_UNAVAILABLE' } }),
   identity: async () => null,
   onNotice: () => () => {},
   observerKey: OBSERVER_KEY_OFF,
   tabKey: TAB_KEY_OFF,
   tabRelay: TAB_RELAY_OFF,
-  connectorVault: CONNECTOR_VAULT_OFF,
+  connectorSync: CONNECTOR_SYNC_OFF,
 }
 
 /** Where a service that was never told runs this daemon from: the installed CLI, on no port it knows. */
@@ -588,7 +563,12 @@ export const DAEMON_UNKNOWN: DaemonAddress = { command: 'harness', port: 0, mach
 
 /** How a delivery is told apart: `quiet` marks a line a service types for the agent alone: the turn it starts is nobody's
  *  news, and ends with no recap and no notification (core/deliveries.ts, core/turns/recaps.ts). */
-export interface DeliveryOptions { quiet?: true }
+export interface DeliveryOptions {
+  quiet?: true
+  when?: 'composer' | 'turn'
+  /** Core-owned connection authority. The wire contract never accepts this member. */
+  current?: () => boolean
+}
 
 /** What became of a delivered turn (`turns.deliver`), as the core's input says it: `queued`, written
  *  (`delivered`), its turn `started`, `rejected` with why, or `unknown`. `sessionId` is the agent it was
@@ -647,20 +627,13 @@ export interface Asker {
    *  a core from before it was given: then the request is its own connection. */
   connection?: string
   requestId?: string
+  /** A declared frame alias routed by core/serviceRoutes, never a field a client supplied. */
+  rpcRoute?: true
   /** It came through the local door over the daemon's own socket (on Windows its pipe, with the token's proof), where
    *  the filesystem said it is this computer's owner: set by the door (core/serviceRoutes.ts), never by a payload, and
    *  never for a client of the local WebSocket. A route only that socket may ask (`ServiceHttpRoute.door`) is refused
    *  without it. */
   door?: 'socket'
-}
-
-/**
- * Whether [asker] may open, retry or change an agent's browser, which holds its person's logins: a process on this
- * computer, or another of the owner's own apps and computers. Never `owner` alone, which a verified machine share also
- * is, and never a guest.
- */
-export function mayOpenBrowser(asker: Asker): boolean {
-  return (asker.local || asker.accountOwner === true) && !asker.guest
 }
 
 /**
@@ -702,7 +675,7 @@ export const ROUTER_REQUESTS = ['route_decide'] as const
  * The agent browser (services/agentBrowser.ts): whether Browser can run here, setting it up (this computer only), a
  * browser's state for the MCP relay of an agent launched before the browser moved to its chat (this computer only),
  * its person's Start and Stop, Retry, the settings and the size of Chrome's window (the machine's own person only,
- * `mayOpenBrowser`), and the agent's own commands, from `harness browser` in its pane (this computer only).
+ * checked by its service), and the agent's own commands, from `harness browser` in its pane (this computer only).
  */
 export const AGENT_BROWSER_REQUESTS = ['agent_browser_available', 'agent_browser_setup', 'agent_browser_retry',
   'agent_browser_state', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test',
@@ -746,7 +719,8 @@ export type GuestLaunch =
 
 /** The core's call into shared machines: a guest's launch (docs/plans/2026-10-19-guest-machine-sharing-plan.md). */
 export interface SharedMachinesCorePort {
-  guestLaunch(input: GuestLaunchInput): Promise<GuestLaunch>
+  /** Untrusted contribution; createGuestCreate checks it against the captured guest request before any effect. */
+  guestLaunch(input: GuestLaunchInput): Promise<unknown>
   /** The service stopping: its reads stop. */
   stop(): Promise<void> | void
 }
@@ -777,7 +751,7 @@ export const MACHINE_ADDON_REQUESTS = ['machine_addon', 'machine_addons_http'] a
  * The saved APIs and the Codex profiles came out of the socket's switch (launchTargetRequests).
  */
 export const MODELS_REQUESTS = [
-  'grid_models_list', 'models_list',
+  'grid_models_list', 'models_list', 'grid_launch_context',
   'grid_fleet_models_list', 'grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop',
   'grid_fleet_run', 'grid_fleet_cancel',
   'api_connections', 'codex_profiles_list', 'codex_profile_link',
@@ -794,8 +768,9 @@ const MINUTE = 60_000
  *
  * - A grid command runs as long as its caller asked, up to half an hour (`GRID_FLEET_MAX_TIMEOUT_MS`).
  * - Grid's set-up installs `grid` on first use (its installer is given ten minutes, `gridInstall.ts`),
- *   hands it this machine's sign-in and makes the account's grid: a Set up, a Get, a Use, `ensure` and
+ *   hands it this machine's sign-in and makes the account's grid: a Set up, a Get, a Use and
  *   a move onto a grid model (`moveTarget`) each wait for it.
+ * - Package context waits eight seconds for setup, then reads the private Grid name.
  * - A launch target, the private grid's name and the lists each run a few `grid` calls of up to 30 s.
  * - The Store's install and update set up a harness's toolchain: minutes.
  *
@@ -811,10 +786,10 @@ export const LONG_ANSWERS: Readonly<Record<string, Readonly<Record<string, numbe
   models: {
     grid_fleet_run: GRID_FLEET_MAX_TIMEOUT_MS + MINUTE,
     grid_fleet_models_list: 15 * MINUTE, grid_fleet_model_download: 15 * MINUTE, grid_fleet_model_start: 15 * MINUTE,
-    ensure: 15 * MINUTE, moveTarget: 15 * MINUTE,
+    grid_launch_context: 3 * MINUTE, moveTarget: 15 * MINUTE,
     launchTarget: 3 * MINUTE, privateGridName: 2 * MINUTE, lists: 2 * MINUTE,
   },
-  store: { dsh_install: 30 * MINUTE, dsh_update: 30 * MINUTE, dshMaterialize: 6 * MINUTE },
+  store: { dsh_install: 30 * MINUTE, dsh_update: 30 * MINUTE, dshMaterialize: 6 * MINUTE, dshContext: 3 * MINUTE },
   // A cloud agent's maker answers on its own time: Fo's reply waits 40 s, and a busy Fo is retried for half a
   // minute more. A wait shorter than that said "not running" of words that were then sent anyway.
   cloud: { create: 3 * MINUTE, deliver: 3 * MINUTE, answer: 3 * MINUTE, stopHarness: 2 * MINUTE, cloud_send: 3 * MINUTE },
@@ -908,8 +883,8 @@ export const MESSAGES_WINDOW_FRAMES: readonly string[] = [MESSAGES_WINDOW_FRAME,
 /**
  * The experiments: services that cost nothing until they are on (docs/design/2026-10-06-core-boundary-next.md,
  * "Experimental features: move only"). Each runs in a process of its own that the master starts only once the
- * core asks for it (harnessd/services.ts `onDemand`): when one of its `requests` arrives, or at start when its
- * saved `state` is in the data folder (paths under it; `dir/*.ext` for a file of that kind in that folder).
+ * core asks for it (harnessd/services.ts `onDemand`), or the edge startup component finds its saved state.
+ * This contract declares requests; saved paths and startup inspection belong to the component.
  * Off, it has no process and none of its code is loaded anywhere. Each may act on the core through the hooks
  * an experiment has (core/experimentQueries.ts, core/deliveries.ts), and no other process may.
  *
@@ -918,19 +893,19 @@ export const MESSAGES_WINDOW_FRAMES: readonly string[] = [MESSAGES_WINDOW_FRAME,
  * entry here; the backend routes it may call (`EXPERIMENT_BACKEND_ROUTES`, `[]` for none); and its start for the
  * core's own process (services/inline.ts `EXPERIMENT_STARTS`). Removing one is deleting those.
  */
-export const EXPERIMENTS: Readonly<Record<string, { requests: readonly string[]; state: readonly string[] }>> = {
-  orchestrator: { requests: ORCHESTRATOR_REQUESTS, state: ['orchestrator/*.json'] },
+export const EXPERIMENTS: Readonly<Record<string, { requests: readonly string[] }>> = {
+  orchestrator: { requests: ORCHESTRATOR_REQUESTS },
   // Its invitations and links: a harness was shared from here. Or a shared tab held here (Agent Messages' file): the
   // observers its members are granted are derived and renewed by Share, and taken back once one leaves.
-  sharing: { requests: SHARE_REQUESTS, state: ['harness-shares.json', 'harness-collaboration.json', 'agent-messages/shared-tabs.json'] },
+  sharing: { requests: SHARE_REQUESTS },
   // Request-only, on from its first request until the daemon stops: another machine's Memories pane asks, and
   // the package's own files are its state.
-  memory: { requests: MEMORY_REQUESTS, state: [] },
+  memory: { requests: MEMORY_REQUESTS },
   // Request-only too: it keeps nothing, and asks Jev only when a client asks it.
-  router: { requests: ROUTER_REQUESTS, state: [] },
+  router: { requests: ROUTER_REQUESTS },
   // Cloud agents. Its harnesses: one was started here, and is watched again as the daemon starts. A New Harness
-  // for one, an answer or a message to one wakes it too (its port's calls, core/agents/cloud.ts).
-  cloud: { requests: CLOUD_REQUESTS, state: ['cloud/harnesses.json'] },
+  // for one, an answer or a message to one wakes it too (its declared session port).
+  cloud: { requests: CLOUD_REQUESTS },
 }
 
 const each = (methods: readonly string[], path: RegExp): BackendRoute[] => methods.map((method) => ({ method, path }))
@@ -963,7 +938,7 @@ export const experimentBackendAllowed = (service: string, method: unknown, path:
  *  Agent Messages, which left them for the edge host and still types a message into an idle agent, and the agent
  *  browser, which types its two lines into an agent when its person starts and stops its browser. No other process
  *  may: writing into a pane is no other service's to ask. */
-export const TURN_DELIVERERS: readonly string[] = [...Object.keys(EXPERIMENTS), 'messages', 'agentBrowser']
+export const TURN_DELIVERERS: readonly string[] = [...Object.keys(EXPERIMENTS), 'messages', 'agentBrowser', 'wifi']
 
 /** The core's calls into Share: an observer's frame as the relay handed it over, the relay gone (every observer
  *  with it), and stopping it. */
@@ -1034,8 +1009,21 @@ export interface RecapSession {
  *  over the relay, and hears how loudly each turn ends (`turn_summary`'s `tier`); absent from an older core. */
 export interface RecapWatchers { device: boolean; active: boolean; remote?: boolean }
 
+/** Raw session failure facts; presentation belongs to the lifecycle consumer. */
+export interface SessionFailure {
+  agentId: string
+  sessionId: string
+  engine?: string
+  message: string
+  failureSummary?: string
+}
+
+/** The most lifecycle data allowed to wait for the recaps component. */
+export const RECAPS_BUFFER_LIMIT = 4 * 1024 * 1024
+
 /** The turn lifecycle, as the core tells the recaps. */
 export type TurnLifecycle =
+  | { kind: 'failure'; failure: SessionFailure }
   /** A session's events (a turn started, its text, its tools and sub-agents, its end), as one batch. `quiet`: the turn
    *  that ends in this batch was started by a quiet delivery (`DeliveryOptions.quiet`); absent from an older core. */
   | { kind: 'events'; session: RecapSession; events: LiveEvent[]; replay: boolean; quiet?: true }
@@ -1070,21 +1058,19 @@ export interface RecapsPort {
   /** The cards of every turn still working or being recapped, for a dial that just attached: asked when it
    *  attaches and sent when they come, never waited for in line. */
   liveCards(): Promise<TurnCardFrame[]>
+  stop(): Promise<void>
 }
 
 /** What the core gets when the recaps fail: nothing told, no recap, and no live card. */
-export const RECAPS_FALLBACKS: PortFallbacks<RecapsPort> = { lifecycle: undefined, recaps: null, liveCards: later([]) }
+export const RECAPS_FALLBACKS: PortFallbacks<RecapsPort> = { lifecycle: undefined, recaps: null, liveCards: later([]), stop: later(undefined) }
 
 /**
  * The core's calls into the agent cleanup (services/agentCleanup.ts): what happens to the harnesses agents start.
- * `typed` is a notice: the core never waits for it, and one the cleanup misses leaves a harness open, as before it. A
+ * Accepted person input is shared through AgentLife; the cleanup retains joined protection in its own process. A
  * harness closed or stopped it hears as every service that follows agents does (`AgentLife` `stopped`), and closes
  * the harnesses that one started.
  */
 export interface AgentCleanupPort {
-  /** The person typed or pasted into a harness, from a window or the phone (an agent id or a session id): one another
-   *  agent started is the person's from then on. */
-  typed(id: string): void
   /** A harness is being deleted: the agent ledger's lines that keep the opening words of what it was told
    *  (`harness tell`) are erased. The one answer a delete waits for here, and for a bounded time: false when they were
    *  not erased, which refuses the delete. The ledger is the agent clients' file, read and locked by the cleanup and
@@ -1094,7 +1080,7 @@ export interface AgentCleanupPort {
 }
 /** What the core gets when the cleanup fails: nothing told, every harness left open, as before it, and no delete of a
  *  harness whose told lines it could not erase. */
-export const AGENT_CLEANUP_FALLBACKS: PortFallbacks<AgentCleanupPort> = { typed: undefined, forgetTold: later(false), stop: undefined }
+export const AGENT_CLEANUP_FALLBACKS: PortFallbacks<AgentCleanupPort> = { forgetTold: later(false), stop: undefined }
 
 /**
  * What happens to agents, as the core tells the services that follow them (core/agentLife.ts, `CoreApi.agents.follow`):
@@ -1107,6 +1093,8 @@ export type AgentLife =
   /** It stopped running here: a stop or any other forget, or its engine's own exit. Told to a follower that was told it
    *  running. */
   | { kind: 'ended'; agentId: string }
+  /** First accepted person input on a controlling terminal stream; a takeover/reopen supplies a new source. */
+  | { kind: 'input'; agentId: string; startedByAgent: boolean; source?: { connection: string; clientKind: string | null } }
   /** A person or an agent stopped it (`agent_close`, Stop Harness, `harness close`, a purge), told once the stop is done,
    *  never while it can still fail. */
   | { kind: 'stopped'; agentId: string }
@@ -1133,38 +1121,6 @@ export const FOLLOW_HAVING_MAX = 4
  *  services its process says hear them (harnessd/services.ts `hears`). */
 export type { HeldAgentLife } from '../harnessd/services.js'
 
-/**
- * The core's stream calls into the agent browser (services/agentBrowser.ts). Display fields use the generic publisher;
- * what happens to its agents it hears as every service that follows agents does
- * (`AgentLife`).
- */
-export interface AgentBrowserPort {
-  /** A viewer's frame of a browser's stream (`agent_browser_open`, `agent_browser_ack`, `agent_browser_close`), from the
-   *  connection [connId]; an open with who asked as the core established it, and an ack or a close with nobody, as the
-   *  stream's own. The stream is the service's (services/agentBrowser/streams.ts): the core passes frames on and
-   *  answers back (core/browserStreams.ts). False when nobody took it. */
-  stream(connId: string, type: string, payload: Record<string, unknown>, asker?: Asker): boolean
-  /** A viewer's bytes for its stream: its keys and mouse, as VNC writes them. The core passes them on only from the
-   *  connection it holds the stream for (core/browserStreams.ts), and names the stream alone. False when they did not
-   *  reach the service: the core then ends the stream. */
-  streamInput(streamId: string, bytes: Uint8Array): boolean
-  /** A viewer's connection ended: its streams end. */
-  streamClosed(connId: string): void
-  /** The gateway's word on the route a remote stream took (`GatewayEvents.browserRoute`), or null: the route went
-   *  away, and the stream ends with it. */
-  streamRoute(streamId: string, route: BrowserRoute | null): void
-  /** The backend refused one of this machine's relayed browser frames: every stream that may be on the relay ends. */
-  streamTransportError(): void
-  /** The viewer's transport refused one of the stream's frames: a hole in its screen, so it ends. */
-  streamRefused(streamId: string): void
-  stop(): void
-}
-
-/** What the core gets when the agent browser fails: frames without a browser, and no stream taken. */
-export const AGENT_BROWSER_FALLBACKS: PortFallbacks<AgentBrowserPort> = {
-  stream: false, streamInput: false, streamClosed: undefined, streamRoute: undefined, streamTransportError: undefined, streamRefused: undefined, stop: undefined,
-}
-
 /** The core's calls into the DSH viewers: each harness agent's viewer server and verdict watch. Which agents have
  *  one they hear as every service that follows agents does (`AgentLife`, `VIEWERS_FOLLOW`). */
 export interface ViewersPort {
@@ -1172,15 +1128,9 @@ export interface ViewersPort {
   forwardingUrl(agentId: string): string | null
   /** Stop every viewer and watch, for a restart or a shutdown. */
   stop(): Promise<void>
-  /** A client's frame of a viewer stream (`viewer_request`, `viewer_data`, …), from the connection `connId`:
-   *  how a client that cannot reach this machine's loopback (a phone, another machine's window) is served
-   *  a viewer. False when the viewers did not take it. */
-  stream(connId: string, type: string, payload: Record<string, unknown>): boolean
   /** A client's `viewer_surface`: a frame of a viewer rendered for it by a headless browser, or why not. */
   surface(connId: string, payload: Record<string, unknown>): Promise<Record<string, unknown>>
-  /** A client's connection ended (`connId`), or every one did (none: the link went down, or the socket is
-   *  stopping): its viewer streams and surfaces close. */
-  closed(connId?: string): void
+
 }
 
 /** How the viewers follow agents (core/agentLife.ts), in their process and in the core's: each agent with a harness at
@@ -1191,12 +1141,12 @@ export const VIEWERS_FOLLOW: FollowOptions = { each: true, having: ['dsh'], fram
 /** What a client is told for a surface the viewers cannot render while they are off or failing. */
 export const VIEWERS_UNAVAILABLE = { error: 'SERVICE_UNAVAILABLE', service: 'viewers', retryable: true }
 
-/** What the core gets when the viewers fail: no new forwarding target, a client's viewer stream is refused at once (core/viewerStreams.ts) and its surface
+/** What the core gets when the viewers fail: no new forwarding target, a client's stream is refused by the shared relay and its surface
  *  answered unavailable, and a restart or shutdown goes on. Their process on demand, before it has
  *  first connected, holds a stream and a surface while it starts instead (core/viewersLink.ts). */
 export const VIEWERS_FALLBACKS: PortFallbacks<ViewersPort> = {
   forwardingUrl: null, stop: later(undefined),
-  stream: false, surface: later(VIEWERS_UNAVAILABLE), closed: undefined,
+  surface: later(VIEWERS_UNAVAILABLE),
 }
 
 /**
@@ -1206,8 +1156,6 @@ export const VIEWERS_FALLBACKS: PortFallbacks<ViewersPort> = {
  * service last told it for what a frame or a keystroke reads, and by asking it for the rest.
  */
 export interface ModelsPort {
-  /** Have grid ready for what the caller is about to do; resolves with what happened, never rejects. */
-  ensure: GridAccess['ensure']
   /** What an agent's frame says of the grid it is on: from memory, so a frame costs no I/O. */
   annotation(grid: AgentGridTarget): GridAnnotation | null
   /** Someone is typing to an agent on `grid`: start it while they type, if it sleeps. */
@@ -1226,7 +1174,8 @@ export interface ModelsPort {
    * `refresh`. An engine that cannot be pointed there is answered with the reason. The core builds no grid launch
    * itself (docs/design/2026-10-08-launch-port.md).
    */
-  gridLaunch(request: GridLaunchRequest): Promise<GridLaunchAnswer>
+  /** Untrusted contribution; gridLaunchThrough checks and detaches it in both process and inline modes. */
+  gridLaunch(request: GridLaunchRequest): Promise<unknown>
   /** Fresh process evidence, batched; core never waits for it to discover or bind a session. */
   gridAssignments(processes: readonly GridAssignmentProcess[]): Promise<GridAssignmentAnswer[]>
   /** Where an agent moved onto a saved API's model sends its inference: the key travels only into its launch. The
@@ -1251,13 +1200,12 @@ export interface ModelsPort {
  * engine's own login never asks models.
  */
 export const MODELS_FALLBACKS: PortFallbacks<ModelsPort> = {
-  ensure: later(FAIL), annotation: null, prewarm: undefined, launchTarget: later(FAIL), moveTarget: later(FAIL), moved: undefined,
+  annotation: null, prewarm: undefined, launchTarget: later(FAIL), moveTarget: later(FAIL), moved: undefined,
   gridAssignments: later(FAIL), gridLaunch: later(FAIL), apiTarget: later(FAIL), privateGridName: later(null), lists: later(FAIL), machines: undefined, signedOut: undefined,
 }
 
 /** What the core calls while `ports.models` is null (models is off): its fallbacks' answers. */
 export const MODELS_OFF: ModelsPort = {
-  ensure: () => Promise.reject(new ServiceUnavailableError('models')),
   annotation: () => null,
   prewarm: () => {},
   launchTarget: () => Promise.reject(new ServiceUnavailableError('models')),
@@ -1291,6 +1239,40 @@ export const MONITOR_FALLBACKS: PortFallbacks<MonitorPort> = { resources: later(
 export const MONITOR_OFF: MonitorPort = {
   resources: () => Promise.reject(new ServiceUnavailableError('monitor')),
   storage: async () => new Map(),
+}
+
+/** Upload preparation only. The stream keeps terminal authority; the worker owns bodies and clipboard work. */
+export interface PasteUpload {
+  generation: string
+  connection: string
+  streamId: string
+}
+export interface PasteBegin extends PasteUpload { kind?: 'image' | 'file'; filename: string; totalBytes: number }
+export type PasteArtifact = { name: string; version: string }
+export interface PasteClipboardRequest extends PasteUpload { artifact: PasteArtifact; corePid?: number }
+export type PasteClipboardResult = { state: 'written' } | { state: 'failed' | 'unavailable'; reason: string }
+export type PasteResult = { error: string } | { ignored: true }
+  | { bytesWritten: number; totalBytes: number; artifact?: PasteArtifact }
+export interface PastePort {
+  begin(request: PasteBegin): Promise<{ accepted: true } | { error: string }>
+  chunk(request: PasteUpload & { seq: number }, bytes: Uint8Array): Promise<PasteResult>
+  clipboard(request: PasteClipboardRequest): Promise<PasteClipboardResult>
+  releaseClipboard(generation: string, corePid?: number): void
+  cancel(generation: string | null): void
+  stop(): void | Promise<void>
+}
+export const PASTE_REQUESTS = [] as const
+export const PASTE_OFF: PastePort = {
+  begin: async () => ({ error: 'PASTE_UNAVAILABLE' }),
+  chunk: async () => ({ error: 'PASTE_UNAVAILABLE' }),
+  clipboard: async () => ({ state: 'unavailable', reason: 'PASTE_UNAVAILABLE' }),
+  releaseClipboard: () => {},
+  cancel: () => {}, stop: () => {},
+}
+export const PASTE_FALLBACKS: PortFallbacks<PastePort> = {
+  begin: later({ error: 'PASTE_UNAVAILABLE' }), chunk: later({ error: 'PASTE_UNAVAILABLE' }),
+  clipboard: later({ state: 'unavailable', reason: 'PASTE_UNAVAILABLE' }), releaseClipboard: undefined,
+  cancel: undefined, stop: undefined,
 }
 
 /** The core's call into connected services (services/connectors.ts), as an agent launches on a profile home (a Claude
@@ -1335,6 +1317,9 @@ export interface WorkspacesPort {
    *  computer reaches GitHub (lib/gitProjectFolder.ts); a start whose address someone else chose never picks the owner's
    *  accounts. */
   prepareFolder(project: GitProjectFolder, options: { cloneFallback: boolean }): Promise<PreparedFolder>
+  /** Best-effort workspace instructions; false means unconfirmed, never a reason to hold an ordinary launch.
+   *  [closed] is the process request's cancellation signal, checked before file effects. */
+  prepareInstructions(workspace: string, engine: string, closed?: AbortSignal): Promise<boolean>
   /** Where a harness works, for Inspect: a worktree, the main checkout or a plain folder; null when nothing answered.
    *  [others]: the folders every other harness here works in, live or stopped. */
   describeWorkspace(target: WorkspaceTarget, others: readonly string[]): Promise<WorkspaceInspection | null>
@@ -1355,14 +1340,14 @@ const REMOVAL_UNAVAILABLE = { ok: false as const, reason: `The worktree was kept
  *  worktree is read or removed. */
 export const WORKSPACES_FALLBACKS: PortFallbacks<WorkspacesPort> = {
   stop: undefined,
-  nameBranches: undefined, ready: false, prepareFolder: later(FOLDER_UNAVAILABLE), describeWorkspace: later(null),
+  nameBranches: undefined, ready: false, prepareInstructions: later(false), prepareFolder: later(FOLDER_UNAVAILABLE), describeWorkspace: later(null),
   reviewWorktree: later(REVIEW_UNAVAILABLE), removeWorktree: later(REMOVAL_UNAVAILABLE),
 }
 
 /** What the core calls while `ports.workspaces` is null (workspaces off): its fallbacks' answers. */
 export const WORKSPACES_OFF: WorkspacesPort = {
   stop: () => {},
-  nameBranches: () => {}, ready: () => false, prepareFolder: async () => FOLDER_UNAVAILABLE, describeWorkspace: async () => null,
+  nameBranches: () => {}, ready: () => false, prepareInstructions: async () => false, prepareFolder: async () => FOLDER_UNAVAILABLE, describeWorkspace: async () => null,
   reviewWorktree: async () => REVIEW_UNAVAILABLE, removeWorktree: async () => REMOVAL_UNAVAILABLE,
 }
 
@@ -1379,39 +1364,8 @@ export interface MessagesPort {
  *  a settings write tells it nothing. */
 export const MESSAGES_FALLBACKS: PortFallbacks<MessagesPort> = { canWrite: false, settingsChanged: undefined }
 
-/**
- * The cloud agents' doors into the core (docs/design/2026-10-11-cloud-agents.md, "The one core change"): the
- * harnesses its service owns, which have no pane, and the questions they ask. The core lists them beside the
- * terminal agents and tells every client what changed (core/agents/cloud.ts).
- */
-export interface CloudCore {
-  /** Every cloud harness, replacing the last list. */
-  publish(harnesses: CloudHarness[]): void
-  /** One waits on the person: shown wherever questions show; the answer comes back through `CloudPort.answer`. */
-  ask(agentId: string, requestId: string, question: { text: string; choices: string[] }): void
-  /** That question is no longer asked. */
-  unask(agentId: string, requestId: string): void
-}
-
-/** What the cloud service answers the core: done, or why not, in words a person reads. */
-export type CloudResult = { ok: true; detail?: string } | { ok: false; error: string; detail?: string }
-
-/** The core's calls into the cloud agents' service: a New Harness for one, a person's words, an answer, a new name, a Stop. */
-export interface CloudPort {
-  /** `agent_create` for a cloud agent: the new harness's frame, or why not. */
-  create(request: Record<string, unknown>): Promise<{ ok: true; agent: Record<string, unknown> } | { ok: false; error: string; detail?: string }>
-  deliver(agentId: string, text: string): Promise<CloudResult>
-  answer(agentId: string, requestId: string, answers: Record<string, string>): Promise<CloudResult>
-  /** Rename Harness: the name Harness shows. The maker's own name for the work stays as it is. */
-  rename(agentId: string, name: string): Promise<CloudResult>
-  /** Stop Harness. Not `stop`: a service host reads a port's `stop` as stopping the service itself. */
-  stopHarness(agentId: string): Promise<CloudResult>
-}
-
-/** A call the cloud service could not take: it is off, failing, or slower than the core waits. */
-export const CLOUD_DOWN = { ok: false as const, error: 'SERVICE_UNAVAILABLE', detail: 'Cloud agents are not running here. Try again in a moment.' }
-/** What the core gets when the cloud service fails: each call is refused with a reason, and nothing is lost but it. */
-export const CLOUD_FALLBACKS: PortFallbacks<CloudPort> = { create: later(CLOUD_DOWN), deliver: later(CLOUD_DOWN), answer: later(CLOUD_DOWN), rename: later(CLOUD_DOWN), stopHarness: later(CLOUD_DOWN) }
+/** One operation contract and fallback for declared session owners, independent of any provider. */
+export const OWNER_FALLBACKS: PortFallbacks<SessionOwnerPort> = { create: later(OWNER_REPLY_DOWN), deliver: later(OWNER_DOWN), answer: later(OWNER_ANSWER_DOWN), rename: later(OWNER_REPLY_DOWN), stopHarness: later(OWNER_REPLY_DOWN) }
 
 /** What a delivered turn answers: delivered, or refused with the machine's name and a reason a person can read. */
 export type SendResult = { ok: true } | { ok: false; machine: string; reason: string }
@@ -1465,18 +1419,33 @@ export type ForkResult = { ok: true; agentId: string } | { ok: false; error: str
  * session.
  */
 
-/** The frames the devices may send every window on this computer (`clients.sendLocal`): what a hand at
- *  this desk did on a dial, and a spoken task offered to the window's palette. Never to the cloud. */
-export const DEVICE_WINDOW_FRAMES = [
-  'dial_open', 'dial_notification_read', 'dial_forked', 'dial_focus', 'dial_swarm', 'dial_scroll', 'dial_status',
-  'voice_route_request',
-] as const
-export type DeviceWindowFrame = { type: (typeof DEVICE_WINDOW_FRAMES)[number]; payload: Record<string, unknown> }
+export type LocalWindowTarget = { kind: 'all' } | { kind: 'first' } | { kind: 'connection'; connId: string }
+export interface LocalWindowDelivery {
+  target: LocalWindowTarget
+  frame: { type: string; payload: Record<string, unknown> }
+}
+export const LOCAL_WINDOW_OFF = (_delivery: LocalWindowDelivery): boolean => false
 
-/** The frames the devices may send one window (`clients.sendToWindow`): a window bridge's ask, to the
- *  window that has the person's attention. */
-export const DEVICE_BRIDGE_FRAMES = ['dial_selection', 'dial_visit', 'dial_form'] as const
-export type DeviceBridgeFrame = { type: (typeof DEVICE_BRIDGE_FRAMES)[number]; payload: Record<string, unknown> }
+/** Permission comes from the authenticated service's declaration, never the notice payload. */
+export function sendLocalWindow(delivery: unknown, permissions: LocalWindowPermissions | undefined,
+  send: (delivery: LocalWindowDelivery) => boolean, log: (line: string) => void = line => console.warn(line)): boolean {
+  const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object'
+    && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
+  if (record(delivery) && Object.hasOwn(delivery, 'target') && Object.hasOwn(delivery, 'frame')
+    && record(delivery.target) && record(delivery.frame) && Object.hasOwn(delivery.frame, 'payload') && record(delivery.frame.payload)) {
+    const target = delivery.target, frame = delivery.frame
+    const kind = target.kind
+    if (Object.hasOwn(target, 'kind') && Object.hasOwn(frame, 'type') && (kind === 'all' || kind === 'first' || kind === 'connection')
+      && typeof frame.type === 'string'
+      && (kind === 'connection' ? Object.hasOwn(target, 'connId') && typeof target.connId === 'string' && target.connId.length > 0 && target.connId.length <= 256
+        && Object.keys(target).length === 2 : Object.keys(target).length === 1)
+      && permissions && Object.hasOwn(permissions, kind) && permissions[kind]?.includes(frame.type)) {
+      return send(delivery as unknown as LocalWindowDelivery)
+    }
+  }
+  log('[services] WINDOW_FRAME_REFUSED')
+  return false
+}
 
 /** Which window has the person's attention, as the local socket last heard (`app_focus` with a focus
  *  revision): where a spoken selection or visit goes (`voice`), and a New Harness form (`form`). */
@@ -1494,7 +1463,7 @@ export const DEVICES_REQUESTS = ['harness_devices_list', 'harness_device_setting
 
 /**
  * The core's calls into the devices: what the windows on this computer said that the dial follows, the
- * cards every device is sent, ⌘K, the mod's poll (core/deviceHookCalls.ts), and stopping. Every one is a notice or a request the core never waits on in line: across a process, a hung
+ * cards every device is sent, the mod's poll (core/deviceHookCalls.ts), and stopping. Every one is a notice or a request the core never waits on in line: across a process, a hung
  * devices process answers the fallbacks, never a frozen core.
  */
 export interface DevicesPort extends DeviceHookPort {
@@ -1519,15 +1488,6 @@ export interface DevicesPort extends DeviceHookPort {
   windowReply(kind: 'selection' | 'visit' | 'form', connId: string, machineId: string, payload: Record<string, unknown>): void
   /** A window left. */
   windowGone(connId: string): void
-  /** ⌘K from the owner's app away from this desk (lib/ownerCommands.ts): which agent a typed task belongs to, on any of
-   *  the owner's machines. A window's comes as its frame (`SERVICE_WS_FRAMES`). */
-  routeTask(text: string): Promise<RouteAnswer>
-  /** Its send: the turn delivered on the agent's own machine, or refused with why. */
-  routeSend(agentId: string, text: string): Promise<SendResult>
-  /** The Wi-Fi device borrowing the dial's walk along the desk, through the core (`CoreApi.wifi.stepFocus`). */
-  stepFocus(direction: 'next' | 'previous', currentAgentId?: string): Promise<{ machineId: string; agentId: string } | 'no_agents'>
-  /** The Wi-Fi device borrowing the dial's stroke for the window's terminal. */
-  scroll(phase: 'down' | 'move' | 'up', dy: number, velocity: number): void
   /** The engines the live agents run: the voice router's worker is one of them. */
   engines(engines: string[]): void
   /** Whether a device watches through the backend: the voice router keeps its worker warm meanwhile. */
@@ -1552,8 +1512,7 @@ const UNSENT: SendResult = { ok: false, machine: '', reason: DEVICES_UNAVAILABLE
 export const DEVICES_FALLBACKS: PortFallbacks<DevicesPort> = {
   card: undefined, desk: undefined, swarms: undefined, unread: undefined, appFocus: undefined, seen: undefined,
   settings: undefined, windowFocus: undefined, windowReply: undefined, windowGone: undefined,
-  routeTask: later(UNROUTED), routeSend: later(UNSENT),
-  stepFocus: later('no_agents'), scroll: undefined, engines: undefined, commanders: undefined, observed: false,
+  engines: undefined, commanders: undefined, observed: false,
   // Off, not an empty hold: the mod asks again in a minute, not at once.
   inboxPoll: later({ off: true }), inboxGone: undefined,
   stop: later(undefined),
@@ -1562,62 +1521,30 @@ export const DEVICES_FALLBACKS: PortFallbacks<DevicesPort> = {
 /*
  * The Wi-Fi device (services/wifi.ts, lib/autonomous-device/): a paired device that speaks its own
  * protocol (docs/autonomous-device-integration.md) over an E2EE session the gateway holds, on its direct
- * link or the relay. It runs beside the dials, in the devices' process (step 9, D3): the core tells it
- * what the agents do and the requests its sessions bring, and it answers them through the core, which
- * checks that each answer goes to the session it came from.
+ * link or the relay. It runs beside the dials, in the devices' process. Requests and replies use the
+ * authenticated gateway peer; the gateway checks the final E2EE session at each send.
  */
 
-/** What the core holds for the Wi-Fi device's service, said again each time it starts: every device
- *  session the gateway holds, which of them said their app's hello (served on, told to resync, as after a
- *  daemon restart), and the window that has the person's attention. */
+/** The current window focus, said again when the component's core link starts. */
 export interface WifiResume {
-  sessions: Array<{ connId: string; client: RemoteClient }>
-  helloed: Array<{ connId: string; identity: string }>
   focus: { machineId: string; agentId: string; connId: string } | null
 }
 
 /** The Wi-Fi device's routes of the door (`SERVICE_HTTP_ROUTES`): `harness device receipt` and its add-ons. */
-export const WIFI_REQUESTS = ['wifi_http'] as const
-
-/** What the core lists for the Wi-Fi device, read in line while it answers a request: the agents as it
- *  shows them, the Store's evidence on each, and whether a window is attached to show one. */
-export interface WifiView {
-  agents: AutonomousDeviceAgent[]
-  store: StoreAgent[]
-  hasWindow: boolean
-}
+export const WIFI_REQUESTS = ['wifi_http', 'wifi_serving', 'wifi_focus_current'] as const
 
 /**
- * The core's calls into the Wi-Fi device: its sessions and their requests, as the gateway hands them on,
- * and what the agents do that it follows (cards, turns, live text, its own deliveries into the panes and
- * the transcript lines that prove them). All notices: what a person asks of it (`harness device receipt`, its
+ * Input facts and window notifications. Relay sessions, cards, normalized events and transcript evidence
+ * are owned and observed outside this port. What a person asks of it (`harness device receipt`, its
  * add-ons) are its routes (`SERVICE_HTTP_ROUTES`).
  */
 export interface WifiPort {
-  /** A device session the gateway holds, as it changes (null: it lost its session). */
-  session(connId: string, client: RemoteClient | null): void
-  /** A device's request, as it arrived sealed and as its session opened it (null: it would not open).
-   *  Settles once the service has taken it: what the core says after it is heard after it. */
-  request(connId: string, frame: Record<string, unknown>, opened: Record<string, unknown> | null): Promise<void>
-  /** A device's connection closed. */
-  dropped(connId: string): void
-  /** The owner unpaired a device here; its sessions are gone. */
-  revoked(identity: string): void
   /** What the core holds for it (`WifiResume`), as it starts. Settles once the sessions are served again. */
   resume(state: WifiResume): Promise<void>
-  /** A frame bound for the devices, as it is sent, with the turn's whole answer for a summary. */
-  card(frame: Record<string, unknown>, fullText?: string): void
-  turnStarted(agentId: string): void
-  turnEnded(agentId: string, aborted: boolean): void
-  /** An agent's live events, for the devices that subscribed to it. */
-  stream(agentId: string, events: readonly LiveEvent[]): void
-  /** A transcript line of an agent the device sent a prompt to, which proves what its turn did. */
-  transcript(agentId: string, sessionId: string, engine: string, line: string): void
-  /** Its own deliveries into the panes, as the pane's write lock moves them on (core/deviceInput.ts). */
+  input(event: SessionInputProgress): void
+  disconnected(): void
+  /** Generic delivery outcomes, including refusal and uncertainty. */
   delivery(event: AutonomousDeviceDelivery): void
-  dispatched(agentId: string, deliveryId: string, text: string, sessionId?: string): void
-  inputStatus(event: DeviceInputStatus): void
-  agentGone(agentId: string): void
   /** A window moved to an agent (null: it left one), by its connection. Settles once it is applied. */
   appFocus(machineId: string, agentId: string | null, connId: string): Promise<void>
   /** A window opened the agent a device's Store preparation made. */
@@ -1625,25 +1552,14 @@ export interface WifiPort {
   stop(): Promise<void>
 }
 
-/** The Wi-Fi device's doors, for a service that is not it: nothing is listed, sent, made or moved. */
-export const WIFI_OFF: CoreApi['wifi'] = {
-  view: async () => ({ agents: [], store: [], hasWindow: false }),
-  submit: async () => {}, cancel: () => {}, started: () => {},
-  stop: async () => false, answer: async () => false,
-  create: async () => ({ ok: false, error: 'UNSUPPORTED' }),
-  stepFocus: async () => 'no_app', scroll: () => false, focusApp: () => false, reveal: () => {},
-  send: () => {}, hello: () => {}, joined: () => {}, ready: () => {}, unpaired: () => {}, focus: () => {},
-  transcripts: () => {}, watching: () => {}, streams: () => {},
-}
-
 /**
  * What the core gets when the Wi-Fi device's service is off: its devices hear nothing (a request they sent
  * is unanswered, which they retry with the same key, as after a lost frame).
  */
 export const WIFI_FALLBACKS: PortFallbacks<WifiPort> = {
-  session: undefined, request: later(undefined), dropped: undefined, revoked: undefined, resume: later(undefined), card: undefined,
-  turnStarted: undefined, turnEnded: undefined, stream: undefined, transcript: undefined, delivery: undefined,
-  dispatched: undefined, inputStatus: undefined, agentGone: undefined, appFocus: later(undefined), revealed: undefined,
+  resume: later(undefined), delivery: undefined,
+  input: undefined, disconnected: undefined,
+  appFocus: later(undefined), revealed: undefined,
   stop: later(undefined),
 }
 
@@ -1736,6 +1652,8 @@ export interface UsageAnswer {
   message?: string
 }
 export type UsageEvent =
+  /** A bounded optional counter; core supplies the authenticated originating service, gateway admits its name. */
+  | { kind: 'service'; service: string; metric: string }
   | { kind: 'request'; request: UsageRequest }
   /** [first]: the request's first answer, the one its counters count; a later one says only what became of a launch. */
   | { kind: 'answer'; request: UsageRequest; answer: UsageAnswer; first: boolean; elapsedMs: number }
@@ -1768,11 +1686,11 @@ export interface GatewayPort {
    *  bare E2EE_REQUIRED when it cannot be. `connId` '' is the backend's own request. */
   reply(connId: string, type: string, requestId: unknown, payload: Record<string, unknown>): void
   /** A frame for one remote client, sealed to it; false when it holds no session. */
-  target(connId: string, type: string, payload: Record<string, unknown>): boolean
+  target(connId: string, type: string, payload: Record<string, unknown>, quota?: ClientStreamQuota): boolean
   /** A terminal frame for one remote client, sealed to it, over its P2P channel when the stream moved
    *  there; false when it could not be sent. */
-  terminal(connId: string, type: string, payload: Record<string, unknown>): boolean
-  terminalBinary(connId: string, clear: TerminalBinaryClear): boolean
+  terminal(connId: string, type: string, payload: Record<string, unknown>, quota?: ClientStreamQuota): boolean
+  terminalBinary(connId: string, frame: Uint8Array, quota?: ClientStreamQuota): boolean
   /** Share's frame to an observer: plaintext to the relay, sealed by Share itself. */
   observer(connId: string, type: string, payload: Record<string, unknown>): boolean
   /** A window opened on this computer: the backend counts it as the person's session at once, or when
@@ -1784,18 +1702,8 @@ export interface GatewayPort {
   /** A local connection's request the gateway answers (the E2EE pairings), answered back to it through
    *  `GatewayEvents.toLocal`. */
   local(connId: string, frame: Record<string, unknown>): Promise<void>
-  /** The Wi-Fi device's answer or event for one of its sessions, sealed to it, over its direct link or the
-   *  relay; false when that session is gone. */
-  device(connId: string, type: string, payload: Record<string, unknown>): boolean
-  /** Which identity's app said hello on a Wi-Fi device session (null: it left), so that the gateway can
-   *  tell the device it was unpaired while its session still stands. */
-  deviceClient(connId: string, identity: string | null): void
   stop(): Promise<void>
 }
-
-/** The wire an agent browser's stream rides, fixed when it opens: a direct P2P link, a P2P link through TURN (billed per
- *  GB), or the backend's relay. */
-export type BrowserRoute = 'direct' | 'turn' | 'relay'
 
 /** What the gateway tells the core. In the core's process these are calls; in the gateway's own, frames
  *  on the link the master started it with, which no other process can open. */
@@ -1804,7 +1712,7 @@ export interface GatewayEvents {
    *  the gateway's word, and the core trusts nothing in the frame for it. Resolves once it is handled. */
   frame(connId: string, frame: Record<string, unknown>, transport: RemoteTransport, role: RemoteRole): Promise<void> | void
   /** A remote client's terminal bytes, opened. */
-  binary(connId: string, clear: TerminalBinaryClear): Promise<void> | void
+  binary(connId: string, clear: TerminalBinaryClear, raw?: Uint8Array): Promise<void> | void
   /** A remote client gained a session (its role and label), or lost it (null). */
   client(connId: string, client: RemoteClient | null): void
   /** The relay says a client's connection closed: what it had open goes with it. */
@@ -1833,21 +1741,12 @@ export interface GatewayEvents {
   revoked(): void
   /** Another computer holds this machine: stop for good, keeping the session. */
   busy(): void
-  /** A Wi-Fi device's request (`autonomous_device_request`), as it arrived sealed and as the session that
-   *  sealed it opened it (null when it could not be opened, or was not the device's to send). */
-  device(connId: string, frame: Record<string, unknown>, opened: Record<string, unknown> | null): Promise<void> | void
-  /** A paired identity was unpaired: the Wi-Fi device service forgets it. */
-  deviceRevoked(identity: string): void
   /** Something the windows on this computer show of the account's devices (the device key log's notices). */
   toWindows(frame: Record<string, unknown>): void
   /** What a shared tab's relay said (`GatewayOps.tabRelay`), for Agent Messages. */
   tabFrame(event: TabFrame): void
-  /** The route an agent browser's stream opened on, which it keeps (core/browserStreams.ts): its profile and pacing. */
-  browserRoute(streamId: string, route: BrowserRoute): void
-  /** A browser stream's route went away, or one of its frames could not be sent on it: it ends. */
-  browserRouteLost(streamId: string): void
-  /** The backend refused one of this machine's relayed browser frames (`agent_browser_transport_error`). */
-  browserTransportError(): void
+  /** A service stream's transport facts, from the authenticated gateway alone. */
+  streamControl(service: string, streamId: string | null, payload: Record<string, unknown>): void
 }
 
 /**
@@ -1950,7 +1849,7 @@ export interface ServiceHttpRoute {
 }
 
 /** The gateway's routes of the door (gateway/start.ts): one request, by path. */
-export const GATEWAY_REQUESTS = ['gateway_http'] as const
+export const GATEWAY_REQUESTS = ['gateway_http', 'gateway_ws'] as const
 
 const deviceDown = (status: number, code: string, message: string): HttpAnswer => ({ status, body: { error: { code, message } } })
 const DEVICE_LINK_DOWN = deviceDown(503, 'UNAVAILABLE', 'The Wi-Fi device link is not reachable on this computer right now. Try again.')
@@ -2055,6 +1954,8 @@ export interface ServiceWsFrame {
   /** The frame's type, as a window sends it. */
   frame: string
   type: string
+  /** Also accepted through the authenticated owner RPC router, with its original Asker and RPC result type. */
+  rpc?: 'owner' | 'local'
   /** The frame its answer goes back as; none for a frame the window tells, which nothing answers. */
   result?: string
   waitMs: number
@@ -2066,10 +1967,15 @@ export interface ServiceWsFrame {
  *  says what was sent back before it left the core's process, word for word, while its service is down
  *  (e2e/keyRoutes.e2e.ts). */
 export const SERVICE_WS_FRAMES: readonly ServiceWsFrame[] = [
+  { frame: 'browser_open', type: 'gateway_ws', rpc: 'local', result: 'browser_open_result', waitMs: 5_000, unanswered: { handled: false } },
+  { frame: 'browser_callback', type: 'gateway_ws', rpc: 'owner', result: 'browser_callback_result', waitMs: 35_000, unanswered: { error: 'UNSUPPORTED' } },
   // ⌘K: which agent a typed task belongs to, on any of the owner's machines; the classifier has 20 s (services/fleet.ts).
-  { frame: 'route_task', type: 'devices_ws', result: 'route_result', waitMs: 25_000, unanswered: { ...UNROUTED } },
+  { frame: 'route_task', type: 'devices_ws', rpc: 'owner', result: 'route_result', waitMs: 25_000, unanswered: { ...UNROUTED } },
   // ⌘K's send, through the fleet's router: the turn delivered on the agent's own machine, or refused with why.
-  { frame: 'route_send', type: 'devices_ws', result: 'route_send_result', waitMs: 5_000, unanswered: { ...UNSENT } },
+  { frame: 'route_send', type: 'devices_ws', rpc: 'owner', result: 'route_send_result', waitMs: 5_000, unanswered: { ...UNSENT } },
+  // Component desk gestures use this same local door, with no relay RPC grant.
+  { frame: 'harness_device_step', type: 'devices_ws', result: 'harness_device_step_result', waitMs: 5_000, unanswered: { error: 'DESK_UNAVAILABLE' } },
+  { frame: 'harness_device_scroll', type: 'devices_ws', waitMs: 5_000 },
   // The window's answer to a spoken task the devices offered it (cable/windowRoute.ts): taken, then sent or cancelled.
   { frame: 'voice_route_reply', type: 'devices_ws', waitMs: 5_000 },
 ]
@@ -2083,10 +1989,6 @@ export interface GatewayOps {
   machines(fallback?: boolean): Promise<HttpAnswer>
   mintGridName(): Promise<string | null>
   status(): Promise<GatewayStatus>
-  /** The Wi-Fi device service is up (its direct links start) or gone (they stop). */
-  wifiService(on: boolean): void
-  /** A Wi-Fi device asked to be unpaired, over its own authenticated session. */
-  revokeIdentity(identity: string): void
   /** The account's sign-in, as it is now (after start-up recorded which sign-in it is); the device key log
    *  registers this machine with it. */
   account(account: GatewayAccount): void
@@ -2101,8 +2003,8 @@ export interface GatewayOps {
   tabKey: TabKey
   /** Shared tabs' relay sockets (`core.account.tabRelay`); what they hear is `GatewayEvents.tabFrame`. */
   tabRelay: TabRelay
-  /** The account's connected services sealed for its machines (`core.account.connectorVault`). */
-  connectorVault: ConnectorVault
+  /** Metadata-only connector synchronization (`core.account.connectorSync`). */
+  connectorSync: ConnectorSync
   /** Machines shared across accounts, made to hold exactly what the shared-machines service says
    *  (gateway/sharedTrust.ts): the ones shared with this account pinned, the machines of the accounts this
    *  one is shared with trusted; a part left out stays as it is. Answers how many of each it holds. */
@@ -2137,12 +2039,19 @@ export interface WindowRelay {
 }
 
 export interface StorePort {
+  stop(): void
+  dshContext(request: DshDescribeRequest): Promise<DshContextAnswer>
+  dshDescribe(request: DshDescribeRequest): Promise<DshDescribeAnswer>
   dshMaterialize(request: DshMaterializeRequest): Promise<DshMaterializeAnswer>
-  dshLaunch(request: DshLaunchRequest): Promise<DshLaunchAnswer>
+  /** Untrusted contribution; dshThrough checks it against captured request and session identity. */
+  dshLaunch(request: DshLaunchRequest): Promise<unknown>
 }
 
-export const STORE_FALLBACKS: PortFallbacks<StorePort> = { dshMaterialize: later(FAIL), dshLaunch: later(FAIL) }
+export const STORE_FALLBACKS: PortFallbacks<StorePort> = { stop: undefined, dshContext: later(FAIL), dshDescribe: later(FAIL), dshMaterialize: later(FAIL), dshLaunch: later(FAIL) }
 export const STORE_OFF: StorePort = {
+  stop: () => {},
+  dshContext: () => Promise.reject(new ServiceUnavailableError('store')),
+  dshDescribe: () => Promise.reject(new ServiceUnavailableError('store')),
   dshMaterialize: () => Promise.reject(new ServiceUnavailableError('store')),
   dshLaunch: () => Promise.reject(new ServiceUnavailableError('store')),
 }
@@ -2160,37 +2069,32 @@ export interface CorePorts {
   devices: DevicesPort | null
   wifi: WifiPort | null
   monitor: MonitorPort | null
+  paste: PastePort | null
   connectors: ConnectorsPort | null
   orchestrator: OrchestratorPort | null
   sharing: SharingPort | null
   recaps: RecapsPort | null
   agentCleanup: AgentCleanupPort | null
-  cloud: CloudPort | null
+  cloud: SessionOwnerPort | null
   sharedMachines: SharedMachinesCorePort | null
-  agentBrowser: AgentBrowserPort | null
 }
 
 export function emptyPorts(): CorePorts {
-  return { usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, connectors: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, sharedMachines: null, agentBrowser: null }
+  return { usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, paste: null, connectors: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, sharedMachines: null }
 }
-
-/** What a browser's stream answers a viewer: its open, and that it closed. Its bytes go beside them, as binary. */
-const BROWSER_STREAM_ANSWERS: ReadonlySet<string> = new Set(['agent_browser_open_result', 'agent_browser_close'])
 
 export interface CoreApiDeps {
   terminals?: TerminalsPort
   conversations?: ConversationReads
   dataDir: string
-  registry: Pick<typeof registry, 'list' | 'byAgent' | 'resolve' | 'advertised' | 'terminalAvailable'>
+  registry: Pick<typeof registry, 'list' | 'rows' | 'byAgent' | 'resolve' | 'advertised' | 'advertisedRows' | 'terminalAvailable'>
   stoppedAgents: Pick<StoppedAgentStore, 'list'>
   databaseHistory: CoreApi['transcripts']['databaseHistory']
   syncSession: CoreApi['agents']['sync']
   runtimeModels: CoreApi['agents']['runtimeModels']
   viewerChanged: CoreApi['clients']['viewerChanged']
-  viewerFrame: CoreApi['clients']['viewerFrame']
-  /** Where a browser stream's answers and bytes go (core/browserStreams.ts); absent, nowhere. */
-  browserFrame?: NonNullable<CoreApi['clients']['browserFrame']>
-  browserBytes?: NonNullable<CoreApi['clients']['browserBytes']>
+  streamFrame?: CoreApi['clients']['streamFrame']
+  streamBytes?: NonNullable<CoreApi['clients']['streamBytes']>
   gridNamed: CoreApi['clients']['gridNamed']
   gridModelsChanged: CoreApi['clients']['gridModelsChanged']
   dshInstallStatus: CoreApi['clients']['dshInstallStatus']
@@ -2200,7 +2104,7 @@ export interface CoreApiDeps {
   observerKey: CoreApi['account']['observerKey']
   tabKey: CoreApi['account']['tabKey']
   tabRelay: CoreApi['account']['tabRelay']
-  connectorVault: CoreApi['account']['connectorVault']
+  connectorSync: CoreApi['account']['connectorSync']
   observer: CoreApi['clients']['observer']
   privateGridName: CoreApi['account']['privateGridName']
   machineName: CoreApi['account']['machineName']
@@ -2208,6 +2112,8 @@ export interface CoreApiDeps {
   onNotice: CoreApi['account']['onNotice']
   create: CoreApi['agents']['create']
   dsh: CoreApi['agents']['dsh']
+  /** The same per-row capture the app formatter uses; no transport or retained snapshot. */
+  facts?: (session: RegisteredSession) => AgentFacts
   windows: CoreApi['clients']['windows']
   daemon: DaemonAddress
   runtimeProfile: CoreApi['agents']['runtimeProfile']
@@ -2234,19 +2140,15 @@ export interface CoreApiDeps {
   signedIn: CoreApi['account']['signedIn']
   environment: CoreApi['account']['environment']
   machines: CoreApi['account']['machines']
-  /** Where the devices' frames go: every window on this computer, or one. Only the devices' own frame
-   *  types reach these (`createCoreApi`). */
-  sendLocal(frame: { type: string; payload: Record<string, unknown> }): void
-  sendToWindow(connId: string, frame: { type: string; payload: Record<string, unknown> }): boolean
   hasWindow: CoreApi['clients']['hasWindow']
   devicesChanged: CoreApi['clients']['devicesChanged']
   dialWatching: CoreApi['clients']['dialWatching']
-  /** The Wi-Fi device's doors (core/wifi.ts). */
-  wifi: CoreApi['wifi']
-  /** The cloud agents' doors (core/agents/cloud.ts). */
-  cloud?: CloudCore
-  /** The running cloud harnesses as list rows (`agents.cloud`). */
-  cloudRows?: () => RegisteredSession[]
+  /** A host-bound session owner door; the unbound core API supplies none. */
+  owners?: SessionOwnerCore
+  /** The service-owned sessions as typed lean list rows. */
+  serviceRows?: () => ServiceSessionRow[]
+  /** Current service membership and one current row, without a temporary projected catalogue. */
+  serviceRead?: { ids(): IterableIterator<string>; row(agentId: string): ServiceSessionRow | undefined }
   lastTurn: CoreApi['transcripts']['lastTurn']
   /** Where a turn's cards and recaps go: the devices, and the apps. Only their own frame types reach these. */
   turnCard: CoreApi['clients']['turnCard']
@@ -2258,19 +2160,106 @@ export interface CoreApiDeps {
   log?: (line: string) => void
 }
 
+/** Complete membership once; current facts for each member when it is emitted. Never an atomic whole-time view. */
+export function readSessions(deps: Pick<CoreApiDeps, 'registry' | 'serviceRead' | 'facts' | 'runtimeProfile' | 'turns' | 'machine' | 'signedIn' | 'environment' | 'hasWindow' | 'log'>,
+  receive: SessionReadReceiver, signal?: AbortSignal, scope: SessionReadScope = 'registered'): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const started = performance.now(), ids: string[] = []
+    let sourceFailure: string | undefined
+    let finished = false, pump: { cancel(): void } | undefined
+    const abort = (): void => { pump?.cancel() }
+    const fail = (code: string): never => { sourceFailure = code; throw new Error(code) }
+    const finish = (code?: string): void => {
+      finished = true
+      ids.length = 0
+      signal?.removeEventListener('abort', abort)
+      if (code) {
+        reject(new Error(code))
+        try { (deps.log ?? console.warn)(`[sessions] ${code}`) } catch { /* a failed diagnostic cannot leave the read pending */ }
+      }
+      else resolve()
+    }
+    try {
+      if (signal?.aborted || !deps.turns.running || !deps.facts) return finish('SESSION_READ_UNAVAILABLE')
+      const header: SessionReadHeader = { version: 2,
+        machine: { id: deps.machine.id(), computerId: deps.machine.computerId(), name: deps.machine.name() },
+        signedIn: deps.signedIn(), environment: deps.environment(), hasWindow: deps.hasWindow() }
+      if (!header.machine.id) return finish('SESSION_READ_UNAVAILABLE')
+      if (boundedJsonBytes(header, SESSION_READ_HEADER_BYTES) === null) return finish('SESSION_READ_TOO_LARGE')
+      const current = (): boolean => !signal?.aborted && deps.machine.id() === header.machine.id
+        && deps.machine.computerId() === header.machine.computerId && deps.signedIn() === header.signedIn && deps.environment() === header.environment
+      let bytes = 0
+      const member = (id: string): void => {
+        if (performance.now() - started >= QUESTION_OBSERVATION_TIMEOUT_MS) fail('SESSION_READ_TIMEOUT')
+        bytes += 48 + 2 * id.length
+        if (bytes > SESSION_READ_MEMBERS_BYTES) fail('SESSION_READ_TOO_LARGE')
+        ids.push(id)
+      }
+      for (const row of scope === 'registered' ? deps.registry.rows() : deps.registry.advertisedRows()) member(row.agentId)
+      const registeredCount = ids.length
+      if (deps.serviceRead) for (const id of deps.serviceRead.ids()) member(id)
+      const count = ids.length
+      const rows = function* (): Generator<SessionReadValue> {
+        for (let index = 0; index < count; index++) {
+          const agentId = ids[index]
+          if (index >= registeredCount) {
+            const row = deps.serviceRead!.row(agentId)
+            if (!row) { yield ['gone', 'service', agentId]; continue }
+            yield ['service', row.agentId, row.sessionId, row.engine, row.registeredAt, row.transcriptPath, row.lastHookAt,
+              typeof row.displayName === 'string' ? row.displayName : '', typeof row.runtimeProfile === 'string' ? row.runtimeProfile : null]
+            continue
+          }
+          const row = deps.registry.byAgent(agentId)
+          if (!row) { yield ['gone', 'registered', agentId]; continue }
+          const selectedModel = deps.runtimeProfile(row), turnRunning = deps.turns.running!(row.sessionId)
+          if (deps.registry.byAgent(agentId) !== row) fail('SESSION_READ_UNAVAILABLE')
+          const { agentId: currentId, sessionId, engine, registeredAt, transcriptPath, lastHookAt, active, cwd, dsh } = row
+          const state = row.launch
+          const launch: SessionReadLaunch | null = !state ? null : state.state === 'failed'
+            ? ['failed', state.error, state.detail === undefined ? false : state.detail]
+            : state.state === 'held' ? ['held', state.service, state.detail] : [state.state]
+          // Shared app facts stay last. No provider is called after this final current-row check.
+          const captured = deps.facts!(row)
+          if (!captured || deps.registry.byAgent(agentId) !== row) fail('SESSION_READ_UNAVAILABLE')
+          if (scope === 'advertised' && !captured.terminalAvailable) { yield ['gone', 'registered', agentId]; continue }
+          const publishedDsh = captured.parts.dsh
+          yield ['registered', currentId, sessionId, engine, registeredAt, transcriptPath, lastHookAt, active, cwd,
+            dsh === undefined ? false : dsh, launch, captured.displayName, captured.terminalAvailable, selectedModel, turnRunning,
+            typeof publishedDsh === 'string' ? publishedDsh === dsh ? true : publishedDsh : false]
+        }
+      }
+      let index = 0
+      pump = startSettledRecords<SessionReadValue, ReadRecord<SessionReadHeader, SessionReadValue>>({
+        rows: rows(), current,
+        begin: { type: 'begin', payload: { header, count } },
+        row: value => {
+          const record: ReadRecord<SessionReadHeader, SessionReadValue> = { type: 'row', payload: { index: index++, value } }
+          // All retained row fields above are copied primitives. Admit before the transport serializes the frame.
+          // Leave room for the bounded request/generation envelope; the physical sink counts the complete frame again.
+          if (boundedJsonBytes(record, QUESTION_OBSERVATION_BYTES - 2048) === null) fail('SESSION_READ_TOO_LARGE')
+          return record
+        },
+        end: { type: 'end', payload: { count } }, send: receive,
+        timeoutMs: Math.max(1, QUESTION_OBSERVATION_TIMEOUT_MS - (performance.now() - started)),
+        finished: reason => finish(reason === null ? undefined : sourceFailure ?? (reason === 'timeout' ? 'SESSION_READ_TIMEOUT' : 'SESSION_READ_UNAVAILABLE')),
+      })
+      if (signal?.aborted) pump.cancel()
+      else if (!finished) signal?.addEventListener('abort', abort, { once: true })
+    } catch (error) {
+      finish(error instanceof Error && error.message === 'SESSION_READ_TIMEOUT' ? 'SESSION_READ_TIMEOUT'
+        : error instanceof Error && error.message === 'SESSION_READ_TOO_LARGE' ? 'SESSION_READ_TOO_LARGE' : 'SESSION_READ_UNAVAILABLE')
+    }
+  })
+}
+
 export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, syncSession, runtimeModels, viewerChanged,
-  gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorVault, observer, privateGridName, machineName, backend, onNotice,
-  runtimeProfile, setRuntime, fork, create, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, browserFrame, browserBytes, machine, activityText, activitySnapshot, activity, summaries,
+  gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorSync, observer, privateGridName, machineName, backend, onNotice,
+  runtimeProfile, setRuntime, fork, create, dsh, facts, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, streamFrame, streamBytes, machine, activityText, activitySnapshot, activity, summaries,
   closeAgent, activityAt, follow, panePid,
-  signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, cloudRows, lastTurn, turnCard, turnSummary,
+  signedIn, environment, machines, hasWindow, devicesChanged, dialWatching, owners, serviceRows, serviceRead, lastTurn, turnCard, turnSummary,
   count, hachiGoalDone, log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
-  // The devices reach the windows through these alone, and only with their own frames: a devices process
-  // speaks to the core as a service, and what it may put in front of a person is decided here, not there.
-  const windowFrames = new Set<string>(DEVICE_WINDOW_FRAMES)
-  const bridgeFrames = new Set<string>(DEVICE_BRIDGE_FRAMES)
-  const refused = (type: unknown): void => log(`[services] the devices sent a window ${String(type).slice(0, 40)}, which is not theirs to send`)
   // The recaps reach the devices and the apps through their own two doors, and only with their own frames.
   const refusedRecap = (type: unknown): void => log(`[services] the recaps sent ${String(type).slice(0, 40)}, which is not theirs to send`)
   // A goals process speaks to the core as a service: a goal's notice goes to every window of the account only for the
@@ -2288,13 +2277,15 @@ export function createCoreApi({
     machine,
     conversations,
     agents: {
-      all: () => [...registry.list(), ...stoppedAgents.list()].map(agentView),
+      all: async () => { const stopped = await stoppedAgents.list(); return [...registry.list(), ...stopped].map(agentView) },
       live: () => registry.list().map(agentView),
+      readSessions: (scope, receive, signal) => readSessions({ registry, serviceRead, facts, runtimeProfile, turns, machine, signedIn, environment, hasWindow, log }, receive, signal, scope),
+      facts: row => { const current = registry.byAgent(row.agentId); return current && facts ? facts(current) : null },
       displayName: projectDisplayName,
       byAgent: (agentId) => { const session = registry.byAgent(agentId); return session && agentView(session) },
       resolve: (id) => { const session = registry.resolve(id); return session && agentView(session) },
       advertised: () => registry.advertised().map(agentView),
-      ...(cloudRows ? { cloud: () => cloudRows().map(agentView) } : {}),
+      ...(serviceRows ? { serviceSessions: serviceRows } : {}),
       terminalAvailable: (agentId) => registry.terminalAvailable(agentId),
       sync: syncSession,
       runtimeModels,
@@ -2336,30 +2327,23 @@ export function createCoreApi({
     turns,
     questions,
     transcripts: { databaseHistory, lastTurn },
-    account: { mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorVault, privateGridName, machineName, backend,
+    account: { mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorSync, privateGridName, machineName, backend,
       identity: accountIdentity(backend), onNotice, signedIn, environment, machines },
     clients: {
       viewerChanged, gridNamed, gridModelsChanged, dshInstallStatus, windows, observer, hasWindow, devicesChanged, dialWatching,
-      // A viewers process speaks to the core as a service: what it may send a client is a viewer stream's
-      // frame, decided here, never whatever it names.
-      viewerFrame: (connId, type, payload) => VIEWER_UP_TYPES.has(type) && viewerFrame(connId, type, payload),
-      ...(browserFrame ? { browserFrame: (connId: string, type: string, payload: Record<string, unknown>) => BROWSER_STREAM_ANSWERS.has(type) && browserFrame(connId, type, payload) } : {}),
-      ...(browserBytes ? { browserBytes } : {}),
-      sendLocal: (frame) => {
-        if (windowFrames.has(frame?.type)) sendLocal(frame)
-        else refused(frame?.type)
+      streamFrame: streamFrame ?? (() => false),
+      ...(streamBytes ? { streamBytes } : {}),
+      sendWindow: LOCAL_WINDOW_OFF,
+      turnCard: (frame) => {
+        if (!TURN_CARD_TYPES.has(frame?.type)) { refusedRecap(frame?.type); return }
+        // A delayed session card cannot describe the agent's replacement conversation.
+        const current = typeof frame.agentId === 'string' ? registry.byAgent(frame.agentId) : undefined
+        if (typeof frame.dbSessionId === 'string' && frame.dbSessionId && current?.sessionId === frame.dbSessionId) turnCard(frame)
       },
-      sendToWindow: (connId, frame) => {
-        if (bridgeFrames.has(frame?.type)) return sendToWindow(connId, frame)
-        refused(frame?.type)
-        return false
-      },
-      turnCard: (frame) => { if (TURN_CARD_TYPES.has(frame?.type)) turnCard(frame); else refusedRecap(frame?.type) },
       turnSummary: (frame) => { if (TURN_SUMMARY_TYPES.has(frame?.type)) turnSummary(frame); else refusedRecap(frame?.type) },
       ...(goalDone ? { hachiGoalDone: goalDone } : {}),
     },
     daemon,
-    wifi,
-    ...(cloud ? { cloud } : {}),
+    ...(owners ? { owners } : {}),
   }
 }

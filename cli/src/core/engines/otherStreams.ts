@@ -406,6 +406,13 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
     },
     get: (sessionId: string): OtherStream | undefined => handles.get(sessionId),
     has: (sessionId: string): boolean => handles.has(sessionId),
+    /** A retained handle alone is not a running reader: loss and recovery keep its turn state here. */
+    ready(sessionId: string): boolean {
+      const handle = handles.get(sessionId), session = deps.bySession(sessionId)
+      return !!handle && !!session && handle.engine === session.engine && connected && !stopped && waiting && !endBackoff
+        && !handle.orphan && !handle.closing && byToken.get(handle.token) === handle
+        && !pending.has(sessionId) && !unopened.has(sessionId) && !deps.stopping?.(session)
+    },
     /** Whether the reader takes the session's stream up again itself: held, and, its worker here, not given up. */
     follows(sessionId: string): boolean {
       const handle = handles.get(sessionId)

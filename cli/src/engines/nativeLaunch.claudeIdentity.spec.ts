@@ -40,7 +40,7 @@ afterEach(() => { Object.defineProperty(process, 'platform', platform) })
 
 it('refuses the Claude desktop app\'s program, naming it, and never asks it for help (which opens its window)', async () => {
   fixture.version = '5.1231.2\r\n'
-  const { inspectNativeLaunch } = await import('./nativeLaunch.js')
+  const { inspectNativeLaunch } = await import('../testing/nativeSetupInProcess.js')
   const result = await inspectNativeLaunch('claude', { permissionMode: 'auto' })
   expect(result).toMatchObject({ ok: false, refusal: 'ENGINE_CANNOT_RUN',
     detail: 'C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\Claude.exe is not Claude Code: asked its version, it answered "5.1231.2" '
@@ -50,7 +50,7 @@ it('refuses the Claude desktop app\'s program, naming it, and never asks it for 
 
 it('goes on for Claude Code, whose version names it', async () => {
   fixture.version = '2.1.322 (Claude Code)\n'
-  const { inspectNativeLaunch } = await import('./nativeLaunch.js')
+  const { inspectNativeLaunch } = await import('../testing/nativeSetupInProcess.js')
   expect(await inspectNativeLaunch('claude', { permissionMode: 'auto' })).toMatchObject({ ok: true })
   expect(fixture.calls[0]).toEqual(['--version'])
   expect(fixture.calls).toContainEqual(['--help'])
@@ -58,7 +58,7 @@ it('goes on for Claude Code, whose version names it', async () => {
 
 it('takes no answer, or a failed one, as no evidence: the launch goes on to the help it always asked', async () => {
   fixture.version = ''
-  const { inspectNativeLaunch } = await import('./nativeLaunch.js')
+  const { inspectNativeLaunch } = await import('../testing/nativeSetupInProcess.js')
   expect(await inspectNativeLaunch('claude', { permissionMode: 'auto' })).toMatchObject({ ok: true })
   fixture.identity++; fixture.calls = []; fixture.version = 'boom'; fixture.versionCode = 1
   expect(await inspectNativeLaunch('claude', { permissionMode: 'auto' })).toMatchObject({ ok: true })
@@ -66,7 +66,17 @@ it('takes no answer, or a failed one, as no evidence: the launch goes on to the 
 
 it('asks no version of another engine', async () => {
   fixture.version = '5.1231.2'
-  const { inspectNativeLaunch } = await import('./nativeLaunch.js')
+  const { inspectNativeLaunch } = await import('../testing/nativeSetupInProcess.js')
   await inspectNativeLaunch('codex', { permissionMode: 'auto' })
   expect(fixture.calls).not.toContainEqual(['--version'])
+})
+
+it('treats an unavailable version transport as no identity evidence, while still requiring help', async () => {
+  const { inspectNativeLaunch, notClaudeCode } = await import('./nativeLaunch.js')
+  const probe = vi.fn(async (_executable, kind) => kind === 'versionHelp' ? null
+    : { code: 0, stdout: '--permission-mode', stderr: '' })
+  expect(await inspectNativeLaunch('claude', {}, { setup: { probe, opencodeMajor: async () => null, hermesKeepsRecord: async () => null } }))
+    .toMatchObject({ ok: true })
+  expect(probe.mock.calls.map(call => call[1])).toEqual(['versionHelp', 'help'])
+  expect(notClaudeCode('/fixture/claude', '\n  \n')).toContain('it answered ""')
 })

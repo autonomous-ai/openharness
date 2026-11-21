@@ -32,7 +32,7 @@ describe('the agent cleanup in its own process', () => {
         api = core
         refresh = deps?.refresh
         core.agents.follow!((event) => { if (event.kind === 'stopped') stops.push(event.agentId) }, { running: false })
-        return { port, look: vi.fn(), closeStartedBy: vi.fn() }
+        return { port, typed: port.typed, look: vi.fn(), closeStartedBy: vi.fn() }
       },
     })
     return { options: options!, api: api!, port, refresh: refresh!, service, stop, stops }

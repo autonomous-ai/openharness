@@ -1,7 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
 import { OPENCLAW_STATES } from '../../engines/openclaw/contract.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { RegistryOwnershipChanged, type RegisteredSession } from '../../lib/registry.js'
@@ -14,7 +13,6 @@ vi.mock('../../lib/paneEngineProcess.js', async (real) => ({
   ...await real<object>(),
   resolvePaneEngineProcess: vi.fn(async () => null),
 }))
-vi.mock('../../lib/engineLaunch.js', async (real) => ({ ...await real<object>(), commandAvailableInInteractiveShell: vi.fn(async () => true) }))
 
 const pending = { agentId: 'a1', sessionId: '', engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%7' }] } as RegisteredSession
 const runtime = { backend: 'tmux' as const, paneId: '%7' }
@@ -63,6 +61,16 @@ function setup(over: Partial<PaneWatcherDeps> = {}) {
 }
 
 describe('watching a new pane', () => {
+  it('reports an unverified prepared executable without another shell lookup after the pane died', async () => {
+    const { deps, watch } = setup()
+    paneState.mockResolvedValue({ dead: true, engineExit: null } as never)
+    const current = vi.fn(() => false)
+    await watch('claude', pending, spawned, ['claude'], { command: 'claude', identity: 'original', current })
+    expect(current).toHaveBeenCalledOnce()
+    expect(deps.registry.setLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({
+      state: 'failed', error: 'ENGINE_DID_NOT_START', detail: expect.stringContaining('could not verify'),
+    }))
+  })
   it.each(['process', 'executable'] as const)('rejects replacement of a process already selected when the watcher started: %s', async change => {
     const entry = { ...pending, processIdentity: identity }
     const { deps, rows, watch } = setup()
@@ -240,7 +248,6 @@ describe('watching a new pane', () => {
     vi.mocked(resolvePaneEngineProcess).mockReset().mockResolvedValue(null)
     paneState.mockReset().mockResolvedValue({ dead: false, engineExit: null } as never)
     releaseHold.mockClear()
-    vi.mocked(commandAvailableInInteractiveShell).mockReset().mockResolvedValue(true)
   })
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
@@ -292,14 +299,14 @@ describe('watching a new pane', () => {
       if (stage === 'state') paneState.mockImplementationOnce(async () => { replace(); return 'gone' })
       if (stage === 'installed') {
         paneState.mockResolvedValueOnce({ dead: true, engineExit: null } as never)
-        vi.mocked(commandAvailableInInteractiveShell).mockImplementationOnce(async () => { replace(); return false })
       }
       if (stage === 'capture' || stage === 'clear') {
         paneState.mockResolvedValueOnce({ dead: false, engineExit: 2 } as never)
         if (stage === 'capture') vi.mocked(deps.captureTerminal).mockImplementationOnce(async () => { replace(); return 'old exit' })
         else releaseHold.mockImplementationOnce(async () => { replace() })
       }
-      const watching = watch('claude', entry, spawned, ['claude'], undefined, 1)
+      const executable = { command: 'claude', identity: 'selected', current: () => { if (stage === 'installed') replace(); return false } }
+      const watching = watch('claude', entry, spawned, ['claude'], executable, 1)
       await vi.advanceTimersByTimeAsync(0)
       if (stage === 'sleep') replace()
       await vi.advanceTimersByTimeAsync(50)
@@ -373,16 +380,20 @@ describe('watching a new pane', () => {
     expect(deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.any(Object), expect.any(Object))
   })
 
-  it('fails a launch whose pane died: not installed, or did not start', async () => {
+  it('diagnoses a dead pane from its prepared executable, without a new lookup', async () => {
     const { deps, watch } = setup()
     paneState.mockResolvedValue({ dead: true, engineExit: null } as never)
+    const executable = { command: 'claude', identity: 'selected', current: () => true }
+    await watch('claude', pending, spawned, ['claude'], executable)
     await watch('claude', pending, spawned, ['claude'], undefined)
-    vi.mocked(commandAvailableInInteractiveShell).mockResolvedValueOnce(false)
-    await watch('claude', pending, spawned, ['claude'], undefined)
-    expect(vi.mocked(deps.registry.setLaunch).mock.calls.map(([, launch]) => (launch as { error: string }).error)).toEqual(['ENGINE_DID_NOT_START', 'ENGINE_NOT_INSTALLED'])
+    const launches = vi.mocked(deps.registry.setLaunch).mock.calls.map(([, launch]) => launch)
+    expect(launches).toEqual([
+      expect.objectContaining({ error: 'ENGINE_DID_NOT_START', detail: expect.not.stringContaining('could not verify') }),
+      expect.objectContaining({ error: 'ENGINE_DID_NOT_START', detail: expect.stringContaining('could not verify') }),
+    ])
     expect(deps.announceSession).toHaveBeenCalledTimes(2)
     vi.mocked(deps.registry.setLaunch).mockReturnValueOnce(null)
-    await watch('claude', pending, spawned, ['claude'], undefined)
+    await watch('claude', pending, spawned, ['claude'], executable)
     expect(deps.announceSession).toHaveBeenCalledTimes(2)
   })
 

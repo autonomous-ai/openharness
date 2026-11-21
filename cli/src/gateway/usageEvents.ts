@@ -8,12 +8,17 @@
  * restarted in between counts the answer as the one before it would have.
  */
 import type { UsageEvent } from '../core/api.js'
+import { serviceMetricAllowed } from './serviceMetrics.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
 import { messageReceipt, productObservation, productUsageIntent, productUsageLaunch, productUsageRequest, productUsageSource,
   type ProductUsageLaunchSignal } from '../lib/productUsageSignals.js'
 import type { MessageOutcome } from '../lib/sessionInput.js'
 
 export function countUsage(event: UsageEvent, counter: (metric: ProductUsageMetric) => void, launch: (signal: ProductUsageLaunchSignal) => void): void {
+  if (event.kind === 'service') {
+    if (serviceMetricAllowed(event.service, event.metric)) counter(event.metric as ProductUsageMetric)
+    return
+  }
   if (event.kind === 'observed') {
     for (const metric of productObservation(event.payload)) counter(metric)
     return

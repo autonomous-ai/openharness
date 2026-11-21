@@ -12,6 +12,9 @@ import { recapsCoreApi, runRecapsService } from './recapsProcess.js'
 
 // The real default reaches a real socket and this process's own channel: never in a test.
 vi.mock('./process.js', () => ({ runServiceProcess: vi.fn(() => ({ stop: vi.fn() })) }))
+vi.mock('../lib/autonomous-device/peerPresence.js', () => ({ devicePeerPresence: vi.fn(options => ({
+  start: vi.fn(), stop: vi.fn(async () => options.changed(false, false)), card: vi.fn(() => true),
+})) }))
 // What the recaps' files went through, in order: each flush, a file or a folder (lib/secureState.ts writes through node:fs).
 const disk = vi.hoisted(() => ({ said: [] as string[] }))
 vi.mock('node:fs', async (original) => {
@@ -60,10 +63,24 @@ describe('the recaps in their own process', () => {
     return { options: options!, api: api!, service, handle, dataDir }
   }
 
-  it('reaches the core as `recaps`, through the socket and token it was given, and answers the apps nothing', () => {
-    const { options } = setup()
+  it('reaches the core as `recaps`, through the socket and token it was given, and answers the apps nothing', async () => {
+    const { options, handle, service } = setup()
     expect(options).toMatchObject({ name: 'recaps', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
     expect(Object.keys(options.requests)).toEqual(['liveCards'])
+    await handle.stop()
+    expect(service.stop).toHaveBeenCalledOnce()
+  })
+
+  it('formats one raw failure on its existing lifecycle route and never replays it to a replacement core', () => {
+    const { options } = setup(), first = connection(), second = connection()
+    options.onConnected!(first.core)
+    options.onEvent!(lifecycle({ kind: 'failure', failure: { agentId: 'a1', sessionId: 's1', message: 'raw', failureSummary: '' } }))
+    expect(first.said('card')).toEqual([{ frame: { type: 'commander_event', agentId: 'a1', dbSessionId: 's1', payload: { kind: 'error', text: '' } } }])
+    expect(first.said('recaps')).toEqual([])
+    options.onDisconnected!()
+    options.onConnected!(second.core)
+    expect(second.said('card')).toEqual([])
+    expect(second.said('recaps')).toEqual([])
   })
 
   // Its saves are renamed whole, never flushed (a cache write, lib/secureState.ts). The one as the process stops cleanly

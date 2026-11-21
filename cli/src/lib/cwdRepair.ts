@@ -16,7 +16,8 @@
  * matches next time — so it runs on every start rather than behind a version marker the daemon does not
  * keep.
  */
-import type { RegisteredSession } from './registry.js'
+import { matchesLaunchReceipt, type RegisteredSession } from './registry.js'
+import type { StoppedAgentStore } from './stoppedAgents.js'
 import { transcriptProject } from '../engines/discoveries.js'
 
 export interface CwdRepairDeps {
@@ -26,10 +27,7 @@ export interface CwdRepairDeps {
     setCwd(agentId: string, cwd: string): boolean
     transaction<T>(apply: () => T | Promise<T>): Promise<T>
   }
-  stoppedAgents: {
-    list(): RegisteredSession[]
-    patch(agentId: string, patch: { cwd: string }): boolean
-  }
+  stoppedAgents: Pick<StoppedAgentStore, 'list' | 'get' | 'current' | 'patch'>
   log: (message: string) => void
 }
 
@@ -52,43 +50,63 @@ export async function repairProjectCwds(deps: CwdRepairDeps): Promise<CwdRepairS
   const summary: CwdRepairSummary = { registry: 0, archived: 0 }
   // Folders proved so far, by agent: what a transcript-less fork (its history lives in the source's
   // file, not one of its own) inherits from the row it was forked from.
-  const proved = new Map<string, string>()
-  const forks: RegisteredSession[] = []
-  const inherit = (row: RegisteredSession): string | null => {
+  const proved = new Map<string, { folder: string; current(): boolean }>()
+  const forks: Array<{ row: RegisteredSession; live: boolean; current(): boolean }> = []
+  const matches = (row: RegisteredSession | null | undefined, selected: RegisteredSession) => !!row
+    && matchesLaunchReceipt(row, selected) && row.cwd === selected.cwd
+    && row.forkedFrom?.agentId === selected.forkedFrom?.agentId
+  const liveProof = (row: RegisteredSession) => {
+    const selected = structuredClone(row)
+    return () => matches(deps.registry.byAgent(selected.agentId), selected)
+  }
+  const inherit = (row: RegisteredSession) => {
     const source = row.forkedFrom?.agentId
     if (!source || row.transcriptPath || !transcriptProject(row.engine) || !row.cwd) return null
-    const folder = proved.get(source)
-    return folder && folder !== row.cwd ? folder : null
+    const proof = proved.get(source)
+    return proof && proof.folder !== row.cwd && proof.current() ? proof : null
   }
 
   await deps.registry.transaction(() => {
     for (const row of deps.registry.list()) {
       const folder = repairedCwd(row, deps.log)
-      if (!folder) { if (row.forkedFrom && !row.transcriptPath) forks.push(row); continue }
+      if (!folder) {
+        if (row.forkedFrom && !row.transcriptPath) forks.push({ row: structuredClone(row), live: true, current: liveProof(row) })
+        continue
+      }
       const was = row.cwd   // `setCwd` mutates this very object
       if (deps.registry.setCwd(row.agentId, folder)) {
         summary.registry++
-        proved.set(row.agentId, folder)
+        proved.set(row.agentId, { folder, current: liveProof(deps.registry.byAgent(row.agentId)!) })
         deps.log(`[repair] ${row.agentId.slice(0, 8)} cwd ${was} → ${folder} (transcript project folder)`)
       }
     }
   })
-  for (const row of deps.stoppedAgents.list()) {
+  for (const row of await deps.stoppedAgents.list()) {
     const folder = repairedCwd(row, deps.log)
-    if (!folder) { if (row.forkedFrom && !row.transcriptPath) forks.push(row); continue }
-    if (deps.stoppedAgents.patch(row.agentId, { cwd: folder })) {
+    if (!folder) {
+      if (row.forkedFrom && !row.transcriptPath) forks.push({ row, live: false, current: () => deps.stoppedAgents.current(row) })
+      continue
+    }
+    if (await deps.stoppedAgents.patch(row.agentId, { cwd: folder }, undefined, () => deps.stoppedAgents.current(row))) {
       summary.archived++
-      proved.set(row.agentId, folder)
+      const updated = await deps.stoppedAgents.get(row.agentId)
+      if (updated && matches(updated, { ...row, cwd: folder })) {
+        proved.set(row.agentId, { folder, current: () => deps.stoppedAgents.current(updated) })
+      }
       deps.log(`[repair] ${row.agentId.slice(0, 8)} (saved) cwd ${row.cwd} → ${folder} (transcript project folder)`)
     }
   }
   // Forks last, once every source that could be proved has been: a fork only moves with its source.
-  for (const row of forks) {
-    const folder = inherit(row)
-    if (!folder) continue
-    const live = deps.registry.byAgent(row.agentId)
+  for (const selected of forks) {
+    const { row, live } = selected
+    const proof = inherit(row)
+    if (!proof) continue
+    const folder = proof.folder
     const was = row.cwd
-    const done = live ? deps.registry.setCwd(row.agentId, folder) : deps.stoppedAgents.patch(row.agentId, { cwd: folder })
+    const done = live ? await deps.registry.transaction(() => selected.current() && proof.current()
+      && deps.registry.setCwd(row.agentId, folder))
+      : await deps.stoppedAgents.patch(row.agentId, { cwd: folder }, proof.current,
+        () => selected.current() && !deps.registry.byAgent(row.agentId))
     if (!done) continue
     if (live) summary.registry++; else summary.archived++
     deps.log(`[repair] ${row.agentId.slice(0, 8)}${live ? '' : ' (saved)'} cwd ${was} → ${folder} (forked from ${row.forkedFrom!.agentId.slice(0, 8)})`)

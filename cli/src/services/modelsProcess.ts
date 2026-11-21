@@ -1,3 +1,4 @@
+import { launchText } from '../lib/launchContribution.js'
 import { gridAssignmentProcessesIn } from '../lib/gridAssignmentWire.js'
 /**
  * Models in its own process (`harness __service models`, with `HARNESSD_SERVICES=models`).
@@ -19,6 +20,8 @@ import type { CoreApi, ServiceRequests } from '../core/api.js'
 import { ACCOUNT_BACKEND_OFF, CONVERSATIONS_OFF, AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, TERMINALS_OFF } from '../core/api.js'
 import type { AgentGridTarget, GridGlance } from '../lib/gridAnnotation.js'
 import { parseGridLaunchOverride, type GridLaunchRequest } from '../lib/gridLaunch.js'
+import { parseGridLaunchSelection } from '../lib/gridLaunchWire.js'
+import { createSessionImageCodec } from '../storage/sessionImage.js'
 import { ENGINES, type AgentEngine } from '../engines/types.js'
 import { gridGlances, onGridModelsChanged } from '../lib/gridModels.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
@@ -48,16 +51,18 @@ const text = (value: unknown): string => (typeof value === 'string' ? value : ''
 /** A grid launch the core asked to have built, checked as the core checks one: the engine, the launch it sends,
  *  this machine's facts and whether it is a relaunch; null when it is not one. */
 export function gridLaunchRequestIn(payload: Record<string, unknown>): GridLaunchRequest | null {
-  const parsed = parseGridLaunchOverride(payload.override)
+  const parsed = parseGridLaunchSelection(payload.override)
   const machine = payload.machine as Record<string, unknown> | null | undefined
   if (parsed.state !== 'ok' || !(ENGINES as readonly string[]).includes(text(payload.engine))) return null
   if (!machine || typeof machine !== 'object' || typeof machine.hermesSystemManaged !== 'boolean') return null
+  const grokHome = machine.grokHome
+  if (grokHome !== undefined && !launchText(grokHome)) return null
   const major = machine.opencodeMajor
   if (major !== undefined && major !== null && !Number.isSafeInteger(major)) return null
   return {
     engine: payload.engine as AgentEngine,
     override: parsed.override,
-    machine: { hermesSystemManaged: machine.hermesSystemManaged, ...(major !== undefined ? { opencodeMajor: major as number | null } : {}) },
+    machine: { hermesSystemManaged: machine.hermesSystemManaged, ...(grokHome !== undefined ? { grokHome } : {}), ...(major !== undefined ? { opencodeMajor: major as number | null } : {}) },
     ...(payload.refresh === true ? { refresh: true } : {}),
   }
 }
@@ -79,7 +84,7 @@ export function modelsCoreApi(dataDir: string, ask: (query: string, payload?: Pa
     terminals: TERMINALS_OFF,
     machine: UNASKED.machine,
     agents: {
-      all: () => [],
+      all: async () => [],
       live: () => [],
       displayName: () => '',
       byAgent: () => undefined,
@@ -130,7 +135,7 @@ export function modelsCoreApi(dataDir: string, ask: (query: string, payload?: Pa
     },
     clients: {
       viewerChanged: () => {},
-      viewerFrame: () => false,
+      streamFrame: () => false,
       gridNamed: (name) => told('gridNamed', { name }),
       gridModelsChanged: () => told('gridModelsChanged'),
       dshInstallStatus: () => {},
@@ -138,7 +143,6 @@ export function modelsCoreApi(dataDir: string, ask: (query: string, payload?: Pa
       ...UNASKED.clients,
     },
     daemon: DAEMON_UNKNOWN,
-    wifi: UNASKED.wifi,
   }
 }
 
@@ -151,7 +155,8 @@ export function runModelsService(options: ModelsServiceOptions): ServiceProcess 
   const ask = (query: string, payload: Payload = {}): Promise<Payload> =>
     core ? core.query(query, payload) : Promise.reject(new Error('not connected to the core'))
   const ports = emptyPorts()
-  const requests = (options.start ?? startModels)(modelsCoreApi(options.dataDir, ask), ports)
+  const imageCodec = createSessionImageCodec(options.dataDir)
+  const requests = (options.start ?? startModels)(modelsCoreApi(options.dataDir, ask), ports, reference => imageCodec.resolve(reference))
   if (!ports.models) throw new Error('models did not start')
   const models = ports.models
 
@@ -172,7 +177,6 @@ export function runModelsService(options: ModelsServiceOptions): ServiceProcess 
 
   // The core's own calls into models, under its port's member names: no client's request reaches these.
   const portCalls: ServiceRequests = {
-    ensure: async (payload) => ({ ...await models.ensure({ ownGrid: payload.ownGrid === true }) }),
     launchTarget: async (payload) => ({ target: await models.launchTarget({ model: text(payload.model), grid: text(payload.grid) }) }),
     moveTarget: async (payload) => ({ ...await models.moveTarget({ gridName: text(payload.gridName) || null, model: text(payload.model) }) }),
     gridAssignments: async (payload) => {
@@ -181,7 +185,8 @@ export function runModelsService(options: ModelsServiceOptions): ServiceProcess 
     },
     gridLaunch: async (payload) => {
       const request = gridLaunchRequestIn(payload)
-      return request ? { ...await models.gridLaunch(request) } : { ok: false, error: 'INVALID_GRID', detail: 'This launch could not be read.' }
+      const answer = request ? await models.gridLaunch(request) : { ok: false, error: 'INVALID_GRID', detail: 'This launch could not be read.' }
+      return isRecord(answer) ? answer : {}
     },
     apiTarget: async (payload) => ({ ...await models.apiTarget({ connectionId: text(payload.connectionId), model: text(payload.model) }) }),
     privateGridName: async () => ({ name: await models.privateGridName() }),

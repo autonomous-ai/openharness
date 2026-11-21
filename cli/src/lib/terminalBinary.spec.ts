@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { deriveTerminalBinaryKey, openTerminalBinary, sealTerminalBinary } from './e2ee/terminalSeal.js'
 import {
   BROWSER_CHUNK_BYTES,
-  browserLocalFrame,
+  clientStreamLocalFrame,
   decodeTerminalHop,
   decodeTerminalLocal,
   encodeTerminalHop,
@@ -258,25 +258,25 @@ describe('terminal binary protocol v3', () => {
   it('a browser frame is read in place: what decodeTerminalLocal reads, its bytes a view, and nothing else', () => {
     const chunk = { kind: TerminalBinaryKind.browser, streamId, seq: 9, bytes: new Uint8Array(BROWSER_CHUNK_BYTES).fill(7), compressed: false }
     const local = encodeTerminalLocal(chunk)!
-    const read = browserLocalFrame(local)!
+    const read = clientStreamLocalFrame(local)!
     const decoded = decodeTerminalLocal(local)!
-    expect(read).toEqual({ streamId: decoded.streamId, seq: decoded.seq, bytes: decoded.bytes })
+    expect(read).toEqual(decoded)
     expect(read.bytes.buffer).toBe(local.buffer)
     // Part of a larger buffer, as a socket hands it.
     const held = new Uint8Array(local.length + 9)
     held.set(local, 5)
-    expect(browserLocalFrame(held.subarray(5, 5 + local.length))).toEqual(read)
+    expect(clientStreamLocalFrame(held.subarray(5, 5 + local.length))).toEqual(read)
     const changed = (at: number, value: number) => { const copy = Uint8Array.from(local); copy[at] = value; return copy }
     for (const wrong of [
       encodeTerminalLocal({ ...chunk, kind: TerminalBinaryKind.output })!, encodeTerminalLocal({ ...chunk, kind: TerminalBinaryKind.input, bytes: Uint8Array.of(1) })!,
       changed(0, 0x49), changed(4, 2), changed(6, 1), changed(6, 2), changed(7, 1), local.subarray(0, local.length - 1), Uint8Array.from([...local, 0]),
       local.subarray(0, 35), new Uint8Array(0),
     ]) {
-      expect(browserLocalFrame(wrong)).toBeNull()
+      expect(clientStreamLocalFrame(wrong)).toBeNull()
     }
     const far = Uint8Array.from(local)
     new DataView(far.buffer).setBigUint64(12 + 16, 2n ** 60n, false)
-    expect(browserLocalFrame(far)).toBeNull()
+    expect(clientStreamLocalFrame(far)).toBeNull()
     expect(decodeTerminalLocal(far)).toBeNull()
   })
 

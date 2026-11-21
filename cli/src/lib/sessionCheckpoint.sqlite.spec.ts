@@ -6,6 +6,15 @@ import { KIB, MIB, pageReads, withinBudget } from '../testing/storePages.js'
 import type { RegisteredSession } from './registry.js'
 import { builtinSqlite, closeSqliteHandles, type DatabaseLike } from './sqliteBuiltin.js'
 import { sqliteReadAll } from './sqliteRead.js'
+import type { StorageEngine } from '../engines/worker/storageProtocol.js'
+import type { CheckpointDeps } from './sessionCheckpoint.js'
+const workerExport: CheckpointDeps = { exportDatabase: async (s, source, reservation) => {
+  const ownership = await reservation.acquire(process.pid), { stage } = ownership
+  const receipt = await (await import('../engines/others/checkpoint.js')).exportDatabase(s.engine as StorageEngine,
+    { sessionId: s.sessionId, hermesHome: s.hermesHome, openclawStateDir: s.openclawStateDir, pid: s.processIdentity?.pid }, stage, source)
+  await ownership.settled()
+  return receipt
+} }
 import { enableOffThreadSqlite, resetOffThreadSqlite } from './sqliteThread.js'
 
 // The real reads, seen: a conversation table is read in pages (#4188). vi.resetModules() keeps this mock, and with it
@@ -51,7 +60,7 @@ it.each(['opencode', 'kilo', 'hermes', 'devin'] as const)('backs up only the sel
   const { SessionCheckpointStore } = await import('./sessionCheckpoint.js')
   const directory = join(root, 'backups')
   mkdirSync(directory, { mode: 0o700 })
-  await new SessionCheckpointStore(directory).save({ agentId: 'fixture', sessionId: 'wanted', engine, hermesHome: root } as RegisteredSession)
+  await new SessionCheckpointStore(directory, workerExport).save({ agentId: 'fixture', sessionId: 'wanted', engine, hermesHome: root } as RegisteredSession)
   const manifest = JSON.parse(readFileSync(join(directory, readdirSync(directory).find(f => f.endsWith('.json'))!), 'utf8'))
   const backup = readFileSync(join(directory, manifest.file), 'utf8')
   expect(backup).toContain('history in WAL')
@@ -75,7 +84,7 @@ it('backs up an OpenCode 2 conversation from its v2 tables, and a v1 one from th
   const { SessionCheckpointStore, SessionCheckpointError } = await import('./sessionCheckpoint.js')
   const directory = join(root, 'backups')
   mkdirSync(directory, { mode: 0o700 })
-  const store = new SessionCheckpointStore(directory)
+  const store = new SessionCheckpointStore(directory, workerExport)
   const backup = async (sessionId: string) => {
     await store.save({ agentId: sessionId, sessionId, engine: 'opencode' } as RegisteredSession)
     const manifest = readdirSync(directory).filter(f => f.endsWith('.json'))
@@ -97,7 +106,7 @@ it('closes an OpenClaw session the Gateway never wrote with no checkpoint, and r
   // A client closing an agent that never took its task was refused, and the agent stayed listed (2026-11-19).
   const { SessionCheckpointStore, SessionCheckpointError } = await import('./sessionCheckpoint.js')
   const directory = join(root, 'backups')
-  const store = new SessionCheckpointStore(directory)
+  const store = new SessionCheckpointStore(directory, workerExport)
   const save = () => store.save({ agentId: 'fixture', sessionId: 'agent:main:plain', engine: 'openclaw', openclawStateDir: root } as RegisteredSession)
   await save()
   expect(readdirSync(directory)).toEqual([])
@@ -108,11 +117,35 @@ it('closes an OpenClaw session the Gateway never wrote with no checkpoint, and r
   databases.push(database)
   database.exec(readFileSync(join(import.meta.dirname, '..', 'engines', 'openclaw', '__fixtures__', 'schema.sql'), 'utf8'))
   await save()
-  expect(readdirSync(directory)).toEqual([])
+  expect(readdirSync(directory)).toEqual(['.stages'])
+  expect(readdirSync(join(directory, '.stages'))).toEqual([])
   databases.pop()!.close()
   writeFileSync(path, 'not a database')
   await expect(save()).rejects.toBeInstanceOf(SessionCheckpointError)
-  expect(readdirSync(directory)).toEqual([])
+  expect(readdirSync(directory)).toEqual(['.stages'])
+  // This fixture now reserves the real live writer, like engine storage. A failed export has no settlement.
+  expect(readdirSync(join(directory, '.stages'))).toEqual(['0'])
+  expect(JSON.parse(readFileSync(join(directory, '.stages', '0', 'owner.json'), 'utf8')))
+    .toMatchObject({ core: process.pid, writer: process.pid, settled: false })
+})
+
+it.each(['absent', 'empty'] as const)('refuses %s OpenClaw history after saving a nonempty checkpoint', async mode => {
+  const path = join(root, 'agents', 'main', 'agent', 'openclaw-agent.sqlite')
+  mkdirSync(dirname(path), { recursive: true })
+  const database = new (builtinSqlite()!)(path, { readOnly: false })
+  databases.push(database)
+  const fixture = (name: string) => readFileSync(join(import.meta.dirname, '..', 'engines', 'openclaw', '__fixtures__', `${name}.sql`), 'utf8')
+  database.exec(fixture('schema')); database.exec(fixture('plain'))
+  const { SessionCheckpointStore, SessionCheckpointError } = await import('./sessionCheckpoint.js')
+  const directory = join(root, 'backups'), store = new SessionCheckpointStore(directory, workerExport)
+  const row = { agentId: 'fixture', sessionId: 'agent:main:plain', engine: 'openclaw', openclawStateDir: root } as RegisteredSession
+  await store.save(row)
+  const files = readdirSync(directory).filter(name => name !== '.stages')
+  const before = files.map(name => readFileSync(join(directory, name)))
+  if (mode === 'empty') database.exec('DELETE FROM transcript_events; DELETE FROM session_windows; DELETE FROM session_nodes;')
+  else { databases.pop()!.close(); closeSqliteHandles(); rmSync(path) }
+  await expect(store.save(row)).rejects.toBeInstanceOf(SessionCheckpointError)
+  expect(files.map(name => readFileSync(join(directory, name)))).toEqual(before)
 })
 
 // Only the read threads enforce a reply limit. The stores are built with the binding: the sqlite3 CLI cannot take
@@ -161,7 +194,7 @@ withBuiltin('a conversation larger than the row cap', () => {
     conversation(engine, Array.from({ length: 80 }, () => 'x'.repeat(500 * KIB)))
     enableOffThreadSqlite()
     const { SessionCheckpointStore } = await import('./sessionCheckpoint.js')
-    await new SessionCheckpointStore(directory).save({ agentId: 'fixture', sessionId: 'wanted', engine, hermesHome: root } as RegisteredSession)
+    await new SessionCheckpointStore(directory, workerExport).save({ agentId: 'fixture', sessionId: 'wanted', engine, hermesHome: root } as RegisteredSession)
     const saved = savedOf(directory)
     expect(saved.tables[table[engine]]).toHaveLength(80)
     expect(saved.tables[table[engine]].map((row) => Object.keys(row))).toEqual(Array.from({ length: 80 }, () => ['id', engine === 'opencode' || engine === 'kilo' ? 'message_id' : 'session_id', 'body']))
@@ -175,9 +208,9 @@ withBuiltin('a conversation larger than the row cap', () => {
     // The read threads stay off: on the caller's thread, before #4188, this row was read and saved.
     conversation('hermes', ['before', 'x'.repeat(33 * MIB), 'after'])
     const { SessionCheckpointStore, SessionCheckpointError } = await import('./sessionCheckpoint.js')
-    await expect(new SessionCheckpointStore(directory).save({ agentId: 'fixture', sessionId: 'wanted', engine: 'hermes', hermesHome: root } as RegisteredSession))
+    await expect(new SessionCheckpointStore(directory, workerExport).save({ agentId: 'fixture', sessionId: 'wanted', engine: 'hermes', hermesHome: root } as RegisteredSession))
       .rejects.toBeInstanceOf(SessionCheckpointError)
-    expect(readdirSync(directory)).toEqual([])
+    expect(readdirSync(directory).filter(name => name !== '.stages')).toEqual([])
   })
 
   it('backs up an OpenClaw conversation larger than the row cap, a compressed row as hex and sized as hex', async () => {
@@ -194,7 +227,7 @@ withBuiltin('a conversation larger than the row cap', () => {
     for (let seq = 100; seq < 104; seq++) compressed.all(seq, 1.5 * MIB, 4 * MIB, window)
     enableOffThreadSqlite()
     const { SessionCheckpointStore } = await import('./sessionCheckpoint.js')
-    await new SessionCheckpointStore(directory).save({ agentId: 'fixture', sessionId: 'agent:main:plain', engine: 'openclaw', openclawStateDir: root } as RegisteredSession)
+    await new SessionCheckpointStore(directory, workerExport).save({ agentId: 'fixture', sessionId: 'agent:main:plain', engine: 'openclaw', openclawStateDir: root } as RegisteredSession)
     const saved = savedOf(directory)
     const events = saved.tables.transcript_events
     expect(events.map((row) => row.seq)).toEqual([...Array.from({ length: 88 }, (_, i) => i), 100, 101, 102, 103])

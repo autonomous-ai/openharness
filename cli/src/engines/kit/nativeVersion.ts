@@ -1,43 +1,15 @@
 /** Native executable facts used by launch control, without loading an interpreter. */
 import { execFile } from 'node:child_process'
-import { realpathSync, statSync } from 'node:fs'
+import { executableIdentity } from './nativeExecutable.js'
 import { resolve } from 'node:path'
 import { resolveBinaryOnPath } from '../../lib/binaryOnPath.js'
 import { windowsEngineArgv } from '../../lib/windows/launch.js'
 
-export interface VersionRule { output: RegExp; args: readonly string[]; timeoutMs: number }
-export interface VersionProbe { identity(): string | null; read(): string | Promise<string> }
-export interface NativeVersionProbe extends VersionProbe { command(): string | null }
-export interface NativeExecutableSnapshot {
-  command: string
-  identity: string
-  current(): boolean
-}
+import { parseMajor, type VersionRule, type VersionProbe, type NativeVersionProbe } from './versionData.js'
+export { executableSnapshot, parseMajor, parseRelease, releaseAtLeast } from './versionData.js'
+export type { VersionRule, VersionProbe, NativeVersionProbe, NativeExecutableSnapshot, Release } from './versionData.js'
 
-/** Retain the file used by the probe through later preparation and dispatch. */
-export function executableSnapshot(probe: NativeVersionProbe): NativeExecutableSnapshot | null {
-  const command = probe.command(), identity = probe.identity()
-  return command && identity ? { command, identity, current: () => probe.identity() === identity } : null
-}
-
-export function parseMajor(rule: VersionRule, output: string): number | null {
-  const match = rule.output.exec(output)
-  return match ? Number(match[1]) : null
-}
-
-export type Release = readonly [number, number, number]
-
-export function parseRelease(rule: VersionRule, output: string): Release | null {
-  const match = rule.output.exec(output)
-  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null
-}
-
-export function releaseAtLeast(release: Release, floor: Release): boolean {
-  for (let part = 0; part < 3; part++) if (release[part] !== floor[part]) return release[part]! > floor[part]!
-  return true
-}
-
-export function nativeVersionProbe(rule: VersionRule, binary: () => string, environment?: NodeJS.ProcessEnv): NativeVersionProbe {
+export function nativeVersionProbe(rule: VersionRule, binary: () => string, environment?: NodeJS.ProcessEnv, execute: typeof execFile = execFile): NativeVersionProbe {
   // One attempt resolves one command. Previously identity() and read() resolved
   // independently, so a PATH/config change could cache B's answer under A's key.
   let selected: string | null | undefined
@@ -53,11 +25,7 @@ export function nativeVersionProbe(rule: VersionRule, binary: () => string, envi
     identity: () => {
       const file = path()
       if (!file) return null
-      try {
-        const target = realpathSync(file), info = statSync(file, { bigint: true })
-        if (!info.isFile()) return null
-        return `${file}:${target}:${info.dev}:${info.ino}:${info.mode}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
-      } catch { return null }
+      return executableIdentity(file)
     },
     read: () => new Promise<string>((done, failed) => {
       const file = path()
@@ -65,7 +33,7 @@ export function nativeVersionProbe(rule: VersionRule, binary: () => string, envi
       let argv: string[]
       // Windows: an npm shim's script under node, never the shim through cmd.exe (lib/windows/launch.ts).
       try { argv = windowsEngineArgv('the engine', [file, ...rule.args], { environment: environment ?? process.env }) } catch (error) { failed(error); return }
-      const child = execFile(argv[0]!, argv.slice(1), {
+      const child = execute(argv[0]!, argv.slice(1), {
         env: environment, encoding: 'utf8', timeout: rule.timeoutMs, killSignal: 'SIGKILL', maxBuffer: 64 * 1024, windowsHide: true,
       }, (error, stdout) => { if (error) failed(error); else done(stdout) })
       child.stdin?.end()

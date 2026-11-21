@@ -7,11 +7,11 @@
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import { createAgentCreator, type CreateAgentDeps } from '../../core/agents/create.js'
 import { heldPaneArgv } from '../../core/agents/heldLaunches.js'
 import { captureLaunchExecutable } from '../../engines/kit/launchExecutable.js'
-import { inspectNativeLaunch } from '../../engines/nativeLaunch.js'
+import { inspectNativeLaunch } from '../../testing/nativeSetupInProcess.js'
 import type { AgentEngine } from '../../engines/types.js'
 import { PtyHostBackend } from '../ptyHostBackend.js'
 import { listDiscoveries } from '../ptyHost/launch.js'
@@ -62,16 +62,13 @@ function creator(backend: PtyHostBackend) {
     watchNewPane: (async () => {}) as unknown as CreateAgentDeps['watchNewPane'],
     announceSession: () => {},
     attach: () => {},
-    prepareApiTools: () => {},
+    prepareInstructions: async () => {},
     hookPort: 0,
     hooksDisabled: true,
-    installOpencodePlugin: async () => true,
     gridLaunchMachine: unused as unknown as CreateAgentDeps['gridLaunchMachine'],
     buildGridLaunch: unused,
     terminalHintMachineName: () => 'windows-vm',
     blocksFolder: () => false,
-    gridSetup: () => null,
-    privateGridName: async () => null,
     dshLaunch: { materialize: unused, launch: unused } as unknown as CreateAgentDeps['dshLaunch'],
     syncProfileHome: async () => [],
   }
@@ -100,7 +97,7 @@ async function created(backend: PtyHostBackend, engine: AgentEngine) {
 }
 
 ;(enabled ? describe : describe.skip)('engines created on the real pty host', () => {
-  registry.load()
+  beforeAll(async () => { await registry.load() })
 
   // A grid launch's provider keys: the host inherited them from the daemon, and a pane told to clear them must not see
   // them, in any case of the name, while the rest of what it inherits stays (security; lib/windows/engineStart.ts).

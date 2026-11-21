@@ -194,6 +194,8 @@ describe('the session the Claude app shows moves the dial', () => {
     const socket = await devicesSocket(d)
     const unknown = randomUUID()
     expect(await attach(socket, c1.sessionId)).toBe(204)
+    // 204 acknowledges receipt; wait for the move before checking the next completed attach.
+    expect(await lineAt(d, 0)).toBe('[device] attach · moved')
     expect(await attach(socket, unknown)).toBe(204)
     expect(await lineAt(d, 1)).toBe('[device] attach · skipped · unknown agent')
     const log = d.log()

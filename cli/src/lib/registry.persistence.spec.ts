@@ -1,4 +1,5 @@
 import { removeRegistryAgent } from '../testing/registryFixtures.js'
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { fork, type ChildProcess } from 'node:child_process'
 import { on, once } from 'node:events'
@@ -21,7 +22,7 @@ vi.mock('node:fs', async original => {
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
 vi.mock('node:fs/promises', async original => {
-  const actual = await deadline.slowSyncFsPromises(original)
+  const actual = await original<typeof import('node:fs/promises')>()
   return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
     const handle = await actual.open(...args), read = handle.read.bind(handle)
     handle.read = (async (...options: Parameters<typeof handle.read>) => {
@@ -37,7 +38,7 @@ vi.mock('node:fs/promises', async original => {
 await import('./registry.js')
 
 let directory: string
-let registry: typeof Registry
+let registry: typeof Registry, storage: typeof import('./sessionStorage.js')['sessionStorage']
 let holder: ChildProcess | undefined
 let exitFlush: Promise<void> | undefined
 let timers: ReturnType<typeof deadline.holdRegistryDeadline>
@@ -54,8 +55,9 @@ beforeEach(async () => {
   exitFlush = undefined
   directory = mkdtempSync(join(tmpdir(), 'registry-persistence-'))
   for (const key of ['ADAPTER_DATA_DIR', 'CLAUDE_PROJECTS_DIR', 'CODEX_HOME', 'CURSOR_HOME']) vi.stubEnv(key, directory)
+  storage = deadline.slowSessionStorage((await import('./sessionStorage.js')).sessionStorage)
   registry = (await import('./registry.js')).registry
-  registry.load()
+  await registry.load()
   ;(await registry.openProcessAgent(input))
   await registry.flush()
 })
@@ -68,7 +70,8 @@ afterEach(async () => {
   try {
     if (holder) await stopHolder(holder)
     holder = undefined
-    await bounded(Promise.resolve(exitFlush ?? registry?.flush()), 10_000, 'registry teardown flush')
+    try { await bounded(Promise.resolve(exitFlush ?? registry?.flush()), 10_000, 'registry teardown flush') }
+    finally { await closeSessionStorageFixture(storage) }
     settled = true
   } finally {
     vi.unstubAllEnvs()
@@ -274,7 +277,7 @@ it('publishes a resumed owner only after durability and rejects cancelled resume
   expect(rows()).toEqual([])
 })
 
-it.each(['taking', 'prepared', 'published'])('recovers a real writer killed at %s without losing peer metadata', async phase => {
+it.each(['taking', 'prepared', 'published', 'confirmed'])('recovers a real writer killed at %s without losing peer metadata', async phase => {
   holder = fork(fileURLToPath(new URL('./__fixtures__/registryCrashWriter.ts', import.meta.url)), [directory, phase], {
     ...ownProcessGroup(), execArgv: ['--import', fileURLToPath(new URL('../../node_modules/tsx/dist/loader.mjs', import.meta.url))], stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
     env: { ...process.env, ADAPTER_DATA_DIR: directory },
@@ -287,10 +290,11 @@ it.each(['taking', 'prepared', 'published'])('recovers a real writer killed at %
   holder.kill('SIGKILL')
   await exited
   holder = undefined
-  expect(rows()[0].title).toBe(phase === 'published' ? 'peer crash metadata' : null)
+  const published = phase === 'published' || phase === 'confirmed'
+  expect(rows()[0].title).toBe(published ? 'peer crash metadata' : null)
   const committed = await registry.setClosePlan(input.agentId, plan)
   expect(committed?.closePlan).toEqual(plan)
-  expect(rows()[0].title).toBe(phase === 'published' ? 'peer crash metadata' : null)
+  expect(rows()[0].title).toBe(published ? 'peer crash metadata' : null)
   expect(rows()[0].closePlan).toEqual(plan)
 })
 

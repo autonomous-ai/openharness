@@ -1,12 +1,20 @@
 import { otherEngineRequests } from '../engines/others/otherEnginesProcess.js'
+import { preloadEngine } from '../engines/inProcess.js'
+import { RuntimeProfileState } from '../lib/runtimeProfileState.js'
 import { questionControlFor } from '../engines/questionControls.js'
 import { modelControlFor } from '../engines/modelControls.js'
 import { screenFor } from '../engines/screens.js'
+import { terminalScreen } from '../engines/kit/screen.js'
 import { submissionFor } from '../engines/submissions.js'
 import { nativeControlFor } from '../engines/nativeControls.js'
 import { backgroundJobFor } from '../engines/backgroundJobs.js'
 import { providerMoveFor } from '../engines/providerMoves.js'
+import { hermesBackground, openclawUserRows } from '../engines/others/storageRequests.js'
+import { exportDatabase } from '../engines/others/checkpoint.js'
 import { prepareResume } from '../engines/resumePreparation.js'
+import { createInlineHistory } from '../engines/transcripts.js'
+import { inlineSharedMachinesPort } from '../lib/sharedMachinesPort.js'
+import { createServiceHost } from './inlineHost.js'
 import { randomBytes } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { request } from 'node:http'
@@ -18,12 +26,11 @@ import { newPipeNonce, PIPE_AUTH_HEADER, pipeAuthValue, readDaemonToken } from '
 import { fakeCore } from '../testing/fakeCore.js'
 import type { DevicesDeps } from './devices.js'
 import type { DevicesListener, ListenerHandler } from './devicesListener.js'
-import { engineTranscriptFor } from '../engines/transcripts.js'
 import { databaseHistory } from '../engines/storeHistory.js'
 import { liveFor } from '../engines/live.js'
 import { runtimeFor } from '../engines/runtime.js'
 import { startGateway } from '../gateway/start.js'
-import { startAgentBrowser } from './agentBrowser.js'
+import { startInlineClientStreams } from './inlineClientStreams.js'
 import { startAgentCleanup } from './agentCleanup.js'
 import { startMemory } from './memory.js'
 import { startConnectors } from './connectors.js'
@@ -32,8 +39,10 @@ import { startEngineProbe } from './engineProbe.js'
 import { startHandoff } from './handoff.js'
 import * as inline from './inline.js'
 import { startModels } from './models.js'
+import { createLocalNativeSetup } from './nativeSetup.js'
 import { startMessagesInCore } from './messages.js'
 import { startMonitor } from './monitor.js'
+import { startPaste } from './paste.js'
 import { startOrchestrator } from './orchestrator.js'
 import { startOsDevice } from './osDevice.js'
 import { startMachineAddons } from './machineAddons.js'
@@ -47,7 +56,6 @@ import { startSharedMachines } from './sharedMachines.js'
 import { startSharing } from './sharing.js'
 import { startStoreInCore } from './store.js'
 import { startUsageInCore } from './usage.js'
-import { startViewers } from './viewers.js'
 import { startWifi } from './wifi.js'
 import { startWindowNames } from './windowNames.js'
 import { startGoals } from './goals.js'
@@ -64,7 +72,7 @@ vi.mock('../lib/windows/pipeAuth.js', async (importOriginal) => ({ ...await impo
 describe('the services the core runs in its own process only when they do not run in theirs', () => {
   it('are their own starts, unchanged: the same services either way, the devices aside', () => {
     const { startDevices: _devices, ...rest } = inline
-    expect(rest).toEqual({ otherEngineRequests, engineTranscriptFor, databaseHistory, liveFor, runtimeFor, screenFor, submissionFor, nativeControlFor, backgroundJobFor, providerMoveFor, prepareResume, modelControlFor, questionControlFor, startAgentBrowser, startAgentCleanup, startCloud, startConnectors, startEngineProbe, startGoals, startHachiInCore, startHandoff, startHomeBridgeInCore, startGateway, startMemory, startModels, startMonitor, startOrchestrator, startOsDevice, startMachineAddons, startProjects, startRecaps, startRouter, startSearch, startSharedMachines, startSharing, startShell, startStoreInCore, startMessagesInCore, startUsageInCore, startViewers, startWifi, startWindowNames, startWorkspaces })
+    expect(rest).toEqual({ RuntimeProfileState, preloadEngine, hermesBackground, openclawUserRows, exportDatabase, otherEngineRequests, createInlineHistory, createServiceHost, inlineSharedMachinesPort, databaseHistory, liveFor, runtimeFor, screenFor, terminalScreen, submissionFor, nativeControlFor, backgroundJobFor, providerMoveFor, prepareResume, modelControlFor, questionControlFor, createLocalNativeSetup, startInlineClientStreams, startAgentCleanup, startCloud, startConnectors, startEngineProbe, startGoals, startHachiInCore, startHandoff, startHomeBridgeInCore, startGateway, startMemory, startModels, startMonitor, startPaste, startOrchestrator, startOsDevice, startMachineAddons, startProjects, startRecaps, startRouter, startSearch, startSharedMachines, startSharing, startShell, startStoreInCore, startMessagesInCore, startUsageInCore, startWifi, startWindowNames, startWorkspaces })
   })
 })
 
@@ -117,8 +125,7 @@ describe('the devices in the core\'s process', () => {
     })
   }
 
-  // Every service runs in the core's process on Windows (masterProcess.ts): without a listener there, no `harness device
-  // notify`, editor or plugin would reach the dial.
+  // Explicit inline Windows starts retain the same authenticated listener as the normal devices process.
   it('on Windows open a pipe of their own, as in their own process: the devices\' token and record in the data folder, and a message signed with that token is answered', async () => {
     const { dataDir, deps, given } = startHere('win32')
     expect(given).toMatchObject(deps)

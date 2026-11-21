@@ -24,7 +24,7 @@ import {
 
 export interface CoreHandle {
   readonly pid: number | undefined
-  send(message: MasterMessage): void
+  send(message: MasterMessage, settled?: (delivered: boolean) => void): void
   kill(signal: NodeJS.Signals): void
   onMessage(listener: (message: unknown) => void): void
   onExit(listener: (code: number | null, signal: NodeJS.Signals | null) => void): void
@@ -32,7 +32,8 @@ export interface CoreHandle {
 
 export interface SupervisorDeps {
   /** Start a core with these extra environment variables. */
-  spawnCore(env: Record<string, string>): CoreHandle
+  /** Null refuses code before a child exists; the same admission restore/backoff applies. */
+  spawnCore(env: Record<string, string>): CoreHandle | null
   /** A monotonic clock, in ms: durations only, untouched by sleep and clock changes. */
   now(): number
   /** The wall clock, in ms: what the status says things happened at. */
@@ -67,6 +68,8 @@ export interface SupervisorDeps {
   bundle?(): string | null
   /** Start the process that runs [service] on demand (./serviceSupervisor.ts `ServiceSupervisor.want`): the core asked for it. */
   want?(service: string): void
+  /** Actual child handles, bounded by the master's declared service hosts. */
+  serviceProcesses?(): Array<{ name: string; pid: number | null }>
   /**
    * The core bound speaking an older protocol than this master (./serviceSupervisor.ts `ServiceSupervisor.unasked`): it
    * never asks for a process that became on demand after its protocol, and expects it to run, as it did.
@@ -111,9 +114,9 @@ export interface ResumeState {
 /**
  * Why a master did not replace itself: the bundle on disk is its own code (`same`); it could not or
  * would not, for a reason that is not the bundle's (`kept`); or the bundle's master did not answer its
- * probe (`refused`), which fails an update to it.
+ * probe (`refused`), which fails an update to it. `storage-unavailable` retries preparation without judging an update.
  */
-export type ReexecOutcome = 'same' | 'kept' | 'refused'
+export type ReexecOutcome = 'same' | 'kept' | 'refused' | 'unsupported' | 'storage-unavailable'
 
 /** Who this master is: its code's version, and what the master it replaced handed on. */
 export interface SupervisorIdentity {
@@ -180,6 +183,7 @@ export type SupervisorState = 'idle' | 'starting' | 'listening' | 'running' | 'r
 export type ExitReason = 'crashed' | 'hung' | 'did-not-bind' | 'not-ready' | 'memory' | 'update' | 'stopped'
 
 export interface SupervisorStatus {
+  services?: Array<{ name: string; pid: number | null }>
   state: SupervisorState
   corePid: number | null
   restarts: number
@@ -295,6 +299,7 @@ export class Supervisor {
 
   status(): SupervisorStatus {
     return {
+      ...(this.deps.serviceProcesses ? { services: this.deps.serviceProcesses() } : {}),
       state: this.state,
       corePid: this.core?.pid ?? null,
       restarts: this.restarts,
@@ -332,6 +337,16 @@ export class Supervisor {
     this.deps.reexec(this.resumeState(), (outcome) => {
       // Stopped while it was deciding: the stop has finished this master already.
       if (this.state === 'stopping' || this.state === 'stopped') return
+      if (outcome === 'storage-unavailable') {
+        // No candidate ran: storage exhaustion cannot reject or confirm an update.
+        this.lastExit = 'worker storage unavailable'
+        this.lastExitReason = 'did-not-bind'
+        const delay = Math.max(1_000, this.backoff)
+        this.backoff = Math.min(delay * 2, this.options.maxBackoffMs)
+        this.deps.log(`[harnessd] the selected bundle had no room to start — make disk space available; retrying in ${delay} ms`)
+        this.scheduleSpawn(delay)
+        return
+      }
       if (outcome === 'refused' && this.update === 'pending') {
         // A bundle whose master cannot start is an update that failed, as one whose core cannot is.
         this.update = null
@@ -340,8 +355,29 @@ export class Supervisor {
         this.next()
         return
       }
+      if (outcome === 'unsupported') {
+        this.admissionRefused()
+        return
+      }
       this.spawn()
     })
+  }
+
+  /** A code refusal has no PID to kill or reap, and never becomes a fictitious core crash. */
+  private admissionRefused(): void {
+    if (this.update === 'pending') {
+      this.update = null
+      this.deps.restoreUpdate()
+      this.deps.log('[harnessd] the new bundle\'s master would not start — rolled back to the previous bundle; restarting')
+      this.next()
+      return
+    }
+    this.lastExit = 'bundle admission refused'
+    this.lastExitReason = 'did-not-bind'
+    const delay = Math.max(1_000, this.backoff)
+    this.backoff = Math.min(delay * 2, this.options.maxBackoffMs)
+    this.deps.log(`[harnessd] the selected bundle has no supported worker cohort — restore a supported build; retrying in ${delay} ms`)
+    this.scheduleSpawn(delay)
   }
 
   /**
@@ -409,6 +445,9 @@ export class Supervisor {
     if (this.bound) this.core?.send({ type: 'harnessd:status', status })
   }
 
+  /** Service lifecycle changes push evidence; there is no process-table polling. */
+  servicesChanged(): void { this.publish() }
+
   private spawn(): void {
     this.bound = false
     this.coreProtocol = HARNESSD_PROTOCOL
@@ -432,6 +471,7 @@ export class Supervisor {
     this.ptyStagedSinceSpawn = false
     const core = this.deps.spawnCore(env)
     this.core = core
+    if (!core) { this.admissionRefused(); return }
     core.onMessage((message) => { if (this.core === core && isCoreMessage(message)) this.onMessage(core, message) })
     core.onExit((code, signal) => { if (this.core === core) this.onExit(code, signal) })
     this.deps.log(`[harnessd] core started (pid ${core.pid ?? '?'})${this.restarts ? ` · restart ${this.restarts}` : ''}${this.safeMode ? ` · safe mode: ${this.safeMode}` : ''}`)
@@ -488,6 +528,7 @@ export class Supervisor {
         // beside it, as it did when the gateway started with every other process. A core too old to ask sends
         // none, before or after.
         this.deps.want?.(message.service)
+        this.publish()
         return
       case 'harnessd:stop': {
         const why = 'the core asked to stop (harness stop)'

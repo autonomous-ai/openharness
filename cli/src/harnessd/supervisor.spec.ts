@@ -90,6 +90,90 @@ describe('Supervisor', () => {
   })
   afterEach(() => vi.useRealTimers())
 
+  it('pushes actual service child evidence on want and lifecycle changes', () => {
+    let pid: number | null = null
+    const supervisor = make({}, { serviceProcesses: () => [{ name: 'engine-others', pid }], want: () => { pid = 42 } })
+    supervisor.start(); core().up()
+    core().say({ type: 'harnessd:want', service: 'engine-others' })
+    expect(core().sent.at(-1)).toMatchObject({ type: 'harnessd:status', status: { services: [{ name: 'engine-others', pid: 42 }] } })
+    pid = null; supervisor.servicesChanged()
+    expect(core().sent.at(-1)).toMatchObject({ type: 'harnessd:status', status: { services: [{ name: 'engine-others', pid: null }] } })
+  })
+
+  it('keeps a disk-limited update pending, starts no child, and resumes probation once storage recovers', () => {
+    let unavailable = false
+    const attempts = vi.fn()
+    const supervisor = make({}, { reexec: (state, proceed) => {
+      attempts(state); proceed(unavailable ? 'storage-unavailable' : 'same')
+    } })
+    supervisor.start(); core().up()
+    unavailable = true
+    core().exit(CORE_EXIT_UPDATE); vi.advanceTimersByTime(0)
+    expect(cores).toHaveLength(1)
+    expect(attempts).toHaveBeenLastCalledWith(expect.objectContaining({ update: 'pending' }))
+    expect(calls).toEqual(['claim'])
+    const count = attempts.mock.calls.length
+    vi.advanceTimersByTime(999)
+    expect(attempts).toHaveBeenCalledTimes(count)
+    vi.advanceTimersByTime(1)
+    expect(attempts).toHaveBeenCalledTimes(count + 1)
+    expect(attempts).toHaveBeenLastCalledWith(expect.objectContaining({ update: 'pending' }))
+    expect(cores).toHaveLength(1)
+    expect(calls).toEqual(['claim'])
+    unavailable = false
+    vi.advanceTimersByTime(2_000)
+    expect(cores).toHaveLength(2)
+    core().up(); live(options.updateProbationMs)
+    expect(calls).toEqual(['claim', 'confirm'])
+    supervisor.stop('fixture'); core().exit(0)
+  })
+
+  it('bounds disk-limited preparation retries and cancels them on stop without a child', () => {
+    const attempts = vi.fn()
+    const supervisor = make({}, { reexec: (_state, proceed) => { attempts(); proceed('storage-unavailable') } })
+    supervisor.start()
+    for (const delay of [1_000, 2_000, 4_000, 4_000]) vi.advanceTimersByTime(delay)
+    expect(attempts).toHaveBeenCalledTimes(5)
+    expect(cores).toEqual([])
+    expect(calls).toEqual([])
+    expect(supervisor.status()).toMatchObject({ corePid: null, state: 'restarting', lastExit: 'worker storage unavailable' })
+    supervisor.stop('fixture'); vi.runOnlyPendingTimers()
+    expect(attempts).toHaveBeenCalledTimes(5)
+    expect(exited).toEqual([0])
+  })
+
+  it('backs off a pre-spawn core refusal without inventing a child, and stop cancels its retry', () => {
+    const spawnCore = vi.fn(() => null) as unknown as SupervisorDeps['spawnCore']
+    const supervisor = make({}, { spawnCore })
+    supervisor.start()
+    expect(supervisor.status()).toMatchObject({ state: 'restarting', corePid: null, lastExit: 'bundle admission refused' })
+    expect(cores).toEqual([])
+    expect(spawnCore).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(999)
+    expect(spawnCore).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(1)
+    expect(spawnCore).toHaveBeenCalledTimes(2)
+    supervisor.stop('test')
+    vi.runOnlyPendingTimers()
+    expect(spawnCore).toHaveBeenCalledTimes(2)
+    expect(exited).toEqual([0])
+  })
+
+  it('restores pending probation when the core is refused before spawn', () => {
+    let refused = true
+    const restored = vi.fn(() => { refused = false; calls.push('restore') })
+    const spawnCore = vi.fn((env: Record<string, string>) => {
+      if (refused) return null
+      const next = new FakeCore(1000, env); cores.push(next); return next
+    }) as unknown as SupervisorDeps['spawnCore']
+    const supervisor = make({}, { spawnCore, restoreUpdate: restored }, { unjudgedUpdate: 'pending' })
+    supervisor.start()
+    expect(restored).toHaveBeenCalledTimes(1)
+    expect(cores).toHaveLength(1)
+    expect(supervisor.status().corePid).toBe(1000)
+    supervisor.stop('test'); core().exit(0)
+  })
+
   it('starts one core, claims the pid file once it is bound, and runs it once it is ready', () => {
     const supervisor = make()
     expect(new Supervisor({ wallClock: () => 7 } as never).status())
@@ -929,6 +1013,33 @@ describe('Supervisor', () => {
       crash()
       asked[3].proceed('refused')
       expect(cores).toHaveLength(3)
+    })
+
+    it('restores an unsupported update and never spawns an unsupported manual replacement', () => {
+      const { asked, deps } = reexecs()
+      const supervisor = make({ initialBackoffMs: 0, maxBackoffMs: 2_000 }, deps)
+      supervisor.start()
+      asked[0].proceed('same')
+      core().up()
+      core().exit(CORE_EXIT_UPDATE)
+      vi.advanceTimersByTime(0)
+      asked[1].proceed('unsupported')
+      expect(calls).toEqual(['claim', 'up', 'restore'])
+      expect(cores).toHaveLength(1)
+      asked[2].proceed('unsupported')
+      expect(supervisor.status()).toMatchObject({ state: 'restarting', corePid: null, lastExit: 'bundle admission refused', lastExitReason: 'did-not-bind' })
+      expect(cores).toHaveLength(1)
+      vi.advanceTimersByTime(999)
+      expect(asked).toHaveLength(3)
+      vi.advanceTimersByTime(1)
+      expect(asked).toHaveLength(4)
+      asked[3].proceed('unsupported')
+      vi.advanceTimersByTime(1_999)
+      expect(asked).toHaveLength(4)
+      vi.advanceTimersByTime(1)
+      expect(asked).toHaveLength(5)
+      expect(cores).toHaveLength(1)
+      supervisor.stop('test')
     })
 
     it('rolls a failed update back and asks again, so the master moves back to the bundle restored', () => {

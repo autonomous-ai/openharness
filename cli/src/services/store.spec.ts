@@ -7,10 +7,15 @@ import { setAgentSettingsForTest } from '../testing/agentSettings.js'
 import type { DshInstallProgress } from '../dsh/install.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { storeLaunchPort } from './storeLaunch.js'
-import { emptyPorts } from '../core/api.js'
-import { STORE_REQUESTS, startStore, startStoreInCore, type StoreDeps } from './store.js'
+import { emptyPorts, STORE_OFF } from '../core/api.js'
+import { storeLaunchContext } from './storeContext.js'
+import { watchSettingFile } from '../messages/settingWatch.js'
+import { STORE_REQUESTS, createStorePreparation, startStore, startStoreInCore, type StoreDeps } from './store.js'
+import { HACHI_ID } from '../dsh/builtinIds.js'
 
 vi.mock('./storeLaunch.js', () => ({ storeLaunchPort: vi.fn() }))
+vi.mock('./storeContext.js', () => ({ storeLaunchContext: vi.fn(async () => ({ privateGrid: 'selected' })) }))
+vi.mock('../messages/settingWatch.js', () => ({ watchSettingFile: vi.fn(() => vi.fn()) }))
 
 const ASKER = { local: true, owner: true }
 
@@ -30,6 +35,27 @@ function setup(over: Partial<StoreDeps> = {}, dataDir = '/data') {
 }
 
 describe('the store service', () => {
+  it('retries partial startup on actual use, stops after success and treats disabled Hachi as absent', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'store-ready-'))
+    const prepare = vi.fn().mockReturnValueOnce(false).mockImplementationOnce(() => { throw Error('busy') }).mockReturnValue(true)
+    const ready = createStorePreparation({ dataDir }, prepare)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(ready.ready()).toBe(false)
+    expect(ready()).toBe(false)
+    expect(ready.ready()).toBe(false)
+    expect(ready(HACHI_ID)).toBe(true)
+    // Disabled Hachi needs no package; that exemption does not make other bundled packages ready.
+    expect(ready.ready()).toBe(false)
+    expect(warn).toHaveBeenCalledWith('[store] BUNDLED_PREPARATION_FAILED · Error')
+    expect(ready('autonomous/autonomous-grid')).toBe(true)
+    expect(ready.ready()).toBe(true)
+    expect(ready()).toBe(true)
+    expect(prepare).toHaveBeenCalledTimes(3)
+    setAgentSettingsForTest(dataDir, { hachi: true })
+    expect(ready(HACHI_ID)).toBe(true)
+    expect(prepare).toHaveBeenLastCalledWith({ hachi: true })
+    warn.mockRestore()
+  })
   it('prepares the release-owned harnesses before answering requests', () => {
     const { deps } = setup()
     expect(deps.prepare).toHaveBeenCalledExactlyOnceWith({ hachi: false })
@@ -106,30 +132,63 @@ describe('the store service', () => {
     expect(Object.keys(startStoreInCore(fakeCore(), ports)).sort()).toEqual([...STORE_REQUESTS].sort())
     expect(ports.store).toMatchObject({ dshMaterialize: expect.any(Function), dshLaunch: expect.any(Function) })
   })
+  it('uses the same context transport inline and revokes it on machine change or stop', async () => {
+    let machineId = 'first'
+    const core = fakeCore({ daemon: { machineId: () => machineId } }), ports = emptyPorts()
+    vi.mocked(storeLaunchPort).mockImplementationOnce((_lookup, _prepare, _prepared, context) => ({ ...STORE_OFF,
+      dshLaunch: async () => ({ ok: false, error: 'unused', detail: '' }),
+      dshContext: async () => ({ ok: true, account: await context!(false) }) }))
+    startStoreInCore(core, ports, undefined, Object.assign(() => true, { ready: () => true, invalidate: () => {} }))
+    expect(await ports.store!.dshContext({ dsh: 'test/draw', engine: 'claude' })).toEqual({ ok: true, account: { privateGrid: 'selected' } })
+    const call = vi.mocked(storeLaunchContext).mock.calls.at(-1)!
+    expect(call[0]).toEqual({ dataDir: core.dataDir, port: core.daemon.port, machineId: 'first' })
+    expect(await call[5]!()).toBe(await core.account.privateGridName())
+    expect(call[2]()).toBe(true)
+    machineId = 'second'; expect(call[2]()).toBe(false)
+    await ports.store!.dshContext({ dsh: 'test/draw', engine: 'claude' })
+    const next = vi.mocked(storeLaunchContext).mock.calls.at(-1)!
+    expect(next[2]()).toBe(true); ports.store!.stop()
+    expect(next[2]()).toBe(false); expect(next[3].aborted).toBe(true)
+  })
+  it('closes the inline setting watch when Store stops', () => {
+    const close = vi.fn(), ports = emptyPorts()
+    vi.mocked(watchSettingFile).mockReturnValueOnce(close)
+    startStoreInCore(fakeCore(), ports, undefined, Object.assign(() => true, { ready: () => true, invalidate: () => {} }))
+    ports.store!.stop(); ports.store!.stop()
+    expect(close).toHaveBeenCalledOnce()
+  })
   it('wakes waiting workspaces on every confirmed inline outcome, including a released failure', async () => {
     const request = { dsh: 'test/package', workspace: '/unused', engine: 'claude' as const, key: 'agent', account: {} }
     const confirmed = { ok: false as const, error: 'DSH_MATERIALIZE_FAILED', detail: 'init failed' }
     const uncertain = { ...confirmed, unavailable: 'store' as const }
-    const launch = { dshMaterialize: vi.fn(async () => confirmed), dshLaunch: vi.fn(async () => confirmed) }
+    const launch = { stop: vi.fn(), dshContext: vi.fn(async () => confirmed), dshDescribe: vi.fn(async () => confirmed), dshMaterialize: vi.fn(async () => confirmed), dshLaunch: vi.fn(async () => confirmed) }
     vi.mocked(storeLaunchPort).mockReturnValue(launch)
     const prepared = vi.fn()
     const ports = emptyPorts()
     for (const notify of [undefined, prepared]) {
-      startStoreInCore(fakeCore(), ports, notify)
+      startStoreInCore(fakeCore(), ports, notify, Object.assign(() => true, { ready: () => true, invalidate: () => {} }))
+      expect(await ports.store!.dshDescribe(request)).toEqual(confirmed)
       await ports.store!.dshMaterialize(request)
       await ports.store!.dshLaunch(request)
     }
-    expect(prepared).toHaveBeenCalledTimes(2)
+    expect(prepared).toHaveBeenCalledTimes(3)
+    launch.dshDescribe.mockResolvedValueOnce(uncertain)
     launch.dshMaterialize.mockResolvedValueOnce(uncertain)
     launch.dshLaunch.mockResolvedValueOnce(uncertain)
+    await ports.store!.dshDescribe(request)
     await ports.store!.dshMaterialize(request)
     await ports.store!.dshLaunch(request)
-    expect(prepared).toHaveBeenCalledTimes(2)
+    expect(prepared).toHaveBeenCalledTimes(4)
     launch.dshMaterialize.mockResolvedValueOnce({ ok: true, created: [], kept: [], warnings: [] } as never)
     launch.dshLaunch.mockResolvedValueOnce({ ok: true, launch: { env: {}, args: [] } } as never)
     await ports.store!.dshMaterialize(request)
     await ports.store!.dshLaunch(request)
-    expect(prepared).toHaveBeenCalledTimes(4)
+    expect(prepared).toHaveBeenCalledTimes(6)
+    startStoreInCore(fakeCore(), ports, prepared, Object.assign(() => false, { ready: () => false, invalidate: () => {} }))
+    await ports.store!.dshDescribe(request)
+    await ports.store!.dshMaterialize(request)
+    await ports.store!.dshLaunch(request)
+    expect(prepared).toHaveBeenCalledTimes(6)
   })
   it('answers exactly the requests it declares', () => {
     expect(Object.keys(setup().requests).sort()).toEqual([...STORE_REQUESTS].sort())

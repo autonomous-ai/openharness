@@ -4,6 +4,8 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import { memEnv, MEMORY_REQUESTS, runMem, startMemory, type MemoryDeps } from './memory.js'
+import { ensureBundledMemories } from '../dsh/builtins.js'
+vi.mock('../dsh/builtins.js', () => ({ ensureBundledMemories: vi.fn(() => true) }))
 
 vi.mock('../dsh/installed.js', () => ({ installedDsh: vi.fn(() => undefined) }))
 
@@ -26,6 +28,17 @@ function deps(answer: (args: string[], input?: string) => unknown = () => ({ ok:
 }
 
 describe('memory: this machine\'s memories for the owner\'s other machines', () => {
+  it('prepares its bundled package on first use while Store is off, retries only on a new request and reports failure', async () => {
+    const memory = startMemory(fakeCore())
+    vi.mocked(ensureBundledMemories).mockClear().mockReturnValueOnce(false).mockImplementationOnce(() => { throw Error('DSH_INDEX_BUSY') })
+    expect(ensureBundledMemories).not.toHaveBeenCalled()
+    expect(await memory.memory_snapshot!({}, owner)).toMatchObject({ error: 'MEMORIES_NOT_INSTALLED' })
+    expect(await memory.memory_snapshot!({}, owner)).toMatchObject({ error: 'MEMORY_FAILED', detail: 'DSH_INDEX_BUSY' })
+    expect(await memory.memory_snapshot!({}, owner)).toMatchObject({ error: 'MEMORIES_NOT_INSTALLED' })
+    expect(ensureBundledMemories).toHaveBeenCalledTimes(3)
+    await memory.memory_snapshot!({}, owner)
+    expect(ensureBundledMemories).toHaveBeenCalledTimes(3)
+  })
   afterEach(() => vi.clearAllMocks())
 
   it('answers the three requests it declares', () => {

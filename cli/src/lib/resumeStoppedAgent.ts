@@ -7,7 +7,7 @@ import { ENGINE_SETTLE_MS, type RuntimeCheck } from './paneEngineProcess.js'
 
 export interface ResumeStoppedDeps {
   live: () => RegisteredSession | undefined
-  saved: () => RegisteredSession | null
+  saved: () => Promise<RegisteredSession | null>
   current: () => boolean
   checkLive: (session: RegisteredSession) => Promise<RuntimeCheck>
   canLaunch: (saved: RegisteredSession) => Promise<boolean>
@@ -33,12 +33,14 @@ const liveIdentity = (row: RegisteredSession | undefined) => row ? JSON.stringif
 
 export async function resumeStoppedAgent(deps: ResumeStoppedDeps): Promise<RestartAgentReply> {
   if (!deps.current()) return resumeChanged
+  let saved = await deps.saved()
+  if (!deps.current()) return resumeChanged
   const existing = deps.live()
-  let saved = deps.saved()
   if (existing) {
     // Compatibility with an archive written before surviving shells got a new identity.
     if (isTerminalEngine(existing.engine) && saved && !isTerminalEngine(saved.engine)) {
       await deps.retain(existing)
+      saved = await deps.saved()
     } else if (existing.resumeOnly && existing.launch?.state === 'starting') {
       return deps.waitForReady(existing)
     } else {
@@ -62,8 +64,8 @@ export async function resumeStoppedAgent(deps: ResumeStoppedDeps): Promise<Resta
         }
         return { ok: true, session: latest!, resumed: true }
       }
-      saved = { ...latest! }
       await deps.retain(latest!)
+      saved = await deps.saved()
     }
   }
   if (!deps.current()) return resumeChanged

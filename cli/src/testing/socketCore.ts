@@ -1,3 +1,6 @@
+import { deviceFactory, nativeFactory } from './sessionFactories.js'
+import { sessionStorage } from '../lib/sessionStorage.js'
+import { opencodeMajorVersion } from '../engines/opencode/version.js'
 /**
  * The core's requests answered the way the daemon answers them, for a socket a spec builds on its own.
  * Requests that left the socket's switch for the core are bound by cli.ts, so a bare socket answers them
@@ -10,13 +13,13 @@ import { env } from '../config/env.js'
 import { createCloseRequests } from '../core/agents/close.js'
 import { createHandoffRequest, type Handoff, type HandoffRequest } from '../services/handoffRequest.js'
 import { createLaunchRequests, type LaunchRequestDeps, type RestartAgent, type ResumeAgent } from '../core/agents/launches.js'
-import { MODELS_OFF, WORKSPACES_OFF, type PreparedFolder, type WorkspacesPort } from '../core/api.js'
+import { MODELS_OFF, STORE_OFF, WORKSPACES_OFF, type PreparedFolder, type WorkspacesPort } from '../core/api.js'
 import { createPurgeRequest, createStopRequest } from '../core/agents/lifecycle.js'
 import { createAgentList, type AgentListDeps } from '../core/agents/list.js'
 import { createAgentUpdate } from '../core/agents/update.js'
 import { createMessageRequest } from '../core/input.js'
 import { createQuestionResponse } from '../core/questions.js'
-import { engineTranscriptFor } from '../engines/transcripts.js'
+import { createInlineHistory } from '../engines/transcripts.js'
 import { createHistory } from '../core/transcripts/history.js'
 import { createTerminalRequests, type TerminalRequestDeps } from '../core/terminals/requests.js'
 import { createCancelRequest } from '../core/turns/cancel.js'
@@ -28,17 +31,17 @@ import { createStoreOf } from '../core/transcripts/stores.js'
 import { registry } from '../lib/registry.js'
 import { openclawSessionDb } from '../lib/openclawStore.js'
 import { stoppedAgents } from '../lib/stoppedAgents.js'
-import { TranscriptPager } from '../lib/transcriptPages.js'
 import { tmuxPaneInfo } from '../lib/tmux.js'
 
 /** `session_get` and `sessions_list` (core/transcripts/history.ts), over the registry and the saved
  *  harnesses, and a pager of their own. */
 export function bindHistory(socket: BackendSocket): void {
+  const inline = createInlineHistory()
   const history = createHistory({
-    readerFor: engineTranscriptFor,
+    readerFor: inline.forEngine,
     resolve: (id) => registry.resolve(id),
     stopped: () => stoppedAgents.list(),
-    pages: new TranscriptPager(),
+    lineCount: inline.lineCount,
     storeOf: createStoreOf({ opencode: join(env.OPENCODE_DATA_DIR, 'opencode.db'), kilo: join(env.KILO_DATA_DIR, 'kilo.db'), devin: join(env.DEVIN_HOME, 'sessions.db'), openclaw: openclawSessionDb }, hermesDbForSession),
   })
   socket.historyProvider = history.sessionGet
@@ -61,6 +64,7 @@ function monitorOf(socket: BackendSocket): Pick<AgentListDeps, 'harnessResources
  *  unless a spec says what it is. */
 export function bindAgentList(socket: BackendSocket, over: Partial<AgentListDeps> = {}): void {
   socket.agentsProvider = createAgentList({
+    deviceFactory,
     registry,
     stoppedAgents,
     toProject: (s) => socket.toProject(s),
@@ -132,7 +136,7 @@ export function bindHandoffRequest(socket: BackendSocket, prepare: ((req: Handof
   }
 }
 
-type Launcher = { resume: ResumeAgent | null; restart: RestartAgent | null; modelTarget: LaunchRequestDeps['modelTarget'] | null; workspaces: WorkspacesPort | null }
+type Launcher = { describeDsh: LaunchRequestDeps['describeDsh'] | null; resume: ResumeAgent | null; restart: RestartAgent | null; modelTarget: LaunchRequestDeps['modelTarget'] | null; workspaces: WorkspacesPort | null; prepareFolderTrust?: LaunchRequestDeps['prepareFolderTrust'] }
 const launchers = new WeakMap<BackendSocket, Launcher>()
 
 /** Workspaces that make every folder a create asks git for with [prepare], and nothing else. */
@@ -147,16 +151,21 @@ export const prepared = (cwd: string, more: Partial<Extract<PreparedFolder, { ok
 export function bindLaunchRequests(socket: BackendSocket, over: Partial<Launcher> = {}): void {
   let launcher = launchers.get(socket)
   if (!launcher) {
-    const state: Launcher = { resume: null, restart: null, modelTarget: null, workspaces: null }
+    const state: Launcher = { describeDsh: null, resume: null, restart: null, modelTarget: null, workspaces: null }
     launcher = state
     launchers.set(socket, state)
-    const launches = createLaunchRequests({
-      receipts: new AgentCreationReceipts(join(env.ADAPTER_DATA_DIR, 'agent-creations')),
+    const launches = createLaunchRequests({ nativeFactory,
+      discovery: sessionStorage.creations,
+      describeDsh: (dsh, engine) => state.describeDsh?.(dsh, engine) ?? STORE_OFF.dshDescribe({ dsh, engine }),
+      opencodeMajor: opencodeMajorVersion,
+      receipts: new AgentCreationReceipts(join(env.ADAPTER_DATA_DIR, 'agent-creations'), sessionStorage.creations.ensure),
       createAgent: () => socket.onCreateAgent, forkAgent: () => socket.onForkAgent,
       resumeAgent: () => state.resume, restartAgent: () => state.restart,
-      byAgent: (id) => registry.byAgent(id), stoppedAgent: (id) => stoppedAgents.get(id) ?? undefined, toProject: (s) => socket.toProject(s),
+      byAgent: (id) => registry.byAgent(id), stoppedAgent: async id => await stoppedAgents.get(id) ?? undefined, toProject: (s) => socket.toProject(s),
       modelTarget: (selection) => (state.modelTarget ?? MODELS_OFF.launchTarget)(selection),
       workspaces: () => state.workspaces,
+      // Trust tests supply this boundary; never write the person's native configuration.
+      prepareFolderTrust: (input, current) => state.prepareFolderTrust?.(input, current) ?? Promise.resolve(false),
     })
     socket.createProvider = launches.create
     socket.createStatusProvider = launches.createStatus

@@ -1,4 +1,4 @@
-import { chmodSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
+import { chmodSync, close, constants, fstatSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
@@ -9,7 +9,18 @@ import { RESUME_REPAIR_CAPABILITIES, RESUME_REPAIR_LOCATE, RESUME_REPAIR_PREPARE
 import { codexSessionMeta } from '../../testing/codexRollout.js'
 import { createResumeRepairs } from './resumeRepairs.js'
 
-vi.mock('node:fs', async real => ({ ...await real<object>(), linkSync: vi.fn((await real<typeof import('node:fs')>()).linkSync) }))
+const closing = vi.hoisted(() => new Set<Promise<void>>())
+vi.mock('node:fs', async real => {
+  const actual = await real<typeof import('node:fs')>()
+  return { ...actual, linkSync: vi.fn(actual.linkSync), openSync: vi.fn(actual.openSync),
+    fstatSync: vi.fn(actual.fstatSync), renameSync: vi.fn(actual.renameSync),
+    close: vi.fn((fd: number, callback: (error: NodeJS.ErrnoException | null) => void) => {
+      let finish!: () => void
+      const wait = new Promise<void>(resolve => { finish = resolve }); closing.add(wait)
+      actual.close(fd, error => { try { callback(error) } finally { closing.delete(wait); finish() } })
+    }),
+  }
+})
 vi.mock('../../engines/transcriptBindings.js', async real => {
   const actual = await real<typeof import('../../engines/transcriptBindings.js')>()
   return { ...actual, controlTranscriptEvidence: vi.fn(actual.controlTranscriptEvidence) }
@@ -23,7 +34,22 @@ function deferred<T>() {
   return { promise, resolve }
 }
 const folders: string[] = []
-afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true }) })
+afterEach(async () => { await Promise.all(closing); vi.restoreAllMocks(); vi.resetAllMocks(); vi.useRealTimers(); for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true }) })
+
+function holdClose() {
+  let retained: { fd: number; callback: (error: NodeJS.ErrnoException | null) => void } | undefined
+  vi.mocked(close).mockImplementationOnce((fd, callback) => { retained = { fd, callback: callback! } })
+  return {
+    get fd() { return retained?.fd },
+    async finish(failure?: NodeJS.ErrnoException) {
+      const held = retained; retained = undefined
+      if (held) await new Promise<void>((resolve, reject) => actualFs.close(held.fd, error => {
+        held.callback(failure ?? error)
+        if (error) reject(error); else resolve()
+      }))
+    },
+  }
+}
 function setup() {
   const home = mkdtempSync(join(tmpdir(), 'repair-worker-')); folders.push(home)
   const folder = join(home, 'sessions'); mkdirSync(folder)
@@ -60,8 +86,159 @@ it('publishes only after the held tail drains, sets its byte in the same turn, a
   expect(t.setTail).toHaveBeenCalledWith(id, lstatSync(t.file).size)
   expect(t.release).toHaveBeenCalledOnce()
   expect(readdirSync(join(t.home, 'state'))).toEqual([])
+  await Promise.all(closing)
   t.prepared(undefined)
   expect(await t.repairs.prepare(t.source, () => true)).toEqual({ repairedItems: 0 })
+})
+
+it('pins the original inode through publication and holds admission until its actual asynchronous close', async () => {
+  const t = setup(), before = repairFile(lstatSync(t.file, { bigint: true })), held = holdClose()
+  let pin: number | undefined
+  t.prepared(() => { vi.mocked(openSync).mockImplementationOnce((path, flags, mode) => pin = actualFs.openSync(path, flags, mode)) })
+  vi.mocked(renameSync).mockImplementationOnce((source, destination) => {
+    expect(pin).toEqual(expect.any(Number))
+    expect(repairFile(actualFs.fstatSync(pin!, { bigint: true }))).toEqual(before)
+    actualFs.renameSync(source, destination)
+  })
+  try {
+    const answer = await t.repairs.prepare(t.source, () => true)
+    expect(answer.repairedItems).toBe(1)
+    expect(held.fd).toEqual(expect.any(Number))
+    expect(repairFile(actualFs.fstatSync(held.fd!, { bigint: true })).key).toBe(before.key)
+    expect(actualFs.fstatSync(held.fd!, { bigint: true }).nlink).toBe(0n)
+    expect(readFileSync(answer.backupPath!, 'utf8')).toBe(body)
+    expect(await t.repairs.prepare(t.source, () => true)).toMatchObject({ unrepaired: 'busy' })
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+    await vi.advanceTimersByTimeAsync(65_000)
+    t.repairs.disconnected('engine-codex'); t.repairs.connected('engine-codex')
+    expect(await t.repairs.prepare(t.source, () => true)).toMatchObject({ unrepaired: 'busy' })
+    await held.finish()
+    expect(await t.repairs.prepare(t.source, () => true)).toEqual({ repairedItems: 0 })
+  } finally { await held.finish() }
+})
+
+it('retains the pin while cleanup races publication and closes it without changing the source', async () => {
+  const t = setup(), held = holdClose()
+  vi.mocked(linkSync).mockImplementationOnce((source, target) => { actualFs.linkSync(source, target); t.worker.release(t.request.token) })
+  try {
+    expect(await t.repairs.prepare(t.source, () => true)).toMatchObject({ unrepaired: 'unavailable' })
+    expect(held.fd).toEqual(expect.any(Number))
+    expect(readFileSync(held.fd!, 'utf8')).toBe(body)
+    expect(readFileSync(t.file, 'utf8')).toBe(body)
+    expect(await t.repairs.prepare(t.source, () => true)).toMatchObject({ unrepaired: 'busy' })
+  } finally { await held.finish() }
+})
+
+it('refuses a pin whose descriptor does not match the original source', async () => {
+  const t = setup(), held = holdClose(), foreign = join(t.home, 'foreign.jsonl')
+  writeFileSync(foreign, body)
+  t.prepared(() => {
+    vi.mocked(openSync).mockImplementationOnce((path, flags, mode) => {
+      expect(path).toBe(actualFs.realpathSync(t.file))
+      expect(Number(flags) & constants.O_NOFOLLOW).toBe(constants.O_NOFOLLOW)
+      return actualFs.openSync(foreign, flags, mode)
+    })
+  })
+  try {
+    expect(await t.repairs.prepare(t.source, () => true)).toMatchObject({ unrepaired: 'unavailable' })
+    expect(held.fd).toEqual(expect.any(Number))
+    expect(readFileSync(t.file, 'utf8')).toBe(body)
+    expect(t.setTail).not.toHaveBeenCalled()
+  } finally { await held.finish() }
+})
+
+it('rechecks caller authority after acquiring the pin and closes it after refusal', async () => {
+  const t = setup(), held = holdClose(); let current = true
+  t.prepared(() => {
+    vi.mocked(openSync).mockImplementationOnce((path, flags, mode) => {
+      const fd = actualFs.openSync(path, flags, mode); current = false; return fd
+    })
+  })
+  try {
+    expect(await t.repairs.prepare(t.source, () => current)).toMatchObject({ unrepaired: 'cancelled' })
+    expect(held.fd).toEqual(expect.any(Number))
+    expect(readFileSync(t.file, 'utf8')).toBe(body)
+    expect(t.setTail).not.toHaveBeenCalled()
+  } finally { await held.finish() }
+})
+
+it('logs an uncertain close and never retries its descriptor or reuses its admission slot', async () => {
+  const t = setup(), held = holdClose(), warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  try {
+    expect(await t.repairs.prepare(t.source, () => true)).toMatchObject({ repairedItems: 1 })
+    expect(held.fd).toEqual(expect.any(Number))
+    const before = vi.mocked(close).mock.calls.length
+    await held.finish(Object.assign(new Error('injected close uncertainty'), { code: 'EIO' }))
+    expect(warning).toHaveBeenCalledWith('[resume] RESUME_REPAIR_CLEANUP_FAILED; restart required')
+    expect(await t.repairs.prepare(t.source, () => true)).toMatchObject({ unrepaired: 'busy' })
+    expect(close).toHaveBeenCalledTimes(before)
+  } finally { await held.finish() }
+})
+
+it('rechecks the pinned descriptor at the final publication fence', async () => {
+  const t = setup(), held = holdClose(); let pin: number | undefined, checks = 0
+  t.prepared(() => {
+    vi.mocked(openSync).mockImplementationOnce((path, flags, mode) => pin = actualFs.openSync(path, flags, mode))
+    vi.mocked(fstatSync).mockImplementation(((fd: number, options: never) => {
+      const info = actualFs.fstatSync(fd, options)
+      return fd === pin && ++checks === 2 ? { ...info, nlink: 2n } : info
+    }) as typeof fstatSync)
+  })
+  try {
+    expect(await t.repairs.prepare(t.source, () => true)).toMatchObject({ unrepaired: 'unavailable' })
+    expect(checks).toBe(2)
+    expect(renameSync).not.toHaveBeenCalled()
+    expect(readFileSync(t.file, 'utf8')).toBe(body)
+  } finally { await held.finish() }
+})
+
+it.each(['hold release', 'release RPC'])('starts pin cleanup even when %s throws', async kind => {
+  const t = setup(), held = holdClose()
+  if (kind === 'hold release') t.release.mockImplementation(() => { throw new Error('injected release failure') })
+  else {
+    const call = t.call.getMockImplementation()!
+    t.call.mockImplementation((service, method, payload) => {
+      if (method.endsWith('_release')) throw new Error('injected release failure')
+      return call(service, method, payload)
+    })
+  }
+  try {
+    await expect(t.repairs.prepare(t.source, () => true)).rejects.toThrow('injected release failure')
+    expect(held.fd).toEqual(expect.any(Number))
+    expect(await t.repairs.prepare(t.source, () => true)).toMatchObject({ unrepaired: 'busy' })
+  } finally { await held.finish() }
+})
+
+it('retains admission when close throws before returning a callback', async () => {
+  const t = setup(), warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  vi.mocked(close).mockImplementationOnce(fd => {
+    actualFs.closeSync(fd)
+    throw new Error('injected uncertain close')
+  })
+  expect(await t.repairs.prepare(t.source, () => true)).toMatchObject({ repairedItems: 1 })
+  expect(warning).toHaveBeenCalledWith('[resume] RESUME_REPAIR_CLEANUP_FAILED; restart required')
+  expect(await t.repairs.prepare(t.source, () => true)).toMatchObject({ unrepaired: 'busy' })
+  expect(close).toHaveBeenCalledOnce()
+})
+
+it('bounds deferred reclamation to the existing two repair slots across different sessions', async () => {
+  const t = setup(), first = holdClose()
+  const otherId = '01a0a3cd-a374-71f2-a11a-1fc1cc41b36e'
+  const otherFile = join(t.home, 'sessions', `rollout-${otherId}.jsonl`)
+  writeFileSync(otherFile, body.replace(id, otherId), { mode: 0o600 })
+  let second: ReturnType<typeof holdClose> | undefined
+  try {
+    expect(await t.repairs.prepare(t.source, () => true)).toMatchObject({ repairedItems: 1 })
+    second = holdClose()
+    expect(await t.repairs.prepare({ ...t.source, sessionId: otherId, transcriptPath: otherFile }, () => true))
+      .toMatchObject({ repairedItems: 1 })
+    expect(first.fd).toEqual(expect.any(Number)); expect(second.fd).toEqual(expect.any(Number))
+    const calls = t.call.mock.calls.length
+    expect(await t.repairs.prepare({ ...t.source, sessionId: 'third-session' }, () => true)).toMatchObject({ unrepaired: 'busy' })
+    expect(t.call).toHaveBeenCalledTimes(calls)
+    await first.finish()
+    expect(await t.repairs.prepare(t.source, () => true)).toEqual({ repairedItems: 0 })
+  } finally { await first.finish(); await second?.finish() }
 })
 
 it.each(['cancelled', 'lost_reply', 'stale_worker', 'expired_hold', 'source_changed', 'stage_changed'] as const)('never publishes after %s', async why => {
@@ -195,6 +372,7 @@ it('checks authority again after final evidence and after linking a backup', asy
   const t = setup(); let checks = 0
   expect(await t.repairs.prepare(t.source, () => ++checks < 5)).toMatchObject({ unrepaired: 'cancelled' })
   expect(t.setTail).not.toHaveBeenCalled()
+  await Promise.all(closing)
   let current = true
   vi.mocked(linkSync).mockImplementationOnce((source, destination) => { actualFs.linkSync(source, destination); current = false })
   expect(await t.repairs.prepare(t.source, () => current)).toMatchObject({ unrepaired: 'cancelled' })

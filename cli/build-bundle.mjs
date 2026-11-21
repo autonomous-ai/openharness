@@ -11,6 +11,7 @@
  * `require` via the banner so ws's try/catch fallback works without them.
  */
 import * as esbuild from 'esbuild'
+import { workerPreparer } from './scripts/lib/workerPreparer.mjs'
 import { createHash } from 'node:crypto'
 import { appendFileSync, readFileSync, copyFileSync, rmSync, writeFileSync } from 'fs'
 import { readDshRegistry } from './scripts/lib/dshRegistry.mjs'
@@ -23,15 +24,16 @@ import { asciiOnly } from './scripts/lib/asciiOnly.mjs'
 import { copyPtyPayload } from './scripts/lib/ptyPayload.mjs'
 import { fileURLToPath } from 'node:url'
 import { basename } from 'node:path'
+const artifactPreparer = await workerPreparer()
 const modelManagerBundle = JSON.stringify(readModelManagerBundle(fileURLToPath(new URL('../store/agents/autonomous-grid', import.meta.url))))
 const devicesBundle = JSON.stringify(readBuiltinBundle(fileURLToPath(new URL('../store/agents/devices', import.meta.url)), ['harness.json', 'AGENTS.md', 'LICENSE', 'template']))
 const harnessMonitorBundle = JSON.stringify(readHarnessMonitorBundle(fileURLToPath(new URL('../store/agents/harness-monitor', import.meta.url))))
 const memoriesBundle = JSON.stringify(readMemoriesBundle(fileURLToPath(new URL('../store/agents/memories', import.meta.url))))
 const hachiBundle = JSON.stringify(readHachiBundle(fileURLToPath(new URL('../store/agents/hachi', import.meta.url))))
 // What src/dsh/builtins.ts records in the installed index as each bundled harness's revision once it is in place: the
-// sha256 of its files' JSON, as it reads them back (src/dsh/bundledFiles.ts). The core checks the index against these
-// as it starts, without loading the files, and starts the Store's process only when one is not in place
-// (src/core/viewersWake.ts). A harness whose files are missing is never put in place, so it has none.
+// sha256 of its files' JSON, as it reads them back (src/dsh/bundledFiles.ts). Store checks the index against these
+// during package admission in Store, without loading the files into core. A harness whose files are missing
+// is never put in place, so it has none.
 const builtinRevisions = JSON.stringify(Object.fromEntries(
   [['models', modelManagerBundle], ['devices', devicesBundle], ['monitor', harnessMonitorBundle], ['memories', memoriesBundle], ['hachi', hachiBundle]]
     .filter(([, bundle]) => JSON.parse(bundle)['harness.json'])
@@ -63,6 +65,7 @@ const options = {
   external: ['bufferutil', 'utf-8-validate'],
   define: {
     __ADAPTER_VERSION__: JSON.stringify(version),
+    __WORKER_ARTIFACT_PREPARER__: JSON.stringify(artifactPreparer),
     __DSH_REGISTRY__: JSON.stringify(dshRegistry),
     __MODEL_MANAGER_BUNDLE__: JSON.stringify(modelManagerBundle),
     __DEVICES_BUNDLE__: JSON.stringify(devicesBundle),

@@ -176,7 +176,7 @@ describe('the core\'s start-up order (core/main.ts)', () => {
 
   it('drains durable registry work after producers stop and before releasing successor ownership', () => {
     const source = code(SOURCE)
-    expect(source.indexOf('registry.load()')).toBeGreaterThan(source.indexOf('await refuseServedDataFolder('))
+    expect(source.indexOf('await registry.load()')).toBeGreaterThan(source.indexOf('await refuseServedDataFolder('))
     // A process exit event cannot await storage; every acknowledged authority operation is already durable.
     expect(source).not.toContain("process.on('exit', () => registry.flush(")
     const update = source.slice(source.indexOf('const updateTeardown ='), source.indexOf('daemonBoot.applyStagedUpdate ='))
@@ -199,7 +199,7 @@ describe('the core\'s start-up order (core/main.ts)', () => {
     const claimed = source.indexOf("? await claimDataFolder(env.ADAPTER_DATA_DIR, ensureDaemonToken(env.ADAPTER_DATA_DIR), ")
     expect(claimed).toBeGreaterThan(source.indexOf("const dataFolderClaim = process.platform === 'win32'"))
     expect(claimed).toBeGreaterThan(source.indexOf('await refuseServedDataFolder('))
-    expect(claimed).toBeLessThan(source.indexOf('registry.load()'))
+    expect(claimed).toBeLessThan(source.indexOf('await registry.load()'))
     expect(claimed).toBeLessThan(source.indexOf('await startHookServer('))
     // In the update's teardown and in the shutdown, beside the local socket: a successor may start once both are gone.
     expect(source.match(/dataFolderClaim\?\.release\(\)/g)).toHaveLength(2)
@@ -268,7 +268,7 @@ describe('the core\'s start-up order (core/main.ts)', () => {
 // modules (the core boundary, docs/design/2026-10-03-harnessd.md) must keep these exactly.
 
 /** Every place `runForeground` binds a handler on the socket: a property, an owner command, a setter. */
-const BINDING = /\bbackend\.(?:ownerCommands\.)?(?:[A-Za-z_$][\w$]*\s*=(?!=)|set[A-Z][\w$]*\()/g
+const BINDING = /\bbackend\.(?:[A-Za-z_$][\w$]*\s*=(?!=)|set[A-Z][\w$]*\()/g
 
 /** The test-only hold the end-to-end harness uses for a start-up that hangs after binding. */
 const TEST_HOLD = "if (harnessd.HARNESSD_TEST_HOLD_READY === '1') await new Promise<never>(() => {})"
@@ -302,7 +302,7 @@ describe('the core\'s request gate (core/main.ts)', () => {
     // `publishStoppedAgent` reads these while restoring agents and in the first reconcile, and those
     // frames go out whether or not requests are open.
     const restore = at('await restoreAgents({')
-    for (const provider of ['activityFrameProvider', 'runtimeProfileProvider', 'framePartsProvider']) {
+    for (const provider of ['activityFrameProvider', 'runtimeDisplayProvider', 'framePartsProvider']) {
       expect(at(`backend.${provider} =`), `backend.${provider} must be bound before restoreAgents`).toBeLessThan(restore)
     }
   })
@@ -324,7 +324,7 @@ describe('the core\'s request gate (core/main.ts)', () => {
     // start their dependency recovery only after the master knows core is ready.
     expect(tail).toEqual(['backend.openRequests()', 'daemonBoot.openRequests = null', 'coreLink.ready()', "console.log('[cli] ready')",
       'installedHooks = env.DISABLE_HOOK_INSTALL ? undefined',
-      ': installEngineHooks(hookPort, { only: env.HOOK_INSTALL_ENGINES, loginShell: loginShellEnvPromise })',
+      ': installEngineHooks(hookPort, { only: env.HOOK_INSTALL_ENGINES, loginShell: loginShellEnvPromise, setup: nativeSetup })',
       'void heldLaunches.restoreHeld()', 'externalResumes.open()', 'launches.open()'])
     expect(logged).toBeGreaterThan(ready)
   })

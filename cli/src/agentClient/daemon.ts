@@ -58,7 +58,8 @@ export interface PushedEvent { type: string; payload: Record<string, unknown> }
 
 /** The least of a WebSocket this needs, so a test can hand in a fake. */
 export interface ClientSocket {
-  send(data: string): void
+  readonly bufferedAmount?: number
+  send(data: string, settled?: (error?: Error) => void): void
   close(): void
   on(event: 'open', listener: () => void): unknown
   on(event: 'message', listener: (data: { toString(): string }, binary: boolean) => void): unknown

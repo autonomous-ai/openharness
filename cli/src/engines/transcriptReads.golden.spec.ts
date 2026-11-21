@@ -535,11 +535,17 @@ async function historyCases(): Promise<Record<string, unknown>> {
   // Through core: `session_get`, `sessions_list` and the recap's last turn, with the readers core is handed.
   for (const [engine, name, path] of files) {
     const s = session(engine, path)
+    const pages = new m.pages.TranscriptPager()
     const deps = {
-      readerFor: m.transcripts.engineTranscriptFor, resolve: (id: string) => id === 'session' || id === s.agentId ? s : undefined,
-      stopped: () => [], pages: new m.pages.TranscriptPager(), dbs: { opencode: '', kilo: '', devin: '' }, hermesDb: async () => '',
-    }
-    const history = m.history.createHistory(deps as unknown as Parameters<typeof m.history.createHistory>[0])
+      readerFor: (engine: string) => {
+        const reader = m.transcripts.engineTranscriptFor(engine)
+        return reader && { lastTurnText: reader.lastTurnText,
+          historyPage: (session, ask) => reader.historyPage(session, ask, pages) }
+      },
+      resolve: (id: string) => id === 'session' || id === s.agentId ? s : undefined,
+      stopped: async () => [], lineCount: (path: string) => pages.lineCount(path), storeOf: async () => null,
+    } satisfies Parameters<typeof m.history.createHistory>[0]
+    const history = m.history.createHistory(deps)
     const whole = await history.sessionGet({ sessionId: 'session' })
     cases[`core · ${engine} · ${name} · whole`] = eventsView(whole)
     const latest = await history.sessionGet({ sessionId: 'session', limit: 3 })

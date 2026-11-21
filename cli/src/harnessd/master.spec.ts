@@ -1,3 +1,5 @@
+import { WORKER_CONTRACT, WORKER_PLAN } from './workerContract.js'
+import { fingerprint } from './bundleFingerprint.js'
 import { EventEmitter } from 'node:events'
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -12,7 +14,7 @@ import {
 import { ignoreLogWriteErrors } from '../lib/log.js'
 import { LEAN_CORE_ENTRY, folderFingerprint } from './leanBundle.js'
 import {
-  PROBE_ANSWER, PROBE_HANDOVER, RESUME_ENV, decodeResume, encodeResume, fingerprint, readHandoverClaimant, readMarker, takeBackHandover, takeHandover, writeMarker,
+  PROBE_ANSWER, PROBE_HANDOVER, RESUME_ENV, decodeResume, encodeResume, readHandoverClaimant, readMarker, takeBackHandover, takeHandover, writeMarker,
 } from './reexec.js'
 import { HARNESSD_PROTOCOL, LEAN_CORE_SCRIPT_ENV } from './protocol.js'
 import { DEFAULT_SUPERVISOR_OPTIONS, type ResumeState } from './supervisor.js'
@@ -183,7 +185,7 @@ describe('the probe a re-executing master asks a bundle', () => {
     const resume: ResumeState = { restarts: 1, lastExit: 'code 75', lastExitReason: 'update', update: 'pending', claimed: true, reexecs: 1, unproven: 1 }
     expect(probeMaster({ env: { [RESUME_ENV]: encodeResume(resume) }, execArgv: [], version: '9.9.9' }, (line) => said.push(line))).toBe(0)
     // Saying it takes a handover (Windows, ./reexec.ts): a master from before would run beside the one handing over.
-    const answer = `${PROBE_ANSWER} · protocol ${HARNESSD_PROTOCOL} · v9.9.9 · ${PROBE_HANDOVER}`
+    const answer = `${PROBE_ANSWER} · protocol ${HARNESSD_PROTOCOL} · v9.9.9 · ${PROBE_HANDOVER} · worker-cohort ${WORKER_CONTRACT} ${WORKER_PLAN}`
     expect(said).toEqual([answer, answer])
   })
 
@@ -204,7 +206,7 @@ describe('the probe a re-executing master asks a bundle', () => {
 
 describe('coreHandle', () => {
   const fake = () => {
-    const child = new EventEmitter() as EventEmitter & { pid: number; send: (m: unknown) => void; kill: (s: string) => void }
+    const child = new EventEmitter() as EventEmitter & { pid: number; send: (m: unknown, done?: (error?: Error | null) => void) => void; kill: (s: string) => void }
     child.pid = 4242
     child.send = vi.fn()
     child.kill = vi.fn()
@@ -220,6 +222,29 @@ describe('coreHandle', () => {
       end(child)
       expect(exits).toHaveLength(1)
     }
+  })
+
+  it('retains a spawned child through a failed kill until its actual exit', () => {
+    const child = fake()
+    child.kill = () => { child.emit('error', Object.assign(new Error('kill failed'), { code: 'EPERM' })) }
+    const handle = coreHandle(child as unknown as ChildProcess)
+    const reaped = vi.fn()
+    handle.onExit(reaped)
+    handle.kill('SIGTERM')
+    expect(reaped).not.toHaveBeenCalled()
+    child.emit('exit', 0, null)
+    expect(reaped).toHaveBeenCalledExactlyOnceWith(0, null)
+  })
+
+  it('settles an asynchronous spawn error only when no PID was created', () => {
+    const child = fake()
+    delete (child as { pid?: number }).pid
+    const handle = coreHandle(child as unknown as ChildProcess)
+    const reaped = vi.fn()
+    handle.onExit(reaped)
+    child.emit('error', new Error('ENOENT'))
+    child.emit('error', new Error('a second failure notification'))
+    expect(reaped).toHaveBeenCalledExactlyOnceWith(1, null)
   })
 
   it('keeps the real update exit when an IPC send fails as the core is leaving', async () => {
@@ -258,6 +283,28 @@ describe('coreHandle', () => {
     child.send = () => { throw new Error('closed') }
     child.kill = () => { throw new Error('ESRCH') }
     expect(() => { handle.send({ type: 'harnessd:status', status: {} as never }); handle.kill('SIGKILL') }).not.toThrow()
+  })
+
+  it.each(['delivered', 'callback', 'throw'])('settles IPC delivery once on %s', mode => {
+    const child = fake()
+    child.send = (_message, done) => {
+      if (mode === 'throw') throw new Error('closed')
+      done?.(mode === 'callback' ? new Error('closed') : null)
+      done?.(new Error('late'))
+    }
+    const settled = vi.fn()
+    coreHandle(child as unknown as ChildProcess).send({ type: 'harnessd:shutdown' }, settled)
+    expect(settled.mock.calls).toEqual([[mode === 'delivered']])
+  })
+
+  it('contains a failed delivery observer and permits sends without an observer', () => {
+    const child = fake()
+    child.send = (_message, done) => done?.()
+    const log = vi.fn()
+    const handle = coreHandle(child as unknown as ChildProcess, log)
+    expect(() => handle.send({ type: 'harnessd:shutdown' }, () => { throw new Error('private') })).not.toThrow()
+    handle.send({ type: 'harnessd:shutdown' })
+    expect(log).toHaveBeenCalledWith('[harnessd] child_channel_callback_failed · Error')
   })
 })
 
@@ -608,9 +655,9 @@ describe('runMaster', { timeout: 60_000 }, () => {
     } finally { log.mockRestore() }
   })
 
-  it('starts the services and the core from the lean bundle when given one, telling the core which CLI it runs for', async () => {
+  it('starts the services and the core from the lean bundle when given one, telling both which CLI they run for', async () => {
     // The lean bundle cli.js carries (./leanBundle.ts): each service, and the core, parses its own code, not
-    // the CLI's. A core started from it is told the cli.js it came from, its CLI to everything it hands on.
+    // the CLI's. Each child is told the cli.js it came from, for helpers and commands it hands on.
     const pidFile = join(dir, 'adapter.pid')
     const seen = join(dir, 'seen')
     const body = (who: string) => `
@@ -640,8 +687,8 @@ describe('runMaster', { timeout: 60_000 }, () => {
       })
       const roles = (): Array<Record<string, string>> => jsonLines(seen)
       await until('the core and the service', () => roles().length >= 2)
-      expect(roles().sort((a, b) => a.role.localeCompare(b.role))).toEqual([{ role: '__run', from: 'lean core', cli }, { role: 'service:search', from: 'lean', cli: null }])
-      expect(lines.some((line) => line.endsWith(`[harnessd] services run from ${lean}`))).toBe(true)
+      expect(roles().sort((a, b) => a.role.localeCompare(b.role))).toEqual([{ role: '__run', from: 'lean core', cli }, { role: 'service:search', from: 'lean', cli }])
+      expect(lines.some((line) => line.endsWith(`[harnessd] master runs from ${cli}`))).toBe(true)
       signals.get('SIGTERM')!()
       await until('the master to finish', () => exits.length > 0)
     } finally { log.mockRestore() }
@@ -792,6 +839,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
     const write = (name: string) => {
       const file = join(dir, name)
       writeFileSync(file, `
+        if (process.argv[2] === '__harnessd-probe') { console.log(${JSON.stringify(`${PROBE_ANSWER} · protocol 7 · vtest · ${PROBE_HANDOVER} · worker-cohort ${WORKER_CONTRACT} ${WORKER_PLAN}`)}); process.exit(0) }
         require('node:fs').appendFileSync(${JSON.stringify(ran)}, ${JSON.stringify(name)} + '\\n')
         process.send({ type: 'harnessd:bound', protocol: ${HARNESSD_PROTOCOL}, port: 1 })
         process.send({ type: 'harnessd:ready' })
@@ -820,12 +868,65 @@ describe('runMaster', { timeout: 60_000 }, () => {
     await until('the master to finish', () => exits.length > 0)
   })
 
+  it.each(['legacy', 'modern', 'different-plan', 'unproven'] as const)('admits a retained master only for a positively supported %s cohort', async (kind) => {
+    const seen = join(dir, 'admitted-children')
+    const own = join(dir, 'own.cjs')
+    const selected = join(dir, 'selected.cjs')
+    writeFileSync(own, '// the master running this test')
+    const answer = kind === 'legacy' ? `${PROBE_ANSWER} · protocol 6 · vprevious · ${PROBE_HANDOVER}`
+      : kind === 'unproven' ? PROBE_ANSWER
+      : `${PROBE_ANSWER} · protocol 7 · vnext · ${PROBE_HANDOVER} · worker-cohort ${WORKER_CONTRACT} ${kind === 'different-plan' ? 'f'.repeat(64) : WORKER_PLAN}`
+    writeFileSync(selected, `
+      const fs = require('node:fs')
+      const role = process.argv[2]
+      if (role === '__harnessd-probe') {
+        if (process.env.HARNESSD_SERVICES !== 'none') process.exit(3)
+        console.log(${JSON.stringify(answer)}); process.exit(0)
+      }
+      fs.appendFileSync(${JSON.stringify(seen)}, JSON.stringify({ role, services: process.env.HARNESSD_SERVICES, capability: process.env.HARNESSD_ENGINE_OTHERS ?? null }) + '\\n')
+      // A historical Windows worker cannot reach a named pipe. It must never be started here.
+      if (${JSON.stringify(kind)} === 'legacy' && role === '__service') process.exit(2)
+      if (role === '__run') { process.send({ type: 'harnessd:bound', protocol: 7, port: 1 }); process.send({ type: 'harnessd:ready' }) }
+      setInterval(() => process.send({ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1 }), 50)
+      process.on('SIGTERM', () => process.exit(0))
+      process.on('message', (m) => { if (m.type === 'harnessd:shutdown') process.exit(0) })
+    `)
+    const signals = new Map<string, () => void>()
+    const exits: number[] = []
+    const lines: string[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation((line: string) => lines.push(line))
+    const supervisor = runMaster({
+      nodePath: process.execPath, execArgv: [], scriptPath: own, currentScript: () => selected,
+      ...pidFileAt(join(dir, 'adapter.pid')), reexecMarkerFile: join(dir, 'harnessd-reexec.json'), execve: null,
+      env: { ...process.env, HARNESSD_SERVICES: 'search', HARNESSD_ENGINE_OTHERS: '999:99' },
+      restoreUpdate: () => {}, confirmUpdate: () => {}, stopByMessage: true,
+      exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
+    })
+    try {
+      if (kind === 'different-plan' || kind === 'unproven') {
+        await until('unsupported cohort reported', () => supervisor.status().lastExit === 'bundle admission refused')
+        expect(supervisor.status()).toMatchObject({ state: 'restarting', corePid: null })
+        expect(existsSync(seen)).toBe(false)
+      } else {
+        await until('the admitted cohort running', () => supervisor.status().state === 'running' && jsonLines(seen).length === (kind === 'legacy' ? 1 : 2))
+        const children = jsonLines(seen)
+        expect(children.filter((child) => child.role === '__service')).toHaveLength(kind === 'legacy' ? 0 : 1)
+        if (kind === 'legacy') expect(children).toEqual([{ role: '__run', services: 'none', capability: null }])
+      }
+    } finally {
+      signals.get('SIGTERM')!()
+      await until('the cohort owner to exit', () => exits.length > 0)
+      log.mockRestore()
+    }
+  })
+
   it('starts the services and the core from the current build when it has one, never from the lean bundle', async () => {
     // Windows: cli\current names the build. A service process runs from it too (spawnService's currentScript branch),
     // and is not recorded as a lean start; the core is told no lean CLI.
     const pidFile = join(dir, 'adapter.pid')
     const seen = join(dir, 'seen')
     const body = (who: string) => `
+      if (process.argv[2] === '__harnessd-probe') { console.log(${JSON.stringify(`${PROBE_ANSWER} · protocol 7 · vtest · ${PROBE_HANDOVER} · worker-cohort ${WORKER_CONTRACT} ${WORKER_PLAN}`)}); process.exit(0) }
       const { appendFileSync } = require('node:fs')
       const role = process.argv[2] === '__service' ? 'service:' + process.argv[3] : process.argv[2]
       appendFileSync(${JSON.stringify(seen)}, JSON.stringify({ role, from: ${JSON.stringify(who)}, cli: process.env.${LEAN_CORE_SCRIPT_ENV} ?? null }) + '\\n')
@@ -1194,8 +1295,9 @@ describe('runMaster', { timeout: 60_000 }, () => {
     child.stdout.on('data', (chunk) => { output += chunk })
     child.stderr.on('data', (chunk) => { output += chunk })
     const exited = new Promise<number | null>((resolve) => child.once('exit', (code) => resolve(code)))
-    await until('the master to start', () => output.includes('READY') && output.includes('restarting'), 20_000)
-    child.kill('SIGTERM')
+    try {
+      await until('the master to start', () => output.includes('READY') && output.includes('retrying'), 20_000)
+    } finally { child.kill('SIGTERM') }
     expect(await exited).toBe(0)
     expect(output).toContain('[harnessd] SIGTERM — stopping')
   })
@@ -1203,7 +1305,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
   describe('re-executing on the bundle on disk', () => {
     const DEAD_PID = 2_000_000_000
     /** One script plays the bundle: as a core it binds, is ready and beats; as a probe it answers, or not. */
-    const bundle = (core: string, probe = `console.log(${JSON.stringify(PROBE_ANSWER)} + ' · test'); process.exit(0)`) => {
+    const bundle = (core: string, probe = `console.log(${JSON.stringify(`${PROBE_ANSWER} · protocol 7 · vtest · ${PROBE_HANDOVER} · worker-cohort ${WORKER_CONTRACT} ${WORKER_PLAN}`)}); process.exit(0)`) => {
       const file = join(dir, 'bundle.cjs')
       writeFileSync(file, `
         const fs = require('node:fs')
@@ -1255,7 +1357,8 @@ describe('runMaster', { timeout: 60_000 }, () => {
     it('rolls an update back when the new bundle\'s master does not answer its probe, and keeps its own code', async () => {
       const script = bundle(`if (process.env.HARNESSD_RESTARTS === '0') setTimeout(() => { fs.appendFileSync(__filename, '\\n// a newer build\\n'); process.exit(75) }, 100)`,
         `console.error('Unknown command: ' + process.argv[2]); process.exit(1)`)
-      const master = start(script)
+      const original = readFileSync(script, 'utf8')
+      const master = start(script, { restoreUpdate: () => { master.calls.push('restore'); writeFileSync(script, original) } })
       await until('the rollback', () => master.calls.includes('restore'))
       await until('a core on the bundle restored', () => master.supervisor.status().state === 'running')
       expect(master.execs).toEqual([])
@@ -1317,7 +1420,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
         const same = start(script, { serviceScriptPath: join(dir, 'lean.mjs'), bundleFingerprint: fingerprint(script) })
         await until('its core', () => same.supervisor.status().state === 'running')
         expect(same.execs).toEqual([])
-        expect(lines.some((line) => line.endsWith(`[harnessd] services run from ${join(dir, 'lean.mjs')}, as this master does`))).toBe(true)
+        expect(lines.some((line) => line.endsWith(`[harnessd] master runs from ${join(dir, 'lean.mjs')}`))).toBe(true)
         await same.stop()
         const older = start(script, { bundleFingerprint: 'the bundle before' })
         await until('the master to re-execute on the bundle on disk', () => older.execs.length > 0)
@@ -1501,14 +1604,23 @@ describe('runMaster', { timeout: 60_000 }, () => {
         expect(atExec).toEqual([])
         await moving.stop()
 
-        // The bundle restored refuses its probe: this master carries on as itself, with each service once.
+        // An unproven restored bundle starts neither core nor services; marker recovery is not admission.
         lines.length = 0
         const refusing = bundle('', `console.error('Unknown command: ' + process.argv[2]); process.exit(1)`)
         writeMarker(marker(), { pid: DEAD_PID, from: 'the one before', to: fingerprint(refusing)!, at: 1 })
         const staying = start(refusing, { env, restoreUpdate: restore(refusing) })
-        await until('a core on the bundle restored', () => staying.supervisor.status().state === 'running')
-        expect(started(lines)).toHaveLength(1)
+        await until('the restored bundle refused', () => staying.supervisor.status().lastExit === 'bundle admission refused')
+        expect(staying.supervisor.status().corePid).toBeNull()
+        expect(started(lines)).toHaveLength(0)
         await staying.stop()
+
+        lines.length = 0
+        const supported = bundle('')
+        writeMarker(marker(), { pid: DEAD_PID, from: 'the one before', to: fingerprint(supported)!, at: 1 })
+        const kept = start(supported, { env, restoreUpdate: restore(supported), execve: null })
+        await until('the supported cohort to run', () => kept.supervisor.status().state === 'running')
+        expect(started(lines)).toHaveLength(1)
+        await kept.stop()
       } finally { log.mockRestore() }
     })
 

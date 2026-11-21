@@ -95,13 +95,20 @@ export const agentSettingsPath = (dataDir: string): string => join(dataDir, 'age
 
 /** Whether a copy kept for [owner] is this sign-in's: the same machine, and the same account where the session knows
  *  its account (`signInAcct`, recorded after a sign-in by hand). */
-export const ownsAgentSettings = (owner: AgentSettingsOwner, session: AuthSession | null): boolean =>
+export const ownsAgentSettings = (owner: AgentSettingsOwner, session: Pick<AuthSession, 'machineId' | 'signInAcct'> | null): boolean =>
   !!session?.machineId && owner.machineId === session.machineId && (!session.signInAcct || owner.accountId === session.signInAcct)
 
 /** The settings for whoever is signed in here now ([session], read from its file unless given). */
 export function readAgentSettings(dataDir: string, session: AuthSession | null = readAuthSession()): AgentSettings {
   try {
-    const saved = JSON.parse(readFileSync(agentSettingsPath(dataDir), 'utf8')) as Record<string, unknown>
+    return agentSettingsFromText(readFileSync(agentSettingsPath(dataDir), 'utf8'), session)
+  } catch { return { ...AGENT_SETTINGS_DEFAULTS } }
+}
+
+/** A setup worker receives captured bytes and non-secret owner identity, never the sign-in credentials. */
+export function agentSettingsFromText(text: string | null, session: Pick<AuthSession, 'machineId' | 'signInAcct'> | null): AgentSettings {
+  try {
+    const saved = JSON.parse(text ?? 'null') as Record<string, unknown>
     // A copy from before they were the account's names no one: Settings ▸ Agents wrote it, for this computer alone.
     if (typeof saved.accountId !== 'string' || typeof saved.machineId !== 'string'
       || !ownsAgentSettings({ accountId: saved.accountId, machineId: saved.machineId }, session)) return { ...AGENT_SETTINGS_DEFAULTS }

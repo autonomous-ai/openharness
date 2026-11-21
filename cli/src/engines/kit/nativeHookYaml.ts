@@ -1,8 +1,9 @@
+import { hookPreparationFiles } from './hookPreparationFiles.js'
 /** A managed YAML hook block and exact-command approvals, applied from eager engine declarations. */
 import { isMap, isScalar, isSeq, Lexer, parseDocument, visit, type Document } from 'yaml'
 import { basename, join } from 'node:path'
+import { HookPreparationHeld, type HookPreparationFiles, type HookFilePublication, type HookPreparationAttempt, type HookPreparationOptions } from './nativeHookFiles.js'
 import { errorKind } from '../../lib/log.js'
-import { HookPreparationHeld, inspectHookFile, type HookFilePublication, runHookPreparation, type HookPreparationAttempt, type HookPreparationOptions } from './nativeHookFiles.js'
 import { HookScriptMissing } from './hookHeld.js'
 import { NativeEvidenceBudget } from './nativeEvidence.js'
 import { isManagedHookCommand } from './notifyHooks.js'
@@ -129,9 +130,9 @@ function message(template: string, values: Record<string, string>): string {
   return template.replace(/\{(file|removed)\}/g, (_, key: string) => values[key])
 }
 
-function prepareAllowlist(rule: NativeYamlHooks, cmd: string, home: string): (attempt: HookPreparationAttempt) => Promise<HookFilePublication> {
+function prepareAllowlist(rule: NativeYamlHooks, cmd: string, home: string, files: HookPreparationFiles): (attempt: HookPreparationAttempt) => Promise<HookFilePublication> {
   const allowlistPath = join(home, rule.allowlist)
-  const observed = inspectHookFile(allowlistPath)
+  const observed = files.inspect(allowlistPath)
   const data = (observed.content === null ? { approvals: [] } : JSON.parse(observed.content)) as { approvals?: Array<{ event?: string; command?: string }> }
   if (!data || typeof data !== 'object' || Array.isArray(data) || (data.approvals !== undefined && !Array.isArray(data.approvals))) {
     throw new HookPreparationHeld('the hook approvals are not a readable list')
@@ -243,6 +244,7 @@ type HomeLines = Array<{ stream: 'log' | 'error'; args: unknown[] }>
 
 /** Installs only homes with a config, each with its own command and allowlist. */
 export async function installNativeYamlHooks(rule: NativeYamlHooks, commandForHome: (home: string) => string, selectedHome?: string, options: HookPreparationOptions & { createMissing?: boolean } = {}): Promise<boolean> {
+  const files = hookPreparationFiles(options)
   const homes = selectedHome ? [selectedHome] : nativeHookHomes(rule.homes, rule.home)
   // Homes are prepared four at a time, but what each says is printed in the homes' order: the default
   // home, then its profiles. Printed as each finished, a profile's lines came before the default home's
@@ -252,7 +254,7 @@ export async function installNativeYamlHooks(rule: NativeYamlHooks, commandForHo
   let next = 0, printed = 0, installed = true
   const print = () => {
     for (; printed < homes.length && finished[printed]; printed++) {
-      for (const { stream, args } of lines[printed]) console[stream](...args)
+      for (const { stream, args } of lines[printed]) files.report(stream, ...args)
     }
   }
   const worker = async () => {
@@ -296,7 +298,8 @@ function managedHooksIn(rule: NativeYamlHooks, cleaned: string): boolean {
  * the file reported. A foreign `hooks:` mapping is left alone, as the installer leaves it, and reported when Harness's
  * commands are in it. A config with CRLF line ends throughout is read as LF and written back with CRLF.
  */
-export async function removeNativeYamlHooks(rule: NativeYamlHooks, homes: readonly string[]): Promise<HookFileRemoval[]> {
+export async function removeNativeYamlHooks(rule: NativeYamlHooks, homes: readonly string[], options: HookPreparationOptions = {}): Promise<HookFileRemoval[]> {
+  const files = hookPreparationFiles(options)
   const outcomes: HookFileRemoval[] = []
   for (const home of homes) {
     const configPath = join(home, rule.homes.file)
@@ -305,10 +308,10 @@ export async function removeNativeYamlHooks(rule: NativeYamlHooks, homes: readon
     let at = configPath
     let done: HookFileRemoval[] = []
     try {
-      outcomes.push(...await runHookPreparation([configPath, allowlistPath], async (attempt) => {
+      outcomes.push(...await files.run([configPath, allowlistPath], async (attempt) => {
         at = configPath
         done = []
-        const observed = inspectHookFile(configPath)
+        const observed = files.inspect(configPath)
         let config: { next: string; removed: number } | null = null
         let kept: string | undefined
         if (observed.content !== null) {
@@ -342,7 +345,7 @@ export async function removeNativeYamlHooks(rule: NativeYamlHooks, homes: readon
           }
         }
         at = allowlistPath
-        const approvals = inspectHookFile(allowlistPath)
+        const approvals = files.inspect(allowlistPath)
         let allowlist: { next: string; removed: number } | null = null
         if (approvals.content !== null) {
           let data: { approvals?: Array<{ command?: string }> }
@@ -379,11 +382,12 @@ export async function removeNativeYamlHooks(rule: NativeYamlHooks, homes: readon
 }
 
 async function installIn(rule: NativeYamlHooks, cmd: string, home: string, options: HookPreparationOptions & { createMissing?: boolean }, lines: HomeLines): Promise<boolean> {
+  const files = hookPreparationFiles(options)
   const log = (...args: unknown[]) => { lines.push({ stream: 'log', args }) }
   const error = (...args: unknown[]) => { lines.push({ stream: 'error', args }) }
   const configPath = join(home, rule.homes.file)
-  try { return await runHookPreparation([configPath, join(home, rule.allowlist)], async attempt => {
-    const observed = inspectHookFile(configPath)
+  try { return await files.run([configPath, join(home, rule.allowlist)], async attempt => {
+    const observed = files.inspect(configPath)
     if (observed.content === null && !options.createMissing) {
       if (home === rule.home) log(message(rule.messages.missing, { file: configPath }))
       return false
@@ -440,7 +444,7 @@ async function installIn(rule: NativeYamlHooks, cmd: string, home: string, optio
     // Inspect approvals before writing YAML. A malformed or unreadable allowlist
     // must never be replaced with an empty one, nor leave half an installation.
     observed.prepare(next)
-    const approve = prepareAllowlist(rule, cmd, home)
+    const approve = prepareAllowlist(rule, cmd, home, files)
     if (next === config) {
       const installed = await observed.replace(config, attempt), approved = await approve(attempt)
       installed.verify(); approved.verify()

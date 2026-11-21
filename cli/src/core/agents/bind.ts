@@ -17,12 +17,10 @@ import { continuationOf } from '../../engines/sessionFiles.js'
 import { sessionStoreOf } from '../../engines/sessionStoreContracts.js'
 import type { TurnRecaps } from '../turns/recaps.js'
 import { paneReadIdentity } from '../transcripts/readIdentity.js'
-import type { AutonomousDeviceInput } from '../deviceInput.js'
 import { openclawStartingUntil } from '../../lib/agentFrame.js'
 import { isRecentlyDeleted } from '../../lib/deletedSessions.js'
 import { transcriptIsFirstTurn } from '../../lib/firstTurnReplay.js'
 import { errorKind, sid } from '../../lib/log.js'
-import type { openclawUserRowSince } from '../../lib/openclawStore.js'
 import { startMarkerMs } from '../../lib/processProof.js'
 import { matchesLaunchReceipt, projectDisplayName, type registry, type RegisteredSession } from '../../lib/registry.js'
 import type { SessionInputController } from '../../lib/sessionInput.js'
@@ -64,7 +62,7 @@ const SESSION_LOAD_MS = 35_000
  *  fails. */
 const FIRST_TASK_BOUND_MS = 180_000
 /** How long the serial discovery pass waits for OpenClaw's store about a typed first task, every other agent behind it: a
- *  read waits up to 5 s on a locked database. A store slower than this says nothing this pass. */
+ *  worker has its own longer watchdog. A store slower than this says nothing this pass. */
 const STORE_READ_MS = 1_000
 /** The keys an agent moved off last (`/new`) asked about its typed first task besides its own: its user row is under the
  *  key the pane was on as OpenClaw took it. More moves than this within the task's bound are not a case. */
@@ -127,6 +125,7 @@ export interface BindDeps {
   /** The app. */
   clients: { send(frame: { type: string; payload: Record<string, unknown> }): void }
   attachSession: (session: RegisteredSession, reset?: boolean, replayCursorFromStart?: boolean, replayFromStart?: boolean) => Promise<boolean>
+  captureReader: (session: RegisteredSession) => (confirmed: RegisteredSession) => boolean
   announceSession: (session: RegisteredSession) => void
   stoppedAgents: Pick<StoppedAgentStore, 'save' | 'finishResume' | 'get'>
   syncRecapPool: () => void
@@ -134,7 +133,6 @@ export interface BindDeps {
   /** Types an agent's first task into its pane as the person's own message (core/input.ts `submitAgent`), which the input
    *  keeps from its hand-over until a turn takes it (`expectFirstTask`). */
   submitFirstTask: (agentId: string, task: string) => void
-  deviceInput: Pick<AutonomousDeviceInput, 'forget'>
   /** Where Copilot, Grok and agy keep their sessions. */
   homes: { copilot: string; grok: string; agy: string }
   /** One owner per conversation, stopped harnesses included (conversationOwners.ts). */
@@ -153,7 +151,7 @@ export interface BindDeps {
   /** The state folder an OpenClaw TUI holds open, or null when its open files cannot be read (lib/openclawStore.ts). */
   openclawStateDir: (pid: number) => Promise<string | null>
   /** Whether OpenClaw's store holds a user row for a session key written after a time; null when it cannot say. */
-  openclawUserRowSince: typeof openclawUserRowSince
+  openclawUserRowSince: (key: string, pane: { pid: number; stateDir?: string | null }, since: number, until?: number) => Promise<boolean | null>
   /** What a Hermes's record of its own terminal says (hermesTerminal.ts). Absent, a Hermes is bound by its hooks and the repair. */
   hermesTerminal?: ReturnType<typeof createHermesTerminal>
   /** Whether the session's live stream is still held, to be resumed where it stopped, by its reader itself. */
@@ -171,8 +169,8 @@ interface BindPass {
 }
 
 export function createBinding({
-  registry, mirror, forgetSession, clients, attachSession, announceSession, stoppedAgents, syncRecapPool,
-  input, submitFirstTask, deviceInput, homes, owners, capturePane, activityRevision, openclawPaneRead, openclawPaneDue, openclawStateDir, hermesTerminal,
+  registry, mirror, forgetSession, clients, attachSession, captureReader, announceSession, stoppedAgents, syncRecapPool,
+  input, submitFirstTask, homes, owners, capturePane, activityRevision, openclawPaneRead, openclawPaneDue, openclawStateDir, hermesTerminal,
   followsLive, openclawUserRowSince,
 }: BindDeps) {
   /**
@@ -216,11 +214,11 @@ export function createBinding({
   }
   /**
    * The `/session` tries on each agent's pane since its history last failed to load, agentId → how many, when the last,
-   * and how many `history failed:` lines the pane showed then. A pass that reads any other state forgets them: a
-   * reconnect or a load that worked ends the run. Cleared at 256 entries rather than aged: a try then comes sooner, and
+   * and how many `history failed:` lines the pane showed then. A ready history, confirmed Gateway outage or new TUI
+   * process ends the episode; transient frames preserve it. Cleared at 256 entries rather than aged: a try then comes sooner, and
    * OpenClaw takes a `/session` at any time.
    */
-  const sessionTries = new Map<string, { tries: number; lastAt: number; failures: number }>()
+  const sessionTries = new Map<string, { process: string; tries: number; lastAt: number; failures: number }>()
   /**
    * How long each agent's first task has waited, agentId → when this daemon first saw it wait, the time it was paused
    * since, and since when it is paused now. A first task once waited for ever: typed into a TUI whose history had not
@@ -349,19 +347,22 @@ export function createBinding({
     // Registration is complete before any optional history reader runs. In particular a stalled
     // module cannot withhold a resumed agent's record, name or announcement. Capture this fact before
     // finishResume changes the stopped record used to decide whether history may be replayed below.
-    const resumedConversation = !!entry.resumeOnly && stoppedAgents.get(entry.agentId)?.sessionId === entry.sessionId
+    const resumedConversation = !!entry.resumeOnly && (await stoppedAgents.get(entry.agentId))?.sessionId === entry.sessionId
     try {
-      stoppedAgents.save(entry)
+      if (!current()) return
+      await stoppedAgents.save(entry, current)
     } catch (error) {
       console.error(`[agent] ${sid(entry.agentId)} could not save the record it resumes from: ${errorKind(error)}`)
     }
+    if (!current()) return
     if (entry.resumeOnly) stoppedAgents.finishResume(entry.agentId)
     // A conversation new to this harness has one owner from now on: a stopped harness it came from (a
     // `/resume`, `claude --resume` in a terminal, a compaction) lets it go, as a running one already has.
     if (meta.isNew) {
-      try { owners?.settle([conversationKey(entry)]) }
+      try { await owners?.settle([conversationKey(entry)]) }
       catch (error) { console.warn(`[agent] ${sid(entry.agentId)} could not settle who owns ${sid(entry.sessionId)}: ${errorKind(error)}`) }
     }
+    if (!current()) return
     syncRecapPool()
     if (meta.isNew) {
       registry.inheritName(entry.agentId, entry.sessionId)
@@ -463,13 +464,14 @@ export function createBinding({
    * The agent's first task, taken off its row. This pass runs inside the reconcile pass's registry transaction
    * (core/main.ts), which holds saves back: taken after it commits, the removal is saved before the task is typed, so a
    * daemon that stops in between never types it twice. A pass that reads the pane again before then takes nothing. Null
-   * when there is none, or when the removal could not be saved, which is said.
+   * when there is none. A failure is distinct: storage release can fail after the removal was saved.
    */
-  const takeFirstTask = (agentId: string): Promise<string | null> =>
-    registry.afterTransaction(() => registry.takeFirstTask(agentId)).catch((error) => {
-      console.error(`[agent] ${sid(agentId)} first task kept · ${errorKind(error)}`)
-      return null
-    })
+  const takeFirstTask = (agentId: string, current: () => boolean): Promise<{ task: string | null; failed: boolean }> =>
+    registry.afterTransaction(() => current() ? registry.takeFirstTask(agentId, { current }) : null)
+      .then(task => ({ task, failed: false }), error => {
+        console.error(`[agent] ${sid(agentId)} first task handoff failed · ${errorKind(error)}`)
+        return { task: null, failed: true }
+      })
   /**
    * The agents whose typed first task the input adopted here, agentId → when: one an earlier daemon typed, or one the
    * input forgot. Cleared at 256 entries rather than aged: an adopted task then counts as one typed here, which its turn
@@ -490,13 +492,19 @@ export function createBinding({
     const keys = [agent.sessionId, ...(agent.earlierSessionIds ?? []).slice(0, EARLIER_KEYS_ASKED)]
     const pane = { pid, stateDir: agent.openclawStateDir }
     // A row under any key says yes.
-    const read = Promise.all(keys.map((key) => openclawUserRowSince(key, pane, at, undefined, adoptedAt).catch(() => null)))
-      .then((said) => said.includes(true))
-      .finally(() => storeReads.delete(agent.agentId))
+    let active = true
+    // A poll keeps at most one storage slot, so a four-key observation cannot fill the checkpoint port.
+    const read = (async () => {
+      for (const key of keys) {
+        if (!active) return false
+        if (await openclawUserRowSince(key, pane, at, adoptedAt).catch(() => null) === true) return active
+      }
+      return false
+    })().finally(() => storeReads.delete(agent.agentId))
     let timer: NodeJS.Timeout | undefined
     const late = new Promise<false>((resolve) => { timer = setTimeout(resolve, STORE_READ_MS, false) })
     try { return await Promise.race([read, late]) }
-    finally { clearTimeout(timer) }
+    finally { active = false; clearTimeout(timer) }
   }
   /**
    * The typed first tasks whose removal failed, agentId → the mark's `at`: said once a mark, as every pass tries again.
@@ -531,14 +539,47 @@ export function createBinding({
    * off the row already: it is said, not put back.
    */
   const handOverFirstTask = (agentId: string): void => {
+    const row = registry.byAgent(agentId)
+    if (changing(agentId) || isRecentlyDeleted(agentId) || !row?.firstTask || row.identityHold || row.launch?.state === 'failed') return
+    const selected = structuredClone(row)
+    const current = () => {
+      const latest = registry.byAgent(agentId)
+      return !changing(agentId) && !isRecentlyDeleted(agentId) && !latest?.identityHold
+        && (!latest?.firstTask || latest.firstTask === selected.firstTask) && matchesLaunchReceipt(latest, selected)
+    }
+    const revoked = () => {
+      const latest = registry.byAgent(agentId)
+      // A hold or startup completion can arrive after durable removal, while its storage source releases.
+      // Fail that same launch visibly; a replacement or foreground lifecycle owns its own outcome.
+      const completed = latest?.launch === undefined || latest.launch.state === 'ready'
+        ? { ...selected, launch: latest?.launch } : selected
+      if (!changing(agentId) && !isRecentlyDeleted(agentId) && latest && !latest.firstTask
+        && matchesLaunchReceipt({ ...latest, evidenceRevision: selected.evidenceRevision }, completed)) {
+        failFirstTask(latest)
+      } else {
+        withdraw?.()
+        console.warn(`[agent] ${sid(agentId)} first task not handed over · launch changed`)
+      }
+    }
     // Expected before its row lets it go: the frame reads starting from the one or the other all the way to its turn.
-    input.expectFirstTask(agentId)
-    void takeFirstTask(agentId).then((task) => {
-      if (!task) return
+    const withdraw = input.expectFirstTask(agentId, row.firstTask)
+    void takeFirstTask(agentId, current).then(({ task, failed }) => {
+      if (failed) {
+        if (registry.byAgent(agentId)?.firstTask !== selected.firstTask) revoked()
+        return
+      }
+      if (!task) {
+        if (!current()) withdraw?.()
+        return
+      }
+      if (!current()) {
+        revoked()
+        return
+      }
       console.log(`[agent] ${sid(agentId)} first task handed over`)
       try { submitFirstTask(agentId, task) }
       catch (error) { console.error(`[agent] ${sid(agentId)} first task not typed · ${errorKind(error)}`) }
-    })
+    }).catch(error => console.error(`[agent] ${sid(agentId)} first task outcome unavailable · ${errorKind(error)}`))
   }
   /**
    * A first task OpenClaw did not take within its bound fails the launch with it, so every verb says so and the person
@@ -548,8 +589,16 @@ export function createBinding({
    */
   const failFirstTask = (agent: RegisteredSession): void => {
     firstTaskClock.delete(agent.agentId)
-    registry.setLaunch(agent.agentId, { state: 'failed', ...OPENCLAW_FIRST_TASK })
-    void takeFirstTask(agent.agentId)
+    const failed = registry.setLaunch(agent.agentId, { state: 'failed', ...OPENCLAW_FIRST_TASK })
+    if (failed) {
+      const selected = structuredClone(failed)
+      void takeFirstTask(agent.agentId, () => {
+        const latest = registry.byAgent(agent.agentId)
+        // A reader hold cannot revive this failed task. A replacement owner, launch or task still revokes cleanup.
+        return !!latest && latest.firstTask === selected.firstTask
+          && matchesLaunchReceipt({ ...latest, evidenceRevision: selected.evidenceRevision }, selected)
+      })
+    }
     input.forget(agent.agentId)
     announceSession(agent)
     console.log(`[agent] ${sid(agent.agentId)} first task not taken · ${OPENCLAW_FIRST_TASK.error}`)
@@ -562,10 +611,12 @@ export function createBinding({
    */
   const handOverAttached = async (agentId: string): Promise<void> => {
     const row = registry.byAgent(agentId)
-    if (!row?.firstTask) return
+    if (changing(agentId) || isRecentlyDeleted(agentId) || !row?.firstTask || row.identityHold || row.launch?.state === 'failed') return
+    const selected = structuredClone(row)
     const revision = activityRevision(row.sessionId)
     const capture = await capturePane(agentId).catch(() => null)
-    if (!capture) return
+    const latest = registry.byAgent(agentId)
+    if (changing(agentId) || isRecentlyDeleted(agentId) || !capture || latest?.identityHold || !matchesLaunchReceipt(latest, selected)) return
     const screen = readOpenclawScreen(capture)
     if (screen.state === 'ready' && screen.box === '' && screen.key === row.sessionId
       && openclawPaneRead(row.sessionId, { ready: true, gatewayLost: screen.gatewayLost, running: screen.running }, capture, revision)) handOverFirstTask(agentId)
@@ -724,7 +775,8 @@ export function createBinding({
         failFirstTask(agent)
         return
       }
-      if (screen.state !== 'no-history') sessionTries.delete(agent.agentId)
+      // A hidden footer or loading frame says nothing about whether the last recovery ended.
+      if (screen.state === 'ready') sessionTries.delete(agent.agentId)
       // Told on every pass, the ones that say a state too: a pass that reads the Gateway gone is what lets the stream
       // close a turn its restart left `running`. A history that did not load is under a status line that says idle.
       const ready = screen.state === 'ready' || screen.state === 'no-history'
@@ -734,6 +786,7 @@ export function createBinding({
       // pane's state: on one that can send, Harness's message scrolled in its box is what its Enter would send.
       const held = openclawScreenHold(screen, agent, gatewayGoneMs(agent.agentId, screen))
         ?? (ready && waiting && !!screen.box && !input.ownsBox(agent.agentId, screen.box, screen.boxHidden, screen.state) ? OPENCLAW_STATES.boxHeld : undefined)
+      if (held === OPENCLAW_STATES.noGateway) sessionTries.delete(agent.agentId)
       const ours = !agent.identityHold || OPENCLAW_HOLDS.has(agent.identityHold) || isOpenclawLocalStopped(agent.identityHold)
       if (held) {
         // A hold another reason set (the store unreadable, an identity read that failed) is that reason's to clear.
@@ -793,7 +846,9 @@ export function createBinding({
       // is theirs to reload. The key is the footer's, the session the pane is on; the row's would undo a `/new`.
       if (screen.state === 'no-history' && screen.box === '' && screen.key && waiting) {
         const now = Date.now()
-        const tried = sessionTries.get(agent.agentId) ?? { tries: 0, lastAt: -Infinity, failures: 0 }
+        const process = tuiProcess(observed.processIdentity)
+        const prior = sessionTries.get(agent.agentId)
+        const tried = prior?.process === process ? prior : { tries: 0, lastAt: -Infinity, failures: 0 }
         // The next is typed once the last load failed, or had its time: one typed while a load is in flight drops it.
         const ended = screen.historyFailures > tried.failures || now - tried.lastAt >= SESSION_LOAD_MS
         if (tried.tries < SESSION_TRIES && now - tried.lastAt >= SESSION_RETRY_MS && ended) {
@@ -801,7 +856,7 @@ export function createBinding({
           // the serial discovery pass, every other agent's behind it.
           const tries = tried.tries + 1
           if (sessionTries.size >= 256) sessionTries.clear()
-          sessionTries.set(agent.agentId, { tries, lastAt: now, failures: screen.historyFailures })
+          sessionTries.set(agent.agentId, { process, tries, lastAt: now, failures: screen.historyFailures })
           console.log(`[discovery] ${sid(agent.agentId)} openclaw · history not loaded · /session ${tries}/${SESSION_TRIES}`)
           void input.typeCommand(agent.agentId, `/session ${screen.key}`).catch(() => false).then((typed) => {
             if (!typed) console.warn(`[discovery] ${sid(agent.agentId)} openclaw · /session ${tries}/${SESSION_TRIES} not typed`)
@@ -850,12 +905,19 @@ export function createBinding({
         announceSession(agent)
         return
       }
-      const answer = await hermesTerminal.follow(agent, { ...observed, sandboxed: !!observed.sandbox }, { current, mayClaim, hold })
+      const refresh = !!agent.sessionId && !!agent.identityHold && OTHER_ENGINE_HOLDS.has(agent.identityHold)
+        && !followsLive(agent.sessionId)
+      const answer = await hermesTerminal.follow(agent, { ...observed, sandboxed: !!observed.sandbox }, { current, mayClaim, hold, refresh })
       if (answer === 'wait' || !current()) return
       if (answer !== 'none' && agent.sessionId) {
+        // Stamping this same conversation would revoke recovery's pending open. Its reader owns the held cursor;
+        // the next pass confirms it after recovery, without replacing its retained stream.
+        if (answer.sessionId === agent.sessionId && agent.identityHold
+          && OTHER_ENGINE_HOLDS.has(agent.identityHold) && followsLive(agent.sessionId)) return
         // `/new`, `/resume`, a branch and a compression split all rewrite the record: the rotation the Copilot switch
         // takes, so the reader, the recaps and the apps see a session change as they saw one from a hook.
         const was = agent.sessionId
+        const keepReader = captureReader(agent)
         const rotated = await commit({
           engine: 'hermes',
           sessionId: answer.sessionId,
@@ -866,13 +928,24 @@ export function createBinding({
           processIdentity: observed.processIdentity,
           hookEvent: 'HermesTerminal',
         })
-        // A new session is a switch, said once the registry took it: one it refuses (a resume that reopened another
-        // conversation) is tried again in the repair's rhythm, and is no switch; a resumed one confirmed is none either.
         if (!rotated) return
+        if (!rotated.isNew && !rotated.rebound && !rotated.evicted && !rotated.orphaned && keepReader(rotated.entry)) return
+        // Fileless readers cannot use transcript revalidation. Native confirmation can retry a reader that gave up,
+        // but only its own hold: a retained orphan must be replaced, and unrelated identity holds still stand.
+        const recovered = !!rotated.entry.identityHold && OTHER_ENGINE_HOLDS.has(rotated.entry.identityHold)
+          && !followsLive(rotated.entry.sessionId)
+        if (recovered) {
+          const latest = registry.byAgent(rotated.entry.agentId)
+          if (!latest || paneReadIdentity(latest) !== paneReadIdentity(rotated.entry)) return
+          registry.setIdentityHold(latest.agentId, undefined)
+          // Registry's commit reply is detached. Follow the exact identity after clearing our own hold.
+          rotated.entry = structuredClone(latest)
+          announceSession(rotated.entry)
+        }
         if (rotated.isNew) console.log(`[discovery] ${sid(agent.agentId)} switched hermes session ${sid(was)} → ${sid(answer.sessionId)}`)
-        // A confirmed one is followed all the same, as a hook's re-register is: the confirmation binds the row (`boundAt`),
-        // and the attach the resume started for the unbound row gives up on a binding that moved on (attach.ts).
-        followRegistered(rotated.entry, rotated)
+        // Same-conversation confirmation fills boundAt and revokes a Resume attach still reading. Follow its new
+        // identity too: the tracker waits for the obsolete attempt; later terminal passes settle to 'wait'.
+        followRegistered(rotated.entry, recovered ? { ...rotated, recovered: true } : rotated)
         return
       }
       if (answer !== 'none') followed = answer
@@ -1008,7 +1081,6 @@ export function createBinding({
     if (!result || !result.isNew) return
     if (previousOwner && previousOwner.agentId !== result.entry.agentId) {
       input.forget(previousOwner.agentId)
-      deviceInput.forget(previousOwner.agentId)
       announceSession(previousOwner)
     }
     lastRepairAttempt.delete(agent.agentId)

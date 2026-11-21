@@ -13,10 +13,14 @@ import { BRIDGE_FILE, makeRealFolders, writeBridge, type BridgeRecord } from '..
 import type { ProcRow } from '../homeMove/oldUsers.js'
 import { writeMoveRecord, type MoveRecord } from '../homeMove/record.js'
 import { resolveBinaryOnPath } from '../lib/binaryOnPath.js'
+import * as tmuxPath from '../lib/tmuxOnPath.js'
 import { harnessPaneOwner } from '../lib/harnessSessionLabel.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { isolatedTmux } from '../testing/isolatedTmux.js'
 import { askForStore, CHECK_MS, STORE_ASK_MS, startHomeBridge, startHomeBridgeInCore, type HomeBridgeDeps } from './homeBridge.js'
+
+// Keep the real finder while a recovery case controls its shell lookup and filesystem-only probe.
+vi.mock('../lib/tmuxOnPath.js', async (real) => ({ ...await real<object>() }))
 
 /** The move, 50 000 s into the boot it ran in, as /proc says them. */
 const BOOT = 'c2a9e1d8-55a4-4c3e-9b8f-0f6d2d1e7a11', BOOTED_AT = 1_700_000_000, MOVED_UPTIME = 50_000
@@ -693,14 +697,53 @@ describe('the home bridge service', () => {
     bridge.stop()
   })
 
-  it('no tmux found has no panes, as a tmux not installed: none is run, and the bridge goes', async () => {
+  it.each(['tmux was not found', 'the lookup failed', 'the login shell timed out'])('an unconfirmed tmux lookup keeps the bridge: %s', async reason => {
     const h = movedHome()
     const tmux = vi.fn(() => NO_SERVER)
-    const { log } = start(h, { tmux, tmuxAt: async () => ({ state: 'absent', reason: 'tmux was not found' }) })
+    const { bridge, log } = start(h, { tmux, tmuxAt: async () => ({ state: 'absent', reason }) })
     await settle()
     expect(tmux).not.toHaveBeenCalled()
+    expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(true)
+    expect(existsSync(h.oldHome)).toBe(true)
+    expect(log.mock.calls).toEqual([['home bridge: a check failed: HOME_BRIDGE_TMUX_UNAVAILABLE · tried again in 10 minutes']])
+    bridge.stop()
+  })
+
+  it('retries an absent shell lookup through the real finder on its next check', async () => {
+    fakeInterval()
+    const h = movedHome()
+    const lookup = vi.spyOn(tmuxPath, 'ensureTmuxOnPath')
+      .mockResolvedValueOnce({ state: 'absent', reason: 'the login shell timed out' })
+      .mockResolvedValue({ state: 'adopted', path: '/fixture/shell/bin/tmux', from: '/fixture/shell/bin' })
+    const arrived = vi.spyOn(tmuxPath, 'tmuxAvailableNow').mockReturnValue(false)
+    restore.push(() => lookup.mockRestore(), () => arrived.mockRestore())
+    const tmux = vi.fn(() => NO_SERVER)
+    const { bridge } = start(h, { tmux, tmuxAt: undefined })
+    restore.push(() => bridge.stop())
+    await settle()
+    expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(true)
+    expect(tmux).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(CHECK_MS)
+    await settle()
+    expect(lookup).toHaveBeenCalledTimes(2)
+    expect(tmux).toHaveBeenCalledExactlyOnceWith('/fixture/shell/bin/tmux')
     expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(false)
-    expect(log.mock.calls).toEqual([['home bridge: removed']])
+  })
+
+  it('a later confirmed tmux lookup lets the bridge finish', async () => {
+    fakeInterval()
+    const h = movedHome()
+    const tmuxAt = vi.fn<HomeBridgeDeps['tmuxAt']>()
+      .mockResolvedValueOnce({ state: 'absent', reason: 'lookup timed out' })
+      .mockResolvedValue({ state: 'present' })
+    const { log } = start(h, { tmuxAt })
+    await settle()
+    expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(true)
+    await vi.advanceTimersByTimeAsync(CHECK_MS)
+    await settle()
+    expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(false)
+    expect(log.mock.calls.at(-1)).toEqual(['home bridge: removed'])
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it('a tmux with no server has no panes, as tmux itself says it', async () => {
@@ -718,7 +761,6 @@ describe('the home bridge service', () => {
 
   const missing = (code: string) => Object.assign(new Error(`spawnSync tmux ${code}`), { code })
   it.each<[string, ReturnType<HomeBridgeDeps['tmux']>]>([
-    ['is not installed', { status: null, stdout: '', stderr: '', error: missing('ENOENT') }],
     ['has no server', { status: 1, stdout: '', stderr: 'no server running on /tmp/tmux-1000/default\n' }],
     ['has no socket', { status: 1, stdout: '', stderr: 'error connecting to /tmp/tmux-1000/default (No such file or directory)\n' }],
   ])('a tmux that %s has no panes', async (_, answer) => {
@@ -729,6 +771,11 @@ describe('the home bridge service', () => {
   })
 
   it.each<[string, ReturnType<HomeBridgeDeps['tmux']>]>([
+    ['could not start', { status: null, stdout: '', stderr: '', error: missing('ENOENT') }],
+    ['was signalled after no-server text', { status: null, stdout: '', stderr: NO_SERVER.stderr }],
+    ['failed with another status after no-server text', { status: 2, stdout: '', stderr: NO_SERVER.stderr }],
+    ['failed despite no-server text', { status: null, stdout: '', stderr: NO_SERVER.stderr, error: missing('ETIMEDOUT') }],
+    ['failed despite a zero status', { status: 0, stdout: '', error: missing('EIO') }],
     ['did not answer in time', { status: null, stdout: '', stderr: '', error: missing('ETIMEDOUT') }],
     ['is not its server\'s version', { status: 1, stdout: '', stderr: 'protocol version mismatch (client 8, server 7)\n' }],
     ['fails with no word', { status: 2, stdout: '', stderr: '' }],

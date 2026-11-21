@@ -1,3 +1,4 @@
+import { cloudQuestionClose, prepareCloudQuestion } from '../cloud/questions.js'
 import { describe, expect, it, vi } from 'vitest'
 import { TAB_KEY_OFF, TAB_RELAY_OFF } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
@@ -53,12 +54,12 @@ describe('the core API a light service runs on in its own process', () => {
     ask.mockRejectedValueOnce(new Error('offline'))
     expect(await api.usage!(target)).toBeNull()
   })
-  it('answers the agents from what the core last said, by agent id or session id', () => {
+  it('answers the agents from what the core last said, by agent id or session id', async () => {
     const live = [agent('a1'), agent('a2')]
     const api = processCoreApi('/data', 'projects', { live: () => live, advertised: () => [live[1]] })
     expect(api.dataDir).toBe('/data')
     expect(api.agents.live()).toEqual(live)
-    expect(api.agents.all()).toEqual(live)
+    expect((await api.agents.all())).toEqual(live)
     expect(api.agents.advertised()).toEqual([live[1]])
     expect(api.agents.byAgent('a2')).toEqual(live[1])
     expect(api.agents.resolve('s-a1')).toEqual(live[0])
@@ -93,7 +94,7 @@ describe('the core API a light service runs on in its own process', () => {
     await expect(api.account.privateGridName()).resolves.toBeNull()
     expect(api.account.machineName()).toBeNull()
     api.clients.viewerChanged('a1')
-    expect(api.clients.viewerFrame('c1', 'viewer_data', {})).toBe(false)
+    expect(api.clients.streamFrame('c1', 'viewer_data', {})).toBe(false)
     api.clients.gridNamed('grid')
     api.clients.gridModelsChanged()
     api.clients.dshInstallStatus({ phase: 'clone' })
@@ -132,8 +133,8 @@ describe('the core API a light service runs on in its own process', () => {
     // What the devices' process starts from before it asks the core for the list, and all any other process has.
     await expect(api.account.machines()).resolves.toEqual({ status: 503, body: {} })
     await expect(UNASKED.account.machines()).resolves.toEqual({ status: 503, body: {} })
-    api.clients.sendLocal({ type: 'dial_focus', payload: {} })
-    expect(api.clients.sendToWindow('w1', { type: 'dial_form', payload: {} })).toBe(false)
+    expect(api.clients.sendWindow({ target: { kind: 'all' }, frame: { type: 'dial_focus', payload: {} } })).toBe(false)
+    expect(api.clients.sendWindow({ target: { kind: 'connection', connId: 'w1' }, frame: { type: 'dial_form', payload: {} } })).toBe(false)
     expect(api.clients.hasWindow()).toBe(false)
     api.clients.devicesChanged({})
     api.clients.dialWatching(true)
@@ -188,15 +189,43 @@ describe('the core API a light service runs on in its own process', () => {
     expect(await processCoreApi('/data', 'store', { ask }).account.backend('GET', '/api/harness-shares')).toEqual({ status: 502, body: { error: 'NOT_AN_EXPERIMENT' } })
   })
 
-  it('gives the cloud agents their doors only with a core to ask, and never waits on or throws from them', async () => {
-    expect(processCoreApi('/data', 'cloud').cloud).toBeUndefined()
-    const ask = vi.fn(async (_query: string): Promise<Record<string, unknown>> => { throw new Error('gone') })
-    const doors = processCoreApi('/data', 'cloud', { ask }).cloud!
-    doors.publish([])
-    doors.ask('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] })
-    doors.unask('cloud_1', 'cloud_q_1')
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(ask.mock.calls.map(([query]) => query)).toEqual(['cloud_publish', 'cloud_ask', 'cloud_unask'])
+  it('keeps publication acknowledgement and recovery reads truthful across the process door', async () => {
+    expect(processCoreApi('/data', 'cloud').owners).toBeUndefined()
+    const ask = vi.fn(async (_query: string): Promise<Record<string, unknown>> => ({ ok: true }))
+    const doors = processCoreApi('/data', 'cloud', { ask }).owners!
+    expect(await doors.end('transfer')).toEqual({ ok: true })
+    ask.mockResolvedValueOnce({ ok: false, error: 'SESSION_OWNER_INVALID' })
+    expect(await doors.end('transfer')).toEqual({ ok: false, error: 'SESSION_OWNER_INVALID' })
+    ask.mockResolvedValueOnce({})
+    await expect(doors.end('transfer')).rejects.toThrow('SESSION_OWNER_UNAVAILABLE')
+    ask.mockResolvedValueOnce({ fingerprint: 'a'.repeat(64) })
+    expect(await doors.checkpoint('fo')).toEqual({ fingerprint: 'a'.repeat(64) })
+    ask.mockResolvedValueOnce({ error: 'SERVICE_UNAVAILABLE' })
+    await expect(doors.checkpoint('fo')).rejects.toThrow('SESSION_OWNER_UNAVAILABLE')
+    ask.mockRejectedValueOnce(new Error('gone'))
+    await expect(doors.end('transfer')).rejects.toThrow('gone')
+    await doors.ask('cloud_1', 'cloud_q_1', prepareCloudQuestion('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] }))
+    await doors.unask('cloud_1', 'cloud_q_1', cloudQuestionClose('cloud_1', 'cloud_q_1'))
+    ask.mockResolvedValueOnce({ error: 'SERVICE_UNAVAILABLE' })
+    await expect(doors.ask('cloud_1', 'cloud_q_1', prepareCloudQuestion('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] }))).rejects.toThrow('SESSION_OWNER_UNAVAILABLE')
+    ask.mockResolvedValueOnce({ error: 'SERVICE_UNAVAILABLE' })
+    await expect(doors.unask('cloud_1', 'cloud_q_1', cloudQuestionClose('cloud_1', 'cloud_q_1'))).rejects.toThrow('SESSION_OWNER_UNAVAILABLE')
+    for (const method of ['ask', 'unask'] as const) {
+      ask.mockResolvedValueOnce({ ok: false, error: 'SESSION_OWNER_INVALID' })
+      const value = method === 'ask' ? prepareCloudQuestion('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] }) : cloudQuestionClose('cloud_1', 'cloud_q_1')
+      expect(await doors[method]('cloud_1', 'cloud_q_1', value as never)).toEqual({ ok: false, error: 'SESSION_OWNER_INVALID' })
+    }
+    expect(ask.mock.calls.map(([query]) => query)).toEqual(['session_owner_end', 'session_owner_end', 'session_owner_end',
+      'session_owner_checkpoint', 'session_owner_checkpoint', 'session_owner_end', 'session_owner_ask', 'session_owner_unask', 'session_owner_ask', 'session_owner_unask', 'session_owner_ask', 'session_owner_unask'])
+  })
+
+  it('preserves the fixed owner conflict for publication and recovery without treating it as a fingerprint', async () => {
+    const conflict = { ok: false, error: 'SESSION_OWNER_CONFLICT' }
+    const ask = vi.fn(async () => conflict)
+    const doors = processCoreApi('/data', 'cloud', { ask }).owners!
+    expect(await doors.end('transfer')).toEqual(conflict)
+    expect(await doors.checkpoint('fo')).toEqual(conflict)
+    expect(ask.mock.calls).toEqual([['session_owner_end', { transfer: 'transfer' }], ['session_owner_checkpoint', { factory: 'fo' }]])
   })
 
   it('acts on the core for an experiment: agents made, turns stopped and delivered, windows told, each asked', async () => {
@@ -307,4 +336,17 @@ describe('the core API a light service runs on in its own process', () => {
     expect(isSession(agent('a1'))).toBe(true)
     expect(isSession({ sessionId: 's' })).toBe(false)
   })
+})
+
+
+it('relays the exact staged owner envelopes and refuses a success without checkpoint evidence', async () => {
+  const ask = vi.fn(async (_query: string, _payload: Record<string, unknown>): Promise<Record<string, unknown>> => ({ ok: true }))
+  const door = processCoreApi('/data', 'cloud', { ask }).owners!
+  const begin = { format: 'session-facts-v1' as const, transfer: 't', factory: 'fo', before: 'a'.repeat(64), after: 'b'.repeat(64), count: 0 }
+  const append = { transfer: 't', index: 0, rows: [] }
+  expect(await door.begin(begin)).toEqual({ ok: true }); expect(await door.append(append)).toEqual({ ok: true })
+  expect(await door.cancel('t')).toEqual({ ok: true })
+  await expect(door.checkpoint('fo')).rejects.toThrow('SESSION_OWNER_UNAVAILABLE')
+  expect(ask.mock.calls).toEqual([['session_owner_begin', begin], ['session_owner_append', append],
+    ['session_owner_cancel', { transfer: 't' }], ['session_owner_checkpoint', { factory: 'fo' }]])
 })

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { env } from '../../config/env.js'
 import { StateFileUnreadable } from '../secureState.js'
@@ -58,12 +58,19 @@ describe('a machine marked gone', () => {
   })
 
   it('keeps only the most recent 256', () => {
+    const id = (n: number) => n.toString(16).padStart(32, '0')
+    const saved = Array.from({ length: 256 }, (_, i) => id(i))
+    // Exercise retention at the boundary without hundreds of unrelated durable setup writes.
+    mkdirSync(join(env.ADAPTER_DATA_DIR, 'e2e'), { recursive: true, mode: 0o700 })
+    writeFileSync(GONE_FILE, JSON.stringify(saved), { mode: 0o600 })
     const peers = new MachinePeerStore()
-    for (let i = 0; i < 300; i++) peers.markGone(i.toString(16).padStart(32, '0'))
-    const gone = peers.gone()
-    expect(gone.size).toBe(256)
-    expect(gone.has((299).toString(16).padStart(32, '0'))).toBe(true)
-    expect(gone.has((0).toString(16).padStart(32, '0'))).toBe(false)
+    peers.markGone(id(0))
+    expect([...peers.gone()]).toEqual([...saved.slice(1), id(0)])
+    peers.markGone(id(256))
+    const expected = [...saved.slice(2), id(0), id(256)]
+    expect([...peers.gone()]).toEqual(expected)
+    expect([...new MachinePeerStore().gone()]).toEqual(expected)
+    expect(JSON.parse(readFileSync(GONE_FILE, 'utf8'))).toEqual(expected)
   })
 
   // Review of #2101 (Batch S): restore() runs in the machine-list callback, and a mark file it cannot rewrite (a full or

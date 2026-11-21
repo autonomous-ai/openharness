@@ -1,4 +1,5 @@
 import type { ActivityFrame } from './turnActivity.js'
+import { sessionFrame, type SessionFacts } from './sessionPresentation.js'
 /**
  * The one shape an agent takes on the wire.
  *
@@ -175,6 +176,23 @@ export interface AgentDshContext {
   verdict: DshVerdict | null
 }
 
+/** A synchronous per-row capture shared by app formatting and internal component reads. */
+export interface AgentFacts {
+  displayName: string
+  terminalAvailable: boolean
+  parts: Readonly<Record<string, unknown>>
+}
+const NO_PARTS: Readonly<Record<string, unknown>> = Object.freeze({})
+export function agentFacts(session: RegisteredSession, terminalAvailable: boolean, parts: Readonly<Record<string, unknown>> = NO_PARTS): AgentFacts {
+  return { displayName: projectDisplayName(session), terminalAvailable, parts }
+}
+
+/** Keep the older shown-row DSH guard; opaque app parts may exist before a row has its DSH attached. */
+export function agentDshContext(session: RegisteredSession, parts: Readonly<Record<string, unknown>>): AgentDshContext | null {
+  return session.dsh && typeof parts.dsh === 'string' ? { id: parts.dsh, name: parts.dshName, viewerUrl: parts.viewerUrl,
+    viewerName: parts.viewerName, verdict: parts.verdict } as AgentDshContext : null
+}
+
 /**
  * An agent's sandboxed browser, as the agent browser service says it (services/agentBrowser.ts): `step` only while it is
  * set up, `error` only once it failed. It never carries the browser's settings.
@@ -281,11 +299,12 @@ export async function agentFrame(
   const gitContext: SessionGitContext = { state: folder ? 'workspace' : 'unavailable', current: folder,
     observedAt: null, locations: [], pullRequests: [], truncated: false, checkouts: [] }
   const updatedAt = await lastActivityAt(s)
-  const frame: AgentFrame = {
+  // Name remains a post-await read; the caller captured terminal membership before it.
+  const facts = agentFacts(s, terminalAvailable)
+  const view: SessionFacts = {
     id: s.agentId,
     sessionId: s.sessionId,
-    userId: '',
-    name: projectDisplayName(s),
+    name: facts.displayName,
     nameChosen: isNameChosen(s),
     title: frameTitle(s),
     status: s.active ? 'active' : 'offline',
@@ -308,7 +327,7 @@ export async function agentFrame(
       } : null,
     outputStats: tokenUsage?.output ? { ...tokenUsage.output, updatedAt: tokenUsage.updatedAt } : null,
     tmuxPane: s.tmuxPane || null,
-    terminal: { available: terminalAvailable, primary: s.primaryRuntimeKey, runtimes: s.runtimes },
+    terminal: { available: facts.terminalAvailable, primary: s.primaryRuntimeKey, runtimes: s.runtimes },
     engine: s.engine,
     selectedModel,
     // A label for OpenClaw, whose tools run in its own workspace rather than the pane's folder. Absent means no
@@ -334,10 +353,6 @@ export async function agentFrame(
     // All five are real answers when null, for the reason the module doc gives: a frame that omits
     // them would erase a viewer URL or a verdict an earlier frame had reported.
     dsh: s.dsh ?? null,
-    dshName: null,
-    viewerUrl: null,
-    viewerName: null,
-    verdict: null,
     forkedFrom: s.forkedFrom ? { agentId: s.forkedFrom.agentId, name: s.forkedFrom.name } : null,
     parentAgentId: s.parentAgentId ?? null,
     startedBy: s.startedBy === 'agent' ? 'agent' : null,
@@ -349,6 +364,9 @@ export async function agentFrame(
     waitingFor: waitingFor?.() ?? null,
     starting: starting?.() ?? false,
   }
-  // Assigning onto the existing fields preserves their wire order; optional service fields append as before.
-  return Object.assign(frame, parts?.())
+  // Keep the final fenced read after all native/common formatting: synchronous providers may revoke this run.
+  return sessionFrame(view, () => {
+    facts.parts = parts?.() ?? facts.parts
+    return facts.parts
+  }) as AgentFrame
 }

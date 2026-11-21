@@ -18,6 +18,80 @@ const setup = (over: Partial<Pick<DeliveriesDeps, 'submit' | 'cancel' | 'deliver
 const event = (deliveryId: string, state: TurnDelivery['state'] = 'queued'): TurnDelivery => ({ deliveryId, sessionId: 'agent-1', state })
 
 describe('delivered turns', () => {
+  it('rejects malformed shared operations and a dead connection before admitting input', () => {
+    const { deps, deliveries } = setup()
+    const payload = { version: 1, agentId: 'a', text: 'hello', deliveryId: 'd', when: 'composer' }
+    for (const invalid of [{ ...payload, version: 2 }, { ...payload, when: 'guess' }, { ...payload, retry: true }]) {
+      expect(deliveries.answer('orchestrator', 'input', invalid)).toEqual({ error: 'INVALID_INPUT' })
+    }
+    expect(deliveries.answer('orchestrator', 'input', payload, { current: () => false, ownsRequest: () => false })).toEqual({ error: 'SERVICE_UNAVAILABLE' })
+    expect(deps.submit).not.toHaveBeenCalled()
+    expect(deliveries.answer('orchestrator', 'input', payload)).toEqual({})
+    expect(deps.submit).toHaveBeenCalledWith('a', 'hello', 'd', { when: 'composer' })
+    const current = () => true
+    deliveries.turns.deliver('a', 'inline', 'inline', { current })
+    expect(deps.submit).toHaveBeenLastCalledWith('a', 'inline', 'inline', { current })
+  })
+
+  it('isolates failed input listeners and removes an inline subscription when it stops', () => {
+    const { deps, deliveries } = setup(), heard = vi.fn()
+    const stopFailure = deliveries.turns.onInput!(() => { throw new Error('private caller detail') })
+    const stop = deliveries.turns.onInput!(heard)
+    const fact = { agentId: 'a', when: 'composer' as const, phase: 'written' as const }
+    deliveries.input(fact)
+    expect(heard).toHaveBeenCalledExactlyOnceWith(fact)
+    expect(deps.log).toHaveBeenCalledExactlyOnceWith('[input] an input listener failed · Error')
+    stop(); stopFailure()
+    deliveries.input(fact)
+    expect(heard).toHaveBeenCalledOnce()
+  })
+  it('probes a versioned input contract and keeps the original maker authority through dispatch', () => {
+    const { deps, deliveries } = setup({ deliverers: new Set(['wifi', 'orchestrator']) })
+    let connected = true
+    const authority = { current: () => connected, ownsRequest: () => false }
+    expect(deliveries.answer('wifi', 'input_contract', {}, authority)).toEqual({ version: 1 })
+    expect(deliveries.answer('wifi', 'input', { version: 1, agentId: 'agent-1', text: 'hello', deliveryId: 'native-1', when: 'composer' }, authority)).toEqual({})
+    expect(deps.submit).toHaveBeenCalledWith('agent-1', 'hello', 'native-1', expect.objectContaining({ when: 'composer', current: authority.current }))
+    deliveries.settled(event('native-1', 'queued'))
+    expect(deps.tell).toHaveBeenCalledWith('wifi', event('native-1', 'queued'), true)
+    deps.tell.mockClear()
+    connected = false
+    deliveries.settled(event('native-1', 'delivered'))
+    expect(deps.tell).not.toHaveBeenCalled()
+    expect(deliveries.answer('orchestrator', 'cancel_delivery', { deliveryId: 'native-1' }, { current: () => true, ownsRequest: () => false }))
+      .toEqual({ error: 'NOT_DELIVERY_OWNER' })
+    expect(deps.cancel).not.toHaveBeenCalled()
+  })
+
+  it('preserves legacy delivery receipts across reconnect while revoking its unstarted effect', () => {
+    const { deps, deliveries } = setup({}, false)
+    let connected = true
+    const authority = { current: () => connected, ownsRequest: () => false }
+    deliveries.answer('orchestrator', 'deliver', { agentId: 'agent-1', text: 'hello', deliveryId: 'legacy' }, authority)
+    connected = false
+    deliveries.ready()
+    expect(deps.submit).not.toHaveBeenCalled()
+    expect(deps.tell).toHaveBeenCalledWith('orchestrator', { deliveryId: 'legacy', sessionId: 'agent-1', state: 'rejected', reason: 'caller_gone' })
+  })
+
+  it('sends new input facts only to a versioned caller on its original connection', () => {
+    const tellInput = vi.fn(), deliveries = createDeliveries({ submit: vi.fn(), cancel: () => false,
+      tell: vi.fn(), tellInput, deliverers: new Set(['orchestrator']) })
+    let connected = true
+    const authority = { current: () => connected, ownsRequest: () => false }
+    deliveries.ready()
+    deliveries.answer('orchestrator', 'deliver', { agentId: 'a', text: 'legacy', deliveryId: 'old' }, authority)
+    deliveries.answer('orchestrator', 'input', { version: 1, agentId: 'a', text: 'new', deliveryId: 'new', when: 'turn' }, authority)
+    const fact = { agentId: 'a', deliveryId: 'old', when: 'turn' as const, phase: 'written' as const }
+    deliveries.input(fact)
+    expect(tellInput).not.toHaveBeenCalled()
+    deliveries.input({ ...fact, deliveryId: 'new' })
+    expect(tellInput).toHaveBeenCalledWith('orchestrator', { ...fact, deliveryId: 'new' })
+    connected = false
+    deliveries.input({ ...fact, deliveryId: 'new' })
+    expect(tellInput).toHaveBeenCalledOnce()
+  })
+
   it('writes a delivery from the core\'s own process into the agent, and takes one back at once', () => {
     const { deps, deliveries } = setup({ cancel: vi.fn(() => false) })
     deliveries.turns.deliver('agent-1', 'hello', 'd1')
@@ -84,13 +158,14 @@ describe('delivered turns', () => {
     const { deps, deliveries } = setup({ deliverers: new Set(['orchestrator', 'messages']) })
     deliveries.answer('orchestrator', 'deliver', { agentId: 'a', text: 't', deliveryId: 'first' })
     deliveries.answer('messages', 'deliver', { agentId: 'a', text: 't', deliveryId: 'second' })
-    // Made again: the newest now, and by its new maker.
-    deliveries.answer('messages', 'deliver', { agentId: 'a', text: 't', deliveryId: 'first' })
+    // A different process cannot take its receipts. Its original maker may refresh it.
+    expect(deliveries.answer('messages', 'deliver', { agentId: 'a', text: 't', deliveryId: 'first' })).toEqual({ error: 'NOT_DELIVERY_OWNER' })
+    deliveries.answer('orchestrator', 'deliver', { agentId: 'a', text: 't', deliveryId: 'first' })
     for (let i = 0; i < KEPT_DELIVERERS - 1; i++) deliveries.answer('orchestrator', 'deliver', { agentId: 'a', text: 't', deliveryId: `d${i}` })
     deps.tell.mockClear()
     deliveries.settled(event('second'))
     deliveries.settled(event('first'))
-    expect(deps.tell.mock.calls).toEqual([['messages', event('first')]])
+    expect(deps.tell.mock.calls).toEqual([['orchestrator', event('first')]])
   })
 
   it('holds what is delivered before the core\'s input is wired, writes it in order once it is, and the rest as it comes', () => {

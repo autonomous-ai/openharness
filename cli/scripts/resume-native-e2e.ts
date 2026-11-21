@@ -306,7 +306,7 @@ try {
     assert.equal((await checkPidRuntime(live)).state, 'gone')
     assert.equal((await tmux('display-message', '-p', '-t', neighbour, '#{pane_pid}')).trim(), neighbourPid,
       'Stop must preserve unrelated work in another pane of the same tmux session')
-    registry.load(); assert(!registry.byAgent(old.agentId)); assert.equal(stoppedAgents.get(old.agentId)!.sessionId, sessionId)
+    await registry.load(); assert(!registry.byAgent(old.agentId)); assert.equal(stoppedAgents.get(old.agentId)!.sessionId, sessionId)
     assert((await rpc('agents_list', { includeStopped: true })).agents.some((a: any) => a.id === old.agentId && a.status === 'stopped'))
     const reopened = await openSaved(randomUUID())
     assert.equal(reopened.state, 'created', JSON.stringify(reopened))
@@ -343,7 +343,7 @@ try {
       const closeTarget = { agentId: current.agentId, sessionId: current.sessionId, createdAt: new Date(current.registeredAt).toISOString() }
       // Deferred intent is durable, but opening/cancelling must leave the same process alive.
       assert.equal((await rpc('agent_close', { ...closeTarget, mode: 'after_task' })).deferred, true)
-      registry.load()
+      await registry.load()
       assert.equal(registry.byAgent(current.agentId)?.closePlan?.state, 'waiting')
       assert.equal((await rpc('agent_close', { ...closeTarget, mode: 'cancel' })).cancelled, true)
       assert.equal((await checkPidRuntime(current)).state, 'alive')
