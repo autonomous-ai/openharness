@@ -405,6 +405,17 @@ describe('Supervisor', () => {
       expect(supervisor.status().safeMode).toBeNull()
       expect(core().env.HARNESSD_SAFE_MODE).toBeUndefined()
     })
+
+    it('logs a core\'s safe-mode reason by its length: an error\'s words can name a path', () => {
+      const supervisor = make()
+      supervisor.start()
+      core().bind()
+      core().ready('listen EADDRINUSE /Users/sentinel/x')
+      expect(lines.at(-1)).toBe('[harnessd] core ready (pid 1000) · in safe mode: text(35)')
+      expect(lines.join('\n')).not.toContain('sentinel')
+      // The status file keeps the core's reason: `harness status` shows it on this machine.
+      expect(supervisor.status().safeMode).toBe('listen EADDRINUSE /Users/sentinel/x')
+    })
   })
 
   describe('an update the updater staged', () => {
@@ -680,7 +691,11 @@ describe('Supervisor', () => {
     it.each([
       ['never binds', (c: FakeCore) => c.exit(1)],
       ['crashes while on probation', (c: FakeCore) => { c.up(); vi.advanceTimersByTime(1000); c.exit(null, 'SIGABRT') }],
-      ['starts in safe mode', (c: FakeCore) => { c.bind(); c.ready('start-up failed'); expect(c.kills).toEqual(['SIGKILL']); c.exit(null, 'SIGKILL') }],
+      ['starts in safe mode', (c: FakeCore) => {
+        c.bind(); c.ready('start-up failed /Users/sentinel/x'); expect(c.kills).toEqual(['SIGKILL'])
+        expect(lines.at(-1)).toBe('[harnessd] core started in safe mode on the new bundle (text(33)) — killing it')
+        c.exit(null, 'SIGKILL')
+      }],
     ])('rolls the bundle back when the updated core %s', (_, fail) => {
       const supervisor = make()
       supervisor.start()
@@ -707,7 +722,7 @@ describe('Supervisor', () => {
       core().bind()
       core().ready('listen ENOSPC: no space left on device /data/.claim-1')
       expect(core().kills).toEqual(['SIGKILL'])
-      expect(lines.at(-1)).toBe('[harnessd] core could not start on the new bundle for want of room on the disk (listen ENOSPC: no space left on device /data/.claim-1) — not a verdict on the build — killing it')
+      expect(lines.at(-1)).toBe('[harnessd] core could not start on the new bundle for want of room on the disk (text(53)) — not a verdict on the build — killing it')
       core().exit(null, 'SIGKILL')
       expect(calls).toEqual(['claim'])
       expect(lines.at(-1)).toBe(`[harnessd] the updated core had no room to start (signal SIGKILL) — keeping the update on trial; trying again in ${options.initialBackoffMs} ms`)
