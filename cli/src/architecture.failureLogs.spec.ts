@@ -625,6 +625,8 @@ it.each([
   "let outcome; try { outcome = await move() } catch (error) { outcome = { moved: false, reason: error instanceof Error ? error.message : String(error) } } log(`[x] ${outcome.reason}`)",
   "this.host.log(`cable: ${port.path} is in use by another program`)",
   "console.warn(`[x] ${error instanceof HookPreparationHeld ? error.reason : errorKind(error)}`)",
+  "try { run() } catch (error) { console[level](`[x] failed: ${error.message}`) }",
+  "function sayOnce(stream: 'log' | 'warn', file: string) { console[stream](`[hooks] removed from ${file}`) }",
 ])('finds %s', (code) => expect(failureLogs(code)).not.toEqual([]))
 
 it.each([
