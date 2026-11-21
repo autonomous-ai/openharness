@@ -105,6 +105,18 @@ describe('the catalog', () => {
     expect(xh2.sessions.filter((d) => d.app === 'chatgpt' && !d.ghost).map((d) => [d.key, d.ageMs])).toEqual([['t1', 60_000], ['t2', 120_000]])
   })
 
+  it('a voice speaks to a session with a running process, or to one its link resumes', () => {
+    // Words for a session with no process are refused before any send: the voice check and the gate then test nothing.
+    for (const s of ALL) {
+      for (const [i, step] of s.steps.entries()) {
+        if (step.kind !== 'voice') continue
+        const started = s.steps.slice(0, i).some((h) => h.kind === 'hook' && h.event === 'start' && h.session === step.target)
+        const resumable = s.sessions.find((d) => d.key === step.target)!.resumable === true
+        expect(started || resumable, `${s.id} voice ${step.target}`).toBe(true)
+      }
+    }
+  })
+
   it('C8 has no tap or swipe, so its open can only be the voice\'s', () => {
     // A swipe's rest opens the session too: one before the voice would pass the open whatever the voice did. The pick
     // lands on its only row.
