@@ -53,6 +53,8 @@ const VOICE_PCM = Buffer.alloc(3_200, 1)
 /** For the dial to be found, welcomed and shown its list: the fleet looks every 2 s, the dial greets every 2 s. */
 const START_WITHIN_MS = 45_000
 const CHILD_END_MS = 5_000
+/** The end of the watch's stderr a failure says. */
+const STDERR_KEPT = 2_000
 /** The devices take a Claude session whose mod poll closed this long ago for one whose next poll is coming
  *  (cable/hosts/inbox.ts READY_MS, 35 s), and a second more for the two clocks. */
 const MOD_READY_MS = 36_000
@@ -337,16 +339,26 @@ class World implements TierBWorld {
     this.carousel.picked(page)
   }
 
-  /** One line on the stdin of the watch Harness Device runs, started under the daemon's environment on its first line. */
+  /**
+   * One line on the stdin of the watch Harness Device runs, started under the daemon's environment on its first line. A
+   * watch that ends before the scenario fails it, with the end of what it said on its stderr.
+   */
   tell(line: { front: string } | { thread: string }): void {
     if (this.closed) return
     if (!this.watch) {
-      this.watch = spawn(process.execPath, [...CLI_ENTRY, 'hardware', 'watch', '--json'], {
-        cwd: this.d.root, env: { ...this.d.env, TMUX_PANE: '' }, stdio: ['pipe', 'ignore', 'ignore'],
+      const watch = this.watch = spawn(process.execPath, [...CLI_ENTRY, 'hardware', 'watch', '--json'], {
+        cwd: this.d.root, env: { ...this.d.env, TMUX_PANE: '' }, stdio: ['pipe', 'ignore', 'pipe'],
       })
-      this.children.push(this.watch)
+      this.children.push(watch)
+      let said = ''
+      watch.stderr!.on('data', (chunk: Buffer) => { said = (said + chunk.toString('utf8')).slice(-STDERR_KEPT) })
+      watch.once('exit', (code, signal) => {
+        if (!this.closed) this.fail(new Error(`harness hardware watch ended before its scenario (${signal ?? code}): ${said.trim()}`))
+      })
+      // A line written as it ends fails with EPIPE: its end is the failure already.
+      watch.stdin!.on('error', () => {})
     }
-    this.watch.stdin!.write(`${JSON.stringify(line)}\n`)
+    if (this.watch.exitCode === null && this.watch.signalCode === null) this.watch.stdin!.write(`${JSON.stringify(line)}\n`)
   }
 
   /** Resolves at the next read: what the dial received since is in `seen`. */
