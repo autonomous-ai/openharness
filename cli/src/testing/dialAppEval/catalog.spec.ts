@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { HELD_OUT, MAIN } from './catalog.js'
-import { STEP_KINDS, type Check, type CheckKind, type Scenario, type SessionKey, type Step, type StepKind } from './types.js'
+import { STEP_KINDS, THRESHOLDS, type Check, type CheckKind, type Scenario, type SessionKey, type Step, type StepKind } from './types.js'
 
 const ALL = [...MAIN, ...HELD_OUT]
 const byId = (id: string): Scenario => ALL.find((s) => s.id === id)!
@@ -66,13 +66,26 @@ describe('the catalog', () => {
     const c9 = byId('C9')
     expect(c9.sessions.filter((s) => !s.ghost).map((s) => [s.key, s.ageMs])).toEqual([['b', 60_000], ['a', 120_000]])
     expect(c9.steps.map((s) => [s.kind, 'session' in s ? s.session : s.kind === 'wait' ? s.ms : ''])).toEqual([
-      ['front', ''], ['claude.write', ''], ['wait', 10_000], ['wait', 1_000], ['swipe', 'a'], ['wait', 1_000], ['swipe', 'b'], ['wait', 3_000], ['hook', 'b']])
+      ['front', ''], ['claude.write', ''], ['wait', 10_000], ['wait', 1_000], ['swipe', 'a'], ['wait', 1_000], ['swipe', 'b'], ['wait', 3_500], ['hook', 'b']])
     expect(c9.steps.filter((s) => s.kind === 'hook')).toEqual([{ label: 'hook', kind: 'hook', session: 'b', event: 'start' }])
     expect(c9.checks.filter((c) => c.kind !== 'cost')).toEqual([
       { id: 'open', kind: 'open', dim: 'D3', session: 'b', link: true, after: 'swipe', at: 'hook' },
       { id: 'ring', kind: 'ring', dim: 'D1', page: 'claude', expect: ['b', 'a'], after: 'hook' },
       { id: 'ringKept', kind: 'ring', dim: 'D7', page: 'claude', expect: ['b', 'a'] },
     ])
+  })
+
+  it('an open window closed by a step is longer than the open\'s half mark, so a late open still scores half', () => {
+    // The window leaves out its closing step's instant: a person's wait of exactly the half mark would leave out an open
+    // that lands on it.
+    for (const s of ALL) {
+      for (const c of s.checks.filter((c) => c.kind === 'open' && c.at !== undefined)) {
+        const from = s.steps.findIndex((step) => step.label === c.after)
+        const to = s.steps.findIndex((step) => step.label === c.at)
+        const ms = s.steps.slice(from, to).reduce((sum, step) => sum + (step.kind === 'wait' && step.until === undefined ? step.ms : 0), 0)
+        expect(ms, `${s.id} ${c.id}`).toBeGreaterThan(THRESHOLDS.open[1])
+      }
+    }
   })
 
   it('C8 has no tap or swipe, so its open can only be the voice\'s', () => {
@@ -158,7 +171,7 @@ describe('the catalog', () => {
     }))
     // C6's turn, C9's rests on a and on b, C10's gap between quit and relaunch, C11's rest and its time unplugged, X3's
     // still window, X11's and XH3's switches.
-    expect(waits('own')).toEqual(['C6 5000', 'C9 1000', 'C9 3000', 'C10 2000', 'C11 1000', 'C11 3000', 'X3 5000', 'X11 300', 'X11 300', 'XH3 200'])
+    expect(waits('own')).toEqual(['C6 5000', 'C9 1000', 'C9 3500', 'C10 2000', 'C11 1000', 'C11 3000', 'X3 5000', 'X11 300', 'X11 300', 'XH3 200'])
     expect(new Set(waits('condition').map((w) => w.split(' ')[1]))).toEqual(new Set(['10000']))
     // The person reading the face once the list is there.
     expect(new Set(waits('reading').map((w) => w.split(' ')[1]))).toEqual(new Set(['1000']))
