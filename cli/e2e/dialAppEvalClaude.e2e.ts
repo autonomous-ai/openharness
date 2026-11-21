@@ -8,6 +8,7 @@
  * its store, `~/.claude`, `~/.codex` and this computer's daemon are never touched. The network guard runs in this process
  * and in every process of each daemon: a connection to anything but this machine fails the scenario, by host and port.
  */
+import { spawn } from 'node:child_process'
 import { appendFileSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -61,6 +62,23 @@ describe.skipIf(WIN32)('the dial eval, tier B: the Claude app', () => {
     } finally {
       await driver.stop()
     }
+  })
+
+  it('a stop whose world failed to close still ends its cost, so the next scenario starts', async () => {
+    const c1 = SCENARIOS.find((s) => s.id === 'C1')!
+    await driver.start(c1, HOST)
+    // A child of the scenario that refuses to be ended: the world's close throws on it.
+    const stubborn = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1_000)'], { stdio: 'ignore' })
+    const kill = stubborn.kill.bind(stubborn)
+    stubborn.kill = () => { throw new Error('this child refuses to end') }
+    driver.lastWorld().children.push(stubborn)
+    try {
+      await expect(driver.stop()).rejects.toThrow('refuses to end')
+    } finally {
+      kill('SIGKILL')
+    }
+    await driver.start(c1, HOST)
+    await driver.stop()
   })
 
   it("an attempt off this machine made as the last daemon closes fails the driver's close, naming it", async () => {
