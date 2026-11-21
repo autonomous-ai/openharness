@@ -35,7 +35,7 @@ export function findGitBash({ env = process.env, isFile = fileExists }: GitBashS
     // Scoop's git.exe on PATH is a shim in <root>\shims; the git it starts, and its bash, are in <root>\apps\git\current.
     candidates.push(win32.resolve(dir, '..', SCOOP_GIT_BASH))
   }
-  // Then where its installer puts it, then where Scoop does.
+  // Then where its installer puts it, then where Scoop does for this user.
   for (const root of gitForWindowsRoots(env)) candidates.push(win32.join(root, 'bin', 'bash.exe'))
   for (const root of scoopRoots(env)) candidates.push(win32.join(root, SCOOP_GIT_BASH))
   return candidates.find((candidate) => isFile(candidate)) ?? null
@@ -52,10 +52,11 @@ export function gitForWindowsRoots(env: NodeJS.ProcessEnv): string[] {
   return [...programFilesRoots(env).map((root) => win32.join(root, 'Git')), ...user]
 }
 
-/** Scoop's roots: its root for this user (SCOOP, else ~\scoop), then its root for everyone. */
+/** Scoop's root for this user: SCOOP, else ~\scoop. Never its root for everyone (SCOOP_GLOBAL, %ProgramData%\scoop):
+ *  any user of the computer may make and fill it, a Harness guest included, and a real global install puts its shims
+ *  on PATH. */
 export function scoopRoots(env: NodeJS.ProcessEnv): string[] {
-  return [env.SCOOP, env.USERPROFILE && win32.join(env.USERPROFILE, 'scoop'), env.SCOOP_GLOBAL, env.ProgramData && win32.join(env.ProgramData, 'scoop')]
-    .filter((root): root is string => !!root)
+  return [env.SCOOP, env.USERPROFILE && win32.join(env.USERPROFILE, 'scoop')].filter((root): root is string => !!root)
 }
 
 /** A folder that is the same whatever folder a program runs in: a drive's (C:\…) or a share's (\\server\…). Any other
