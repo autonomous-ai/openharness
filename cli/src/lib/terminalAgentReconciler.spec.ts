@@ -941,6 +941,18 @@ describe('a pass whose observations cannot be saved', () => {
     expect(said(warn)).toHaveLength(2)
   })
 
+  // What it saw was not kept: a check that something did not happen would read it as a look (the passes count).
+  it('is not counted as a pass that looked', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // Two batches a pass: the first pass's second is refused, the next pass saves both.
+    const run = outage([null, full(), null, null])
+    await run.reconciler.trigger()
+    expect(run.reconciler.passes).toBe(0)
+    await run.reconciler.trigger()
+    expect(run.reconciler.passes).toBe(1)
+    expect(said(warn)).toHaveLength(1)
+  })
+
   it.each([
     ['an owner that changed', () => new RegistryOwnershipChanged('the registry owner changed while its write was being prepared')],
     ['any other failure', () => new Error('fixture')],
