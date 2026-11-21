@@ -125,8 +125,24 @@ describe('the catalog', () => {
       (step.kind === 'wait' && (step.until !== undefined) === conditioned ? [`${s.id} ${step.ms}`] : [])))
     // C6's turn, C10's gap between quit and relaunch, C11's time unplugged, X3's still window, X11's and XH3's switches.
     expect(waits(false)).toEqual(['C6 5000', 'C10 2000', 'C11 3000', 'X3 5000', 'X11 300', 'X11 300', 'XH3 200'])
-    // Each before a step that needs the first list: C11's swipe needs a row to land on, or its replug tests nothing.
-    expect(waits(true)).toEqual(['C2 10000', 'C4 10000', 'C10 10000', 'C11 10000', 'X3 10000', 'CH1 10000'])
+    expect(new Set(waits(true).map((w) => w.split(' ')[1]))).toEqual(new Set(['10000']))
+  })
+
+  it('a step on a row of the dial comes after a wait until the dial lists that row', () => {
+    // XH2's thread is on the ChatGPT page while the dial shows the Claude app's: no list of it reaches the dial first.
+    const unlisted = new Set(['XH2'])
+    for (const s of ALL.filter((s) => !unlisted.has(s.id))) {
+      const listed = new Set<SessionKey>()
+      for (const step of s.steps) {
+        if (step.kind === 'wait' && step.until) for (const key of step.until.expect) listed.add(key)
+        const row = step.kind === 'tap' || step.kind === 'swipe' || step.kind === 'attach' ? step.session
+          : step.kind === 'voice' ? step.target
+          : step.kind === 'thread' ? s.sessions.find((d) => d.title === step.title)!.key
+          : undefined
+        // Otherwise the step outruns the first list, and the dial has no row to act on.
+        if (row !== undefined) expect(listed.has(row), `${s.id} ${step.kind} ${row}`).toBe(true)
+      }
+    }
   })
 
   it('the held-out file says it is not to be read', () => {
