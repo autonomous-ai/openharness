@@ -63,6 +63,7 @@ class _Cli extends CliLogin {
   final answer = Completer<CliAuthStatus>();
   bool fails = false;
   int asked = 0;
+  int logins = 0;
   @override
   Future<CliAuthStatus> checkStatus() async {
     asked++;
@@ -74,7 +75,10 @@ class _Cli extends CliLogin {
   Future<void> login({
     void Function(String url)? onAuthorizeUrl,
     SignInProvider? provider,
-  }) async {}
+  }) async {
+    logins++;
+  }
+
   @override
   Future<void> logout() async {}
 }
@@ -455,6 +459,42 @@ void main() {
       await _ticks();
       expect(cli.asked, 1);
       expect(_screen(app), 'workspace');
+    },
+  );
+
+  // `harness login --force` runs the CLI too, so Sign in on the sign-in page a held launch ended on runs nothing.
+  test(
+    'Sign in while uninstall holds its marker runs no harness login and stays on the sign-in page',
+    () async {
+      final before = appLog;
+      final lines = <String>[];
+      appLog = _Recorded('auth', lines);
+      addTearDown(() => appLog = before);
+      uninstalling = () => true;
+      await app.bootstrap();
+      await _ticks();
+      lines.clear();
+      await app.login(SignInProvider.google);
+      await _ticks();
+      expect(cli.logins, 0);
+      expect(app.status, AppStatus.unauthenticated);
+      expect(app.signingIn, isFalse);
+      expect(app.lastError, isNull);
+      expect(lines.single, contains('harness uninstall'));
+    },
+  );
+
+  test(
+    'Sign in once uninstall has released its marker runs harness login once',
+    () async {
+      uninstalling = () => true;
+      await app.bootstrap();
+      await _ticks();
+      uninstalling = () => false;
+      cli.answer.complete(const CliAuthStatus(loggedIn: true));
+      await app.login(SignInProvider.google);
+      await _ticks();
+      expect(cli.logins, 1);
     },
   );
 
