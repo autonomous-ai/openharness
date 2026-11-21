@@ -92,7 +92,8 @@ export class PrivateHerdr {
   /**
    * With `lettered`, its panes are splits of one workspace whose ids carry a letter (`w2:pB` on), as a person's herdr
    * that has run a while: a fresh server's are digits alone. [env] is what the server inherits beside the daemon's, as
-   * one started from a kitty window or a Zellij pane keeps that terminal's variables, and its panes with it.
+   * one started from a kitty window keeps that window's variables. Its panes keep only some: herdr 0.9.5 strips `TMUX`,
+   * `TMUX_PANE`, `ZELLIJ`, `ZELLIJ_SESSION_NAME`, `ZELLIJ_PANE_ID`, `KITTY_WINDOW_ID` and `WEZTERM_PANE` from them.
    */
   static async start(d: IsolatedDaemon, { lettered = false, env = {} }: { lettered?: boolean; env?: NodeJS.ProcessEnv } = {}):
     Promise<PrivateHerdr> {
