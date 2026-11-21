@@ -72,8 +72,11 @@ export function heldOut(): Scenario[] {
     scenario({
       id: 'XH3', app: 'chatgpt', title: 'Voice 200 ms after a follow moved the dial: the words reach the newly focused thread',
       dims: ['D5'], sessions: [...threads(['t1', 't2']), chatgptGhost],
+      // Both threads have a running session, idle, so the words can reach either.
       steps: [
         { kind: 'codex.write', sessions: ['t1', 't2'] },
+        { kind: 'hook', session: 't1', event: 'start' },
+        { kind: 'hook', session: 't2', event: 'start' },
         ...listed('chatgpt', ['t1', 't2']),
         { kind: 'front', app: 'chatgpt' },
         { label: 'follow', kind: 'thread', title: titleOf('t2') },
