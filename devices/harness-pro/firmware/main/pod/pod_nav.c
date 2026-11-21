@@ -51,6 +51,7 @@ static void home_on_app(pod_nav_t *n, const pod_model_t *m, const char *id)
     home_app_follows(n, m);
 }
 // Home on a tab's card lists Tabs (the mirror of home_on_app): left on Apps, Home would draw the first card and the next sync jump to home_app.
+// Only leaving a room lands it (land_on_tab): the window's tab moving the room leaves Home on Apps (pod_nav_follow_tab).
 static void home_on_tab(pod_nav_t *n, int tab)
 {
     n->stack[0].scroll = (int16_t)tab;
@@ -497,7 +498,9 @@ bool pod_nav_follow_tab(pod_nav_t *n, pod_model_t *m) {
             n->stack[i].tab = (int8_t)sel;
             set_id(n->stack[i].tab_id, m->tabs[sel].id);
         }
-        if (n->stack[0].scroll != POD_HOME_WORKING) home_on_tab(n, sel);   // a room opened from the Working card keeps Home on it
+        // Home moves only while it lists tabs (up from the room lands on the tab, land_on_tab); a room opened from the
+        // Working card keeps Home on it.
+        if (n->stack[0].scroll != POD_HOME_WORKING && !pod_home_apps(n, m)) n->stack[0].scroll = (int16_t)sel;
         return true;
     }
     const pod_agent_t *l[POD_AGENTS_MAX];
@@ -505,6 +508,7 @@ bool pod_nav_follow_tab(pod_nav_t *n, pod_model_t *m) {
     pod_frame_t tabs, tf, af;
     memset(&tabs, 0, sizeof tabs); memset(&tf, 0, sizeof tf);
     tabs.view = POD_V_TABS;
+    tabs.scroll = pod_home_apps(n, m) ? n->stack[0].scroll : (int16_t)sel;
     tf.view = POD_V_TAB;
     tf.tab = (int8_t)sel;
     set_id(tf.tab_id, m->tabs[sel].id);
@@ -512,7 +516,6 @@ bool pod_nav_follow_tab(pod_nav_t *n, pod_model_t *m) {
     af.view = view_for(m, l[0]);
     set_id(af.agent, l[0]->id);
     n->stack[0] = tabs; n->stack[1] = tf; n->stack[2] = af;
-    home_on_tab(n, sel);
     n->depth = 3;
     n->sending = false;
     opened(n, m, af.agent);
