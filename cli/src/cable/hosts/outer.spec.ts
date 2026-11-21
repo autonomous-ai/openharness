@@ -45,6 +45,24 @@ describe('the first lookup that finds an app', () => {
     expect(second.calls).toEqual([[hints, 42]])
   })
 
+  it('a first answer with a client\'s process and no app is kept when the second names none', async () => {
+    const first = lookup(() => Promise.resolve({ pid: 7 }))
+    const second = lookup(() => Promise.resolve({}))
+    expect(await firstOuter(first, second)(hints, 42)).toEqual({ pid: 7 })
+  })
+
+  it('the second\'s answer when it names an app', async () => {
+    const first = lookup(() => Promise.resolve({ pid: 7 }))
+    const second = lookup(() => Promise.resolve({ app: 'wezterm', pid: 9 }))
+    expect(await firstOuter(first, second)(hints, 42)).toEqual({ app: 'wezterm', pid: 9 })
+  })
+
+  it('the second not nested: the first\'s', async () => {
+    const first = lookup(() => Promise.resolve({ pid: 7 }))
+    const second = lookup(() => undefined)
+    expect(await firstOuter(first, second)(hints, 42)).toEqual({ pid: 7 })
+  })
+
   it('the second\'s answer when the first is not nested', async () => {
     const first = lookup(() => undefined)
     const second = lookup(() => Promise.resolve({ app: 'iterm' }))
