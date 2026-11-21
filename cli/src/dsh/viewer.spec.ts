@@ -812,19 +812,26 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
     }
     at('models/old.step', 1_000)
     toWatch.deps = { platform: 'win32', realpath: (path) => realpathSync.native(path), log: () => {} }
+    silent.on = true
     try {
       const { urls, manager } = setup()
       await manager.start('a1', dsh({ command: 'v', url: 'http://127.0.0.1:${port}/?file=${artifact}', artifactExtensions: ['.step'] }), short)
-      const { paths, ready } = watchers.at(-1)!
+      const { watcher: inner, paths } = watchers.at(-1)!
       expect(paths).toBe(long)
       expect(urls).toEqual(['http://127.0.0.1:4790/?file=models/old.step'])
-      await ready
+      // announced by hand, by the path chokidar names under the folder it watches, and the rescan's debounce runs on a
+      // held clock
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
       at('models/new.step', 2_000)
-      await vi.waitFor(() => expect(urls.at(-1)).toBe('http://127.0.0.1:4790/?file=models/new.step'), { timeout: 10_000 })
+      inner.emit('add', join(long, 'models', 'new.step'))
+      await vi.advanceTimersByTimeAsync(300)
+      expect(urls.at(-1)).toBe('http://127.0.0.1:4790/?file=models/new.step')
     } finally {
+      vi.useRealTimers()
+      silent.on = false
       toWatch.deps = undefined
     }
-  }, 15_000)
+  })
 
   it('runs a real viewer through the user\'s shell, on the port it was given, and stops it', async () => {
     const urls: Array<string | null> = []

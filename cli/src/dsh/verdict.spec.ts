@@ -347,14 +347,19 @@ describe('DshVerdictWatcher, on Windows', () => {
     symlinkSync(long, short)
     toWatch.deps = { platform: 'win32', realpath: (path) => realpathSync.native(path), log: () => {} }
     const seen: Array<string | null> = []
-    watcher = new DshVerdictWatcher({ onChange: (_id, v) => seen.push(v ? v.summary : null) })
+    const clock = heldDebounce()
+    watcher = new DshVerdictWatcher({ onChange: (_id, v) => seen.push(v ? v.summary : null), debounce: clock.debounce })
     watcher.watch('a', join(short, '.harness', 'verdict.json'))
     const inner = innerWatcher(watcher, 'a')
     await once(inner, 'ready')
     const dir = join(realpathSync.native(long), '.harness')
     expect(Object.keys(inner.getWatched())).toContain(dir)
     expect(Object.keys(inner.getWatched())).not.toContain(join(short, '.harness'))
-    writeFileSync(join(dir, 'verdict.json'), JSON.stringify({ spec: 1, ready: true, summary: 'first' }))
-    await vi.waitFor(() => expect(seen).toEqual(['first']), { timeout: 10_000 })
-  }, 15_000)
+    // announced by hand, by the path chokidar names under the folder it watches
+    const file = join(dir, 'verdict.json')
+    writeFileSync(file, JSON.stringify({ spec: 1, ready: true, summary: 'first' }))
+    inner.emit('add', file)
+    clock.run()
+    expect(seen).toEqual(['first'])
+  })
 })
