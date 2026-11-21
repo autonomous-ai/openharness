@@ -988,11 +988,12 @@ class GitPlanTests(unittest.TestCase):
         self.assertEqual(self.plan()["suites"], [])
 
     def test_what_a_job_takes_from_the_rest_of_ci_yml_is_part_of_its_definition(self):
-        # The workflow's env reaches the jobs that name a variable, its permissions every job, and an anchor each job that
+        # The workflow's env reaches the jobs that name a variable, its permissions and concurrency every job, and an anchor each job that
         # names it. A job's line may end in a comment, and the jobs may sit at any indent.
-        def workflow(node="24", permissions="read", anchor="base", step="base", note="", indent="  "):
+        def workflow(node="24", permissions="read", concurrency="ci", anchor="base", step="base", note="", indent="  "):
             i = indent
             return (f"name: CI\non:\n  pull_request:\npermissions:\n  contents: {permissions}\n"
+                    f"concurrency:\n  group: {concurrency}\n"
                     f"# The runtime.\nenv:\n  NODE: {node}\n  OTHER: x\njobs:\n"
                     f"{i}cli-tests:{note}\n{i}  runs-on: ubuntu-24.04\n{i}  steps:\n{i}    - run: node-$NODE {step}\n"
                     f"{i}pty-checks:\n{i}  runs-on: ubuntu-24.04\n{i}  steps:\n{i}    - &build\n{i}      run: echo {anchor}\n"
@@ -1003,6 +1004,7 @@ class GitPlanTests(unittest.TestCase):
         for base, head, suites in (
                 ({}, dict(node="26"), {"cli"}),
                 ({}, dict(permissions="write"), {"cli", "pty", "tui", "desktop"}),
+                ({}, dict(concurrency="other"), {"cli", "pty", "tui", "desktop"}),
                 ({}, dict(anchor="edited"), {"pty", "tui"}),
                 (dict(note="  # the CLI's"), dict(note="  # the CLI's", step="edited"), {"cli"}),
                 (dict(indent="    "), dict(indent="    ", step="edited"), {"cli"})):
