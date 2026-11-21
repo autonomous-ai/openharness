@@ -14,7 +14,8 @@ import 'package:harness/ws/ws_conn.dart';
 /// A daemon that answers whatever the test says, with the supervisor's callbacks captured so the
 /// test can fire "it became ready" itself.
 class _ScriptedDiscovery extends LocalCliDiscovery {
-  _ScriptedDiscovery(this.answers) : super(config: AppConfig.dev);
+  _ScriptedDiscovery(this.answers, {bool Function()? uninstalling})
+    : super(config: AppConfig.dev, uninstalling: uninstalling);
 
   final List<LocalCliProbe> answers;
   int ensureCalls = 0;
@@ -57,8 +58,14 @@ class _ScriptedDiscovery extends LocalCliDiscovery {
 }
 
 class _SignedInCli extends CliLogin {
+  /// How many times `harness auth status` ran.
+  int checks = 0;
+
   @override
-  Future<CliAuthStatus> checkStatus() async => CliAuthStatus(loggedIn: true);
+  Future<CliAuthStatus> checkStatus() async {
+    checks++;
+    return CliAuthStatus(loggedIn: true);
+  }
 }
 
 /// Stops at the machine list: this test is about the daemon gate, not what comes after it.
@@ -86,13 +93,13 @@ class _QuietConnection extends WsConn {
 
 class _Notifier extends AppNotifier {
   int refreshes = 0;
-  _Notifier(LocalCliDiscovery discovery)
+  _Notifier(LocalCliDiscovery discovery, {_SignedInCli? cli})
     : super(
         config: AppConfig.dev,
         authSession: AuthSession(),
         configStore: null,
         localCliDiscovery: discovery,
-        cliLogin: _SignedInCli(),
+        cliLogin: cli ?? _SignedInCli(),
         connectionForTest: (_) => _QuietConnection(),
       ) {
     // Already known, so the retry path does not go looking for it over the
@@ -313,6 +320,50 @@ void main() {
     );
     expect(discovery.superviseCalls, 0);
   });
+
+  // `harness uninstall` holds its marker while it removes the CLI: a `harness auth status` run then starts a CLI out
+  // of the files being removed, and on Windows holds them so the removal fails.
+  test(
+    'ensureCliDaemonReady runs no harness auth status while uninstall holds its marker',
+    () async {
+      final discovery = _ScriptedDiscovery([
+        const LocalCliProbe.down('connection refused'),
+      ], uninstalling: () => true);
+      final cli = _SignedInCli();
+      final notifier = _Notifier(discovery, cli: cli);
+      addTearDown(notifier.dispose);
+
+      await expectLater(
+        notifier.ensureCliDaemonReady(),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            'The local Harness daemon did not start. Try running `harness start` yourself, then reopen the app.',
+          ),
+        ),
+      );
+      expect(cli.checks, 0);
+    },
+  );
+
+  test(
+    'ensureCliDaemonReady runs no harness auth status while uninstall holds its marker, and asks again once the marker is gone',
+    () async {
+      var held = true;
+      final discovery = _ScriptedDiscovery([
+        const LocalCliProbe.down('connection refused'),
+      ], uninstalling: () => held);
+      final cli = _SignedInCli();
+      final notifier = _Notifier(discovery, cli: cli);
+      addTearDown(notifier.dispose);
+
+      await expectLater(notifier.ensureCliDaemonReady(), throwsStateError);
+      held = false;
+      await expectLater(notifier.ensureCliDaemonReady(), throwsStateError);
+      expect(cli.checks, 1);
+    },
+  );
 
   test(
     'a daemon with no backend is READY: this computer works over the loopback',

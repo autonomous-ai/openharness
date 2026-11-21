@@ -98,7 +98,8 @@ class _Environment extends EnvironmentProvisioner {
 }
 
 class _Discovery extends LocalCliDiscovery {
-  _Discovery() : super(config: AppConfig.dev);
+  _Discovery(bool Function()? uninstalling)
+    : super(config: AppConfig.dev, uninstalling: uninstalling);
   @override
   Future<String?> computerId() async => null;
   @override
@@ -107,13 +108,13 @@ class _Discovery extends LocalCliDiscovery {
 }
 
 class _App extends AppNotifier {
-  _App(_Cli cli, LocalKeyValueStore storage)
+  _App(_Cli cli, LocalKeyValueStore storage, {bool Function()? uninstalling})
     : super(
         config: AppConfig.dev,
         authSession: AuthSession(),
         cliLogin: cli,
         environmentProvisioner: _Environment(),
-        localCliDiscovery: _Discovery(),
+        localCliDiscovery: _Discovery(uninstalling),
         paneLayoutStore: PaneLayoutStore(storage: storage),
       );
   Completer<void>? daemon;
@@ -167,12 +168,15 @@ void main() {
   late _Cli cli;
   late _Api api;
   late _App app;
+  // Whether `harness uninstall` holds its marker, asked each time.
+  late bool Function() uninstalling;
 
   setUp(() {
     storage = _Memory();
     cli = _Cli();
     api = _Api();
-    app = _App(cli, storage)..api = api;
+    uninstalling = () => false;
+    app = _App(cli, storage, uninstalling: () => uninstalling())..api = api;
     // The CLI's sign-in file is on this computer.
     app.cliSessionOnDisk = () => true;
   });
@@ -320,6 +324,51 @@ void main() {
       await _ticks();
       expect(_screen(app), 'login');
       expect(app.currentUser, isNull);
+    },
+  );
+
+  // `harness uninstall` holds its marker while it removes the CLI: a `harness auth status` run then starts a CLI out
+  // of the files being removed, and on Windows holds them so the removal fails.
+  test(
+    'a launch while uninstall holds its marker runs no harness auth status and ends on the sign-in page',
+    () async {
+      uninstalling = () => true;
+      // What the CLI would say if it were asked.
+      cli.answer.complete(const CliAuthStatus(loggedIn: true));
+      await app.bootstrap();
+      await _ticks();
+      expect(cli.asked, 0);
+      expect(app.status, AppStatus.unauthenticated);
+      expect(app.lastError, isNull);
+    },
+  );
+
+  test(
+    'a kept sign-in while uninstall holds its marker is not confirmed by harness auth status',
+    () async {
+      await keptFrom('machine-a');
+      uninstalling = () => true;
+      cli.answer.complete(
+        const CliAuthStatus(loggedIn: true, machineId: 'machine-a'),
+      );
+      await app.bootstrap();
+      await _ticks();
+      expect(cli.asked, 0);
+      expect(app.status, AppStatus.unauthenticated);
+    },
+  );
+
+  test(
+    'a kept window whose check failed asks no second check once uninstall holds its marker',
+    () async {
+      await keptFrom('machine-a');
+      cli.fails = true;
+      // The uninstall starts right after the early check has run.
+      uninstalling = () => cli.asked > 0;
+      await app.bootstrap();
+      await _ticks();
+      expect(cli.asked, 1);
+      expect(app.status, AppStatus.unauthenticated);
     },
   );
 
