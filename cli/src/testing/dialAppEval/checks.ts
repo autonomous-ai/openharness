@@ -1,0 +1,354 @@
+// The dial eval's check evaluators: pure functions from what a driver saw to scores (docs/plans/2026-11-21-dial-app-eval-plan.md,
+// Task 5). Evidence names session keys and times only, never a title, a folder or spoken text, and lists only what was
+// observed: a driver that observes nothing leaves it empty, so its probes fail.
+import { observedTitle } from '../../cable/hosts/observedTitle.js'
+import { agentIdOf, THRESHOLDS, type App, type Check, type CheckResult, type Platform, type Scenario, type Seen,
+  type SessionDef, type SessionKey, type Tier, type WrongSend } from './types.js'
+
+/** The firmware's carousel holds 16 tiles (cable_client.h `CABLE_MAX_AGENTS`). */
+const RING_CAP = 16
+/** A failing check's evidence stays readable in the report, however long the scenario ran. */
+const MAX_EVIDENCE = 20
+const BUNDLES: Readonly<Record<App, string>> = { claude: 'com.anthropic.claudefordesktop', chatgpt: 'com.openai.codex' }
+
+/** [full, half], inclusive (≤); never seen scores 0. */
+export function graded(value: number | null, threshold: readonly [number, number]): 0 | 0.5 | 1 {
+  if (value === null) return 0
+  return value <= threshold[0] ? 1 : value <= threshold[1] ? 0.5 : 0
+}
+
+interface Part { part: string; score: number; timed: boolean; ms?: number | null; evidence: string[] }
+/** A check's window: from its `after` step (inclusive, as a step's own reaction lands at its time) to its `at` step. */
+interface Window { from: number; to: number }
+interface Ring { at: number; page: string; rows: Array<{ id: string; name: string }> }
+
+type CheckOf<K extends Check['kind']> = Extract<Check, { kind: K }>
+
+/** The wire's name for an app's page: the ChatGPT app's threads are Codex's. */
+const pageOf = (app: App): string => (app === 'chatgpt' ? 'codex' : 'claude')
+const ratio = (part: number, whole: number): number => (whole === 0 ? 1 : part / whole)
+const bounded = (lines: string[]): string[] =>
+  lines.length <= MAX_EVIDENCE ? lines : [...lines.slice(0, MAX_EVIDENCE), `… ${lines.length - MAX_EVIDENCE} more`]
+
+class World {
+  private readonly keys = new Map<string, SessionKey>()
+
+  constructor(readonly scenario: Scenario, readonly seen: Seen) {
+    for (const s of scenario.sessions) this.keys.set(agentIdOf(s), s.key)
+  }
+
+  session(key: SessionKey): SessionDef {
+    const found = this.scenario.sessions.find((s) => s.key === key)
+    if (!found) throw new Error(`scenario ${this.scenario.id} names no session ${key}`)
+    return found
+  }
+
+  /** A row's session key; an id the scenario does not know is never printed, as it may be the machine's. */
+  keyOf(agentId: string | null): string {
+    return agentId === null ? 'none' : this.keys.get(agentId) ?? 'other'
+  }
+
+  stepAt(label: string): number | undefined {
+    return this.seen.steps.find((s) => s.label === label)?.at
+  }
+
+  /** Undefined while a step it names has not run: nothing it measures was seen. */
+  window(check: Check): Window | undefined {
+    const from = check.after === undefined ? 0 : this.stepAt(check.after)
+    const to = check.at === undefined ? Infinity : this.stepAt(check.at)
+    return from === undefined || to === undefined ? undefined : { from, to }
+  }
+
+  /**
+   * Only whole lists count: a list with no `agents.end`, or one a second `agents.begin` replaced, is never read, as the
+   * firmware does not read it. Its page is the last `apps` frame's, which each push sends before its ring.
+   */
+  rings(): Ring[] {
+    const rings: Ring[] = []
+    let page = ''
+    let building: Ring['rows'] | undefined
+    for (const { at, message } of this.seen.frames) {
+      if (message.t === 'apps') page = typeof message.shown === 'string' ? message.shown : ''
+      else if (message.t === 'agents.begin') building = []
+      else if (message.t === 'agent' && building && typeof message.id === 'string') {
+        building.push({ id: message.id, name: typeof message.name === 'string' ? message.name : '' })
+      } else if (message.t === 'agents.end' && building) {
+        rings.push({ at, page, rows: building })
+        building = undefined
+      }
+    }
+    return rings
+  }
+
+  /** Each step that ran before `to`, with the scenario's step. */
+  stepsBefore(to: number): Scenario['steps'] {
+    return this.seen.steps.filter((s) => s.at < to).map((s) => this.scenario.steps[s.index]!)
+  }
+}
+
+const within = (at: number, w: Window): boolean => at >= w.from && at < w.to
+
+function ringParts(check: CheckOf<'ring'>, world: World, w: Window | undefined): Part[] {
+  const expected = check.expect.map((key) => agentIdOf(world.session(key)))
+  const page = pageOf(check.page)
+  const all = world.rings()
+  const lists = w ? all.filter((r) => r.page === page && within(r.at, w)) : []
+  const last = lists.at(-1)
+  const right = (r: Ring): boolean => {
+    const ids = new Set(r.rows.map((row) => row.id))
+    return expected.every((id) => ids.has(id)) && r.rows.length === new Set(expected).size && ids.size === r.rows.length
+  }
+  const changed = w && check.timed ? lists.find(right) : undefined
+  const change = changed && w ? changed.at - w.from : null
+  const parts: Part[] = []
+  const evidence: string[] = []
+  if (!last) {
+    if (all.length > 0) evidence.push(`no whole list on ${page} in the window; ${all.length} whole lists seen`)
+    for (const part of ['recall', 'precision', 'order', 'names', 'cap', 'archived']) parts.push({ part, score: 0, timed: false, evidence })
+  } else {
+    const ids = last.rows.map((r) => r.id)
+    const unique = new Set(ids)
+    evidence.push(`list at ${last.at} on ${page}: ${ids.length} rows ${ids.map((id) => world.keyOf(id)).join(' ')}`.trimEnd())
+    const named = check.expect.filter((key) => {
+      const row = last.rows.find((r) => r.id === agentIdOf(world.session(key)))
+      return row !== undefined && row.name === observedTitle(titleOf(world, key, w!.to))
+    })
+    const misnamed = check.expect.filter((key) => !named.includes(key))
+    if (misnamed.length > 0) evidence.push(`names wrong: ${misnamed.join(' ')}`)
+    const archived = [...archivedBefore(world, w!.to)].filter((key) => unique.has(agentIdOf(world.session(key))))
+    if (archived.length > 0) evidence.push(`archived rows: ${archived.join(' ')}`)
+    const scored: Array<[string, number]> = [
+      ['recall', ratio(expected.filter((id) => unique.has(id)).length, expected.length)],
+      // A duplicate or an unknown id is an extra row: only one row per expected id is right.
+      ['precision', ratio(new Set(ids.filter((id) => expected.includes(id))).size, ids.length)],
+      ['order', ratio(expected.filter((id, i) => ids[i] === id).length, expected.length)],
+      ['names', ratio(named.length, check.expect.length)],
+      ['cap', ids.length <= RING_CAP ? 1 : 0],
+      ['archived', archived.length === 0 ? 1 : 0],
+    ]
+    for (const [part, score] of scored) parts.push({ part, score, timed: false, evidence })
+  }
+  if (check.timed) {
+    const lines = changed ? [`first right list at ${changed.at}`] : evidence
+    parts.push({ part: 'change', score: graded(change, THRESHOLDS.ringChange), timed: true, ms: change, evidence: lines })
+  }
+  return parts
+}
+
+/** The title a row should carry at `to`: the latest `codex.write` that renamed it before then, else the fixture's. */
+function titleOf(world: World, key: SessionKey, to: number): string {
+  let title = world.session(key).title
+  for (const step of world.stepsBefore(to)) {
+    if (step.kind === 'codex.write' && step.names && Object.hasOwn(step.names, key)) title = step.names[key]!
+  }
+  return title
+}
+
+/** Sessions the latest write before `to` left archived: a later write of the session unarchives it. */
+function archivedBefore(world: World, to: number): Set<SessionKey> {
+  const archived = new Set<SessionKey>()
+  for (const step of world.stepsBefore(to)) {
+    if (step.kind === 'claude.write') {
+      for (const key of step.sessions) {
+        if (step.archived) archived.add(key)
+        else archived.delete(key)
+      }
+    } else if (step.kind === 'codex.write') {
+      for (const key of step.sessions) archived.delete(key)
+      for (const key of step.archived ?? []) archived.add(key)
+    }
+  }
+  return archived
+}
+
+function focusParts(check: CheckOf<'focus'>, world: World, w: Window | undefined): Part[] {
+  const id = agentIdOf(world.session(check.session))
+  const faces = w ? world.seen.faces.filter((f) => f.at < w.to) : []
+  const after = w ? faces.filter((f) => f.at >= w.from) : []
+  const evidence = bounded(after.map((f) => `face at ${f.at}: ${world.keyOf(f.active)}`))
+  const last = faces.at(-1)
+  if (last && after.length === 0) evidence.push(`face at ${last.at}: ${world.keyOf(last.active)}`)
+  const landing = after.findIndex((f) => f.active === id)
+  const latency = landing >= 0 && w ? after[landing]!.at - w.from : null
+  const parts: Part[] = [
+    { part: 'lands', score: last?.active === id ? 1 : 0, timed: false, evidence },
+    { part: 'latency', score: graded(latency, THRESHOLDS.follow), timed: true, ms: latency, evidence },
+  ]
+  if (check.noBounce) {
+    const bounced = landing >= 0 && after.slice(landing).some((f) => f.active !== null && f.active !== id)
+    parts.push({ part: 'noBounce', score: landing >= 0 && !bounced ? 1 : 0, timed: false, evidence })
+  }
+  return parts
+}
+
+function stillParts(check: CheckOf<'still'>, world: World, w: Window | undefined): Part[] {
+  if (!w) return [{ part: 'still', score: 0, timed: false, evidence: [] }]
+  const start = world.seen.faces.filter((f) => f.at <= w.from).at(-1)?.active ?? null
+  // Inclusive of its last ms, as every mark here is.
+  const moved = world.seen.faces.filter((f) => f.at >= w.from && f.at <= w.from + check.ms && f.active !== start)
+  const evidence = bounded(moved.map((f) => `face at ${f.at}: ${world.keyOf(f.active)}`))
+  return [{ part: 'still', score: moved.length === 0 ? 1 : 0, timed: false, evidence }]
+}
+
+/** The session's own link: the Claude app opens its store's `local_` id, the ChatGPT app the Codex thread. */
+function linkOf(session: SessionDef): string | undefined {
+  if (session.app === 'chatgpt') return `codex://threads/${session.id}`
+  return session.localId && `claude://code/continue?session=${session.localId}`
+}
+
+/**
+ * The command that brings the app to the front on each platform (the eval sees commands, not windows): macOS sends to
+ * the app by its bundle; Linux runs xdg-open with the link, or a raise, which tier A records as `raise …`; Windows asks
+ * harness-pty to open the link or raise the app. Null `platform`: any of them, for a wait that knows none.
+ */
+function fronts(argv: string[], platform: Platform | null, app: App, link: string | undefined): boolean {
+  const exe = (argv[0] ?? '').split(/[\\/]/).at(-1)!.replace(/\.exe$/, '')
+  const on = (p: Platform): boolean => platform === null || platform === p
+  return (on('darwin') && argv.some((a, i) => a === '-b' && argv[i + 1] === BUNDLES[app]))
+    || (on('linux') && ((exe === 'xdg-open' && link !== undefined && argv.includes(link)) || exe === 'raise'))
+    || (on('win32') && exe === 'harness-pty' && ((argv[1] === 'open-link' && link !== undefined && argv[2] === link) || argv[1] === 'raise'))
+}
+
+function openParts(check: CheckOf<'open'>, world: World, w: Window | undefined, platform: Platform | null): Part[] {
+  const session = world.session(check.session)
+  const link = linkOf(session)
+  const commands = w ? world.seen.commands.filter((c) => within(c.at, w)) : []
+  const linked = commands.filter((c) => link !== undefined && c.argv.includes(link))
+  const front = commands.find((c) => fronts(c.argv, platform, session.app, link))
+  // Commands carry paths: the evidence says only what each one was.
+  const evidence = bounded(commands.map((c) =>
+    `command at ${c.at}: ${[linked.includes(c) && 'link', fronts(c.argv, platform, session.app, link) && 'front'].filter(Boolean).join(' ') || 'other'}`))
+  const latency = front && w ? front.at - w.from : null
+  return [
+    ...(check.link ? [{ part: 'link', score: linked.length > 0 ? 1 : 0, timed: false, evidence }] : []),
+    { part: 'front', score: front ? 1 : 0, timed: false, evidence },
+    { part: 'latency', score: graded(latency, THRESHOLDS.open), timed: true, ms: latency, evidence },
+  ]
+}
+
+/** The row's state as the device cards set it, as HarnessSource.noteCard reads them; a restored recap is no news. */
+function stateAfter(message: Record<string, unknown>, was: string): string | undefined {
+  switch (message.t) {
+    case 'turn.started': return 'working'
+    case 'question': return 'needs-you'
+    case 'question.close': return was === 'needs-you' ? 'working' : undefined
+    case 'turn.done': return 'done'
+    case 'summary': return message.restore === true ? undefined : 'done'
+    case 'turn.error': return 'error'
+  }
+  return undefined
+}
+
+const STATE_MARKS = { working: THRESHOLDS.working, 'needs-you': THRESHOLDS.needsYou, done: THRESHOLDS.done } as const
+
+function stateParts(check: CheckOf<'state'>, world: World, w: Window | undefined): Part[] {
+  const session = world.session(check.session)
+  const id = agentIdOf(session)
+  const page = pageOf(session.app)
+  const rings = world.rings().filter((r) => r.page === page)
+  const changes: Array<{ at: number; state: string }> = []
+  let state = 'idle'
+  for (const { at, message } of world.seen.frames) {
+    if (message.agentId !== id) continue
+    const next = stateAfter(message, state)
+    if (next !== undefined) changes.push({ at, state: (state = next) })
+  }
+  // Shown: at some moment in the window the row is in its page's last whole list and in that state.
+  const moments = w ? [w.from, ...changes.map((c) => c.at), ...rings.map((r) => r.at)].filter((at) => within(at, w)).sort((x, y) => x - y) : []
+  const shownAt = moments.find((at) => {
+    const now = changes.filter((c) => c.at <= at).at(-1)?.state ?? 'idle'
+    const ring = rings.filter((r) => r.at <= at).at(-1)
+    return now === check.state && ring !== undefined && ring.rows.some((r) => r.id === id)
+  })
+  const seenChanges = w ? changes.filter((c) => within(c.at, w)) : []
+  const evidence = bounded(seenChanges.map((c) => `${check.session} ${c.state} at ${c.at}`))
+  if (shownAt !== undefined) evidence.push(`${check.session} shown ${check.state} at ${shownAt}`)
+  const parts: Part[] = [{ part: 'shown', score: shownAt === undefined ? 0 : 1, timed: false, evidence }]
+  if (check.state !== 'idle') {
+    const latency = shownAt === undefined || !w ? null : shownAt - w.from
+    parts.push({ part: 'latency', score: graded(latency, STATE_MARKS[check.state]), timed: true, ms: latency, evidence })
+  }
+  return parts
+}
+
+function voiceParts(check: CheckOf<'voice'>, world: World, w: Window | undefined): Part[] {
+  const deliveries = w ? world.seen.deliveries.filter((d) => within(d.at, w)) : []
+  const mine = deliveries.filter((d) => d.target === check.session)
+  const exact = mine.length > 0 && mine.every((d) => d.text === check.text)
+  // Spoken text is never printed: only whether it matched.
+  const evidence = bounded(deliveries.map((d) =>
+    `delivery at ${d.at} via ${d.path} to ${d.target ?? 'none'}${d.target === check.session ? `, text ${d.text === check.text ? 'exact' : 'differs'}` : ''}`))
+  return [
+    { part: 'reached', score: mine.length > 0 ? 1 : 0, timed: false, evidence },
+    { part: 'once', score: mine.length === 1 ? 1 : 0, timed: false, evidence },
+    { part: 'exact', score: exact ? 1 : 0, timed: false, evidence },
+  ]
+}
+
+function recapParts(check: CheckOf<'recap'>, world: World, w: Window | undefined): Part[] {
+  const id = agentIdOf(world.session(check.session))
+  const summaries = w ? world.seen.frames.filter((f) => f.message.t === 'summary' && f.message.agentId === id && within(f.at, w)) : []
+  const last = summaries.at(-1)
+  const exact = last?.message.text === check.text
+  const evidence = last ? [`summary at ${last.at}: text ${exact ? 'exact' : 'differs'}`] : []
+  return [{ part: 'exact', score: exact ? 1 : 0, timed: false, evidence }]
+}
+
+function costParts(seen: Seen): Part[] {
+  const cost = seen.cost
+  const evidence = cost ? [`cpu ${cost.cpuPercent}%, loop p99 ${cost.loopP99Ms} ms, ${cost.leftovers} processes left`] : []
+  return [
+    { part: 'cpu', score: graded(cost?.cpuPercent ?? null, THRESHOLDS.cpuPercent), timed: true, evidence },
+    { part: 'loopP99', score: graded(cost?.loopP99Ms ?? null, THRESHOLDS.loopP99Ms), timed: true, ms: cost?.loopP99Ms ?? null, evidence },
+    { part: 'leftovers', score: cost?.leftovers === 0 ? 1 : 0, timed: false, evidence },
+  ]
+}
+
+function partsOf(check: Check, scenario: Scenario, seen: Seen, platform: Platform | null): Part[] {
+  const world = new World(scenario, seen)
+  const w = world.window(check)
+  switch (check.kind) {
+    case 'ring': return ringParts(check, world, w)
+    case 'focus': return focusParts(check, world, w)
+    case 'still': return stillParts(check, world, w)
+    case 'open': return openParts(check, world, w, platform)
+    case 'state': return stateParts(check, world, w)
+    case 'voice': return voiceParts(check, world, w)
+    case 'recap': return recapParts(check, world, w)
+    case 'cost': return costParts(seen)
+  }
+}
+
+export function evaluate(check: Check, scenario: Scenario, seen: Seen, tier: Tier, platform: Platform): CheckResult[] {
+  // Tier A runs in the test process: its cost would be the test runner's, so it has no D8.
+  if (check.kind === 'cost' && tier === 'a') return []
+  const parts = partsOf(check, scenario, seen, platform)
+  const base = { tier, platform, scenario: scenario.id, app: scenario.app, dim: check.dim, heldOut: scenario.heldOut }
+  // Robustness asks whether the thing still works, not how fast: one pass/fail result over its untimed parts.
+  if (check.dim === 'D7') {
+    const untimed = parts.filter((p) => !p.timed)
+    const evidence = [...new Set(untimed.flatMap((p) => p.evidence))]
+    return [{ ...base, check: check.id, score: untimed.every((p) => p.score === 1) ? 1 : 0, timed: false, evidence }]
+  }
+  return parts.map((p) => ({ ...base, check: `${check.id}.${p.part}`, score: p.score, timed: p.timed,
+    ...(p.ms === undefined ? {} : { ms: p.ms }), evidence: p.evidence }))
+}
+
+/** A wait may end once every untimed part is right; the platform is the driver's, so any platform's front counts. */
+export function holds(check: Check, scenario: Scenario, seen: Seen): boolean {
+  const untimed = partsOf(check, scenario, seen, null).filter((p) => !p.timed)
+  return untimed.length > 0 && untimed.every((p) => p.score === 1)
+}
+
+/** Each delivery after a voice step to anyone but that step's target; one with no known target is a wrong send too. */
+export function wrongSends(scenario: Scenario, seen: Seen): Array<Omit<WrongSend, 'tier' | 'platform'>> {
+  const voices = seen.steps.filter((s) => s.kind === 'voice')
+  const wrong: Array<Omit<WrongSend, 'tier' | 'platform'>> = []
+  for (const d of seen.deliveries) {
+    const step = voices.filter((s) => s.at <= d.at).at(-1)
+    const voice = step && scenario.steps[step.index]
+    if (voice?.kind !== 'voice' || d.target === voice.target) continue
+    wrong.push({ scenario: scenario.id, target: voice.target, got: d.target, path: d.path, at: d.at })
+  }
+  return wrong
+}
