@@ -27,6 +27,7 @@ import {
   type TmuxRuntimeRef,
   type RuntimeValidation,
 } from './terminalTypes.js'
+import { codeOrLength } from './log.js'
 import { inTmuxRoom } from './tmuxControlGate.js'
 import { TmuxControlStream } from './tmuxStream.js'
 import {
@@ -231,12 +232,12 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     // local socket and the backend link, leave for an update, and say what is missing. Refusing instead left a
     // machine whose PATH lost tmux with a daemon that could not start and therefore could not be fixed.
     if (tmuxPath.state === 'absent') {
-      console.error(`[tmux] unavailable: ${tmuxPath.reason} · install tmux and verify \`tmux -V\`,`
+      console.error(`[tmux] unavailable: ${codeOrLength(tmuxPath.reason)} · install tmux and verify \`tmux -V\`,`
         + ' then restart — agents cannot be created or restored until then')
       return { state: 'unavailable', code: 'TMUX_UNAVAILABLE', reason: tmuxPath.reason }
     }
     if (tmuxPath.state === 'adopted') {
-      console.log(`[tmux] not on the daemon PATH · adopted ${tmuxPath.path} · ${tmuxPath.from}`)
+      console.log(`[tmux] not on the daemon PATH · adopted tmux from the ${tmuxPath.from}`)
     }
     // Before the first inventory: sessions a pre-prefix build named `<engine>-<ts>` are renamed to
     // `harness-<engine>-<ts>` so discovery's whitelist sees the registry's own panes again.
@@ -252,7 +253,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     const startup = await this.inventory()
     console.log(startup.state === 'available'
       ? '[terminal] tmux: available'
-      : `[terminal] tmux: ${startup.state} (${startup.reason})`)
+      : `[terminal] tmux: ${startup.state} (${codeOrLength(startup.reason)})`)
     return { state: 'ready' }
   }
 

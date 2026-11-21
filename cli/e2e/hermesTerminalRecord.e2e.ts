@@ -17,7 +17,12 @@ const OLDER = 'Hermes Agent v0.21.5 (2026.10.7)'
 const BLOCK = '# machine-adapter: session discovery'
 const PERSON = 'model: anthropic/claude\nterminal:\n  client_env_passthrough: ["MY_VAR"]\n'
 const TUI = 'display:\n  interface: tui\n'
+/**
+ * The line that says a file's hooks were removed. It names the file by a tag made with the daemon's own key
+ * (lib/log.ts `hashOf`), which the test cannot make: a removal is told by these words and a tag.
+ */
 const REMOVED = "[hooks] removed Harness's Hermes hooks → "
+const REMOVAL = /\[hooks\] removed Harness's Hermes hooks → ([0-9a-f]{8})$/gm
 
 type Agent = { id: string; sessionId?: string; status?: string; launch?: { state: string }; identityHold?: string }
 type Saved = { agentId: string; sessionId: string; cwd: string | null; hermesHome?: string | null; hermesHomeDerived?: true; lastHookAt: number }
@@ -36,7 +41,7 @@ afterEach(async () => {
 async function rig() {
   const d = daemon = await IsolatedDaemon.create()
   onTestFailed(() => console.log(d.log()))
-  const home = d.env.HERMES_HOME = join(d.root, 'hermes')
+  const home = d.env.HERMES_HOME = join(d.env.HOME!, 'hermes')
   d.env.HERMES_PATH = join(d.root, 'bin', 'hermes')
   d.env.HOOK_INSTALL_ENGINES = 'hermes'
   mkdirSync(home, { recursive: true })
@@ -85,6 +90,9 @@ const movedFrom = (home: string, terminal: string, was: string): Promise<string>
 /** Once [line] is in [d]'s log after [from]: the daemon's stdout reaches the test some time after what it reports is done. */
 const logged = (d: IsolatedDaemon, from: number, line: string) =>
   until(`"${line}" in the log`, () => d.log().slice(from).includes(line) || null, 15_000, 50)
+/** Once [d]'s log after [from] says one home's hooks went: a line for its config and one for its approvals list. */
+const removedFromHome = (d: IsolatedDaemon, from: number) => until('the removal of a home\'s hooks in the log', () =>
+  new Set([...d.log().slice(from).matchAll(REMOVAL)].map((line) => line[1])).size >= 2 || null, 15_000, 50)
 const saved = (d: IsolatedDaemon, agentId: string): Saved | undefined =>
   (JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8')) as Saved[]).find((row) => row.agentId === agentId)
 const row = async (c: LocalClient, agentId: string): Promise<Agent | undefined> =>
@@ -120,7 +128,7 @@ it('binds a Hermes v0.23 from its terminal record, follows /new, and writes no h
   await r.d.start()
   await until('the hook removed', () => readFileSync(r.config, 'utf8') === PERSON || null, 15_000)
   await until('its approvals removed', () => JSON.parse(readFileSync(allowlist, 'utf8')).approvals.length === 0 || null, 15_000)
-  await logged(r.d, mark, `${REMOVED}${r.config}`)
+  await removedFromHome(r.d, mark)
 
   const c = await r.connect()
   const cwd = r.folder('p1')
@@ -253,7 +261,7 @@ it('keeps the hook of a home set to the TUI', async () => {
 
 it('follows a Hermes that only has a HOME of its own, and starts it again in that home', async () => {
   const r = await rig()
-  const folder = join(r.d.root, 'agents', 'a1')
+  const folder = join(r.d.env.HOME!, 'agents', 'a1')
   const own = join(folder, '.hermes')
   const ownConfig = join(own, 'config.yaml')
   await olderHook(r, own)
@@ -267,7 +275,7 @@ it('follows a Hermes that only has a HOME of its own, and starts it again in tha
   // In no sandbox, the store its process holds open is the home it really uses: it is not marked.
   await until('the home on the saved row', () => saved(r.d, a.agentId)?.hermesHome === own || null, 15_000)
   expect(saved(r.d, a.agentId)?.hermesHomeDerived).toBeUndefined()
-  await logged(r.d, mark, `${REMOVED}${ownConfig}`)
+  await removedFromHome(r.d, mark)
   expect(readFileSync(ownConfig, 'utf8')).toBe(PERSON)
 
   // Started again, it is handed that home as HERMES_HOME, as a `HERMES_HOME=/x hermes` typed by hand would be.
@@ -293,7 +301,7 @@ const unshareWorks = (): boolean =>
 describe.runIf(process.platform === 'linux' && unshareWorks())('in a sandbox', () => {
   it('binds and follows a Hermes whose home and folder are where the daemon sees them', async () => {
     const r = await rig()
-    const folder = join(r.d.root, 'agents', 'a1')
+    const folder = join(r.d.env.HOME!, 'agents', 'a1')
     const own = join(folder, '.hermes')
     const ownConfig = join(own, 'config.yaml')
     await olderHook(r, own)
@@ -306,7 +314,7 @@ describe.runIf(process.platform === 'linux' && unshareWorks())('in a sandbox', (
     await boundTo(c, a.agentId, a.started.session)
     await until('the home marked on the saved row', () => saved(r.d, a.agentId)?.hermesHomeDerived || null, 15_000)
     expect(saved(r.d, a.agentId)?.hermesHome).toBe(own)
-    await logged(r.d, mark, `${REMOVED}${ownConfig}`)
+    await removedFromHome(r.d, mark)
     expect(readFileSync(ownConfig, 'utf8')).toBe(PERSON)
     await logged(r.d, mark, 'hermes runs in a sandbox · followed from its terminal record')
     expect(r.d.log().slice(mark).split('hermes runs in a sandbox · followed from its terminal record')).toHaveLength(2)
@@ -317,7 +325,7 @@ describe.runIf(process.platform === 'linux' && unshareWorks())('in a sandbox', (
 
   it('binds a Hermes whose home, folder and /dev/pts are remapped', async () => {
     const r = await rig()
-    const folder = join(r.d.root, 'agents', 'a1')
+    const folder = join(r.d.env.HOME!, 'agents', 'a1')
     const own = join(folder, '.hermes')
     mkdirSync(own, { recursive: true })
     r.hermes({ home: folder, sandbox: 'remapped' })
@@ -339,7 +347,7 @@ describe.runIf(process.platform === 'linux' && unshareWorks())('in a sandbox', (
   it('leaves alone a Hermes whose home it cannot know, and its pane working', async () => {
     const r = await rig()
     // Only its home is on the sandbox's own filesystem: no path the daemon can see names its store.
-    r.hermes({ home: join(r.d.root, 'agents', 'a1'), sandbox: 'unseen' })
+    r.hermes({ home: join(r.d.env.HOME!, 'agents', 'a1'), sandbox: 'unseen' })
     await r.d.start()
     const c = await r.connect()
     const mark = r.d.log().length

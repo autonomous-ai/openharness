@@ -103,7 +103,7 @@ describe('Harness’s own Codex hooks, recorded as reviewed', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     await installHookSettings('codex', hooks.settings, 19473, codexHome)
     // The file by its name, never its path: the path names the person's home.
-    expect(log).toHaveBeenCalledWith("[hooks] recorded Harness's own Codex hooks as reviewed → config.toml")
+    expect(log).toHaveBeenCalledWith("[hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)")
     const installed = JSON.parse(readFileSync(join(codexHome, 'hooks.json'), 'utf8'))
     const config = readFileSync(join(codexHome, 'config.toml'), 'utf8')
     for (const [key, hash] of reviewRecords(record, join(codexHome, 'hooks.json'), installed)) {
@@ -263,7 +263,7 @@ describe('Harness’s own Codex hooks, recorded as reviewed', () => {
   it('never throws: an unreadable settings path is a hook Codex asks about, as before', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     expect(await recordReviewed(record, '/nonexistent-home', '/nonexistent-home/hooks.json')).toBe(false)
-    expect(error.mock.calls.map(call => call[0])).toEqual([record.messages.skipped.replace('{config}', 'config.toml')])
+    expect(error.mock.calls.map(call => call[0])).toEqual([record.messages.skipped.replace('{config}', 'config.toml (outside the home)')])
     expect(error.mock.calls.flat().join(' ')).not.toContain('/nonexistent-home')
   })
 })

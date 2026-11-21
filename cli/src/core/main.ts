@@ -48,7 +48,7 @@ import { join } from 'path'
 import { execFile, spawn } from 'child_process'
 import { createServer, type Server } from 'http'
 import { homedir, hostname } from 'os'
-import { env } from '../config/env.js'
+import { backendName, env } from '../config/env.js'
 import { VERSION } from '../version.js'
 import { isLocalOnly, withoutUpdate } from '../lib/cardUpdate.js'
 import { elapsedSecondsOf } from '../lib/footerTimer.js'
@@ -64,7 +64,7 @@ import { engineSessionTitle } from '../lib/sessionTitle.js'
 import { machineNames } from '../lib/machineNames.js'
 import { engineHooks as engineHookFacets } from '../engines/hooks.js'
 import type { LiveFor } from '../engines/facets/live.js'
-import { DAEMON_LOG_FILE, PID_FILE, daemonPort, isAlive, readPid, removePidFileIf, LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel, writePidFile } from '../lib/daemonState.js'
+import { DAEMON_LOG_FILE, PID_FILE, daemonPort, isAlive, readPid, removePidFileIf, LEGACY_LOG_FILE, MACHINE_NAME_FILE, failForegroundStart, tildify, computerId, thisDeviceLabel, writePidFile } from '../lib/daemonState.js'
 import { atomicWriteFile } from '../lib/secureState.js'
 import { clearSafeModeMarker, safeModeDisposition, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker } from '../lib/daemonSafeMode.js'
 import { awakeTimeout } from '../lib/sleepAware.js'
@@ -3198,7 +3198,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // would let a long-lived, chatty daemon run unbounded between restarts.
   // A core run by harnessd leaves this to its master, which outlives it (harnessd/master.ts).
   const logTrimTimer = coreLink.supervised ? undefined : setInterval(() => {
-    if (trimLogFile(LOG_FILE)) console.log(`[log] ${tildify(LOG_FILE)} hit its size cap — dropped the oldest half`)
+    if (trimLogFile(LOG_FILE)) console.log('[log] the daemon\'s log hit its size cap — dropped the oldest half')
   }, LOG_CHECK_INTERVAL_MS)
   logTrimTimer?.unref?.() // never hold the event loop open for log upkeep
 
@@ -3207,7 +3207,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // (`restartDaemonForIdentity`), so nothing here has to watch for one arriving.
   if (session) {
     backend.connect()
-    console.log(`[cli] dialing ${env.BACKEND_WS_URL}/api/adapter-ws · watching registered sessions for ${ENGINES.length} engines`)
+    console.log(`[cli] dialing ${backendName(env.BACKEND_WS_URL)} · watching registered sessions for ${ENGINES.length} engines`)
   } else {
     backend.serveThisComputerOnly()
     console.log(`[cli] not signed in — serving this computer only · watching registered sessions for ${ENGINES.length} engines`)
@@ -3430,20 +3430,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 }
 
 /**
- * A start-up that threw, and does not stay up: only its kind goes to the log, which Export logs sends, never its words
- * or its stack. The pid file goes if it is this core's: one left naming a process that is gone, the next
- * `harness start` would refuse on.
- */
-const failStart = (err: unknown, code: number): never => {
-  // The one a person meets starting by hand (`harness start -f`, `harness login`) says why, in fixed words: its own
-  // words name the socket's path.
-  const why = (err as { code?: unknown } | null | undefined)?.code === 'EADDRINUSE' ? ' · another Harness daemon serves this data folder' : ''
-  console.error(`Failed to start adapter: ${errorKind(err)}${why}`)
-  removePidFileIf(process.pid)
-  process.exit(code)
-}
-
-/**
  * The daemon's start-up threw. STAY UP anyway, waiting for a fix.
  *
  * Exiting here is what made one bad build unrecoverable: the desktop app answers a dead port by running
@@ -3466,7 +3452,7 @@ const enterSafeMode = (err: unknown): void => {
     // Under harnessd, said for good: any other exit, the master restarts, and a core that another daemon
     // keeps from running was restarted for as long as its master lived (e2e/twodaemons.e2e.ts). Except
     // what stands in the way is leaving too: then the master starts this core again.
-    failStart(err, coreLink.supervised && !disposition.retry ? CORE_EXIT_STOP : 1)
+    failForegroundStart(err, coreLink.supervised && !disposition.retry ? CORE_EXIT_STOP : 1)
   }
   // The marker keeps the stack, for `harness status`; the log, which Export logs sends, gets only the kind.
   const detail = err instanceof Error ? (err.stack ?? err.message) : String(err)
@@ -3554,6 +3540,6 @@ export function runCoreInForeground(session: AuthSession | null, scriptPath: str
   holdHarnessdEnv()
   dropAgentSessionEnv()
   SCRIPT_PATH = scriptPath
-  // Never the command's `onError`, which prints the error whole: this process is the daemon, and that is its log.
-  return runForeground(session).catch((err: unknown) => failStart(err, 1))
+  // How a daemon's start fails, not the command's `onError`: this process is the daemon, and what it prints is its log.
+  return runForeground(session).catch((err: unknown) => failForegroundStart(err))
 }

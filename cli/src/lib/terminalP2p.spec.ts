@@ -72,6 +72,97 @@ describe('terminal WebRTC data channel', () => {
     }
   }, 10_000)
 
+  // A peer's abort reason is its own text: it reached the relay's [p2p] lines and the backend's p2p metric
+  // (remoteRelay.ts `reportP2pResult`). The peer logs its reason on its own side.
+  it('a peer\'s abort reason reaches no log line and no report', async () => {
+    const abort = (sessionId: string): TerminalP2pSignal => ({ sessionId, protocolVersion: 1, reason: 'words /Users/sentinel' })
+    const states: Array<{ state: string; reason?: string }> = []
+    const unavailable: string[] = []
+    let closed!: () => void
+    const stopped = new Promise<void>((resolve) => { closed = resolve })
+    let initiator!: TerminalP2pInitiator
+    const responder = new TerminalP2pResponderPool({
+      sendSignal: (_connId, type, payload) => { void initiator.handleSignal(type, payload) },
+      onData: () => { /* no data in this test */ },
+    })
+    initiator = new TerminalP2pInitiator({
+      policy: { enabled: true, protocolVersion: 1, stunUrls: [], openWaitMs: 1_500 },
+      sendSignal: (type, payload) => { void responder.handleSignal('source-1', type, payload) },
+      onData: () => { /* no data in this test */ },
+      onState: (state, _setupMs, reason) => {
+        if (reason) states.push({ state, reason })
+        if (state === 'closed') closed()
+      },
+      onUnavailable: (reason) => { unavailable.push(reason) },
+    })
+    // An offer nobody answers, for the host side's own connections: a primary, and an upgrade trial.
+    let resolveOffer!: (payload: TerminalP2pSignal) => void
+    const offered = new Promise<TerminalP2pSignal>((resolve) => { resolveOffer = resolve })
+    const unanswered = new TerminalP2pInitiator({
+      policy: { enabled: true, protocolVersion: 1, stunUrls: [], openWaitMs: 1_500 },
+      sendSignal: (type, payload) => { if (type === 'p2p_offer') resolveOffer(payload) },
+      onData: () => { /* no peer in this test */ },
+    })
+    const closedConnection = vi.spyOn(responder, 'closeConnection')
+    const closedShadow = vi.spyOn(responder as unknown as { closeShadow: (connId: string, reason: string) => Promise<void> }, 'closeShadow')
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      initiator.start()
+      expect(await initiator.waitUntilReady(5_000)).toBe(true)
+      await initiator.handleSignal('p2p_abort', abort(initiator.sessionId))
+      await stopped
+      expect(states).toEqual([{ state: 'failed', reason: 'peer_aborted' }, { state: 'closed', reason: 'peer_aborted' }])
+      expect(unavailable).toEqual(['peer_aborted'])
+
+      unanswered.start()
+      const offer = await offered
+      await responder.handleSignal('source-2', 'p2p_offer', offer)
+      await responder.handleSignal('source-3', 'p2p_offer', { ...offer, upgrade: true })
+      closedConnection.mockClear()
+      closedShadow.mockClear()
+      await responder.handleSignal('source-2', 'p2p_abort', abort(offer.sessionId))
+      await responder.handleSignal('source-3', 'p2p_abort', abort(offer.sessionId))
+      expect(closedConnection.mock.calls).toEqual([['source-2', 'peer_aborted', false]])
+      expect(closedShadow.mock.calls).toEqual([['source-2', 'peer_aborted'], ['source-3', 'peer_aborted']])
+    } finally {
+      vi.restoreAllMocks()
+      await unanswered.stop('test_complete', false)
+      await initiator.stop('test_complete', false)
+      await responder.stop()
+    }
+  }, 10_000)
+
+  it('a peer\'s candidate types are ICE\'s words', async () => {
+    // A peer writes its own description: any word after `typ` in it would reach the [p2p] gave-up line.
+    let answered!: () => void
+    const answerIn = new Promise<void>((resolve) => { answered = resolve })
+    let initiator!: TerminalP2pInitiator
+    const responder = new TerminalP2pResponderPool({
+      sendSignal: (_connId, type, payload) => {
+        if (type !== 'p2p_answer' || typeof payload.sdp !== 'string') return
+        void initiator.handleSignal(type, { ...payload, sdp: payload.sdp.replaceAll('typ host', 'typ sentinel') }).then(() => answered())
+      },
+      onData: () => { /* no data in this test */ },
+    })
+    initiator = new TerminalP2pInitiator({
+      policy: { enabled: true, protocolVersion: 1, stunUrls: [], openWaitMs: 1_500 },
+      sendSignal: (type, payload) => { void responder.handleSignal('source-1', type, payload) },
+      onData: () => { /* no data in this test */ },
+    })
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      initiator.start()
+      await answerIn
+      // Which other types each side gathers is this machine's network's.
+      expect(initiator.negotiationFacts).toMatch(/^answer=yes ours=[a-z/]+ peer=([a-z]+\/)*other(\/[a-z]+)* ice=\w+$/)
+      expect(initiator.negotiationFacts).not.toContain('sentinel')
+    } finally {
+      vi.restoreAllMocks()
+      await initiator.stop('test_complete', false)
+      await responder.stop()
+    }
+  }, 10_000)
+
   it('races the policy stun urls but still offers the raw list, since peers need not agree', async () => {
     const policyUrls = ['stun:a.example:3478', 'stun:b.example:3478']
     // Returning [] keeps werift on host candidates, so the offer is emitted immediately instead of

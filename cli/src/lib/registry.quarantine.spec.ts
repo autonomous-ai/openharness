@@ -84,8 +84,21 @@ describe('a registry no version can load', () => {
     const registry = await loadRegistry()
     registry.load()
     expect(registry.list()).toEqual([])
-    expect(error).toHaveBeenCalledWith(expect.stringMatching(/^\[registry\] registry is not JSON; moved it aside to .*registry\.json\.corrupt-\S+ and started empty$/))
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/^\[registry\] registry is not JSON; moved it aside to registry\.json\.corrupt-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z and started empty$/))
     expect(error.mock.calls.flat().join('\n')).not.toContain('SECRET')
+  })
+
+  it('a corrupt registry is moved aside and named by its own file name, never the folder it is in', async () => {
+    // The data folder is under the person's home, whose name is theirs.
+    dataDir = mkdtempSync(join(tmpdir(), 'sentinel-registry-'))
+    writeFileSync(join(dataDir, 'registry.json'), '{"schemaVersion":2}', { mode: 0o600 })
+    const registry = await loadRegistry()
+    registry.load()
+    const aside = readdirSync(dataDir).filter((name) => name.startsWith('registry.json.corrupt-'))
+    expect(aside).toHaveLength(1)
+    const lines = error.mock.calls.map((call: unknown[]) => call.map(String).join(' ')).join('\n')
+    expect(lines).not.toContain('sentinel')
+    expect(lines).toContain(`[registry] registry root is not an array; moved it aside to ${aside[0]} and started empty`)
   })
 
   it('names the kind of failure it could not be moved by, whatever was thrown', async () => {

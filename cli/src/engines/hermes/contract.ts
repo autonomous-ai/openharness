@@ -110,7 +110,7 @@ export const HERMES_HOOK_SETTINGS = {
   messages: {
     missing: '[hooks] no Hermes config at {file} — skipping (run hermes once first)',
     foreign: '[hooks] {file} has its own `hooks:` block — leaving it untouched.',
-    manual: '[hooks] add these entries under it manually to mirror Hermes sessions:',
+    manual: '[hooks] run `harness hooks hermes` for the entries to add under it to mirror Hermes sessions',
     current: '[hooks] Hermes session hooks already installed',
     installed: '[hooks] installed Hermes session hooks → {file}',
     collapsed: '[hooks] installed Hermes session hooks (collapsed {removed} stale blocks) → {file}',

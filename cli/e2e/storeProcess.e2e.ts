@@ -154,7 +154,7 @@ describe('the Store in its own process, beside the viewers', () => {
     const d = await fresh({ HARNESSD_SERVICE_HEARTBEAT_TIMEOUT_MS: '3000', HARNESSD_SERVICE_STOP_GRACE_MS: '100' })
     let client = await LocalClient.connect(d)
     expect(await client.request('dsh_install', { url: repository(d) }, 180_000)).toMatchObject({ ok: true })
-    const profile = join(d.root, 'held-codex-profile')
+    const profile = join(d.env.HOME!, 'held-codex-profile')
     mkdirSync(profile)
     const agents = [await create(d, client, madeByHarness(d, 'held-claude'), HARNESS), await create(d, client, madeByHarness(d, 'held-codex'), HARNESS, 'codex', profile)]
     const stopped = await create(d, client, 'stop-while-store-is-held', HARNESS)

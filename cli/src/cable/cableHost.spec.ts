@@ -350,8 +350,9 @@ describe('DaemonCableHost.listAgentsFlat across machines, and the tab the dial g
 
     machines[0].state = 'offline'
     expect((await settled(host)).map((a) => a.id)).toEqual([])
-    // An agent leaving the carousel is the one event that cannot be diagnosed from its absence.
-    expect(log.mock.calls.flat().join('\n')).toContain('left the carousel')
+    // An agent leaving the carousel is the one event that cannot be diagnosed from its absence. The machine is said by
+    // its id: its name is a person's, or the computer's.
+    expect(log).toHaveBeenCalledWith('cable: other is offline — its 1 agents left the carousel')
   })
 
   it('holds a tile the window has open even when its machine goes offline', async () => {
@@ -2409,11 +2410,17 @@ describe('the dial reaches the fleet through the core\'s port', () => {
     expect(await host.selectMachine('mine')).toEqual({ ok: true })
     expect(fleet.release).toHaveBeenCalledWith()
     await new Promise((r) => setTimeout(r, 0))
-    expect(log).toHaveBeenCalledWith('cable: could not announce mine (Link office-imac to this computer first)')
-    fleet.online = vi.fn(async () => ({ ok: false as const, message: 'backend unreachable' }))
+    expect(log).toHaveBeenCalledWith('cable: could not announce mine (NEEDS_LINK)')
+    // The router carries a failure by its kind, and a code the lane gave; a code that is not one is said by its length.
+    fleet.online = vi.fn(async () => ({ ok: false as const, kind: 'TypeError' }))
     host.onDialAttached()
     await new Promise((r) => setTimeout(r, 0))
-    expect(log).toHaveBeenCalledWith('cable: could not open the lane (backend unreachable)')
+    expect(log).toHaveBeenCalledWith('cable: could not open the lane (TypeError)')
+    fleet.online = vi.fn(async () => ({ ok: false as const, kind: 'Error', code: '/Users/sentinel' }))
+    host.onDialAttached()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(log).toHaveBeenCalledWith('cable: could not open the lane (text(15))')
+    expect(log.mock.calls.flat().join('\n')).not.toContain('sentinel')
     host.onDialGone()
     expect(fleet.release).toHaveBeenLastCalledWith(true)
     // No lane to hold: nothing is opened, and a remote machine cannot be chosen.
@@ -2481,7 +2488,7 @@ describe('the dial reaches the fleet through the core\'s port', () => {
     expect(w.log).not.toHaveBeenCalled()
     fleet.forkAgent = vi.fn(async () => ({ result: { ok: false as const, error: 'FORK_FAILED', detail: 'busy' }, machineId: 'other', asked: true }))
     expect(await host.forkAgent('r1')).toEqual({ ok: false, error: 'FORK_FAILED', detail: 'busy' })
-    expect(w.log).toHaveBeenCalledWith('cable: fork other/r1 refused (FORK_FAILED: busy)')
+    expect(w.log).toHaveBeenCalledWith('cable: fork other/r1 refused (FORK_FAILED)')
     expect(w.opened).not.toHaveBeenCalled()
   })
 
@@ -3130,7 +3137,7 @@ describe('a plug-in whose first lane open fails', () => {
     host.onDialAttached()
     await turns()
     expect(fleet.online).toHaveBeenCalledTimes(1)
-    expect(log).toHaveBeenCalledWith('cable: could not open the lane (UNAVAILABLE: the sign-in could not be refreshed)')
+    expect(log).toHaveBeenCalledWith('cable: could not open the lane (TOKEN_UNAVAILABLE)')
     expect(fleet.select).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(1_000)
     await turns()
@@ -3207,7 +3214,7 @@ describe('a plug-in whose first lane open fails', () => {
     await turns()
     await vi.advanceTimersByTimeAsync(120_000)
     expect(fleet.online).toHaveBeenCalledTimes(1)
-    expect(log).toHaveBeenCalledWith('cable: could not open the lane (sign in again) — other machines are unavailable until the next sign-in')
+    expect(log).toHaveBeenCalledWith('cable: could not open the lane (SESSION_OVER) — other machines are unavailable until the next sign-in')
     expect(log).not.toHaveBeenCalledWith('cable: trying the cloud lane again')
   })
 
@@ -3221,7 +3228,7 @@ describe('a plug-in whose first lane open fails', () => {
     await turns()
     await vi.advanceTimersByTimeAsync(120_000)
     expect(fleet.online).toHaveBeenCalledTimes(1)
-    expect(log).toHaveBeenCalledWith('cable: could not open the lane (connect ECONNREFUSED 127.0.0.1:1)')
+    expect(log).toHaveBeenCalledWith('cable: could not open the lane (ECONNREFUSED)')
   })
 
   it('runs one backoff over the real lane when the backend is down at the first plug-in', async () => {
@@ -3273,7 +3280,7 @@ describe('a plug-in whose first lane open fails', () => {
       if (Date.now() > deadline) throw new Error(`the lane never opened: ${lines.join(' | ')}`)
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
-    expect(lines).toContain('cable: could not open the lane (UNAVAILABLE)')
+    expect(lines).toContain('cable: could not open the lane (TOKEN_UNAVAILABLE)')
     expect(frames.filter((frame) => frame.type === 'machines_watch')).toHaveLength(1)
     expect(frames.find((frame) => frame.type === 'machine_select')?.payload?.machineId).toBe('mine')
     expect(link.status()).toBe('ready')

@@ -176,7 +176,7 @@ export function startPtyUpdater(opts: {
       installed = d.install(prepared, opts.rootDir)
     } catch (error) {
       d.discard(prepared)
-      if (error instanceof PtyPayloadRefused) { refuse(key, entry.version, error.reason); return null }
+      if (error instanceof PtyPayloadRefused) { refuse(key, entry.version, errorKind(error)); return null }
       throw error
     }
     if (!installed) return null
@@ -209,19 +209,23 @@ export function startPtyUpdater(opts: {
       if (!entry || key === null || !wanted(entry)) return
       if (!ready) {
         if (refused?.key === key && d.now() < refused.until) return
-        once('available', entry.version, () => d.log(`[update] newer terminal host available: ${currentPtyVersion(runtimeDir)} → ${entry.version}`))
+        once('available', entry.version, () => {
+          // A version, read from `current-pty`: the folder it is read from is not printed.
+          const installed = currentPtyVersion(runtimeDir)
+          d.log(`[update] newer terminal host available: ${installed} → ${entry.version}`)
+        })
         let prepared: PreparedPty
         try {
           prepared = await d.prepare(entry, runtimeDir, verified?.key === key ? verified.zip : undefined)
         } catch (error) {
           if (error instanceof PtyPayloadUnpackFailed) {
             verified = { key, zip: error.zip }
-            d.error(`[update] terminal host ${entry.version} was downloaded but could not be unpacked (${error.reason}) — unpacking it again next check, from the bytes already verified`)
+            d.error(`[update] terminal host ${entry.version} was downloaded but could not be unpacked (${errorKind(error)}) — unpacking it again next check, from the bytes already verified`)
             return
           }
           verified = null
           if (!(error instanceof PtyPayloadRefused)) throw error
-          refuse(key, entry.version, error.reason)
+          refuse(key, entry.version, errorKind(error))
           return
         }
         verified = null

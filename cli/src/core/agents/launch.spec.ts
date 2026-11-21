@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { prepareResume } from '../../engines/resumePreparation.js'
 import { bringPiSessionHome } from '../../lib/piSessionHome.js'
+import { hashOf } from '../../lib/log.js'
 import type { GridLaunchAnswer, GridLaunchOverride, GridLaunchRequest } from '../../lib/gridLaunchWire.js'
 import { dropPermissionFlagIfUnsupported } from '../../lib/engineLaunch.js'
 import { buildLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps } from '../../lib/launchOverrides.js'
@@ -255,7 +256,7 @@ describe('relaunch helpers', () => {
     await helpers.prepareSessionResume(session({ engine: 'codex' }), held)
     expect(bringPiSessionHome).toHaveBeenCalledTimes(3)
     expect(log.mock.calls.map(([line]) => String(line))).toEqual([
-      "[resume] a1 · pi's conversation brought home · /home/.pi/agent/sessions/--w--/s1.jsonl",
+      `[resume] a1 · pi's conversation brought home · ${hashOf('/home/.pi/agent/sessions/--w--/s1.jsonl')}`,
     ])
     // A copy that fails never costs the relaunch: it runs after the old Pi stopped.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})

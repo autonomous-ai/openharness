@@ -9,7 +9,7 @@ export const hooks: HookContract = {
     // The person's own. A home the person moved (CLAUDE_CONFIG_DIR, lib/engineHomes.ts) gets the same block
     // in its own settings.json (core/engines/hooks.ts).
     home: { inHome: '.claude' },
-    file: 'settings.json',
+    fileName: 'settings.json',
     // SessionStart/UserPromptSubmit bind mutable engine-session metadata to the process agent. SessionEnd
     // only asks discovery to reconcile: the process, not the hook, owns the tile lifetime. UserPromptSubmit
     // is the CATCH hook, so a SessionStart missed because the adapter started late is repaired on first input.

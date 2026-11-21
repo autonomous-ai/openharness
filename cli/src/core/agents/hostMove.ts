@@ -10,6 +10,7 @@
 import { baseNode } from '../../harnessd/baseNode.js'
 import { matchesLaunchReceipt, type RegisteredSession, type registry } from '../../lib/registry.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
+import { codeOrLength } from '../../lib/log.js'
 import type { TerminalRuntimeRef } from '../../lib/terminalTypes.js'
 import type { MoveGate } from '../../lib/hostMove/gate.js'
 import { moveAgent, moveCreateRequest, type MoveAgentDeps, type MoveOutcome } from '../../lib/hostMove/moveAgent.js'
@@ -113,7 +114,7 @@ export function hostMoveDeps(session: RegisteredSession, current: () => boolean,
       const kept = await swap.holdOpen()
       if (!owns()) return 'failed'
       if (!kept.ok) {
-        w.log(`[terminal] move ${agentId}: could not keep the old pane open (${kept.reason ?? 'unknown reason'})`)
+        w.log(`[terminal] move ${agentId}: could not keep the old pane open (${codeOrLength(kept.reason ?? 'UNKNOWN')})`)
         return 'failed'
       }
       return swap.terminate()
@@ -166,7 +167,7 @@ export function hostMoveDeps(session: RegisteredSession, current: () => boolean,
         { ...swap, isCurrent: owns, prepareResume: prepared ? undefined : () => deferred.prepare() },
       )
       if (!outcome.ok) {
-        w.log(`[terminal] move ${agentId}: the relaunch in the old pane failed: ${outcome.detail}`)
+        w.log(`[terminal] move ${agentId}: the relaunch in the old pane failed: ${codeOrLength(outcome.error ?? outcome.detail)}`)
         return false
       }
       // The row learns it as a restart's does (`commitRelaunchedEngine`, core/agents/restart.ts): shared, not copied.

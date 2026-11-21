@@ -860,7 +860,8 @@ describe('cable session', () => {
 
     port.say({ t: 'settings.state', ok: false, error: 'This device has no such character.', settings })
     await vi.waitFor(() => expect(seen.at(-1)).toMatchObject({ settings }))
-    expect(lines.some((l) => l.includes('refused a settings change: This device has no such character.'))).toBe(true)
+    // The dial's own words stay out of the log: a refusal is said by its length.
+    expect(lines).toContain('cable: device refused a settings change: text(34)')
 
     // A change made on the glass arrives unprompted and moves the pane.
     const quieter = { ...settings, quiet: true, brightness: 20 }
@@ -1133,6 +1134,33 @@ describe('cable session', () => {
       port.say(hi)
       await settle()
       expect(offers(port)).toBe(2)
+      await session.stop()
+    })
+
+    it('a dial\'s refusal of an image, or of a settings change, is logged by its code or length', async () => {
+      const lines: string[] = []
+      const { session, port } = await connect(makeHost({
+        firmwareFor: async () => ({ version: '9.9.9', image, sha256: 'x'.repeat(64) }), log: (line) => lines.push(line),
+      }))
+      for (const refusal of [{ message: 'no room at /Users/sentinel/fw' }, { message: 'BUSY' }, {}]) {
+        port.say(hi)
+        await settle()
+        port.say({ t: 'fw.error', ...refusal })
+        await settle()
+      }
+      for (const refusal of [{ error: 'no such face in /Users/sentinel' }, { error: 'UNKNOWN_SKIN' }, {}]) {
+        port.say({ t: 'settings.state', ok: false, ...refusal })
+        await settle()
+      }
+      expect(lines).toEqual(expect.arrayContaining([
+        'cable: firmware 9.9.9 refused: text(29) (0/2048 B)',
+        'cable: firmware 9.9.9 refused: BUSY (0/2048 B)',
+        'cable: firmware 9.9.9 refused: no reason given (0/2048 B)',
+        'cable: device refused a settings change: text(31)',
+        'cable: device refused a settings change: UNKNOWN_SKIN',
+        'cable: device refused a settings change: no reason given',
+      ]))
+      expect(lines.join('\n')).not.toContain('sentinel')
       await session.stop()
     })
 
@@ -3537,6 +3565,23 @@ describe('spoken output search purpose', () => {
       // A changed mapping clears everything.
       await session.petsChanged()
       expect(session.petDial().errors).toEqual({})
+      await session.stop()
+    })
+
+    it('a dial\'s refusal of a pet is logged by its code or length', async () => {
+      const lines: string[] = []
+      const store = fakeStore({ all: A, engines: { claude: B } })
+      const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore, log: (line) => lines.push(line) }))
+      port.say({ ...hello, pets: 1, petIds: [] })
+      await settle()
+      port.say({ t: 'pet.error', id: A, reason: 'memory' })
+      await settle()
+      port.say({ t: 'pet.error', id: B, reason: 'no room for /Users/sentinel/pets' })
+      await settle()
+      // The dial's own word stays where the person reads it.
+      expect(session.petDial().errors).toEqual({ [A]: 'memory', [B]: 'no room for /Users/sentinel/pets' })
+      expect(lines).toContain(`cable: dial refused pet ${A}: text(6)`)
+      expect(lines.join('\n')).not.toContain('sentinel')
       await session.stop()
     })
 

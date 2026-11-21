@@ -19,6 +19,7 @@ import {
 import { piProviderExtensionIn } from './gridAssignmentWire.js'
 import { ENGINES, type AgentEngine } from '../engines/types.js'
 import { buildEngineLaunchArgv } from './engineLaunch.js'
+import { hashOf } from './log.js'
 
 /** The shape the desktop actually sends, with values read off the live control plane. */
 const WIRE = {
@@ -309,12 +310,22 @@ describe('the engines that cannot', () => {
 })
 
 describe('describeGridLaunch', () => {
-  it('names the grid and the model, and never the key', () => {
-    const line = describeGridLaunch('claude', WITH_MODEL, 'on')
-    expect(line).toContain('autonomous.ai')
-    expect(line).toContain('GLM-4.7-Flash')
+  it('names a grid by its id and the model, never its name, a hash of it, or the key', () => {
+    // The line goes to the daemon log (agent create and retarget), which Export logs sends off the machine,
+    // and a grid's name is one the person can choose: short, so its hash is guessable.
+    const line = describeGridLaunch('claude', { ...WITH_MODEL, networkName: 'Home sentinel' }, 'on')
+    expect(line).not.toContain('sentinel')
+    expect(line).not.toContain(hashOf('Home sentinel'))
+    expect(line).toContain(`claude -> a grid (${WITH_MODEL.networkId}) · GLM-4.7-Flash`)
     expect(line).not.toContain(WIRE.apiKey)
     expect(describeGridLaunch('claude', OVERRIDE, 'on')).not.toContain(WIRE.apiKey)
+  })
+
+  it('names a saved API by a fixed word: its id is made from the name the person gave it', () => {
+    const line = describeGridLaunch('claude', { ...WITH_MODEL, networkId: 'api:sentinel-api', networkName: 'Sentinel API' }, 'on')
+    expect(line).not.toMatch(/sentinel/i)
+    expect(line).not.toContain(hashOf('Sentinel API'))
+    expect(line).toContain('claude -> an API · GLM-4.7-Flash')
   })
 
   it('names the web-search status — the daemon log is where a degraded launch says why', () => {

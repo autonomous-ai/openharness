@@ -4,6 +4,7 @@
  */
 import { join } from 'node:path'
 import { launchHomeOf } from '../lib/engineHomes.js'
+import { hashOf } from '../lib/log.js'
 import { homeIsNetworkOrDevice } from './kit/homeAdoption.js'
 import { recordTrustIn, trustsIn } from './kit/folderTrust.js'
 import { recordInheritedMcp } from './kit/inheritedMcp.js'
@@ -42,7 +43,7 @@ export function folderTrust(engine: AgentEngine, profile?: string | null, enviro
       if (mcp) {
         try {
           const settled = recordInheritedMcp(mcp, path, launchHomeOf(mcp.user.home, profile, environment))
-          if (settled.length) console.log(`[launch] ${engine}: continues without the MCP servers ${settled.join(', ')} it found above ${path}, as its question does by default`)
+          if (settled.length) console.log(`[launch] ${engine}: continues without the ${settled.length} MCP servers it found above ${hashOf(path)}, as its question does by default`)
         } catch { /* the engine asks, as before */ }
       }
       return recorded

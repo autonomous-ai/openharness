@@ -8,7 +8,8 @@
  * and CODEX_HOME, and the fake engines run them (fakeEngine.mjs): the real `hook/notify.mjs` carries
  * every hook event to the daemon, with its deadline and its offline registry writes. Before a daemon
  * starts, every folder it could install hooks into is checked to be inside the test's root
- * (`assertHooksContained`), and every file it says it wrote is checked again once it is up.
+ * (`assertHooksContained`), and once it is up no hook line of its log may say its file is outside the daemon's home,
+ * under which the harness keeps every engine's (`hooksOutside`).
  *
  * It runs on a copy of the worker's Node alone in its folder (e2e/harness/testNode.ts), so it finds no engine beside
  * its Node.
@@ -29,6 +30,7 @@ import { GH_FORBIDDEN_STUB } from '../../src/testing/ghStub.js'
 import { hooks as claudeHooks } from '../../src/engines/claude/hookContract.js'
 import { hooks as codexHooks } from '../../src/engines/codex/hookContract.js'
 import { readAdoptedHomes } from '../../src/engines/kit/homeAdoption.js'
+import { OUTSIDE_HOME } from '../../src/lib/log.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
 import { endRootProcesses } from '../../src/testing/rootProcesses.js'
 import { assertSocketPathFits } from '../../src/testing/socketPathRoom.js'
@@ -274,18 +276,16 @@ export function assertHookScriptBeside(scriptPath: string): void {
   throw new Error(`${scriptPath} has no notify.mjs beside it: its daemon refuses every hook install (lay it out with buildWithLean)`)
 }
 
+/** A hook line naming a file by its path, not by its tag: a path names the person's home. */
+const HOOK_LINE_PATH = /\[hooks\] .*(?:→|unchanged:) (?:\/|[A-Za-z]:\\)/
 /**
- * The files a daemon's log says it installed hooks or plugins into, found them already in, or left alone.
- * The update line names the hook script first and the file it rewrote after ` in `.
+ * The lines of [log] that show a daemon put hooks outside its home, for its error: each hook line naming a raw path, a
+ * regression in itself, and each that says its file is outside the home. Every line naming a hook file the daemon wrote,
+ * installed, updated or kept says so after the file's tag (lib/log.ts `fileTag`): a tag is made with a key of the
+ * daemon's own, which no test can make, and these fixed words need none.
  */
-export function hookFilesNamed(log: string): string[] {
-  const files: string[] = []
-  for (const line of log.split('\n')) {
-    if (!line.includes('[hooks]')) continue
-    const named = line.includes('updated (path/port changed)') ? / in (\/\S+)\s*$/.exec(line) : /(?:→|unchanged:) (\/\S+)/.exec(line)
-    if (named) files.push(named[1])
-  }
-  return files
+export function hooksOutside(log: string): string[] {
+  return log.split('\n').filter((line) => HOOK_LINE_PATH.test(line) || (line.includes('[hooks] ') && line.includes(OUTSIDE_HOME)))
 }
 
 export const until = async <T>(what: string, probe: () => Promise<T | null | undefined | false> | T | null | undefined | false, ms = 30_000, every = 100): Promise<T> => {
@@ -350,9 +350,12 @@ export class IsolatedDaemon {
     // What a daemon beside another keeps for itself; everything else is the computer's, and shared. Short
     // names: the socket lives in the data folder, and a Unix socket's path has room for 96 bytes.
     const own = beside ? join(root, `b${++besideCount}`) : root
+    // The engines' homes are under the home: a hook line says when its file is outside the daemon's home (lib/log.ts
+    // fileTag), and the test fails on it (`hooksOutside`).
+    const home = tmux.env.HOME!
     const dirs = {
-      home: tmux.env.HOME!, data: options.dataDir ?? join(own, beside ? 'd' : 'data'), runtime: join(own, 'runtime'), auth: join(own, 'auth'),
-      bin: join(own, 'bin'), dsh: join(own, 'dsh'), claudeProjects: join(root, 'claude', 'projects'), codexHome: join(root, 'codex'),
+      home, data: options.dataDir ?? join(own, beside ? 'd' : 'data'), runtime: join(own, 'runtime'), auth: join(own, 'auth'),
+      bin: join(own, 'bin'), dsh: join(own, 'dsh'), claudeProjects: join(home, 'claude', 'projects'), codexHome: join(home, 'codex'),
       projects: join(root, 'projects'), tmp: join(own, 't'),
     }
     try {
@@ -563,10 +566,10 @@ esac
     try { return readFileSync(this.opensLog, 'utf8').split('\n').filter(Boolean).map((line) => line.split(' ')) } catch { return [] }
   }
 
-  /** Throws when the daemon said it put hooks outside the root, or an engine refused hooks found there. */
+  /** Throws when the last start's log says it put hooks outside its home, or an engine refused hooks found there. */
   private assertHooksStayedInside(): void {
-    const outside = hookFilesNamed(this.output).filter((file) => !inside(this.root, file))
-    if (outside.length) throw new Error(`the daemon under test wrote hooks outside ${this.root}: ${[...new Set(outside)].join(', ')}`)
+    const outside = hooksOutside(this.output.slice(this.startedAt))
+    if (outside.length) throw new Error(`the daemon under test wrote hooks outside ${this.env.HOME}; its lines:\n${outside.join('\n')}`)
     const refused = this.hookLog().split('\n').filter((line) => line.includes('REFUSED'))
     if (refused.length) throw new Error(`a fake engine refused to run hooks (test root ${this.root}):\n${refused.join('\n')}`)
   }
@@ -724,7 +727,10 @@ esac
     return env
   }
 
-  /** SIGTERM, then SIGKILL to its whole process group after `ms`. Resolves when the process is gone. */
+  /**
+   * SIGTERM, then SIGKILL to its whole process group after `ms`. Resolves when the process is gone, and its hooks are
+   * checked to have stayed inside the root.
+   */
   async stop(ms = 15_000): Promise<void> {
     const child = this.child
     if (!child) return
@@ -733,6 +739,7 @@ esac
     const timer = setTimeout(() => IsolatedDaemon.killGroup(child), ms)
     await exited
     clearTimeout(timer)
+    this.assertHooksStayedInside()
   }
 
   /**

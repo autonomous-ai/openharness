@@ -16,7 +16,7 @@
  */
 import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -25,6 +25,7 @@ import type { QuestionRow, ScreenReading } from './facets/screen.js'
 import type { AgentEngine } from './types.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { rowKeys } from '../lib/questionController.js'
+import { sourceFiles } from '../testing/sourceFiles.js'
 import { engineLoaded, inProcessScreen } from './inProcess.js'
 import * as takeoverScreens from '../lib/__fixtures__/takeoverScreens.js'
 import * as rewindPickers from '../lib/__fixtures__/rewindPickers.js'
@@ -71,30 +72,24 @@ function fixtureInputs(): Array<{ id: string; text: string }> {
 /** Every pane written out whole in a spec: a multi-line string, or a list of literal lines joined with `\n`. */
 function specInputs(): Array<{ id: string; text: string }> {
   const found: Array<{ id: string; text: string }> = []
-  const walk = (dir: string): void => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const path = join(dir, entry.name)
-      if (entry.isDirectory()) { if (entry.name !== '__fixtures__') walk(path); continue }
-      const file = relative(SRC, path)
-      if (!SPECS.test(file)) continue
-      const source = ts.createSourceFile(path, readFileSync(path, 'utf8'), ts.ScriptTarget.Latest, true)
-      const literal = (node: ts.Node): string | null => ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) ? node.text : null
-      const visit = (node: ts.Node): void => {
-        let text: string | null = null
-        if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'join'
-          && ts.isArrayLiteralExpression(node.expression.expression) && node.arguments.length === 1 && literal(node.arguments[0]) === '\n') {
-          const lines = node.expression.expression.elements.map(literal)
-          if (lines.length > 1 && lines.every((line) => line !== null)) text = lines.join('\n')
-        } else {
-          text = literal(node)
-        }
-        if (text !== null && text.split('\n').length > 2) found.push({ id: `${file}#${sha256(text).slice(0, 12)}`, text })
-        ts.forEachChild(node, visit)
+  for (const file of sourceFiles(SRC).filter((file) => SPECS.test(file))) {
+    const path = join(SRC, file)
+    const source = ts.createSourceFile(path, readFileSync(path, 'utf8'), ts.ScriptTarget.Latest, true)
+    const literal = (node: ts.Node): string | null => ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) ? node.text : null
+    const visit = (node: ts.Node): void => {
+      let text: string | null = null
+      if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'join'
+        && ts.isArrayLiteralExpression(node.expression.expression) && node.arguments.length === 1 && literal(node.arguments[0]) === '\n') {
+        const lines = node.expression.expression.elements.map(literal)
+        if (lines.length > 1 && lines.every((line) => line !== null)) text = lines.join('\n')
+      } else {
+        text = literal(node)
       }
-      visit(source)
+      if (text !== null && text.split('\n').length > 2) found.push({ id: `${file}#${sha256(text).slice(0, 12)}`, text })
+      ts.forEachChild(node, visit)
     }
+    visit(source)
   }
-  walk(SRC)
   return found.sort((a, b) => a.id.localeCompare(b.id))
 }
 

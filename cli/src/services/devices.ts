@@ -98,7 +98,7 @@ import { MachineListCache } from '../device/machineList.js'
 import type { NoticeAsk, NoticeResult } from '../lib/dialNotice.js'
 import { claudeProjectsRoots, codexHomeRoots, movedEngineHomes } from '../lib/engineHomes.js'
 import { harnessDevicesRequest } from '../lib/harnessDevices.js'
-import { errorKind } from '../lib/log.js'
+import { codeOrLength, errorKind } from '../lib/log.js'
 import { pidAlive } from '../lib/processProof.js'
 import { ptyHostBinary } from '../lib/ptyHost/launch.js'
 import { OpenSessions, SessionRows } from '../lib/sessionSearch/external.js'
@@ -111,7 +111,8 @@ import { tmuxFinder } from '../lib/binaryFinder.js'
 import { VERSION } from '../version.js'
 import { createPartGuard } from './devicesGuard.js'
 import { attachHandler, dialStream, frontHandler, noticeHandler, notifyHandler, orcaFrontHandler, tabHandler, tabsStream, threadHandler, type DevicesListener, type ListenerHandler, type ListenerStreamHandler } from './devicesListener.js'
-import { FLEET_FALLBACKS, startFleet, type Fleet } from './fleet.js'
+import { FLEET_FALLBACKS, FLEET_UNAVAILABLE, startFleet, type Fleet } from './fleet.js'
+import { TURN_UNANSWERED } from './fleetRouter.js'
 
 export { DEVICES_REQUESTS }
 
@@ -216,6 +217,8 @@ export interface DevicesDeps {
 
 /** ⌘K's answer while the fleet is not running: it never started, so there is no list to weigh. */
 const NO_AGENT_LIST = 'no agent list yet'
+/** The sentences ⌘K's send is refused with here, all fixed: its log line says one as it is, anything else by its length. */
+const SEND_REFUSALS: ReadonlySet<string> = new Set([NO_AGENT_LIST, FLEET_UNAVAILABLE, TURN_UNANSWERED])
 const unrouted = (reason: string): RouteAnswer => ({ agentId: '', machineId: '', name: '', confidence: 0, reason, candidates: [], weighed: 0, machines: 0, via: '' })
 const sid = (id: string): string => id.slice(0, 8)
 /** A card for the dial, and the machine it came from when another machine sent it (services/fleet.ts). */
@@ -2231,7 +2234,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // Addressed to one device by the fleet's id: a preference belongs to the glass it was set on. Nothing is
     // answered here; the device's own `settings.state` reaches the windows as an ordinary `dial_status`.
     settings: (id, patch) => part.call('dial', () => cable.setSettings(id, patch as Parameters<CableFleet['setSettings']>[1])
-      .then((result) => { if (!result.ok) log(`[cable] settings for ${id || 'no device'}: ${result.error}`) })),
+      .then((result) => { if (!result.ok) log(`[cable] settings for ${id || 'no device'}: ${codeOrLength(result.error)}`) })),
     windowFocus: (next) => {
       focus = next
       // State replay after a service restart carries windowFocus, without another appFocus event.
@@ -2251,8 +2254,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // own machine instead of being looked for in this computer's registry.
     routeSend: async (agentId, text): Promise<SendResult> => {
       const sent = fleet?.routeSend(agentId, text) ?? { ok: false as const, machine: '', reason: NO_AGENT_LIST }
+      // The refused machine's name stays in the reply: the fleet's router logs that machine by its id.
       log(`[route] ⌘K → ${sid(agentId)} · bytes=${Buffer.byteLength(text, 'utf8')}`
-        + (sent.ok ? '' : ` · REFUSED: ${sent.reason}${sent.machine ? ` (${sent.machine})` : ''}`))
+        + (sent.ok ? '' : ` · REFUSED: ${SEND_REFUSALS.has(sent.reason) ? sent.reason : codeOrLength(sent.reason)}`))
       return sent
     },
     // The Wi-Fi device borrows the dial's walk along the desk and its stroke, until it is one of the devices.

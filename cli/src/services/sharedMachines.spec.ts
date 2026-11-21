@@ -268,7 +268,7 @@ describe('shared machines', () => {
       const port = fakePort({ trust: vi.fn(async () => down) })
       start(port)
       await fire()
-      expect(log).toHaveBeenCalledWith(expect.stringContaining('could not update the trust stores'))
+      expect(log).toHaveBeenCalledWith('could not update the trust stores: BACKEND_UNREACHABLE')
       port.shared.mockRejectedValueOnce(new Error('boom'))
       await fire()
       expect(log).toHaveBeenCalledWith('read failed: Error')

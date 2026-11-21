@@ -4,10 +4,11 @@
  * it runs in before PATH, and SystemRoot, windir and ComSpec are whoever runs the command's. The bare names are read as
  * text, as noWindow.spec.ts reads `detached`.
  */
-import { readdirSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { sourceFiles } from '../../testing/sourceFiles.js'
 import { powershellPath, systemProgram, systemRoot } from './powershell.js'
 import { systemRoot as masterSystemRoot } from '../../harnessd/platform.js'
 
@@ -84,8 +85,7 @@ describe('Windows programs by their full paths', () => {
   // Test code runs in the repository; what a person runs does not.
   it('no file under cli/src runs one by a bare name', () => {
     const src = fileURLToPath(new URL('../..', import.meta.url))
-    const bare = readdirSync(src, { recursive: true, encoding: 'utf8' })
-      .map((file) => file.split('\\').join('/'))
+    const bare = sourceFiles(src)
       .filter((file) => /\.(ts|mts|js|mjs)$/.test(file) && !/\.(spec|test)\.ts$/.test(file) && !file.startsWith('testing/'))
       .flatMap((file) => [...readFileSync(join(src, file), 'utf8').matchAll(BARE)].map((match) => [file, match[0]] as const))
     expect(bare.filter(([file]) => !(file in RESOLVED_ELSEWHERE)).map(([file, call]) => `${file}: ${call}`)).toEqual([])

@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net'
 import { hostname } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WebSocketServer, type WebSocket } from 'ws'
-import { env } from '../config/env.js'
+import { backendName, env } from '../config/env.js'
 import { AuthSessionError } from '../lib/authSession.js'
 import { UpstreamLink } from './upstream.js'
 
@@ -226,6 +226,43 @@ describe('UpstreamLink reconnect backoff', () => {
     link[end]()
 
     expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+describe('UpstreamLink connected line', () => {
+  // Every process says the backend with the same words (core/main.ts, device/deviceLink.ts): a hash differs between processes.
+  it('names the backend by whether it is the one a build dials unless told otherwise', () => {
+    expect(backendName('wss://harness-api.autonomous.ai')).toBe('the production backend')
+    expect(backendName('wss://harness-api.autonomous.ai/api/adapter-ws?label=sentinel&v=1')).toBe('the production backend')
+    expect(backendName('wss://harness-api.autonomous.ai.example/api/adapter-ws')).toBe('another backend')
+    expect(backendName('ws://localhost:8090')).toBe('another backend')
+    expect(backendName('not a URL')).toBe('another backend')
+  })
+
+  // `harness start` waits for `[backend] connected` (lib/daemonLaunch.ts); the URL carries the hostname.
+  it('the connected line keeps its marker and says which backend in fixed words, never its URL', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const originalUrl = env.BACKEND_WS_URL
+    let dialed = ''
+    const server = await backend({ onConnection: (_ws, request) => { dialed = request.url ?? '' } })
+    env.BACKEND_WS_URL = server.url
+    const { link, signals } = upstream(token)
+    try {
+      const up = once(signals, 'up')
+      link.connect()
+      await up
+
+      const lines = log.mock.calls.map((call) => call.map(String).join(' '))
+      expect(dialed).toContain('label=')
+      expect(lines.filter((line) => line.startsWith('[backend] connected'))).toEqual(['[backend] connected · another backend'])
+      expect(lines.join('\n')).not.toContain('127.0.0.1')
+    } finally {
+      link.stop()
+      env.BACKEND_WS_URL = originalUrl
+      for (const client of server.wss.clients) client.terminate()
+      await new Promise((resolve) => server.wss.close(resolve))
+      vi.restoreAllMocks()
+    }
   })
 })
 

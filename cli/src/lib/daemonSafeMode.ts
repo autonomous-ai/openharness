@@ -13,6 +13,7 @@
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { atomicWriteJson } from './secureState.js'
+import { errorKind } from './log.js'
 
 /** Written while a daemon is in safe mode; removed on the way out. `harness status` reads it. */
 export const SAFE_MODE_FILE_NAME = 'adapter.safe-mode'
@@ -58,11 +59,13 @@ export function safeModeDisposition(
   // not it has claimed the pid file yet. Read off the code, which the message does not carry: a second
   // master's core that lost the race before the winner's claim would otherwise stay up in safe mode, and
   // its master claim the pid file over the daemon that is serving (e2e/twodaemons.e2e.ts).
-  if ((error as { code?: unknown } | null | undefined)?.code === 'EADDRINUSE') return { stay: false, reason: message }
+  // Here and below, a core that leaves says why only in its log (core/main.ts `enterSafeMode`), which Export logs
+  // sends: fixed words and the kind, never the message, which names the socket's path.
+  if ((error as { code?: unknown } | null | undefined)?.code === 'EADDRINUSE') return { stay: false, reason: `the data folder's socket is another daemon's (${errorKind(error)})` }
   // The core of a master that is gone, still leaving once the wait for it was over: this core goes, and is
   // started again by its master, which by then finds the folder free. Gone for good instead, its master
   // went with it, cleanly, and launchd and systemd do not start a clean exit again.
-  if ((error as { code?: unknown } | null | undefined)?.code === 'ORPHAN_STILL_SERVING') return { stay: false, reason: message, retry: true }
+  if ((error as { code?: unknown } | null | undefined)?.code === 'ORPHAN_STILL_SERVING') return { stay: false, reason: `the master that started this core is gone (${errorKind(error)})`, retry: true }
   const owner = deps.readPid()
   // Under harnessd the pid file names the master that runs this core: that daemon is this one.
   if (owner !== null && owner !== deps.selfPid && owner !== deps.masterPid && deps.isAlive(owner)) {

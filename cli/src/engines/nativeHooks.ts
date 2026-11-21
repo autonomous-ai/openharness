@@ -3,11 +3,10 @@ import { existsSync } from 'node:fs'
 import { lstat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { HookPreparationHeld, hookPreparationRoutes, runHookPreparation, type HookPreparationProof } from './kit/nativeHookFiles.js'
-import { HookScriptMissing } from './kit/hookHeld.js'
 import { nativeHookLocations, type NativeHookOptions } from './kit/nativeLocations.js'
 import { env } from '../config/env.js'
 import { hookTokenPath } from '../lib/hookAuth.js'
-import { errorKind } from '../lib/log.js'
+import { errorKind, fileTag } from '../lib/log.js'
 import { VERSION } from '../version.js'
 import { OPENCODE_LEGACY_PLUGIN, OPENCODE_TUI_PLUGIN, OPENCODE_LEGACY_REMOVAL, OPENCODE_VERSION } from './opencode/contract.js'
 import { KILO_PLUGIN } from './kilo/contract.js'
@@ -78,12 +77,18 @@ export async function installHermesHooks(port: number, selectedHome?: string, op
 function hermesHooksAsToday(port: number, selectedHome: string | undefined, options: NativeHookOptions | undefined, platform: NodeJS.Platform): Promise<boolean> {
   // Once for every home, before the pool: a missing notify.mjs is a failed install said in one line, never a rejection.
   try { requireHookScript('hermes') } catch (error) {
-    if (isNamedHold(error, platform)) console.error(`${hooksNotInstalled('hermes')} · ${errorKind(error)}`)
-    else console.error(HERMES_HOOK_SETTINGS.messages.failed, errorKind(error))
+    const held = error instanceof HookPreparationHeld ? error.hold : errorKind(error)
+    if (isNamedHold(error, platform)) console.error(`${hooksNotInstalled('hermes')} · ${held}`)
+    else console.error(HERMES_HOOK_SETTINGS.messages.failed, held)
     return Promise.resolve(false)
   }
-  return installNativeYamlHooks(HERMES_HOOK_SETTINGS, home => command(port, 'hermes', env.CODEX_HOME, home, options?.environment, platform === 'win32' ? 'cmd' : 'bash'), selectedHome,
+  return installNativeYamlHooks(HERMES_HOOK_SETTINGS, home => hermesHookCommand(port, home, options?.environment, platform), selectedHome,
     { ...options, createMissing: !!selectedHome && !!options?.environment })
+}
+
+/** The hook line Harness installs in Hermes [home]; `harness hooks hermes` prints the same. */
+export function hermesHookCommand(port: number, home: string, environment?: Readonly<Record<string, string>>, platform: NodeJS.Platform = hostPlatform()): string {
+  return command(port, 'hermes', env.CODEX_HOME, home, environment, platform === 'win32' ? 'cmd' : 'bash')
 }
 
 // The removal lines said, each once per file in the daemon's life; at the limit the set starts again.
@@ -94,7 +99,8 @@ function sayOnce(stream: 'log' | 'warn', template: string, file: string, reason 
   if (said.has(key)) return
   if (said.size >= MAX_SAID) said.clear()
   said.add(key)
-  console[stream](template.replace(/\{(file|reason)\}/g, (_, name: string) => name === 'file' ? file : reason))
+  // The file by its hash: its path names the person's home.
+  console[stream](template.replace(/\{(file|reason)\}/g, (_, name: string) => name === 'file' ? fileTag(file) : reason))
 }
 
 /**
@@ -114,9 +120,11 @@ async function removeHermesHooks(homes: readonly string[]): Promise<void> {
     if (link) sayOnce('warn', HERMES_HOOKS_SAID.kept, link, 'the file is a symbolic link')
     else editable.push(home)
   }
-  for (const { file, removed, failed, kept } of await removeNativeYamlHooks(HERMES_HOOK_SETTINGS, editable)) {
+  for (const { file, removed, failedKind, kept } of await removeNativeYamlHooks(HERMES_HOOK_SETTINGS, editable)) {
     if (removed > 0) sayOnce('log', HERMES_HOOKS_SAID.removed, file)
-    const reason = failed ?? kept
+    // Not uninstall's sentence for a person (`failed`), which can quote an error naming a path: a hold's fixed words or
+    // the error's kind. What keeps a file is fixed words too.
+    const reason = failedKind ?? kept
     if (reason) sayOnce('warn', HERMES_HOOKS_SAID.kept, file, reason)
   }
 }
@@ -194,8 +202,7 @@ export async function installOpencodePlugin(port: number, snapshot?: OpencodeLau
     }, { ...options, timeoutMs: Math.max(0, deadline - performance.now()), confirmed: proof => installation.proofs.push(proof), identity: JSON.stringify([port, snapshot?.identity, major]),
       current: () => group.current.port === port && group.current.executable === installation.executable
         && group.current.major === major && performance.now() < deadline && snapshot?.current() !== false && options.current?.() !== false }) } catch (error) {
-      // A hold's reason is fixed words (hookHeld.ts); HookScriptMissing's names a path, so that one is said by its kind.
-      console.error('[hooks] OpenCode preparation held:', error instanceof HookPreparationHeld && !(error instanceof HookScriptMissing) ? error.reason : errorKind(error))
+      console.error('[hooks] OpenCode preparation held:', error instanceof HookPreparationHeld ? error.hold : errorKind(error))
       return false
     }
   })()

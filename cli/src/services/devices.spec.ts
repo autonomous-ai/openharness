@@ -56,6 +56,12 @@ import {
   type DevicesListener, type ListenerHandler, type ListenerStreamHandler,
 } from './devicesListener.js'
 
+// A dial's and a route's refusal, in words holding a path: the daemon's log must name them by length alone.
+const { SETTINGS_REFUSED, FAR_REFUSED } = vi.hoisted(() => ({
+  SETTINGS_REFUSED: 'That device is not plugged into /Users/sentinel/desk.',
+  FAR_REFUSED: 'the last request to /Users/sentinel/far did not come back',
+}))
+
 const seen = vi.hoisted(() => ({
   host: null as unknown as CableHostWiring,
   dial: null as unknown as { onDialStatus(status: unknown): void },
@@ -117,7 +123,7 @@ vi.mock('../cable/cableFleet.js', async (real) => {
     apps = true
     wantsApps() { return this.apps }
     petDial = () => ({ supported: false, held: [] as string[], sending: null })
-    setSettings = vi.fn(async (id: string, _patch: unknown) => (id === 'usb' ? { ok: true } : { ok: false, error: 'That device is not plugged into this computer.' }))
+    setSettings = vi.fn(async (id: string, _patch: unknown) => (id === 'usb' ? { ok: true } : { ok: false, error: SETTINGS_REFUSED }))
   }
   return { ...actual, CableFleet: FakeCable }
 })
@@ -158,7 +164,7 @@ vi.mock('./fleet.js', async (real) => {
         if (typeof key === 'string' && Object.hasOwn(state.answers, key)) return state.answers[key]
         if (key === 'onEvent') return (listener: (event: FleetEvent) => void) => { state.events = listener; return () => {} }
         if (key === 'routeTask') return async (text: string) => ({ agentId: 'a1', machineId: 'm1', name: 'api', confidence: 1, reason: text, candidates: [], weighed: 1, machines: 1, via: 'model' })
-        if (key === 'routeSend') return (agentId: string) => agentId === 'far' ? { ok: false, machine: 'mac-mini', reason: 'the last request to it did not come back' }
+        if (key === 'routeSend') return (agentId: string) => agentId === 'far' ? { ok: false, machine: 'mac-mini', reason: FAR_REFUSED }
           : agentId === 'nameless' ? { ok: false, machine: '', reason: 'no such agent' } : { ok: true }
         if (key === 'knows') return () => { if (state.fail) throw new Error('lost'); return true }
         if (key === 'stop') return vi.fn()
@@ -1329,13 +1335,14 @@ describe('what the windows say, reaching the dial', () => {
     expect(calls('agentSeen')).toEqual([['a1', 'tok']])
   })
 
-  it('changes one device\'s settings, and logs a refusal', async () => {
+  it('changes one device\'s settings, and logs a refusal by its length, not its words', async () => {
     const { port } = start()
     port.settings('usb', { brightness: 3 })
     port.settings('', { brightness: 3 })
     port.settings('gone', { brightness: 3 })
-    await vi.waitFor(() => expect(logs).toContain('[cable] settings for gone: That device is not plugged into this computer.'))
-    expect(logs).toContain('[cable] settings for no device: That device is not plugged into this computer.')
+    await vi.waitFor(() => expect(logs).toContain(`[cable] settings for gone: text(${SETTINGS_REFUSED.length})`))
+    expect(logs).toContain(`[cable] settings for no device: text(${SETTINGS_REFUSED.length})`)
+    expect(logs.join('\n')).not.toContain('sentinel')
   })
 
   it('translates every card for the devices into the dial\'s calls, and ignores the rest', () => {
@@ -1710,7 +1717,7 @@ describe('the other machines\' cards', () => {
 })
 
 describe('⌘K, the Wi-Fi device\'s borrowed walk, the voice router and stopping', () => {
-  it('route a typed task and its send through the fleet, saying why a send was refused', async () => {
+  it('route a typed task and its send through the fleet, saying a refusal by its length, not its words', async () => {
     const { port } = start()
     expect(await port.routeTask('fix the parser')).toMatchObject({ agentId: 'a1', reason: 'fix the parser' })
     expect(await port.routeSend('a1', 'go')).toEqual({ ok: true })
@@ -1718,8 +1725,24 @@ describe('⌘K, the Wi-Fi device\'s borrowed walk, the voice router and stopping
     expect(await port.routeSend('nameless', 'go')).toMatchObject({ ok: false, machine: '' })
     expect(logs).toEqual(expect.arrayContaining([
       '[route] ⌘K → a1 · bytes=2',
-      '[route] ⌘K → far · bytes=2 · REFUSED: the last request to it did not come back (mac-mini)',
-      '[route] ⌘K → nameless · bytes=2 · REFUSED: no such agent',
+      `[route] ⌘K → far · bytes=2 · REFUSED: text(${FAR_REFUSED.length})`,
+      '[route] ⌘K → nameless · bytes=2 · REFUSED: text(13)',
+    ]))
+    // The machine's name is a person's, or the computer's: the router's own line names it by its id.
+    expect(logs.join('\n')).not.toContain('sentinel')
+    expect(logs.join('\n')).not.toContain('mac-mini')
+  })
+
+  it('say the fleet\'s own refusals of a send as they are: each is one of its fixed sentences', async () => {
+    const { port } = start()
+    seen.fleet!.answers = { routeSend: () => ({ ok: false, machine: 'mac-mini', reason: 'the last request to it did not come back' }) }
+    await port.routeSend('far', 'go')
+    // A fleet that fails answers with its fallback.
+    seen.fleet!.answers = { routeSend: () => { throw new Error('lost') } }
+    expect(await port.routeSend('far', 'go')).toEqual({ ok: false, machine: '', reason: 'the fleet service is unavailable' })
+    expect(logs).toEqual(expect.arrayContaining([
+      '[route] ⌘K → far · bytes=2 · REFUSED: the last request to it did not come back',
+      '[route] ⌘K → far · bytes=2 · REFUSED: the fleet service is unavailable',
     ]))
   })
 
@@ -1730,7 +1753,7 @@ describe('⌘K, the Wi-Fi device\'s borrowed walk, the voice router and stopping
     expect(await frame('route_task', { text: '   ' })).toEqual({ agentId: '', machineId: '', name: '', confidence: 0, reason: 'empty task', candidates: [], weighed: 0, machines: 0, via: '' })
     expect(await frame('route_task', 'not a payload')).toMatchObject({ agentId: '', reason: 'empty task' })
     expect(await frame('route_send', { agentId: 'a1', text: 'go' })).toEqual({ ok: true })
-    expect(await frame('route_send', { agentId: 'far', text: 'go' })).toEqual({ ok: false, machine: 'mac-mini', reason: 'the last request to it did not come back' })
+    expect(await frame('route_send', { agentId: 'far', text: 'go' })).toEqual({ ok: false, machine: 'mac-mini', reason: FAR_REFUSED })
     for (const payload of [{ agentId: 'a1' }, { text: 'go' }, { agentId: 5, text: 'go' }]) {
       expect(await frame('route_send', payload), JSON.stringify(payload)).toEqual({ ok: false, machine: '', reason: 'nothing to send' })
     }

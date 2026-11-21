@@ -103,10 +103,10 @@ export async function uninstallDeps(options: { tildify: (path: string) => string
       const codex = hookContracts.codex.settings
       const inCodex = (file: string | undefined) => (file ? targets.codex.homes.map((codexHome) => join(codexHome, file)) : [])
       const labels = {
-        claudeSettings: new Set(targets.claude.homes.map((claudeHome) => join(claudeHome, hookContracts.claude.settings.file))),
-        codexSettings: new Set(inCodex(codex.file)),
-        reviews: new Set(inCodex(codex.reviewed?.file)),
-        whole: new Set([...targets.plugins.map((plugin) => plugin.file), ...inCodex(codex.allow && 'file' in codex.allow ? codex.allow.file : undefined)]),
+        claudeSettings: new Set(targets.claude.homes.map((claudeHome) => join(claudeHome, hookContracts.claude.settings.fileName))),
+        codexSettings: new Set(inCodex(codex.fileName)),
+        reviews: new Set(inCodex(codex.reviewed?.fileName)),
+        whole: new Set([...targets.plugins.map((plugin) => plugin.file), ...inCodex(codex.allow && 'fileName' in codex.allow ? codex.allow.fileName : undefined)]),
         adopted: ADOPTED_HOMES,
         hooksLeft: YAML_HOOKS_KEPT,
       }

@@ -171,7 +171,7 @@ describe('the dial set up from its first attach', () => {
   it('a Codex in another home is set up once the scan sees it, and what the person removes stays removed', async () => {
     const { d, desk } = await fresh()
     const codexHome = d.env.CODEX_HOME!
-    const other = join(d.root, 'codex-other'), mine = join(d.root, 'codex-mine'), old = join(d.root, 'codex-old')
+    const other = join(d.env.HOME!, 'codex-other'), mine = join(d.env.HOME!, 'codex-mine'), old = join(d.env.HOME!, 'codex-old')
     const theirs = '---\nname: dial\ndescription: my own\n---\n\nMine.\n'
     mkdirSync(dirname(skillOf(mine)), { recursive: true })
     writeFileSync(skillOf(mine), theirs)
@@ -280,7 +280,7 @@ describe('the dial set up from its first attach', () => {
   it.runIf(!!process.env.E2E_REAL_CODEX)('a real Codex app-server\'s rollout gives its home', async () => {
     const codex = process.env.E2E_REAL_CODEX!
     const { d, desk } = await fresh()
-    const home = join(d.root, 'codex-real'), work = join(d.root, 'work'), sessions = join(home, 'sessions')
+    const home = join(d.env.HOME!, 'codex-real'), work = join(d.root, 'work'), sessions = join(home, 'sessions')
     mkdirSync(home, { recursive: true })
     mkdirSync(work, { recursive: true })
     // No login and no model: the provider is a port where nothing listens.
@@ -295,7 +295,7 @@ env_key = "PROBE_KEY"
 trust_level = "trusted"
 `)
     // A tmux server of the test's own, its socket under the root, and nothing of the developer's in the pane.
-    const tmuxEnv = { HOME: join(d.root, 'home'), CODEX_HOME: home, PATH: d.tmux.env.PATH!, PROBE_KEY: 'none', TMUX_TMPDIR: d.root }
+    const tmuxEnv = { HOME: d.env.HOME!, CODEX_HOME: home, PATH: d.tmux.env.PATH!, PROBE_KEY: 'none', TMUX_TMPDIR: d.root }
     const tmux = (...args: string[]): string => execFileSync('tmux', ['-L', 'dialskill', '-f', '/dev/null', ...args], { env: tmuxEnv }).toString()
     // Read before its server goes, and printed when the case fails.
     let screen = ''

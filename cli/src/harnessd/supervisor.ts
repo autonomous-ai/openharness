@@ -10,6 +10,7 @@
  * The core and the master talk over the spawn channel (`./protocol.ts`). Everything that touches the
  * operating system is injected (`SupervisorDeps`), so every decision here is tested without one.
  */
+import { codeOrLength } from '../lib/log.js'
 import {
   CORE_EXIT_STOP,
   CORE_EXIT_UPDATE,
@@ -469,17 +470,17 @@ export class Supervisor {
           // loop. Before, the good build was rolled back and remembered as bad (e2e/updateHostile.e2e.ts).
           // Started again, on the same bundle and still on trial, once there may be room.
           this.noRoom = true
-          this.kill(core, 'not-ready', `could not start on the new bundle for want of room on the disk (${message.safeMode}) — not a verdict on the build`)
+          this.kill(core, 'not-ready', `could not start on the new bundle for want of room on the disk (${codeOrLength(message.safeMode)}) — not a verdict on the build`)
           return
         }
         if (message.safeMode !== undefined && this.update) {
           // The new bundle could not start: that is the update failing, however long it stays up.
-          this.kill(core, 'crashed', `started in safe mode on the new bundle (${message.safeMode})`)
+          this.kill(core, 'crashed', `started in safe mode on the new bundle (${codeOrLength(message.safeMode)})`)
           return
         }
         this.upAt = this.deps.now()
         this.coreSafeMode = message.safeMode ?? null
-        this.deps.log(`[harnessd] core ready (pid ${core.pid ?? '?'})${message.safeMode === undefined ? '' : ` · in safe mode: ${message.safeMode}`}`)
+        this.deps.log(`[harnessd] core ready (pid ${core.pid ?? '?'})${message.safeMode === undefined ? '' : ` · in safe mode: ${codeOrLength(message.safeMode)}`}`)
         this.setState('running')
         this.up()
         return

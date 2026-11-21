@@ -9,10 +9,11 @@
  * Its limits: an alias (`const p = process`), `Object.assign`, `Object.defineProperty` or `Reflect.set` on `process`,
  * `node --title=…` and a script kept as text are not reached. e2e/processArguments.e2e.ts reads the real processes.
  */
-import { readdirSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import ts from 'typescript'
 import { expect, it } from 'vitest'
+import { sourceFiles } from './testing/sourceFiles.js'
 
 const SRC = __dirname
 
@@ -75,7 +76,7 @@ it.each([
 
 it('no file of the daemon sets a process title', () => {
   // Every .ts, .tsx, .js, .mjs and .cjs under cli/src but its specs and tests, as architecture.environment.spec.ts lists them.
-  const files = readdirSync(SRC, { recursive: true, encoding: 'utf8' })
+  const files = sourceFiles(SRC)
     .filter((file) => /\.([cm]?[jt]s|tsx)$/.test(file) && !/\.(spec|test)\.([cm]?ts|tsx)$/.test(file))
   const found = files.flatMap((file) => titleWrites(readFileSync(join(SRC, file), 'utf8'), file).map((finding) => `${file}: ${finding}`))
   expect(found, 'No process of the daemon sets process.title: on macOS the title is written over the process\'s arguments, '

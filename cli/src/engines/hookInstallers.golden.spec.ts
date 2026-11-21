@@ -15,6 +15,7 @@ import { homedir, tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { hashOf } from '../lib/log.js'
 import { expectForeignHooksPreserved, preservedHookFiles } from '../testing/hookGoldenSafety.js'
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/hook-installers.golden.json', import.meta.url))
@@ -335,8 +336,11 @@ beforeAll(async () => {
   const messages = messagesCommand(join(root, 'home', '.harness', 'agent-messages'))
   for (const timeout of [5, 30]) hashes.push([reviewHash(codex.settings.reviewed!, 'PostToolUse', undefined, { command: messages, timeout }), `<hash PostToolUse messages${timeout === 5 ? '' : ` timeout ${timeout}`}>`])
   hashes.push([messages, '<messages command>'])
+  // The log names each settings file, and the hook script, by its hash (lib/log.ts hashOf): each known one by its path.
+  const named = [notify.HOOK_SCRIPT, ...(['claude', 'codex'] as const).flatMap((engine) => (['install', 'installIn'] as const).map((via) => join(all[engine][via], FILE[engine])))]
+  const pathHashes = named.map((path): [string, string] => [hashOf(path), `<hash ${path}>`])
   // The real path first: on macOS the temporary folder is reached through /var, and Codex keys by /private/var.
-  tokens = [...hashes, ...commands, [notify.HOOK_SCRIPT, '<script>'], [process.execPath, '<node>'], [realpathSync(root), '<root>'], [root, '<root>'], [`.${process.pid}.`, '.<pid>.']]
+  tokens = [...hashes, ...commands, ...pathHashes, [notify.HOOK_SCRIPT, '<script>'], [process.execPath, '<node>'], [realpathSync(root), '<root>'], [root, '<root>'], [`.${process.pid}.`, '.<pid>.']]
 })
 
 afterAll(() => {

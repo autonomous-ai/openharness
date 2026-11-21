@@ -24,7 +24,7 @@ import path from 'node:path'
 import { env } from '../config/env.js'
 import type { AgentEngine } from '../engines/types.js'
 import { harnessPaneOwner } from './harnessSessionLabel.js'
-import { errorKind } from './log.js'
+import { codeOrLength, errorKind } from './log.js'
 import { isHeldStartCommand } from './nativePaneHold.js'
 import { lookupPaneEngineProcess } from './paneEngineProcess.js'
 import { comparableStartMarker, processRows, setProcessTableSource, type ProcessRow } from './processTable.js'
@@ -281,16 +281,16 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     // A drain host that does not answer yet, and is not proven gone, is still the one its panes are on: ready,
     // reconnecting, its inventory unavailable (so its panes are kept) until it answers or is proven gone.
     if (this.draining && !('client' in reached)) {
-      console.error(`[terminal] ptyhost: draining ${this.instance} unavailable (${'incompatible' in reached ? reached.incompatible : reached.unavailable}); reconnecting`)
+      console.error(`[terminal] ptyhost: draining ${this.instance} unavailable (${'incompatible' in reached ? 'incompatible' : reached.code}); reconnecting`)
       this.scheduleReconnect()
       return { state: 'ready' }
     }
     if ('incompatible' in reached) {
-      console.error(`[terminal] ptyhost: unavailable (${reached.incompatible})`)
+      console.error('[terminal] ptyhost: unavailable (incompatible)')
       return { state: 'unavailable', code: 'PTY_HOST_UNAVAILABLE', reason: reached.incompatible }
     }
     if ('unavailable' in reached) {
-      console.error(`[terminal] ptyhost: unavailable (${reached.unavailable})`)
+      console.error(`[terminal] ptyhost: unavailable (${reached.code})`)
       return { state: 'unavailable', code: reached.code, reason: reached.unavailable }
     }
     this.attach(reached.client)
@@ -315,7 +315,7 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     this.detach()
     client?.close()
     this.panes.clear()
-    console.log(`[terminal] ptyhost: draining ${this.instance} has gone (${reason})`)
+    console.log(`[terminal] ptyhost: draining ${this.instance} has gone (${codeOrLength(reason)})`)
     this.onHostReplaced?.()
   }
 
@@ -542,7 +542,7 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
       }
     }
     if (!('client' in reached)) {
-      console.error(`[terminal] ptyhost: reconnect failed (${'incompatible' in reached ? reached.incompatible : reached.unavailable})`)
+      console.error(`[terminal] ptyhost: reconnect failed (${'incompatible' in reached ? 'incompatible' : reached.code})`)
       this.scheduleReconnect()
       return
     }

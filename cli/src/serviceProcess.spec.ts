@@ -7,7 +7,13 @@ const local = vi.hoisted(() => ({ socket: '/data/daemon-18473.sock' as string | 
 vi.mock('./lib/localSocket.js', async (real) => ({ ...await real<object>(), unixSocketPath: () => local.socket }))
 // The test's own console stays as it is: it is shared with every other test in this worker.
 const stamped = vi.hoisted(() => ({ times: 0 }))
-vi.mock('./lib/log.js', async (real) => ({ ...await real<object>(), installTimestampedConsole: () => { stamped.times++ } }))
+// Nor is it handed a handler that exits it: the handler is lib/log.ts's, tested there.
+const fatal = vi.hoisted(() => ({ calls: [] as unknown[][] }))
+vi.mock('./lib/log.js', async (real) => ({
+  ...await real<object>(),
+  installTimestampedConsole: () => { stamped.times++ },
+  exitOnFatal: (...args: unknown[]) => { fatal.calls.push(args) },
+}))
 // What the master said leaves process.env as the process starts (lib/harnessdEnv.ts): held here, as there,
 // but in a store each test starts empty, since the process is every test's in this worker.
 const harnessd = vi.hoisted(() => ({ held: {} as Record<string, string> }))
@@ -88,6 +94,22 @@ describe('a service in its own process', () => {
     expect(hosted[0].services).toHaveLength(2)
     expect(stops.workspaces).toHaveBeenCalledOnce()
     expect(stops.usage).toHaveBeenCalledOnce()
+  })
+
+  it('a service process that throws or rejects logs its kind and exits 1', async () => {
+    const order: string[] = []
+    const runners = new Map([['search', async () => { order.push('load'); return () => { order.push('start'); return { stop: () => {} } } }]])
+    const { host } = fakeHost()
+    await startServiceProcess('search', { runners, host, fatal: (tag) => { order.push(`fatal ${tag}`) } })
+    // Before any service loads: Node's own report of an error nothing caught is its message and stack, into the daemon's log.
+    expect(order).toEqual(['fatal [service search]', 'load', 'start'])
+    // By default to stderr, which the master made the daemon's log, under the process's name: `edge` for the host it shares.
+    fatal.calls = []
+    process.env.HARNESSD_SERVICE = 'edge'
+    try {
+      await startServiceProcess('search', { runners, host })
+    } finally { delete process.env.HARNESSD_SERVICE }
+    expect(fatal.calls).toEqual([['[service edge]', 2]])
   })
 
   it('leaves off a service that cannot start and runs the others; with none started it exits 1, as a lone one did', async () => {

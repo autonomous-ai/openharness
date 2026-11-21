@@ -39,7 +39,7 @@ const ENABLE = `plugin enable ${DIAL_PLUGIN_ID} --scope user`
  * settings and sessions its own.
  */
 function orcaClaudeHome(d: IsolatedDaemon, name = 'orca-claude'): string {
-  const home = join(d.root, name)
+  const home = join(d.env.HOME!, name)
   const plugins = join(dirname(d.env.CLAUDE_PROJECTS_DIR!), 'plugins')
   mkdirSync(home, { recursive: true })
   mkdirSync(plugins, { recursive: true })
@@ -178,7 +178,7 @@ describe('Orca\'s account homes on the dial', () => {
   it('with a dial attached, an Orca Codex home gets the dial skill', async () => {
     let home = ''
     const { d, desk } = await fresh((d) => {
-      home = join(d.root, 'orca-codex')
+      home = join(d.env.HOME!, 'orca-codex')
       mkdirSync(home, { recursive: true })
       FakeOrca.install(d).accounts({ codex: [home] })
     })
@@ -213,7 +213,7 @@ describe('Orca\'s account homes on the dial', () => {
       const link = join(dirname(d.env.CLAUDE_PATH!), 'orca')
       // Checked before anything starts: a daemon with no app of the harness's would run the computer's.
       expect(d.env.HARNESS_ORCA_APP_BIN).toBe(readlinkSync(link))
-      home = join(d.root, 'orca-codex')
+      home = join(d.env.HOME!, 'orca-codex')
       mkdirSync(home, { recursive: true })
       orca = FakeOrca.install(d)
       orca.accounts({ codex: [home] })

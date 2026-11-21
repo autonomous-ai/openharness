@@ -369,7 +369,9 @@ describe('installPreparedPty', () => {
     for (const name of PTY_PAYLOAD_FILES) writeFileSync(join(ptyRoot, '0.11.0', name), `other ${name}`)
     const before = snapshot()
     const prepared = staged()
-    expect(() => installPreparedPty(prepared, root, realFs)).toThrow(PtyPayloadRefused)
+    const error = (() => { try { installPreparedPty(prepared, root, realFs) } catch (e) { return e } })()
+    expect(error).toBeInstanceOf(PtyPayloadRefused)
+    expect(error).toMatchObject({ code: 'VERSION_FOLDER_DIFFERS' })
     expect(snapshot()).toEqual(before)
     expect(existsSync(prepared.staging)).toBe(false)
     expect(readFileSync(join(ptyRoot, '0.11.0', 'harness.exe'), 'utf8')).toBe('other harness.exe')
@@ -385,7 +387,9 @@ describe('installPreparedPty', () => {
   it('refuses a version launch.ts could not read', () => {
     for (const version of ['0.11.0-beta', 'v0.11.0', '..', '']) {
       const before = snapshot()
-      expect(() => installPreparedPty(staged('new', version), root, realFs)).toThrow(PtyPayloadRefused)
+      const error = (() => { try { installPreparedPty(staged('new', version), root, realFs) } catch (e) { return e } })()
+      expect(error).toBeInstanceOf(PtyPayloadRefused)
+      expect(error).toMatchObject({ code: 'BAD_VERSION_NAME' })
       expect(snapshot()).toEqual(before)
     }
   })

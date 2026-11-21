@@ -79,7 +79,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
   it('keeps readiness and a terminal available while a moved-home write is held, then retries and restores it', async () => {
     const d = await IsolatedDaemon.create(); daemon = d
     onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
-    const home = join(d.root, 'codex-durable'), fault = join(d.root, 'adoption-unavailable')
+    const home = join(d.env.HOME!, 'codex-durable'), fault = join(d.root, 'adoption-unavailable')
     mkdirSync(home, { mode: 0o700 })
     writeFileSync(fault, 'hold', { mode: 0o600 })
     d.env.HARNESS_HOME_ADOPTION_FAULT_FILE = fault
@@ -116,7 +116,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
   it.each(['claude', 'codex'] as const)('%s model picker follows the login shell home', async engine => {
     const d = await IsolatedDaemon.create(); daemon = d
     onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
-    const home = join(d.root, `${engine}-models`)
+    const home = join(d.env.HOME!, `${engine}-models`)
     mkdirSync(home)
     const variable = engine === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME'
     writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export ${variable}=${JSON.stringify(home)}\n`)
@@ -159,7 +159,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     const d = await IsolatedDaemon.create(); daemon = d
     onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
     delete d.env.SHELL
-    const home = join(d.root, 'codex-no-shell')
+    const home = join(d.env.HOME!, 'codex-no-shell')
     mkdirSync(home, { mode: 0o700 })
     for (const profile of ['.zshrc', '.bash_profile']) writeFileSync(join(d.env.HOME!, profile), `export CODEX_HOME=${JSON.stringify(home)}\n`)
     await d.start()
@@ -171,7 +171,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
   it.each(['activity', 'resources', 'close'] as const)('a moved shared Codex server supplies %s', async operation => {
     const d = await IsolatedDaemon.create(); daemon = d
     onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
-    const home = join(d.root, 'codex-shared')
+    const home = join(d.env.HOME!, 'codex-shared')
     mkdirSync(home)
     writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export CODEX_HOME=${JSON.stringify(home)}\n`)
     // Older Codex releases have a shared server and no --no-daemon flag. Keep the actual CLI probe.
@@ -215,7 +215,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
   it('a moved Codex home supplies the thread name shown on its agent', async () => {
     const d = await IsolatedDaemon.create(); daemon = d
     onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
-    const home = join(d.root, 'codex-names')
+    const home = join(d.env.HOME!, 'codex-names')
     mkdirSync(home)
     writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export CODEX_HOME=${JSON.stringify(home)}\n`)
     await d.start()
@@ -238,7 +238,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
   it('a moved Codex home repairs a parent overwritten by its child when the daemon restarts', async () => {
     const d = await IsolatedDaemon.create(); daemon = d
     onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
-    const home = join(d.root, 'codex-parent')
+    const home = join(d.env.HOME!, 'codex-parent')
     mkdirSync(home)
     writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export CODEX_HOME=${JSON.stringify(home)}\n`)
     await d.start()
@@ -326,7 +326,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
   it.each(['claude', 'codex'] as const)('search finds external %s conversations in the moved home after startup', async engine => {
     const d = await IsolatedDaemon.create(); daemon = d
     onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
-    const home = join(d.root, `${engine}-search`)
+    const home = join(d.env.HOME!, `${engine}-search`)
     mkdirSync(home)
     const variable = engine === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME'
     writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export ${variable}=${JSON.stringify(home)}\n`)
@@ -365,7 +365,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     const d = await IsolatedDaemon.create({ env: { DISABLE_HOOK_INSTALL: 'false', HOOK_INSTALL_ENGINES: 'claude,codex' } })
     daemon = d
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
-    const home = join(d.root, folder)
+    const home = join(d.env.HOME!, folder)
     mkdirSync(home, { recursive: true })
     // The profile every shell the daemon starts reads; the daemon itself never sees this variable.
     writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export ${variable}=${JSON.stringify(home)}\n`)
@@ -403,7 +403,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     const d = await IsolatedDaemon.create({ env: { HOOK_INSTALL_ENGINES: hooked } })
     daemon = d
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
-    const home = join(d.root, `${engine}-work`)
+    const home = join(d.env.HOME!, `${engine}-work`)
     mkdirSync(home, { recursive: true })
     writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export ${variable}=${JSON.stringify(home)}\n`)
     const cwd = join(d.projectsDir, `typed-resume-${engine}`)
@@ -453,7 +453,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     const d = await IsolatedDaemon.create({ env: { HOOK_INSTALL_ENGINES: hooked } })
     daemon = d
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
-    const home = join(d.root, `${engine}-work`)
+    const home = join(d.env.HOME!, `${engine}-work`)
     mkdirSync(home, { recursive: true })
     writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export ${variable}=${JSON.stringify(home)}\n`)
     const cwd = join(d.projectsDir, `typed-new-${engine}`)
@@ -484,7 +484,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
   it('a Codex typed in with a CODEX_HOME of its own binds from its hook and keeps that home', async () => {
     const d = await IsolatedDaemon.create(); daemon = d
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
-    const profile = join(d.root, 'codex-typed-hooked')
+    const profile = join(d.env.HOME!, 'codex-typed-hooked')
     mkdirSync(profile, { recursive: true })
     await d.start()
     const client = await LocalClient.connect(d)
@@ -524,7 +524,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
   it('a Codex typed in under a CODEX_HOME with no hook in it binds from the rollout it holds open', async () => {
     const d = await IsolatedDaemon.create({ env: { HOOK_INSTALL_ENGINES: 'claude' } }); daemon = d
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
-    const profile = join(d.root, 'codex-typed-unhooked')
+    const profile = join(d.env.HOME!, 'codex-typed-unhooked')
     mkdirSync(profile, { recursive: true })
     await d.start()
     const client = await LocalClient.connect(d)
@@ -679,7 +679,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     const d = await IsolatedDaemon.create()
     daemon = d
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
-    const home = join(d.root, 'codex-work')
+    const home = join(d.env.HOME!, 'codex-work')
     mkdirSync(home, { recursive: true })
     writeFileSync(join(home, 'config.toml'), 'model_provider = "azure"\n')
     writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export CODEX_HOME=${JSON.stringify(home)}\n`)
@@ -730,7 +730,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     const d = await IsolatedDaemon.create({ trustPrompt: true })
     daemon = d
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
-    const home = join(d.root, `${engine}-work`)
+    const home = join(d.env.HOME!, `${engine}-work`)
     mkdirSync(home, { recursive: true })
     // The engine has run there before: its config exists, which is when the daemon adds to it.
     const config = join(home, engine === 'claude' ? '.claude.json' : 'config.toml')

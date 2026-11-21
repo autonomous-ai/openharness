@@ -178,7 +178,8 @@ describe('the lane to the other machines', () => {
     await router.listAgentsFlat()
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect((await router.listAgentsFlat()).map((a) => a.id)).toEqual(['r1'])
-    expect(log).toHaveBeenCalledWith('[cable] cable: office-imac → 1 agents')
+    // The machine by its id: its name (office-imac) is a person's, or the computer's.
+    expect(log).toHaveBeenCalledWith('[cable] cable: other → 1 agents')
     expect(fleet.sendTurn('r1', 'ship it')).toEqual({ ok: true })
     expect(lane.sendSealed).toHaveBeenCalledWith(expect.objectContaining({ type: 'message', machineId: 'other' }))
     expect(await router.recentSummaries('r1')).toEqual([])

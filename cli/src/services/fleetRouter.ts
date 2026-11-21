@@ -15,7 +15,7 @@
 import type { ForkResult, SendResult } from '../core/api.js'
 import type { FleetRouting, ForkOutcome, SelectResult } from './fleet.js'
 import { extendShortRecap } from '../lib/deviceRecap.js'
-import { errorKind } from '../lib/log.js'
+import { errorKind, sid } from '../lib/log.js'
 import { transcriptActivityAt } from '../lib/transcriptActivity.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { RouterContinuity } from '../lib/voiceRouter.js'
@@ -85,6 +85,8 @@ const REMOTE_GRACE_MS = 30_000
 /** How the lane says an agent list went unanswered (DeviceLink.rpc). Every other failure of a list the machine
  *  answered during is its answer: a refusal. */
 const LIST_TIMED_OUT = 'agents_list timed out'
+/** Why a turn for a machine whose last request did not come back is refused (`sendTurn`). */
+export const TURN_UNANSWERED = 'the last request to it did not come back'
 
 /** Each other machine's agents, as last read. `asked` throttles the round; `at` ages the answer; `refusedSince` is the
  *  machine's first refusal of a list since its last good one. */
@@ -371,15 +373,16 @@ export class FleetRouter implements FleetRouting {
   }
 
   /** Come online for a dial — see MachineFleet.online. A lane that will not open is an answer: the dial
-   *  says so in its log and carries on with this computer. */
-  async online(): Promise<{ ok: true } | { ok: false; message: string; code?: string }> {
+   *  says so in its log, by the failure's kind (its words can quote the person's files), and carries on with this
+   *  computer. */
+  async online(): Promise<{ ok: true } | { ok: false; kind: string; code?: string }> {
     try {
       await this.fleet!.online()
       return { ok: true }
     } catch (err) {
       // Why it failed, when the lane says (machineFleet.ts LANE_*): whether the dial tries again turns on it.
       const code = (err as { code?: unknown }).code
-      return { ok: false, message: (err as Error).message, ...(typeof code === 'string' && code ? { code } : {}) }
+      return { ok: false, kind: errorKind(err), ...(typeof code === 'string' && code ? { code } : {}) }
     }
   }
 
@@ -440,11 +443,12 @@ export class FleetRouter implements FleetRouting {
       if (m.state === 'offline' || m.state === 'needs-link') {
         // The machine ITSELF says it has nothing to offer, which is different from not being able to
         // ask it. No grace period, but never silently: an agent leaving the carousel is exactly the
-        // event that is impossible to diagnose after the fact from its absence.
+        // event that is impossible to diagnose after the fact from its absence. Each line names the machine by its id:
+        // its name is a person's, or the computer's, and Export logs sends the log off the machine.
         // Replaced even when empty, so a list still out from before it went cannot fill it when it lands.
         if (entry) this.remoteAgents.set(m.id, { agents: [], at: now, asked: entry.asked })
         if (entry?.agents.length) {
-          this.local.log(`cable: ${m.name} is ${m.state} — its ${entry.agents.length} agents left the carousel`)
+          this.local.log(`cable: ${sid(m.id)} is ${m.state} — its ${entry.agents.length} agents left the carousel`)
         }
         continue
       }
@@ -464,7 +468,7 @@ export class FleetRouter implements FleetRouting {
           // One line per TRANSITION, not per round: this runs every few seconds forever, and a healthy
           // machine that logs each time buries everything else in the file.
           if (asking.agents.length !== agents.length) {
-            this.local.log(`cable: ${m.name} → ${agents.length} agents`)
+            this.local.log(`cable: ${sid(m.id)} → ${agents.length} agents`)
           }
         })
         .catch((err) => {
@@ -482,7 +486,7 @@ export class FleetRouter implements FleetRouting {
           }
           if (stale) this.remoteAgents.set(m.id, { agents: [], at: failedAt, asked: failedAt })
           if (asking.agents.length && stale) {
-            this.local.log(`cable: ${m.name} dropped off the carousel (${errorKind(err)})`)
+            this.local.log(`cable: ${sid(m.id)} dropped off the carousel (${errorKind(err)})`)
           }
         })
         .finally(() => this.inFlight.delete(m.id))
@@ -510,8 +514,8 @@ export class FleetRouter implements FleetRouting {
       const seen = this.fleet?.reachable?.(machineId)
       if (seen && !seen.ok) {
         const ago = Math.round((Date.now() - seen.at) / 1000)
-        this.local.log(`cable: refused a turn for ${agentId.slice(0, 8)} — ${machine} last failed ${ago}s ago`)
-        return { ok: false, machine, reason: 'the last request to it did not come back' }
+        this.local.log(`cable: refused a turn for ${agentId.slice(0, 8)} — ${sid(machineId)} last failed ${ago}s ago`)
+        return { ok: false, machine, reason: TURN_UNANSWERED }
       }
       this.fleet!.sendTurn(machineId, agentId, text)
       this.spokeTo(agentId)

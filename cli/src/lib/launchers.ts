@@ -44,7 +44,8 @@ export function ensureLauncher(node: string, log: (message: string) => void = ()
     log(`  ✗ could not repoint bin/harness at the new Node: ${errorKind(error)}`)
     return false
   }
-  log(`  ✓ repointed ${launcher} at ${node}`)
+  // Not the launcher's path nor the Node's: both are under the person's home, and the master logs this line.
+  log('  ✓ repointed bin/harness at the new Node')
   return true
 }
 

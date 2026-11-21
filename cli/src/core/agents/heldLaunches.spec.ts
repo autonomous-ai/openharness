@@ -29,16 +29,36 @@ function setup(rows: RegisteredSession[], answer: (only: ReadonlySet<string>) =>
 
 describe('agents held until a service is ready', () => {
   it('says once why an agent stays held, and does not repeat a pass that changed nothing', async () => {
-    let reason = 'the pty host has gone'
-    const { held, log } = setup([row('a', HELD)], (only) => summary({ held: [...only], failed: [...only].map(agentId => ({ agentId, reason })) }))
+    let code = 'PANE_FAILED'
+    const { held, log } = setup([row('a', HELD)], (only) => summary({ held: [...only], failed: [...only].map(agentId => ({ agentId, code, reason: 'the pty host has gone' })) }))
     await held.boot(async () => {})
     await held.restoreHeld(); await held.restoreHeld(); await held.restoreHeld()
-    reason = 'no such folder'
+    code = 'WAITING_PANE_FAILED'
     await held.restoreHeld()
     expect(log.mock.calls.map(([line]) => line)).toEqual([
-      '[restore] a · could not launch from held · the pty host has gone',
+      '[restore] a · could not launch from held · PANE_FAILED',
       '[restore] held · every service · launched 0 of 1 · 1 still waiting',
-      '[restore] a · could not launch from held · no such folder',
+      '[restore] a · could not launch from held · WAITING_PANE_FAILED',
+    ])
+  })
+
+  it("a held agent is logged by its failure's code, never its reason", async () => {
+    // The reasons come from the restore (a pane's refusal, a launch's detail): they can name the person's folders.
+    let failure = { code: 'PANE_FAILED', reason: 'peer said /Users/sentinel/x' }
+    const { held, log } = setup([row('a', HELD)], (only) => summary({ held: [...only], failed: [...only].map(agentId => ({ agentId, ...failure })) }))
+    await held.boot(async () => {})
+    await held.restoreHeld()
+    // Another reason with the same code: the log has nothing new to say.
+    failure = { code: 'PANE_FAILED', reason: 'peer said /Users/sentinel/y' }
+    await held.restoreHeld()
+    // A launch's own error is a code, but typed a string: one that is not a code is said by its length.
+    failure = { code: 'refused at /Users/sentinel', reason: 'no way there' }
+    await held.restoreHeld()
+    const lines = log.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+    expect(lines).not.toContain('sentinel')
+    expect(log.mock.calls.map(([line]) => line).filter((line) => line.includes('could not launch'))).toEqual([
+      '[restore] a · could not launch from held · PANE_FAILED',
+      '[restore] a · could not launch from held · text(26)',
     ])
   })
 
@@ -221,10 +241,10 @@ describe('agents held until a service is ready', () => {
       const waiting = setup([row('a', HELD)], (only) => summary({ held: [...only] }))
       await waiting.held.boot(async () => {})
       expect(await waiting.held.restartHeld('a')).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE', detail: HELD.state === 'held' ? HELD.detail : '' })
-      const refused = setup([row('b', HELD)], (only) => summary({ failed: [...only].map((agentId) => ({ agentId, reason: 'no way there' })) }))
+      const refused = setup([row('b', HELD)], (only) => summary({ failed: [...only].map((agentId) => ({ agentId, code: 'GRID_ENGINE_UNSUPPORTED', reason: 'no way there' })) }))
       refused.restore.mockImplementationOnce(async (only) => {
         refused.registry.get('b')!.launch = { state: 'failed', error: 'GRID_ENGINE_UNSUPPORTED', detail: 'no way there' }
-        return summary({ failed: [...only].map((agentId) => ({ agentId, reason: 'no way there' })) })
+        return summary({ failed: [...only].map((agentId) => ({ agentId, code: 'GRID_ENGINE_UNSUPPORTED', reason: 'no way there' })) })
       })
       await refused.held.boot(async () => {})
       expect(await refused.held.restartHeld('b')).toEqual({ ok: false, error: 'GRID_ENGINE_UNSUPPORTED', detail: 'no way there' })
@@ -232,8 +252,8 @@ describe('agents held until a service is ready', () => {
       bare.restore.mockImplementationOnce(async () => { bare.registry.get('c')!.launch = { state: 'failed', error: 'START_TIMEOUT' }; return summary() })
       await bare.held.boot(async () => {})
       expect(await bare.held.restartHeld('c')).toEqual({ ok: false, error: 'START_TIMEOUT' })
-      const lost = setup([row('d', HELD)], (only) => summary({ failed: [...only].map((agentId) => ({ agentId, reason: 'tmux said no' })) }))
-      lost.restore.mockImplementationOnce(async (only) => { lost.registry.get('d')!.launch = { state: 'ready' }; return summary({ failed: [...only].map((agentId) => ({ agentId, reason: 'tmux said no' })) }) })
+      const lost = setup([row('d', HELD)], (only) => summary({ failed: [...only].map((agentId) => ({ agentId, code: 'PANE_FAILED', reason: 'tmux said no' })) }))
+      lost.restore.mockImplementationOnce(async (only) => { lost.registry.get('d')!.launch = { state: 'ready' }; return summary({ failed: [...only].map((agentId) => ({ agentId, code: 'PANE_FAILED', reason: 'tmux said no' })) }) })
       await lost.held.boot(async () => {})
       expect(await lost.held.restartHeld('d')).toEqual({ ok: false, error: 'RESTART_FAILED', detail: 'tmux said no' })
       const none = setup([row('e', HELD)], () => summary())

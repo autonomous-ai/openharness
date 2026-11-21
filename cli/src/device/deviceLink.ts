@@ -29,11 +29,12 @@ import { randomUUID } from 'node:crypto'
 
 import WebSocket from 'ws'
 
+import { backendName } from '../config/env.js'
 import type { LaneSeal } from '../core/api.js'
 import type { MachinePeer } from '../lib/e2ee/machinePeers.js'
 import { isWrapped } from '../lib/relayFrames.js'
 import { computerName } from '../lib/computerName.js'
-import { errorKind } from '../lib/log.js'
+import { codeOrLength, errorKind } from '../lib/log.js'
 import { VERSION } from '../version.js'
 import { LANE_SESSION_OVER, LANE_TOKEN_UNAVAILABLE } from '../cable/machineFleet.js'
 
@@ -663,7 +664,7 @@ export class DeviceLink {
       + `&autonomousEnv=${encodeURIComponent(this.opts.autonomousEnv)}`
 
     let token = await this.readToken()
-    this.opts.log(`device: connecting → ${base}/api/device-ws`)
+    this.opts.log(`device: connecting → ${backendName(base)}`)
     try {
       await this.open(url, token)
     } catch (err) {
@@ -1216,7 +1217,7 @@ export class DeviceLink {
       this.pending.delete(requestId)
       clearTimeout(waiter.timer)
       if (typeof payload.error === 'string') {
-        this.opts.log(`device: ${type} error=${payload.error}`)
+        this.opts.log(`device: ${type} error=${codeOrLength(payload.error)}`)
         waiter.reject(new Error(payload.error))
         return
       }

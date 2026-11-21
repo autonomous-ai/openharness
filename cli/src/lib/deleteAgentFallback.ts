@@ -78,7 +78,7 @@ export async function terminateDeletedAgent(
 
   const check = async (): Promise<RuntimeCheck> => {
     try { return await deps.checkRuntime(session) }
-    catch (err) { return { state: 'unknown', reason: err instanceof Error ? err.message : String(err) } }
+    catch (err) { return { state: 'unknown', reason: errorKind(err) } }
   }
   // PID + start marker validation is what prevents a recycled PID from receiving our signal. Unknown
   // means we cannot prove the target and must leave the runtime suppressed rather than call it gone.

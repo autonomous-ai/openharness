@@ -30,7 +30,7 @@ import { PACK_VERSION } from './pets/pack.js'
 import { planPetSync } from './pets/sync.js'
 import { MAX_PACKS, type PetStore } from './pets/store.js'
 import type { PetDialState } from './pets/sync.js'
-import { SerialLink, findDialPort } from './serial.js'
+import { SerialLink, findDialPort, serialPortName } from './serial.js'
 import { PortAccessError } from './portAccess.js'
 import { PLAYER_PAGE_SIZE, playerPage, type PlayerSession } from './playerLibrary.js'
 import { PassageCarry, withCarriedPassage, type CarryRead } from './passageCarry.js'
@@ -39,7 +39,7 @@ import { dialText, noticeSummary } from './dialText.js'
 import { QuestionInbox, type ReviewedAnswer, type AnswerReceipt, type QuestionSpeech } from './questionInbox.js'
 import { notificationReadToken, type UnreadNotification } from '../lib/notificationRead.js'
 import { partitionTexts } from '../lib/questionController.js'
-import { errorKind } from '../lib/log.js'
+import { codeOrLength, errorKind } from '../lib/log.js'
 
 /** Bumped when the VOCABULARY changes. Separate from the frame version, which is the envelope. */
 export const CABLE_PROTO_VERSION = 3   // 3: + question.close (a question answered on another client)
@@ -1081,7 +1081,7 @@ export class CableSession {
       // fail to open rather than steal it back — this interval only decides how soon we would find OUR
       // dial if the user unplugged theirs and plugged ours into the same socket.
       this.foreignRetryAt = Date.now() + 60_000
-      this.log(`cable: ${this.link.path} is not a Harness dial (${this.bytesSinceOpen} B, no frames) — releasing it`)
+      this.log(`cable: ${serialPortName(this.link.path)} is not a Harness dial (${this.bytesSinceOpen} B, no frames) — releasing it`)
       this.reportForeign(this.link.path, `${this.bytesSinceOpen} B, no frames`)
       await this.link.close('not ours')
       this.link = null
@@ -1255,7 +1255,7 @@ export class CableSession {
     // keyed by MAC and outlives the port precisely so this one does not have to.
     this.offered.clear()
     this.lastRx = Date.now()
-    this.log(`cable: open on ${opened.path}`)
+    this.log(`cable: open on ${serialPortName(opened.path)}`)
   }
 
   private clearOpenProblem(): void {
@@ -1440,6 +1440,11 @@ export class CableSession {
   private async onMessage(msg: Message): Promise<void> {
     const str = (key: string): string | undefined =>
       typeof msg[key] === 'string' ? (msg[key] as string) : undefined
+    // A refusal's words are the firmware's own text: the log says a code, or only how long it is.
+    const refusal = (key: string): string => {
+      const said = str(key)
+      return said === undefined ? 'no reason given' : codeOrLength(said)
+    }
 
     switch (msg.t) {
       case 'hello': {
@@ -2036,7 +2041,7 @@ export class CableSession {
         const settings = readSettings(msg.settings)
         if (settings) this.greetedSettings = settings
         if (hasUiSkin(msg.settings)) this.skinReported = true
-        if (msg.ok === false) this.log(`cable: device refused a settings change: ${str('error') ?? 'no reason given'}`)
+        if (msg.ok === false) this.log(`cable: device refused a settings change: ${refusal('error')}`)
         this.report()
         return
       }
@@ -2076,9 +2081,8 @@ export class CableSession {
         this.report()
         return
       case 'fw.error':
-        // The outcome is `refused`, not the dial's message: that string is the
-        // firmware's own text and this stream carries short codes.
-        this.endFirmware(`refused: ${str('message') ?? 'no reason given'}`)
+        // The outcome is `refused`, and the dial's message only by its code or length.
+        this.endFirmware(`refused: ${refusal('message')}`)
         this.report()
         // Pets that waited behind the image go now.
         await this.syncPets()
@@ -2120,9 +2124,9 @@ export class CableSession {
         // memory and busy will not change within this link; crc, version and shape would fail identically on a
         // resend of the same bytes. All are recorded and none retried until the link comes back.
         this.petErrors.set(id, reason)
-        this.log(`cable: dial refused pet ${id}: ${reason}`)
+        this.log(`cable: dial refused pet ${id}: ${codeOrLength(reason)}`)
         if (this.petTransfer?.id === id) {
-          this.petTransfer.xfer.finish(`refused: ${reason}`)
+          this.petTransfer.xfer.finish(`refused: ${codeOrLength(reason)}`)
           this.petTransfer = null
           this.clearPetStall()
         }

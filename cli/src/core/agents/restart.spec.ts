@@ -591,14 +591,17 @@ describe('restarting an agent', () => {
       expect(run.deps.agentReconciler.releaseRoute).toHaveBeenCalledWith(routeKey)
     })
 
-    it('without a mode or a yes, launches with no mode and no bypass; a fresh session on a grid says both', async () => {
-      const grid = agent({ gridLaunch: { networkName: 'Home' } } as Partial<RegisteredSession>)
+    it('without a mode or a yes, launches with no mode and no bypass; a fresh session on a grid says both, never which grid', async () => {
+      // A grid's name is one the person can choose, and Export logs sends the line off the machine.
+      const grid = agent({ gridLaunch: { networkName: 'Home sentinel' } } as Partial<RegisteredSession>)
       const run = setup(grid, { downgradedPermission: vi.fn(async () => ({ bypassPermission: false })) as never })
       vi.mocked(restartAgent).mockResolvedValueOnce({ ok: true, resumed: false, processIdentity: newProcess } as never)
       expect(await run.restart('a1')).toEqual({ ok: true, session: grid, resumed: false })
       expect(run.deps.paneSwapDeps).toHaveBeenCalledWith(grid, { backend: run.tmuxBackend, runtime }, { env: { GRID_KEY: 'k' } }, null, expect.any(Function))
       expect(vi.mocked(restartAgent).mock.calls[0][1]).toBe(false)
-      expect(console.log).toHaveBeenCalledWith('[restart] a1 claude · fresh session · grid Home')
+      const lines = vi.mocked(console.log).mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+      expect(lines).not.toContain('sentinel')
+      expect(lines).toContain('[restart] a1 claude · fresh session · on a grid')
     })
 
     it('writes on the row the grid its launch record puts the engine on, never the grid the row had', async () => {

@@ -49,6 +49,15 @@ const DARWIN_O_EXLOCK = 0x20
 export const DIAL_VENDOR_ID = 0x303a
 export const DIAL_PRODUCT_ID = 0x1001
 
+/**
+ * The one way a log line prints a dial's serial port, unchanged: the port's name (`/dev/cu.usbmodem1101`, `COM4`) is a
+ * device's name, not the person's content (the 2026-11-19 log sweep's answer 5, kept by the 2026-11-21 log spec), and
+ * it is what someone needs to tell two dials apart. architecture.failureLogs.spec.ts reads this call as safe by name.
+ */
+export function serialPortName(path: string): string {
+  return path
+}
+
 export interface DialPort {
   path: string
   vendorId: number

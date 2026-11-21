@@ -23,6 +23,7 @@ import { runAgentBrowserService } from './agentBrowserProcess.js'
 import type { ServiceProcessOptions } from './process.js'
 import { defaultSettings, settingsHash, type BrowserSettings } from './agentBrowser/settings.js'
 import { StateFile } from './agentBrowser/stateFile.js'
+import { ToolServers } from './agentBrowser/toolServers.js'
 import { resetAgentTmpSweep } from '../lib/agentTmp.js'
 import { Browsers } from './agentBrowser/browsers.js'
 import { Containers } from './agentBrowser/containers.js'
@@ -1670,6 +1671,16 @@ describe('the agent\'s commands', () => {
     const lines = log.mock.calls.map(([line]) => String(line)).filter(line => line.startsWith('agent browser a1: ') && !line.includes('tool server'))
     expect(lines).toEqual(['agent browser a1: navigate ok', 'agent browser a1: type failed', 'agent browser a1: snapshot tool_timeout'])
     expect(log.mock.calls.flat().join('\n')).not.toMatch(/secret|hunter2|Kim/)
+  })
+
+  it('a command\'s failure in words of its own is logged by their length, never the words', async () => {
+    const c = await commands()
+    const log = vi.spyOn(console, 'log')
+    vi.spyOn(ToolServers.prototype, 'call').mockResolvedValueOnce({ error: 'tool said /Users/sentinel/x' } as never)
+    expect(await c.run('snapshot')).toEqual({ error: 'tool said /Users/sentinel/x' })
+    const lines = log.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+    expect(lines).not.toContain('sentinel')
+    expect(lines).toContain('agent browser a1: snapshot text(27)')
   })
 })
 

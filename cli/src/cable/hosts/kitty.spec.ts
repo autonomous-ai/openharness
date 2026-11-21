@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
+import type { FoundFrom, TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
 import { RECORDED_KITTY } from '../../testing/recordedKitty.js'
 import type { Place } from './adapter.js'
 import { APP_BUNDLES } from './hostDetect.js'
@@ -41,7 +41,7 @@ const {
   focusWindowPidDescendant,
 } = RECORDED_KITTY
 /** kitten where the finder found it, off the devices' PATH. */
-const FOUND = async (): Promise<TmuxPathOutcome> => ({ state: 'adopted', path: FAKE_KITTEN, from: '/fake/bin' })
+const FOUND = async (): Promise<TmuxPathOutcome> => ({ state: 'adopted', path: FAKE_KITTEN, from: 'login shell' })
 const ABSENT = async (): Promise<TmuxPathOutcome> => ({ state: 'absent', reason: 'kitty was not found' })
 const OFF = '[device] kitty · remote control off'
 /** This account, as the recording's: uid 1000, the owner of the socket kitty made at `/tmp/kitty`. */
@@ -380,7 +380,7 @@ describe('kitty\'s binary', () => {
   it('only kitty found: it runs as kitty @', async () => {
     expect(kittyAt.args.slice(1, 4)).toEqual(focusWindow.args.slice(1, 4))
     expect(kittyPlusKitten.code).not.toBe(0)
-    const { calls, adapter } = recorder({ kitty: async () => ({ state: 'adopted', path: '/usr/bin/kitty', from: '/usr/bin' }) })
+    const { calls, adapter } = recorder({ kitty: async () => ({ state: 'adopted', path: '/usr/bin/kitty', from: 'PATH' }) })
     expect(await adapter.focus(OWN)).toBe(true)
     expect(await adapter.type(OWN, 'hello agent', 'claude')).toBe(true)
     expect(calls).toEqual([focusWindow, sendText, enter].map(({ args }) => ran(args, '/usr/bin/kitty')))
@@ -576,7 +576,7 @@ describe('kitty as the core finds tmux', () => {
     chmodSync(join(dir, name), 0o755)
     return join(dir, name)
   }
-  const adopted = (path: string) => ({ state: 'adopted', path, from: path.slice(0, path.lastIndexOf('/')) })
+  const adopted = (path: string, from: FoundFrom) => ({ state: 'adopted', path, from })
   beforeEach(() => {
     shell.asked.length = 0
     shell.answer = null
@@ -600,34 +600,34 @@ describe('kitty as the core finds tmux', () => {
     const where = home()
     shell.answer = '/home/u/.local/kitty.app/bin/kitten'
     const kitty = kittyFinder(where, 'linux')
-    expect(await kitty()).toEqual(adopted('/home/u/.local/kitty.app/bin/kitten'))
-    expect(await kitty()).toEqual(adopted('/home/u/.local/kitty.app/bin/kitten'))
+    expect(await kitty()).toEqual(adopted('/home/u/.local/kitty.app/bin/kitten', 'login shell'))
+    expect(await kitty()).toEqual(adopted('/home/u/.local/kitty.app/bin/kitten', 'login shell'))
     expect(shell.asked).toEqual(['kitten'])
   })
 
   it('else in a folder the core looks in', async () => {
     const where = home()
     const brew = install(join(where.HARNESS_HOMEBREW_PREFIXES, 'bin'))
-    expect(await kittyFinder(where, 'darwin')()).toEqual(adopted(brew))
+    expect(await kittyFinder(where, 'darwin')()).toEqual(adopted(brew, 'standard install location'))
     const user = home()
     const local = install(user.HARNESS_BIN_DIR)
-    expect(await kittyFinder(user, 'linux')()).toEqual(adopted(local))
+    expect(await kittyFinder(user, 'linux')()).toEqual(adopted(local, 'standard install location'))
   })
 
   it('else on macOS kitty.app\'s own kitten, and on Linux that is never looked for', async () => {
     app.there = true
-    expect(await kittyFinder(home(), 'darwin')()).toEqual(adopted(APP_KITTEN))
+    expect(await kittyFinder(home(), 'darwin')()).toEqual(adopted(APP_KITTEN, 'standard install location'))
     app.asked = 0
     const where = home()
     const kitty = install(where.PATH, 'kitty')
-    expect(await kittyFinder(where, 'linux')()).toEqual(adopted(kitty))
+    expect(await kittyFinder(where, 'linux')()).toEqual(adopted(kitty, 'PATH'))
     expect(app.asked).toBe(0)
   })
 
   it('else kitty on the devices\' PATH, run by its path', async () => {
     const where = home()
     const kitty = install(where.PATH, 'kitty')
-    expect(await kittyFinder(where, 'darwin')()).toEqual(adopted(kitty))
+    expect(await kittyFinder(where, 'darwin')()).toEqual(adopted(kitty, 'PATH'))
     expect(shell.asked).toEqual(['kitten'])
   })
 
@@ -639,10 +639,10 @@ describe('kitty as the core finds tmux', () => {
     expect((await kitty()).state).toBe('absent')
     expect(shell.asked).toEqual(['kitten'])
     const path = install(where.HARNESS_BIN_DIR)
-    expect(await kitty()).toEqual(adopted(path))
+    expect(await kitty()).toEqual(adopted(path, 'standard install location'))
     expect(shell.asked).toEqual(['kitten', 'kitten'])
     // Found, it holds.
-    expect(await kitty()).toEqual(adopted(path))
+    expect(await kitty()).toEqual(adopted(path, 'standard install location'))
     expect(shell.asked).toHaveLength(2)
   })
 
@@ -651,6 +651,6 @@ describe('kitty as the core finds tmux', () => {
     const kitty = kittyFinder(where, 'linux')
     expect((await kitty()).state).toBe('absent')
     const path = install(where.PATH, 'kitty')
-    expect(await kitty()).toEqual(adopted(path))
+    expect(await kitty()).toEqual(adopted(path, 'PATH'))
   })
 })

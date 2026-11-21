@@ -8,7 +8,7 @@
  * holds it (createZellijOuter), as tmux's does. zellij is found as the core finds tmux (zellijFinder): the master's PATH
  * may hold none.
  */
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { binaryOnPath } from '../../lib/binaryOnPath.js'
 import { binaryFinder } from '../../lib/binaryFinder.js'
 import { resolveViaLoginShell, tmuxInstallDirectories, type TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
@@ -48,8 +48,10 @@ const installed = (env: NodeJS.ProcessEnv): string | undefined =>
 export function zellijFinder(env: NodeJS.ProcessEnv = process.env): () => Promise<TmuxPathOutcome> {
   return binaryFinder(async () => {
     if (binaryOnPath('zellij', env)) return { state: 'present' }
-    const path = (await resolveViaLoginShell('zellij')) ?? installed(env)
-    return path ? { state: 'adopted', path, from: dirname(path) } : { state: 'absent', reason: 'zellij was not found' }
+    const viaShell = await resolveViaLoginShell('zellij')
+    if (viaShell) return { state: 'adopted', path: viaShell, from: 'login shell' }
+    const atInstall = installed(env)
+    return atInstall ? { state: 'adopted', path: atInstall, from: 'standard install location' } : { state: 'absent', reason: 'zellij was not found' }
   }, () => binaryOnPath('zellij', env) || installed(env) !== undefined)
 }
 

@@ -62,7 +62,6 @@ const STALL_MS = 10_000
  */
 const ANSWER_MS = STALL_MS
 const KILL_GRACE_MS = 1_000
-const STDERR_KEPT = 2_000
 
 interface Stream {
   id: string
@@ -81,7 +80,8 @@ interface Stream {
   /** The viewer has sent something: an ack or its own bytes. */
   answered: boolean
   answerTimer: NodeJS.Timeout | null
-  stderr: string
+  /** How much the exec wrote to stderr, for the line its exit logs: its words can quote the container's paths. */
+  stderrBytes: number
 }
 
 export interface BrowserStreamDeps {
@@ -130,16 +130,16 @@ export class BrowserStreamManager {
       id: randomUUID(), connId, agentId, local, route: local ? 'direct' : null, child,
       // Until the gateway says which route it took, a remote stream gets the relay's profile, the cheapest.
       shaper: new RfbShaper(BROWSER_PROFILES[local ? 'direct' : 'relay']),
-      seq: 0, unacked: 0, waiting: [], paused: false, stallTimer: null, answered: false, answerTimer: null, stderr: '',
+      seq: 0, unacked: 0, waiting: [], paused: false, stallTimer: null, answered: false, answerTimer: null, stderrBytes: 0,
     }
     this.streams.set(stream.id, stream)
     stream.shaper.onOutput(bytes => { if (this.streams.get(stream.id) === stream) child.stdin?.write(bytes) })
-    stream.shaper.onClose((reason, detail) => {
-      console.warn(`[agent-browser] stream ${sid(stream.id)} closed: ${detail}`)
+    stream.shaper.onClose((reason, violation) => {
+      console.warn(`[agent-browser] stream ${sid(stream.id)} closed: ${violation}`)
       this.end(stream, reason)
     })
     child.stdout?.on('data', (data: Buffer) => this.output(stream, data))
-    child.stderr?.on('data', (data: Buffer) => { stream.stderr = (stream.stderr + data.toString()).slice(-STDERR_KEPT) })
+    child.stderr?.on('data', (data: Buffer) => { stream.stderrBytes += data.length })
     // A child that died closes its stdin under a write: the exit below is what ends the stream.
     child.stdin?.on('error', () => {})
     child.on('error', (error) => {
@@ -148,7 +148,7 @@ export class BrowserStreamManager {
     })
     child.on('exit', (code, signal) => {
       if (this.streams.get(stream.id) !== stream) return
-      console.warn(`[agent-browser] stream ${sid(stream.id)} exec exited (${code ?? signal}): ${stream.stderr.trim()}`)
+      console.warn(`[agent-browser] stream ${sid(stream.id)} exec exited (${code ?? signal}): stderr ${stream.stderrBytes} B`)
       this.end(stream, 'agent')
     })
     this.deps.sendTarget(connId, 'agent_browser_open_result', { requestId, streamId: stream.id })

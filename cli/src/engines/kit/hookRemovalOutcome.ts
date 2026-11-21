@@ -12,6 +12,8 @@ export interface HookFileRemoval {
   removed: number
   /** Why the file was left as it was. */
   failed?: string
+  /** The same for a log line: a hold's fixed words, any other failure its kind. `failed` can quote an error's words. */
+  failedKind?: string
   /** A file at a path of ours that is somebody else's. */
   kept?: string
 }
@@ -22,7 +24,7 @@ export interface HookFileRemoval {
  * without the identity reader's.
  */
 export function failure(error: unknown): string {
-  if (error instanceof HookPreparationHeld) return error.reason
+  if (error instanceof HookPreparationHeld) return error.hold
   if (error instanceof IdentityReadUnavailable) return error.message.replace(/^Conversation identity is held: (.*?)\.?$/s, '$1')
   return error instanceof Error ? error.message : String(error)
 }

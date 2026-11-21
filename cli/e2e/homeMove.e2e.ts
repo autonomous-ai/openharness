@@ -29,7 +29,7 @@ import { BRIDGE_FILE, REAL_ENTRIES } from '../src/homeMove/bridge.js'
 import { Store } from '../src/lib/connectors/store.js'
 import { savedDaemonPort } from '../src/lib/daemonRecord.js'
 import { LocalClient } from './harness/client.js'
-import { assertHooksContained, CLI_ROOT, hookFilesNamed, IsolatedDaemon, listeningPort, until } from './harness/daemon.js'
+import { assertHooksContained, CLI_ROOT, hooksOutside, IsolatedDaemon, listeningPort, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 import type { DialMessage } from './harness/fakeDial.js'
@@ -100,8 +100,8 @@ class Start {
       await start.stop()
       IsolatedDaemon.killGroup(start.child)
       forgetGroup(pid)
-      const outside = hookFilesNamed(start.said).filter((file) => !file.startsWith(`${h.d.root}/`))
-      if (outside.length) throw new Error(`a daemon of this file wrote hooks outside ${h.d.root}: ${outside.join(', ')}`)
+      const outside = hooksOutside(start.said)
+      if (outside.length) throw new Error(`a daemon of this file wrote hooks outside its home; its lines:\n${outside.join('\n')}`)
     })
     onTestFailed(() => { console.log(`---- the daemon ${pid} ${args.join(' ')}\n${start.said.split('\n').slice(-150).join('\n')}`) })
     return start

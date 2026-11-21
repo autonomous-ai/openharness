@@ -1,11 +1,12 @@
 import { execFile, execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, relative } from 'node:path'
+import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { resolveBinaryOnPath } from '../lib/binaryOnPath.js'
 import { isolatedTmux } from './isolatedTmux.js'
+import { sourceFiles } from './sourceFiles.js'
 
 const exec = promisify(execFile)
 const hasTmux = (() => { try { execFileSync('tmux', ['-V']); return true } catch { return false } })()
@@ -146,10 +147,8 @@ describe.skipIf(!hasTmux)('real tmux test isolation', () => {
 // their panes' again (review of 2026-11-16). What a caller needs of the worker's goes on the allowlist, with its reason.
 it('no caller hands it a copy of another environment, or anything of the worker\'s', () => {
   const cli = join(import.meta.dirname, '..', '..')
-  const spreads = (folder: string) => readdirSync(join(cli, folder), { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.ts'))
-    .map((entry) => join(entry.parentPath, entry.name))
-    .filter((file) => /isolatedTmux\(\s*(?:\{[^}]*(?:\.\.\.|process\.env)|process\.env)/.test(readFileSync(file, 'utf8')))
-    .map((file) => relative(cli, file))
+  const spreads = (folder: string) => sourceFiles(join(cli, folder))
+    .map((file) => `${folder}/${file}`)
+    .filter((file) => file.endsWith('.ts') && /isolatedTmux\(\s*(?:\{[^}]*(?:\.\.\.|process\.env)|process\.env)/.test(readFileSync(join(cli, file), 'utf8')))
   expect([...spreads('src'), ...spreads('e2e')]).toEqual([])
 })

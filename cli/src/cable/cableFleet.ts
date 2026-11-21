@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { resetBoard } from './boardReset.js'
 import { DialVerdicts } from './dialPortVerdicts.js'
-import { findDialPorts, portInUse, SerialLink, type DialPort } from './serial.js'
+import { findDialPorts, portInUse, SerialLink, serialPortName, type DialPort } from './serial.js'
 import { isUsbConsoleUser } from './usbConsoleUser.js'
 import { errorKind } from '../lib/log.js'
 import type { CableSession, CableHost, CablePort, DialStatus, PortOpener } from './cableSession.js'
@@ -174,7 +174,7 @@ export class CableFleet {
     if (!watch.wasBusy) return false
     watch.wasBusy = false
     this.verdicts.clear(port)
-    this.host.log(`cable: ${port.path} was in use and is free again — looking at it once more`)
+    this.host.log(`cable: ${serialPortName(port.path)} was in use and is free again — looking at it once more`)
     return true
   }
 
@@ -227,7 +227,7 @@ export class CableFleet {
       // A board somebody else has open is somebody's work in progress (a flash, a monitor, a console).
       // Two readers on one tty interleave bytes, so it is not opened, and looked at again next scan.
       if (await this.inUse(port.path)) {
-        if (!this.heldNotes.has(port.path)) this.host.log(`cable: ${port.path} is in use by another program — leaving it alone`)
+        if (!this.heldNotes.has(port.path)) this.host.log(`cable: ${serialPortName(port.path)} is in use by another program — leaving it alone`)
         this.heldNotes.add(port.path)
         continue
       }
@@ -243,7 +243,7 @@ export class CableFleet {
         if (!sibling) { this.host.onDialAttached?.(); return }
         // The host asks again only as the first dial arrives, so this one is given what its sibling would be asked again.
         // Mid-greeting: the session only takes them in here, and asks each once as its greeting's push ends.
-        const failed = (error: unknown) => this.host.log(`cable: ${port.path} open questions: ${errorKind(error)} [usb ${id}]`)
+        const failed = (error: unknown) => this.host.log(`cable: ${serialPortName(port.path)} open questions: ${errorKind(error)} [usb ${id}]`)
         // One its sibling holds rang before the devices restarted: held here too, never asked.
         for (const open of sibling.session.owedQuestions()) (open.held
           ? entry.session.hold(open.agentId, open.id, open.questions)
@@ -268,7 +268,7 @@ export class CableFleet {
           if (key === 'onForeignPort') return (path: string, why: string) => {
             if (why === 'silent' && this.knownPro(port)) return this.silentPro(id, entry)
             this.verdicts.markForeign(port)
-            this.host.log(`cable: ${path} is not a Harness dial (${why}) — leaving it alone until it is unplugged or reset [usb ${id}]`)
+            this.host.log(`cable: ${serialPortName(path)} is not a Harness dial (${why}) — leaving it alone until it is unplugged or reset [usb ${id}]`)
             // Off this call stack: the session is in the middle of deciding this, and stop() waits on it.
             setTimeout(() => {
               if (this.entries.get(id) !== entry) return
@@ -344,11 +344,11 @@ export class CableFleet {
       if (this.stopped || !this.canUseUsb(true)) return forget()
       // Only a USB serial says which board this is; a port without one is told, never reset.
       if (!again && entry.port.serialNumber && await this.reset(entry.port.path)) {
-        this.host.log(`cable: Harness Pro on ${entry.port.path} is silent — reset it over the cable, looking again [usb ${id}]`)
+        this.host.log(`cable: Harness Pro on ${serialPortName(entry.port.path)} is silent — reset it over the cable, looking again [usb ${id}]`)
         if (this.unanswered.get(id) === held) held.stage = 'reset'
         return
       }
-      this.host.log(`cable: Harness Pro on ${entry.port.path} is still silent${again ? ' after a reset' : ' and cannot be reset here'} — asking for a replug [usb ${id}]`)
+      this.host.log(`cable: Harness Pro on ${serialPortName(entry.port.path)} is still silent${again ? ' after a reset' : ' and cannot be reset here'} — asking for a replug [usb ${id}]`)
       if (this.unanswered.get(id) !== held) return
       held.stage = 'told'
       this.publish()
@@ -370,7 +370,7 @@ export class CableFleet {
     const first = this.options.dropBackoffMs ?? DROP_BACKOFF_MS
     const backoffMs = !last || now - last.at > DROP_FORGIVEN_MS ? first : Math.min(last.backoffMs * 2, DROP_BACKOFF_MAX_MS)
     this.dropped.set(id, { until: now + backoffMs, backoffMs, at: now })
-    this.host.log(`cable: ${entry.port.path} dropped (${hostile ? 'flooding the port' : `${entry.faults.length} faults in a minute: ${errorKind(error)}`}) — this dial alone; its port is looked at again in ${Math.round(backoffMs / 1000)} s [usb ${id}]`)
+    this.host.log(`cable: ${serialPortName(entry.port.path)} dropped (${hostile ? 'flooding the port' : `${entry.faults.length} faults in a minute: ${errorKind(error)}`}) — this dial alone; its port is looked at again in ${Math.round(backoffMs / 1000)} s [usb ${id}]`)
     // Off this call stack: the session is in the middle of the call that failed, and stop() waits on it.
     setTimeout(() => {
       if (this.entries.get(id) !== entry) return
@@ -417,7 +417,7 @@ export class CableFleet {
       if (!await entry.session.setSettings(patch)) return { ok: false, error: 'The device did not take the change.' }
       return { ok: true }
     } catch (error) {
-      this.host.log(`cable: ${entry.port.path} settings: ${errorKind(error)}`)
+      this.host.log(`cable: ${serialPortName(entry.port.path)} settings: ${errorKind(error)}`)
       return { ok: false, error: 'The device did not take the change.' }
     }
   }
@@ -427,7 +427,7 @@ export class CableFleet {
       try {
         const method = entry.session[name] as (...args: unknown[]) => Promise<void>
         await method.apply(entry.session, args)
-      } catch (error) { this.host.log(`cable: ${entry.port.path} ${name}: ${errorKind(error)}`) }
+      } catch (error) { this.host.log(`cable: ${serialPortName(entry.port.path)} ${name}: ${errorKind(error)}`) }
     }))
   }
   syncAgents(...args: Parameters<Surface['syncAgents']>) { return this.send('syncAgents', ...args) }

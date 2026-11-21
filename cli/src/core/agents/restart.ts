@@ -270,8 +270,9 @@ export function createAgentRestarter({
         launchedGrid(built.overrides.gridLaunchRecord?.override), place, dispatchCurrent,
         { launchArgs, ...(built.overrides.gridLaunchRecord ? { gridLaunchRecord: built.overrides.gridLaunchRecord } : {}) }, operation)
       if (typeof refreshed === 'string') return changed
+      // A grid's name is one the person can choose, short enough to be guessed from a hash: the log says only that it is one.
       console.log(`[restart] ${sid(session.agentId)} ${engine} · ${outcome.resumed ? 'resumed' : 'fresh session'}`
-        + (session.gridLaunch ? ` · grid ${session.gridLaunch.networkName}` : ''))
+        + (session.gridLaunch ? ' · on a grid' : ''))
       return { ok: true, session: refreshed, resumed: outcome.resumed }
     } finally {
       releaseRoute()

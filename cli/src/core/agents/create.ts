@@ -30,7 +30,7 @@ import {
   buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, permissionModeApproves, permissionModeFlags,
   launchAttempts, refusePermissionFlagIfUnsupported, supportsFirstPrompt, supportsNamedAgent, typedFirstPrompt, NamedAgentUnsupportedError,
 } from '../../lib/engineLaunch.js'
-import { errorKind } from '../../lib/log.js'
+import { codeOrLength, errorKind } from '../../lib/log.js'
 import { setUpWithin } from '../../lib/setUpWithin.js'
 import { agentLaunchArgs, joinedInstructions } from '../../lib/agentAttribution.js'
 import { machineMcpLaunchArgs } from '../../lib/machineMcp.js'
@@ -182,7 +182,7 @@ export function createAgentCreator({
     const refusal = await refusePermissionFlagIfUnsupported(engine, { permissionMode, bypassPermission }, undefined, native)
     if (!current()) return stale()
     if (refusal) {
-      console.warn(`[agent] create refused · ${engine} · ${refusal.detail}`)
+      console.warn(`[agent] create refused · ${engine} · ${codeOrLength(refusal.error)}`)
       return { ok: false, ...refusal }
     }
     // Native version and model control are eager; optional readers never decide whether a launch can proceed.
@@ -213,7 +213,7 @@ export function createAgentCreator({
       if (!(await createBackend.capabilities()).sessionEnv) {
         const detail = `${tmuxTooOldForSessionEnv('a new session')} — so ${installed.manifest.name} `
           + `could not tell ${engine} which harness it is. Upgrade tmux.`
-        console.warn(`[agent] create ${dsh} refused · ${detail}`)
+        console.warn(`[agent] create ${dsh} refused · TMUX_TOO_OLD_FOR_DSH`)
         return { ok: false, error: 'TMUX_TOO_OLD_FOR_DSH', detail }
       }
     }
@@ -224,7 +224,7 @@ export function createAgentCreator({
     const built = grid ? await buildGridLaunch({ engine, override: grid, machine: await gridLaunchMachine(engine, native) }) : null
     if (!current()) return stale()
     if (built && !built.ok) {
-      console.warn(`[agent] create ${engine} refused · ${built.detail}`)
+      console.warn(`[agent] create ${engine} refused · ${codeOrLength(built.error)}`)
       return built
     }
     if (dsh) {
@@ -251,8 +251,9 @@ export function createAgentCreator({
           if (materialized.unavailable) return materialized
           throw new Error(materialized.detail)
         }
-        for (const warning of materialized.warnings) console.warn(`[dsh] ${dsh} materialize · ${warning}`)
-        console.log(`[dsh] ${dsh} materialized ${cwd} · created ${materialized.created.length} · kept ${materialized.kept.length}`)
+        // A warning names the template's folder (dsh/materialize.ts), and the workspace is the person's: counted, not named.
+        if (materialized.warnings.length) console.warn(`[dsh] ${dsh} materialize · ${materialized.warnings.length} warnings`)
+        console.log(`[dsh] ${dsh} materialized · created ${materialized.created.length} · kept ${materialized.kept.length}`)
         // The template just went into an EMPTY folder: everything in it is the harness's, and Claude Code
         // need not ask. Laid into a folder that already held something — a clone, the person's own repo —
         // it proves nothing about the rest, so trust stays the person's call (engines/kit/folderTrust.ts).
@@ -280,7 +281,7 @@ export function createAgentCreator({
       if (!(await createBackend.capabilities()).sessionEnv) {
         const detail = `${tmuxTooOldForSessionEnv('a new session')} — so ${engine} could not have been pointed at grid `
           + `${grid.networkName}. Upgrade tmux, or create this agent without a grid selected.`
-        console.warn(`[agent] create ${engine} refused · ${detail}`)
+        console.warn(`[agent] create ${engine} refused · TMUX_TOO_OLD_FOR_GRID`)
         return { ok: false, error: 'TMUX_TOO_OLD_FOR_GRID', detail }
       }
       if (!current()) return stale()
@@ -298,8 +299,8 @@ export function createAgentCreator({
           gridLaunch.args = [...gridLaunch.args, ...handOff.args]
         } catch (error) {
           const detail = `could not write ${engine}'s grid configuration · ${error instanceof Error ? error.message : error}`
-          // A held publication's reason is fixed words (engines/kit/hookHeld.ts): it says what holds it.
-          console.warn(`[agent] create ${engine} refused · could not write ${engine}'s grid configuration · ${error instanceof HookPreparationHeld ? error.reason : errorKind(error)}`)
+          // A held publication's hold is fixed words (engines/kit/hookHeld.ts): it says what holds it.
+          console.warn(`[agent] create ${engine} refused · could not write ${engine}'s grid configuration · ${error instanceof HookPreparationHeld ? error.hold : errorKind(error)}`)
           return { ok: false, error: 'GRID_CONFIG_FAILED', detail, ...(native ? { unavailable: 'native' } : {}) }
         }
       }
@@ -341,9 +342,8 @@ export function createAgentCreator({
     // not discover our old server plugin; the cached version probe changes with the executable.
     // Native installation is eager. A plugin is how this engine tells the daemon its session.
     if (!native && engine === 'opencode' && !hooksDisabled && !await installOpencodePlugin(hookPort)) {
-      const detail = 'OpenCode\'s plugin installer could not be loaded'
-      console.warn(`[agent] create opencode refused · ${detail}`)
-      return { ok: false, error: 'ENGINE_UNAVAILABLE', detail }
+      console.warn('[agent] create opencode refused · ENGINE_UNAVAILABLE')
+      return { ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s plugin installer could not be loaded' }
     }
     // Do not start a second interactive login shell merely to ask whether the engine is installed.
     // The pane's own shell performs the same check before exec, and installs only when necessary.

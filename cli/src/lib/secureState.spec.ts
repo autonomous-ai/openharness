@@ -790,6 +790,7 @@ describe('readState', () => {
     mkdirSync(`${file}.unreadable`)
     writeFileSync(join(`${file}.unreadable`, 'older'), 'x')
     expect(readState(file, 'cache', jsonArray)).toEqual({ state: 'missing' })
+    // Named as Harness names its own state file: the name tells which one, and its folder stays out.
     expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/^\[state\] summaries\.json could not be set aside \([A-Z]+\)$/))
     expect(readFileSync(file, 'utf8')).toBe(torn)
     expect(readState(file, 'cache', jsonArray)).toEqual({ state: 'missing' })

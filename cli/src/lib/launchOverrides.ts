@@ -39,6 +39,7 @@ import type { ScmLaunchRecord } from '../scm/types.js'
 import { agentLaunchArgs, joinedInstructions, type StartedBy } from './agentAttribution.js'
 import { machineMcpLaunchArgs } from './machineMcp.js'
 import { checkLaunchWords } from './launchArgs.js'
+import { codeOrLength } from './log.js'
 import type { CreationAuthority } from './agentCreationReceipt.js'
 import type { publishGridConfigDir } from './publishedGridConfig.js'
 import { nativeHookLocations } from '../engines/kit/nativeLocations.js'
@@ -314,7 +315,7 @@ export async function prepareLaunchOverrides(
     if (source.launchArgs?.length) {
       const checked = checkLaunchWords(engine, source.launchArgs)
       if (checked.ok) overrides = { ...overrides, ownerArgs: [...source.launchArgs] }
-      else console.warn(`[launch] ${configKey.slice(0, 8)} saved launch flags not applied · ${checked.detail}`)
+      else console.warn(`[launch] ${configKey.slice(0, 8)} saved launch flags not applied · ${codeOrLength(checked.detail)}`)
     }
     // What Harness tells the agent rides every relaunch, in the slot `agent_create` gave it: last. Read again each
     // time, with the person's switches and settings as they are now.

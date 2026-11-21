@@ -304,7 +304,7 @@ describe('Hermes\'s YAML hooks, taken out', () => {
       write(config, `model: x\n\n${block}`)
       write(allowlist, broken)
       const outcomes = await removeNativeYamlHooks(rule, [home])
-      expect(outcomes).toEqual([{ file: allowlist, removed: 0, failed: expect.any(String) }])
+      expect(outcomes).toEqual([{ file: allowlist, removed: 0, failed: expect.any(String), failedKind: 'the hook approvals are not a readable list' }])
       expect(readFileSync(config, 'utf8')).toBe(`model: x\n\n${block}`)
       expect(readFileSync(allowlist, 'utf8')).toBe(broken)
     }
@@ -316,7 +316,7 @@ describe('Hermes\'s YAML hooks, taken out', () => {
     write(allowlist, approvals)
     chmodSync(allowlist, 0o444)
     const outcomes = await removeNativeYamlHooks(rule, [home])
-    expect(outcomes).toEqual([{ file: allowlist, removed: 0, failed: 'the settings file is read-only' }])
+    expect(outcomes).toEqual([{ file: allowlist, removed: 0, failed: 'the settings file is read-only', failedKind: 'the settings file is read-only' }])
     expect(readFileSync(config, 'utf8')).toBe(`model: x\n\n${block}`)
   })
 
@@ -352,7 +352,7 @@ describe('Hermes\'s YAML hooks, taken out', () => {
   it('reports a held file by its reason, without the installers\' wording', async () => {
     const { rule, home, config } = hermes()
     write(config, `model: x\n\n${HERMES_HOOK_SETTINGS.begin}\nhooks:\n`)
-    expect(await removeNativeYamlHooks(rule, [home])).toEqual([{ file: config, removed: 0, failed: 'the managed YAML block has no closing marker' }])
+    expect(await removeNativeYamlHooks(rule, [home])).toEqual([{ file: config, removed: 0, failed: 'the managed YAML block has no closing marker', failedKind: 'the managed YAML block has no closing marker' }])
   })
 })
 

@@ -178,6 +178,33 @@ describe('preparePtyPayload failure kinds', () => {
     await expect(run({ probe: async () => { throw new Error('exit 1') } })).rejects.toBeInstanceOf(PtyPayloadRefused)
     expect(leftovers()).toEqual([])
   })
+  it('each refusal carries a fixed code, which the log reads instead of its words', async () => {
+    const cases: Array<[string, () => ReturnType<typeof run>]> = [
+      ['DIGEST_MISMATCH', () => run({ download: async () => { throw new DigestMismatchError('bad') } })],
+      ['WRONG_FILES', () => run({}, PTY_PAYLOAD_FILES.slice(1))],
+      ['NOT_SIGNED', () => run({ signatures: async () => ['harness-launch.exe is NotSigned'] })],
+      ['PROBE_FAILED', () => run({ probe: async () => { throw new Error('exit 1') } })],
+      ['PROBE_NOT_JSON', () => run({ probe: async () => null })],
+      ['PTY_VERSION_MISMATCH', () => run({ probe: goodProbe({ version: '0.9.0' }) })],
+      ['PROTOCOL_UNSUPPORTED', () => run({ probe: goodProbe({ protocol: 0 }) })],
+      ['NO_FEATURES', () => run({ probe: goodProbe({ features: 'seed' }) })],
+      ['SERIAL_VERSION_MISMATCH', () => run({ probe: goodProbe({}, { version: '0.9.0' }) })],
+      ['SERVE_FAILED', () => run({ serve: async () => { throw new Error('its create failed') } })],
+    ]
+    // One at a time: a staging folder is named by the millisecond it was made in.
+    for (const [code, prepare] of cases) {
+      const err = await prepare().catch((e) => e)
+      expect(err, code).toBeInstanceOf(PtyPayloadRefused)
+      expect(err.code, code).toBe(code)
+    }
+    expect(leftovers()).toEqual([])
+  })
+  it('a failed unpack keeps the tool\'s error as its cause, whose code the log reads', async () => {
+    const full = Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' })
+    const err = await run({ unzip: async () => { throw full } }).catch((e) => e)
+    expect(err).toBeInstanceOf(PtyPayloadUnpackFailed)
+    expect(err.cause).toBe(full)
+  })
 })
 
 describe('the serve canary', () => {

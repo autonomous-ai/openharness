@@ -1,9 +1,8 @@
 /** Native plugin bytes are engine declarations. Installing them never loads an interpreter. */
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { errorKind } from '../../lib/log.js'
+import { errorKind, fileTag } from '../../lib/log.js'
 import { HookPreparationHeld, directoryChanged, inspectHookFile, type HookFilePublication, runHookPreparation, type HookPreparationAttempt, type HookPreparationOptions } from './nativeHookFiles.js'
-import { HookScriptMissing } from './hookHeld.js'
 
 export interface NativePlugin {
   file: string
@@ -40,7 +39,8 @@ export function prepareNativePlugin(rule: NativePlugin, values: NativePluginValu
       if (created) directoryChanged(attempt, dirname(created))
     }
     const published = await observed.replace(source, attempt)
-    console.log(current ? rule.messages.current : rule.messages.installed.replace('{file}', () => rule.file))
+    // The file by its hash: its path names the person's home.
+    console.log(current ? rule.messages.current : rule.messages.installed.replace('{file}', () => fileTag(rule.file)))
     if (!current) for (const line of rule.messages.after) console.log(line)
     return published
   } }
@@ -51,8 +51,7 @@ export async function installNativePlugin(rule: NativePlugin, values: NativePlug
     const published = await prepareNativePlugin(rule, values).commit(attempt)
     published.verify(); return true
   }, { ...options, identity: nativePluginSource(rule, values) }) }
-  // A hold's reason is fixed words (hookHeld.ts); HookScriptMissing's names a path, so that one is said by its kind.
-  catch (err) { console.error(rule.messages.failed, err instanceof HookPreparationHeld && !(err instanceof HookScriptMissing) ? err.reason : errorKind(err)); return false }
+  catch (err) { console.error(rule.messages.failed, err instanceof HookPreparationHeld ? err.hold : errorKind(err)); return false }
 }
 
 export interface NativePluginRemoval {
@@ -83,5 +82,5 @@ export async function removeNativePlugin(rule: NativePluginRemoval): Promise<boo
     const removed = await prepareNativePluginRemoval(rule).commit(attempt)
     removed.verify(); return true
   }, { identity: JSON.stringify(rule) }) }
-  catch (err) { console.error(rule.failed, err instanceof HookPreparationHeld && !(err instanceof HookScriptMissing) ? err.reason : errorKind(err)); return false }
+  catch (err) { console.error(rule.failed, err instanceof HookPreparationHeld ? err.hold : errorKind(err)); return false }
 }

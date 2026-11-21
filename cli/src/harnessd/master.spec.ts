@@ -641,7 +641,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
       const roles = (): Array<Record<string, string>> => jsonLines(seen)
       await until('the core and the service', () => roles().length >= 2)
       expect(roles().sort((a, b) => a.role.localeCompare(b.role))).toEqual([{ role: '__run', from: 'lean core', cli }, { role: 'service:search', from: 'lean', cli: null }])
-      expect(lines.some((line) => line.endsWith(`[harnessd] services run from ${lean}`))).toBe(true)
+      expect(lines.some((line) => line.endsWith('[harnessd] services run from the lean bundle'))).toBe(true)
       signals.get('SIGTERM')!()
       await until('the master to finish', () => exits.length > 0)
     } finally { log.mockRestore() }
@@ -675,7 +675,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
       })
       await until('a core from cli.js, running', () => supervisor.status().state === 'running')
       expect(readFileSync(seen, 'utf8').trim().split('\n')).toEqual(['lean', 'lean', 'cli'])
-      expect(lines.some((line) => line.endsWith(`[harnessd] the core died 2 times from the lean bundle before it beat: it starts from ${cli} from now on`))).toBe(true)
+      expect(lines.some((line) => line.endsWith('[harnessd] the core died 2 times from the lean bundle before it beat: it starts from cli.js from now on'))).toBe(true)
       // Two crashes, as any two: not yet the three in a row that start it in safe mode.
       expect(supervisor.status().safeMode).toBeNull()
       signals.get('SIGTERM')!()
@@ -732,14 +732,14 @@ describe('runMaster', { timeout: 60_000 }, () => {
       expect(services()[0]!.from).toBe('lean')
       rmSync(leanDir, { recursive: true })
       expect(await restart()).toBe('cli')
-      expect(lines.some((line) => line.endsWith(`[harnessd] the lean bundle ${lean} cannot be used (it is gone): the core and the services start from ${cli}`))).toBe(true)
+      expect(lines.some((line) => line.endsWith('[harnessd] the lean bundle cannot be used (it is gone): the core and the services start from cli.js'))).toBe(true)
       // Back as it was, and then cli.js replaced by an update this master runs no code of.
       mkdirSync(leanDir)
       writeFileSync(lean, body('lean').replace("require('node:fs')", "await import('node:fs')"))
       expect(await restart()).toBe('lean')
       writeFileSync(cli, `${body('cli')}\n// the next release\n`)
       expect(await restart()).toBe('cli')
-      expect(lines.some((line) => line.endsWith(`[harnessd] the lean bundle ${lean} cannot be used (${cli} is no longer the bundle it came from): the core and the services start from ${cli}`))).toBe(true)
+      expect(lines.some((line) => line.endsWith('[harnessd] the lean bundle cannot be used (cli.js is no longer the bundle it came from): the core and the services start from cli.js'))).toBe(true)
       signals.get('SIGTERM')!()
       await until('the master to finish', () => exits.length > 0)
     } finally { log.mockRestore() }
@@ -1317,7 +1317,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
         const same = start(script, { serviceScriptPath: join(dir, 'lean.mjs'), bundleFingerprint: fingerprint(script) })
         await until('its core', () => same.supervisor.status().state === 'running')
         expect(same.execs).toEqual([])
-        expect(lines.some((line) => line.endsWith(`[harnessd] services run from ${join(dir, 'lean.mjs')}, as this master does`))).toBe(true)
+        expect(lines.some((line) => line.endsWith('[harnessd] services run from the lean bundle, as this master does'))).toBe(true)
         await same.stop()
         const older = start(script, { bundleFingerprint: 'the bundle before' })
         await until('the master to re-execute on the bundle on disk', () => older.execs.length > 0)

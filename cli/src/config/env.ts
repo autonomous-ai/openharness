@@ -111,13 +111,29 @@ function migrateLegacyAdapterState(): void {
     try {
       rmSync(join(homedir(), '.machine'), { recursive: true, force: true })
     } catch { /* ignore */ }
-    console.warn(`[machine] moved adapter state from ~/.machine/cli/data into ${adapterDataDir}`)
+    console.warn('[machine] moved adapter state from ~/.machine/cli/data into the data folder')
   } else if (moved) {
-    console.warn(`[machine] renamed ${moved} pre-rename file(s) in ${adapterDataDir}`)
+    console.warn(`[machine] renamed ${moved} pre-rename file(s) in the data folder`)
   }
 }
 
 migrateLegacyAdapterState()
+
+/** The backend a build dials unless BACKEND_WS_URL names another. */
+const PRODUCTION_BACKEND_WS_URL = 'wss://harness-api.autonomous.ai'
+
+/**
+ * Which backend [url] dials, for a log line, in the same words in every process that dials one (the core, the gateway,
+ * the device lane): a URL names a developer's own host, and a dial's this computer's name and ids. A hash would not do:
+ * each process hashes in its own way.
+ */
+export function backendName(url: string): string {
+  try {
+    return new URL(url).origin === PRODUCTION_BACKEND_WS_URL ? 'the production backend' : 'another backend'
+  } catch {
+    return 'another backend'
+  }
+}
 
 const fields = {
   NODE_ENV: oneOf(['development', 'production', 'test'], 'development'),
@@ -135,7 +151,7 @@ const fields = {
   // SSO flow works from a box with no browser of its own. See cli/docker/remote-machine/.
   ADAPTER_LOGIN_CALLBACK_PORT: number('0'),
   // The backend the CLI dials (`/api/adapter-ws`). Local dev: ws://localhost:8090.
-  BACKEND_WS_URL: text('wss://harness-api.autonomous.ai'),
+  BACKEND_WS_URL: text(PRODUCTION_BACKEND_WS_URL),
   // SSO account plane used by native-loopback login and the adapter WebSocket.
   AUTONOMOUS_ENV: oneOf(['prod', 'stag'], 'prod'),
   // Web app base URL — used to print the agent's chat link on `adapter start`. Local: http://localhost:3000.

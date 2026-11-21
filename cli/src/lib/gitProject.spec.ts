@@ -294,6 +294,21 @@ exec '${realGit}' "$@"
     }
   })
 
+  it('says a branch it could not mark as Harness\'s by the failure\'s kind, never the branch a person named', async () => {
+    // A held lock on the repository's config: the mark, the one config write of this start, fails.
+    await writeFile(join(repo, '.git', 'config.lock'), '')
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const named = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'fix/sentinel-login' })
+      expect(await current(named)).toBe('fix/sentinel-login')
+      const lines = error.mock.calls.map(call => call.map(String).join(' '))
+      expect(lines.join('\n')).not.toContain('sentinel')
+      expect(lines).toEqual(["[worktree] could not mark its branch as Harness's, so it is not renamed after its session: Error"])
+    } finally {
+      error.mockRestore()
+    }
+  })
+
   it('creates a named branch once, and refuses names Git would not take', async () => {
     const named = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'fix/login' })
     expect(named).toBe(join(worktrees(), 'login'))
@@ -482,15 +497,15 @@ exec '${realGit}' "$@"
       expect(await listed()).not.toContain('cut')
     }, 20_000)
 
-    it('says why git failed, without credentials, and leaves no partial folder or new branch', async () => {
+    it('says how git failed, none of what it printed, and leaves no partial folder or new branch', async () => {
       const said = vi.spyOn(console, 'error').mockImplementation(() => {})
       await filtered('broken', "echo 'cannot reach https://robot:s3cret-token@example.invalid/lfs' >&2; exit 1")
       await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'broken' }))
         .rejects.toMatchObject({ code: 'WORKTREE_FAILED' })
       const lines = said.mock.calls.map(call => call.join(' ')).filter(line => line.startsWith('[worktree]'))
       expect(lines).toHaveLength(1)
-      expect(lines[0]).toContain('exit 128')
-      expect(lines[0]).toContain('cannot reach https://')
+      expect(lines[0]).toMatch(/^\[worktree\] git worktree add failed \(exit 128\) at the worktree · stderr \d+ B$/)
+      expect(lines[0]).not.toContain('cannot reach')
       expect(lines[0]).not.toContain('s3cret-token')
       await expect(realpath(join(worktrees(), 'broken'))).rejects.toThrow()
       expect(await git('branch', '--list', 'broken')).toBe('')
@@ -527,18 +542,29 @@ exec '${realGit}' "$@"
       expect(await listed()).not.toContain('worktrees/project with spaces/mine')
     })
 
-    it('logs none of a stateless GitHub token git printed', async () => {
+    it('a git that cannot be stopped is logged by how it failed', async () => {
       const said = vi.spyOn(console, 'error').mockImplementation(() => {})
-      const payload = 'eyJpc3MiOiIxMjM0NTYifQ', signature = `${'s'.repeat(470)}-x_y`
-      await filtered('leaky', `echo 'remote refused (token "ghs_123456_eyJhbGciOiJSUzI1NiJ9.${payload}.${signature}"), retry.' >&2; exit 1`)
-      await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'leaky' })).rejects.toMatchObject({ code: 'WORKTREE_FAILED' })
-      const line = said.mock.calls.map(call => call.join(' ')).find(text => text.startsWith('[worktree]'))!
-      expect(line).toContain('remote refused (token "')
-      expect(line).not.toContain('ghs_123456_')
-      expect(line).not.toContain(payload)
-      expect(line).not.toContain('ssssssss')
-      expect(line).not.toContain('-x_y')
-    })
+      const kill = process.kill.bind(process)
+      const groups: number[] = []
+      // The first stop of git's group is refused with words naming a folder; the group is ended for real afterwards.
+      vi.spyOn(process, 'kill').mockImplementation((pid: number, signal?: string | number) => {
+        if (pid < 0 && signal === 'SIGKILL' && !groups.length) {
+          groups.push(pid)
+          throw Object.assign(new Error('kill EPERM /Users/sentinel/x'), { code: 'EPERM' })
+        }
+        return kill(pid, signal)
+      })
+      await filtered('slow', 'sleep 60; cat')
+      try {
+        await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'unstoppable', worktreeTimeout: 1_500 }))
+          .rejects.toMatchObject({ code: 'WORKTREE_FAILED' })
+      } finally {
+        for (const group of groups) { try { kill(group, 'SIGKILL') } catch { /* already gone */ } }
+      }
+      const lines = said.mock.calls.map(call => call.map(String).join(' ')).join('\n')
+      expect(lines).not.toContain('sentinel')
+      expect(lines).toContain('[worktree] could not stop git and what it started: EPERM')
+    }, 20_000)
 
     describe('on Windows, where taskkill cannot stop what git started', () => {
       const platform = process.platform
@@ -728,7 +754,7 @@ exec '${realGit}' "$@"
       .rejects.toMatchObject({ code: 'GIT_PROJECT_UNAVAILABLE' })
   })
 
-  it('removes a worktree whose checkout hook fails, so a retry starts clean, and logs what the hook said', async () => {
+  it('removes a worktree whose checkout hook fails, so a retry starts clean, and logs how git failed', async () => {
     const said = vi.spyOn(console, 'error').mockImplementation(() => {})
     const hooks = join(root, 'hooks')
     await mkdir(hooks)
@@ -738,7 +764,9 @@ exec '${realGit}' "$@"
     await expect(prepare('worktree')).rejects.toMatchObject({ code: 'WORKTREE_FAILED' })
     expect(await git('worktree', 'list', '--porcelain')).not.toContain('/worktrees/')
     expect(await git('for-each-ref', '--format=%(refname)', 'refs/heads')).toBe(before)
-    expect(said.mock.calls.map(call => call.join(' ')).join('\n')).toMatch(/\[worktree\] git worktree add failed \(exit 1\).*hook refused/)
+    const lines = said.mock.calls.map(call => call.join(' ')).join('\n')
+    expect(lines).toMatch(/\[worktree\] git worktree add failed \(exit 1\) at the worktree · stderr \d+ B/)
+    expect(lines).not.toContain('hook refused')
     expect(await git('branch', '--show-current')).toBe('main')
     said.mockRestore()
   })

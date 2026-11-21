@@ -227,7 +227,11 @@ describe('two daemons on one computer', () => {
 
     const foreground = await cli(daemon, ['start', '--foreground'])
     expect(foreground.code, foreground.output).not.toBe(0)
-    expect(foreground.output).toMatch(/already serving .*daemon-\d+\.sock/)
+    // Under launchd and systemd this output is the daemon's log, which Export logs sends: the reason in fixed words,
+    // never the error's own, which name the socket's path.
+    expect(foreground.output).toContain('Failed to start adapter: EADDRINUSE · another Harness daemon serves this data folder')
+    expect(foreground.output).not.toContain(daemon.socketPath)
+    expect(foreground.output).not.toMatch(/already serving|^\s+at /m)
     // It left before it did anything: no restore, no services, no reaped viewers.
     expect(foreground.output).not.toMatch(/\[discovery\]|\[restore\]|\[dsh\] reaped|\[services\]/)
     expect(IsolatedDaemon.alive(viewer.pid!), 'the running daemon\'s viewer').toBe(true)

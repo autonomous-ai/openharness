@@ -4,6 +4,7 @@ import { unlink } from 'node:fs/promises'
 import { deflateSync } from 'node:zlib'
 import { ENGINES } from '../engines/types.js'
 import { launchContract } from '../engines/launches.js'
+import { codeOrLength, errorKind, hashOf } from './log.js'
 import type { RegisteredSession } from './registry.js'
 import { writeImageToOsClipboard } from './osClipboard.js'
 import { sleptFor } from './sleepAware.js'
@@ -896,7 +897,7 @@ export class TerminalStreamManager {
     ).catch((error: unknown) => {
       // Nothing above is awaited by anyone, so a throw from the reporting itself would otherwise
       // surface only as a process-level unhandledRejection.
-      this.diagnostic(state, 'input_report_failed', { reason: error instanceof Error ? error.message : String(error) })
+      this.diagnostic(state, 'input_report_failed', { kind: errorKind(error) })
     })
   }
 
@@ -945,7 +946,7 @@ export class TerminalStreamManager {
   /** See `TerminalStreamManagerDeps.onInput`. A listener's failure is its own: input is never held by it. */
   private tookInput(state: ActiveStream, typed: boolean): void {
     try { this.deps.onInput?.(state.agentId, typed, { connId: state.connId, kind: state.client?.kind ?? null }) } catch (error) {
-      this.diagnostic(state, 'input_listener_failed', { reason: error instanceof Error ? error.message : String(error) })
+      this.diagnostic(state, 'input_listener_failed', { kind: errorKind(error) })
     }
   }
 
@@ -1137,7 +1138,7 @@ export class TerminalStreamManager {
     }
     const streamId = state.streamId
     const reject = (reason: string): void => {
-      this.diagnostic(state, 'chunked_upload_rejected', { reason })
+      this.diagnostic(state, 'chunked_upload_rejected', { reason: codeOrLength(reason) })
       this.deps.sendTarget(connId, 'terminal_chunked_upload_begin_result', { streamId, accepted: false, reason })
     }
     const uploadKind = payload.uploadKind === 'image' ? TerminalBinaryKind.imagePaste
@@ -1495,7 +1496,7 @@ export class TerminalStreamManager {
       handle.endSnapshot()
       state.snapshotting = false
       state.resyncing = false
-      this.diagnostic(state, 'snapshot_failed', { reason: snapshot.reason })
+      this.diagnostic(state, 'snapshot_failed', { reason: codeOrLength(snapshot.reason) })
       this.sendError(state.connId, 'TERMINAL_SNAPSHOT_FAILED', { streamId: state.streamId, message: snapshot.reason })
       await this.closeStream(state, snapshot.reason, false)
       return
@@ -1664,9 +1665,10 @@ export class TerminalStreamManager {
     if (state.closing) return
     state.closing = true
     if (state.pausedAt != null) state.pausedMs += Math.max(0, this.now() - state.pausedAt)
+    // The reason and the taker's name go to the client whole (below); the log keeps a length and a hash.
     this.diagnostic(state, 'closed', {
-      reason,
-      ...(takenBy ? { takenBy: takenBy.name } : {}),
+      reason: codeOrLength(reason),
+      ...(takenBy ? { takenBy: hashOf(takenBy.name) } : {}),
       lifetimeMs: Math.max(0, this.now() - state.openedAt),
       outputFrames: state.outputFrames,
       outputPlainBytes: state.outputPlainBytes,
@@ -1791,7 +1793,7 @@ export class TerminalStreamManager {
       return
     }
     if (opened.state !== 'succeeded') {
-      this.diagnostic(state, 'retarget_failed', { reason: opened.reason })
+      this.diagnostic(state, 'retarget_failed', { reason: codeOrLength(opened.reason) })
       await this.closeStream(state, opened.reason, true)
       return
     }

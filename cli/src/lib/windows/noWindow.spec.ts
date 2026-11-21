@@ -1,8 +1,9 @@
-import { readdirSync, readFileSync } from 'node:fs'
-import { join, relative, sep } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
+import { sourceFiles } from '../../testing/sourceFiles.js'
 import { ownProcessGroup } from './noWindow.js'
 
 const SOURCE = fileURLToPath(new URL('../..', import.meta.url))
@@ -19,13 +20,8 @@ const ALLOWED: Record<string, string> = {
   'lib/daemonLaunch.ts': 'a build run from a checkout: an installed copy starts through harness-launch.exe',
 }
 
-function sources(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
-    const path = join(dir, entry.name)
-    if (entry.isDirectory()) return entry.name === 'testing' || entry.name === 'e2e' || entry.name === '__fixtures__' ? [] : sources(path)
-    return /\.tsx?$/.test(entry.name) && !/\.(spec|test|d)\.tsx?$/.test(entry.name) ? [path] : []
-  })
-}
+const sources = (): string[] => sourceFiles(SOURCE).filter(file => /\.tsx?$/.test(file) && !/\.(spec|test|d)\.tsx?$/.test(file)
+  && !file.split('/').slice(0, -1).some(folder => folder === 'testing' || folder === 'e2e' || folder === '__fixtures__'))
 
 /** Each `detached:` in a file's code that is not plainly false. Read from its syntax, so a comment or a string names nothing. */
 function detachedOptions(file: string): number {
@@ -51,9 +47,7 @@ describe('no window flashes on Windows', () => {
   })
 
   it('has no `detached` outside ownProcessGroup but the places listed with their reason', () => {
-    const helper = join('lib', 'windows', 'noWindow.ts')
-    const found = sources(SOURCE).map(file => relative(SOURCE, file)).filter(file => file !== helper && detachedOptions(join(SOURCE, file)) > 0)
-      .map(file => file.split(sep).join('/'))
+    const found = sources().filter(file => file !== 'lib/windows/noWindow.ts' && detachedOptions(join(SOURCE, file)) > 0)
     // A new one? Use ownProcessGroup(). See docs/windows-rules.md for why windowsHide beside detached does not work.
     expect(found.filter(file => !(file in ALLOWED))).toEqual([])
     // And a reason nothing needs any more goes.

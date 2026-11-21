@@ -13,6 +13,7 @@ import { messagesCommand } from './messagesHook.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import * as preparations from './nativeHookFiles.js'
 import { reviewHash, reviewRecords } from './hookReview.js'
+import { hashOf } from '../../lib/log.js'
 import { HARNESS_AGENT_TOOLS } from '../facets/hooks.js'
 
 // How the watched path is changed: opened for writing in place, or a file renamed onto it.
@@ -56,12 +57,12 @@ it.each(['claude', 'codex'] as const)('publishes one current %s proof after both
   expect(await installHookSettings(engine, settings, 19473, home, { confirmed: proof => { proofs.push(proof) } })).toBe(true)
   expect(proofs).toHaveLength(1)
   expect(proofs[0]!.current()).toBe(true)
-  const content = JSON.parse(readFileSync(join(home, settings.file), 'utf8'))
+  const content = JSON.parse(readFileSync(join(home, settings.fileName), 'utf8'))
   expect(content.hooks[settings.inbox!.event]?.some((block: { hooks: { command: string }[] }) => block.hooks.some(hook => hook.command === messagesCommand(env.HARNESS_AGENT_MESSAGES_DIR)))).toBe(true)
 })
 
 it.each(['both current', 'follower revoked', 'owner revoked'] as const)('joins the complete Messages stage with caller authority: %s', async state => {
-  const home = join(root, 'claude'), file = join(home, claude.settings.file)
+  const home = join(root, 'claude'), file = join(home, claude.settings.fileName)
   const inspect = preparations.inspectHookFile
   let enter!: () => void, release!: () => void
   const entered = new Promise<void>(done => { enter = done })
@@ -92,7 +93,7 @@ it.each(['both current', 'follower revoked', 'owner revoked'] as const)('joins t
 })
 
 it.each(['peer edit', 'another port'] as const)('holds when %s changes required hook authority during publication', async change => {
-  const home = join(root, 'claude'), file = join(home, claude.settings.file)
+  const home = join(root, 'claude'), file = join(home, claude.settings.fileName)
   const run = preparations.runHookPreparation
   let intercepted = false, peerBytes = ''
   vi.spyOn(preparations, 'runHookPreparation').mockImplementation((files, work, options) => run(files, attempt => work({
@@ -124,7 +125,7 @@ it('preserves marker-only commands and foreign siblings of the exact Messages ho
   const owned = { type: 'command', command: messagesCommand('/fixture/old') }
   const blocks = [{ hooks: [foreign] }, { matcher: 'custom', annotation: 'retain this', hooks: [owned, sibling] },
     { hooks: [{ ...owned, command: owned.command + '; echo foreign' }] }]
-  const file = join(home, codex.settings.file), event = codex.settings.inbox!.event
+  const file = join(home, codex.settings.fileName), event = codex.settings.inbox!.event
   writeFileSync(file, JSON.stringify({ hooks: { [event]: blocks } }))
   expect(await installHookSettings('codex', codex.settings, 19473, home)).toBe(true)
   const settings = JSON.parse(readFileSync(file, 'utf8'))
@@ -138,7 +139,7 @@ it('preserves marker-only commands and foreign siblings of the exact Messages ho
 it('approves the required Codex hook when an earlier optional hook uses the same event', async () => {
   const home = join(root, 'codex'); mkdirSync(home)
   const previous = { hooks: [{ type: 'command', command: messagesCommand('/fixture/previous') }] }
-  const file = join(home, codex.settings.file)
+  const file = join(home, codex.settings.fileName)
   writeFileSync(file, JSON.stringify({ hooks: { SessionStart: [previous] } }))
   const confirmed = vi.fn()
   expect(await installHookSettings('codex', codex.settings, 19473, home, { confirmed })).toBe(true)
@@ -146,7 +147,7 @@ it('approves the required Codex hook when an earlier optional hook uses the same
   expect(settings.hooks.SessionStart[0]).toEqual(previous)
   const required = settings.hooks.SessionStart[1]
   expect(required.hooks[0].command).toContain('notify.mjs')
-  const config = readFileSync(join(home, codex.settings.reviewed!.file), 'utf8')
+  const config = readFileSync(join(home, codex.settings.reviewed!.fileName), 'utf8')
   const key = `${realpathSync(file)}:session_start:1:0`
   const hash = reviewHash(codex.settings.reviewed!, 'SessionStart', required.matcher, required.hooks[0])
   expect(config).toContain(`[hooks.state.${JSON.stringify(key)}]\ntrusted_hash = ${JSON.stringify(hash)}`)
@@ -159,7 +160,7 @@ it('approves the required Codex hook when an earlier optional hook uses the same
 it('an updated Codex hook of Harness\'s keeps its place, and the person\'s beside it its review', async () => {
   vi.spyOn(console, 'log').mockImplementation(() => {})
   const home = join(root, 'codex'); mkdirSync(home)
-  const file = join(home, codex.settings.file), config = join(home, codex.settings.reviewed!.file)
+  const file = join(home, codex.settings.fileName), config = join(home, codex.settings.reviewed!.fileName)
   expect(await installHookSettings('codex', codex.settings, 19474, home)).toBe(true)
   const theirs = { hooks: [{ type: 'command', command: 'my-own-hook', timeout: 7 }] }
   const settings = JSON.parse(readFileSync(file, 'utf8'))
@@ -177,14 +178,35 @@ it('an updated Codex hook of Harness\'s keeps its place, and the person\'s besid
   expect(state[at(1)]?.trusted_hash).toBe(trusted)
 })
 
-it('names a home literally in its log lines, whatever characters the path holds', async () => {
+it('names a home by its hash in its log lines, whatever characters the path holds', async () => {
   const log = vi.spyOn(console, 'log').mockImplementation(() => {})
   // `$&` and `$1` mean something to String.replace with a string replacement, and {port} to the templates.
   const home = join(root, 'a$&b$1{port}{file}')
   const file = join(home, 'settings.json')
   await installHookSettings('claude', { ...claude.settings, messages: { ...claude.settings.messages, installed: '{file}|{script}|{port}' } }, 19473, home)
-  expect(log.mock.calls[0]).toEqual([`${file}|${HOOK_SCRIPT}|19473`])
+  // The test's root is not under the worker's home (vitest.setup.ts): the tag says so.
+  expect(log.mock.calls[0]).toEqual([`${hashOf(file)} (outside the home)|${hashOf(HOOK_SCRIPT)}|19473`])
   expect(JSON.parse(readFileSync(file, 'utf8')).hooks.Stop[0].hooks[0].command).toContain('--port 19473')
+})
+
+// A path names the person's home, and Export logs sends the log off the machine: each line names the file, and the
+// hook script, by a hash, and says when the file is outside the home, which the end-to-end harness checks
+// (e2e/harness/daemon.ts `hooksOutside`). The test's root is not under the worker's home (vitest.setup.ts).
+it.each(['claude', 'codex'] as const)('a hook install names its file by a hash, never its path, and says it is outside the home: %s', async engine => {
+  const lines: string[] = []
+  for (const level of ['log', 'warn', 'error'] as const) vi.spyOn(console, level).mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(' ')) })
+  const settings = engine === 'claude' ? claude.settings : codex.settings
+  const home = mkdtempSync(join(root, 'sentinel-')), file = join(home, engine === 'claude' ? 'settings.json' : 'hooks.json')
+  expect(await installHookSettings(engine, settings, 19473, home)).toBe(true)
+  expect(await installHookSettings(engine, settings, 19474, home)).toBe(true)
+  expect(await installHookSettings(engine, settings, 19474, home)).toBe(true)
+  expect(lines.join('\n')).not.toContain('sentinel')
+  expect(lines).toContain(engine === 'claude'
+    ? `[hooks] installed Claude Code session, turn, wait and subagent hooks → ${hashOf(file)} (outside the home)`
+    : `[hooks] installed Codex session and turn hooks → ${hashOf(file)} (outside the home)`)
+  expect(lines).toContain(engine === 'claude'
+    ? `[hooks] updated (path/port changed) → ${hashOf(HOOK_SCRIPT)} --port 19474 in ${hashOf(file)} (outside the home)`
+    : `[hooks] Codex session and turn hooks already installed → ${hashOf(file)} (outside the home)`)
 })
 
 it('reports a held malformed file even when an engine declares no malformed-file lines', async () => {
@@ -215,7 +237,7 @@ const claudeRules = (skip: { bash?: string[]; mcp?: string[]; help?: boolean; co
 
 it('allows Harness\'s agent commands and MCP tools in Claude Code beside the person\'s own rules, once', async () => {
   const home = join(root, 'claude'); mkdirSync(home)
-  const file = join(home, claude.settings.file)
+  const file = join(home, claude.settings.fileName)
   writeFileSync(file, JSON.stringify({ permissions: { allow: ['Bash(npm test:*)'], deny: ['Bash(rm:*)'], defaultMode: 'auto' } }))
   expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
   const first = readFileSync(file, 'utf8')
@@ -229,7 +251,7 @@ it('allows Harness\'s agent commands and MCP tools in Claude Code beside the per
 it('adds the rules an earlier release did not have to a Claude Code list that has harness send alone', async () => {
   const home = join(root, 'claude')
   expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
-  const file = join(home, claude.settings.file)
+  const file = join(home, claude.settings.fileName)
   const settings = JSON.parse(readFileSync(file, 'utf8'))
   settings.permissions.allow = ['Bash(harness send:*)', `Bash(${join(env.HARNESS_BIN_DIR, 'harness')} send:*)`]
   writeFileSync(file, JSON.stringify(settings, null, 2) + '\n')
@@ -241,7 +263,7 @@ it('adds the rules an earlier release did not have to a Claude Code list that ha
 
 it('never allows what the person denied or asked for in Claude Code, in any spelling, and keeps their rules as they are', async () => {
   const home = join(root, 'claude'); mkdirSync(home)
-  const file = join(home, claude.settings.file)
+  const file = join(home, claude.settings.fileName)
   // A deny for `harness close` keeps out the launcher's `close` as well, which Claude Code does not count as the same;
   // an ask for one MCP tool keeps out that tool under both server names; a broader ask keeps out a whole verb.
   const permissions = { deny: ['Bash(harness close:*)', 'mcp__harness__harness_start'], ask: [`Bash(${join(env.HARNESS_BIN_DIR, 'harness')} new --mode:*)`, 'Bash(harness wai*)'] }
@@ -262,7 +284,7 @@ it('never allows what the person denied or asked for in Claude Code, in any spel
 it('allows only Harness\'s own MCP tools, not every tool of a server that is also called harness', async () => {
   const home = join(root, 'claude')
   expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
-  const allow: string[] = JSON.parse(readFileSync(join(home, claude.settings.file), 'utf8')).permissions.allow
+  const allow: string[] = JSON.parse(readFileSync(join(home, claude.settings.fileName), 'utf8')).permissions.allow
   expect(allow.filter((rule) => rule.startsWith('mcp__'))).toEqual(Object.values(HARNESS_AGENT_TOOLS).flatMap((tool) =>
     [`mcp__harness__${tool}`, `mcp__plugin_harness_harness__${tool}`]))
   expect(allow.some((rule) => rule.includes('*') && rule.startsWith('mcp__'))).toBe(false)
@@ -271,7 +293,7 @@ it('allows only Harness\'s own MCP tools, not every tool of a server that is als
 it('allows harness browser in Claude Code by name and by the launcher\'s path, and no MCP tool for it', async () => {
   const home = join(root, 'claude')
   expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
-  const allow: string[] = JSON.parse(readFileSync(join(home, claude.settings.file), 'utf8')).permissions.allow
+  const allow: string[] = JSON.parse(readFileSync(join(home, claude.settings.fileName), 'utf8')).permissions.allow
   expect(allow).toContain('Bash(harness browser:*)')
   expect(allow).toContain(`Bash(${join(env.HARNESS_BIN_DIR, 'harness')} browser:*)`)
   // Exactly `harness browser …`: nothing broader of Harness's, and no rule of a tool it does not have.
@@ -282,7 +304,7 @@ it('allows harness browser in Claude Code by name and by the launcher\'s path, a
 it('a deny or an ask for harness browser keeps its allow out in both spellings', async () => {
   const launcher = join(env.HARNESS_BIN_DIR, 'harness')
   for (const permissions of [{ deny: ['Bash(harness browser:*)'] }, { ask: [`Bash(${launcher} browser navigate:*)`] }]) {
-    const home = mkdtempSync(join(root, 'claude-')), file = join(home, claude.settings.file)
+    const home = mkdtempSync(join(root, 'claude-')), file = join(home, claude.settings.fileName)
     writeFileSync(file, JSON.stringify({ permissions }))
     expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
     const written = JSON.parse(readFileSync(file, 'utf8')).permissions
@@ -302,7 +324,7 @@ it('harnessRules gives a verb with no tool its commands alone, and no empty grou
 it('allows exactly harness device notify in Claude Code, by name and by the launcher\'s path', async () => {
   const home = join(root, 'claude')
   expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
-  const allow: string[] = JSON.parse(readFileSync(join(home, claude.settings.file), 'utf8')).permissions.allow
+  const allow: string[] = JSON.parse(readFileSync(join(home, claude.settings.fileName), 'utf8')).permissions.allow
   // Never the whole `device` word: `harness device claude enable` and the rest of `device` still ask.
   expect(allow.filter((rule) => rule.includes('device'))).toEqual(['Bash(harness device notify:*)', `Bash(${join(env.HARNESS_BIN_DIR, 'harness')} device notify:*)`])
 })
@@ -310,7 +332,7 @@ it('allows exactly harness device notify in Claude Code, by name and by the laun
 it('a deny or an ask for harness device notify, or for all of harness device, keeps it out in both spellings and nothing else', async () => {
   const launcher = join(env.HARNESS_BIN_DIR, 'harness')
   for (const permissions of [{ deny: ['Bash(harness device notify:*)'] }, { ask: [`Bash(${launcher} device notify --json:*)`] }, { deny: ['Bash(harness device:*)'] }]) {
-    const home = mkdtempSync(join(root, 'claude-')), file = join(home, claude.settings.file)
+    const home = mkdtempSync(join(root, 'claude-')), file = join(home, claude.settings.fileName)
     writeFileSync(file, JSON.stringify({ permissions }))
     expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
     const allow: string[] = JSON.parse(readFileSync(file, 'utf8')).permissions.allow
@@ -320,7 +342,7 @@ it('a deny or an ask for harness device notify, or for all of harness device, ke
 })
 
 it('a deny for another device command leaves harness device notify allowed', async () => {
-  const home = join(root, 'claude'), file = join(home, claude.settings.file)
+  const home = join(root, 'claude'), file = join(home, claude.settings.fileName)
   mkdirSync(home)
   writeFileSync(file, JSON.stringify({ permissions: { deny: ['Bash(harness device claude enable:*)'] } }))
   expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
@@ -331,7 +353,7 @@ it('the rule is a prefix of three literal words in each engine', async () => {
   const claudeHome = join(root, 'claude'), codexHome = join(root, 'codex')
   expect(await installHookSettings('claude', claude.settings, 19473, claudeHome)).toBe(true)
   expect(await installHookSettings('codex', codex.settings, 19473, codexHome)).toBe(true)
-  const notify = (JSON.parse(readFileSync(join(claudeHome, claude.settings.file), 'utf8')).permissions.allow as string[]).filter((rule) => rule.includes('device'))
+  const notify = (JSON.parse(readFileSync(join(claudeHome, claude.settings.fileName), 'utf8')).permissions.allow as string[]).filter((rule) => rule.includes('device'))
   expect(notify).toHaveLength(2)
   // A wildcard, a separator or an expansion of its own would let the rule approve more than the three words.
   for (const rule of notify) {
@@ -411,7 +433,7 @@ it('rewrites the Codex rules file an earlier release wrote for harness send alon
 
 it('allows the agent commands where an engine has no inbox, and holds nothing when that fails', async () => {
   const settings = { ...claude.settings, inbox: undefined }
-  const home = join(root, 'claude'), file = join(home, settings.file)
+  const home = join(root, 'claude'), file = join(home, settings.fileName)
   expect(await installHookSettings('claude', settings, 19473, home)).toBe(true)
   const written = JSON.parse(readFileSync(file, 'utf8'))
   expect(written.permissions.allow).toEqual(claudeRules())
@@ -441,7 +463,7 @@ it('launches Codex when its rules file cannot be written, and says so', async ()
 })
 
 it.skipIf(process.getuid?.() === 0)('says only the allowance failed when a read-only file already has the hook', async () => {
-  const home = join(root, 'claude'), file = join(home, claude.settings.file)
+  const home = join(root, 'claude'), file = join(home, claude.settings.fileName)
   expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
   const settings = JSON.parse(readFileSync(file, 'utf8')); delete settings.permissions
   writeFileSync(file, JSON.stringify(settings, null, 2) + '\n'); chmodSync(file, 0o444)
@@ -461,7 +483,7 @@ const oursAt = (port: number) => ({ hooks: [{ type: 'command', command: command(
 // Codex caps an Interrupt hook at 3 s and hashes the capped value (facts-codex §1): written with the contract's 5,
 // its review record would never match.
 it('writes a declared event\'s own timeout in place of the contract\'s, and the contract\'s for the others', async () => {
-  const home = join(root, 'claude'), file = join(home, claude.settings.file)
+  const home = join(root, 'claude'), file = join(home, claude.settings.fileName)
   expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }, { event: 'Stop', timeout: 3 }]), 19473, home)).toBe(true)
   const { hooks } = JSON.parse(readFileSync(file, 'utf8'))
   expect(hooks).toEqual({ SessionStart: [oursAt(19473)], Stop: [{ hooks: [{ ...oursAt(19473).hooks[0], timeout: 3 }] }] })
@@ -469,7 +491,7 @@ it('writes a declared event\'s own timeout in place of the contract\'s, and the 
 })
 
 it('takes Harness\'s block out of an event its engine no longer declares, and leaves the person\'s', async () => {
-  const home = join(root, 'claude'), file = join(home, claude.settings.file)
+  const home = join(root, 'claude'), file = join(home, claude.settings.fileName)
   mkdirSync(home)
   const ours = oursAt(19473), theirs = { matcher: 'auto', hooks: [{ type: 'command', command: 'echo compacting' }] }
   const shared = { matcher: 'mcp', hooks: [...ours.hooks, { type: 'command', command: 'echo asked' }] }
@@ -483,7 +505,7 @@ it('takes Harness\'s block out of an event its engine no longer declares, and le
 })
 
 it('a second install writes nothing', async () => {
-  const home = join(root, 'claude'), file = join(home, claude.settings.file)
+  const home = join(root, 'claude'), file = join(home, claude.settings.fileName)
   mkdirSync(home)
   writeFileSync(file, JSON.stringify({ hooks: { SubagentStop: [oursAt(19474)] } }))
   expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }]), 19473, home)).toBe(true)
@@ -496,7 +518,7 @@ it('a second install writes nothing', async () => {
 })
 
 it('leaves Agent Messages\' block where it is', async () => {
-  const home = join(root, 'claude'), file = join(home, claude.settings.file)
+  const home = join(root, 'claude'), file = join(home, claude.settings.fileName)
   mkdirSync(home)
   const messages = { hooks: [{ type: 'command', command: messagesCommand(env.HARNESS_AGENT_MESSAGES_DIR), timeout: 5 }] }
   writeFileSync(file, JSON.stringify({ hooks: { PostToolUse: [messages, oursAt(19473)] } }))
@@ -505,7 +527,7 @@ it('leaves Agent Messages\' block where it is', async () => {
 })
 
 it('leaves an event it does not declare alone when nothing of Harness\'s is in it, whatever its shape', async () => {
-  const home = join(root, 'claude'), file = join(home, claude.settings.file)
+  const home = join(root, 'claude'), file = join(home, claude.settings.fileName)
   mkdirSync(home)
   const odd = [null, 'text', { hooks: 'no' }, { hooks: [null, { command: 5 }] }]
   writeFileSync(file, JSON.stringify({ hooks: { PreCompact: odd, SubagentStop: [oursAt(19473)] } }))
@@ -514,7 +536,7 @@ it('leaves an event it does not declare alone when nothing of Harness\'s is in i
 })
 
 it('on Windows, prunes the forms Harness writes there', async () => {
-  const home = join(root, 'claude'), file = join(home, claude.settings.file)
+  const home = join(root, 'claude'), file = join(home, claude.settings.fileName)
   vi.spyOn(console, 'log').mockImplementation(() => {})
   expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }, { event: 'PreCompact' }]), 19473, home, {}, 'win32')).toBe(true)
   const execForm = JSON.parse(readFileSync(file, 'utf8')).hooks.PreCompact[0].hooks[0]

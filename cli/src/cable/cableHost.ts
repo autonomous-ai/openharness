@@ -22,7 +22,7 @@ import type { RegisteredSession } from '../lib/registry.js'
 import { fetchRelease, loadImage, shouldOffer, type FirmwareRelease } from './fwPush.js'
 import { routeVoiceTask, type RouterAgent, type RouterContinuity } from '../lib/voiceRouter.js'
 import { env } from '../config/env.js'
-import { errorKind } from '../lib/log.js'
+import { codeOrLength, errorKind } from '../lib/log.js'
 import { FleetRouter } from '../services/fleetRouter.js'
 import type { ForkResult } from '../core/api.js'
 import type { FleetRouting } from '../services/fleet.js'
@@ -425,21 +425,19 @@ export class DaemonCableHost implements CableHost {
     this.wiring.log(line)
     void (async () => {
       // The socket first, and unconditionally: it is what makes the machine wheel's dots live, and it is
-      // held for as long as the dial is plugged in whether or not anything is selected.
-      let online: { ok: true } | { ok: false; message: string; code?: string }
-      try {
-        online = await this.viaFleet((r) => r.online())
-      } catch (err) {
-        online = { ok: false, message: (err as Error).message }
-      }
+      // held for as long as the dial is plugged in whether or not anything is selected. A router that throws is logged
+      // by the catch below, by its kind.
+      const online = await this.viaFleet((r) => r.online())
       if (!online.ok) {
+        // The lane's code, or the failure's kind: a code that is not one is said by its length.
+        const why = online.code === undefined ? online.kind : codeOrLength(online.code)
         // A session that is over is not tried again: each try would be a refused refresh and two log lines every 30 s
         // until someone signs in (security review 2 on #2483). The next sign-in and plug-in open it.
         if (online.code === LANE_SESSION_OVER) {
-          this.wiring.log(`cable: could not open the lane (${online.message}) — other machines are unavailable until the next sign-in`)
+          this.wiring.log(`cable: could not open the lane (${why}) — other machines are unavailable until the next sign-in`)
           return
         }
-        this.wiring.log(`cable: could not open the lane (${online.message})`)
+        this.wiring.log(`cable: could not open the lane (${why})`)
         // Only a token that could not be read is tried again from here: it left the lane no socket, so nothing else
         // would (deviceLink.ts readToken). A socket that failed is the lane's own reconnect's, and trying it here too
         // ran two backoffs against a backend that is down (security review 2 on #2483).
@@ -485,7 +483,7 @@ export class DaemonCableHost implements CableHost {
     // Never fatal. The local machine in particular must stay usable with no backend at all — it is the
     // one machine the cable can vouch for on its own. Replaced by a newer select is not a failure: that
     // one tells the backend where the dial is.
-    if (!selected.ok && selected.code !== 'SUPERSEDED') this.wiring.log(`cable: could not announce ${machineId} (${selected.message})`)
+    if (!selected.ok && selected.code !== 'SUPERSEDED') this.wiring.log(`cable: could not announce ${machineId} (${selected.code})`)
   }
 
   /**
@@ -1138,7 +1136,7 @@ export class DaemonCableHost implements CableHost {
         if (this.wiring.forked) this.wiring.forked(machineId, result.agentId, agentId)
         else this.wiring.opened?.(machineId, result.agentId)
       } else {
-        this.wiring.log(`cable: fork ${machineId}/${agentId} refused (${result.error}${result.detail ? `: ${result.detail}` : ''})`)
+        this.wiring.log(`cable: fork ${machineId}/${agentId} refused (${codeOrLength(result.error)})`)
       }
       return result
     })

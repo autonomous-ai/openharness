@@ -442,7 +442,7 @@ export class OrchestratorService {
       // Storage failures must not crash the entire daemon or allow more launches.
       run.state = 'paused'
       run.error = `Project paused after a background error: ${error instanceof Error ? error.message : 'unknown error'}. Inspect existing agents before resuming.`
-      console.error(`[orchestrator] ${run.error}`)
+      console.error(`[orchestrator] project paused after a background error · ${errorKind(error)}`)
       this.changed(run, false)
     })
   }

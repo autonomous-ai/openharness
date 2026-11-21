@@ -17,7 +17,7 @@
  */
 import { WebSocket } from 'ws'
 import { hostname } from 'os'
-import { env } from '../config/env.js'
+import { backendName, env } from '../config/env.js'
 import { tuiPresence, WINDOW_SURFACES, type LocalWindows, type WindowSurface } from '../lib/windowSurfaces.js'
 import { AuthSessionError } from '../lib/authSession.js'
 import { AuthSessionManager } from '../lib/authRefresh.js'
@@ -193,7 +193,8 @@ export class UpstreamLink {
 
     ws.on('open', () => {
       this.openedAt = Date.now()
-      console.log(`[backend] connected → ${this.url}`)
+      // `harness start` waits for the marker (lib/daemonLaunch.ts); the URL names this computer's hostname.
+      console.log(`[backend] connected · ${backendName(this.url)}`)
       this.events.status(true)
       this.drainQueue()
       this.events.up()

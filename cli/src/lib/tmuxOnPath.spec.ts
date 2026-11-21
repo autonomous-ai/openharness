@@ -83,7 +83,7 @@ describe('ensureTmuxOnPath', () => {
 
     expect(outcome.state).toBe('adopted')
     if (outcome.state !== 'adopted') return
-    expect(outcome.from).toBe(binDir)
+    expect(outcome.from).toBe('login shell')
     // The point of the whole exercise: every later execFile('tmux', …) now resolves.
     expect(env.PATH?.split(delimiter)[0]).toBe(binDir)
     expect(env.PATH).toContain('/nonexistent-for-this-test')
@@ -146,7 +146,7 @@ PATH="${binDir}" exec /bin/sh -c "$@"
 
     const outcome = await ensureTmuxOnPath(env, fakeShell(usersBin), runtimeDir)
 
-    expect(outcome).toEqual({ state: 'adopted', path: join(usersBin, 'tmux'), from: usersBin })
+    expect(outcome).toEqual({ state: 'adopted', path: join(usersBin, 'tmux'), from: 'login shell' })
     expect(env.PATH!.split(delimiter)[0]).toBe(usersBin)
   })
 
@@ -260,7 +260,7 @@ esac
     writeExecutable(join(working, 'tmux'), '#!/bin/sh\nprintf "tmux 3.7c\\n"\n')
     const env: NodeJS.ProcessEnv = { PATH: '/nonexistent' }
     expect(await ensureTmuxOnPath(env, '/nonexistent/shell', noManagedTmux(), [broken, working]))
-      .toMatchObject({ state: 'adopted', path: join(working, 'tmux') })
+      .toEqual({ state: 'adopted', path: join(working, 'tmux'), from: 'standard install location' })
     expect(env.PATH?.split(delimiter)[0]).toBe(working)
   })
 
@@ -279,7 +279,7 @@ esac
 })
 
 describe('tmuxFinder', () => {
-  const ADOPTED = async (): Promise<TmuxPathOutcome> => ({ state: 'adopted', path: '/x/bin/tmux', from: '/x/bin' })
+  const ADOPTED = async (): Promise<TmuxPathOutcome> => ({ state: 'adopted', path: '/x/bin/tmux', from: 'login shell' })
 
   // As the core retries its own (terminalBackendRecovery.ts): a tmux installed after the process started, or a login
   // shell that timed out on a loaded Mac, otherwise left the dial with no tmux until the process restarted.
@@ -311,7 +311,7 @@ describe('tmuxFinder', () => {
     process.env.PATH = '/nonexistent-for-this-test'
     process.env.SHELL = fakeShell(binDir)
     try {
-      expect(await tmuxFinder()()).toEqual({ state: 'adopted', path: join(binDir, 'tmux'), from: binDir })
+      expect(await tmuxFinder()()).toEqual({ state: 'adopted', path: join(binDir, 'tmux'), from: 'login shell' })
       expect(process.env.PATH).toBe('/nonexistent-for-this-test')
     } finally {
       if (shell === undefined) delete process.env.SHELL

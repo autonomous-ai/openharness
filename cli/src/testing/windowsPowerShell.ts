@@ -97,7 +97,8 @@ export function windowsPowerShell(): WindowsPowerShell {
 
 /**
  * Ends [own]'s process tree, and gives '' once it has exited, or, when it is still there 3 s later, what is left and
- * what taskkill said: a wait with no end would hang the call, or the spec's afterAll, with no word of why.
+ * how ending it failed (taskkill's exit and how many bytes it printed): a wait with no end would hang the call, or the
+ * spec's afterAll, with no word of why.
  */
 export async function endTree(own: Pick<Host, 'pid' | 'exited'>): Promise<string> {
   const failed = await stopTree(own.pid)

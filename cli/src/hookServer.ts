@@ -14,12 +14,12 @@ import { readStorePool } from './engines/kit/storePool.js'
 import { homeIsAbsolute } from './engines/kit/homeAdoption.js'
 import { isInteractiveSource, rowSessionSource, storeSourceQuery } from './engines/kit/storeSource.js'
 import { IdentityReadUnavailable } from './engines/kit/identityScan.js'
-import { createPendingAdmissions, type AdmissionDecision } from './core/engines/pendingAdmission.js'
+import { createPendingAdmissions, type AdmissionDecision, type AdmissionHold } from './core/engines/pendingAdmission.js'
 import { paneReadIdentity } from './core/transcripts/readIdentity.js'
 import { processIdentityKey } from './lib/terminalRuntime.js'
 import { isRecentlyDeleted } from './lib/deletedSessions.js'
 import { registry, type RegisterInput, type RegisteredSession } from './lib/registry.js'
-import { errorKind, sid } from './lib/log.js'
+import { codeOrLength, errorKind, hashOf, sid } from './lib/log.js'
 import { VERSION } from './version.js'
 import { env } from './config/env.js'
 import { hookCredentialMatches, loadOrCreateHookCredential, loadOrCreateHookToken } from './lib/hookAuth.js'
@@ -358,19 +358,19 @@ async function inspectHermesKind(sessionId: string, knownHome?: string, capture?
       sql: columns => storeSourceQuery(HERMES_SOURCE, columns), params: [sessionId], maxRows: 1, maxBuffer: HERMES_SOURCE.maxBuffer,
       columns: ['id', 'source'], pointKey: 'id', knownHome, capture,
     })
-    if (!found.length) return { kind: 'hold', reason: 'Waiting for the Hermes session source record; keeping the current conversation.' }
-    if (found.length !== 1) return { kind: 'hold', reason: 'Hermes session source is ambiguous across homes; keeping the current conversation.' }
+    if (!found.length) return { kind: 'hold', code: 'HERMES_SOURCE_MISSING', reason: 'Waiting for the Hermes session source record; keeping the current conversation.' }
+    if (found.length !== 1) return { kind: 'hold', code: 'HERMES_SOURCE_AMBIGUOUS', reason: 'Hermes session source is ambiguous across homes; keeping the current conversation.' }
     const { home, aliases, row } = found[0]
-    if (knownHome && !aliases.includes(knownHome)) return { kind: 'hold', reason: 'Waiting for the Hermes source in its known home; keeping the current conversation.' }
+    if (knownHome && !aliases.includes(knownHome)) return { kind: 'hold', code: 'HERMES_SOURCE_ELSEWHERE', reason: 'Waiting for the Hermes source in its known home; keeping the current conversation.' }
     // A unified-runtime row names its creator separately; an unstamped one waits like a row not written yet.
     const source = rowSessionSource(HERMES_SOURCE, row)
-    if (source === null) return { kind: 'hold', reason: 'Waiting for the Hermes session creator to be recorded; keeping the current conversation.' }
+    if (source === null) return { kind: 'hold', code: 'HERMES_CREATOR_MISSING', reason: 'Waiting for the Hermes session creator to be recorded; keeping the current conversation.' }
     if (typeof source !== 'string' || source.length > 128) throw new IdentityReadUnavailable('the Hermes source record is invalid')
     if (!isInteractiveSource(HERMES_SOURCE, source)) return { kind: 'reject', reason: 'hermes_subagent' }
     return { kind: 'accept', value: knownHome ?? (home === env.HERMES_HOME ? undefined : home) }
   } catch (error) {
     if (!(error instanceof IdentityReadUnavailable)) throw error
-    return { kind: 'hold', reason: `Hermes session source is unavailable; keeping the current conversation. ${error.message}` }
+    return { kind: 'hold', code: 'HERMES_SOURCE_UNAVAILABLE', failure: errorKind(error), reason: `Hermes session source is unavailable; keeping the current conversation. ${error.message}` }
   }
 }
 
@@ -435,6 +435,10 @@ export interface HookServerOptions {
   admissionBytesCapacity?: number
 }
 
+/** Claude Code's own SessionEnd reasons, its hook input's `reason` (read from Claude Code 2.1.330): fixed words, logged as
+ *  they are. Any other engine's reason is logged as a code or a length. */
+const SESSION_END_REASONS: readonly string[] = ['clear', 'resume', 'logout', 'prompt_input_exit', 'other']
+
 /** The `/api/status` fields a caller without the local credential is answered. */
 // Which daemon this is (its pid and computer, as a takeover or a status check compares) and where its socket
 // is — never the account, its folders or its connections.
@@ -491,11 +495,13 @@ export function startHookServer(
       // Before any route, reads included. See lib/loopbackRequest.ts.
       if (!trustedLocal && !isLoopbackRequest(req, hosts)) {
         // At most one line a minute: enough to explain a client that was refused, not a lever for a
-        // page to flood the log. Host and Origin are the sender's, so they are escaped and bounded.
+        // page to flood the log. The address, Host and Origin are the sender's (a page's URL can name the person's
+        // work), so the address is its length and each header, when sent, a tag that reads the same while this daemon runs.
         if (Date.now() - lastRefusalLogAt > 60_000) {
           lastRefusalLogAt = Date.now()
-          const shown = (v: unknown) => JSON.stringify(String(v ?? '').slice(0, 80))
-          console.warn(`[hooks] refused ${req.method} ${url.slice(0, 80)} · host=${shown(req.headers.host)} origin=${shown(req.headers.origin)}`)
+          const sent = ([['host', req.headers.host], ['origin', req.headers.origin]] as const)
+            .flatMap(([name, value]) => value ? [`${name}=${hashOf(value)}`] : [])
+          console.warn(`[hooks] refused ${req.method} (${url.length} chars)${sent.length ? ` · ${sent.join(' ')}` : ''}`)
         }
         json(403, { error: 'FORBIDDEN_HOST' }); return
       }
@@ -738,14 +744,14 @@ export function startHookServer(
           try { handlers.onAdmissionHeld?.(processAgent.agentId, reason) }
           catch (error) { console.warn('[hooks] admission status notification failed', errorKind(error)) }
         }
-        const held = (reason: string) => {
+        const held = ({ code, reason, failure }: AdmissionHold) => {
           clearTimeout(replyTimer)
           deferred = true
           history.holds++
           const holds = admissionHolds.get(processAgent.agentId) ?? new Map<string, string>()
           holds.set(deliveryId, reason); admissionHolds.set(processAgent.agentId, holds)
           publishHold()
-          console.log(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} held · ${reason}`)
+          console.log(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} held · ${code}${failure ? ` · ${failure}` : ''}`)
           answer(200, { pending: true })
         }
         const clearHold = () => {
@@ -811,12 +817,12 @@ export function startHookServer(
         }
         const prepare = (): AdmissionDecision<string | undefined> | null => {
           if (!current()) return { kind: 'reject', reason: 'stale_hook' }
-          if (handlers.hookAdmissionBlocked?.(processAgent.agentId)) return { kind: 'hold', reason: 'Waiting for Stop to settle before admitting the hook.' }
+          if (handlers.hookAdmissionBlocked?.(processAgent.agentId)) return { kind: 'hold', code: 'STOP_SETTLING', reason: 'Waiting for Stop to settle before admitting the hook.' }
           const row = live()!
           if (!runtimeHints.some(hint => row.runtimes.some(runtime => runtime.backend === hint.backend && runtime.paneId === hint.paneId
             // A paneId is only unique within one pty host.
             && (hint.backend !== 'ptyhost' || (runtime.backend === 'ptyhost' && runtime.instance === hint.instance))))) {
-            return { kind: 'hold', reason: 'Waiting for the original hook pane to belong to its engine process.' }
+            return { kind: 'hold', code: 'HOOK_PANE_UNOWNED', reason: 'Waiting for the original hook pane to belong to its engine process.' }
           }
           inspectionIdentity = paneReadIdentity(row)
           prepared = { ...body, ...taken, processIdentity: row.processIdentity ? { ...row.processIdentity } : undefined,
@@ -824,12 +830,12 @@ export function startHookServer(
             transcriptPath: knownTranscriptFor(body, row) }
           const admission = admitHook(engine, prepared)
           if (!admission.accepted) return admission.reason === 'engine_hook_failed'
-            ? { kind: 'hold', reason: 'Waiting for complete native hook evidence.' } : { kind: 'reject', reason: admission.reason }
+            ? { kind: 'hold', code: 'HOOK_EVIDENCE_INCOMPLETE', reason: 'Waiting for complete native hook evidence.' } : { kind: 'reject', reason: admission.reason }
           return null
         }
         const commit = async (hermesHome: string | undefined, admissionCurrent: () => boolean): Promise<AdmissionDecision<string | undefined>> => {
-          if (!current() || paneReadIdentity(live()) !== inspectionIdentity) return { kind: 'hold', reason: 'Waiting for fresh evidence after the binding changed.' }
-          if (handlers.hookAdmissionBlocked?.(processAgent.agentId)) return { kind: 'hold', reason: 'Waiting for Stop to settle before admitting the hook.' }
+          if (!current() || paneReadIdentity(live()) !== inspectionIdentity) return { kind: 'hold', code: 'BINDING_CHANGED', reason: 'Waiting for fresh evidence after the binding changed.' }
+          if (handlers.hookAdmissionBlocked?.(processAgent.agentId)) return { kind: 'hold', code: 'STOP_SETTLING', reason: 'Waiting for Stop to settle before admitting the hook.' }
           const prior = live()
           const before = prior && { sessionId: prior.sessionId, transcriptPath: prior.transcriptPath,
             held: !!(prior.identityHold || prior.interpretationHold) }
@@ -863,9 +869,9 @@ export function startHookServer(
           if (committed && carriesStop && !stopRetained && !stopInvocationClaimed) {
             stopUnmatched ||= deferred || before?.sessionId !== committed.entry.sessionId
               || before?.transcriptPath !== committed.entry.transcriptPath || before?.held === true
-            if (!handlers.onAdmissionStop && stopUnmatched) return { kind: 'hold', reason: 'Waiting for core ownership of the unmatched Stop.' }
+            if (!handlers.onAdmissionStop && stopUnmatched) return { kind: 'hold', code: 'UNMATCHED_STOP', reason: 'Waiting for core ownership of the unmatched Stop.' }
             stopRetained = handlers.onAdmissionStop?.(committed.entry, stopUnmatched) ?? false
-            if (stopUnmatched && !stopRetained) return { kind: 'hold', reason: 'Waiting for core ownership of the unmatched Stop.' }
+            if (stopUnmatched && !stopRetained) return { kind: 'hold', code: 'UNMATCHED_STOP', reason: 'Waiting for core ownership of the unmatched Stop.' }
           }
           if (committed) committedIdentity = paneReadIdentity(committed.entry)
           return committed ? { kind: 'accept', value: hermesHome } : { kind: 'reject', reason: 'invalid_session_registration' }
@@ -881,7 +887,7 @@ export function startHookServer(
           // Core cleared the live admission hold; the durable commit reply is a detached snapshot.
           result.entry = structuredClone(owner)
           console.log(`[hooks] ${sid(result.entry.sessionId)} ${body.hookEvent ?? 'session-start'} · engine=${result.entry.engine} · isNew=${result.isNew}`
-            + (engine === 'hermes' ? ` · after a source check${result.entry.hermesHome ? ` · home=${result.entry.hermesHome}` : ''}` : ''))
+            + (engine === 'hermes' ? ` · after a source check${result.entry.hermesHome ? ` · home=${hashOf(result.entry.hermesHome)}` : ''}` : ''))
           const optional = (call: () => void | Promise<void>) => {
             try { void Promise.resolve(call()).catch(error => console.warn('[hooks] committed admission notification failed', errorKind(error))) }
             catch (error) { console.warn('[hooks] committed admission notification failed', errorKind(error)) }
@@ -945,7 +951,7 @@ export function startHookServer(
           } else {
             saveReceipt(history.records, deliveryId)
             const detail = 'Too many unverified hooks are pending; this hook was not queued. Retry after recovery.'
-            console.log(`[hooks] ${sid(body.sessionId ?? '?')} held · ${detail}`)
+            console.log(`[hooks] ${sid(body.sessionId ?? '?')} held · HOOK_ADMISSION_BUSY`)
             answer(429, { pending: false, error: 'HOOK_ADMISSION_BUSY', detail })
           }
         }
@@ -979,7 +985,8 @@ export function startHookServer(
       if (req.method === 'POST' && url === '/api/hook/session-end') {
         const hook = await boundHook('session-end')
         if (!hook) return
-        console.log(`[hooks] ${sid(hook.sessionId)} session-end${hook.reason ? ` · reason=${hook.reason}` : ''}`)
+        const reason = hook.reason && (SESSION_END_REASONS.includes(hook.reason) ? hook.reason : codeOrLength(hook.reason))
+        console.log(`[hooks] ${sid(hook.sessionId)} session-end${reason ? ` · reason=${reason}` : ''}`)
         handlers.onSessionEnd(hook.sessionId, hook.reason)
         json(200, { ok: true })
         return
@@ -1185,7 +1192,7 @@ export function startHookServer(
       // must not survive on a random port while another one owns this user's socket.
       listenLocalSocket(handle, socketPath, { token: options.pipeToken ?? undefined }).then(
         (localSocket) => {
-          console.log(`[hooks] listening on ${socketPath}`)
+          console.log('[hooks] listening on the private socket')
           resolve({ server, port: actual, localSocket })
         },
         (error: unknown) => {

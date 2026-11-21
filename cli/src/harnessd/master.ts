@@ -319,7 +319,7 @@ export function runMaster(config: MasterConfig): Supervisor {
   const handover = resume?.handover
   if (resume && !handover) log(`[harnessd] master re-executed (pid ${process.pid})${config.version ? ` · now v${config.version}` : ''}`)
   if (config.serviceScriptPath && config.serviceScriptPath !== config.scriptPath) {
-    log(`[harnessd] services run from ${config.serviceScriptPath}${config.bundleFingerprint ? ', as this master does' : ''}`)
+    log(`[harnessd] services run from the lean bundle${config.bundleFingerprint ? ', as this master does' : ''}`)
   }
   // The bundle this master's code came from, read once, as it starts; the bundle on disk is read
   // again before every core starts.

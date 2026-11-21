@@ -5,7 +5,7 @@ import type { RegisteredSession, registry as liveRegistry } from './registry.js'
 import { terminalRouteKey } from './terminalRuntime.js'
 import type { StopAgentOptions } from './stopAgentService.js'
 import { resumeMode } from './resumeCapability.js'
-import { sid } from './log.js'
+import { codeOrLength, sid } from './log.js'
 import { OPENCLAW_FIRST_TASK } from '../engines/openclaw/contract.js'
 
 export type CloseActivity = 'idle' | 'working' | 'needs_input' | 'draft' | 'unknown'
@@ -274,7 +274,7 @@ export class CloseAgentService {
         console.log(`[close] ${sid(request.agentId)} bound no conversation within ${CLOSE_BIND_WAIT_MS / 1000}s; closing it without one`)
         return this.attempt(request, identity(s), revision, true)
       }
-      if (!waiting) console.log(`[close] ${sid(request.agentId)} is still starting (${result.detail ?? result.error}); waiting for its conversation`)
+      if (!waiting) console.log(`[close] ${sid(request.agentId)} is still starting (${codeOrLength(result.error)}); waiting for its conversation`)
       waiting = true
       if (!bound) await this.sleep(Math.min(CLOSE_BIND_RETRY_MS, deadline - this.now()))
       const latest = same()

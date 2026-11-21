@@ -241,7 +241,22 @@ describe('Notices', () => {
     vi.advanceTimersByTime(10 * NOTICE_RETRY_MS)
     expect(core.typed.map(t => t.text)).toEqual([STOPPED_LINE, STOPPED_LINE, STOPPED_LINE])
     expect(measure.mock.calls).toEqual([['agent_browser_notice_failed']])
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('notice_failed: the stopped line was not typed after 3 tries (rejected)'))
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('notice_failed: the stopped line was not typed after 3 tries (REJECTED)'))
+  })
+
+  it('a reason the core gives in its own words is logged by its length, a code as it is', () => {
+    state.update(s => { s.told = { a1: true, a2: true } })
+    notices.stopped('a1', false)
+    notices.stopped('a2', false)
+    for (let tries = 1; tries <= 3; tries++) {
+      core.hear(core.typed.filter(t => t.agentId === 'a1').at(-1)!.deliveryId, 'rejected', 'queue full at /Users/sentinel/x')
+      core.hear(core.typed.filter(t => t.agentId === 'a2').at(-1)!.deliveryId, 'rejected', 'QUEUE_EXPIRED')
+      vi.advanceTimersByTime(tries * NOTICE_RETRY_MS)
+    }
+    const lines = log.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+    expect(lines).not.toContain('sentinel')
+    expect(lines).toContain('agent browser a1: notice_failed: the stopped line was not typed after 3 tries (text(31))')
+    expect(lines).toContain('agent browser a2: notice_failed: the stopped line was not typed after 3 tries (QUEUE_EXPIRED)')
   })
 
   // The person's Stop leaves nothing for the agent's own end to take back: a stop line still waiting when the agent stops

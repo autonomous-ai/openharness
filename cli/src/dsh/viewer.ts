@@ -44,21 +44,21 @@ export interface ResolvedViewer {
  * A harness's own viewer resolves to itself. `viewer.use` resolves through the installed index to
  * a viewer package (spec 1.1): the command and directory are the package's; the URL and the
  * extensions are the harness's when it narrows them, else the package's. Missing or wrong-kind
- * packages are named, not guessed.
+ * packages are refused by a code, not guessed: what a manifest names is someone else's words.
  */
 export function resolveViewer(
   dsh: InstalledDsh,
   lookup: (id: string) => InstalledDsh | undefined = installedDsh,
-): { ok: true; viewer: ResolvedViewer } | { ok: false; error: string } {
+): { ok: true; viewer: ResolvedViewer } | { ok: false; code: 'NO_VIEWER' | 'VIEWER_NOT_INSTALLED' | 'NOT_A_VIEWER_PACKAGE' } {
   const viewer = dsh.manifest.viewer
-  if (!viewer) return { ok: false, error: `${dsh.id} has no viewer` }
+  if (!viewer) return { ok: false, code: 'NO_VIEWER' }
   if ('command' in viewer) {
     return { ok: true, viewer: { id: dsh.id, dir: dsh.realDir, command: viewer.command, url: viewer.url, artifactExtensions: viewer.artifactExtensions ?? [] } }
   }
   const pkg = lookup(viewer.use)
-  if (!pkg) return { ok: false, error: `${dsh.id} uses viewer ${viewer.use}, which is not installed on this machine` }
+  if (!pkg) return { ok: false, code: 'VIEWER_NOT_INSTALLED' }
   if (!isViewerPackage(pkg.manifest) || !pkg.manifest.viewer || !('command' in pkg.manifest.viewer)) {
-    return { ok: false, error: `${dsh.id} uses ${viewer.use}, which is not a viewer package` }
+    return { ok: false, code: 'NOT_A_VIEWER_PACKAGE' }
   }
   return {
     ok: true,
@@ -205,7 +205,7 @@ export class DshViewerManager {
     if (!dsh.manifest.viewer) return
     const resolved = resolveViewer(dsh, this.deps.lookup)
     if (!resolved.ok) {
-      this.log(`[dsh] ${resolved.error} · agent ${agentId.slice(0, 8)} has no viewer pane`)
+      this.log(`[dsh] ${resolved.code} · agent ${agentId.slice(0, 8)} has no viewer pane`)
       return
     }
     const viewer = resolved.viewer
@@ -251,8 +251,9 @@ export class DshViewerManager {
   private followPreview(state: ViewerState, preview: string | null): void {
     if (state.preview === preview) return
     const target = viewerTarget(preview)
+    // A page is said by its port: its address can carry a path naming the person's folders.
     if (preview && (!target || (this.deps.reservedPorts?.() ?? []).includes(Number(target.port)))) {
-      this.log(`[dsh] ${state.dsh.id} preview ${preview} refused · a loopback page of the agent's own, not this daemon`)
+      this.log(`[dsh] ${state.dsh.id} preview${target ? ` on port ${target.port}` : ''} refused · a loopback page of the agent's own, not this daemon`)
       preview = null
     }
     state.preview = preview
@@ -263,11 +264,11 @@ export class DshViewerManager {
     void (this.deps.waitForPort ?? waitForLoopbackPort)(Number(target.port), PREVIEW_WAIT_MS, host).then((up) => {
       if (state.stopping || this.states.get(state.agentId) !== state || state.preview !== preview) return
       if (!up) {
-        this.log(`[dsh] ${state.dsh.id} preview ${preview} did not listen within ${PREVIEW_WAIT_MS / 60_000} min · the package's viewer stays`)
+        this.log(`[dsh] ${state.dsh.id} preview on port ${target.port} did not listen within ${PREVIEW_WAIT_MS / 60_000} min · the package's viewer stays`)
         return
       }
       state.previewUp = true
-      this.log(`[dsh] ${state.dsh.id} viewer shows the agent's preview ${preview}`)
+      this.log(`[dsh] ${state.dsh.id} viewer shows the agent's preview on port ${target.port}`)
       this.publish(state)
     })
   }
@@ -400,7 +401,8 @@ export class DshViewerManager {
     // Only now is there a URL to hand the pane. A pane sent to a port nobody serves yet shows a
     // connection error and never recovers, so nothing — a verdict, a new artifact — publishes before.
     state.port = port
-    this.log(`[dsh] ${state.dsh.id} viewer up on 127.0.0.1:${port} for ${state.workspace}`)
+    // Not the workspace: its folder names the person's home.
+    this.log(`[dsh] ${state.dsh.id} viewer up on 127.0.0.1:${port}`)
     this.publish(state)
   }
 

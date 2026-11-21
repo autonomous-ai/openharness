@@ -7,6 +7,7 @@ import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallPaths, engineInstallRecipe, type EngineInstallRecipe } from '../../lib/engineInstall.js'
 import { engineShellArgv, interactiveEngineShell, npmEngineBins } from '../../lib/engineLaunch.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
+import { hashOf } from '../../lib/log.js'
 import { storeAppAlias } from '../../lib/windows/storeAppAlias.js'
 import { probeExecFile } from '../../lib/offThreadExec.js'
 import { shellSingleQuote } from '../../lib/shellQuote.js'
@@ -178,7 +179,7 @@ export async function captureLaunchExecutable(engine: AgentEngine, shell?: strin
         if (app) {
           if (!reportedAliases.has(path)) {
             reportedAliases.add(path)
-            console.warn(`[launch] ${engine}: looked past ${path}, a Windows Store app's alias for ${app}, which is not ${engine}`)
+            console.warn(`[launch] ${engine}: looked past ${hashOf(path)}, a Windows Store app's alias for ${app}, which is not ${engine}`)
           }
           continue
         }

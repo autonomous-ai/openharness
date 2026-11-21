@@ -12,7 +12,7 @@
  * front. kitty matches a window by its own process alone (RECORDED_KITTY.focusWindowPid), and its `ls` is never read:
  * it holds the windows' environment.
  */
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { binaryOnPath, resolveBinaryOnPath } from '../../lib/binaryOnPath.js'
 import { binaryFinder } from '../../lib/binaryFinder.js'
 import { resolveViaLoginShell, tmuxInstallDirectories, type TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
@@ -61,8 +61,12 @@ const installed = (env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string | 
 export function kittyFinder(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): () => Promise<TmuxPathOutcome> {
   return binaryFinder(async () => {
     if (binaryOnPath('kitten', env)) return { state: 'present' }
-    const path = (await resolveViaLoginShell('kitten')) ?? installed(env, platform) ?? resolveBinaryOnPath('kitty', env)
-    return path ? { state: 'adopted', path, from: dirname(path) } : { state: 'absent', reason: 'kitty was not found' }
+    const viaShell = await resolveViaLoginShell('kitten')
+    if (viaShell) return { state: 'adopted', path: viaShell, from: 'login shell' }
+    const atInstall = installed(env, platform)
+    if (atInstall) return { state: 'adopted', path: atInstall, from: 'standard install location' }
+    const kitty = resolveBinaryOnPath('kitty', env)
+    return kitty ? { state: 'adopted', path: kitty, from: 'PATH' } : { state: 'absent', reason: 'kitty was not found' }
   }, () => binaryOnPath('kitten', env) || installed(env, platform) !== undefined || binaryOnPath('kitty', env))
 }
 

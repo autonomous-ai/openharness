@@ -17,7 +17,7 @@ import { binaryOnPath } from '../../lib/binaryOnPath.js'
 import { builtinSqlite } from '../../lib/sqliteBuiltin.js'
 import { describeGridLaunch, gridEnvVarNames } from '../../lib/gridLaunchWire.js'
 import { validateLaunchOverrides, type LaunchOverridesDeps, type LaunchSource } from '../../lib/launchOverrides.js'
-import { sid } from '../../lib/log.js'
+import { codeOrLength, sid } from '../../lib/log.js'
 import { matchesLaunchReceipt, type registry, type RegisteredSession } from '../../lib/registry.js'
 import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
@@ -274,7 +274,7 @@ export function createAgentRetargeter({
           nativeEffect = written.ok ? 'applied' : (written.effect ?? 'none')
           if (!dispatchCurrent()) return preparationChanged()
           if (!written.ok) {
-            console.warn(`[grid] retarget ${sid(session.agentId)} refused · ${written.code} · ${written.detail}`)
+            console.warn(`[grid] retarget ${sid(session.agentId)} refused · ${written.code}`)
             return { ok: false, error: written.code, detail: written.detail }
           }
         }
@@ -316,7 +316,7 @@ export function createAgentRetargeter({
       replacementStarted = outcome.ok
       if (!current()) return changed()
       if (!outcome.ok) {
-        console.warn(`[grid] retarget ${sid(session.agentId)} failed · ${outcome.detail}`)
+        console.warn(`[grid] retarget ${sid(session.agentId)} failed · ${codeOrLength(outcome.error ?? outcome.detail)}`)
         return failed('RESPAWN_FAILED', outcome.detail)
       }
       const publication = await registry.confirmLaunch(session.agentId, { processIdentity: outcome.processIdentity,

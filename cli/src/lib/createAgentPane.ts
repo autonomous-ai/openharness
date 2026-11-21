@@ -154,9 +154,9 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
       ...(deps.paneLaunch?.env || deps.env ? { env: { ...(deps.paneLaunch?.env ?? {}), ...(deps.env ?? {}) } } : {}),
     })
     if (spawned.state !== 'succeeded') {
-      console.warn(`[agent] create ${deps.engine} failed · tmux could not open a pane · ${spawned.reason ?? ''}`)
-      const missing = spawned.reason === 'tmux is unavailable'
-      return { ok: false, error: missing ? 'TMUX_UNAVAILABLE' : 'SPAWN_FAILED', detail: spawned.reason }
+      const code = spawned.reason === 'tmux is unavailable' ? 'TMUX_UNAVAILABLE' : 'SPAWN_FAILED'
+      console.warn(`[agent] create ${deps.engine} failed · tmux could not open a pane · ${code}`)
+      return { ok: false, error: code, detail: spawned.reason }
     }
     let pending: RegisteredSession | null
     try {

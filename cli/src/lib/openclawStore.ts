@@ -71,7 +71,7 @@ async function configuredAgentDir(stateDir: string, agentId: string): Promise<st
     const expanded = dir.startsWith('~/') ? join(homedir(), dir.slice(2)) : dir
     return isAbsolute(expanded) ? expanded : join(stateDir, expanded)
   } catch (error) {
-    once(`[openclaw] ${path} unreadable · ${error instanceof Error ? error.name : 'unknown'} · using the default agent folder`)
+    once(`[openclaw] the agent folder's config is unreadable · ${errorKind(error)} · using the default agent folder`)
     return null
   }
 }

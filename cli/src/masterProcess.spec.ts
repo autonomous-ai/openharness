@@ -38,6 +38,9 @@ vi.mock('./lib/localSocket.js', async (real) => {
   const actual = await real<typeof import('./lib/localSocket.js')>()
   return { ...actual, unixSocketPath: (...args: Parameters<typeof actual.unixSocketPath>) => socket.none ? null : actual.unixSocketPath(...args) }
 })
+// No test hands the worker's process a handler that exits it: the handler is lib/log.ts's, tested there.
+const exitOnFatal = vi.hoisted(() => vi.fn((_tag: string, _fd: number) => {}))
+vi.mock('./lib/log.js', async (real) => ({ ...await real<object>(), exitOnFatal }))
 // No test moves the worker's folder.
 const enterHome = vi.hoisted(() => vi.fn((): string | null => null))
 vi.mock('./lib/workingFolder.js', () => ({ enterHome }))
@@ -49,7 +52,7 @@ vi.mock('./lib/daemonSpawnLock.js', async (real) => ({
 
 const {
   BUNDLE_ENV, BUNDLE_SHA256_ENV, HANDOVER_LAUNCH_TIMEOUT_MS, HANDOVER_LOCK_WAIT_MS, LEAN_DIR, LEAN_FINGERPRINT_ENV, LEAN_OFF_FILE, handoverAlive, masterEnv, probeLean,
-  probeThisMaster, processBundleDeps, processWindowsMasterDeps, readHandoverPid, startMaster, startMasterFromBundle, startMasterInForeground, windowsMaster, writeFatalTo,
+  probeThisMaster, processBundleDeps, processWindowsMasterDeps, readHandoverPid, startMaster, startMasterFromBundle, startMasterInForeground, windowsMaster,
 } = await import('./masterProcess.js')
 type Deps = Parameters<typeof startMasterFromBundle>[1] & object
 
@@ -64,7 +67,7 @@ function deps(over: Partial<Deps> = {}) {
     exists: () => true,
     read: () => Buffer.from('cli.js'),
     write: () => '/data/lean/harnessd-aaaa.mjs',
-    probe: (node, path, env) => { calls.probes.push({ node, path, env }); return { ok: true, detail: PROBE_ANSWER } },
+    probe: (node, path, env) => { calls.probes.push({ node, path, env }); return { ok: true, ended: 'exit 0' } },
     execve: (file, args, env) => { calls.execs.push({ file, args, env }) },
     start: (start) => { calls.starts.push(start) },
     log: (line) => { calls.logs.push(line) },
@@ -94,7 +97,7 @@ describe('a master started on cli.js', () => {
     const gone = deps({ node: () => named, exists: (path) => path !== named })
     startMasterFromBundle('/cli/cli.js', gone.given)
     expect(gone.calls.execs).toEqual([])
-    expect(gone.calls.logs).toEqual([expect.stringContaining(`${named} is not there to re-execute on`)])
+    expect(gone.calls.logs).toEqual(['[harnessd] the Node is not there to re-execute on: the master, the core and the services run from cli.js'])
   })
 
   it('probes and execs on the managed Node 24 while this process runs on an older one, and stays on its own otherwise', () => {
@@ -133,13 +136,13 @@ describe('a master started on cli.js', () => {
     const { given, calls } = deps({
       node: () => next,
       nodeBack: (failed) => { back.push(failed); return own },
-      probe: (node) => { probed.push(node); return node === next ? { ok: false, detail: 'exit 1' } : { ok: true, detail: PROBE_ANSWER } },
+      probe: (node) => { probed.push(node); return node === next ? { ok: false, ended: 'exit 1' } : { ok: true, ended: 'exit 0' } },
     })
     startMasterFromBundle('/cli/cli.js', given)
     expect(probed).toEqual([next, own])
     expect(back).toEqual([true])
     expect(calls.execs.map(({ file }) => file)).toEqual([own])
-    expect(calls.logs).toEqual([`[harnessd] the lean bundle /data/lean/harnessd-aaaa.mjs did not answer its probe on ${next} (exit 1): the master stays on ${own}`])
+    expect(calls.logs).toEqual(['[harnessd] the lean bundle did not answer its probe on the new Node (exit 1): the master stays on the Node it runs on'])
   })
 
   it('puts current-node back whenever the master stays on the Node it runs on: the next start must not go to 24 unjudged', () => {
@@ -188,7 +191,7 @@ describe('a master started on cli.js', () => {
     const { given, calls } = deps({ execve: null })
     startMasterFromBundle('/cli/cli.js', given)
     expect(calls.starts).toEqual([{ scriptPath: '/cli/cli.js', serviceScriptPath: '/data/lean/harnessd-aaaa.mjs', leanFingerprint: PRINT }])
-    expect(calls.logs).toEqual(['[harnessd] this Node cannot re-execute the master: it runs from /cli/cli.js, the core and the services from /data/lean/harnessd-aaaa.mjs'])
+    expect(calls.logs).toEqual(['[harnessd] this Node cannot re-execute the master: it runs from cli.js, the core and the services from the lean bundle'])
     const failing = deps({ execve: () => { throw new Error('E2BIG') } })
     startMasterFromBundle('/cli/cli.js', failing.given)
     expect(failing.calls.starts).toEqual([{ scriptPath: '/cli/cli.js', serviceScriptPath: '/data/lean/harnessd-aaaa.mjs', leanFingerprint: PRINT }])
@@ -201,12 +204,12 @@ describe('a master started on cli.js', () => {
   it('never execs onto a node binary or a lean bundle that is not there: that exec could not be caught', () => {
     // On Node 22.23 an exec of a missing node binary aborts the master (exit 134) and one onto a missing
     // script ends it in the new image (MODULE_NOT_FOUND): neither reaches the catch.
-    for (const gone of [process.execPath, '/data/lean/harnessd-aaaa.mjs']) {
+    for (const [gone, said] of [[process.execPath, 'the Node'], ['/data/lean/harnessd-aaaa.mjs', 'the lean bundle']]) {
       const { given, calls } = deps({ exists: (path) => path !== gone })
       startMasterFromBundle('/cli/cli.js', given)
       expect(calls.execs).toEqual([])
       expect(calls.starts).toEqual([{ scriptPath: '/cli/cli.js' }])
-      expect(calls.logs).toEqual([`[harnessd] ${gone} is not there to re-execute on: the master, the core and the services run from /cli/cli.js`])
+      expect(calls.logs).toEqual([`[harnessd] ${said} is not there to re-execute on: the master, the core and the services run from cli.js`])
     }
   })
 
@@ -215,12 +218,13 @@ describe('a master started on cli.js', () => {
     startMasterFromBundle('/cli/cli.js', given)
     expect(calls.starts).toEqual([{ scriptPath: '/cli/cli.js' }])
     expect(calls.probes).toEqual([])
-    expect(calls.logs).toEqual([`[harnessd] ${LEAN_OFF_FILE} is there: the master, the core and the services run from /cli/cli.js`])
+    expect(calls.logs).toEqual(['[harnessd] lean-off is there: the master, the core and the services run from cli.js'])
   })
 
   it('runs everything from cli.js when the lean bundle is not there to use, and says why', () => {
     const cases: Array<[Partial<Deps>, string]> = [
-      [{ probe: () => ({ ok: false, detail: 'SyntaxError' }) }, 'did not answer its probe (SyntaxError)'],
+      [{ probe: () => ({ ok: false, ended: 'exit 1 · stderr 230 B' }) },
+        '[harnessd] the lean bundle did not answer its probe (exit 1 · stderr 230 B): the master, the core and the services run from cli.js'],
       [{ write: () => { throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' }) } },
         '[harnessd] the lean bundle could not be written out (ENOSPC): the master, the core and the services run from cli.js'],
       [{ read: () => { throw 'EACCES' } }, 'could not be written out (string)'],
@@ -236,7 +240,33 @@ describe('a master started on cli.js', () => {
     const none = deps()
     startMasterFromBundle('/cli/cli.js', none.given)
     expect(none.calls.starts).toEqual([{ scriptPath: '/cli/cli.js' }])
-    expect(none.calls.logs).toEqual(['[harnessd] no lean bundle in /cli/cli.js: the master, the core and the services run from it'])
+    expect(none.calls.logs).toEqual(['[harnessd] no lean bundle in cli.js: the master, the core and the services run from it'])
+  })
+
+  it('never names a path on its lines, whichever way it starts', () => {
+    // Each path names the folders it was installed in, under the person's home, and Export logs sends the log off the machine.
+    const lean = '/sentinel/data/lean/harnessd-aaaa.mjs'
+    const ways: Array<Partial<Deps>> = [
+      { leanOff: () => true },
+      { probe: () => ({ ok: false, ended: 'exit 1' }) },
+      { execve: null },
+      { exists: () => false },
+      { exists: (path) => path !== lean },
+      { execve: () => { throw new Error('/sentinel/node: E2BIG') } },
+    ]
+    const lines: string[] = []
+    for (const way of ways) {
+      const { given, calls } = deps({ write: () => lean, node: () => '/sentinel/node', nodeBack: () => '/sentinel/own', ...way })
+      startMasterFromBundle('/sentinel/cli/cli.js', given)
+      lines.push(...calls.logs)
+    }
+    leanBundle.read.mockReturnValue(null)
+    const none = deps()
+    startMasterFromBundle('/sentinel/cli/cli.js', none.given)
+    lines.push(...none.calls.logs)
+    // One line each, and two where the bundle did not answer on the new Node and then on its own.
+    expect(lines).toHaveLength(8)
+    expect(lines.join('\n')).not.toContain('sentinel')
   })
 
   it('runs everything from cli.js, quietly, with HARNESSD_LEAN=off', () => {
@@ -435,34 +465,11 @@ describe('the master on Windows', () => {
       } finally { Object.assign(console, saved) }
     })
 
-    it('writes an error that ends the master to the log, then exits 1 as Node would have', () => {
-      const file = join(dir, 'harness.log')
-      const fd = openSync(file, 'a')
-      const listeners = new Map<string, (error: unknown) => void>()
-      const exits: number[] = []
-      writeFatalTo(fd, (event, listener) => { listeners.set(event, listener) }, (code) => { exits.push(code) })
-      expect([...listeners.keys()]).toEqual(['uncaughtException', 'unhandledRejection'])
-      listeners.get('uncaughtException')!(new Error('boom'))
-      listeners.get('unhandledRejection')!('a reason that is no Error')
-      closeSync(fd)
-      const text = readFileSync(file, 'utf8')
-      // Its kind, never its stack: Export logs sends the log off the machine.
-      expect(text).toMatch(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} \[harnessd\] the master stopped on an uncaught error: Error\n/)
-      expect(text).toContain('[harnessd] the master stopped on an unhandled rejection: string\n')
-      expect(text).not.toContain('boom')
-      expect(exits).toEqual([1, 1])
-      // A log it can no longer write costs the line, never the exit.
-      listeners.get('uncaughtException')!(new Error('again'))
-      expect(exits).toEqual([1, 1, 1])
-      // As this process runs it: on this process, through process.exit.
-      const on = vi.spyOn(process, 'on').mockImplementation((() => process) as never)
-      const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
-      try {
-        processWindowsMasterDeps().fatal(fd)
-        expect(on.mock.calls.map(([event]) => event)).toEqual(['uncaughtException', 'unhandledRejection'])
-        ;(on.mock.calls[0]![1] as (error: unknown) => void)(new Error('real'))
-        expect(exit).toHaveBeenCalledWith(1)
-      } finally { on.mockRestore(); exit.mockRestore() }
+    it('writes an error that ends the master to the log it opened, in the line every process of the daemon writes', () => {
+      exitOnFatal.mockClear()
+      processWindowsMasterDeps().fatal(42)
+      // To the log: harness-launch.exe gave the master no stderr.
+      expect(exitOnFatal.mock.calls).toEqual([['[harnessd] the master', 42]])
     })
 
     it('takes the spawn lock as a handoff, waiting 5 s at most, and reads busy for any failure', async () => {
@@ -520,14 +527,21 @@ describe('the probe of a lean bundle', () => {
     return path
   }
 
-  it('passes when it answers as a master would, and says why it did not otherwise', () => {
+  it('passes when it answers as a master would, and says how it ended otherwise', () => {
     expect(probeLean(process.execPath, script(`if (process.argv[2] === '__harnessd-probe' && process.env.HANDED === 'yes') console.log(${JSON.stringify(PROBE_ANSWER)})`), { ...process.env, HANDED: 'yes' }))
-      .toEqual({ ok: true, detail: PROBE_ANSWER })
-    expect(probeLean(process.execPath, script(`console.error('it broke'); process.exit(3)`), process.env)).toEqual({ ok: false, detail: 'it broke' })
-    expect(probeLean(process.execPath, script(`console.log('something else')`), process.env)).toEqual({ ok: false, detail: 'something else' })
-    expect(probeLean(process.execPath, script(''), process.env)).toEqual({ ok: false, detail: 'exit 0' })
-    expect(probeLean(process.execPath, script(`process.kill(process.pid, 'SIGKILL')`), process.env)).toEqual({ ok: false, detail: 'signal SIGKILL' })
-    expect(probeLean(process.execPath, script('setInterval(() => {}, 1000)'), process.env, 200).ok).toBe(false)
+      .toEqual({ ok: true, ended: 'exit 0' })
+    expect(probeLean(process.execPath, script(`console.log('something else')`), process.env)).toEqual({ ok: false, ended: 'exit 0' })
+    expect(probeLean(process.execPath, script(''), process.env)).toEqual({ ok: false, ended: 'exit 0' })
+    expect(probeLean(process.execPath, script(`process.kill(process.pid, 'SIGKILL')`), process.env)).toEqual({ ok: false, ended: 'signal SIGKILL' })
+    // No answer in time: the spawn's own error, by its code.
+    expect(probeLean(process.execPath, script('setInterval(() => {}, 1000)'), process.env, 200)).toEqual({ ok: false, ended: 'ETIMEDOUT' })
+  })
+
+  it('a probe says how it ended, never what it printed', () => {
+    // A bundle's stderr can quote the person's files: its size alone, 15 bytes for 'boom /sentinel\n'.
+    expect(probeLean(process.execPath, script(`console.error('boom /sentinel'); process.exit(3)`), process.env)).toEqual({ ok: false, ended: 'exit 3 · stderr 15 B' })
+    // A Node that cannot be started: the spawn error's code, not its message, which names the Node's path.
+    expect(probeLean(join(dir, 'sentinel-node'), script(''), process.env)).toEqual({ ok: false, ended: 'ENOENT' })
   })
 })
 
@@ -559,6 +573,24 @@ describe('starting the master', () => {
     } finally { said.mockRestore() }
     expect(LEAN_DIR).toMatch(/[\\/]lean$/)
     expect(LEAN_OFF_FILE).toMatch(/[\\/]lean-off$/)
+  })
+
+  it('the master on macOS and Linux stops on a fatal error with one line', () => {
+    for (const platform of ['darwin', 'linux'] as const) {
+      const order: string[] = []
+      enterHome.mockImplementationOnce(() => { order.push('enterHome'); return null })
+      startMaster({ scriptPath: '/cli/cli.js' }, () => {}, platform, () => ({}), () => { order.push('fatal') })
+      // First, before anything that can throw: Node's own report of it is its message and stack, into the daemon's log.
+      expect(order).toEqual(['fatal', 'enterHome'])
+    }
+    // Windows writes its own, once the log the master writes itself is open (windowsMaster).
+    const fatal = vi.fn()
+    startMaster({ scriptPath: '/cli/cli.js' }, () => {}, 'win32', () => ({}), fatal)
+    expect(fatal).not.toHaveBeenCalled()
+    // By default to stderr, which launchd, systemd and `harness start` make the daemon's log.
+    exitOnFatal.mockClear()
+    startMaster({ scriptPath: '/cli/cli.js' }, () => {}, 'linux')
+    expect(exitOnFatal.mock.calls).toEqual([['[harnessd] the master', 2]])
   })
 
   it('the pid file is written whole', () => {

@@ -42,12 +42,9 @@ export async function call(path: string, body?: unknown): Promise<Record<string,
   let envelope: { success?: boolean, data?: unknown, error?: { code?: string, message?: string } } | null
   try { envelope = await response.json() as typeof envelope } catch { envelope = null }
   const code = envelope?.error?.code ?? ''
-  // Told apart from the account's sign-in by the gateway's code: renew.ts marks the connection for reconnecting.
-  if (GRANT_GONE.includes(code)) {
-    const gone = new GatewayError('invalid_grant')
-    gone.detail = `${response.status} ${code}`
-    throw gone
-  }
+  // Told apart from the account's sign-in by the gateway's code: renew.ts marks the connection for reconnecting, and
+  // logs the code, one of GRANT_GONE's fixed words.
+  if (GRANT_GONE.includes(code)) throw Object.assign(new GatewayError('invalid_grant'), { code })
   if (response.status === 401 || response.status === 403) throw new GatewayError('Your Harness sign-in has expired. Run harness login, then try again.')
   if (!response.ok || envelope?.success === false) {
     throw new GatewayError(envelope?.error?.message || `Harness answered ${response.status}. Try again shortly.`)

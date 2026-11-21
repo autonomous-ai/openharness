@@ -204,6 +204,35 @@ describe('DshViewerManager', () => {
       expect(manager!.url('a1')).toBe('http://127.0.0.1:4000/')
     })
 
+    it('logs the viewer and a preview by their ports, never the workspace or the page\'s address', async () => {
+      // A workspace folder names the person's home, and a page's address can carry a path: Export logs sends the log off.
+      const logs: string[] = []
+      const answers = new Map<number, (up: boolean) => void>()
+      manager = new DshViewerManager({
+        onUrl: () => {},
+        log: (line) => logs.push(line),
+        freePort: async () => 4790,
+        waitForPort: (port) => port === 4790 ? Promise.resolve(true) : new Promise((resolve) => { answers.set(port, resolve) }),
+        spawn: (() => fakeChild()) as unknown as typeof import('./shell.js').spawnDshCommand,
+        reservedPorts: () => [18473],
+      })
+      const answer = async (port: number, up: boolean): Promise<void> => { answers.get(port)?.(up); await new Promise((r) => setImmediate(r)) }
+      await manager.start('a1', web(), '/Users/sentinel/ws')
+      manager.setVerdictPreview('a1', 'http://127.0.0.1:18473/Users/sentinel')
+      manager.setVerdictPreview('a1', 'https://example.com/Users/sentinel')
+      manager.setVerdictPreview('a1', 'http://127.0.0.1:5173/Users/sentinel')
+      await answer(5173, false)
+      manager.setVerdictPreview('a1', 'http://127.0.0.1:5174/Users/sentinel')
+      await answer(5174, true)
+      expect(logs).toEqual([
+        '[dsh] acme/thing viewer up on 127.0.0.1:4790',
+        '[dsh] acme/thing preview on port 18473 refused · a loopback page of the agent\'s own, not this daemon',
+        '[dsh] acme/thing preview refused · a loopback page of the agent\'s own, not this daemon',
+        '[dsh] acme/thing preview on port 5173 did not listen within 10 min · the package\'s viewer stays',
+        '[dsh] acme/thing viewer shows the agent\'s preview on port 5174',
+      ])
+    })
+
     it('never names the daemon\'s own port, and follows a preview named before the viewer started', async () => {
       const { asked, listen } = previewSetup([18473])
       manager!.setVerdictPreview('a1', 'http://127.0.0.1:18473/')
@@ -309,11 +338,9 @@ describe('viewer.use (spec 1.1)', () => {
     expect(used.ok && used.viewer).toEqual({ id: 'acme/viewer', dir: '/real/acme/viewer', command: 'viewer.sh', url: 'http://127.0.0.1:${port}/?file=${artifact}', artifactExtensions: ['.step', '.glb'] })
     const narrowed = resolveViewer(dsh({ use: 'acme/viewer', artifactExtensions: ['.step'] }), lookup)
     expect(narrowed.ok && narrowed.viewer.artifactExtensions).toEqual(['.step'])
-    const missing = resolveViewer(dsh({ use: 'acme/nope' }), lookup)
-    expect(missing.ok).toBe(false)
-    expect(!missing.ok && missing.error).toContain('not installed')
+    expect(resolveViewer(dsh({ use: 'acme/nope' }), lookup)).toEqual({ ok: false, code: 'VIEWER_NOT_INSTALLED' })
     const notViewer = resolveViewer(dsh({ use: 'acme/viewer' }), () => dsh({ command: 'x', url: 'http://127.0.0.1:${port}/' }))
-    expect(!notViewer.ok && notViewer.error).toContain('not a viewer package')
+    expect(notViewer).toEqual({ ok: false, code: 'NOT_A_VIEWER_PACKAGE' })
   })
 
   it('launches a used viewer in the package directory, naming both the harness and the viewer in the env', async () => {
@@ -337,7 +364,11 @@ describe('viewer.use (spec 1.1)', () => {
       const bare = new DshViewerManager({ onUrl: () => undefined, log: (l) => logs.push(l), lookup: () => undefined })
       await bare.start('a10', dsh({ use: 'acme/viewer' }), '/ws')
       expect(bare.url('a10')).toBeNull()
-      expect(logs.join(' ')).toContain('not installed')
+      expect(logs).toContain('[dsh] VIEWER_NOT_INSTALLED · agent a10 has no viewer pane')
+      // The viewer a manifest names is someone else's words: the line says why by a code, never what it names.
+      await bare.start('a11', dsh({ use: '/Users/sentinel/x' }), '/ws')
+      expect(logs.join('\n')).not.toContain('sentinel')
+      expect(logs).toContain('[dsh] VIEWER_NOT_INSTALLED · agent a11 has no viewer pane')
     } finally {
       await manager.stopAll()
     }
@@ -348,7 +379,7 @@ describe('viewer.use (spec 1.1)', () => {
     const used = resolveViewer(dsh({ use: 'acme/viewer' }), () => bare)
     expect(used.ok && used.viewer.artifactExtensions).toEqual([])
     const none: InstalledDsh = { ...dsh({ command: 'x', url: 'y' }), manifest: { spec: 1, id: 'acme/thing', name: 'Thing', engine: 'claude' } }
-    expect(resolveViewer(none, lookup)).toEqual({ ok: false, error: 'acme/thing has no viewer' })
+    expect(resolveViewer(none, lookup)).toEqual({ ok: false, code: 'NO_VIEWER' })
   })
 })
 

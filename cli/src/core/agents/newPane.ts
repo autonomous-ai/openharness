@@ -8,7 +8,7 @@
  */
 import { OPENCLAW_LOCAL, OPENCLAW_STATES, openclawFolderInUse, readOpenclawScreen } from '../../engines/openclaw/contract.js'
 import type { AgentEngine } from '../../engines/types.js'
-import { describeAgentCreateFailure, summarizePaneOutput } from '../../lib/agentCreateDiagnosis.js'
+import { describeAgentCreateFailure } from '../../lib/agentCreateDiagnosis.js'
 import type { engineInstallRecipe } from '../../lib/engineInstall.js'
 import { commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
 import { errorKind, sid } from '../../lib/log.js'
@@ -174,13 +174,13 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
         if (paneState.dead) {
           const installed = await commandAvailableInInteractiveShell(command[0], undefined, installIfMissing)
           if (!current()) return
-          const error = installed ? 'ENGINE_DID_NOT_START' : 'ENGINE_NOT_INSTALLED'
+          const code = installed ? 'ENGINE_DID_NOT_START' : 'ENGINE_NOT_INSTALLED'
           const detail = installed
             ? `${engine} exited before its engine process became ready. See the terminal output for details.`
             : `${engine} is not installed, or its automatic install failed. See the terminal output for details.`
-          const failed = registry.setLaunch(pending.agentId, { state: 'failed', error, detail })
+          const failed = registry.setLaunch(pending.agentId, { state: 'failed', error: code, detail })
           if (failed) announceSession(failed)
-          console.warn(`[agent] create failed · ${engine} · ${detail}`)
+          console.warn(`[agent] create failed · ${engine} · ${code}`)
           return
         }
         // The engine started and was gone again before it was ever seen (a flag it refused, a
@@ -194,10 +194,6 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
           // anywhere — frame, registry, archive — records that an engine was ever meant to be here
           // or why it left. openharness#285 was exactly this: opencode printed its help over a flag
           // it did not know, and the only trace was one line saying the pane had become a terminal.
-          // `describeAgentCreateFailure` was written for this and had no caller.
-          // `dead: true` describes the ENGINE, which is what the diagnosis is about, not the pane —
-          // the pane is alive and about to become a terminal. That is the sentence this state
-          // selects ("started and exited with status N"), and it is the true one here.
           const captured = await captureTerminal(pending.agentId, 40)
           if (!current()) return
           // An OpenClaw the person fixes outside the pane: a local run another OpenClaw's lock turned away (it needs
@@ -209,18 +205,14 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
           if (refused) {
             const failed = registry.setLaunch(pending.agentId, { state: 'failed', ...refused })
             if (failed) announceSession(failed)
-            console.warn(`[agent] create failed · ${engine} · ${refused.detail}`)
+            console.warn(`[agent] create failed · ${engine} · ${refused.error}`)
             return
           }
+          // The pane's words and the binary's path can name the person's files, and Export logs sends this line
+          // off the machine: it says how much the pane printed, and the engine by its name.
+          const printed = (captured ?? '').split('\n').filter((line) => line.trim()).length
           console.warn(`[agent] create · ${engine} · agent ${sid(pending.agentId)} · `
-            + describeAgentCreateFailure({
-              state: { dead: true, exitStatus: paneState.engineExit, command: engine },
-              output: summarizePaneOutput(captured ?? ''),
-              engineBin: command[0],
-              shellName: null,
-              processes: [],
-              elapsedMs: Date.now() - startedAt,
-            }))
+            + describeAgentCreateFailure(engine, paneState.engineExit, Date.now() - startedAt) + ` · pane output ${printed} lines`)
           // A hook may have bound a conversation while this watcher was awaiting its probe.
           // Archive the current row, not the pre-hook pending snapshot.
           const row = registry.byAgent(pending.agentId)

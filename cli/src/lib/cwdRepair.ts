@@ -42,7 +42,7 @@ export function repairedCwd(row: RegisteredSession, log: (message: string) => vo
   if (project.belongs(row.cwd, row.transcriptPath)) return null
   const folder = project.cwdOf(row.transcriptPath)
   if (!folder) {
-    log(`[repair] ${row.agentId.slice(0, 8)} cwd ${row.cwd} is not its transcript's project folder, and the transcript names no matching folder — left as is`)
+    log(`[repair] ${row.agentId.slice(0, 8)} cwd is not its transcript's project folder, and the transcript names no matching folder — left as is`)
     return null
   }
   return folder === row.cwd ? null : folder
@@ -65,11 +65,10 @@ export async function repairProjectCwds(deps: CwdRepairDeps): Promise<CwdRepairS
     for (const row of deps.registry.list()) {
       const folder = repairedCwd(row, deps.log)
       if (!folder) { if (row.forkedFrom && !row.transcriptPath) forks.push(row); continue }
-      const was = row.cwd   // `setCwd` mutates this very object
       if (deps.registry.setCwd(row.agentId, folder)) {
         summary.registry++
         proved.set(row.agentId, folder)
-        deps.log(`[repair] ${row.agentId.slice(0, 8)} cwd ${was} → ${folder} (transcript project folder)`)
+        deps.log(`[repair] ${row.agentId.slice(0, 8)} cwd repaired (transcript project folder)`)
       }
     }
   })
@@ -79,7 +78,7 @@ export async function repairProjectCwds(deps: CwdRepairDeps): Promise<CwdRepairS
     if (deps.stoppedAgents.patch(row.agentId, { cwd: folder })) {
       summary.archived++
       proved.set(row.agentId, folder)
-      deps.log(`[repair] ${row.agentId.slice(0, 8)} (saved) cwd ${row.cwd} → ${folder} (transcript project folder)`)
+      deps.log(`[repair] ${row.agentId.slice(0, 8)} (saved) cwd repaired (transcript project folder)`)
     }
   }
   // Forks last, once every source that could be proved has been: a fork only moves with its source.
@@ -87,11 +86,10 @@ export async function repairProjectCwds(deps: CwdRepairDeps): Promise<CwdRepairS
     const folder = inherit(row)
     if (!folder) continue
     const live = deps.registry.byAgent(row.agentId)
-    const was = row.cwd
     const done = live ? deps.registry.setCwd(row.agentId, folder) : deps.stoppedAgents.patch(row.agentId, { cwd: folder })
     if (!done) continue
     if (live) summary.registry++; else summary.archived++
-    deps.log(`[repair] ${row.agentId.slice(0, 8)}${live ? '' : ' (saved)'} cwd ${was} → ${folder} (forked from ${row.forkedFrom!.agentId.slice(0, 8)})`)
+    deps.log(`[repair] ${row.agentId.slice(0, 8)}${live ? '' : ' (saved)'} cwd repaired (forked from ${row.forkedFrom!.agentId.slice(0, 8)})`)
   }
   return summary
 }

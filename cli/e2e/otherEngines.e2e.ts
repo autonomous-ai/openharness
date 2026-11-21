@@ -38,7 +38,7 @@ describe('the other engines\' worker', () => {
   async function fresh(env: Record<string, string> = {}, scriptPath?: string) {
     const d = daemon = await IsolatedDaemon.create({ scriptPath, env: { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000', ...env } })
     onTestFailed(() => console.log(d.log()))
-    d.env.PI_HOME = join(d.root, 'pi')
+    d.env.PI_HOME = join(d.env.HOME!, 'pi')
     // While this file exists a starting worker stays off the core, beating to its master (services/process.ts
     // heldOffFile): the test, not a backoff, decides how long an outage lasts. Absent, nothing waits.
     const gate = join(d.root, 'others-connect-hold')

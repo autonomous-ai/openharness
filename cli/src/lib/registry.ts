@@ -1639,7 +1639,8 @@ class Registry {
     try {
       renameSync(FILE, aside)
       this.writeBlocked = false
-      console.error(`[registry] registry ${reason}; moved it aside to ${aside} and started empty`)
+      // Its own name only, Harness's file name and the time, for an operator to find: the folder names the person's home.
+      console.error(`[registry] registry ${reason}; moved it aside to ${basename(aside)} and started empty`)
     } catch (error) {
       this.writeBlocked = true
       console.error(`[registry] registry ${reason}, and it could not be moved aside (${errorKind(error)}); refusing to overwrite it`)

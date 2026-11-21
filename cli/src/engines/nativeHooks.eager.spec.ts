@@ -16,6 +16,10 @@ vi.mock('./inProcess.js', () => ({ loadEngine: vi.fn(() => { throw new Error('op
 
 it('composes hook declarations without probing, installing or requesting optional code', async () => {
   const hooks = await import('./nativeHooks.js')
-  expect(Object.keys(hooks)).toHaveLength(12)
+  expect(Object.keys(hooks).sort()).toEqual([
+    'hermesHookCommand', 'hermesRecordSeen', 'installAgyHooks', 'installAmpPlugin', 'installCommandCodeHooks',
+    'installCopilotHooks', 'installCursorHooks', 'installDevinHooks', 'installGrokHooks', 'installHermesHooks',
+    'installKiloPlugin', 'installOpencodePlugin', 'installPiExtension',
+  ])
   for (const operation of [opencodeBinAsync, loadEngine, mkdirSync, renameSync, unlinkSync, writeFileSync]) expect(operation).not.toHaveBeenCalled()
 })
