@@ -77,8 +77,9 @@ export async function installHermesHooks(port: number, selectedHome?: string, op
 function hermesHooksAsToday(port: number, selectedHome: string | undefined, options: NativeHookOptions | undefined, platform: NodeJS.Platform): Promise<boolean> {
   // Once for every home, before the pool: a missing notify.mjs is a failed install said in one line, never a rejection.
   try { requireHookScript('hermes') } catch (error) {
-    if (isNamedHold(error, platform)) console.error(`${hooksNotInstalled('hermes')} · ${error.hold}`)
-    else console.error(HERMES_HOOK_SETTINGS.messages.failed, errorKind(error))
+    const held = error instanceof HookPreparationHeld ? error.hold : errorKind(error)
+    if (isNamedHold(error, platform)) console.error(`${hooksNotInstalled('hermes')} · ${held}`)
+    else console.error(HERMES_HOOK_SETTINGS.messages.failed, held)
     return Promise.resolve(false)
   }
   return installNativeYamlHooks(HERMES_HOOK_SETTINGS, home => hermesHookCommand(port, home, options?.environment, platform), selectedHome,

@@ -64,9 +64,10 @@ export function hooksNotOnWindows(engine: string): true {
 /**
  * An install that did not happen for a hold the person can name: on Windows a refused hook line (quoteHookCommand) or a
  * held file, and on every platform a missing notify.mjs. It is said in one line, no stack: a stack trace there buried
- * the hold (B4.10 VM log). Any other error or platform: the caller logs its own failure line.
+ * the hold (B4.10 VM log). Any other error or platform: the caller logs its own failure line. Not a type guard: a hold
+ * off Windows that is not a missing notify.mjs is still a hold, and answers false.
  */
-export function isNamedHold(error: unknown, platform: NodeJS.Platform): error is HookPreparationHeld {
+export function isNamedHold(error: unknown, platform: NodeJS.Platform): boolean {
   return error instanceof HookPreparationHeld && (platform === 'win32' || error instanceof HookScriptMissing)
 }
 
