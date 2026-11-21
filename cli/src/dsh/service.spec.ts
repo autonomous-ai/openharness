@@ -49,15 +49,20 @@ describe('daemon package mutations', () => {
     expect(refreshDshRegistry).toHaveBeenLastCalledWith(true)
   })
 
-  it('logs each installer line by its byte length, never its words: npm and uv print paths', async () => {
+  it('logs the installer\'s output once, by its line count and bytes, never its words: npm and uv print paths', async () => {
     vi.mocked(installDsh).mockImplementation(async (options: DshInstallOptions) => {
       options.onLine!('added 3 packages in /Users/sentinel/x')
+      options.onLine!('Receiving 10%\rReceiving 20%')
+      options.onLine!('ok ready')
       return success
     })
     expect(await mutateDsh({ id: 'acme/thing' }, () => {})).toEqual({ ok: true, id: 'acme/thing' })
-    const lines = vi.mocked(console.log).mock.calls.map((call) => call.map(String).join(' ')).join('\n')
-    expect(lines).not.toContain('sentinel')
-    expect(lines).toContain('[dsh] install · line 37 B')
+    // An install that prints nothing says nothing of it.
+    vi.mocked(installDsh).mockResolvedValue(success)
+    expect(await mutateDsh({ id: 'acme/thing' }, () => {})).toEqual({ ok: true, id: 'acme/thing' })
+    const lines = vi.mocked(console.log).mock.calls.map((call) => call.map(String).join(' '))
+    expect(lines.join('\n')).not.toContain('sentinel')
+    expect(lines.filter((line) => line.startsWith('[dsh] install '))).toEqual(['[dsh] install printed 3 lines · 72 B'])
   })
 
   it('rejects an unknown catalog id and an empty request before running code', async () => {
