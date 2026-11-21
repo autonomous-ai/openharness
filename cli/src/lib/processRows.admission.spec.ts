@@ -27,8 +27,12 @@ async function finish(rows = table(), commands = paths(), error: Error | null = 
     request.done(error as Parameters<ExecDone>[0], request.args.at(-1) === 'pid=,lstart=,comm=' ? commands : rows, '')
   }
 }
-beforeEach(() => { requests.length = 0; ticks.mockReset().mockReturnValue(null); setProcessTableSource(null) })
-afterEach(async () => { await finish(); await Promise.resolve(); setProcessTableSource(null) })
+beforeEach(() => {
+  requests.length = 0; ticks.mockReset().mockReturnValue(null); setProcessTableSource(null)
+  // The synthetic table owns these identities; do not ask the host kernel about fixture PIDs.
+  vi.spyOn(process, 'kill').mockReturnValue(true)
+})
+afterEach(async () => { await finish(); await Promise.resolve(); setProcessTableSource(null); vi.restoreAllMocks() })
 
 describe('a known process read', () => {
   it('keeps the full native read and returns only the requested PID with command recovery', async () => {

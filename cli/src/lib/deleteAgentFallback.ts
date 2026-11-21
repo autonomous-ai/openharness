@@ -26,6 +26,17 @@ export async function checkPidRuntime(
 ): Promise<RuntimeCheck> {
   const expected = session.processIdentity
   if (!expected) return { state: 'gone', reason: 'agent has no saved process identity' }
+  if ((process.platform === 'darwin' || process.platform === 'linux')
+    && Number.isInteger(expected.pid) && expected.pid > 0 && expected.pid <= 0x7fffffff) {
+    // Close rechecks after publication. Kernel absence needs no full census;
+    // existence or a permission failure still needs the exact identity below.
+    try { process.kill(expected.pid, 0) }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException | null)?.code === 'ESRCH') {
+        return { state: 'gone', reason: 'saved process identity is no longer running' }
+      }
+    }
+  }
   const rows = await processRows(expected.pid)
   if (!rows) return { state: 'unknown', reason: 'process table is unavailable' }
   const live = rows.find((row) => row.pid === expected.pid)

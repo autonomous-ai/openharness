@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { terminateDeletedAgent, checkPidRuntime, type TerminateDeps } from './deleteAgentFallback.js'
 import type { RegisteredSession } from './registry.js'
 import type { RuntimeCheck } from './paneEngineProcess.js'
@@ -271,6 +271,9 @@ describe('delete-agent process termination wiring', () => {
  * PID-reuse guard. Pure extraction: this must not change onDeleteAgent's own behavior.
  */
 describe('checkPidRuntime', () => {
+  // These rows model existing kernel PIDs; only the process-table evidence is synthetic.
+  beforeEach(() => { vi.spyOn(process, 'kill').mockReturnValue(true) })
+  afterEach(() => vi.restoreAllMocks())
   const row = (over: Partial<ProcessRow> = {}): ProcessRow => ({
     pid: 4242, parentPid: 1, executable: 'claude', startMarker: 'Mon Aug  3 09:00:00 2026', args: 'claude', ...over,
   })
