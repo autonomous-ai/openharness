@@ -1,7 +1,7 @@
 import { mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync } from 'node:fs'
 import { tmpdir, userInfo } from 'node:os'
 import { join, relative } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { claudeStoreRoots } from '../cable/hosts/appPlaces.js'
 import { claudeAppFixture } from './claudeAppFixture.js'
 
@@ -38,6 +38,27 @@ describe('claudeAppFixture', () => {
     } finally {
       // The link alone, before its folder goes: nothing is ever removed through it.
       unlinkSync(link)
+    }
+  })
+
+  // Linux finds its store from XDG_CONFIG_HOME (Windows from APPDATA and LOCALAPPDATA), which tier A empties before it
+  // makes a fixture. Linux stands in for both here, the one OS whose paths this computer's path module reads.
+  it('refuses the root of the env it was loaded with and the default root, whatever the env is now', async () => {
+    const loaded = join(tmpdir(), 'eval-loaded-config')
+    vi.stubEnv('XDG_CONFIG_HOME', loaded)
+    vi.resetModules()
+    const { claudeAppFixture: fresh } = await import('./claudeAppFixture.js')
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { ...platform, value: 'linux' })
+    const roots = [join(loaded, 'Claude', 'claude-code-sessions'), join(userInfo().homedir, '.config', 'Claude', 'claude-code-sessions')]
+    try {
+      for (const now of ['', join(tmpdir(), 'eval-later-config')]) {
+        vi.stubEnv('XDG_CONFIG_HOME', now)
+        for (const root of roots) expect(() => fresh(root)).toThrow(REFUSED)
+      }
+    } finally {
+      Object.defineProperty(process, 'platform', platform)
+      vi.unstubAllEnvs()
     }
   })
 
