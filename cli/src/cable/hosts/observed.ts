@@ -516,7 +516,8 @@ export class ObservedSource implements HostSource {
 
   /** What a rest and a tap may show: its panes, and in an adapter where it has none of its own, the pane its caller
    *  placed it at (placeIn). A place is a guess: showing the wrong terminal costs a look, while words typed there would
-   *  run at another's prompt. So only these two and its name read it, never words, `byPane` or `paneOf`. */
+   *  run at another's prompt. So only these two, its name and Orca's scope (shownAt) read it, never words, `byPane` or
+   *  `paneOf`. */
   private shownOnly(e: Entry): readonly Located[] {
     return (this.deps.actions?.adapters ?? []).flatMap((adapter) => {
       const pane = this.placeIn(e, adapter.id)
@@ -570,7 +571,7 @@ export class ObservedSource implements HostSource {
   }
 
   /** A live agent's pane id in that adapter; none when it has no pane there, or its session ended. A held pane is not
-   *  its own: the devices' paths that read this (Orca's ring and scope, the scroll) take it for none. */
+   *  its own: the devices' paths that read this (Orca's ring order, the scroll) take it for none. */
   paneOf(agentId: string, adapter: string): string | undefined {
     const e = this.entries.get(agentId)
     return e && this.live(e) ? e.panes.find(({ pane }) => pane.adapter === adapter && !pane.held)?.pane.id : undefined
@@ -598,9 +599,12 @@ export class ObservedSource implements HostSource {
     return e && this.live(e) ? { pid: e.outer?.pid ?? e.outerPid ?? e.caller ?? e.pid, app: e.agent.app } : undefined
   }
 
-  /** The pane its caller last placed it at in that adapter (setPaneNames), as shownOnly reads it; never one of its panes. */
-  placedAt(agentId: string, adapter: string): string | undefined {
-    return this.paneNames.get(adapter)?.placed.get(agentId)
+  /** A live agent's pane id in that adapter as a rest and a tap show it (placeIn); none once its session ended. Orca's
+   *  ring for the worktree on screen reads this, not paneOf: a held terminal is still in the worktree the agent was
+   *  started from, while words and the focus watch keep to its own panes. */
+  shownAt(agentId: string, adapter: string): string | undefined {
+    const e = this.entries.get(agentId)
+    return e && this.live(e) ? this.placeIn(e, adapter)?.id : undefined
   }
 
   /**
