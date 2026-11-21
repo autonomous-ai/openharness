@@ -977,12 +977,14 @@ describe('harnessd\'s variables in the tmux server\'s environment', () => {
 // What main.ts did for tmux at daemon start, now the backend's own: find tmux, rename the sessions an older
 // build named, forget harnessd's variables, and say what the first inventory found — in that order.
 describe('readying tmux at daemon start', () => {
+  // The reason goes back whole to whoever asks; the log keeps its length (AGENTS.md rule 7).
   it('prepare reports tmux absent as unavailable, not a throw', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
-      const backend = new TmuxBackend(() => DEFAULT_HOST_THEME, undefined, undefined, undefined, { ensureOnPath: async () => ({ state: 'absent', reason: 'no tmux' }) })
-      expect(await backend.prepare({ ownedPanes: new Map() })).toEqual({ state: 'unavailable', code: 'TMUX_UNAVAILABLE', reason: 'no tmux' })
-      expect(error.mock.calls).toEqual([['[tmux] unavailable: no tmux · install tmux and verify `tmux -V`, then restart — agents cannot be created or restored until then']])
+      const reason = 'tmux was not found in /Users/sentinel/bin'
+      const backend = new TmuxBackend(() => DEFAULT_HOST_THEME, undefined, undefined, undefined, { ensureOnPath: async () => ({ state: 'absent', reason }) })
+      expect(await backend.prepare({ ownedPanes: new Map() })).toEqual({ state: 'unavailable', code: 'TMUX_UNAVAILABLE', reason })
+      expect(error.mock.calls).toEqual([[`[tmux] unavailable: text(${reason.length}) · install tmux and verify \`tmux -V\`, then restart — agents cannot be created or restored until then`]])
     } finally { error.mockRestore() }
   })
 
@@ -1011,7 +1013,7 @@ exit 0
       expect(first('show-environment')).toBe(-1)
       const names = serverVariablesToUnset()
       expect(log.mock.calls.map(([line]) => line)).toEqual([
-        '[tmux] not on the daemon PATH · adopted /opt/tmux/bin/tmux · /opt/tmux/bin',
+        '[tmux] not on the daemon PATH · adopted tmux',
         expect.stringMatching(/^\[terminal\] renamed tmux session claude-1790000000000 → harness-claude-\d+-[0-9a-f-]+ \(pane %7\) · named by a build before the harness- prefix$/),
         `[terminal] tmux: unset ${names.length} harnessd and agent session names in the environment new panes start with`,
         // The renamed session is still `claude-…` in this fake, so the inventory whitelists none of it.
@@ -1038,8 +1040,23 @@ exit 0
       expect(await backend.prepare({ ownedPanes: new Map() })).toEqual({ state: 'ready' })
       expect(log.mock.calls).toEqual([
         [`[terminal] tmux: unset ${serverVariablesToUnset().length} harnessd and agent session names in the environment new panes start with`],
-        ['[terminal] tmux: unavailable (tmux listed no panes)'],
+        ['[terminal] tmux: unavailable (text(20))'],
       ])
+    } finally { log.mockRestore() }
+  })
+
+  it('names a first inventory tmux refused by its length, never by what tmux printed', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-prepare-'))
+    dirs.push(dir)
+    writeFileSync(join(dir, 'tmux'), '#!/bin/sh\ncase "$1" in list-panes) echo "boom /Users/sentinel/x" >&2; exit 1 ;; esac\nexit 0\n', { mode: 0o700 })
+    process.env.PATH = `${dir}${delimiter}${originalPath ?? ''}`
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      const backend = new TmuxBackend(undefined, () => 'daemon-a', () => {}, undefined, { ensureOnPath: async () => ({ state: 'present' }) })
+      expect(await backend.prepare({ ownedPanes: new Map() })).toEqual({ state: 'ready' })
+      const lines = log.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+      expect(lines).not.toContain('sentinel')
+      expect(lines).toMatch(/^\[terminal\] tmux: unavailable \(text\(\d+\)\)$/m)
     } finally { log.mockRestore() }
   })
 
