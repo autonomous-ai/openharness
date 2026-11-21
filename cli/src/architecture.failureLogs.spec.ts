@@ -1,28 +1,45 @@
 /**
- * No daemon log line carries an error's words or hides its kind (AGENTS.md, Code standards, rules 6 and 7). A message
- * or a stack can quote the person's files, prompts or a peer's text, and since #4447 Export logs sends the daemon's log
- * off the machine. A line that says only "failed" names nothing anyone can act on. A failure is logged as
- * `errorKind(error)` (lib/log.ts): its type and its code, never its words. So this reads every file of the daemon, as
- * code, so that a comment or a string naming an error is no finding.
+ * No daemon log line carries an error's words, a stored string, process output, a path or a URL, or hides an error's
+ * kind (AGENTS.md, Code standards, rules 6 and 7). A message, a stack, a result's detail, a process's stderr or a
+ * folder can quote the person's files, prompts, account name or a peer's text, and since #4447 Export logs sends the
+ * daemon's log off the machine. A line that says only "failed" names nothing anyone can act on. A failure is logged as
+ * `errorKind(error)` (lib/log.ts): its type and its code, never its words; a stored or a peer's string as
+ * `codeOrLength(value)`, a path, URL or label as a fixed word or `hashOf(text)`, process output as its length. So this
+ * reads every file of the daemon, `testing/` too (its shapes mirror the daemon's wiring), as code, so that a comment or
+ * a string naming an error is no finding.
  *
  * A log call is a `console` call, or a call named `log`, `warn`, `error` or `info`, bare or on anything but `console`
  * and `Math`, or a call of one picked by `??`, `||` or `?:`, or of a name a parameter's default or a `const` binds to
  * one, whose value is not thrown. An error is what a catch or an error handler binds, a name on the left of
  * `instanceof` in the expression at hand, a name spelled as one (`e`, `err`, `error`, `ex`, `exception`, `…Error`,
  * `…Err`) that is not a parameter typed `string`, and the `.cause` of any of these. A log call is found when it prints
- * an error's `.message`, `.stack` or `.toString()`, an error whole (as itself, in a template, a sum, an object or a
- * branch, handed to any function but `errorKind`, or built in place), or a local made from either (its initializer, or
- * a value a `let` is given later); when it runs in a catch that binds nothing; and when it says "fail" in a catch that
- * binds one and names nothing it caught. What a function of the file's own logs of a parameter (a function, a `const`
- * one, a method called on `this`), and what a `writeSync` writes, are found the same way, but for the catch they run in.
+ * an error's `.message`, `.stack`, `.reason`, `.detail`, `.stderr`, `.stdout`, `.path` or `.toString()`, an error whole
+ * (as itself, in a template, a sum, an object, a branch or a method's receiver, handed to any function but the safe
+ * ones below, or built in place), or a local made from either (its initializer, or a value a `let` is given later);
+ * when it runs in a catch that binds nothing; and when it says "fail" in a catch that binds one and names nothing it
+ * caught. It is found, too, when it prints whole, as an identifier or a property read's last name, a name of any value
+ * that holds content: process output (`stderr`, `stdout`, `output`, `…Stderr`, `…Stdout`, `…Output`), free text
+ * (`detail`, `details`, `message`, `…Detail`, `…Message`), a path or URL (`path`, `cwd`, `dir`, `folder`, `file`,
+ * `home`, `url`, `…Path`, `…Cwd`, `…Dir`, `…Folder`, `…File`, `…Home`, `…Url`, `…URL`); but not a name an `import`
+ * binds, nor a forwarder's, a plain parameter of the function the log call is in handed on bare, whose callers are
+ * checked where they call it. And when it prints whole a property of a local given a function of the file's own's
+ * result (awaited or not) or an object literal, and the value there is found by the rules above. A `.length` or a
+ * `.size`, a type test, a comparison, and what `errorKind`, `codeOrLength`, `hashOf`, `sid`, `serialPortName` (the one
+ * way a serial port's name is logged), `Number`, `Boolean` and `Buffer.byteLength` return carry no words. What a
+ * function of the file's own logs of a parameter (a function, a `const` one, a method called on `this`), and what a
+ * `writeSync` writes, are found the same way, but for the catch they run in. Until the sweep of
+ * docs/plans/2026-11-21-log-no-stored-strings-plan.md lands, its pending lists excuse each of its files exactly the
+ * hits it has.
  *
- * Its limits: a logger under another name, text carried two locals away or through a local of the function that logs
- * it, what a function of the file's own returns (a write that answers with an error's message), a local destructured
- * from an error (`const { message } = error`), an error kept on a property (`this.lastError.message`,
- * `run.error?.message`), an error's words read by element access (`error['message']`), an `AggregateError`'s
- * `.errors`, a catch with a binding that logs without the word "fail", and an error's `.reason`, `.detail`, `.stderr`,
- * `.stdout` and `.path`, which a follow-up adds with the lines that log stored strings
- * (docs/plans/2026-11-19-log-failure-kinds-plan.md, answer 6).
+ * Its limits: a logger under another name; text carried two locals away or through a local of the function that logs
+ * it; a local whose value is content of a name the rules read (`const shown = basename(file)`), never followed; what a
+ * function of the file's own returns, but at a property of a local given it; a local destructured from an error or a
+ * result; an error's or a value's words read by element access (`error['message']`); an `AggregateError`'s `.errors`;
+ * a catch with a binding that logs without the word "fail"; a name the rules do not read (`reason`, `why`, `label`, a
+ * string `error`: a syntactic rule cannot tell a literal union's fixed words from free text); a hold's sentence
+ * (`HookPreparationHeld`'s `hold`), which no rule reads and `architecture.hookHolds.spec.ts` keeps to string literals;
+ * and a value built in one file and logged in another (a hold's reason, a peer's answer, a probe's result, a stream's
+ * close reason), each fixed at its sink with a behaviour test (docs/plans/2026-11-21-log-no-stored-strings-plan.md).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, sep } from 'node:path'
@@ -43,6 +60,8 @@ const TERMINAL = [
   'devices/client.ts', // harness hardware
   'orchestrator/command.ts', // harness orchestrator
   'agentClient/settings.ts', // harness agent settings, from cli.ts alone: its `err` is the person's own terminal
+  'agentClient/mcpServers.ts', // harness mcp-servers, from cli.ts alone
+  'dsh/command.ts', // harness dsh, from cli.ts alone
   'lib/autonomous-device/addonCommand.ts', // harness addon, from cli.ts alone: its `print` is the command's JSON answer
   'lib/apiCommand.ts', // harness api
   'lib/newCommand.ts', // harness new
@@ -151,6 +170,68 @@ const loggedArguments = (call: ts.CallExpression): readonly ts.Expression[] => {
   return call.arguments.filter((_, index) => at.has(index))
 }
 
+/** The values a function returns: its `return`s outside the functions it holds, or an arrow's body. */
+const returnsOf = (fn: ts.SignatureDeclaration): ts.Expression[] => {
+  if (ts.isArrowFunction(fn) && !ts.isBlock(fn.body)) return [fn.body]
+  const values: ts.Expression[] = []
+  const visit = (node: ts.Node): void => {
+    if (ts.isReturnStatement(node)) {
+      if (node.expression) values.push(node.expression)
+    } else if (!ts.isFunctionLike(node) && !ts.isClassLike(node)) ts.forEachChild(node, visit)
+  }
+  if ('body' in fn && fn.body) ts.forEachChild(fn.body, visit)
+  return values
+}
+
+const awaited = (value: ts.Expression): ts.Expression => {
+  const inner = unwrap(value)
+  return ts.isAwaitExpression(inner) ? awaited(inner.expression) : inner
+}
+
+/** The object literals a value can be, through `await`, `?:`, `??` and `||`. */
+const objectsIn = (value: ts.Expression): ts.ObjectLiteralExpression[] => {
+  const inner = awaited(value)
+  if (ts.isConditionalExpression(inner)) return [...objectsIn(inner.whenTrue), ...objectsIn(inner.whenFalse)]
+  if (ts.isBinaryExpression(inner) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(inner.operatorToken.kind)) {
+    return [...objectsIn(inner.left), ...objectsIn(inner.right)]
+  }
+  return ts.isObjectLiteralExpression(inner) ? [inner] : []
+}
+
+/** What an object literal holds at [name]: an assigned value or a shorthand's name. */
+const valuesAt = (object: ts.ObjectLiteralExpression, name: string): ts.Expression[] => object.properties.flatMap((property) =>
+  ts.isPropertyAssignment(property) && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) && property.name.text === name
+    ? [property.initializer]
+    : ts.isShorthandPropertyAssignment(property) && property.name.text === name ? [property.name] : [])
+
+const reading = new Set<ts.SignatureDeclaration>()
+
+/**
+ * What a property of a local, printed whole, prints of what the local was given: a function of the file's own's result
+ * (awaited or not) or an object literal, read at that property as the log call's own argument. A function that calls
+ * itself is read once.
+ */
+const returnedBy = (read: ts.PropertyAccessExpression, hand: Hand): string | undefined => {
+  const on = unwrap(read.expression)
+  const declaration = hand.locals && ts.isIdentifier(on) ? declarationOf(on) : undefined
+  if (!declaration || !ts.isVariableDeclaration(declaration) || !ts.isIdentifier(declaration.name)
+    || !(declaration.parent.flags & (ts.NodeFlags.Const | ts.NodeFlags.Let))) return undefined
+  for (const value of valuesOf(declaration)) {
+    const given = awaited(value)
+    const fn = ts.isCallExpression(given) ? calleeOf(given) : undefined
+    if (fn && reading.has(fn)) continue
+    const objects = fn ? returnsOf(fn).flatMap(objectsIn) : ts.isObjectLiteralExpression(given) ? [given] : []
+    if (fn) reading.add(fn)
+    let found: string | undefined
+    for (const at of objects.flatMap((object) => valuesAt(object, read.name.text))) {
+      found ??= printed(at, true, handOf([at], true))
+    }
+    if (fn) reading.delete(fn)
+    if (found) return found
+  }
+  return undefined
+}
+
 const ERROR_EVENTS = ['error', 'unhandledRejection', 'uncaughtException']
 
 /** A function handed an error first: `.catch(fn)`, `.then(_, fn)`, `.on('error', fn)` and its kin. */
@@ -177,12 +258,19 @@ const namesOf = (name: ts.BindingName): string[] => ts.isIdentifier(name)
   ? [name.text]
   : name.elements.flatMap((element) => ts.isOmittedExpression(element) ? [] : namesOf(element.name))
 
+/** The names an import binds: its default, its namespace or each of its named bindings. */
+const importedBy = (clause: ts.ImportClause): ts.Identifier[] => [
+  ...clause.name ? [clause.name] : [],
+  ...!clause.namedBindings ? [] : ts.isNamespaceImport(clause.namedBindings) ? [clause.namedBindings.name]
+    : clause.namedBindings.elements.map((element) => element.name),
+]
+
 const scopes = new WeakMap<ts.Node, ReadonlyMap<string, ts.Node>>()
 
 /**
  * The names a scope declares, each to its first declaration: a catch's, a function's parameters, a `for`'s locals, a
- * block's locals, functions and classes. Indexed once per scope: a lookup that read every statement of every block
- * around it, for each name of each call, was most of the time the scan spent past parsing.
+ * block's locals, functions, classes and imports. Indexed once per scope: a lookup that read every statement of every
+ * block around it, for each name of each call, was most of the time the scan spent past parsing.
  */
 const declaredIn = (scope: ts.Node): ReadonlyMap<string, ts.Node> | undefined => {
   const known = scopes.get(scope)
@@ -203,6 +291,7 @@ const declaredIn = (scope: ts.Node): ReadonlyMap<string, ts.Node> | undefined =>
     for (const statement of scope.statements) {
       if (ts.isVariableStatement(statement)) statement.declarationList.declarations.forEach((declaration) => add(declaration.name, declaration))
       else if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name) add(statement.name, statement)
+      else if (ts.isImportDeclaration(statement) && statement.importClause) importedBy(statement.importClause).forEach((name) => add(name, statement))
     }
   } else return undefined
   scopes.set(scope, names)
@@ -221,10 +310,12 @@ const declarationOf = (identifier: ts.Identifier): ts.Node | undefined => {
 const ERROR_NAME = /^(e|err|error|ex|exception)$|(Error|Err)$/
 
 /**
- * What the expression at hand holds: the names it tests with `instanceof`, and whether a local made from an error counts.
+ * What the expression at hand holds: the names it tests with `instanceof`, and whether it is the log call's own, where
+ * a local made from an error counts and so do the names of content (a local's own value is read for an error alone).
  * [only] reads one parameter as the error and nothing else: what a function prints of it is what it logs of its callers'.
+ * [passed] are the arguments a forwarder hands on as they are.
  */
-type Hand = { tested: Set<string>, locals: boolean, only?: ts.ParameterDeclaration }
+type Hand = { tested: Set<string>, locals: boolean, only?: ts.ParameterDeclaration, passed?: ReadonlySet<ts.Node> }
 
 const handOf = (nodes: readonly ts.Node[], locals: boolean): Hand => {
   const tested = new Set<string>()
@@ -292,6 +383,32 @@ const OPERAND_OPERATORS = [ts.SyntaxKind.PlusToken, ts.SyntaxKind.QuestionQuesti
 
 const shown = (node: ts.Node): string => node.getText().replace(/\s+/g, ' ')
 
+/** An error's fields that hold its words: what it says and where, what it stored, what a process printed, a path. */
+const ERROR_WORDS = ['message', 'stack', 'reason', 'detail', 'stderr', 'stdout', 'path']
+
+/** Names that hold content, of any value: what a process printed, free text, and where a person's things are. */
+const CONTENT_NAMES: ReadonlyArray<readonly [string, RegExp]> = [
+  ['process output', /^(stderr|stdout|output)$|(Stderr|Stdout|Output)$/],
+  ['free text', /^(detail|details|message)$|(Detail|Message)$/],
+  ['a path or URL', /^(path|cwd|dir|folder|file|home|url)$|(Path|Cwd|Dir|Folder|File|Home|Url|URL)$/],
+]
+
+/** What a name of the log call's own says it holds, when it is content. */
+const contentNamed = (name: string, hand: Hand): string | undefined =>
+  hand.locals ? CONTENT_NAMES.find(([, pattern]) => pattern.test(name))?.[0] : undefined
+
+/**
+ * The calls whose value carries no words: a kind, a code or a length, a hash, a short id, a serial port's name (the one
+ * function that passes it, cable/serial.ts), a number, a boolean and a byte count.
+ */
+const SAFE_CALLS = ['errorKind', 'codeOrLength', 'hashOf', 'sid', 'serialPortName', 'Number', 'Boolean', 'Buffer.byteLength']
+
+const isSafe = (call: ts.CallExpression): boolean => {
+  const callee = unwrap(call.expression)
+  return SAFE_CALLS.includes(ts.isIdentifier(callee) ? callee.text
+    : ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) ? `${callee.expression.text}.${callee.name.text}` : '')
+}
+
 const firstPrinted = (parts: readonly ts.Node[], whole: boolean, hand: Hand): string | undefined => {
   for (const part of parts) {
     const found = printed(part, whole, hand)
@@ -301,32 +418,46 @@ const firstPrinted = (parts: readonly ts.Node[], whole: boolean, hand: Hand): st
 }
 
 /**
- * What [node] prints of an error, or undefined. [whole] says its value is printed as it is (an argument, a template's
- * part, a branch): an error there is printed whole. Elsewhere (a property read, a condition) only its words can be.
+ * What [node] prints of an error or of content, or undefined. [whole] says its value is printed as it is (an argument,
+ * a template's part, a branch, a method's receiver): an error there is printed whole, and so is a name of content.
+ * Elsewhere (a property read, a condition) only an error's words can be.
  */
 function printed(node: ts.Node, whole: boolean, hand: Hand): string | undefined {
   const inner = ts.isExpression(node) ? unwrap(node) : node
-  // A kind, a number, a type test and a comparison carry no words.
-  if (ts.isCallExpression(inner) && ts.isIdentifier(inner.expression) && ['errorKind', 'Number'].includes(inner.expression.text)) return undefined
+  // A kind, a code, a hash, a number, a type test and a comparison carry no words.
+  if (ts.isCallExpression(inner) && isSafe(inner)) return undefined
   if (ts.isTypeOfExpression(inner)) return undefined
   if (ts.isBinaryExpression(inner) && PASSING_OPERATORS.includes(inner.operatorToken.kind)) return undefined
   if (ts.isIdentifier(inner)) {
-    const name = whole ? nameOf(inner, hand) : undefined
-    return name === 'error' ? `an error, ${inner.text}` : name === 'local' ? `a local made from an error, ${inner.text}` : undefined
+    if (!whole) return undefined
+    const name = nameOf(inner, hand)
+    if (name) return name === 'error' ? `an error, ${inner.text}` : `a local made from an error, ${inner.text}`
+    // A forwarder's parameter is checked where its callers hand it on, and an imported name is a module's (`path`).
+    const content = contentNamed(inner.text, hand)
+    if (!content || hand.passed?.has(inner)) return undefined
+    const declaration = declarationOf(inner)
+    return declaration && ts.isImportDeclaration(declaration) ? undefined : `${content}, ${inner.text}`
   }
   if (ts.isExpression(inner) && whole && isError(inner, hand)) return `an error, ${shown(inner)}`
   const first = (parts: readonly ts.Node[], partsWhole: boolean): string | undefined => firstPrinted(parts, partsWhole, hand)
   if (ts.isPropertyAccessExpression(inner)) {
-    if (['message', 'stack'].includes(inner.name.text) && isError(inner.expression, hand)) return `an error's words, ${shown(inner)}`
-    return printed(inner.expression, false, hand)
+    const name = inner.name.text
+    // A size is a number, of an error's words too.
+    if (name === 'length' || name === 'size') return undefined
+    if (ERROR_WORDS.includes(name) && isError(inner.expression, hand)) return `an error's words, ${shown(inner)}`
+    const content = whole ? contentNamed(name, hand) : undefined
+    if (content) return `${content}, ${shown(inner)}`
+    return (whole ? returnedBy(inner, hand) : undefined) ?? printed(inner.expression, false, hand)
   }
   if (ts.isCallExpression(inner)) {
     const callee = unwrap(inner.expression)
     if (ts.isPropertyAccessExpression(callee) && callee.name.text === 'toString' && isError(callee.expression, hand)) {
       return `an error's words, ${shown(inner)}`
     }
-    // Handed to any function, an error is printed by what that function makes of it.
-    return printed(callee, false, hand) ?? first(inner.arguments, true)
+    // Handed to any function, a value is printed by what that function makes of it, and so is a method's receiver
+    // (`stream.stderr.trim()`).
+    return (ts.isPropertyAccessExpression(callee) ? printed(callee.expression, true, hand) : printed(callee, false, hand))
+      ?? first(inner.arguments, true)
   }
   if (ts.isNewExpression(inner)) return first(inner.arguments ?? [], true)
   if (ts.isTemplateExpression(inner)) return first(inner.templateSpans.map((span) => span.expression), true)
@@ -394,7 +525,20 @@ const hidden = (call: ts.CallExpression): string | undefined => {
   return namesIn(call.arguments).some((name) => madeFrom(declarationOf(name))) ? undefined : '"fail" naming nothing it caught'
 }
 
-/** Each log call in [code] that prints an error's words or hides its kind, as `<file>:<line>: <what it found>`. */
+/**
+ * What a forwarder hands on as it is: an argument that is, bare, a plain parameter of the function the call is in. Its
+ * callers are checked where they call it, a logger by its name or a function of the file's own through its forwarding.
+ */
+const passedOn = (call: ts.CallExpression, logged: readonly ts.Expression[]): Set<ts.Node> => {
+  let fn: ts.Node = call.parent
+  while (!ts.isFunctionLike(fn) && !ts.isSourceFile(fn)) fn = fn.parent
+  return new Set(logged.map(unwrap).filter((argument) => {
+    const declaration = ts.isIdentifier(argument) ? declarationOf(argument) : undefined
+    return !!declaration && ts.isParameter(declaration) && declaration.parent === fn && ts.isIdentifier(declaration.name)
+  }))
+}
+
+/** Each log call in [code] that prints an error's words or content or hides its kind, as `<file>:<line>: <what>`. */
 function failureLogs(code: string, file = 'file.ts'): string[] {
   // The rule reads no JSDoc: leaving it unparsed takes a tenth off the parse.
   const source = ts.createSourceFile(file, code, { languageVersion: ts.ScriptTarget.Latest, jsDocParsingMode: ts.JSDocParsingMode.ParseNone },
@@ -405,7 +549,7 @@ function failureLogs(code: string, file = 'file.ts'): string[] {
       // A `writeSync` and a function of the file's own are read for what they log, not for the catch they run in.
       const logged = loggedArguments(node)
       // The hand is read only for a call that logs: read for every call, a chain's arguments were walked once per link.
-      const finding = (logged.length ? firstPrinted(logged, true, handOf(node.arguments, true)) : undefined)
+      const finding = (logged.length ? firstPrinted(logged, true, { ...handOf(node.arguments, true), passed: passedOn(node, logged) }) : undefined)
         ?? (isLogCall(node) ? hidden(node) : undefined)
       if (finding) found.push(`${file}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}: ${finding}`)
     }
@@ -415,15 +559,33 @@ function failureLogs(code: string, file = 'file.ts'): string[] {
   return found
 }
 
-/**
- * The hits in every file of the daemon: every .ts under cli/src but tests, end-to-end scripts, the TUI and the terminal
- * list. `testing/` is read: its shapes mirror the daemon's own wiring.
- */
+/** The hits in every file of the daemon: every .ts under cli/src but tests, e2e scripts, the TUI and the terminal list. */
 const daemonHits = (): string[] => readdirSync(SRC, { recursive: true, encoding: 'utf8' })
   .map((file) => file.split(sep).join('/'))
   .filter((file) => file.endsWith('.ts') && !/\.(spec|test|d)\.ts$/.test(file) && !/^(e2e|tui)\//.test(file)
     && !/(^|\/)__fixtures__\//.test(file) && !TERMINAL.includes(file))
   .flatMap((file) => failureLogs(readFileSync(join(SRC, file), 'utf8'), file))
+
+/**
+ * The pending lists: the hits on the tree a task of docs/plans/2026-11-21-log-no-stored-strings-plan.md fixes, one
+ * list a task, one line a file, `<path from cli/src> <hits>`. Each task deletes its own list; Task 23 deletes the
+ * pending lists and this code.
+ */
+const PENDING_LISTS = join(SRC, 'architecture.failureLogs.pending')
+
+type Pending = { list: string, file: string, hits: number }
+
+const pendingExcuses = (): Pending[] => readdirSync(PENDING_LISTS).flatMap((list) => readFileSync(join(PENDING_LISTS, list), 'utf8')
+  .split('\n').filter(Boolean).map((line) => {
+    const [file = '', hits] = line.split(' ')
+    return { list, file, hits: Number(hits) }
+  }))
+
+const fileOf = (hit: string): string => hit.slice(0, hit.indexOf(':'))
+
+/** The hits no pending line excuses: a file's are excused only when its line names exactly that many. */
+const unexcused = (hits: readonly string[], pending: readonly Pending[]): string[] => hits.filter((hit) => !pending.some(({ file, hits: count }) =>
+  file === fileOf(hit) && hits.filter((other) => fileOf(other) === file).length === count))
 
 it.each([
   "try { run() } catch (error) { console.error('[x] failed:', error) }",

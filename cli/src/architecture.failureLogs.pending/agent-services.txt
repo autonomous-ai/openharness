@@ -1,0 +1,6 @@
+lib/deleteAgentFallback.ts 2
+lib/closeAgentService.ts 1
+lib/resumeAgentService.ts 1
+lib/launchOverrides.ts 1
+lib/cwdRepair.ts 4
+lib/gitProject.ts 2

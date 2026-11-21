@@ -1,0 +1,8 @@
+core/agents/create.ts 7
+engines/kit/hookReview.ts 2
+engines/kit/hookSettings.ts 5
+engines/kit/nativeHookSettings.ts 2
+engines/kit/nativeHookYaml.ts 7
+engines/kit/nativePlugin.ts 2
+engines/nativeHooks.ts 1
+engines/nativeLaunch.ts 1
