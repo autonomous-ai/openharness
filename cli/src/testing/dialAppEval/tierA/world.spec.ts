@@ -49,4 +49,10 @@ describe("tier A's world", () => {
     expect(await deps.windowsRaise!.link('codex://threads/eval', 'com.openai.codex')).toBe(true)
     expect(world.seen([]).commands.map(({ argv, ok }) => [argv[1], ok])).toEqual([['raise', false], ['open-link', true]])
   })
+
+  it("the core's turns.send reaches no session: tier A has no Harness agent, so a real core would refuse it", () => {
+    const { world, core } = worldOn('darwin')
+    core.turns.send(world.agentId('a'), 'Eval words for alpha.')
+    expect(world.seen([]).deliveries).toEqual([{ at: 0, path: 'turns', target: null, text: 'Eval words for alpha.' }])
+  })
 })
