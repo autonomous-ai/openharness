@@ -29,7 +29,7 @@ import { MINIMUM_NODE_MAJOR, managedNodePath, nodeMajorOf } from './lib/nodeRunt
 import { currentCli, harnessLaunchPath } from './lib/windows/installLayout.js'
 import { launchDetached } from './lib/windows/launcher.js'
 import { leanFingerprint, readLeanBundle, releaseLeanClaim, writeLeanBundle, type LeanBundle } from './harnessd/leanBundle.js'
-import { errorKind, ts } from './lib/log.js'
+import { errorKind, exitOnFatal, ts } from './lib/log.js'
 import { confirm as confirmUpdate, pendingVersion, putNodeBack, restore as restoreUpdate, unjudgedUpdate } from './lib/selfUpdate.js'
 import { keepStaged, ptyUnjudged, rollBackStaged } from './lib/windows/ptyUpdate.js'
 import { enterHome } from './lib/workingFolder.js'
@@ -98,7 +98,10 @@ export interface WindowsMasterDeps {
   readPid(): number | null
   /** Whether a process runs; a throw when that is not known (`handoverAlive`). */
   alive(pid: number): boolean
-  /** An error that ends this process, written to [fd] first (`writeFatalTo`). */
+  /**
+   * An error that ends this process, written to [fd] first (lib/log.ts `exitOnFatal`): under harness-launch.exe the
+   * master has no stderr, and such an error left no word of why.
+   */
   fatal(fd: number): void
 }
 
@@ -146,27 +149,6 @@ export function handoverAlive(pid: number, kill: (pid: number, signal: 0) => voi
   }
 }
 
-/**
- * Under harness-launch.exe the master has no stderr: an error that ended it left no word of why. So, once it writes
- * the daemon's log itself, such an error's kind is written there, at once (the process is about to end), and it exits
- * 1, as Node does on an uncaught error or an unhandled rejection.
- */
-export function writeFatalTo(
-  fd: number,
-  on: (event: 'uncaughtException' | 'unhandledRejection', listener: (error: unknown) => void) => void = (event, listener) => { process.on(event, listener) },
-  exit: (code: number) => void = (code) => process.exit(code),
-): void {
-  const fatal = (what: string) => (error: unknown): void => {
-    try {
-      // not a state file: the master's last line, appended to its log
-      writeSync(fd, `${ts()} [harnessd] the master stopped on ${what}: ${errorKind(error)}\n`)
-    } catch { /* the log cannot be written: the line is lost, never the exit */ }
-    exit(1)
-  }
-  on('uncaughtException', fatal('an uncaught error'))
-  on('unhandledRejection', fatal('an unhandled rejection'))
-}
-
 export const processWindowsMasterDeps = (): WindowsMasterDeps => ({
   cliDir: env.ADAPTER_CLI_DIR,
   currentCli: (root) => currentCli(root),
@@ -184,7 +166,7 @@ export const processWindowsMasterDeps = (): WindowsMasterDeps => ({
   lock: async () => { try { return await acquireSpawnLock('handoff', { waitMs: HANDOVER_LOCK_WAIT_MS }) } catch { return null } },
   readPid: () => readHandoverPid(),
   alive: (pid) => handoverAlive(pid),
-  fatal: (fd) => writeFatalTo(fd),
+  fatal: (fd) => exitOnFatal('[harnessd] the master', fd),
 })
 
 /**
@@ -235,7 +217,11 @@ export function windowsMaster(scriptPath: string, deps: WindowsMasterDeps = proc
 export function startMaster(
   start: MasterStart, exit: (code: number) => void = (code) => process.exit(code),
   platform: NodeJS.Platform = process.platform, windows: () => Partial<MasterConfig> = () => windowsMaster(start.scriptPath),
+  fatal: () => void = () => exitOnFatal('[harnessd] the master', 2),
 ): ReturnType<typeof runMaster> {
+  // Before anything that can throw: Node's own report of an error nothing caught is its message and stack, on stderr,
+  // which launchd, systemd and `harness start` make the daemon's log. Windows has its own, once that log is open.
+  if (platform !== 'win32') fatal()
   // First, so the core, the services, tmux and the PTY host it starts inherit the home: started in a folder deleted
   // since (the firmware flash's worktree), every core it started there failed to read its folder, an update's too.
   const homeLine = enterHome()
@@ -336,8 +322,8 @@ export interface BundleMasterDeps {
   read: (path: string) => Buffer
   /** Writes the lean bundle out and returns where (harnessd/leanBundle.ts `writeLeanBundle`). */
   write: (lean: LeanBundle) => string
-  /** Runs `<node> <lean> __harnessd-probe` as the re-executed master would start: whether it answered. */
-  probe: (node: string, leanPath: string, env: NodeJS.ProcessEnv) => { ok: boolean; detail: string }
+  /** Runs `<node> <lean> __harnessd-probe` as the re-executed master would start: whether it answered, and how it ended. */
+  probe: (node: string, leanPath: string, env: NodeJS.ProcessEnv) => { ok: boolean; ended: string }
   execve: Execve | null
   /** The node the master re-executes on (`masterNode`), under the name `harnessd` (harnessd/processName.ts), so
    *  Activity Monitor names it. Asked only when it can re-execute; defaults to this process's. */
@@ -357,16 +343,17 @@ export interface BundleMasterDeps {
 }
 
 /** Run `<leanPath> __harnessd-probe` on [node] with this process's flags, as the master would start on it. */
-export function probeLean(node: string, leanPath: string, probeEnv: NodeJS.ProcessEnv, timeoutMs = PROBE_TIMEOUT_MS): { ok: boolean; detail: string } {
+export function probeLean(node: string, leanPath: string, probeEnv: NodeJS.ProcessEnv, timeoutMs = PROBE_TIMEOUT_MS): { ok: boolean; ended: string } {
   const run = spawnSync(node, [...process.execArgv, leanPath, '__harnessd-probe'], {
-    env: probeEnv, encoding: 'utf8', timeout: timeoutMs, stdio: ['ignore', 'pipe', 'pipe'],
+    env: probeEnv, timeout: timeoutMs, stdio: ['ignore', 'pipe', 'pipe'],
   })
-  // Judged as the re-execution's own probe judges a bundle (harnessd/reexec.ts `runProbe`).
-  const out = String(run.stdout ?? '')
-  const lastLine = (text: string): string => text.trim().split('\n').pop()!.trim()
+  // Judged as the re-execution's own probe judges a bundle (harnessd/reexec.ts `runProbe`), and said by how it ended,
+  // never by what it printed or the spawn's message: either can quote the person's paths, and the master logs it.
+  const how = run.error ? errorKind(run.error) : run.signal ? `signal ${run.signal}` : `exit ${run.status}`
+  const wrote = run.stderr?.length ?? 0
   return {
-    ok: run.status === 0 && out.includes(PROBE_ANSWER),
-    detail: run.error?.message ?? (lastLine(String(run.stderr ?? '')) || lastLine(out) || (run.signal ? `signal ${run.signal}` : `exit ${run.status}`)),
+    ok: run.status === 0 && String(run.stdout ?? '').includes(PROBE_ANSWER),
+    ended: wrote ? `${how} · stderr ${wrote} B` : how,
   }
 }
 
@@ -419,7 +406,8 @@ export function startMasterFromBundle(bundlePath: string, deps: BundleMasterDeps
     deps.start({ scriptPath: bundlePath, ...(lean ? { serviceScriptPath: lean.path, leanFingerprint: lean.fingerprint } : {}) })
   }
   if (deps.env.HARNESSD_LEAN === 'off') { fromBundle(null); return }
-  if (deps.leanOff()) { fromBundle(`${LEAN_OFF_FILE} is there: the master, the core and the services run from ${bundlePath}`); return }
+  // Its lines name what they are, not where: every path here is under the person's home.
+  if (deps.leanOff()) { fromBundle('lean-off is there: the master, the core and the services run from cli.js'); return }
   let written: { lean: LeanBundle; path: string } | null
   try {
     const lean = readLeanBundle(deps.read(bundlePath))
@@ -428,7 +416,7 @@ export function startMasterFromBundle(bundlePath: string, deps: BundleMasterDeps
     fromBundle(`the lean bundle could not be written out (${errorKind(error)}): the master, the core and the services run from cli.js`)
     return
   }
-  if (!written) { fromBundle(`no lean bundle in ${bundlePath}: the master, the core and the services run from it`); return }
+  if (!written) { fromBundle('no lean bundle in cli.js: the master, the core and the services run from it'); return }
   const { lean, path: leanPath } = written
   const fingerprint = leanFingerprint(lean)
   const leanEnv = { ...deps.env, [BUNDLE_ENV]: bundlePath, [BUNDLE_SHA256_ENV]: lean.bundleSha256, [LEAN_FINGERPRINT_ENV]: fingerprint }
@@ -440,24 +428,24 @@ export function startMasterFromBundle(bundlePath: string, deps: BundleMasterDeps
   const own = probed.ok || !deps.execve ? null : deps.nodeBack?.(true) ?? null
   if (own) {
     // Moving Nodes, and the bundle did not answer on the new one: the master stays on its own, as before the update.
-    deps.log(`[harnessd] the lean bundle ${leanPath} did not answer its probe on ${node} (${probed.detail}): the master stays on ${own}`)
+    deps.log(`[harnessd] the lean bundle did not answer its probe on the new Node (${probed.ended}): the master stays on the Node it runs on`)
     node = own
     probed = deps.probe(node, leanPath, leanEnv)
   }
   if (!probed.ok) {
-    fromBundle(`the lean bundle ${leanPath} did not answer its probe (${probed.detail}): the master, the core and the services run from ${bundlePath}`)
+    fromBundle(`the lean bundle did not answer its probe (${probed.ended}): the master, the core and the services run from cli.js`)
     return
   }
   if (!deps.execve) {
-    fromBundle(`this Node cannot re-execute the master: it runs from ${bundlePath}, the core and the services from ${leanPath}`, { path: leanPath, fingerprint })
+    fromBundle('this Node cannot re-execute the master: it runs from cli.js, the core and the services from the lean bundle', { path: leanPath, fingerprint })
     return
   }
   // An exec that fails cannot be caught once it has begun: on Node 22.23 and 24.22.2 a node binary that is not there
   // aborts this process (exit 134), and a script that is not there ends it in the new image
   // (MODULE_NOT_FOUND). The probe ran both a moment ago; they are checked again right before.
-  const missing = [node, leanPath].find((path) => !deps.exists(path))
+  const missing = !deps.exists(node) ? 'the Node' : !deps.exists(leanPath) ? 'the lean bundle' : null
   if (missing) {
-    fromBundle(`${missing} is not there to re-execute on: the master, the core and the services run from ${bundlePath}`)
+    fromBundle(`${missing} is not there to re-execute on: the master, the core and the services run from cli.js`)
     return
   }
   try {

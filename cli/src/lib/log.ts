@@ -7,7 +7,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import { closeSync, existsSync, openSync, readSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, openSync, readSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs'
 
 function pad(n: number, width = 2): string {
   return String(n).padStart(width, '0')
@@ -151,6 +151,28 @@ export function codeOrLength(value: unknown): string {
 /** A path, URL or label for a log line: the same text always reads the same, and none of it shows. */
 export function hashOf(text: string): string {
   return createHash('sha256').update(text).digest('hex').slice(0, 8)
+}
+
+/**
+ * An error nothing caught ends this process with one line, [tag] and the error's kind, written to [fd] at once (the
+ * process is about to end), then exit 1, as Node does, so whatever supervises the process restarts it as before. Node's
+ * own report is the error's message and stack, which can quote the person's files, and Export logs sends the log off
+ * the machine. Every master and service process of the daemon installs it; the core keeps its own, which stays up.
+ */
+export function exitOnFatal(
+  tag: string, fd: number,
+  on: (event: 'uncaughtException' | 'unhandledRejection', listener: (error: unknown) => void) => void = (event, listener) => { process.on(event, listener) },
+  exit: (code: number) => void = (code) => process.exit(code),
+): void {
+  const fatal = (what: string) => (error: unknown): void => {
+    try {
+      // not a state file: the process's last line, appended to its log
+      writeSync(fd, `${ts()} ${tag} stopped on ${what}: ${errorKind(error)}\n`)
+    } catch { /* the log cannot be written: the line is lost, never the exit */ }
+    exit(1)
+  }
+  on('uncaughtException', fatal('an uncaught error'))
+  on('unhandledRejection', fatal('an unhandled rejection'))
 }
 
 /** One-line, whitespace-flattened preview of user/assistant text, capped with an ellipsis. */
