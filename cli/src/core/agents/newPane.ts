@@ -11,7 +11,7 @@ import type { AgentEngine } from '../../engines/types.js'
 import { describeAgentCreateFailure } from '../../lib/agentCreateDiagnosis.js'
 import type { engineInstallRecipe } from '../../lib/engineInstall.js'
 import { commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
-import { codeOrLength, errorKind, sid } from '../../lib/log.js'
+import { errorKind, sid } from '../../lib/log.js'
 import { matchesLaunchReceipt, RegistryOwnershipChanged, type LaunchPublication, type registry, type RegisteredSession, type RegistryAuthority } from '../../lib/registry.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
@@ -174,13 +174,13 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
         if (paneState.dead) {
           const installed = await commandAvailableInInteractiveShell(command[0], undefined, installIfMissing)
           if (!current()) return
-          const error = installed ? 'ENGINE_DID_NOT_START' : 'ENGINE_NOT_INSTALLED'
+          const code = installed ? 'ENGINE_DID_NOT_START' : 'ENGINE_NOT_INSTALLED'
           const detail = installed
             ? `${engine} exited before its engine process became ready. See the terminal output for details.`
             : `${engine} is not installed, or its automatic install failed. See the terminal output for details.`
-          const failed = registry.setLaunch(pending.agentId, { state: 'failed', error, detail })
+          const failed = registry.setLaunch(pending.agentId, { state: 'failed', error: code, detail })
           if (failed) announceSession(failed)
-          console.warn(`[agent] create failed · ${engine} · ${codeOrLength(error)}`)
+          console.warn(`[agent] create failed · ${engine} · ${code}`)
           return
         }
         // The engine started and was gone again before it was ever seen (a flag it refused, a
