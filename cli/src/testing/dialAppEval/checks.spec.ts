@@ -231,8 +231,8 @@ describe('open', () => {
 
 describe('state', () => {
   const s = scenario([write, { kind: 'hook', session: 'a', event: 'turn-start', label: 'go' }])
-  const state = (want: 'working' | 'needs-you' | 'done' | 'idle'): Check =>
-    ({ id: 'st', kind: 'state', dim: 'D4', session: 'a', state: want, after: 'go' })
+  const state = (want: 'working' | 'needs-you' | 'done' | 'idle', session = 'a'): Check =>
+    ({ id: 'st', kind: 'state', dim: 'D4', session, state: want, after: 'go' })
   const ring = list(100, 'claude', [A, B, C])
 
   it('the row in that state after `after` passes, with its latency', () => {
@@ -262,6 +262,15 @@ describe('state', () => {
     const frames = [...ring, frame(600, { t: 'question', agentId: id(A), id: 'q' }), frame(700, { t: 'question.close', agentId: id(A), id: 'q' })]
     const s2 = scenario([write, { kind: 'hook', session: 'a', event: 'needs-input', label: 'go' }])
     expect(scores(run(state('working'), s2, seen(s2, [50, 650], { frames }))).shown).toBe(1)
+  })
+
+  it('a probe on a ghost session fails with the state changes observed in the window', () => {
+    const probe = state('working', 'ghost')
+    const frames = [...ring, frame(300, { t: 'turn.started', agentId: id(B), text: '' }), frame(800, { t: 'turn.started', agentId: id(A), text: '' })]
+    const results = run(probe, s, seen(s, [50, 500], { frames }))
+    expect(scores(results).shown).toBe(0)
+    // Only what happened after `after`: b's change came before it.
+    expect(results.find((r) => r.check === 'st.shown')?.evidence).toEqual(['a working at 800'])
   })
 })
 
@@ -294,6 +303,11 @@ describe('recap', () => {
     expect(scores(run(recap, s, seen(s, [50, 500], { frames: [summary(2100, 'Eval answer')] })))).toEqual({ exact: 1 })
     expect(scores(run(recap, s, seen(s, [50, 500], { frames: [summary(2100, 'Eval answe')] })))).toEqual({ exact: 0 })
     expect(scores(run(recap, s, seen(s, [50, 500], { frames: [summary(400, 'Eval answer')] })))).toEqual({ exact: 0 })
+  })
+
+  it('a probe on a ghost session fails with the summaries observed in the window, never their text', () => {
+    const results = run({ ...recap, session: 'ghost' }, s, seen(s, [50, 500], { frames: [summary(400, 'Eval answer'), summary(2100, 'Eval answer')] }))
+    expect(results.map((r) => [r.check, r.score, r.evidence])).toEqual([['c.exact', 0, ['summary at 2100 for a']]])
   })
 })
 
