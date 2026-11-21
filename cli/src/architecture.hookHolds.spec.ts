@@ -78,6 +78,11 @@ it.each([
   "throw new HookPreparationHeld('a hook argument ' + reason)",
   "class A extends HookPreparationHeld { constructor(s: string) { super(s) } }; new A('x')",
   "class A extends HookPreparationHeld {}; class B extends A {}; new B(why)",
+  // The sentence set past the constructor: a hold's own member, or assigned onto a new hold.
+  "class A extends HookPreparationHeld { override readonly hold = detail }",
+  "class A extends HookPreparationHeld { override readonly hold: string; constructor(why: string) { super('x'); this.hold = why } }",
+  "throw Object.assign(new HookPreparationHeld('x'), { hold: detail })",
+  "class A extends HookPreparationHeld {}; const hold = reason; throw Object.assign(new A('x'), { hold })",
 ])('finds %s', (code) => expect(planted(code)).not.toEqual([]))
 
 it.each([
@@ -85,6 +90,10 @@ it.each([
   'throw new HookPreparationHeld(`the hooks member is not an object`)',
   'throw new HookScriptMissing()',
   "class Missing extends HookPreparationHeld { constructor() { super('notify.mjs is missing') } }",
+  "throw new HookPreparationHeld(('the hooks member is not an object'))",
+  "throw new HookPreparationHeld('a hook event is not a list' as const)",
+  "class A extends HookPreparationHeld { override readonly hold = 'notify.mjs is missing' }",
+  "throw Object.assign(new HookPreparationHeld('x'), { hold: 'x' })",
   // Not a hold: an Error of another kind is the failure guard's.
   'throw new Error(`${detail}`)',
 ])('passes %s', (code) => expect(planted(code)).toEqual([]))
