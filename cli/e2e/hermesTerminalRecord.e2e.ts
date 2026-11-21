@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { hashOf } from '../src/lib/log.js'
 import { LocalClient } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { fakeHermesScript } from './harness/fakeHermes.mjs'
@@ -17,6 +18,7 @@ const OLDER = 'Hermes Agent v0.21.5 (2026.10.7)'
 const BLOCK = '# machine-adapter: session discovery'
 const PERSON = 'model: anthropic/claude\nterminal:\n  client_env_passthrough: ["MY_VAR"]\n'
 const TUI = 'display:\n  interface: tui\n'
+/** The line that says a config's hooks were removed, which names the config by its hash (lib/log.ts `hashOf`). */
 const REMOVED = "[hooks] removed Harness's Hermes hooks → "
 
 type Agent = { id: string; sessionId?: string; status?: string; launch?: { state: string }; identityHold?: string }
@@ -120,7 +122,7 @@ it('binds a Hermes v0.23 from its terminal record, follows /new, and writes no h
   await r.d.start()
   await until('the hook removed', () => readFileSync(r.config, 'utf8') === PERSON || null, 15_000)
   await until('its approvals removed', () => JSON.parse(readFileSync(allowlist, 'utf8')).approvals.length === 0 || null, 15_000)
-  await logged(r.d, mark, `${REMOVED}${r.config}`)
+  await logged(r.d, mark, `${REMOVED}${hashOf(r.config)}`)
 
   const c = await r.connect()
   const cwd = r.folder('p1')
@@ -267,7 +269,7 @@ it('follows a Hermes that only has a HOME of its own, and starts it again in tha
   // In no sandbox, the store its process holds open is the home it really uses: it is not marked.
   await until('the home on the saved row', () => saved(r.d, a.agentId)?.hermesHome === own || null, 15_000)
   expect(saved(r.d, a.agentId)?.hermesHomeDerived).toBeUndefined()
-  await logged(r.d, mark, `${REMOVED}${ownConfig}`)
+  await logged(r.d, mark, `${REMOVED}${hashOf(ownConfig)}`)
   expect(readFileSync(ownConfig, 'utf8')).toBe(PERSON)
 
   // Started again, it is handed that home as HERMES_HOME, as a `HERMES_HOME=/x hermes` typed by hand would be.
@@ -306,7 +308,7 @@ describe.runIf(process.platform === 'linux' && unshareWorks())('in a sandbox', (
     await boundTo(c, a.agentId, a.started.session)
     await until('the home marked on the saved row', () => saved(r.d, a.agentId)?.hermesHomeDerived || null, 15_000)
     expect(saved(r.d, a.agentId)?.hermesHome).toBe(own)
-    await logged(r.d, mark, `${REMOVED}${ownConfig}`)
+    await logged(r.d, mark, `${REMOVED}${hashOf(ownConfig)}`)
     expect(readFileSync(ownConfig, 'utf8')).toBe(PERSON)
     await logged(r.d, mark, 'hermes runs in a sandbox · followed from its terminal record')
     expect(r.d.log().slice(mark).split('hermes runs in a sandbox · followed from its terminal record')).toHaveLength(2)

@@ -260,6 +260,8 @@ describe('the master re-executing itself on an update', () => {
  * re-execute in both directions, with the same pid and the version of the bundle now on disk.
  */
 const RELEASED = process.env.MIGRATION_FROM
+/** How a release from before probes ends one: exit 1, its one line `Unknown command: __harnessd-probe` on stderr. */
+const OLD_REFUSAL = `exit 1 · stderr ${Buffer.byteLength(`Unknown command: ${PROBE_COMMAND}\n`)} B`
 describe.skipIf(!RELEASED)('a released master and this one, each over the other\'s core', () => {
   const NEXT = '0.99.0'
   let scratch = ''
@@ -317,9 +319,9 @@ describe.skipIf(!RELEASED)('a released master and this one, each over the other\
     })
     // Found by QA on a quiet machine: 0.3.60 re-executes, but this fixture assumed every published
     // release predated it. Probe the actual bundle; a timeout or broken probe must not select the old
-    // expectations and hide a regression. Old releases explicitly reject the private command.
+    // expectations and hide a regression. Old releases explicitly reject the private command (OLD_REFUSAL).
     const probe = await runProbe(process.execPath, [join(cliDir(), 'cli.js'), PROBE_COMMAND], daemon.env).result
-    if (!probe.ok) expect(probe.detail).toBe(`Unknown command: ${PROBE_COMMAND}`)
+    if (!probe.ok) expect(probe.ended).toBe(OLD_REFUSAL)
     releasedCanReexec = probe.ok
     await daemon.start()
   })
@@ -380,7 +382,7 @@ describe.skipIf(!RELEASED)('a released master and this one, each over the other\
     })
     expect(daemon!.log().slice(from)).toContain(releasedCanReexec
       ? `now v${releasedVersion}`
-      : 'did not answer its probe (Unknown command: __harnessd-probe) — keeping this master')
+      : `did not answer its probe (${OLD_REFUSAL}) — keeping this master`)
     // This master over a core too old to ask for a process on demand starts each as that core binds
     // (harnessd/services.ts `unasked`): models, which a core of protocol 4 asks for only once grid is in use,
     // the gateway, which it asks for only signed in or with something paired, and the viewers, which a core of

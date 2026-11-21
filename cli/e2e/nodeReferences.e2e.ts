@@ -79,7 +79,7 @@ describe.skipIf(!copies)('the launcher follows the Node the daemon runs on', { t
     await until('the launcher to name the Node the daemon runs on', () => readFileSync(launcher(), 'utf8').includes(`exec '${node()}' `) || null, 60_000, 200)
     expect(readFileSync(launcher(), 'utf8')).toBe(before().replace(/^exec .*$/m, `exec '${node()}' '${join(cli(), 'cli.js')}' "$@"`))
     // Said by the master, which did it, after the file is in place: its line comes over a pipe, so it is waited for.
-    await until('the master to say so', () => d.log().includes(`[node-runtime] ✓ repointed ${launcher()} at `) || null, 30_000, 100)
+    await until('the master to say so', () => d.log().includes('[node-runtime] ✓ repointed bin/harness at the new Node') || null, 30_000, 100)
   })
 
   it('a core with no master leaves the launcher as it is', async () => {

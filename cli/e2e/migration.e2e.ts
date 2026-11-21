@@ -148,9 +148,10 @@ describe.skipIf(!FROM)('upgrading a machine from a released build', () => {
     })
     if (fromHasMaster) {
       // Asked of the bundle itself, as reexec.e2e.ts does: a timeout or a broken probe must fail here, not
-      // pass as a release from before re-executing. Those reject the private command by name.
+      // pass as a release from before re-executing. Those reject the private command by name, on stderr alone:
+      // exit 1 and that one line's bytes.
       const probe = await runProbe(process.execPath, [join(cliDir(), 'cli.js'), PROBE_COMMAND], daemon.env).result
-      if (!probe.ok) expect(probe.detail).toBe(`Unknown command: ${PROBE_COMMAND}`)
+      if (!probe.ok) expect(probe.ended).toBe(`exit 1 · stderr ${Buffer.byteLength(`Unknown command: ${PROBE_COMMAND}\n`)} B`)
       fromCanReexec = probe.ok
     }
     // A released build may say nothing when it is ready, and has no request gate: its port is the sign.
