@@ -513,6 +513,19 @@ folders.
 
 **WezTerm.** The dial's words are typed into the agent's pane.
 
+**Orca and herdr.** The dial's words are typed into an Orca terminal or a herdr pane only when Orca or herdr made the
+agent's terminal. An agent started from one, in VS Code or another terminal, gets a tap there and no words; the
+daemon's log says `[device] orca · held` or `[device] herdr · held` once.
+
+**herdr inside a terminal.** An agent in a herdr pane is on the page of the app holding herdr's client, as on macOS:
+WezTerm, kitty or Ghostty, or the app holding the tmux or Zellij client herdr runs in. In WezTerm and kitty (kitty
+with remote control on) a swipe, and a rest while that app is in front, select the tab holding herdr's client, then
+the agent's herdr pane; a tap does the same and brings the window forward. Ghostty on Linux, GNOME Terminal, Ptyxis,
+Konsole, Alacritty, foot and xterm offer no tab API: there the agent is on Ghostty's page, else on the Other page, as
+on macOS; a swipe and a tap focus the herdr pane, a tap brings the client's window forward where the desktop raises
+by process (X11, sway, KDE, Hyprland; not GNOME), and the tab holding the client is not selected. The same holds for
+tmux's client in those terminals.
+
 ## The daemon's control interface
 
 `harness pair <verb>` is how the paired daemon ([daemons/BRAIN.md](../daemons/BRAIN.md)) reads and

@@ -365,5 +365,11 @@ from before (`src/harnessd/services.spec.ts`, `e2e/messagesSkew.e2e.ts`).
   In the person's herdr the devices process runs `herdr agent focus <pane>` alone, for the pane a hook named in the
   default session, at a tap, and at a rest only while the app holding that pane's client is in front
   (`cable/hosts/herdr.ts`), beside the dial's words over herdr's socket. To find that client it reads only process
-  names, parents and ttys, the unix-socket rows `lsof` gives for herdr's own processes and a tty's access time, never
-  another process's environment or argv (`cable/hosts/herdrOuter.ts`). It never creates or closes anything there.
+  names, parents and ttys, the unix sockets of herdr's own processes (on macOS the rows `lsof` gives, on Linux `ss -xn`
+  and their `/proc/<pid>/fd` socket links) and a tty's access time, never another process's environment or argv
+  (`cable/hosts/herdrOuter.ts`). It never creates or closes anything there.
+
+  The devices process types into an Orca terminal or a herdr pane only when Orca's terminal host or herdr made the
+  agent's terminal (`cable/hosts/scannedApp.ts` `ptyOwner`); an agent started from one, in VS Code or another terminal,
+  has that pane held: a tap alone, logged `[device] orca · held` or `[device] herdr · held` once a caller
+  (`cable/hosts/orca.ts`, `herdr.ts`). On Windows they are as before.
