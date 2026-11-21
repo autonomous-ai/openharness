@@ -407,14 +407,21 @@ export function condition(until: Until, scenario: Scenario, seen: Seen): { holds
   return { holds: untimed.length > 0 && untimed.every((p) => p.score === 1), evidence: [...new Set(untimed.flatMap((p) => p.evidence))] }
 }
 
-/** Each delivery after a voice step to anyone but that step's target; one with no known target is a wrong send too. */
+/**
+ * Each delivery after a voice step to anyone but that step's target; one with no known target is a wrong send too. A
+ * delivery is the latest voice step's that spoke its words, as one can land after the next step; words no step spoke are
+ * the latest step's.
+ */
 export function wrongSends(scenario: Scenario, seen: Seen): Array<Omit<WrongSend, 'tier' | 'platform'>> {
-  const voices = seen.steps.filter((s) => s.kind === 'voice')
+  const voices = seen.steps.flatMap((s) => {
+    const step = scenario.steps[s.index]!
+    return step.kind === 'voice' ? [{ at: s.at, step }] : []
+  })
   const wrong: Array<Omit<WrongSend, 'tier' | 'platform'>> = []
   for (const d of seen.deliveries) {
-    const step = voices.filter((s) => s.at <= d.at).at(-1)
-    const voice = step && scenario.steps[step.index]
-    if (voice?.kind !== 'voice' || d.target === voice.target) continue
+    const before = voices.filter((v) => v.at <= d.at)
+    const voice = (before.filter((v) => v.step.transcript === d.text).at(-1) ?? before.at(-1))?.step
+    if (voice === undefined || d.target === voice.target) continue
     wrong.push({ scenario: scenario.id, target: voice.target, got: d.target, path: d.path, at: d.at })
   }
   return wrong
