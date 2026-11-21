@@ -97,6 +97,8 @@ export async function beginCost(d: IsolatedDaemon): Promise<{ end(): Promise<Cos
       while (fresh.some(alive) && Date.now() < deadline) await new Promise((done) => setTimeout(done, 100))
       return {
         cpuPercent: Math.round(1_000 * used / wall) / 10,
+        // Each value is the gap between two of corePerf.cjs's samples, taken every 10 ms (monitorEventLoopDelay's
+        // resolution): an idle loop reads about 10 ms, this p99's floor, and two stalls within one gap count as one.
         loopP99Ms: Math.round(p99 * 10) / 10,
         leftovers: fresh.filter(alive).length,
       }
