@@ -385,7 +385,8 @@ export async function removeNativeYamlHooks(rule: NativeYamlHooks, homes: readon
         return done
       }, { identity: JSON.stringify(['uninstall', rule.begin, home]) }))
     } catch (error) {
-      outcomes.push(...done, { file: at, removed: 0, failed: failure(error) })
+      outcomes.push(...done, { file: at, removed: 0, failed: failure(error),
+        failedKind: error instanceof HookPreparationHeld ? error.hold : errorKind(error) })
     }
   }
   return outcomes

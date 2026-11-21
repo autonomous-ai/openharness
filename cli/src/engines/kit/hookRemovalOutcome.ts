@@ -12,6 +12,8 @@ export interface HookFileRemoval {
   removed: number
   /** Why the file was left as it was. */
   failed?: string
+  /** The same for a log line: a hold's fixed words, any other failure its kind. `failed` can quote an error's words. */
+  failedKind?: string
   /** A file at a path of ours that is somebody else's. */
   kept?: string
 }

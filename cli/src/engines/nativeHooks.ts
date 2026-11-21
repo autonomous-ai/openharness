@@ -6,7 +6,7 @@ import { HookPreparationHeld, hookPreparationRoutes, runHookPreparation, type Ho
 import { nativeHookLocations, type NativeHookOptions } from './kit/nativeLocations.js'
 import { env } from '../config/env.js'
 import { hookTokenPath } from '../lib/hookAuth.js'
-import { codeOrLength, errorKind, hashOf } from '../lib/log.js'
+import { errorKind, hashOf } from '../lib/log.js'
 import { VERSION } from '../version.js'
 import { OPENCODE_LEGACY_PLUGIN, OPENCODE_TUI_PLUGIN, OPENCODE_LEGACY_REMOVAL, OPENCODE_VERSION } from './opencode/contract.js'
 import { KILO_PLUGIN } from './kilo/contract.js'
@@ -119,11 +119,11 @@ async function removeHermesHooks(homes: readonly string[]): Promise<void> {
     if (link) sayOnce('warn', HERMES_HOOKS_SAID.kept, link, 'the file is a symbolic link')
     else editable.push(home)
   }
-  for (const { file, removed, failed, kept } of await removeNativeYamlHooks(HERMES_HOOK_SETTINGS, editable)) {
+  for (const { file, removed, failedKind, kept } of await removeNativeYamlHooks(HERMES_HOOK_SETTINGS, editable)) {
     if (removed > 0) sayOnce('log', HERMES_HOOKS_SAID.removed, file)
-    // A failure is uninstall's words for a person, an error's among them, which can name a path: its length. What
-    // keeps a file is fixed words.
-    const reason = failed ? codeOrLength(failed) : kept
+    // Not uninstall's sentence for a person (`failed`), which can quote an error naming a path: a hold's fixed words or
+    // the error's kind. What keeps a file is fixed words too.
+    const reason = failedKind ?? kept
     if (reason) sayOnce('warn', HERMES_HOOKS_SAID.kept, file, reason)
   }
 }
