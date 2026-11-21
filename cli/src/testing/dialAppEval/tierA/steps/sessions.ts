@@ -15,7 +15,7 @@ import { parseObservedHook, type ObservedEvent, type ObservedEventName } from '.
 import type { App, Platform, SessionDef, SessionKey } from '../../types.js'
 import type { StepHandler, TierAWorld } from '../world.js'
 
-/** The first session's pid; each session's is this plus its index in the scenario. */
+/** The first session's pid; each start takes the next, so a relaunched session's process is a new one. */
 const FIRST_PID = 41_000
 /** The mod waits a minute after a poll the devices could not hold (core/api.ts DEVICES_FALLBACKS). */
 const MOD_RETRY_MS = 60_000
@@ -32,12 +32,14 @@ interface State {
   quit: Map<App, SessionKey[]>
   /** Poll ids are never reused in a world: the inbox keeps a gone id that came before its poll. */
   polls: number
+  /** The processes started in this world. */
+  started: number
 }
 const states = new WeakMap<TierAWorld, State>()
 
 function stateOf(world: TierAWorld): State {
   let state = states.get(world)
-  if (!state) states.set(world, state = { live: new Map(), quit: new Map(), polls: 0 })
+  if (!state) states.set(world, state = { live: new Map(), quit: new Map(), polls: 0, started: 0 })
   return state
 }
 
@@ -138,7 +140,7 @@ export async function startSession(world: TierAWorld, key: SessionKey): Promise<
   const state = stateOf(world)
   if (state.live.has(key)) return
   const s = world.session(key)
-  const pid = FIRST_PID + world.scenario.sessions.indexOf(s)
+  const pid = FIRST_PID + state.started++
   const transcriptPath = transcriptOf(world, s)
   mkdirSync(dirname(transcriptPath), { recursive: true })
   // A relaunched session goes on in the transcript it had.
