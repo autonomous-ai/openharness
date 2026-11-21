@@ -125,10 +125,11 @@ class ValidationTests(unittest.TestCase):
             {"name": "device-id", "argv": [str(tool), "--device-id", "macos", "test"], "cwd": "desktop", "timeout_seconds": 5},
             {"name": "bat", "argv": [str(bat), "test"], "cwd": "desktop", "timeout_seconds": 5},
             {"name": "fvm", "argv": [str(fvm), "flutter", "test"], "cwd": "desktop", "timeout_seconds": 5},
+            {"name": "wrapped", "argv": ["env", "-u", "TMUX", str(tool), "test"], "cwd": "desktop", "timeout_seconds": 5},
         ]
         result, receipt = self.run_plan([*desktop, self.beside_flutter()])
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-        self.assertEqual({c["name"]: c["status"] for c in receipt["checks"]}, dict.fromkeys(("script", "make", "verbose", "device", "device-id", "bat", "fvm", "other"), "passed"))
+        self.assertEqual({c["name"]: c["status"] for c in receipt["checks"]}, dict.fromkeys(("script", "make", "verbose", "device", "device-id", "bat", "fvm", "wrapped", "other"), "passed"))
         self.assertFalse((self.root / ".harness" / "overlap").exists())
 
     def test_failure_does_not_hide_other_results(self):
