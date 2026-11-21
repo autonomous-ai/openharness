@@ -4,17 +4,18 @@
  * `harness hardware watch --json` for the app in front, and the fake backend for the dial's speech. A daemon serves the
  * first scenario and every one after it, reset, until a scenario asks for one of its own (`fresh`).
  *
- * Isolation: each daemon's open (HARNESS_OPEN_BIN, which only records), its home, its apps' folder and both apps'
- * stores are checked to be inside its root before it starts, and it is signed in to the fake backend alone. The network
+ * Isolation: each daemon's open (HARNESS_OPEN_BIN, which only records: `writeRecordingOpen`), its home, its apps' folder
+ * and both apps' stores are checked to be inside its root before it starts, and it is signed in to the fake backend alone. The network
  * guard (src/testing/dialAppEval/netGuard.ts) is in this process and preloaded into every process of the daemon and every
  * child started here: a start whose core or devices process did not load it fails.
  *
  * What it saw: the frames the dial received, at their arrival; the faces of the firmware's carousel model, fed those
  * frames and the person's own turns (a swipe moves the glass before the daemon hears of it); the commands of the
- * recording open; the deliveries the app's steps record; and, after `stop`, what the scenario cost (appEvalCost.ts).
+ * recording open, with their exit; the deliveries the app's steps record; and, after `stop`, what the scenario cost
+ * (appEvalCost.ts).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative } from 'node:path'
 import { chatGptPlaces, claudeStoreRoots } from '../../src/cable/hosts/appPlaces.js'
 import { claudeAppFixture } from '../../src/testing/claudeAppFixture.js'
@@ -22,6 +23,7 @@ import { describeAttempt, guardThisProcess, netGuardEnv, readNetGuard, type NetA
 import { agentIdOf, type App, type Delivery, type EvalDriver, type Platform, type Scenario, type Seen,
   type SessionDef, type SessionKey, type Step, type StepKind, type StepOf } from '../../src/testing/dialAppEval/types.js'
 import { CAROUSEL_REFRESH_MS, DialCarousel, type DialMessage } from '../../src/testing/dialCarousel.js'
+import { writeExecutable } from '../../src/testing/executableFixture.js'
 import { beginCost, costEnv } from './appEvalCost.js'
 import { writeAppCodex } from './codexAppCli.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './daemon.js'
@@ -34,7 +36,7 @@ import { writeSchemeApps } from './schemeApps.js'
 const FILTER = { appFilter: 'v1' }
 const SERIAL = 'EVAL-B'
 const MAC = 'e2:e0:00:00:0e:b1'
-/** The page of each app's ring: the ChatGPT app's threads are Codex's. */
+/** The page of each app's ring, and the scheme of its links: the ChatGPT app's threads are Codex's. */
 const PAGE: Readonly<Record<App, string>> = { claude: 'claude', chatgpt: 'codex' }
 /** The app in front as Harness Device names it: a bundle id on macOS, the window's process on Linux; `other` is an app
  *  the dial follows none of. */
@@ -52,11 +54,16 @@ const CHILD_END_MS = 5_000
 // How the real CLI is started: the run's bundle when there is one (E2E_BUNDLE), as the daemon runs.
 const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : ['--import', 'tsx', 'src/cli.ts']
 
+/** One run of the recording open: the command it stands for, and whether it exited 0. */
+export type OpenRun = Omit<Seen['commands'][number], 'at'>
+
 export interface TierBWorld {
   readonly d: IsolatedDaemon; readonly desk: Desk; readonly dial: FakeDial
   readonly scenario: Scenario; readonly platform: Platform
   now(): number; agentId(key: SessionKey): string; session(key: SessionKey): SessionDef
   deliver(d: Omit<Delivery, 'at'>): void; gap(reason: string): void
+  /** Each run of the open from now on, as it is read: how a fake app sees the links the devices run. */
+  onOpen(listener: (run: OpenRun) => void): void
   /** Ended at stop. */
   readonly children: ChildProcess[]
 }
@@ -72,6 +79,8 @@ type Run = Exclude<Step, { kind: 'wait' }>
 /** A daemon, its desk and its backend, kept across the scenarios that do not ask for a fresh one. */
 interface Rig {
   d: IsolatedDaemon; desk: Desk; backend: FakeBackend
+  /** Where its recording open notes its runs. */
+  runs: string
   /** The network guard's file, in the root: the processes it was loaded into and what it refused there. */
   guard: string
   /** How many of its attempts were handed on. */
@@ -90,6 +99,41 @@ const CHATGPT_INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 `
 
 const inside = (root: string, path: string | undefined): boolean => !!path && isAbsolute(path) && !relative(root, path).startsWith('..')
+/** The file beside the recording open that has the links of an app fail while it is there. */
+const failsFile = (open: string, app: App): string => join(dirname(open), `${PAGE[app]}.fails`)
+
+/**
+ * The open the devices run (HARNESS_OPEN_BIN), in place of the harness's own (harness/daemon.ts), which notes no exit: it
+ * stands in for /usr/bin/open on macOS and for xdg-open on Linux (cable/hosts/appLink.ts), opens nothing, and notes each
+ * run in [runs] as `<exit> <arguments>`. A link of an app `linksFail` names exits 1, on both: the open is how either
+ * platform's link fails, while Linux's scheme still has its app (a scheme without one is kept by the devices for as
+ * long as they run, so a later scenario on the same daemon would have no link at all).
+ */
+export function writeRecordingOpen(path: string, runs: string): void {
+  if ([path, runs].some((p) => p.includes("'"))) throw new Error('the recording open\'s folder holds a quote')
+  const fails = (Object.keys(PAGE) as App[]).map((app) =>
+    `case "$*" in *${PAGE[app]}://*) [ -e '${failsFile(path, app)}' ] && code=1 ;; esac\n`)
+  writeExecutable(path, `#!/bin/sh\ncode=0\n${fails.join('')}printf '%s %s\\n' "$code" "$*" >> '${runs}'\nexit "$code"\n`)
+}
+
+/** The apps whose links the recording open at [path] fails from now on: every other app's open. */
+export function linksFail(path: string, apps: readonly App[]): void {
+  for (const app of Object.keys(PAGE) as App[]) {
+    if (apps.includes(app)) writeFileSync(failsFile(path, app), '')
+    else rmSync(failsFile(path, app), { force: true })
+  }
+}
+
+/** Each run the recording open noted in [runs], in order, as the command it stood for on [platform]. */
+export function openRuns(runs: string, platform: Platform): OpenRun[] {
+  let text = ''
+  try { text = readFileSync(runs, 'utf8') } catch { return [] }
+  return text.split('\n').filter(Boolean).map((line) => {
+    const space = line.indexOf(' ')
+    const args = line.slice(space + 1)
+    return { argv: [platform === 'linux' ? 'xdg-open' : 'open', ...(args ? args.split(' ') : [])], ok: line.slice(0, space) === '0' }
+  })
+}
 /** The files in [dir] and below gone, its folders kept: the daemon's watches on them stay. */
 function emptied(dir: string): void {
   for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
@@ -133,6 +177,8 @@ async function openRig(): Promise<Rig> {
     const places = { open: d.env.HARNESS_OPEN_BIN, home, applications: d.env.HARNESS_APPLICATIONS_DIR, 'Claude store': claudeStore,
       'Codex home': home && join(home, '.codex') }
     for (const [name, path] of Object.entries(places)) if (!inside(d.root, path)) throw new Error(`the daemon's ${name} is not inside its root`)
+    const runs = join(dirname(places.open!), 'runs.log')
+    writeRecordingOpen(places.open!, runs)
     // The store's folders, as the app leaves them, so the devices watch them from the start.
     claudeAppFixture(claudeStore!).org()
     mkdirSync(places['Codex home']!, { recursive: true })
@@ -158,7 +204,7 @@ async function openRig(): Promise<Rig> {
     await d.start()
     // An engine started by hand reads its hooks once, as it starts: they are in before any scenario starts one.
     await d.hooksInstalled(['claude', 'codex'])
-    return { d, desk: new Desk(dials), backend, guard, given: 0 }
+    return { d, desk: new Desk(dials), backend, runs, guard, given: 0 }
   } catch (error) {
     await d?.close().catch(() => {})
     await backend.close()
@@ -186,10 +232,11 @@ class World implements TierBWorld {
   private page = ''
   private watch: ChildProcess | undefined
   private waiting: Array<() => void> = []
+  private readonly openers: Array<(run: OpenRun) => void> = []
   private readonly refreshing: ReturnType<typeof setInterval>
 
   constructor(private readonly rig: Rig, readonly scenario: Scenario, readonly platform: Platform) {
-    this.opened = rig.d.opens().length
+    this.opened = openRuns(rig.runs, platform).length
     // The firmware's refresh task, which applies a list a moment after it ends: each turn also reads what came.
     this.refreshing = setInterval(() => this.read(), CAROUSEL_REFRESH_MS)
   }
@@ -211,6 +258,7 @@ class World implements TierBWorld {
   }
   deliver(d: Omit<Delivery, 'at'>): void { this.deliveries.push({ at: Date.now(), ...d }) }
   gap(reason: string): void { this.gaps.push(reason) }
+  onOpen(listener: (run: OpenRun) => void): void { this.openers.push(listener) }
 
   async plug(): Promise<void> {
     this.plugged = await this.desk.plug(SERIAL, MAC, FILTER)
@@ -264,8 +312,12 @@ class World implements TierBWorld {
     }
     this.carousel.refresh()
     this.face(Date.now())
-    const opens = this.d.opens()
-    for (; this.opened < opens.length; this.opened++) this.commands.push({ at: Date.now(), argv: opens[this.opened]! })
+    const runs = openRuns(this.rig.runs, this.platform)
+    for (; this.opened < runs.length; this.opened++) {
+      const run = runs[this.opened]!
+      this.commands.push({ at: Date.now(), ...run })
+      for (const listener of this.openers) listener(run)
+    }
     for (const done of this.waiting.splice(0)) done()
   }
 
@@ -343,6 +395,7 @@ export class TierBDriver implements EvalDriver {
     if (this.rig) await this.reset(this.rig)
     const rig = this.rig ??= await openRig()
     const world = this.world = new World(rig, scenario, platform)
+    linksFail(rig.d.env.HARNESS_OPEN_BIN!, scenario.world?.linkFails ?? [])
     const front = scenario.world?.front ?? scenario.app
     await GENERIC.front(world, { kind: 'front', app: front })
     await world.plug()

@@ -16,15 +16,15 @@
  * (their SessionEnd hook, their poll, their process), so nothing of a scenario outlives it.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { readFileSync, statSync, watch, writeFileSync, type FSWatcher } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { readFileSync, statSync, writeFileSync } from 'node:fs'
+import { basename, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { claudeStoreRoots } from '../../src/cable/hosts/appPlaces.js'
 import { APP_BUNDLES } from '../../src/cable/hosts/hostDetect.js'
 import { fetchOverSocket } from '../../src/lib/localTransport.js'
 import { claudeAppFixture } from '../../src/testing/claudeAppFixture.js'
 import type { SessionDef, SessionKey } from '../../src/testing/dialAppEval/types.js'
-import { speak, type AppSteps, type TierBWorld } from './appEvalDriver.js'
+import { speak, type AppSteps, type OpenRun, type TierBWorld } from './appEvalDriver.js'
 import { CLI_ROOT, until, type IsolatedDaemon } from './daemon.js'
 import { inboxPoll } from './modInbox.js'
 import { Outside } from './outsideAgent.js'
@@ -58,9 +58,8 @@ interface FakeApp {
   live: Map<SessionKey, Live>
   /** Each start in flight, so a link and a step never start one session twice. */
   starting: Map<SessionKey, Promise<Live>>
-  /** The runs of `open` read: only those since the app started reach it. */
-  opened: number
-  watcher: FSWatcher
+  /** Ended: a link run after it reaches no app. */
+  closed: boolean
 }
 interface State {
   app?: FakeApp
@@ -91,12 +90,9 @@ function appOf(world: TierBWorld): FakeApp {
   // Only the app's lifetime: what it does is in this file.
   const child = spawn(process.execPath, ['-e', 'process.stdin.resume()'], { env: world.d.env, stdio: ['pipe', 'ignore', 'ignore'] })
   world.children.push(child)
-  const opens = world.d.env.HARNESS_OPEN_BIN!
-  const app: FakeApp = {
-    process: child, live: new Map(), starting: new Map(), opened: world.d.opens().length,
-    // The recording open writes its log beside itself.
-    watcher: watch(dirname(opens), () => follow(world, app)),
-  }
+  const app: FakeApp = { process: child, live: new Map(), starting: new Map(), closed: false }
+  // Only the links run since it started reach it.
+  world.onOpen((run) => follow(world, app, run))
   // Ended, it ends its sessions first, and only then goes: the driver's end of its children waits for that.
   const kill = child.kill.bind(child)
   let ending: Promise<void> | undefined
@@ -108,14 +104,11 @@ function appOf(world: TierBWorld): FakeApp {
   return app
 }
 
-/** Each link run since the last look that continues a resumable session the app is not running: it resumes it. */
-function follow(world: TierBWorld, app: FakeApp): void {
-  const opens = world.d.opens()
-  for (; app.opened < opens.length; app.opened++) {
-    const argv = opens[app.opened]!
-    const s = world.scenario.sessions.find((one) => one.app === 'claude' && one.resumable && !one.ghost && argv.includes(linkOf(one)))
-    if (s) void start(world, app, s.key)
-  }
+/** A link that opened, continuing a resumable session the app is not running: it resumes it. */
+function follow(world: TierBWorld, app: FakeApp, run: OpenRun): void {
+  if (app.closed || !run.ok) return
+  const s = world.scenario.sessions.find((one) => one.app === 'claude' && one.resumable && !one.ghost && run.argv.includes(linkOf(one)))
+  if (s) void start(world, app, s.key)
 }
 
 /** The session's Claude Code, its start hook run, and the mod's poll held. */
@@ -192,9 +185,9 @@ async function end(world: TierBWorld, app: FakeApp, key: SessionKey, live: Live)
   }
 }
 
-/** The app's end: its link watch, and each of its sessions, those still starting too. */
+/** The app's end: no more links, and each of its sessions, those still starting too. */
 async function close(world: TierBWorld, app: FakeApp): Promise<void> {
-  app.watcher.close()
+  app.closed = true
   const state = stateOf(world)
   if (state.app === app) state.app = undefined
   await Promise.allSettled([...app.starting.values()])

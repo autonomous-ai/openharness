@@ -8,10 +8,10 @@
  * each call under the root (harness/codexAppCli.ts, harness/fakeEngine.mjs). From a voice step to the scenario's stop,
  * each new call is a `codex` delivery to the session of its thread, or to none when no session of the scenario has it,
  * so a send to the wrong thread is seen. No ChatGPT scenario has a thread the app resumes from its link, so no fake of
- * the app watches the links run.
+ * the app watches the links run. A link the scenario's world says fails is the recording open's (appEvalDriver.ts).
  */
 import { spawn } from 'node:child_process'
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { onTestFinished } from 'vitest'
@@ -20,12 +20,9 @@ import type { SessionDef, SessionKey } from '../../src/testing/dialAppEval/types
 import { claudeSteps } from './appEvalClaude.js'
 import { speak, type AppSteps, type TierBWorld } from './appEvalDriver.js'
 import { CodexOutside } from './codexOutside.js'
-import { writeSchemeApps } from './schemeApps.js'
 
 /** The queue calls of the app's own CLI and of the `codex` on PATH, under the root (codexAppCli.ts, fakeEngine.mjs). */
 const LEDGERS = ['codex-app-queue', 'codex-queue']
-/** The recording open's line that refuses a ChatGPT link, after the line that notes it. */
-const LINK_FAILS = 'case "$*" in *codex://*) exit 1 ;; esac\n'
 
 interface State {
   /** Each running session. */
@@ -76,21 +73,6 @@ async function end(world: TierBWorld, key: SessionKey): Promise<void> {
 const answerLine = (text: string): string =>
   `${JSON.stringify({ type: 'event_msg', payload: { type: 'agent_message', phase: 'final_answer', message: text } })}\n`
 
-/**
- * The open as the scenario's world has it: a ChatGPT link it says fails is refused, by the recording open on macOS and,
- * on Linux, with no app named for its scheme. Set at each scenario's first write, so the one before leaves none of it.
- */
-function linksAsTheWorldSays(world: TierBWorld): void {
-  const fails = world.scenario.world?.linkFails?.includes('chatgpt') === true
-  if (world.platform === 'linux') {
-    writeSchemeApps(world.d, fails ? { claude: 'com.anthropic.Claude.desktop' } : { claude: 'com.anthropic.Claude.desktop', codex: 'chatgpt.desktop' })
-    return
-  }
-  const open = world.d.env.HARNESS_OPEN_BIN!
-  const notes = readFileSync(open, 'utf8').replace(LINK_FAILS, '')
-  writeFileSync(open, fails ? notes + LINK_FAILS : notes)
-}
-
 /** Each queue call from now to the scenario's stop, as a `codex` delivery: one reader of each ledger, a child ended at
  *  stop, from its next line on. */
 function hear(world: TierBWorld): void {
@@ -123,7 +105,6 @@ export const chatgptSteps: AppSteps = {
    */
   'codex.write': async (world, step) => {
     const state = stateOf(world)
-    if (world.scenario.steps.find((s) => s.kind === 'codex.write') === step) linksAsTheWorldSays(world)
     const home = codexAppFixture(join(world.d.env.HOME!, '.codex'))
     const now = Date.now()
     const keys = [...new Set([...step.sessions, ...step.archived ?? []])]
