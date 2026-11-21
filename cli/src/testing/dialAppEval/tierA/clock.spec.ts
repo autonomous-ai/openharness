@@ -5,7 +5,7 @@ import { open, readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { EVAL_EPOCH, installClock, MAX_ADVANCES, quiet, settle } from './clock.js'
+import { countFsCalls, EVAL_EPOCH, installClock, MAX_ADVANCES, quiet, settle } from './clock.js'
 
 // As dialAppEval.spec.ts mocks it: each read is counted from its call.
 vi.mock('node:fs/promises', async (real) => (await import('./clock.js')).countFsCalls(await real<object>()))
@@ -41,6 +41,18 @@ describe("tier A's clock", () => {
     await quiet(nothingInFlight)
     expect(closed).toBe(true)
     await Promise.all(backlog)
+  })
+
+  it('a world never quiet stops with what it was waiting on', async () => {
+    let land: () => void = () => {}
+    const fs = countFsCalls({ read: () => new Promise<void>((resolve) => { land = resolve }) })
+    void fs.read()
+    try {
+      // A small limit: the product's is 10 s of real time.
+      await expect(quiet(() => 3, 20)).rejects.toThrow(/^the world was not quiet in 20 ms: 3 store reads, 1 node:fs\/promises calls\b/)
+    } finally {
+      land()
+    }
   })
 
   it('settle stops at its limit, and as soon as until holds', async () => {
