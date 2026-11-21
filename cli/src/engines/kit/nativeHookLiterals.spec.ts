@@ -22,7 +22,7 @@ it('a native settings install names its file by a hash, never its path', async (
     messages: { current: 'current', installed: 'installed {file}', failed: 'failed' } }, 19473)
   expect(JSON.parse(readFileSync(file, 'utf8')).hooks.sessionStart[0].command).toContain('--port 19473')
   expect(said(log)).not.toContain('sentinel')
-  expect(log).toHaveBeenCalledWith(`installed ${hashOf(file)}`)
+  expect(log).toHaveBeenCalledWith(`installed ${hashOf(file)} (outside the home)`)
 })
 it('a native plugin install renders its argument contents once and names its file by a hash, never its path', async () => {
   root = mkdtempSync(join(tmpdir(), 'sentinel-'))
@@ -33,5 +33,5 @@ it('a native plugin install renders its argument contents once and names its fil
   { credential: '${version}$&', version: 'fixture', port: '19473' })
   expect(readFileSync(file, 'utf8')).toBe('credential=${version}$&;version=fixture')
   expect(said(log)).not.toContain('sentinel')
-  expect(log).toHaveBeenCalledWith(`installed ${hashOf(file)}`)
+  expect(log).toHaveBeenCalledWith(`installed ${hashOf(file)} (outside the home)`)
 })

@@ -8,6 +8,8 @@
 
 import { createHmac, randomBytes } from 'node:crypto'
 import { closeSync, existsSync, openSync, readSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { isAbsolute, relative, sep } from 'node:path'
 
 function pad(n: number, width = 2): string {
   return String(n).padStart(width, '0')
@@ -159,6 +161,25 @@ const TAG_KEY: Buffer = (globalThis as { [key: symbol]: Buffer })[Symbol.for('ha
 /** A path, URL or label for a log line: the same text reads the same within this process, and none of it shows. */
 export function hashOf(text: string): string {
   return createHmac('sha256', TAG_KEY).update(text).digest('hex').slice(0, 8)
+}
+
+/** What a line says after a file it names that is not under this process's home. */
+export const OUTSIDE_HOME = '(outside the home)'
+
+/**
+ * ` (outside the home)` when [path] is not under the home as this process sees it (os.homedir(): HOME, or USERPROFILE
+ * on Windows), else nothing. A tag is made with a key of this process's own, so only these fixed words tell a reader of
+ * the log where a file is: the end-to-end harness fails a daemon whose hook line says them (e2e/harness/daemon.ts
+ * `hooksOutside`).
+ */
+export function outsideHome(path: string): string {
+  const rel = relative(homedir(), path)
+  return rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel) ? ` ${OUTSIDE_HOME}` : ''
+}
+
+/** A file for a log line: its tag, then whether it is outside the home (`outsideHome`). Every hook line names its file so. */
+export function fileTag(file: string): string {
+  return hashOf(file) + outsideHome(file)
 }
 
 /**

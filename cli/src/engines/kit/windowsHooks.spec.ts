@@ -11,7 +11,7 @@ import { COPILOT_HOOK_SETTINGS } from '../copilot/contract.js'
 import { CURSOR_HOOK_SETTINGS } from '../cursor/contract.js'
 import { DEVIN_HOOK_SETTINGS } from '../devin/contract.js'
 import { GROK_HOOK_SETTINGS } from '../grok/contract.js'
-import { hashOf } from '../../lib/log.js'
+import { fileTag } from '../../lib/log.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { installHermesHooks } from '../nativeHooks.js'
 import { installHookSettings, notifyHookEntry } from './hookSettings.js'
@@ -223,7 +223,7 @@ describe('Codex\'s PowerShell hook on Windows', () => {
     const before = [stamp(file), stamp(config)]
     log.mockClear()
     expect(await installHookSettings('codex', codex.settings, 19473, home, {}, 'win32')).toBe(true)
-    expect(log.mock.calls[0]![0]).toBe(codex.settings.messages.current.replace('{file}', hashOf(file)))
+    expect(log.mock.calls[0]![0]).toBe(codex.settings.messages.current.replace('{file}', fileTag(file)))
     expect([stamp(file), stamp(config)]).toEqual(before)
   })
 

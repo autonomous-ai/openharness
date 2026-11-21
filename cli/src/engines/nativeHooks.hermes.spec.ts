@@ -107,7 +107,7 @@ it('a removal names its file by a hash, never its path', async () => {
   vi.mocked(hermesKeepsRecord).mockResolvedValue(true); writeFileSync(config, WITH_BLOCK)
   expect(await installHermesHooks(18473)).toBe(true)
   expect([...logs, ...warns].join('\n')).not.toContain('sentinel')
-  expect(logs).toEqual([`[hooks] removed Harness's Hermes hooks → ${hashOf(config)}`])
+  expect(logs).toEqual([`[hooks] removed Harness's Hermes hooks → ${hashOf(config)} (outside the home)`])
 })
 
 // The disk's error names the file it could not write: the line says the error's kind, never its words.
@@ -115,14 +115,14 @@ it.skipIf(process.getuid?.() === 0)('a removal that failed names its file by a h
   vi.mocked(hermesKeepsRecord).mockResolvedValue(true); writeFileSync(config, WITH_BLOCK); chmodSync(home, 0o555)
   expect(await installHermesHooks(18473)).toBe(true)
   expect(warns.join('\n')).not.toContain('sentinel')
-  expect(warns).toEqual([`[hooks] could not remove Harness's Hermes hooks from ${hashOf(config)} · EACCES`])
+  expect(warns).toEqual([`[hooks] could not remove Harness's Hermes hooks from ${hashOf(config)} (outside the home) · EACCES`])
 })
 
 // A hold is fixed words that say what keeps the file as it is.
 it('a removal held says what holds it', async () => {
   vi.mocked(hermesKeepsRecord).mockResolvedValue(true); writeFileSync(config, '- a list, not a mapping\n')
   expect(await installHermesHooks(18473)).toBe(true)
-  expect(warns).toEqual([`[hooks] could not remove Harness's Hermes hooks from ${hashOf(config)} · the YAML configuration is not a complete mapping`])
+  expect(warns).toEqual([`[hooks] could not remove Harness's Hermes hooks from ${hashOf(config)} (outside the home) · the YAML configuration is not a complete mapping`])
 })
 
 it('leaves a home whose config or approvals list is a link, and says so once', async () => {
@@ -137,7 +137,7 @@ it('leaves a home whose config or approvals list is a link, and says so once', a
   expect(await installHermesHooks(18473)).toBe(true)
   expect(readFileSync(join(host, 'config.yaml'), 'utf8')).toBe(WITH_BLOCK)
   expect(lstatSync(config).isSymbolicLink()).toBe(true)
-  expect(warns).toEqual([`[hooks] could not remove Harness's Hermes hooks from ${hashOf(config)} · the file is a symbolic link`])
+  expect(warns).toEqual([`[hooks] could not remove Harness's Hermes hooks from ${hashOf(config)} (outside the home) · the file is a symbolic link`])
 
   // The approvals list beside a config of its own: the home is left as it is, and a record seen there changes nothing.
   rmSync(config); writeFileSync(config, PERSON)
@@ -148,7 +148,7 @@ it('leaves a home whose config or approvals list is a link, and says so once', a
   await hermesRecordSeen(home)
   expect(readFileSync(config, 'utf8')).toBe(installed)
   expect(readFileSync(join(host, 'shell-hooks-allowlist.json'), 'utf8')).toBe(approvals)
-  expect(warns).toEqual([`[hooks] could not remove Harness's Hermes hooks from ${hashOf(allowlist)} · the file is a symbolic link`])
+  expect(warns).toEqual([`[hooks] could not remove Harness's Hermes hooks from ${hashOf(allowlist)} (outside the home) · the file is a symbolic link`])
 })
 
 it('removes the hooks of a home the first time a record is seen there', async () => {

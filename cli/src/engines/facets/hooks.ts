@@ -77,8 +77,8 @@ export interface HookSettings {
   upToDate: { command: 'first-ours' | 'first'; matcher: boolean }
   /**
    * The daemon's log lines, with {port} filled in, and {file} and {script} by their paths' hashes (lib/log.ts
-   * `hashOf`): a path names the person's home. The end-to-end harness counts, core by core, the files these lines
-   * name against the files holding hooks in its throwaway root (e2e/harness/daemon.ts `hooksOutside`).
+   * `hashOf`): a path names the person's home. {file} also says when the file is outside the home (lib/log.ts `fileTag`),
+   * which the end-to-end harness fails (e2e/harness/daemon.ts `hooksOutside`).
    */
   messages: {
     /** Nothing to write. */

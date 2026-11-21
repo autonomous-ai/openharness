@@ -1,7 +1,7 @@
 /** A managed YAML hook block and exact-command approvals, applied from eager engine declarations. */
 import { isMap, isScalar, isSeq, Lexer, parseDocument, visit, type Document } from 'yaml'
 import { join } from 'node:path'
-import { errorKind, hashOf } from '../../lib/log.js'
+import { errorKind, fileTag } from '../../lib/log.js'
 import { HookPreparationHeld, inspectHookFile, type HookFilePublication, runHookPreparation, type HookPreparationAttempt, type HookPreparationOptions } from './nativeHookFiles.js'
 import { NativeEvidenceBudget } from './nativeEvidence.js'
 import { isManagedHookCommand } from './notifyHooks.js'
@@ -399,7 +399,7 @@ async function installIn(rule: NativeYamlHooks, cmd: string, home: string, optio
   try { return await runHookPreparation([configPath, join(home, rule.allowlist)], async attempt => {
     const observed = inspectHookFile(configPath)
     if (observed.content === null && !options.createMissing) {
-      if (home === rule.home) log(message(rule.messages.missing, { file: hashOf(configPath) }))
+      if (home === rule.home) log(message(rule.messages.missing, { file: fileTag(configPath) }))
       return false
     }
     // A captured launch owns preparation of its selected home, including its
@@ -433,7 +433,7 @@ async function installIn(rule: NativeYamlHooks, cmd: string, home: string, optio
       throw new HookPreparationHeld('the YAML configuration is not a complete mapping')
     }
     if (foreignHooks || document.has('hooks')) {
-      error(message(rule.messages.foreign, { file: hashOf(configPath) }))
+      error(message(rule.messages.foreign, { file: fileTag(configPath) }))
       // The entries name the managed Node, notify.mjs and the person's folders, and Export logs sends the log off the
       // machine: the line names the command that prints them on the person's terminal (manualHookEntries).
       error(rule.messages.manual)
@@ -444,7 +444,7 @@ async function installIn(rule: NativeYamlHooks, cmd: string, home: string, optio
     let listed = cleaned
     if (rule.passthrough) {
       const edited = editPassthrough(cleaned, rule.passthrough)
-      if (edited === null) log(message(rule.passthrough.unlisted, { file: hashOf(configPath) }))
+      if (edited === null) log(message(rule.passthrough.unlisted, { file: fileTag(configPath) }))
       else listed = edited
     }
     const next = `${listed.replace(/\s*$/, '')}\n${hooksBlock(rule, cmd)}`
@@ -458,7 +458,7 @@ async function installIn(rule: NativeYamlHooks, cmd: string, home: string, optio
     if (next === config) {
       const installed = await observed.replace(config, attempt), approved = await approve(attempt)
       installed.verify(); approved.verify()
-      log(rule.messages.current + (home === rule.home ? '' : ` (${hashOf(home)})`))
+      log(rule.messages.current + (home === rule.home ? '' : ` (${fileTag(home)})`))
       return true
     }
 
@@ -466,8 +466,8 @@ async function installIn(rule: NativeYamlHooks, cmd: string, home: string, optio
     installed.verify(); approved.verify()
     log(
       removed > 1
-        ? message(rule.messages.collapsed, { removed: String(removed), file: hashOf(configPath) })
-        : message(rule.messages.installed, { file: hashOf(configPath) }),
+        ? message(rule.messages.collapsed, { removed: String(removed), file: fileTag(configPath) })
+        : message(rule.messages.installed, { file: fileTag(configPath) }),
     )
     log(rule.messages.after)
     return true

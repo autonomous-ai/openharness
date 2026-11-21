@@ -6,7 +6,7 @@ import { HookPreparationHeld, hookPreparationRoutes, runHookPreparation, type Ho
 import { nativeHookLocations, type NativeHookOptions } from './kit/nativeLocations.js'
 import { env } from '../config/env.js'
 import { hookTokenPath } from '../lib/hookAuth.js'
-import { errorKind, hashOf } from '../lib/log.js'
+import { errorKind, fileTag } from '../lib/log.js'
 import { VERSION } from '../version.js'
 import { OPENCODE_LEGACY_PLUGIN, OPENCODE_TUI_PLUGIN, OPENCODE_LEGACY_REMOVAL, OPENCODE_VERSION } from './opencode/contract.js'
 import { KILO_PLUGIN } from './kilo/contract.js'
@@ -100,7 +100,7 @@ function sayOnce(stream: 'log' | 'warn', template: string, file: string, reason 
   if (said.size >= MAX_SAID) said.clear()
   said.add(key)
   // The file by its hash: its path names the person's home.
-  console[stream](template.replace(/\{(file|reason)\}/g, (_, name: string) => name === 'file' ? hashOf(file) : reason))
+  console[stream](template.replace(/\{(file|reason)\}/g, (_, name: string) => name === 'file' ? fileTag(file) : reason))
 }
 
 /**

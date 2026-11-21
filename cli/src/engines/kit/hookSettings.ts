@@ -12,7 +12,7 @@ import { env } from '../../config/env.js'
 import { HARNESS_AGENT_COMMANDS, HARNESS_AGENT_TOOLS, HARNESS_AGENT_VERBS, type HarnessAgentVerb, type HookSettings } from '../facets/hooks.js'
 import { prepareReviewed } from './hookReview.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
-import { errorKind, hashOf } from '../../lib/log.js'
+import { errorKind, fileTag, hashOf } from '../../lib/log.js'
 import { atomicWriteFile } from '../../lib/secureState.js'
 import { isMessagesBlock, messagesCommand, writeMessagesHook } from './messagesHook.js'
 import { engineName } from '../../lib/agentNames.js'
@@ -70,7 +70,7 @@ export async function installHookSettings(engine: HookEngine, settings: HookSett
     const held = err instanceof HookPreparationHeld ? err.hold : errorKind(err)
     if (isNamedHold(err, platform)) { console.error(`${hooksNotInstalled(engine)} · ${held}`); return false }
     console.error(settings.messages.failed.replace(/\{(file|script|port)\}/g, (_, name: string) =>
-      name === 'file' ? hashOf(files[0]) : name === 'script' ? hashOf(HOOK_SCRIPT) : String(port)), held)
+      name === 'file' ? fileTag(files[0]) : name === 'script' ? hashOf(HOOK_SCRIPT) : String(port)), held)
     return false
   }
 }
@@ -224,7 +224,7 @@ async function installNotifyHooks(settings: HookSettings, port: number, home: st
   const file = join(home, settings.fileName)
   // A path names the person's home: the file and the hook script by their hashes (facets/hooks.ts `messages`).
   const say = (line: string): string => line.replace(/\{(file|script|port)\}/g, (_, name: string) =>
-    name === 'file' ? hashOf(file) : name === 'script' ? hashOf(HOOK_SCRIPT) : String(port))
+    name === 'file' ? fileTag(file) : name === 'script' ? hashOf(HOOK_SCRIPT) : String(port))
   // Ours as this platform reads a hook: on Windows a line for its runner, or exec form (kit/notifyHooks.ts isManagedHook).
   const isOurs = (block: HookBlock): boolean => Array.isArray(block?.hooks) && block.hooks.some(hook => isManagedHook(hook, platform))
   // A hook already there is the current one when its line is. On Windows its arguments too: exec form keeps them in

@@ -18,7 +18,7 @@ import { parse as parseToml } from 'smol-toml'
 import { createHash } from 'node:crypto'
 import { basename, join } from 'node:path'
 import type { HookReviewRecord } from '../facets/hooks.js'
-import { errorKind } from '../../lib/log.js'
+import { errorKind, outsideHome } from '../../lib/log.js'
 import { HookPreparationHeld, inspectHookFile, runHookPreparation, type HookPreparationAttempt } from './nativeHookFiles.js'
 import { isMessagesBlock } from './messagesHook.js'
 import { isOurs, type HookBlock, type Settings } from './notifyHooks.js'
@@ -242,7 +242,7 @@ export function prepareReviewed(record: HookReviewRecord, home: string, settings
     commit: async (attempt: HookPreparationAttempt) => {
       const published = await observed.replace(output, attempt)
       // The file by its name, never its path, which names the person's home.
-      if (output !== text) console.log(record.messages.recorded.replace('{config}', record.fileName))
+      if (output !== text) console.log(record.messages.recorded.replace('{config}', () => record.fileName + outsideHome(config)))
       return published
     },
   }
@@ -261,7 +261,7 @@ export async function recordReviewed(record: HookReviewRecord, home: string, set
     source.verify(); published.verify()
     return true
   }) } catch (err) {
-    console.error(record.messages.skipped.replace('{config}', record.fileName), err instanceof HookPreparationHeld ? err.hold : errorKind(err))
+    console.error(record.messages.skipped.replace('{config}', () => record.fileName + outsideHome(config)), err instanceof HookPreparationHeld ? err.hold : errorKind(err))
     return false
   }
 }

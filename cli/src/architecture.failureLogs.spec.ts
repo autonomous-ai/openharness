@@ -29,10 +29,10 @@
  * (not one it hands on by its name: `.on('data', say)`, `this.say.bind(this)`). And when it prints whole
  * a property of a local given a function of the file's own's result (awaited or not) or an object literal, and the
  * value there is found by the rules above. A `.length` or a `.size`, a type test, a comparison, a `?:`'s condition (it
- * is tested, never printed), and what these return carry no words: `errorKind`, `codeOrLength`, `hashOf` and `sid`
- * (lib/log.ts), `serialPortName` (cable/serial.ts, the one way a serial port's name is logged) and `backendName`
- * (config/env.ts, which backend a URL names, in fixed words), each imported from its module under its own name or
- * called in that module; and Node's `Number`, `Boolean` and `Buffer.byteLength` where the file declares no such name.
+ * is tested, never printed), and what these return carry no words: `errorKind`, `codeOrLength`, `hashOf`, `fileTag`,
+ * `outsideHome` and `sid` (lib/log.ts), `serialPortName` (cable/serial.ts, the one way a serial port's name is logged)
+ * and `backendName` (config/env.ts, which backend a URL names, in fixed words), each imported from its module under its
+ * own name or called in that module; and Node's `Number`, `Boolean` and `Buffer.byteLength` where the file declares no such name.
  * What a function of the file's own logs of a parameter (a function, a `const` one, a method called on `this`), and
  * what a `writeSync` writes, are found the same way, but for the catch they run in.
  *
@@ -420,11 +420,12 @@ const contentNamed = (name: string, hand: Hand): string | undefined =>
 
 /**
  * The functions whose value carries no words, each by the module that holds it (from cli/src): a kind, a code or a
- * length, a hash, a short id, a serial port's name (the one function that passes it), and which backend a URL names, in
- * fixed words. Trusted by its name, any function so named would be: a local `sid` that slices a path.
+ * length, a hash, a file's hash and whether it is outside the home, a short id, a serial port's name (the one function
+ * that passes it), and which backend a URL names, in fixed words. Trusted by its name, any function so named would be: a local `sid` that slices a path.
  */
 const SAFE_HELPERS: ReadonlyMap<string, string> = new Map([
-  ['errorKind', 'lib/log'], ['codeOrLength', 'lib/log'], ['hashOf', 'lib/log'], ['sid', 'lib/log'],
+  ['errorKind', 'lib/log'], ['codeOrLength', 'lib/log'], ['hashOf', 'lib/log'], ['fileTag', 'lib/log'],
+  ['outsideHome', 'lib/log'], ['sid', 'lib/log'],
   ['serialPortName', 'cable/serial'], ['backendName', 'config/env'],
 ])
 

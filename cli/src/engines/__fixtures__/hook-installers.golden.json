@@ -3,7 +3,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Claude Code session, turn, wait and subagent hooks → <hash <root>/moved/claude-work/settings.json>",
+     "log [hooks] installed Claude Code session, turn, wait and subagent hooks → <hash <root>/moved/claude-work/settings.json> (outside the home)",
      "log [hooks] (takes effect on the next claude session start)"
     ],
     "threw": null
@@ -35,7 +35,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Claude Code session, turn, wait and subagent hooks → <hash <root>/moved/claude-work/settings.json>",
+     "log [hooks] installed Claude Code session, turn, wait and subagent hooks → <hash <root>/moved/claude-work/settings.json> (outside the home)",
      "log [hooks] (takes effect on the next claude session start)"
     ],
     "threw": null
@@ -476,7 +476,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Claude Code session, turn, wait and subagent hooks → <hash <root>/moved/claude-work/settings.json>",
+     "log [hooks] installed Claude Code session, turn, wait and subagent hooks → <hash <root>/moved/claude-work/settings.json> (outside the home)",
      "log [hooks] (takes effect on the next claude session start)"
     ],
     "threw": null
@@ -508,7 +508,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Claude Code session, turn, wait and subagent hooks → <hash <root>/moved/claude-work/settings.json>",
+     "log [hooks] installed Claude Code session, turn, wait and subagent hooks → <hash <root>/moved/claude-work/settings.json> (outside the home)",
      "log [hooks] (takes effect on the next claude session start)"
     ],
     "threw": null
@@ -540,7 +540,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Claude Code session, turn, wait and subagent hooks → <hash <root>/moved/claude-work/settings.json>",
+     "log [hooks] installed Claude Code session, turn, wait and subagent hooks → <hash <root>/moved/claude-work/settings.json> (outside the home)",
      "log [hooks] (takes effect on the next claude session start)"
     ],
     "threw": null
@@ -572,7 +572,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Claude Code session, turn, wait and subagent hooks → <hash <root>/moved/claude-work/settings.json>",
+     "log [hooks] installed Claude Code session, turn, wait and subagent hooks → <hash <root>/moved/claude-work/settings.json> (outside the home)",
      "log [hooks] (takes effect on the next claude session start)"
     ],
     "threw": null
@@ -728,7 +728,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Claude Code session, turn, wait and subagent hooks → <hash <root>/moved/claude-work/settings.json>",
+     "log [hooks] installed Claude Code session, turn, wait and subagent hooks → <hash <root>/moved/claude-work/settings.json> (outside the home)",
      "log [hooks] (takes effect on the next claude session start)"
     ],
     "threw": null
@@ -884,7 +884,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] updated (path/port changed) → <hash <script>> --port 19473 in <hash <root>/moved/claude-work/settings.json>",
+     "log [hooks] updated (path/port changed) → <hash <script>> --port 19473 in <hash <root>/moved/claude-work/settings.json> (outside the home)",
      "log [hooks] (takes effect on the next claude session start)"
     ],
     "threw": null
@@ -916,7 +916,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Claude Code session, turn, wait and subagent hooks → <hash <root>/moved/claude-work/settings.json>",
+     "log [hooks] installed Claude Code session, turn, wait and subagent hooks → <hash <root>/moved/claude-work/settings.json> (outside the home)",
      "log [hooks] (takes effect on the next claude session start)"
     ],
     "threw": null
@@ -1171,7 +1171,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Claude Code session, turn, wait and subagent hooks → <hash <root>/moved/claude-work/settings.json>",
+     "log [hooks] installed Claude Code session, turn, wait and subagent hooks → <hash <root>/moved/claude-work/settings.json> (outside the home)",
      "log [hooks] (takes effect on the next claude session start)"
     ],
     "threw": null
@@ -1229,7 +1229,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Claude Code session, turn, wait and subagent hooks → <hash <root>/moved/claude-work/settings.json>",
+     "log [hooks] installed Claude Code session, turn, wait and subagent hooks → <hash <root>/moved/claude-work/settings.json> (outside the home)",
      "log [hooks] (takes effect on the next claude session start)"
     ],
     "threw": null
@@ -1488,16 +1488,16 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json>",
+     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json> (outside the home)",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)"
     ],
     "threw": null
    },
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)"
     ],
     "threw": null
    }
@@ -1536,16 +1536,16 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json>",
+     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json> (outside the home)",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)"
     ],
     "threw": null
    },
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)"
     ],
     "threw": null
    }
@@ -1962,15 +1962,15 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)"
     ],
     "threw": null
    },
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)"
     ],
     "threw": null
    }
@@ -2009,16 +2009,16 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json>",
+     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json> (outside the home)",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)"
     ],
     "threw": null
    },
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)"
     ],
     "threw": null
    }
@@ -2057,16 +2057,16 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json>",
+     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json> (outside the home)",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)"
     ],
     "threw": null
    },
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)"
     ],
     "threw": null
    }
@@ -2105,16 +2105,16 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json>",
+     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json> (outside the home)",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)"
     ],
     "threw": null
    },
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)"
     ],
     "threw": null
    }
@@ -2153,16 +2153,16 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json>",
+     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json> (outside the home)",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)"
     ],
     "threw": null
    },
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)"
     ],
     "threw": null
    }
@@ -2201,15 +2201,15 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)"
     ],
     "threw": null
    },
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)"
     ],
     "threw": null
    }
@@ -2248,15 +2248,15 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)"
     ],
     "threw": null
    },
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)"
     ],
     "threw": null
    }
@@ -2295,15 +2295,15 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)"
     ],
     "threw": null
    },
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)"
     ],
     "threw": null
    }
@@ -2342,15 +2342,15 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)"
     ],
     "threw": null
    },
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)"
     ],
     "threw": null
    }
@@ -2389,16 +2389,16 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json>",
+     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json> (outside the home)",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)"
     ],
     "threw": null
    },
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)"
     ],
     "threw": null
    }
@@ -2437,15 +2437,15 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)"
     ],
     "threw": null
    },
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)"
     ],
     "threw": null
    }
@@ -2484,16 +2484,16 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json>",
+     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json> (outside the home)",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)"
     ],
     "threw": null
    },
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)"
     ],
     "threw": null
    }
@@ -2532,16 +2532,16 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json>",
+     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json> (outside the home)",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)"
     ],
     "threw": null
    },
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)"
     ],
     "threw": null
    }
@@ -2580,16 +2580,16 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json>",
+     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json> (outside the home)",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)"
     ],
     "threw": null
    },
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)"
     ],
     "threw": null
    }
@@ -2628,16 +2628,16 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json>",
+     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json> (outside the home)",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)"
     ],
     "threw": null
    },
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)"
     ],
     "threw": null
    }
@@ -2676,16 +2676,16 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json>",
+     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json> (outside the home)",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)"
     ],
     "threw": null
    },
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)"
     ],
     "threw": null
    }
@@ -2728,15 +2728,15 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)"
     ],
     "threw": null
    },
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)"
     ],
     "threw": null
    }
@@ -2858,15 +2858,15 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)",
      "warn [hooks] Agent Messages' hook not installed in Codex's hooks.json (messages reach its agents once they are idle): the settings file is read-only"
     ],
     "threw": null
    },
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>",
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)",
      "warn [hooks] Agent Messages' hook not installed in Codex's hooks.json (messages reach its agents once they are idle): the settings file is read-only"
     ],
     "threw": null
@@ -2978,16 +2978,16 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json>",
+     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json> (outside the home)",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)"
     ],
     "threw": null
    },
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)"
     ],
     "threw": null
    }
@@ -3052,16 +3052,16 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json>",
+     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json> (outside the home)",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)"
     ],
     "threw": null
    },
    {
     "logs": [
-     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json>"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)"
     ],
     "threw": null
    }

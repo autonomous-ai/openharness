@@ -93,16 +93,16 @@ it('says what each home did in the homes\' order, whichever home finishes first'
   expect(readFileSync(join(home, 'config.yaml'), 'utf8')).toContain(`--hermes-home ${home}`)
   expect(readFileSync(join(profile, 'config.yaml'), 'utf8')).toContain(`--hermes-home ${profile}`)
   expect(lines).toEqual([
-    `[hooks] installed Hermes session hooks → ${hashOf(join(home, 'config.yaml'))}`,
+    `[hooks] installed Hermes session hooks → ${hashOf(join(home, 'config.yaml'))} (outside the home)`,
     '[hooks] (takes effect on the next hermes session start)',
-    `[hooks] installed Hermes session hooks → ${hashOf(join(profile, 'config.yaml'))}`,
+    `[hooks] installed Hermes session hooks → ${hashOf(join(profile, 'config.yaml'))} (outside the home)`,
     '[hooks] (takes effect on the next hermes session start)',
   ])
 
   lines.length = 0
   profileFirst()
   expect(await installNativeYamlHooks(rule, command)).toBe(true)
-  expect(lines).toEqual(['[hooks] Hermes session hooks already installed', `[hooks] Hermes session hooks already installed (${hashOf(profile)})`])
+  expect(lines).toEqual(['[hooks] Hermes session hooks already installed', `[hooks] Hermes session hooks already installed (${hashOf(profile)} (outside the home))`])
 })
 
 // A path names the person's home, and Export logs sends the log off the machine: each line names a config, and a
@@ -121,12 +121,12 @@ it('a hook install names its file by a hash, never its path', async () => {
   await installNativeYamlHooks(rule, command)
   await installNativeYamlHooks(rule, command)
   expect(lines.join('\n')).not.toContain('sentinel')
-  expect(lines).toContain(`[hooks] no Hermes config at ${hashOf(join(at, 'config.yaml'))} — skipping (run hermes once first)`)
-  expect(lines).toContain(`[hooks] installed Hermes session hooks → ${hashOf(join(work, 'config.yaml'))}`)
-  expect(lines).toContain(`[hooks] ${hashOf(join(work, 'config.yaml'))} has no terminal.client_env_passthrough list to add Harness's pane names to:`
+  expect(lines).toContain(`[hooks] no Hermes config at ${hashOf(join(at, 'config.yaml'))} (outside the home) — skipping (run hermes once first)`)
+  expect(lines).toContain(`[hooks] installed Hermes session hooks → ${hashOf(join(work, 'config.yaml'))} (outside the home)`)
+  expect(lines).toContain(`[hooks] ${hashOf(join(work, 'config.yaml'))} (outside the home) has no terminal.client_env_passthrough list to add Harness's pane names to:`
     + ' sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness')
-  expect(lines).toContain(`[hooks] Hermes session hooks already installed (${hashOf(work)})`)
-  expect(lines).toContain(`[hooks] ${hashOf(join(theirs, 'config.yaml'))} has its own \`hooks:\` block — leaving it untouched.`)
+  expect(lines).toContain(`[hooks] Hermes session hooks already installed (${hashOf(work)} (outside the home))`)
+  expect(lines).toContain(`[hooks] ${hashOf(join(theirs, 'config.yaml'))} (outside the home) has its own \`hooks:\` block — leaving it untouched.`)
   expect(lines).toContain('[hooks] run `harness hooks hermes` for the entries to add under it to mirror Hermes sessions')
   expect(lines.filter((line) => line.startsWith('[hooks]   '))).toEqual([])
 })
@@ -209,7 +209,7 @@ describe('the pane names in Hermes\' terminal.client_env_passthrough', () => {
 
     lines.length = 0
     expect(await installNativeYamlHooks(rule, command, profile)).toBe(true)
-    expect(lines[0]).toBe(`[hooks] ${hashOf(join(profile, 'config.yaml'))} has no terminal.client_env_passthrough list to add Harness's pane names to:`
+    expect(lines[0]).toBe(`[hooks] ${hashOf(join(profile, 'config.yaml'))} (outside the home) has no terminal.client_env_passthrough list to add Harness's pane names to:`
       + ' sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness')
   })
 })
