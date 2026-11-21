@@ -52,8 +52,8 @@ const none = ['[device] herdr client · none']
 const notRead = (why: 'processes' | 'sockets' | 'ttys' | 'app') => [`[device] herdr client · not read · ${why}`]
 
 /** A recording runner that runs nothing, so no spec reads a process of this machine's: each call answers the next of
- *  [codes], then exit 0, lsof, ps and ss print what [said] gives them, a tty's access time and a process's sockets are
- *  [said]'s, ss is on the PATH, and a process's terminal is the one the table gives it. */
+ *  [codes], then exit 0, lsof, any ps and ss print what [said] gives them, a tty's access time and a process's sockets are
+ *  [said]'s, ss and ps are on the PATH, and a process's terminal is the one the table gives it. */
 function lookup(
   over: Partial<Omit<HerdrOuterDeps, 'processes'>> & { processes?: () => Promise<readonly PtyProcess[]> } = {},
   codes: Array<number | null> = [], said: Said = {},
@@ -69,10 +69,10 @@ function lookup(
   const outer = createHerdrOuter({
     run: async (file, args, timeoutMs) => {
       calls.push({ file, args, timeoutMs })
-      const stdout = file === LSOF ? said.lsof ?? '' : file === PS ? said.ps ?? '' : file === SS ? said.ss ?? '' : ''
+      const stdout = file === LSOF ? said.lsof ?? '' : file.endsWith('/ps') ? said.ps ?? '' : file === SS ? said.ss ?? '' : ''
       return { code: codes.length ? codes.shift()! : 0, stdout }
     },
-    onPath: (name) => (name === 'ss' ? SS : null),
+    onPath: (name) => (name === 'ss' ? SS : name === 'ps' ? PS : null),
     sockets: async (pid) => { held.push(pid); return said.sockets?.[pid] },
     tty: async (pid) => { ttys.push(pid); return (await table()).find((p) => p.pid === pid)?.tty },
     log: (line) => { logs.push(line) },
@@ -619,6 +619,23 @@ describe('herdr\'s clients on Linux', () => {
     }
     // With no ss nothing is read.
     expect(cases[0][1].held).toEqual([])
+  })
+
+  // NixOS has no /bin/ps: ps is where the PATH has it, as ss is. macOS's is always /bin/ps.
+  it('Linux: ps is the one on the PATH, and with none the ttys are not read; macOS runs /bin/ps', async () => {
+    const nixos = '/run/current-system/sw/bin/ps'
+    const at = (ps: string | null) => ({ onPath: (name: string) => (name === 'ss' ? SS : name === 'ps' ? ps : null) })
+    const table = scene({ [P.terminalA]: 'wezterm-gui' }, [P.clientB])
+    const onNixos = onLinux(table, { ps: recordedTtys(P.clientA) }, at(nixos))
+    expect(await onNixos.outer(LINUX_PANE, P.agent)).toStrictEqual({ app: 'wezterm', tty: '/dev/pts/0', pid: P.clientA })
+    expect(onNixos.calls).toEqual([ssAsked, { ...psAsked(String(P.clientA)), file: nixos }])
+    const noPs = onLinux(table, { ps: recordedTtys(P.clientA) }, at(null))
+    expect(await noPs.outer(LINUX_PANE, P.agent)).toEqual({})
+    expect(noPs.calls).toEqual([ssAsked])
+    expect(noPs.logs).toEqual(notRead('ttys'))
+    const onMac = lookup(at(nixos), [], ONE)
+    expect(await onMac.outer(PANE, 100)).toStrictEqual(IN_TERMINAL)
+    expect(onMac.calls).toEqual([lsofAsked('80,4300'), psAsked('4300')])
   })
 
   it('Linux: a descriptor folder that cannot be read leaves that process out', async () => {
