@@ -183,6 +183,13 @@ describe('still', () => {
     expect(scores(run(check, s, seen(s, [500], { faces: [face(100, A), face(1500, B)] }))).still).toBe(0)
     expect(scores(run(check, s, seen(s, [500], { faces: [face(100, A), face(1501, B)] }))).still).toBe(1)
   })
+
+  it('a step that closes the window at its last ms is not the dial moving by itself', () => {
+    const t = scenario([tap, { ...tap, label: 'next' }])
+    const check: Check = { ...still, dim: 'D2', at: 'next' }
+    expect(scores(run(check, t, seen(t, [500, 1500], { faces: [face(100, A), face(1500, B)] }))).still).toBe(1)
+    expect(scores(run(check, t, seen(t, [500, 1500], { faces: [face(100, A), face(1499, B)] }))).still).toBe(0)
+  })
 })
 
 describe('open', () => {

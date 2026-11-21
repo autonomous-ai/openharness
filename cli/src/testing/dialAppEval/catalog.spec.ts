@@ -52,6 +52,10 @@ describe('the catalog', () => {
     for (const s of ALL) expect(s.platforms, s.id).toEqual(s.id === 'X3' ? ['darwin'] : ['darwin', 'win32', 'linux'])
   })
 
+  it('X3\'s still window ends at its tap, so the tap is not the dial moving by itself', () => {
+    expect(byId('X3').checks.find((c) => c.kind === 'still')).toMatchObject({ after: 'front', at: 'tap' })
+  })
+
   it('C3, CH1, CH2 and XH1 are tier A only, every other scenario (C10, C11, X7, C8, X9, CH3 and XH3 among them) runs in tier B', () => {
     const onlyA = ['C3', 'CH1', 'CH2', 'XH1']
     for (const s of ALL) expect(s.tiers, s.id).toEqual(onlyA.includes(s.id) ? ['a'] : ['a', 'b'])
