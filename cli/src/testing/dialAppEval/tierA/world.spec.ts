@@ -7,6 +7,7 @@ import type { DevicesDeps, startDevices } from '../../../services/devices.js'
 import { claudeSessions, scenario, threads } from '../catalog.js'
 import type { Platform, Scenario } from '../types.js'
 import { installClock } from './clock.js'
+import { machine } from './machine.js'
 import { World } from './world.js'
 
 const S1 = scenario({ id: 'W1', app: 'chatgpt', title: 'Eval world', dims: ['D3'], steps: [], checks: [], probes: [],
@@ -118,5 +119,28 @@ describe("tier A's world records every send, failing closed", () => {
     await deps.orca!.run('/usr/bin/osascript', ['-e', 'eval'], 1_000)
     await deps.codex!.run('/opt/eval/bin/codex', ['login'], { cwd: '/eval-cwd', env: {}, timeoutMs: 1_000 })
     expect(world.gaps).toEqual(['a command tier A does not answer: osascript', 'a command tier A does not answer: codex'])
+  })
+})
+
+describe("tier A's Linux raise", () => {
+  it('is the real raise on a desktop that takes a process: each raise records the pids and classes it is handed', async () => {
+    machine.reset('linux')
+    const { world, deps } = worldOn('linux')
+    // A session's Claude Code in a terminal of its own: the raise walks from the session to the terminal.
+    machine.start({ pid: 40_000, ppid: 1, executable: 'ghostty' })
+    machine.start({ pid: 41_000, ppid: 40_000, executable: 'claude' })
+    // The desktop is found on the raise's first look, as the real one is at start.
+    await world.quiet()
+    const raise = deps.raise!
+    expect([raise.ready({ agent: true }), raise.ready({ agent: false, app: 'claude' }), raise.ready({ agent: false, app: 'codex' })])
+      .toEqual([true, true, false])
+    expect(await raise.raise({ pid: 41_000 })).toBe(true)
+    expect(await raise.raise({ app: 'claude' })).toBe(true)
+    // The ChatGPT app's window has no known class: with no process either, nothing is run.
+    expect(await raise.raise({ app: 'codex' })).toBe(false)
+    expect(world.seen([]).commands.map((c) => c.argv)).toEqual([
+      ['raise', '--pid', '41000', '--pid', '40000'],
+      ['raise', '--class', 'com.anthropic.Claude', '--class', 'com.anthropic.claude'],
+    ])
   })
 })
