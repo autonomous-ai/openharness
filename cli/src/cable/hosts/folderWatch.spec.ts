@@ -1,4 +1,5 @@
-import { realpathSync, watch } from 'node:fs'
+import { EventEmitter } from 'node:events'
+import { existsSync, realpathSync, watch, writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -6,15 +7,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { PathToWatchDeps } from '../../lib/pathToWatch.js'
 import { watchNearest } from './folderWatch.js'
 
-/** Each folder fs.watch is given, in order. */
-const given = vi.hoisted(() => [] as string[])
-vi.mock('node:fs', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:fs')>()
-  const watch = ((path: string, ...rest: unknown[]) => {
-    given.push(path)
-    return (actual.watch as (...args: unknown[]) => unknown)(path, ...rest)
-  }) as typeof actual.watch
-  return { ...actual, watch, default: { ...actual, watch } }
+// Each watch as it is, so a spec can start one whose stream is not live yet, and see the folder each watch is given.
+vi.mock('node:fs', async (real) => {
+  const fs = await real<typeof import('node:fs')>()
+  return { ...fs, watch: vi.fn(fs.watch) }
 })
 /** This computer, unless a case says Windows. */
 const toWatch = vi.hoisted(() => ({ deps: undefined as PathToWatchDeps | undefined }))
@@ -25,7 +21,7 @@ vi.mock('../../lib/pathToWatch.js', async (importOriginal) => {
 
 afterEach(() => {
   toWatch.deps = undefined
-  given.length = 0
+  vi.mocked(watch).mockClear()
 })
 
 /** Makes a change once every watch started so far is live, and again under a new name each time until `count` grows.
@@ -158,9 +154,62 @@ describe('one watch on the nearest existing folder', () => {
     } finally {
       stop()
     }
+    const given = vi.mocked(watch).mock.calls.map(([folder]) => String(folder))
     expect(given.filter((folder) => folder.includes('HXDIAL~1'))).toEqual([])
     expect(given).toContain(realpathSync.native(long))
     expect(names).toContain('b')
     expect(names.some((name) => name !== undefined && written.includes(name))).toBe(true)
+  })
+
+  /** The next watch started: one whose stream is not live yet, so it tells nothing until `tell` is called. */
+  function notLive() {
+    let tell: (event: string, file: string) => void = () => {}
+    vi.mocked(watch).mockImplementationOnce(((_path: string, _options: unknown, listener: typeof tell) => {
+      tell = listener
+      return Object.assign(new EventEmitter(), { close: () => {} })
+    }) as unknown as typeof watch)
+    return { tell: (file: string) => tell('rename', file) }
+  }
+
+  // A caller looks as it starts its watch, and the stream starts after (toldOf): a file made between is told by no
+  // change.
+  it('a file made before its watch is live is found: the watch tells one change once it is', async () => {
+    const t = await mkdtemp(join(tmpdir(), 'fw-'))
+    const file = join(t, 'app.sock')
+    notLive()
+    vi.useFakeTimers()
+    const found: boolean[] = []
+    const stop = watchNearest([t], () => { found.push(existsSync(file)) })
+    try {
+      writeFileSync(file, '')
+      vi.advanceTimersByTime(5_000)
+      expect(found).toEqual([true])
+      vi.advanceTimersByTime(60_000)
+      expect(found).toEqual([true])
+    } finally {
+      stop()
+      vi.useRealTimers()
+    }
+  })
+
+  it('a watch that told a change is live, and tells no other for it; a stopped one tells none', async () => {
+    const t = await mkdtemp(join(tmpdir(), 'fw-'))
+    const live = notLive()
+    vi.useFakeTimers()
+    try {
+      let told = 0
+      const stop = watchNearest([t], () => { told++ })
+      live.tell('one')
+      vi.advanceTimersByTime(60_000)
+      expect(told).toBe(1)
+      stop()
+      notLive()
+      let stopped = 0
+      watchNearest([t], () => { stopped++ })()
+      vi.advanceTimersByTime(60_000)
+      expect(stopped).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
