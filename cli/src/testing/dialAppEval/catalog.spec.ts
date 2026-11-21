@@ -52,6 +52,10 @@ describe('the catalog', () => {
     for (const s of ALL) expect(s.platforms, s.id).toEqual(s.id === 'X3' ? ['darwin'] : ['darwin', 'win32', 'linux'])
   })
 
+  it('X3 starts with another app in front, so its front step brings the ChatGPT app up', () => {
+    expect(byId('X3').world?.front).toBe('other')
+  })
+
   it('X3\'s still window ends at its tap, so the tap is not the dial moving by itself', () => {
     expect(byId('X3').checks.find((c) => c.kind === 'still')).toMatchObject({ after: 'front', at: 'tap' })
   })
