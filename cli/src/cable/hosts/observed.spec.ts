@@ -3231,7 +3231,8 @@ describe('ObservedSource and a pane that only holds the agent', () => {
     expect(s.src.holds('a:a1', other)).toBe(false)
   })
 
-  it('a read that names no host lands as null and places the agent again, telling no change', async () => {
+  // Its held pane's key was listed while the read ran: the row of that pane a listing source keeps comes back.
+  it('a read that names no host lands as null and places the agent again, telling the change once its held pane\'s key goes', async () => {
     const places: Array<Place['ptyOwner']> = []
     const logs: string[] = []
     // As an adapter says once a caller that its pane only holds the agent, once the read landed.
@@ -3247,12 +3248,20 @@ describe('ObservedSource and a pane that only holds the agent', () => {
     const placed = places.length
     await s.reads[0](undefined)
     expect(places.slice(placed)).toEqual([null])
-    expect(s.changes).not.toHaveBeenCalled()
+    expect(s.agent().paneKeys).toBeUndefined()
+    expect(s.changes).toHaveBeenCalledTimes(1)
     expect(logs).toEqual(['[device] a · held'])
     // Its next event places it again on the same caller: said once.
     s.src.ingest(s.ev('turn-start', { hostHints: HINTS }))
     expect(places.at(-1)).toBeNull()
     expect(logs).toEqual(['[device] a · held'])
+
+    // A held pane no listing source keys: nothing listed changed.
+    const unkeyed = holding([{ ...fake('a', unlessMadeBy('a')).adapter, paneKey: undefined }])
+    unkeyed.src.ingest(unkeyed.ev('session-start', { hostHints: HINTS }))
+    unkeyed.changes.mockClear()
+    await unkeyed.reads[0](undefined)
+    expect(unkeyed.changes).not.toHaveBeenCalled()
   })
 })
 
