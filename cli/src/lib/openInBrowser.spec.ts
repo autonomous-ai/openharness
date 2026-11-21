@@ -31,6 +31,11 @@ describe('browserCommand', () => {
   it("opens in Harness OS's own browser when it has one", () => {
     expect(browserCommand('https://a/', 'linux', '/usr/bin/hn-browser')).toEqual({ file: '/usr/bin/hn-browser', args: ['https://a/'] })
   })
+
+  it("never runs a hn-browser off Linux: on Windows its path is a folder of the working folder's drive, which anyone can make", () => {
+    expect(browserCommand('https://a/', 'win32', '/usr/bin/hn-browser')).toEqual({ file: systemProgram('rundll32.exe'), args: ['url.dll,FileProtocolHandler', 'https://a/'] })
+    expect(browserCommand('https://a/', 'darwin', '/usr/bin/hn-browser')).toEqual({ file: 'open', args: ['https://a/'] })
+  })
 })
 
 describe('openInBrowser', () => {
