@@ -65,7 +65,8 @@ export interface TierBWorld {
   readonly d: IsolatedDaemon; readonly desk: Desk; readonly dial: FakeDial
   readonly scenario: Scenario; readonly platform: Platform
   agentId(key: SessionKey): string; session(key: SessionKey): SessionDef
-  deliver(d: Omit<Delivery, 'at'>): void; gap(reason: string): void
+  /** [at]: when it reached its session, ms since the epoch; now when not given. */
+  deliver(d: Omit<Delivery, 'at'>, at?: number): void; gap(reason: string): void
   /** Each run of the open from now on, as it is read: how a fake app sees the links the devices run. */
   onOpen(listener: (run: OpenRun) => void): void
   /** The app in front, as the watch was last told. */
@@ -284,7 +285,7 @@ class World implements TierBWorld {
     if (!found) throw new Error(`scenario ${this.scenario.id} names no session ${key}`)
     return found
   }
-  deliver(d: Omit<Delivery, 'at'>): void { this.deliveries.push({ at: Date.now(), ...d }) }
+  deliver(d: Omit<Delivery, 'at'>, at = Date.now()): void { this.deliveries.push({ at, ...d }) }
   gap(reason: string): void { this.gaps.push(reason) }
   onOpen(listener: (run: OpenRun) => void): void { this.openers.push(listener) }
   title(text: string): void { this.tell({ thread: text }) }

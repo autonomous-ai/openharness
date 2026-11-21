@@ -161,17 +161,29 @@ async function holdMod(world: TierBWorld, key: SessionKey, sessionId: string, si
   }
 }
 
-/** Each prompt its terminal took that no step typed (`!until <name>`): words some path typed into this session. */
+/**
+ * Each prompt [transcript] took that no step typed (`!until <name>`), at the time its own row says (ms since the epoch,
+ * none when the row names none): words some path typed into its session, when they reached it.
+ */
+export function typedPrompts(transcript: string): Array<{ at?: number; text: string }> {
+  const typed: Array<{ at?: number; text: string }> = []
+  for (const line of transcript.split('\n')) {
+    let row: { type?: unknown; timestamp?: unknown; message?: { content?: unknown } }
+    try { row = JSON.parse(line) as typeof row } catch { continue }
+    const prompt = row.type === 'user' ? row.message?.content : undefined
+    if (typeof prompt !== 'string' || /^!until eval-turn-\d+$/.test(prompt)) continue
+    const at = typeof row.timestamp === 'string' ? Date.parse(row.timestamp) : Number.NaN
+    typed.push({ ...(Number.isNaN(at) ? {} : { at }), text: prompt })
+  }
+  return typed
+}
+
+/** The words typed into this session while it ran, read as it leaves. */
 function typedInto(world: TierBWorld, key: SessionKey, live: Live): void {
   let text = ''
   // From its size in bytes as it started.
   try { text = readFileSync(live.transcript).subarray(live.from).toString('utf8') } catch { return }
-  for (const line of text.split('\n')) {
-    let row: { type?: unknown; message?: { content?: unknown } }
-    try { row = JSON.parse(line) as typeof row } catch { continue }
-    const prompt = row.type === 'user' ? row.message?.content : undefined
-    if (typeof prompt === 'string' && !/^!until eval-turn-\d+$/.test(prompt)) world.deliver({ path: 'typed', target: key, text: prompt })
-  }
+  for (const { at, text: words } of typedPrompts(text)) world.deliver({ path: 'typed', target: key, text: words }, at)
 }
 
 /** It leaves as Claude Code does when the app ends it: its open turn over, its SessionEnd hook, then its process. */
