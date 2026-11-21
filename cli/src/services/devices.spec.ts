@@ -3453,6 +3453,49 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(orcaRuns.at(-1)).toEqual(['tmux', ['select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], 10_000])
   })
 
+  // The same on Linux, with the client in a WezTerm pane: WezTerm's tab adapter finds that pane by the client's tty
+  // (wezterm.ts createWeztermTabAdapter). The list's own forms are wezterm.spec.ts's.
+  it('an agent in the person\'s tmux whose client is in a WezTerm pane: a rest with WezTerm in front lists WezTerm\'s panes, activates the client\'s, then selects the tmux pane', async () => {
+    readers.processes.mockResolvedValue([
+      { pid: 4242, ppid: 4000, executable: 'claude' }, { pid: 4000, ppid: 1, executable: 'zsh' },
+      // The client, in its WezTerm pane's shell.
+      { pid: 4300, ppid: 4299, executable: 'tmux' }, { pid: 4299, ppid: 4298, executable: 'zsh' },
+      { pid: 4298, ppid: 1, executable: 'wezterm-gui' },
+    ])
+    const panes = JSON.stringify([{ tab_id: 0, pane_id: 0, tty_name: '/dev/pts/2' }, { tab_id: 1, pane_id: 1, tty_name: '/dev/pts/4' }])
+    const listener = fakeListener()
+    const { port } = startHere({ listen: listener.listen, orca: { ...orca, onPath: (name: string) => `/opt/${name}/bin/${name}`,
+      run: async (file, args, timeoutMs) => {
+        orcaRuns.push([file, args, timeoutMs])
+        const stdout = args[0] === 'display-message' ? '4000|work|\n' : args[0] === 'list-clients' ? '1794700050|4300|/dev/pts/4\n'
+          : args[2] === 'list' ? panes : ''
+        return { code: 0, stdout }
+      } } })
+    port.observed(hook('session-start', { hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux' } }))
+    attach(port)
+    await vi.waitFor(() => expect(said()).toEqual(['[device] tmux client · found']))
+    expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual(expect.objectContaining({ id: 'wezterm', count: 1 }))
+    await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+    const wezterm = '/opt/wezterm/bin/wezterm'
+    // Another app in front: neither WezTerm nor tmux is touched.
+    let runs = orcaRuns.length
+    expect(listener.front('kitty')).toBeUndefined()
+    host().swipeEnded(ID, 'rest')
+    await vi.waitFor(() => expect(said().filter((line) => line.startsWith('[device] swipe ·'))).toHaveLength(1))
+    expect(orcaRuns.slice(runs)).toEqual([])
+    runs = orcaRuns.length
+    expect(listener.front('wezterm')).toBeUndefined()
+    host().swipeEnded(ID, 'rest')
+    await swiped('ok')
+    expect(orcaRuns.slice(runs)).toEqual([
+      [wezterm, ['cli', '--no-auto-start', 'list', '--format', 'json'], 10_000],
+      [wezterm, ['cli', '--no-auto-start', 'activate-pane', '--pane-id', '1'], 10_000],
+      // tmux's switch checks its pane's process first.
+      ['tmux', expect.arrayContaining(['display-message', '%3']), 10_000],
+      ['tmux', ['select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], 10_000],
+    ])
+  })
+
   // Diego's Terminal tab B ran `herdr` (2026-11-19): Claude Code in a pane of his herdr server, whose hints name no app.
   // The lookup's own runs are this spec's; its walk is herdrOuter.spec.ts's.
   describe('an agent in the person\'s herdr, attached from a Terminal tab', () => {
