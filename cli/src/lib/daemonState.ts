@@ -126,11 +126,6 @@ export function removePidFileIf(pid: number | undefined, deps: { readPid: () => 
  *  the socket's path. */
 const SERVED_ELSEWHERE = ' · another Harness daemon serves this data folder'
 
-/** How a command fails: say why, let go of the pid file if it is this process's, and exit. Commands alone fail
- *  this way, on the terminal of the person who ran one; a daemon's start fails through [failForegroundStart]. */
-export const onError = (err: unknown, code = 1): never =>
-  exitSaying(err, code, () => console.error('Failed to start adapter:', err))
-
 /** How a daemon's start fails: `harness start --foreground`, which launchd and systemd run, and the core's, which does
  *  not stay up (core/main.ts), also one a command runs in its own process (`runCoreInForeground`). What either prints
  *  is the daemon's log, which Export logs sends. So an error says its kind, never its words, its stack or a path; the
@@ -141,11 +136,14 @@ export const failForegroundStart = (err: unknown, code = 1): never =>
     console.error(`Failed to start adapter: ${errorKind(err)}${why}`)
   })
 
-function exitSaying(err: unknown, code: number, sayFault: () => void): never {
+/** How a start or a command fails: say why ([sayFault], or which trust file cannot be read and why), let go of the pid
+ *  file if it is this process's, and exit. A command's own way is lib/commandFailure.ts `onError`. */
+export function exitSaying(err: unknown, code: number, sayFault: () => void): never {
   // A trust file that cannot be read is the person's to move aside, not a fault in Harness: no stack, and the
-  // file's full path is in `harness status`, kept out of the error itself.
+  // file's full path is in `harness status`, kept out of the error itself. Said from its fields, its own file's name
+  // and why, not its message: a daemon's start says it in the daemon's log too.
   if (err instanceof StateFileUnreadable) {
-    console.error(`✗ ${err.message}`)
+    console.error(`✗ ${err.base} cannot be read (${err.failure})`)
     console.error('  harness status shows where it is')
   } else {
     sayFault()

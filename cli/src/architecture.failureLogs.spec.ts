@@ -72,6 +72,7 @@ const TERMINAL = [
   'engines/hooksCommand.ts', // harness hooks, from cli.ts alone: the entries a person adds to Hermes by hand
   'lib/autonomous-device/addonCommand.ts', // harness addon, from cli.ts alone: its `print` is the command's JSON answer
   'lib/apiCommand.ts', // harness api
+  'lib/commandFailure.ts', // onError, how a command fails, from cli.ts alone; a daemon's start fails in lib/daemonState.ts
   'lib/newCommand.ts', // harness new
   'lib/flash.ts', // harness flash
   'lib/daemonStop.ts', // harness stop
