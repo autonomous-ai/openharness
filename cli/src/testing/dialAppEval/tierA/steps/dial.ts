@@ -1,10 +1,11 @@
-// Tier A's steps on the dial: a tap, a swipe, and its cable pulled and plugged in again (Task 13 builds them).
-import { StepNotBuilt } from '../../types.js'
+// Tier A's steps on the dial: a tap, a swipe, and its cable pulled and plugged in again, through the loopback dial on
+// the devices' real cable.
 import type { StepHandler } from '../world.js'
 
 export const dialSteps: { tap: StepHandler<'tap'>; swipe: StepHandler<'swipe'>; unplug: StepHandler<'unplug'>; replug: StepHandler<'replug'> } = {
-  tap: async () => { throw new StepNotBuilt('tap', 'a') },
-  swipe: async () => { throw new StepNotBuilt('swipe', 'a') },
-  unplug: async () => { throw new StepNotBuilt('unplug', 'a') },
-  replug: async () => { throw new StepNotBuilt('replug', 'a') },
+  tap: async (world, step) => { world.dial.tap(world.agentId(step.session)) },
+  // The rest that opens the session after a swipe is the cable's own timer: the step only turns the dial.
+  swipe: async (world, step) => { world.dial.swipe(world.agentId(step.session)) },
+  unplug: async (world) => { world.dial.unplug() },
+  replug: async (world) => { world.dial.replug() },
 }
