@@ -21,7 +21,9 @@ afterEach(() => {
 const scenario: Scenario = {
   id: 'S1', app: 'claude', title: 'Eval sessions', dims: ['D4'], platforms: ['darwin', 'win32', 'linux'], tiers: ['a'],
   heldOut: false, steps: [], checks: [], probes: [],
-  sessions: [claudeSession('a', 60_000), claudeSession('b', 120_000), thread('t1', 60_000), thread('c1', 180_000, { cli: true })],
+  sessions: [claudeSession('a', 60_000), claudeSession('b', 120_000), thread('t1', 60_000), thread('c1', 180_000, { cli: true }),
+    // A folder with a control character, which the core takes as forged.
+    claudeSession('x', 60_000, { cwd: '/work/eval-\u0007' })],
 }
 
 /** A world whose devices record what they are told, and hold each mod poll until the test answers it. */
@@ -152,6 +154,12 @@ describe("tier A's live sessions", () => {
       readLastAnswer(engine, machine.owners.get(sessionId)!.transcriptPath!, { roots: [root], maxBytes: 262_144, deadlineMs: 1_000 })
     expect(await read('claude', a.id, w.world.folders.claudeProjects)).toBeUndefined()
     expect(await read('codex', t1.id, w.world.folders.codexSessions)).toBeUndefined()
+  })
+
+  it('a hook the core would refuse fails its step, and the devices are told nothing', async () => {
+    const w = fakeWorld('darwin')
+    await expect(w.hook('x', 'start')).rejects.toThrow(/the core refuses/)
+    expect(w.told).toEqual([])
   })
 
   it('needs-input tells the devices, and a permission in the Claude app is also the mod\'s asked', async () => {
