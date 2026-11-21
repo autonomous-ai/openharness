@@ -227,10 +227,13 @@ function openParts(check: CheckOf<'open'>, world: World, w: Window | undefined, 
   ]
 }
 
-/** The row's state as the device cards set it, as HarnessSource.noteCard reads them; a restored recap is no news. */
+/**
+ * The row's state as the device cards set it, as HarnessSource.noteCard reads them; a restored recap is no news. An open
+ * question stays up on the dial until its close or the turn's end: a turn card sent with it is no news either.
+ */
 function stateAfter(message: Record<string, unknown>, was: string): string | undefined {
   switch (message.t) {
-    case 'turn.started': return 'working'
+    case 'turn.started': return was === 'needs-you' ? undefined : 'working'
     case 'question': return 'needs-you'
     case 'question.close': return was === 'needs-you' ? 'working' : undefined
     case 'turn.done': return 'done'
