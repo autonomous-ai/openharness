@@ -78,9 +78,17 @@ class CliE2eWorkflowTests(unittest.TestCase):
         download = [step for step in backend if miss in step and "MongoBinary.getPath()" in step
                     and "require('mongodb-memory-server')" in step]
         self.assertEqual(len(download), 1)
+        # mongodb-memory-server retries only 416, 429, 500 and 503: a 504 must not fail every shard at setup, where
+        # only the real-backend specs need mongod. A bounded retry, each attempt logged, then a warning and on.
+        download_id = re.search(r"(?m)^ *id: ([\w-]+)$", download[0])
+        self.assertTrue(download_id)
+        self.assertRegex(download[0], r"(?m)^ *continue-on-error: true$")
+        self.assertRegex(download[0], r"ATTEMPTS=3\b")
+        self.assertIn("sleep ", download[0])
+        self.assertIn("::warning", download[0])
         save, saved_key = cache("save")
         self.assertEqual(saved_key, key)
-        self.assertIn(miss, save)
+        self.assertIn(f"steps.{download_id[1]}.outcome == 'success'", save)
         self.assertIn("github.ref == 'refs/heads/main'", save)
 
     def test_the_dial_hosts_job_is_one_reusable_workflow(self):
