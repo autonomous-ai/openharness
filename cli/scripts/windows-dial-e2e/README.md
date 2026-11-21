@@ -108,12 +108,14 @@ Run over SSH as the account whose console session it is, from the folder it is i
 
 It registers a one-shot task under this account with an interactive logon and no stored password, and starts the script
 through Windows' own `conhost.exe --headless`, so no window shows and nothing is compiled. Exit 3: this account has no
-console session. Exit 4: this Windows has no `quser.exe` to find it with (Windows Home). A task still running at its timeout is ended with everything it started.
+console session, as the task says: an interactive task runs only in its account's session, so with none it has not
+started within 20 s (last result `0x41303`, "has not yet run"), and it is deleted with its files. The same on every
+edition: Windows Home has no `quser.exe`. A task still running at its timeout is ended with everything it started.
 
-It uses no CIM, which an SSH logon's network token is denied (the `ScheduledTasks` cmdlets go through it too):
-`quser.exe` finds this account's console session, the Task Scheduler's own `Schedule.Service` COM object registers,
-runs, stops and deletes the task, and the wrapper writes its pid to `<name>.pid`, by which `taskkill /t` ends what it
-started.
+It uses no CIM, which an SSH logon's network token is denied (the `ScheduledTasks` cmdlets go through it too): the Task
+Scheduler's own `Schedule.Service` COM object registers, runs, stops and deletes the task, and the wrapper writes its
+pid to `<name>.pid`, by which `taskkill /t` ends what it started. taskkill lists processes through WMI too, so over SSH
+it says `Access denied` and ends nothing: it runs as a task of its own in the session (`<name>-end`, no window).
 
 ## The VM
 

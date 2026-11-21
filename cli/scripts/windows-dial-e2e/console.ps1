@@ -11,8 +11,7 @@
 #   -NoWait: prints the task's name and returns; the log grows as the script writes, to be read over SSH.
 #   -Stop <name>: waits up to 90 s for that task to end (a desk's quit restores the dial's settings, stops its daemon and
 #     looks at the dial once more), then ends what is left, prints its log and `exit <code>`, and deletes it all.
-# -ArgsJson is a JSON array of strings, passed to the script as its arguments. Exit 3: this account has no console session;
-# exit 4: this Windows has no quser.exe to find it with (Windows Home).
+# -ArgsJson is a JSON array of strings, passed to the script as its arguments. Exit 3: this account has no console session.
 param(
   [string]$Script,
   [string]$ArgsJson = '[]',
@@ -39,17 +38,39 @@ function Files([string]$Name) {
   @{ wrapper = Join-Path $dir "$Name.ps1"; call = Join-Path $dir "$Name.json"; log = Join-Path $dir "$Name.log"; done = Join-Path $dir "$Name.done"; doneTemp = Join-Path $dir "$Name.done.tmp"; pid = Join-Path $dir "$Name.pid" }
 }
 
+# A one-shot task under this account, started now: TASK_CREATE with TASK_LOGON_INTERACTIVE_TOKEN, no password, so it
+# runs only in the session signed in.
+function Start-Interactive([string]$Name, [string]$Program, [string]$Arguments, [TimeSpan]$Limit) {
+  $task = $service.NewTask(0)
+  $action = $task.Actions.Create(0) # TASK_ACTION_EXEC
+  $action.Path = $Program
+  $action.Arguments = $Arguments
+  $task.Principal.RunLevel = 0 # TASK_RUNLEVEL_LUA
+  $task.Settings.ExecutionTimeLimit = [Xml.XmlConvert]::ToString($Limit)
+  $task.Settings.DisallowStartIfOnBatteries = $false
+  $task.Settings.StopIfGoingOnBatteries = $false
+  $task.Settings.MultipleInstances = 2 # TASK_INSTANCES_IGNORE_NEW
+  $tasks.RegisterTaskDefinition($Name, $task, 2, $me.Name, $null, 3) | Out-Null
+  $tasks.GetTask($Name).Run($null) | Out-Null
+}
+
 # The task, and what its script started: the task's PowerShell runs the wrapper, which writes its pid first, and a desk
 # and its daemon run under it, whose tree taskkill ends while its parents still stand.
 function End-Task([string]$Name) {
-  # taskkill says on stderr that a process has gone, which is no failure here.
-  $ErrorActionPreference = 'Continue'
   $pidFile = (Files $Name).pid
   if (Test-Path -LiteralPath $pidFile) {
     $id = [int]"$(Get-Content -LiteralPath $pidFile -Raw)".Trim()
     $p = if ($id) { Get-Process -Id $id -ErrorAction SilentlyContinue }
     # A pid is reused once its process ends, by one started after the file was written: never that one's tree.
-    if ($p -and $p.StartTime -le (Get-Item -LiteralPath $pidFile).LastWriteTime) { & taskkill.exe /pid $id /t /f 2>&1 | Out-Null }
+    if ($p -and $p.StartTime -le (Get-Item -LiteralPath $pidFile).LastWriteTime) {
+      # taskkill lists a tree through WMI, which a network logon is denied (over SSH it says "Access denied" and ends
+      # nothing): it runs in the session, as a task of its own with no window, and ends the wrapper last.
+      $end = "$Name-end"
+      $kill = '--headless "' + (Join-Path $system 'taskkill.exe') + '" /pid ' + $id + ' /t /f'
+      try { Start-Interactive $end (Join-Path $system 'conhost.exe') $kill (New-TimeSpan -Minutes 1) } catch {}
+      if (-not $p.WaitForExit(20000)) { Write-Output "the task's processes did not end" }
+      try { $tasks.DeleteTask($end, 0) } catch {}
+    }
   }
   # Gone already is no failure either.
   try { $tasks.GetTask($Name).Stop(0) } catch {}
@@ -80,17 +101,6 @@ if ($path -notmatch '\.ps1$' -or -not (Test-Path -LiteralPath $path -PathType Le
 $words = @()
 try { foreach ($word in (ConvertFrom-Json $ArgsJson)) { if ($word -isnot [string]) { throw 'not a string' }; $words += $word } }
 catch { Write-Output 'console.ps1: -ArgsJson takes a JSON array of strings'; exit 2 }
-
-# The account at the console: quser reads the sessions through the WTS API, which a network logon may use, and names
-# each account without its domain. It says "No User exists" on stderr, exit 1, when nobody is signed in: no console
-# session either. The person's name is never printed.
-$user = $me.Name.Split('\')[-1]
-$quser = Join-Path $system 'quser.exe'
-# Windows Home has none: say so, not that nobody is signed in.
-if (-not (Test-Path -LiteralPath $quser -PathType Leaf)) { Write-Output "console.ps1: this Windows has no $quser to find the console session with"; exit 4 }
-$sessions = & { $ErrorActionPreference = 'Continue'; & $quser 2>$null }
-# A row: '>' on the session quser runs in, else a space, the account, the session's name, its id.
-if (-not (@($sessions) -match ('^.' + [regex]::Escape($user) + '\s+console\s+\d'))) { Write-Output 'this account has no console session'; exit 3 }
 
 $name = 'harness-dial-check-' + [guid]::NewGuid().ToString('N')
 $files = Files $name
@@ -128,16 +138,7 @@ try {
 '@
 
 $shell = Join-Path $system 'WindowsPowerShell\v1.0\powershell.exe'
-$task = $service.NewTask(0)
-$action = $task.Actions.Create(0) # TASK_ACTION_EXEC
-$action.Path = Join-Path $system 'conhost.exe'
-$action.Arguments = '--headless "' + $shell + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $files.wrapper + '"'
-$task.Principal.RunLevel = 0 # TASK_RUNLEVEL_LUA
 $limit = if ($NoWait) { New-TimeSpan -Hours 8 } else { New-TimeSpan -Seconds ($TimeoutSec + 60) }
-$task.Settings.ExecutionTimeLimit = [Xml.XmlConvert]::ToString($limit)
-$task.Settings.DisallowStartIfOnBatteries = $false
-$task.Settings.StopIfGoingOnBatteries = $false
-$task.Settings.MultipleInstances = 2 # TASK_INSTANCES_IGNORE_NEW
 $keep = $false
 $code = 124
 # Opened before the first file is written: a registration the Task Scheduler refuses still deletes them.
@@ -146,22 +147,26 @@ try {
   # curly, double) in a path or an argument cannot end a string there.
   [IO.File]::WriteAllText($files.call, (ConvertTo-Json -Compress -InputObject @{ script = $path; args = $words }), $utf8)
   $wrapper | Set-Content -LiteralPath $files.wrapper -Encoding utf8
-  # TASK_CREATE, under this account with TASK_LOGON_INTERACTIVE_TOKEN: no password, it runs only in the session signed in.
-  $tasks.RegisterTaskDefinition($name, $task, 2, $me.Name, $null, 3) | Out-Null
-  $tasks.GetTask($name).Run($null) | Out-Null
-  if ($NoWait) { $keep = $true; Write-Output $name; $code = 0; return }
-  $deadline = (Get-Date).AddSeconds($TimeoutSec)
+  Start-Interactive $name (Join-Path $system 'conhost.exe') ('--headless "' + $shell + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $files.wrapper + '"') $limit
+  # Whether this account is signed in, the task itself says, on every edition (Windows Home has no quser.exe): an
+  # interactive task runs only in its account's session, and with none it stays "has not yet run"
+  # (SCHED_S_TASK_HAS_NOT_RUN). The wrapper's first lines write the log.
   $startBy = (Get-Date).AddSeconds(20)
-  while (-not (Test-Path -LiteralPath $files.done)) {
-    if ((Get-Date) -gt $deadline) { Write-Output "timed out after $TimeoutSec s"; break }
-    if ((Get-Date) -gt $startBy -and -not (Test-Path -LiteralPath $files.log)) {
-      Write-Output "the task did not start (last result $($tasks.GetTask($name).LastTaskResult))"
-      break
+  while (-not (Test-Path -LiteralPath $files.log) -and (Get-Date) -lt $startBy) { Start-Sleep -Milliseconds 300 }
+  if (-not (Test-Path -LiteralPath $files.log)) {
+    $result = $tasks.GetTask($name).LastTaskResult
+    if ($result -eq 0x41303) { Write-Output 'this account has no console session'; $code = 3 }
+    else { Write-Output "the task did not start (last result $result)" }
+  } elseif ($NoWait) { $keep = $true; Write-Output $name; $code = 0; return }
+  else {
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while (-not (Test-Path -LiteralPath $files.done)) {
+      if ((Get-Date) -gt $deadline) { Write-Output "timed out after $TimeoutSec s"; break }
+      Start-Sleep -Milliseconds 300
     }
-    Start-Sleep -Milliseconds 300
+    Get-Content -LiteralPath $files.log -Encoding UTF8
+    $code = Exit-Code $files.done
   }
-  if (Test-Path -LiteralPath $files.log) { Get-Content -LiteralPath $files.log -Encoding UTF8 }
-  $code = Exit-Code $files.done
 } finally {
   if (-not $keep) {
     End-Task $name

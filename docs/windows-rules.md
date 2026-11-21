@@ -264,10 +264,13 @@ Claude Code's plugins on Windows (Claude Code 2.1.328 and 2.1.329, VM, 2026-11-2
 - Test in the person's session (session 1) and in the signed build. Windows behaves differently in session 0 and for an
   unsigned file.
 - **Over SSH a standard user is denied CIM.** SSH is a network logon, and CIM refuses it: `Get-CimInstance` and the
-  `ScheduledTasks` cmdlets, which go through CIM, fail. A test tool finds the console session with System32's
-  `quser.exe` (the WTS API) and starts its task through the Task Scheduler's own COM object (`Schedule.Service`), an
-  interactive logon with no password stored (`cli/scripts/windows-dial-e2e/console.ps1`). Test: the VM run of
-  `console.ps1`, as the VM's standard test user.
+  `ScheduledTasks` cmdlets, which go through CIM, fail, and so does `taskkill` (it lists processes through WMI: `Access
+  denied`, nothing ended), while `Stop-Process` on one pid works. A test tool starts its task through the Task
+  Scheduler's own COM object (`Schedule.Service`), an interactive logon with no password stored, and knows the account
+  is signed in when the task starts: one that stays "has not yet run" (`0x41303`) has no session to run in. Not
+  `quser.exe`: Windows Home has none. A tree is ended by `taskkill /t` in a task of its own in the session
+  (`cli/scripts/windows-dial-e2e/console.ps1`). Test: the VM run of `console.ps1`, as the VM's standard test user and as
+  the user at its console.
 - Smart App Control blocks a local `flutter build windows` (Bad Image on `flutter_windows.dll`). To show a Dart-only
   change before a release, copy the installed signed version folder and replace only `data\app.so` and
   `data\flutter_assets` with a release build made by the same Flutter version (`FLUTTER_VERSION` in
