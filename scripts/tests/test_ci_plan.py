@@ -1950,6 +1950,14 @@ class FullCheckoutTests(unittest.TestCase):
                    if test.startswith("test_") and re.search(r"(?m)^\s+full_checkout\(", inspect.getsource(method))}
         self.assertEqual(needing, set(self.NAMES))
 
+    def test_the_scan_job_runs_them_from_this_list(self):
+        # A second list in ci.yml fell behind this one (#4529 added a fifth name, the job ran four): it reads this one.
+        job = planner.ci_jobs((REPOSITORY / ".github/workflows/ci.yml").read_text())["cross-read-scan"]
+        self.assertIn("FullCheckoutTests.NAMES", job)
+        for name in self.NAMES:
+            with self.subTest(name=name):
+                self.assertNotIn(name.rsplit(".", 1)[1], job)
+
     def test_the_scan_jobs_tests_fail_without_a_full_checkout_and_skip_elsewhere(self):
         # A skip exits 0: in the job that exists to run them, a checkout without their files would pass as green.
         for name, result in self.results_without_a_checkout("1").items():
