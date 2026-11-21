@@ -3175,13 +3175,15 @@ describe('ObservedSource and a pane that only holds the agent', () => {
     expect(s.agent().name).toBe('Build')
   })
 
-  it('a held pane\'s key folds no source\'s row once the maker is read, and paneOf names no held pane', async () => {
+  it('a held pane\'s key folds no source\'s row once the maker is read, and neither paneOf nor byPane finds a held pane', async () => {
     const s = holding([fake('a', unlessMadeBy('a')).adapter, fake('b', () => false).adapter])
     s.src.ingest(s.ev('session-start', { hostHints: HINTS }))
     await s.reads[0]('x')
     expect(s.agent().paneKeys).toEqual(['b:b1'])
     expect(s.src.paneOf(s.agent().id, 'a')).toBeUndefined()
+    expect(s.src.byPane('a', 'a1')).toBeUndefined()
     expect(s.src.paneOf(s.agent().id, 'b')).toBe('b1')
+    expect(s.src.byPane('b', 'b1')?.id).toBe(s.agent().id)
     // Resumed on a terminal a's host made: that pane is its own.
     s.src.ingest(s.ev('session-start', { hostHints: HINTS, callerPid: 200 }))
     await s.reads[1]('a')
