@@ -326,6 +326,14 @@ describe('voice', () => {
   it('a delivery before `after` is not this step\'s', () => {
     expect(scores(run(voice, s, seen(s, [500], { deliveries: [to(400, 'a')] }))).reached).toBe(0)
   })
+
+  it('a refused voice scores 0 with the dial\'s voice frames in the window and no delivery, never their text', () => {
+    const frames = [frame(400, { t: 'voice.error', message: 'Before' }), frame(700, { t: 'voice.error', message: 'Eval refusal' }),
+      frame(800, { t: 'voice.transcript', text: 'Eval hello' })]
+    const results = run(voice, s, seen(s, [500], { frames }))
+    expect(results.map((r) => [r.check, r.score])).toEqual([['v.reached', 0], ['v.once', 0], ['v.exact', 0]])
+    expect(results[0]!.evidence).toEqual(['voice.error at 700', 'voice.transcript at 800', 'no delivery'])
+  })
 })
 
 describe('recap', () => {
