@@ -73,6 +73,12 @@ describe.skipIf(WIN32)('the dial eval, tier B: the Claude app', () => {
     driver = new TierBDriver({ claude: claudeSteps })
   })
 
+  it('a scenario refused at its start is a run that says why, with nothing seen', async () => {
+    const run = await runScenario(driver, { ...SCENARIOS.find((s) => s.id === 'C1')!, world: { chatgptInstalled: false } }, HOST)
+    expect(run.error).toContain('no ChatGPT app')
+    expect(driver.seen().frames).toEqual([])
+  })
+
   it('the fake Claude app attaches the session it resumes from its link, as the mod does for the session the app shows', async () => {
     // C8's resting, resumable session, tapped.
     const c8 = SCENARIOS.find((s) => s.id === 'C8')!
