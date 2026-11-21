@@ -91,9 +91,10 @@ typedef struct {
     char pending_focus[ID_MAX];
     uint32_t pending_focus_ms;
     // A pick (POD_A_PICK_APP) whose ring is not here yet: the app picked ("" none) and when. Its room opens on the feed that
-    // brings the ring (synced), within POD_LANDING_MS; a new contact, a link drop, an apps frame showing another app and a
-    // host focus that lands end the wait. `landed`: the picked app whose room opened (at once or on its ring); within
-    // POD_LANDING_MS of landing_ms a focus on one of its agents is the Mac answering the pick, not an echo of the tap.
+    // brings the ring (synced), within POD_LANDING_MS; a new contact, the side button, a link drop, an apps frame showing
+    // another app and a host focus that lands end the wait. `landed`: the picked app whose room opened (at once or on its
+    // ring); within POD_LANDING_MS of landing_ms a focus on one of its agents is the Mac answering the pick, not an echo of
+    // the tap.
     char landing[CABLE_APP_ID_MAX], landed[CABLE_APP_ID_MAX];
     uint32_t landing_ms;
     // The software update (see pod_ui_ota): while on, the stack stays as it was and ph_view_ota is what is drawn.
@@ -142,7 +143,7 @@ pod_out_t pod_ui_focus(pod_ui_t *, const char *agent_id, uint32_t now_ms);
 // tab 0 empty, the person already elsewhere, a touch or the side button (pod_ui_navigated), or a host focus that landed.
 // True when it entered. Call after every model change. An update and a contact in progress: false.
 bool pod_ui_start(pod_ui_t *, uint32_t now_ms);
-// The person navigated (the side button): the start never runs over them. Touches do this themselves.
+// The person navigated (the side button): the start never runs over them, and a pick's wait ends. Touches do this themselves.
 void pod_ui_navigated(pod_ui_t *);
 
 // The roster's second source, player.library. A sweep walks the pages: begin, one pod_ui_library_page per page

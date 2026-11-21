@@ -808,7 +808,11 @@ pod_out_t pod_ui_focus(pod_ui_t *u, const char *agent_id, uint32_t now_ms)
     return none;
 }
 
-void pod_ui_navigated(pod_ui_t *u) { u->started = true; }
+void pod_ui_navigated(pod_ui_t *u)
+{
+    u->started = true;
+    u->landing[0] = u->landed[0] = 0;   // a press is the person driving, as a touch is
+}
 
 bool pod_ui_start(pod_ui_t *u, uint32_t now_ms)
 {
