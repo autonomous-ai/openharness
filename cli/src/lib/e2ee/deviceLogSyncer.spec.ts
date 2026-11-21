@@ -1028,6 +1028,23 @@ describe('DeviceLogSyncer — another key holds this machine\'s id', () => {
     expect(t.calls.conflict).toHaveBeenCalledWith(expect.objectContaining({ afterJoin: true }))
   })
 
+  it('names the holder by its fingerprint in the log, never the name a person gave it', async () => {
+    const lines: string[] = []
+    const before = setup({ log: (l) => lines.push(l) })
+    before.backend.add(box2, 'machine', MID_HOLDER, 'sentinel-old')
+    await before.syncer.register()
+    const after = setup({ log: (l) => lines.push(l) })
+    after.backend.add(phone, 'viewer', '', 'phone')
+    await after.syncer.refresh()
+    after.backend.add(box2, 'machine', MID_HOLDER, 'sentinel-new')
+    await after.syncer.register()
+    expect(after.calls.conflict).toHaveBeenCalledWith(expect.objectContaining({ label: 'sentinel-new' }))
+    expect(lines.join('\n')).not.toContain('sentinel')
+    const who = fingerprint(b64d(box2.pub))
+    expect(lines.filter((l) => l.includes(`by another key on your account: ${who} — `))).toHaveLength(1)
+    expect(lines.filter((l) => l.includes(`after it joined: ${who} — `))).toHaveLength(1)
+  })
+
   it('clears when the holder is removed, and this machine registers itself', async () => {
     const t = setup()
     t.backend.add(box2, 'machine', MID_HOLDER, 'old-install')
@@ -2365,9 +2382,23 @@ describe('DeviceLogSyncer — "It\'s mine", once for the account', () => {
     expect(t.syncer.list().members.find((m) => m.pub === phone.pub)).toMatchObject({ pending: false, confirmed: { by: box2.pub, label: 'box2', at: 5_000 } })
     expect(t.syncer.list().members.find((m) => m.pub === box2.pub)?.confirmed).toBeUndefined()
     expect(t.calls.changed).toHaveBeenCalled()
-    expect(lines.some((l) => l.includes('confirmed as yours on box2'))).toBe(true)
+    expect(lines).toContain(`[devlog] ${fingerprint(b64d(phone.pub))} was confirmed as yours on ${fingerprint(b64d(box2.pub))}: no longer new here`)
     // It stays trusted as it was: an acknowledgement adds no trust and takes none away.
     expect(t.calls.drop).not.toHaveBeenCalledWith(phone.pub)
+  })
+
+  it('logs the confirmed key and the one that confirmed it by fingerprint, never the names a person gave them', async () => {
+    const lines: string[] = []
+    const t = setup({ acks: true, log: (l) => lines.push(l) })
+    t.backend.add(box2, 'machine', MID2, 'sentinel-box')
+    await t.syncer.register()
+    t.backend.add(phone, 'viewer', '', 'sentinel-phone')
+    await t.syncer.refresh()
+    t.backend.acks.push(t.backend.ack(box2, phone.pub))
+    await t.syncer.refresh()
+    expect(t.syncer.list().members.find((m) => m.pub === phone.pub)?.confirmed).toMatchObject({ label: 'sentinel-box' })
+    expect(lines.join('\n')).not.toContain('sentinel')
+    expect(lines).toContain(`[devlog] ${fingerprint(b64d(phone.pub))} was confirmed as yours on ${fingerprint(b64d(box2.pub))}: no longer new here`)
   })
 
   it('asks from just below the oldest key new here, and not at all while nothing is new', async () => {
@@ -2560,6 +2591,19 @@ describe('DeviceLogSyncer — "It\'s mine", once for the account', () => {
       expect(await u.syncer.dismiss({ pub: phone.pub, confirm: true })).toBe(false)
       expect(t.backend.postAck).not.toHaveBeenCalled()
       expect(u.backend.postAck).not.toHaveBeenCalled()
+    })
+
+    it('says which key it could not vouch for by its fingerprint, never the name a person gave it', async () => {
+      const lines: string[] = []
+      const t = setup({ acks: true, log: (l) => lines.push(l) })
+      t.backend.add(box2, 'machine', MID2, 'box2')
+      await t.syncer.register()
+      t.backend.add(phone, 'viewer', '', 'sentinel-phone')
+      await t.syncer.refresh()
+      t.backend.acksRoute = false
+      expect(await t.syncer.dismiss({ pub: phone.pub, confirm: true })).toBe(false)
+      expect(lines.join('\n')).not.toContain('sentinel')
+      expect(lines).toContain(`[devlog] could not tell your other devices that ${fingerprint(b64d(phone.pub))} is yours: they still show it as new`)
     })
 
     it('a backend that does not take it (or predates it) leaves the dismissal here, and says so', async () => {
