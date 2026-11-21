@@ -259,7 +259,7 @@ export const MAIN: Scenario[] = [
       { label: 'tap', kind: 'tap', session: 't2' },
     ],
     checks: [
-      { id: 'still', kind: 'still', dim: 'D2', ms: 5 * S, after: 'front' },
+      { id: 'still', kind: 'still', dim: 'D2', ms: 5 * S, after: 'front', at: 'tap' },
       { id: 'ringKept', kind: 'ring', dim: 'D7', page: 'chatgpt', expect: ['t1', 't2'], after: 'front' },
       { id: 'openKept', kind: 'open', dim: 'D7', session: 't2', link: true, after: 'tap' },
     ],
