@@ -104,6 +104,18 @@ describe('findGh on Windows', () => {
   })
 })
 
+describe("Scoop's root for everyone", () => {
+  it('is never looked in for git or gh: any user of the computer can fill it', async () => {
+    // Users may make C:\ProgramData\scoop, a Harness guest included; a real global install puts its shims on PATH.
+    const disk = windowsDisk('C:\\ProgramData\\scoop\\shims\\git.exe', 'C:\\ProgramData\\scoop\\shims\\gh.exe',
+      'D:\\GlobalScoop\\shims\\git.exe', 'D:\\GlobalScoop\\shims\\gh.exe')
+    for (const env of [{ ProgramData: 'C:\\ProgramData', PATH: '' }, { SCOOP_GLOBAL: 'D:\\GlobalScoop', PATH: '' }]) {
+      expect(await findGit({ platform: 'win32', env, isFile: disk.isFile })).toBeNull()
+      expect(await findGh({ platform: 'win32', env, isFile: disk.isFile })).toBeNull()
+    }
+  })
+})
+
 describe.each(['darwin', 'linux'] as const)('findGit and findGh on %s', (platform) => {
   it("takes the first absolute PATH folder's program before asking the login shell", async () => {
     const tools = folderWith('git', 'gh')
