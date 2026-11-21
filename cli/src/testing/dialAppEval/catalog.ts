@@ -167,8 +167,6 @@ export const MAIN: Scenario[] = [
     steps: [
       { kind: 'claude.write', sessions: ['a'] },
       ...listed('claude', ['a']),
-      { kind: 'front', app: 'claude' },
-      { kind: 'swipe', session: 'a' },
       { label: 'voice', kind: 'voice', transcript: 'Eval words for alpha.', target: 'a' },
     ],
     checks: [
