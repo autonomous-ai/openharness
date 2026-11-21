@@ -223,6 +223,20 @@ void main() {
       ]);
     });
 
+    // Whoever starts the app sets SystemRoot: a tasklist.exe in the folder it names would run.
+    test('tasklist runs from the Windows folder the file system names, whatever SystemRoot says', () async {
+      final asked = <String>[];
+      await windowsDeviceAppRunning(
+        environment: const {'SystemRoot': r'D:\Elsewhere', 'USERNAME': 'a'},
+        run: (executable, arguments) async {
+          asked.add(executable);
+          return ProcessResult(1, 0, '', '');
+        },
+      );
+      expect(asked.single, isNot(startsWith(r'D:\Elsewhere')));
+      expect(asked.single, endsWith(r'\System32\tasklist.exe'));
+    });
+
     test("tasklist's rows: harness-device.exe in any case counts; a localized no-tasks line does not", () {
       expect(
         tasklistNamesDeviceApp(

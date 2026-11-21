@@ -434,6 +434,39 @@ void main() {
     expect(ready.output, contains('Harness 0.4.20 is installed.'));
   });
 
+  // Whoever starts the app sets SystemRoot and windir: a powershell.exe in the folder they name would run.
+  test('PowerShell runs from the Windows folder the file system names, whatever SystemRoot says', () async {
+    final calls = <List<String>>[];
+    final ready =
+        await provisioner(
+          windows(calls: calls),
+          checkSignatures: true,
+          environment: {
+            'SystemRoot': r'D:\Elsewhere',
+            'windir': r'D:\Elsewhere',
+          },
+        ).ensureReady(
+          onProgress: (_) {},
+          install: true,
+          mode: EnvironmentSetupMode.automatic,
+        );
+    expect(ready.isReady, isTrue, reason: '${ready.failure?.detail}');
+    final powershell = [
+      for (final call in calls)
+        if (call.first.endsWith('powershell.exe')) call.first,
+    ];
+    // The install, and the signature check of what it laid down.
+    expect(powershell, hasLength(greaterThanOrEqualTo(2)));
+    for (final executable in powershell) {
+      expect(executable, isNot(startsWith(r'D:\Elsewhere')));
+      expect(p.windows.isAbsolute(executable), isTrue);
+      expect(
+        executable,
+        endsWith(r'\System32\WindowsPowerShell\v1.0\powershell.exe'),
+      );
+    }
+  });
+
   test('an older CLI is reinstalled, through the same install.ps1', () async {
     installLayout(cliVersion: '0.4.19');
     var installed = '0.4.19';
