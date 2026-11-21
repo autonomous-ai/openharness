@@ -157,6 +157,22 @@ describe('one watch on the nearest existing folder', () => {
     }
   })
 
+  it('a watch that fails tells nothing more, not even its look', () => {
+    vi.useFakeTimers()
+    const watches = fakeWatches()
+    const t = folder()
+    const { changes, stop } = told([t])
+    try {
+      vi.advanceTimersByTime(1_000)
+      watches.on(t).fail()
+      expect(watches.open()).toEqual([])
+      vi.advanceTimersByTime(60_000)
+      expect(changes).toEqual([])
+    } finally {
+      stop()
+    }
+  })
+
   it('with no folder of the list there it holds nothing: nothing is told, and its stop is safe', () => {
     vi.useFakeTimers()
     const watches = fakeWatches()
