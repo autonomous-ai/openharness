@@ -13,9 +13,10 @@ const PROGRAMS = ['cmd', 'icacls', 'powershell', 'reg', 'schtasks', 'taskkill', 
 /** One of them by its bare name, as what a call runs: a spawn's, an exec's or a runner's first argument, a command's
  *  `file`, or the fallback for a variable that names one (`ComSpec ?? 'cmd.exe'`). */
 const BARE = new RegExp(String.raw`(?:\b(?:spawn|spawnSync|execFile|execFileSync|exec|patientExec|run|runner|runGuestCommand)\)?\(|\bfile:|\?\?|\|\|)\s*(['"\x60])(?:${PROGRAMS.join('|')})(?:\.exe)?\1`, 'g')
-/** Files that name one bare, and why that runs System32's. */
+/** Files with a bare spelling resolved by a caller, and why. */
 const RESOLVED_ELSEWHERE: Record<string, string> = {
   'harnessd/platform.ts': 'defaultPlatformDeps runs each command of the Task Scheduler service from System32 (windowsProgram)',
+  'engines/kit/__fixtures__/windowsInstall.2026-11-15.ts': 'only called by windowsInstall.spec.ts with an explicit comspec and a fake spawn',
   // CreateProcessW looks in the PTY host's own folders before System32, and it runs in its home (ptyHost/launch.ts).
   'lib/windows/shell.ts': "a pane's shell, which the PTY host starts",
 }

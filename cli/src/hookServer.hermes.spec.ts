@@ -419,8 +419,8 @@ it('starts with the existing binding as authority when no hook watermark exists 
   const preparing = new Promise<void>(resolve => { entered = resolve })
   const held = new Promise<void>(resolve => { release = resolve })
   inspection.prepare = async () => { inspection.prepare = undefined; entered(); await held }
-  // A 200 reply admits the hook to the queue, not the registry. Wait for the caller's completion
-  // notification after real storage publication, without imposing waitFor's one-second disk budget.
+  // A committed row can be visible before onRegistered runs. Wait for the caller's completion
+  // notification, not just the row changing after real storage publication.
   const registered = new Promise<void>(resolve => { f.registered.mockImplementationOnce(() => resolve()) })
   try {
     await f.hook(a, 200, boundAt + 1)
