@@ -4,7 +4,7 @@
  * wrapper pinned to that socket. Its panes start with the daemon's environment, so the suite's fake engine run in one
  * runs the daemon's hooks, and WezTerm gives it its own WEZTERM_PANE.
  */
-import { execFile, spawn, type ChildProcess } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -48,14 +48,75 @@ return ${domains}
 /** What this harness reads of a pane in `cli list --format json`. */
 type Pane = { pane_id: number; tab_id: number; window_id: number; is_active: boolean; tty_name?: string }
 
+/** The mux server's process: the test's child, or the process of a shell in another terminal's pane that exec'd it. */
+interface MuxProcess {
+  readonly pid: number
+  /** How it exited, once it has. */
+  exited(): string | undefined
+  stop(): Promise<void>
+}
+
+function childServer(binary: string, cwd: string, env: NodeJS.ProcessEnv): MuxProcess {
+  const server = spawn(binary, [], { cwd, env, stdio: 'ignore', ...ownProcessGroup() })
+  // Ended by the worker's reaper should the worker go before `stop`.
+  watchGroup(server.pid!)
+  server.once('exit', () => leaderGone(server.pid!))
+  let exited: string | undefined
+  server.once('exit', (code, signal) => { exited = String(code ?? signal) })
+  return {
+    pid: server.pid!,
+    exited: () => exited,
+    async stop() {
+      const gone = server.exitCode !== null || server.signalCode !== null
+        ? Promise.resolve()
+        : new Promise<void>((done) => server.once('exit', () => done()))
+      server.kill('SIGTERM')
+      const timer = setTimeout(() => IsolatedDaemon.killGroup(server), 10_000)
+      await gone
+      clearTimeout(timer)
+      IsolatedDaemon.killGroup(server)
+      forgetGroup(server.pid!)
+    },
+  }
+}
+
+/** The server exec'd by the shell [type] types a line into, its pid written first so the test knows its process. The
+ *  shell leads its terminal's process group, which the server keeps. */
+async function paneServer(binary: string, folder: string, type: (line: string) => Promise<void>): Promise<MuxProcess> {
+  const said = join(folder, 'server.pid')
+  await type(`echo $$ > '${said}' && WEZTERM_CONFIG_FILE='${join(folder, 'server.lua')}' exec '${binary}'`)
+  const pid = await until('the WezTerm mux server started in its pane',
+    async () => Number((await readFile(said, 'utf8').catch(() => '')).trim()) || null, 20_000, 50)
+  // Ended by the worker's reaper should the worker go before `stop`.
+  watchGroup(pid)
+  return {
+    pid,
+    exited: () => IsolatedDaemon.alive(pid) ? undefined : 'gone',
+    async stop() {
+      try { process.kill(pid, 'SIGTERM') } catch { /* already gone */ }
+      await until('the WezTerm mux server to exit', () => !IsolatedDaemon.alive(pid), 10_000, 50)
+        .catch(() => { try { process.kill(-pid, 'SIGKILL') } catch { /* already gone */ } })
+      forgetGroup(pid)
+    },
+  }
+}
+
 export class PrivateWezterm {
   private reads = 0
 
-  private constructor(private readonly d: IsolatedDaemon, private readonly server: ChildProcess,
+  private constructor(private readonly d: IsolatedDaemon, private readonly server: MuxProcess,
     private readonly env: NodeJS.ProcessEnv, private readonly folder: string, private readonly domains: string) {}
 
-  /** [env]: variables its panes inherit, as a WezTerm started from another app's pane keeps that pane's. */
-  static async start(d: IsolatedDaemon, env: NodeJS.ProcessEnv = {}): Promise<PrivateWezterm> {
+  /** The mux server's process. */
+  get pid(): number { return this.server.pid }
+
+  /**
+   * [env]: variables its panes inherit, as a WezTerm started from another app's pane keeps that pane's. With [from], the
+   * server is started by the shell that function types its command line into, as a person starts WezTerm from another
+   * terminal's pane: its parents are that shell's, and its panes inherit the shell's environment, which [env] names.
+   */
+  static async start(d: IsolatedDaemon, env: NodeJS.ProcessEnv = {}, from?: (line: string) => Promise<void>):
+    Promise<PrivateWezterm> {
     if (!weztermBinary) throw new Error('WezTerm is not installed')
     const folder = join(d.env.HOME!, 'wezterm')
     const socket = join(folder, 'sock')
@@ -72,23 +133,18 @@ export class PrivateWezterm {
 WEZTERM_CONFIG_FILE='${config}' WEZTERM_UNIX_SOCKET='${socket}' exec '${weztermBinary}' "$@"
 `, { mode: 0o755 })
     const panes = { ...d.env, ...env }
-    const server = spawn(join(dirname(weztermBinary), 'wezterm-mux-server'), [], {
-      cwd: d.env.HOME, env: { ...panes, WEZTERM_CONFIG_FILE: join(folder, 'server.lua') }, stdio: 'ignore',
-      ...ownProcessGroup(),
-    })
-    // Ended by the worker's reaper should the worker go before `stop`.
-    watchGroup(server.pid!)
-    server.once('exit', () => leaderGone(server.pid!))
-    // A server that exits will never answer: the wait ends at once and says so.
-    let exited: string | undefined
-    server.once('exit', (code, signal) => { exited = String(code ?? signal) })
+    const binary = join(dirname(weztermBinary), 'wezterm-mux-server')
+    const server = from
+      ? await paneServer(binary, folder, from)
+      : childServer(binary, d.env.HOME!, { ...panes, WEZTERM_CONFIG_FILE: join(folder, 'server.lua') })
     // A pane starts with the environment of the `cli spawn` that asked for it, not the server's: `cli` carries [env].
     const wezterm = new PrivateWezterm(d, server,
       { ...panes, WEZTERM_CONFIG_FILE: config, WEZTERM_UNIX_SOCKET: socket }, folder, domains)
     try {
+      // A server that exits will never answer: the wait ends at once and says so.
       await until('the private WezTerm to answer',
-        async () => exited !== undefined || (existsSync(socket) && await wezterm.cli('list').then(() => true, () => false)), 20_000, 100)
-      if (exited !== undefined) throw new Error(`the private WezTerm exited (${exited}) before it answered`)
+        async () => server.exited() !== undefined || (existsSync(socket) && await wezterm.cli('list').then(() => true, () => false)), 20_000, 100)
+      if (server.exited() !== undefined) throw new Error(`the private WezTerm exited (${server.exited()}) before it answered`)
     } catch (error) {
       await wezterm.stop()
       throw error
@@ -157,15 +213,6 @@ WEZTERM_CONFIG_FILE='${config}' WEZTERM_UNIX_SOCKET='${socket}' exec '${weztermB
   }
 
   async stop(): Promise<void> {
-    const server = this.server
-    const exited = server.exitCode !== null || server.signalCode !== null
-      ? Promise.resolve()
-      : new Promise<void>((done) => server.once('exit', () => done()))
-    server.kill('SIGTERM')
-    const timer = setTimeout(() => IsolatedDaemon.killGroup(server), 10_000)
-    await exited
-    clearTimeout(timer)
-    IsolatedDaemon.killGroup(server)
-    forgetGroup(server.pid!)
+    await this.server.stop()
   }
 }

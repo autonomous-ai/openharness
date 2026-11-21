@@ -1,16 +1,19 @@
 /**
  * The dial's words reach only the pane herdr made for the agent (docs/plans/2026-11-21-dial-linux-followups-design.md
  * § 1), on the real daemon: an agent whose hooks run in a pane of a herdr server of the test's own
- * (harness/herdrServer.ts) takes them there; an agent in a WezTerm pane of the test's own (harness/weztermMux.ts)
- * started from that herdr pane keeps its HERDR_PANE_ID, so the herdr pane only holds it: WezTerm types the words, herdr
- * none, and no herdr client is looked for. No `herdr` or `wezterm` the daemon runs reaches the developer's, and the
- * daemon's process table hides every herdr outside the test's tree (ownHerdrsOnly).
+ * (harness/herdrServer.ts) takes them there; an agent in a pane of a WezTerm mux server of the test's own
+ * (harness/weztermMux.ts) started from a herdr pane keeps that pane's HERDR_PANE_ID, so the herdr pane only holds it:
+ * WezTerm types the words, herdr none, and the herdr client attached to that server is not its place. No `herdr` or
+ * `wezterm` the daemon runs reaches the developer's, and the daemon's process table hides every herdr outside the
+ * test's tree (ownHerdrsOnly).
  *
  * Skipped where herdr (or the cc that builds its agent) is not installed, the WezTerm case also where WezTerm is not;
  * CI's `e2e (dial hosts)` job installs both, and there a missing one fails the file (harness/dialHosts.ts).
  */
+import { execFile } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { observedAgentId } from '../src/cable/hosts/observed.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
@@ -19,6 +22,8 @@ import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { herdrBinary, ownHerdrsOnly, PrivateHerdr } from './harness/herdrServer.js'
 import { PrivateWezterm, weztermBinary } from './harness/weztermMux.js'
+
+const execFileAsync = promisify(execFile)
 
 /** The machine a daemon signs in as, to hear its dial's words: the daemon asks its backend for each transcript. */
 const ME: FakeMachine = { machineId: 'c6'.repeat(16), computerId: 'e2e-dial-herdr-pane-computer', name: 'Fixture', token: 'e2e-dial-herdr-pane-token' }
@@ -42,6 +47,14 @@ const lines = (d: IsolatedDaemon, prefix: string): string[] =>
   d.log().split('\n').filter((line) => line.includes(prefix)).map((line) => line.slice(line.indexOf('[device]')))
 const said = (d: IsolatedDaemon, line: string) =>
   until(`"${line}" in the daemon's log`, () => lines(d, line).includes(line), 30_000, 50)
+/** Whether [pid]'s parents reach [ancestor]. */
+async function descends(pid: number, ancestor: number): Promise<boolean> {
+  for (let at = pid; at > 1;) {
+    at = Number((await execFileAsync('/bin/ps', ['-o', 'ppid=', '-p', String(at)])).stdout.trim())
+    if (at === ancestor) return true
+  }
+  return false
+}
 
 describe.skipIf(!herdrBinary)("the dial's words reach the agent's own pane, herdr", () => {
   let daemon: IsolatedDaemon | undefined
@@ -49,8 +62,10 @@ describe.skipIf(!herdrBinary)("the dial's words reach the agent's own pane, herd
   let backend: FakeBackend | undefined
   let herdr: PrivateHerdr | undefined
   let wezterm: PrivateWezterm | undefined
+  const clients: Array<{ close(): Promise<void> }> = []
   afterEach(async () => {
     // The terminals first: they hold the daemon's engine, and the daemon's close sweeps what names its root.
+    for (const client of clients.splice(0)) await client.close()
     await wezterm?.stop()
     await herdr?.stop()
     await desk?.close()
@@ -140,10 +155,16 @@ describe.skipIf(!herdrBinary)("the dial's words reach the agent's own pane, herd
 
   it.skipIf(!weztermBinary)('an agent in a WezTerm pane started from that herdr pane takes them in WezTerm, none in the herdr pane, and has no herdr client place', async () => {
     const { d, dial, herdr } = await fresh()
-    // WezTerm started from a herdr pane: its panes keep that pane's HERDR_PANE_ID.
+    // WezTerm's mux server started from a herdr pane's shell: herdr's server is among its parents, and its panes keep
+    // that pane's HERDR_PANE_ID.
     const shell = await herdr.pane('ops')
-    const mux = await PrivateWezterm.start(d, { HERDR_PANE_ID: shell })
+    await until('the shell in ops', async () => /\S/.test(await herdr.screen(shell)), 20_000, 100)
+    const mux = await PrivateWezterm.start(d, { HERDR_PANE_ID: shell }, (line) => herdr.type(shell, line))
     wezterm = mux
+    expect(await descends(mux.pid, herdr.pid)).toBe(true)
+    // A herdr client attached, in a tab of a fake Ghostty, which a lookup by the nearest herdr among the agent's parents
+    // would find and place it on Ghostty's page.
+    clients.push(await herdr.tabClient('ghostty'))
 
     // 1. The fake Claude Code in a WezTerm pane: its hook names both the WezTerm pane and the herdr pane.
     const from = d.hookLog().length
@@ -162,7 +183,8 @@ describe.skipIf(!herdrBinary)("the dial's words reach the agent's own pane, herd
     expect(await herdr.screen(shell)).not.toContain(WORDS)
     expect(lines(d, HELD)).toEqual([HELD])
 
-    // 3. No herdr server made its terminal: no herdr client is its place.
+    // 3. No herdr server made its terminal: herdr's lookup finds no client to place it by, though one is attached.
+    await said(d, '[device] herdr client · none')
     expect(lines(d, '[device] herdr client · found')).toEqual([])
 
     const tty = (JSON.parse(await mux.cli('list', '--format', 'json')) as Array<{ pane_id: number; tty_name?: string }>)
