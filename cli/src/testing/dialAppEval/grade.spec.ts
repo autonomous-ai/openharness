@@ -59,6 +59,18 @@ describe('scores', () => {
     expect(report.groups).toEqual([])
   })
 
+  it('the report names no held-out check or gap: the delta counts the changed ones', () => {
+    const report = grade(run([
+      result({ check: 'ring.recall', dim: 'D1', score: 1 }),
+      result({ scenario: 'CH1', heldOut: true, check: 'ring.recall', dim: 'D1', score: 0 }),
+    ], { gaps: [{ tier: 'a', platform: 'linux', scenario: 'CH2', app: 'claude', heldOut: true, reason: 'a platform read' }] }),
+    baseline({ 'a/darwin/C1/ring.recall': 0, 'a/darwin/CH1/ring.recall': 1, 'a/darwin/CH1/ring.order': 1 }))
+    expect(report.delta.checks).toEqual([{ key: 'a/darwin/C1/ring.recall', before: 0, after: 1 }])
+    expect(report.delta.heldOutChanged).toBe(2)
+    expect(report.gaps).toEqual([])
+    expect(report.heldOut.claude.leftOut).toBe(1)
+  })
+
   it('byTier and byPlatform score each subset of the main set', () => {
     const report = grade(run([
       result({ check: 'ring.recall', dim: 'D1', score: 1 }),
@@ -131,6 +143,7 @@ describe('delta', () => {
     expect(report.delta).toEqual({
       apps: { a: { claude: { before: null, after: 100 }, chatgpt: { before: null, after: null } } },
       checks: [{ key: 'a/darwin/C1/ring.recall', before: null, after: 1 }],
+      heldOutChanged: 0,
     })
   })
 })
@@ -169,6 +182,13 @@ describe('tierAVerdict', () => {
     expect(verdict.ok).toBe(false)
     expect(verdict.message).toContain('regression: a/darwin/C1/ring.order')
     expect(verdict.message).toContain('stale baseline: a/darwin/C1/ring.recall;')
+  })
+
+  it('tier A names no held-out check: their differences are a count', () => {
+    const held = run([...now.results, result({ scenario: 'CH1', heldOut: true, check: 'ring.recall', dim: 'D1', score: 0 })])
+    const verdict = tierAVerdict(held, baseline({ 'a/darwin/C1/ring.recall': 1, 'a/darwin/C1/ring.order': 0.5,
+      'a/darwin/CH1/ring.recall': 1, 'a/darwin/CH1/ring.order': 1 }))
+    expect(verdict).toEqual({ ok: false, message: 'held out: 2 checks differ from the baseline' })
   })
 
   it('fails on a wrong send, naming keys and path, never text', () => {

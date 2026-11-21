@@ -30,7 +30,7 @@ function report(over: Partial<Report> = {}): Report {
     failing: [],
     groups: [{ app: 'claude', dim: 'D1', scenario: 'C1', pointsLost: 18.75, checks: ['ring.recall'] }],
     gaps: [],
-    delta: { apps: { a: { claude: { before: 75, after: 80 }, chatgpt: { before: null, after: 90 } } }, checks: [] },
+    delta: { apps: { a: { claude: { before: 75, after: 80 }, chatgpt: { before: null, after: 90 } } }, checks: [], heldOutChanged: 2 },
     ...over,
   }
 }
@@ -63,12 +63,19 @@ it('each app\'s score shows its runs left out beside it', () => {
   }
 })
 
-it('held-out is its own table', () => {
-  const md = markdown(report())
+it('held-out is its own table, each score with its runs left out beside it', () => {
+  const r = report({ heldOut: both(scores(70, { D2: 70 }, 3), scores(null)) })
+  const md = markdown(r)
   const heldOut = md.slice(md.indexOf('## Held out'))
   expect(md.indexOf('## Held out')).toBeGreaterThan(md.indexOf('## Scores'))
-  expect(heldOut).toMatch(/\| the Claude app \| — \| 70 \|/)
+  expect(heldOut).toMatch(/\| the Claude app \| — \| 70 \|[^\n]*\| 70 \| left out: 3 \|/)
   expect(md.slice(md.indexOf('## Scores'), md.indexOf('## Held out'))).not.toMatch(/\b70\b/)
+  const text = summary(r)
+  expect(text.slice(text.indexOf('Held out'))).toMatch(/the Claude app[^\n]*70 left out: 3/)
+})
+
+it('the delta counts the held-out checks that changed, never naming them', () => {
+  for (const text of [summary(report()), markdown(report())]) expect(text).toContain('- held out: 2 checks changed')
 })
 
 it('a wrong send is listed by keys and path, never by text', () => {
