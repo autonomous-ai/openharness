@@ -111,9 +111,9 @@ function migrateLegacyAdapterState(): void {
     try {
       rmSync(join(homedir(), '.machine'), { recursive: true, force: true })
     } catch { /* ignore */ }
-    console.warn(`[machine] moved adapter state from ~/.machine/cli/data into ${adapterDataDir}`)
+    console.warn('[machine] moved adapter state from ~/.machine/cli/data into the data folder')
   } else if (moved) {
-    console.warn(`[machine] renamed ${moved} pre-rename file(s) in ${adapterDataDir}`)
+    console.warn(`[machine] renamed ${moved} pre-rename file(s) in the data folder`)
   }
 }
 

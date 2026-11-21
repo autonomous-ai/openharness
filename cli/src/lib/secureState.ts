@@ -24,7 +24,7 @@ import { homedir } from 'node:os'
 import { basename, dirname, win32, type PlatformPath } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { homePath } from '../config/envFields.js'
-import { errorKind } from './log.js'
+import { errorKind, hashOf } from './log.js'
 
 const PRIVATE_DIRECTORY_MODE = 0o700
 const PRIVATE_FILE_MODE = 0o600
@@ -593,7 +593,7 @@ function setAsideUnreadable(file: string): boolean {
     unreadableFiles.delete(file)
     return true
   } catch (error) {
-    console.warn(`[state] ${basename(file)} could not be set aside (${errorKind(error)})`)
+    console.warn(`[state] ${hashOf(file)} could not be set aside (${errorKind(error)})`)
     const memory = unreadableFiles.get(file)
     if (memory) memory.stuck = true
     return false

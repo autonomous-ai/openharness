@@ -276,7 +276,7 @@ async function ensureManagedArchive(spec: ManagedArchive): Promise<ArchiveResult
     // both read this file to decide what to execute, so it must never name something that cannot run. Flushed: one a
     // power cut emptied names nothing to run until a reinstall.
     if (!spec.leavesPointer) atomicWriteFile(join(env.ADAPTER_RUNTIME_DIR, `current-${spec.name}`), `${binary}${layout.eol}`, 'cache', { durable: true })
-    spec.log(`  ✓ ${spec.label} runtime ready → ${target}`)
+    spec.log(`  ✓ ${spec.label} runtime ready (${artifact.version})`)
     if (spec.retiresSuperseded) retireSuperseded(spec.name, key, target, installed)
     return { path: binary, reason: null }
   } catch {
@@ -368,7 +368,7 @@ export async function ensureNodeMeetsMinimum(
     manifestTimeoutMs: timeoutMs,
     leavesPointer: true,
   })
-  if (result.reason) log(`  ✗ Node stays at ${installed}: ${result.reason}`)
+  if (result.reason) log(`  ✗ Node stays on the one installed: ${result.reason}`)
   return { node: result.path, reason: result.reason }
 }
 

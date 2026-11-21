@@ -281,8 +281,10 @@ export async function downloadVerified(ref: FileRef, limits: TransferLimits = DO
  * which says nothing about the build; `failed`: the build ran and failed; `wrong-version`: it ran and
  * said it is another version than the manifest names. A build that ran says which terminal host protocol it
  * needs (`ptyProtocol`, its `PTY_PROTOCOL`): the updater's protocol rule (`installedPtyProtocol`).
+ * `ended` says how, for the updater's log: an error's kind, an exit code or signal, never an error's message, which
+ * names the install folder and the interpreter under the person's home.
  */
-export type CanaryResult = { ok: true; ptyProtocol: number } | { ok: false; problem: 'unwritable' | 'failed' | 'wrong-version'; detail: string }
+export type CanaryResult = { ok: true; ptyProtocol: number } | { ok: false; problem: 'unwritable' | 'failed' | 'wrong-version'; ended: string }
 
 /** The protocol a build that prints only its version speaks: every build from before `version --json`. */
 const PLAIN_VERSION_PTY_PROTOCOL = 2
@@ -329,7 +331,7 @@ export async function runCanary(
       writeFileSync(join(tmpDir, PACKAGE), RUNTIME_PACKAGE)
       writeFileSync(tmpCli, cliBuf) // not a state file: the canary's own folder
     } catch (error) {
-      return { ok: false, problem: 'unwritable', detail: error instanceof Error ? error.message : String(error) }
+      return { ok: false, problem: 'unwritable', ended: errorKind(error) }
     }
     // The interpreter the NEXT daemon will run on — managedNodePath(), or the Node an update moves it to
     // (`startSelfUpdater`'s `node`). Canarying on this process's interpreter would assert about a Node the
@@ -352,7 +354,7 @@ export async function runCanary(
           failure: timedOut ? `no answer within ${timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)} s` : `${timeoutMs} ms`}`
             : typeof failed.code === 'number' ? `exit ${failed.code}`
             : failed.signal ? `signal ${failed.signal}`
-            : failed.message,
+            : errorKind(failed),
           stdout: '',
         })
       })
@@ -362,10 +364,10 @@ export async function runCanary(
         grace = setTimeout(() => child.kill('SIGKILL'), CANARY_KILL_GRACE_MS)
       })
     })
-    if (r.failure !== null) return { ok: false, problem: 'failed', detail: r.failure }
+    if (r.failure !== null) return { ok: false, problem: 'failed', ended: r.failure }
     const lines = r.stdout.trim().split('\n')
     const said = readVersionAnswer(lines[lines.length - 1].trim())
-    if (version !== undefined && said.version !== version) return { ok: false, problem: 'wrong-version', detail: `it says it is ${said.version || 'nothing'}` }
+    if (version !== undefined && said.version !== version) return { ok: false, problem: 'wrong-version', ended: `it says it is ${said.version || 'nothing'}` }
     return { ok: true, ptyProtocol: said.ptyProtocol }
   } finally {
     try { rmSync(tmpDir, { recursive: true, force: true }) } catch { /* ignore */ }
@@ -835,17 +837,17 @@ export function startSelfUpdater(opts: {
           const without = await runCanary(verified.cliBuf, opts.dir, entry.version)
           if (halted) return
           if (without.ok) {
-            console.error(`[update] ${entry.version} does not run on ${next} (${result.detail}) — it goes in on the Node the daemon runs on`)
+            console.error(`[update] ${entry.version} does not run on the new Node (${result.ended}) — it goes in on the Node the daemon runs on`)
             recordNodeMigration(opts.dir, 'does-not-run', next)
             next = null
             result = without
           }
         }
         if (!result.ok && result.problem === 'unwritable') {
-          console.error(`[update] could not write the canary for ${entry.version} (${result.detail}) — trying again next check`)
+          console.error(`[update] could not write the canary for ${entry.version} (${result.ended}) — trying again next check`)
           return
         }
-        if (!result.ok) { refuse(`failed its canary (${result.detail})`); return }
+        if (!result.ok) { refuse(`failed its canary (${result.ended})`); return }
         verified.canaried = true
         verified.ptyProtocol = result.ptyProtocol
         verified.node = next
@@ -898,7 +900,7 @@ export function startSelfUpdater(opts: {
         // the swap again. Say so, or a minute of "check failed" reads as the updater being broken. A lock this CLI did
         // not make is said in fixed words: its `reason` quotes the lock's path and an error's message.
         if (!(err instanceof SpawnLockBusyError)) throw err
-        console.log(`[update] ${ready.version} is ready but the daemon spawn lock is ${err.owner ? `held (${describeSpawnLockOwner(err.owner)})` : err.reason ? 'not a lock this CLI made — remove it by hand' : 'held by an unknown process'} — trying again next check`)
+        console.log(`[update] ${ready.version} is ready but the daemon spawn lock is ${err.owner ? `held (${describeSpawnLockOwner(err.owner)})` : Boolean(err.reason) ? 'not a lock this CLI made — remove it by hand' : 'held by an unknown process'} — trying again next check`)
       })
     } catch (err) {
       console.error('[update] check failed (will retry):', errorKind(err))
