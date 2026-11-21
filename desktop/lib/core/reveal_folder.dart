@@ -1,5 +1,10 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
+
+import 'windows_folder.dart';
+
 /// Opens [path] in the OS file manager — Finder on macOS, whatever `xdg-open`
 /// resolves to on Linux.
 ///
@@ -23,14 +28,21 @@ Future<bool> openFile(String path) async {
   return _openWithSystem(path);
 }
 
+/// What opens a folder or a file on [operatingSystem]. On Windows Explorer by
+/// its path in the Windows folder: a bare `explorer` is looked for in the
+/// app's folder and its working folder first.
+@visibleForTesting
+String systemOpener(String operatingSystem) => switch (operatingSystem) {
+  'macos' => '/usr/bin/open',
+  'windows' => p.windows.join(windowsFolder(), 'explorer.exe'),
+  _ => 'xdg-open',
+};
+
 Future<bool> _openWithSystem(String path) async {
-  final executable = Platform.isMacOS
-      ? '/usr/bin/open'
-      : Platform.isWindows
-      ? 'explorer'
-      : 'xdg-open';
   try {
-    final result = await Process.run(executable, [path]);
+    final result = await Process.run(systemOpener(Platform.operatingSystem), [
+      path,
+    ]);
     // `explorer` answers 1 even when it opened the window it was asked for.
     return result.exitCode == 0 || Platform.isWindows;
   } on ProcessException {
