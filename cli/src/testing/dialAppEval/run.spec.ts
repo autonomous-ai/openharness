@@ -1,9 +1,11 @@
 // The eval command on a fake exec: each "vitest run" writes fixture results where the command told it to, so no
 // test file, daemon or network is run.
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterEach, beforeEach, expect, it } from 'vitest'
+import { isAbsolute, join, relative } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { main, parseArgs } from './run.js'
 import { writeResults } from './runner.js'
 import type { Baseline, CheckResult, Report, RunResults, Tier, WrongSend } from './types.js'
@@ -28,7 +30,10 @@ beforeEach(() => {
   out = join(dir, 'out')
   baselinePath = join(dir, 'baseline.json')
 })
-afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
+afterEach(() => {
+  vi.unstubAllEnvs()
+  rmSync(dir, { recursive: true, force: true })
+})
 
 interface Call { cmd: string; args: string[]; out: string | undefined; env: NodeJS.ProcessEnv }
 type Source = Parameters<typeof writeResults>[1]
@@ -104,6 +109,45 @@ it('a new temp folder when DIAL_EVAL_OUT is not given, printed', async () => {
   } finally {
     rmSync(used, { recursive: true, force: true })
   }
+})
+
+it('a relative DIAL_EVAL_OUT reaches the tiers as the folder it names here, as they run in cli/', async () => {
+  const h = harness({ a: results('a', 1) })
+  expect(await main(['--tier', 'a'], { ...h.deps, out: relative(process.cwd(), out) })).toBe(0)
+  expect(isAbsolute(h.calls[0]!.out!)).toBe(true)
+  expect(h.calls[0]!.out).toBe(out)
+})
+
+it('the tiers get no proxy: their connections stay on this machine', async () => {
+  const proxies = ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'NODE_USE_ENV_PROXY']
+  for (const name of proxies) vi.stubEnv(name, name === 'NODE_USE_ENV_PROXY' ? '1' : 'http://192.0.2.1:3128')
+  const h = harness({ a: results('a', 1) })
+  expect(await main(['--tier', 'a'], h.deps)).toBe(0)
+  for (const name of proxies) expect(h.calls[0]!.env).not.toHaveProperty(name)
+  expect(h.calls[0]!.env.PATH).toBe(process.env.PATH)
+})
+
+it('a report an earlier run left is gone before the tiers run', async () => {
+  mkdirSync(out, { recursive: true })
+  for (const name of ['report.json', 'report.md']) writeFileSync(join(out, name), 'earlier')
+  const deps = { ...harness({}).deps, exec: async (_cmd: string, _args: string[], env: NodeJS.ProcessEnv) => {
+    writeFileSync(join(env.DIAL_EVAL_OUT!, 'results-a-spec.json'), JSON.stringify({ schema: 2 }))
+    return 0
+  } }
+  await expect(main(['--tier', 'a'], deps)).rejects.toThrow(/schema/)
+  expect(existsSync(join(out, 'report.json'))).toBe(false)
+  expect(existsSync(join(out, 'report.md'))).toBe(false)
+})
+
+// Making a symlink needs Developer Mode or an administrator on Windows.
+it.skipIf(process.platform === 'win32')('runs when started through a symlink, as npm and a linked checkout start it', () => {
+  const cli = fileURLToPath(new URL('../../..', import.meta.url))
+  const link = join(dir, 'run.ts')
+  symlinkSync(fileURLToPath(new URL('./run.ts', import.meta.url)), link)
+  const started = spawnSync(process.execPath, [join(cli, 'node_modules', 'tsx', 'dist', 'cli.mjs'), link, '--tier', 'c'],
+    { cwd: cli, encoding: 'utf8' })
+  expect(started.stdout).toContain('usage: npm run eval:dial-apps')
+  expect(started.status).toBe(2)
 })
 
 it('--tier b runs only the e2e files', async () => {
@@ -209,11 +253,14 @@ it('a wrong send exits 1 without --update-baseline too', async () => {
   expect(report().gate.passed).toBe(false)
 })
 
-it('tier B is not run on Windows', async () => {
+it('tier B is not run on Windows, and the report says so and why', async () => {
   const h = harness({ a: results('a', 1), b: results('b', 1) }, { platform: 'win32' })
   expect(await main([], h.deps)).toBe(0)
   expect(h.calls.map((c) => c.args.slice(1))).toEqual([['run', ...TIER_A_FILES]])
-  expect(h.log()).toContain('tier B is not run on Windows')
+  const why = 'tier B is not run on Windows: its e2e files run on macOS and Linux only'
+  expect(h.log()).toContain(why)
+  expect(report().skipped).toEqual([{ tier: 'b', reason: why }])
+  expect(readFileSync(join(out, 'report.md'), 'utf8')).toContain(why)
   const only = harness({}, { platform: 'win32' })
   expect(await main(['--tier', 'b'], only.deps)).toBe(1)
   expect(only.calls).toEqual([])

@@ -122,6 +122,12 @@ it('the delta gives each subset\'s app scores, before and after', () => {
   }
 })
 
+it('a tier the command did not run is named, with why', () => {
+  const r = report({ skipped: [{ tier: 'b', reason: 'not on this host' }] })
+  for (const text of [summary(r), markdown(r)]) expect(text).toContain('- tier b: not on this host')
+  expect(markdown(report())).not.toContain('Not run')
+})
+
 it('writeReport writes report.json and report.md', () => {
   const dir = mkdtempSync(join(tmpdir(), 'report-spec-'))
   dirs.push(dir)
