@@ -42,6 +42,11 @@ function scoredResults(results: RunResults): CheckResult[] {
   return results.results.filter((r) => !gapRuns.has(runKey(r)))
 }
 
+/** What the scores are made of: a wait that held is the harness's own readiness, kept in the results only so the
+ *  baseline sees one that stops holding; one that missed costs its dimension (runner.ts). */
+const scoring = (results: readonly CheckResult[]): CheckResult[] =>
+  results.filter((r) => !(r.check.startsWith('wait.') && r.score === 1))
+
 function appScores(results: readonly CheckResult[], gaps: readonly CoverageGap[], app: App): AppScores {
   const rows = results.filter((r) => r.app === app)
   const dims = Object.fromEntries(DIMENSIONS.map((d) => {
@@ -62,7 +67,7 @@ function table(results: readonly CheckResult[], gaps: readonly CoverageGap[]): R
 
 /** Each subset's main-set app scores, for the subsets given. */
 function subsetScores(results: RunResults, subsets: Iterable<string>): Map<string, Record<App, number | null>> {
-  const main = scoredResults(results).filter((r) => !r.heldOut)
+  const main = scoring(scoredResults(results)).filter((r) => !r.heldOut)
   const gaps = results.gaps.filter((g) => !g.heldOut)
   return new Map([...subsets].map((subset) => {
     const scores = table(main.filter((r) => subsetOf(r) === subset), gaps.filter((g) => subsetOf(g) === subset))
@@ -96,7 +101,7 @@ function rankedGroups(failing: ReadonlyArray<CheckResult & { pointsLost: number 
 
 export function grade(results: RunResults, baseline: Baseline | null): Report {
   const scored = scoredResults(results)
-  const main = scored.filter((r) => !r.heldOut)
+  const main = scoring(scored).filter((r) => !r.heldOut)
   const mainGaps = results.gaps.filter((g) => !g.heldOut)
   const heldOutGaps = results.gaps.filter((g) => g.heldOut)
 
@@ -125,7 +130,7 @@ export function grade(results: RunResults, baseline: Baseline | null): Report {
   return {
     schema: 1,
     apps,
-    heldOut: table(scored.filter((r) => r.heldOut), heldOutGaps),
+    heldOut: table(scoring(scored).filter((r) => r.heldOut), heldOutGaps),
     byTier,
     byPlatform,
     gate: { passed: results.wrongSends.length === 0, wrongSends: results.wrongSends },
