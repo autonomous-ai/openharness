@@ -8,7 +8,8 @@
  * its store, `~/.claude`, `~/.codex` and this computer's daemon are never touched. The network guard runs in this process
  * and in every process of each daemon: a connection to anything but this machine fails the scenario, by host and port.
  */
-import { appendFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { listed, scenariosFor } from '../src/testing/dialAppEval/catalog.js'
 import { loadBaseline, SKIP_RATCHET_ENV, tierBVerdict } from '../src/testing/dialAppEval/grade.js'
@@ -77,6 +78,32 @@ describe.skipIf(WIN32)('the dial eval, tier B: the Claude app', () => {
     const run = await runScenario(driver, { ...SCENARIOS.find((s) => s.id === 'C1')!, world: { chatgptInstalled: false } }, HOST)
     expect(run.error).toContain('no ChatGPT app')
     expect(driver.seen().frames).toEqual([])
+  })
+
+  it("a scenario on a daemon another ran on reads no earlier scenario's transcript or rollout", async () => {
+    await runScenario(driver, SCENARIOS.find((s) => s.id === 'C6')!, HOST)
+    const { d } = driver.lastWorld()
+    const answers = (folder: string): string[] => readdirSync(folder, { recursive: true }).map(String).filter((name) => name.endsWith('.jsonl'))
+    const rollouts = join(d.env.CODEX_HOME!, 'sessions')
+    expect(answers(d.env.CLAUDE_PROJECTS_DIR!)).not.toEqual([])
+    // A Codex session's rollout, as the ChatGPT app's steps leave one.
+    mkdirSync(join(rollouts, '2026'), { recursive: true })
+    writeFileSync(join(rollouts, '2026', 'rollout-2026-11-15T00-00-00-eval.jsonl'), '{}\n')
+    await driver.start(SCENARIOS.find((s) => s.id === 'C1')!, HOST)
+    try {
+      expect(driver.lastWorld().d).toBe(d)
+      expect(answers(d.env.CLAUDE_PROJECTS_DIR!)).toEqual([])
+      expect(answers(rollouts)).toEqual([])
+    } finally {
+      await driver.stop()
+    }
+  })
+
+  it("a voice scenario runs on a daemon of its own while one of its sessions' last mod poll is one the devices still count", async () => {
+    await runScenario(driver, SCENARIOS.find((s) => s.id === 'C7')!, HOST)
+    const before = driver.lastWorld().d
+    await runScenario(driver, SCENARIOS.find((s) => s.id === 'C8')!, HOST)
+    expect(driver.lastWorld().d).not.toBe(before)
   })
 
   it('the fake Claude app attaches the session it resumes from its link, as the mod does for the session the app shows', async () => {
