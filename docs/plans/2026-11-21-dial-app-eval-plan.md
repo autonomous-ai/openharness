@@ -40,6 +40,9 @@ harness (`IsolatedDaemon`, `Desk`, `FakeDial`, `Outside`, `CodexOutside`, the fa
 - Tier B's baseline holds macOS only in this PR: Linux tier B is gate-only (PM, 2026-11-21).
 - Never the real `~/.claude`, `~/.codex`, Claude or ChatGPT app, `/usr/bin/open`, `xdg-open`, backend or account:
   throwaway homes and temp folders only. No real Claude or ChatGPT app is ever run.
+- Every eval test, tier A and tier B, runs under one network guard (Task 23): a connection to anything but this machine
+  (loopback, a Unix socket, a named pipe) fails the test, naming its host and port, never its path, query or payload
+  (PM, 2026-11-21).
 - Nothing under `cli/src/core/`. The only product-code changes are the two `DevicesDeps` seams (`transcribe`,
   `watchStore`), each documented "For this service's tests", and the transcriber field on `CableHostWiring` they feed.
 - Fixtures are made up: titles start with `Eval `, folders with `/work/eval-`. The report names scenario ids, check
@@ -113,19 +116,22 @@ harness (`IsolatedDaemon`, `Desk`, `FakeDial`, `Outside`, `CodexOutside`, the fa
 | 15 | The Claude store fixture refuses the real store | medium | - |
 | 16 | `corePerf.cjs` measures the devices process | medium | - |
 | 17 | The Claude mod's inbox poll in the e2e harness | medium | - |
-| 18 | Tier B driver core, its cost meter, and C1 on the real daemon | high | 4, 8, 16 |
-| 19 | Tier B: the Claude app's scenarios | high | 9, 17, 18 |
-| 20 | Tier B: the ChatGPT app's scenarios | high | 9, 18 |
+| 18 | Tier B driver core, its cost meter, and C1 on the real daemon | high | 4, 8, 16, 23 |
+| 19 | Tier B: the Claude app's scenarios | high | 9, 17, 18, 23 |
+| 20 | Tier B: the ChatGPT app's scenarios | high | 9, 18, 23 |
 | 21 | `ci-plan.py`: linux-e2e runs the eval's files | high | 2 |
-| 22 | Held-out e2e file, baseline, ratchet, timing hints, scaffolding out | high | 10, 14, 19, 20 |
+| 22 | Held-out e2e file, baseline, ratchet, timing hints, scaffolding out | high | 10, 14, 19, 20, 23 |
+| 23 | One network guard for every eval test | high | 8 |
 
 Files shared by tasks (devcrew runs them one at a time; the dependencies above order them): `types.ts` (1, 4 only if
-the budget fallback applies, 22), `catalog.ts` (4, 9), `dialAppEval.spec.ts` (4, 8, 22), `tierA/driver.ts` (4, 14,
+the budget fallback applies, 22), `catalog.ts` (4, 9), `dialAppEval.spec.ts` (4, 8, 23, 22), `tierA/driver.ts` (4, 14,
 22), `tierA/steps/window.ts` (4, 13), `cli/e2e/harness/appEvalDriver.ts` (18, 22), `appEvalClaude.ts` (18, 19),
 `appEvalChatgpt.ts` (18, 20), `dialAppEvalClaude.e2e.ts` (18, 19, 22), `dialAppEvalChatgpt.e2e.ts` (20, 22).
+Task 23's `netGuard.*` files are its own; Tasks 18-20 and 22 only import `netGuard.ts`. Task 23 shares no file with
+Task 9 or Tasks 11-14.
 No task edits the catalog after Task 9: a family task that finds an entry wrong reports it.
 
-Longest chain: 3 → 4 → 8 → 18 → 19 → 22 (six tasks; 1 → 5 → 8 → 12 → 14 → 22 is as long).
+Longest chain: 3 → 4 → 8 → 23 → 18 → 19 → 22 (seven tasks; 1 → 5 → 8 → 23 → 18 → 19 → 22 is as long).
 
 ---
 
@@ -772,13 +778,85 @@ Promise<{ status: number; body: unknown }>` (body `null` when empty), the POST b
   e2e/deviceClaudeOrca.e2e.ts` → PASS.
 - [ ] **Step 3:** Commit.
 
+### Task 23: One network guard for every eval test
+
+**Files:** Create `cli/src/testing/dialAppEval/netGuard.cjs`, `cli/src/testing/dialAppEval/netGuard.ts`,
+`cli/src/testing/dialAppEval/netGuard.spec.ts`; Modify `cli/src/testing/dialAppEval/dialAppEval.spec.ts`.
+**Depends on:** 8. **Effort:** high.
+
+Why (PM, 2026-11-21): a devices spec's red run posted to the production backend's speech-to-text, and tier A, before a
+fix, opened 4-5 WebSockets to `wss://harness-api.autonomous.ai/api/device-ws` with the machine's hostname in a query
+parameter. Every eval test, tier A and tier B, runs under one guard: a connection to anything but this machine fails
+the test, naming its host and port, never its path, query or payload.
+
+**Interfaces:**
+- Produces:
+  ```ts
+  // netGuard.cjs: the one implementation, plain CommonJS on Node's built-ins only, so `--require` loads it into any Node
+  // (as e2e/harness/corePerf.cjs). Required with HARNESS_E2E_NET_GUARD_FILE set it installs itself, appending one
+  // JSON line per event to that file (mode 0o600); without it, it installs nothing.
+  // netGuard.ts: the typed door every TS caller uses
+  export const NET_GUARD_PRELOAD: string                 // absolute path of netGuard.cjs
+  export const NET_GUARD_FILE_ENV = 'HARNESS_E2E_NET_GUARD_FILE'
+  export interface NetAttempt { api: 'net' | 'tls' | 'dgram' | 'dns'; host: string; port: number | null
+    pid: number; process: string }   // process: HARNESSD_SERVICE under `__service`, `core` (`__run`), `master`
+                                     // (`__harnessd`), else `node`; never a path or an argument
+  export function isLocal(host: string | undefined): boolean
+  export function guardThisProcess(): { taken(): NetAttempt[] /* since the last call, then cleared */; uninstall(): void }
+  export function readNetGuard(file: string): { loaded: Array<{ pid: number; process: string }>; attempts: NetAttempt[] }
+    // a missing file: both empty
+  export function netGuardEnv(file: string, nodeOptions?: string): { NODE_OPTIONS: string; HARNESS_E2E_NET_GUARD_FILE: string }
+    // `--require=<NET_GUARD_PRELOAD>` first, then the NODE_OPTIONS given (corePerf's preload) kept
+  export function describeAttempt(a: NetAttempt): string   // `<process> <api> <host>:<port>`
+  ```
+- What it guards: `net.Socket.prototype.connect` (the one door of `net.connect`, `tls.connect`, `http(s).request`, the
+  `ws` package, `fetch` and the global `WebSocket`), read in each form Node passes (an options object, `(port, host)`,
+  `(path)`, the normalized array `net.connect` hands on); `dgram.Socket#send` and `#connect`; `dns.lookup`,
+  `dns.promises.lookup` and the `resolve*` functions of both. If a Step 1 case shows an entry point that does not pass
+  through these, wrap it too, recorded the same way.
+- Local: no host (Node's default), `localhost`, `*.localhost`, `127.0.0.0/8`, `0.0.0.0`, `::1`, `::`, `::ffff:127.*`
+  (bracketed too), and any `path` (a Unix socket or a named pipe). Everything else is not, the machine's own hostname
+  and its LAN addresses included (a lookup of the hostname can leave the machine).
+- A refused attempt: recorded (the in-process list, or a `{ kind: 'attempt', … }` line), then the caller sees a
+  connection failure on the next tick (`process.nextTick`, never a timer, so tier A's fake clock does not hold it): the
+  socket destroyed with an `ENETUNREACH` error `the dial eval reaches no network: <host>:<port>`, a dgram callback or
+  `error` event with it, a lookup with `ENOTFOUND`. The product's own error path runs; the test fails on the record.
+  At install the file preload writes `{ kind: 'loaded', pid, process }`, so a caller can prove the guard is in a
+  process (Task 18).
+- Tier A (`dialAppEval.spec.ts`): the `fetch` stub and the `ws` mock go; `guardThisProcess()` in `beforeAll`,
+  `uninstall` in `afterAll`, and `afterEach` expects `taken().map(describeAttempt)` to equal `[]` beside the processes
+  `reached` (the `child_process` refusal stays: it is about processes, not the network). The header says the guard is
+  the one way the spec refuses the network.
+
+- [ ] **Step 1: Failing tests.** `netGuard.spec.ts` (never a real host: `192.0.2.1` and `example.invalid` only):
+  `fetch, a ws WebSocket, the global WebSocket, net.connect, a net.Socket's connect, tls.connect, http.request and
+  https.request to a host off this machine each fail and are each recorded by host and port` (`it.each` over the eight);
+  `a URL's path, its query and a request's body are never recorded` (a fetch POST to
+  `http://example.invalid:9/stt?hostname=eval-marker-host` with body `eval-marker-body`: the attempt is
+  `{ host: 'example.invalid', port: 9 }`, and neither marker is in the JSON of `taken()` or in the error's message);
+  `localhost, 127.0.0.1, ::1 and a Unix socket (a named pipe on Windows) still connect` (a local server answers each);
+  `a lookup of example.invalid is refused and recorded, and localhost resolves`; `a dgram send to 192.0.2.1 is refused
+  and recorded, and one to 127.0.0.1 arrives`; `uninstall puts every entry point back`; `preloaded through
+  netGuardEnv into a child Node with __service and HARNESSD_SERVICE=devices, the file records it loaded as devices and
+  its attempt on 192.0.2.1, and its local connection works` (a child spawned as `corePerf.spec.ts` spawns its own);
+  `netGuardEnv keeps the NODE_OPTIONS it is given`; `without its file the preload installs nothing`.
+  `dialAppEval.spec.ts`: `tier A reaches no network: a fetch to example.invalid fails and the guard names it`
+  (`taken()` holds `example.invalid`, which clears it for `afterEach`).
+- [ ] **Step 2:** `cd cli && npx vitest run src/testing/dialAppEval/netGuard.spec.ts
+  src/testing/dialAppEval/dialAppEval.spec.ts` → FAIL (module missing).
+- [ ] **Step 3:** Write `netGuard.cjs` and `netGuard.ts`; move the tier A spec onto the guard.
+- [ ] **Step 4:** Same command → PASS, every tier A scenario that ran before still runs, none fails on the guard;
+  `npm run typecheck`.
+- [ ] **Step 5:** Commit red, then green.
+
 ### Task 18: Tier B driver core, its cost meter, and C1 on the real daemon
 
 **Files:** Create `cli/e2e/harness/appEvalDriver.ts`, `cli/e2e/harness/appEvalCost.ts`,
 `cli/e2e/harness/appEvalClaude.ts`, `cli/e2e/harness/appEvalChatgpt.ts`, `cli/e2e/dialAppEvalClaude.e2e.ts`.
-**Depends on:** 4, 8, 16. **Effort:** high.
+**Depends on:** 4, 8, 16, 23. **Effort:** high.
 
 **Interfaces:**
+- Consumes: Task 23's `guardThisProcess`, `netGuardEnv`, `readNetGuard`, `describeAttempt`.
 - Produces:
   ```ts
   export interface TierBWorld {
@@ -789,7 +867,10 @@ Promise<{ status: number; body: unknown }>` (body `null` when empty), the POST b
     readonly children: ChildProcess[]                    // ended at stop
   }
   export type TierBHandler<K extends StepKind> = (world: TierBWorld, step: StepOf<K>) => Promise<void>
-  export class TierBDriver implements EvalDriver { close(): Promise<void> }   // one per e2e file; close in afterAll
+  export class TierBDriver implements EvalDriver {
+    close(): Promise<void>                               // one per e2e file; close in afterAll
+    networkReached(): string[]                           // describeAttempt of each attempt since the last call
+  }
   // appEvalCost.ts
   export async function beginCost(d: IsolatedDaemon): Promise<{ end(): Promise<NonNullable<Seen['cost']>> }>
   // appEvalClaude.ts / appEvalChatgpt.ts: claudeSteps / chatgptSteps for that app's sessions:
@@ -810,51 +891,67 @@ Promise<{ status: number; body: unknown }>` (body `null` when empty), the POST b
   (`cpuPercent`), corePerf's `/end` `eventLoop.p99Ms` (`loopP99Ms`), and `leftovers`: processes under the root that were
   not there at begin, are not the daemon's own (`harnessd`, `harnessd-core`, `harnessd-<process>`) and still run.
   `seen().cost` holds it.
+- The network guard (Task 23), on every tier B process: the constructor calls `guardThisProcess()` (the e2e test
+  process), `close()` uninstalls it. Each daemon, after `IsolatedDaemon.create` and before `start` (as
+  `enginehomes.e2e.ts` sets `d.env.NODE_OPTIONS`): `Object.assign(d.env, netGuardEnv(join(d.root, 'net-guard.jsonl'),
+  '--require=<corePerf.cjs>'))`. Every child the driver or a step starts (`world.children`, `harness hardware watch`)
+  gets the same two variables. At the end of `start`, `readNetGuard(file).loaded` must hold `core` and `devices`, else
+  `start` throws `the network guard is not in the <process> process`. `networkReached()` gives `taken()` and the file's
+  attempts not given before; the driver reads the file at each `stop` and before it closes a daemon (the root goes with
+  it).
 - `dialAppEvalClaude.e2e.ts`: `describe.skipIf(win32)`, one `TierBDriver`, `it.for` over `scenariosFor('b', host)`
-  filtered to the Claude app, skip on `StepNotBuilt`; asserts no wrong send and no uncaught probe; `afterAll` writes
-  `results-b-claude.json` to `DIAL_EVAL_OUT` when set.
+  filtered to the Claude app, skip on `StepNotBuilt`; asserts no wrong send, no uncaught probe and
+  `driver.networkReached()` equal to `[]` (also for a skipped scenario: a step before the unbuilt one may have reached
+  out); `afterAll` writes `results-b-claude.json` to `DIAL_EVAL_OUT` when set.
 
-- [ ] **Step 1: Failing test:** write `dialAppEvalClaude.e2e.ts`; `cd cli && TMPDIR=/tmp npx vitest run --config
-  vitest.e2e.config.ts e2e/dialAppEvalClaude.e2e.ts` → FAIL (driver missing).
+- [ ] **Step 1: Failing test:** write `dialAppEvalClaude.e2e.ts` with C1 and `the network guard is in the core and the
+  devices process, and a connection from the devices process to 192.0.2.1 fails the run naming it` (the driver's guard
+  file given a hand-written attempt line: `networkReached()` names `devices net 192.0.2.1:9`); `cd cli &&
+  TMPDIR=/tmp npx vitest run --config vitest.e2e.config.ts e2e/dialAppEvalClaude.e2e.ts` → FAIL (driver missing).
 - [ ] **Step 2:** Implement the driver core, the generic steps and `claude.write`.
 - [ ] **Step 3:** Same command → C1 passes, its probe caught, its `cost` check giving `cpu`, `loopP99` and
-  `leftovers` results; the rest skip. Print each scenario's wall time.
+  `leftovers` results, no network reached; the rest skip. Print each scenario's wall time.
 - [ ] **Step 4:** Commit red, then green.
 
 ### Task 19: Tier B: the Claude app's scenarios
 
-**Files:** Modify `cli/e2e/harness/appEvalClaude.ts`, `cli/e2e/dialAppEvalClaude.e2e.ts`. **Depends on:** 9, 17, 18.
-**Effort:** high.
+**Files:** Modify `cli/e2e/harness/appEvalClaude.ts`, `cli/e2e/dialAppEvalClaude.e2e.ts`.
+**Depends on:** 9, 17, 18, 23. **Effort:** high.
 
 `hook` through `Outside` (`outsideAgent.ts`) with the Claude app's hints (on Linux under the fake of the app), each live
 session's mod poll held with `inboxPoll` (`mod` deliveries); `attach` through the real `harness device claude link
 --json` and the mod's POST, as `dialClaudeAppFollow.e2e.ts`; `quit` ends the app's sessions, `relaunch` starts them
-again; the fake Claude app follows `opens.log` and starts a `resumable` session whose continue link was run.
+again; the fake Claude app follows `opens.log` and starts a `resumable` session whose continue link was run. Every
+process these steps start (`Outside`, `harness device claude link`, the fake app's sessions) runs with the daemon's
+`netGuardEnv` (Task 23) and goes in `world.children`.
 
 - [ ] **Step 1: Failing test:** add `it('ran every Claude scenario of tier B')` (none skipped) → FAIL.
 - [ ] **Step 2:** Implement.
 - [ ] **Step 3:** `cd cli && TMPDIR=/tmp npx vitest run --config vitest.e2e.config.ts e2e/dialAppEvalClaude.e2e.ts`
-  → PASS, under 6 minutes on this Mac (report the time); no wrong send (else stop and report).
+  → PASS, under 6 minutes on this Mac (report the time); no wrong send and no network reached (else stop and report).
 - [ ] **Step 4:** Commit red, then green.
 
 ### Task 20: Tier B: the ChatGPT app's scenarios
 
 **Files:** Modify `cli/e2e/harness/appEvalChatgpt.ts`, `cli/e2e/harness/codexOutside.ts`; Create
-`cli/e2e/dialAppEvalChatgpt.e2e.ts`. **Depends on:** 9, 18. **Effort:** high.
+`cli/e2e/dialAppEvalChatgpt.e2e.ts`. **Depends on:** 9, 18, 23. **Effort:** high.
 
 - `codex.write` with `codexAppFixture` in the daemon's `~/.codex` and the app installed as `dialChatgptFollow.e2e.ts`
   does (macOS Info.plist, Linux file under the root's stand-in for /usr/lib); `walBusy` through the fixture's
   `writer()`. `hook` through `CodexOutside`, whose `hook` gains `'Stop'` (its header updated) for X8's done and recap;
   `quit`/`relaunch` as for Claude. Codex queue sends recorded by the app's own Codex CLI fake (`codexAppCli.ts`) as
   `codex` deliveries. The fake ChatGPT app follows `opens.log` for `codex://threads/<id>`. X5: on macOS the root's
-  `fake-open` exits 1 for a `codex:` link in that scenario; on Linux no `xdg-mime` app for `codex`.
-- The e2e file as Task 18's for the ChatGPT app, with `it('ran every ChatGPT scenario of tier B')`.
+  `fake-open` exits 1 for a `codex:` link in that scenario; on Linux no `xdg-mime` app for `codex`. Every process these
+  steps start (`CodexOutside`, the fake app's sessions) runs with the daemon's `netGuardEnv` (Task 23) and goes in
+  `world.children`.
+- The e2e file as Task 18's for the ChatGPT app (the same `networkReached()` assertion), with
+  `it('ran every ChatGPT scenario of tier B')`.
 
 - [ ] **Step 1: Failing test:** write the e2e file; `cd cli && TMPDIR=/tmp npx vitest run --config
   vitest.e2e.config.ts e2e/dialAppEvalChatgpt.e2e.ts` → FAIL.
 - [ ] **Step 2:** Implement.
-- [ ] **Step 3:** Same → PASS (X3 runs on macOS, is filtered out on Linux), under 6 minutes; no wrong send (else stop
-  and report); `TMPDIR=/tmp npx vitest run --config vitest.e2e.config.ts e2e/dialCodexApp.e2e.ts e2e/deviceCodex.e2e.ts`
+- [ ] **Step 3:** Same → PASS (X3 runs on macOS, is filtered out on Linux), under 6 minutes; no wrong send and no
+  network reached (else stop and report); `TMPDIR=/tmp npx vitest run --config vitest.e2e.config.ts e2e/dialCodexApp.e2e.ts e2e/deviceCodex.e2e.ts`
   → PASS (`CodexOutside`'s other users).
 - [ ] **Step 4:** Commit red, then green.
 
@@ -901,20 +998,20 @@ gains `cli/src/testing/dialCarousel.ts`.
 **Files:** Create `cli/e2e/dialAppEvalHeldOut.e2e.ts`, `cli/src/testing/dialAppEval/baseline.json`; Modify
 `dialAppEval.spec.ts`, `cli/e2e/dialAppEvalClaude.e2e.ts`, `cli/e2e/dialAppEvalChatgpt.e2e.ts`, `types.ts`,
 `tierA/driver.ts`, `cli/e2e/harness/appEvalDriver.ts`, `cli/ci-e2e-durations.json`; `catalog.ts` and `types.ts` only
-if the budget fallback is needed. **Depends on:** 10, 14, 19, 20. **Effort:** high.
+if the budget fallback is needed. **Depends on:** 10, 14, 19, 20, 23. **Effort:** high.
 
 - [ ] **Step 1:** Write `dialAppEvalHeldOut.e2e.ts` as Task 18's file over `HELD_OUT` (its header says whoever fixes a
-  failing group does not read it); `results-b-heldOut.json`.
+  failing group does not read it), with the same `networkReached()` assertion; `results-b-heldOut.json`.
 - [ ] **Step 2: Failing tests:** the tier A spec's last case `matches the baseline` (`tierAVerdict(collect(runs),
   loadBaseline()!)`, its message on failure) and each e2e file's `matches this platform's baseline`
   (`tierBVerdict(…, process.platform)`) → FAIL (no baseline).
 - [ ] **Step 3: The baseline run** on this Mac at this head: `cd cli && TMPDIR=/tmp npm run eval:dial-apps --
   --update-baseline`. It writes tier A (darwin, win32, linux) and tier B darwin; no Linux tier B entry is written in
-  this PR (PM, 2026-11-21). **If it shows any wrong-session send,
-  stop and report to the main session (the PM decides before anything merges).** Keep its `report.md` for the PR.
+  this PR (PM, 2026-11-21). **If it shows any wrong-session send, or a test fails on the network guard, stop and report
+  to the main session (the PM decides before anything merges).** Keep its `report.md` for the PR.
 - [ ] **Step 4:** Same specs → PASS.
 - [ ] **Step 5: Scaffolding out:** remove `StepNotBuilt` from `types.ts`, the drivers and the specs, the skips and the
-  "ran every … scenario" cases; `npm run typecheck`; `npx vitest run src/testing/dialAppEval/` → PASS.
+  "ran every … scenario" cases (the network guard and its assertions stay); `npm run typecheck`; `npx vitest run src/testing/dialAppEval/` → PASS.
 - [ ] **Step 6: Times.** The tier A spec's wall time under 60 s (else apply Task 4's fallback and redo Step 3 for tier
   A); each e2e file's time into `cli/ci-e2e-durations.json` (`durationMs`), each under about 6 minutes.
 - [ ] **Step 7:** `npm test` → PASS; the three e2e files → PASS.
@@ -941,19 +1038,26 @@ if the budget fallback is needed. **Depends on:** 10, 14, 19, 20. **Effort:** hi
    the files assert the gate and the probes there, not a baseline. If PR CI did not select them, run once by hand: **Actions → CI → Run
    workflow**, `scope=linux-e2e`, `e2e_files="cli/e2e/dialAppEvalClaude.e2e.ts cli/e2e/dialAppEvalChatgpt.e2e.ts
    cli/e2e/dialAppEvalHeldOut.e2e.ts"`. No other extra run.
-5. **dial-hosts:** PR CI runs it for `fakeDial.ts` and `dialCarousel.ts` (`DIAL_HOST_PATHS`). Seen: green, none
+5. **The network guard,** on this Mac: `cd cli && npx vitest run src/testing/dialAppEval/netGuard.spec.ts`, and in
+   checks 1 and 3. Seen: every refused case names only `192.0.2.1` or `example.invalid` (no real host is ever tried),
+   the local ones connect; in tier B every daemon's `net-guard.jsonl` lists `core` and `devices` as loaded and no
+   attempt, and no eval test fails on the guard. On Linux, checks 2 and 4 run the same assertions. A test that fails
+   on the guard is a product or harness leak to report, never one to allow.
+6. **dial-hosts:** PR CI runs it for `fakeDial.ts` and `dialCarousel.ts` (`DIAL_HOST_PATHS`). Seen: green, none
    skipped. `windows-e2e` x64 also runs, for `cli/src/cable/cableHost.ts`.
-6. **Local gates** at the final head from a clean tree: `cd cli && npm run typecheck`; `npm run test:core` (`devices.ts`
+7. **Local gates** at the final head from a clean tree: `cd cli && npm run typecheck`; `npm run test:core` (`devices.ts`
    at 100 %); `python3 scripts/tests/test_ci_plan.py`; then `python3 scripts/local-checks.py --run`, which selects
    every `cli-*` gate because `cli/package.json` changed (core, harnessd, orchestrator, sharing, resume,
    remote-viewers, portability, local-models, serial, pty, shell); its fence pasted into the PR body.
-7. **PR evidence:** the baseline run's report (score per app and dimension, held-out score, the top groups by points
+8. **PR evidence:** the baseline run's report (score per app and dimension, held-out score, the top groups by points
    lost), the red-then-green commits, the times (tier A total, each e2e file), platforms: macOS and Linux run, win32
    graded in tier A by injection.
-8. **Gaps named in the PR:** Windows tier B (proposal: add the three files to `windows-e2e`'s list in `windows.yml`,
+9. **Gaps named in the PR:** Windows tier B (proposal: add the three files to `windows-e2e`'s list in `windows.yml`,
    not in this PR); Harness Device's Accessibility prompt (X3's second half, the device app's own e2e); sleep/wake and
-   log-export signals; Linux tier B baseline entries (a later item; gate-only here, PM 2026-11-21).
-9. **After merge** (main session, with the PM): run both tiers on `main` and report each app's score per dimension,
+   log-export signals; Linux tier B baseline entries (a later item; gate-only here, PM 2026-11-21); the network guard
+   reaches the daemon's Node processes and the Node children that inherit its NODE_OPTIONS, not its non-Node ones
+   (tmux, zsh, `harness-pty`, the native helpers, the fake `open`).
+10. **After merge** (main session, with the PM): run both tiers on `main` and report each app's score per dimension,
    the held-out score and the top failing groups with a one-line cause each.
 
 No check needs a real account, a person's login or production: every account is the fake backend's made-up machine.
