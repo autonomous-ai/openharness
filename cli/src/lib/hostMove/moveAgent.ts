@@ -11,6 +11,7 @@
  */
 
 import type { AgentEngine } from '../../engines/types.js'
+import { codeOrLength } from '../log.js'
 import type { TerminateOutcome } from '../deleteAgentFallback.js'
 import { PANE_START_TIMEOUT_MS } from '../ptyHost/client.js'
 import type { LaunchPublication, RegisteredSession } from '../registry.js'
@@ -265,7 +266,7 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
         // Its route stays held, so discovery never mints it a second agent, possibly beside the same conversation:
         // until the daemon restarts, whose start closes it (`removeOrphanMovePanes`), or a later close of it.
         keptRoutes.add(terminalRouteKey(newPane))
-        log(`[terminal] move ${agentId}: warning: the new pane ${newPane.paneId} was not confirmed closed (${closed.done ? 'refused' : closed.reason}); its route stays held`)
+        log(`[terminal] move ${agentId}: warning: the new pane ${newPane.paneId} was not confirmed closed (${closed.done ? 'refused' : codeOrLength(closed.reason)}); its route stays held`)
       }
     }
     if (!stopped) return notMoved(false)
@@ -279,7 +280,7 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
     // The old pane's engine runs again before the gate opens, so held input reaches a live engine. When it does not
     // come back, the input still goes to the old pane, as it does after a failed restart.
     const relaunched = await bounded(() => deps.relaunchOld(session), MOVE_RELAUNCH_TIMEOUT_MS, 'the relaunch in the old pane')
-    if (!relaunched.done) log(`[terminal] move ${agentId}: ${relaunched.reason}`)
+    if (!relaunched.done) log(`[terminal] move ${agentId}: the relaunch in the old pane did not finish (${codeOrLength(relaunched.reason)})`)
     return notMoved(relaunched.done && relaunched.value)
   }
 
@@ -376,7 +377,7 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
     }
     created = null
     const streams = await bounded(() => deps.retarget(agentId, newPane), MOVE_STEP_TIMEOUT_MS, 'moving open streams')
-    if (!streams.done) log(`[terminal] move ${agentId}: ${streams.reason}`)
+    if (!streams.done) log(`[terminal] move ${agentId}: moving open streams did not finish (${codeOrLength(streams.reason)})`)
     if (!deps.current()) return await recover(CANCELLED)
     const released = await bounded(() => deps.releaseHold(newPane), MOVE_STEP_TIMEOUT_MS, 'releasing the new pane')
     if (!released.done) return await recover('the confirmed destination remains held')
@@ -386,7 +387,7 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
     for (const old of session.runtimes) {
       if (!deps.current()) return await recover(CANCELLED)
       const closed = await bounded(() => deps.killPane(old), MOVE_STEP_TIMEOUT_MS, 'closing the old pane')
-      if (!closed.done || !closed.value) log(`[terminal] move ${agentId}: the old pane was not confirmed closed (${closed.done ? 'refused' : closed.reason})`)
+      if (!closed.done || !closed.value) log(`[terminal] move ${agentId}: the old pane was not confirmed closed (${closed.done ? 'refused' : codeOrLength(closed.reason)})`)
     }
     deps.complete()
     return { moved: true, resumed: true }
