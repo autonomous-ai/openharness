@@ -11,6 +11,7 @@
 import { appendFileSync } from 'node:fs'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { scenariosFor } from '../src/testing/dialAppEval/catalog.js'
+import { loadBaseline, tierBVerdict } from '../src/testing/dialAppEval/grade.js'
 import { readNetGuard } from '../src/testing/dialAppEval/netGuard.js'
 import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from '../src/testing/dialAppEval/runner.js'
 import { StepNotBuilt, type Platform } from '../src/testing/dialAppEval/types.js'
@@ -74,5 +75,12 @@ describe.skipIf(WIN32)('the dial eval, tier B: the Claude app', () => {
   it('ran every Claude scenario of tier B', () => {
     expect(skipped).toEqual([])
     expect(runs.map((run) => run.scenario)).toEqual(SCENARIOS.map((s) => s.id))
+  })
+
+  it("matches this platform's baseline", () => {
+    const baseline = loadBaseline()
+    expect(baseline).not.toBeNull()
+    const verdict = tierBVerdict(collect(runs), baseline!, HOST)
+    expect(verdict.ok, verdict.message).toBe(true)
   })
 })

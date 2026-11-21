@@ -13,6 +13,7 @@
 import { homedir, tmpdir } from 'node:os'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MAIN, scenariosFor } from './catalog.js'
+import { loadBaseline, tierAVerdict } from './grade.js'
 import { describeAttempt, guardThisProcess } from './netGuard.js'
 import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from './runner.js'
 import { TierADriver } from './tierA/driver.js'
@@ -167,5 +168,12 @@ describe('tier A', () => {
     expect(runs.length).toBeGreaterThan(0)
     const written = JSON.stringify(collect(runs))
     for (const part of [tmpdir(), homedir(), '/work/eval-']) expect(written).not.toContain(part)
+  })
+
+  it('matches the baseline', () => {
+    const baseline = loadBaseline()
+    expect(baseline).not.toBeNull()
+    const verdict = tierAVerdict(collect(runs), baseline!)
+    expect(verdict.ok, verdict.message).toBe(true)
   })
 })

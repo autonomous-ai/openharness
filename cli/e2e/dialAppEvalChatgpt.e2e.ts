@@ -12,6 +12,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { scenariosFor } from '../src/testing/dialAppEval/catalog.js'
+import { loadBaseline, tierBVerdict } from '../src/testing/dialAppEval/grade.js'
 import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from '../src/testing/dialAppEval/runner.js'
 import { StepNotBuilt, type Platform } from '../src/testing/dialAppEval/types.js'
 import { chatgptSteps } from './harness/appEvalChatgpt.js'
@@ -56,5 +57,12 @@ describe.skipIf(WIN32)('the dial eval, tier B: the ChatGPT app', () => {
   it('ran every ChatGPT scenario of tier B', () => {
     expect(skipped).toEqual([])
     expect(runs.map((r) => r.scenario)).toEqual(SCENARIOS.map((s) => s.id))
+  })
+
+  it("matches this platform's baseline", () => {
+    const baseline = loadBaseline()
+    expect(baseline).not.toBeNull()
+    const verdict = tierBVerdict(collect(runs), baseline!, HOST)
+    expect(verdict.ok, verdict.message).toBe(true)
   })
 })
