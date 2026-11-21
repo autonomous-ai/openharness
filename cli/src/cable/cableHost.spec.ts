@@ -1,5 +1,5 @@
 // How the wheel's rows are composed: the local row, and the fleet's rows around it.
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 
 import { DaemonCableHost, HARNESS_OPEN_WAIT_MS, cableEventFor, cableStepFor, type CableHostWiring, type RingScope } from './cableHost.js'
 import { FleetError, type FleetMachine, type MachineFleet } from './machineFleet.js'
@@ -75,6 +75,18 @@ it('reads the current window selection for each recording instead of caching it 
   focused = { machineId: 'mine', agentId: 'a1' }
   expect(host.appFocus()).toEqual(focused)
   expect(new DaemonCableHost(wiring()).appFocus()).toBeUndefined()
+})
+
+it('transcribes with the wiring\'s transcriber when given, and posts nothing', async () => {
+  // Refused, so no run of this spec ever reaches the backend.
+  const posted = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('no backend in this spec'))
+  onTestFinished(() => { posted.mockRestore() })
+  const heard: unknown[][] = []
+  const host = new DaemonCableHost(wiring({ transcribe: async (...args) => { heard.push(args); return 'Eval words' } }))
+  const pcm = Buffer.alloc(2)
+  expect(await host.transcribe(pcm, 16000, 'en')).toBe('Eval words')
+  expect(heard).toEqual([[pcm, 16000, 'en', undefined]])
+  expect(posted).not.toHaveBeenCalled()
 })
 
 describe('notification read receipts', () => {

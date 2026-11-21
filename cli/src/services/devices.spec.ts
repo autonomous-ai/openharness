@@ -593,7 +593,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; storePackageFolder?: DevicesDeps['storePackageFolder']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; storePackageFolder?: DevicesDeps['storePackageFolder']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null; transcribe?: DevicesDeps['transcribe']; watchStore?: DevicesDeps['watchStore'] } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const apps = over.orca ?? orca
   // None, and no read under way, unless the spec gives its own; null leaves the devices to read this computer's.
@@ -621,6 +621,8 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     // None unless the spec gives its own: on macOS the devices read the Claude app's store under the suite's throwaway
     // home, where there is none.
     claudeAppStore: over.claudeAppStore,
+    watchStore: over.watchStore,
+    transcribe: over.transcribe,
     // No Codex home and no ChatGPT app unless the spec gives its own: no spec reads the throwaway home's ~/.codex, or runs
     // plutil on this Mac's /Applications. null leaves each out.
     codexAppThreads: over.codexAppThreads === null ? undefined : over.codexAppThreads ?? noCodexApp,
@@ -1043,6 +1045,18 @@ describe('the dial\'s host, wired to the core', () => {
     expect(w.runtimeProfile!(agent)).toBe('p')
     w.log('cable: hello')
     expect(logs).toContain('[cable] cable: hello')
+  })
+
+  it('a dial\'s speech goes to the devices\' transcriber when one is given', async () => {
+    // Refused, so no run of this spec ever reaches the backend.
+    const posted = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('no backend in this spec'))
+    onTestFinished(() => { posted.mockRestore() })
+    const heard: unknown[][] = []
+    start({ transcribe: async (...args) => { heard.push(args); return 'Eval words' } })
+    const pcm = Buffer.alloc(2)
+    expect(await (seen.cable.args[1] as DaemonCableHost).transcribe(pcm, 16000, 'en')).toBe('Eval words')
+    expect(heard).toEqual([[pcm, 16000, 'en', undefined]])
+    expect(posted).not.toHaveBeenCalled()
   })
 
   it('reaches an agent here through the core\'s own doors', async () => {
@@ -9949,6 +9963,22 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
     expect(watchedFolders.stopped).toBe(watchedFolders.calls.length)
     expect(fake.calls.at(-1)).toBe('forget')
     expect(rank.mock.lastCall).toEqual(['codex', undefined])
+  })
+
+  it('the Claude app\'s store and the ChatGPT app\'s Codex home are watched through watchStore when given', async () => {
+    const stored = { calls: [] as Array<readonly string[]>, stopped: 0 }
+    const watchStore: NonNullable<DevicesDeps['watchStore']> = (folders) => {
+      stored.calls.push(folders)
+      return () => { stored.stopped++ }
+    }
+    const { live } = withThreads({ watchStore })
+    await live()
+    const chains = claudeStoreRoots('darwin', process.env, homedir()).map(({ watch }) => watch)
+    expect(stored.calls).toEqual([...chains, [CODEX_HOME]])
+    const watched = watchedFolders.calls.map(([folders]) => folders)
+    for (const folders of stored.calls) expect(watched).not.toContainEqual(folders)
+    seen.host.watching!(false)
+    expect(stored.stopped).toBe(stored.calls.length)
   })
 
   it('with HARNESS_DEVICE_OBSERVED off there is no source', async () => {
