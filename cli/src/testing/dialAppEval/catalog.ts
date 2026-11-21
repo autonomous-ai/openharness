@@ -222,6 +222,7 @@ export const MAIN: Scenario[] = [
       // The swipe needs b's row, or the replug has no focus to keep.
       ...listed('claude', ['a', 'b']),
       { kind: 'swipe', session: 'b' },
+      { kind: 'wait', ms: 1 * S },
       { label: 'unplug', kind: 'unplug' },
       { kind: 'wait', ms: 3 * S },
       { label: 'replug', kind: 'replug' },
