@@ -99,6 +99,13 @@ describe('ring', () => {
     expect(scores(run(check, s, seen(s, [100, 200], { frames: list(300, 'codex', [T, U]) }))).names).toBe(0.5)
   })
 
+  it('names are scored over the expected rows present: a missing row loses recall alone', () => {
+    const s = scenario([write])
+    const results = run(ring, s, seen(s, [100], { frames: list(200, 'claude', [A, C]) }))
+    expect(scores(results)).toMatchObject({ recall: 2 / 3, names: 1 })
+    expect(results[0]!.evidence).toEqual(['list at 200 on claude: 2 rows a c'])
+  })
+
   it('more than 16 rows fail the cap, and a row archived before `at` fails archived', () => {
     const many = Array.from({ length: 17 }, (_, i) => claude(`s${i}`, 20 + i))
     const s = scenario([{ kind: 'claude.write', sessions: many.map((m) => m.key), label: 'w' }], many)
@@ -512,6 +519,6 @@ it('a condition holds once the last whole list on its page since the start is th
     'list at 200 on claude: 2 rows a b'] })
   expect(condition(until, s, seen(s, [], { frames: list(200, 'claude', [B, A]) })).holds).toBe(false)
   expect(condition(until, s, seen(s, [], { frames: [...list(200, 'claude', [A, B]), ...list(300, 'claude', [A])] })))
-    .toEqual({ holds: false, evidence: ['list at 300 on claude: 1 rows a', 'names wrong: b'] })
+    .toEqual({ holds: false, evidence: ['list at 300 on claude: 1 rows a'] })
   expect(condition(until, s, seen(s, []))).toEqual({ holds: false, evidence: [] })
 })
