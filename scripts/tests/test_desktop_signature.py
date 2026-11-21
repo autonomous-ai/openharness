@@ -11,6 +11,8 @@ import io
 import os
 from pathlib import Path
 import re
+import shlex
+import shutil
 import tempfile
 import unittest
 from unittest import mock
@@ -154,14 +156,26 @@ class TauriSignatureTests(unittest.TestCase):
             verify.check_signature(LIVE_DEVICE_SIGNATURE, LIVE_DEVICE_DIGEST, FILE, "0.1.11")
         self.assertEqual(caught.exception.reason, "comment")
 
-    def test_an_openssl_that_is_not_openssl_3_is_refused(self):
-        tools = self.folder / "libressl"
-        tools.mkdir()
-        (tools / "openssl").write_text("#!/bin/sh\necho 'LibreSSL 3.3.6'\n")
+    def openssl_saying(self, version):
+        """PATH with an openssl first whose `version` says version, and which hands every other command to the real one."""
+        tools = Path(tempfile.mkdtemp(dir=self.folder))
+        real = shutil.which("openssl")
+        (tools / "openssl").write_text(
+            f'#!/bin/sh\nif [ "$1" = version ]; then echo {shlex.quote(version)}; exit 0; fi\nexec {shlex.quote(real)} "$@"\n')
         (tools / "openssl").chmod(0o755)
-        with mock.patch.dict(os.environ, PATH=f"{tools}{os.pathsep}{os.environ['PATH']}"):
-            with self.assertRaisesRegex(RuntimeError, r"^OpenSSL 3 is required to check signatures$"):
-                self.check(self.good)
+        return mock.patch.dict(os.environ, PATH=f"{tools}{os.pathsep}{os.environ['PATH']}")
+
+    def test_an_openssl_that_is_not_openssl_3_or_later_is_refused(self):
+        # LibreSSL's pkeyutl has no -rawin, and OpenSSL before 3 checks no Ed25519 from its command line.
+        for version in ("LibreSSL 3.3.6", "OpenSSL 1.1.1w  11 Sep 2023"):
+            with self.subTest(version=version), self.openssl_saying(version):
+                with self.assertRaisesRegex(RuntimeError, r"^OpenSSL 3 or later is required to check signatures$"):
+                    self.check(self.good)
+
+    def test_openssl_4_checks_signatures(self):
+        with self.openssl_saying("OpenSSL 4.0.0 1 Apr 2026 (Library: OpenSSL 4.0.0 1 Apr 2026)"):
+            self.assertIsNone(self.check(self.good))
+            self.assertRefused("file", self.good, digest=hashlib.blake2b(PAYLOAD + b"!").digest())
 
 
 class SignedCommandTests(unittest.TestCase):
