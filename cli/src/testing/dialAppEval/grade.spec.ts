@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { claudeGhost, claudeSessions, listed, scenario } from './catalog.js'
 import { BASELINE_PATH, droppedKeys, grade, loadBaseline, tierAVerdict, tierBVerdict, updateBaseline } from './grade.js'
 import type { Baseline, CheckResult, CoverageGap, RunResults, WrongSend } from './types.js'
 
@@ -291,6 +292,21 @@ describe('droppedKeys', () => {
     expect(droppedKeys(before, ran, ['a'], catalog)).toEqual(['a/darwin/C1/ring.order', 'a/linux/C1/ring.order'])
     expect(droppedKeys(before, ran, ['b'], catalog)).toEqual([])
     expect(droppedKeys(null, ran, ['a'], catalog)).toEqual([])
+  })
+
+  it('lets go of a wait whose step is no condition wait now, and of a check its scenario no longer has', () => {
+    // A catalog edit moved C1's condition wait from step 2 to step 1, and dropped its focus check.
+    const c1 = scenario({
+      id: 'C1', app: 'claude', title: 'Eval C1', dims: ['D1'], tiers: ['a'], sessions: [...claudeSessions(['a']), claudeGhost],
+      steps: [{ kind: 'claude.write', sessions: ['a'] }, ...listed('claude', ['a'])],
+      checks: [{ id: 'ring', kind: 'ring', dim: 'D1', page: 'claude', expect: ['a'] }], probes: [],
+    })
+    const was = baseline({
+      'a/darwin/C1/ring.recall': 1, 'a/darwin/C1/ring.order': 1, 'a/darwin/C1/wait.1': 1, 'a/darwin/C1/wait.2': 1,
+      'a/darwin/C1/wait.3': 1, 'a/darwin/C1/focus.lands': 1,
+    })
+    expect(droppedKeys(was, ran, ['a'], new Map([['a/darwin/C1', c1]])))
+      .toEqual(['a/darwin/C1/ring.order', 'a/darwin/C1/wait.1'])
   })
 })
 
