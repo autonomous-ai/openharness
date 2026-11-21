@@ -61,14 +61,14 @@ export const RECORDED_ORCA = {
   macos: {
     version: '1.4.265',
     /** The recorder's agent, its login shell, `login`, then the terminal host (no tty, ppid 1). The home folder is
-     *  written as `/Users/u`. */
+     *  written as `/Users/u` and the host folder's hash as `<hash>`. */
     chain: [
       { comm: 'claude', tty: 'ttys020' },
       { comm: '-/bin/zsh', tty: 'ttys020' },
       { comm: '/usr/bin/login', tty: 'ttys020' },
       {
         comm:
-          '/Users/u/Library/Application Support/orca/daemon-host/macos/terminal-host-c0a1457fc9539503c43f1a19d826c49e898863c1/' +
+          '/Users/u/Library/Application Support/orca/daemon-host/macos/terminal-host-<hash>/' +
           'app.noindex/Orca Agents.app/Contents/MacOS/Orca Agents',
         tty: null,
       },

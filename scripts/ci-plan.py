@@ -168,7 +168,8 @@ LINUX_E2E_CANARY = "cli/e2e/twoAccounts.spike.e2e.ts"
 LINUX_E2E_CANARY_PATHS = (".github/actions/cli-e2e-setup/", "cli/e2e/harness/", "cli/vitest.e2e*.config.ts",
                           "cli/ci-e2e-durations.json", LINUX_E2E_CANARY)
 # The e2e files that drive an Orca terminal through Orca's terminal-host stand-in (InOrca with a handle) and run on
-# Linux; the macOS-only ones are run locally (the plan's Verification), as no PR CI suite runs macOS.
+# Linux; the macOS-only ones are run locally (docs/plans/2026-11-21-dial-linux-followups-plan.md, Verification), as no
+# PR CI suite runs macOS.
 LINUX_E2E_ORCA_FILES = ("cli/e2e/dialOrcaFocus.e2e.ts", "cli/e2e/dialOrcaFullRing.e2e.ts", "cli/e2e/dialStream.e2e.ts",
                         "cli/e2e/dialPaneFollow.e2e.ts", "cli/e2e/dialClaudeAppFollow.e2e.ts")
 # What they cover and no other linux-e2e file does: the stand-in, InOrca, the fake orca CLI and Orca's adapter. A change
