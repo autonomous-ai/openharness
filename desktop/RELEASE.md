@@ -512,9 +512,11 @@ job that runs build code holds the bucket write or the signing key:
    `scripts/verify-desktop-release.py --signed`, checks both signatures against the key the apps pin
    (`device-app/src-tauri/tauri.conf.json`), so a wrong key stops the release here. The job passes on the two `.sig`
    files (Tauri's form: the `.minisig` text base64-encoded on one line) as `desktop-linux-signatures`.
-3. **`upload-linux`** holds the bucket write and no key. `scripts/upload-desktop-linux.sh <X.Y.Z> <folder>` checks the
-   sums and that each `.sig` is one line of base64, uploads both AppImages create-only and writes their parts, each
-   with its `signature`, for `publish` to merge.
+3. **`upload-linux`** holds the bucket write and no key. Its download merges build-linux's artifact, which build code
+   made, with the signatures, so it first runs `scripts/verify-desktop-release.py --signed` on both AppImages against
+   the pinned key. Then `scripts/upload-desktop-linux.sh <X.Y.Z> <folder>` checks the sums and that each `.sig` is one
+   line of base64, uploads both AppImages create-only and writes their parts, each with its `signature`, for `publish`
+   to merge.
 
 The trusted comment is `timestamp:<unix>`, `file:Harness-linux-<arch>.AppImage` and `desktop-version:<X.Y.Z>`,
 tab-separated; the app matches the file and version fields whole. It has no `version:` field: Harness Device's

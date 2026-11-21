@@ -28,7 +28,7 @@ command line, Bash, GitHub Actions YAML, minisign 0.12.
   `file`. The Python verifier keeps the same order and reasons.
 - **Test key seams are arguments only.** Dart: a `tauriPublicKey` named argument (default the pinned constant) on
   `DesktopUpdater`, `DeviceAppInstaller` and `deviceAppInstallerFor`. Python: `public_key=None` (meaning the pinned key)
-  on `verify_minisign`, `check_signature`, `verify_artifact`, `verify` and the candidate `seal`. No flag, no environment
+  on `check_signature`, `verify_artifact`, `verify` and the candidate `seal`. No flag, no environment
   variable.
 - **Fixtures.** The verifier's own tests use signatures made by `cargo tauri signer generate` + `minisign -S` with
   throwaway keys, committed with their commands, plus the live Device 0.1.11 signature. Tests that need signatures over
@@ -40,7 +40,8 @@ command line, Bash, GitHub Actions YAML, minisign 0.12.
   key through `tauriPublicKey`. `ci.yml`'s `device-app-desktop` job does not change.
 - **Python checks Ed25519 with `openssl pkeyutl -verify -rawin`** (checked on 2026-11-21 against the live Device 0.1.11
   signature: file and global verify, a changed digest fails) and BLAKE2b with `hashlib`: no new dependency. A
-  non-OpenSSL-3 `openssl` (macOS's LibreSSL) is refused with `OpenSSL 3 is required to check signatures`. Local runs on
+  `openssl` older than OpenSSL 3, or LibreSSL (macOS's), is refused with `OpenSSL 3 or later is required to check
+  signatures`. Local runs on
   a Mac need Homebrew's `openssl@3` first on PATH.
 - **Python reads the pinned key from `device-app/src-tauri/tauri.conf.json` when it checks**, so the release side holds
   no copy; Desktop's constant is held equal to the same file by its test. That file therefore joins the `process` and
@@ -368,14 +369,13 @@ Effort: xhigh. Depends on: nothing.
   - `pinned_public_key() -> str` — `plugins.updater.pubkey` of `ROOT / "device-app" / "src-tauri" / "tauri.conf.json"`.
   - `parse_signature(text) -> (key_id: bytes, file_signature: bytes, trusted_comment: str, global_signature: bytes)`,
     raising `SignatureRefused("missing" | "malformed")`.
-  - `verify_minisign(signature, digest: bytes, public_key=None) -> str` — shape, key, global, file; returns the trusted
-    comment.
-  - `check_signature(signature, digest, file_name, version, public_key=None)` — `verify_minisign`, then the comment
-    holds `file:<file_name>` and `desktop-version:<version>` and no field starting with `version:`, else `comment`.
+  - `check_signature(signature, digest, file_name, version, public_key=None)` — shape, key, global, then the comment
+    holds `file:<file_name>` and `desktop-version:<version>` and no field starting with `version:`, else `comment`;
+    then file.
   - `ed25519_verify(public_key: bytes, message: bytes, signature: bytes) -> bool` — `openssl pkeyutl -verify -pubin
     -inkey <pem> -rawin -in <message> -sigfile <signature>` in a temporary folder (DER prefix
-    `302a300506032b6570032100` + the 32 bytes); `RuntimeError("OpenSSL 3 is required to check signatures")` unless
-    `openssl version` starts with `OpenSSL 3`.
+    `302a300506032b6570032100` + the 32 bytes); `RuntimeError("OpenSSL 3 or later is required to check signatures")`
+    unless `openssl version` names OpenSSL 3 or later.
   - `main`: `--signed PATH [PATH ...]` checks each `PATH` (its name one of `SIGNED`'s values) against `PATH.sig` with the
     pinned key, prints `<name>: signature verified` or `error: <name>: signature refused (<reason>)` and exits 1;
     writes no receipt. No option names a key.
@@ -391,8 +391,8 @@ Effort: xhigh. Depends on: nothing.
   that also carries `version:1.2.3` → `comment`; Review Focus 2 look-alikes (`Harness-linux-x64.AppImage.old`,
   `desktop-version:1.2.30`) → `comment`; algorithm `Ed` → `malformed`; `None`, `""`, garbage, 4097 characters →
   `missing` / `malformed`; the live Device 0.1.11 signature (`platforms.darwin-aarch64.signature`, committed as a
-  constant) and digest (Task 2's hex) pass `verify_minisign` with the pinned key and return
-  `timestamp:1795156839\tfile:Harness Device.app.tar.gz\tversion:0.1.11`; `main(["1.2.3", "--signed", <AppImage signed
+  constant) and digest (Task 2's hex) pass every step of the check with the pinned key, with the Device's comment
+  `timestamp:1795156839\tfile:Harness Device.app.tar.gz\tversion:0.1.11` in place of a Desktop one; `main(["1.2.3", "--signed", <AppImage signed
   by the fixture key>])` returns 1 and prints `signature refused (key)`; the parser has `--signed` and no option whose
   name contains `key` or `pub`.
 - [ ] **Step 2: Run to see them fail.** `python3 -m unittest scripts/tests/test_desktop_signature.py` (OpenSSL 3 on
@@ -545,8 +545,9 @@ Effort: xhigh. Depends on: Task 6, Task 8, Task 9.
     minisign`, the download, the signing step (the only step naming `TAURI_SIGNING_PRIVATE_KEY` and `_PASSWORD`), the
     `--signed` check of both AppImages, the upload of `desktop-linux-signatures`; no `flutter`, `apt`, `auth` or
     `gcloud`.
-  - `upload-linux holds GCP and no key` — `needs: [version, build-linux, sign-linux]`; the GCP auth step;
-    `upload-desktop-linux.sh "$VERSION"`; no `TAURI_SIGNING`.
+  - `upload-linux holds GCP and no key` — `needs: [version, build-linux, sign-linux]`; the `--signed` check of both
+    AppImages after the download and before the upload; the GCP auth step; `upload-desktop-linux.sh "$VERSION"`; no
+    `TAURI_SIGNING`.
   - `build-windows runs build code with no token` — its `permissions:` is `contents: read` alone; no `secrets.`,
     `google-github-actions/auth` or `setup-gcloud`.
   - `no other job names the signing key`.
