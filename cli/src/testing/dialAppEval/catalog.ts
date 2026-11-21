@@ -186,7 +186,7 @@ export const MAIN: Scenario[] = [
       { kind: 'swipe', session: 'a' },
       { kind: 'wait', ms: 1 * S },
       { label: 'swipe', kind: 'swipe', session: 'b' },
-      { kind: 'wait', ms: 3 * S },
+      { kind: 'wait', ms: 3.5 * S },
       { label: 'hook', kind: 'hook', session: 'b', event: 'start' },
     ],
     checks: [
