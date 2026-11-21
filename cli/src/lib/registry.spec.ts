@@ -11,7 +11,6 @@ import type { AgentEngine } from '../engines/types.js'
 import type { ProcessIdentity, RegisteredSession, RegisterInput } from './registry.js'
 
 const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
-vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
 // No test here means the write deadline to pass: how fast this machine writes the registry never fails them.
 beforeEach(() => { deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS) })
 
@@ -79,7 +78,7 @@ async function loadRegistryModule() {
   process.env.CLAUDE_PROJECTS_DIR = dataDir
   process.env.CODEX_HOME = dataDir
   process.env.CURSOR_HOME = dataDir
-  storageInstances.add((await import('./sessionStorage.js')).sessionStorage)
+  storageInstances.add(deadline.slowSessionStorage((await import('./sessionStorage.js')).sessionStorage))
   const loaded = await import('./registry.js')
   registryInstances.add(loaded.registry)
   return loaded

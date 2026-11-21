@@ -32,7 +32,6 @@ vi.mock('./processLiveness.js', async original => ({ ...await original<object>()
   processLockIdentity: () => ({ startMarker: 'fixture-start', generationMarker: 'fixture-generation' }), lockOwnerAlive: () => true,
 }))
 const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
-vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
 // No case here means the write deadline to pass: how fast this machine writes the registry never changes the golden.
 beforeEach(() => { deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS) })
 afterEach(() => { vi.restoreAllMocks() })
@@ -81,7 +80,7 @@ it.each(['linux', 'darwin'])('preserves healthy registration and transfers on %s
     write(codex, meta(A)); write(child, meta(CHILD, { subagent: { thread_spawn: { parent_thread_id: A, depth: 1 } } }))
     for (const id of [B, C]) write(claude(id), JSON.stringify({ type: 'user', cwd: root, sessionId: id, isSidechain: false }) + '\n')
     vi.resetModules()
-    ownedStorage = (await import('./sessionStorage.js')).sessionStorage
+    ownedStorage = deadline.slowSessionStorage((await import('./sessionStorage.js')).sessionStorage)
     const { registry } = await import('./registry.js')
     owned = registry
     for (const [index, engine] of (['claude', 'codex', 'terminal'] as const).entries()) {

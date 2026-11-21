@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -17,15 +17,6 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true })
 })
 
-/** Wait for [check], looking every 20 ms, up to [ms]. */
-const until = async (check: () => boolean, ms = 5_000): Promise<void> => {
-  const end = Date.now() + ms
-  while (!check()) {
-    if (Date.now() > end) throw new Error('timed out')
-    await new Promise((settle) => setTimeout(settle, 20))
-  }
-}
-
 /** A computer with no inotify watches left: the file can only be looked at by time. */
 const noWatches = (): never => { throw Object.assign(new Error('ENOSPC: no inotify watches left'), { code: 'ENOSPC' }) }
 
@@ -39,21 +30,22 @@ class FakeWatch extends EventEmitter {
 describe('the watch on the setting\'s file while Agent Messages are off', () => {
   it('hears every write to the file, each a rename over the one it watched, until it is stopped', async () => {
     write(root, false)
-    const changed = vi.fn()
+    const observed: boolean[] = []
+    const changed = vi.fn(() => { observed.push(JSON.parse(readFileSync(agentSettingsPath(root), 'utf8')).agentMessages) })
     const stop = watchSettingFile(agentSettingsPath(root), changed)
-    // Read once more as the watch takes hold, for a write it could not yet hear.
-    await until(() => changed.mock.calls.length === 1)
-    // As the core's sync writes it: whole, renamed into place.
-    write(root, true)
-    await until(() => changed.mock.calls.length >= 2)
-    const heard = changed.mock.calls.length
-    write(root, false)
-    await until(() => changed.mock.calls.length > heard)
-    stop()
+    try {
+      // fs.watch can coalesce or repeat events; the caller must read each new state.
+      await vi.waitFor(() => expect(observed.at(-1)).toBe(false))
+      write(root, true)
+      await vi.waitFor(() => expect(observed.at(-1)).toBe(true))
+      write(root, false)
+      await vi.waitFor(() => expect(observed.at(-1)).toBe(false))
+    } finally { stop() }
     stop()
     const after = changed.mock.calls.length
     write(root, true)
-    await new Promise((settle) => setTimeout(settle, 300))
+    // Drain the watch's queued next-turn reads after stop; the fake-watch case also sends late native events.
+    await new Promise((settle) => setImmediate(settle))
     expect(changed).toHaveBeenCalledTimes(after)
   })
 

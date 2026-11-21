@@ -21,7 +21,6 @@ vi.mock('fs', async (real) => {
 
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
-vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
 
 let dataDir = ''
 const stores = new Set<typeof import('./sessionStorage.js')['sessionStorage']>()
@@ -34,7 +33,7 @@ async function loadRegistry() {
   process.env.CLAUDE_PROJECTS_DIR = dataDir
   process.env.CODEX_HOME = dataDir
   process.env.CURSOR_HOME = dataDir
-  stores.add((await import('./sessionStorage.js')).sessionStorage)
+  stores.add(deadline.slowSessionStorage((await import('./sessionStorage.js')).sessionStorage))
   const registry = (await import('./registry.js')).registry
   registries.add(registry)
   return registry

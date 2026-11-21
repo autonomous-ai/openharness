@@ -358,7 +358,6 @@ NOT_READS = {
        for source in ("cli/e2e/harness/realBackend.ts", "cli/scripts/box-claim-e2e.ts", "cli/scripts/local-stack-peer.ts",
                       "cli/scripts/remote-viewers-stack.ts", "cli/scripts/share-harness-e2e.ts")},
     "cli/src/engines/__fixtures__/other-runtime.golden.json": ("test data: a model name", {"provider/"}),
-    "cli/src/lib/connectors/call.spec.ts": ("test data: files in a temporary home", {"docs/"}),
     "cli/src/lib/sessionSearch/turns.spec.ts": ("test data: a tool call's file path", {"desktop/"}),
     "cli/src/lib/handoffChangedFiles.spec.ts": ("test data: changed file names", {"docs/"}),
     "cli/src/lib/connectors/call.spec.ts": ("test data: files in a temporary home", {"docs/"}),

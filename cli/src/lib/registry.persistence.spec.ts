@@ -22,7 +22,7 @@ vi.mock('node:fs', async original => {
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
 vi.mock('node:fs/promises', async original => {
-  const actual = await deadline.slowSyncFsPromises(original)
+  const actual = await original<typeof import('node:fs/promises')>()
   return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
     const handle = await actual.open(...args), read = handle.read.bind(handle)
     handle.read = (async (...options: Parameters<typeof handle.read>) => {
@@ -55,7 +55,7 @@ beforeEach(async () => {
   exitFlush = undefined
   directory = mkdtempSync(join(tmpdir(), 'registry-persistence-'))
   for (const key of ['ADAPTER_DATA_DIR', 'CLAUDE_PROJECTS_DIR', 'CODEX_HOME', 'CURSOR_HOME']) vi.stubEnv(key, directory)
-  storage = (await import('./sessionStorage.js')).sessionStorage
+  storage = deadline.slowSessionStorage((await import('./sessionStorage.js')).sessionStorage)
   registry = (await import('./registry.js')).registry
   await registry.load()
   ;(await registry.openProcessAgent(input))

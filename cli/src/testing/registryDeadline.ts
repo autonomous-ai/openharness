@@ -3,11 +3,12 @@
  * would decide registry tests. This holds that deadline off the clock, and stands in for a loaded disk: a registry
  * image sync outlives every real wait from 250 ms to just under the deadline.
  *
- * It imports only vitest: a spec loads it through `vi.hoisted`, before `node:fs/promises` is mocked, so loading
+ * Its only runtime import is vitest: a spec loads it through `vi.hoisted`, before file APIs are mocked, so loading
  * `registryPersistence.ts` here would bind the real one. One module instance holds the state, so a spec's
- * `vi.resetModules()` gives its fs factory no second copy.
+ * `vi.resetModules()` gives each fixture no second clock.
  */
 import { vi } from 'vitest'
+import type { SessionStorage } from '../lib/sessionStorage.js'
 
 type Callback = (...args: unknown[]) => void
 
@@ -39,23 +40,17 @@ function runPass<Bound>(timers: Map<unknown, Timer<Bound>>, chosen: (ms: Bound) 
 /** A prepared registry image, including one flushed in the storage worker, advances the simulated slow-disk waits. */
 export function registryImageSynced(): void { runPass(due, () => true) }
 
-/** An `fs/promises` whose registry image (`registry.json.*.tmp`) syncs fire every real wait still due. */
-export async function slowSyncFsPromises(
-  original: () => Promise<typeof import('node:fs/promises')>,
-  options?: { afterSync?: (path: string, actual: typeof import('node:fs/promises')) => Promise<void> },
-): Promise<typeof import('node:fs/promises')> {
-  const actual = await original()
-  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
-    const handle = await actual.open(...args), sync = handle.sync.bind(handle)
-    handle.sync = async () => {
-      await sync()
-      const path = String(args[0])
-      if (!(path.includes('registry.json.') && path.endsWith('.tmp'))) return
-      registryImageSynced()
-      await options?.afterSync?.(path, actual)
-    }
-    return handle
-  } }
+/** Simulate slow registry image syncs at the storage child's reply, where preparation actually finishes. */
+export function slowSessionStorage(storage: SessionStorage, afterSync?: (value: unknown) => Promise<void>): SessionStorage {
+  const prepare = storage.prepare.bind(storage)
+  vi.spyOn(storage, 'prepare').mockImplementation(async (...args) => {
+    const prepared = await prepare(...args)
+    if (args[0].kind !== 'registry') return prepared
+    registryImageSynced()
+    try { await afterSync?.(args[2]); return prepared }
+    catch (error) { await storage.discard(prepared); throw error }
+  })
+  return storage
 }
 
 /**

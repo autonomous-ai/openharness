@@ -11,7 +11,6 @@ import { createExternalResumes } from '../core/agents/externalResume.js'
 import { stopExternalOwner } from '../core/agents/externalOwner.js'
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
-vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
 vi.mock('./bootId.js', async original => ({ ...await original<object>(), currentBootId: () => 'linux:12345678-1234-1234-1234-123456789012' }))
 
 const instances = new Set<typeof import('./registry.js')['registry']>()
@@ -41,7 +40,7 @@ const intent = (extra: Partial<ExternalResumeIntent> = {}): ExternalResumeIntent
 })
 const fact = () => ({ engine: 'claude' as const, sessionId: 'canonical', aliases: ['alias', 'other-alias'], cwd: root,
   origin: 'terminal' as const, title: 'Saved conversation', mtime: 1, transcriptPath: join(root, 'record.jsonl') })
-async function load() { vi.resetModules(); stores.add((await import('./sessionStorage.js')).sessionStorage); const mod = await import('./registry.js'); instances.add(mod.registry); await mod.registry.load(); return mod.registry }
+async function load() { vi.resetModules(); stores.add(deadline.slowSessionStorage((await import('./sessionStorage.js')).sessionStorage)); const mod = await import('./registry.js'); instances.add(mod.registry); await mod.registry.load(); return mod.registry }
 const disk = (): RegisteredSession[] => JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))
 const write = (rows: RegisteredSession[]) => writeFileSync(join(root, 'registry.json'), JSON.stringify(rows), { mode: 0o600 })
 const pending = async (extra: Partial<ExternalResumeIntent> = {}) => {

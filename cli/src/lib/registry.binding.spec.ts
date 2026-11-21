@@ -12,7 +12,6 @@ vi.mock('./processLiveness.js', async original => ({ ...await original<object>()
   processLockIdentity: () => ({ startMarker: 'fixture-start', generationMarker: 'fixture-generation' }), lockOwnerAlive: () => true,
 }))
 const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
-vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
 // Loads the module graph once, before any hook's time limit: cold, it takes seconds on a loaded machine. Each test
 // still imports fresh modules (vi.resetModules), now from the warm transform cache.
 await import('./registry.js')
@@ -21,7 +20,7 @@ const stores = new Set<typeof import('./sessionStorage.js')['sessionStorage']>()
 const registries = new Set<typeof import('./registry.js')['registry']>()
 async function loadRegistry() {
   vi.resetModules()
-  stores.add((await import('./sessionStorage.js')).sessionStorage)
+  stores.add(deadline.slowSessionStorage((await import('./sessionStorage.js')).sessionStorage))
   ;({ registry } = await import('./registry.js'))
   registries.add(registry)
 }

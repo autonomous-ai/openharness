@@ -30,7 +30,6 @@ vi.mock('./lib/processLiveness.js', async original => ({ ...await original<objec
 }))
 
 const deadline = await vi.hoisted(() => import('./testing/registryDeadline.js'))
-vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
 // The hook server answers a commit still in flight after 250 ms, and the registry expires a write at its deadline. No
 // case here means either to fire, so both are held: how fast this machine writes the registry never changes the golden.
 beforeEach(() => { deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS, { hold: [250] }) })
@@ -84,7 +83,7 @@ it.each(['linux', 'darwin'])('preserves healthy native hook admission on %s', as
     vi.resetModules()
     const { registry } = await import('./lib/registry.js')
     ownedRegistry = registry
-    ownedStorage = (await import('./lib/sessionStorage.js')).sessionStorage
+    ownedStorage = deadline.slowSessionStorage((await import('./lib/sessionStorage.js')).sessionStorage)
     const { startHookServer } = await import('./hookServer.js')
     const { readHookCredential } = await import('./lib/hookAuth.js')
     const agents = new Map<string, RegisteredSession>()

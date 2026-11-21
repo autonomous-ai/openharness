@@ -28,10 +28,13 @@ class CliE2eWorkflowTests(unittest.TestCase):
         nightly = jobs(read(CLI_E2E))
         for job in (nightly.get("e2e", ""), nightly.get("agent-browser-podman", ""), jobs(read(DIAL_HOSTS)).get("dial-hosts", "")):
             self.assertIn(SETUP, job)
-        for path in (CLI_E2E, DIAL_HOSTS, CI):
+        # CI's unit-test job also needs shell completion repair. This contract owns only its e2e setup.
+        for path, text in ((CLI_E2E, read(CLI_E2E)), (DIAL_HOSTS, read(DIAL_HOSTS)),
+                           (CI, jobs(read(CI)).get("linux-e2e", ""))):
             with self.subTest(path=path.name):
-                self.assertNotIn("compaudit", read(path))
-                self.assertNotIn("fs.inotify", read(path))
+                self.assertIn(SETUP, text)
+                self.assertNotIn("compaudit", text)
+                self.assertNotIn("fs.inotify", text)
         action = read(ACTION)
         # One copy of each fix: the compaudit repair and the inotify limits.
         self.assertEqual(len(re.findall(r"(?m)^.*insecure=\$\(zsh -fc 'autoload -U compaudit && compaudit'.*$", action)), 1)
@@ -39,7 +42,7 @@ class CliE2eWorkflowTests(unittest.TestCase):
 
     def test_the_shards_set_up_their_shells_and_the_real_backend(self):
         e2e = jobs(read(CLI_E2E)).get("e2e", "")
-        self.assertRegex(e2e, r"packages: tcsh dash\n")
+        self.assertRegex(e2e, r"packages: tcsh dash xvfb xclip\n")
         self.assertIn("real-backend: 'true'", e2e)
         action = read(ACTION)
         for text in ("using: composite", "redis-server", "mongodb-memory-server@10 redis-memory-server@0.12",
@@ -49,6 +52,14 @@ class CliE2eWorkflowTests(unittest.TestCase):
         self.assertTrue(runs)
         for step in runs:
             self.assertRegex(step, r"(?m)^ *shell: bash$")
+
+    def test_nightly_and_pr_e2e_install_clipboard_tools(self):
+        for path, name in ((CLI_E2E, "e2e"), (CI, "linux-e2e")):
+            with self.subTest(path=path.name, job=name):
+                job = jobs(read(path)).get(name, "")
+                package_line = re.search(r"(?m)^ *packages: (.+)$", job)
+                self.assertIsNotNone(package_line)
+                self.assertTrue({"tcsh", "dash", "xvfb", "xclip"} <= set(package_line.group(1).split()))
 
     def test_the_dial_hosts_job_is_one_reusable_workflow(self):
         job = jobs(read(CLI_E2E)).get("dial-hosts", "")

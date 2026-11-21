@@ -1,3 +1,4 @@
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 import { releaseRegistryEngine, unbindRegistrySession } from '../testing/registryFixtures.js'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -17,11 +18,8 @@ vi.mock('node:fs', async original => {
   } }
 })
 // A slow disk: a registry image that names `slow.image` is synced only once the test waits for the registry's writes.
-const slow = vi.hoisted(() => ({ image: undefined as string | undefined, waited: Promise.resolve(), release: () => {} }))
+const slow = vi.hoisted(() => ({ holds: 0, image: undefined as string | undefined, waited: Promise.resolve(), release: () => {} }))
 const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
-vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original, { afterSync: async (path, actual) => {
-  if (slow.image && (await actual.readFile(path, 'utf8')).includes(slow.image)) await slow.waited
-} }))
 // No test here means the write deadline to pass: how fast this machine writes the registry never fails them.
 beforeEach(() => { deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS) })
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
@@ -37,8 +35,21 @@ vi.mock('./bootId.js', async original => ({ ...await original<object>(), current
 vi.mock('./processLiveness.js', async original => ({ ...await original<object>(),
   processLockIdentity: () => ({ startMarker: 'fixture-start', generationMarker: 'fixture-generation' }), lockOwnerAlive: () => true,
 }))
+const stores = new Set<typeof import('./sessionStorage.js')['sessionStorage']>()
+const registries = new Set<typeof import('./registry.js')['registry']>()
+async function loadRegistry() {
+  const storage = (await import('./sessionStorage.js')).sessionStorage
+  stores.add(deadline.slowSessionStorage(storage, async value => {
+    if (slow.image && JSON.stringify(value).includes(slow.image)) { slow.holds++; await slow.waited }
+  }))
+  const module = await import('./registry.js')
+  registries.add(module.registry)
+  return module
+}
 let root: string | undefined
-afterEach(() => { slow.release(); slow.image = undefined; vi.restoreAllMocks(); fault.beforeVerify = undefined; fault.onDirectoryOpen = undefined; fault.captures = 0; vi.doUnmock('./engineHomes.js'); vi.unstubAllEnvs(); vi.resetModules(); if (root) rmSync(root, { recursive: true, force: true }) })
+afterEach(async () => { slow.release(); slow.image = undefined; slow.holds = 0;
+  await Promise.allSettled([...registries].map(registry => registry.flush({ exiting: true }))); registries.clear()
+  await Promise.all([...stores].map(closeSessionStorageFixture)); stores.clear(); vi.restoreAllMocks(); fault.beforeVerify = undefined; fault.onDirectoryOpen = undefined; fault.captures = 0; vi.doUnmock('./engineHomes.js'); vi.unstubAllEnvs(); vi.resetModules(); if (root) rmSync(root, { recursive: true, force: true }) })
 
 it('repairs a child-overwritten parent from an adopted Codex home before the login shell is read', async () => {
   // Found by QA on a quiet machine: restart searched only the default home and discarded this parent binding.
@@ -62,10 +73,8 @@ it('repairs a child-overwritten parent from an adopted Codex home before the log
     registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
   }]), { mode: 0o600 })
   vi.resetModules()
-  const { registry } = await import('./registry.js')
+  const { registry } = await loadRegistry()
   slow.image = `rollout-${parentId}.jsonl`; slow.waited = new Promise<void>(done => { slow.release = done })
-  const flush = registry.flush.bind(registry)
-  vi.spyOn(registry, 'flush').mockImplementation(options => { slow.release(); return flush(options) })
   // An ancestor that changes during every look (`ENUMERATION_ATTEMPTS`); one change alone is looked at again.
   let looks = ENUMERATION_ATTEMPTS
   fault.onDirectoryOpen = () => {
@@ -78,13 +87,15 @@ it('repairs a child-overwritten parent from an adopted Codex home before the log
   expect(JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))[0].transcriptPath).toBe(child)
   // A changed ancestor is incomplete evidence, even when another CI fixture
   // caused it. The preserved binding can be repaired by the next fresh read.
-  await vi.waitFor(async () => {
-    await registry.load()
-    await registry.flush()
-    expect(registry.get(parentId)?.transcriptPath).toBe(parent)
-    expect(registry.get(parentId)?.identityHold).toBeUndefined()
-    expect(JSON.parse(readFileSync(join(root!, 'registry.json'), 'utf8'))[0].transcriptPath).toBe(parent)
-  }, { timeout: 3_000 })
+  const reloaded = registry.load()
+  await vi.waitFor(() => expect(slow.holds).toBeGreaterThan(0))
+  expect(JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))[0].transcriptPath).toBe(child)
+  slow.release()
+  await reloaded
+  await registry.flush()
+  expect(registry.get(parentId)?.transcriptPath).toBe(parent)
+  expect(registry.get(parentId)?.identityHold).toBeUndefined()
+  expect(JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))[0].transcriptPath).toBe(parent)
   await registry.load()
   expect(registry.get(parentId)).toMatchObject({ transcriptPath: parent })
   expect(registry.get(parentId)?.identityHold).toBeUndefined()
@@ -101,7 +112,7 @@ it.each(['unbind', 'release', 'separate-shell'] as const)('clears a hold with it
   writeFileSync(join(root, 'engine-homes.json'), '{', { mode: 0o600 })
   writeFileSync(join(root, 'registry.json'), JSON.stringify(rows), { mode: 0o600 })
   vi.resetModules()
-  const { registry } = await import('./registry.js')
+  const { registry } = await loadRegistry()
   const log = vi.spyOn(console, 'log').mockImplementation(() => {})
   try {
     await registry.load()
@@ -141,7 +152,7 @@ it.each(['healthy', 'unreadable', 'changed-at-commit'] as const)('stages a regis
   if (condition === 'changed-at-commit') fault.beforeVerify = () => writeFileSync(file, JSON.stringify({ codex: [moved] }))
   vi.resetModules()
   observeHomeReads()
-  const { registry } = await import('./registry.js')
+  const { registry } = await loadRegistry()
   const log = vi.spyOn(console, 'log').mockImplementation(() => {})
   await registry.load()
   log.mockRestore()

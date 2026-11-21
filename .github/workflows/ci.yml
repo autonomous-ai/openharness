@@ -891,7 +891,7 @@ jobs:
       - uses: ./.github/actions/cli-e2e-setup
         with:
           node-version: ${{ env.CLI_NODE_VERSION }}
-          packages: tcsh dash
+          packages: tcsh dash xvfb xclip
           real-backend: 'true'
       # Vitest runs every file when it is given none: an empty list runs the full suite only when the plan says so.
       - name: The plan gave files or a full run

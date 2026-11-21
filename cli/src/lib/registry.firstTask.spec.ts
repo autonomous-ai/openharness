@@ -1,3 +1,4 @@
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 import { releaseRegistryEngine } from '../testing/registryFixtures.js'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -8,7 +9,6 @@ import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
-vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
 vi.mock('./bootId.js', async original => ({ ...await original<object>(), currentBootId: () => 'fixture-boot', bootChanged: () => false }))
 vi.mock('./processLiveness.js', async original => ({ ...await original<object>(),
   processLockIdentity: () => ({ startMarker: 'fixture-start', generationMarker: 'fixture-generation' }), lockOwnerAlive: () => true,
@@ -18,6 +18,7 @@ const TASK = 'Fix the parser'
 const SESSION = 'agent:main:harness-1'
 const runtimes = [{ backend: 'tmux' as const, paneId: '%1' }]
 const instances = new Set<typeof import('./registry.js')['registry']>()
+const stores = new Set<typeof import('./sessionStorage.js')['sessionStorage']>()
 let root: string
 let lines: string[]
 beforeEach(() => {
@@ -30,9 +31,9 @@ beforeEach(() => {
     vi.spyOn(console, level).mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(' ')) })
   }
 })
-afterEach(async () => { for (const instance of instances) await instance.flush({ exiting: true }).catch(() => {}); instances.clear(); vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.resetModules(); rmSync(root, { recursive: true, force: true }) })
+afterEach(async () => { for (const instance of instances) await instance.flush({ exiting: true }).catch(() => {}); instances.clear(); await Promise.all([...stores].map(closeSessionStorageFixture)); stores.clear(); vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.resetModules(); rmSync(root, { recursive: true, force: true }) })
 
-async function load() { vi.resetModules(); const mod = await import('./registry.js'); instances.add(mod.registry); await mod.registry.load(); return mod }
+async function load() { vi.resetModules(); stores.add(deadline.slowSessionStorage((await import('./sessionStorage.js')).sessionStorage)); const mod = await import('./registry.js'); instances.add(mod.registry); await mod.registry.load(); return mod }
 const disk = (): RegisteredSession[] => JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))
 async function pending() {
   const { registry, strictPersistedRow } = await load()

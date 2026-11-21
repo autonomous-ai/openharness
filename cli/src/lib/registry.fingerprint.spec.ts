@@ -14,7 +14,6 @@ vi.mock('fs', async (importOriginal) => {
 })
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
-vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
 // Loads the module graph once, before any hook's time limit: cold, it takes seconds on a loaded machine. Each test
 // still imports fresh modules (vi.resetModules), now from the warm transform cache.
 await import('./registry.js')
@@ -56,7 +55,7 @@ async function observe(on: typeof Registry = registry, identity: Row = { ...inpu
 
 async function freshRegistry(): Promise<typeof Registry> {
   vi.resetModules()
-  stores.add((await import('./sessionStorage.js')).sessionStorage)
+  stores.add(deadline.slowSessionStorage((await import('./sessionStorage.js')).sessionStorage))
   const next = (await import('./registry.js')).registry
   await next.load()
   loaded.push(next)
@@ -74,7 +73,7 @@ beforeEach(async () => {
   directory = mkdtempSync(join(tmpdir(), 'registry-fingerprint-'))
   file = join(directory, 'registry.json')
   for (const key of ['ADAPTER_DATA_DIR', 'CLAUDE_PROJECTS_DIR', 'CODEX_HOME', 'CURSOR_HOME']) vi.stubEnv(key, directory)
-  stores.add((await import('./sessionStorage.js')).sessionStorage)
+  stores.add(deadline.slowSessionStorage((await import('./sessionStorage.js')).sessionStorage))
   registry = (await import('./registry.js')).registry
   await registry.load()
   loaded.push(registry)
