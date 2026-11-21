@@ -44,15 +44,16 @@ function check(key: string, value: unknown): void {
       expect(before.filter(row => row[0] === label)).toEqual([[label, 200, { pending: true },
         [{ sessionId: '20261008_100002_dddddd', engine: 'hermes', hermesHome: null }],
         ['[hooks] 20261008 SessionStart · engine=hermes · isNew=true · after a source check']]])
-      // A hold is logged by its sentence's length (the sentence itself reaches the core, not the log).
-      const held = (reason: string) => `[hooks] 20261008 SessionStart held · text(${reason.length})`
-      expect(after.filter(row => row[0] === label)).toEqual([[label, 200, { pending: true }, [],
-        [held('Hermes session source is ambiguous across homes; keeping the current conversation.')]]])
+      // A hold is logged by its code, and a failure's by its kind (the sentence itself reaches the core, not the log). The
+      // former artifact logged one by its sentence's length.
+      const held = (code: string) => `[hooks] 20261008 SessionStart held · ${code}`
+      expect(after.filter(row => row[0] === label)).toEqual([[label, 200, { pending: true }, [], [held('HERMES_SOURCE_AMBIGUOUS')]]])
       const unreadable = 'one whose candidate store cannot be read'
       const unavailable = 'Hermes session source is unavailable; keeping the current conversation.'
-      expect(before.filter(row => row[0] === unreadable)).toEqual([[unreadable, 200, { pending: true }, [], [held(unavailable)]]])
+      expect(before.filter(row => row[0] === unreadable)).toEqual([[unreadable, 200, { pending: true }, [],
+        [`[hooks] 20261008 SessionStart held · text(${unavailable.length})`]]])
       expect(after.filter(row => row[0] === unreadable)).toEqual([[unreadable, 200, { pending: true }, [],
-        [held(unavailable + ' Conversation identity is held: a native store query is unavailable.')]]])
+        [held('HERMES_SOURCE_UNAVAILABLE · IdentityReadUnavailable IDENTITY_UNAVAILABLE')]]])
       const healthy = (row: unknown[]) => row[0] !== label && row[0] !== unreadable
       expect(after.filter(healthy)).toEqual(before.filter(healthy))
     } else expect({ key, result }).toEqual({ key, result: golden[key] })
