@@ -37,6 +37,9 @@ export function heldOut(): Scenario[] {
         { kind: 'hook', session: 'b', event: 'start' },
         { kind: 'hook', session: 'b', event: 'turn-start' },
         ...listed('claude', ['a', 'b']),
+        // The dial lands on the working b: the person turns to a and rests there before speaking.
+        { kind: 'swipe', session: 'a' },
+        { kind: 'wait', ms: 1 * S },
         { label: 'voice', kind: 'voice', transcript: 'Eval words for alpha.', target: 'a' },
       ],
       checks: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'a', text: 'Eval words for alpha.', after: 'voice' }],

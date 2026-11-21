@@ -228,8 +228,9 @@ describe('the catalog', () => {
       return is === kind ? [`${s.id} ${step.ms}`] : []
     }))
     // C6's turn, C9's rests on a and on b, C10's gap between quit and relaunch, C11's rest and its time unplugged, X3's
-    // still window, X8's turn, X11's and XH3's switches.
-    expect(waits('own')).toEqual(['C6 5000', 'C9 1000', 'C9 3500', 'C10 2000', 'C11 1000', 'C11 3000', 'X3 5000', 'X8 2000', 'X11 300', 'X11 300', 'XH3 200'])
+    // still window, X8's turn, X11's switches, CH3's rest on a and XH3's switch.
+    expect(waits('own')).toEqual(['C6 5000', 'C9 1000', 'C9 3500', 'C10 2000', 'C11 1000', 'C11 3000', 'X3 5000', 'X8 2000',
+      'X11 300', 'X11 300', 'CH3 1000', 'XH3 200'])
     expect(new Set(waits('condition').map((w) => w.split(' ')[1]))).toEqual(new Set(['10000']))
     // The person reading the face once the list is there.
     expect(new Set(waits('reading').map((w) => w.split(' ')[1]))).toEqual(new Set(['1000']))
