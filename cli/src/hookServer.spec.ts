@@ -268,20 +268,23 @@ describe('process-owned hook server', () => {
     expect(legacy.status).toBe(404)
   })
 
-  it('a session-end reason is logged as a code or a length', async () => {
+  it('a session-end reason is logged as it is when it is one of Claude Code\'s own, else as a code or a length', async () => {
     const agent = { engine: 'claude', sessionId: 'session-1', agentId: 'agent-1', runtimes: [], processIdentity: null } as unknown as RegisteredSession
     vi.spyOn(registry, 'bySession').mockReturnValue(agent)
     vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
     const { handlers, base, headers } = await start({ resolveHookAgent: async () => agent })
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    for (const reason of ['clear', '/Users/sentinel/x']) {
+    for (const reason of ['clear', 'prompt_input_exit', 'SOME_CODE', '/Users/sentinel/x']) {
       await fetch(`${base}/api/hook/session-end`, { method: 'POST', headers,
         body: JSON.stringify({ engine: 'claude', sessionId: 'session-1', reason, tmuxPane: '%1', callerPid: 123 }) })
     }
-    const lines = log.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
-    expect(lines).not.toContain('sentinel')
-    expect(lines).toContain('[hooks] session- session-end · reason=text(5)')
-    expect(lines).toContain('[hooks] session- session-end · reason=text(17)')
+    const lines = log.mock.calls.map((call) => call.map(String).join(' ')).filter((line) => line.includes('session-end'))
+    expect(lines).toEqual([
+      '[hooks] session- session-end · reason=clear',
+      '[hooks] session- session-end · reason=prompt_input_exit',
+      '[hooks] session- session-end · reason=SOME_CODE',
+      '[hooks] session- session-end · reason=text(17)',
+    ])
     // The handler still gets the engine's word as it came.
     expect(handlers.onSessionEnd).toHaveBeenLastCalledWith('session-1', '/Users/sentinel/x')
   })
