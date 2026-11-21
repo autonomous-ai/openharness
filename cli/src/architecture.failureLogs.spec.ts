@@ -632,6 +632,9 @@ it.each([
   "console.warn(`[x] ${error instanceof HookPreparationHeld ? error.reason : errorKind(error)}`)",
   "try { run() } catch (error) { console[level](`[x] failed: ${error.message}`) }",
   "function sayOnce(stream: 'log' | 'warn', file: string) { console[stream](`[hooks] removed from ${file}`) }",
+  "console.log(rule.messages.installed.replace('{file}', () => rule.file))",
+  "console.log(`[x] ${items.map((i) => i.path).join(', ')}`)",
+  "log(`[x] ${problems.map(function (problem) { return problem.message }).join(' · ')}`)",
 ])('finds %s', (code) => expect(failureLogs(code)).not.toEqual([]))
 
 it.each([
