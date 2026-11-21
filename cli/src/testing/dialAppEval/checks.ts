@@ -216,9 +216,15 @@ function openParts(check: CheckOf<'open'>, world: World, w: Window | undefined, 
   const commands = w ? world.seen.commands.filter((c) => within(c.at, w)) : []
   const linked = commands.filter((c) => link !== undefined && c.argv.includes(link))
   const front = commands.find((c) => fronts(c.argv, platform, session.app, link))
-  // Commands carry paths: the evidence says only what each one was.
-  const evidence = bounded(commands.map((c) =>
-    `command at ${c.at}: ${[linked.includes(c) && 'link', fronts(c.argv, platform, session.app, link) && 'front'].filter(Boolean).join(' ') || 'other'}`))
+  // The dial's inputs first, so an input that opened nothing fails with what the driver saw. Commands carry paths: the
+  // evidence says only what each one was.
+  const inputs = w ? world.seen.steps.filter((s) => within(s.at, w)).flatMap((s) => {
+    const step = world.scenario.steps[s.index]!
+    return step.kind === 'tap' || step.kind === 'swipe' ? [`${step.kind} on ${step.session} at ${s.at}`] : []
+  }) : []
+  const evidence = bounded([...inputs, ...commands.map((c) =>
+    `command at ${c.at}: ${[linked.includes(c) && 'link', fronts(c.argv, platform, session.app, link) && 'front'].filter(Boolean).join(' ') || 'other'}`),
+  ...(inputs.length > 0 && commands.length === 0 ? ['no command'] : [])])
   const latency = front && w ? front.at - w.from : null
   return [
     ...(check.link ? [{ part: 'link', score: linked.length > 0 ? 1 : 0, timed: false, evidence }] : []),
