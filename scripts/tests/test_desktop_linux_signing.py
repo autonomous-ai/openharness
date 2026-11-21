@@ -1,4 +1,5 @@
-"""Run the Linux signing script with a recording minisign, and nothing else on PATH but tools that log their argv."""
+"""Run the Linux signing script with a recording minisign, and nothing else on PATH but tools that log their argv and
+environment."""
 import base64
 import hashlib
 import json
@@ -20,9 +21,10 @@ KEY = f"untrusted comment: rsign encrypted secret key\n{SECRET_LINE}\n"
 TAURI_KEY = base64.b64encode(KEY.encode()).decode()
 PASSWORD = "fixture password"
 MINISIG = b"untrusted comment: signature from minisign secret key\nRUQfixture\ntrusted comment: fixture\nfixture\n"
-# The only tools on PATH besides minisign. Each logs its argv, so a secret in any argv shows, and a tool the script
-# starts to run fails here until it is listed.
+# The only tools on PATH besides minisign. Each logs its argv and environment, so a secret in either shows, and a tool
+# the script starts to run fails here until it is listed.
 TOOLS = ("base64", "date", "mktemp", "rm", "sha256sum", "tr")
+SECRET_NAMES = ("TAURI_SIGNING_PRIVATE_KEY", "TAURI_SIGNING_PRIVATE_KEY_PASSWORD")
 
 MINISIGN = r'''
 import json, os, sys
@@ -31,7 +33,8 @@ args = sys.argv[1:]
 key = Path(args[args.index("-s") + 1])
 with open(os.environ["MINISIGN_LOG"], "a") as log:
     log.write(json.dumps({"argv": sys.argv, "stdin": sys.stdin.read(), "key": key.read_text(),
-                          "key_path": str(key), "mode": key.stat().st_mode & 0o777}) + "\n")
+                          "key_path": str(key), "mode": key.stat().st_mode & 0o777,
+                          "environment": sorted(os.environ)}) + "\n")
 fail = os.environ.get("MINISIGN_FAIL")
 if fail and args[args.index("-m") + 1].endswith(fail):
     sys.exit("minisign: fixture failure")
@@ -50,6 +53,7 @@ class Release:
         self.runner_temp = root / "runner temp"
         self.argv_log = root / "argv.log"
         self.minisign_log = root / "minisign.log"
+        self.environment_log = root / "environment.log"
         tools = root / "bin"
         for folder in (self.folder, self.runner_temp, tools):
             folder.mkdir(parents=True)
@@ -62,11 +66,14 @@ class Release:
         for tool in TOOLS:
             real = shutil.which(tool)
             case.assertIsNotNone(real, tool)
+            # export -p, the shell's own, lists what the real tool inherits, and starts no other tool.
             (tools / tool).write_text(
-                f'#!/bin/sh\nprintf "%s\\n" "$0" "$@" >> "$ARGV_LOG"\nexec {shlex.quote(real)} "$@"\n')
+                f'#!/bin/sh\nprintf "%s\\n" "$0" "$@" >> "$ARGV_LOG"\nexport -p >> "$ENVIRONMENT_LOG"\n'
+                f'exec {shlex.quote(real)} "$@"\n')
             (tools / tool).chmod(0o755)
         self.env = {"PATH": str(tools), "RUNNER_TEMP": str(self.runner_temp), "ARGV_LOG": str(self.argv_log),
-                    "MINISIGN_LOG": str(self.minisign_log), "TAURI_SIGNING_PRIVATE_KEY": TAURI_KEY,
+                    "MINISIGN_LOG": str(self.minisign_log), "ENVIRONMENT_LOG": str(self.environment_log),
+                    "TAURI_SIGNING_PRIVATE_KEY": TAURI_KEY,
                     "TAURI_SIGNING_PRIVATE_KEY_PASSWORD": PASSWORD}
 
     def sign(self, version="1.2.3", **env):
@@ -134,6 +141,20 @@ class LinuxSigningTests(unittest.TestCase):
             self.assertEqual(run["mode"], 0o600)
             self.assertIn(release.runner_temp, Path(run["key_path"]).parents)
         self.assertEqual(list(release.runner_temp.iterdir()), [])
+
+    def test_no_tool_the_script_starts_inherits_the_key_or_its_password(self):
+        release = Release(self)
+        result = release.sign()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        runs = release.minisign_runs()
+        self.assertEqual(len(runs), 2)
+        for run in runs:
+            self.assertIn("MINISIGN_LOG", run["environment"])
+            self.assertEqual([name for name in SECRET_NAMES if name in run["environment"]], [])
+        inherited = release.environment_log.read_text()
+        self.assertIn("ARGV_LOG", inherited)
+        for secret in (*SECRET_NAMES, TAURI_KEY, PASSWORD):
+            self.assertNotIn(secret, inherited)
 
     def test_an_appimage_whose_sums_do_not_match_signs_nothing(self):
         x64, arm64 = (Path(name) for name in NAMES)
