@@ -8,7 +8,7 @@
  * was not hearing (the core restarted, or the link dropped): they are told it ended.
  */
 import type { AgentLife, AgentView, FollowOptions } from '../core/api.js'
-import { errorKind } from '../lib/log.js'
+import { codeOrLength, errorKind } from '../lib/log.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { agentsIn, isSession } from './processCoreApi.js'
 
@@ -97,7 +97,7 @@ export function followLink(options: FollowOptions, log: (line: string) => void =
       const listed = agentsIn(answer)
       if (!listed) {
         heard = null
-        log(`[agents] the core did not answer what agents to follow (${typeof answer?.error === 'string' ? answer.error : 'no answer'}): none is heard of as it runs`)
+        log(`[agents] the core did not answer what agents to follow (${typeof answer?.error === 'string' ? codeOrLength(answer.error) : 'no answer'}): none is heard of as it runs`)
         return
       }
       const ids = new Set(listed.map((session) => session.agentId))

@@ -23,7 +23,7 @@
 import { gridJson } from './gridExec.js'
 import type { GridHandoffResult } from './gridHandoff.js'
 import type { EnsureResult, EnsureStatus } from './gridEnsure.js'
-import { errorKind } from './log.js'
+import { errorKind, hashOf } from './log.js'
 
 export type GridAttachStatus =
   /** No `grid` on this machine — there is nothing to attach a sign-in to. */
@@ -134,7 +134,7 @@ export async function reconcileGridAttach(
   }
   if (email && names.includes(name)) {
     deps.onName(name)
-    deps.log(`already signed in with grid '${name}' — nothing to do`)
+    deps.log(`already signed in with grid ${hashOf(name)} — nothing to do`)
     return { status: 'converged', name, detail: '', ...(ownGrid ? { ownGrid: 'existed' as const } : {}) }
   }
   // Signed in as this account earlier in this daemon's life, and nothing here needs the account's own
@@ -163,18 +163,18 @@ export async function reconcileGridAttach(
     }
     const handoff = await deps.handoff(token)
     if (handoff.code !== 'OK') {
-      deps.log(`grid sign-in did not happen: ${handoff.message}`)
+      deps.log(`grid sign-in did not happen: ${handoff.code}`)
       return { status: 'handoff-failed', name, detail: handoff.message }
     }
   }
   if (!ownGrid) {
     deps.onName(name)
-    deps.log(`signed grid in as this account ('${name}' not needed yet)`)
+    deps.log(`signed grid in as this account (${hashOf(name)} not needed yet)`)
     return { status: 'signed-in', name, detail: '' }
   }
   const ensured = await deps.ensure(name)
   deps.onName(name)
-  deps.log(`signed grid in and ensured '${name}': ${ensured.status}${ensured.message ? ` — ${ensured.message}` : ''}`)
+  deps.log(`signed grid in and ensured ${hashOf(name)}: ${ensured.status}`)
   return { status: 'signed-in', name, detail: ensured.message, ownGrid: ensured.status }
 }
 

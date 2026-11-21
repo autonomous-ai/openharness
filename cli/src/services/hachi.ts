@@ -23,7 +23,7 @@ import { Ledger, ledgerPath, type Started } from '../agentClient/ledger.js'
 import type { CoreApi, ServiceRequests } from '../core/api.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
 import { agentSettingsPath, readAgentSettings } from '../lib/agentSettings.js'
-import { errorKind } from '../lib/log.js'
+import { codeOrLength, errorKind } from '../lib/log.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { watchSettingFile } from '../messages/settingWatch.js'
 import { createHachiWakes, type HeardState, type WakeChild } from './hachiWakes.js'
@@ -120,7 +120,7 @@ export function startHachi(core: CoreApi, given: Partial<HachiDeps> = {}): { sto
     // Hachi's own line, open while Hachi runs here; gone meanwhile, the line is not delivered (hachiWakes.ts counts it).
     send: async (items) => {
       const reply = await following.get('self')!.line.request('agent_messages', { action: 'wake', agentId: hachi!.agentId, items })
-      if (reply.error) deps.log(`[hachi] the wake was not taken: ${String(reply.error)}`)
+      if (reply.error) deps.log(`[hachi] the wake was not taken: ${codeOrLength(reply.error)}`)
       return !reply.error
     },
   })

@@ -31,7 +31,7 @@ import { statSync } from 'node:fs'
 import type { CoreApi, CorePorts, GuestLaunchInput, ServiceRequests } from '../core/api.js'
 import { createGuestAccounts, guestHomeRoot, guestWorkspaceFor, type SharedFolder } from '../lib/guestAccounts.js'
 import { guestHelperStatus, installGuestHelper, type GuestHelperInstallResult, type GuestHelperState } from '../lib/guestHelperInstall.js'
-import { errorKind } from '../lib/log.js'
+import { codeOrLength, errorKind } from '../lib/log.js'
 import { atomicWriteJson, jsonObject, readState, requireState } from '../lib/secureState.js'
 import { createWindowsGuestAccounts } from '../lib/windows/windowsGuestAccounts.js'
 import { failed, type PortFailure, type ShareMember, type SharedMachinesPort, type SharePolicy,
@@ -257,7 +257,7 @@ export function startSharedMachines(core: CoreApi, overrides: Partial<SharedMach
     if (!failed(remote)) desired.keys = shares(local) ? trustedKeys(local, remote) : []
     if (desired.pins || desired.keys) {
       const held = await port.trust(desired)
-      if (failed(held)) deps.log(`could not update the trust stores: ${held.failed.message}`)
+      if (failed(held)) deps.log(`could not update the trust stores: ${codeOrLength(held.failed.code)}`)
     }
     // A guest sharing no longer names keeps none of the owner's folders; every guest it names has the folders
     // the owner shares.
