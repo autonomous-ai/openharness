@@ -171,7 +171,8 @@ export class World implements TierAWorld {
       account: { signedIn: () => false },
       // No Harness window: the person works in the apps.
       clients: { hasWindow: () => false },
-      turns: { send: (agentId, text) => this.deliver({ path: 'turns', target: this.keyOf(agentId), text }) },
+      // Tier A has no Harness agent, so the real core would refuse a send to any: one is a send to no session.
+      turns: { send: (_agentId, text) => this.deliver({ path: 'turns', target: null, text }) },
     })
     start(this.core, this.ports, this.deps(root, installed))
   }
@@ -259,11 +260,6 @@ export class World implements TierAWorld {
     }
     this.commands.push({ at: Date.now(), argv, ok: answer.code === 0 })
     return { stdout: '', ...answer }
-  }
-
-  /** The agent's session key, or none for an agent the scenario does not know. */
-  private keyOf(agentId: string): SessionKey | null {
-    return this.scenario.sessions.find((s) => agentIdOf(s) === agentId)?.key ?? null
   }
 
   /** Each of the store's calls that returns a promise, counted while it is in flight. */
