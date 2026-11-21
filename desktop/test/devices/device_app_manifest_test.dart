@@ -51,11 +51,11 @@ Map<String, Object?> linuxManifest({
   },
   'device-linux-x64-appimage': {
     ...entry(url: _linuxX64Url)..remove('version'),
-    if (version != null) 'version': version,
+    'version': ?version,
   },
   'device-linux-arm64-appimage': {
     ...entry(url: _linuxArm64Url)..remove('version'),
-    if (version != null) 'version': version,
+    'version': ?version,
   },
 };
 
