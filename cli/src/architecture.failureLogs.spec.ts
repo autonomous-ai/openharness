@@ -25,7 +25,8 @@
  * constants `…_PATH`, `…_DIR`, `…_FOLDER`, `…_FILE`, `…_HOME`, `…_URL`), a machine's name (`machine`, `machineName`,
  * `…MachineName`); but not a module of Node's own by its default or namespace name (`path` of `node:path`), nor a
  * forwarder's: a plain parameter handed on bare by a function whose callers are checked where they call it, one bound
- * to a logger's name (`log: (line) => …`, `deps.log ?? (…)`) or a function of the file's own. And when it prints whole
+ * to a logger's name (`log: (line) => …`, `deps.log ?? (…)`) or a function of the file's own that the file only calls
+ * (not one it hands on by its name: `.on('data', say)`, `this.say.bind(this)`). And when it prints whole
  * a property of a local given a function of the file's own's result (awaited or not) or an object literal, and the
  * value there is found by the rules above. A `.length` or a `.size`, a type test, a comparison, a `?:`'s condition (it
  * is tested, never printed), and what these return carry no words: `errorKind`, `codeOrLength`, `hashOf` and `sid`
@@ -577,19 +578,72 @@ const hidden = (call: ts.CallExpression): string | undefined => {
   return namesIn(call.arguments).some((name) => madeFrom(declarationOf(name))) ? undefined : '"fail" naming nothing it caught'
 }
 
+const identifiers = new WeakMap<ts.SourceFile, ReadonlyMap<string, readonly ts.Identifier[]>>()
+
+/** Every identifier of [source] spelled [text], indexed once per file. */
+const spelled = (source: ts.SourceFile, text: string): readonly ts.Identifier[] => {
+  let index = identifiers.get(source)
+  if (!index) {
+    const found = new Map<string, ts.Identifier[]>()
+    const visit = (node: ts.Node): void => {
+      if (ts.isIdentifier(node)) {
+        const same = found.get(node.text)
+        if (same) same.push(node)
+        else found.set(node.text, [node])
+      }
+      ts.forEachChild(node, visit)
+    }
+    visit(source)
+    identifiers.set(source, index = found)
+  }
+  return index.get(text) ?? []
+}
+
+/** Whether [use] is what a call calls: `say(…)`, `(say)(…)`, `this.say?.(…)`. */
+const isCallee = (use: ts.Expression): boolean => {
+  let at: ts.Node = use
+  while (ts.isParenthesizedExpression(at.parent)) at = at.parent
+  return ts.isCallExpression(at.parent) && at.parent.expression === at
+}
+
+/**
+ * Whether the file uses the function [declaration] binds to [name] only by calling it, each call read through its
+ * forwarding: a function handed by its name (`.on('data', say)`) is called by code the guard does not read. An
+ * export's callers in another file are a limit (the header's).
+ */
+const onlyCalled = (name: ts.Identifier, declaration: ts.Node): boolean => spelled(name.getSourceFile(), name.text).every((use) =>
+  use === name || (ts.isPropertyAccessExpression(use.parent) && use.parent.name === use)
+  || ((ts.isPropertyAssignment(use.parent) || ts.isPropertyDeclaration(use.parent) || ts.isMethodDeclaration(use.parent)) && use.parent.name === use)
+  || ts.isExportSpecifier(use.parent) || declarationOf(use) !== declaration || isCallee(use))
+
+/** The same of a class's method or function property: each `this.<name>` in its class calls it. */
+const onlyCalledOnThis = (member: ts.MethodDeclaration | ts.PropertyDeclaration): boolean => {
+  const name = member.name
+  if (!ts.isIdentifier(name) && !ts.isPrivateIdentifier(name)) return false
+  let held = true
+  const visit = (node: ts.Node): void => {
+    if (ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword && node.name.text === name.text
+      && !isCallee(node)) held = false
+    ts.forEachChild(node, visit)
+  }
+  visit(member.parent)
+  return held
+}
+
 /**
  * Whether [fn]'s callers are checked where they call it: it is bound to a logger's name (`log: (line) => …`,
  * `const log = deps.log ?? ((line) => …)`), so each of its calls is a log call, or it is a function of the file's own
- * (`calleeOf`), whose calls are read through its forwarding.
+ * (`calleeOf`) that the file only calls, each call read through its forwarding.
  */
 const callersChecked = (fn: ts.SignatureDeclaration): boolean => {
   const named = (name: ts.Node | undefined): boolean => !!name && ts.isIdentifier(name) && LOGGERS.includes(name.text)
-  if (ts.isFunctionDeclaration(fn)) return true
-  if (ts.isMethodDeclaration(fn)) return ts.isClassLike(fn.parent) || named(fn.name)
+  if (ts.isFunctionDeclaration(fn)) return !fn.name || onlyCalled(fn.name, fn)
+  if (ts.isMethodDeclaration(fn)) return ts.isClassLike(fn.parent) ? onlyCalledOnThis(fn) : named(fn.name)
   let bound: ts.Node = fn
   while (ts.isParenthesizedExpression(bound.parent) || ts.isAsExpression(bound.parent) || ts.isSatisfiesExpression(bound.parent)) bound = bound.parent
-  if ((ts.isVariableDeclaration(bound.parent) || (ts.isPropertyDeclaration(bound.parent) && ts.isClassLike(bound.parent.parent)))
-    && bound.parent.initializer === bound) return true
+  const holder = bound.parent
+  if (ts.isVariableDeclaration(holder) && holder.initializer === bound) return !ts.isIdentifier(holder.name) || onlyCalled(holder.name, holder)
+  if (ts.isPropertyDeclaration(holder) && ts.isClassLike(holder.parent) && holder.initializer === bound) return onlyCalledOnThis(holder)
   // A logger's name binds it through `??`, `||` and `?:` too: what is picked is called as that logger.
   let picked: ts.Node = fn
   while (ts.isParenthesizedExpression(picked.parent) || ts.isConditionalExpression(picked.parent) || (ts.isBinaryExpression(picked.parent)
