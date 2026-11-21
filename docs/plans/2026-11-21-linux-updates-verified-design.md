@@ -24,7 +24,7 @@ shipped binary. That is the scope.
 
 ## Decisions already made
 
-By the orchestrator for Ken, 2026-11-21:
+Made before the design, 2026-11-21:
 
 1. **Reuse the Tauri updater key** of Harness Device for the Desktop Linux AppImage. No new secret: the repository
    secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` already exist (repo-level:
@@ -34,7 +34,7 @@ By the orchestrator for Ken, 2026-11-21:
 3. **Include both Linux paths in Desktop**: the Desktop updater on Linux verifies its own signature, and Desktop
    installing Harness Device on Linux verifies the Device's signature.
 4. **Split the GCS upload out of `build-linux`**: build code never holds bucket write.
-5. **The one-line install scripts stay on the CDN, unchanged** (Ken, 2026-11-21): no signature check inside
+5. **The one-line install scripts stay on the CDN, unchanged** (owner, 2026-11-21): no signature check inside
    `website/scripts/desktop-install.sh` or `device-install.sh`, no move to the web app, no codesign step on macOS.
    A key pinned in a script served from the same bucket adds nothing.
 6. **The CLI's installers and updater are a separate item**, not this branch (same gap, about three times the size:
@@ -215,7 +215,7 @@ Order matters, because a new Linux Desktop refuses an unsigned update:
    sha256 alone, as today; from then on they hold the check.
 3. Nothing else waits: Part 3 reads signatures every Device release with Linux already publishes.
 
-The release itself is not part of this branch: releases happen only when Ken asks. The pull request states the order.
+The release itself is not part of this branch. The pull request states the order.
 
 ## Measures
 

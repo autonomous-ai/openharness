@@ -636,7 +636,7 @@ once, already done) and minisign's pinned GitHub release.
 4. **The release workflow on GitHub: not run on this branch**, `test_publication=true` included: a `--prepare` run
    writes candidates to the release bucket, and the publication checks write disposable objects there. Its jobs are
    held by Task 10's tests, its scripts by Tasks 6–9's and by check 2. The first real signed release is the next
-   Desktop release, when Ken asks. The PR body says: the first Desktop release after this merges runs
+   Desktop release. The PR body says: the first Desktop release after this merges runs
    `release-desktop.yml` with `test_publication=true` before the real one (the only real run of the changed
    `check-desktop-*-gcs.py` scripts), and states the rollout order (Task 11 writes both into `desktop/RELEASE.md`).
 5. **Numbers for the PR body.** From check 3's two Linux legs: the 100 MB BLAKE2b-512 + Ed25519 time on x64 and arm64
