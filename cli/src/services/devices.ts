@@ -29,6 +29,7 @@ import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, D
 import { CableSession, SHOWN_ONLY_PREFIX, type DialStatus, type FollowCause } from '../cable/cableSession.js'
 import type { HostAdapter, Pane } from '../cable/hosts/adapter.js'
 import { chatGptPlaces, claudeStoreRoots } from '../cable/hosts/appPlaces.js'
+import { AppWake } from '../cable/hosts/appWake.js'
 import { createClaudeAppAdapter } from '../cable/hosts/claudeApp.js'
 import { ClaudeAppSource, type ClaudeAppSourceDeps } from '../cable/hosts/claudeAppSource.js'
 import { ClaudeAppStore } from '../cable/hosts/claudeAppStore.js'
@@ -700,7 +701,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, orcaHomes, {
     adapters,
     modReady: (sessionId) => inbox.ready(sessionId),
-    toMod: (sessionId, text) => inbox.deliver(sessionId, text),
+    // Words for a session the Claude app's wake still waits for would take its first poll ahead of the wake's: they are
+    // words not taken yet (cable/hosts/appWake.ts waitsFor). The wake is built whenever this source is.
+    toMod: (sessionId, text) => claudeWake!.waitsFor(sessionId) ? Promise.resolve('busy' as const) : inbox.deliver(sessionId, text),
     canOpen: opener.can,
     // Noted before `open -b`, which can take a while, and for an app with no pane of its own. A tap on a Claude app agent
     // runs the continue link a rest runs: its attach is the dial's own echo too.
@@ -838,12 +841,35 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }) : null
   /** The Claude app's stores, in the person's home: the app's own folders, not a Harness path. */
   const claudeAppRoots = claudeStoreRoots(apps.platform, process.env, homedir())
+  /** One for the whole devices process, every dial's words for a resting Claude app session, behind the observed agents'
+   *  switch (docs/plans/2026-11-21-dial-claude-app-wake-send-design.md). */
+  const claudeWake: AppWake | null = observed ? new AppWake({
+    // A tap's link and its notes, without the opener's fallback, which brings the app on whatever session it shows. The
+    // raw adapter: the noted one would note the move twice.
+    open: async (localId, agentId) => {
+      noteMove()
+      noteLink(agentId)
+      return (await claude.focus(claudePane(localId))) === true
+    },
+    // The observed source runs its listeners unguarded, and the inbox says nothing of one that throws: the wake's go
+    // through the part guard, which says what failed.
+    observed: {
+      list: () => observed.list(),
+      send: (agent, text) => observed.send(agent, text),
+      onChange: (listener) => observed.onChange(() => part.call('claude-app', listener)),
+    },
+    onPoll: (listener) => inbox.onPoll((sessionId) => part.call('claude-app', () => listener(sessionId))),
+    after: timerIn('claude-app'),
+    monotonic,
+    log,
+    count: voiced,
+  }) : null
   /** The Claude app's Code sessions, with or without a process, listed from its stores when a file of them changes
    *  (docs/plans/2026-11-19-dial-claude-app-sessions-design.md). It runs only while a dial is attached, behind the
    *  observed agents' switch, on macOS, Windows and Linux, where the app runs
    *  (docs/plans/2026-11-20-dial-app-sessions-win-linux-design.md). A session with a process is the observed source's
    *  copy, which holds its row while it runs (registry.ts). */
-  const claudeAppSource = observed ? new ClaudeAppSource({
+  const claudeAppSource = claudeWake ? new ClaudeAppSource({
     store: deps.claudeAppStore ?? new ClaudeAppStore(claudeAppRoots.map(({ root }) => root)),
     roots: claudeAppRoots,
     watch: (folders, changed) => watchNearest(folders, changed),
@@ -857,6 +883,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     canShow: (localId) => claude.canShow(claudePane(localId)),
     // The noted copy keeps the show the Claude app's adapter has.
     show: (localId, agentId) => claudeNoted.show!(claudePane(localId), agentId),
+    canLink: (localId) => claude.canLink(claudePane(localId)),
+    wake: claudeWake,
     monotonic,
     log,
   }) : null

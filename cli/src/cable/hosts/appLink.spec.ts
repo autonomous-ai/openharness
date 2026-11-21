@@ -24,6 +24,19 @@ function recorder(over: Partial<AppLinkDeps> = {}, codes: Array<number | null> =
   return { calls, verbs: createAppLink(deps, link) }
 }
 
+/** The recorder on Windows, holding a raise whose link notes its URL and bundle and answers the next of [answers],
+ *  then true. */
+function onWindows(answers: boolean[] = [], link: AppLink = FAKE, over: Partial<AppLinkDeps> = {}) {
+  const links: Array<[string, string | undefined]> = []
+  const windows: WindowsRaise = {
+    app: async () => { throw new Error('no app') },
+    link: async (url, bundle) => { links.push([url, bundle]); return answers.length ? answers.shift()! : true },
+    cursorFolder: async () => { throw new Error('no folder') },
+    desktop: async () => { throw new Error('no desktop') },
+  }
+  return { ...recorder({ platform: 'win32', windows, ...over }, [], link), links }
+}
+
 /** The recorder, each command held until it is let go, so a link can be caught still running. */
 function holding() {
   const calls: Call[] = []
@@ -80,6 +93,22 @@ describe('an app whose session opens by its link', () => {
     front = false
     expect(verbs.canFocus(pane('s1'))).toBe(true)
     expect(verbs.canShow(pane('s1'))).toBe(false)
+  })
+
+  it('canLink: macOS and Windows with its raise; Linux only once xdg-mime named an app; never the app in front', async () => {
+    expect(recorder({ inFront: () => false }).verbs.canLink(pane('s1'))).toBe(true)
+    expect(onWindows([], FAKE, { inFront: () => false }).verbs.canLink(pane('s1'))).toBe(true)
+    expect(recorder({ platform: 'win32' }).verbs.canLink(pane('s1'))).toBe(false)
+    const linux = recorder({ platform: 'linux', inFront: () => false })
+    expect(linux.verbs.canLink(pane('s1'))).toBe(false) // starts the read
+    await settled()
+    expect(linux.verbs.canLink(pane('s1'))).toBe(true)
+    expect(linux.calls).toEqual([asked])
+    for (const none of [recorder({ platform: 'linux' }, [], FAKE, '\n'), recorder({ platform: 'linux', onPath: () => null })]) {
+      none.verbs.canLink(pane('s1'))
+      await settled()
+      expect(none.verbs.canLink(pane('s1'))).toBe(false)
+    }
   })
 
   it('focus runs the link alone, the URL its one argument', async () => {
@@ -286,19 +315,6 @@ describe('a link on Linux', () => {
 
 // Windows has no `open`: the link goes to the raise, which opens it through `harness-pty open-link` (windowsRaise.ts).
 describe('a link on Windows', () => {
-  /** The recorder on Windows, holding a raise whose link notes its URL and bundle and answers the next of [answers],
-   *  then true. */
-  function onWindows(answers: boolean[] = [], link: AppLink = FAKE, over: Partial<AppLinkDeps> = {}) {
-    const links: Array<[string, string | undefined]> = []
-    const windows: WindowsRaise = {
-      app: async () => { throw new Error('no app') },
-      link: async (url, bundle) => { links.push([url, bundle]); return answers.length ? answers.shift()! : true },
-      cursorFolder: async () => { throw new Error('no folder') },
-      desktop: async () => { throw new Error('no desktop') },
-    }
-    return { ...recorder({ platform: 'win32', windows, ...over }, [], link), links }
-  }
-
   it('a tap and a rest send the link and its bundle to the raise, and run nothing', async () => {
     const { calls, links, verbs } = onWindows([true, true, false, false], { ...FAKE, bundle: 'com.example.fake' })
     expect(verbs.canFocus(pane('s1'))).toBe(true)

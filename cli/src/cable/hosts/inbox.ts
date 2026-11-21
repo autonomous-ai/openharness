@@ -35,6 +35,7 @@ export class Inbox {
   /** Ids `gone` found no open poll for, oldest first. Its notice can come before its own poll: the devices process handles
    *  a notice at once and a call a microtask later (services/process.ts), and the socket hands it several in one tick. */
   private readonly early = new Set<string>()
+  private readonly pollListeners = new Set<(sessionId: string) => void>()
 
   constructor(private readonly deps: InboxDeps) {}
 
@@ -53,7 +54,18 @@ export class Inbox {
     return new Promise((resolve) => {
       const held: Poll = { pollId, resolve, cancel: this.deps.after(HOLD_MS, () => this.close(sessionId, held, {})) }
       this.polls.set(sessionId, held)
+      // Told only now it is held, so a deliver from a listener finds this poll: the Claude app's wake hands the first
+      // poll of the session it opened its words (the design, § 3.4).
+      for (const listener of [...this.pollListeners]) {
+        try { listener(sessionId) } catch { /* the listener's fault is its own to say: the poll stays held */ }
+      }
     })
+  }
+
+  /** Hears each poll as it is held, with its session id; a poll answered at once is not. The result stops it. */
+  onPoll(listener: (sessionId: string) => void): () => void {
+    this.pollListeners.add(listener)
+    return () => { this.pollListeners.delete(listener) }
   }
 
   /** The poll's client went, or a newer poll replaced it. */

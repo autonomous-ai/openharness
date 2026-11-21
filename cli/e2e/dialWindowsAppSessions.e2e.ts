@@ -249,7 +249,7 @@ describe.runIf(process.platform === 'win32')("the Claude and ChatGPT apps' sessi
     await pick('claude')
     const rows = await showing(d.dial, 'the three sessions', [msixOnly, shared, roamingOnly].map(claudeAgent))
     expect(rows).toEqual([msixOnly, shared, roamingOnly].map((session) =>
-      expect.objectContaining({ id: claudeAgent(session), name: session.title, engine: 'claude', host: 'claude', caps: 'sf' })))
+      expect.objectContaining({ id: claudeAgent(session), name: session.title, engine: 'claude', host: 'claude', caps: 'svf' })))
     const ids = new Set(rows.map((row) => row.id))
     expect(d.dial.messages.filter((m) => (m.t === 'turn.started' || m.t === 'turn.done') && ids.has(String(m.agentId)))).toEqual([])
 

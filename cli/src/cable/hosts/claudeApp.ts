@@ -7,7 +7,7 @@
  * reaches the link.
  */
 import type { HostAdapter, Pane, Place } from './adapter.js'
-import { createAppLink, type AppLinkDeps } from './appLink.js'
+import { createAppLink, type AppLinkDeps, type AppLinkVerbs } from './appLink.js'
 import { APP_BUNDLES } from './hostDetect.js'
 
 /** The check the Claude app makes of a session its `claude://code/continue` link names (read in the app, 2026-11-14). */
@@ -21,7 +21,7 @@ export function claudePaneKey(localId: string): string {
 
 export function createClaudeAppAdapter(
   deps: AppLinkDeps,
-): HostAdapter & Required<Pick<HostAdapter, 'canShow' | 'show' | 'paneKey'>> {
+): HostAdapter & Required<Pick<HostAdapter, 'canShow' | 'show' | 'paneKey'>> & Pick<AppLinkVerbs, 'canLink'> {
   return {
     id: 'claude',
     tap: 'instead',
