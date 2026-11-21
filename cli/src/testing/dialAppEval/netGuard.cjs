@@ -9,6 +9,7 @@ const dns = require('node:dns')
 const { appendFileSync } = require('node:fs')
 const { syncBuiltinESMExports } = require('node:module')
 const net = require('node:net')
+const os = require('node:os')
 const tls = require('node:tls')
 
 const FILE_ENV = 'HARNESS_E2E_NET_GUARD_FILE'
@@ -34,6 +35,13 @@ function processName() {
   if (process.argv.includes('__run')) return 'core'
   if (process.argv.includes('__harnessd')) return 'master'
   return 'node'
+}
+
+/** A host as it is kept and said: the machine's own name, with .local or without, can be the person's. */
+function hostOf(host) {
+  const name = String(host).toLowerCase()
+  const self = os.hostname().toLowerCase().replace(/\.local$/, '')
+  return name === self || name === `${self}.local` ? '<this machine>' : String(host)
 }
 
 function portOf(port) {
@@ -68,7 +76,7 @@ function install(record) {
   if (proxy) throw new Error(`the network guard cannot hold under ${proxy}: a proxy would carry requests off this machine`)
   installed = true
   const refusal = (api, host, port, code) => {
-    const attempt = { api, host: String(host), port: portOf(port), pid: process.pid, process: processName() }
+    const attempt = { api, host: hostOf(host), port: portOf(port), pid: process.pid, process: processName() }
     record(attempt)
     const where = attempt.port === null ? attempt.host : `${attempt.host}:${attempt.port}`
     return Object.assign(new Error(`the dial eval reaches no network: ${where}`), { code })

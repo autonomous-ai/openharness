@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 
 export interface NetAttempt {
   api: 'net' | 'tls' | 'dgram' | 'dns'
+  /** `<this machine>` for the machine's own name, with .local or without. */
   host: string
   port: number | null
   pid: number
