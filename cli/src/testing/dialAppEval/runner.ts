@@ -26,8 +26,8 @@ const RESULTS_FILE = /^results-[ab]-\w+\.json$/
 const firstLine = (error: unknown): string => String(error instanceof Error ? error.message : error).split('\n', 1)[0]!
 
 export async function runScenario(driver: EvalDriver, scenario: Scenario, platform: Platform): Promise<ScenarioRun> {
-  /** Each condition wait that reached its limit: what came after it ran on a world that was not ready. */
-  const missed: Array<{ index: number; evidence: string[] }> = []
+  /** Each condition wait run, and whether it held: one that reached its limit let what came after it run on a world that was not ready. */
+  const waited: Array<{ index: number; held: boolean; evidence: string[] }> = []
   // A throw ends the steps, never the run: what was seen up to it still holds the wrong sends the gate must see.
   let error: string | undefined
   let doing = 'start'
@@ -41,7 +41,7 @@ export async function runScenario(driver: EvalDriver, scenario: Scenario, platfo
         const until = step.until
         await driver.settle(step.ms, () => condition(until, scenario, driver.seen()).holds)
         const after = condition(until, scenario, driver.seen())
-        if (!after.holds) missed.push({ index, evidence: [`not held in ${step.ms} ms`, ...after.evidence] })
+        waited.push({ index, held: after.holds, evidence: after.holds ? after.evidence : [`not held in ${step.ms} ms`, ...after.evidence] })
       }
     }
     doing = 'the last settle'
@@ -64,12 +64,13 @@ export async function runScenario(driver: EvalDriver, scenario: Scenario, platfo
   const wrong = wrongSends(scenario, seen).map((w) => ({ ...on, ...w }))
   const score = (checks: readonly Check[]): CheckResult[] => gaps.length > 0 ? []
     : checks.flatMap((check) => evaluate(check, scenario, seen, tier, platform))
-  // A missed wait costs the scenario's first dimension, so a run whose steps outran the dial never passes unseen.
-  const failed = (check: string, evidence: string[]): CheckResult => ({ ...on, scenario: scenario.id, check, app: scenario.app,
-    dim: scenario.dims[0]!, heldOut: scenario.heldOut, score: 0, timed: false, evidence })
-  const waits = gaps.length > 0 ? [] : missed.map(({ index, evidence }) => failed(`wait.${index}`, evidence))
+  const own = (check: string, score: number, timed: boolean, evidence: string[]): CheckResult => ({ ...on, scenario: scenario.id,
+    check, app: scenario.app, dim: scenario.dims[0]!, heldOut: scenario.heldOut, score, timed, evidence })
+  // A missed wait costs the scenario's first dimension, so a run whose steps outran the dial never passes unseen. Every
+  // wait has its result, so tier A's exact baseline sees one that stops holding; timed, as tier B's depend on the runner.
+  const waits = gaps.length > 0 ? [] : waited.map(({ index, held, evidence }) => own(`wait.${index}`, held ? 1 : 0, true, evidence))
   // A run that threw costs the scenario's first dimension too, and its error stays in the report.
-  const errors = gaps.length > 0 || error === undefined ? [] : [failed('error', [error])]
+  const errors = gaps.length > 0 || error === undefined ? [] : [own('error', 0, false, [error])]
   return { scenario: scenario.id, platform, results: [...score(scenario.checks), ...waits, ...errors], probes: score(scenario.probes),
     wrongSends: wrong, gaps, ...(error === undefined ? {} : { error }) }
 }

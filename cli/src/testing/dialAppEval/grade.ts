@@ -15,6 +15,13 @@ const UPDATE_TIER_A = 'run `npm run eval:dial-apps -- --tier a --update-baseline
 
 type Run = Pick<CheckResult, 'tier' | 'platform' | 'scenario'>
 const runKey = (r: Run): string => `${r.tier}/${r.platform}/${r.scenario}`
+const runOfKey = (key: string): string => key.split('/', 3).join('/')
+/** A baseline subset: tier A as one, as it runs every platform by injection; tier B one per platform it drove. */
+const subsetOf = (r: Pick<CheckResult, 'tier' | 'platform'>): string => (r.tier === 'a' ? 'a' : `b/${r.platform}`)
+const subsetOfKey = (key: string): string => {
+  const [tier, platform] = key.split('/', 2) as [Tier, Platform]
+  return subsetOf({ tier, platform })
+}
 const platformKey = (r: Pick<CheckResult, 'tier' | 'platform'>): string => `${r.tier}/${r.platform}`
 const platformOfKey = (key: string): string => key.split('/', 2).join('/')
 const mean = (values: readonly number[]): number => values.reduce((sum, v) => sum + v, 0) / values.length
@@ -130,15 +137,19 @@ export function tierAVerdict(results: RunResults, baseline: Baseline): Verdict {
   const now = new Map(scoredResults(results).filter((r) => r.tier === 'a').map((r) => [resultKey(r), r.score]))
   const before = new Map(Object.entries(baseline.checks).filter(([key]) => key.startsWith('a/')))
   const regressions: string[] = []
+  const missing: string[] = []
   const stale: string[] = []
   for (const key of [...new Set([...now.keys(), ...before.keys()])].sort()) {
     const was = before.get(key)
     const is = now.get(key)
-    if (was !== undefined && is !== undefined && is < was) regressions.push(key)
+    if (is === undefined) missing.push(key)
+    // A new check that fails is a regression: one that passes, or rose, is the baseline's to catch up with.
+    else if (is < (was ?? 1)) regressions.push(key)
     else if (was !== is) stale.push(key)
   }
   const lines = [
     ...(regressions.length > 0 ? [`regression: ${regressions.join(', ')}`] : []),
+    ...(missing.length > 0 ? [`missing: ${missing.join(', ')}`] : []),
     ...(stale.length > 0 ? [`stale baseline: ${stale.join(', ')}; ${UPDATE_TIER_A}`] : []),
   ]
   return lines.length > 0 ? { ok: false, message: lines.join('\n') } : { ok: true, message: 'tier A matches the baseline' }
@@ -186,6 +197,24 @@ export function updateBaseline(baseline: Baseline | null, results: RunResults, t
     checks: Object.fromEntries(entries),
     apps: { claude: apps.claude.score, chatgpt: apps.chatgpt.score },
   }
+}
+
+/** The subsets an update with these tiers replaces: those the run drove. */
+function replaced(results: RunResults, tiers: readonly Tier[]): Set<string> {
+  return new Set([...results.results, ...results.gaps].filter((r) => tiers.includes(r.tier)).map(subsetOf))
+}
+
+/**
+ * The baseline checks an update would drop with nothing to say why: each of a subset it replaces that the run no longer
+ * gives, while its scenario had no gap and `catalog` (each tier/platform/scenario the catalog runs now) still has it.
+ */
+export function droppedKeys(baseline: Baseline | null, results: RunResults, tiers: readonly Tier[], catalog: ReadonlySet<string>): string[] {
+  const subsets = replaced(results, tiers)
+  const given = new Set(results.results.map(resultKey))
+  const gapRuns = new Set(results.gaps.map(runKey))
+  return Object.keys(baseline?.checks ?? {})
+    .filter((key) => subsets.has(subsetOfKey(key)) && !given.has(key) && !gapRuns.has(runOfKey(key)) && catalog.has(runOfKey(key)))
+    .sort(byText)
 }
 
 export function loadBaseline(path: string = BASELINE_PATH): Baseline | null {
