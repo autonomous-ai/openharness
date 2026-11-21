@@ -8,13 +8,14 @@
  * and CODEX_HOME, and the fake engines run them (fakeEngine.mjs): the real `hook/notify.mjs` carries
  * every hook event to the daemon, with its deadline and its offline registry writes. Before a daemon
  * starts, every folder it could install hooks into is checked to be inside the test's root
- * (`assertHooksContained`), and every file it says it wrote is checked again once it is up.
+ * (`assertHooksContained`), and once it is up the files its log says hold its hooks are counted against those the
+ * root holds (`hooksOutside`).
  *
  * It runs on a copy of the worker's Node alone in its folder (e2e/harness/testNode.ts), so it finds no engine beside
  * its Node.
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from 'node:fs'
 import { mkdir, symlink, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
@@ -29,7 +30,6 @@ import { GH_FORBIDDEN_STUB } from '../../src/testing/ghStub.js'
 import { hooks as claudeHooks } from '../../src/engines/claude/hookContract.js'
 import { hooks as codexHooks } from '../../src/engines/codex/hookContract.js'
 import { readAdoptedHomes } from '../../src/engines/kit/homeAdoption.js'
-import { hashOf } from '../../src/lib/log.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
 import { endRootProcesses } from '../../src/testing/rootProcesses.js'
 import { assertSocketPathFits } from '../../src/testing/socketPathRoom.js'
@@ -275,30 +275,77 @@ export function assertHookScriptBeside(scriptPath: string): void {
   throw new Error(`${scriptPath} has no notify.mjs beside it: its daemon refuses every hook install (lay it out with buildWithLean)`)
 }
 
+/** A hook line naming a file by its path, not by its tag: a path names the person's home. */
+const HOOK_LINE_PATH = /\[hooks\] .*(?:→|unchanged:) (?:\/|[A-Za-z]:\\)/
 /**
- * The files a daemon's log says it installed hooks or plugins into, found them already in, or left alone, each by the
- * hash the log names it by (lib/log.ts `hashOf`): a path would name the person's home. The update line names the hook
- * script first and the file it rewrote after ` in `.
+ * A line saying Harness's hooks are in a file (installed, already installed, or updated), and the tag naming that file:
+ * the last word, which on the update line follows its script's tag and ` in `. A removal, or a file left as it was,
+ * leaves no hook of ours in the file it names.
  */
-function hookFilesNamed(log: string): string[] {
-  const files: string[] = []
-  for (const line of log.split('\n')) {
-    if (!line.includes('[hooks]')) continue
-    const named = line.includes('updated (path/port changed)') ? / in ([0-9a-f]{8})\s*$/.exec(line) : /(?:→|unchanged:) ([0-9a-f]{8})(?:\s|$)/.exec(line)
-    if (named) files.push(named[1])
-  }
-  return files
+const HOOKS_IN = /\[hooks\] (?:installed .* →|.* already installed →|updated \(path\/port changed\) → .* in) ([0-9a-f]{8})\s*$/
+/** The line each core starts with (core/main.ts): what follows it, up to the next, is that core's. */
+const CORE_STARTS = '[cli] daemon pid '
+/**
+ * Whether [text] is a file Harness's hooks are in: notify.mjs's command is in it, or it is one of Harness's plugins, which
+ * all begin with these words (engines/kit/nativePlugin.ts). A bundle quotes the plugins' words, never at its start.
+ */
+const holdsHooks = (text: string): boolean => /notify\.mjs'? --port \d/.test(text) || text.startsWith('// session-register')
+/** The most an installer reads of a hook file (engines/kit/nativeHookFiles.ts): a larger file holds none of ours. */
+const HOOK_FILE_MAX_BYTES = 1024 * 1024
+
+/** What the root's walk reads, which a spec replaces. `text` is null for a file larger than any hook file. */
+export interface TreeReader {
+  entries(dir: string): Pick<Dirent, 'name' | 'isFile' | 'isDirectory'>[]
+  text(file: string): string | null
+}
+const DISK: TreeReader = {
+  entries: (dir) => readdirSync(dir, { withFileTypes: true }),
+  text: (file) => statSync(file).size > HOOK_FILE_MAX_BYTES ? null : readFileSync(file, 'utf8'),
 }
 
 /**
- * The hashes [log] names a hook file by that are no file's under [root]: each path there is hashed as the daemon
- * spells it, the root joined to the path inside it. A link is not followed, so a file reached through one is outside.
+ * How many files under [root] hold Harness's hooks. A link is not followed, so a file reached through one is outside.
+ * A daemon still running moves its files about: a folder or a file listed and gone by the time it is read is passed over.
  */
-export function hooksOutside(log: string, root: string): string[] {
-  const named = hookFilesNamed(log)
-  if (!named.length) return []
-  const inside = new Set(readdirSync(root, { recursive: true, encoding: 'utf8' }).map((path) => hashOf(join(root, path))))
-  return named.filter((hash) => !inside.has(hash))
+function hookFilesIn(root: string, read: TreeReader): number {
+  const gone = (error: unknown) => ['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')
+  let held = 0
+  const walk = (dir: string): void => {
+    let entries: ReturnType<TreeReader['entries']>
+    try { entries = read.entries(dir) } catch (error) { if (gone(error)) return; throw error }
+    for (const entry of entries) {
+      const path = join(dir, entry.name)
+      if (entry.isDirectory()) walk(path)
+      else if (entry.isFile()) {
+        try { if (holdsHooks(read.text(path) ?? '')) held++ } catch (error) { if (!gone(error)) throw error }
+      }
+    }
+  }
+  walk(root)
+  return held
+}
+
+/**
+ * The lines of [log] that show a daemon put hooks outside [root], for its error: each hook line naming a raw path, a
+ * regression in itself; else, of a core whose lines name more files holding its hooks than [root] holds, those lines,
+ * which name them by tags alone. Each tag is made with a key of that core's own (lib/log.ts `hashOf`), which no test can
+ * make, so the files are counted, core by core: within one core a file always has the same tag, and in the next another.
+ */
+export function hooksOutside(log: string, root: string, read: TreeReader = DISK): string[] {
+  const lines = log.split('\n')
+  const raw = lines.filter((line) => HOOK_LINE_PATH.test(line))
+  if (raw.length) return raw
+  const cores: string[][] = [[]]
+  for (const line of lines) {
+    if (line.includes(CORE_STARTS)) cores.push([])
+    else if (HOOKS_IN.test(line)) cores.at(-1)!.push(line)
+  }
+  let held: number | undefined
+  for (const said of cores) {
+    const files = new Set(said.map((line) => HOOKS_IN.exec(line)![1]))
+    if (files.size && files.size > (held ??= hookFilesIn(root, read))) return said
+  }
+  return []
 }
 
 export const until = async <T>(what: string, probe: () => Promise<T | null | undefined | false> | T | null | undefined | false, ms = 30_000, every = 100): Promise<T> => {
@@ -576,10 +623,14 @@ esac
     try { return readFileSync(this.opensLog, 'utf8').split('\n').filter(Boolean).map((line) => line.split(' ')) } catch { return [] }
   }
 
-  /** Throws when the daemon said it put hooks outside the root, or an engine refused hooks found there. */
+  /**
+   * Throws when the last start's log says it put hooks outside the root, or an engine refused hooks found there. Its
+   * files are counted against the root as it is now, so each start is checked before the next: a later one may take
+   * hooks out again (Hermes's), or the test moves a home.
+   */
   private assertHooksStayedInside(): void {
-    const outside = hooksOutside(this.output, this.root)
-    if (outside.length) throw new Error(`the daemon under test wrote hooks outside ${this.root}, to the files its log names by these hashes: ${[...new Set(outside)].join(', ')}`)
+    const outside = hooksOutside(this.output.slice(this.startedAt), this.root)
+    if (outside.length) throw new Error(`the daemon under test wrote hooks outside ${this.root}; its lines:\n${outside.join('\n')}`)
     const refused = this.hookLog().split('\n').filter((line) => line.includes('REFUSED'))
     if (refused.length) throw new Error(`a fake engine refused to run hooks (test root ${this.root}):\n${refused.join('\n')}`)
   }
@@ -737,7 +788,10 @@ esac
     return env
   }
 
-  /** SIGTERM, then SIGKILL to its whole process group after `ms`. Resolves when the process is gone. */
+  /**
+   * SIGTERM, then SIGKILL to its whole process group after `ms`. Resolves when the process is gone, and its hooks are
+   * checked to have stayed inside the root.
+   */
   async stop(ms = 15_000): Promise<void> {
     const child = this.child
     if (!child) return
@@ -746,6 +800,7 @@ esac
     const timer = setTimeout(() => IsolatedDaemon.killGroup(child), ms)
     await exited
     clearTimeout(timer)
+    this.assertHooksStayedInside()
   }
 
   /**
