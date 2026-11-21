@@ -69,6 +69,9 @@ const LINUX_TOOLS: ReadonlySet<string> = new Set(['xdg-mime', 'xdg-open'])
 /** Made-up places, recorded and never run. */
 const CODEX_BIN = '/opt/eval/bin/codex'
 const APP_CODEX_BIN = '/opt/eval/ChatGPT.app/codex'
+/** The programs whose commands the world answers as the scenario says, by name: macOS's and Linux's openers, the scheme
+ *  lookup, the Windows helper and the Linux raise. A command of any other is one tier A does not model. */
+const ANSWERED: ReadonlySet<string> = new Set(['open', 'xdg-open', 'xdg-mime', 'harness-pty', 'raise'])
 
 /** Harness's own engine homes are the suite's throwaway ones (vitest.setup.ts): never a folder outside this run's. */
 function emptied(folder: string): string {
@@ -79,12 +82,14 @@ function emptied(folder: string): string {
   return folder
 }
 
-/** Codex's queue's send (cable/hosts/codexQueue.ts): the thread and the words. */
-function queued(args: readonly string[]): { thread: string; text: string } | undefined {
+/** A command's program, as its path or name ends. */
+const programOf = (argv: readonly string[]): string => (argv[0] ?? '').split(/[\\/]/).at(-1)!
+
+/** Codex's queue's send (cable/hosts/codexQueue.ts): the thread and the words, the thread none unless it reads both. */
+function queued(args: readonly string[]): { thread: string | undefined; text: string } {
   const at = args.indexOf('--thread')
   const message = args.find((arg) => arg.startsWith('--message='))
-  return args[0] === 'queue' && at >= 0 && message !== undefined
-    ? { thread: args[at + 1] ?? '', text: message.slice('--message='.length) } : undefined
+  return { thread: at < 0 || message === undefined ? undefined : args[at + 1], text: message?.slice('--message='.length) ?? '' }
 }
 
 /** An editor that is not installed: nothing of it is found or run. */
@@ -93,28 +98,31 @@ const noEditor = (editor: VscodeEditor, platform: Platform, root: string): Vscod
   executable: () => false, read: () => null, run: async () => ({ code: null, timedOut: false }), files: () => null,
   tempDir: () => join(root, 'vsix'), write: () => {}, remove: () => {},
 })
-/** herdr, Herdr and opencode with nobody listening, as their clients say when there is no socket or service. */
-const noHerdr: HerdrClient = {
+/**
+ * herdr, Herdr Core and opencode with nobody listening, as their clients say when there is no socket or service. Tier A
+ * models no pane of theirs: words one is asked to put in a pane are `typed` into no session, which the gate counts.
+ */
+const noHerdr = (typed: (text: string) => void): HerdrClient => ({
   request: async () => ({ ok: false, fault: 'no_socket' }),
   subscribe: (_entries, to) => { queueMicrotask(() => to.closed('no_socket')); return { close: () => {} } },
-  prompt: async () => ({ outcome: 'failed', fault: 'no_socket' }),
+  prompt: async (_pane, _kind, text) => { typed(text); return { outcome: 'failed', fault: 'no_socket' } },
   socketStamp: () => undefined,
   binary: () => undefined,
-}
-const noHc: HcClient = {
+})
+const noHc = (typed: (text: string) => void): HcClient => ({
   request: async () => ({ ok: false, fault: 'no_socket' }),
   subscribe: (to) => { queueMicrotask(() => to.closed('no_socket')); return { close: () => {} } },
-  prompt: async () => ({ outcome: 'failed', fault: 'no_socket' }),
+  prompt: async (_address, _kind, text) => { typed(text); return { outcome: 'failed', fault: 'no_socket' } },
   keys: async () => false,
   socketStamp: () => undefined,
-}
-const noOpencode: OpencodeClient = {
+})
+const noOpencode = (typed: (text: string) => void): OpencodeClient => ({
   registration: () => ({ fault: 'no_service' }),
   find: async () => ({ fault: 'no_service' }),
   request: async () => ({ ok: false, fault: 'no_service' }),
   events: (_onEvent, onClose) => { queueMicrotask(() => onClose('no_service')); return { close: () => {} } },
-  prompt: async () => 'failed',
-}
+  prompt: async (_session, text) => { typed(text); return 'failed' },
+})
 /** Orca's reads, which never land: no Orca runs here. */
 const noOrca: OrcaReads = {
   orcaWatchesFocus: () => new Promise(() => {}),
@@ -171,8 +179,15 @@ export class World implements TierAWorld {
       account: { signedIn: () => false },
       // No Harness window: the person works in the apps.
       clients: { hasWindow: () => false },
-      // Tier A has no Harness agent, so the real core would refuse a send to any: one is a send to no session.
-      turns: { send: (_agentId, text) => this.deliver({ path: 'turns', target: null, text }) },
+      // Tier A has no Harness agent, so the real core would refuse a send or an answer to any: each is to no session.
+      turns: { send: (_agentId, text) => this.nowhere(text), deliver: (_agentId, text) => this.nowhere(text) },
+      questions: {
+        answer: (_agentId, _requestId, answers) => this.nowhere(Object.values(answers).join('\n')),
+        answerReviewed: async ({ answers }) => {
+          this.nowhere(Object.values(answers).join('\n'))
+          return false
+        },
+      },
     })
     start(this.core, this.ports, this.deps(root, installed))
   }
@@ -204,7 +219,7 @@ export class World implements TierAWorld {
   }
 
   gap(reason: string): void {
-    this.gaps.push(reason)
+    if (!this.gaps.includes(reason)) this.gaps.push(reason)
   }
 
   quiet(): Promise<void> {
@@ -247,9 +262,17 @@ export class World implements TierAWorld {
     }
   }
 
-  /** A command the devices ran: answered by the world's rules, and recorded at its virtual time with whether it ran to a
-   *  good end. */
-  private ran(argv: string[]): Required<Answer> {
+  /** A send through the core, which reaches no session in tier A. */
+  private nowhere(text: string): void {
+    this.deliver({ path: 'turns', target: null, text })
+  }
+
+  /**
+   * A command the devices ran: answered by the world's rules, and recorded at its virtual time with whether it ran to a
+   * good end. One of a program the world does not answer (`modelled`) is a gap: its answer would be made up.
+   */
+  private ran(argv: string[], modelled = ANSWERED.has(programOf(argv))): Required<Answer> {
+    if (!modelled) this.gap(`a command tier A does not answer: ${programOf(argv)}`)
     let answer: Answer = { code: 0 }
     for (const rule of this.rules) {
       const said = rule(argv)
@@ -283,6 +306,7 @@ export class World implements TierAWorld {
 
   private deps(root: string, installed: boolean): DevicesDeps {
     const { platform, scenario } = this
+    const typed = (text: string): void => this.deliver({ path: 'typed', target: null, text })
     const failing = new Set(scenario.world?.linkFails ?? [])
     const apps = Object.entries(APPS) as Array<[App, (typeof APPS)[App]]>
     // A link of an app the scenario says fails them is refused.
@@ -311,9 +335,13 @@ export class World implements TierAWorld {
       orcaReads: noOrca,
       codex: {
         run: async (file, args) => {
-          const { code } = this.ran([file, ...args])
-          const send = queued(args)
-          if (send) this.deliver({ path: 'codex', target: scenario.sessions.find((s) => s.id === send.thread)?.key ?? null, text: send.text })
+          const queue = args[0] === 'queue'
+          const { code } = this.ran([file, ...args], queue)
+          // A run that failed queued nothing. One that ran is a send, to no session when it names none of the scenario's.
+          if (queue && code === 0) {
+            const { thread, text } = queued(args)
+            this.deliver({ path: 'codex', target: scenario.sessions.find((s) => s.id === thread)?.key ?? null, text })
+          }
           return code
         },
         binary: () => CODEX_BIN,
@@ -322,10 +350,11 @@ export class World implements TierAWorld {
         readLoginShell: () => {},
         platform,
       },
-      herdr: noHerdr,
-      hc: noHc,
-      cmux: { binary: () => null, sessions: async () => ({ ok: false, fault: 'no-binary' }), mode: async () => undefined, inputState: async () => undefined, paste: async () => false },
-      opencode: noOpencode,
+      herdr: noHerdr(typed),
+      hc: noHc(typed),
+      cmux: { binary: () => null, sessions: async () => ({ ok: false, fault: 'no-binary' }), mode: async () => undefined,
+        inputState: async () => undefined, paste: async (_workspace, _surface, text) => { typed(text); return false } },
+      opencode: noOpencode(typed),
       claudeAppStore: this.counted(new ClaudeAppStore([this.claudeStore.root])),
       codexAppThreads: this.counted(new CodexAppThreads(this.codexHome.home)),
       watchStore: this.watch.watch,
