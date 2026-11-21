@@ -56,7 +56,8 @@ class CliE2eWorkflowTests(unittest.TestCase):
                  and "mongodb-memory-server/package.json').version" in step and '>> "$GITHUB_OUTPUT"' in step
                  and 'echo "MONGOMS_DOWNLOAD_DIR=${{ runner.temp }}/mongodb-binaries" >> "$GITHUB_ENV"' in step]
         self.assertEqual(len(found), 1)
-        # The package's own postinstall would download mongod before the cache is looked at.
+        # CI's npm does not run the package's postinstall: this only guards against one that would download mongod
+        # before the cache is looked at.
         self.assertIn("MONGOMS_DISABLE_POSTINSTALL=1 ", found[0])
         output = re.search(r'echo "([\w-]+)=\$\(node -p "require\(\'mongodb-memory-server/package\.json\'\)\.version"\)" >> "\$GITHUB_OUTPUT"', found[0])
         self.assertTrue(output)

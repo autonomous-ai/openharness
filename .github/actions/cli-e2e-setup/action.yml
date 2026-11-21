@@ -50,9 +50,10 @@ runs:
     # behind tests whose fake backend still answered the old way.
     #
     # mongod comes from a cache keyed by the installed mongodb-memory-server, which picks its version: on 2026-11-16
-    # fastdl.mongodb.org answered 504 and every shard of run 43902144004 failed before a test ran. Only main saves it,
-    # as backend-cache.yml does (#2804, #2822): a cache saved on main is visible to every PR, one saved on a PR to that
-    # PR alone. The specs find it through MONGOMS_DOWNLOAD_DIR, which mongodb-memory-server reads.
+    # fastdl.mongodb.org answered 504 for the ubuntu2204-7.0.24 tarball and one shard of run 43902144004 failed at test
+    # time. Only main saves it, as backend-cache.yml does (#2804, #2822): a cache saved on main is visible to every PR,
+    # one saved on a PR to that PR alone. The specs find it through MONGOMS_DOWNLOAD_DIR, which mongodb-memory-server
+    # reads.
     - name: Set up the real backend and its in-memory Mongo and Redis
       id: services
       if: inputs.real-backend == 'true'
