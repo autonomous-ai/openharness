@@ -5,13 +5,13 @@
  * `git.exe` committed into a repository would run as `git` there. Prepending a folder to PATH, as tmux does
  * (tmuxOnPath.ts), cannot fix that: the working folder is looked in first. A path names one file wherever it runs.
  * On macOS a daemon launchd starts has a PATH without Homebrew's: a Mac with Homebrew's gh was told to install it
- * beside a working `gh` in every terminal (2026-10-17). So gh is looked for where its installers put it, and then the
- * login shell is asked, as for tmux.
+ * beside a working `gh` in every terminal (2026-10-17). So gh is looked for where its installers put it, and then
+ * both in the PATH the person's login shell gives.
  */
 import { homedir } from 'node:os'
 import { delimiter, isAbsolute, join, win32 } from 'node:path'
 import { resolveBinaryOnPath } from './binaryOnPath.js'
-import { resolveViaLoginShell } from './tmuxOnPath.js'
+import { warmLoginShellEnvironment } from './loginShellEnv.js'
 import { fileExists, fixedFolder, gitForWindowsRoots, programFilesRoots, scoopRoots } from './windows/gitBash.js'
 
 export type Program = 'git' | 'gh'
@@ -21,7 +21,10 @@ export interface ProgramSearch {
   env?: NodeJS.ProcessEnv
   /** Windows: whether a file is at this path. */
   isFile?: (path: string) => boolean
-  /** macOS and Linux: where the login shell finds the program (tmuxOnPath.ts `resolveViaLoginShell`). */
+  /** macOS and Linux: where the login shell finds the program. By default in its PATH as loginShellEnv.ts read it,
+   *  once a process (the daemon's as it starts): gh is missing on most computers, and a shell for each miss, up to
+   *  5 s each, kept the pull request reader's slots full. The PATH is looked in again at each miss, so a program
+   *  installed since into one of its folders is found with no new shell. */
   loginShell?: () => Promise<string | null>
 }
 
@@ -44,9 +47,10 @@ export function findGh(search: ProgramSearch = {}): Promise<string | null> {
 
 async function findProgram(name: Program, search: ProgramSearch,
   installFolders: (env: NodeJS.ProcessEnv, platform: NodeJS.Platform) => string[]): Promise<string | null> {
-  const { platform = process.platform, env = process.env, isFile = fileExists, loginShell = () => resolveViaLoginShell(name) } = search
-  // A relative PATH entry names a folder under the one the program runs in. The login shell is asked last, as it is
-  // a process that can take seconds.
+  const { platform = process.platform, env = process.env, isFile = fileExists,
+    loginShell = async () => resolveBinaryOnPath(name, { PATH: (await warmLoginShellEnvironment()).PATH }, isAbsolute) } = search
+  // A relative PATH entry names a folder under the one the program runs in. The login shell last: reading its PATH
+  // the first time starts it.
   if (platform !== 'win32') {
     return resolveBinaryOnPath(name, env, isAbsolute)
       ?? resolveBinaryOnPath(name, { PATH: installFolders(env, platform).join(delimiter) }, isAbsolute) ?? await loginShell()
