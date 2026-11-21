@@ -51,7 +51,12 @@ export function watchNearest(folders: readonly string[], changed: (file?: string
       held?.watcher.close()
       held = { watcher, at }
       clearTimeout(live)
-      live = setTimeout(() => changed(), LIVE_MS).unref()
+      // As a change told: a nearer folder made before the watch was live is told by no change, so the look moves there,
+      // and that watch looks in its turn.
+      live = setTimeout(() => {
+        hold()
+        changed()
+      }, LIVE_MS).unref()
       return
     }
   }
