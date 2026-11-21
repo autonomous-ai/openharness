@@ -9,6 +9,7 @@
  * and in every process of each daemon: a connection to anything but this machine fails the scenario, by host and port.
  */
 import { spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { appendFileSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -80,6 +81,15 @@ describe.skipIf(WIN32)('the dial eval, tier B: the Claude app', () => {
     } finally {
       await driver.stop()
     }
+  })
+
+  it('a watch that ends before its scenario does fails the scenario, saying so', async () => {
+    await driver.start(SCENARIOS.find((s) => s.id === 'C1')!, HOST)
+    const watch = driver.lastWorld().children.find((child) => child.spawnargs.includes('watch'))!
+    const exited = once(watch, 'exit')
+    watch.kill('SIGKILL')
+    await exited
+    await expect(driver.stop()).rejects.toThrow('harness hardware watch ended before its scenario')
   })
 
   it('a stop whose world failed to close still ends its cost, so the next scenario starts', async () => {
