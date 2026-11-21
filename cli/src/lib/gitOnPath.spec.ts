@@ -1,8 +1,10 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, isAbsolute, join, win32 } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createProgramPath, findGh, findGit } from './gitOnPath.js'
+import { resetLoginShellEnvironmentCache } from './loginShellEnv.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 /** The folder a simulated Windows git runs in: a repository someone else's commits filled. */
 const WORKING_FOLDER = 'C:\\repo'
@@ -28,6 +30,8 @@ const folders: string[] = []
 const startFolder = process.cwd()
 afterEach(() => {
   process.chdir(startFolder)
+  vi.unstubAllEnvs()
+  resetLoginShellEnvironmentCache()
   for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true })
 })
 
@@ -142,6 +146,26 @@ describe.each(['darwin', 'linux'] as const)('findGit and findGh on %s', (platfor
     const found = await findGh({ platform, env: { PATH: folderWith(), HOME: home }, loginShell: async () => { asked += 1; return null } })
     expect([join(home, '.local', 'bin', 'gh'), ...HOMEBREW_GH]).toContain(found)
     expect(asked).toBe(0)
+  })
+})
+
+describe('the login shell', () => {
+  // gh is missing on most computers, and the pull request reader asks for it in each of its 4 slots: a shell for each
+  // miss, up to 5 s each, kept them full ("Git context is busy").
+  it.skipIf(process.platform === 'win32')('is started once for misses in a row, and its PATH looked in again at each', async () => {
+    const folder = folderWith()
+    const shell = join(folder, 'zsh')
+    // Answers as a login shell whose PATH is [folder], with no git yet, and counts its starts.
+    writeExecutable(shell, `#!/bin/sh\necho start >> '${shell}.starts'\nprintf '__HARNESS_ENV_BEGIN__PATH=${folder}'\n`)
+    const starts = () => readFileSync(`${shell}.starts`, 'utf8').split('\n').filter(Boolean).length
+    vi.stubEnv('SHELL', shell)
+    resetLoginShellEnvironmentCache()
+    for (let miss = 0; miss < 3; miss++) expect(await findGit({ platform: 'linux', env: { PATH: folderWith() } })).toBeNull()
+    expect(starts()).toBe(1)
+    // Installed since, in a folder of that PATH.
+    writeFileSync(join(folder, 'git'), '#!/bin/sh\n', { mode: 0o755 })
+    expect(await findGit({ platform: 'linux', env: { PATH: folderWith() } })).toBe(join(folder, 'git'))
+    expect(starts()).toBe(1)
   })
 })
 
