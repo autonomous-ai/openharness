@@ -4340,6 +4340,66 @@ describe('ObservedSource outer place', () => {
     expect(t.src.windowOf(id)).toEqual({ pid: 100, app: 'tmux' })
   })
 
+  // A client in a terminal with no page (docs/plans/2026-11-21-dial-linux-followups-design.md, Decided): its window is
+  // raised by its process, while the agent stays where its hints put it.
+  it('an outer answer with only its client\'s process: no page, tab or pane moves, and the raise gets that process', async () => {
+    const t = nested()
+    t.src.ingest(t.ev('session-start', inTmux()))
+    const { id } = t.agent()
+    const told = t.changes.mock.calls.length
+    await t.asks[0].answer({ pid: 4300 })
+    expect(t.agent().app).toBe('tmux')
+    expect(t.src.paneOf(id, 'tabs')).toBeUndefined()
+    expect(t.src.paneOf(id, 'tmux')).toBe('%3:100')
+    expect(t.src.byTab('terminal-app', '/dev/ttys004')).toBeUndefined()
+    expect(t.src.windowOf(id)).toEqual({ pid: 4300, app: 'tmux' })
+    expect(t.changes).toHaveBeenCalledTimes(told + 1)
+    expect(await t.src.focus(t.agent())).toBe(true)
+    expect(t.actions.open.mock.calls).toEqual([[id, { pane: { adapter: 'tmux', id: '%3:100' } }]])
+    expect(t.tty).not.toHaveBeenCalled()
+    // A later answer of none, or one with a process out of form, keeps no process.
+    for (const place of [{}, { pid: 0 }, { pid: 1.5 }]) {
+      t.src.ingest(t.ev('turn-start', inTmux()))
+      await t.asks.at(-1)!.answer(place)
+      expect(t.src.windowOf(id), JSON.stringify(place)).toEqual({ pid: 100, app: 'tmux' })
+    }
+  })
+
+  it('another caller drops the kept process', async () => {
+    for (const [moved, caller] of [[{ callerPid: 101 }, 101], [inTmux({ TMUX_PANE: '%4' }), 100]] as const) {
+      const t = nested()
+      t.src.ingest(t.ev('session-start', inTmux()))
+      await t.asks[0].answer({ pid: 4300 })
+      const { id } = t.agent()
+      expect(t.src.windowOf(id), JSON.stringify(moved)).toEqual({ pid: 4300, app: 'tmux' })
+      t.src.ingest(t.ev('needs-input', { ...inTmux(), ...moved }))
+      expect(t.src.windowOf(id), JSON.stringify(moved)).toEqual({ pid: caller, app: 'tmux' })
+    }
+  })
+
+  // The front report lags an open: a pane that comes after its app and is shown only while that app is in front would be
+  // skipped by the tap that brought the app.
+  it('a tap on a nested agent raises its after-app pane once the open answered, before the front names that app', async () => {
+    let front: string | undefined
+    const late: HostAdapter = {
+      id: 'after-app', tap: 'after',
+      paneOf: (place) => (place.outer ? { adapter: 'after-app', id: 'x' } : undefined),
+      canFocus: () => true, canShow: () => front === 'terminal-app',
+      show: vi.fn(async (): Promise<PaneSwitch> => 'ok'), focus: vi.fn(async () => true),
+    }
+    let opened!: (yes: boolean) => void
+    const t = nested({ open: vi.fn(() => new Promise<boolean>((resolve) => { opened = resolve })) }, (adapters) => [late, ...adapters])
+    t.src.ingest(t.ev('session-start', inTmux()))
+    await t.asks[0].answer(CLIENT)
+    const raising = t.src.focus(t.agent())
+    expect(t.actions.open.mock.calls).toEqual([[t.agent().id, { bundle: 'com.apple.Terminal', pane: { adapter: 'tmux', id: '%3:100:terminal-app' } }]])
+    expect(late.focus).not.toHaveBeenCalled()
+    opened(true)
+    expect(await raising).toBe(true)
+    expect(late.focus).toHaveBeenCalledExactlyOnceWith({ adapter: 'after-app', id: 'x' })
+    expect(t.actions.tabSelect).not.toHaveBeenCalled()
+  })
+
   it('needs-input and turn-stop keep it, and ask nothing', async () => {
     const t = nested()
     t.src.ingest(t.ev('session-start', inTmux()))
