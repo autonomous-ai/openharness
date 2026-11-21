@@ -31,6 +31,26 @@ it.each([
   expect(readdirSync(home)).toEqual([])
 }, 60_000)
 
+// The master on a Mac or Linux runs its team guard and, on Linux, the home move before startMaster installs its fatal
+// handler (masterProcess.ts). Node's own report of an error either throws is its message and stack, on the stderr launchd
+// and systemd make the daemon's log, which Export logs sends. Windows' master installs its own once its log is open.
+it.skipIf(process.platform === 'win32')('a master whose home move throws ends with one line, the error by its kind', () => {
+  const home = mkdtempSync(join(tmpdir(), 'master-fatal-')); homes.push(home)
+  // As on Linux, with a home move whose error names the person's folder; nothing is moved, nothing else starts.
+  const stub = "export async function moveHomeAtStart() { throw new Error('the home at /Users/sentinel/x could not move') }"
+  const hooks = 'export async function resolve(specifier, context, next) { return specifier === \'./homeMove/start.js\''
+    + ` ? { url: ${JSON.stringify(`data:text/javascript,${encodeURIComponent(stub)}`)}, shortCircuit: true } : next(specifier, context) }`
+  const preload = "import { register } from 'node:module'; Object.defineProperty(process, 'platform', { value: 'linux' }); "
+    + `register(${JSON.stringify(`data:text/javascript,${encodeURIComponent(hooks)}`)})`
+  const run = spawnSync(process.execPath, ['--import', LOADER, '--import', `data:text/javascript,${encodeURIComponent(preload)}`, ENTRY, '__harnessd'], {
+    encoding: 'utf8', timeout: 30_000,
+    env: { PATH: process.env.PATH, HOME: home, ADAPTER_DATA_DIR: join(home, 'data') },
+  })
+  expect(run.stderr).not.toContain('sentinel')
+  expect({ status: run.status, stderr: run.stderr })
+    .toEqual({ status: 1, stderr: expect.stringMatching(/^[\d-]+ [\d:.]+ \[harnessd\] the master stopped on an uncaught error: Error\n$/) })
+}, 60_000)
+
 it('allows a call it cannot read, and one with no input at all', () => {
   for (const input of ['not json', '']) {
     const home = mkdtempSync(join(tmpdir(), 'retired-guard-')); homes.push(home)
