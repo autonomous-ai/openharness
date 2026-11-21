@@ -15,6 +15,10 @@ const driver = await import('../../e2e/harness/appEvalDriver.js' as string) as {
   tierBGaps(scenario: Scenario, platform: Platform): string[]
 }
 
+const claude = await import('../../e2e/harness/appEvalClaude.js' as string) as {
+  linkedSocket(root: string, code: number | null, stdout: string, stderr: string): string
+}
+
 let dir = ''
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
@@ -71,5 +75,24 @@ describe("tier B's gaps", () => {
     const question = { ...c7, steps: c7.steps.map((step) => step.kind === 'hook' && step.event === 'needs-input' ? { ...step, asks: 'question' as const } : step) }
     expect(() => driver.tierBGaps(question, 'darwin')).toThrow('question')
     expect(driver.tierBGaps(c7, 'darwin')).toEqual([])
+  })
+})
+
+describe("tier B's Claude mod: the socket its link names", () => {
+  const root = '/tmp/htmux-eval'
+  const named = (path: string): string => JSON.stringify({ devicesSocket: path })
+
+  it('is the one the link named inside the daemon\'s root', () => {
+    expect(claude.linkedSocket(root, 0, named(`${root}/data/devices.sock`), '')).toBe(`${root}/data/devices.sock`)
+  })
+
+  it('is refused outside the root, so the attach reaches no other daemon\'s devices', () => {
+    expect(() => claude.linkedSocket(root, 0, named('/tmp/htmux-other/data/devices.sock'), '')).toThrow("outside the daemon's root")
+    expect(() => claude.linkedSocket(root, 0, named('data/devices.sock'), '')).toThrow("outside the daemon's root")
+  })
+
+  it('says what the link printed on its stderr when it named none', () => {
+    expect(() => claude.linkedSocket(root, 1, '', 'no devices process\n')).toThrow('no devices process')
+    expect(() => claude.linkedSocket(root, 0, 'not json', '')).toThrow("named no devices' socket")
   })
 })
