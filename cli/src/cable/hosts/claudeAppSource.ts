@@ -4,7 +4,9 @@
  * newest first, at most 16, read by claudeAppStore.ts while a dial is attached. Each is an idle row on the Claude app's
  * page under the id the observed source gives the same session, so the hooked copy and this one are one row
  * (registry.ts) and the row keeps its id as the session's process comes and goes. No process runs it, so it rests: no
- * voice, and no weight in the dial's default app.
+ * weight in the dial's default app. It takes voice where its link opens, and its words wake the session: they open it
+ * by that link, then go to its mod once its process runs (appWake.ts,
+ * docs/plans/2026-11-21-dial-claude-app-wake-send-design.md).
  *
  * Pushed by non-recursive watches of the store's folders, never polled. A working turn writes its session's file several
  * times a second, so one pass runs at a time, and the changes during it give one more after it, at least 250 ms after
@@ -15,12 +17,13 @@
 import { basename, join, sep } from 'node:path'
 import { errorKind } from '../../lib/log.js'
 import type { ClaudeStoreRoot } from './appPlaces.js'
+import type { AppWake } from './appWake.js'
 import { claudePaneKey } from './claudeApp.js'
 import { localIdOf } from './claudeAppStore.js'
 import type { ClaudeAppSession, ClaudeAppStore, StoreFolders, StoreRead } from './claudeAppStore.js'
 import { observedAgentId } from './observed.js'
 import { observedTitle } from './observedTitle.js'
-import type { Caps, HostAgent, HostSource, PaneSwitch } from './types.js'
+import type { Caps, HostAgent, HostSource, PaneSwitch, SendResult } from './types.js'
 
 /** The least time between the starts of two passes (cmuxSource.ts's rule). */
 const GAP_MS = 250
@@ -44,6 +47,10 @@ export interface ClaudeAppSourceDeps {
   focus(localId: string, agentId: string): Promise<boolean>
   canShow(localId: string): boolean
   show(localId: string, agentId: string): Promise<PaneSwitch>
+  /** Whether the session's link opens on this computer (appLink.ts canLink): only then does its row take voice. */
+  canLink(localId: string): boolean
+  /** The devices' one wake, which every dial's words for a resting session go through. */
+  wake: Pick<AppWake, 'send' | 'stop'>
   monotonic(): number
   log(line: string): void
 }
@@ -130,6 +137,8 @@ export class ClaudeAppSource implements HostSource {
     if (!this.running) return
     this.running = false
     this.stops++
+    // The dial detached: a wake still opening or waiting answers that its session did not answer.
+    this.deps.wake.stop()
     for (const stop of this.unwatch) stop()
     this.unwatch = []
     this.watchFolders(NO_FOLDERS)
@@ -156,9 +165,19 @@ export class ClaudeAppSource implements HostSource {
     return this.rows.map(({ agent }) => ({ ...agent }))
   }
 
-  /** Status, a tap, and a rest while the app is in front: no process runs the session to take words or answer. */
-  capabilities(): Caps {
-    return { status: true, voice: false, focus: true, answer: false }
+  /** Status, a tap, a rest while the app is in front, and voice where the session's link opens: no process runs the
+   *  session to answer. */
+  capabilities(agent: HostAgent): Caps {
+    const row = this.find(agent.id)
+    return { status: true, voice: !!row && this.deps.canLink(row.localId), focus: true, answer: false }
+  }
+
+  /** The words wake the row's session, named by the row as they arrive. A row no longer listed opens nothing. */
+  async send(agent: HostAgent, text: string): Promise<SendResult> {
+    const row = this.find(agent.id)
+    if (!row) return { ok: false, reason: `${agent.name} did not answer.` }
+    const { localId, agent: { id, sessionId, name } } = row
+    return this.deps.wake.send({ localId, sessionId: sessionId!, agentId: id, name }, text)
   }
 
   async focus(agent: HostAgent): Promise<boolean> {
