@@ -16,7 +16,10 @@ async function tell(world: TierAWorld, message: { type: string } & Record<string
 }
 
 export const windowSteps: { front: StepHandler<'front'>; thread: StepHandler<'thread'>; attach: StepHandler<'attach'> } = {
-  front: (world, step) => tell(world, { type: 'front', app: FRONT[step.app] }),
+  front: (world, step) => {
+    world.front = step.app
+    return tell(world, { type: 'front', app: FRONT[step.app] })
+  },
   thread: (world, step) => tell(world, { type: 'thread', title: step.title }),
   // The mod names the Claude Code session the app attached: its cliSessionId.
   attach: (world, step) => tell(world, { type: 'attach', sessionId: world.session(step.session).id }),

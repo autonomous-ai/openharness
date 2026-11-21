@@ -43,6 +43,8 @@ export interface TierAWorld {
   readonly folders: { claudeProjects: string; codexSessions: string }
   /** What the devices' transcriber answers. */
   speech: string | null
+  /** The app in front, as the last front step told the watch. */
+  front: App | 'other'
   /** A fixture file written: the store's watch hears of it now. */
   storeChanged(path: string): void
   /** Virtual ms since the scenario's time 0. */
@@ -144,6 +146,8 @@ export class World implements TierAWorld {
   readonly codexHome: ReturnType<typeof codexAppFixture>
   readonly folders: { claudeProjects: string; codexSessions: string }
   speech: string | null = null
+  /** None until the driver's first front step, before the dial is plugged in. */
+  front: App | 'other' = 'other'
   readonly commands: Seen['commands'] = []
   readonly deliveries: Seen['deliveries'] = []
   readonly gaps: string[] = []
