@@ -13,7 +13,7 @@ function run(results: CheckResult[], more: { wrongSends?: WrongSend[]; gaps?: Co
   return { schema: 1, results, wrongSends: more.wrongSends ?? [], gaps: more.gaps ?? [] }
 }
 
-function baseline(checks: Record<string, number>, apps: Baseline['apps'] = { claude: null, chatgpt: null }): Baseline {
+function baseline(checks: Record<string, number>, apps: Baseline['apps'] = {}): Baseline {
   return { schema: 1, checks, apps }
 }
 
@@ -110,13 +110,14 @@ describe('gate', () => {
 })
 
 describe('delta', () => {
-  it('delta lists each changed check and both app scores', () => {
+  it('delta lists each changed check and both app scores of each subset the run drove, against that subset\'s', () => {
     const before = baseline(
       { 'a/darwin/C1/ring.recall': 1, 'a/darwin/C1/ring.order': 1, 'a/darwin/C1/ring.cap': 1, 'b/darwin/C1/ring.recall': 1 },
-      { claude: 90, chatgpt: 80 },
+      { a: { claude: 90, chatgpt: 80 }, 'b/darwin': { claude: 70, chatgpt: null } },
     )
     const report = grade(run(mixed), before)
-    expect(report.delta.apps).toEqual({ claude: { before: 90, after: 18.75 }, chatgpt: { before: 80, after: null } })
+    // Tier A against tier A's: tier B was not run, so its scores are no change.
+    expect(report.delta.apps).toEqual({ a: { claude: { before: 90, after: 18.75 }, chatgpt: { before: 80, after: null } } })
     // Tier B was not run here, so its entry is no change.
     expect(report.delta.checks).toEqual([
       { key: 'a/darwin/C1/ring.cap', before: 1, after: null },
@@ -128,7 +129,7 @@ describe('delta', () => {
   it('no baseline: every app score is new and every check is new', () => {
     const report = grade(run(mixed.slice(0, 1)), null)
     expect(report.delta).toEqual({
-      apps: { claude: { before: null, after: 100 }, chatgpt: { before: null, after: null } },
+      apps: { a: { claude: { before: null, after: 100 }, chatgpt: { before: null, after: null } } },
       checks: [{ key: 'a/darwin/C1/ring.recall', before: null, after: 1 }],
     })
   })
@@ -204,8 +205,9 @@ describe('tierBVerdict', () => {
 })
 
 describe('updateBaseline', () => {
-  it('updateBaseline keeps the other tier\'s entries', () => {
-    const before = baseline({ 'a/darwin/C1/ring.recall': 0, 'a/linux/C9/gone': 1, 'b/darwin/C1/ring.recall': 1 }, { claude: 1, chatgpt: 2 })
+  it('updateBaseline keeps the other tier\'s entries and app scores', () => {
+    const before = baseline({ 'a/darwin/C1/ring.recall': 0, 'a/linux/C9/gone': 1, 'b/darwin/C1/ring.recall': 1 },
+      { a: { claude: 1, chatgpt: 2 }, 'b/darwin': { claude: 3, chatgpt: 4 } })
     const after = updateBaseline(before, run(mixed), ['a'])
     expect(after).toEqual({
       schema: 1,
@@ -213,14 +215,23 @@ describe('updateBaseline', () => {
         'a/darwin/C1/ring.recall': 1, 'a/darwin/C1/ring.order': 0, 'a/darwin/C5/voice.reached': 0,
         'b/darwin/C1/ring.recall': 1,
       },
-      apps: { claude: 18.75, chatgpt: null },
+      apps: { a: { claude: 18.75, chatgpt: null }, 'b/darwin': { claude: 3, chatgpt: 4 } },
     })
   })
 
-  it('tier B replaces only that run\'s platforms', () => {
-    const before = baseline({ 'b/darwin/C1/ring.recall': 1, 'b/darwin/C1/gone': 1, 'b/linux/C1/ring.recall': 0.5 })
+  it('tier B replaces only that run\'s platforms, its checks and its app scores', () => {
+    const before = baseline({ 'b/darwin/C1/ring.recall': 1, 'b/darwin/C1/gone': 1, 'b/linux/C1/ring.recall': 0.5 },
+      { 'b/darwin': { claude: 100, chatgpt: null }, 'b/linux': { claude: 50, chatgpt: null } })
     const after = updateBaseline(before, run([result({ tier: 'b', check: 'ring.recall', dim: 'D1', score: 0 })]), ['b'])
     expect(after.checks).toEqual({ 'b/darwin/C1/ring.recall': 0, 'b/linux/C1/ring.recall': 0.5 })
+    expect(after.apps).toEqual({ 'b/darwin': { claude: 0, chatgpt: null }, 'b/linux': { claude: 50, chatgpt: null } })
+  })
+
+  it('a tier given that wrote nothing keeps its entries', () => {
+    const before = baseline({ 'a/darwin/C1/ring.recall': 1 }, { a: { claude: 100, chatgpt: null } })
+    const after = updateBaseline(before, run([result({ tier: 'b', check: 'ring.recall', dim: 'D1', score: 1 })]), ['a', 'b'])
+    expect(after).toEqual({ schema: 1, checks: { 'a/darwin/C1/ring.recall': 1, 'b/darwin/C1/ring.recall': 1 },
+      apps: { a: { claude: 100, chatgpt: null }, 'b/darwin': { claude: 100, chatgpt: null } } })
   })
 
   it('leaves out a tier it was not given and starts from nothing with no baseline', () => {
@@ -254,7 +265,7 @@ describe('loadBaseline', () => {
     dir = mkdtempSync(join(tmpdir(), 'grade-'))
     const path = join(dir, 'baseline.json')
     expect(loadBaseline(path)).toBeNull()
-    const written = baseline({ 'a/darwin/C1/ring.recall': 1 }, { claude: 100, chatgpt: null })
+    const written = baseline({ 'a/darwin/C1/ring.recall': 1 }, { a: { claude: 100, chatgpt: null } })
     writeFileSync(path, JSON.stringify(written))
     expect(loadBaseline(path)).toEqual(written)
   })

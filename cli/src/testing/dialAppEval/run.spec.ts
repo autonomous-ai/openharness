@@ -127,15 +127,16 @@ it('a low score exits 0, and a tier\'s own failure is printed, not fatal', async
 
 it('--update-baseline writes the baseline, keeping the tier not run', async () => {
   writeBaseline({ schema: 1, checks: { 'a/darwin/C1/ring.recall': 0.5, 'b/darwin/C1/ring.recall': 0.5 },
-    apps: { claude: 50, chatgpt: null } })
+    apps: { a: { claude: 50, chatgpt: null }, 'b/darwin': { claude: 50, chatgpt: null } } })
   const h = harness({ a: results('a', 1) })
   expect(await main(['--tier', 'a', '--update-baseline'], h.deps)).toBe(0)
-  expect(readBaseline().checks).toEqual({ 'a/darwin/C1/ring.recall': 1, 'b/darwin/C1/ring.recall': 0.5 })
+  expect(readBaseline()).toEqual({ schema: 1, checks: { 'a/darwin/C1/ring.recall': 1, 'b/darwin/C1/ring.recall': 0.5 },
+    apps: { a: { claude: 100, chatgpt: null }, 'b/darwin': { claude: 50, chatgpt: null } } })
   expect(h.log()).toContain(`baseline written: ${baselinePath}`)
 })
 
 it('and refuses on a wrong send', async () => {
-  const before = { schema: 1, checks: { 'a/darwin/C1/ring.recall': 0.5 }, apps: { claude: 50, chatgpt: null } } as const
+  const before = { schema: 1, checks: { 'a/darwin/C1/ring.recall': 0.5 }, apps: { a: { claude: 50, chatgpt: null } } } as const
   writeBaseline(before)
   const h = harness({ a: results('a', 1, [wrongSend]) })
   expect(await main(['--tier', 'a', '--update-baseline'], h.deps)).toBe(1)

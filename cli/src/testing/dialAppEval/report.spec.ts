@@ -30,7 +30,7 @@ function report(over: Partial<Report> = {}): Report {
     failing: [],
     groups: [{ app: 'claude', dim: 'D1', scenario: 'C1', pointsLost: 18.75, checks: ['ring.recall'] }],
     gaps: [],
-    delta: { apps: { claude: { before: 75, after: 80 }, chatgpt: { before: null, after: 90 } }, checks: [] },
+    delta: { apps: { a: { claude: { before: 75, after: 80 }, chatgpt: { before: null, after: 90 } } }, checks: [] },
     ...over,
   }
 }
@@ -105,6 +105,13 @@ it('evidence holding os.tmpdir(), HOME or a /work/eval- folder is printed with t
     expect(text).not.toContain(tmpdir())
     expect(text).not.toContain(homedir())
     expect(text).not.toContain('/work/eval-')
+  }
+})
+
+it('the delta gives each subset\'s app scores, before and after', () => {
+  for (const text of [summary(report()), markdown(report())]) {
+    expect(text).toContain('- a, the Claude app: 75 → 80')
+    expect(text).toContain('- a, the ChatGPT app: — → 90')
   }
 })
 
