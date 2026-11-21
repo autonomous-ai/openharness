@@ -42,7 +42,7 @@
     }
    ],
    [
-    "[hooks] 20261008 SessionStart · engine=hermes · isNew=true · after a source check · home=<root>/home/.hermes/profiles/work"
+    "[hooks] 20261008 SessionStart · engine=hermes · isNew=true · after a source check · home=hashOf(<root>/home/.hermes/profiles/work)"
    ]
   ],
   [
@@ -59,7 +59,7 @@
     }
    ],
    [
-    "[hooks] 20261008 SessionStart · engine=hermes · isNew=true · after a source check · home=<root>/home/.hermes/profiles/work"
+    "[hooks] 20261008 SessionStart · engine=hermes · isNew=true · after a source check · home=hashOf(<root>/home/.hermes/profiles/work)"
    ]
   ],
   [
@@ -115,7 +115,7 @@
    },
    [],
    [
-    "[hooks] 20261008 SessionStart held · Waiting for the Hermes session source record; keeping the current conversation."
+    "[hooks] 20261008 SessionStart held · text(79)"
    ]
   ],
   [
@@ -126,7 +126,7 @@
    },
    [],
    [
-    "[hooks] 20261008 SessionStart held · Hermes session source is unavailable; keeping the current conversation."
+    "[hooks] 20261008 SessionStart held · text(71)"
    ]
   ]
  ]
