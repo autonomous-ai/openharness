@@ -1,9 +1,11 @@
 // Tier A's clock (clock.ts): virtual time moves only while the world is quiet, to the next timer, never by a fixed step,
 // and a world whose timers never let it reach its end stops with a name rather than spinning for good.
-import { readFile } from 'node:fs/promises'
+import { pbkdf2 } from 'node:crypto'
+import { open, readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { EVAL_EPOCH, installClock, MAX_ADVANCES, settle } from './clock.js'
+import { EVAL_EPOCH, installClock, MAX_ADVANCES, quiet, settle } from './clock.js'
 
 const nothingInFlight = (): number => 0
 /** Virtual ms since the clock was installed. */
@@ -22,6 +24,17 @@ describe("tier A's clock", () => {
     await settle(1_000, undefined, nothingInFlight)
     expect(fired).toEqual([500])
     expect(now()).toBe(1_000)
+  })
+
+  it('quiet waits for a file that is closing, the last step of every read', async () => {
+    const handle = await open(fileURLToPath(import.meta.url))
+    // Work queued ahead of the close on the thread pool holds it for many real turns, as a loaded host does.
+    const backlog = Array.from({ length: 64 }, () => promisify(pbkdf2)('eval', 'salt', 20_000, 32, 'sha256'))
+    let closed = false
+    void handle.close().then(() => { closed = true })
+    await quiet(nothingInFlight)
+    expect(closed).toBe(true)
+    await Promise.all(backlog)
   })
 
   it('settle stops at its limit, and as soon as until holds', async () => {
