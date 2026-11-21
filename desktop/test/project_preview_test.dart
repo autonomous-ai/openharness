@@ -72,4 +72,21 @@ void main() {
       );
     },
   );
+
+  test("runs the resolver's git", () async {
+    final init = await Process.run('git', ['-C', root.path, 'init', '-b', 'x']);
+    expect(init.exitCode, 0);
+    expect((await readLocalProjectPreview(root.path))['branch'], 'x');
+    // Absolute and missing: a bare `git` would run the real one instead.
+    final missing = '${root.path}/no-git/git';
+    String noGit() => throw const ProcessException('git', [], 'not found', 2);
+    for (final program in [() => missing, noGit]) {
+      final preview = await readLocalProjectPreview(
+        root.path,
+        program: program,
+      );
+      expect(preview['path'], root.path);
+      expect(preview['branch'], isNull);
+    }
+  });
 }
