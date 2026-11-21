@@ -46,6 +46,23 @@ describe('scores', () => {
     expect(lost).toBe(100 - report.apps.claude.score!)
   })
 
+  it('a wait that held scores nothing, in the headline, a subset or points lost; one that missed costs its dimension', () => {
+    // A held wait is the harness's own readiness, kept only so tier A's exact baseline sees one that stops holding.
+    const held = result({ check: 'wait.1', dim: 'D5', score: 1, timed: true })
+    const report = grade(run([...mixed, held]), null)
+    expect(report.apps.claude.score).toBe(18.75)
+    expect(report.apps.claude.dims.D5).toBe(0)
+    expect(report.byTier.a.claude.score).toBe(18.75)
+    expect(report.delta.apps.a!.claude.after).toBe(18.75)
+    expect(report.failing.map((r) => [r.check, r.pointsLost])).toEqual([['voice.reached', 62.5], ['ring.order', 18.75]])
+    expect(updateBaseline(null, run([...mixed, held]), ['a'])).toMatchObject({
+      checks: { 'a/darwin/C1/wait.1': 1 }, apps: { a: { claude: 18.75 } },
+    })
+    const missed = grade(run([...mixed, { ...held, score: 0 }]), null)
+    expect(missed.apps.claude.dims.D5).toBe(0)
+    expect(missed.failing.map((r) => r.check)).toContain('wait.1')
+  })
+
   it('held-out results are scored apart and never in the headline', () => {
     const report = grade(run([
       result({ check: 'ring.recall', dim: 'D1', score: 1 }),
