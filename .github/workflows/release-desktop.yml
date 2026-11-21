@@ -372,15 +372,18 @@ jobs:
 
       # appimagetool packages the Linux bundle into the single-file .AppImage the release publishes
       # (see RELEASE.md). --appimage-extract-and-run in package-desktop-linux.sh means the runner
-      # itself never needs FUSE. Pinned to a numbered release (not "continuous") for reproducibility.
+      # itself never needs FUSE. Pinned to a numbered release (not "continuous") for reproducibility, and by the sha256
+      # of each asset, as GitHub lists them for 1.9.1: what it packages gets Harness's signature.
       - name: Download appimagetool
         env:
           APPIMAGETOOL_VERSION: '1.9.1'
           APPIMAGE_ARCH: ${{ matrix.arch == 'arm64' && 'aarch64' || 'x86_64' }}
+          APPIMAGETOOL_SHA256: ${{ matrix.arch == 'arm64' && 'f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158' || 'ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0' }}
         run: |
           set -euo pipefail
           url="https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-${APPIMAGE_ARCH}.AppImage"
           curl -fL "$url" -o "$RUNNER_TEMP/appimagetool"
+          echo "$APPIMAGETOOL_SHA256  $RUNNER_TEMP/appimagetool" | sha256sum --check --strict
           chmod +x "$RUNNER_TEMP/appimagetool"
           echo "APPIMAGETOOL=$RUNNER_TEMP/appimagetool" >> "$GITHUB_ENV"
 
