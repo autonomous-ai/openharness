@@ -11918,6 +11918,20 @@ describe('the dial follows the pane focused in Orca (docs/plans/2026-11-16-dial-
       expect(asked()).toEqual([])
     })
 
+    it('a tap on an agent whose Orca terminal only holds it switches that terminal, and its line is the echo', async () => {
+      // A WezTerm started in Orca terminal 2 made the agent's terminal: Orca's handle is held, and takes a tap alone.
+      madeBy('wezterm-gui')
+      const { settle, line } = await dialWith()
+      await settle('orca')
+      line(null)
+      expect(await host().openAgent(agent(2))).toBeUndefined()
+      expect(orcaRuns.map(([, args]) => args)).toEqual([['terminal', 'switch', '--terminal', H(2), '--json']])
+      clock = 1_000
+      line(H(2))
+      expect(focusLines()).toEqual([ECHO])
+      expect(asked()).toEqual([])
+    })
+
     it('a line for a pane switched before the latest switch is still an echo, and uses up those before it', async () => {
       const { settle, line } = await dialWith({ agents: 3 })
       await settle('orca')
