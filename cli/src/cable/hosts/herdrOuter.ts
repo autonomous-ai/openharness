@@ -6,7 +6,7 @@
  * client is found as a herdr process connected to the server's client socket.
  *
  * Only what that needs is read: process names and parents (the table), the terminals of the caller and its parents up to
- * the server, the unix-socket rows lsof gives for herdr's own processes (macOS) or ss's rows of the sockets bound at a
+ * the server and, for a client in no app, of it and its parents up to its terminal's maker, the unix-socket rows lsof gives for herdr's own processes (macOS) or ss's rows of the sockets bound at a
  * client socket's path (Linux) with the socket links among herdr's own processes' descriptors, their ttys (ps), and a
  * tty's access time (stat), which moves when the person types into it. Never another process's environment or argv:
  * those hold secrets. Every value read is outside text, held to its form, and lsof, ss and ps run with no shell.
@@ -58,13 +58,11 @@ export interface HerdrOuterDeps {
   onPath: OrcaDeps['onPath']
   /** The socket inodes among a process's descriptors (procSockets); nothing when they cannot be read. */
   sockets(pid: number): Promise<readonly string[] | undefined>
-  /** The person's tmux's and Zellij's lookups, asked of a client in no app's window: one inside their pane. */
-  inner: OuterLookup
 }
 
 /** The app that holds the herdr client showing an agent's pane, that client's tty when it names a tab, and its process,
- *  which kitty's tabs find the client's window by and Linux's raise brings; or, with no app, the process
- *  to raise alone. */
+ *  which kitty's tabs find the client's window by and Linux's raise brings; or, with no app, the process to raise
+ *  alone when it is in a window. */
 interface ClientPlace { app?: string; tty?: string; pid?: number }
 /** The step of a lookup that could not be read, as its line names it: the process table, the sockets, the ttys, the
  *  clients' app. */
@@ -147,9 +145,9 @@ function acceptedPeers(stdout: string, served: ReadonlySet<string>): Set<string>
 
 /**
  * Where the person sees an agent in a pane of their own herdr: in the app holding the herdr client they used last, at
- * that client's tty, or the app holding the client of the person's tmux or Zellij that client runs in. Nothing at once
- * on Windows, when the hints name no herdr pane in form or the caller is no pid; else the client's place, its process
- * alone when no app holds it, `{}` when no client is found. Never rejects.
+ * that client's tty. Nothing at once on Windows, when the hints name no herdr pane in form or the caller is no pid; else
+ * the client's place, its process alone when no app holds it, `{}` when no client is found or it runs inside a
+ * multiplexer. Never rejects.
  */
 export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
   // Windows has no `ps` to read a client's tty with, and no form for one.
@@ -207,10 +205,10 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
     return new Set(others.filter((_, at) => held[at]?.some((inode) => peers.has(inode))))
   }
 
-  /** `{}` when no herdr server made the caller's terminal or none of its clients (or itself, run with `--no-session`) is
-   *  on a tty; the client's process alone when none is in a listed app or a multiplexer's pane that is; the step that
-   *  could not be read, when one could not. */
-  async function placeOf(hints: Readonly<Record<string, string>>, pid: number): Promise<ClientPlace | NotRead> {
+  /** `{}` when no herdr server made the caller's terminal, none of its clients (or itself, run with `--no-session`) is
+   *  on a tty, or the one used last of those in no listed app is inside a multiplexer; that client's process alone
+   *  otherwise; the step that could not be read, when one could not. */
+  async function placeOf(pid: number): Promise<ClientPlace | NotRead> {
     // One read of the table serves the server's, the clients' and their apps' walks.
     const rows = await deps.processes().catch(() => undefined)
     if (!rows) return 'processes'
@@ -247,13 +245,12 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
     const shown = left.filter((p) => apps.has(p))
     if (!shown.length) {
       const client = await usedLast(left, ttyOf)
-      // The agent's hints are what herdr's server inherited as it started: a server started in the person's tmux or
-      // Zellij pane is placed by that multiplexer's client. A client attached later from another pane is not: its
-      // environment is not read.
-      const inner = await deps.inner(hints, client)
-      // In no multiplexer, or one in no listed app (a terminal with no page): the client's process alone, so Linux's
-      // raise brings its window.
-      return inner?.app ? inner : { pid: client }
+      // A client whose own terminal tmux, Zellij or another herdr made is in no window a raise could bring, and herdr
+      // (0.9.5) strips their variables from its panes, so the agent's hints cannot name that multiplexer's pane. In a
+      // terminal with no page: the client's process alone, so Linux's raise brings its window.
+      const maker = await readPtyMaker(client, rows, deps.tty).catch(() => null)
+      if (maker === null) return 'ttys'
+      return maker?.host === 'tmux' || maker?.host === 'zellij' || maker?.host === 'herdr' ? {} : { pid: client }
     }
     const client = await usedLast(shown, ttyOf)
     const app = apps.get(client)
@@ -262,9 +259,9 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
     return tty && isClientTty(tty) ? { app, tty, pid: client } : { app, pid: client }
   }
 
-  async function lookUp(hints: Readonly<Record<string, string>>, pid: number): Promise<ClientPlace> {
+  async function lookUp(pid: number): Promise<ClientPlace> {
     // Every other step answers its own word: what is left to throw is the app scan.
-    const place = await placeOf(hints, pid).catch((): NotRead => 'app')
+    const place = await placeOf(pid).catch((): NotRead => 'app')
     if (typeof place === 'string') {
       deps.log(`[device] herdr client · not read · ${place}`)
       return {}
@@ -287,7 +284,7 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
     const key = `${id}:${pid}`
     const last = asked.get(key)
     if (last) return last.answer
-    const ask = { at: now, answer: lookUp(hints, pid), settled: false }
+    const ask = { at: now, answer: lookUp(pid), settled: false }
     void ask.answer.then(() => { ask.settled = true })
     asked.set(key, ask)
     return ask.answer

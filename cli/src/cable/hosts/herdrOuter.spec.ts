@@ -81,8 +81,6 @@ function lookup(
     roots: ['/Users/u/Applications/'],
     bundleId: async (bundle) => (bundle === '/Users/u/Applications/Terminal.app' ? 'com.apple.Terminal' : undefined),
     atime: async (tty) => { stats.push(tty); return said.atime?.[tty] },
-    // No multiplexer holds a client unless a spec's says so.
-    inner: () => undefined,
     ...over,
     processes: async () => { reads++; return table() },
   })
@@ -310,51 +308,11 @@ describe('the outer place of an agent in the person\'s herdr', () => {
         lsof, ps: '4310 ttys007\n4400 ttys009\n', atime,
       })
       expect(await outer({ ...PANE, TMUX_PANE: '%3' }, 100), maker).toStrictEqual({})
-      expect(calls, maker).toEqual([lsofAsked('80,4310,4400'), psAsked('4310,4400')])
+      // Another herdr's server is a herdr process too, and no client of this one's.
+      expect(calls, maker).toEqual([lsofAsked(maker === HERDR ? '80,4310,4398,4400' : '80,4310,4400'), psAsked('4310,4400')])
       expect(ttys, maker).toEqual([100, 90, 80, 4400, 4399, 4398])
       expect(logs, maker).toEqual(none)
     }
-  })
-
-  // A client whose own pty the person's tmux or Zellij made: its parents end at the detached server. The agent's hints
-  // are what herdr's server inherited when it started in that multiplexer's pane.
-  it('a client whose terminal tmux made: tmux\'s lookup is asked for the client with the agent\'s hints, and its place is the answer', async () => {
-    const processes = async () => [
-      ...TABLE.filter((p) => p.pid !== 4300), { pid: 4400, ppid: 4399, executable: HERDR }, { pid: 4399, ppid: 4398, executable: '-zsh' },
-      { pid: 4398, ppid: 1, executable: 'tmux' },
-    ]
-    const hints = { ...PANE, TMUX_PANE: '%3' }
-    const place = { app: 'terminal-app', tty: '/dev/ttys004', pid: 4200 }
-    const asked: Array<[Readonly<Record<string, string>>, number]> = []
-    const inner = (said: Readonly<Record<string, string>>, pid: number) => {
-      asked.push([said, pid])
-      return said.TMUX_PANE ? Promise.resolve(place) : undefined
-    }
-    const lsof = sockets({ 80: SERVER, 4400: [['0xb4', '->0xa1']] })
-    const { calls, logs, outer } = lookup({ processes, inner }, [], { lsof, ps: '4400 ttys009\n' })
-    expect(await outer(hints, 100)).toStrictEqual(place)
-    expect(asked).toEqual([[hints, 4400]])
-    expect(calls).toEqual([lsofAsked('80,4400'), psAsked('4400')])
-    expect(logs).toEqual(found)
-  })
-
-  it('the same through Zellij\'s', async () => {
-    const processes = async () => [
-      ...TABLE.filter((p) => p.pid !== 4300), { pid: 4400, ppid: 4399, executable: HERDR }, { pid: 4399, ppid: 4398, executable: '-zsh' },
-      { pid: 4398, ppid: 1, executable: 'zellij' },
-    ]
-    const hints = { ...PANE, ZELLIJ_SESSION_NAME: 'work', ZELLIJ_PANE_ID: '0' }
-    const place = { app: 'wezterm', pid: 4200 }
-    const asked: Array<[Readonly<Record<string, string>>, number]> = []
-    const inner = (said: Readonly<Record<string, string>>, pid: number) => {
-      asked.push([said, pid])
-      return said.ZELLIJ_SESSION_NAME ? Promise.resolve(place) : undefined
-    }
-    const lsof = sockets({ 80: SERVER, 4400: [['0xb4', '->0xa1']] })
-    const { logs, outer } = lookup({ processes, inner }, [], { lsof, ps: '4400 ttys009\n' })
-    expect(await outer(hints, 100)).toStrictEqual(place)
-    expect(asked).toEqual([[hints, 4400]])
-    expect(logs).toEqual(found)
   })
 
   // GNOME Terminal, Ptyxis, Konsole, Alacritty, xterm: the agent stays on herdr's page, and Linux's raise brings the
@@ -365,42 +323,15 @@ describe('the outer place of an agent in the person\'s herdr', () => {
       ...TABLE.filter((p) => p.pid !== 4298), { pid: 4298, ppid: 1, executable: XTERM },
       ...SECOND,
     ]
-    // The client typed into last is the one asked of, and answered.
+    // The client typed into last is the one answered.
     const atime = { '/dev/ttys004': 1000, '/dev/ttys007': 2000 }
-    const cases: Array<[string, (said: Readonly<Record<string, string>>, pid: number) => ReturnType<HerdrOuterDeps['inner']>]> = [
-      ['in no multiplexer', () => undefined],
-      ['a multiplexer that finds no app', () => Promise.resolve({})],
-    ]
-    for (const [name, answer] of cases) {
-      const asked: number[] = []
-      const inner = (said: Readonly<Record<string, string>>, pid: number) => { asked.push(pid); return answer(said, pid) }
-      const { logs, outer } = lookup({ processes, inner }, [], { ...TWO, atime })
-      expect(await outer(PANE, 100), name).toStrictEqual({ pid: 4310 })
-      expect(asked, name).toEqual([4310])
-      expect(logs, name).toEqual(none)
-    }
+    const { logs, outer } = lookup({ processes }, [], { ...TWO, atime })
+    expect(await outer(PANE, 100)).toStrictEqual({ pid: 4310 })
+    expect(logs).toEqual(none)
     // Linux: the recorded clients, each in a terminal the dial lists no page for.
     const linux = onLinux(scene(), { ps: recordedTtys(P.clientA, P.clientB), atime: { '/dev/pts/0': 2000, '/dev/pts/2': 1000 } })
     expect(await linux.outer(LINUX_PANE, P.agent)).toStrictEqual({ pid: P.clientA })
     expect(linux.logs).toEqual(none)
-  })
-
-  it('a client with an app still wins over one inside tmux', async () => {
-    const processes = async () => [
-      ...TABLE, { pid: 4400, ppid: 4399, executable: HERDR }, { pid: 4399, ppid: 4398, executable: '-zsh' },
-      { pid: 4398, ppid: 1, executable: 'tmux' },
-    ]
-    const asked: number[] = []
-    const inner = (_: Readonly<Record<string, string>>, pid: number) => {
-      asked.push(pid)
-      return Promise.resolve({ app: 'wezterm', pid: 4200 })
-    }
-    const lsof = sockets({ 80: SERVER, 4300: [['0xb1', '->0xa2']], 4400: [['0xb4', '->0xa1']] })
-    const atime = { '/dev/ttys004': 1000, '/dev/ttys009': 9000 }
-    const { logs, outer } = lookup({ processes, inner }, [], { lsof, ps: '4300 ttys004\n4400 ttys009\n', atime })
-    expect(await outer({ ...PANE, TMUX_PANE: '%3' }, 100)).toEqual(IN_TERMINAL)
-    expect(asked).toEqual([])
-    expect(logs).toEqual(found)
   })
 
   it('a client gone before ps is dropped', async () => {
