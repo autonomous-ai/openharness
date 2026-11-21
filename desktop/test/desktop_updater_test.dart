@@ -9,9 +9,13 @@ import 'package:cryptography/dart.dart' show DartSha256;
 import 'package:dio/dio.dart';
 import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/logging/app_log.dart';
 import 'package:harness/update/desktop_updater.dart';
+import 'package:harness/update/tauri_signature.dart';
 import 'package:harness/update/update_signature.dart';
 import 'package:path/path.dart' as p;
+
+import 'support/tauri_test_signer.dart';
 
 Future<String> _sha256Hex(List<int> bytes) async {
   final hash = await Sha256().hash(bytes);
@@ -137,8 +141,8 @@ Future<(List<int>, String)> _buildFakeBundleZip(
 
 /// Stand-in bytes for a Linux AppImage.
 ///
-/// `downloadAndStage` no longer unpacks or inspects the Linux artifact — sha256 already
-/// authenticates the whole single-file download — so a fake AppImage needs nothing more than
+/// `downloadAndStage` does not unpack or inspect the Linux artifact — its sha256 and Harness's
+/// signature cover the whole single-file download — so a fake AppImage needs nothing more than
 /// deterministic bytes with a known size and hash, the same idea as [_fakeArchiveBytes].
 Future<(List<int>, String)> _fakeAppImageBytes(String version) async {
   final bytes = utf8.encode('not-a-real-appimage:$version\n' * 8);
@@ -156,6 +160,24 @@ Uint8List _windowsZip(String version) {
     archive.addFile(ArchiveFile.bytes(entry.key, utf8.encode(entry.value)));
   }
   return ZipEncoder().encodeBytes(archive);
+}
+
+Matcher _refused(SignatureRefusal reason) => throwsA(
+  isA<TauriSignatureRefused>().having((e) => e.reason, 'reason', reason),
+);
+
+/// Every line logged, as its level, category and message.
+class _RecordedLog implements AppLog {
+  final lines = <(AppLogLevel, String, String)>[];
+
+  @override
+  void record(
+    AppLogLevel level,
+    String category,
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) => lines.add((level, category, message));
 }
 
 /// The fixtures here are not signed; update_signature_*_test.dart checks real
@@ -929,18 +951,51 @@ void main() {
   group('Linux architecture packaging', () {
     late List<int> appImageBytes;
     late String appImageSha;
+    late TauriTestSigner signer;
 
     setUp(() async {
       final (bytes, sha) = await _fakeAppImageBytes(newVersion);
       appImageBytes = bytes;
       appImageSha = sha;
+      signer = await TauriTestSigner.generate();
     });
+
+    /// What Harness's release signs: [bytes] as [architecture]'s AppImage of
+    /// [version].
+    Future<String> signAppImage(
+      List<int> bytes, {
+      String architecture = 'x64',
+      String version = newVersion,
+    }) async => signer.sign(
+      await blake2b512OfBytes(bytes),
+      'timestamp:1\tfile:Harness-linux-$architecture.AppImage\t'
+      'desktop-version:$version',
+    );
 
     Future<String> serveLinuxMetadataAndAppImage({
       required String manifestVersion,
       String architecture = 'x64',
       String? shaOverride,
+      // Served in place of the AppImage Harness signed, the manifest naming its
+      // sha256 and size: what whoever can write the bucket would publish.
+      List<int>? tampered,
+      // The entry's signature, by default the release's for [architecture]
+      // and [manifestVersion]; [signed] false leaves it out.
+      String? signature,
+      bool signed = true,
     }) async {
+      final served = tampered ?? appImageBytes;
+      final servedSha = tampered == null
+          ? appImageSha
+          : await _sha256Hex(tampered);
+      final entrySignature = signed
+          ? signature ??
+                await signAppImage(
+                  appImageBytes,
+                  architecture: architecture,
+                  version: manifestVersion,
+                )
+          : null;
       server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       final base = 'http://127.0.0.1:${server!.port}';
       final archive = 'Harness-linux-$architecture.AppImage';
@@ -952,13 +1007,14 @@ void main() {
               'desktop-linux-$architecture': {
                 'version': manifestVersion,
                 'url': '$base/$archive',
-                'sha256': shaOverride ?? appImageSha,
-                'size': appImageBytes.length,
+                'sha256': shaOverride ?? servedSha,
+                'size': served.length,
+                'signature': ?entrySignature,
               },
             }),
           );
         } else if (request.uri.path == '/$archive') {
-          request.response.add(appImageBytes);
+          request.response.add(served);
         } else {
           request.response.statusCode = HttpStatus.notFound;
         }
@@ -1006,8 +1062,44 @@ void main() {
       expect(info.sha256, appImageSha);
     });
 
+    test('checkOnce carries the Linux entry\'s signature', () async {
+      final signature = await signAppImage(appImageBytes);
+      final url = await serveLinuxMetadataAndAppImage(
+        manifestVersion: newVersion,
+        signature: signature,
+      );
+      final updater = DesktopUpdater(
+        isWindows: false,
+        enabled: true,
+        dio: Dio(),
+        metadataUrl: url,
+        releaseMode: true,
+        isLinux: true,
+        architecture: 'x64',
+      );
+      final info = await updater.checkOnce(currentVersion: '1.0.0');
+      expect(info!.signature, signature);
+    });
+
+    /// Stages what the served manifest offers, as Update does, on an x64
+    /// Linux app that trusts [signer].
+    Future<StagedUpdate?> stageOffered(String metadataUrl) async {
+      final updater = DesktopUpdater(
+        isWindows: false,
+        enabled: true,
+        dio: Dio(),
+        metadataUrl: metadataUrl,
+        releaseMode: true,
+        isLinux: true,
+        architecture: 'x64',
+        tauriPublicKey: signer.publicKey,
+      );
+      final info = await updater.checkOnce(currentVersion: '1.0.0');
+      return updater.downloadAndStage(info!);
+    }
+
     test(
-      'downloadAndStage stages the AppImage as-is and makes it executable',
+      'downloadAndStage stages a signed AppImage as-is and makes it executable',
       () async {
         await serveLinuxMetadataAndAppImage(manifestVersion: newVersion);
         final updater = DesktopUpdater(
@@ -1016,12 +1108,14 @@ void main() {
           dio: Dio(),
           isLinux: true,
           architecture: 'x64',
+          tauriPublicKey: signer.publicKey,
         );
         final info = UpdateInfo(
           version: newVersion,
           url: 'http://127.0.0.1:${server!.port}/Harness-linux-x64.AppImage',
           sha256: appImageSha,
           size: appImageBytes.length,
+          signature: await signAppImage(appImageBytes),
         );
         final staged = await updater.downloadAndStage(info);
         expect(staged, isNotNull);
@@ -1056,6 +1150,55 @@ void main() {
       },
     );
 
+    // The manifest sits in the same bucket as the AppImage, so whoever can
+    // write one can make the sha256 match; only the signature tells.
+    test('a tampered AppImage whose sha256 the manifest names is refused, and nothing is staged', () async {
+      final url = await serveLinuxMetadataAndAppImage(
+        manifestVersion: newVersion,
+        tampered: [...appImageBytes]..[0] ^= 1,
+      );
+      final temp = Directory(p.join(scratch.path, 'temp'))..createSync();
+      await expectLater(
+        IOOverrides.runZoned(
+          () => stageOffered(url),
+          getSystemTempDirectory: () => temp,
+        ),
+        _refused(SignatureRefusal.file),
+      );
+      expect(temp.listSync(), isEmpty);
+    });
+
+    test('an entry with no signature is refused', () async {
+      final url = await serveLinuxMetadataAndAppImage(
+        manifestVersion: newVersion,
+        signed: false,
+      );
+      await expectLater(stageOffered(url), _refused(SignatureRefusal.missing));
+    });
+
+    test('the other architecture\'s signature is refused', () async {
+      final url = await serveLinuxMetadataAndAppImage(
+        manifestVersion: newVersion,
+        signature: await signAppImage(appImageBytes, architecture: 'arm64'),
+      );
+      await expectLater(stageOffered(url), _refused(SignatureRefusal.comment));
+    });
+
+    test('a refusal logs one line with its reason and no path', () async {
+      final log = _RecordedLog();
+      final previous = appLog;
+      appLog = log;
+      addTearDown(() => appLog = previous);
+      final url = await serveLinuxMetadataAndAppImage(
+        manifestVersion: newVersion,
+        tampered: [...appImageBytes]..[0] ^= 1,
+      );
+      await expectLater(stageOffered(url), _refused(SignatureRefusal.file));
+      expect(log.lines, [
+        (AppLogLevel.warn, 'update', 'signature refused (file)'),
+      ]);
+    });
+
     // A release is ~45 MB. Its hash ran synchronously on the UI isolate
     // (535 ms for 45 MiB in an AOT build), so nothing else — no frame, no
     // timer — ran until it finished. The same hash timed here, twice so the
@@ -1075,6 +1218,7 @@ void main() {
         expected = _sha256HexSync(bytes);
         if (timing.elapsed < onThisIsolate) onThisIsolate = timing.elapsed;
       }
+      final signature = await signAppImage(bytes);
       final dio = Dio()..httpClientAdapter = _MemoryAdapter(bytes);
       final updater = DesktopUpdater(
         isWindows: false,
@@ -1082,6 +1226,7 @@ void main() {
         dio: dio,
         isLinux: true,
         architecture: 'x64',
+        tauriPublicKey: signer.publicKey,
       );
       final gaps = _EventLoopGaps()..start();
       final staged = await updater.downloadAndStage(
@@ -1090,6 +1235,7 @@ void main() {
           url: 'https://fixture.invalid/Harness-linux-x64.AppImage',
           sha256: expected,
           size: bytes.length,
+          signature: signature,
         ),
       );
       final longest = gaps.stop();
