@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { evaluate, graded, holds, wrongSends } from './checks.js'
+import { condition, evaluate, graded, wrongSends } from './checks.js'
 import { agentIdOf, THRESHOLDS, type Check, type CheckResult, type Platform, type Scenario, type Seen, type SessionDef,
-  type Step, type Tier } from './types.js'
+  type Step, type Tier, type Until } from './types.js'
 
 const uuid = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const claude = (key: string, n: number): SessionDef =>
@@ -395,11 +395,14 @@ it('evidence is empty when nothing was seen', () => {
   }
 })
 
-it('holds is whether a wait may end: every untimed part right', () => {
+it('a condition holds once the last whole list on its page since the start is the one expected, in order', () => {
   const s = scenario([write])
-  const check: Check = { id: 'r', kind: 'ring', dim: 'D1', page: 'claude', expect: ['a', 'b'], after: 'w', timed: true }
-  expect(holds(check, s, seen(s, [100], { frames: list(9000, 'claude', [A, B]) }))).toBe(true)
-  expect(holds(check, s, seen(s, [100], { frames: list(200, 'claude', [A]) }))).toBe(false)
-  // Its `after` step has not run yet.
-  expect(holds(check, s, seen(s, []))).toBe(false)
+  const until: Until = { kind: 'ring', page: 'claude', expect: ['a', 'b'] }
+  // From the scenario's start, whatever step has run.
+  expect(condition(until, s, seen(s, [], { frames: list(200, 'claude', [A, B]) }))).toEqual({ holds: true, evidence: [
+    'list at 200 on claude: 2 rows a b'] })
+  expect(condition(until, s, seen(s, [], { frames: list(200, 'claude', [B, A]) })).holds).toBe(false)
+  expect(condition(until, s, seen(s, [], { frames: [...list(200, 'claude', [A, B]), ...list(300, 'claude', [A])] })))
+    .toEqual({ holds: false, evidence: ['list at 300 on claude: 1 rows a', 'names wrong: b'] })
+  expect(condition(until, s, seen(s, []))).toEqual({ holds: false, evidence: [] })
 })

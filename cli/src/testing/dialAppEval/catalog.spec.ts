@@ -120,6 +120,15 @@ describe('the catalog', () => {
     }
   })
 
+  it('a wait is the person\'s own timing or a condition on the dial bounded by 10 s, never a fixed wait for the dial', () => {
+    const waits = (conditioned: boolean): string[] => ALL.flatMap((s) => s.steps.flatMap((step) =>
+      (step.kind === 'wait' && (step.until !== undefined) === conditioned ? [`${s.id} ${step.ms}`] : [])))
+    // C6's turn, C10's gap between quit and relaunch, C11's time unplugged, X3's still window, X11's and XH3's switches.
+    expect(waits(false)).toEqual(['C6 5000', 'C10 2000', 'C11 3000', 'X3 5000', 'X11 300', 'X11 300', 'XH3 200'])
+    // Each before a step that needs the first list: C11's swipe needs a row to land on, or its replug tests nothing.
+    expect(waits(true)).toEqual(['C2 10000', 'C4 10000', 'C10 10000', 'C11 10000', 'X3 10000', 'CH1 10000'])
+  })
+
   it('the held-out file says it is not to be read', () => {
     const lines = readFileSync(new URL('./heldOut.ts', import.meta.url), 'utf8').split('\n')
     const header = lines.slice(0, lines.findIndex((line) => !line.startsWith('//'))).map((line) => line.replace(/^\/\/ ?/, '')).join(' ')
