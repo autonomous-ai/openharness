@@ -1122,13 +1122,12 @@ static void nav_test_home_app_kept_by_id(void) {
 static void nav_test_home_pill_goes(void) {
     fresh_apps();
     act(POD_A_HOME_APPS, 0, 0);
-    M.selected = 1;
-    apps_of("harness", NULL, NULL);   // the last other app goes: Tabs, on the selected tab
+    apps_of("harness", NULL, NULL);   // the last other app goes: Tabs, on the selected tab (s1: the clamp alone would reach the last)
     pod_nav_sync(&N, &M);
-    CHECK(!N.home_apps && top()->scroll == 1 && !pod_home_apps(&N, &M));
+    CHECK(!N.home_apps && top()->scroll == 0 && !pod_home_apps(&N, &M));
     pod_model_apps(&M, k_apps, 3, "harness");
     pod_nav_sync(&N, &M);
-    CHECK(pod_home_switch(&M) && !pod_home_apps(&N, &M) && top()->scroll == 1);
+    CHECK(pod_home_switch(&M) && !pod_home_apps(&N, &M) && top()->scroll == 0);
 }
 static void nav_test_home_window_returns(void) {   // the PM's open question 3: Tabs, on the selected tab
     fresh_apps();
@@ -1136,9 +1135,9 @@ static void nav_test_home_window_returns(void) {   // the PM's open question 3: 
     pod_nav_sync(&N, &M);
     act(POD_A_SCROLL, 1, 0);
     CHECK(top()->scroll == 33 && !strcmp(N.home_app, "codex"));
-    window_back("s2");
+    window_back("s1");   // the first tab: the clamp alone would reach the last
     pod_nav_sync(&N, &M);
-    CHECK(!pod_home_apps(&N, &M) && top()->scroll == 1 && !N.home_app[0]);
+    CHECK(!pod_home_apps(&N, &M) && top()->scroll == 0 && !N.home_app[0]);
 }
 static void nav_test_follow_tab_leaves_apps(void) {
     fresh_apps();
