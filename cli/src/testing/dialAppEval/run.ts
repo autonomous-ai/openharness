@@ -3,14 +3,15 @@
  * grades them together into one report (docs/plans/2026-11-21-dial-app-eval-design.md, "One command").
  */
 import { spawn } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { BASELINE_PATH, grade, loadBaseline, updateBaseline } from './grade.js'
+import { scenariosFor } from './catalog.js'
+import { BASELINE_PATH, SKIP_RATCHET_ENV, droppedKeys, grade, loadBaseline, tierAVerdict, tierBVerdict, updateBaseline } from './grade.js'
 import { summary, writeReport } from './report.js'
-import { readResults } from './runner.js'
-import type { RunResults, Tier } from './types.js'
+import { readResults, resultsName, SOURCES } from './runner.js'
+import type { Platform, RunResults, Tier } from './types.js'
 
 const USAGE = 'usage: npm run eval:dial-apps -- [--tier a|b] [--update-baseline]'
 const CLI_DIR = fileURLToPath(new URL('../../..', import.meta.url))
@@ -23,6 +24,7 @@ const FILES: Record<Tier, string[]> = {
 }
 const NO_TIER_B_ON_WINDOWS = 'tier B is not run on Windows: its e2e files run on macOS and Linux only'
 const WRONG_SEND = 'a voice prompt reached another session: stop and ask the PM before a baseline is written'
+const PLATFORMS: readonly Platform[] = ['darwin', 'win32', 'linux']
 
 export interface EvalDeps {
   exec(cmd: string, args: string[], env: NodeJS.ProcessEnv): Promise<number>
@@ -48,6 +50,9 @@ export function parseArgs(argv: string[]): { tiers: Tier[]; update: boolean } {
 
 const ran = (results: RunResults, tier: Tier): boolean =>
   results.results.some((r) => r.tier === tier) || results.gaps.some((g) => g.tier === tier)
+/** Each tier/platform/scenario the catalog runs now: a scenario taken out of it may leave the baseline. */
+const catalogRuns = (tiers: readonly Tier[]): Set<string> => new Set(tiers.flatMap((tier) =>
+  PLATFORMS.flatMap((platform) => scenariosFor(tier, platform).map((s) => `${tier}/${platform}/${s.id}`))))
 
 export async function main(argv: string[], deps: EvalDeps): Promise<number> {
   let args: ReturnType<typeof parseArgs>
@@ -70,11 +75,18 @@ export async function main(argv: string[], deps: EvalDeps): Promise<number> {
   for (const name of readdirSync(out)) if (/^results-.*\.json$/.test(name)) rmSync(join(out, name))
   deps.log(`results and report: ${out}`)
 
+  // The ratchet is judged here, from every tier's results at once, so a tier's vitest failing is never the ratchet.
+  const env = { ...process.env, DIAL_EVAL_OUT: out, [SKIP_RATCHET_ENV]: '1' }
+  const failed: Tier[] = []
   for (const tier of tiers) {
-    // A tier's spec fails on its own ratchet; the report says what changed, so that is not fatal here.
-    const code = await deps.exec(process.execPath, [VITEST, 'run', ...FILES[tier]], { ...process.env, DIAL_EVAL_OUT: out })
-    if (code !== 0) deps.log(`tier ${tier}: vitest exited ${code}`)
+    const code = await deps.exec(process.execPath, [VITEST, 'run', ...FILES[tier]], env)
+    if (code !== 0) {
+      failed.push(tier)
+      deps.log(`tier ${tier}: vitest exited ${code}`)
+    }
   }
+  // A file a tier did not write lost its scenarios: an update from the rest would drop their baseline entries.
+  const unwritten = tiers.flatMap((tier) => SOURCES[tier].map(resultsName)).filter((name) => !existsSync(join(out, name)))
 
   const results = readResults(out)
   const baselinePath = deps.baseline ?? BASELINE_PATH
@@ -83,19 +95,36 @@ export async function main(argv: string[], deps: EvalDeps): Promise<number> {
   deps.log(summary(report))
   if (skipsB) deps.log(NO_TIER_B_ON_WINDOWS)
   writeReport(out, report)
+  // The report says what changed; the ratchet's verdict is printed, never fatal: the eval measures.
+  if (baseline) {
+    const verdicts = [
+      ...(tiers.includes('a') ? [['A', tierAVerdict(results, baseline)] as const] : []),
+      ...(tiers.includes('b') ? [['B', tierBVerdict(results, baseline, deps.platform as Platform)] as const] : []),
+    ]
+    for (const [tier, verdict] of verdicts) if (!verdict.ok) deps.log(`tier ${tier} ratchet: ${verdict.message}`)
+  }
 
   const missing = tiers.filter((t) => !ran(results, t))
   for (const tier of missing) deps.log(`tier ${tier} wrote no results`)
-  const code = missing.length > 0 || !report.gate.passed ? 1 : 0
-  if (args.update) {
-    if (!report.gate.passed) deps.log(WRONG_SEND)
-    else if (code !== 0) deps.log('no baseline written: a tier wrote no results')
-    else {
-      writeFileSync(baselinePath, `${JSON.stringify(updateBaseline(baseline, results, tiers), null, 2)}\n`)
-      deps.log(`baseline written: ${baselinePath}`)
-    }
+  for (const name of unwritten) deps.log(`${name} was not written`)
+  const code = failed.length > 0 || unwritten.length > 0 || missing.length > 0 || !report.gate.passed ? 1 : 0
+  if (!args.update) return code
+  if (!report.gate.passed) {
+    deps.log(WRONG_SEND)
+    return code
   }
-  return code
+  if (code !== 0) {
+    deps.log('no baseline written: every tier must pass and write all its results')
+    return code
+  }
+  const dropped = droppedKeys(baseline, results, tiers, catalogRuns(tiers))
+  if (dropped.length > 0) {
+    deps.log(`no baseline written: these checks of scenarios still in the catalog, with no gap, are not in this run: ${dropped.join(', ')}`)
+    return 1
+  }
+  writeFileSync(baselinePath, `${JSON.stringify(updateBaseline(baseline, results, tiers), null, 2)}\n`)
+  deps.log(`baseline written: ${baselinePath}`)
+  return 0
 }
 
 const realDeps: EvalDeps = {

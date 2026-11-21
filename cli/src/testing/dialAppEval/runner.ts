@@ -19,9 +19,14 @@ export interface ScenarioRun {
 }
 
 type Source = 'spec' | 'claude' | 'chatgpt' | 'heldOut'
-/** The tier spec runs tier A; the e2e files, one per app and the held-out one, run tier B. */
-const TIER_OF: Readonly<Record<Source, Tier>> = { spec: 'a', claude: 'b', chatgpt: 'b', heldOut: 'b' }
+/** The tier spec runs tier A; the e2e files, one per app and the held-out one, run tier B. Each writes its own file. */
+export const SOURCES: Readonly<Record<Tier, readonly Source[]>> = { a: ['spec'], b: ['claude', 'chatgpt', 'heldOut'] }
 const RESULTS_FILE = /^results-[ab]-\w+\.json$/
+
+/** `results-<tier>-<source>.json`. */
+export function resultsName(source: Source): string {
+  return `results-${SOURCES.a.includes(source) ? 'a' : 'b'}-${source}.json`
+}
 
 const firstLine = (error: unknown): string => String(error instanceof Error ? error.message : error).split('\n', 1)[0]!
 
@@ -93,7 +98,7 @@ export function collect(runs: readonly ScenarioRun[]): RunResults {
 /** Writes `results-<tier>-<source>.json` in dir; returns its path. */
 export function writeResults(dir: string, source: Source, results: RunResults): string {
   mkdirSync(dir, { recursive: true })
-  const path = join(dir, `results-${TIER_OF[source]}-${source}.json`)
+  const path = join(dir, resultsName(source))
   writeFileSync(path, `${JSON.stringify(results, null, 2)}\n`)
   return path
 }

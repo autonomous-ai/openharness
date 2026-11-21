@@ -9,6 +9,11 @@ import {
 } from './types.js'
 
 export const BASELINE_PATH = fileURLToPath(new URL('./baseline.json', import.meta.url))
+/**
+ * Set to `1` by the eval command for the tier spec and the e2e files it runs: it judges the ratchet itself from the
+ * merged results, so their own ratchet cases skip and a failure of theirs is never one.
+ */
+export const SKIP_RATCHET_ENV = 'DIAL_EVAL_SKIP_RATCHET'
 
 const APPS: readonly App[] = ['claude', 'chatgpt']
 const UPDATE_TIER_A = 'run `npm run eval:dial-apps -- --tier a --update-baseline` and commit cli/src/testing/dialAppEval/baseline.json'
