@@ -246,7 +246,7 @@ describe('a tap on an agent in the person\'s own tmux pane (docs/specs/2026-11-1
   it('the pane holds the agent: the person\'s client is switched to it, then its app comes forward', async () => {
     const { calls, logs, opener } = recorder({}, [], OWN)
     expect(target(IN_GHOSTTY)).toEqual({ bundle: 'com.mitchellh.ghostty', pane: { adapter: 'tmux', id: '%3:100' } })
-    expect(opener.can(target(IN_GHOSTTY))).toBe(true)
+    expect(opener.can('a1', target(IN_GHOSTTY))).toBe(true)
     expect(await opener.open('a1', target(IN_GHOSTTY))).toBe(true)
     expect(calls).toEqual([asked, listed, switched(), ghostty])
     expect(logs).toEqual([])
@@ -353,7 +353,7 @@ describe('a tap on an agent in the person\'s own tmux pane (docs/specs/2026-11-1
 
   it('on Linux the client is switched, and nothing comes forward', async () => {
     const linux = recorder({ platform: 'linux' }, [], OWN)
-    expect(linux.opener.can(target(IN_GHOSTTY))).toBe(true)
+    expect(linux.opener.can('a1', target(IN_GHOSTTY))).toBe(true)
     expect(await linux.opener.open('a1', target(IN_GHOSTTY))).toBe(true)
     expect(linux.calls).toEqual([asked, listed, switched()])
   })

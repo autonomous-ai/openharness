@@ -150,7 +150,7 @@ export interface ObservedActions {
   modReady(sessionId: string): boolean
   toMod(sessionId: string, text: string): Promise<Delivery>
   /** Whether a tap can open the target here: macOS brings an app forward, elsewhere only a pane's own command runs. */
-  canOpen(target: OpenTarget): boolean
+  canOpen(agentId: string, target: OpenTarget): boolean
   /** A tap: the agent's pane and its app, in the order the pane's adapter keeps (open.ts). */
   open(agentId: string, target: OpenTarget): Promise<boolean>
   /** Codex's own queue (codexQueue.ts): a thread runs its words as its next turn, and no terminal is typed into. */
@@ -298,7 +298,7 @@ export class ObservedSource implements HostSource {
     return {
       status: true,
       voice: live && (!!this.first(e, words) || this.modReady(e, actions) || this.queueable(e, actions)),
-      focus: live && actions.canOpen(this.target(e)),
+      focus: live && actions.canOpen(e.agent.id, this.target(e)),
       // Its prompts are answered in its own app: the dial only shows them.
       answer: false,
     }
@@ -449,7 +449,7 @@ export class ObservedSource implements HostSource {
     const actions = this.deps.actions
     if (!e || !actions || !this.live(e)) return false
     const target = this.target(e)
-    if (!actions.canOpen(target)) return false
+    if (!actions.canOpen(e.agent.id, target)) return false
     const opened = await actions.open(e.agent.id, target)
     if (opened) await this.raiseAfter(agent)
     return opened

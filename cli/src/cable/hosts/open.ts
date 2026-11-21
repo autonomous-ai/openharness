@@ -11,7 +11,7 @@
  */
 import { isAbsolute } from 'node:path'
 import type { HostAdapter, Pane } from './adapter.js'
-import { APP_BUNDLES, BUNDLE_APPS, HARNESS_BUNDLE, inCmux, inHerdr } from './hostDetect.js'
+import { APP_BUNDLES, HARNESS_BUNDLE, inCmux, inHerdr } from './hostDetect.js'
 import type { LinuxRaise } from './linuxRaise.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 import type { WindowsRaise } from './windowsRaise.js'
@@ -65,7 +65,7 @@ export interface OpenDeps {
 }
 
 export function createOpenActions(deps: OpenDeps): {
-  can(target: OpenTarget): boolean
+  can(agentId: string, target: OpenTarget): boolean
   open(agentId: string, target: OpenTarget): Promise<boolean>
   /** Brings Harness Desktop forward, starting it when it is not running; there on macOS, and on Windows with a raise. */
   desktop?: () => Promise<boolean>
@@ -97,11 +97,10 @@ export function createOpenActions(deps: OpenDeps): {
     const adapter = pane && deps.adapters.find((known) => known.id === pane.adapter)
     return adapter && adapter.tap !== 'after' && adapter.canFocus(pane) ? { adapter, pane } : undefined
   }
-  // On Linux the agent's window, by its process or its app's class: its app as its bundle names it (bundleOf), the only
-  // word of it a target carries.
-  const appOf = (bundle?: string): string | undefined => (bundle !== undefined && Object.hasOwn(BUNDLE_APPS, bundle) ? BUNDLE_APPS[bundle] : undefined)
-  const can = (target: OpenTarget): boolean =>
-    !!paneOn(target) || (byBundle && !!target.bundle) || !!raise?.ready({ agent: true, app: appOf(target.bundle) })
+  // On Linux the agent's window, by its process or its app's class: the app the raise is handed (raiseWindow), as GNOME
+  // raises by class alone. A bundle names only the host's app there, none for an app learnt from the agent's parents.
+  const can = (agentId: string, target: OpenTarget): boolean =>
+    !!paneOn(target) || (byBundle && !!target.bundle) || !!raise?.ready({ agent: true, app: deps.windowOf?.(agentId)?.app })
   // Harness Desktop is started by its launcher on Windows, never raised: a running one takes the launch over and comes
   // forward itself (windowsRaise.ts).
   const forward = async (bundle: string): Promise<boolean> => windows
@@ -181,7 +180,7 @@ export function createOpenActions(deps: OpenDeps): {
     async open(agentId, target) {
       // A tapped notice turns the dial to its own app: a pick waiting would turn it away again.
       dropWaiting()
-      if (!can(target) || running.has(agentId)) return false
+      if (!can(agentId, target) || running.has(agentId)) return false
       running.add(agentId)
       try {
         return await open(agentId, target)

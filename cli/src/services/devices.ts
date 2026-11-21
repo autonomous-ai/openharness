@@ -707,7 +707,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // runs the continue link a rest runs: its attach is the dial's own echo too.
     open: (agentId, target) => {
       noteMove()
-      if (target.pane?.adapter === claude.id && opener.can(target)) noteLink(agentId)
+      if (target.pane?.adapter === claude.id && opener.can(agentId, target)) noteLink(agentId)
       return opener.open(agentId, target)
     },
     codexQueue,

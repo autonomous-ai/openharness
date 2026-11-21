@@ -1408,7 +1408,7 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
     hcReports: vi.fn((_address: string) => true),
     herdrInFront: vi.fn(() => false),
     // As on macOS: an app or a pane is something a tap can open (open.ts).
-    canOpen: vi.fn((target: OpenTarget) => !!target.bundle || !!target.pane),
+    canOpen: vi.fn((_agentId: string, target: OpenTarget) => !!target.bundle || !!target.pane),
     open: vi.fn(async (_agentId: string, _target: OpenTarget) => true),
     claudeInFront: vi.fn(() => true),
     claudeShow: vi.fn(async (_agentId: string, _session: string): Promise<PaneSwitch> => 'ok'),
@@ -1521,7 +1521,8 @@ describe('ObservedSource actions', () => {
     const caps = (sessionId: string) => src.capabilities(src.list().find((a) => a.sessionId === sessionId)!)
     expect(caps('warp')).toEqual({ status: true, voice: false, focus: true, answer: false })
     expect(caps('app')).toEqual({ status: true, voice: false, focus: true, answer: false })
-    expect(actions.canOpen.mock.calls).toEqual([[{ bundle: 'dev.warp.Warp-Stable' }], [{ bundle: 'org.alacritty' }]])
+    const id = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!.id
+    expect(actions.canOpen.mock.calls).toEqual([[id('warp'), { bundle: 'dev.warp.Warp-Stable' }], [id('app'), { bundle: 'org.alacritty' }]])
     // What cannot open it (Linux, with no pane) gives no f.
     actions.canOpen.mockReturnValue(false)
     expect(caps('warp')).toMatchObject({ focus: false })
@@ -2154,7 +2155,7 @@ describe('ObservedSource and the Herdr terminal a session the scan found runs in
     expect(herdrLines(s.logs)).toHaveLength(2)
     expect(s.src.capabilities(row('a'))).toMatchObject({ voice: false, focus: false })
     expect(await s.src.focus(row('a'))).toBe(false)
-    expect(s.actions.canOpen).toHaveBeenLastCalledWith({})
+    expect(s.actions.canOpen).toHaveBeenLastCalledWith(row('a').id, {})
     expect(await s.src.send(row('a'), 'next')).toEqual({ ok: false, reason: 'a did not answer.' })
     expect(s.actions.hcPrompt).not.toHaveBeenCalled()
   })
