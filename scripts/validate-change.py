@@ -239,7 +239,10 @@ def flutter_test_folder(check, root):
     # The repo's desktop test commands (docs/validation-and-release.md) run `flutter test` in desktop/ themselves.
     if any(Path(arg).name == "test-desktop.py" for arg in argv) or (Path(argv[0]).name == "make" and "desktop-test" in argv[1:]):
         return (root / "desktop").resolve()
-    if Path(argv[0]).name == "flutter" and next((arg for arg in argv[1:] if not arg.startswith("-")), None) == "test":
+    # Any flutter run with a `test` argument holds its folder, whatever global options (`-d macos`) or launcher (`fvm`,
+    # flutter.bat) come first: holding a folder by mistake only serialises checks.
+    program = Path(argv[0]).name
+    if (program in ("flutter", "flutter.bat") or (program == "fvm" and argv[1:2] == ["flutter"])) and "test" in argv[1:]:
         return (root / check.get("cwd", ".")).resolve()
     return None
 
