@@ -14,7 +14,7 @@ difference Linux forces is named below with its reason. One pull request.
    recorded.
 2. **herdr inside a Linux terminal is unreachable.** On macOS (#4500) an agent in herdr inside a Terminal, iTerm2 or
    Ghostty tab is on that app's page, and a swipe or a tap reaches it. On Linux the client lookup
-   (`herdrOuter.ts`) answers nothing (`platform !== 'darwin'`), so the agent sits on herdr's page and a tap focuses its
+   (`herdrOuter.ts`) answers nothing (`platform !== 'darwin'`), so the agent sits on the "Other" page and a tap focuses its
    herdr pane with no window coming forward.
 3. **GNOME's tap check asks about another app than its raise.** On GNOME the tap check (`open.ts` `can`) asks the raise
    about the app the target's bundle names, while the raise uses the agent's own app (`observed.ts` `windowOf`). An
@@ -45,7 +45,7 @@ difference Linux forces is named below with its reason. One pull request.
 
 - PM (harness-pm, 2026-11-21): items 1-3 as proposed; fixing the wrong-pane cause on macOS too is fine (same cause).
 - PM: a terminal with no page of its own on the dial (GNOME Terminal, Ptyxis, Konsole, Alacritty, xterm, …) keeps an
-  agent in herdr there on **herdr's page**, as macOS does today for a terminal it does not list; macOS's behaviour is not
+  agent in herdr there where macOS puts it today for a terminal it does not list: the **"Other" page** (app id `terminal`; herdr's panes say `TERM_PROGRAM=herdr`, which names no app, and no listed app is among the parents), as an agent run directly in that terminal; macOS's behaviour is not
   changed for this. A swipe and a tap still reach the agent through `herdr agent focus`. On Linux, where the desktop
   takes a process (X11, sway, KDE, Hyprland), a tap also raises the window holding herdr's client, by that client's pid.
 - PM: spec goes straight to the plan.
@@ -57,7 +57,7 @@ difference Linux forces is named below with its reason. One pull request.
   2. herdr inside the person's tmux or Zellij is placed only through the variables herdr's server inherited when it
      started (`TMUX_PANE`, Zellij's session); a client that attached later from elsewhere is not placed (its
      environment cannot be read): a named limit. One mechanism for both, so on macOS herdr inside tmux inside Terminal,
-     iTerm2 or Ghostty moves from herdr's page to that app's page, as #4500's rule says (herdr in a terminal app → that
+     iTerm2 or Ghostty moves from the "Other" page to that app's page, as #4500's rule says (herdr in a terminal app → that
      app's page); said in the PR.
   3. WezTerm and kitty tab selection is one code path on both OSes: on macOS too.
   4. The builder's call below (a held pane ranks after the agent's other panes for a tap) stands.
@@ -91,7 +91,7 @@ difference Linux forces is named below with its reason. One pull request.
 
 ## Non-goals
 
-- A page of its own for GNOME Terminal, Ptyxis, Konsole or any terminal the dial does not list (decided: herdr's page).
+- A page of its own for GNOME Terminal, Ptyxis, Konsole or any terminal the dial does not list (decided: the "Other" page, as today).
 - Selecting a tab in GNOME Terminal, Ptyxis, Konsole, Ghostty (Linux), Alacritty, foot or xterm: none offers a tab API
   the dial can call without new permission (GNOME Terminal's and Ptyxis' D-Bus interfaces select no tab; Ghostty's Linux
   build has no list/focus; Konsole's D-Bus `setCurrentSession` is not used here, a later decision).
@@ -199,12 +199,12 @@ parents (they end at the detached server). The lookup then asks the multiplexer 
 app holding tmux's or Zellij's client. Those lookups read the agent's hints, which are what herdr's server inherited
 when it started: a client that attached later from another tmux pane or Zellij session is not placed (decided, named in
 the PR). This is the same mechanism on macOS, where it also places herdr inside the person's tmux on the terminal app's
-page (today it sits on herdr's page), as #4500's rule says; said in the PR. Zellij names no pane's process or tty
+page (today it sits on the "Other" page), as #4500's rule says; said in the PR. Zellij names no pane's process or tty
 (`RECORDED_ZELLIJ.listPanes`), so the Zellij pane holding herdr's client is not selected: a tap brings the app holding
 Zellij's client forward and focuses the herdr pane.
 
 **A client in a terminal with no page (decided).** No listed app among the client's parents and no multiplexer: the
-agent stays on herdr's page. On Linux the answer still carries the client's pid, so a tap's raise brings forward the
+agent stays on the "Other" page. On Linux the answer still carries the client's pid, so a tap's raise brings forward the
 window of that client or its nearest parent that owns one (`linuxRaise.ts`, by process: X11, sway, KDE, Hyprland). GNOME
 raises by class, and herdr has none: no raise there. On macOS nothing changes (the raise is `open -b`). `firstOuter`
 keeps that pid when no later lookup names an app; `observed.ts` keeps it for `windowOf` only, never for the page or a tab.
@@ -243,10 +243,10 @@ takes the agent's id). GNOME still raises by class: with two windows of one app,
 | In an Orca terminal, Windows | words by handle | unchanged |
 | In a herdr pane | words, tap through herdr | same, once the maker reads `herdr` |
 | In a terminal started from a herdr pane | words typed into the herdr pane; macOS/Linux client lookup could place it on herdr's client's app | herdr pane held; no herdr client place |
-| herdr client in WezTerm / kitty / Ghostty (Linux) | herdr's page, tap focuses herdr pane | that app's page; rest selects the WezTerm/kitty tab, then herdr focus; tap raises the window too |
+| herdr client in WezTerm / kitty / Ghostty (Linux) | "Other", tap focuses herdr pane | that app's page; rest selects the WezTerm/kitty tab, then herdr focus; tap raises the window too |
 | herdr client in WezTerm / kitty (macOS) | WezTerm's/kitty's page, no tab | same page; the tab is selected |
-| herdr client in tmux or Zellij inside a listed app | herdr's page | the app holding the multiplexer's client |
-| herdr client in GNOME Terminal etc. (Linux) | herdr's page | herdr's page; tap also raises the client's window (not GNOME) |
+| herdr client in tmux or Zellij inside a listed app | "Other" | the app holding the multiplexer's client |
+| herdr client in GNOME Terminal etc. (Linux) | "Other" | "Other"; tap also raises the client's window (not GNOME) |
 | tmux client in WezTerm / kitty | that app's page, no tab | the tab is selected |
 | GNOME, agent whose app was learnt from its parents | no tap | tap raises its app's window by class |
 
@@ -291,7 +291,7 @@ leaves the computer.
 3. **herdr inside a terminal, Linux** (`dialHost*` e2e): herdr's client attached in a WezTerm mux pane: the agent is on
    WezTerm's page, one row; a rest with WezTerm in front activates the client's WezTerm pane (`cli list` reads it back)
    and moves herdr's focus; with another app in front nothing moves. herdr's client in an xterm on the X11 desk (no page):
-   the agent stays on herdr's page and a tap raises that xterm (`_NET_ACTIVE_WINDOW`). kitty under Xvfb: the client's
+   the agent stays on the "Other" page and a tap raises that xterm (`_NET_ACTIVE_WINDOW`). kitty under Xvfb: the client's
    window is focused. herdr's client in a Zellij pane: the page of the app holding Zellij's client, where the runner can
    hold one; else unit tests only, said so.
 4. **macOS on this Mac:** `dialHerdrTerminal`, `dialTmuxTerminal`, `deviceHerdr`, `dialOrcaFocus`, `dialOrcaFullRing`,
