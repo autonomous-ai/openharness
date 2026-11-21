@@ -35,9 +35,10 @@ describe.skipIf(WIN32)('the dial eval, tier B: the held-out set', () => {
   it.for(SCENARIOS)('$id: $title', async (scenario) => {
     const began = Date.now()
     const run = await runScenario(driver, scenario, HOST)
+    // Kept before any assertion, so a scenario that fails one is still in the results and the baseline's verdict.
+    runs.push(run)
     console.log(`[dial eval] ${scenario.id}: ${Date.now() - began} ms`)
     expect(driver.networkReached()).toEqual([])
-    runs.push(run)
     expect(run.wrongSends).toEqual([])
     expect(uncaughtProbes(run)).toEqual([])
   })
