@@ -17,7 +17,7 @@
  * (their SessionEnd hook, their poll, their process), so nothing of a scenario outlives it.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { readFileSync, statSync, writeFileSync } from 'node:fs'
+import { readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { claudeStoreRoots } from '../../src/cable/hosts/appPlaces.js'
@@ -87,6 +87,15 @@ const stateOf = (world: TierBWorld): State => {
 /** The link the devices make for a Claude app session (cable/hosts/claudeApp.ts). */
 const linkOf = (s: SessionDef): string => `claude://code/continue?session=${s.localId}`
 const fileOf = (world: TierBWorld, name: string, kind: 'release' | 'permit'): string => join(world.d.engineConfig.root, `${name}.${kind}`)
+
+/**
+ * [text] in [file] whole: written beside it and renamed over it. The fake Claude Code reads a release or permit file the
+ * moment it is there, and one caught between its creation and its write is empty: a turn that answers `answer N: …`.
+ */
+export function writeWhole(file: string, text: string): void {
+  writeFileSync(`${file}.tmp`, text)
+  renameSync(`${file}.tmp`, file)
+}
 
 /** The app, running: started at the first step on it. */
 function appOf(world: TierBWorld): FakeApp {
@@ -193,7 +202,7 @@ async function end(world: TierBWorld, app: FakeApp, key: SessionKey, live: Live)
   const { outside } = live
   // A dialog waiting on the person is declined, as with Esc; an open turn answers as it would.
   if (live.asking) outside.type('\x1b')
-  else if (live.open) writeFileSync(fileOf(world, live.open, 'release'), '')
+  else if (live.open) writeWhole(fileOf(world, live.open, 'release'), '')
   outside.type('!exit')
   try {
     await until(`${key}'s SessionEnd hook`, () => outside.ran(world.d, 'SessionEnd'), END_MS, 50)
@@ -321,13 +330,13 @@ export const claudeSteps = {
       case 'needs-input':
         // Claude Code asks within the turn; a question is drawn as a permission is, so it says the same to its hooks.
         if (!live.open) throw new Error(`scenario ${world.scenario.id}: ${step.session} asks with no turn open`)
-        writeFileSync(fileOf(world, live.open, 'permit'), 'printf eval')
+        writeWhole(fileOf(world, live.open, 'permit'), 'printf eval')
         live.asking = true
         break
       case 'turn-stop': {
         if (!live.open || live.asking) throw new Error(`scenario ${world.scenario.id}: ${step.session} has no turn to stop`)
         const stops = ++live.stops
-        writeFileSync(fileOf(world, live.open, 'release'), step.lastAnswer ?? '')
+        writeWhole(fileOf(world, live.open, 'release'), step.lastAnswer ?? '')
         live.open = undefined
         await until(`${step.session}'s Stop hook`, () => outside.ran(d, 'Stop', stops), HOOK_MS, 50)
         break
