@@ -31,7 +31,9 @@ async function renewNow(vault: Store, code: string, force: boolean): Promise<Tok
     if ((error as Error).message !== 'invalid_grant') throw error
     // Why a connection asks for Reconnect: without this, a grant the service dropped leaves no trace of when or why.
     const age = token.obtained_at ? `, issued ${new Date(token.obtained_at * 1000).toISOString()}` : ''
-    console.warn(`[connections] ${code}: ${token.issuer ? hashOf(token.issuer) : token.source || 'the service'} refused to renew it (${errorKind(error)}${age})`)
+    // A custom server's code is made from the name the person gave it (connect.ts customCode).
+    const who = token.source === 'custom' ? 'custom' : code
+    console.warn(`[connections] ${who}: ${token.issuer ? hashOf(token.issuer) : token.source || 'the service'} refused to renew it (${errorKind(error)}${age})`)
     locked(vault.root, () => {
       // Another process may have renewed it with a rotated refresh token meanwhile: keep that one.
       const now = vault.token(code)

@@ -196,7 +196,8 @@ async function tokenRequest(client: Client, form: Record<string, string>): Promi
   const answer = await http(client.token_endpoint, { headers, body: new URLSearchParams(fields).toString() })
   const data = jsonOf(answer.body) ?? {}
   if (answer.status !== 200 || typeof data.access_token !== 'string') {
-    throw new SignInError(data.error === 'invalid_grant' ? 'invalid_grant' : 'The service did not issue a token.')
+    // The status as the code a log reads (renew.ts): never the service's own words, which a log would carry off.
+    throw Object.assign(new SignInError(data.error === 'invalid_grant' ? 'invalid_grant' : 'The service did not issue a token.'), { code: `HTTP_${answer.status}` })
   }
   return data
 }
@@ -287,7 +288,8 @@ export class LocalSignIn implements SignIn {
 /** A renewed `dcr` token, through this computer's registered client. */
 export async function refresh(vault: Store, token: Token): Promise<Token> {
   const client = vault.client(token.issuer ?? '')
-  if (!client || !token.refresh_token || !token.mcp_entry) throw new SignInError('invalid_grant')
+  // A code of its own, so the log tells this computer's want of a client or a refresh token from the service's refusal.
+  if (!client || !token.refresh_token || !token.mcp_entry) throw Object.assign(new SignInError('invalid_grant'), { code: 'NO_CLIENT_OR_REFRESH_TOKEN' })
   const mcpUrl = token.mcp_entry.url
   const form: Record<string, string> = { grant_type: 'refresh_token', refresh_token: token.refresh_token, resource: mcpUrl }
   let data: Record<string, unknown>
