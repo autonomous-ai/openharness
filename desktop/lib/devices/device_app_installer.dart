@@ -15,6 +15,7 @@ import '../core/home_dir.dart';
 import '../core/runtime_architecture.dart';
 import '../core/runtime_platform.dart';
 import '../logging/app_log.dart';
+import '../update/tauri_signature.dart';
 import 'device_app.dart';
 import 'device_app_launcher.dart';
 import 'device_app_manifest.dart';
@@ -142,8 +143,9 @@ List<String> deviceAppTargetFolders() {
 /// takes all seven: it unpacks `Harness Device.app` into the first target
 /// folder that takes it. Windows runs the per-user installer, which puts the
 /// app at its place ([deviceAppPlace]); Linux puts the AppImage there. Neither
-/// unpacks, and Linux checks no signature (an AppImage carries none), and puts
-/// the app in the desktop's app list before it opens it.
+/// unpacks. An AppImage carries no OS signature, so Linux checks the Device
+/// release's Tauri signature of it instead, and puts the app in the desktop's
+/// app list before it opens it.
 class DeviceAppInstaller {
   DeviceAppInstaller({
     required this._manifestUrl,
@@ -159,6 +161,7 @@ class DeviceAppInstaller {
     this._tempRoot,
     this._manifestTimeout = const Duration(seconds: 15),
     this._downloadTimeout = const Duration(minutes: 5),
+    this._tauriPublicKey = tauriUpdatePublicKey,
   }) : _platform = platform ?? defaultTargetPlatform,
        _place = place ?? deviceAppPlace,
        _dio =
@@ -186,6 +189,7 @@ class DeviceAppInstaller {
   final Directory? _tempRoot;
   final Duration _manifestTimeout;
   final Duration _downloadTimeout;
+  final String _tauriPublicKey;
 
   /// Never throws: every failure is a step. Removes its temporary directory whatever happened.
   Future<DeviceAppInstallResult> install() async {
@@ -217,6 +221,8 @@ class DeviceAppInstaller {
           step = DeviceAppInstallStep.install;
           installed = await _runSetup(download);
         case TargetPlatform.linux:
+          step = DeviceAppInstallStep.signature;
+          await _checkAppImage(release, download);
           step = DeviceAppInstallStep.install;
           installed = await _placeAppImage(download);
           try {
@@ -372,6 +378,28 @@ class DeviceAppInstaller {
     final place = _place() ?? (throw const _Refused());
     _require(File(place).existsSync());
     return place;
+  }
+
+  /// Linux: refuses unless the key Harness Device's updater trusts signed
+  /// this file, as the release names it, for the entry's version: a manifest
+  /// someone else wrote can match a sha256, never this.
+  Future<void> _checkAppImage(DeviceAppRelease release, String appImage) async {
+    try {
+      await checkTauriSignature(
+        release.version == null ? null : release.signature,
+        fileName:
+            'Harness-Device-linux-${_architecture ?? runtimeArchitecture}.AppImage',
+        versionField: 'version:${release.version}',
+        digest: () => blake2b512OfFile(appImage),
+        publicKey: _tauriPublicKey,
+      );
+    } on TauriSignatureRefused catch (refused) {
+      appLog.warn(
+        'devices',
+        'device app signature refused (${refused.reason.name})',
+      );
+      rethrow;
+    }
   }
 
   /// Linux: the AppImage at the place, executable, unless a copy is already
