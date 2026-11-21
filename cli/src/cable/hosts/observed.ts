@@ -222,6 +222,9 @@ interface Entry {
   outerAsk?: { pid: number; hints: Readonly<Record<string, string>> }
   /** The app and tab it is seen in, from that answer, while its caller and hints are those it was asked for. */
   outer?: Outer
+  /** The client's process from an answer that named no app (a client in a terminal with no page): the raise's alone,
+   *  never a page, a tab or a pane, while its caller and hints are those it was asked for. */
+  outerPid?: number
   /** The process whose parents were walked for its app, a caller whose hints named none, and the app they named: none
    *  while the walk runs, or when they named no listed app. */
   appPid?: number
@@ -448,12 +451,23 @@ export class ObservedSource implements HostSource {
     const target = this.target(e)
     if (!actions.canOpen(target)) return false
     const opened = await actions.open(e.agent.id, target)
-    // `open -b` brings the app forward on whichever tab it had: a pane that comes after its app (a tab) is raised once it
-    // came, also when the tapped pane was the multiplexer's inside that tab. Read after the open, as an agent that ended
-    // or moved meanwhile has no such pane to raise.
-    const tab = opened ? this.shown(agent).find(({ adapter }) => adapter.tap === 'after') : undefined
-    if (tab?.adapter.canFocus(tab.pane)) await tab.adapter.focus(tab.pane)
+    if (opened) await this.raiseAfter(agent)
     return opened
+  }
+
+  /** `open -b` brings the app forward on whichever tab it had: a pane that comes after its app (a tab) is raised once it
+   *  came, also when the tapped pane was the multiplexer's inside that tab. Read after the open, as an agent that ended
+   *  or moved meanwhile has no such pane to raise. A nested agent's is raised without asking whether a rest could show
+   *  it: one shown only while its app is in front would be skipped while the front report lags the open. */
+  private async raiseAfter(agent: HostAgent): Promise<void> {
+    const e = this.entries.get(agent.id)
+    if (e?.outer && this.live(e)) {
+      const tab = this.shownOnly(e).find(({ adapter, pane }) => adapter.tap === 'after' && adapter.canFocus(pane))
+      if (tab) await tab.adapter.focus(tab.pane)
+      return
+    }
+    const tab = this.shown(agent).find(({ adapter }) => adapter.tap === 'after')
+    if (tab?.adapter.canFocus(tab.pane)) await tab.adapter.focus(tab.pane)
   }
 
   /** Only a pane whose app can show it now (an Orca terminal, a Claude app session while that app is in front, a tab a
@@ -567,10 +581,11 @@ export class ObservedSource implements HostSource {
 
   /** A live agent's latest process, the one whose window a raise brings forward, and its app; none once its session
    *  ended, as its window holds something else now. Nested in a multiplexer, the process is the client its app holds:
-   *  the agent's own is under the multiplexer's server, which owns no window. */
+   *  the agent's own is under the multiplexer's server, which owns no window. A client in a terminal with no page is
+   *  that client too (Entry.outerPid). */
   windowOf(agentId: string): { pid: number; app: string } | undefined {
     const e = this.entries.get(agentId)
-    return e && this.live(e) ? { pid: e.outer?.pid ?? e.caller ?? e.pid, app: e.agent.app } : undefined
+    return e && this.live(e) ? { pid: e.outer?.pid ?? e.outerPid ?? e.caller ?? e.pid, app: e.agent.app } : undefined
   }
 
   /** The pane its caller last placed it at in that adapter (setPaneNames), as shownOnly reads it; never one of its panes. */
@@ -686,7 +701,10 @@ export class ObservedSource implements HostSource {
   private askOuter(entry: Entry, e: ObservedHookEvent): boolean {
     const last = entry.outerAsk
     const same = last !== undefined && last.pid === e.callerPid && sameHints(last.hints, e.hostHints)
-    if (!same) entry.outer = undefined
+    if (!same) {
+      entry.outer = undefined
+      entry.outerPid = undefined
+    }
     if (same && e.event !== 'session-start' && e.event !== 'turn-start') return true
     const answer = this.deps.outer?.(e.hostHints, e.callerPid)
     if (!answer) {
@@ -701,6 +719,7 @@ export class ObservedSource implements HostSource {
     void answer.then((place) => {
       if (entry.outerAsk !== ask || !this.live(entry)) return
       entry.outer = place.app ? { app: place.app, tty: place.tty, pid: place.pid } : undefined
+      entry.outerPid = !place.app && Number.isSafeInteger(place.pid) && place.pid! > 0 ? place.pid : undefined
       entry.tty = entry.outer?.tty
       this.placeApp(entry, ask.hints, ask.pid)
       this.locate(entry)
