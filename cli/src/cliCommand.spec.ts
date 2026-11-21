@@ -207,12 +207,12 @@ describe('CLI login/start command contract', () => {
 
   // The daemon's log names this command for the Hermes entries a person adds by hand (kit/nativeHookYaml.ts), so the
   // help lists it.
-  it('help lists harness hermes-hooks in one line', async () => {
+  it('help lists harness hooks hermes in one line', async () => {
     const result = await run('help')
 
     expect(result.status).toBe(0)
-    expect(result.stdout.split('\n').filter((line) => line.includes('harness hermes-hooks')))
-      .toEqual(['  harness hermes-hooks         the hook entries to add by hand to a Hermes config.yaml with its own hooks:'])
+    expect(result.stdout.split('\n').filter((line) => line.includes('harness hooks')))
+      .toEqual(['  harness hooks hermes         the hook entries to add by hand to a Hermes config.yaml with its own hooks:'])
   }, ONE_RUN_TEST_MS)
 
   it('returns a nonzero status for an unknown command', async () => {

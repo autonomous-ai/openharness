@@ -1,5 +1,5 @@
 /**
- * `harness hermes-hooks` prints, on the person's own terminal, the entries Harness would add to each Hermes home: the
+ * `harness hooks hermes` prints, on the person's own terminal, the entries Harness would add to each Hermes home: the
  * daemon's log names only the command, since the entries name the managed Node, notify.mjs and the person's folders.
  * The home is a throwaway folder, never the person's `~/.hermes`, and the Hermes is the suite's mock.
  */
@@ -11,7 +11,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 let root = '', home = '', profile = ''
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'hermes-hooks-command-'))
+  root = mkdtempSync(join(tmpdir(), 'hooks-command-'))
   home = join(root, '.hermes'); profile = join(home, 'profiles', 'work')
   mkdirSync(profile, { recursive: true })
   writeFileSync(join(home, 'config.yaml'), 'model: x\n'); writeFileSync(join(profile, 'config.yaml'), 'model: y\n')
@@ -27,13 +27,13 @@ function written(config: string): string {
   return text.slice(text.indexOf('hooks:\n') + 'hooks:\n'.length, text.indexOf('\n# machine-adapter: end'))
 }
 
-it('prints, for every home with a config, the exact entries the installer writes there', async () => {
+it('prints, for every Hermes home with a config, the exact entries the installer writes there', async () => {
   const { hermesKeepsRecord } = await import('./hermesRecord.js')
   vi.mocked(hermesKeepsRecord).mockResolvedValue(false)
   const { installHermesHooks } = await import('./nativeHooks.js')
-  const { hermesHooksCommand } = await import('./hermesHooksCommand.js')
+  const { hooksCommand } = await import('./hooksCommand.js')
   const lines: string[] = []
-  hermesHooksCommand(4242, (line) => lines.push(line))
+  expect(hooksCommand('hermes', 4242, (line) => lines.push(line))).toBe(0)
   expect(await installHermesHooks(4242)).toBe(true)
 
   const printed = lines.join('\n')
@@ -45,10 +45,19 @@ it('prints, for every home with a config, the exact entries the installer writes
   expect(printed).toContain('terminal:\n  client_env_passthrough: ["HARNESS_PANE", "TMUX_PANE"]')
 })
 
-it('prints nothing when no home has a config', async () => {
+it('prints nothing when no Hermes home has a config', async () => {
   rmSync(home, { recursive: true })
-  const { hermesHooksCommand } = await import('./hermesHooksCommand.js')
+  const { hooksCommand } = await import('./hooksCommand.js')
   const lines: string[] = []
-  hermesHooksCommand(4242, (line) => lines.push(line))
+  expect(hooksCommand('hermes', 4242, (line) => lines.push(line))).toBe(0)
   expect(lines).toEqual([])
+})
+
+// Harness writes every other engine's hooks itself, so a person has nothing to add by hand for them.
+it.each([[undefined], ['claude']])('refuses %s in one line naming the engines it covers', async (engine) => {
+  const { hooksCommand } = await import('./hooksCommand.js')
+  const lines: string[] = [], errors: string[] = []
+  expect(hooksCommand(engine, 4242, (line) => lines.push(line), (line) => errors.push(line))).toBe(1)
+  expect(lines).toEqual([])
+  expect(errors).toEqual(['Usage: harness hooks hermes   (Harness writes the other engines\' hooks itself)'])
 })

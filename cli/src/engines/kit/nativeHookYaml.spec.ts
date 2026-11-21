@@ -127,7 +127,7 @@ it('a hook install names its file by a hash, never its path', async () => {
     + ' sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness')
   expect(lines).toContain(`[hooks] Hermes session hooks already installed (${hashOf(work)})`)
   expect(lines).toContain(`[hooks] ${hashOf(join(theirs, 'config.yaml'))} has its own \`hooks:\` block — leaving it untouched.`)
-  expect(lines).toContain('[hooks] run `harness hermes-hooks` for the entries to add under it to mirror Hermes sessions')
+  expect(lines).toContain('[hooks] run `harness hooks hermes` for the entries to add under it to mirror Hermes sessions')
   expect(lines.filter((line) => line.startsWith('[hooks]   '))).toEqual([])
 })
 
