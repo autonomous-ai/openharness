@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { BASELINE_PATH, grade, loadBaseline, tierAVerdict, tierBVerdict, updateBaseline } from './grade.js'
+import { BASELINE_PATH, droppedKeys, grade, loadBaseline, tierAVerdict, tierBVerdict, updateBaseline } from './grade.js'
 import type { Baseline, CheckResult, CoverageGap, RunResults, WrongSend } from './types.js'
 
 function result(over: Partial<CheckResult> & Pick<CheckResult, 'check' | 'dim' | 'score'>): CheckResult {
@@ -146,17 +146,22 @@ describe('tierAVerdict', () => {
     expect(verdict.ok).toBe(true)
   })
 
-  it('tier A: a drop is a regression, a rise or a new check a stale baseline naming the update command', () => {
+  it('tier A: a drop or a new check below 1 is a regression, a rise or a new passing check a stale baseline naming the update command', () => {
     const drop = tierAVerdict(now, baseline({ 'a/darwin/C1/ring.recall': 1, 'a/darwin/C1/ring.order': 1 }))
     expect(drop).toEqual({ ok: false, message: 'regression: a/darwin/C1/ring.order' })
+    const failingNew = tierAVerdict(now, baseline({ 'a/darwin/C1/ring.recall': 1 }))
+    expect(failingNew).toEqual({ ok: false, message: 'regression: a/darwin/C1/ring.order' })
 
     const update = '; run `npm run eval:dial-apps -- --tier a --update-baseline` and commit cli/src/testing/dialAppEval/baseline.json'
     const rise = tierAVerdict(now, baseline({ 'a/darwin/C1/ring.recall': 1, 'a/darwin/C1/ring.order': 0 }))
     expect(rise).toEqual({ ok: false, message: `stale baseline: a/darwin/C1/ring.order${update}` })
-    const added = tierAVerdict(now, baseline({ 'a/darwin/C1/ring.recall': 1 }))
-    expect(added).toEqual({ ok: false, message: `stale baseline: a/darwin/C1/ring.order${update}` })
-    const missing = tierAVerdict(now, baseline({ 'a/darwin/C1/ring.recall': 1, 'a/darwin/C1/ring.order': 0.5, 'a/linux/C1/ring.cap': 1 }))
-    expect(missing).toEqual({ ok: false, message: `stale baseline: a/linux/C1/ring.cap${update}` })
+    const passingNew = tierAVerdict(now, baseline({ 'a/darwin/C1/ring.order': 0.5 }))
+    expect(passingNew).toEqual({ ok: false, message: `stale baseline: a/darwin/C1/ring.recall${update}` })
+  })
+
+  it('tier A: a baseline check the run no longer gives is missing', () => {
+    const verdict = tierAVerdict(now, baseline({ 'a/darwin/C1/ring.recall': 1, 'a/darwin/C1/ring.order': 0.5, 'a/linux/C1/ring.cap': 1 }))
+    expect(verdict).toEqual({ ok: false, message: 'missing: a/linux/C1/ring.cap' })
   })
 
   it('names both a regression and a stale entry', () => {
@@ -222,6 +227,23 @@ describe('updateBaseline', () => {
   it('leaves out a tier it was not given and starts from nothing with no baseline', () => {
     const results = run([result({ check: 'ring.recall', dim: 'D1', score: 1 }), result({ tier: 'b', check: 'x', dim: 'D1', score: 1 })])
     expect(updateBaseline(null, results, ['b']).checks).toEqual({ 'b/darwin/C1/x': 1 })
+  })
+})
+
+describe('droppedKeys', () => {
+  const before = baseline({
+    'a/darwin/C1/ring.recall': 1, 'a/darwin/C1/ring.order': 1, 'a/linux/C1/ring.order': 1, 'a/darwin/X2/ring.recall': 1,
+    'a/darwin/C9/ring.recall': 1, 'b/darwin/C1/ring.recall': 1, 'b/linux/C1/ring.recall': 1,
+  })
+  const catalog = new Set(['a/darwin/C1', 'a/linux/C1', 'a/darwin/X2', 'b/darwin/C1', 'b/linux/C1'])
+  const ran = run([result({ check: 'ring.recall', dim: 'D1', score: 1 })],
+    { gaps: [{ tier: 'a', platform: 'darwin', scenario: 'X2', app: 'chatgpt', reason: 'a platform read' }] })
+
+  it('names each check of a subset the update replaces that the run no longer gives, unless a gap or the catalog explains it', () => {
+    // C1's order on both platforms went with nothing to say why; X2 is a gap; C9 left the catalog; tier B was not run.
+    expect(droppedKeys(before, ran, ['a'], catalog)).toEqual(['a/darwin/C1/ring.order', 'a/linux/C1/ring.order'])
+    expect(droppedKeys(before, ran, ['b'], catalog)).toEqual([])
+    expect(droppedKeys(null, ran, ['a'], catalog)).toEqual([])
   })
 })
 

@@ -119,12 +119,13 @@ it('steps run in order and labels are timed', async () => {
 /** A wait until the dial has a ring of these sessions, bounded by 5 s. */
 const listed = (expect: string[]): Step => ({ kind: 'wait', ms: 5_000, until: { kind: 'ring', page: 'claude', expect } })
 
-it('a condition wait ends as soon as what the dial has received meets it', async () => {
+it('a condition wait ends as soon as what the dial has received meets it, a timed result of 1', async () => {
   const s = scenario([write, listed(['a', 'b']), tap])
   const driver = new Scripted({ events: [{ at: 1_200, does: (d) => d.frames.push(...list(d.now(), [A, B])) }] })
   const run = await runScenario(driver, s, 'darwin')
   expect(driver.calls.slice(1, 4)).toEqual(['claude.write at 0', 'settle 5000 until 1200', 'tap at 1200'])
-  expect(run.results.map((r) => r.check)).not.toContain('wait.1')
+  // Timed: tier B never asserts it, and tier A's exact baseline sees a wait that stops holding.
+  expect(run.results.find((r) => r.check === 'wait.1')).toMatchObject({ dim: 'D1', score: 1, timed: true })
 })
 
 it('a condition wait that reaches its limit is a failing result that says what the dial had', async () => {
@@ -134,7 +135,7 @@ it('a condition wait that reaches its limit is a failing result that says what t
   expect(driver.calls.slice(1, 4)).toEqual(['claude.write at 0', 'settle 5000 until 5000', 'tap at 5000'])
   const missed = run.results.find((r) => r.check === 'wait.1')
   expect(missed).toMatchObject({ tier: 'a', platform: 'darwin', scenario: 'S1', app: 'claude', dim: 'D1', heldOut: false,
-    score: 0, timed: false })
+    score: 0, timed: true })
   expect(missed!.evidence.slice(0, 2)).toEqual(['not held in 5000 ms', 'list at 0 on claude: 1 rows a'])
 })
 
