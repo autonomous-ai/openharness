@@ -5866,9 +5866,13 @@ class AppNotifier extends ChangeNotifier {
               return status;
             })
             .catchError((Object _) => null);
-        final environmentReady = await _prepareEnvironment();
-        _markStartup('tools');
-        if (!environmentReady) return;
+        // Setup runs the CLI (`node cli.js version`) and may install it again, so not while `harness uninstall` holds
+        // its marker: the launch goes on to the signed-in check, which has no answer then (see [_checkAuthStatus]).
+        if (!_discovery.uninstallHeld()) {
+          final environmentReady = await _prepareEnvironment();
+          _markStartup('tools');
+          if (!environmentReady) return;
+        }
         await _continueAfterEnvironmentReady(
           early: _installedThisBoot || askedAt != _authRevision ? null : early,
         );
