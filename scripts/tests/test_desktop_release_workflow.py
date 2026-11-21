@@ -85,6 +85,19 @@ class ReleaseDesktopWorkflowTests(unittest.TestCase):
         self.assertIn("name: desktop-linux-${{ matrix.arch }}\n", upload)
         self.assertIn("path: desktop/build/linux-release/\n", upload)
 
+    def test_build_linux_runs_appimagetool_only_when_its_pinned_sha256_matches(self):
+        # What appimagetool packages gets Harness's signature, so the tool is pinned by its bytes, not only its tag.
+        job = self.job("build-linux")
+        download = steps(job)[self.step(job, "appimagetool-${APPIMAGE_ARCH}.AppImage")]
+        self.assertIn("APPIMAGE_ARCH: ${{ matrix.arch == 'arm64' && 'aarch64' || 'x86_64' }}\n", download)
+        sums = re.search(r"APPIMAGETOOL_SHA256: \$\{\{ matrix\.arch == 'arm64' && '([0-9a-f]{64})' \|\| '([0-9a-f]{64})' \}\}\n",
+                         download)
+        self.assertIsNotNone(sums, "a pinned sha256 for each architecture")
+        self.assertNotEqual(sums.group(1), sums.group(2))
+        check = download.find('"$APPIMAGETOOL_SHA256  $RUNNER_TEMP/appimagetool" | sha256sum --check --strict')
+        self.assertGreater(check, download.find("curl -fL"))
+        self.assertLess(check, download.find("chmod +x"))
+
     def test_sign_linux_holds_the_key_and_runs_no_build_code(self):
         job = self.job("sign-linux")
         self.assertRegex(job, r"(?m)^    needs: \[version, build-linux\]$")
