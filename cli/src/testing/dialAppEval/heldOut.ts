@@ -3,7 +3,7 @@
 //
 // Scored and reported apart, never in the headline score. A function, not a list: the catalog imports it and it uses
 // the catalog's builders, so it is called once the catalog has them.
-import { chatgptGhost, claudeGhost, claudeSession, claudeSessions, keys, LISTED_MS, S, scenario, thread, threads, titleOf } from './catalog.js'
+import { chatgptGhost, claudeGhost, claudeSession, claudeSessions, keys, listed, S, scenario, thread, threads, titleOf } from './catalog.js'
 import type { Scenario } from './types.js'
 
 export function heldOut(): Scenario[] {
@@ -14,7 +14,7 @@ export function heldOut(): Scenario[] {
       dims: ['D1'], tiers: ['a'], sessions: [...claudeSessions(s16), claudeSession('s00', 30 * S), claudeGhost],
       steps: [
         { kind: 'claude.write', sessions: s16 },
-        { kind: 'wait', ms: LISTED_MS },
+        listed('claude', s16),
         { label: 'new', kind: 'claude.write', sessions: ['s00'] },
       ],
       checks: [{ id: 'ring', kind: 'ring', dim: 'D1', page: 'claude', expect: ['s00', ...s16.slice(0, 15)], after: 'new' }],

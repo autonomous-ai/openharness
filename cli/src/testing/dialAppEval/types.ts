@@ -75,9 +75,14 @@ export type Step = { label?: Label } & (
   | { kind: 'relaunch'; app: App }
   | { kind: 'unplug' }
   | { kind: 'replug' }
-  /** until: a check id whose condition ends the wait. */
-  | { kind: 'wait'; ms: number; until?: string }
+  /**
+   * With `until`, the wait ends once it holds and `ms` is only its limit: one that reaches it is a failing result.
+   * Without, `ms` is the person's own timing.
+   */
+  | { kind: 'wait'; ms: number; until?: Until }
 )
+/** What a wait ends on: what the dial has received from the scenario's start, as a ring check reads it. */
+export type Until = { kind: 'ring'; page: App; expect: SessionKey[] }
 export type StepOf<K extends StepKind> = Extract<Step, { kind: K }>
 
 export const CHECK_KINDS = ['ring', 'focus', 'still', 'open', 'state', 'voice', 'recap', 'cost'] as const

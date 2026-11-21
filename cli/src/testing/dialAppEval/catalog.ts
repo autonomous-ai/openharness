@@ -3,16 +3,15 @@
  * Every session is made up: titles start with "Eval ", folders with /work/eval-, ids are fixed UUIDs.
  */
 import { heldOut } from './heldOut.js'
-import type { Check, Platform, Scenario, SessionDef, SessionKey, Tier } from './types.js'
+import type { App, Check, Platform, Scenario, SessionDef, SessionKey, Step, Tier } from './types.js'
 
 const EVERY_PLATFORM: Platform[] = ['darwin', 'win32', 'linux']
 export const S = 1_000
 const MIN = 60 * S
-/**
- * A wait for the first list before a change. It names no check: each check's window opens at a later step, so none
- * holds before it. Past the ring's half mark (5 s), by when the list has come.
- */
-export const LISTED_MS = 5 * S
+/** A condition wait's limit: twice the ring's half mark, so only a dial that never gets there reaches it. */
+const UNTIL_MS = 10 * S
+/** A wait for the first list before a step that needs it: the dial has a ring of these sessions on that page. */
+export const listed = (page: App, expect: SessionKey[]): Step => ({ kind: 'wait', ms: UNTIL_MS, until: { kind: 'ring', page, expect } })
 
 const NAMES: Readonly<Record<SessionKey, string>> = { a: 'Alpha', b: 'Bravo', c: 'Charlie', d: 'Delta', e: 'Echo', z: 'Zulu' }
 
@@ -79,7 +78,7 @@ export const MAIN: Scenario[] = [
     dims: ['D1', 'D7'], sessions: [...claudeSessions(['a', 'b', 'c']), claudeGhost],
     steps: [
       { kind: 'claude.write', sessions: ['a', 'b', 'c'] },
-      { kind: 'wait', ms: LISTED_MS },
+      listed('claude', ['a', 'b', 'c']),
       { label: 'archive', kind: 'claude.write', sessions: ['b'], archived: true },
     ],
     checks: [
@@ -103,7 +102,7 @@ export const MAIN: Scenario[] = [
     dims: ['D3'], sessions: [...claudeSessions(['a']), claudeGhost],
     steps: [
       { kind: 'claude.write', sessions: ['a'] },
-      { kind: 'wait', ms: LISTED_MS },
+      listed('claude', ['a']),
       { label: 'tap', kind: 'tap', session: 'a' },
     ],
     checks: [{ id: 'open', kind: 'open', dim: 'D3', session: 'a', link: true, after: 'tap' }],
@@ -191,7 +190,7 @@ export const MAIN: Scenario[] = [
       { kind: 'claude.write', sessions: ['a', 'b'] },
       { kind: 'hook', session: 'a', event: 'start' },
       { kind: 'hook', session: 'b', event: 'start' },
-      { kind: 'wait', ms: LISTED_MS },
+      listed('claude', ['a', 'b']),
       { label: 'quit', kind: 'quit', app: 'claude' },
       { kind: 'wait', ms: 2 * S },
       { label: 'relaunch', kind: 'relaunch', app: 'claude' },
@@ -207,6 +206,8 @@ export const MAIN: Scenario[] = [
     dims: ['D7'], sessions: [...claudeSessions(['a', 'b']), claudeGhost],
     steps: [
       { kind: 'claude.write', sessions: ['a', 'b'] },
+      // The swipe needs b's row, or the replug has no focus to keep.
+      listed('claude', ['a', 'b']),
       { kind: 'swipe', session: 'b' },
       { label: 'unplug', kind: 'unplug' },
       { kind: 'wait', ms: 3 * S },
@@ -248,7 +249,7 @@ export const MAIN: Scenario[] = [
     dims: ['D2', 'D7'], platforms: ['darwin'], sessions: [...threads(['t1', 't2']), chatgptGhost],
     steps: [
       { kind: 'codex.write', sessions: ['t1', 't2'] },
-      { kind: 'wait', ms: LISTED_MS },
+      listed('chatgpt', ['t1', 't2']),
       { label: 'front', kind: 'front', app: 'chatgpt' },
       { kind: 'wait', ms: 5 * S },
       { label: 'tap', kind: 'tap', session: 't2' },

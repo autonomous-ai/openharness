@@ -5,7 +5,7 @@
  */
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { evaluate, holds, wrongSends } from './checks.js'
+import { condition, evaluate, wrongSends } from './checks.js'
 import type { Check, CheckResult, CoverageGap, EvalDriver, Platform, RunResults, Scenario, Tier, WrongSend } from './types.js'
 
 /** After the last step: past the largest half threshold (5 s), so a late reaction still counts. */
@@ -22,15 +22,18 @@ const TIER_OF: Readonly<Record<Source, Tier>> = { spec: 'a', claude: 'b', chatgp
 const RESULTS_FILE = /^results-[ab]-\w+\.json$/
 
 export async function runScenario(driver: EvalDriver, scenario: Scenario, platform: Platform): Promise<ScenarioRun> {
+  /** Each condition wait that reached its limit: what came after it ran on a world that was not ready. */
+  const missed: Array<{ index: number; evidence: string[] }> = []
   try {
     await driver.start(scenario, platform)
-    for (const step of scenario.steps) {
+    for (const [index, step] of scenario.steps.entries()) {
       if (step.kind !== 'wait') await driver.step(step)
       else if (step.until === undefined) await driver.settle(step.ms)
       else {
-        const check = scenario.checks.find((c) => c.id === step.until)
-        if (!check) throw new Error(`${scenario.id}: a wait until ${step.until}, a check it does not have`)
-        await driver.settle(step.ms, () => holds(check, scenario, driver.seen()))
+        const until = step.until
+        await driver.settle(step.ms, () => condition(until, scenario, driver.seen()).holds)
+        const after = condition(until, scenario, driver.seen())
+        if (!after.holds) missed.push({ index, evidence: [`not held in ${step.ms} ms`, ...after.evidence] })
       }
     }
     await driver.settle(SETTLE_END_MS)
@@ -46,7 +49,11 @@ export async function runScenario(driver: EvalDriver, scenario: Scenario, platfo
   const wrong = wrongSends(scenario, seen).map((w) => ({ ...on, ...w }))
   const score = (checks: readonly Check[]): CheckResult[] => gaps.length > 0 ? []
     : checks.flatMap((check) => evaluate(check, scenario, seen, tier, platform))
-  return { scenario: scenario.id, platform, results: score(scenario.checks), probes: score(scenario.probes), wrongSends: wrong, gaps }
+  // A missed wait costs the scenario's first dimension, so a run whose steps outran the dial never passes unseen.
+  const waits: CheckResult[] = gaps.length > 0 ? [] : missed.map(({ index, evidence }) => ({ ...on, scenario: scenario.id,
+    check: `wait.${index}`, app: scenario.app, dim: scenario.dims[0]!, heldOut: scenario.heldOut, score: 0, timed: false, evidence }))
+  return { scenario: scenario.id, platform, results: [...score(scenario.checks), ...waits], probes: score(scenario.probes),
+    wrongSends: wrong, gaps }
 }
 
 /** A probe is caught by a result below 1 that says what was seen; its id is its results' check up to the part. */

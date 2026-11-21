@@ -3,7 +3,7 @@
 // observed: a driver that observes nothing leaves it empty, so its probes fail.
 import { observedTitle } from '../../cable/hosts/observedTitle.js'
 import { agentIdOf, THRESHOLDS, type App, type Check, type CheckResult, type Platform, type Scenario, type Seen,
-  type SessionDef, type SessionKey, type Tier, type WrongSend } from './types.js'
+  type SessionDef, type SessionKey, type Tier, type Until, type WrongSend } from './types.js'
 
 /** The firmware's carousel holds 16 tiles (cable_client.h `CABLE_MAX_AGENTS`). */
 const RING_CAP = 16
@@ -342,10 +342,14 @@ export function evaluate(check: Check, scenario: Scenario, seen: Seen, tier: Tie
     ...(p.ms === undefined ? {} : { ms: p.ms }), evidence: p.evidence }))
 }
 
-/** A wait may end once every untimed part is right; the platform is the driver's, so any platform's front counts. */
-export function holds(check: Check, scenario: Scenario, seen: Seen): boolean {
-  const untimed = partsOf(check, scenario, seen, null).filter((p) => !p.timed)
-  return untimed.length > 0 && untimed.every((p) => p.score === 1)
+/**
+ * A wait's condition holds once every untimed part of the same check, from the scenario's start, is right; the
+ * evidence is what the dial had, for a wait that reaches its limit.
+ */
+export function condition(until: Until, scenario: Scenario, seen: Seen): { holds: boolean; evidence: string[] } {
+  // The id and dim name no result: only the parts are read.
+  const untimed = partsOf({ id: 'until', dim: scenario.dims[0]!, ...until }, scenario, seen, null).filter((p) => !p.timed)
+  return { holds: untimed.length > 0 && untimed.every((p) => p.score === 1), evidence: [...new Set(untimed.flatMap((p) => p.evidence))] }
 }
 
 /** Each delivery after a voice step to anyone but that step's target; one with no known target is a wrong send too. */
