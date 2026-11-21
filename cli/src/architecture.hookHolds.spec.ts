@@ -3,12 +3,15 @@
  * architecture.failureLogs.spec.ts reads: that is safe only while every hold is built from fixed words. A sentence
  * made from a path, an error's words or anything a person wrote would reach the log, and Export logs sends it off the
  * machine. So this reads every file of cli/src but its specs, as code, and finds each hold built from anything but a
- * string literal: a `new` of `HookPreparationHeld`, or of a class that extends one, to any depth, with such an
- * argument, and a `super(…)` with one in such a class's constructor. HookPreparationHeld's own `super` is its prefix and
- * the argument a `new` of it was given, checked there.
+ * string literal (in parentheses or under `as` too): a `new` of `HookPreparationHeld`, or of a class that extends one,
+ * to any depth, with such an argument, and a `super(…)` with one in such a class's constructor; and each `hold` set
+ * from anything else past the constructor, by such a class's own member (`override readonly hold = …`, `this.hold =
+ * …`) or by `Object.assign` onto a `new` of one (`{ hold: … }`, `{ hold }`). HookPreparationHeld's own `super` and
+ * `hold` are its prefix and the argument a `new` of it was given, checked there.
  *
  * Its limits: a hold by another name (an import's alias, a value holding the class); a class that extends a hold
- * through an expression rather than its name.
+ * through an expression rather than its name; a `hold` set by any other means (`Object.assign` onto a value already
+ * made, a spread into it, `Object.defineProperty`).
  */
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, sep } from 'node:path'
@@ -30,7 +33,22 @@ const extended = (node: ts.ClassLikeDeclaration): string | undefined => {
   return clause?.types[0] ? nameOf(clause.types[0].expression) : undefined
 }
 
-const fixedWords = (argument: ts.Expression): boolean => ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument)
+const unwrap = (node: ts.Expression): ts.Expression =>
+  ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isSatisfiesExpression(node) || ts.isTypeAssertionExpression(node)
+  || ts.isNonNullExpression(node) ? unwrap(node.expression) : node
+
+const fixedWords = (argument: ts.Expression): boolean => {
+  const inner = unwrap(argument)
+  return ts.isStringLiteral(inner) || ts.isNoSubstitutionTemplateLiteral(inner)
+}
+
+const isHold = (name: ts.PropertyName | ts.Expression | undefined): boolean => !!name && ts.isIdentifier(name) && name.text === 'hold'
+
+/** The class [node] is in. */
+const classOf = (node: ts.Node): ts.ClassLikeDeclaration | undefined => {
+  for (let at = node.parent; at; at = at.parent) if (ts.isClassLike(at)) return at
+  return undefined
+}
 
 const visit = (node: ts.Node, each: (node: ts.Node) => void): void => {
   each(node)
@@ -58,8 +76,26 @@ function holdsNotFixed(files: ReadonlyArray<readonly [string, string]>): string[
   for (const [file, code] of naming(holds)) {
     const source = sourceOf(file, code)
     const at = (node: ts.Node) => `${file}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}`
+    const isNewHold = (value: ts.Expression): boolean => {
+      const inner = unwrap(value)
+      return ts.isNewExpression(inner) && holds.has(nameOf(inner.expression) ?? '')
+    }
     visit(source, (node) => {
       if (ts.isNewExpression(node) && holds.has(nameOf(node.expression) ?? '') && !(node.arguments ?? []).every(fixedWords)) found.push(at(node))
+      // A hold's sentence set past the constructor: a member of a class that extends one, or what it assigns `this.hold`.
+      // HookPreparationHeld's own is the argument a `new` of it was given.
+      const inHold = (): boolean => { const owner = classOf(node); return !!owner && holds.has(extended(owner) ?? '') }
+      if (ts.isPropertyDeclaration(node) && isHold(node.name) && node.initializer && !fixedWords(node.initializer) && inHold()) found.push(at(node))
+      if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isPropertyAccessExpression(node.left)
+        && node.left.expression.kind === ts.SyntaxKind.ThisKeyword && isHold(node.left.name) && !fixedWords(node.right) && inHold()) found.push(at(node))
+      // Or assigned onto a new hold: `Object.assign(new HookPreparationHeld('x'), { hold })`.
+      if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && nameOf(node.expression.expression) === 'Object'
+        && node.expression.name.text === 'assign' && node.arguments[0] && isNewHold(node.arguments[0])) {
+        for (const property of node.arguments.slice(1).map(unwrap).filter(ts.isObjectLiteralExpression).flatMap((object) => object.properties)) {
+          if (ts.isPropertyAssignment(property) && isHold(property.name) && !fixedWords(property.initializer)) found.push(at(property))
+          if (ts.isShorthandPropertyAssignment(property) && isHold(property.name)) found.push(at(property))
+        }
+      }
       if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.SuperKeyword && !node.arguments.every(fixedWords)) {
         let constructor: ts.Node = node.parent
         while (!ts.isFunctionLike(constructor) && !ts.isSourceFile(constructor)) constructor = constructor.parent
