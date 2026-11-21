@@ -557,11 +557,12 @@ export class ObservedSource implements HostSource {
     return found && { ...found.agent }
   }
 
-  /** The live agent with that adapter's pane of that id: of two, the one heard from last. */
+  /** The live agent with that adapter's pane of that id: of two, the one heard from last. A held pane is not its own, as
+   *  for paneOf. */
   byPane(adapter: string, id: string): HostAgent | undefined {
     let found: Entry | undefined
     for (const e of this.entries.values()) {
-      if (!this.live(e) || !e.panes.some(({ pane }) => pane.adapter === adapter && pane.id === id)) continue
+      if (!this.live(e) || !e.panes.some(({ pane }) => pane.adapter === adapter && pane.id === id && !pane.held)) continue
       if (!found || e.agent.lastActivityAt > found.agent.lastActivityAt) found = e
     }
     return found && { ...found.agent }
