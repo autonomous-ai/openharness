@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { env } from '../config/env.js'
 import { AuthSessionError } from '../lib/authSession.js'
+import { hashOf } from '../lib/log.js'
 import { UpstreamLink } from './upstream.js'
 
 // A computer's name that is not its hostname, so the adapter-ws label below shows which one it sends.
@@ -226,6 +227,33 @@ describe('UpstreamLink reconnect backoff', () => {
     link[end]()
 
     expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+describe('UpstreamLink connected line', () => {
+  // `harness start` waits for `[backend] connected` (lib/daemonLaunch.ts); the URL carries the hostname.
+  it('the connected line keeps its marker and names no URL', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const originalUrl = env.BACKEND_WS_URL
+    let dialed = ''
+    const server = await backend({ onConnection: (_ws, request) => { dialed = request.url ?? '' } })
+    env.BACKEND_WS_URL = server.url
+    const { link, signals } = upstream(token)
+    try {
+      const up = once(signals, 'up')
+      link.connect()
+      await up
+
+      const lines = log.mock.calls.map((call) => call.map(String).join(' '))
+      expect(lines.filter((line) => line.startsWith('[backend] connected'))).toEqual([`[backend] connected · ${hashOf(`${server.url}${dialed}`)}`])
+      expect(lines.join('\n')).not.toContain('127.0.0.1')
+    } finally {
+      link.stop()
+      env.BACKEND_WS_URL = originalUrl
+      for (const client of server.wss.clients) client.terminate()
+      await new Promise((resolve) => server.wss.close(resolve))
+      vi.restoreAllMocks()
+    }
   })
 })
 
