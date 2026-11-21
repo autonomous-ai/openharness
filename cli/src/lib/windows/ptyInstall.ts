@@ -232,7 +232,7 @@ export function installPreparedPty(prepared: PreparedPty, rootDir: string, fs: P
   const versionDir = join(ptyRoot, version)
   const undo: Array<() => void> = []
   try {
-    if (!VERSION_DIR.test(version)) throw new PtyPayloadRefused(`version ${JSON.stringify(version)} is not a version folder name`)
+    if (!VERSION_DIR.test(version)) throw new PtyPayloadRefused('BAD_VERSION_NAME', `version ${JSON.stringify(version)} is not a version folder name`)
     // A version still on probation must be confirmed or rolled back first: its marker names the one to go back to.
     if (existsSync(join(ptyRoot, PTY_PENDING))) throw new Error(`a pty version is still on probation (${PTY_PENDING})`)
     // Without a version to go back to, probation could not roll the new one back.
@@ -242,7 +242,7 @@ export function installPreparedPty(prepared: PreparedPty, rootDir: string, fs: P
 
     // 1. The version folder. A complete one is never replaced: a host may run from it.
     if (existsSync(versionDir)) {
-      if (!sameFiles(versionDir, staging)) throw new PtyPayloadRefused(`${versionDir} exists with other files`)
+      if (!sameFiles(versionDir, staging)) throw new PtyPayloadRefused('VERSION_FOLDER_DIFFERS', `${versionDir} exists with other files`)
     } else {
       renameRetrying(fs, staging, versionDir)
       // Back to the staging name first, so a folder that half fails to delete is never taken for a complete one.

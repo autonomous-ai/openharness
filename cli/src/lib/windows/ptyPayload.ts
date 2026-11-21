@@ -137,8 +137,15 @@ export interface PreparedPty {
   paired?: boolean
 }
 
+/** Why a payload was refused, in fixed words: the log reads it (`errorKind`), never the [reason], which can quote a
+ *  binary's output or a path that names the person's home. */
+export type PtyRefusalCode =
+  | 'DIGEST_MISMATCH' | 'WRONG_FILES' | 'NOT_SIGNED' | 'PROBE_FAILED' | 'PROBE_NOT_JSON' | 'PTY_VERSION_MISMATCH'
+  | 'PROTOCOL_UNSUPPORTED' | 'NO_FEATURES' | 'SERIAL_VERSION_MISMATCH' | 'SERVE_FAILED' | 'BAD_VERSION_NAME'
+  | 'VERSION_FOLDER_DIFFERS'
+
 export class PtyPayloadRefused extends Error {
-  constructor(readonly reason: string) { super(`pty payload refused: ${reason}`) }
+  constructor(readonly code: PtyRefusalCode, readonly reason: string) { super(`pty payload refused: ${reason}`) }
 }
 
 /**
@@ -150,7 +157,8 @@ export class PtyPayloadUnpackFailed extends Error {
   readonly reason: string
   constructor(readonly zip: Buffer, cause: unknown) {
     const reason = cause instanceof Error ? cause.message : String(cause)
-    super(`pty payload not unpacked: ${reason}`)
+    // The tool's error as the cause: the log names it by its code (`ENOSPC`), never its message.
+    super(`pty payload not unpacked: ${reason}`, { cause })
     this.reason = reason
   }
 }
@@ -347,7 +355,7 @@ async function canary(probe: PreparePtyDeps['probe'], binary: string): Promise<u
   try {
     return await Promise.race([probe(binary), hung])
   } catch (e) {
-    throw new PtyPayloadRefused(`${binary.split(/[\\/]/).pop()} version failed: ${e instanceof Error ? e.message : String(e)}`)
+    throw new PtyPayloadRefused('PROBE_FAILED', `${binary.split(/[\\/]/).pop()} version failed: ${e instanceof Error ? e.message : String(e)}`)
   } finally {
     clearTimeout(timer)
   }
@@ -364,7 +372,7 @@ async function serves(serve: PreparePtyDeps['serve'], binary: string, host: { pr
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer within ${bound} ms`)), bound) }),
     ])
   } catch (e) {
-    throw new PtyPayloadRefused(`harness-pty serve failed: ${reasonOf(e)}`)
+    throw new PtyPayloadRefused('SERVE_FAILED', `harness-pty serve failed: ${reasonOf(e)}`)
   } finally {
     clearTimeout(timer)
   }
@@ -383,7 +391,7 @@ export async function preparePtyPayload(entry: PtyEntry, runtimeDir: string, dep
       try {
         zip = await d.download({ url: entry.url, sha256: entry.sha256, size: entry.size })
       } catch (e) {
-        if (e instanceof DigestMismatchError) throw new PtyPayloadRefused(`digest mismatch: ${e.message}`)
+        if (e instanceof DigestMismatchError) throw new PtyPayloadRefused('DIGEST_MISMATCH', `digest mismatch: ${e.message}`)
         throw e
       }
     }
@@ -396,27 +404,27 @@ export async function preparePtyPayload(entry: PtyEntry, runtimeDir: string, dep
     const found = readdirSync(staging).sort()
     const want = [...PTY_PAYLOAD_FILES].sort()
     if (found.length !== want.length || found.some((f, i) => f !== want[i])) {
-      throw new PtyPayloadRefused(`payload holds [${found.join(', ')}], expected [${want.join(', ')}]`)
+      throw new PtyPayloadRefused('WRONG_FILES', `payload holds [${found.join(', ')}], expected [${want.join(', ')}]`)
     }
     // Before any of its files runs: an unsigned host is blocked by Smart App Control, and with it Harness's own start.
     const unsigned = await d.signatures(staging, PTY_PAYLOAD_FILES)
-    if (unsigned.length) throw new PtyPayloadRefused(`not signed as Harness releases are: ${unsigned.join('; ')}`)
+    if (unsigned.length) throw new PtyPayloadRefused('NOT_SIGNED', `not signed as Harness releases are: ${unsigned.join('; ')}`)
     const host = await canary(d.probe, join(staging, 'harness-pty.exe'))
-    if (!host || typeof host !== 'object') throw new PtyPayloadRefused('harness-pty version is not a JSON object')
+    if (!host || typeof host !== 'object') throw new PtyPayloadRefused('PROBE_NOT_JSON', 'harness-pty version is not a JSON object')
     const h = host as { version?: unknown; protocol?: unknown; features?: unknown }
-    if (h.version !== entry.version) throw new PtyPayloadRefused(`harness-pty reports version ${String(h.version)}, expected ${entry.version}`)
+    if (h.version !== entry.version) throw new PtyPayloadRefused('PTY_VERSION_MISMATCH', `harness-pty reports version ${String(h.version)}, expected ${entry.version}`)
     // Above this CLI's: the host of a protocol bump, kept for the CLI build that needs it. Below every supported one
     // (or not a protocol at all): no build will ever need it.
     const paired = Number.isSafeInteger(h.protocol) && (h.protocol as number) > PTY_PROTOCOL
     if (typeof h.protocol !== 'number' || (!paired && !SUPPORTED_PTY_PROTOCOLS.includes(h.protocol))) {
-      throw new PtyPayloadRefused(`harness-pty speaks unsupported protocol ${String(h.protocol)}`)
+      throw new PtyPayloadRefused('PROTOCOL_UNSUPPORTED', `harness-pty speaks unsupported protocol ${String(h.protocol)}`)
     }
     if (!Array.isArray(h.features) || !h.features.every((f) => typeof f === 'string')) {
-      throw new PtyPayloadRefused('harness-pty reports no features array')
+      throw new PtyPayloadRefused('NO_FEATURES', 'harness-pty reports no features array')
     }
     const serial = await canary(d.probe, join(staging, 'harness-serial.exe'))
     const sv = (serial as { version?: unknown } | null)?.version
-    if (sv !== entry.version) throw new PtyPayloadRefused(`harness-serial reports version ${String(sv)}, expected ${entry.version}`)
+    if (sv !== entry.version) throw new PtyPayloadRefused('SERIAL_VERSION_MISMATCH', `harness-serial reports version ${String(sv)}, expected ${entry.version}`)
     // A version is no proof the host serves: one whose conpty.dll does not load, or that cannot bind or start a pane,
     // would be kept by a probation that judges the core, and every new pane would fail on it.
     await serves(d.serve, join(staging, 'harness-pty.exe'), { protocol: h.protocol, version: entry.version })

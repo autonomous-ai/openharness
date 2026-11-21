@@ -179,7 +179,7 @@ describe('preparePtyPayload failure kinds', () => {
     expect(leftovers()).toEqual([])
   })
   it('each refusal carries a fixed code, which the log reads instead of its words', async () => {
-    const cases: Array<[string, () => Promise<unknown>]> = [
+    const cases: Array<[string, () => ReturnType<typeof run>]> = [
       ['DIGEST_MISMATCH', () => run({ download: async () => { throw new DigestMismatchError('bad') } })],
       ['WRONG_FILES', () => run({}, PTY_PAYLOAD_FILES.slice(1))],
       ['NOT_SIGNED', () => run({ signatures: async () => ['harness-launch.exe is NotSigned'] })],
