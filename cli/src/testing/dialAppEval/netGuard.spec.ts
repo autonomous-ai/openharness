@@ -15,7 +15,7 @@ import net from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import tls from 'node:tls'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WebSocket as WsWebSocket } from 'ws'
 import { describeAttempt, guardThisProcess, isLocal, NET_GUARD_FILE_ENV, NET_GUARD_PRELOAD, netGuardEnv, readNetGuard,
   type NetAttempt } from './netGuard.js'
@@ -315,6 +315,23 @@ it('install wraps every entry point, and uninstall puts each back', () => {
   expect(sources()).toBe(pristine)
 })
 
+// A proxy on this machine would carry each request off it, past every check of the guard's.
+it.each<[string, Record<string, string>]>([
+  ['NODE_USE_ENV_PROXY', { NODE_USE_ENV_PROXY: '1' }],
+  ['--use-env-proxy', { NODE_OPTIONS: '--max-old-space-size=123 --use-env-proxy' }],
+])('%s from the env stops the guard installing, naming it', (name, env) => {
+  guard.uninstall()
+  let installed: ReturnType<typeof guardThisProcess> | undefined
+  for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value)
+  try {
+    expect(() => { installed = guardThisProcess() }).toThrow(`the network guard cannot hold under ${name}`)
+  } finally {
+    installed?.uninstall()
+    vi.unstubAllEnvs()
+    guard = guardThisProcess()
+  }
+})
+
 it('describes an attempt by its process, its door, its host and its port', () => {
   expect(describeAttempt(attempt('net', OFF, 9))).toBe(`node net ${OFF}:9`)
   expect(describeAttempt({ ...attempt('dns', 'example.invalid', null), process: 'devices' })).toBe('devices dns example.invalid')
@@ -388,6 +405,18 @@ describe('the preload', () => {
         dns.lookup, dns.promises.lookup].map(String).join('\\n')))
     `)
     expect(JSON.parse(stdout)).toBe(pristine)
+  })
+
+  it('a Node started with --use-env-proxy does not start under it, and says why', async () => {
+    const started = spawn(process.execPath, ['--use-env-proxy', '-e', 'console.log("ran")'],
+      { env: { HOME: folder(), ...netGuardEnv(join(folder(), 'net.jsonl')) }, stdio: ['ignore', 'pipe', 'pipe'] })
+    let said = ''
+    started.stdout.on('data', (chunk) => { said += chunk })
+    started.stderr.on('data', (chunk) => { said += chunk })
+    const [code] = await once(started, 'exit')
+    expect(code).not.toBe(0)
+    expect(said).toContain('the network guard cannot hold under --use-env-proxy')
+    expect(said).not.toContain('ran')
   })
 
   it('a missing file reads as nothing', () => {
