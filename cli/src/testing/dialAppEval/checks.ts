@@ -256,8 +256,10 @@ function openParts(check: CheckOf<'open'>, world: World, w: Window | undefined, 
     && !c.argv.some((arg) => refused.some((app) => arg.startsWith(SCHEMES[app]))) && fronts(c.argv, platform, session.app, link)
   const front = commands.find(brings)
   // The dial's inputs first, so an input that opened nothing fails with what the driver saw. Commands carry paths: the
-  // evidence says only what each one was.
-  const inputs = w ? world.seen.steps.filter((s) => within(s.at, w)).flatMap((s) => {
+  // evidence says only what each one was. The inputs are the scenario's own steps, which every driver records: only a
+  // window in which the driver saw a command or a frame names them, so a recorder that sees nothing catches no probe.
+  const heard = commands.length > 0 || (w !== undefined && world.seen.frames.some((f) => within(f.at, w)))
+  const inputs = w && heard ? world.seen.steps.filter((s) => within(s.at, w)).flatMap((s) => {
     const step = world.scenario.steps[s.index]!
     return step.kind === 'tap' || step.kind === 'swipe' ? [`${step.kind} on ${step.session} at ${s.at}`] : []
   }) : []
