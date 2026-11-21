@@ -10,8 +10,8 @@
  */
 import { appendFileSync, writeFileSync } from 'node:fs'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { scenariosFor } from '../src/testing/dialAppEval/catalog.js'
-import { loadBaseline, tierBVerdict } from '../src/testing/dialAppEval/grade.js'
+import { listed, scenariosFor } from '../src/testing/dialAppEval/catalog.js'
+import { loadBaseline, SKIP_RATCHET_ENV, tierBVerdict } from '../src/testing/dialAppEval/grade.js'
 import { readNetGuard } from '../src/testing/dialAppEval/netGuard.js'
 import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from '../src/testing/dialAppEval/runner.js'
 import type { Platform } from '../src/testing/dialAppEval/types.js'
@@ -74,7 +74,10 @@ describe.skipIf(WIN32)('the dial eval, tier B: the Claude app', () => {
   })
 
   it('the fake Claude app attaches the session it resumes from its link, as the mod does for the session the app shows', async () => {
-    await runScenario(driver, { ...SCENARIOS.find((s) => s.id === 'C8')!, fresh: true }, HOST)
+    // C8's resting, resumable session, tapped.
+    const c8 = SCENARIOS.find((s) => s.id === 'C8')!
+    const steps = [{ kind: 'claude.write' as const, sessions: ['a'] }, ...listed('claude', ['a']), { kind: 'tap' as const, session: 'a' }]
+    await runScenario(driver, { ...c8, steps, fresh: true }, HOST)
     // Its own daemon, so its log is this scenario's alone.
     expect(driver.lastWorld().d.log().split('\n').filter((line) => line.includes('[device] attach ·'))).not.toEqual([])
   })
@@ -91,13 +94,15 @@ describe.skipIf(WIN32)('the dial eval, tier B: the Claude app', () => {
     const run = await runScenario(driver, scenario, HOST)
     // Kept before any assertion, so a scenario that fails one is still in the results and the baseline's verdict.
     runs.push(run)
+    expect(run.error).toBeUndefined()
     console.log(`[dial eval] ${scenario.id}: ${Date.now() - began} ms`)
     expect(driver.networkReached()).toEqual([])
     expect(run.wrongSends).toEqual([])
     expect(uncaughtProbes(run)).toEqual([])
   })
 
-  it("matches this platform's baseline", () => {
+  // The eval command judges the ratchet itself, over every file's results (run.ts).
+  it.skipIf(process.env[SKIP_RATCHET_ENV] === '1')("matches this platform's baseline", () => {
     const baseline = loadBaseline()
     expect(baseline).not.toBeNull()
     const verdict = tierBVerdict(collect(runs), baseline!, HOST)

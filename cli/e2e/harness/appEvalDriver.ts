@@ -22,7 +22,7 @@ import { dirname, isAbsolute, join, relative } from 'node:path'
 import { chatGptPlaces, claudeStoreRoots } from '../../src/cable/hosts/appPlaces.js'
 import { claudeAppFixture } from '../../src/testing/claudeAppFixture.js'
 import { describeAttempt, guardThisProcess, netGuardEnv, readNetGuard, type NetAttempt } from '../../src/testing/dialAppEval/netGuard.js'
-import { agentIdOf, type App, type Delivery, type EvalDriver, type Platform, type Scenario, type Seen,
+import { agentIdOf, PAGE, type App, type Delivery, type EvalDriver, type Platform, type Scenario, type Seen,
   type SessionDef, type SessionKey, type Step, type StepKind, type StepOf } from '../../src/testing/dialAppEval/types.js'
 import { CAROUSEL_REFRESH_MS, DialCarousel, type DialMessage } from '../../src/testing/dialCarousel.js'
 import { writeExecutable } from '../../src/testing/executableFixture.js'
@@ -38,8 +38,8 @@ import { writeSchemeApps } from './schemeApps.js'
 const FILTER = { appFilter: 'v1' }
 const SERIAL = 'EVAL-B'
 const MAC = 'e2:e0:00:00:0e:b1'
-/** The page of each app's ring, and the scheme of its links: the ChatGPT app's threads are Codex's. */
-const PAGE: Readonly<Record<App, string>> = { claude: 'claude', chatgpt: 'codex' }
+/** The scheme of each app's links (cable/hosts/claudeApp.ts, codexApp.ts): the ChatGPT app's threads are Codex's. */
+const SCHEME: Readonly<Record<App, string>> = { claude: 'claude', chatgpt: 'codex' }
 /** The app in front as Harness Device names it: a bundle id on macOS, the window's process on Linux; `other` is an app
  *  the dial follows none of. */
 const FRONT: Readonly<Record<'darwin' | 'linux', Record<App | 'other', string>>> = {
@@ -62,7 +62,7 @@ export type OpenRun = Omit<Seen['commands'][number], 'at'>
 export interface TierBWorld {
   readonly d: IsolatedDaemon; readonly desk: Desk; readonly dial: FakeDial
   readonly scenario: Scenario; readonly platform: Platform
-  now(): number; agentId(key: SessionKey): string; session(key: SessionKey): SessionDef
+  agentId(key: SessionKey): string; session(key: SessionKey): SessionDef
   deliver(d: Omit<Delivery, 'at'>): void; gap(reason: string): void
   /** Each run of the open from now on, as it is read: how a fake app sees the links the devices run. */
   onOpen(listener: (run: OpenRun) => void): void
@@ -107,7 +107,7 @@ const CHATGPT_INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 
 const inside = (root: string, path: string | undefined): boolean => !!path && isAbsolute(path) && !relative(root, path).startsWith('..')
 /** The file beside the recording open that has the links of an app fail while it is there. */
-const failsFile = (open: string, app: App): string => join(dirname(open), `${PAGE[app]}.fails`)
+const failsFile = (open: string, app: App): string => join(dirname(open), `${SCHEME[app]}.fails`)
 
 /**
  * The open the devices run (HARNESS_OPEN_BIN), in place of the harness's own (harness/daemon.ts), which notes no exit: it
@@ -118,14 +118,14 @@ const failsFile = (open: string, app: App): string => join(dirname(open), `${PAG
  */
 export function writeRecordingOpen(path: string, runs: string): void {
   if ([path, runs].some((p) => p.includes("'"))) throw new Error('the recording open\'s folder holds a quote')
-  const fails = (Object.keys(PAGE) as App[]).map((app) =>
-    `case "$*" in *${PAGE[app]}://*) [ -e '${failsFile(path, app)}' ] && code=1 ;; esac\n`)
+  const fails = (Object.keys(SCHEME) as App[]).map((app) =>
+    `case "$*" in *${SCHEME[app]}://*) [ -e '${failsFile(path, app)}' ] && code=1 ;; esac\n`)
   writeExecutable(path, `#!/bin/sh\ncode=0\n${fails.join('')}printf '%s %s\\n' "$code" "$*" >> '${runs}'\nexit "$code"\n`)
 }
 
 /** The apps whose links the recording open at [path] fails from now on: every other app's open. */
 export function linksFail(path: string, apps: readonly App[]): void {
-  for (const app of Object.keys(PAGE) as App[]) {
+  for (const app of Object.keys(SCHEME) as App[]) {
     if (apps.includes(app)) writeFileSync(failsFile(path, app), '')
     else rmSync(failsFile(path, app), { force: true })
   }
@@ -276,7 +276,6 @@ class World implements TierBWorld {
     return this.plugged
   }
 
-  now(): number { return Date.now() - this.origin }
   agentId(key: SessionKey): string { return agentIdOf(this.session(key)) }
   session(key: SessionKey): SessionDef {
     const found = this.scenario.sessions.find((s) => s.key === key)
@@ -487,7 +486,6 @@ export class TierBDriver implements EvalDriver {
     while (!until() && Date.now() < deadline) await world.nextRead()
   }
 
-  now(): number { return this.need().now() }
   seen(): Seen { return this.need().seen() }
   /** The last scenario's world, kept after its stop: for a test that reads what its daemon did. */
   lastWorld(): TierBWorld { return this.need() }
