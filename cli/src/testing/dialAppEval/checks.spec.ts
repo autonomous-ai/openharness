@@ -190,6 +190,12 @@ describe('still', () => {
     expect(scores(run(check, t, seen(t, [500, 1500], { faces: [face(100, A), face(1500, B)] }))).still).toBe(1)
     expect(scores(run(check, t, seen(t, [500, 1500], { faces: [face(100, A), face(1499, B)] }))).still).toBe(0)
   })
+
+  it('the first landing from no tile is not a move; leaving that tile for another, or for none, is', () => {
+    expect(scores(run(still, s, seen(s, [500], { faces: [face(100, null), face(700, A), face(900, A)] }))).s).toBe(1)
+    expect(scores(run(still, s, seen(s, [500], { faces: [face(100, null), face(700, A), face(900, B)] }))).s).toBe(0)
+    expect(scores(run(still, s, seen(s, [500], { faces: [face(100, null), face(700, A), face(900, null)] }))).s).toBe(0)
+  })
 })
 
 describe('open', () => {
