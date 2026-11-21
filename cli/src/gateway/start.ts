@@ -41,7 +41,7 @@ import { MachinePeerStore } from '../lib/e2ee/machinePeers.js'
 import { applySharedTrust, isSharedKey } from './sharedTrust.js'
 import { E2eeStore } from '../lib/e2ee/store.js'
 import { TrustGroupStore, type GroupMember } from '../lib/e2ee/trustGroup.js'
-import { errorKind } from '../lib/log.js'
+import { codeOrLength, errorKind } from '../lib/log.js'
 import { RemoteRelayPool } from '../lib/remoteRelay.js'
 import { HarnessShareRelay, type SharedMachineReference } from '../sharing/relay.js'
 import { RelayGateway } from './gateway.js'
@@ -152,6 +152,16 @@ export function unpairedHandler(
       void devlog()?.remove(identityPub)
     }
   }
+}
+
+/**
+ * The device key log's `postAck`: the backend keeps "It's mine". A refusal names the backend's code; anything else
+ * there is the backend's own text, logged by its length.
+ */
+export async function postDeviceAck(http: Pick<ReturnType<typeof createAccountHttp>, 'backend'>, ack: unknown): Promise<boolean> {
+  const r = await http.backend('POST', '/api/device-keys/acks', { ack }, ACK_POST_TIMEOUT_MS)
+  if (r.status !== 200 && r.status !== 404) console.log(`[devlog] the backend did not keep "It's mine" (${r.status}: ${codeOrLength((r.body.error as { code?: unknown } | undefined)?.code)})`)
+  return r.status === 200
 }
 
 /** Pairing errors as `harness pair` maps them to HTTP. */
@@ -336,11 +346,7 @@ export function startGateway(given: GatewayHost): StartedGateway {
       const acks = r.status === 200 ? (r.body.data as { acks?: unknown } | undefined)?.acks : undefined
       return Array.isArray(acks) ? acks : null
     },
-    postAck: async (ack) => {
-      const r = await accountHttp.backend('POST', '/api/device-keys/acks', { ack }, ACK_POST_TIMEOUT_MS)
-      if (r.status !== 200 && r.status !== 404) console.log(`[devlog] the backend did not keep "It's mine" (${r.status}: ${String((r.body.error as { code?: unknown } | undefined)?.code ?? '')})`)
-      return r.status === 200
-    },
+    postAck: (ack) => postDeviceAck(accountHttp, ack),
     append: async (entry) => {
       const p = await gateway.appendDeviceLog(entry as unknown as Record<string, unknown>)
       if (!p) return null

@@ -24,7 +24,7 @@ import { AuthSessionManager } from '../lib/authRefresh.js'
 import { backendHttpBase } from '../lib/backendHttpBase.js'
 import { BACKEND_IDLE_DEADLINE_MS, watchSocketLiveness, type LivenessWatch } from '../lib/wsLiveness.js'
 import { decodeTerminalHop, TerminalHopDirection } from '../lib/terminalBinary.js'
-import { errorKind } from '../lib/log.js'
+import { errorKind, hashOf } from '../lib/log.js'
 import { VERSION } from '../version.js'
 
 const APP_PING_MS = 15_000
@@ -193,7 +193,8 @@ export class UpstreamLink {
 
     ws.on('open', () => {
       this.openedAt = Date.now()
-      console.log(`[backend] connected → ${this.url}`)
+      // `harness start` waits for the marker (lib/daemonLaunch.ts); the URL names this computer's hostname.
+      console.log(`[backend] connected · ${hashOf(this.url)}`)
       this.events.status(true)
       this.drainQueue()
       this.events.up()

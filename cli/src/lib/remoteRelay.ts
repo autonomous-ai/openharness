@@ -1056,7 +1056,7 @@ export class RemoteRelayPool {
           if (relayed && !entry.upgradeDone) this.scheduleUpgradeAttempt(machineId, entry)
         } else if (state === 'failed' && !wasDirect) {
           console.log(`[p2p] gave up · machine=${sid(machineId)} reason=${reason ?? 'unknown'} after=${Math.round(setupMs)}ms`
-            + ` · ${p2p.negotiationDetail} — terminals stay on the ws relay`)
+            + ` · ${p2p.negotiationFacts} — terminals stay on the ws relay`)
           this.reportP2pResult(entry, reason === 'negotiation_timeout' ? 'timeout' : 'failed', setupMs, reason)
           // TURN-first failing says the path changed: the next attempt gathers everything again.
           if (turnFirst) this.turnOnly.delete(machineId)
