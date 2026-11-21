@@ -398,27 +398,28 @@ describe('what a browser stream ignores and how it fails', () => {
     expect(stdout.isPaused()).toBe(false)
   })
 
-  it('a viewer message the shaper cannot read closes the stream with reason closed and a line naming it', () => {
+  it('a viewer message the shaper cannot read closes the stream with reason closed and a line giving its words\' length', () => {
     const h = harness()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const streamId = h.open('local:w')
     h.manager.input(streamId, new TextEncoder().encode('RFB 003.008\n'))
     h.manager.input(streamId, Uint8Array.of(1, 1, 99))
     expect(h.closes()).toEqual([['local:w', streamId, 'closed']])
-    expect(warn.mock.calls.flat().join(' ')).toContain('unknown RFB client message type 99')
+    expect(warn.mock.calls.flat().join(' ')).toContain(`stream ${streamId.slice(0, 8)} closed: text(34)`)
   })
 
-  it('an exec that exits says why in the log', () => {
+  it('an exec that exits says how it ended in the log, and its stderr by its size', () => {
     const h = harness()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     h.open('local:w')
     h.children[0].stderr.emit('data', Buffer.from('Error: no container with name or ID "harness-browser-a1" found\n'))
     h.children[0].exit(125, null)
-    expect(warn.mock.calls.flat().join(' ')).toContain('exec exited (125): Error: no container with name or ID "harness-browser-a1" found')
+    expect(warn.mock.calls.flat().join(' ')).toContain('exec exited (125): stderr 63 B')
+    expect(warn.mock.calls.flat().join(' ')).not.toContain('harness-browser-a1')
     // An exec ended by a signal (the OOM killer's) names it.
     h.open('local:w')
     h.children[1].exit(null, 'SIGKILL')
-    expect(warn.mock.calls.flat().join(' ')).toContain('exec exited (SIGKILL)')
+    expect(warn.mock.calls.flat().join(' ')).toContain('exec exited (SIGKILL): stderr 0 B')
   })
 
   it('an ack or a close that names no stream changes nothing', () => {
