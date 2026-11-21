@@ -8,7 +8,7 @@
 
 typedef enum { POD_V_TABS, POD_V_TAB, POD_V_AGENT, POD_V_RECAP, POD_V_TALK, POD_V_INBOX } pod_view_t;
 // POD_TAB_RECENT: the Recent list, the agents with the most recent tasks, from every tab. POD_TAB_APP: an app's ring, the agents
-// of the app shown (pod_app_agents), tab_id the app id. -2 is left free: home_at reads a TAB frame's tab as a Home page.
+// of the app shown (pod_app_agents), tab_id the app id.
 enum { POD_TAB_RECENT = -1, POD_TAB_APP = -3 };
 
 typedef struct {
