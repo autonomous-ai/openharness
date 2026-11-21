@@ -17,6 +17,10 @@ import './lib/connectWait.js'
 import { fileURLToPath } from 'node:url'
 
 const [, , command, name] = process.argv
+// The master's handler of an error nothing caught, first: the team guard and Linux's home move below run before
+// startMaster installs its own, and Node's report of their error is its message and stack, on the stderr launchd and
+// systemd make the daemon's log. Windows' master installs its own once that log is open (masterProcess.ts).
+if (command === '__harnessd' && process.platform !== 'win32') (await import('./lib/log.js')).exitOnFatal('[harnessd] the master', 2)
 // What an old Team account's boot job runs (its first step, its master, and what its master starts): only these load the guard.
 const guard = command !== undefined && ['team', '__harnessd', '__run', '__service'].includes(command)
   ? await import('./team/bootGuard.js') : null
