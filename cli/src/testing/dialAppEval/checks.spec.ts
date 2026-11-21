@@ -118,6 +118,15 @@ describe('ring', () => {
     expect(scores(run(two, archived, seen(archived, [100, 150], { frames: list(200, 'claude', [A, B]) }))).archived).toBe(1)
   })
 
+  it('a long ring\'s evidence names at most 20 sessions a line', () => {
+    const many = Array.from({ length: 30 }, (_, i) => claude(`s${i}`, 20 + i))
+    const s = scenario([{ kind: 'claude.write', sessions: many.map((m) => m.key), label: 'w' }], many)
+    const misnamed = many.map((m): Row => [id(m), 'Eval wrong'])
+    const results = run({ ...ring, expect: many.map((m) => m.key) }, s, seen(s, [100], { frames: list(200, 'claude', misnamed) }))
+    const keys = many.slice(0, 20).map((m) => m.key).join(' ')
+    expect(results[0]!.evidence).toEqual([`list at 200 on claude: 30 rows ${keys} … 10 more`, `names wrong: ${keys} … 10 more`])
+  })
+
   it('a timed ring scores the change from `after` to the first right list', () => {
     const s = scenario([write])
     const timed: Check = { ...ring, timed: true }
