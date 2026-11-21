@@ -124,9 +124,23 @@ class ReleaseDesktopWorkflowTests(unittest.TestCase):
         download = steps(job)[self.step(job, "actions/download-artifact@")]
         self.assertIn("pattern: desktop-linux-*\n", download)
         self.assertIn("merge-multiple: true\n", download)
-        self.assertLess(self.step(job, "uses: ./.github/actions/setup-gcloud"),
-                        self.step(job, 'upload-desktop-linux.sh "$VERSION"'))
+        upload = self.step(job, 'upload-desktop-linux.sh "$VERSION"')
+        self.assertLess(self.step(job, "uses: ./.github/actions/setup-gcloud"), upload)
         self.assertNotIn("TAURI_SIGNING", job)
+
+    def test_upload_linux_uploads_only_appimages_their_signatures_verify(self):
+        # The merged download holds build-linux's artifact too, made by build code: sign-linux's check is repeated on the
+        # very files that go up.
+        job = self.job("upload-linux")
+        check = self.step(job, "--signed")
+        self.assertIn('python3 scripts/verify-desktop-release.py "$VERSION"', steps(job)[check])
+        for name in ("Harness-linux-x64.AppImage", "Harness-linux-arm64.AppImage"):
+            with self.subTest(checked=name):
+                self.assertIn(f"linux-release/{name}", steps(job)[check])
+        self.assertLess(self.step(job, "actions/download-artifact@"), check)
+        self.assertLess(check, self.step(job, 'upload-desktop-linux.sh "$VERSION"'))
+        # The check and the key it trusts, the one the apps pin.
+        self.assertLessEqual({"scripts/verify-desktop-release.py", "device-app/src-tauri/tauri.conf.json"}, checkout(job))
 
     def test_build_windows_runs_build_code_with_no_token(self):
         job = self.job("build-windows")
