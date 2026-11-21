@@ -7,8 +7,12 @@
  * Words reach a Codex thread only through `codex queue`, the app's own CLI's or the one on PATH, both fakes that note
  * each call under the root (harness/codexAppCli.ts, harness/fakeEngine.mjs). From a voice step to the scenario's stop,
  * each new call is a `codex` delivery to the session of its thread, or to none when no session of the scenario has it,
- * so a send to the wrong thread is seen. No ChatGPT scenario has a thread the app resumes from its link, so no fake of
- * the app watches the links run. A link the scenario's world says fails is the recording open's (appEvalDriver.ts).
+ * so a send to the wrong thread is seen. A link the scenario's world says fails is the recording open's
+ * (appEvalDriver.ts).
+ *
+ * The app itself answers a link that opened one of its threads while it is in front: a moment later its window shows
+ * that thread, titled with Codex's name of it, which Harness Device reads and says on the watch, as the real app's
+ * window does (the design's "The fake apps react to links"); with Accessibility not granted (X3) nothing is read.
  */
 import { spawn } from 'node:child_process'
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
@@ -18,19 +22,24 @@ import { onTestFinished } from 'vitest'
 import { codexAppFixture } from '../../src/testing/codexAppFixture.js'
 import type { SessionDef, SessionKey } from '../../src/testing/dialAppEval/types.js'
 import { claudeSteps } from './appEvalClaude.js'
-import { speak, type AppSteps, type TierBWorld } from './appEvalDriver.js'
+import { speak, type AppSteps, type OpenRun, type TierBWorld } from './appEvalDriver.js'
 import { CodexOutside } from './codexOutside.js'
 
 /** The queue calls of the app's own CLI and of the `codex` on PATH, under the root (codexAppCli.ts, fakeEngine.mjs). */
 const LEDGERS = ['codex-app-queue', 'codex-queue']
+/** From a link opening a thread to Harness Device reading the window's new title. */
+const TITLE_MS = 200
+/** The scenarios on a computer that has not granted Harness Device Accessibility, so no title is ever read: the catalog
+ *  names no world option for it, only X3's own title. */
+const NO_ACCESSIBILITY: ReadonlySet<string> = new Set(['X3'])
 
 interface State {
   /** Each running session. */
   live: Map<SessionKey, CodexOutside>
   /** The sessions the app's quit ended, for its relaunch. */
   quit: SessionKey[]
-  /** The threads Codex has named: it names a thread once, so a later write of its row keeps its name. */
-  named: Set<string>
+  /** Codex's name of each thread it has named: it names a thread once, so a later write of its row keeps its name. */
+  names: Map<string, string>
   /** Whether the queue calls are read. */
   heard: boolean
 }
@@ -38,8 +47,19 @@ const states = new WeakMap<TierBWorld, State>()
 
 function stateOf(world: TierBWorld): State {
   let state = states.get(world)
-  if (!state) states.set(world, state = { live: new Map(), quit: [], named: new Set(), heard: false })
+  if (!state) {
+    states.set(world, state = { live: new Map(), quit: [], names: new Map(), heard: false })
+    world.onOpen((run) => showLinked(world, run))
+  }
   return state
+}
+
+/** A link that opened one of the app's threads while the app is in front: its window shows it a moment later. */
+function showLinked(world: TierBWorld, run: OpenRun): void {
+  if (!run.ok || world.front !== 'chatgpt' || NO_ACCESSIBILITY.has(world.scenario.id)) return
+  const s = world.scenario.sessions.find((one) => one.app === 'chatgpt' && !one.ghost && run.argv.includes(`codex://threads/${one.id}`))
+  const name = s && stateOf(world).names.get(s.id)
+  if (name !== undefined) setTimeout(() => world.title(name), TITLE_MS)
 }
 
 /**
@@ -122,13 +142,13 @@ export const chatgptSteps: AppSteps = {
       home.state({ projectOrder: step.projects, assignments })
     }
     const names: Array<[SessionKey, string]> = [
-      ...step.sessions.filter((key) => !state.named.has(world.session(key).id)).map((key): [SessionKey, string] => [key, world.session(key).title]),
+      ...step.sessions.filter((key) => !state.names.has(world.session(key).id)).map((key): [SessionKey, string] => [key, world.session(key).title]),
       ...Object.entries(step.names ?? {}),
     ]
     for (const [key, name] of names) {
       const { id } = world.session(key)
       home.name(id, name)
-      state.named.add(id)
+      state.names.set(id, name)
     }
     if (step.walBusy) {
       // The app's own writer, open with a write of its rows in the WAL, as while it runs: the reader reads past it. Closed

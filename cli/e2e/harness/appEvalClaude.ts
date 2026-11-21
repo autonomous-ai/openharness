@@ -9,7 +9,8 @@
  *   one. So words that reach any session by either path are seen with their target;
  * - the mod's attach, through the real `harness device claude link --json` and its post, as dialClaudeAppFollow.e2e.ts;
  * - the app itself: a process for as long as it runs, which quits with its sessions and relaunches them, and resumes a
- *   resumable session whose continue link was run, as the real app does (the design's "The fake apps react to links").
+ *   resumable session whose continue link opened, then shows it, its mod's attach naming it, as the real app does (the
+ *   design's "The fake apps react to links").
  *
  * Every process these start runs under the daemon's environment, the network guard's preload in it (appEvalDriver.ts).
  * The app's process is in `world.children`: the driver ends it at stop, and its end first ends each of its sessions
@@ -104,11 +105,12 @@ function appOf(world: TierBWorld): FakeApp {
   return app
 }
 
-/** A link that opened, continuing a resumable session the app is not running: it resumes it. */
+/** A link that opened, continuing a resumable session the app is not running: it resumes it and shows it, its mod's
+ *  attach naming it. */
 function follow(world: TierBWorld, app: FakeApp, run: OpenRun): void {
   if (app.closed || !run.ok) return
   const s = world.scenario.sessions.find((one) => one.app === 'claude' && one.resumable && !one.ghost && run.argv.includes(linkOf(one)))
-  if (s) void start(world, app, s.key)
+  if (s) void start(world, app, s.key).then(() => attach(world, s.key))
 }
 
 /** The session's Claude Code, its start hook run, and the mod's poll held. */
@@ -221,6 +223,16 @@ function installMod(d: IsolatedDaemon): void {
   }))
 }
 
+/** The mod's attach of the session the app shows, as the mod posts it to the devices. */
+async function attach(world: TierBWorld, key: SessionKey): Promise<void> {
+  const socket = await devicesSocket(world)
+  const answer = await fetchOverSocket(socket)('http://localhost/', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ type: 'attach', sessionId: world.session(key).id }),
+  })
+  if (answer.status !== 204) throw new Error(`the mod's attach was answered ${answer.status}`)
+}
+
 /** The devices' socket, as the mod finds it: the real link. */
 function devicesSocket(world: TierBWorld): Promise<string> {
   const { d } = world
@@ -290,14 +302,7 @@ export const claudeSteps = {
         break
     }
   },
-  attach: async (world, step) => {
-    const socket = await devicesSocket(world)
-    const answer = await fetchOverSocket(socket)('http://localhost/', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ type: 'attach', sessionId: world.session(step.session).id }),
-    })
-    if (answer.status !== 204) throw new Error(`the mod's attach was answered ${answer.status}`)
-  },
+  attach: (world, step) => attach(world, step.session),
   voice: speak,
   quit: async (world, step) => {
     if (step.app !== 'claude') throw new Error(`scenario ${world.scenario.id}: the Claude app's steps quit no ${step.app} app`)

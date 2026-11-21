@@ -64,6 +64,10 @@ export interface TierBWorld {
   deliver(d: Omit<Delivery, 'at'>): void; gap(reason: string): void
   /** Each run of the open from now on, as it is read: how a fake app sees the links the devices run. */
   onOpen(listener: (run: OpenRun) => void): void
+  /** The app in front, as the watch was last told. */
+  readonly front: App | 'other'
+  /** A title of the ChatGPT app's window, as Harness Device reads it: a line on the watch. */
+  title(text: string): void
   /** Ended at stop. */
   readonly children: ChildProcess[]
 }
@@ -238,6 +242,7 @@ class World implements TierBWorld {
   cost: Seen['cost']
   /** Time 0, ms since the epoch: set as the scenario starts. */
   origin = Date.now()
+  front: App | 'other' = 'other'
   private readonly frames: Seen['frames'] = []
   private readonly faces: Seen['faces'] = []
   private readonly commands: Seen['commands'] = []
@@ -250,6 +255,8 @@ class World implements TierBWorld {
   private watch: ChildProcess | undefined
   private waiting: Array<() => void> = []
   private readonly openers: Array<(run: OpenRun) => void> = []
+  /** Stopped: what a fake app says after it reaches no watch. */
+  private closed = false
   private readonly refreshing: ReturnType<typeof setInterval>
 
   constructor(private readonly rig: Rig, readonly scenario: Scenario, readonly platform: Platform) {
@@ -276,6 +283,7 @@ class World implements TierBWorld {
   deliver(d: Omit<Delivery, 'at'>): void { this.deliveries.push({ at: Date.now(), ...d }) }
   gap(reason: string): void { this.gaps.push(reason) }
   onOpen(listener: (run: OpenRun) => void): void { this.openers.push(listener) }
+  title(text: string): void { this.tell({ thread: text }) }
 
   async plug(): Promise<void> {
     this.plugged = await this.desk.plug(SERIAL, MAC, FILTER)
@@ -300,6 +308,7 @@ class World implements TierBWorld {
 
   /** One line on the stdin of the watch Harness Device runs, started under the daemon's environment on its first line. */
   tell(line: { front: string } | { thread: string }): void {
+    if (this.closed) return
     if (!this.watch) {
       this.watch = spawn(process.execPath, [...CLI_ENTRY, 'hardware', 'watch', '--json'], {
         cwd: CLI_ROOT, env: { ...this.d.env, TMUX_PANE: '' }, stdio: ['pipe', 'ignore', 'ignore'],
@@ -348,6 +357,7 @@ class World implements TierBWorld {
   async close(): Promise<void> {
     clearInterval(this.refreshing)
     this.read()
+    this.closed = true
     for (const child of this.children) await end(child)
   }
 
@@ -377,9 +387,10 @@ export const speak: TierBHandler<'voice'> = async (world, step) => {
 
 const GENERIC: { [K in GenericKind]: (world: World, step: StepOf<K>) => Promise<void> } = {
   front: async (world, step) => {
+    world.front = step.app
     world.tell({ front: FRONT[world.platform as 'darwin' | 'linux'][step.app] })
   },
-  thread: async (world, step) => { world.tell({ thread: step.title }) },
+  thread: async (world, step) => { world.title(step.title) },
   tap: async (world, step) => { world.dial.send({ t: 'agent.open', agentId: world.agentId(step.session) }) },
   // The rest that opens the session after a swipe is the cable's own timer: the step only turns the dial.
   swipe: async (world, step) => { world.swipe(world.agentId(step.session)) },
