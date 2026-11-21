@@ -12,8 +12,8 @@ const net = require('node:net')
 const tls = require('node:tls')
 
 const FILE_ENV = 'HARNESS_E2E_NET_GUARD_FILE'
-const RESOLVES = ['resolve', 'resolve4', 'resolve6', 'resolveAny', 'resolveCaa', 'resolveCname', 'resolveMx',
-  'resolveNaptr', 'resolveNs', 'resolvePtr', 'resolveSoa', 'resolveSrv', 'resolveTxt']
+// Every query node:dns offers, by its name, so one a later Node adds is guarded too.
+const DNS_QUERIES = Object.keys(dns).filter((name) => /^(lookup|resolve|reverse)/.test(name) && typeof dns[name] === 'function')
 
 // The machine's own hostname and its LAN addresses are not here: a lookup of the hostname can leave the machine.
 function isLocal(host) {
@@ -99,16 +99,24 @@ function install(record) {
     dgramRefused(this, callback, refusal('dgram', address, port, 'ENETUNREACH'))
   })
 
-  for (const name of ['lookup', ...RESOLVES]) {
-    replace(dns, name, (original) => function guarded(hostname, ...rest) {
+  for (const name of DNS_QUERIES) {
+    // A lookup (getaddrinfo, getnameinfo) answers this machine's names from the hosts file; a resolve or a reverse asks
+    // a DNS server whatever it names.
+    const passes = (hostname) => name.startsWith('lookup') && isLocal(hostname)
+    const withCallback = (original) => function guarded(hostname, ...rest) {
       const callback = rest[rest.length - 1]
-      if (isLocal(hostname) || typeof callback !== 'function') return original.call(this, hostname, ...rest)
+      if (passes(hostname) || typeof callback !== 'function') return original.call(this, hostname, ...rest)
       process.nextTick(callback, refusal('dns', hostname, null, 'ENOTFOUND'))
-    })
-    replace(dns.promises, name, (original) => function guarded(hostname, ...rest) {
-      if (isLocal(hostname)) return original.call(this, hostname, ...rest)
+    }
+    const withPromise = (original) => function guarded(hostname, ...rest) {
+      if (passes(hostname)) return original.call(this, hostname, ...rest)
       return Promise.reject(refusal('dns', hostname, null, 'ENOTFOUND'))
-    })
+    }
+    replace(dns, name, withCallback)
+    replace(dns.promises, name, withPromise)
+    // node:dns's own functions are bound copies of these: a new Resolver's are the prototype's.
+    if (Object.hasOwn(dns.Resolver.prototype, name)) replace(dns.Resolver.prototype, name, withCallback)
+    if (Object.hasOwn(dns.promises.Resolver.prototype, name)) replace(dns.promises.Resolver.prototype, name, withPromise)
   }
   // So an ESM import of node:dns or node:dns/promises sees the guard as well.
   syncBuiltinESMExports()
