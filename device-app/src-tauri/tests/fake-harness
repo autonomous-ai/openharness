@@ -9,9 +9,12 @@
 #   @hang       waits for ever, in this same process
 #   @exit N     exits N
 #   @driver     from here on, stdin closing prints harness login --json's CANCELLED result and exits 1
-# A run that ends by itself appends its arguments to ends.log; a killed one leaves no line.
+# A run that ends by itself appends its arguments to ends.log; a killed one leaves no line. A run that waits (@wait,
+# @hang) ends as a killed one once the process that started it or the folder has gone: the app starts it in a process
+# group of its own, so a killed test run never reaches it, and it would wait for ever.
 
 dir=${FAKE_HARNESS:-$(dirname "$0")/fake}
+parent=$PPID
 args="$*"
 IFS=_
 script="$dir/$*"
@@ -20,11 +23,27 @@ watcher=
 printf '%s\n' "$args" >>"$dir/calls.log"
 printf '%s\n' "$$" >>"$dir/pids.log"
 
-end() {
-  # The watcher goes with the run, so nothing is left to signal a pid that may be another process's by then.
+# The watcher goes with the run, so nothing is left to signal a pid that may be another process's by then.
+unwatch() {
   if [ -n "$watcher" ]; then kill "$watcher" 2>/dev/null; fi
+}
+
+end() {
+  unwatch
   printf '%s\n' "$args" >>"$dir/ends.log"
   exit "$1"
+}
+
+# Waits until the file $1 is in the folder; with no name, for ever. `kill -0` and `[` are builtins: a turn forks only
+# its sleep.
+wait_for() {
+  while [ -z "$1" ] || [ ! -e "$dir/$1" ]; do
+    if ! kill -0 "$parent" 2>/dev/null || [ ! -d "$dir" ]; then
+      unwatch
+      exit 1
+    fi
+    sleep 0.02
+  done
 }
 
 cancelled() {
@@ -44,10 +63,10 @@ exec 3<&0
 while IFS= read -r line <&4 || [ -n "$line" ]; do
   case $line in
     '@err '*) printf '%s\n' "${line#@err }" >&2 ;;
-    '@wait '*) while [ ! -e "$dir/${line#@wait }" ]; do sleep 0.02; done ;;
+    '@wait '*) wait_for "${line#@wait }" ;;
     @stdin) cat >/dev/null ;;
     @record) cat >>"$dir/stdin.log" ;;
-    @hang) exec sleep 2147483647 ;;
+    @hang) wait_for '' ;;
     '@exit '*) end "${line#@exit }" ;;
     @driver)
       trap cancelled USR1
