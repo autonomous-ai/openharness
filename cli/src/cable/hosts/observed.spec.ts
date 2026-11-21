@@ -3161,6 +3161,20 @@ describe('ObservedSource and a pane that only holds the agent', () => {
     expect(await only.src.send(only.agent(), 'next')).toMatchObject({ ok: false })
   })
 
+  // The devices take a held pane for none (paneOf) and place the agent by its folder, as in Neovim's :terminal inside an
+  // Orca terminal: the place is where it runs, the held pane only where it was started from.
+  it('a held pane gives way to the pane its caller was placed at: a rest and a tap show the placed one, and the agent takes its name', async () => {
+    const a = fake('a', () => true)
+    const s = holding([a.adapter])
+    s.src.ingest(s.ev('turn-stop', { hostHints: HINTS }))
+    s.src.setPaneNames('a', new Map([['t3', { title: 'Build', renamed: false }]]), new Map([[s.agent().id, 't3']]))
+    expect(s.src.hasPane(s.agent())).toBe(true)
+    expect(await s.src.showPane(s.agent())).toBe('ok')
+    expect(a.shown.mock.calls.map(([pane]) => pane)).toEqual([{ adapter: 'a', id: 't3' }])
+    expect(await s.tapped()).toEqual({ adapter: 'a', id: 't3' })
+    expect(s.agent().name).toBe('Build')
+  })
+
   it('a held pane\'s key folds no source\'s row once the maker is read, and paneOf names no held pane', async () => {
     const s = holding([fake('a', unlessMadeBy('a')).adapter, fake('b', () => false).adapter])
     s.src.ingest(s.ev('session-start', { hostHints: HINTS }))
