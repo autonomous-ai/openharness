@@ -70,7 +70,7 @@ static pod_out_t synced(pod_ui_t *u)
 pod_out_t pod_ui_link(pod_ui_t *u, bool up)
 {
     if (up && !u->model.linked) u->sweep.restart = true;
-    if (!up) { pod_ui_sweep_abort(u); u->landing[0] = 0; }   // the next link's ring is not this pick's
+    if (!up) { pod_ui_sweep_abort(u); u->landing[0] = u->landed[0] = 0; }   // the next link's ring is not this pick's
     if (up && !u->model.linked) {   // a real down -> up transition: the start runs again on this link on swarms this link brings
         u->started = false;
         u->fresh_swarms = false;
@@ -355,7 +355,7 @@ pod_out_t pod_ui_touch(pod_ui_t *u, bool down, int x, int y, uint32_t now_ms, bo
         u->down_ms = now_ms;
         u->touched = true;
         u->last_touch_ms = now_ms;
-        u->landing[0] = 0;   // the person is driving: a ring that lands now opens nothing over them
+        u->landing[0] = u->landed[0] = 0;   // the person is driving: a ring that lands now opens nothing over them, a focus waits out the quiet
         u->cancelled = u->dragging = u->hit_valid = u->ban_touch = false;
         memset(&u->hit, 0, sizeof u->hit);   // a DOWN on nothing carries nothing over from the last contact
         if (u->hands_free && !pod_ui_talking(u)) u->hands_free = false;   // Talk ended some other way
@@ -549,8 +549,8 @@ pod_out_t pod_ui_touch(pod_ui_t *u, bool down, int x, int y, uint32_t now_ms, bo
     pod_out_t out = pod_nav_act(&u->nav, &u->model, u->hit.action, arg, now_ms);
     *changed = true;
     if (u->hands_free && out.fx == POD_FX_VOICE_END) u->hands_free = false;   // sent
-    if (out.fx == POD_FX_APP_PICK && u->nav.depth == 1 && strcmp(out.agent, POD_APP_HARNESS)) {   // the ring is not here yet: wait for it
-        pod_copy_str(u->landing, sizeof u->landing, out.agent);
+    if (out.fx == POD_FX_APP_PICK && strcmp(out.agent, POD_APP_HARNESS)) {   // the ring is not here yet: wait for it; else its room opened at once
+        pod_copy_str(u->nav.depth == 1 ? u->landing : u->landed, CABLE_APP_ID_MAX, out.agent);
         u->landing_ms = now_ms;
     }
     return out;
@@ -749,7 +749,12 @@ static bool follow_now(pod_ui_t *u, const char *id, uint32_t now_ms)
     // there is a tap on Tabs, then the hand goes to the desktop app), so only the daemon's echo of the device's own last
     // move (POD_FOLLOW_ECHO_MS) is ignored there; elsewhere the full window protects what the person is reading.
     uint32_t quiet = u->nav.depth <= 1 ? POD_FOLLOW_ECHO_MS : POD_FOLLOW_QUIET_MS;
-    if (u->touched && (int32_t)(now_ms - u->last_touch_ms) < (int32_t)quiet) return true;
+    // The pick's tap is no reason to drop the focus that answers it: one of the picked app's agents, within POD_LANDING_MS,
+    // before its ring or after the room opened.
+    const pod_agent_t *a = pod_model_find(&u->model, id);
+    const char *app = u->landing[0] ? u->landing : u->landed;
+    const bool answer = app[0] && a && !strcmp(a->host, app) && (int32_t)(now_ms - u->landing_ms) < POD_LANDING_MS;
+    if (!answer && u->touched && (int32_t)(now_ms - u->last_touch_ms) < (int32_t)quiet) return true;
     if (u->down) return true;
     if (pod_nav_follow(&u->nav, &u->model, id, now_ms)) {
         u->scroll_px = 0;
@@ -782,6 +787,7 @@ static void land(pod_ui_t *u)
     // Signed: the touch does not move the model's clock, so it can still be behind the tap's lift.
     if ((int32_t)(u->model.clock_ms - u->landing_ms) >= POD_LANDING_MS) { u->landing[0] = 0; return; }   // the daemon ignored it
     if (!pod_nav_open_app(&u->nav, &u->model, u->landing)) return;
+    memcpy(u->landed, u->landing, sizeof u->landed);
     u->landing[0] = 0;
     u->dirty = true;
 }
