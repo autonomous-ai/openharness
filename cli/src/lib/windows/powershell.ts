@@ -4,20 +4,36 @@
  * nothing in it is quoted twice by cmd and PowerShell, and its inputs in environment variables, never in its text.
  */
 import { execFile, spawnSync } from 'node:child_process'
+import { realpathSync } from 'node:fs'
 import { win32 } from 'node:path'
 
 export const POWERSHELL_TIMEOUT_MS = 30_000
 
-/** One of Windows' own programs by its full path in System32: Node on Windows looks for a bare name in the folder it
- *  runs in before PATH (systemProgram.spec.ts). Windows' folder is the first of SystemRoot and windir that names a
- *  drive's folder: an empty or relative one would name a folder under the one the command runs in. */
-export function systemProgram(name: string, env: NodeJS.ProcessEnv = process.env): string {
-  const root = [env.SystemRoot, env.windir].find((folder) => /^[A-Za-z]:\\/.test(folder ?? ''))
-  return win32.join(root ?? 'C:\\Windows', 'System32', name)
+let askedRoot: string | undefined
+
+/** Windows' own folder, asked of the file system: SystemRoot and windir are whoever runs the command's, and can name
+ *  another folder. Without [real], the file system's own reader, asked once a process: every Windows program's path
+ *  is built on it. */
+export function systemRoot(real?: (path: string) => string): string {
+  if (!real) return askedRoot ??= systemRoot(realpathSync.native)
+  try {
+    const root = real('\\\\?\\GLOBALROOT\\SystemRoot')
+    // A drive's folder that cmd.exe reads as itself between quotes: no variable, no `!`, no quote, no operator.
+    if (/^[A-Za-z]:\\[^%!"^&|<>]*$/.test(root)) return root
+  } catch {
+    // Not there off Windows, or not readable: the folder Windows installs to.
+  }
+  return 'C:\\Windows'
 }
 
-export function powershellPath(env: NodeJS.ProcessEnv = process.env): string {
-  return systemProgram('WindowsPowerShell\\v1.0\\powershell.exe', env)
+/** One of Windows' own programs by its full path in System32 of [systemRoot]: Node on Windows looks for a bare name in
+ *  the folder it runs in before PATH (systemProgram.spec.ts). */
+export function systemProgram(name: string): string {
+  return win32.join(systemRoot(), 'System32', name)
+}
+
+export function powershellPath(): string {
+  return systemProgram('WindowsPowerShell\\v1.0\\powershell.exe')
 }
 
 export function encodedCommandArgs(script: string): string[] {

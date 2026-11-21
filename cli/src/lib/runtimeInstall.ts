@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join, sep, win32 } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 
 import { env } from '../config/env.js'
 import { gridAvailable, gridChildEnv, gridCommand, gridVersion, managedGridPath, meetsVersionFloor } from './gridExec.js'
@@ -9,6 +9,7 @@ import { followWindowsGridPin } from './gridWindowsPin.js'
 import { MINIMUM_NODE_MAJOR, managedNodePath, nodeMajorOf } from './nodeRuntime.js'
 import { atomicWriteFile } from './secureState.js'
 import { RUNTIME_DOWNLOAD_LIMITS, downloadVerified } from './selfUpdate.js'
+import { systemProgram } from './windows/powershell.js'
 
 /**
  * Provisioning the Node the CLI runs on, from inside the CLI.
@@ -40,9 +41,8 @@ export function unpackCommand(
   archive: string,
   into: string,
   platform: NodeJS.Platform = process.platform,
-  systemRoot: string | undefined = process.env.SystemRoot,
 ): { file: string; args: string[] } {
-  if (platform === 'win32') return { file: win32.join(systemRoot || 'C:\\Windows', 'System32', 'tar.exe'), args: ['-xf', archive, '-C', into] }
+  if (platform === 'win32') return { file: systemProgram('tar.exe'), args: ['-xf', archive, '-C', into] }
   return { file: '/usr/bin/tar', args: ['-xzf', archive, '-C', into] }
 }
 

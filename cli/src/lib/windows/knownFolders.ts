@@ -5,7 +5,7 @@
  *
  * One hidden `cmd.exe` run reads every key:
  * - `cmd.exe`, `chcp.com` and `reg.exe` by their full paths in Windows' own folder, which is asked of the file system
- *   (`systemRoot`): a `reg` earlier on `PATH`, a `ComSpec` or a `SystemRoot` is the caller's.
+ *   (`systemProgram`, ./powershell.ts): a `reg` earlier on `PATH`, a `ComSpec` or a `SystemRoot` is the caller's.
  * - `chcp.com 65001` first: `reg.exe` prints to a pipe in the console's code page, which lacks most letters, so a folder
  *   named outside ASCII would come out misspelled (`userPathValue` in ../../scripts/installPs1.spec.ts met it).
  * - `/d`: the registry may give every `cmd.exe` AutoRun commands, which are not this run's.
@@ -15,8 +15,7 @@
  */
 import { isUtf8 } from 'node:buffer'
 import { spawnSync } from 'node:child_process'
-import { realpathSync } from 'node:fs'
-import { win32 } from 'node:path'
+import { systemProgram, systemRoot } from './powershell.js'
 
 /** As long as `readUserEnvironment` gives `reg query` (../serviceCommand.ts). */
 export const KNOWN_FOLDERS_TIMEOUT_MS = 3_000
@@ -40,29 +39,15 @@ const UNREAD_KEY = 'reg.exe could not read a key'
 /** A text value named `AppData` or `Local AppData`, in any case, as reg.exe prints it: four spaces before its data. */
 const FOLDER_VALUE = /^ +(AppData|Local AppData) +(?:REG_SZ|REG_EXPAND_SZ) {4}(.*)$/i
 
-/** Windows' own folder, asked of the file system: no variable names it. */
-export function systemRoot(real: (path: string) => string = realpathSync.native): string {
-  try {
-    const root = real('\\\\?\\GLOBALROOT\\SystemRoot')
-    // A drive's folder that cmd.exe reads as itself between quotes: no variable, no `!`, no quote, no operator.
-    if (/^[A-Za-z]:\\[^%!"^&|<>]*$/.test(root)) return root
-  } catch {
-    // Not there off Windows, or not readable: the folder Windows installs to.
-  }
-  return 'C:\\Windows'
-}
-
 /** Every key in one hidden cmd.exe run whose console is UTF-8. Never throws. */
 export function regQuery(keys: string[], run: RegRun = spawnSync): (Buffer | RegFailure)[] {
-  const root = systemRoot()
-  const tool = (name: string): string => win32.join(root, 'System32', name)
   // `&&` and `||` echo reg.exe's exit as the key's marker. The keys are this module's or a test's: none holds `"`, `%` or `!`.
-  const line = [`"${tool('chcp.com')}" 65001 >nul`,
-    ...keys.map(key => `("${tool('reg.exe')}" query "${key}" && echo ${KEY_READ} || echo ${KEY_FAILED})`)].join(' & ')
+  const line = [`"${systemProgram('chcp.com')}" 65001 >nul`,
+    ...keys.map(key => `("${systemProgram('reg.exe')}" query "${key}" && echo ${KEY_READ} || echo ${KEY_FAILED})`)].join(' & ')
   // The line goes to cmd.exe as written, /s taking its outer quotes off, as ../../engines/kit/windowsInstall.ts passes one.
   // SystemRoot is the folder found here: a Windows program needs it, and Node would copy the caller's in for one missing.
-  const result = run(tool('cmd.exe'), ['/d', '/s', '/c', `"${line}"`], {
-    env: { SystemRoot: root }, timeout: KNOWN_FOLDERS_TIMEOUT_MS, windowsHide: true, windowsVerbatimArguments: true, stdio: ['ignore', 'pipe', 'ignore'],
+  const result = run(systemProgram('cmd.exe'), ['/d', '/s', '/c', `"${line}"`], {
+    env: { SystemRoot: systemRoot() }, timeout: KNOWN_FOLDERS_TIMEOUT_MS, windowsHide: true, windowsVerbatimArguments: true, stdio: ['ignore', 'pipe', 'ignore'],
   })
   const failure = result.error ? ((result.error as NodeJS.ErrnoException).code === 'ETIMEDOUT' ? 'cmd.exe timed out' : 'cmd.exe did not start')
     : result.status !== 0 ? `cmd.exe exited ${result.status}` : undefined
