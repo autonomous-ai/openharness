@@ -27,22 +27,32 @@ $utf8 = New-Object Text.UTF8Encoding $false
 [Console]::OutputEncoding = $utf8
 $dir = $PSScriptRoot
 $me = [Security.Principal.WindowsIdentity]::GetCurrent()
+# Windows' folder as the system says, never a variable someone can set.
+$system = [Environment]::GetFolderPath('System')
+# The Task Scheduler's own COM object: its cmdlets go through CIM, which a network logon (SSH) is denied.
+$service = New-Object -ComObject Schedule.Service
+$service.Connect()
+$tasks = $service.GetFolder('\')
 
 function Files([string]$Name) {
-  @{ wrapper = Join-Path $dir "$Name.ps1"; call = Join-Path $dir "$Name.json"; log = Join-Path $dir "$Name.log"; done = Join-Path $dir "$Name.done"; doneTemp = Join-Path $dir "$Name.done.tmp" }
+  @{ wrapper = Join-Path $dir "$Name.ps1"; call = Join-Path $dir "$Name.json"; log = Join-Path $dir "$Name.log"; done = Join-Path $dir "$Name.done"; doneTemp = Join-Path $dir "$Name.done.tmp"; pid = Join-Path $dir "$Name.pid" }
 }
 
-# The task, and what its script started: the task's PowerShell runs the wrapper, and a desk and its daemon run under it,
-# whose tree taskkill ends while its parents still stand.
+# The task, and what its script started: the task's PowerShell runs the wrapper, which writes its pid first, and a desk
+# and its daemon run under it, whose tree taskkill ends while its parents still stand.
 function End-Task([string]$Name) {
   # taskkill says on stderr that a process has gone, which is no failure here.
   $ErrorActionPreference = 'Continue'
-  $wrapper = (Files $Name).wrapper
-  foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'")) {
-    if ($p.CommandLine -and $p.CommandLine.Contains($wrapper)) { & taskkill.exe /pid $p.ProcessId /t /f 2>&1 | Out-Null }
+  $pidFile = (Files $Name).pid
+  if (Test-Path -LiteralPath $pidFile) {
+    $id = [int]"$(Get-Content -LiteralPath $pidFile -Raw)".Trim()
+    $p = if ($id) { Get-Process -Id $id -ErrorAction SilentlyContinue }
+    # A pid is reused once its process ends, by one started after the file was written: never that one's tree.
+    if ($p -and $p.StartTime -le (Get-Item -LiteralPath $pidFile).LastWriteTime) { & taskkill.exe /pid $id /t /f 2>&1 | Out-Null }
   }
-  Stop-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
-  Unregister-ScheduledTask -TaskName $Name -Confirm:$false -ErrorAction SilentlyContinue
+  # Gone already is no failure either.
+  try { $tasks.GetTask($Name).Stop(0) } catch {}
+  try { $tasks.DeleteTask($Name, 0) } catch {}
 }
 
 function Exit-Code([string]$Done) {
@@ -58,7 +68,7 @@ if ($Stop) {
   $code = Exit-Code $files.done
   End-Task $Stop
   if (Test-Path -LiteralPath $files.log) { Get-Content -LiteralPath $files.log -Encoding UTF8 }
-  Remove-Item -LiteralPath $files.wrapper, $files.call, $files.log, $files.done, $files.doneTemp -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $files.wrapper, $files.call, $files.log, $files.done, $files.doneTemp, $files.pid -Force -ErrorAction SilentlyContinue
   Write-Output "exit $code"
   exit $code
 }
@@ -70,9 +80,13 @@ $words = @()
 try { foreach ($word in (ConvertFrom-Json $ArgsJson)) { if ($word -isnot [string]) { throw 'not a string' }; $words += $word } }
 catch { Write-Output 'console.ps1: -ArgsJson takes a JSON array of strings'; exit 2 }
 
-# The account at the console, as Windows names it; the person's name is never printed.
-$console = (Get-CimInstance Win32_ComputerSystem).UserName
-if (-not $console -or -not [string]::Equals($console, $me.Name, [StringComparison]::OrdinalIgnoreCase)) { Write-Output 'this account has no console session'; exit 3 }
+# The account at the console: quser reads the sessions through the WTS API, which a network logon may use, and names
+# each account without its domain. It says "No User exists" on stderr, exit 1, when nobody is signed in: no console
+# session either. The person's name is never printed.
+$user = $me.Name.Split('\')[-1]
+$sessions = & { $ErrorActionPreference = 'Continue'; & (Join-Path $system 'quser.exe') 2>$null }
+# A row: '>' on the session quser runs in, else a space, the account, the session's name, its id.
+if (-not (@($sessions) -match ('^.' + [regex]::Escape($user) + '\s+console\s+\d'))) { Write-Output 'this account has no console session'; exit 3 }
 
 $name = 'harness-dial-check-' + [guid]::NewGuid().ToString('N')
 $files = Files $name
@@ -85,6 +99,8 @@ $ErrorActionPreference = 'Continue'
 $global:LASTEXITCODE = 0
 $code = 0
 $base = $PSCommandPath -replace '\.ps1$', ''
+# First: End-Task ends this PowerShell's tree by it.
+[IO.File]::WriteAllText("$base.pid", "$PID")
 $log = "$base.log"
 [IO.File]::WriteAllText($log, '')
 try {
@@ -110,24 +126,30 @@ try {
 [IO.File]::Move("$base.done.tmp", "$base.done")
 '@ | Set-Content -LiteralPath $files.wrapper -Encoding utf8
 
-$conhost = Join-Path $env:SystemRoot 'System32\conhost.exe'
-$shell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-$action = New-ScheduledTaskAction -Execute $conhost -Argument ('--headless "' + $shell + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $files.wrapper + '"')
-$principal = New-ScheduledTaskPrincipal -UserId $me.User.Value -LogonType Interactive -RunLevel Limited
+$shell = Join-Path $system 'WindowsPowerShell\v1.0\powershell.exe'
+$task = $service.NewTask(0)
+$action = $task.Actions.Create(0) # TASK_ACTION_EXEC
+$action.Path = Join-Path $system 'conhost.exe'
+$action.Arguments = '--headless "' + $shell + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $files.wrapper + '"'
+$task.Principal.RunLevel = 0 # TASK_RUNLEVEL_LUA
 $limit = if ($NoWait) { New-TimeSpan -Hours 8 } else { New-TimeSpan -Seconds ($TimeoutSec + 60) }
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit $limit -MultipleInstances IgnoreNew
-Register-ScheduledTask -TaskName $name -Action $action -Principal $principal -Settings $settings | Out-Null
+$task.Settings.ExecutionTimeLimit = [Xml.XmlConvert]::ToString($limit)
+$task.Settings.DisallowStartIfOnBatteries = $false
+$task.Settings.StopIfGoingOnBatteries = $false
+$task.Settings.MultipleInstances = 2 # TASK_INSTANCES_IGNORE_NEW
+# TASK_CREATE, under this account with TASK_LOGON_INTERACTIVE_TOKEN: no password, it runs only in the session signed in.
+$tasks.RegisterTaskDefinition($name, $task, 2, $me.Name, $null, 3) | Out-Null
 $keep = $false
 $code = 124
 try {
-  Start-ScheduledTask -TaskName $name
+  $tasks.GetTask($name).Run($null) | Out-Null
   if ($NoWait) { $keep = $true; Write-Output $name; $code = 0; return }
   $deadline = (Get-Date).AddSeconds($TimeoutSec)
   $startBy = (Get-Date).AddSeconds(20)
   while (-not (Test-Path -LiteralPath $files.done)) {
     if ((Get-Date) -gt $deadline) { Write-Output "timed out after $TimeoutSec s"; break }
     if ((Get-Date) -gt $startBy -and -not (Test-Path -LiteralPath $files.log)) {
-      Write-Output "the task did not start (last result $((Get-ScheduledTaskInfo -TaskName $name).LastTaskResult))"
+      Write-Output "the task did not start (last result $($tasks.GetTask($name).LastTaskResult))"
       break
     }
     Start-Sleep -Milliseconds 300
@@ -137,7 +159,7 @@ try {
 } finally {
   if (-not $keep) {
     End-Task $name
-    Remove-Item -LiteralPath $files.wrapper, $files.call, $files.log, $files.done, $files.doneTemp -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $files.wrapper, $files.call, $files.log, $files.done, $files.doneTemp, $files.pid -Force -ErrorAction SilentlyContinue
   }
 }
 Write-Output "exit $code"

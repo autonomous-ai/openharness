@@ -97,8 +97,7 @@ look of a dial that was not attached); 6 the dial's pets changed. A desk refuses
 
 ## console.ps1
 
-Run over SSH as the account whose console session it is, from the folder it is in. That account must be the owner or
-an administrator: over SSH a standard user is denied `Get-CimInstance Win32_ComputerSystem`, which finds the session.
+Run over SSH as the account whose console session it is, from the folder it is in; a standard user will do.
 
 - `console.ps1 -Script run-desk.ps1 -ArgsJson '["--dial-read","COM3","--out","C:\\…\\first-read.json","--serial-bin","C:\\…\\harness-serial.exe"]'`
   waits for the script (`-TimeoutSec`, 600 by default), prints its output and `exit <code>`, and exits with that code.
@@ -110,6 +109,11 @@ an administrator: over SSH a standard user is denied `Get-CimInstance Win32_Comp
 It registers a one-shot task under this account with an interactive logon and no stored password, and starts the script
 through Windows' own `conhost.exe --headless`, so no window shows and nothing is compiled. Exit 3: this account has no
 console session. A task still running at its timeout is ended with everything it started.
+
+It uses no CIM, which an SSH logon's network token is denied (the `ScheduledTasks` cmdlets go through it too):
+`quser.exe` finds this account's console session, the Task Scheduler's own `Schedule.Service` COM object registers,
+runs, stops and deletes the task, and the wrapper writes its pid to `<name>.pid`, by which `taskkill /t` ends what it
+started.
 
 ## The VM
 
