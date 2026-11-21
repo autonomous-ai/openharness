@@ -180,6 +180,13 @@ LINUX_E2E_ORCA_FILES = ("cli/e2e/dialOrcaFocus.e2e.ts", "cli/e2e/dialOrcaFullRin
 # to one runs them beside the PR's own files; its deletion too, as a canary path's does.
 LINUX_E2E_ORCA_PATHS = ("cli/e2e/harness/orcaHost.ts", "cli/e2e/harness/inOrca.ts", "cli/e2e/harness/fakeOrca.ts",
                         "cli/src/cable/hosts/orca.ts")
+# The dial app eval's tier B files (docs/plans/2026-11-21-dial-app-eval-design.md), and what they cover: the hosts'
+# adapters, the eval's catalog and grader, the carousel model and the tier B driver. A change to one runs them beside the
+# PR's own files; its deletion too, as the Orca paths' does.
+LINUX_E2E_APP_EVAL_FILES = ("cli/e2e/dialAppEvalClaude.e2e.ts", "cli/e2e/dialAppEvalChatgpt.e2e.ts",
+                            "cli/e2e/dialAppEvalHeldOut.e2e.ts")
+LINUX_E2E_APP_EVAL_PATHS = ("cli/src/cable/hosts/", "cli/src/testing/dialAppEval/", "cli/src/testing/dialCarousel.ts",
+                            "cli/e2e/harness/appEval*.ts", *LINUX_E2E_APP_EVAL_FILES)
 DIAL_HOST_FILES = ("cli/e2e/dialHost*.e2e.ts", "cli/e2e/deviceHerdr.e2e.ts")
 # dial-hosts: those files, the code they run and the job's own definition. The daemon runs every host adapter from its
 # bundle, and the adapters share their folder's code (observed.ts finds the hosts): the whole folder, and what it and the
@@ -187,7 +194,7 @@ DIAL_HOST_FILES = ("cli/e2e/dialHost*.e2e.ts", "cli/e2e/deviceHerdr.e2e.ts")
 # test_ci_plan walks the imports.
 DIAL_HOST_PATHS = (
     "cli/e2e/harness/dialHosts.ts", "cli/vitest.e2e.dialHosts.config.ts", "cli/src/cable/hosts/",
-    *(f"cli/src/cable/{name}.ts" for name in ("cableFrame", "portAccess", "roundGlyphs")),
+    "cli/src/testing/dialCarousel.ts", *(f"cli/src/cable/{name}.ts" for name in ("cableFrame", "portAccess", "roundGlyphs")),
     *(f"cli/e2e/harness/{name}.ts" for name in ("desk", "fakeBackend", "fakeDial", "fakeOrca", "herdrServer", "inOrca",
                                                  "kittyWindow", "orcaHost", "outsideAgent", "swayDesk", "weztermMux",
                                                  "x11Desk", "zellijSession")),
@@ -489,6 +496,11 @@ def linux_e2e_orca_path(path):
     return path in LINUX_E2E_ORCA_PATHS
 
 
+def linux_e2e_app_eval_path(path):
+    """What linux-e2e runs LINUX_E2E_APP_EVAL_FILES for."""
+    return any(listed(entry, path) for entry in LINUX_E2E_APP_EVAL_PATHS)
+
+
 def dial_hosts_path(path):
     """What the dial-hosts job runs: its files (a "*" stays within e2e/, as Vitest's glob does), adapters and helpers."""
     return any(listed(entry, path) for entry in (*DIAL_HOST_FILES, *DIAL_HOST_PATHS))
@@ -497,7 +509,8 @@ def dial_hosts_path(path):
 def e2e_owners(path):
     """The end-to-end suites whose own paths include this path."""
     suites = {"windows-e2e"} if windows_e2e(path) else set()
-    if linux_e2e_file(path) or linux_e2e_canary_path(path) or linux_e2e_orca_path(path):
+    if (linux_e2e_file(path) or linux_e2e_canary_path(path) or linux_e2e_orca_path(path)
+            or linux_e2e_app_eval_path(path)):
         suites.add("linux-e2e")
     if dial_hosts_path(path):
         suites.add("dial-hosts")
@@ -517,8 +530,8 @@ def select(paths, present=None):
     """Each changed path runs its owners' suites, the end-to-end suites whose own paths include it, and every suite
     that declares reading it (PR_READS); a path a suite owns, a component or an end-to-end one, runs the cross-read
     scan too. linux-e2e runs an e2e file only when the diff leaves it in the tree (present: the paths it adds or
-    modifies; None, all of them), its canary for any change to what it runs for, and the Orca files for any change to
-    what they cover."""
+    modifies; None, all of them), its canary for any change to what it runs for, and the Orca files and the dial app
+    eval's for any change to what they cover."""
     selected, reasons = set(), {}
     for path in paths:
         if not isinstance(path, str) or not path or path.startswith("/") or ".." in path.split("/"):
@@ -528,8 +541,8 @@ def select(paths, present=None):
             suite for suite, entries in PR_READS.items() if any(covers(entry, path) for entry in entries)}
         if (own | e2e_owners(path)) - {"cross-read-scan"}:
             scopes.add("cross-read-scan")
-        if present is not None and path not in present and not (linux_e2e_canary_path(path)
-                                                                 or linux_e2e_orca_path(path)):
+        if present is not None and path not in present and not (linux_e2e_canary_path(path) or linux_e2e_orca_path(path)
+                                                                 or linux_e2e_app_eval_path(path)):
             scopes.discard("linux-e2e")
         selected |= scopes
         reasons[path] = sorted(scopes)
@@ -1154,7 +1167,8 @@ def make_plan(root, event_name, event, scope="full", source=None, evidence=None,
 def e2e_plan(paths, running, root=None, head=None, present=None, files=None):
     """What the running end-to-end suites' jobs read besides their flags: whether windows-e2e adds arm64 (for a
     Windows-only path, or a run by hand, which names none), the Device packages to build, and linux-e2e's files
-    (cli/-relative; a run by hand's files, else the present paths', the Orca files for what they cover, and the canary
+    (cli/-relative; a run by hand's files, else the present paths', the Orca files and the dial app eval's for what they
+    cover, and the canary
     for what it runs for or when its job's definition changed alone) and rows, or the full suite above
     LINUX_E2E_FILES_MAX files."""
     arm64 = "windows-e2e" in running and (not paths or any(windows_only(path) for path in paths))
@@ -1164,13 +1178,17 @@ def e2e_plan(paths, running, root=None, head=None, present=None, files=None):
     if "linux-e2e" in running:
         if files is None:
             files = [path for path in paths if (present is None or path in present) and linux_e2e_file(path)]
-            if any(linux_e2e_orca_path(path) for path in paths):
-                at_head = git(root, "ls-tree", "-r", "--name-only", head, "--", *LINUX_E2E_ORCA_FILES).splitlines()
-                missing = [path for path in LINUX_E2E_ORCA_FILES if path not in at_head]
+            for covered, listed_files, name in ((linux_e2e_orca_path, LINUX_E2E_ORCA_FILES, "LINUX_E2E_ORCA_FILES"),
+                                                (linux_e2e_app_eval_path, LINUX_E2E_APP_EVAL_FILES,
+                                                 "LINUX_E2E_APP_EVAL_FILES")):
+                if not any(covered(path) for path in paths):
+                    continue
+                at_head = git(root, "ls-tree", "-r", "--name-only", head, "--", *listed_files).splitlines()
+                missing = [path for path in listed_files if path not in at_head]
                 if missing:
                     raise ValueError(f"linux-e2e: {', '.join(missing)} not at {head[:12]}; update "
-                                     "LINUX_E2E_ORCA_FILES in scripts/ci-plan.py")
-                files += LINUX_E2E_ORCA_FILES
+                                     f"{name} in scripts/ci-plan.py")
+                files += listed_files
             if not files or any(linux_e2e_canary_path(path) for path in paths):
                 if git(root, "ls-tree", "-r", "--name-only", head, "--", LINUX_E2E_CANARY) != LINUX_E2E_CANARY:
                     raise ValueError(f"linux-e2e: its canary {LINUX_E2E_CANARY} is not at {head[:12]}; name another "
