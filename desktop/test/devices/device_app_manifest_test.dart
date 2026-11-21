@@ -33,6 +33,31 @@ const _linuxX64Url =
     'https://cdn.autonomous.ai/harness/device/0.2.0/Harness-Device-linux-x64.AppImage';
 const _linuxArm64Url =
     'https://cdn.autonomous.ai/harness/device/0.2.0/Harness-Device-linux-arm64.AppImage';
+const _x64Signature = 'x64-signature';
+const _arm64Signature = 'arm64-signature';
+
+/// The live manifest's Linux shape: Desktop's entries, and Tauri's
+/// `platforms` entries naming the same files with their signatures. A null
+/// [version] leaves the entries' `version` out.
+Map<String, Object?> linuxManifest({
+  Object? x64Url = _linuxX64Url,
+  Object? arm64Url = _linuxArm64Url,
+  Object? version = '0.2.0',
+}) => {
+  'version': '0.2.0',
+  'platforms': {
+    'linux-x86_64': {'url': x64Url, 'signature': _x64Signature},
+    'linux-aarch64': {'url': arm64Url, 'signature': _arm64Signature},
+  },
+  'device-linux-x64-appimage': {
+    ...entry(url: _linuxX64Url)..remove('version'),
+    'version': ?version,
+  },
+  'device-linux-arm64-appimage': {
+    ...entry(url: _linuxArm64Url)..remove('version'),
+    'version': ?version,
+  },
+};
 
 void main() {
   test('Apple Silicon takes the arm64 entry, then the other', () {
@@ -137,6 +162,86 @@ void main() {
       ),
       isNull,
     );
+  });
+
+  test('Linux takes the Tauri signature of the same file from platforms', () {
+    final x64 = parse(
+      linuxManifest(),
+      architecture: 'x64',
+      platform: TargetPlatform.linux,
+    );
+    expect(x64?.url, _linuxX64Url);
+    expect(x64?.signature, _x64Signature);
+    expect(x64?.version, '0.2.0');
+    final arm64 = parse(linuxManifest(), platform: TargetPlatform.linux);
+    expect(arm64?.url, _linuxArm64Url);
+    expect(arm64?.signature, _arm64Signature);
+    expect(arm64?.version, '0.2.0');
+  });
+
+  test('a platforms url naming another file gives no signature', () {
+    for (final url in [
+      'https://cdn.autonomous.ai/harness/device/0.1.9/Harness-Device-linux-x64.AppImage',
+      _linuxX64Url.toUpperCase(),
+      '$_linuxX64Url/',
+    ]) {
+      final release = parse(
+        linuxManifest(x64Url: url),
+        architecture: 'x64',
+        platform: TargetPlatform.linux,
+      );
+      expect(release?.url, _linuxX64Url, reason: url);
+      expect(release?.signature, isNull, reason: url);
+    }
+  });
+
+  test('the other arch\'s platforms entry gives no signature', () {
+    final manifest = linuxManifest();
+    (manifest['platforms'] as Map).remove('linux-x86_64');
+    final release = parse(
+      manifest,
+      architecture: 'x64',
+      platform: TargetPlatform.linux,
+    );
+    expect(release?.url, _linuxX64Url);
+    expect(release?.signature, isNull);
+  });
+
+  test('an entry with no version, or not X.Y.Z, gives no signature', () {
+    for (final version in [null, '0.2']) {
+      final release = parse(
+        linuxManifest(version: version),
+        architecture: 'x64',
+        platform: TargetPlatform.linux,
+      );
+      expect(release?.url, _linuxX64Url, reason: '$version');
+      expect(release?.version, isNull, reason: '$version');
+      expect(release?.signature, isNull, reason: '$version');
+    }
+  });
+
+  test('macOS and Windows releases carry no signature', () {
+    final mac = parse({
+      'platforms': {
+        'darwin-aarch64': {'url': _url, 'signature': 'sig'},
+      },
+      'device-macos': entry(),
+    });
+    expect(mac?.url, _url);
+    expect(mac?.version, '0.1.4');
+    expect(mac?.signature, isNull);
+    final windows = parse(
+      {
+        'platforms': {
+          'windows-x86_64': {'url': _windowsX64Url, 'signature': 'sig'},
+        },
+        'device-windows-x64-exe': entry(url: _windowsX64Url),
+      },
+      architecture: 'x64',
+      platform: TargetPlatform.windows,
+    );
+    expect(windows?.url, _windowsX64Url);
+    expect(windows?.signature, isNull);
   });
 
   test('a Mac never takes a Windows or Linux entry', () {

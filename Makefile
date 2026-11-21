@@ -50,7 +50,8 @@ release-backend:
 ## from max(last git tag, live harness/desktop/metadata.json). ARGS="--dry-run" to preview,
 ## ARGS="--prepare" to package a pushed PR head during final checks, without publishing,
 ## ARGS="--minor" for a forced-update minor bump, ARGS="X.Y.Z" for an explicit version. The by-hand
-## escape hatches (upload-desktop, upload-desktop-linux, upload-node-runtime, upload-tmux-runtime) live in desktop/Makefile.
+## escape hatches (upload-desktop, upload-node-runtime, upload-tmux-runtime) live in desktop/Makefile.
+## Linux has none: only release-desktop.yml holds the key its AppImages are signed with.
 release-desktop:
 	bash desktop/scripts/release-desktop.sh $(ARGS)
 

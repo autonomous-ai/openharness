@@ -155,6 +155,7 @@ jobs:
             /desktop/scripts/
             /cli/scripts/release-cli.sh
             /backend/scripts/release-be.sh
+            /device-app/src-tauri/tauri.conf.json
             /.gitattributes
             /.gitignore
             /.gitmodules
@@ -225,6 +226,7 @@ jobs:
             /mobile/lib/ws/terminal_transport_plugin.dart
             /mobile/lib/ws/relay_codec.dart
             /mobile/lib/e2ee/relay_session_crypto.dart
+            /device-app/src-tauri/tauri.conf.json
             /.gitattributes
             /.gitignore
             /.gitmodules
@@ -1151,7 +1153,8 @@ jobs:
 
   # Desktop installs, finds and starts this run's debug Device package, for a change to Desktop's device install or the
   # app's install, packaging and instance code: device_app_install_windows_linux_native_test.dart serves it under a
-  # loopback stand-in manifest with its real sha256 and size. No account, no backend, no production manifest.
+  # loopback stand-in manifest with its real sha256 and size and, on Linux, a signature made with a key the test
+  # generates. No account, no backend, no production manifest.
   device-app-desktop:
     concurrency:
       group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-device-app-desktop-${{ strategy.job-index }}

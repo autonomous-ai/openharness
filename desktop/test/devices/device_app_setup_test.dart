@@ -238,7 +238,8 @@ void main() {
         deviceAppSignatureCheckFor(TargetPlatform.macOS),
         same(deviceAppSignedLikeDesktop),
       );
-      // Never asked on Linux, where an AppImage carries no OS signature.
+      // Never asked on Linux: the installer checks the AppImage's Tauri
+      // signature itself, as it needs the manifest's signature and version.
       expect(
         await deviceAppSignatureCheckFor(TargetPlatform.linux)(
           '/home/p q/.local/opt/Harness-Device.AppImage',

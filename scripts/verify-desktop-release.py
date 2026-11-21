@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """Verify all nine public Desktop downloads concurrently, without storing the binaries.
 
-Uses the updater's Dart user agent, full SHA-256/size checks and curl's total
-transfer deadline (a socket idle timeout alone does not bound a slow transfer).
+Uses the updater's Dart user agent, full SHA-256/size checks, each Linux AppImage's
+Tauri signature against the key Harness Device pins, and curl's total transfer
+deadline (a socket idle timeout alone does not bound a slow transfer).
 Only reads public endpoints; never publishes or changes a manifest.
+
+With --signed, checks Linux AppImages on disk against their Tauri signatures (<AppImage>.sig) and the key Harness
+Device pins, before they are uploaded; it writes no receipt.
 """
 import argparse
+import base64
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import hashlib
@@ -15,6 +20,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from urllib.parse import urlsplit
 
@@ -31,6 +37,12 @@ USER_AGENT = "Dart/3.13 (dart:io)"
 CONNECTION_DROPPED = frozenset({7, 18, 35, 52, 55, 56})
 DOWNLOAD_TRIES = 3
 RETRY_PAUSE_SECONDS = 2
+ROOT = Path(__file__).resolve().parents[1]
+# Fixed per architecture, never taken from a URL: a signature's file: field must name exactly this.
+SIGNED = {"desktop-linux-x64": "Harness-linux-x64.AppImage", "desktop-linux-arm64": "Harness-linux-arm64.AppImage"}
+# A real signature is about 450 characters; Desktop refuses a longer text before decoding it, and so does the release.
+SIGNATURE_LIMIT = 4096
+ED25519_DER_PREFIX = bytes.fromhex("302a300506032b6570032100")
 
 
 def utc_now():
@@ -79,6 +91,13 @@ def entries_for_version(manifest, version, keys=KEYS):
         if not isinstance(entry.get("url"), str):
             raise ValueError(f"{key}: missing URL")
         curl_command(entry["url"], 1)  # Validate every entry before starting downloads.
+        if key in SIGNED:
+            # Publish and promotion hold no file to check it over, so they refuse what cannot be a signature;
+            # verify_artifact checks it against the key once it has the bytes.
+            try:
+                parse_signature(entry.get("signature"))
+            except SignatureRefused as error:
+                raise ValueError(f"{key}: {error}") from None
         entries.append((key, entry))
     return entries
 
@@ -88,8 +107,11 @@ class ConnectionDropped(ValueError):
 
 
 def download(entry, timeout):
-    """The file's size and digest. A timeout is not retried: it would break the deadline this check promises."""
-    digest = hashlib.sha256()
+    """The file's size, SHA-256 and BLAKE2b-512 (what a Tauri signature signs), in one pass.
+
+    A timeout is not retried: it would break the deadline this check promises.
+    """
+    sha256, blake2b = hashlib.sha256(), hashlib.blake2b()
     size = 0
     with subprocess.Popen(
         curl_command(entry["url"], timeout) + ["--max-filesize", str(entry["size"])],
@@ -98,7 +120,8 @@ def download(entry, timeout):
         try:
             for chunk in iter(lambda: process.stdout.read(1024 * 1024), b""):
                 size += len(chunk)
-                digest.update(chunk)
+                sha256.update(chunk)
+                blake2b.update(chunk)
             error = process.stderr.read().decode(errors="replace").strip()
             code = process.wait()
             if code in CONNECTION_DROPPED:
@@ -109,20 +132,20 @@ def download(entry, timeout):
             if process.poll() is None:
                 process.kill()
                 process.wait()
-    return size, digest
+    return size, sha256, blake2b
 
 
-def verify_artifact(item, timeout):
+def verify_artifact(item, timeout, public_key=None):
     key, entry = item
     started = time.monotonic()
     result = {field: entry[field] for field in ("version", "url", "sha256", "size")}
     result.update(key=key, started_at=utc_now(), status="failed")
-    digest = hashlib.sha256()
+    sha256 = hashlib.sha256()
     size = 0
     try:
         for attempt in range(1, DOWNLOAD_TRIES + 1):
             try:
-                size, digest = download(entry, timeout)
+                size, sha256, blake2b = download(entry, timeout)
                 break
             except ConnectionDropped:
                 if attempt == DOWNLOAD_TRIES:
@@ -130,19 +153,127 @@ def verify_artifact(item, timeout):
                 time.sleep(attempt * RETRY_PAUSE_SECONDS)
         if size != entry["size"]:
             raise ValueError(f"size mismatch: expected {entry['size']}, received {size}")
-        if digest.hexdigest() != entry["sha256"]:
+        if sha256.hexdigest() != entry["sha256"]:
             raise ValueError("SHA-256 mismatch")
+        if key in SIGNED:
+            # The check a Linux Desktop makes before it installs, so a release never publishes what it would refuse.
+            check_signature(entry.get("signature"), blake2b.digest(), SIGNED[key], entry["version"], public_key)
         result["status"] = "passed"
     except (OSError, ValueError) as error:
         result["error"] = str(error)
-    result.update(actual_size=size, actual_sha256=digest.hexdigest(),
+    result.update(actual_size=size, actual_sha256=sha256.hexdigest(),
                   finished_at=utc_now(), duration_seconds=round(time.monotonic() - started, 3))
     print(f"{key}: {result['status']} ({result['duration_seconds']}s)" +
           (f" — {result['error']}" if "error" in result else ""), flush=True)
     return result
 
 
-def verify(version, manifest_url=MANIFEST, jobs=3, timeout=90):
+class SignatureRefused(ValueError):
+    """Why a signature is refused, one of Desktop's six reasons, so a log line holds no signature text."""
+
+    def __init__(self, reason):
+        super().__init__(f"signature refused ({reason})")
+        self.reason = reason
+
+
+def pinned_public_key():
+    """The key Harness Device pins, and Desktop with it: read from the app's config, so the release keeps no copy."""
+    return json.loads((ROOT / "device-app" / "src-tauri" / "tauri.conf.json").read_text())["plugins"]["updater"]["pubkey"]
+
+
+def parse_signature(text):
+    """Tauri's form, the .minisig text base64-encoded: its key id, file signature, trusted comment and global signature."""
+    if text is None or text == "":
+        raise SignatureRefused("missing")
+    try:
+        if not isinstance(text, str) or len(text) > SIGNATURE_LIMIT:
+            raise ValueError
+        lines = base64.b64decode(text, validate=True).decode().split("\n")
+        if lines[-1] == "":
+            lines.pop()
+        untrusted, signature, trusted, global_signature = lines
+        signature = base64.b64decode(signature, validate=True)
+        global_signature = base64.b64decode(global_signature, validate=True)
+        # ED alone: the legacy Ed signs the whole file, not its BLAKE2b-512.
+        if (not untrusted.startswith("untrusted comment: ") or not trusted.startswith("trusted comment: ")
+                or len(signature) != 74 or signature[:2] != b"ED" or len(global_signature) != 64):
+            raise ValueError
+    except ValueError:
+        raise SignatureRefused("malformed") from None
+    return signature[2:10], signature[10:], trusted[len("trusted comment: "):], global_signature
+
+
+def _public_key(text):
+    """Tauri's form of a minisign public key (Ed, key id, Ed25519 key): its key id and Ed25519 key."""
+    key = base64.b64decode(base64.b64decode(text, validate=True).split(b"\n")[1], validate=True)
+    return key[2:10], key[10:]
+
+
+def ed25519_verify(public_key, message, signature):
+    """OpenSSL 3 and later check Ed25519 from the command line, so the release adds no dependency; LibreSSL's pkeyutl has
+    no -rawin."""
+    version = re.match(r"OpenSSL ([0-9]+)\.", subprocess.run(
+        ["openssl", "version"], capture_output=True, text=True, timeout=30).stdout)
+    if not version or int(version.group(1)) < 3:
+        raise RuntimeError("OpenSSL 3 or later is required to check signatures")
+    with tempfile.TemporaryDirectory() as folder:
+        folder = Path(folder)
+        pem = base64.b64encode(ED25519_DER_PREFIX + public_key).decode()
+        (folder / "key.pem").write_text(f"-----BEGIN PUBLIC KEY-----\n{pem}\n-----END PUBLIC KEY-----\n")
+        (folder / "message").write_bytes(message)
+        (folder / "signature").write_bytes(signature)
+        return subprocess.run(
+            ["openssl", "pkeyutl", "-verify", "-pubin", "-inkey", folder / "key.pem", "-rawin",
+             "-in", folder / "message", "-sigfile", folder / "signature"],
+            capture_output=True, timeout=30,
+        ).returncode == 0
+
+
+def _verified(signature, digest, public_key, comment_holds):
+    """Desktop's order, so each refusal has one reason: a genuine signature for another file is comment, not file."""
+    signature_key_id, file_signature, comment, global_signature = parse_signature(signature)
+    key_id, key = _public_key(pinned_public_key() if public_key is None else public_key)
+    if signature_key_id != key_id:
+        raise SignatureRefused("key")
+    if not ed25519_verify(key, file_signature + comment.encode(), global_signature):
+        raise SignatureRefused("global")
+    if not comment_holds(comment.split("\t")):
+        raise SignatureRefused("comment")
+    if not ed25519_verify(key, digest, file_signature):
+        raise SignatureRefused("file")
+
+
+def check_signature(signature, digest, file_name, version, public_key=None):
+    """A Desktop AppImage's signature: its comment names this file and this Desktop version, each field matched whole."""
+    _verified(signature, digest, public_key, lambda fields: (
+        f"file:{file_name}" in fields and f"desktop-version:{version}" in fields
+        # Harness Device's updater reads only a version: field, so it never takes a signature without one.
+        and not any(field.startswith("version:") for field in fields)))
+
+
+def blake2b_of(path):
+    digest = hashlib.blake2b()
+    with open(path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.digest()
+
+
+def check_signed(version, paths):
+    """Each AppImage against its .sig and the pinned key, all of them reported before the exit status."""
+    failed = False
+    for path in paths:
+        sig = path.with_name(path.name + ".sig")
+        try:
+            check_signature(sig.read_text(errors="replace") if sig.exists() else None, blake2b_of(path), path.name, version)
+            print(f"{path.name}: signature verified")
+        except SignatureRefused as error:
+            print(f"error: {path.name}: {error}", file=sys.stderr)
+            failed = True
+    return 1 if failed else 0
+
+
+def verify(version, manifest_url=MANIFEST, jobs=3, timeout=90, public_key=None):
     started = time.monotonic()
     receipt = dict(version=version, manifest_url=manifest_url, started_at=utc_now(),
                    source_sha=os.environ.get("GITHUB_SHA"), run_id=os.environ.get("GITHUB_RUN_ID"),
@@ -151,7 +282,7 @@ def verify(version, manifest_url=MANIFEST, jobs=3, timeout=90):
         manifest, receipt["manifest_sha256"] = read_manifest(manifest_url, min(20, timeout))
         entries = entries_for_version(manifest, version)
         with ThreadPoolExecutor(max_workers=jobs) as pool:
-            receipt["artifacts"] = list(pool.map(lambda item: verify_artifact(item, timeout), entries))
+            receipt["artifacts"] = list(pool.map(lambda item: verify_artifact(item, timeout, public_key), entries))
         if all(item["status"] == "passed" for item in receipt["artifacts"]):
             receipt["status"] = "passed"
     except (OSError, ValueError, subprocess.TimeoutExpired) as error:
@@ -167,7 +298,12 @@ def main(argv=None):
     parser.add_argument("--receipt", type=Path, default=Path(".harness/desktop-release-verification.json"))
     parser.add_argument("--jobs", type=int, choices=range(1, len(KEYS) + 1), default=3)
     parser.add_argument("--timeout", type=int, choices=range(1, 301), default=90, metavar="SECONDS")
+    parser.add_argument("--signed", nargs="+", type=Path, metavar="PATH")
     args = parser.parse_args(argv)
+    if args.signed:
+        if any(path.name not in SIGNED.values() for path in args.signed):
+            parser.error(f"--signed takes {' and '.join(SIGNED.values())}")
+        return check_signed(args.version, args.signed)
     receipt = verify(args.version, args.manifest_url, args.jobs, args.timeout)
     args.receipt.parent.mkdir(parents=True, exist_ok=True)
     args.receipt.write_text(json.dumps(receipt, indent=2) + "\n")

@@ -19,6 +19,10 @@
 // runner `flutter test` builds, which nothing signs, so Authenticode reads it
 // NotSigned and the installer is held to its sha256 alone, Task 41's rule for
 // a local build; the install check asserts that first.
+//
+// Linux's signature step is the real one too, with a key made for the run: it
+// signs the package as the Device release does, and the installer trusts that
+// key alone.
 
 import 'dart:convert';
 import 'dart:io';
@@ -37,9 +41,12 @@ import 'package:harness/devices/device_app_installer.dart';
 import 'package:harness/devices/device_app_launcher.dart';
 import 'package:harness/devices/device_app_probe.dart';
 import 'package:harness/devices/device_app_setup.dart';
+import 'package:harness/update/tauri_signature.dart';
 import 'package:harness/update/update_signature.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:path/path.dart' as p;
+
+import '../test/support/tauri_test_signer.dart';
 
 const _pngMagic = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
@@ -202,7 +209,17 @@ void main() {
 
   late Directory root;
   late String sha256, base;
+  late int size;
   HttpServer? server;
+
+  /// The Device release's Tauri key as far as this run's installer knows.
+  late TauriTestSigner signer;
+
+  /// Linux: the package's signature, as the Device release signs it.
+  late String signature;
+  String trustedComment() =>
+      'timestamp:${DateTime.now().millisecondsSinceEpoch ~/ 1000}\t'
+      'file:$fileName\tversion:0.0.0';
 
   /// Set once this account was seen to have no copy and none running: from
   /// then on what is at the place is this test's to remove.
@@ -216,6 +233,30 @@ void main() {
 
   /// What the server serves, by path.
   final files = <String, String>{};
+
+  /// Serves the stand-in manifest naming the package by [sha256]; on Linux
+  /// with Tauri's entry for the same url, carrying [signature].
+  void serveManifest(String sha256) {
+    final manifest = p.join(root.path, 'metadata.json');
+    File(manifest).writeAsStringSync(
+      jsonEncode({
+        'device-$os-$arch-${Platform.isWindows ? 'exe' : 'appimage'}': {
+          'version': '0.0.0',
+          'url': url,
+          'sha256': sha256,
+          'size': size,
+        },
+        if (Platform.isLinux)
+          'platforms': {
+            'linux-${arch == 'arm64' ? 'aarch64' : 'x86_64'}': {
+              'url': url,
+              'signature': signature,
+            },
+          },
+      }),
+    );
+    files['/metadata.json'] = manifest;
+  }
 
   /// Linux: the app-list entry Desktop wrote, read just before it first
   /// started the app, so a write by the app's first run cannot hide in it.
@@ -238,21 +279,17 @@ void main() {
     }
     ours = true;
     root = Directory.systemTemp.createTempSync('device-app-win-linux-test-');
-    final size = File(package).lengthSync();
+    size = File(package).lengthSync();
     sha256 = await _sha256Of(package);
     debugPrint('package $size bytes');
-    final manifest = p.join(root.path, 'metadata.json');
-    File(manifest).writeAsStringSync(
-      jsonEncode({
-        'device-$os-$arch-${Platform.isWindows ? 'exe' : 'appimage'}': {
-          'version': '0.0.0',
-          'url': url,
-          'sha256': sha256,
-          'size': size,
-        },
-      }),
-    );
-    files['/metadata.json'] = manifest;
+    signer = await TauriTestSigner.generate();
+    if (Platform.isLinux) {
+      signature = await signer.sign(
+        await blake2b512OfFile(package),
+        trustedComment(),
+      );
+    }
+    serveManifest(sha256);
     final loopback = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     server = loopback;
     base = 'http://${loopback.address.host}:${loopback.port}';
@@ -354,6 +391,7 @@ void main() {
         ),
       ),
     run: run,
+    tauriPublicKey: signer.publicKey,
   );
 
   testWidgets(
@@ -378,6 +416,61 @@ void main() {
       );
     },
   );
+
+  testWidgets(
+    'linux: a package changed after signing, its sha256 in the manifest, '
+    'fails at the signature, and nothing is installed',
+    skip: !Platform.isLinux,
+    (tester) async {
+      final bytes = File(package).readAsBytesSync();
+      bytes[bytes.length ~/ 2] ^= 0xff;
+      final changed = p.join(root.path, 'changed');
+      File(changed).writeAsBytesSync(bytes);
+      files[urlPath] = changed;
+      serveManifest(await _sha256Of(changed));
+      addTearDown(() => serveManifest(sha256));
+      runs.clear();
+
+      final result = await installer().install();
+
+      expect(result.failed, DeviceAppInstallStep.signature);
+      expect(result.installedAt, isNull);
+      expect(runs, isEmpty);
+      expect(
+        FileSystemEntity.typeSync(place(), followLinks: false),
+        FileSystemEntityType.notFound,
+      );
+    },
+  );
+
+  testWidgets('linux: verifying a 100 MB AppImage', skip: !Platform.isLinux, (
+    tester,
+  ) async {
+    final appImage = p.join(root.path, 'large.AppImage');
+    final sink = File(appImage).openWrite();
+    // BLAKE2b's time does not depend on the bytes.
+    final chunk = Uint8List(1024 * 1024);
+    for (var i = 0; i < 100; i++) {
+      sink.add(chunk);
+    }
+    await sink.close();
+    final signed = await signer.sign(
+      await blake2b512OfFile(appImage),
+      trustedComment(),
+    );
+
+    final watch = Stopwatch()..start();
+    await checkTauriSignature(
+      signed,
+      fileName: fileName,
+      versionField: 'version:0.0.0',
+      digest: () => blake2b512OfFile(appImage),
+      publicKey: signer.publicKey,
+    );
+    watch.stop();
+
+    debugPrint('signature check: 100 MB in ${watch.elapsedMilliseconds} ms');
+  });
 
   testWidgets('before: neither installed nor running', (tester) async {
     final presence = await probe.lookup();

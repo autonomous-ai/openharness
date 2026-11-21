@@ -7,11 +7,14 @@ import json
 import os
 from pathlib import Path
 import secrets
+import sys
 import tempfile
 
 spec = importlib.util.spec_from_file_location('candidate', Path(__file__).with_name('desktop-release-candidate.py'))
 candidate = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(candidate)
+sys.path.insert(0, str(Path(__file__).with_name('tests')))
+from desktop_publication_fixture import FixtureSigner, desktop_comment
 
 
 def main():
@@ -28,6 +31,8 @@ def main():
     try:
         with tempfile.TemporaryDirectory(prefix='candidate-gcs-check-') as folder:
             root = Path(folder)
+            # A throwaway key signs the Linux fakes, and only this run's seal and verify trust it.
+            signer = FixtureSigner(root / 'signer')
             entries = {}
             for key, filename in candidate.FILES.items():
                 data = f'Candidate fixture {key}\n'.encode()
@@ -35,11 +40,13 @@ def main():
                 file.write_bytes(data)
                 entries[key] = dict(version=version, size=len(data), sha256=hashlib.sha256(data).hexdigest(),
                                     url=f'https://storage.googleapis.com/{bucket}/{prefix}/{filename}')
+                if key in candidate.verification.SIGNED:
+                    entries[key]['signature'] = signer.sign(data, desktop_comment(candidate.verification.SIGNED[key], version))
             gcloud('storage', 'cp', *[str(root / file) for file in candidate.FILES.values()],
                    f'gs://{bucket}/{prefix}/', '--if-generation-match=0')
             for name, keys in candidate.publisher.PARTS.items():
                 (root / name).write_text(json.dumps({key: entries[key] for key in keys}))
-            receipt = candidate.seal(version, bucket, prefix, root, identity)
+            receipt = candidate.seal(version, bucket, prefix, root, identity, public_key=signer.public_key)
             candidate.check_sources(receipt)
             candidate.promote(receipt, destination, scratch)
             print(f'PASS: seal {len(candidate.FILES)} source generations and promote their exact bytes', flush=True)
@@ -47,7 +54,8 @@ def main():
             promoted.mkdir()
             gcloud('storage', 'cp', f'gs://{bucket}/{scratch}/*.json', str(promoted) + '/')
             candidate.publisher.publish(uri, version, promoted, allow_initialize=True)
-            checked = candidate.verification.verify(version, uri.replace('gs://', 'https://storage.googleapis.com/'))
+            checked = candidate.verification.verify(version, uri.replace('gs://', 'https://storage.googleapis.com/'),
+                                                    public_key=signer.public_key)
             assert checked['status'] == 'passed', checked
             print(f'PASS: publish and verify all {len(candidate.FILES)} promoted fixture downloads', flush=True)
             destination_uris = [f'gs://{bucket}/{destination}/{filename}' for filename in candidate.FILES.values()]

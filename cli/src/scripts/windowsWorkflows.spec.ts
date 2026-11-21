@@ -227,10 +227,10 @@ describe('the Windows release workflows', () => {
     expect(build).toContain("if: matrix.arch == 'x64'")
     expect(build).not.toContain('gcloud')
     expect(job('upload-windows')).toContain('bash desktop/scripts/upload-desktop-windows.sh "$VERSION" windows-release')
-    expect(release).toMatch(/publish:\n\s+needs: \[version, preflight, build-macos, build-linux, build-windows, upload-windows\]/)
-    expect(release).toContain("needs.build-linux.result == 'success' && needs.upload-windows.result == 'success'")
-    expect(release).toMatch(/candidate:\n\s+needs: \[version, build-macos, build-linux, upload-windows\]/)
-    expect(release).toMatch(/cleanup:\n\s+needs: \[version, preflight, build-macos, build-linux, build-windows, upload-windows, candidate, publish\]/)
+    expect(release).toMatch(/publish:\n\s+needs: \[version, preflight, build-macos, build-linux, sign-linux, upload-linux, build-windows, upload-windows\]/)
+    expect(release).toContain("needs.upload-linux.result == 'success' && needs.upload-windows.result == 'success'")
+    expect(release).toMatch(/candidate:\n\s+needs: \[version, build-macos, upload-linux, upload-windows\]/)
+    expect(release).toMatch(/cleanup:\n\s+needs: \[version, preflight, build-macos, build-linux, sign-linux, upload-linux, build-windows, upload-windows, candidate, publish\]/)
     expect(release).toContain('[harness-install.exe](${base}/harness-install.exe)')
   })
 
@@ -257,7 +257,7 @@ describe('the Windows release workflows', () => {
     // A skipped sign-windows is an ancestor of `candidate`: an implicit success() there would skip every candidate
     // prepared while signing is off.
     expect(job(read('release-desktop.yml'), 'candidate')).toContain(
-      "if: ${{ !cancelled() && inputs.prepare_only && needs.version.result == 'success' && needs.build-macos.result == 'success' && needs.build-linux.result == 'success' && needs.upload-windows.result == 'success' }}",
+      "if: ${{ !cancelled() && inputs.prepare_only && needs.version.result == 'success' && needs.build-macos.result == 'success' && needs.upload-linux.result == 'success' && needs.upload-windows.result == 'success' }}",
     )
     const action = readFileSync(join(workflows, '..', 'actions', 'windows-signing', 'action.yml'), 'utf8')
     expect(action).toContain('uses: azure/login@v3')

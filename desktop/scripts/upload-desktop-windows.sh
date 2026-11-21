@@ -90,7 +90,7 @@ for name in "${NAMES[@]}"; do
   GCS_PATH="$ARTIFACT_PREFIX/$name"
   echo ">> uploading $name ($(wc -c < "$FILE" | tr -d ' ') bytes) to gs://${GCS_BUCKET}/${GCS_PATH}"
   # Create-only: a versioned file is immutable, because the CDN keeps the first bytes it served for a path
-  # (upload-desktop-linux.sh, gcs_refuse_republish). A re-run fails here instead of replacing them.
+  # (upload-desktop.sh, gcs_refuse_republish). A re-run fails here instead of replacing them.
   gcs_cp "$FILE" "gs://${GCS_BUCKET}/${GCS_PATH}" "public, max-age=31536000, immutable" "" 0
 done
 for part in windows-x64.json windows-arm64.json; do

@@ -9,13 +9,22 @@ import threading
 import time
 import unittest
 
+import desktop_publication_fixture as fixture
+
 SCRIPT = Path(__file__).resolve().parents[1] / "verify-desktop-release.py"
 spec = importlib.util.spec_from_file_location("verify_desktop", SCRIPT)
 verify = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(verify)
+LINUX = {"desktop-linux-x64": "Harness-linux-x64.AppImage", "desktop-linux-arm64": "Harness-linux-arm64.AppImage"}
 
 
 class DesktopVerificationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        folder = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(folder.cleanup)
+        cls.signer = fixture.FixtureSigner(folder.name)
+
     def setUp(self):
         self.payload = b"release artifact fixture\0" * 100
         self.requests = []
@@ -71,6 +80,8 @@ class DesktopVerificationTests(unittest.TestCase):
                       size=len(self.payload), sha256=hashlib.sha256(self.payload).hexdigest())
             for key in verify.KEYS
         }
+        for key, file_name in LINUX.items():
+            self.manifest[key]["signature"] = self.signer.sign(self.payload, fixture.desktop_comment(file_name, "1.2.3"))
 
     def tearDown(self):
         self.server.shutdown()
@@ -78,7 +89,7 @@ class DesktopVerificationTests(unittest.TestCase):
         self.thread.join()
 
     def run_verification(self, **kwargs):
-        return verify.verify("1.2.3", self.base + "/metadata.json", **kwargs)
+        return verify.verify("1.2.3", self.base + "/metadata.json", **dict(public_key=self.signer.public_key, **kwargs))
 
     def test_all_nine_full_downloads_with_updater_agent_and_bounded_parallelism(self):
         receipt = self.run_verification(jobs=2)
@@ -147,6 +158,34 @@ class DesktopVerificationTests(unittest.TestCase):
                 self.assertEqual(receipt["artifacts"][0]["status"], "failed")
                 self.assertEqual(sum(item["status"] == "passed" for item in receipt["artifacts"]), 8)
                 self.manifest[verify.KEYS[0]] = original
+
+    def test_a_linux_download_whose_signature_does_not_verify_fails_naming_the_reason(self):
+        self.manifest["desktop-linux-x64"]["signature"] = self.signer.sign(
+            b"other bytes", fixture.desktop_comment("Harness-linux-x64.AppImage", "1.2.3"))
+        receipt = self.run_verification()
+        self.assertEqual(receipt["status"], "failed")
+        self.assertEqual([(item["key"], item.get("error")) for item in receipt["artifacts"] if item["status"] != "passed"],
+                         [("desktop-linux-x64", "signature refused (file)")])
+
+    def test_a_linux_entry_with_no_signature_fails_before_any_download(self):
+        entry = self.manifest["desktop-linux-arm64"]
+        for reason in ("missing", "malformed"):
+            with self.subTest(reason=reason):
+                if reason == "missing":
+                    del entry["signature"]
+                else:
+                    entry["signature"] = "bm90IGEgc2lnbmF0dXJl"  # base64 of "not a signature"
+                self.requests.clear()
+                receipt = self.run_verification()
+                self.assertEqual(receipt["status"], "failed")
+                self.assertEqual(receipt["error"], f"desktop-linux-arm64: signature refused ({reason})")
+                self.assertEqual([path for path, _ in self.requests], ["/metadata.json"])
+
+    def test_without_a_key_argument_the_pinned_key_decides(self):
+        receipt = verify.verify("1.2.3", self.base + "/metadata.json")
+        self.assertEqual(receipt["status"], "failed")
+        self.assertEqual({item["key"]: item.get("error") for item in receipt["artifacts"] if item["status"] != "passed"},
+                         {"desktop-linux-x64": "signature refused (key)", "desktop-linux-arm64": "signature refused (key)"})
 
     def test_transfer_deadline_fails_in_bounded_time(self):
         self.delay = 1.5

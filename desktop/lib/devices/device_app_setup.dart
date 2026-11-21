@@ -6,6 +6,7 @@ import '../core/runtime_platform.dart';
 import '../core/test_run.dart';
 import '../logging/app_log.dart';
 import '../update/desktop_updater.dart' show currentBundlePath;
+import '../update/tauri_signature.dart' show tauriUpdatePublicKey;
 import '../update/update_signature.dart';
 import 'device_app.dart';
 import 'device_app_installer.dart';
@@ -131,7 +132,8 @@ DeviceAppOpen deviceAppOpenFor(
 }
 
 /// What [platform]'s installer checks the download with: the installer's signer on Windows, the bundle's on macOS.
-/// Linux is never asked, as an AppImage carries no OS signature, and refuses were it ever asked.
+/// Linux is never asked: the installer checks the AppImage's Tauri signature itself, as that check needs the
+/// manifest's signature and version. It refuses were it ever asked.
 @visibleForTesting
 DeviceAppSignatureCheck deviceAppSignatureCheckFor(TargetPlatform platform) =>
     switch (platform) {
@@ -143,14 +145,15 @@ DeviceAppSignatureCheck deviceAppSignatureCheckFor(TargetPlatform platform) =>
 Future<bool> _neverSigned(String _) async => false;
 
 /// [platform]'s installer as the app builds it, with [platform]'s signature check ([deviceAppSignatureCheckFor])
-/// and place, opening with [open]: the end-to-end test builds this one too. [manifestUrl], [dio] and [run] stand in
-/// for the release and its tools under test.
+/// and place, opening with [open]: the end-to-end test builds this one too. [manifestUrl], [dio], [run] and
+/// [tauriPublicKey] stand in for the release, its tools and its Tauri key under test.
 DeviceAppInstaller deviceAppInstallerFor(
   TargetPlatform platform, {
   required DeviceAppOpen open,
   String manifestUrl = deviceAppManifestUrl,
   Dio? dio,
   DeviceAppRun run = runDeviceAppTool,
+  String tauriPublicKey = tauriUpdatePublicKey,
 }) => DeviceAppInstaller(
   manifestUrl: manifestUrl,
   // Windows and Linux install at the place, never in a folder of these.
@@ -164,6 +167,7 @@ DeviceAppInstaller deviceAppInstallerFor(
   run: run,
   platform: platform,
   place: () => deviceAppPlace(platform: platform),
+  tauriPublicKey: tauriPublicKey,
 );
 
 /// The offer with this OS's lookup, installer and opener. [supported] defaults to

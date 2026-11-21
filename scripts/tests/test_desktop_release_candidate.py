@@ -1,4 +1,5 @@
 """Candidate identity, artifact promotion and bounded discovery contracts."""
+import contextlib
 import copy
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -14,6 +15,8 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
+import desktop_publication_fixture as fixture
+
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('candidate', ROOT / 'scripts/desktop-release-candidate.py')
 candidate = importlib.util.module_from_spec(spec)
@@ -26,21 +29,34 @@ TREE = 'b' * 40
 PREFIX = 'harness/desktop-candidates/123-1-' + 'c' * 32
 VERSION = '1.2.55'
 NOW = datetime.now(timezone.utc)
+LINUX = ('desktop-linux-x64', 'desktop-linux-arm64')
+
+
+def setUpModule():
+    # One throwaway key for the module: make_receipt runs in most tests, and signing is two OpenSSL calls.
+    global SIGNER, SIGNATURES
+    folder = tempfile.TemporaryDirectory()
+    unittest.addModuleCleanup(folder.cleanup)
+    SIGNER = fixture.FixtureSigner(folder.name)
+    SIGNATURES = {key: SIGNER.sign(key.encode(), fixture.desktop_comment(candidate.FILES[key], VERSION)) for key in LINUX}
 
 
 def tree_entry(path, number, kind='tree'):
-    # number is one character, repeated into the 40-character object id.
-    return dict(path=path, sha=str(number) * 40, type=kind, mode='040000' if kind == 'tree' else '100644')
+    # number's digits, repeated into the 40-character object id.
+    return dict(path=path, sha=(str(number) * 40)[:40], type=kind, mode='040000' if kind == 'tree' else '100644')
 
 
 TREES = {
     TREE: dict(sha=TREE, truncated=False, tree=[tree_entry('desktop', 1), tree_entry('scripts', 2),
         tree_entry('.github', 3), tree_entry('mobile', 4), tree_entry('installer', 9), tree_entry('pty', 'd'),
-        tree_entry('term', 'e'), tree_entry('tui', 'f')]),
+        tree_entry('term', 'e'), tree_entry('tui', 'f'), tree_entry('device-app', 10)]),
     'f' * 40: dict(sha='f' * 40, truncated=False, tree=[tree_entry('vendor', 0), tree_entry('src', 'c')]),
     '3' * 40: dict(sha='3' * 40, truncated=False, tree=[tree_entry('actions', 5), tree_entry('workflows', 6)]),
     '6' * 40: dict(sha='6' * 40, truncated=False, tree=[tree_entry('release-desktop.yml', 7, 'blob')]),
     '4' * 40: dict(sha='4' * 40, truncated=False, tree=[tree_entry('pubspec.lock', 8, 'blob')]),
+    '10' * 20: dict(sha='10' * 20, truncated=False, tree=[tree_entry('scripts', 11), tree_entry('src-tauri', 12)]),
+    '11' * 20: dict(sha='11' * 20, truncated=False, tree=[tree_entry('release-setup.sh', 13, 'blob')]),
+    '12' * 20: dict(sha='12' * 20, truncated=False, tree=[tree_entry('tauri.conf.json', 14, 'blob')]),
 }
 INPUTS = candidate.build_inputs(TREE, lambda sha: TREES[sha])
 
@@ -51,6 +67,8 @@ def make_receipt():
         payload = key.encode()
         entries[key] = dict(version=VERSION, size=len(payload), sha256=hashlib.sha256(payload).hexdigest(),
                             generation=str(index), url=f'https://storage.googleapis.com/{BUCKET}/{PREFIX}/{filename}?generation={index}')
+        if key in SIGNATURES:
+            entries[key]['signature'] = SIGNATURES[key]
     return dict(schema=2, status='passed', version=VERSION, bucket=BUCKET, prefix=PREFIX, repository=REPOSITORY,
                 run_id=123, run_attempt=1, source_sha=SHA, source_tree=TREE, build_inputs=copy.deepcopy(INPUTS),
                 created_at=(NOW - timedelta(seconds=10)).isoformat(), artifacts=entries)
@@ -76,7 +94,8 @@ def make_jobs():
     return [dict(name=name, id=index, run_id=123, run_attempt=1, head_sha=SHA, status='completed', conclusion='success',
                  steps=[dict(conclusion='success')]) for index, name in enumerate(
                      ['version', 'preflight', 'build-macos', 'build-linux (ubuntu-22.04, x64)',
-                      'build-linux (ubuntu-22.04-arm, arm64)', 'build-windows (windows-latest, x64)',
+                      'build-linux (ubuntu-22.04-arm, arm64)', 'sign-linux', 'upload-linux',
+                      'build-windows (windows-latest, x64)',
                       'build-windows (windows-11-arm, arm64)', 'upload-windows', 'candidate', 'cleanup'])]
 
 
@@ -192,7 +211,7 @@ class CandidateIdentityTests(unittest.TestCase):
         client = FakeGithub()
         candidate.find_candidate(client, VERSION, INPUTS, BUCKET, 456)
         paths = [path for path in client.calls if path.startswith('git/trees/')]
-        self.assertEqual(len(paths), 5)
+        self.assertEqual(len(paths), 8)
         self.assertEqual(len(paths), len(set(paths)))
         self.assertTrue(all('?' not in path for path in paths))
 
@@ -238,6 +257,19 @@ class CandidateIdentityTests(unittest.TestCase):
                     candidate.check_jobs(make_run(), signed, windows_signing=True)
         with self.assertRaises(ValueError):
             candidate.check_jobs(make_run(), jobs, windows_signing=True)
+
+    # sign-linux signs the AppImages and upload-linux publishes them: a candidate without either has no signed Linux build.
+    def test_unsigned_linux_candidate_cannot_reuse(self):
+        jobs = make_jobs()
+        candidate.check_jobs(make_run(), jobs)
+        for name in ['sign-linux', 'upload-linux']:
+            for change in ['missing', 'skipped']:
+                with self.subTest(job=name, change=change), self.assertRaises(ValueError):
+                    if change == 'missing':
+                        changed = [job for job in jobs if job['name'] != name]
+                    else:
+                        changed = [dict(job, conclusion='skipped') if job['name'] == name else job for job in jobs]
+                    candidate.check_jobs(make_run(), changed)
 
     def test_wait_follows_one_live_run_without_starting_another(self):
         client = FakeGithub()
@@ -353,6 +385,8 @@ class BuildInputTests(unittest.TestCase):
             'installer/src/main.rs': 'Windows installer', 'pty/src/bin/desktop-launcher.rs': 'Windows launcher',
             'term/src/lib.rs': 'launcher dependency', 'tui/vendor/vte/src/lib.rs': 'patched dependency',
             'tui/src/main.rs': 'terminal interface',
+            'device-app/scripts/release-setup.sh': 'pinned Linux signer',
+            'device-app/src-tauri/tauri.conf.json': 'pinned update key',
         }
         for path, content in self.files.items():
             file = self.root / path
@@ -418,7 +452,7 @@ class BuildInputTests(unittest.TestCase):
     # name that GitHub never gives makes check_jobs refuse every candidate, so this reads the names from the workflow.
     def test_required_matrix_jobs_are_named_as_github_names_them(self):
         workflow = (ROOT / '.github/workflows/release-desktop.yml').read_text()
-        names = ['version', 'preflight', 'build-macos', 'upload-windows', 'candidate', 'cleanup']
+        names = ['version', 'preflight', 'build-macos', 'sign-linux', 'upload-linux', 'upload-windows', 'candidate', 'cleanup']
         for job in ['build-linux', 'build-windows']:
             body = re.search(rf'^  {job}:\n(.*?)(?=^  [\w-]+:|\Z)', workflow, re.M | re.S)[1]
             template = re.search(r'^    name: (.+)$', body, re.M)
@@ -434,13 +468,15 @@ class BuildInputTests(unittest.TestCase):
         candidate.check_jobs(make_run(), jobs)
 
     def test_native_checkout_inputs_are_all_covered_by_the_reuse_contract(self):
-        for filename, jobs in [('release-desktop.yml', ['build-macos', 'build-linux', 'build-windows']),
+        for filename, jobs in [('release-desktop.yml', ['build-macos', 'build-linux', 'build-windows', 'sign-linux',
+                                                        'upload-linux']),
                                ('desktop-internal-build.yml', ['build-macos'])]:
             workflow = (ROOT / '.github/workflows' / filename).read_text()
             for job in jobs:
                 with self.subTest(workflow=filename, job=job):
-                    body = re.search(rf'^  {job}:\n(.*?)(?=^  [\w-]+:|\Z)', workflow, re.M | re.S)[1]
-                    checkout = re.search(r'^          sparse-checkout: \|\n((?:            .+\n)+)', body, re.M)
+                    body = re.search(rf'^  {job}:\n(.*?)(?=^  [\w-]+:|\Z)', workflow, re.M | re.S)
+                    self.assertIsNotNone(body, f'{filename} has no {job} job')
+                    checkout = re.search(r'^          sparse-checkout: \|\n((?:            .+\n)+)', body[1], re.M)
                     self.assertIsNotNone(checkout, 'native checkout must declare its complete inputs')
                     for pattern in checkout[1].splitlines():
                         path = pattern.strip().strip('/')
@@ -479,7 +515,16 @@ class CandidatePromotionTests(unittest.TestCase):
                 (Path(folder) / name).write_bytes(objects[f'gs://{BUCKET}/harness/desktop/.ci/456-1/{name}'])
             entries = candidate.publisher.read_parts(Path(folder), VERSION)
         self.assertTrue(all(entry['url'].startswith(f'https://cdn.autonomous.ai/harness/desktop/{VERSION}/') for entry in entries.values()))
+        self.assertEqual({key: entries[key].get('signature') for key in LINUX}, SIGNATURES)
         self.assertFalse(any('metadata.json' in call[3] for call in calls))
+
+    def test_promotion_refuses_a_receipt_whose_linux_entry_has_no_signature_before_any_write(self):
+        receipt = make_receipt()
+        del receipt['artifacts']['desktop-linux-arm64']['signature']
+        with patch.object(candidate.publisher, 'gcloud') as gcloud:
+            with self.assertRaisesRegex(ValueError, r'desktop-linux-arm64: signature refused \(missing\)'):
+                candidate.promote(receipt, f'harness/desktop/{VERSION}', 'harness/desktop/.ci/456-1')
+            gcloud.assert_not_called()
 
     def test_destinations_and_source_generations_are_checked_before_writes(self):
         receipt = make_receipt()
@@ -518,6 +563,30 @@ class CandidatePromotionTests(unittest.TestCase):
                 (path / 'linux-arm64.json').unlink()
                 with self.assertRaisesRegex(ValueError, 'expected 6 platform manifests'):
                     candidate.seal(VERSION, BUCKET, PREFIX, path, identity)
+
+    def test_sealing_checks_linux_signatures_with_the_key_it_is_given(self):
+        receipt = make_receipt()
+        identity = {key: receipt[key] for key in ['repository', 'run_id', 'run_attempt', 'source_sha', 'source_tree', 'build_inputs']}
+        def key_of(uri):
+            return next(key for key, filename in candidate.FILES.items() if uri.split('?')[0].endswith('/' + filename))
+        def describe(uri):
+            return dict(generation='7', size=receipt['artifacts'][key_of(uri)]['size'])
+        def download(entry, timeout):
+            # Only the network is replaced: these are the bytes the receipt's sums and signatures were made over.
+            data = key_of(entry['url']).encode()
+            return len(data), hashlib.sha256(data), hashlib.blake2b(data)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)
+            for name, keys in candidate.publisher.PARTS.items():
+                part = {key: dict(receipt['artifacts'][key], url=f'https://storage.googleapis.com/{BUCKET}/{PREFIX}/{candidate.FILES[key]}')
+                        for key in keys}
+                (path / name).write_text(json.dumps(part))
+            with patch.object(candidate.publisher, 'gcloud'), patch.object(candidate, 'describe', side_effect=describe), \
+                    patch.object(candidate.verification, 'download', side_effect=download), contextlib.redirect_stdout(io.StringIO()):
+                sealed = candidate.seal(VERSION, BUCKET, PREFIX, path, identity, public_key=SIGNER.public_key)
+                with self.assertRaisesRegex(ValueError, 'failed verification'):
+                    candidate.seal(VERSION, BUCKET, PREFIX, path, identity)
+        self.assertEqual({key: sealed['artifacts'][key]['signature'] for key in LINUX}, SIGNATURES)
 
     def test_cleanup_never_selects_production_recent_unknown_or_unpinned_objects(self):
         def object_at(prefix, name, days=8, generation='17'):

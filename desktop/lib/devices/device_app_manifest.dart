@@ -23,14 +23,24 @@ class DeviceAppRelease {
     required this.url,
     required this.sha256,
     required this.size,
+    this.version,
+    this.signature,
   });
 
   final String url;
   final String sha256; // lowercase
   final int size;
+
+  /// The entry's `version` when it is X.Y.Z.
+  final String? version;
+
+  /// Linux only: the Tauri signature of this same file, base64 as in the
+  /// manifest.
+  final String? signature;
 }
 
 final _sha256 = RegExp(r'^[0-9a-fA-F]{64}$');
+final _version = RegExp(r'^[0-9]+\.[0-9]+\.[0-9]+$');
 
 /// The entry this computer installs, or null when the manifest names none it may fetch.
 /// [architecture] is `arm64` or `x64`.
@@ -60,14 +70,21 @@ DeviceAppRelease? parseDeviceAppManifest(
           : const ['device-linux-x64-appimage'],
     _ => const <String>[],
   };
+  // The Desktop-shaped `device-linux-<arch>-appimage` entry carries no
+  // signature: Tauri's `platforms` entry for this arch does, beside the url of
+  // the file it signed.
+  final platforms = manifest['platforms'];
+  final tauri = platform == TargetPlatform.linux && platforms is Map
+      ? platforms[arm64 ? 'linux-aarch64' : 'linux-x86_64']
+      : null;
   for (final key in keys) {
-    final release = _release(manifest[key]);
+    final release = _release(manifest[key], tauri);
     if (release != null) return release;
   }
   return null;
 }
 
-DeviceAppRelease? _release(Object? entry) {
+DeviceAppRelease? _release(Object? entry, Object? tauri) {
   if (entry is! Map) return null;
   final url = entry['url'];
   final sha256 = entry['sha256'];
@@ -75,7 +92,20 @@ DeviceAppRelease? _release(Object? entry) {
   if (url is! String || !_fetchable(url)) return null;
   if (sha256 is! String || !_sha256.hasMatch(sha256)) return null;
   if (size is! int || size < 1 || size > deviceAppMaxBytes) return null;
-  return DeviceAppRelease(url: url, sha256: sha256.toLowerCase(), size: size);
+  final named = entry['version'];
+  final version = named is String && _version.hasMatch(named) ? named : null;
+  // The signature's trusted comment names a file and version: a signature
+  // with no version to check it against, or for another url, is none at all.
+  final signature = tauri is Map && tauri['url'] == url && version != null
+      ? tauri['signature']
+      : null;
+  return DeviceAppRelease(
+    url: url,
+    sha256: sha256.toLowerCase(),
+    size: size,
+    version: version,
+    signature: signature is String ? signature : null,
+  );
 }
 
 /// Under one of [deviceAppUrlPrefixes] once a server has read it: a `..`
