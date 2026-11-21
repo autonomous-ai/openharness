@@ -88,6 +88,8 @@ export interface CableHostWiring {
   accessToken?: (opts?: { force?: boolean; failedToken?: string }) => Promise<string>
   /** The account's environment, which the transcriber checks the upload against. */
   environment?: () => string
+  /** For the devices' tests: the transcriber in place of the backend's, so a capture is turned to text with nothing posted. */
+  transcribe?: (pcm: Buffer, sampleRate: number, lang: string, signal?: AbortSignal) => Promise<string>
   /** A dial is on the wire on this computer, or none is any more: the core streams the turn cards and
    *  makes the recaps for it, as for a device watching through the backend. */
   watching?: (on: boolean) => void
@@ -1398,6 +1400,7 @@ export class DaemonCableHost implements CableHost {
    * their voice quota on words nobody will read.
    */
   async transcribe(pcm: Buffer, sampleRate: number, lang: string, signal?: AbortSignal): Promise<string> {
+    if (this.wiring.transcribe) return this.wiring.transcribe(pcm, sampleRate, lang, signal)
     // The text reaches the dial's glass as a toast, so it is addressed to the person holding it, not to
     // a terminal: signing in happens on the computer, and that is the one thing they need to know.
     const accessToken = this.wiring.accessToken

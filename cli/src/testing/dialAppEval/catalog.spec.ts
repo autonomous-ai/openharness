@@ -1,0 +1,295 @@
+import { readFileSync } from 'node:fs'
+import { describe, expect, it } from 'vitest'
+import { HELD_OUT, MAIN, titleOf } from './catalog.js'
+import { STEP_KINDS, THRESHOLDS, type Check, type CheckKind, type Scenario, type SessionKey, type Step, type StepKind } from './types.js'
+
+const ALL = [...MAIN, ...HELD_OUT]
+const byId = (id: string): Scenario => ALL.find((s) => s.id === id)!
+
+/** The session keys a step names. */
+function stepKeys(step: Step): SessionKey[] {
+  switch (step.kind) {
+    case 'claude.write': return step.sessions
+    case 'codex.write': return [...step.sessions, ...step.archived ?? [], ...Object.keys(step.names ?? {}), ...Object.keys(step.ages ?? {})]
+    case 'hook': case 'attach': case 'tap': case 'swipe': return [step.session]
+    case 'voice': return [step.target]
+    default: return []
+  }
+}
+/** The session keys a check names. */
+function checkKeys(check: Check): SessionKey[] {
+  switch (check.kind) {
+    case 'ring': return [...check.expect, ...check.apart ?? []]
+    case 'focus': case 'open': case 'state': case 'voice': case 'recap': return [check.session]
+    default: return []
+  }
+}
+
+describe('the catalog', () => {
+  it('the ids are C1-C12, X1-X11 and the six held out, 6 of 29', () => {
+    const range = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => `${prefix}${i + 1}`)
+    expect(MAIN.map((s) => s.id)).toEqual([...range('C', 12), ...range('X', 11)])
+    expect(HELD_OUT.map((s) => s.id)).toEqual(['CH1', 'CH2', 'CH3', 'XH1', 'XH2', 'XH3'])
+    expect(MAIN.every((s) => !s.heldOut)).toBe(true)
+    expect(HELD_OUT.every((s) => s.heldOut)).toBe(true)
+    expect(ALL).toHaveLength(29)
+  })
+
+  it('each scenario\'s checks cover exactly its dims', () => {
+    for (const s of ALL) {
+      expect(new Set(s.dims).size, s.id).toBe(s.dims.length)
+      expect([...new Set(s.checks.map((c) => c.dim))].sort(), s.id).toEqual([...s.dims].sort())
+    }
+    expect(byId('CH3').dims.filter((d) => d !== 'D8')).toEqual(['D5'])
+    expect(byId('XH3').dims.filter((d) => d !== 'D8')).toEqual(['D5'])
+  })
+
+  it('each scenario\'s check ids are its own, so no two results share a key', () => {
+    for (const s of ALL) expect(new Set(s.checks.map((c) => c.id)).size, s.id).toBe(s.checks.length)
+  })
+
+  it('X10 counts the Codex CLI session apart from the thread, on another page, and its probe asks for one more there', () => {
+    const x10 = byId('X10')
+    expect(x10.checks.find((c) => c.id === 'ring')).toMatchObject({ kind: 'ring', expect: ['t1'], apart: ['c1'] })
+    expect(x10.probes).toContainEqual(expect.objectContaining({ id: 'apart', kind: 'ring', expect: ['t1'], apart: ['c1', 'z'] }))
+  })
+
+  it('X3 is macOS only', () => {
+    for (const s of ALL) expect(s.platforms, s.id).toEqual(s.id === 'X3' ? ['darwin'] : ['darwin', 'win32', 'linux'])
+  })
+
+  it('X3 starts with another app in front, so its front step brings the ChatGPT app up, on a world with no Accessibility', () => {
+    expect(byId('X3').world).toEqual({ front: 'other', accessibility: false })
+    for (const s of ALL) if (s.id !== 'X3') expect(s.world?.accessibility, s.id).toBeUndefined()
+  })
+
+  it('X3\'s still window ends at its tap, so the tap is not the dial moving by itself', () => {
+    expect(byId('X3').checks.find((c) => c.kind === 'still')).toMatchObject({ after: 'front', at: 'tap' })
+  })
+
+  it('X3\'s ring check reads the ring the dial holds when its still window ends, though the whole list came before front', () => {
+    const ringKept = byId('X3').checks.find((c) => c.id === 'ringKept')!
+    expect(ringKept.after).toBeUndefined()
+    expect(ringKept.at).toBe('tap')
+  })
+
+  it('C9 swipes from the older a to the new b, which has no hook yet, rests on it, and then b\'s hook arrives', () => {
+    const c9 = byId('C9')
+    expect(c9.sessions.filter((s) => !s.ghost).map((s) => [s.key, s.ageMs])).toEqual([['b', 60_000], ['a', 120_000]])
+    expect(c9.steps.map((s) => [s.kind, 'session' in s ? s.session : s.kind === 'wait' ? s.ms : ''])).toEqual([
+      ['front', ''], ['claude.write', ''], ['wait', 10_000], ['wait', 1_000], ['swipe', 'a'], ['wait', 1_000], ['swipe', 'b'], ['wait', 3_500], ['hook', 'b']])
+    expect(c9.steps.filter((s) => s.kind === 'hook')).toEqual([{ label: 'hook', kind: 'hook', session: 'b', event: 'start' }])
+    expect(c9.checks.filter((c) => c.kind !== 'cost')).toEqual([
+      { id: 'open', kind: 'open', dim: 'D3', session: 'b', link: true, after: 'swipe', at: 'hook' },
+      { id: 'ring', kind: 'ring', dim: 'D1', page: 'claude', expect: ['b', 'a'], after: 'hook' },
+      { id: 'ringKept', kind: 'ring', dim: 'D7', page: 'claude', expect: ['b', 'a'] },
+    ])
+  })
+
+  it('a ring read after a write comes after a listing, so it reads the change and not the first read of the store', () => {
+    for (const s of ALL) {
+      for (const c of s.checks.filter((c) => c.kind === 'ring' && c.after !== undefined)) {
+        const step = s.steps.findIndex((step) => step.label === c.after)
+        if (!['claude.write', 'codex.write'].includes(s.steps[step]!.kind)) continue
+        expect(s.steps.slice(0, step).some((step) => step.kind === 'wait' && step.until !== undefined), `${s.id} ${c.id}`).toBe(true)
+      }
+    }
+  })
+
+  it('an open window closed by a step is longer than the open\'s half mark, so a late open still scores half', () => {
+    // The window leaves out its closing step's instant: a person's wait of exactly the half mark would leave out an open
+    // that lands on it.
+    for (const s of ALL) {
+      for (const c of s.checks.filter((c) => c.kind === 'open' && c.at !== undefined)) {
+        const from = s.steps.findIndex((step) => step.label === c.after)
+        const to = s.steps.findIndex((step) => step.label === c.at)
+        const ms = s.steps.slice(from, to).reduce((sum, step) => sum + (step.kind === 'wait' && step.until === undefined ? step.ms : 0), 0)
+        expect(ms, `${s.id} ${c.id}`).toBeGreaterThan(THRESHOLDS.open[1])
+      }
+    }
+  })
+
+  it('XH2 shows the Claude app\'s page first and its title names the ChatGPT page\'s second tile, so only the title can pass it', () => {
+    const xh2 = byId('XH2')
+    expect(xh2.steps.find((s) => s.kind === 'wait' && s.until !== undefined)).toMatchObject({ until: { page: 'claude' } })
+    expect(xh2.steps.find((s) => s.kind === 'thread')).toMatchObject({ title: titleOf('t2') })
+    expect(xh2.sessions.filter((d) => d.app === 'chatgpt' && !d.ghost).map((d) => [d.key, d.ageMs])).toEqual([['t1', 60_000], ['t2', 120_000]])
+  })
+
+  it('a state is timed from a step after the dial listed its row, and a turn lasts at least 2 s', () => {
+    // Before the first list the row is not on the dial, and the latency would time the first list, not the change. A
+    // stop right after its start replaces working before a person could see it.
+    for (const s of ALL) {
+      for (const c of s.checks.filter((c) => c.kind === 'state')) {
+        const step = s.steps.findIndex((step) => step.label === c.after)
+        const listed = s.steps.slice(0, step).some((w) => w.kind === 'wait' && w.until?.expect.includes(c.session) === true)
+        expect(listed, `${s.id} ${c.id}`).toBe(true)
+      }
+      for (const [i, step] of s.steps.entries()) {
+        if (step.kind !== 'hook' || step.event !== 'turn-stop') continue
+        const start = s.steps.slice(0, i).findLastIndex((h) => h.kind === 'hook' && h.event === 'turn-start' && h.session === step.session)
+        const ms = s.steps.slice(start, i).reduce((sum, w) => sum + (w.kind === 'wait' && w.until === undefined ? w.ms : 0), 0)
+        expect(ms, `${s.id} turn of ${step.session}`).toBeGreaterThanOrEqual(2_000)
+      }
+    }
+  })
+
+  it('a voice speaks to a session with a running process, or to one its link resumes', () => {
+    // Words for a session with no process are refused before any send: the voice check and the gate then test nothing.
+    for (const s of ALL) {
+      for (const [i, step] of s.steps.entries()) {
+        if (step.kind !== 'voice') continue
+        const started = s.steps.slice(0, i).some((h) => h.kind === 'hook' && h.event === 'start' && h.session === step.target)
+        const resumable = s.sessions.find((d) => d.key === step.target)!.resumable === true
+        expect(started || resumable, `${s.id} voice ${step.target}`).toBe(true)
+      }
+    }
+  })
+
+  it('C12 speaks to a running, idle Claude app session with no input first: the words reach it, once', () => {
+    const c12 = byId('C12')
+    expect([c12.app, c12.dims]).toEqual(['claude', ['D5', 'D8']])
+    expect(c12.steps.filter((s) => s.kind !== 'wait').map((s) => s.kind)).toEqual(['claude.write', 'hook', 'voice'])
+    expect(c12.checks.find((c) => c.kind === 'voice')).toMatchObject({ session: 'a', after: 'voice' })
+  })
+
+  it('C8 has no tap or swipe, so its open can only be the voice\'s', () => {
+    // A swipe's rest opens the session too: one before the voice would pass the open whatever the voice did. The pick
+    // lands on its only row.
+    expect(byId('C8').steps.filter((s) => s.kind === 'tap' || s.kind === 'swipe')).toEqual([])
+  })
+
+  it('C3, CH1, CH2 and XH1 are tier A only, every other scenario (C10, C11, X7, C8, X9, CH3 and XH3 among them) runs in tier B', () => {
+    const onlyA = ['C3', 'CH1', 'CH2', 'XH1']
+    for (const s of ALL) expect(s.tiers, s.id).toEqual(onlyA.includes(s.id) ? ['a'] : ['a', 'b'])
+  })
+
+  it('each tier B scenario carries exactly one cost check, D8, and the tier A only ones none', () => {
+    for (const s of ALL) {
+      const costs = s.checks.filter((c) => c.kind === 'cost')
+      if (s.tiers.includes('b')) expect(costs, s.id).toEqual([{ id: 'cost', kind: 'cost', dim: 'D8' }])
+      else expect([costs, s.dims.includes('D8')], s.id).toEqual([[], false])
+    }
+  })
+
+  it('every key a step or check names is declared, and only probes name a ghost', () => {
+    for (const s of ALL) {
+      const declared = new Map(s.sessions.map((d) => [d.key, d]))
+      const real = (key: SessionKey) => declared.has(key) && !declared.get(key)!.ghost
+      expect(declared.size, s.id).toBe(s.sessions.length)
+      for (const step of s.steps) {
+        for (const key of stepKeys(step)) expect(real(key), `${s.id} ${step.kind} ${key}`).toBe(true)
+        // A window title is the title of a session the scenario writes.
+        if (step.kind === 'thread') expect(s.sessions.some((d) => !d.ghost && d.title === step.title), `${s.id} thread`).toBe(true)
+      }
+      for (const check of s.checks) for (const key of checkKeys(check)) expect(real(key), `${s.id} ${check.id} ${key}`).toBe(true)
+      for (const probe of s.probes) {
+        const keys = checkKeys(probe)
+        expect(keys.every((key) => declared.has(key)), `${s.id} probe ${probe.id}`).toBe(true)
+        expect(keys.some((key) => declared.get(key)!.ghost), `${s.id} probe ${probe.id}`).toBe(true)
+      }
+    }
+  })
+
+  it('each check\'s after and at name a step\'s label', () => {
+    for (const s of ALL) {
+      const labels = new Set(s.steps.flatMap((step) => (step.label === undefined ? [] : [step.label])))
+      for (const check of [...s.checks, ...s.probes]) {
+        for (const label of [check.after, check.at]) if (label !== undefined) expect(labels.has(label), `${s.id} ${check.id} ${label}`).toBe(true)
+      }
+    }
+  })
+
+  it('every title starts with "Eval " and every folder with /work/eval-', () => {
+    for (const s of ALL) {
+      for (const d of s.sessions) expect([d.title.startsWith('Eval '), d.cwd.startsWith('/work/eval-')], `${s.id} ${d.key}`).toEqual([true, true])
+      for (const step of s.steps) {
+        if (step.kind === 'codex.write') for (const name of Object.values(step.names ?? {})) expect(name.startsWith('Eval '), s.id).toBe(true)
+        if (step.kind === 'voice') expect(step.transcript.startsWith('Eval '), s.id).toBe(true)
+        if (step.kind === 'hook' && step.lastAnswer !== undefined) expect(step.lastAnswer.startsWith('Eval '), s.id).toBe(true)
+      }
+    }
+  })
+
+  it('every scenario has a probe, and each step kind but wait is used by a scenario whose probe can see it', () => {
+    const sees: Record<Exclude<StepKind, 'wait'>, CheckKind[]> = {
+      'claude.write': ['ring'], 'codex.write': ['ring'], quit: ['ring'], relaunch: ['ring'],
+      unplug: ['ring', 'focus'], replug: ['ring', 'focus'],
+      hook: ['state', 'recap'],
+      tap: ['open', 'focus'], swipe: ['open', 'focus'],
+      front: ['focus', 'open'], thread: ['focus', 'open'], attach: ['focus', 'open'],
+      voice: ['voice'],
+    }
+    for (const s of ALL) expect(s.probes.length, s.id).toBeGreaterThan(0)
+    for (const kind of STEP_KINDS.filter((k) => k !== 'wait')) {
+      const seenBy = ALL.filter((s) => s.steps.some((step) => step.kind === kind) && s.probes.some((p) => sees[kind].includes(p.kind)))
+      expect(seenBy.length, kind).toBeGreaterThan(0)
+    }
+  })
+
+  it('a wait is the person\'s own timing or a condition on the dial bounded by 10 s, never a fixed wait for the dial', () => {
+    const waits = (kind: 'condition' | 'reading' | 'own'): string[] => ALL.flatMap((s) => s.steps.flatMap((step, i) => {
+      if (step.kind !== 'wait') return []
+      const after = s.steps[i - 1]
+      const is = step.until !== undefined ? 'condition' : after?.kind === 'wait' && after.until !== undefined ? 'reading' : 'own'
+      return is === kind ? [`${s.id} ${step.ms}`] : []
+    }))
+    // C6's turn, C9's rests on a and on b, C10's gap between quit and relaunch, C11's rest and its time unplugged, X3's
+    // still window, X8's turn, X11's switches, CH3's rest on a and XH3's switch.
+    expect(waits('own')).toEqual(['C6 5000', 'C9 1000', 'C9 3500', 'C10 2000', 'C11 1000', 'C11 3000', 'X3 5000', 'X8 2000',
+      'X11 300', 'X11 300', 'CH3 1000', 'XH3 200'])
+    expect(new Set(waits('condition').map((w) => w.split(' ')[1]))).toEqual(new Set(['10000']))
+    // The person reading the face once the list is there.
+    expect(new Set(waits('reading').map((w) => w.split(' ')[1]))).toEqual(new Set(['1000']))
+    expect(waits('reading')).toHaveLength(waits('condition').length)
+  })
+
+  it('an input on the dial or the app comes at least 1 s after its listing, and any step at least 1 s after an input', () => {
+    // Faster, it lands in the same instant the list arrives, inside the devices' echo window after a push, or inside a
+    // swipe's rest, whose open makes the devices drop the next title as its echo: no person does either. X11's switches
+    // 300 ms apart and XH3's voice 200 ms after the follow are those scenarios' point: only the input right after one of
+    // their own short waits is let through.
+    const inputs = new Set<Step['kind']>(['tap', 'swipe', 'voice', 'attach', 'thread'])
+    const quick = new Set(['X11', 'XH3'])
+    for (const s of ALL) {
+      // Since the last listing, or the last input once there is one. A condition wait may end at once: it counts 0.
+      let since: number | null = null
+      let afterInput = false
+      for (const [i, step] of s.steps.entries()) {
+        if (step.kind === 'wait') {
+          since = step.until !== undefined ? 0 : since === null ? null : since + step.ms
+          if (step.until !== undefined) afterInput = false
+          continue
+        }
+        const input = inputs.has(step.kind)
+        if (!input && !afterInput) continue
+        const before = s.steps[i - 1]
+        if (!(quick.has(s.id) && before?.kind === 'wait' && before.until === undefined)) {
+          expect(since, `${s.id} ${step.kind} ${i}`).toBeGreaterThanOrEqual(1_000)
+        }
+        if (input) [since, afterInput] = [0, true]
+      }
+    }
+  })
+
+  it('a step on a row of the dial comes after a wait until the dial lists that row', () => {
+    for (const s of ALL) {
+      const listed = new Set<SessionKey>()
+      for (const step of s.steps) {
+        if (step.kind === 'wait' && step.until) for (const key of step.until.expect) listed.add(key)
+        const row = step.kind === 'tap' || step.kind === 'swipe' || step.kind === 'attach' ? step.session
+          : step.kind === 'voice' ? step.target
+          : step.kind === 'thread' ? s.sessions.find((d) => d.title === step.title)!.key
+          : undefined
+        // Otherwise the step outruns the first list, and the dial has no row to act on.
+        if (row !== undefined) expect(listed.has(row), `${s.id} ${step.kind} ${row}`).toBe(true)
+      }
+    }
+  })
+
+  it('the held-out file says it is not to be read', () => {
+    const lines = readFileSync(new URL('./heldOut.ts', import.meta.url), 'utf8').split('\n')
+    const header = lines.slice(0, lines.findIndex((line) => !line.startsWith('//'))).map((line) => line.replace(/^\/\/ ?/, '')).join(' ')
+    expect(header.startsWith('Held out (docs/plans/2026-11-21-dial-app-eval-design.md, Held-out set): whoever fixes a failing group of the dial eval does not read this file.')).toBe(true)
+  })
+})

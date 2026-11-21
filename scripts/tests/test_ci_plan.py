@@ -361,12 +361,14 @@ class SelectionTests(unittest.TestCase):
                 self.assertFalse(planner.linux_e2e_file(path))
                 self.assertIn("dial-hosts", planner.select([path])[0])
                 self.assertNotIn("linux-e2e", planner.select([path])[0])
-        # Their adapters run there alone; the harness, the configs and the setup action also run linux-e2e's canary.
+        # Their adapters run there alone; the harness, the configs and the setup action also run linux-e2e's canary,
+        # and what the dial app eval covers its e2e files.
         for entry in planner.DIAL_HOST_PATHS:
             path = entry + "x" if entry.endswith("/") else entry
             with self.subTest(path=path):
                 self.assertIn("dial-hosts", planner.select([path])[0])
-                self.assertEqual("linux-e2e" in planner.select([path])[0], planner.linux_e2e_canary_path(path))
+                self.assertEqual("linux-e2e" in planner.select([path])[0],
+                                 planner.linux_e2e_canary_path(path) or planner.linux_e2e_app_eval_path(path))
         # A name that only starts like one, or one in a folder below, is not a dial host's: Vitest's glob stays in e2e/.
         for path in ("cli/e2e/deviceHerdrApp.e2e.ts", "cli/e2e/sub/dialHostKitty.e2e.ts"):
             with self.subTest(path=path):
@@ -441,13 +443,21 @@ class SelectionTests(unittest.TestCase):
         adapters = sorted(str(path.relative_to(root)) for path in (root / "cli/src/cable/hosts").glob("*.ts")
                           if planner.dial_hosts_path(str(path.relative_to(root))) and ".spec." not in path.name)
         self.assertTrue(files and adapters)
-        within = ("cli/e2e/harness/", "cli/src/cable/")
+        within = ("cli/e2e/harness/", "cli/src/cable/", "cli/src/testing/dialCarousel.ts")
         canary = imports_from(root, [planner.LINUX_E2E_CANARY], within)
         run = imports_from(root, files + adapters, within) - set(files)
         self.assertEqual(sorted(path for path in run if not planner.dial_hosts_path(path) and path not in canary), [])
 
     def test_the_orca_e2e_files_are_plain_and_run_on_linux(self):
         for path in planner.LINUX_E2E_ORCA_FILES:
+            with self.subTest(path=path):
+                self.assertTrue(planner.E2E_FILE.fullmatch(path))
+                self.assertTrue(planner.linux_e2e_file(path))
+                self.assertNotIn(path, planner.LINUX_E2E_NEVER)
+                self.assertFalse(planner.dial_hosts_path(path))
+
+    def test_the_app_eval_e2e_files_are_plain_and_run_on_linux(self):
+        for path in planner.LINUX_E2E_APP_EVAL_FILES:
             with self.subTest(path=path):
                 self.assertTrue(planner.E2E_FILE.fullmatch(path))
                 self.assertTrue(planner.linux_e2e_file(path))
@@ -935,19 +945,20 @@ class GitPlanTests(unittest.TestCase):
     def test_a_change_to_the_orca_stand_in_or_adapter_runs_the_orca_e2e_files(self):
         adapter, stand_in = "cli/src/cable/hosts/orca.ts", "cli/e2e/harness/orcaHost.ts"
         self.assertLessEqual({"linux-e2e", "dial-hosts"}, planner.select([adapter])[0])
-        # The rest of the hosts' folder is dial-hosts' alone.
-        self.assertNotIn("linux-e2e", planner.select(["cli/src/cable/hosts/scannedApp.ts"])[0])
         canary = planner.LINUX_E2E_CANARY.removeprefix("cli/")
         orca = sorted(path.removeprefix("cli/") for path in planner.LINUX_E2E_ORCA_FILES)
-        for path in (planner.LINUX_E2E_CANARY, *planner.LINUX_E2E_ORCA_FILES, adapter, stand_in):
+        # The adapter is in the hosts' folder, which the dial app eval covers: it runs the eval's files too.
+        both = sorted([*orca, *(path.removeprefix("cli/") for path in planner.LINUX_E2E_APP_EVAL_FILES)])
+        for path in (planner.LINUX_E2E_CANARY, *planner.LINUX_E2E_ORCA_FILES, *planner.LINUX_E2E_APP_EVAL_FILES,
+                     adapter, stand_in):
             self.write(path)
         self.hints({})
         self.base = self.commit()
         # The adapter alone runs them and no canary, as they are real files; beside the PR's own; the stand-in, a
         # harness file, with the canary too; and the adapter's deletion still runs them.
-        for changed, deleted, files in (((adapter,), (), orca),
-                                        ((adapter, "cli/e2e/a.e2e.ts"), (), sorted([*orca, "e2e/a.e2e.ts"])),
-                                        ((stand_in,), (), sorted([*orca, canary])), ((), (adapter,), orca)):
+        for changed, deleted, files in (((adapter,), (), both),
+                                        ((adapter, "cli/e2e/a.e2e.ts"), (), sorted([*both, "e2e/a.e2e.ts"])),
+                                        ((stand_in,), (), sorted([*orca, canary])), ((), (adapter,), both)):
             with self.subTest(changed=changed, deleted=deleted):
                 self.git("checkout", "-q", "--detach", self.base)
                 for path in changed:
@@ -964,6 +975,40 @@ class GitPlanTests(unittest.TestCase):
         (self.root / planner.LINUX_E2E_ORCA_FILES[0]).unlink()
         self.commit()
         with self.assertRaisesRegex(ValueError, re.escape(planner.LINUX_E2E_ORCA_FILES[0])):
+            self.plan()
+
+    def test_a_change_the_app_eval_covers_runs_its_e2e_files(self):
+        hosts, catalog, carousel, driver = ("cli/src/cable/hosts/scannedApp.ts", "cli/src/testing/dialAppEval/catalog.ts",
+                                            "cli/src/testing/dialCarousel.ts", "cli/e2e/harness/appEvalDriver.ts")
+        notes = "cli/e2e/harness/appEvalNotes.md"
+        canary = planner.LINUX_E2E_CANARY.removeprefix("cli/")
+        evals = sorted(path.removeprefix("cli/") for path in planner.LINUX_E2E_APP_EVAL_FILES)
+        for path in (planner.LINUX_E2E_CANARY, *planner.LINUX_E2E_APP_EVAL_FILES, hosts, catalog, carousel, driver, notes):
+            self.write(path)
+        self.hints({})
+        self.base = self.commit()
+        # The hosts' folder, the eval's folder and the carousel run them alone; the tier B driver, a harness file, with
+        # the canary too; a deletion still runs them; a harness file whose name only starts as the driver's runs the
+        # canary alone.
+        for changed, deleted, files in (((hosts,), (), evals), ((catalog,), (), evals), ((carousel,), (), evals),
+                                        ((driver,), (), sorted([*evals, canary])), ((), (catalog,), evals),
+                                        ((notes,), (), [canary])):
+            with self.subTest(changed=changed, deleted=deleted):
+                self.git("checkout", "-q", "--detach", self.base)
+                for path in changed:
+                    self.write(path, "changed")
+                for path in deleted:
+                    (self.root / path).unlink()
+                self.commit()
+                plan = self.plan()
+                self.assertIn("linux-e2e", plan["reasons"][(changed or deleted)[0]])
+                self.assertEqual(plan["e2e"]["linux_files"], files)
+        # A head without one of them fails the plan, naming it: a PR that renames or deletes one updates the list.
+        self.git("checkout", "-q", "--detach", self.base)
+        self.write(carousel, "changed")
+        (self.root / planner.LINUX_E2E_APP_EVAL_FILES[-1]).unlink()
+        self.commit()
+        with self.assertRaisesRegex(ValueError, re.escape(planner.LINUX_E2E_APP_EVAL_FILES[-1])):
             self.plan()
 
     def test_a_change_to_a_jobs_definition_in_ci_yml_runs_its_suite(self):

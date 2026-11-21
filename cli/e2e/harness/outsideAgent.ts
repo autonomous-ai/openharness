@@ -149,13 +149,14 @@ export class Outside {
   /**
    * With [app], the tab runs under a fake of it: the engine's parents are the pseudo-terminal, the app, the test. With
    * `shell`, a real `/bin/sh` runs in the pseudo-terminal and the engine is its foreground job (SHELL), as the shell a
-   * terminal app starts for its tab.
+   * terminal app starts for its tab. With `resume`, it goes on in that conversation (`--resume <id>`), as the Claude app
+   * starts one of its sessions again.
    */
   static async start(d: IsolatedDaemon, folder: string, hints: Record<string, string>, app?: FakeApp,
-    { shell = false } = {}): Promise<Outside> {
-    const { tab, pid, shellPid } = await Outside.open(d, folder, hints, app, shell)
+    { shell = false, resume }: { shell?: boolean; resume?: string } = {}): Promise<Outside> {
+    const { tab, pid, shellPid } = await Outside.open(d, folder, hints, app, shell, resume === undefined ? [] : ['--resume', resume])
     // Its conversation, as its SessionStart hook named it once that hook had run.
-    const started = new RegExp(`claude pid=${pid} SessionStart\\(startup\\) session=(\\S+) ran`)
+    const started = new RegExp(`claude pid=${pid} SessionStart\\(${resume === undefined ? 'startup' : 'resume'}\\) session=(\\S+) ran`)
     const sessionId = await until(`${folder} to run its SessionStart hook`, () => d.hookLog().match(started)?.[1], 30_000, 100)
     return new Outside(tab, pid, sessionId, folder, undefined, shellPid)
   }
@@ -173,15 +174,15 @@ export class Outside {
     return new Outside(tab, pid, sessionId, folder, home)
   }
 
-  /** The tab, once it said the engine's pid (and with [shell], the shell's). */
-  private static async open(d: IsolatedDaemon, folder: string, hints: Record<string, string>, app?: FakeApp, shell = false):
-    Promise<{ tab: ChildProcess; pid: number; shellPid?: number }> {
+  /** The tab, once it said the engine's pid (and with [shell], the shell's). [engineArgs] go to the engine. */
+  private static async open(d: IsolatedDaemon, folder: string, hints: Record<string, string>, app?: FakeApp, shell = false,
+    engineArgs: readonly string[] = []): Promise<{ tab: ChildProcess; pid: number; shellPid?: number }> {
     const cwd = join(d.projectsDir, folder)
     mkdirSync(cwd, { recursive: true })
     // d.env carries none of the developer's host hints (testing/daemonEnvironment.ts): only [hints] name the app.
     const env: NodeJS.ProcessEnv = { ...d.env, TERM: 'xterm-256color' }
     const shellCommand = shell ? ['--say', '/bin/sh', '-i', '-c', SHELL, 'sh'] : []
-    const command = ['python3', '-c', PTY, ...shellCommand, d.env.CLAUDE_PATH!]
+    const command = ['python3', '-c', PTY, ...shellCommand, d.env.CLAUDE_PATH!, ...engineArgs]
     const [file, ...args] = app ? [fakeApp(d, app), '-e', UNDER_APP, ...command] : command
     const tab = spawn(file, args, { cwd, env: { ...env, ...hints }, stdio: ['pipe', 'pipe', 'pipe'] })
     tab.stdout!.resume()

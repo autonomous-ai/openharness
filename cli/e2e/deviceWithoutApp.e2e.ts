@@ -19,7 +19,6 @@
  */
 import type { ChildProcess } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { request } from 'node:http'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -28,6 +27,7 @@ import { Desk } from './harness/desk.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { InOrca } from './harness/inOrca.js'
+import { inboxPoll } from './harness/modInbox.js'
 import { Outside } from './harness/outsideAgent.js'
 import { controlClient, InOwnTmux, type ControlClient } from './harness/ownTmux.js'
 
@@ -49,19 +49,6 @@ async function create(daemon: IsolatedDaemon, client: LocalClient, folder: strin
 /** The machine a daemon signs in as, to hear its dial's words: the daemon asks its backend for each transcript. */
 const ME: FakeMachine = { machineId: 'c5'.repeat(16), computerId: 'e2e-device-without-app-computer', name: 'Fixture', token: 'e2e-device-without-app-token' }
 const isTurn = (type: string, agentId: string) => (frame: Frame) => frame.type === type && frame.agentId === agentId
-
-/** The mod's poll over the daemon's socket, as the mod sends it: its status and what it was answered. */
-const inboxPoll = (d: IsolatedDaemon, sessionId: string): Promise<{ status: number; body: unknown }> =>
-  new Promise((resolve, reject) => {
-    const req = request({ socketPath: d.socketPath, path: '/api/hook/inbox', method: 'POST', headers: { 'Content-Type': 'application/json' } },
-      (res) => {
-        let said = ''
-        res.on('data', (chunk: Buffer) => { said += chunk.toString('utf8') })
-        res.on('end', () => resolve({ status: res.statusCode ?? 0, body: JSON.parse(said) }))
-      })
-    req.on('error', reject)
-    req.end(JSON.stringify({ sessionId }))
-  })
 
 /** One list the dial was sent: its rows, between `agents.begin` and `agents.end`, and the end. */
 interface Roster { rows: DialMessage[]; end: DialMessage }

@@ -6,8 +6,9 @@
  */
 import { appendFileSync, mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import { userInfo } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { builtinSqlite, type DatabaseLike } from '../lib/sqliteBuiltin.js'
+import { withinReal } from './claudeAppFixture.js'
 
 /** Written to every row's title, name, first message and preview: a reader that lets any of them out shows it. */
 export const NEVER_READ = 'NEVER-READ-7f3c'
@@ -52,7 +53,7 @@ export interface CodexAppFixture {
 
 export function codexAppFixture(home: string): CodexAppFixture {
   // The account's own home, from the user database: a test or a benchmark moves HOME, which homedir() follows.
-  if (resolve(home) === join(userInfo().homedir, '.codex')) {
+  if (withinReal(join(userInfo().homedir, '.codex'), home)) {
     throw new Error('the Codex app fixture never writes the real ~/.codex')
   }
   const store = join(home, 'state_5.sqlite')
