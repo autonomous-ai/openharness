@@ -112,7 +112,7 @@ it('a hook install names its file by a hash, never its path', async () => {
   vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { lines.push(args.join(' ')) })
   vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => { lines.push(args.join(' ')) })
   // A default home with no config yet, a profile whose config has no list for the pane names, and one with hooks of the
-  // person's own, which is told what to add by hand: the command names the home, so the line names it by what it is.
+  // person's own, which is told what to add by hand: the entries name the home, so the line names the command that prints them.
   const at = join(mkdtempSync(join(root, 'sentinel-')), 'hermes'), work = join(at, 'profiles', 'work'), theirs = join(at, 'profiles', 'theirs')
   mkdirSync(work, { recursive: true }); writeFileSync(join(work, 'config.yaml'), 'model: y\n')
   mkdirSync(theirs, { recursive: true }); writeFileSync(join(theirs, 'config.yaml'), 'hooks:\n  on_session_start: []\n')
@@ -127,7 +127,8 @@ it('a hook install names its file by a hash, never its path', async () => {
     + ' sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness')
   expect(lines).toContain(`[hooks] Hermes session hooks already installed (${hashOf(work)})`)
   expect(lines).toContain(`[hooks] ${hashOf(join(theirs, 'config.yaml'))} has its own \`hooks:\` block — leaving it untouched.`)
-  expect(lines).toContain("[hooks]   on_session_start: [{ command: <Harness's notify.mjs command for this home>, timeout: 10 }]")
+  expect(lines).toContain('[hooks] run `harness hermes-hooks` for the entries to add under it to mirror Hermes sessions')
+  expect(lines.filter((line) => line.startsWith('[hooks]   '))).toEqual([])
 })
 
 // Hermes 0.22+ runs every session's hooks in one shared gateway, so a hook names the gateway's pane. Each client's
