@@ -4,9 +4,9 @@
  * (docs/plans/2026-11-19-dial-claude-app-sessions-design.md, "Why"): `<account>/<org>/local_<uuid>.json`, written to a
  * temp file and renamed over, and a deleted session's file swapped for a 13-byte `deleted_<uuid>`.
  */
-import { mkdirSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, realpathSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { userInfo } from 'node:os'
-import { isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { claudeStoreRoots } from '../cable/hosts/appPlaces.js'
 
 /** The account and org folders a fixture writes to unless told another. */
@@ -21,6 +21,29 @@ export interface FixtureSession {
 }
 export interface FixturePlace { account?: string; org?: string; mtime?: number; bytes?: number }
 
+/**
+ * `path` as the file system names it: its nearest existing folder read through every link (and, on Windows, every short
+ * name), the rest joined on, in lower case where the OS's folders ignore it. Two spellings of one place give one answer.
+ */
+function canonical(path: string): string {
+  let folder = resolve(path)
+  const below: string[] = []
+  for (;;) {
+    try {
+      folder = realpathSync.native(folder)
+      break
+    } catch {
+      // Missing (or unreadable): its parent is the nearest that may exist.
+      const parent = dirname(folder)
+      if (parent === folder) break
+      below.unshift(basename(folder))
+      folder = parent
+    }
+  }
+  const named = join(folder, ...below)
+  return process.platform === 'darwin' || process.platform === 'win32' ? named.toLowerCase() : named
+}
+
 /** A store of the Claude app's in `root`, a folder the caller made: never a real one. */
 export function claudeAppFixture(root: string): {
   readonly root: string
@@ -33,9 +56,9 @@ export function claudeAppFixture(root: string): {
   remove(localId: string, place?: FixturePlace): void
 } {
   // The account's own home, from the user database: a test or a benchmark moves HOME, which homedir() follows.
-  const asked = resolve(root)
+  const asked = canonical(root)
   for (const real of claudeStoreRoots(process.platform, process.env, userInfo().homedir)) {
-    const inside = relative(real.root, asked)
+    const inside = relative(canonical(real.root), asked)
     if (inside.split(sep)[0] !== '..' && !isAbsolute(inside)) {
       throw new Error('the Claude app fixture never writes the real Claude app store')
     }
