@@ -6,7 +6,7 @@
  * `[backend] connected` token scanned by the self-update readiness check) stay intact.
  */
 
-import { createHash } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
 import { closeSync, existsSync, openSync, readSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs'
 
 function pad(n: number, width = 2): string {
@@ -148,9 +148,17 @@ export function codeOrLength(value: unknown): string {
   return CODE.test(value) ? value : `text(${value.length})`
 }
 
-/** A path, URL or label for a log line: the same text always reads the same, and none of it shows. */
+/**
+ * Made once per process and kept in memory alone: with a plain hash, whoever holds an exported log could confirm a
+ * guessed path (`/Users/<name>/…`) or a short name by hashing the guess. Another process, or this one started again,
+ * tags the same text differently. Held on the process's global object, not this module, so a second load of the module
+ * in the same process (a spec that resets its modules) tags alike.
+ */
+const TAG_KEY: Buffer = (globalThis as { [key: symbol]: Buffer })[Symbol.for('harness.logTagKey')] ??= randomBytes(32)
+
+/** A path, URL or label for a log line: the same text reads the same within this process, and none of it shows. */
 export function hashOf(text: string): string {
-  return createHash('sha256').update(text).digest('hex').slice(0, 8)
+  return createHmac('sha256', TAG_KEY).update(text).digest('hex').slice(0, 8)
 }
 
 /**
