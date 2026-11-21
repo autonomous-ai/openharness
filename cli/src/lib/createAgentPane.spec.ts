@@ -347,4 +347,22 @@ describe('createAndRegisterPane', () => {
     expect(tmuxBackend.kill).not.toHaveBeenCalled()
     expect(openPendingAgent).not.toHaveBeenCalled()
   })
+
+  it('logs a tmux spawn failure by its reason\'s length, and still answers with its words', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const tmuxBackend = fakeTmux([{ state: 'failed', dispatch: 'not_started', reason: 'no server running on /Users/sentinel/tmux' }])
+    try {
+      const result = await createAndRegisterPane({
+        tmuxBackend, registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-1', argv: () => ['claude'],
+      })
+      expect(result).toMatchObject({ ok: false, error: 'SPAWN_FAILED', detail: 'no server running on /Users/sentinel/tmux' })
+      const lines = warn.mock.calls.map(call => call.map(String).join(' ')).join('\n')
+      expect(lines).not.toContain('sentinel')
+      expect(lines).toContain('[agent] create claude failed · tmux could not open a pane · text(41)')
+    } finally {
+      warn.mockRestore()
+    }
+  })
 })

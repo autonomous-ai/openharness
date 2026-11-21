@@ -141,6 +141,14 @@ describe('restartAgent', () => {
     expect(asked.at(-1)).toEqual({ bypassPermission: false })
   })
 
+  it('logs a refused respawn by its reason\'s length, never its words', async () => {
+    const logs: string[] = []
+    const d = deps({ respawn: async () => ({ ok: false, reason: "can't find pane /Users/sentinel/x" }) })
+    await restartAgent({ engine: 'codex', sessionId: 's1' }, false, { ...d, log: (message) => logs.push(message) })
+    expect(logs.join('\n')).not.toContain('sentinel')
+    expect(logs).toContain('[restart] codex respawn-pane failed: text(33)')
+  })
+
   it('never respawns when holdOpen fails to re-arm the pane', async () => {
     const d = deps({ holdOpen: async () => ({ ok: false, reason: 'tmux unreachable' }) })
     const outcome = await restartAgent({ engine: 'claude', sessionId: 's1' }, false, d)
