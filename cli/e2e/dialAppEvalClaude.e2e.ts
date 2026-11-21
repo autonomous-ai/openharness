@@ -8,7 +8,7 @@
  * its store, `~/.claude`, `~/.codex` and this computer's daemon are never touched. The network guard runs in this process
  * and in every process of each daemon: a connection to anything but this machine fails the scenario, by host and port.
  */
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, writeFileSync } from 'node:fs'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { scenariosFor } from '../src/testing/dialAppEval/catalog.js'
 import { loadBaseline, tierBVerdict } from '../src/testing/dialAppEval/grade.js'
@@ -46,6 +46,30 @@ describe.skipIf(WIN32)('the dial eval, tier B: the Claude app', () => {
     expect(driver.networkReached()).toEqual(['devices net 192.0.2.1:9'])
     // Given once.
     expect(driver.networkReached()).toEqual([])
+  })
+
+  it('a start fails whose core or devices process the guard is not in, whatever an older line of its file says', async () => {
+    const c1 = SCENARIOS.find((s) => s.id === 'C1')!
+    await driver.start(c1, HOST)
+    await driver.stop()
+    // The file as it would be had both processes started again without the guard: only others' lines.
+    writeFileSync(driver.netGuardFile(), ['core', 'devices'].map((process) => `${JSON.stringify({ kind: 'loaded', pid: 1, process })}\n`).join(''))
+    try {
+      await expect(driver.start(c1, HOST)).rejects.toThrow('the network guard is not in the core process')
+    } finally {
+      await driver.stop()
+    }
+  })
+
+  it("an attempt off this machine made as the last daemon closes fails the driver's close, naming it", async () => {
+    await driver.start(SCENARIOS.find((s) => s.id === 'C1')!, HOST)
+    await driver.stop()
+    const file = driver.netGuardFile()
+    const devices = readNetGuard(file).loaded.find((l) => l.process === 'devices')!
+    appendFileSync(file, `${JSON.stringify({ kind: 'attempt', api: 'net', host: '192.0.2.1', port: 9, pid: devices.pid, process: 'devices' })}\n`)
+    await expect(driver.close()).rejects.toThrow('devices net 192.0.2.1:9')
+    // The file's other tests on a driver of their own: the closed one has taken its guard off this process.
+    driver = new TierBDriver({ claude: claudeSteps })
   })
 
   it('the fake Claude app attaches the session it resumes from its link, as the mod does for the session the app shows', async () => {
