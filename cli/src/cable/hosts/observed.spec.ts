@@ -2954,7 +2954,7 @@ describe('ObservedSource and the app a hook\'s caller runs in', () => {
 })
 
 // A terminal or an editor started from another host's pane keeps that pane's variables, so only the process that made
-// the caller's pseudo-terminal says whose pane it is (scannedApp.ts ptyOwner): words typed into a pane that only holds
+// the caller's pseudo-terminal says whose pane it is (scannedApp.ts readPtyOwner): words typed into a pane that only holds
 // the agent run at whatever that pane shows.
 describe('ObservedSource and the host that owns its caller\'s terminal', () => {
   const ZELLIJ = { ZELLIJ: '0', ZELLIJ_SESSION_NAME: 's1', ZELLIJ_PANE_ID: '1' }

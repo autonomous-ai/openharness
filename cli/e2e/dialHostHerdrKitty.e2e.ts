@@ -5,7 +5,8 @@
  * the first window of a kitty of the test's own (harness/kittyWindow.ts), with remote control on for its socket alone,
  * on an X11 desk of the test's own (harness/x11Desk.ts), another tab of that kitty active, and the suite's hooked fake
  * Claude Code in a herdr pane. The server is started with that window's KITTY_WINDOW_ID and KITTY_LISTEN_ON, as one the
- * client started there keeps them, so the agent's hooks name kitty's socket. A fake dial on the desk lists it, and the
+ * client started there keeps them; herdr (0.9.5) strips KITTY_WINDOW_ID from its panes and keeps KITTY_LISTEN_ON, so the
+ * agent's hooks name kitty's socket and no kitty window. A fake dial on the desk lists it, and the
  * test writes the `front` lines on the stdin of the real `harness hardware watch --json`, as Harness Device does. No
  * `herdr` or `kitten` the daemon runs reaches the developer's, and the daemon's process table hides every herdr outside
  * the test's tree (ownHerdrsOnly).

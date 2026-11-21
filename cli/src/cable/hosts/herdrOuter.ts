@@ -6,10 +6,11 @@
  * client is found as a herdr process connected to the server's client socket.
  *
  * Only what that needs is read: process names and parents (the table), the terminals of the caller and its parents up to
- * the server and, for a client in no app, of it and its parents up to its terminal's maker, the unix-socket rows lsof gives for herdr's own processes (macOS) or ss's rows of the sockets bound at a
- * client socket's path (Linux) with the socket links among herdr's own processes' descriptors, their ttys (ps), and a
- * tty's access time (stat), which moves when the person types into it. Never another process's environment or argv:
- * those hold secrets. Every value read is outside text, held to its form, and lsof, ss and ps run with no shell.
+ * the server and, for a client in no app, of it and its parents up to its terminal's maker, the unix-socket rows lsof
+ * gives for herdr's own processes (macOS) or ss's rows of the sockets bound at a client socket's path (Linux) with the
+ * socket links among herdr's own processes' descriptors, their ttys (ps), and a tty's access time (stat), which moves
+ * when the person types into it. Never another process's environment or argv: those hold secrets. Every value read is
+ * outside text, held to its form, and lsof, ss and ps run with no shell.
  */
 import { opendir, readlink, stat } from 'node:fs/promises'
 import { HERDR_PANE } from './herdrClient.js'

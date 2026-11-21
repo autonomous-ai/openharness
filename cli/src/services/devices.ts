@@ -714,9 +714,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // a session paired there would be listed twice on Herdr's page.
   hookIds ? (pid): string | undefined => hcSource?.terminalOf(pid) : undefined,
   // An agent in a pane of the person's herdr, tmux or Zellij is on the page of the app holding the client that shows
-  // it: each lookup answers nothing at once for an agent in none of its panes. herdr's first: herdr inside the person's
-  // tmux is the nearer host, and keeps tmux's answer when herdr's finds no app. Zellij's last: a Zellij server started
-  // in a tmux pane gives its panes that pane's TMUX_PANE, where tmux's finds no app.
+  // it: each lookup answers nothing at once for an agent in none of its panes, and places only one on a terminal its
+  // host made, so at most one names an app. herdr's first: its client's process alone, in a terminal with no page, is
+  // kept for Linux's raise when neither other names an app.
   firstOuter(createHerdrOuter({ ...outerDeps, atime: ttyAtime, tty: readTtyName, onPath: apps.onPath, sockets: procSockets }),
     firstOuter(createTmuxOuter({ ...outerDeps, tmux: tmuxAt, tty: readTtyName }),
       createZellijOuter({ ...outerDeps, zellij: zellijAt, tty: readTtyName }))),
