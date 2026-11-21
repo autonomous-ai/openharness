@@ -15,12 +15,35 @@ import { get } from "node:http";
 import { startGameViewer } from "../viewer.mjs";
 import { playtestStore } from "../playtests.mjs";
 
-const until = async (predicate) => {
-  for (let i = 0; i < 120; i++) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 10));
+// Waits on the viewer's own publish, its event stream, rather than polling a time budget: on a
+// loaded macOS, FSEvents delivers a file change with no bound. The stream opens with the
+// current state, so a publish that happened before the call is still seen.
+const published = async (viewer, predicate) => {
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(new Error("State did not arrive")),
+    30000,
+  );
+  try {
+    const res = await fetch(viewer.url + "/api/events", {
+      signal: controller.signal,
+    });
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for await (const chunk of res.body) {
+      buffer += decoder.decode(chunk, { stream: true });
+      let end;
+      while ((end = buffer.indexOf("\n\n")) !== -1) {
+        const data = buffer.slice(0, end).match(/^event: state\ndata: (.*)$/s);
+        buffer = buffer.slice(end + 2);
+        if (data && predicate(JSON.parse(data[1]))) return;
+      }
+    }
+    throw new Error("Event stream ended");
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
   }
-  throw new Error("Condition did not arrive");
 };
 async function fixture(t) {
   const workspace = mkdtempSync(join(tmpdir(), "game-viewer-test-"));
@@ -46,7 +69,7 @@ async function fixture(t) {
     await viewer.close();
     rmSync(workspace, { recursive: true, force: true });
   });
-  await until(() => viewer.state.status === "preview");
+  await published(viewer, (state) => state.status === "preview");
   const post = async (path, body, headers = {}) =>
     fetch(viewer.url + path, {
       method: "POST",
@@ -207,15 +230,25 @@ test("studio metadata updates without rebuilding the game or clearing readiness"
     join(workspace, ".harness/progress.json"),
     JSON.stringify({ phase: "play", message: "Adding the jump controls" }),
   );
-  await until(
-    () => viewer.state.progress.message === "Adding the jump controls",
+  await published(
+    viewer,
+    (state) => state.progress.message === "Adding the jump controls",
   );
   writeFileSync(
     join(workspace, "studio.json"),
     JSON.stringify({ title: "A new title", controls: "Arrow keys" }),
   );
-  await until(() => viewer.state.project.title === "A new title");
-  await new Promise((resolve) => setTimeout(resolve, 400));
+  await published(viewer, (state) => state.project.title === "A new title");
+  // The viewer handles its file events in order: once this later write is published, a rebuild
+  // the title change caused would already show.
+  writeFileSync(
+    join(workspace, ".harness/progress.json"),
+    JSON.stringify({ phase: "play", message: "Tuning the jump height" }),
+  );
+  await published(
+    viewer,
+    (state) => state.progress.message === "Tuning the jump height",
+  );
   assert.equal(viewer.state.latest.number, number);
   assert.equal(viewer.state.status, "ready");
   const verdict = JSON.parse(
