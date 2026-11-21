@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { once } from 'node:events'
 import { createServer, type Server, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { connectLines, markerStampOf, socketStampOf, watchSocket, type LineEnd } from './unixSocket.js'
 
@@ -51,10 +51,10 @@ function lines(path: string, out: string, maxLineBytes: number) {
   return { told, toldN, ended }
 }
 
-/** Makes a change once every watch started so far is live, then waits until `count` grows. On macOS fs.watch starts its
- *  stream on another thread, one stream for every folder the process watches (libuv's FSEvents), so a change made at
- *  once can go untold: a watch started after, once it has told of a change of its own, says the stream holds the rest. */
-async function toldOf(count: () => number, change: () => Promise<unknown>): Promise<void> {
+/** Makes a change once every watch started so far is live, and again under a new name each time until `count` grows
+ *  (folderWatch.spec.ts says why). A change that cannot be made twice, a folder made or removed, is made once: a try
+ *  after the first does nothing. */
+async function toldOf(count: () => number, change: (name: string) => Promise<unknown>): Promise<void> {
   const folder = await mkdtemp(join(tmpdir(), 'ws-'))
   let live = false
   const sentinel = watch(folder, () => { live = true })
@@ -65,8 +65,11 @@ async function toldOf(count: () => number, change: () => Promise<unknown>): Prom
       expect(live).toBe(true)
     }, { timeout: 10_000 })
     const before = count()
-    await change()
-    await vi.waitFor(() => expect(count()).toBeGreaterThan(before), { timeout: 10_000 })
+    let tries = 0
+    await vi.waitFor(async () => {
+      await change(`${basename(folder)}-${tries++}`)
+      expect(count()).toBeGreaterThan(before)
+    }, { timeout: 10_000 })
   } finally {
     sentinel.close()
   }
@@ -167,13 +170,13 @@ describe.skipIf(process.platform === 'win32')('another program\'s Unix socket', 
     const count = () => told
     try {
       // With no <config>, a change in home is told.
-      await toldOf(count, () => mkdir(join(home, 'a')))
+      await toldOf(count, (name) => mkdir(join(home, name)))
       // <config> appears in home, and the watch moves there: a change in it is told.
-      await toldOf(count, () => mkdir(config))
-      await toldOf(count, () => mkdir(join(config, 'b')))
+      await toldOf(count, () => mkdir(config, { recursive: true }))
+      await toldOf(count, (name) => mkdir(join(config, name)))
       // So does <config>/herdr.
-      await toldOf(count, () => mkdir(folder))
-      await toldOf(count, () => mkdir(join(folder, 'c')))
+      await toldOf(count, () => mkdir(folder, { recursive: true }))
+      await toldOf(count, (name) => mkdir(join(folder, name)))
     } finally {
       stopWatch()
     }
@@ -182,7 +185,7 @@ describe.skipIf(process.platform === 'win32')('another program\'s Unix socket', 
     let seen = 0
     const other = watchSocket(at, () => { seen++ })
     try {
-      await toldOf(() => seen, () => mkdir(join(folder, 'd')))
+      await toldOf(() => seen, (name) => mkdir(join(folder, name)))
     } finally {
       other()
     }
@@ -216,7 +219,7 @@ describe.skipIf(process.platform === 'win32')('another program\'s Unix socket', 
   it('from the parent it tells the name of what changed there', async () => {
     const { folder, count, stop: stopWatch } = await watchedFor('herdr', false)
     try {
-      await toldOf(count, () => mkdir(folder))
+      await toldOf(count, () => mkdir(folder, { recursive: true }))
     } finally {
       stopWatch()
     }
@@ -237,11 +240,11 @@ describe.skipIf(process.platform === 'win32')('another program\'s Unix socket', 
   it('the watch moves out of a folder that is removed, and back in once it is made again', async () => {
     const { config, folder, count, stop: stopWatch } = await watchedHerdr()
     try {
-      await toldOf(count, () => rm(folder, { recursive: true }))
+      await toldOf(count, () => rm(folder, { recursive: true, force: true }))
       // <config> is the nearest existing folder now.
-      await toldOf(count, () => mkdir(join(config, 'b')))
-      await toldOf(count, () => mkdir(folder))
-      await toldOf(count, () => mkdir(join(folder, 'c')))
+      await toldOf(count, (name) => mkdir(join(config, name)))
+      await toldOf(count, () => mkdir(folder, { recursive: true }))
+      await toldOf(count, (name) => mkdir(join(folder, name)))
     } finally {
       stopWatch()
     }
@@ -255,7 +258,7 @@ describe.skipIf(process.platform === 'win32')('another program\'s Unix socket', 
       // Failed before its folder's change is told, which it then never is.
       rmSync(folder, { recursive: true })
       held.emit('error', new Error('gone'))
-      await toldOf(count, () => mkdir(join(config, 'b')))
+      await toldOf(count, (name) => mkdir(join(config, name)))
     } finally {
       stopWatch()
     }

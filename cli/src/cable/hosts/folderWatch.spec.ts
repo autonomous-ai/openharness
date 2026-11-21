@@ -1,7 +1,7 @@
 import { realpathSync, watch } from 'node:fs'
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { PathToWatchDeps } from '../../lib/pathToWatch.js'
 import { watchNearest } from './folderWatch.js'
@@ -28,10 +28,14 @@ afterEach(() => {
   given.length = 0
 })
 
-/** Makes a change once every watch started so far is live, then waits until `count` grows. On macOS fs.watch starts its
- *  stream on another thread, one stream for every folder the process watches (libuv's FSEvents), so a change made at
- *  once can go untold: a watch started after, once it has told of a change of its own, says the stream holds the rest. */
-async function toldOf(count: () => number, change: () => Promise<unknown>): Promise<void> {
+/** Makes a change once every watch started so far is live, and again under a new name each time until `count` grows.
+ *  On macOS every folder the process watches is in one FSEvents stream, which libuv builds anew on another thread at
+ *  each watch's start and close (src/unix/fsevents.c): a change made while it is rebuilt is told to no watch, and so is
+ *  one fseventsd drops under load. So a change made at once can go untold, and a watch started after that has told of a
+ *  change of its own says the stream was live, not that it still is: a move to a nearer folder told late, after it,
+ *  rebuilds the stream under the step's change. A change that cannot be made twice, a folder made or removed, is made
+ *  once: a try after the first does nothing. */
+async function toldOf(count: () => number, change: (name: string) => Promise<unknown>): Promise<void> {
   const folder = await mkdtemp(join(tmpdir(), 'fw-'))
   let live = false
   const sentinel = watch(folder, () => { live = true })
@@ -42,8 +46,11 @@ async function toldOf(count: () => number, change: () => Promise<unknown>): Prom
       expect(live).toBe(true)
     }, { timeout: 10_000 })
     const before = count()
-    await change()
-    await vi.waitFor(() => expect(count()).toBeGreaterThan(before), { timeout: 10_000 })
+    let tries = 0
+    await vi.waitFor(async () => {
+      await change(`${basename(folder)}-${tries++}`)
+      expect(count()).toBeGreaterThan(before)
+    }, { timeout: 10_000 })
   } finally {
     sentinel.close()
   }
@@ -64,9 +71,9 @@ describe('one watch on the nearest existing folder', () => {
     await mkdir(a)
     const { count, stop } = watched([b, a])
     try {
-      await toldOf(count, () => writeFile(join(a, 'one'), ''))
-      await toldOf(count, () => mkdir(b))
-      await toldOf(count, () => writeFile(join(b, 'two'), ''))
+      await toldOf(count, (name) => writeFile(join(a, name), ''))
+      await toldOf(count, () => mkdir(b, { recursive: true }))
+      await toldOf(count, (name) => writeFile(join(b, name), ''))
     } finally {
       stop()
     }
@@ -79,7 +86,7 @@ describe('one watch on the nearest existing folder', () => {
     const { count, stop } = watched([b, a, t])
     try {
       await toldOf(count, () => mkdir(b, { recursive: true }))
-      await toldOf(count, () => writeFile(join(b, 'one'), ''))
+      await toldOf(count, (name) => writeFile(join(b, name), ''))
     } finally {
       stop()
     }
@@ -93,10 +100,10 @@ describe('one watch on the nearest existing folder', () => {
     await mkdir(b, { recursive: true })
     const { count, stop } = watched([b, a])
     try {
-      await toldOf(count, () => rm(b, { recursive: true }))
-      await toldOf(count, () => writeFile(join(a, 'one'), ''))
-      await toldOf(count, () => mkdir(b))
-      await toldOf(count, () => writeFile(join(b, 'two'), ''))
+      await toldOf(count, () => rm(b, { recursive: true, force: true }))
+      await toldOf(count, (name) => writeFile(join(a, name), ''))
+      await toldOf(count, () => mkdir(b, { recursive: true }))
+      await toldOf(count, (name) => writeFile(join(b, name), ''))
     } finally {
       stop()
     }
@@ -108,7 +115,7 @@ describe('one watch on the nearest existing folder', () => {
     // Another watch, of the folder above, tells of the change; the list's watch, which holds nothing above, does not.
     const above = watched([t])
     try {
-      await toldOf(above.count, () => writeFile(join(t, 'one'), ''))
+      await toldOf(above.count, (name) => writeFile(join(t, name), ''))
     } finally {
       above.stop()
     }
@@ -119,13 +126,13 @@ describe('one watch on the nearest existing folder', () => {
   it('after its stop nothing is told', async () => {
     const t = await mkdtemp(join(tmpdir(), 'fw-'))
     const stopped = watched([t])
-    await toldOf(stopped.count, () => writeFile(join(t, 'one'), ''))
+    await toldOf(stopped.count, (name) => writeFile(join(t, name), ''))
     stopped.stop()
     const before = stopped.count()
     // Another watch of the same folder tells of the change, which the stopped one does not.
     const other = watched([t])
     try {
-      await toldOf(other.count, () => writeFile(join(t, 'two'), ''))
+      await toldOf(other.count, (name) => writeFile(join(t, name), ''))
     } finally {
       other.stop()
     }
@@ -142,17 +149,18 @@ describe('one watch on the nearest existing folder', () => {
     await symlink(long, short)
     toWatch.deps = { platform: 'win32', realpath: (path) => realpathSync.native(path), log: () => {} }
     const names: Array<string | undefined> = []
+    const written: string[] = []
     let told = 0
     const stop = watchNearest([join(short, 'b'), short], (file) => { told++; names.push(file) })
     try {
-      await toldOf(() => told, () => mkdir(join(long, 'b')))
-      await toldOf(() => told, () => writeFile(join(long, 'b', 'one'), ''))
+      await toldOf(() => told, () => mkdir(join(long, 'b'), { recursive: true }))
+      await toldOf(() => told, (name) => { written.push(name); return writeFile(join(long, 'b', name), '') })
     } finally {
       stop()
     }
     expect(given.filter((folder) => folder.includes('HXDIAL~1'))).toEqual([])
     expect(given).toContain(realpathSync.native(long))
     expect(names).toContain('b')
-    expect(names).toContain('one')
+    expect(names.some((name) => name !== undefined && written.includes(name))).toBe(true)
   })
 })
