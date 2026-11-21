@@ -469,7 +469,7 @@ describe('registry remote display names', () => {
     expect(aside).toHaveLength(1)
     expect(readFileSync(join(dataDir, aside[0]), 'utf8')).toBe(bytes)
     expect(statSync(join(dataDir, aside[0])).mode & 0o777).toBe(0o600)
-    expect(error).toHaveBeenCalledWith(expect.stringMatching(/^\[registry\] registry .*; moved it aside to .*registry\.json\.corrupt-.* and started empty$/))
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/^\[registry\] registry .*; moved it aside to [0-9a-f]{8} and started empty$/))
     ;(await registry.openProcessAgent({
       agentId: 'after-the-move',
       engine: 'claude',
