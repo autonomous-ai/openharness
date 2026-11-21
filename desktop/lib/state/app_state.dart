@@ -7727,6 +7727,15 @@ class AppNotifier extends ChangeNotifier {
   /// button of its own to name it — the browser opens on the sign-in page's chooser.
   Future<void> login([SignInProvider? provider]) async {
     if (_disposed || signingIn || signingOut || signOutError != null) return;
+    // `harness login --force` runs the CLI `harness uninstall` is removing (see [_checkAuthStatus]): nothing runs, and
+    // the person stays on the sign-in page, as a launch while the marker is held ends.
+    if (viewer == null && _discovery.uninstallHeld()) {
+      appLog.info(
+        'auth',
+        'no harness login: harness uninstall holds its marker',
+      );
+      return;
+    }
     final measureSignIn = productMeasurement.begin(ProductFlow.signIn);
     var signedInHere = false;
     final wasGuest = isGuest;
