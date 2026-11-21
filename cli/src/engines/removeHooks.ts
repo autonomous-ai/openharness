@@ -170,14 +170,14 @@ export async function removeEngineHooks(targets: HookTargets, platform: NodeJS.P
     return true
   }
   for (const home of targets.claude.homes) {
-    if (remote(home, join(home, claude.file))) continue
-    out.push(await removeJsonHooks(join(home, claude.file), {
+    if (remote(home, join(home, claude.fileName))) continue
+    out.push(await removeJsonHooks(join(home, claude.fileName), {
       schema: 'nested', messages: true,
       ...(claude.allow && 'list' in claude.allow ? { allowList: claude.allow.list, allowRules: targets.claude.allowRules } : {}),
     }))
   }
   for (const home of targets.codex.homes) {
-    const settingsFile = join(home, codex.file)
+    const settingsFile = join(home, codex.fileName)
     if (remote(home, settingsFile)) continue
     // Read before the hooks go: the review records are keyed by the hooks' places in it.
     const before = codex.reviewed ? settingsBefore(settingsFile) : null
@@ -185,7 +185,7 @@ export async function removeEngineHooks(targets: HookTargets, platform: NodeJS.P
     out.push(hooks)
     // Only once the hooks are out (or were already, on a second uninstall): a record taken away from a hook still there makes Codex ask about it again.
     if (codex.reviewed && !hooks.failed) out.push(await removeReviewedHooks(codex.reviewed, home, settingsFile, { before, now: () => codexHooksNow(home) }))
-    if (codex.allow && 'file' in codex.allow) out.push(await removeOwnedFile(join(home, codex.allow.file), (content) => RULES_OPENINGS.some((opening) => content.startsWith(opening))))
+    if (codex.allow && 'fileName' in codex.allow) out.push(await removeOwnedFile(join(home, codex.allow.fileName), (content) => RULES_OPENINGS.some((opening) => content.startsWith(opening))))
   }
   for (const rule of targets.native) {
     if (remote(rule.file)) continue

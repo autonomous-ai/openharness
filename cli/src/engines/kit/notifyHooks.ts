@@ -52,7 +52,7 @@ export function requireHookScript(engine: NotifyEngine): void {
   const missing = missingHookScript()
   if (!missing) return
   refusedForScript.add(engine)
-  throw new HookScriptMissing(missing)
+  throw new HookScriptMissing()
 }
 
 /** An engine that declares no Windows hook runner gets no hooks there. That is said once per install and is not a failure. */
@@ -66,11 +66,11 @@ export function hooksNotOnWindows(engine: string): true {
  * held file, and on every platform a missing notify.mjs. It is said in one line, no stack: a stack trace there buried
  * the hold (B4.10 VM log). Any other error or platform: the caller logs its own failure line.
  */
-export function isNamedHold(error: unknown, platform: NodeJS.Platform): boolean {
+export function isNamedHold(error: unknown, platform: NodeJS.Platform): error is HookPreparationHeld {
   return error instanceof HookPreparationHeld && (platform === 'win32' || error instanceof HookScriptMissing)
 }
 
-/** The words of that line; the caller adds the hold's reason, or HookScriptMissing's kind: that reason names a path. */
+/** The words of that line; the caller adds the hold. */
 export function hooksNotInstalled(engine: NotifyEngine): string {
   return `[hooks] ${engineName(engine)} hooks are not installed`
 }
@@ -116,7 +116,6 @@ function shellQuote(value: string): string {
 export type HookRunner = 'argv' | 'bash' | 'cmd' | 'powershell'
 
 const BARE_WORD = /^[A-Za-z0-9_-]+$/
-const refuse = (reason: string): never => { throw new HookPreparationHeld(`a hook argument ${reason}`) }
 
 /**
  * [argv] as [runner] takes it: the list itself for `argv`; for the others, one line that [runner] splits back into
@@ -126,10 +125,11 @@ const refuse = (reason: string): never => { throw new HookPreparationHeld(`a hoo
  * install with a reason.
  */
 export function quoteHookCommand(runner: HookRunner, argv: string[]): string | string[] {
-  if (!argv.length) refuse('list is empty')
+  // Each hold in fixed words of its own: the log prints them (architecture.hookHolds.spec.ts).
+  if (!argv.length) throw new HookPreparationHeld('a hook argument list is empty')
   for (const arg of argv) {
-    if (typeof arg !== 'string') refuse('is not text')
-    if (/[\0\r\n]/.test(arg)) refuse('holds a line break or NUL, which no hook runner passes whole')
+    if (typeof arg !== 'string') throw new HookPreparationHeld('a hook argument is not text')
+    if (/[\0\r\n]/.test(arg)) throw new HookPreparationHeld('a hook argument holds a line break or NUL, which no hook runner passes whole')
   }
   switch (runner) {
     case 'argv': return [...argv]
@@ -138,16 +138,16 @@ export function quoteHookCommand(runner: HookRunner, argv: string[]): string | s
       // cmd.exe expands %…% (and !…! with delayed expansion) even inside quotes, and a quote ends them. `& | < > ^ ( )`
       // are refused too, in case an engine does not wrap the line: unquoted, cmd.exe reads them as its own syntax. A
       // trailing backslash would escape the closing quote for the program's own parser (CommandLineToArgvW's rules).
-      if (/["%!&|<>^()]/.test(arg)) refuse('holds one of " % ! & | < > ^ ( ), which cmd.exe reads as more than text')
-      if (arg.endsWith('\\')) refuse('ends in a backslash, which would escape its closing quote')
+      if (/["%!&|<>^()]/.test(arg)) throw new HookPreparationHeld('a hook argument holds one of " % ! & | < > ^ ( ), which cmd.exe reads as more than text')
+      if (arg.endsWith('\\')) throw new HookPreparationHeld('a hook argument ends in a backslash, which would escape its closing quote')
       return BARE_WORD.test(arg) ? arg : `"${arg}"`
     }).join(' ')
     case 'powershell': return `& ${argv.map(withoutTrailingSeparators).map((arg) => {
       // Inside single quotes PowerShell reads only a quote, typographic ones too. Windows PowerShell 5.1 passes a
       // double quote inside an argument to a native program unescaped.
-      if (arg === '') refuse('is empty, which Windows PowerShell 5.1 drops')
-      if (arg.endsWith('\\')) refuse('ends in a backslash, which would escape its closing quote')
-      if (/["\u2018\u2019\u201a\u201b]/.test(arg)) refuse('holds a double or typographic quote, which PowerShell passes on differently')
+      if (arg === '') throw new HookPreparationHeld('a hook argument is empty, which Windows PowerShell 5.1 drops')
+      if (arg.endsWith('\\')) throw new HookPreparationHeld('a hook argument ends in a backslash, which would escape its closing quote')
+      if (/["\u2018\u2019\u201a\u201b]/.test(arg)) throw new HookPreparationHeld('a hook argument holds a double or typographic quote, which PowerShell passes on differently')
       return BARE_WORD.test(arg) ? arg : `'${arg.replace(/'/g, "''")}'`
     }).join(' ')}`
   }

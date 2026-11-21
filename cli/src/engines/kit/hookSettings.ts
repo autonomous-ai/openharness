@@ -12,10 +12,9 @@ import { env } from '../../config/env.js'
 import { HARNESS_AGENT_COMMANDS, HARNESS_AGENT_TOOLS, HARNESS_AGENT_VERBS, type HarnessAgentVerb, type HookSettings } from '../facets/hooks.js'
 import { prepareReviewed } from './hookReview.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
-import { errorKind } from '../../lib/log.js'
+import { errorKind, hashOf } from '../../lib/log.js'
 import { atomicWriteFile } from '../../lib/secureState.js'
 import { isMessagesBlock, messagesCommand, writeMessagesHook } from './messagesHook.js'
-import { HookScriptMissing } from './hookHeld.js'
 import { engineName } from '../../lib/agentNames.js'
 import { HOOK_SCRIPT, hookArgv, isNamedHold, hooksNotInstalled, hooksNotOnWindows, identitySettings, isManagedHook, requireHookScript, foreignHookBlocks, quoteHookCommand, withoutOwnHooks, type CommandHook, type HookBlock, type Settings } from './notifyHooks.js'
 import { HookPreparationHeld, inspectHookFile, runHookPreparation, type HookPreparationAttempt } from './nativeHookFiles.js'
@@ -44,7 +43,7 @@ export function notifyHookEntry(settings: HookSettings, argv: string[], platform
 
 export async function installHookSettings(engine: HookEngine, settings: HookSettings, port: number, home: string = defaultHookHome(settings), options: NativeHookOptions = {},
   platform: NodeJS.Platform = hostPlatform()): Promise<boolean> {
-  const files = [join(home, settings.file), ...(settings.reviewed ? [join(home, settings.reviewed.file)] : [])]
+  const files = [join(home, settings.fileName), ...(settings.reviewed ? [join(home, settings.reviewed.fileName)] : [])]
   // A startup refresh and a launch share the entire installation. Releasing the
   // reservation between notify and Messages let each revoke the other's second
   // stage, so a healthy launch could be held by the daemon's own refresh.
@@ -68,11 +67,10 @@ export async function installHookSettings(engine: HookEngine, settings: HookSett
       return true
     }, { ...options, identity: JSON.stringify([engine, identitySettings(settings, platform), port, home, entry.args ? [entry.command, entry.args] : entry.command, env.HARNESS_AGENT_MESSAGES_DIR]) })
   } catch (err) {
-    // A hold's reason is fixed words (hookHeld.ts); HookScriptMissing's names a path, so that one is said by its kind.
-    const held = err instanceof HookPreparationHeld && !(err instanceof HookScriptMissing) ? err.reason : errorKind(err)
+    const held = err instanceof HookPreparationHeld ? err.hold : errorKind(err)
     if (isNamedHold(err, platform)) { console.error(`${hooksNotInstalled(engine)} · ${held}`); return false }
     console.error(settings.messages.failed.replace(/\{(file|script|port)\}/g, (_, name: string) =>
-      name === 'file' ? files[0] : name === 'script' ? HOOK_SCRIPT : String(port)), held)
+      name === 'file' ? hashOf(files[0]) : name === 'script' ? hashOf(HOOK_SCRIPT) : String(port)), held)
     return false
   }
 }
@@ -86,7 +84,7 @@ export async function installHookSettings(engine: HookEngine, settings: HookSett
  * A message can still reach an idle agent, typed, and a command not allowed asks, as before.
  */
 async function installMessagesBlock(engine: HookEngine, settings: HookSettings, home: string, attempt: HookPreparationAttempt, verifyRequired: () => void): Promise<void> {
-  const file = join(home, settings.file)
+  const file = join(home, settings.fileName)
   const root = env.HARNESS_AGENT_MESSAGES_DIR
   const inboxCommand = messagesCommand(root)
   const { inbox, allow } = settings
@@ -117,22 +115,21 @@ async function installMessagesBlock(engine: HookEngine, settings: HookSettings, 
     published.verify(); approval?.verify()
     if (inbox) writeMessagesHook(root)
   } catch (err) {
-    // A hold's reason is fixed words (hookHeld.ts); HookScriptMissing's names a path, so that one is said by its kind.
-    const held = err instanceof HookPreparationHeld && !(err instanceof HookScriptMissing) ? err.reason : errorKind(err)
+    const held = err instanceof HookPreparationHeld ? err.hold : errorKind(err)
     // The file by its fixed name and its engine's, never its path, which names the person's home.
-    if (blockChanged) console.warn(`[hooks] Agent Messages' hook not installed in ${engineName(engine)}'s ${settings.file} (messages reach its agents once they are idle):`, held)
+    if (blockChanged) console.warn(`[hooks] Agent Messages' hook not installed in ${engineName(engine)}'s ${settings.fileName} (messages reach its agents once they are idle):`, held)
     else {
       // The hook was already in place and only the allowance was refused (a read-only file): its script is
       // still kept current, and the log names what failed rather than calling the hook missing.
-      console.warn(`[hooks] could not allow Harness's agent commands in ${engineName(engine)}'s ${settings.file} (the engine asks before each one):`, held)
+      console.warn(`[hooks] could not allow Harness's agent commands in ${engineName(engine)}'s ${settings.fileName} (the engine asks before each one):`, held)
       if (inbox) try { writeMessagesHook(root) } catch { /* the hook runs nothing it cannot find; messages wait for idle */ }
     }
     verifyRequired()
   }
-  if (allow && 'file' in allow) {
+  if (allow && 'fileName' in allow) {
     // Each path written as a Starlark string's contents: the file's rules are `prefix_rule(pattern=["…"])`.
-    try { writeRulesFile(join(home, allow.file), harnessRules(allow.rules, (path) => JSON.stringify(path).slice(1, -1)).flat().join('\n')) } catch (err) {
-      console.warn(`[hooks] could not allow Harness's agent commands in ${engineName(engine)}'s ${allow.file} (the engine asks before each one):`, errorKind(err))
+    try { writeRulesFile(join(home, allow.fileName), harnessRules(allow.rules, (path) => JSON.stringify(path).slice(1, -1)).flat().join('\n')) } catch (err) {
+      console.warn(`[hooks] could not allow Harness's agent commands in ${engineName(engine)}'s ${allow.fileName} (the engine asks before each one):`, errorKind(err))
     }
   }
 }
@@ -224,9 +221,10 @@ function writeRulesFile(file: string, rules: string): void {
 
 async function installNotifyHooks(settings: HookSettings, port: number, home: string, entry: { command: string; args?: string[] }, attempt: HookPreparationAttempt,
   platform: NodeJS.Platform): Promise<boolean> {
-  const file = join(home, settings.file)
+  const file = join(home, settings.fileName)
+  // A path names the person's home: the file and the hook script by their hashes (facets/hooks.ts `messages`).
   const say = (line: string): string => line.replace(/\{(file|script|port)\}/g, (_, name: string) =>
-    name === 'file' ? file : name === 'script' ? HOOK_SCRIPT : String(port))
+    name === 'file' ? hashOf(file) : name === 'script' ? hashOf(HOOK_SCRIPT) : String(port))
   // Ours as this platform reads a hook: on Windows a line for its runner, or exec form (kit/notifyHooks.ts isManagedHook).
   const isOurs = (block: HookBlock): boolean => Array.isArray(block?.hooks) && block.hooks.some(hook => isManagedHook(hook, platform))
   // A hook already there is the current one when its line is. On Windows its arguments too: exec form keeps them in

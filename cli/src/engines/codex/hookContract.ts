@@ -10,7 +10,7 @@ export const hooks: HookContract = {
     // `Agent.codexHome`/`agent_create`) reads hooks.json from THAT folder, not this one, so `onCreateAgent`
     // installs again into the chosen profile before spawning such an agent. Idempotent either way.
     home: { setting: 'CODEX_HOME' },
-    file: 'hooks.json',
+    fileName: 'hooks.json',
     // The session's start and prompt bind it; Stop says its turns end by hook and closes none, as Codex waits for it
     // before it writes the turn's end (no `stopClosesTurns`, facts-codex §5); Interrupt ends its turn; PermissionRequest
     // and PreToolUse (`request_user_input` only, so no hook runs for any other tool) say it waits on the person. No
@@ -37,7 +37,7 @@ export const hooks: HookContract = {
     // `harness device notify` as exactly its three words (facets/hooks.ts HARNESS_AGENT_COMMANDS), never `device` alone:
     // the pattern matches argv, so the line after `notify` is one argument. By name only: the dial skill names `harness`.
     allow: {
-      file: 'rules/harness.rules',
+      fileName: 'rules/harness.rules',
       rules: [
         'host_executable(name="harness", paths=["{launcher}"])',
         'prefix_rule(pattern=["harness", {verbs}], decision="allow")',
@@ -72,7 +72,7 @@ export const hooks: HookContract = {
     // PreToolUse, and Codex hashes both. Any other hook is still asked about. A Codex that hashes differently asks
     // about these again, as before.
     reviewed: {
-      file: 'config.toml',
+      fileName: 'config.toml',
       table: 'hooks.state',
       key: 'trusted_hash',
       events: {

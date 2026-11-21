@@ -14,7 +14,7 @@
  * its Node.
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { mkdir, symlink, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
@@ -29,6 +29,7 @@ import { GH_FORBIDDEN_STUB } from '../../src/testing/ghStub.js'
 import { hooks as claudeHooks } from '../../src/engines/claude/hookContract.js'
 import { hooks as codexHooks } from '../../src/engines/codex/hookContract.js'
 import { readAdoptedHomes } from '../../src/engines/kit/homeAdoption.js'
+import { hashOf } from '../../src/lib/log.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
 import { endRootProcesses } from '../../src/testing/rootProcesses.js'
 import { assertSocketPathFits } from '../../src/testing/socketPathRoom.js'
@@ -275,17 +276,29 @@ export function assertHookScriptBeside(scriptPath: string): void {
 }
 
 /**
- * The files a daemon's log says it installed hooks or plugins into, found them already in, or left alone.
- * The update line names the hook script first and the file it rewrote after ` in `.
+ * The files a daemon's log says it installed hooks or plugins into, found them already in, or left alone, each by the
+ * hash the log names it by (lib/log.ts `hashOf`): a path would name the person's home. The update line names the hook
+ * script first and the file it rewrote after ` in `.
  */
-export function hookFilesNamed(log: string): string[] {
+function hookFilesNamed(log: string): string[] {
   const files: string[] = []
   for (const line of log.split('\n')) {
     if (!line.includes('[hooks]')) continue
-    const named = line.includes('updated (path/port changed)') ? / in (\/\S+)\s*$/.exec(line) : /(?:→|unchanged:) (\/\S+)/.exec(line)
+    const named = line.includes('updated (path/port changed)') ? / in ([0-9a-f]{8})\s*$/.exec(line) : /(?:→|unchanged:) ([0-9a-f]{8})(?:\s|$)/.exec(line)
     if (named) files.push(named[1])
   }
   return files
+}
+
+/**
+ * The hashes [log] names a hook file by that are no file's under [root]: each path there is hashed as the daemon
+ * spells it, the root joined to the path inside it. A link is not followed, so a file reached through one is outside.
+ */
+export function hooksOutside(log: string, root: string): string[] {
+  const named = hookFilesNamed(log)
+  if (!named.length) return []
+  const inside = new Set(readdirSync(root, { recursive: true, encoding: 'utf8' }).map((path) => hashOf(join(root, path))))
+  return named.filter((hash) => !inside.has(hash))
 }
 
 export const until = async <T>(what: string, probe: () => Promise<T | null | undefined | false> | T | null | undefined | false, ms = 30_000, every = 100): Promise<T> => {
@@ -565,8 +578,8 @@ esac
 
   /** Throws when the daemon said it put hooks outside the root, or an engine refused hooks found there. */
   private assertHooksStayedInside(): void {
-    const outside = hookFilesNamed(this.output).filter((file) => !inside(this.root, file))
-    if (outside.length) throw new Error(`the daemon under test wrote hooks outside ${this.root}: ${[...new Set(outside)].join(', ')}`)
+    const outside = hooksOutside(this.output, this.root)
+    if (outside.length) throw new Error(`the daemon under test wrote hooks outside ${this.root}, to the files its log names by these hashes: ${[...new Set(outside)].join(', ')}`)
     const refused = this.hookLog().split('\n').filter((line) => line.includes('REFUSED'))
     if (refused.length) throw new Error(`a fake engine refused to run hooks (test root ${this.root}):\n${refused.join('\n')}`)
   }

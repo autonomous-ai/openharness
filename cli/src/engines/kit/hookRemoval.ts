@@ -46,7 +46,11 @@ export function withoutHarnessHooks(text: string | null, rule: JsonHookRemoval, 
   const events = settings[member]
   let removed = 0
   if (events !== undefined) {
-    if (!object(events)) throw new HookPreparationHeld(`the ${member} member is not an object`)
+    if (!object(events)) {
+      // Fixed words, which the log prints (architecture.hookHolds.spec.ts): a named block is a contract's member.
+      if (rule.schema === 'named') throw new HookPreparationHeld('the hook block\'s member is not an object')
+      throw new HookPreparationHeld('the hooks member is not an object')
+    }
     if (rule.schema === 'nested') removed = withoutOwnHooks(events, owns, () => true)
     else for (const [event, list] of Object.entries(events)) {
       if (!Array.isArray(list)) continue
@@ -129,7 +133,7 @@ export async function removeOwnedFile(file: string, owned: (content: string) => 
  */
 export async function removeReviewedHooks(record: HookReviewRecord, home: string, settingsFile: string,
   held: { before: Settings | null; now: () => Settings }, platform: NodeJS.Platform = hostPlatform()): Promise<HookFileRemoval> {
-  const config = join(home, record.file)
+  const config = join(home, record.fileName)
   try {
     return await runHookPreparation([config], async (attempt) => {
       const observed = inspectHookFile(config, 0o600)

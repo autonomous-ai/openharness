@@ -22,7 +22,7 @@ export interface HookFileRemoval {
  * without the identity reader's.
  */
 export function failure(error: unknown): string {
-  if (error instanceof HookPreparationHeld) return error.reason
+  if (error instanceof HookPreparationHeld) return error.hold
   if (error instanceof IdentityReadUnavailable) return error.message.replace(/^Conversation identity is held: (.*?)\.?$/s, '$1')
   return error instanceof Error ? error.message : String(error)
 }

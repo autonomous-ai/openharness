@@ -1,9 +1,8 @@
 /** Eager mechanics for native JSON hook schemas; unreadable settings are never empty settings. */
 import { command, requireHookScript, isNamedHold, hooksNotInstalled, hooksNotOnWindows, identitySettings, isManagedHook, isManagedHookCommand, foreignHookBlocks, type HookRunner, type Settings, type HookBlock } from './notifyHooks.js'
 import { HookPreparationHeld, inspectHookFile, runHookPreparation } from './nativeHookFiles.js'
-import { HookScriptMissing } from './hookHeld.js'
 import type { NativeHookOptions } from './nativeLocations.js'
-import { errorKind } from '../../lib/log.js'
+import { errorKind, hashOf } from '../../lib/log.js'
 import { hostPlatform } from './windowsFiles.js'
 
 export interface NativeHookSettings {
@@ -90,13 +89,13 @@ export async function installNativeHookSettings(rule: NativeHookSettings, port: 
       }
       const published = await observed.replace(changed ? JSON.stringify(parsed, null, 2) + '\n' : observed.content!, attempt)
       published.verify()
-      console.log(changed ? rule.messages.installed.replace('{file}', () => rule.file) : rule.messages.current)
+      // The file by its hash: its path names the person's home.
+      console.log(changed ? rule.messages.installed.replace('{file}', () => hashOf(rule.file)) : rule.messages.current)
       if (changed && rule.messages.after) console.log(rule.messages.after)
       return true
     }, { ...options, identity: JSON.stringify([identitySettings(rule, platform), port, cmd]) })
   } catch (error) {
-    // A hold's reason is fixed words (hookHeld.ts); HookScriptMissing's names a path, so that one is said by its kind.
-    const held = error instanceof HookPreparationHeld && !(error instanceof HookScriptMissing) ? error.reason : errorKind(error)
+    const held = error instanceof HookPreparationHeld ? error.hold : errorKind(error)
     if (isNamedHold(error, platform)) console.error(`${hooksNotInstalled(rule.engine)} · ${held}`)
     else console.error(rule.messages.failed, held)
     return false

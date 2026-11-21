@@ -139,7 +139,7 @@ beforeAll(async () => {
   const reviewed = codexContract.settings.reviewed!
   const place = json(join(codexHome(), 'hooks.json')).hooks!.Stop.length - 1
   ownTrust = [`${join(realpathSync(codexHome()), 'hooks.json')}:${reviewed.events.Stop}:${place}:0`, reviewHash(reviewed, 'Stop', undefined, OWN.hooks[0]!)]
-  const config = join(codexHome(), reviewed.file)
+  const config = join(codexHome(), reviewed.fileName)
   write(config, `${read(config)}\n[hooks.state.${JSON.stringify(ownTrust[0])}]\ntrusted_hash = ${JSON.stringify(ownTrust[1])}\n`)
 
   // The move: the XDG roots hold the tree, and the data root its marker, so the rule picks them. The next start installs from there.
