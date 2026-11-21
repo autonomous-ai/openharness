@@ -24,7 +24,7 @@ import { homedir } from 'node:os'
 import { basename, dirname, win32, type PlatformPath } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { homePath } from '../config/envFields.js'
-import { errorKind, hashOf } from './log.js'
+import { errorKind } from './log.js'
 
 const PRIVATE_DIRECTORY_MODE = 0o700
 const PRIVATE_FILE_MODE = 0o600
@@ -568,7 +568,7 @@ export function readState<T>(file: string, kind: StateKind, parse: (text: string
       if (memory && round < READ_TRIES) continue
       return read
     }
-    if (setAsideUnreadable(file)) {
+    if (setAsideUnreadable(file, base)) {
       console.warn(`[state] ${base} could not be read (${read.failure}); kept as ${base}.unreadable, starting empty.`)
     }
     return { state: 'missing' }
@@ -586,14 +586,15 @@ export function requireState<T>(file: string, parse: (text: string) => T, kind: 
   return read.state === 'ok' ? read.value : null
 }
 
-/** Rename to `<file>.unreadable`, over an older one. Never throws: a failure is one log line. True when set aside. */
-function setAsideUnreadable(file: string): boolean {
+/** Rename to `<file>.unreadable`, over an older one. Never throws: a failure is one log line, naming the file by [base], as
+ *  readState does. True when set aside. */
+function setAsideUnreadable(file: string, base: string): boolean {
   try {
     runSync(renameOverSteps(file, `${file}.unreadable`))
     unreadableFiles.delete(file)
     return true
   } catch (error) {
-    console.warn(`[state] ${hashOf(file)} could not be set aside (${errorKind(error)})`)
+    console.warn(`[state] ${base} could not be set aside (${errorKind(error)})`)
     const memory = unreadableFiles.get(file)
     if (memory) memory.stuck = true
     return false
