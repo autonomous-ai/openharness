@@ -513,16 +513,24 @@ export class ObservedSource implements HostSource {
     return { ...(bundle ? { bundle } : {}), ...(near ? { pane: near.pane } : {}) }
   }
 
-  /** What a rest and a tap may show: its panes, and in an adapter where it has none, the pane its caller placed it at. A
-   *  place is a guess: showing the wrong terminal costs a look, while words typed there would run at another's prompt.
-   *  So only these two read it, never words, `byPane` or `paneOf`. */
+  /** What a rest and a tap may show: its panes, and in an adapter where it has none of its own, the pane its caller
+   *  placed it at (placeIn). A place is a guess: showing the wrong terminal costs a look, while words typed there would
+   *  run at another's prompt. So only these two and its name read it, never words, `byPane` or `paneOf`. */
   private shownOnly(e: Entry): readonly Located[] {
     return (this.deps.actions?.adapters ?? []).flatMap((adapter) => {
-      const own = e.panes.find((located) => located.adapter === adapter)
-      if (own) return [own]
-      const at = this.paneNames.get(adapter.id)?.placed.get(e.agent.id)
-      return at === undefined ? [] : [{ adapter, pane: { adapter: adapter.id, id: at } }]
+      const pane = this.placeIn(e, adapter.id)
+      return pane ? [{ adapter, pane }] : []
     })
+  }
+
+  /** Its pane in that adapter as a rest, a tap and its name read it: its own; else the one its caller placed it at; else
+   *  its held one. A held pane counts as none for the devices (paneOf), which place the agent where it runs, while the
+   *  held pane shows only where it was started from. */
+  private placeIn(e: Entry, adapter: string): Pane | undefined {
+    const own = e.panes.find(({ pane }) => pane.adapter === adapter)?.pane
+    if (own && !own.held) return own
+    const at = this.paneNames.get(adapter)?.placed.get(e.agent.id)
+    return at === undefined ? own : { adapter, id: at }
   }
 
   /** Every pane its adapters know it by, afresh: a session resumed elsewhere keeps none it left. One paired with an hc
@@ -765,10 +773,10 @@ export class ObservedSource implements HostSource {
     return pane?.renamed ? pane.title : e.title ?? pane?.title ?? folderName(e.agent.cwd, e.agent.engine)
   }
 
-  /** The name of its pane in the first adapter that names one: its own pane there, else the one it was placed at. */
+  /** The name of its pane in the first adapter that names one, the pane a rest and a tap show there (placeIn). */
   private paneName(e: Entry): PaneName | undefined {
-    for (const [adapter, { names, placed }] of this.paneNames) {
-      const id = e.panes.find(({ pane }) => pane.adapter === adapter)?.pane.id ?? placed.get(e.agent.id)
+    for (const [adapter, { names }] of this.paneNames) {
+      const id = this.placeIn(e, adapter)?.id
       const name = id === undefined ? undefined : names.get(id)
       if (name) return name
     }
