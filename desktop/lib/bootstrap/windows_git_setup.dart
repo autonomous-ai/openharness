@@ -21,7 +21,13 @@ class WindowsGitSetup {
     bool? isWindows,
     void Function(String line)? log,
   }) : _environment = environment ?? Platform.environment,
-       _isFile = isFile ?? ((path) => File(path).existsSync()),
+       // Unfollowed: winget.exe in WindowsApps is an App Execution Alias, a
+       // link the file system cannot follow, which Windows runs.
+       _isFile =
+           isFile ??
+           ((path) =>
+               FileSystemEntity.typeSync(path, followLinks: false) !=
+               FileSystemEntityType.notFound),
        _run = run ?? _runWinget,
        _isWindows = isWindows ?? (RuntimePlatform.isWindows && !kUnderTest),
        _log = log ?? ((_) {});
@@ -89,7 +95,12 @@ class WindowsGitSetup {
     if (marker == null || _isFile(marker)) return;
     try {
       await File(marker).create(recursive: true);
-      final code = await _run('winget', arguments);
+      final winget = ProgramPath.winget(
+        environment: _environment,
+        isWindows: true,
+        isProgram: _isFile,
+      ).resolve();
+      final code = await _run(winget, arguments);
       _log(
         code == 0
             ? 'Git for Windows installed'

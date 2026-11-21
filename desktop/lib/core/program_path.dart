@@ -28,6 +28,13 @@ class ProgramPath {
     bool Function(String path)? isProgram,
   }) : this._('ssh', _openSsh, environment, isWindows, isProgram);
 
+  /// winget, then this user's WindowsApps, where the App Installer puts it.
+  ProgramPath.winget({
+    Map<String, String>? environment,
+    bool? isWindows,
+    bool Function(String path)? isProgram,
+  }) : this._('winget', _windowsApps, environment, isWindows, isProgram);
+
   ProgramPath._(
     this._name,
     this._windowsFolders,
@@ -100,6 +107,11 @@ class ProgramPath {
 
   static List<String> _openSsh(Map<String, String> _) => [
     p.windows.join(windowsFolder(), 'System32', 'OpenSSH'),
+  ];
+
+  static List<String> _windowsApps(Map<String, String> env) => [
+    if (env['LOCALAPPDATA'] case final local?)
+      p.windows.join(local, 'Microsoft', 'WindowsApps'),
   ];
 }
 
