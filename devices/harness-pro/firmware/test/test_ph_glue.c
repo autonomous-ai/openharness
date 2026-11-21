@@ -1697,6 +1697,18 @@ static void ring_and_its_focus(void) {
     CHECK(U.nav.depth == 3 && !strcmp(top()->agent, "a5"));
     pod_ui_focus(&U, "a6", 2050 + 300);
     CHECK(U.nav.depth == 3 && !strcmp(top()->agent, "a6") && top()->tab == POD_TAB_APP);
+    // The agents first (Harness still shown), the Mac's focus, the apps frame last: the focus opens in the ring, not in Recent.
+    pick_codex();
+    ring_roster();
+    pod_ui_focus(&U, "a6", 2050 + 100);
+    CHECK(U.nav.depth == 1 && !strcmp(U.landing, "codex"));
+    pod_ui_apps(&U, APPS3, 3, "codex", 2050 + 200);
+    CHECK(U.nav.depth == 3 && !strcmp(top()->agent, "a6") && top()->tab == POD_TAB_APP && !U.landing[0] && !U.pending_focus[0]);
+    pick_codex();   // the wait over, a focus that came early opens where a focus does
+    ring_roster();
+    pod_ui_focus(&U, "a6", 2050 + 900);
+    pod_ui_apps(&U, APPS3, 3, "vscode", 2050 + 1000);
+    CHECK(U.nav.depth == 3 && !strcmp(top()->agent, "a6") && top()->tab == POD_TAB_RECENT && !U.pending_focus[0]);
 }
 
 static void pick_of_shown_app_opens_at_once(void) {
