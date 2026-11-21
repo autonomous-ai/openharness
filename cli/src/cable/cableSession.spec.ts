@@ -19,6 +19,9 @@ import { DialLog } from './dialLog.js'
 import { noticeSummary } from './dialText.js'
 import { NO_ACCESS, NO_ACCESS_YET, PortAccessError } from './portAccess.js'
 import type { PetStore } from './pets/store.js'
+import { AppWake } from './hosts/appWake.js'
+import { ClaudeAppSource } from './hosts/claudeAppSource.js'
+import { observedAgentId } from './hosts/observed.js'
 import { HostRegistry } from './hosts/registry.js'
 import type { AppEntry, AppList, AppPick, HostAgent, HostSource } from './hosts/types.js'
 import type { RegisteredSession } from '../lib/registry.js'
@@ -7866,6 +7869,113 @@ describe('what the dial cannot do for an agent', () => {
       await vi.advanceTimersByTimeAsync(SWIPE_REST_MS)
       expect(onFault).toHaveBeenCalledWith(expect.objectContaining({ message: 'orca is gone' }), false)
     } finally { vi.useRealTimers(); await session.stop() }
+  })
+})
+
+describe("a resting Claude app row's words (docs/plans/2026-11-21-dial-claude-app-wake-send-design.md)", () => {
+  const ROOT = '/h/Library/Application Support/Claude/claude-code-sessions'
+  const SESSION = '0b7c2f4e-8a1d-4c3b-9e5f-6a7b8c9d0e1f'
+  const ROW = observedAgentId('claude', SESSION)
+  const BUSY = 'Still opening Fix the build. Try again in a moment.'
+
+  /** The dial greeted on a host whose registry holds the Claude app's real source and wake, on a fake store listing one
+   *  session, links that open, an observed source listing nothing and a mod that never polls: a wake stays opening until
+   *  the test fires its timer. */
+  async function resting() {
+    const timers: Array<{ ms: number; run: () => void }> = []
+    const opens: string[] = []
+    const wake = new AppWake({
+      open: async (localId) => { opens.push(localId); return true },
+      observed: { list: () => [], onChange: () => () => {}, send: async () => ({ ok: true }) },
+      onPoll: () => () => {},
+      after: (ms, run) => { timers.push({ ms, run }); return () => {} },
+      monotonic: () => 0,
+      log: () => {},
+      count: () => {},
+    })
+    const source = new ClaudeAppSource({
+      store: {
+        folders: async () => ({ roots: [ROOT], accounts: [join(ROOT, 'acc')], orgs: [join(ROOT, 'acc', 'org')] }),
+        files: async () => {},
+        touch: async () => {},
+        read: async () => ({ sessions: [{ localId: 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b', sessionId: SESSION,
+          cwd: '/work/api', title: 'Fix the build', lastActivityAt: 1 }], parsed: 1, skipped: 0, over: 0, more: false }),
+        forget: () => {},
+      },
+      roots: [{ root: ROOT, watch: [ROOT] }],
+      watch: () => () => {},
+      after: () => () => {},
+      focus: async () => true,
+      canShow: () => true,
+      show: async () => 'ok',
+      canLink: () => true,
+      wake,
+      monotonic: () => 0,
+      log: () => {},
+    })
+    const host = new DaemonCableHost({
+      sessions: () => [], displayName: (s) => s.agentId, machineName: () => 'this-mac', machineId: () => 'mac-local',
+      computerId: () => 'abc', sendTurn: vi.fn(), stopTurn: vi.fn(), answer: vi.fn(), recent: () => [], recentAsks: () => [],
+      log: () => {},
+    })
+    host.setRegistry(new HostRegistry([host.harness, source]))
+    vi.spyOn(host, 'transcribe').mockResolvedValue('run the build')
+    const listed = new Promise<void>((resolve) => { source.onChange(resolve) })
+    source.start()
+    await listed
+    const c = await connect(host)
+    c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    await vi.waitFor(() => expect(c.port.types()).toContain('agents.end'))
+    return { ...c, timers, opens }
+  }
+  const speak = (port: LoopbackPort, uploadId: string) => {
+    port.say({ t: 'voice.begin', agentId: ROW, lang: 'en', sr: 16000, uploadId })
+    port.pcm(Buffer.alloc(3200, 7))
+  }
+
+  it('a resting Claude app row takes voice; words while it opens are refused on the dial in plain words', async () => {
+    const { session, port, opens } = await resting()
+    try {
+      speak(port, 'u1')
+      await settle()
+      // Taken at voice.begin, as a Harness agent's words are.
+      expect(port.types()).not.toContain('voice.error')
+      port.say({ t: 'voice.end', uploadId: 'u1' })
+      await vi.waitFor(() => expect(opens).toHaveLength(1))
+      speak(port, 'u2')
+      port.say({ t: 'voice.end', uploadId: 'u2' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'voice.error', uploadId: 'u2', message: BUSY }))
+      // The first words still wait for their session.
+      expect(port.sent.some((m) => m.t === 'voice.error' && m.uploadId === 'u1')).toBe(false)
+    } finally { vi.restoreAllMocks(); await session.stop() }
+  })
+
+  it("30 s with no process: the dial's voice error says it did not open", async () => {
+    const { session, port, timers } = await resting()
+    try {
+      speak(port, 'u1')
+      port.say({ t: 'voice.end', uploadId: 'u1' })
+      await vi.waitFor(() => expect(timers.map((t) => t.ms)).toContain(30_000))
+      timers.find((t) => t.ms === 30_000)!.run()
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'voice.error', uploadId: 'u1',
+        message: 'Fix the build did not open in Claude. Try again.' }))
+    } finally { vi.restoreAllMocks(); await session.stop() }
+  })
+
+  it("a voice draft's send while it opens resolves with the wake's refusal", async () => {
+    const { session, port, opens } = await resting()
+    try {
+      speak(port, 'u1')
+      port.say({ t: 'voice.end', uploadId: 'u1' })
+      await vi.waitFor(() => expect(opens).toHaveLength(1))
+      speak(port, 'u2')
+      port.say({ t: 'voice.end', uploadId: 'u2', review: true })
+      await vi.waitFor(() => expect(port.types()).toContain('voice.draft'))
+      const draft = port.sent.find((m) => m.t === 'voice.draft')!
+      port.say({ t: 'draft.command', draftId: draft.id, revision: draft.revision, requestId: 'r1', op: 'send' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual(expect.objectContaining({ t: 'draft.state', requestId: 'r1',
+        error: BUSY })))
+    } finally { vi.restoreAllMocks(); await session.stop() }
   })
 })
 
