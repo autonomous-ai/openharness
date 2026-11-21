@@ -4,7 +4,7 @@ use crate::cli::{HarnessCli, find_cli};
 use crate::types::MemoryLog;
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -68,9 +68,7 @@ impl Fake {
 
     /// The script as the override, with the test's own PATH, where the script's tools are.
     pub fn cli(&self) -> HarnessCli {
-        let path_var = env::var_os("PATH");
-        let invocation = find_cli(self.folder.path(), path_var.as_deref(), Some(&self.program())).unwrap();
-        HarnessCli::new(invocation, self.log.clone())
+        cli_at(&self.program(), self.log.clone())
     }
 
     fn file(&self, name: &str) -> PathBuf {
@@ -80,6 +78,14 @@ impl Fake {
     fn lines(&self, name: &str) -> Vec<String> {
         fs::read_to_string(self.file(name)).unwrap_or_default().lines().map(String::from).collect()
     }
+}
+
+/// The fake at `program` as the override, its folder as home, with the test's own PATH, where the script's tools are.
+fn cli_at(program: &Path, log: Arc<MemoryLog>) -> HarnessCli {
+    let path_var = env::var_os("PATH");
+    let home = program.parent().expect("the fake is in a folder");
+    let invocation = find_cli(home, path_var.as_deref(), Some(program)).unwrap();
+    HarnessCli::new(invocation, log)
 }
 
 /// Whether the process is there (a zombie still is).
@@ -103,7 +109,7 @@ pub fn wait_gone(pid: i32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::Cli;
+    use crate::cli::{Cli, spawn_lock};
     use std::process::{Command, Stdio};
 
     /// The fake program a runner starts; unset, the test is no runner.
@@ -115,12 +121,8 @@ mod tests {
     #[ignore = "run only by a_fake_ends_with_its_parent"]
     fn a_runner_of_the_fake() {
         let Some(program) = env::var_os(RUNNER) else { return };
-        let home = tempfile::tempdir().unwrap();
-        let path_var = env::var_os("PATH");
-        let invocation = find_cli(home.path(), path_var.as_deref(), Some(&PathBuf::from(program))).unwrap();
-        let _watch = HarnessCli::new(invocation, Arc::new(MemoryLog::default()))
-            .spawn(&["hardware", "watch", "--json"])
-            .unwrap();
+        // The fake's own folder as home: a kill runs no destructor, so a temp folder of the runner's would stay.
+        let _watch = cli_at(Path::new(&program), Arc::default()).spawn(&["hardware", "watch", "--json"]).unwrap();
         loop {
             thread::park();
         }
@@ -132,14 +134,19 @@ mod tests {
     fn a_fake_ends_with_its_parent() {
         let fake = Fake::new();
         fake.script("hardware watch --json", &[r#"{"attached":false}"#, "@wait never"]);
-        let mut runner = Command::new(env::current_exe().unwrap())
-            .args(["--exact", "testing::tests::a_runner_of_the_fake", "--ignored", "--nocapture"])
-            .env(RUNNER, fake.program())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
+        let mut runner = {
+            // As around every spawn (cli::spawn_lock): on a Mac the runner would otherwise keep the pipes of a child
+            // another test starts at that moment, and hold that child's stdin and output open while it runs.
+            let _spawning = spawn_lock();
+            Command::new(env::current_exe().unwrap())
+                .args(["--exact", "testing::tests::a_runner_of_the_fake", "--ignored"])
+                .env(RUNNER, fake.program())
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap()
+        };
         let end = Instant::now() + Duration::from_secs(5);
         let pid = loop {
             if let Some(&pid) = fake.pids().first() {
