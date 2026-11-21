@@ -79,7 +79,7 @@ export interface TierBWorld {
   readonly front: App | 'other'
   /** A mod poll for the Claude session [sessionId] closed now. */
   modPolled(sessionId: string): void
-  /** What a fake app did on its own failed: the scenario fails with it at its next step, wait or stop. */
+  /** A fake app's own failure, outside any step: the scenario fails with it at its next step, wait or stop. */
   fail(error: unknown): void
   /** A title of the ChatGPT app's window, as Harness Device reads it: a line on the watch. */
   title(text: string): void
@@ -138,7 +138,7 @@ export function writeRecordingOpen(path: string, runs: string): void {
   writeExecutable(path, `#!/bin/sh\ncode=0\n${fails.join('')}printf '%s %s\\n' "$code" "$*" >> '${runs}'\nexit "$code"\n`)
 }
 
-/** The apps whose links the recording open at [path] fails from now on: every other app's open. */
+/** The apps whose links the recording open at [path] fails from now on; every other app's links open. */
 export function linksFail(path: string, apps: readonly App[]): void {
   for (const app of Object.keys(SCHEME) as App[]) {
     if (apps.includes(app)) writeFileSync(failsFile(path, app), '')
