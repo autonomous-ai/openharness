@@ -293,6 +293,29 @@ describe('the outer place of an agent in the person\'s herdr', () => {
     expect(logs).toEqual(found)
   })
 
+  // A client whose own pty the person's tmux, Zellij or another herdr made: its parents end at the detached server, so
+  // no window holds it. herdr 0.9.5 strips the multiplexers' variables from its panes, so the agent's hints cannot name
+  // that multiplexer's pane (the follow-ups design): the agent stays on herdr's page, and no raise is tried.
+  it('a client whose terminal tmux, Zellij or herdr made: {}, its own terminal\'s maker read alone', async () => {
+    for (const maker of ['tmux', 'zellij', HERDR]) {
+      const processes = async () => [
+        ...TABLE.filter((p) => p.pid !== 4300), ...SECOND,
+        { pid: 4400, ppid: 4399, tty: 'ttys009', executable: HERDR }, { pid: 4399, ppid: 4398, tty: 'ttys009', executable: '-zsh' },
+        { pid: 4398, ppid: 1, executable: maker },
+      ]
+      const lsof = sockets({ 80: SERVER, 4310: [['0xb2', '->0xa1']], 4400: [['0xb4', '->0xa1']] })
+      // The client inside the multiplexer was typed into last: the one asked of.
+      const atime = { '/dev/ttys007': 1000, '/dev/ttys009': 9000 }
+      const { calls, logs, ttys, outer } = lookup({ processes, bundleId: async () => 'com.example.other' }, [], {
+        lsof, ps: '4310 ttys007\n4400 ttys009\n', atime,
+      })
+      expect(await outer({ ...PANE, TMUX_PANE: '%3' }, 100), maker).toStrictEqual({})
+      expect(calls, maker).toEqual([lsofAsked('80,4310,4400'), psAsked('4310,4400')])
+      expect(ttys, maker).toEqual([100, 90, 80, 4400, 4399, 4398])
+      expect(logs, maker).toEqual(none)
+    }
+  })
+
   // A client whose own pty the person's tmux or Zellij made: its parents end at the detached server. The agent's hints
   // are what herdr's server inherited when it started in that multiplexer's pane.
   it('a client whose terminal tmux made: tmux\'s lookup is asked for the client with the agent\'s hints, and its place is the answer', async () => {
