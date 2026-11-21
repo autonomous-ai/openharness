@@ -81,13 +81,36 @@ describe('ring', () => {
     expect(results.every((r) => r.evidence.length > 0)).toBe(true)
   })
 
-  it('reads the last whole list after `after` and before `at`, on its own page', () => {
+  it('reads the ring the dial holds as the window ends: its page\'s last whole list before `at`', () => {
     const s = scenario([write, { kind: 'wait', ms: 1000, label: 'end' }])
     const check: Check = { ...ring, at: 'end' }
-    const frames = [...list(50, 'claude', [A, B, C]), ...list(300, 'claude', [A, B, C]), ...list(400, 'codex', [T]),
-      ...list(2000, 'claude', [A, B, C])]
-    expect(scores(run(check, s, seen(s, [100, 1500], { frames: [...list(50, 'claude', [A, B, C]), ...list(400, 'codex', [T])] }))).recall).toBe(0)
-    expect(scores(run(check, s, seen(s, [100, 1500], { frames }))).recall).toBe(1)
+    const frames = [...list(300, 'claude', [A, B, C]), ...list(400, 'codex', [T]), ...list(2000, 'claude', [A])]
+    expect(scores(run(check, s, seen(s, [100, 1500], { frames })))).toMatchObject({ recall: 1, precision: 1 })
+    const late = run(check, s, seen(s, [100, 1500], { frames: [...list(400, 'codex', [T]), ...list(2000, 'claude', [A, B, C])] }))
+    expect(scores(late).recall).toBe(0)
+    expect(late[0]!.evidence).toEqual(['no whole list held on claude; 2 whole lists seen'])
+  })
+
+  it('a list from before `after` is the ring still held: right, it passes every untimed part, and only change needs a list in the window', () => {
+    const s = scenario([write])
+    const results = run({ ...ring, timed: true }, s, seen(s, [100], { frames: list(50, 'claude', [A, B, C]) }))
+    expect(scores(results)).toEqual({ recall: 1, precision: 1, order: 1, names: 1, cap: 1, archived: 1, change: 0 })
+    expect(results[0]!.evidence).toEqual(['list at 50 on claude: 3 rows a b c'])
+    expect(results.find((r) => r.check === 'r.change')!.evidence).toEqual(['list at 50 on claude: 3 rows a b c', 'no right list in the window'])
+    // Held but stale: an archive no push followed still shows its row.
+    const archived = scenario([write, { kind: 'claude.write', sessions: ['b'], archived: true, label: 'archive' }])
+    const stale = run({ ...ring, expect: ['a', 'c'], after: 'archive' }, archived, seen(archived, [50, 100], { frames: list(60, 'claude', [A, B, C]) }))
+    expect(scores(stale)).toMatchObject({ recall: 1, precision: 2 / 3, archived: 0 })
+  })
+
+  it('an unplugged dial holds no list it had before: after a replug only a list since the unplug is read', () => {
+    const s = scenario([write, { kind: 'unplug' }, { kind: 'replug', label: 'r' }])
+    const check: Check = { ...ring, after: 'r' }
+    const before = run(check, s, seen(s, [100, 200, 300], { frames: list(150, 'claude', [A, B, C]) }))
+    expect(scores(before).recall).toBe(0)
+    expect(before[0]!.evidence).toEqual(['no whole list held on claude; 1 whole lists seen'])
+    expect(scores(run(check, s, seen(s, [100, 200, 300], { frames: [...list(150, 'claude', [A, B, C]), ...list(400, 'claude', [A, B, C])] }))).recall)
+      .toBe(1)
   })
 
   it('names are the latest codex.write names before `at`, as observedTitle makes them', () => {
@@ -155,6 +178,8 @@ describe('ring', () => {
     expect(apart(counted(0)).score).toBe(0)
     expect(apart(counted(2)).score).toBe(0)
     expect(apart(list(200, 'codex', [T])).score).toBe(0)
+    // The apps frame the dial holds as the window ends, even one from before `after`.
+    expect(run(check, s, seen(s, [300], { frames: counted(1) })).find((r) => r.check === 'r.apart')!.score).toBe(1)
     // A ring check that names no sessions apart has no such part.
     expect(run({ ...ring }, scenario([write]), seen(scenario([write]), [100], { frames: list(200, 'claude', [A, B, C]) }))
       .some((r) => r.check === 'r.apart')).toBe(false)
