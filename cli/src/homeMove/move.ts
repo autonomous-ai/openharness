@@ -120,7 +120,9 @@ function complete(journal: Journal, steps: Steps, oldDataDir: string, run: { byt
       makeRealFolders(plan.legacy)
       steps.add({ did: 'bridge' })
     }
-    for (const entry of plan.entries) if (!entry.known) deps.log(`home move: unknown entry ${entry.name} · moved to data`)
+    // Counted, not named: a person or another tool named them, and the line goes to harness.log.
+    const unknown = plan.entries.filter((entry) => !entry.known).length
+    if (unknown > 0) deps.log(`home move: ${unknown} unknown entr${unknown === 1 ? 'y' : 'ies'} · moved to data`)
     // They still name the old tree, which the bridge's links serve while it lasts.
     const { left } = run
     if (left.length > 0) deps.log(`home move: ${left.length} record${left.length === 1 ? '' : 's'} left unchanged · ${[...new Set(left.map(recordKind))].sort().join(', ')}`)
