@@ -49,8 +49,11 @@ function store(scenario: string, name = 'openclaw-agent.sqlite'): { path: string
   const path = join(dir, name)
   const db = new Database(path, { readOnly: false })
   open.push(db)
+  // The reader starts after setup: commit the recorded schema and rows together, not every DDL statement.
+  db.exec('BEGIN')
   db.exec(fixture('schema'))
   db.exec(fixture(scenario))
+  db.exec('COMMIT')
   return { path, db }
 }
 const one = (db: DatabaseLike, sql: string): Record<string, unknown> => db.prepare(sql).all()[0]

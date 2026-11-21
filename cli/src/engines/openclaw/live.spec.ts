@@ -28,8 +28,11 @@ function store(scenario?: string): { path: string; db: DatabaseLike } {
   const path = join(dir, `${scenario ?? 'empty'}.sqlite`)
   const db = new (builtinSqlite()!)(path, { readOnly: false })
   open.push(db)
+  // The reader starts after setup: commit the recorded schema and rows together, not every DDL statement.
+  db.exec('BEGIN')
   db.exec(fixture('schema'))
   if (scenario) db.exec(fixture(scenario))
+  db.exec('COMMIT')
   return { path, db }
 }
 const windowOf = (db: DatabaseLike, key: string): string =>
