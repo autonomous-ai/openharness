@@ -2218,6 +2218,16 @@ static void another_computer_ends_the_landing(void) {
     CHECK(LOCK_DEPTH == 0);
 }
 
+// The wait is timed on the clock of the feed that brings the ring: agents 5 s after the pick open nothing, with no redraw
+// between (the glass dark) to move the clock.
+static void ring_after_the_wait_opens_nothing(void) {
+    pick_codex();
+    pro_app_apps(APP_ROWS, 3, "codex");
+    now += POD_LANDING_MS;
+    feed_agents(true, false, true);
+    CHECK(U.nav.depth == 1 && !U.landing[0] && LOCK_DEPTH == 0);
+}
+
 // A question's entry goes whenever the question ends: a new turn, a finished turn, a link drop.
 static void notify_question_entry_ends_with_question(void) {
     notif_room();
@@ -2645,6 +2655,7 @@ int main(int argc, char **argv) {
         {"notify_never_over_talk", notify_never_over_talk}, {"notify_tiers", notify_tiers}, {"notify_question_and_error", notify_question_and_error}, {"notify_entries_expire", notify_entries_expire}, {"notify_question_entry_ends_with_question", notify_question_entry_ends_with_question}, {"notify_question_resent_after_relink_is_quiet", notify_question_resent_after_relink_is_quiet}, {"notify_question_same_prompt_new_request_beeps", notify_question_same_prompt_new_request_beeps}, {"question_list_tier_is_quiet", question_list_tier_is_quiet}, {"agents_carry_app_and_view", agents_carry_app_and_view}, {"voice_needs_the_v_cap", voice_needs_the_v_cap}, {"see_it_notice_lasts_two_seconds", see_it_notice_lasts_two_seconds}, {"apps_reach_the_model", apps_reach_the_model}, {"apps_forgotten_on_another_computer", apps_forgotten_on_another_computer}, {"app_pick_reaches_the_cable", app_pick_reaches_the_cable},
         {"apps_click_through", apps_click_through}, {"apps_without_a_window", apps_without_a_window}, {"no_other_app_no_pill", no_other_app_no_pill},
         {"no_voice_room_says_where", no_voice_room_says_where}, {"another_computer_ends_the_landing", another_computer_ends_the_landing},
+        {"ring_after_the_wait_opens_nothing", ring_after_the_wait_opens_nothing},
         {"notify_replace_seen_and_read", notify_replace_seen_and_read},
         {"ota_screen_and_touch", ota_screen_and_touch}, {"voice_refused_while_updating", voice_refused_while_updating},
         {"update_gate", update_gate}, {"ota_failed_returns", ota_failed_returns}, {"ota_keeps_awake", ota_keeps_awake},
