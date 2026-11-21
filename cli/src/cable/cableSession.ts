@@ -1440,6 +1440,11 @@ export class CableSession {
   private async onMessage(msg: Message): Promise<void> {
     const str = (key: string): string | undefined =>
       typeof msg[key] === 'string' ? (msg[key] as string) : undefined
+    // A refusal's words are the firmware's own text: the log says a code, or only how long it is.
+    const refusal = (key: string): string => {
+      const said = str(key)
+      return said === undefined ? 'no reason given' : codeOrLength(said)
+    }
 
     switch (msg.t) {
       case 'hello': {
@@ -2036,7 +2041,7 @@ export class CableSession {
         const settings = readSettings(msg.settings)
         if (settings) this.greetedSettings = settings
         if (hasUiSkin(msg.settings)) this.skinReported = true
-        if (msg.ok === false) this.log(`cable: device refused a settings change: ${str('error') ?? 'no reason given'}`)
+        if (msg.ok === false) this.log(`cable: device refused a settings change: ${refusal('error')}`)
         this.report()
         return
       }
@@ -2076,9 +2081,8 @@ export class CableSession {
         this.report()
         return
       case 'fw.error':
-        // The outcome is `refused`, not the dial's message: that string is the
-        // firmware's own text and this stream carries short codes.
-        this.endFirmware(`refused: ${str('message') ?? 'no reason given'}`)
+        // The outcome is `refused`, and the dial's message only by its code or length.
+        this.endFirmware(`refused: ${refusal('message')}`)
         this.report()
         // Pets that waited behind the image go now.
         await this.syncPets()
