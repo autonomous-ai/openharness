@@ -92,6 +92,20 @@ it('a wrong send is listed by keys and path, never by text', () => {
   }
 })
 
+it('points lost read as words: 1 point, 18.8 points', () => {
+  const r = report({ failing: [{ ...failing([]), pointsLost: 1 }, { ...failing([]), check: 'ring.order', pointsLost: 18.75 }] })
+  for (const text of [summary(r), markdown(r)]) {
+    expect(text).toContain('score 0, 1 point lost')
+    expect(text).toContain('score 0, 18.8 points lost')
+  }
+})
+
+it('the gate counts wrong-session sends by that name', () => {
+  const send = { tier: 'b', platform: 'linux', scenario: 'C9', target: 'c-a', got: 'c-b', path: 'mod', at: 1200 } as const
+  expect(summary(report({ gate: { passed: false, wrongSends: [send] } }))).toContain('Gate: failed, 1 wrong-session send')
+  expect(markdown(report({ gate: { passed: false, wrongSends: [send, send] } }))).toContain('Gate: failed, 2 wrong-session sends')
+})
+
 it('evidence holding os.tmpdir(), HOME or a /work/eval- folder is printed with that part replaced by <path>', () => {
   const r = report({
     failing: [failing([
