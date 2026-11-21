@@ -6,17 +6,17 @@
  * client is found as a herdr process connected to the server's client socket.
  *
  * Only what that needs is read: process names and parents (the table), the terminals of the caller and its parents up to
- * the server, the unix-socket rows lsof gives for herdr's own processes, their ttys (ps), and a tty's access time (stat),
- * which moves when the person types into it. Never another
- * process's environment or argv: those hold secrets. Every value read is outside text, held to its form, and lsof and ps
- * run with no shell.
+ * the server, the unix-socket rows lsof gives for herdr's own processes (macOS) or Linux's socket table (ss) with the
+ * socket links among herdr's own processes' descriptors, their ttys (ps), and a tty's access time (stat), which moves
+ * when the person types into it. Never another process's environment or argv: those hold secrets. Every value read is
+ * outside text, held to its form, and lsof, ss and ps run with no shell.
  */
-import { stat } from 'node:fs/promises'
+import { opendir, readlink, stat } from 'node:fs/promises'
 import { HERDR_PANE } from './herdrClient.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 import type { OuterLookup } from './outer.js'
 import { readPtyMaker, scannedApps, type ProcessName } from './scannedApp.js'
-import { TAB_TTY } from './tabs.js'
+import { clientTtyForm } from './tabs.js'
 import { OUTER_EVERY_MS, PID } from './tmux.js'
 
 /** The herdr processes besides the server a lookup asks of at most: the highest pids, the newest. */
@@ -29,6 +29,13 @@ const CLIENT_SOCKET = '/herdr-client.sock'
 const SOCKET_ADDRESS = /^0x[0-9a-f]{1,16}$/
 /** One `ps -o pid=,tty=` row. */
 const PID_TTY = /^\s*([1-9][0-9]{0,9})\s+(\S+)\s*$/
+/** The descriptors of one process read at most: a herdr server holds a few for each pane and client. */
+export const FDS_A_PROCESS = 1024
+/** A descriptor's link to a socket, with the socket's inode. */
+const SOCKET_LINK = /^socket:\[([0-9]{1,20})\]$/
+/** One `ss -xn` row of a connected unix stream socket: its local address (a bound path, which may hold spaces, or `*`)
+ *  and inode, its peer's address (ss names no peer's path: `*`) and inode, then an empty Process column. */
+const SS_ROW = /^u_str\s+ESTAB\s+[0-9]+\s+[0-9]+\s+(\S.*?)\s+([0-9]{1,20})\s+\*\s+([0-9]{1,20})\s*$/
 
 export interface HerdrOuterDeps {
   run: OrcaDeps['run']
@@ -43,6 +50,10 @@ export interface HerdrOuterDeps {
   bundleId(bundle: string): Promise<string | undefined>
   /** A tty's access time (ttyAtime); nothing when it cannot be read. */
   atime(tty: string): Promise<number | undefined>
+  /** Where Linux's `ss` is. */
+  onPath: OrcaDeps['onPath']
+  /** The socket inodes among a process's descriptors (procSockets); nothing when they cannot be read. */
+  sockets(pid: number): Promise<readonly string[] | undefined>
 }
 
 /** The app that holds the herdr client showing an agent's pane, and that client's tty when it names a tab. */
@@ -54,6 +65,25 @@ type NotRead = 'processes' | 'sockets' | 'ttys' | 'app'
 /** A file's access time, nothing when it cannot be read. Never rejects. */
 export async function ttyAtime(tty: string): Promise<number | undefined> {
   return (await stat(tty).catch(() => undefined))?.atimeMs
+}
+
+/** The socket inodes among a process's descriptors (/proc/<pid>/fd links that read socket:[<inode>]), each once, at
+ *  most FDS_A_PROCESS read; none when the folder cannot be read (the process gone, or another account's). [proc] is
+ *  /proc, or a test's folder standing in for it. Never rejects. */
+export async function procSockets(pid: number, proc = '/proc'): Promise<readonly string[] | undefined> {
+  const folder = `${proc}/${pid}/fd`
+  const fds: string[] = []
+  try {
+    for await (const fd of await opendir(folder)) {
+      fds.push(fd.name)
+      if (fds.length === FDS_A_PROCESS) break
+    }
+  } catch {
+    return undefined
+  }
+  // A descriptor closed since the folder was read has no link: passed over.
+  const links = await Promise.all(fds.map((fd) => readlink(`${folder}/${fd}`).catch(() => '')))
+  return [...new Set(links.flatMap((link) => SOCKET_LINK.exec(link)?.[1] ?? []))]
 }
 
 /** The process is herdr itself, by its executable's name exactly: `herdr-dev` or a `herdr.app` is not. */
@@ -95,14 +125,30 @@ function connectedOf(stdout: string, server: number, asked: ReadonlySet<number>)
   return new Set(peers.filter(([, peer]) => serving.has(peer)).map(([client]) => client))
 }
 
+/** The peers' inodes of the connections the server accepted on its client socket: the `ss -xn` rows whose local path
+ *  ends in …/herdr-client.sock and whose local inode is one of the server's ([served]). A client's own socket is
+ *  unnamed, and a named session's server accepts on a socket of its own. A row out of form is passed over. */
+function acceptedPeers(stdout: string, served: ReadonlySet<string>): Set<string> {
+  const peers = new Set<string>()
+  for (const line of stdout.split('\n')) {
+    const row = SS_ROW.exec(line)
+    if (row && row[1].endsWith(CLIENT_SOCKET) && served.has(row[2])) peers.add(row[3])
+  }
+  return peers
+}
+
 /**
- * Where the person sees an agent in a pane of their own herdr's default session: in the app holding the herdr client
- * they used last, at that client's tty. Nothing at once off macOS, when the hints name no herdr pane in form or the
- * caller is no pid; else the client's place, `{}` when none is found. Never rejects.
+ * Where the person sees an agent in a pane of their own herdr: in the app holding the herdr client they used last, at
+ * that client's tty. Nothing at once on Windows, when the hints name no herdr pane in form or the caller is no pid; else
+ * the client's place, `{}` when none is found. Never rejects.
  */
 export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
-  // By pane and caller, as tmux's: a lookup in flight is shared past its 5 s, so an lsof that hangs to its timeout runs
-  // no second one.
+  // Windows has no `ps` to read a client's tty with, and no form for one.
+  const form = clientTtyForm(deps.platform)
+  if (!form) return () => undefined
+  const isClientTty = (tty: string): boolean => form.test(tty)
+  // By pane and caller, as tmux's: a lookup in flight is shared past its 5 s, so an lsof or ss that hangs to its timeout
+  // runs no second one.
   const asked = new Map<string, { at: number; answer: Promise<ClientPlace>; settled: boolean }>()
   const skipped = new Set<string>()
 
@@ -122,12 +168,33 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
     if (pids.length === 1) return pids[0]
     const times = await Promise.all(pids.map((pid) => {
       const tty = ttyOf.get(pid) ?? ''
-      return TAB_TTY.test(tty) ? deps.atime(tty).catch(() => undefined) : undefined
+      return isClientTty(tty) ? deps.atime(tty).catch(() => undefined) : undefined
     }))
     let last = 0
     // The pids ascend: on a tie the later one, the higher pid, wins.
     for (let at = 1; at < pids.length; at++) if ((times[at] ?? -Infinity) >= (times[last] ?? -Infinity)) last = at
     return pids[last]
+  }
+
+  /** macOS: which of [others] are connected to the server's client socket, from lsof's unix-socket rows of herdr's own
+   *  processes. Nothing when lsof could not be read. */
+  async function lsofClients(server: number, others: readonly number[]): Promise<Set<number> | undefined> {
+    const sockets = await output(deps.run, '/usr/sbin/lsof', ['-a', '-U', '-p', [server, ...others].join(','), '-F', 'pdn'])
+    return sockets === undefined ? undefined : connectedOf(sockets, server, new Set(others))
+  }
+
+  /** Linux: which of [others] hold the peer of a connection the server accepted on its client socket, from `ss -xn` and
+   *  the socket inodes of herdr's own processes' descriptors: `ss -p` would read every process of the account. A process
+   *  whose descriptors cannot be read is left out. Nothing when ss or the server's descriptors could not be read. */
+  async function ssClients(server: number, others: readonly number[]): Promise<Set<number> | undefined> {
+    const ss = deps.onPath('ss')
+    if (!ss) return undefined
+    const [rows, served, held] = await Promise.all([
+      output(deps.run, ss, ['-xn']), deps.sockets(server), Promise.all(others.map((pid) => deps.sockets(pid))),
+    ])
+    if (rows === undefined || served === undefined) return undefined
+    const peers = acceptedPeers(rows, new Set(served))
+    return new Set(others.filter((_, at) => held[at]?.some((inode) => peers.has(inode))))
   }
 
   /** `{}` when no herdr server made the caller's terminal, or none of its clients (or itself, run with `--no-session`)
@@ -149,9 +216,8 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
     // socket: with no other herdr, or none connected, the server is the one candidate.
     let candidates = [server]
     if (others.length) {
-      const sockets = await output(deps.run, '/usr/sbin/lsof', ['-a', '-U', '-p', [server, ...others].join(','), '-F', 'pdn'])
-      if (sockets === undefined) return 'sockets'
-      const connected = connectedOf(sockets, server, new Set(others))
+      const connected = await (deps.platform === 'linux' ? ssClients : lsofClients)(server, others)
+      if (connected === undefined) return 'sockets'
       if (connected.size) candidates = others.filter((other) => connected.has(other))
     }
     const ttys = await output(deps.run, '/bin/ps', ['-o', 'pid=,tty=', '-p', candidates.join(',')])
@@ -161,8 +227,8 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
       const row = PID_TTY.exec(line)
       if (row && candidates.includes(Number(row[1]))) ttyOf.set(Number(row[1]), `/dev/${row[2]}`)
     }
-    // A candidate ps does not list has gone. The server counts only on a tab's tty: a detached one has none.
-    const left = candidates.filter((p) => ttyOf.has(p) && (p !== server || TAB_TTY.test(ttyOf.get(p) ?? '')))
+    // A candidate ps does not list has gone. The server counts only on a client's tty: a detached one has none.
+    const left = candidates.filter((p) => ttyOf.has(p) && (p !== server || isClientTty(ttyOf.get(p) ?? '')))
     if (!left.length) return {}
     // A client inside tmux or Herdr's terminal has parents that end at a detached server or holder: no app, dropped.
     const apps = await scannedApps(left, { platform: deps.platform, roots: deps.roots, processes: async () => rows, bundleId: deps.bundleId })
@@ -172,7 +238,7 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
     const app = apps.get(client)
     const tty = ttyOf.get(client)
     // A tty out of form names no tab.
-    return tty && TAB_TTY.test(tty) ? { app, tty } : { app }
+    return tty && isClientTty(tty) ? { app, tty } : { app }
   }
 
   async function lookUp(pid: number): Promise<ClientPlace> {
@@ -188,7 +254,7 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
 
   return (hints, pid) => {
     const id = hints.HERDR_PANE_ID
-    if (deps.platform !== 'darwin' || !id) return undefined
+    if (!id) return undefined
     if (!HERDR_PANE.test(id)) {
       skip(id)
       return undefined
