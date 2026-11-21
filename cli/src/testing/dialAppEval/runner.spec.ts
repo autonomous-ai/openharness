@@ -45,6 +45,7 @@ class Scripted implements EvalDriver {
   readonly tier: Tier
   readonly calls: string[] = []
   readonly frames: Seen['frames'] = []
+  readonly deliveries: Seen['deliveries'] = []
   cost: Seen['cost']
   private t = 0
   private scenario: Scenario | undefined
@@ -85,7 +86,7 @@ class Scripted implements EvalDriver {
   }
 
   seen(): Seen {
-    return { frames: [...this.frames], faces: [], commands: [], deliveries: [], steps: [...this.steps],
+    return { frames: [...this.frames], faces: [], commands: [], deliveries: [...this.deliveries], steps: [...this.steps],
       ...(this.cost ? { cost: this.cost } : {}) }
   }
 
@@ -204,8 +205,25 @@ it('results files round-trip and merge', async () => {
   expect(readResults(dir)).toEqual({ schema: 1, results: [...a.results, ...b.results], wrongSends: [], gaps: b.gaps })
 })
 
-it('the driver stops when a step throws', async () => {
-  const failing = new Scripted({ throwOn: { kind: 'tap', error: new Error('boom') } })
-  await expect(runScenario(failing, scenario([write, tap]), 'darwin')).rejects.toThrow('boom')
+it('a step that throws still stops the driver, keeps the wrong sends seen so far and fails the run with what threw', async () => {
+  const voice: Step = { kind: 'voice', transcript: 'Eval words', target: 'a' }
+  const failing = new Scripted({
+    throwOn: { kind: 'tap', error: new Error('boom\nat a stack line') },
+    onStep: (d, step) => { if (step.kind === 'voice') d.deliveries.push({ at: d.now(), path: 'mod', target: 'b', text: 'Eval words' }) },
+  })
+  const run = await runScenario(failing, scenario([voice, tap]), 'darwin')
   expect(failing.calls.at(-1)).toBe('stop')
+  expect(run.wrongSends).toEqual([{ tier: 'a', platform: 'darwin', scenario: 'S1', target: 'a', got: 'b', path: 'mod', at: 0 }])
+  expect(run.error).toBe('step 1 (tap) threw: boom')
+  expect(run.results.find((r) => r.check === 'error')).toEqual({ tier: 'a', platform: 'darwin', scenario: 'S1', check: 'error',
+    app: 'claude', dim: 'D1', heldOut: false, score: 0, timed: false, evidence: ['step 1 (tap) threw: boom'] })
+})
+
+it('a stop that throws fails the run too, and a run that throws nothing has no error', async () => {
+  const stuck = await runScenario(new Scripted({ onStop: () => { throw new Error('stuck') } }), scenario([write]), 'darwin')
+  expect(stuck.error).toBe('stop threw: stuck')
+  expect(stuck.results.filter((r) => r.check === 'error').map((r) => r.score)).toEqual([0])
+  const clean = await runScenario(new Scripted(), scenario([write]), 'darwin')
+  expect(clean.error).toBeUndefined()
+  expect(clean.results.map((r) => r.check)).not.toContain('error')
 })
