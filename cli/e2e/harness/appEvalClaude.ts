@@ -107,10 +107,23 @@ function appOf(world: TierBWorld): FakeApp {
   const app: FakeApp = { process: child, live: new Map(), starting: new Map(), closed: false }
   // Only the links run since it started reach it.
   world.onOpen((run) => follow(world, app, run))
-  // Ended, it ends its sessions first, and only then goes: the driver's end of its children waits for that.
+  // Ended, it ends its sessions first, and only then goes: the driver's end of its children waits for that. SIGKILL, the
+  // driver's last resort when that takes too long, ends it and its sessions' Claude Code at once, as a crash does: no
+  // SessionEnd, the words typed into each still read.
   const kill = child.kill.bind(child)
   let ending: Promise<void> | undefined
-  child.kill = () => {
+  child.kill = (signal?: NodeJS.Signals | number) => {
+    if (signal === 'SIGKILL') {
+      app.closed = true
+      if (state.app === app) state.app = undefined
+      for (const [key, live] of app.live) {
+        live.mod.abort()
+        live.outside.kill()
+        typedInto(world, key, live)
+      }
+      app.live.clear()
+      return kill('SIGKILL')
+    }
     ending ??= close(world, app).finally(() => { kill('SIGKILL') })
     return true
   }
