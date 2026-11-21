@@ -330,7 +330,6 @@ jobs:
     permissions:
       contents: read
     strategy:
-      # No max-parallel: each job writes its own scratch manifest, so they cannot race.
       fail-fast: false
       matrix:
         include:
