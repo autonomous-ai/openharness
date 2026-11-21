@@ -24,6 +24,8 @@ const SCENARIOS = WIN32 ? [] : scenariosFor('b', HOST).filter((s) => s.app === '
 describe.skipIf(WIN32)('the dial eval, tier B: the Claude app', () => {
   let driver: TierBDriver
   const runs: ScenarioRun[] = []
+  /** The scenarios a step not built yet skipped. */
+  const skipped: string[] = []
   beforeAll(() => { driver = new TierBDriver(claudeSteps) })
   afterAll(async () => {
     await driver?.close()
@@ -60,9 +62,17 @@ describe.skipIf(WIN32)('the dial eval, tier B: the Claude app', () => {
     console.log(`[dial eval] ${scenario.id}: ${Date.now() - began} ms${notBuilt ? `, skipped: ${notBuilt.message}` : ''}`)
     // Also for a skipped one: a step before the one not built may have reached out.
     expect(driver.networkReached()).toEqual([])
-    if (!run) return skip(notBuilt!.message)
+    if (!run) {
+      skipped.push(scenario.id)
+      return skip(notBuilt!.message)
+    }
     runs.push(run)
     expect(run.wrongSends).toEqual([])
     expect(uncaughtProbes(run)).toEqual([])
+  })
+
+  it('ran every Claude scenario of tier B', () => {
+    expect(skipped).toEqual([])
+    expect(runs.map((run) => run.scenario)).toEqual(SCENARIOS.map((s) => s.id))
   })
 })
