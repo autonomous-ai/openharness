@@ -16,9 +16,6 @@ import type { TierAWorld } from './world.js'
 
 /** How long an app takes to show and resume what a link opens. */
 const OPEN_MS = 500
-/** The scenarios whose ChatGPT app has no Accessibility, so no window title reaches the watch: the catalog's world has
- *  no field for it, and X3 says it in its title. */
-const NO_ACCESSIBILITY: ReadonlySet<string> = new Set(['X3'])
 
 /** The link the devices make for a session (cable/hosts/claudeApp.ts, codexApp.ts): only the whole link opens it. */
 const linkOf = (s: SessionDef): string => (s.app === 'claude' ? `claude://code/continue?session=${s.localId}` : `codex://threads/${s.id}`)
@@ -41,7 +38,7 @@ function codexName(world: TierAWorld, s: SessionDef): string {
 async function show(world: TierAWorld, s: SessionDef): Promise<void> {
   try {
     if (s.app === 'claude') await windowSteps.attach(world, { kind: 'attach', session: s.key })
-    else if (world.front === 'chatgpt' && !NO_ACCESSIBILITY.has(world.scenario.id)) {
+    else if (world.front === 'chatgpt' && world.scenario.world?.accessibility !== false) {
       await windowSteps.thread(world, { kind: 'thread', title: codexName(world, s) })
     }
   } catch {

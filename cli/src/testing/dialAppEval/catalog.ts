@@ -274,7 +274,7 @@ export const MAIN: Scenario[] = [
   }),
   scenario({
     id: 'X3', app: 'chatgpt', title: 'No Accessibility: the dial does not move by itself, and the ring and a tap still work',
-    dims: ['D2', 'D7'], platforms: ['darwin'], sessions: [...threads(['t1', 't2']), chatgptGhost], world: { front: 'other' },
+    dims: ['D2', 'D7'], platforms: ['darwin'], sessions: [...threads(['t1', 't2']), chatgptGhost], world: { front: 'other', accessibility: false },
     steps: [
       { kind: 'codex.write', sessions: ['t1', 't2'] },
       ...listed('chatgpt', ['t1', 't2']),

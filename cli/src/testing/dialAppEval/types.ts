@@ -107,8 +107,8 @@ export type Check = { id: string; dim: Dimension; after?: Label; at?: Label } & 
 export interface Scenario {
   id: string; app: App; title: string; dims: Dimension[]; platforms: Platform[]; tiers: Tier[]; heldOut: boolean
   sessions: SessionDef[]
-  /** front defaults to `app`. */
-  world?: { front?: App | 'other'; chatgptInstalled?: false; linkFails?: App[] }
+  /** front defaults to `app`. accessibility false: Harness Device is not granted it, so no window title is read. */
+  world?: { front?: App | 'other'; chatgptInstalled?: false; linkFails?: App[]; accessibility?: false }
   steps: Step[]; checks: Check[]
   /** Checks that name a ghost session, so they must fail: they prove a check can fail with its evidence. Never scored. */
   probes: Check[]

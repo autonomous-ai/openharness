@@ -12,7 +12,7 @@
  *
  * The app itself answers a link that opened one of its threads while it is in front: a moment later its window shows
  * that thread, titled with Codex's name of it, which Harness Device reads and says on the watch, as the real app's
- * window does (the design's "The fake apps react to links"); with Accessibility not granted (X3) nothing is read.
+ * window does (the design's "The fake apps react to links"); on a world with no Accessibility (X3's) nothing is read.
  */
 import { spawn } from 'node:child_process'
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
@@ -29,9 +29,6 @@ import { CodexOutside } from './codexOutside.js'
 const LEDGERS = ['codex-app-queue', 'codex-queue']
 /** From a link opening a thread to Harness Device reading the window's new title. */
 const TITLE_MS = 200
-/** The scenarios on a computer that has not granted Harness Device Accessibility, so no title is ever read: the catalog
- *  names no world option for it, only X3's own title. */
-const NO_ACCESSIBILITY: ReadonlySet<string> = new Set(['X3'])
 
 interface State {
   /** Each running session. */
@@ -56,7 +53,7 @@ function stateOf(world: TierBWorld): State {
 
 /** A link that opened one of the app's threads while the app is in front: its window shows it a moment later. */
 function showLinked(world: TierBWorld, run: OpenRun): void {
-  if (!run.ok || world.front !== 'chatgpt' || NO_ACCESSIBILITY.has(world.scenario.id)) return
+  if (!run.ok || world.front !== 'chatgpt' || world.scenario.world?.accessibility === false) return
   const s = world.scenario.sessions.find((one) => one.app === 'chatgpt' && !one.ghost && run.argv.includes(`codex://threads/${one.id}`))
   const name = s && stateOf(world).names.get(s.id)
   if (name !== undefined) setTimeout(() => world.title(name), TITLE_MS)
