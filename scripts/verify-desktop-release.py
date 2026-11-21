@@ -210,10 +210,12 @@ def _public_key(text):
 
 
 def ed25519_verify(public_key, message, signature):
-    """OpenSSL 3's command line checks Ed25519, so the release adds no dependency; LibreSSL's pkeyutl has no -rawin."""
-    version = subprocess.run(["openssl", "version"], capture_output=True, text=True, timeout=30).stdout
-    if not version.startswith("OpenSSL 3"):
-        raise RuntimeError("OpenSSL 3 is required to check signatures")
+    """OpenSSL 3 and later check Ed25519 from the command line, so the release adds no dependency; LibreSSL's pkeyutl has
+    no -rawin."""
+    version = re.match(r"OpenSSL ([0-9]+)\.", subprocess.run(
+        ["openssl", "version"], capture_output=True, text=True, timeout=30).stdout)
+    if not version or int(version.group(1)) < 3:
+        raise RuntimeError("OpenSSL 3 or later is required to check signatures")
     with tempfile.TemporaryDirectory() as folder:
         folder = Path(folder)
         pem = base64.b64encode(ED25519_DER_PREFIX + public_key).decode()

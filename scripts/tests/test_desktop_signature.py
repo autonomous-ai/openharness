@@ -1,7 +1,7 @@
 """The release's check of a Tauri signature, against throwaway keys and the live Device 0.1.11 signature.
 
 FixtureSigner (OpenSSL) writes the minisign form Tauri writes; the live signature pins that format and the key Harness
-Device ships. OpenSSL 3 must be first on PATH (on a Mac, Homebrew's openssl@3).
+Device ships. OpenSSL 3 or later must be first on PATH (on a Mac, Homebrew's openssl@3).
 """
 import base64
 import contextlib
