@@ -75,6 +75,9 @@ export class TierADriver implements EvalDriver {
     if (step.kind === 'voice') {
       const target = world.agentId(step.target)
       await this.settle(CAROUSEL_REFRESH_MS, () => world.dial.faces.at(-1)?.active === target)
+      // A face that never showed the target is not the scenario's: its scores are left out, saying why. The person
+      // speaks all the same, so words that reach another session still fail the gate.
+      if (world.dial.faces.at(-1)?.active !== target) world.gap(`voice step ${index}: the face never showed ${step.target}`)
     }
     this.steps.push({ at: Date.now(), index, kind: step.kind, ...(step.label === undefined ? {} : { label: step.label }) })
     await (STEPS[step.kind] as (world: TierAWorld, step: Run) => Promise<void>)(world, step)
