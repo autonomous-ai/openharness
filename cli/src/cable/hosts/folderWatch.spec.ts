@@ -246,6 +246,25 @@ describe('one watch on the nearest existing folder', () => {
     }
   })
 
+  // Its look takes the path of a change told: a nearer folder made before the watch was live is told by no change, and
+  // without the move the watch held the parent for good.
+  it('its look moves to a nearer folder made before the watch was live', () => {
+    vi.useFakeTimers()
+    const watches = fakeWatches()
+    const t = folder()
+    const b = join(t, 'b')
+    const { changes, stop } = told([b, t])
+    try {
+      mkdirSync(b)
+      vi.advanceTimersByTime(5_000)
+      expect(watches.open()).toEqual([b])
+      watches.on(b).tell('app.sock')
+      expect(changes).toEqual([undefined, 'app.sock'])
+    } finally {
+      stop()
+    }
+  })
+
   it('a watch that told a change is live, and tells no other for it', () => {
     vi.useFakeTimers()
     const watches = fakeWatches()
