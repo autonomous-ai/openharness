@@ -125,7 +125,8 @@ function pathRedactor(): (line: string) => string {
     .filter((root) => root.length > 1)
     .sort((a, b) => b.length - a.length)
     .map((root) => root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-  // The whole path goes, not just its root: a folder's name below it can name the work too.
-  const pattern = new RegExp(`(?:${roots.join('|')})[^\\s"'(),\\]]*`, 'g')
+  // The whole path goes, not just its root: a folder's name below it can name the work too, and may hold a space, so
+  // the path runs to a quote, a bracket or the line's end.
+  const pattern = new RegExp(`(?:${roots.join('|')})[^"'\`()[\\]{}<>\\n]*`, 'g')
   return (line) => line.replace(pattern, '<path>')
 }
