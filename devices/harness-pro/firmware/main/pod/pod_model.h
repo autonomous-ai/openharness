@@ -192,8 +192,8 @@ void pod_model_apps(pod_model_t *, const pod_app_t *apps, int n, const char *sho
 void pod_model_apps_switch(pod_model_t *, bool on);
 // From agents.end: view:"machine", and whether its tab was non-empty.
 void pod_model_view(pod_model_t *, bool machine_view, bool tab_open);
-// An agent's app and caps, from its `agent` row. The roster is fed through pod_glue, whose row has neither, so pro_app
-// calls this for every row right after it, under the same lock. Unknown id: ignored; NULL host: ""; caps & POD_CAPS_ALL.
+// An agent's app and caps, from its `agent` row. pod_ui_roster calls this for every row before pod_model_agents_end, so
+// the nav sync after it sees each app's ring. Unknown id: ignored; NULL host: ""; caps & POD_CAPS_ALL.
 void pod_model_agent_app(pod_model_t *, const char *id, const char *host, uint8_t caps);
 const char *pod_host_name(const char *host);     // "ChatGPT" for codex; unknown, "" or NULL: "Terminal"
 const char *pod_host_see_it(const char *host);   // "See it in ChatGPT": a literal, valid forever
