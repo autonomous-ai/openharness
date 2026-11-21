@@ -76,17 +76,18 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
 - `-EncodedCommand` makes PowerShell write CLIXML to stderr. Use `-Command` when anyone reads the error.
   Inside `-Command`, `-ErrorAction Stop` needs `try`/`catch` for the script to end.
 - **Windows' own programs run by their full paths.** Node on Windows looks for a bare name in the folder it runs in
-  before PATH. `powershellPath()` and `systemProgram()` (`cli/src/lib/windows/powershell.ts`) name System32's.
-  Windows' folder is asked of the file system (`systemRoot()`), never read from `SystemRoot`, `windir` or `ComSpec`:
-  whoever starts the process sets those, and they can name another folder. Test:
-  `cli/src/lib/windows/systemProgram.spec.ts`.
+  before PATH. `powershellPath()` and `systemProgram()` (`cli/src/lib/windows/powershell.ts`) name System32's, and
+  `windowsFolder()` and `windowsSystemProgram()` in Desktop (`desktop/lib/core/windows_folder.dart`). Windows' folder
+  is asked of the file system (`systemRoot()`, `windowsFolder()`), never read from `SystemRoot`, `windir` or `ComSpec`:
+  whoever starts the process sets those, and they can name another folder. Tests:
+  `cli/src/lib/windows/systemProgram.spec.ts`, `desktop/test/windows_folder_test.dart`.
 - **git, gh and any program run in a project's folder run by an absolute path, found once.** Node and Dart on Windows
   run a `git.exe` in the child's working folder before PATH, so a `git.exe` committed to a repository would run as
   `git` there, and adding a folder to PATH cannot stop it. Take PATH's drive or share folders only, the `.exe` alone
   (a `.cmd` needs `cmd.exe`), then the installers' folders: `gitPath()` and `ghPath()` (`cli/src/lib/gitOnPath.ts`),
-  `GitProgram` in Desktop (`desktop/lib/core/git_program.dart`). Never Scoop's machine-wide root (`SCOOP_GLOBAL`,
-  `%ProgramData%\scoop`): any user can write there. Tests: `cli/src/lib/gitOnPath.spec.ts`,
-  `desktop/test/git_program_test.dart`.
+  `ProgramPath` in Desktop, for git, ssh and winget (`desktop/lib/core/program_path.dart`). Never Scoop's machine-wide
+  root (`SCOOP_GLOBAL`, `%ProgramData%\scoop`): any user can write there. Tests: `cli/src/lib/gitOnPath.spec.ts`,
+  `desktop/test/program_path_test.dart`.
 - **A link opens with no shell.** `cmd.exe /c start` ends the command at a URL's `&` and runs the rest, splits it at a
   space and expands its `%`, and a sign-in URL is full of `&`. Open it through System32's
   `rundll32.exe url.dll,FileProtocolHandler <url>` (`browserCommand` in `cli/src/lib/openInBrowser.ts`), and refuse a
