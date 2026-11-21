@@ -2,11 +2,14 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/bootstrap/windows_git_setup.dart';
+import 'package:path/path.dart' as p;
 
 void main() {
   late Directory home;
   late List<List<String>> runs;
   late List<String> logs;
+  // Where the App Installer puts winget for this user.
+  const winget = r'C:\Users\a\AppData\Local\Microsoft\WindowsApps\winget.exe';
 
   setUp(() {
     home = Directory.systemTemp.createTempSync('git-setup-');
@@ -16,10 +19,9 @@ void main() {
   tearDown(() => home.deleteSync(recursive: true));
 
   WindowsGitSetup setup({
-    Set<String> files = const {},
+    Set<String> files = const {winget},
     bool isWindows = true,
     int code = 0,
-    Object? thrown,
     Map<String, String>? environment,
   }) => WindowsGitSetup(
     environment:
@@ -34,7 +36,6 @@ void main() {
     isWindows: isWindows,
     log: logs.add,
     run: (executable, arguments) async {
-      if (thrown != null) throw thrown;
       runs.add([executable, ...arguments]);
       return code;
     },
@@ -63,7 +64,7 @@ void main() {
 
   test('installs it for this user alone, asking nothing', () async {
     await setup().start();
-    expect(runs.single.first, 'winget');
+    expect(runs.single.first, winget);
     expect(
       runs.single,
       containsAll([
@@ -109,7 +110,77 @@ void main() {
   });
 
   test('a computer without winget goes on without Git', () async {
-    await setup(thrown: const ProcessException('winget', [])).start();
+    await setup(files: {}).start();
+    expect(runs, isEmpty);
     expect(logs.single, contains('was not installed'));
   });
+
+  // A bare `winget` is looked for in the app's folder and its working folder before PATH.
+  test(
+    "runs winget by an absolute path, PATH's then this user's WindowsApps",
+    () async {
+      // Each try leaves its marker, which would stop the next.
+      final marker = File(
+        p.windows.join(home.path, '.harness', 'run', 'git-install-tried'),
+      );
+      for (final (path, found) in [
+        (r'C:\Windows;C:\Tools', r'C:\Tools\winget.exe'),
+        (r'C:\Windows;C:\Tools', winget),
+        (r'.;;tools;\tools', winget),
+      ]) {
+        runs.clear();
+        await setup(
+          environment: {
+            'USERPROFILE': home.path,
+            'PATH': path,
+            'LOCALAPPDATA': r'C:\Users\a\AppData\Local',
+          },
+          // Every relative path finds the planted winget.exe in the working folder.
+          files: {
+            found,
+            r'.\winget.exe',
+            r'winget.exe',
+            r'tools\winget.exe',
+            r'\tools\winget.exe',
+            r'C:\Program Files\Harness\winget.exe',
+          },
+        ).start();
+        expect(runs.single.first, found, reason: path);
+        marker.deleteSync();
+      }
+    },
+  );
+
+  // The App Installer's winget.exe is an App Execution Alias: a link the file
+  // system cannot follow, which Windows runs.
+  final local = Platform.environment['LOCALAPPDATA'];
+  final alias = local == null
+      ? null
+      : p.windows.join(local, 'Microsoft', 'WindowsApps', 'winget.exe');
+  test(
+    "on a real Windows this user's winget is found where the App Installer puts it",
+    () async {
+      await WindowsGitSetup(
+        environment: {
+          'USERPROFILE': home.path,
+          'PATH': '',
+          'LOCALAPPDATA': local!,
+        },
+        isWindows: true,
+        log: logs.add,
+        run: (executable, arguments) async {
+          runs.add([executable, ...arguments]);
+          return 0;
+        },
+      ).start();
+      expect(runs.single.first, alias);
+    },
+    skip:
+        !Platform.isWindows ||
+            alias == null ||
+            FileSystemEntity.typeSync(alias, followLinks: false) ==
+                FileSystemEntityType.notFound
+        ? 'needs a Windows with the App Installer'
+        : false,
+  );
 }
