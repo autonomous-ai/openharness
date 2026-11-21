@@ -6,7 +6,7 @@
  * raise (windowsRaise.ts); elsewhere nothing runs.
  */
 import { isAbsolute } from 'node:path'
-import type { HostAdapter } from './adapter.js'
+import type { HostAdapter, Pane } from './adapter.js'
 import { openPath } from './open.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 import type { PaneSwitch } from './types.js'
@@ -41,7 +41,10 @@ const DESKTOP_FILE = /^[A-Za-z0-9._-]{1,128}\.desktop$/
 /** Whether a scheme has an app: `app` once `read` has answered. */
 interface SchemeApp { app?: boolean; read: Promise<boolean> }
 
-export type AppLinkVerbs = Pick<HostAdapter, 'canFocus' | 'focus'> & Required<Pick<HostAdapter, 'canShow' | 'show'>>
+export type AppLinkVerbs = Pick<HostAdapter, 'canFocus' | 'focus'> & Required<Pick<HostAdapter, 'canShow' | 'show'>> & {
+  /** Whether the session's link can open on this computer, whichever app is in front. */
+  canLink(pane: Pane): boolean
+}
 
 export function createAppLink(deps: AppLinkDeps, link: AppLink): AppLinkVerbs {
   const windows = deps.windows
@@ -109,6 +112,9 @@ export function createAppLink(deps: AppLinkDeps, link: AppLink): AppLinkVerbs {
     // Asked at each look: the app may have left the front since the last one. A rest never waits on a command, so a
     // scheme not read yet answers no.
     canShow: (pane) => canOpen(pane.id, false) && deps.inFront(),
+    // Not canFocus: on Linux that answers yes before the read, so a first tap waits for it. Voice is not offered before
+    // the scheme is known to have an app, so a scheme not read yet answers no.
+    canLink: (pane) => canOpen(pane.id, false),
     // A rest of the dial shows the session in the app, which is already in front: a link that fails brings no app
     // forward, and its outcome is the swipe's own count.
     async show(pane, agentId): Promise<PaneSwitch> {
