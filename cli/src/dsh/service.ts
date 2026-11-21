@@ -43,7 +43,7 @@ export const mutateDsh = async ({ id, url, ref, update }: { id?: string; url?: s
       progress(p)
     },
     onLine: (raw) => {
-      console.log(`[dsh] ${update ? 'update' : 'install'} · ${raw}`)
+      console.log(`[dsh] ${update ? 'update' : 'install'} · line ${Buffer.byteLength(raw)} B`)
       // The last carriage-return segment is the line as a terminal would show it.
       const line = raw.split('\r').filter((s) => s.trim()).pop()?.trim() ?? ''
       if (!line) return

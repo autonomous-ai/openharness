@@ -184,6 +184,6 @@ export function machineMcpLaunchArgs(engine: string, cwd: string | null | undefi
   const { servers, why } = readMachineMcp(dataDir)
   if (why) console.warn(`[agent] machine MCP servers not added · ${codeOrLength(why)}`)
   const { servers: chosen, unsupported } = machineMcpFor(servers, engine, cwd)
-  if (unsupported.length) console.warn(`[agent] machine MCP servers not added · ${engine} has no machine MCP path in this Harness yet (${unsupported.join(', ')})`)
+  if (unsupported.length) console.warn(`[agent] machine MCP servers not added · ${engine} has no machine MCP path in this Harness yet · servers ${unsupported.length}`)
   return machineMcpArgs(engine, chosen)
 }

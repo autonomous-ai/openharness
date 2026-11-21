@@ -218,7 +218,6 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
           console.warn(`[agent] create · ${engine} · agent ${sid(pending.agentId)} · `
             + describeAgentCreateFailure({
               state: { dead: true, exitStatus: paneState.engineExit, command: engine },
-              output: '',
               engineBin: engine,
               shellName: null,
               processes: [],

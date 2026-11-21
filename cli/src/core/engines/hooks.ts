@@ -332,7 +332,10 @@ export function installEngineHooks(port: number, options: InstallEngineHooksOpti
     confirm: confirmHomes,
     install: async (engine, home) => {
       if (options.only && !options.only.has(engine)) return
-      if (!await engineHooks[engine].installIn(port, home, { current: adoptions.current })) throw new Error(`${sessionStoreContracts[engine].product} hook preparation is unavailable`)
+      // The hold line prints only the error's kind (homeAdoptions.ts), so the code is what names the engine there.
+      if (!await engineHooks[engine].installIn(port, home, { current: adoptions.current })) {
+        throw Object.assign(new Error(`${sessionStoreContracts[engine].product} hook preparation is unavailable`), { code: `${engine.toUpperCase()}_HOOKS_UNAVAILABLE` })
+      }
       console.log(`[hooks] ${sessionStoreContracts[engine].product} hooks installed in its adopted home`)
     },
     held: reason => {

@@ -44,7 +44,7 @@ import type { TerminalDispatchControl, TerminalRuntimeRef } from './terminalType
 import type { WindowsPaneLaunch } from './windows/engineStart.js'
 import { processAmong, sameProcessIdentity, sameTerminalPlacement, terminalInstanceId, terminalRouteKey } from './terminalRuntime.js'
 import { resumesConversation } from './resumeCapability.js'
-import { codeOrLength, errorKind } from './log.js'
+import { codeOrLength, errorKind, hashOf } from './log.js'
 
 export interface RestoreLaunch {
   nativeToken?: string
@@ -754,7 +754,7 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
           summary.restored.push(entry.agentId)
           deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · pane ${dead.paneId} → ${created.runtime.paneId}`
             + (resumeSessionId ? ` · resuming ${resumeSessionId.slice(0, 8)}` : ' · fresh session')
-            + (entry.gridLaunch ? ` · grid ${entry.gridLaunch.networkName}` : ''))
+            + (entry.gridLaunch ? ` · grid ${hashOf(entry.gridLaunch.networkName)}` : ''))
           const currentWatch = restoreOwner(deps, deps.registry.byAgent(entry.agentId)!)
           const releaseWatch = release!
           watching = true
