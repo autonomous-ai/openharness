@@ -61,7 +61,7 @@ describe('refreshNodeReferences', () => {
     expect(refreshNodeReferences((line) => lines.push(line), { service: null, logFile: join(root, 'harness.log') }, node('24.22.2')))
       .toEqual({ launcher: true, service: false })
     expect(readFileSync(launcher(), 'utf8')).toBe(`#!/bin/sh\nexec '${node('24.22.2')}' '${cli()}' "$@"\n`)
-    expect(lines).toEqual([`  ✓ repointed ${launcher()} at ${node('24.22.2')}`])
+    expect(lines).toEqual(['  ✓ repointed bin/harness at the new Node'])
   })
 
   it('rewrites the launchd plist and systemd unit whose node is 22', async () => {
@@ -72,7 +72,7 @@ describe('refreshNodeReferences', () => {
       expect(refreshNodeReferences((line) => lines.push(line), { service: disk.service, logFile: join(root, 'harness.log') }, node('24.22.2')))
         .toEqual({ launcher: false, service: true })
       expect(disk.files[disk.service.file]).toBe(disk.service.render(definition(node('24.22.2'))))
-      expect(lines).toEqual([`  ✓ repointed ${disk.service.file} at ${node('24.22.2')}`])
+      expect(lines).toEqual(['  ✓ repointed the service definition at the new Node'])
       // The running job is the platform's: nothing is reloaded or restarted under the daemon.
       expect(disk.calls).toEqual([])
     }
@@ -126,6 +126,8 @@ describe('refreshNodeReferences', () => {
     const lines: string[] = []
     expect(refreshNodeReferences((line) => lines.push(line), { service: disk.service, logFile: join(root, 'harness.log') }, node('24.22.2')))
       .toEqual({ launcher: false, service: false })
-    expect(lines).toEqual([`  ✗ ${disk.service.file} was left on its Node: ${disk.service.file} does not run its Node where harness service install writes it`])
+    // The platform's reason names the file, under the person's home: its length alone.
+    const reason = `${disk.service.file} does not run its Node where harness service install writes it`
+    expect(lines).toEqual([`  ✗ the service definition was left on its Node: text(${reason.length})`])
   })
 })

@@ -4,7 +4,7 @@ import { createHash } from 'crypto'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
-  ts, sid, preview, installTimestampedConsole, logFrame, errorKind, codeOrLength, hashOf,
+  ts, sid, preview, installTimestampedConsole, logFrame, errorKind, codeOrLength, hashOf, exitOnFatal,
   adoptLegacyLog, prepareLogFile, trimLogFile, LOG_MAX_BYTES,
 } from './log.js'
 
@@ -257,6 +257,41 @@ describe('codeOrLength', () => {
     ['null', null, 'object'],
     ['an object', { code: 'ENOENT' }, 'object'],
   ])('a value that is %s reads %s', (_, value, shown) => expect(codeOrLength(value)).toBe(shown))
+})
+
+describe('exitOnFatal', () => {
+  let dir: string
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'exit-on-fatal-')) })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  it('exitOnFatal writes one line with the tag and the kind and exits 1', () => {
+    const file = join(dir, 'harness.log')
+    const fd = openSync(file, 'a')
+    const listeners = new Map<string, (error: unknown) => void>()
+    const exits: number[] = []
+    exitOnFatal('[service gateway]', fd, (event, listener) => { listeners.set(event, listener) }, (code) => { exits.push(code) })
+    expect([...listeners.keys()]).toEqual(['uncaughtException', 'unhandledRejection'])
+    listeners.get('uncaughtException')!(new TypeError('/sentinel'))
+    listeners.get('unhandledRejection')!('/sentinel')
+    closeSync(fd)
+    const stamp = String.raw`\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3}`
+    // Its kind, never its words or its stack: Export logs sends the log off the machine.
+    expect(readFileSync(file, 'utf8')).toMatch(new RegExp(`^${stamp} \\[service gateway\\] stopped on an uncaught error: TypeError\n`
+      + `${stamp} \\[service gateway\\] stopped on an unhandled rejection: string\n$`))
+    expect(exits).toEqual([1, 1])
+    // A log it can no longer write costs the line, never the exit.
+    listeners.get('uncaughtException')!(new Error('again'))
+    expect(exits).toEqual([1, 1, 1])
+    // As a process runs it: on this process, through process.exit.
+    const on = vi.spyOn(process, 'on').mockImplementation((() => process) as never)
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+    try {
+      exitOnFatal('[service gateway]', fd)
+      expect(on.mock.calls.map(([event]) => event)).toEqual(['uncaughtException', 'unhandledRejection'])
+      ;(on.mock.calls[1]![1] as (error: unknown) => void)('real')
+      expect(exit).toHaveBeenCalledWith(1)
+    } finally { on.mockRestore(); exit.mockRestore() }
+  })
 })
 
 describe('hashOf', () => {
