@@ -111,11 +111,13 @@ function ringParts(check: CheckOf<'ring'>, world: World, w: Window | undefined):
     const ids = last.rows.map((r) => r.id)
     const unique = new Set(ids)
     evidence.push(`list at ${last.at} on ${page}: ${ids.length} rows ${ids.map((id) => world.keyOf(id)).join(' ')}`.trimEnd())
-    const named = check.expect.filter((key) => {
+    // Over the rows the list has: a missing row is recall's to lose, not names'.
+    const present = check.expect.filter((key) => unique.has(agentIdOf(world.session(key))))
+    const named = present.filter((key) => {
       const row = last.rows.find((r) => r.id === agentIdOf(world.session(key)))
-      return row !== undefined && row.name === observedTitle(titleOf(world, key, w!.to))
+      return row!.name === observedTitle(titleOf(world, key, w!.to))
     })
-    const misnamed = check.expect.filter((key) => !named.includes(key))
+    const misnamed = present.filter((key) => !named.includes(key))
     if (misnamed.length > 0) evidence.push(`names wrong: ${misnamed.join(' ')}`)
     const archived = [...archivedBefore(world, w!.to)].filter((key) => unique.has(agentIdOf(world.session(key))))
     if (archived.length > 0) evidence.push(`archived rows: ${archived.join(' ')}`)
@@ -124,7 +126,7 @@ function ringParts(check: CheckOf<'ring'>, world: World, w: Window | undefined):
       // A duplicate or an unknown id is an extra row: only one row per expected id is right.
       ['precision', ratio(new Set(ids.filter((id) => expected.includes(id))).size, ids.length)],
       ['order', ratio(expected.filter((id, i) => ids[i] === id).length, expected.length)],
-      ['names', ratio(named.length, check.expect.length)],
+      ['names', ratio(named.length, present.length)],
       ['cap', ids.length <= RING_CAP ? 1 : 0],
       ['archived', archived.length === 0 ? 1 : 0],
     ]
