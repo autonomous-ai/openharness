@@ -5860,8 +5860,7 @@ class AppNotifier extends ChangeNotifier {
         // Beside the tool probe, as neither waits on the other (task #2169). A fresh computer has no CLI yet: a check that
         // fails is asked again after. One from before a sign-out or an install says nothing about now.
         final askedAt = _authRevision;
-        final early = cliLogin
-            .checkStatus()
+        final early = _checkAuthStatus()
             .then<CliAuthStatus?>((status) {
               _markStartup('signed-in check');
               return status;
@@ -6116,7 +6115,7 @@ class AppNotifier extends ChangeNotifier {
           await _openFromKeptSignIn(early, revision)) {
         return;
       }
-      final authStatus = await early ?? await cliLogin.checkStatus();
+      final authStatus = await early ?? await _checkAuthStatus();
       _markStartup('signed-in check');
       if (!_authWorkCurrent(revision)) return;
       signedIn = authStatus.loggedIn;
@@ -6152,6 +6151,16 @@ class AppNotifier extends ChangeNotifier {
       }
       notifyListeners();
     }
+  }
+
+  /// `harness auth status` for a launch. While `harness uninstall` holds its marker the CLI is being removed: a run
+  /// starts it from the files going away, and on Windows holds them so the removal fails. No answer then, as when the
+  /// CLI is missing, so the launch ends on the login screen. A viewer has no local CLI to remove.
+  Future<CliAuthStatus> _checkAuthStatus() async {
+    if (viewer == null && _discovery.spawnHeld()) {
+      throw CliNotAvailableException('harness uninstall is removing the CLI');
+    }
+    return cliLogin.checkStatus();
   }
 
   /// Opens the window as the account this computer was last proven signed in as, while `harness auth status` still
@@ -6197,7 +6206,7 @@ class AppNotifier extends ChangeNotifier {
   ) async {
     CliAuthStatus? answer;
     try {
-      answer = await check ?? await cliLogin.checkStatus();
+      answer = await check ?? await _checkAuthStatus();
     } catch (error) {
       debugPrint('bootstrap: signed-in check failed behind the window: $error');
     }
@@ -7005,10 +7014,13 @@ class AppNotifier extends ChangeNotifier {
         // reason to stop, either: it starts WITHOUT a session and serves this computer. So the window
         // is told it has become a guest (a banner, and the sheet on the next reach for another
         // machine) and the supervisor goes on bringing the daemon back.
-        final authStatus = await cliLogin.checkStatus();
-        if (!_authWorkCurrent(revision)) return;
-        if (!authStatus.loggedIn && signedIn) {
-          _signedOutAtRuntime(_signedOutMessage);
+        // Not while `harness uninstall` holds its marker: the CLI it would run is being removed (see [_checkAuthStatus]).
+        if (!discovery.spawnHeld()) {
+          final authStatus = await cliLogin.checkStatus();
+          if (!_authWorkCurrent(revision)) return;
+          if (!authStatus.loggedIn && signedIn) {
+            _signedOutAtRuntime(_signedOutMessage);
+          }
         }
         throw StateError(
           'The local Harness daemon did not start. Try running `harness start` yourself, then reopen the app.',

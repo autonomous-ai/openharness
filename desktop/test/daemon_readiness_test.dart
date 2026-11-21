@@ -14,8 +14,8 @@ import 'package:harness/ws/ws_conn.dart';
 /// A daemon that answers whatever the test says, with the supervisor's callbacks captured so the
 /// test can fire "it became ready" itself.
 class _ScriptedDiscovery extends LocalCliDiscovery {
-  _ScriptedDiscovery(this.answers, {bool Function()? uninstalling})
-    : super(config: AppConfig.dev, uninstalling: uninstalling);
+  _ScriptedDiscovery(this.answers, {super.uninstalling})
+    : super(config: AppConfig.dev);
 
   final List<LocalCliProbe> answers;
   int ensureCalls = 0;
