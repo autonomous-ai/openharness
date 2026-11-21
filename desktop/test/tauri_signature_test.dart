@@ -126,6 +126,23 @@ void main() {
     );
   });
 
+  // Harness Device's updater trusts a `version:` field, so a Desktop
+  // signature carrying one could make a Linux Device install Desktop.
+  test('a Desktop signature with a version: field refuses: comment', () async {
+    final signer = await TauriTestSigner.generate();
+    for (final version in ['version:1.2.3', 'version:0.1.12']) {
+      final signature = await signer.sign(
+        payloadDigest,
+        'file:$_desktopFile\t$_desktopVersion\t$version',
+      );
+      await expectLater(
+        desktop(signature, publicKey: signer.publicKey),
+        refused(SignatureRefusal.comment),
+        reason: version,
+      );
+    }
+  });
+
   test('another key refuses: key', () async {
     await expectLater(
       desktop(_fixture('other_key.sig')),
