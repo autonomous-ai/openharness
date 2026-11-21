@@ -2,10 +2,11 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { mkdtemp, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import type { BigIntStats } from 'node:fs'
 import type { RegisteredSession } from './registry.js'
 
 const source = vi.hoisted(() => ({
-  path: '', reads: 0, opened: 0, closed: 0,
+  path: '', reads: 0, opened: 0, closed: 0, coarseTimestamps: false,
   beforeOpen: undefined as (() => Promise<void>) | undefined,
   afterOpen: undefined as (() => Promise<void>) | undefined,
   afterPreviousStat: undefined as (() => Promise<void>) | undefined,
@@ -21,7 +22,17 @@ vi.mock('node:fs/promises', async original => {
   }, open: async (...args: Parameters<typeof fs.open>) => {
     if (String(args[0]) !== source.path) return fs.open(...args)
     await source.beforeOpen?.()
-    const handle = await fs.open(...args), read = handle.read.bind(handle), close = handle.close.bind(handle)
+    const handle = await fs.open(...args), read = handle.read.bind(handle), close = handle.close.bind(handle), stat = handle.stat.bind(handle)
+    let timestamps: Pick<BigIntStats, 'mtimeNs' | 'ctimeNs' | 'mtimeMs' | 'ctimeMs'> | undefined
+    handle.stat = (async (...values: Parameters<typeof stat>) => {
+      const found = await stat(...values)
+      if (source.coarseTimestamps && 'mtimeNs' in found) {
+        // Coarse filesystems can hide a same-size rewrite within one timestamp tick.
+        timestamps ??= { mtimeNs: found.mtimeNs, ctimeNs: found.ctimeNs, mtimeMs: found.mtimeMs, ctimeMs: found.ctimeMs }
+        Object.assign(found, timestamps)
+      }
+      return found
+    }) as typeof handle.stat
     source.opened++
     handle.read = (async (...values: Parameters<typeof read>) => {
       source.reads++; const result = await read(...values)
@@ -36,7 +47,7 @@ let root: string, directory: string, row: RegisteredSession, store: import('./se
 const transcript = (id: string, body: string) => JSON.stringify({ type: 'session_meta', payload: { id, cwd: '/tmp', source: 'cli' } }) + '\n' + body + '\n'
 beforeEach(async () => {
   vi.resetModules()
-  Object.assign(source, { path: '', reads: 0, opened: 0, closed: 0,
+  Object.assign(source, { path: '', reads: 0, opened: 0, closed: 0, coarseTimestamps: false,
     beforeOpen: undefined, afterOpen: undefined, afterPreviousStat: undefined, afterRead: undefined, afterClose: undefined })
   root = await mkdtemp(join(tmpdir(), 'checkpoint-native-proof-')); directory = join(root, 'checkpoints')
   const profile = join(root, 'profile'); await mkdir(join(profile, 'sessions'), { recursive: true, mode: 0o700 })
@@ -73,7 +84,7 @@ it('refuses a different opened descriptor even when the original pathname is res
   expect(source.reads).toBe(0); await unchanged(before)
 })
 
-it('refuses a changed native header between the first and second stat without copying bytes', async () => {
+it('refuses a native header changed during the previous-checkpoint metadata read without copying bytes', async () => {
   const before = await manifest()
   source.afterPreviousStat = async () => { await writeFile(source.path, transcript('another-conversation', 'wrong header'), { mode: 0o600 }) }
   await expect(store.save(row)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
@@ -96,7 +107,17 @@ it.each(['in-place', 'in-place-same-size', 'pathname'])('refuses %s replacement 
       : transcript('another-conversation', 'replaced during copy')
     await writeFile(source.path, replaced, { mode: 0o600 })
   }
-  await expect(store.save(row)).rejects.toBeDefined()
+  await expect(store.save(row)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+  expect(source.reads).toBeGreaterThan(0); await unchanged(before)
+})
+
+it('refuses a header replaced during copy even when coarse timestamps hide it and it is restored on close', async () => {
+  const before = await manifest(), bytes = transcript('conversation', 'fresh history')
+  await writeFile(source.path, bytes, { mode: 0o600 })
+  source.coarseTimestamps = true
+  source.afterRead = async () => { await writeFile(source.path, transcript('replacementx', 'fresh history'), { mode: 0o600 }) }
+  source.afterClose = async () => { await writeFile(source.path, bytes, { mode: 0o600 }) }
+  await expect(store.save(row)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
   expect(source.reads).toBeGreaterThan(0); await unchanged(before)
 })
 
