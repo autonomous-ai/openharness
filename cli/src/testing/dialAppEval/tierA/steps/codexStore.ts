@@ -1,6 +1,5 @@
 // Tier A's steps on the ChatGPT app's Codex home: its threads, its sidebar and Codex's names.
 import { join } from 'node:path'
-import { onTestFinished } from 'vitest'
 import type { CodexAppFixture } from '../../../codexAppFixture.js'
 import type { SessionKey } from '../../types.js'
 import type { StepHandler } from '../world.js'
@@ -47,10 +46,10 @@ export const codexStoreSteps: { 'codex.write': StepHandler<'codex.write'> } = {
     }
     if (names.length > 0) written.push(join(home.home, 'session_index.jsonl'))
     if (step.walBusy) {
-      // The app's own writer, open with a write of its rows in the WAL, as while it runs: the reader reads past it.
-      // The world has no stop of its own to hang its close on: it closes when the test that runs the scenario ends.
+      // The app's own writer, open with a write of its rows in the WAL, as while it runs: the reader reads past it. Closed
+      // as the world closes, after the devices stopped and before its folder goes.
       const writer = home.writer()
-      onTestFinished(() => writer.close())
+      world.onClose(() => writer.close())
       writer.exec('UPDATE threads SET recency_at_ms = recency_at_ms')
       written.push(join(home.home, 'state_5.sqlite-wal'))
     }

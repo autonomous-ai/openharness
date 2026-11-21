@@ -54,6 +54,8 @@ export interface TierAWorld {
   answer(rule: (argv: readonly string[]) => { code: number; stdout?: string } | undefined): void
   /** This scenario on this platform cannot be graded: why. */
   gap(reason: string): void
+  /** What a step holds open for the scenario (the app's WAL writer), closed as the world closes, before its folder goes. */
+  onClose(close: () => void): void
   quiet(): Promise<void>
 }
 
@@ -152,6 +154,7 @@ export class World implements TierAWorld {
   private readonly watch = createStoreWatch()
   /** The store reads in flight: the clock moves on only once there are none. */
   private reads = 0
+  private readonly closing: Array<() => void> = []
 
   constructor(readonly scenario: Scenario, readonly platform: Platform, start: typeof startDevices) {
     const root = this.root = mkdtempSync(join(tmpdir(), 'dial-eval-'))
@@ -226,6 +229,10 @@ export class World implements TierAWorld {
     if (!this.gaps.includes(reason)) this.gaps.push(reason)
   }
 
+  onClose(close: () => void): void {
+    this.closing.push(close)
+  }
+
   quiet(): Promise<void> {
     return quiet(this.inFlight)
   }
@@ -242,8 +249,12 @@ export class World implements TierAWorld {
 
   /** The devices stopped, on virtual time still, and whatever they were reading landed. */
   async close(): Promise<void> {
-    await this.ports.devices?.stop()
-    await this.quiet()
+    try {
+      await this.ports.devices?.stop()
+      await this.quiet()
+    } finally {
+      for (const close of this.closing.splice(0)) close()
+    }
   }
 
   remove(): void {
