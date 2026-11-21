@@ -2,6 +2,7 @@ import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { hashOf } from './log.js'
 import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 // The one way a corrupt registry is still refused: it cannot even be moved aside.
@@ -84,8 +85,21 @@ describe('a registry no version can load', () => {
     const registry = await loadRegistry()
     registry.load()
     expect(registry.list()).toEqual([])
-    expect(error).toHaveBeenCalledWith(expect.stringMatching(/^\[registry\] registry is not JSON; moved it aside to .*registry\.json\.corrupt-\S+ and started empty$/))
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/^\[registry\] registry is not JSON; moved it aside to [0-9a-f]{8} and started empty$/))
     expect(error.mock.calls.flat().join('\n')).not.toContain('SECRET')
+  })
+
+  it('a corrupt registry is moved aside and named by a hash', async () => {
+    // The data folder is under the person's home, whose name is theirs.
+    dataDir = mkdtempSync(join(tmpdir(), 'sentinel-registry-'))
+    writeFileSync(join(dataDir, 'registry.json'), '{"schemaVersion":2}', { mode: 0o600 })
+    const registry = await loadRegistry()
+    registry.load()
+    const aside = readdirSync(dataDir).filter((name) => name.startsWith('registry.json.corrupt-'))
+    expect(aside).toHaveLength(1)
+    const lines = error.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+    expect(lines).not.toContain('sentinel')
+    expect(lines).toContain(`[registry] registry root is not an array; moved it aside to ${hashOf(join(dataDir, aside[0]))} and started empty`)
   })
 
   it('names the kind of failure it could not be moved by, whatever was thrown', async () => {

@@ -36,9 +36,29 @@ describe('agents held until a service is ready', () => {
     reason = 'no such folder'
     await held.restoreHeld()
     expect(log.mock.calls.map(([line]) => line)).toEqual([
-      '[restore] a · could not launch from held · the pty host has gone',
+      '[restore] a · could not launch from held · text(21)',
       '[restore] held · every service · launched 0 of 1 · 1 still waiting',
-      '[restore] a · could not launch from held · no such folder',
+      '[restore] a · could not launch from held · text(14)',
+    ])
+  })
+
+  it("a held agent's reason is logged by its code or length", async () => {
+    // The reasons come from the restore (a pane's refusal, a launch's detail): they can name the person's folders.
+    let reason = 'peer said /Users/sentinel/x'
+    const { held, log } = setup([row('a', HELD)], (only) => summary({ held: [...only], failed: [...only].map(agentId => ({ agentId, reason })) }))
+    await held.boot(async () => {})
+    await held.restoreHeld()
+    // The same length, another reason: said again, as the reason itself changed.
+    reason = 'peer said /Users/sentinel/y'
+    await held.restoreHeld()
+    reason = 'SERVICE_UNAVAILABLE'
+    await held.restoreHeld()
+    const lines = log.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+    expect(lines).not.toContain('sentinel')
+    expect(log.mock.calls.map(([line]) => line).filter((line) => line.includes('could not launch'))).toEqual([
+      '[restore] a · could not launch from held · text(27)',
+      '[restore] a · could not launch from held · text(27)',
+      '[restore] a · could not launch from held · SERVICE_UNAVAILABLE',
     ])
   })
 

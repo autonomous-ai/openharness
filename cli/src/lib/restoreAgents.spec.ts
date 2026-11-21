@@ -858,6 +858,22 @@ describe('restoreAgents — which agents get a pane back', () => {
     expect(h.rows.get('agent-a')?.tmuxPane).toBe('%3')
   })
 
+  it.each([
+    ['says why', async () => ({ ok: false as const, reason: 'tmux said no in /Users/sentinel/x' }), 'tmux said no in /Users/sentinel/x', 'text(33)'],
+    ['throws', async () => { throw new Error('tmux said no in /Users/sentinel/x') }, 'Error: tmux said no in /Users/sentinel/x', 'text(40)'],
+  ])('logs a pane that %s by the length of its reason, never its words', async (_label, respawn, reason, logged) => {
+    const h = harness([row()])
+    const log = vi.fn()
+    h.deps.log = log
+    // A terminal host's refusal can quote the folder it was asked to open the pane in.
+    h.deps.respawn = respawn
+    const summary = await restoreAgents(h.deps)
+    expect(summary.failed).toEqual([{ agentId: 'agent-a', reason }])
+    const lines = log.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+    expect(lines).not.toContain('sentinel')
+    expect(lines).toContain(`[restore] claude · agent agent-a · could not open a pane · ${logged}`)
+  })
+
   it('restores several agents inside one transaction so reused pane ids cannot evict each other', async () => {
     const h = harness([row({ agentId: 'a', runtimes: [{ backend: 'tmux', paneId: '%1' }] }), row({ agentId: 'b', runtimes: [{ backend: 'tmux', paneId: '%0' }] })])
     h.probes.set('%0', [identity(1)])
