@@ -153,7 +153,7 @@ describe('closing the harnesses a closed harness started', () => {
     // A harness's name or title holds the person's words: the log says it by its id.
     expect(log.mock.calls.map(([line]) => line)).toEqual([
       '[agent-cleanup] closed blip: the harness that started it was closed. Its conversation is kept.',
-      '[agent-cleanup] could not close stuck (the harness that started it was closed): Could not save its screen.',
+      '[agent-cleanup] could not close stuck (the harness that started it was closed): CLOSE_FAILED',
       '[agent-cleanup] could not close odd (the harness that started it was closed): AGENT_CHANGED',
     ])
     // Stopped meanwhile: not tried again.
@@ -401,7 +401,7 @@ describe('closing a harness another agent started once it has sat idle', () => {
     advance(ASK_AGAIN_MS)
     await cleanup.look()
     expect(closeStarted).toHaveBeenCalledTimes(2)
-    expect(log.mock.calls.map(([line]) => line)).toEqual([expect.stringMatching(/^\[agent-cleanup\] could not close broken \(another agent started it, .*\): Could not save its screen\.$/)])
+    expect(log.mock.calls.map(([line]) => line)).toEqual([expect.stringMatching(/^\[agent-cleanup\] could not close broken \(another agent started it, .*\): CLOSE_FAILED$/)])
     ;(core.agents.live as ReturnType<typeof vi.fn>).mockReturnValueOnce([])
     await cleanup.look()
     await cleanup.look()

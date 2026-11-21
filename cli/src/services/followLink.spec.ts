@@ -158,6 +158,14 @@ describe('what a service in its own process hears of agents', () => {
       expect(await link.ready(0)).toBe(false)
     })
 
+    it("a core's refusal in words is said by its length, never its words", async () => {
+      const { link, log } = setup()
+      await link.connected(coreAnswering({ error: 'peer said /Users/sentinel/x' }))
+      const lines = log.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+      expect(lines).not.toContain('sentinel')
+      expect(lines).toContain('[agents] the core did not answer what agents to follow (text(27)): none is heard of as it runs')
+    })
+
     it('one that follows no runs asks nothing: what it hears the core holds for it', async () => {
       const { link } = setup({ running: false })
       const query = coreAnswering({ agents: [] })

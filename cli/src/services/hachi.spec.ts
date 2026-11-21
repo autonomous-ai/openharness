@@ -343,6 +343,22 @@ describe('Hachi\'s wakes, what can go wrong', () => {
     t.service.stop()
   })
 
+  it('says a wake refused in words by its length, never its words', async () => {
+    setAgentSettingsForTest(dir, { hachi: true })
+    const t = setup([hachiRow(), row('api')])
+    startedByHachi('api')
+    await t.look()
+    const here = t.lineFor(SELF, 'api'), self = t.lineFor(SELF, 'hachi')
+    self.answers.agent_messages = { error: 'peer said /Users/sentinel/x' }
+    here.push('api', 'agent_activity', { state: 'working' })
+    here.push('api', 'turn_ended')
+    await t.advance(WAKE_COALESCE_MS)
+    const lines = t.log.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+    expect(lines).not.toContain('sentinel')
+    expect(lines).toContain('[hachi] the wake was not taken: text(27)')
+    t.service.stop()
+  })
+
   it('says a look that failed, by its kind, and looks once at a time', async () => {
     setAgentSettingsForTest(dir, { hachi: true })
     let fail: unknown = null
