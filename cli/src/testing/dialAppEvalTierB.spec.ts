@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process'
+import { createServer, type Server } from 'node:http'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -20,6 +21,10 @@ const claude = await import('../../e2e/harness/appEvalClaude.js' as string) as {
   linkedSocket(root: string, code: number | null, stdout: string, stderr: string): string
   typedPrompts(transcript: string): Array<{ at?: number; text: string }>
   writeWhole(file: string, text: string): void
+}
+
+const modInbox = await import('../../e2e/harness/modInbox.js' as string) as {
+  inboxPoll(d: { socketPath: string }, sessionId: string): Promise<{ status: number; body: unknown }>
 }
 
 let dir = ''
@@ -156,4 +161,33 @@ describe("tier B's Claude sessions: a turn's release file", () => {
     }
     expect(await empty).toBe(0)
   }, 30_000)
+})
+
+describe("the Claude mod's inbox poll", () => {
+  let server: Server | undefined
+  afterEach(() => { server?.close() })
+
+  /** A daemon's socket in a throwaway folder that answers every poll with [answer]. */
+  async function daemon(answer: (res: import('node:http').ServerResponse) => void): Promise<{ socketPath: string }> {
+    dir = mkdtempSync(join(tmpdir(), 'tier-b-inbox-'))
+    const socketPath = join(dir, 'daemon.sock')
+    server = createServer((_req, res) => answer(res))
+    await new Promise<void>((done) => server!.listen(socketPath, done))
+    return { socketPath }
+  }
+
+  it('is answered with the JSON the daemon sent', async () => {
+    const d = await daemon((res) => res.end(JSON.stringify({ text: 'Eval words.' })))
+    expect(await modInbox.inboxPoll(d, 'eval')).toEqual({ status: 200, body: { text: 'Eval words.' } })
+  })
+
+  it('fails, never throws past its caller, on an answer that is not JSON', async () => {
+    const d = await daemon((res) => res.end('not json'))
+    await expect(modInbox.inboxPoll(d, 'eval')).rejects.toThrow(SyntaxError)
+  })
+
+  it('fails on an answer cut short', async () => {
+    const d = await daemon((res) => { res.writeHead(200, { 'content-length': '100' }); res.write('{"te'); setTimeout(() => res.socket?.destroy(), 20) })
+    await expect(modInbox.inboxPoll(d, 'eval')).rejects.toThrow()
+  })
 })
