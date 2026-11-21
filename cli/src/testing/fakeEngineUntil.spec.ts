@@ -12,7 +12,9 @@ const { fakeEngineShim } = await import('../../e2e/harness/daemon.js' as string)
 }
 
 /** The hooks the fake runs here: each writes its input as one line of hooks.jsonl. */
-const EVENTS = ['UserPromptSubmit', 'Stop']
+const EVENTS = ['UserPromptSubmit', 'Stop', 'PermissionRequest', 'Notification']
+/** Under the 6 s a permission dialog waits before Claude Code says so to its Notification hooks. */
+const AT_ONCE_MS = 3_000
 
 let root = ''
 let engine: ChildProcess | undefined
@@ -75,5 +77,16 @@ describe('the fake Claude Code\'s `!until <name>`', () => {
     await claude.hooked('UserPromptSubmit')
     writeFileSync(join(root, 'eval-turn.release'), '')
     expect(answerOf(await claude.hooked('Stop'))).toBe('answer 1: !until eval-turn')
+  }, 30_000)
+
+  it('asks permission to run its permit file\'s command the moment that file is written, its Notification at once', async () => {
+    const claude = start()
+    claude.type('!until eval-turn')
+    await claude.hooked('UserPromptSubmit')
+    writeFileSync(join(root, 'eval-turn.permit'), 'printf eval')
+    const asked = await claude.hooked('PermissionRequest')
+    expect(asked).toMatchObject({ tool_name: 'Bash', tool_input: { command: 'printf eval' } })
+    await claude.hooked('Notification', (input) => input.notification_type === 'permission_prompt', AT_ONCE_MS)
+    expect(claude.hooks().filter((input) => input.hook_event_name === 'Stop')).toEqual([])
   }, 30_000)
 })
