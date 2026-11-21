@@ -68,10 +68,11 @@ export function createAppLink(deps: AppLinkDeps, link: AppLink): AppLinkVerbs {
     return code === 0 && DESKTOP_FILE.test(stdout.trim())
   }
 
-  const canOpen = (session: string): boolean => {
+  // [unread]: what a scheme whose read has not answered yet counts as.
+  const canOpen = (session: string, unread: boolean): boolean => {
     if (byBundle) return true
     const scheme = linux ? SCHEME.exec(link.url(session))?.[1] : undefined
-    return scheme !== undefined && appOf(scheme).app === true
+    return scheme !== undefined && (appOf(scheme).app ?? unread)
   }
 
   // The URL alone: xdg-open cannot name an app, so the scheme's app gets it.
@@ -97,15 +98,17 @@ export function createAppLink(deps: AppLinkDeps, link: AppLink): AppLinkVerbs {
   }
 
   return {
-    // On Linux the first look starts the read and answers false: a look never waits on a command.
-    canFocus: (pane) => canOpen(pane.id),
+    // On Linux the first look starts the read and answers yes: the tap's focus waits for the read (opensOnLinux), so a
+    // first tap is not dropped while the read runs.
+    canFocus: (pane) => canOpen(pane.id, true),
     async focus(pane) {
       if (!(byBundle || linux) || !link.session.test(pane.id)) return false
       if (await opens(pane.id)) return true
       return byBundle && link.forward ? link.forward() : false
     },
-    // Asked at each look: the app may have left the front since the last one.
-    canShow: (pane) => canOpen(pane.id) && deps.inFront(),
+    // Asked at each look: the app may have left the front since the last one. A rest never waits on a command, so a
+    // scheme not read yet answers no.
+    canShow: (pane) => canOpen(pane.id, false) && deps.inFront(),
     // A rest of the dial shows the session in the app, which is already in front: a link that fails brings no app
     // forward, and its outcome is the swipe's own count.
     async show(pane, agentId): Promise<PaneSwitch> {

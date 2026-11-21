@@ -1,7 +1,9 @@
 name: CI
 
-# Fast PR checks: each changed component, and each that reads a changed file, runs its own Linux unit tests. Native,
-# macOS, coverage-gate, browser and end-to-end checks are outside PR CI; see
+# Fast PR checks: each changed component, and each that reads a changed file, runs its own Linux unit tests. End to end
+# runs where a PR's paths touch what it tests: windows.yml's Windows checks, the CLI e2e files a PR adds or changes on
+# Linux (above 40, the whole suite), the dial's hosts, and Harness Device on Windows and Linux. The full CLI end-to-end
+# suite (nightly and by hand), macOS, native, coverage-gate and browser checks stay outside PR CI; see
 # docs/validation-and-release.md#what-pr-ci-does-not-run. Merge candidates rerun
 # only the plan and process checks; the PR run covered the code. After Update branch,
 # a suite whose inputs main's new commits left untouched reuses the earlier head's result.
@@ -17,8 +19,12 @@ on:
       scope:
         description: 'Affected component; full for core suites, all for every component'
         type: choice
-        options: [full, cli, tui, backend, desktop, process, all, companions, website, os, provider, firmware, pro, mobile, daemons, pty, device-app]
+        options: [full, cli, tui, backend, desktop, process, all, companions, website, os, provider, firmware, pro, mobile, daemons, pty, device-app, windows-e2e, linux-e2e, dial-hosts, device-app-e2e, device-app-update, device-app-desktop, device-app-install, cross-read-scan]
         default: full
+      e2e_files:
+        description: 'With scope linux-e2e: the cli/e2e files to run, separated by spaces'
+        type: string
+        default: ''
   workflow_call:
     inputs:
       scope:
@@ -77,6 +83,20 @@ jobs:
       daemons: ${{ steps.select.outputs.daemons }}
       pty: ${{ steps.select.outputs.pty }}
       device-app: ${{ steps.select.outputs.device-app }}
+      windows-e2e: ${{ steps.select.outputs.windows-e2e }}
+      windows-e2e-arm64: ${{ steps.select.outputs.windows-e2e-arm64 }}
+      linux-e2e: ${{ steps.select.outputs.linux-e2e }}
+      linux-e2e-files: ${{ steps.select.outputs.linux-e2e-files }}
+      linux-e2e-shards: ${{ steps.select.outputs.linux-e2e-shards }}
+      linux-e2e-full: ${{ steps.select.outputs.linux-e2e-full }}
+      linux-e2e-must-pass: ${{ steps.select.outputs.linux-e2e-must-pass }}
+      dial-hosts: ${{ steps.select.outputs.dial-hosts }}
+      device-app-e2e: ${{ steps.select.outputs.device-app-e2e }}
+      device-app-update: ${{ steps.select.outputs.device-app-update }}
+      device-app-desktop: ${{ steps.select.outputs.device-app-desktop }}
+      device-app-install: ${{ steps.select.outputs.device-app-install }}
+      device-app-builds: ${{ steps.select.outputs.device-app-builds }}
+      cross-read-scan: ${{ steps.select.outputs.cross-read-scan }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -100,11 +120,14 @@ jobs:
           .github/workflows/website-checks.yml .github/workflows/experience-checks.yml
           .github/workflows/authoring-browser-checks.yml .github/workflows/home-assistant-checks.yml
           .github/workflows/desktop-logging-checks.yml .github/workflows/windows.yml .github/workflows/backend-cache.yml
+          .github/workflows/cli-e2e-dial-hosts.yml
       - id: select
         env:
           CI_SCOPE: ${{ inputs.scope || 'full' }}
+          # Free text: through env and as one argument (never read as an option); the planner takes plain cli/e2e names.
+          CI_E2E_FILES: ${{ inputs.e2e_files }}
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/ci-plan.py --scope "$CI_SCOPE" --output "$RUNNER_TEMP/ci-plan.json"
+        run: python3 scripts/ci-plan.py --scope "$CI_SCOPE" --e2e-files="$CI_E2E_FILES" --output "$RUNNER_TEMP/ci-plan.json"
       - uses: actions/upload-artifact@v4
         with:
           name: ci-plan
@@ -821,11 +844,540 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo test --locked --lib --manifest-path device-app/src-tauri/Cargo.toml
 
+  # windows.yml's tests (the PTY host's Rust tests and builds, the Windows CLI specs, the dial end to end, the install
+  # check) for a change to Windows code or to cross-platform code with win32 branches that break only on Windows.
+  # x64 covers that code; arm64 tests something x64 does not only for the Windows-only files, so the plan adds it for
+  # those alone.
+  windows-e2e:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-windows-e2e
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.windows-e2e == 'true'
+    uses: ./.github/workflows/windows.yml
+    with:
+      x64_only: ${{ needs.plan.outputs.windows-e2e-arm64 != 'true' }}
+
+  # The e2e files a pull request adds or changes, on Linux set up as cli-e2e.yml's nightly shards (one action), spread
+  # over the plan's runners by their timing hints. Above 40 changed files the plan gives no list and eight rows: every
+  # file the CI config includes, as the nightly. The files reach the commands only through env: a name is never shell.
+  linux-e2e:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-linux-e2e-${{ strategy.job-index }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.linux-e2e == 'true'
+    name: linux-e2e (${{ matrix.shard }})
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.linux-e2e-shards) }}
+    # 24.04, as the nightly shards: 26.04 has no zsh or tcsh package.
+    runs-on: ubuntu-24.04
+    # As a nightly shard: about nine minutes of tests at most, plus install and the bundle.
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: cli
+    env:
+      LANG: C.UTF-8
+      SHELL: /bin/zsh
+      E2E_FILES: ${{ needs.plan.outputs.linux-e2e-files }}
+      E2E_FULL: ${{ needs.plan.outputs.linux-e2e-full }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+      - uses: ./.github/actions/cli-e2e-setup
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+          packages: tcsh dash
+          real-backend: 'true'
+      # Vitest runs every file when it is given none: an empty list runs the full suite only when the plan says so.
+      - name: The plan gave files or a full run
+        run: |
+          if [[ -z "$E2E_FILES" && "$E2E_FULL" != true ]]; then
+            echo "linux-e2e: the plan gave no file and no full run"
+            exit 1
+          fi
+      # The file list before sharding: the summary holds the run to it.
+      - name: Discover the selected files
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          read -ra files <<<"$E2E_FILES"
+          npx vitest list --config vitest.e2e.ci.config.ts --filesOnly --json="$RUNNER_TEMP/inventory-$SHARD.json" "${files[@]}"
+      - name: Run the selected files
+        env:
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ strategy.job-total }}
+          E2E_BUNDLE: '1'
+          E2E_ARTIFACTS_DIR: ${{ runner.temp }}/e2e-daemon-logs
+        run: |
+          read -ra files <<<"$E2E_FILES"
+          npx vitest run --config vitest.e2e.ci.config.ts --shard="$SHARD/$SHARDS" \
+            --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/result-$SHARD.json" "${files[@]}"
+      - name: Preserve inventory and test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-e2e-shard-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/inventory-${{ matrix.shard }}.json
+            ${{ runner.temp }}/result-${{ matrix.shard }}.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+      - name: Preserve the failing tests' daemon logs
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-e2e-daemon-logs-${{ matrix.shard }}
+          path: ${{ runner.temp }}/e2e-daemon-logs/
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 7
+
+  # Exactly the selected files ran, each passing and collecting a case; a file whose every case skips passes and the
+  # job summary lists it. In the full mode, the nightly's rule: every discovered file once, every shard passing. The
+  # plan's canary, when it runs, passes a case and skips none: skipped, the real backend's setup broke.
+  linux-e2e-summary:
+    needs: [plan, linux-e2e]
+    if: ${{ !cancelled() && needs.plan.outputs.ready == 'true' && needs.plan.outputs.linux-e2e == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+          sparse-checkout: scripts/verify-cli-test-shards.py
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: linux-e2e-shard-*
+          path: ${{ runner.temp }}/linux-e2e-shards
+          merge-multiple: true
+      - name: Require the selected files, each with a case, and every shard passing
+        env:
+          SHARDS: ${{ needs.plan.outputs.linux-e2e-shards }}
+          E2E_FILES: ${{ needs.plan.outputs.linux-e2e-files }}
+          E2E_FULL: ${{ needs.plan.outputs.linux-e2e-full }}
+          E2E_TEST_RESULT: ${{ needs.linux-e2e.result }}
+          E2E_MUST_PASS: ${{ needs.plan.outputs.linux-e2e-must-pass }}
+        run: |
+          args=(--suite e2e --root "$GITHUB_WORKSPACE/cli" --shards "$(jq length <<<"$SHARDS")"
+            --tests-result "$E2E_TEST_RESULT" --output "$RUNNER_TEMP/linux-e2e-summary.json"
+            --step-summary "$GITHUB_STEP_SUMMARY")
+          if [[ "$E2E_FULL" != true ]]; then args+=(--selected "$E2E_FILES"); fi
+          if [[ -n "$E2E_MUST_PASS" ]]; then args+=(--must-pass "$E2E_MUST_PASS"); fi
+          python3 scripts/verify-cli-test-shards.py "$RUNNER_TEMP/linux-e2e-shards" "${args[@]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-e2e-summary
+          path: ${{ runner.temp }}/linux-e2e-summary.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+
+  # The dial's hosts (herdr, WezTerm, Zellij, kitty, an X11 desktop and sway), for a change to their e2e files, their
+  # adapters or this job's definition: the workflow cli-e2e.yml's nightly calls.
+  dial-hosts:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-dial-hosts
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.dial-hosts == 'true'
+    uses: ./.github/workflows/cli-e2e-dial-hosts.yml
+
+  # Harness Device's debug packages, each built once for the Device suites that run (the plan's device-app-builds) and
+  # handed to their jobs as artifacts. A debug build reads HARNESS_DEVICE_CLI, the fake CLI the drivers point it at.
+  # Outside the suites' jobs, so a reused suite never builds; ci/required needs it, so a failed build fails the gate.
+  device-app-build:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-device-app-build-${{ strategy.job-index }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.device-app-builds != '[]'
+    name: device-app-build (${{ matrix.bundle }}, ${{ matrix.arch }})
+    # Each package on its own arch, as a release builds it: an AppImage carries the libraries of the machine that
+    # bundled it, so Linux builds on the oldest Ubuntu Desktop supports.
+    runs-on: ${{ fromJSON('{"appimage-x64":"ubuntu-22.04","appimage-arm64":"ubuntu-22.04-arm","nsis-x64":"windows-latest","nsis-arm64":"windows-11-arm"}')[format('{0}-{1}', matrix.bundle, matrix.arch)] }}
+    # A mirror outage, then a cold app compile and its bundle.
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.device-app-builds) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+      - uses: ./.github/actions/device-app-setup
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+      - name: Package
+        working-directory: device-app/src-tauri
+        shell: bash
+        env:
+          BUNDLE: ${{ matrix.bundle }}
+        run: cargo tauri build --ci --debug --bundles "$BUNDLE" -- --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: device-app-${{ matrix.bundle }}-${{ matrix.arch }}
+          path: device-app/src-tauri/target/debug/bundle/${{ matrix.bundle }}/${{ matrix.bundle == 'nsis' && '*-setup.exe' || '*.AppImage' }}
+          retention-days: 3
+          if-no-files-found: error
+
+  # linux.sh: the AppImage against the fake CLI, X11, sway and the app's own install lines, for any device-app/ change.
+  device-app-linux:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-device-app-linux-${{ strategy.job-index }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: [plan, device-app-build]
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.device-app-e2e == 'true'
+    name: device-app-linux (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    # A mirror outage, then the run, whose last part runs the app's two install lines, ten minutes each at most.
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - { runner: ubuntu-22.04, arch: x64 }
+          - { runner: ubuntu-22.04-arm, arch: arm64 }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+      # The packages the AppImage was proven with: Tauri's, then what linux.sh runs: a display, a window manager, X
+      # clients (xprop from x11-utils), headless sway and foot, a session bus, the D-Bus Python of the fake tray host,
+      # FUSE for the AppImage.
+      - run: >-
+          sudo bash scripts/apt-install.sh libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+          file xvfb openbox xdotool x11-utils xterm sway foot dbus-x11 python3-dbus python3-gi libfuse2
+      - uses: actions/download-artifact@v4
+        with:
+          name: device-app-appimage-${{ matrix.arch }}
+          path: ${{ runner.temp }}/device-app
+      - name: End to end
+        run: |
+          shopt -s nullglob
+          found=("$RUNNER_TEMP"/device-app/*.AppImage)
+          if [[ ${#found[@]} -ne 1 ]]; then echo "one AppImage, not ${#found[@]}"; exit 1; fi
+          bash device-app/scripts/e2e/linux.sh "${found[0]}"
+
+  # windows.ps1: the installed app against the fake CLI, for any device-app/ change.
+  device-app-windows:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-device-app-windows-${{ strategy.job-index }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: [plan, device-app-build]
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.device-app-e2e == 'true'
+    name: device-app-windows (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    # The run's wait on harness start takes up to minutes.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - { runner: windows-latest, arch: x64 }
+          - { runner: windows-11-arm, arch: arm64 }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: device-app-nsis-${{ matrix.arch }}
+          path: ${{ runner.temp }}/device-app
+      - name: End to end
+        shell: pwsh
+        run: |
+          $setup = @(Get-ChildItem "$env:RUNNER_TEMP\device-app\*-setup.exe")
+          if ($setup.Count -ne 1) { throw "one installer, not $($setup.Count)" }
+          pwsh -NoProfile -File device-app/scripts/e2e/windows.ps1 -Installer $setup[0].FullName -Out "$env:RUNNER_TEMP\device-app-e2e"
+      # The app's log and the fake CLI's files of each part, for a failure.
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-app-windows-e2e-${{ matrix.arch }}
+          path: ${{ runner.temp }}/device-app-e2e
+          retention-days: 3
+          if-no-files-found: ignore
+
+  # The app updates itself from a local manifest, for a change to the updater or the release build: update-pair.sh
+  # builds 0.0.1 and 0.0.2 as a release does, signed with a key pair made in the run, and the driver's update mode serves
+  # them on 127.0.0.1:8765. Windows first: its leg is the longest.
+  device-app-update:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-device-app-update-${{ strategy.job-index }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.device-app-update == 'true'
+    name: device-app-update (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    # Two release builds (four on Windows), then the run, which waits a minute for a second check.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - { runner: windows-latest }
+          - { runner: ubuntu-22.04 }
+          - { runner: ubuntu-22.04-arm }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+      # What linux.sh runs: a display, a window manager, X clients, a session bus, the Python of its probes, FUSE for
+      # the AppImage.
+      - if: runner.os == 'Linux'
+        run: >-
+          sudo bash scripts/apt-install.sh xvfb openbox xdotool xterm dbus-x11 python3-dbus python3-gi libfuse2
+      - uses: ./.github/actions/device-app-setup
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+      - name: Update pair
+        shell: bash
+        env:
+          DEVICE_TARGET: ${{ runner.os == 'Windows' && 'x86_64-pc-windows-msvc' || '' }}
+        run: bash device-app/scripts/e2e/update-pair.sh "$RUNNER_TEMP/pair"
+      - name: End to end
+        if: runner.os == 'Linux'
+        run: bash device-app/scripts/e2e/linux.sh --update "$RUNNER_TEMP/pair"
+      - name: End to end
+        if: runner.os == 'Windows'
+        run: >-
+          pwsh -NoProfile -File device-app/scripts/e2e/windows.ps1 -Update "$env:RUNNER_TEMP\pair"
+          -Out "$env:RUNNER_TEMP\device-app-update"
+      # The app's log and the requests served, for a failure.
+      - if: failure() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-app-update-${{ matrix.runner }}
+          path: ${{ runner.temp }}/device-app-update
+          retention-days: 3
+          if-no-files-found: ignore
+
+  # Desktop installs, finds and starts this run's debug Device package, for a change to Desktop's device install or the
+  # app's install, packaging and instance code: device_app_install_windows_linux_native_test.dart serves it under a
+  # loopback stand-in manifest with its real sha256 and size. No account, no backend, no production manifest.
+  device-app-desktop:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-device-app-desktop-${{ strategy.job-index }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: [plan, device-app-build]
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.device-app-desktop == 'true'
+    name: device-app-desktop (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    # A mirror outage, Desktop's debug build, then the run, whose Windows install may take its 5 minutes.
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - { runner: windows-latest, bundle: nsis, arch: x64 }
+          - { runner: windows-11-arm, bundle: nsis, arch: arm64 }
+          - { runner: ubuntu-22.04, bundle: appimage, arch: x64 }
+          - { runner: ubuntu-22.04-arm, bundle: appimage, arch: arm64 }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+      # The packages the test was proven with: Desktop's Linux build packages as release-desktop.yml installs them,
+      # Tauri's and `file`, then the run's: a display (xauth for xvfb-run), a session bus, FUSE for the AppImage.
+      - if: runner.os == 'Linux'
+        run: >-
+          sudo bash scripts/apt-install.sh clang cmake ninja-build pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
+          liblzma-dev libstdc++-12-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev file xvfb xauth dbus-x11
+          libfuse2
+      - uses: actions/download-artifact@v4
+        with:
+          name: device-app-${{ matrix.bundle }}-${{ matrix.arch }}
+          path: device-app-package
+      - name: Name the package
+        id: package
+        shell: bash
+        run: |
+          shopt -s nullglob
+          found=(device-app-package/*-setup.exe device-app-package/*.AppImage)
+          if [[ ${#found[@]} -ne 1 ]]; then echo "one package, not ${#found[@]}"; exit 1; fi
+          path="$PWD/${found[0]}"
+          if [[ "$RUNNER_OS" == Windows ]]; then path="$(cygpath -w "$path")"; fi
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+      # release-desktop.yml's pin, read as desktop-tests reads it.
+      - name: Flutter version
+        id: flutter
+        shell: bash
+        run: |
+          version="$(sed -n "s/^  FLUTTER_VERSION: '\([^']*\)'.*/\1/p" .github/workflows/release-desktop.yml)"
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - if: runner.os == 'Linux' && runner.arch == 'X64'
+        uses: ./.github/actions/desktop-flutter
+        with:
+          version: ${{ steps.flutter.outputs.version }}
+      - if: runner.os == 'Linux' && runner.arch == 'ARM64'
+        uses: ./.github/actions/desktop-flutter-arm64
+        with:
+          version: ${{ steps.flutter.outputs.version }}
+      # A clone of the pinned tag, as windows-desktop.yml installs it: Flutter's own bootstrap then fetches the Dart SDK
+      # for the runner's architecture, arm64 included.
+      - name: Flutter
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          FLUTTER_VERSION: ${{ steps.flutter.outputs.version }}
+        run: |
+          git clone --depth 1 --branch "$env:FLUTTER_VERSION" https://github.com/flutter/flutter.git "$env:RUNNER_TEMP\flutter"
+          if ($LASTEXITCODE -ne 0) { throw "git clone failed ($LASTEXITCODE)" }
+          "$env:RUNNER_TEMP\flutter\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+      - name: Flutter packages
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: desktop
+        run: |
+          flutter config --no-analytics
+          flutter pub get
+          if ($LASTEXITCODE -ne 0) { throw "flutter pub get failed ($LASTEXITCODE)" }
+      # The Device app's state says the CLI was seen and sign-in and the login item asked, so it installs nothing and
+      # opens no window: %APPDATA%\ai.autonomous.harness.device\state.json, as windows.ps1 seeds it.
+      - name: End to end
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: desktop
+        env:
+          FLUTTER_TEST: '1'
+          HARNESS_DEVICE_TEST_PACKAGE: ${{ steps.package.outputs.path }}
+        run: |
+          $data = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'ai.autonomous.harness.device'
+          New-Item -ItemType Directory -Force -Path $data | Out-Null
+          [IO.File]::WriteAllText((Join-Path $data 'state.json'), '{"version":1,"cliSeen":true,"askedSignIn":true,"loginItem":true}')
+          flutter test -d windows --no-pub integration_test/device_app_install_windows_linux_native_test.dart
+          if ($LASTEXITCODE -ne 0) { throw "the end-to-end test failed ($LASTEXITCODE)" }
+      # The same state under a scratch HOME and XDG folders ($XDG_DATA_HOME/ai.autonomous.harness.device, as linux.sh
+      # seeds it), on a display and session bus of its own. Flutter keeps the runner's pub cache.
+      - name: End to end
+        if: runner.os == 'Linux'
+        working-directory: desktop
+        env:
+          FLUTTER_TEST: '1'
+          HARNESS_DEVICE_TEST_PACKAGE: ${{ steps.package.outputs.path }}
+        run: |
+          export PUB_CACHE="${PUB_CACHE:-$HOME/.pub-cache}"
+          scratch="$RUNNER_TEMP/device-app-home"
+          export HOME="$scratch/home" XDG_CONFIG_HOME="$scratch/config" XDG_DATA_HOME="$scratch/data" \
+            XDG_CACHE_HOME="$scratch/cache" XDG_STATE_HOME="$scratch/state" XDG_RUNTIME_DIR="$scratch/runtime"
+          mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME/ai.autonomous.harness.device" "$XDG_CACHE_HOME" \
+            "$XDG_STATE_HOME" "$XDG_RUNTIME_DIR"
+          chmod 0700 "$XDG_RUNTIME_DIR"
+          printf '{"version":1,"cliSeen":true,"askedSignIn":true,"loginItem":true}\n' \
+            >"$XDG_DATA_HOME/ai.autonomous.harness.device/state.json"
+          xvfb-run -a -s '-screen 0 1280x800x24' dbus-run-session -- \
+            flutter test -d linux --no-pub integration_test/device_app_install_windows_linux_native_test.dart
+      # The Device app's log, for a failure: its local data folder on Windows, the scratch XDG_DATA_HOME on Linux.
+      - name: Device app's log
+        if: failure()
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            logs="$(cygpath -u "$LOCALAPPDATA")/ai.autonomous.harness.device/logs"
+          else
+            logs="$RUNNER_TEMP/device-app-home/data/ai.autonomous.harness.device/logs"
+          fi
+          mkdir -p "$RUNNER_TEMP/device-app-log"
+          if [[ -d "$logs" ]]; then cp -R "$logs/." "$RUNNER_TEMP/device-app-log/"; fi
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-app-desktop-${{ matrix.runner }}
+          path: ${{ runner.temp }}/device-app-log
+          retention-days: 3
+          if-no-files-found: ignore
+
+  # The one line end to end, for a change to the install script or the AppImage's packaging: device-install.sh piped
+  # from curl as a person runs it, on a clean Ubuntu with no libfuse2, installing the x64 AppImage. linux-install.sh
+  # points cdn.autonomous.ai and storage.googleapis.com at a local HTTPS server under a throwaway CA; never the real CDN
+  # or bucket. 26.04 is what new Ubuntu desktops ship.
+  device-app-install:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-device-app-install-${{ strategy.job-index }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: [plan, device-app-build]
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.device-app-install == 'true'
+    name: device-app-install (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - { runner: ubuntu-22.04 }
+          - { runner: ubuntu-24.04 }
+          - { runner: ubuntu-26.04 }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+      # A display (xauth for xvfb-run) and a session bus; then what every Ubuntu desktop has and a bare runner lacks:
+      # the host's graphics and text stack, which an AppImage does not bundle. None of them brings libfuse2.
+      - run: >-
+          sudo bash scripts/apt-install.sh xvfb xauth dbus-x11 libegl1 libgles2 libgbm1 libharfbuzz0b libfribidi0
+          libwayland-client0
+      - uses: actions/download-artifact@v4
+        with:
+          name: device-app-appimage-x64
+          path: ${{ runner.temp }}/device-app
+      - name: End to end
+        run: |
+          shopt -s nullglob
+          found=("$RUNNER_TEMP"/device-app/*.AppImage)
+          if [[ ${#found[@]} -ne 1 ]]; then echo "one AppImage, not ${#found[@]}"; exit 1; fi
+          bash device-app/scripts/e2e/linux-install.sh "${found[0]}"
+
+  # test_ci_plan.CrossReadTests' repository-wide scan, which skips in process-checks' sparse checkout: here on a full
+  # one, for a change to the planner, its test or the tables it reads (scripts/ci-plan.py ALSO).
+  cross-read-scan:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-cross-read-scan
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cross-read-scan == 'true'
+    runs-on: ubuntu-24.04
+    # The checkout, then the scan: about 20 seconds locally.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+      - name: Every cross-read is declared
+        # The planner tests that need every file: with this set, a missing file fails them instead of skipping.
+        env:
+          CROSS_READ_SCAN_REQUIRED: '1'
+        shell: bash
+        run: |
+          python3 -m unittest discover -s scripts/tests -p test_ci_plan.py -v \
+            -k test_every_cross_read_in_this_repository_is_declared \
+            -k test_the_dial_host_files_are_the_ones_cli_e2e_leaves_out \
+            -k test_every_declared_input_exists \
+            -k test_every_desktop_file_the_phone_tests_read_selects_mobile 2>&1 | tee "$RUNNER_TEMP/scan.log"
+          # A renamed test matches no -k and would leave the scan passing without it.
+          grep -Eq '^Ran 4 tests in ' "$RUNNER_TEMP/scan.log" || { echo "::error::the scan ran fewer or more than its 4 tests"; exit 1; }
+
   required:
     name: ci/required
     needs: [plan, process-checks, desktop-tests, companion-subsystems, cli-typecheck, cli-tests, tui-test,
             backend-desk, backend-integration, website-checks, os-checks, provider-checks, firmware-checks, pro-firmware-build, pro-golden,
-            mobile-checks, daemons-checks, pty-checks, device-app-checks]
+            mobile-checks, daemons-checks, pty-checks, device-app-checks, windows-e2e, linux-e2e, linux-e2e-summary,
+            dial-hosts, device-app-build,
+            device-app-linux, device-app-windows, device-app-update, device-app-desktop, device-app-install,
+            cross-read-scan]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 3

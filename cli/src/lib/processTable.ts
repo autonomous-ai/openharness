@@ -392,7 +392,7 @@ let processRowsInFlight: { scope: ProcessReadScope; read: Promise<ProcessRow[] |
 type ProcessTableSource = () => Promise<ProcessRow[] | null>
 let source: ProcessTableSource | null = null
 
-/** Windows reads its table from harness-pty (lib/windows/processTable.ts); tests inject rows. */
+/** The daemon's own read (on Windows, its connected harness-pty's `processes` op); tests inject rows. */
 export function setProcessTableSource(next: ProcessTableSource | null): void {
   source = next
   processRowsInFlight = null
@@ -470,6 +470,13 @@ export async function readProcessRows(os: NodeJS.Platform = process.platform, pi
 }
 
 async function readProcessRowsFor(os: NodeJS.Platform, scope: ProcessReadScope): Promise<ProcessRow[] | null> {
+  if (os === 'win32') {
+    const { windowsProcessRows } = await import('./windows/processTable.js')
+    const rows = await windowsProcessRows(null)
+    scope.sealed = true
+    const wanted = scope.pids
+    return rows === null || wanted === null ? rows : rows.filter(row => wanted.has(row.pid))
+  }
   // Keep one full native census for every caller arriving during I/O, including separate timer callbacks.
   const [stdout, commands] = await Promise.all([readProcessText('pid=,ppid=,comm=,lstart=,args='),
     os === 'darwin' ? readProcessText('pid=,lstart=,comm=') : null])

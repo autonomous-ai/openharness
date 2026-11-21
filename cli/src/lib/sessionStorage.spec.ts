@@ -49,14 +49,13 @@ function faultChild(fault: 'after-sync' | 'replace-before-open' | 'directory-clo
     import { childAdmissionFailure } from ${JSON.stringify(admissionModule)};
     if (childAdmissionFailure(process.env, process.ppid, process.argv[1])) process.exit(2);
     const closeSync = syncFs.closeSync;
-    let directoryFault = false, stoppedCloses = 0;
+    let directoryFault = false;
     syncFs.closeSync = fd => {
       const stat = syncFs.fstatSync(fd);
-      if (${JSON.stringify(fault)} === 'page-close' && stat.isDirectory()
-        && stat.ino === syncFs.statSync(${JSON.stringify(join(root, 'stopped-agents'))}).ino) stoppedCloses++;
       if (!directoryFault && (${JSON.stringify(fault)} === 'directory-close' && syncFs.fstatSync(fd).isDirectory()
         || ${JSON.stringify(fault)} === 'file-close' && syncFs.fstatSync(fd).isFile()
-        || ${JSON.stringify(fault)} === 'page-close' && stoppedCloses === 3)) {
+        || ${JSON.stringify(fault)} === 'page-close' && stat.isDirectory()
+          && stat.ino === syncFs.statSync(${JSON.stringify(join(root, 'stopped-agents'))}).ino)) {
         directoryFault = true; throw new Error('fixture directory close failure');
       }
       return closeSync(fd);
@@ -74,6 +73,9 @@ function faultChild(fault: 'after-sync' | 'replace-before-open' | 'directory-clo
       }
       return handle;
     };
+    // An already-private directory needs no transient open. Exercise the actual
+    // tightening path; page-close targets the page's retained directory instead.
+    if (${JSON.stringify(fault)} === 'directory-close') syncFs.chmodSync(${JSON.stringify(root)}, 0o750);
     syncBuiltinESMExports();
     (await import(${JSON.stringify(processModule)})).runSessionStorage();
   `, { mode: 0o600 })
@@ -149,6 +151,7 @@ describe('required session storage process', () => {
     child.once('exit', () => { exited = true })
     await expect(reading).rejects.toMatchObject({ code: 'disconnected' })
     expect(exited).toBe(true)
+    expect(() => process.kill(child.pid!, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }))
     expect((storage as unknown as { child?: ChildProcess }).child).toBeUndefined()
   })
 

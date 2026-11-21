@@ -225,9 +225,12 @@ describe('local CLI WebSocket', () => {
       ws.send(JSON.stringify({ type: 'app_swarms', payload: { active: 'missing', swarms: [{ id: 'tab', name: 'Tab', agentIds: ['active', 7] }], tiles: [] } }))
       ws.send(JSON.stringify({ type: 'terminal_resize', payload: { streamId, cols: 90, rows: 25 } }))
       await vi.waitFor(() => expect(backend.frames.at(-1)?.type).toBe('terminal_resize'))
-      expect(panes).toHaveBeenCalledExactlyOnceWith(['active'], true)
-      expect(unread).toHaveBeenCalledExactlyOnceWith([{ agentId: 'active', machineId, question: false, text: 'Synthetic recap' }])
-      expect(tabs).toHaveBeenCalledExactlyOnceWith({ active: 'tab', swarms: [{ id: 'tab', name: 'Tab', agentIds: ['active'], panes: 1 }], tiles: [] })
+      // First-use interpretation is asynchronous and does not hold terminal traffic.
+      await vi.waitFor(() => {
+        expect(panes).toHaveBeenCalledExactlyOnceWith(['active'], true)
+        expect(unread).toHaveBeenCalledExactlyOnceWith([{ agentId: 'active', machineId, question: false, text: 'Synthetic recap' }])
+        expect(tabs).toHaveBeenCalledExactlyOnceWith({ active: 'tab', swarms: [{ id: 'tab', name: 'Tab', agentIds: ['active'], panes: 1 }], tiles: [] })
+      })
       expect(routed).not.toHaveBeenCalled()
     } finally { ws.close() }
   })

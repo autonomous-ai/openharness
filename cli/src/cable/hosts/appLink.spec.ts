@@ -59,11 +59,11 @@ const xdgOpened = (session: string, file = '/fake/bin/xdg-open'): Call => ({ fil
 const settled = () => new Promise((resolve) => setImmediate(resolve))
 
 describe('an app whose session opens by its link', () => {
-  it('canFocus is macOS\'s, and Linux\'s once the scheme\'s app is known; canShow also needs the app in front, asked each time', async () => {
+  it('canFocus is macOS\'s, and Linux\'s until the scheme is read to have no app; canShow also needs the app known and in front, asked each time', async () => {
     let linuxFront = true
     const linux = recorder({ platform: 'linux', inFront: () => linuxFront })
-    // The first ask starts the read and answers false; a second while it runs starts none.
-    expect(linux.verbs.canFocus(pane('s1'))).toBe(false)
+    // The first ask starts the read: a tap's focus waits for it, a rest's look does not. A second while it runs starts none.
+    expect(linux.verbs.canFocus(pane('s1'))).toBe(true)
     expect(linux.verbs.canShow(pane('s1'))).toBe(false)
     await settled()
     expect(linux.verbs.canFocus(pane('s1'))).toBe(true)
@@ -208,6 +208,20 @@ describe('a link on Linux', () => {
       expect(await forged.verbs.show(pane(id), 'a1'), id).toBe('failed')
     }
     expect(forged.calls).toEqual([])
+  })
+
+  // The opener asks canFocus before it runs focus (open.ts): a first tap while the read runs still opens its link.
+  it('a first tap opens the link once xdg-mime names an app, and none once it names no app', async () => {
+    const { calls, verbs } = recorder({ platform: 'linux' })
+    expect(verbs.canFocus(pane('s1'))).toBe(true)
+    expect(await verbs.focus(pane('s1'))).toBe(true)
+    expect(calls).toEqual([asked, xdgOpened('s1')])
+
+    const none = recorder({ platform: 'linux' }, [], FAKE, '')
+    expect(none.verbs.canFocus(pane('s1'))).toBe(true)
+    expect(await none.verbs.focus(pane('s1'))).toBe(false)
+    expect(none.verbs.canFocus(pane('s1'))).toBe(false)
+    expect(none.calls).toEqual([asked])
   })
 
   it('reads the scheme\'s app once, and again after an open that failed', async () => {

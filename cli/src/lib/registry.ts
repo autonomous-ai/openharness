@@ -53,7 +53,7 @@ import { copilotTranscriptPath } from '../engines/copilot/contract.js'
 import { OPENCLAW_KEY } from '../engines/openclaw/contract.js'
 import { bootChanged, currentBootId } from './bootId.js'
 import { AtomicWriteUnconfirmed, atomicWriteJson, readPrivateStateFile, secureStateDirectory } from './secureState.js'
-import { RegistryCleanupUnavailable, RegistryPersistenceUnavailable, RegistryWriteQueue, privateRegistryDirectory, registryFileLock, type RegistryWriteDeadline } from './registryPersistence.js'
+import { REGISTRY_WRITE_DEADLINE_MS, RegistryCleanupUnavailable, RegistryPersistenceUnavailable, RegistryWriteQueue, privateRegistryDirectory, registryFileLock, type RegistryWriteDeadline } from './registryPersistence.js'
 import { mergeTerminalRuntimes, primaryRuntime, processIdentityKey, sameProcessIdentity, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
 import type { HookTerminalHint, ProcessIdentity, TerminalRuntimeRef } from './terminalTypes.js'
 import { externalReservations, externalResumePending, externalResumeIds, parseExternalResume, type ExternalResumeIntent } from './externalResume.js'
@@ -2106,7 +2106,7 @@ class Registry {
     const grids = input.grid === undefined ? [selected] : [selected, { ...selected, grid: input.grid }]
     const launches = grids.flatMap(row => [row, { ...row, active: true, launch: { state: 'ready' as const } }]).map(launchIdentity)
     const requested = structuredClone(input)
-    const expires = Math.min(authority.expires ?? Infinity, performance.now() + 5_000)
+    const expires = Math.min(authority.expires ?? Infinity, performance.now() + REGISTRY_WRITE_DEADLINE_MS)
     const verify = () => {
       if (authority.current?.() === false || !owners.includes(ownershipIdentity(this.byAgent(agentId)))) {
         throw new RegistryOwnershipChanged('the registry owner changed while its write was being prepared')
@@ -3876,7 +3876,13 @@ class Registry {
           verifyOwners?.()
           bindingCommit?.verify()
           // Ordinary observations can advance during durability; never install the pre-rename rebase.
-          const liveRows = new Map(Array.from(this.agents.values()).map(row => [row.agentId, persistedRow(row) as unknown as Record<string, unknown>]))
+          // A row this write removes stays removed. Its owner was verified just above, so what changed on it meanwhile (an
+          // attach finishing late set the engine's version) was said of a row now gone; rebased as a newer live change, it
+          // brought the row back, and the Stop that wrote the removal failed (e2e/enginehomes.e2e.ts).
+          const removed = new Set([...bindingCommit ? [bindingCommit] : [], ...bindingCommit?.displaced ?? []]
+            .filter(row => !row.candidate).map(row => row.agentId))
+          const liveRows = new Map(Array.from(this.agents.values()).filter(row => !removed.has(row.agentId))
+            .map(row => [row.agentId, persistedRow(row) as unknown as Record<string, unknown>]))
           const committed = new Map(serialized.map(row => [row.agentId, row as unknown as Record<string, unknown>]))
           const remainingIntents = new Map([...this.intended].filter(([id, intent]) => capturedIntents.get(id) !== intent))
           const fingerprint = (row: Record<string, unknown>): string => {

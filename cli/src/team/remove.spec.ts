@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { GuestRunResult } from '../lib/guestRunner.js'
 import type { AdminResult } from '../lib/windows/elevated.js'
 import type { TeamConfig } from './config.js'
@@ -145,8 +145,12 @@ describe('removing an old Team account', () => {
 
     it('runs the Windows removal behind User Account Control, its staging folder the owner\'s by SID', async () => {
       const w = windows({ ok: true, stdout: 'harness: removed the Harness Team account, its profile and its daemon\'s task\n' })
-      expect(await removeTeamAccount(w.deps)).toEqual({ ok: true, removed: true })
-      expect(w.calls.map((call) => call.command)).toEqual(['whoami'])
+      vi.stubEnv('SystemRoot', 'C:\\Windows')
+      try {
+        expect(await removeTeamAccount(w.deps)).toEqual({ ok: true, removed: true })
+      } finally { vi.unstubAllEnvs() }
+      // By its full path: Windows looks for a bare name in the folder the command runs in before PATH.
+      expect(w.calls.map((call) => call.command)).toEqual(['C:\\Windows\\System32\\whoami.exe'])
       expect(w.handed).toHaveLength(1)
       expect(w.handed[0]!.sid).toBe('S-1-5-21-1-2-3-1001')
       expect(w.handed[0]!.script).toContain("$TEAM_HOME = 'C:\\Users\\harnessteam'")

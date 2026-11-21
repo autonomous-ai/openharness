@@ -8,9 +8,10 @@
  *
  * The match is the process tree: an agent runs under the shell VS Code started for its terminal, or is that terminal's
  * own process, so the window that lists a pid of its chain holds it. A process's name is outside text (a process can
- * write a prompt there) and its environment holds secrets (cli/AGENTS.md rule 4), so neither is read: one
- * `ps -axo pid=,ppid=` table gives pids and parents alone. A running pid's parents never change, so an agent's chain is
- * read once and kept until it leaves, and one read serves every agent that needs one.
+ * write a prompt there) and its environment holds secrets (cli/AGENTS.md rule 4), so neither is kept: of the one
+ * process table every OS reads (processTable.ts processRows, harness-pty's on Windows), pids and parents alone. A
+ * running pid's parents never change, so an agent's chain is read once and kept until it leaves, and one read serves
+ * every agent that needs one.
  *
  * A page line's lines also press Claude Code's page keys in the extension
  * (docs/plans/2026-11-18-dial-vscode-claude-fullscreen-scroll-design.md), a plain line's do not: lines that wait keep
@@ -22,12 +23,13 @@
  * (claudeRenderer.ts), then, only when that says fullscreen, numbers from `ps -o pid=,pgid=,tpgid= -p <agent>,<shell>`.
  * The foreground is the shell's tpgid, never the agent's own: under screen, script, asciinema or sudo's use_pty the
  * agent leads a pseudo-terminal of its own and is always in front there, while the VS Code terminal shows that program.
- * Never a name, an environment or arguments.
+ * Never a name, an environment or arguments. Windows has no `ps` and no process groups: no stroke there carries keys.
  */
 import { isAbsolute } from 'node:path'
 import { REFUSED, type ListenerHandler, type ListenerStream, type ListenerStreamHandler } from '../../services/devicesListener.js'
+import { processRows, type ProcessRow } from '../../lib/processTable.js'
 import type { PageAgent } from './adapter.js'
-import { execText, parentChain, PS_MAX_BYTES, PS_TIMEOUT_MS, type Exec, type ProcessName } from './scannedApp.js'
+import { execText, parentChain, PS_TIMEOUT_MS, type Exec, type ProcessName } from './scannedApp.js'
 
 export const VSCODE_WINDOWS = 8
 export const VSCODE_TERMINALS = 32
@@ -51,24 +53,18 @@ export const GROUPS_MAX_BYTES = 128
 const WINDOW_ID = /^[A-Za-z0-9-]{8,36}$/
 const PID_MAX = 2 ** 31 - 1
 const MINUTE_MS = 60_000
-const PARENT_ROW = /^\s*(\d+)\s+(\d+)\s*$/
 /** A tty's foreground group is -1 on Linux for a process with no terminal. */
 const GROUPS_ROW = /^ *(\d+) +(\d+) +(-?\d+) *$/
 
-type ProcessParent = Pick<ProcessName, 'pid' | 'ppid'>
+/** `startMarker`: when it started, by which a parent on a reused pid ends its chain (parentChain). */
+type ProcessParent = Pick<ProcessName, 'pid' | 'ppid'> & { startMarker?: string }
 
-/** Each process's pid and parent, from one `ps -axo pid=,ppid=` read through scannedApp.ts's patient exec; rejects when
- *  `ps` could not be read. */
-export async function readProcessParents(exec: Exec = execText): Promise<ProcessParent[]> {
-  const out = await exec('ps', ['-axo', 'pid=,ppid='], { timeout: PS_TIMEOUT_MS, maxBuffer: PS_MAX_BYTES })
-  const rows: ProcessParent[] = []
-  for (const line of (out ?? '').split('\n')) {
-    const row = PARENT_ROW.exec(line)
-    if (row) rows.push({ pid: Number(row[1]), ppid: Number(row[2]) })
-  }
-  // `ps` lists itself at the least: no row is a read that failed. The error names nothing it printed.
-  if (!rows.length) throw new Error('process table not read')
-  return rows
+/** Each process's pid, parent and start, from one read of the process table; rejects when it could not be read. */
+export async function readProcessParents(rows: () => Promise<ProcessRow[] | null> = processRows): Promise<ProcessParent[]> {
+  const table = await rows()
+  // A table lists its reader at the least: no row is a read that failed. The error names nothing it held.
+  if (!table?.length) throw new Error('process table not read')
+  return table.map(row => ({ pid: row.pid, ppid: row.parentPid, startMarker: row.startMarker }))
 }
 
 export interface ProcessGroups { pgid: number; tpgid: number }
@@ -76,7 +72,10 @@ export interface ProcessGroups { pgid: number; tpgid: number }
 /** The agent's group and its VS Code terminal's foreground group, the tpgid of the shell VS Code started there, from
  *  one `ps -o pid=,pgid=,tpgid= -p <agent>,<shell>` through scannedApp.ts's patient exec. None when `ps` failed, either
  *  process is gone, or it printed anything but one row of three numbers for each. */
-export async function readForeground(agent: number, shell: number, exec: Exec = execText): Promise<ProcessGroups | undefined> {
+export async function readForeground(agent: number, shell: number, exec: Exec = execText,
+  platform: NodeJS.Platform = process.platform): Promise<ProcessGroups | undefined> {
+  // Windows has no `ps` and no foreground process group to read (docs/windows-rules.md §3).
+  if (platform === 'win32') return undefined
   // An agent that is its terminal's own process is named once: ps lists a process once however often it is named.
   const pids = [...new Set([agent, shell])]
   const out = await exec('ps', ['-o', 'pid=,pgid=,tpgid=', '-p', pids.join(',')], { timeout: PS_TIMEOUT_MS, maxBuffer: GROUPS_MAX_BYTES })
@@ -115,7 +114,7 @@ export interface VscodeTerminals {
 }
 
 export interface VscodeTerminalsDeps {
-  /** One read of every process's pid and parent; rejects when `ps` could not be read. */
+  /** One read of every process's pid and parent; rejects when the table could not be read (readProcessParents). */
   processes(): Promise<readonly ProcessParent[]>
   /** Whether Claude Code's settings for that absolute folder, and the home its transcript path names, draw it fullscreen
    *  (claudeRenderer.ts readFullscreen). */

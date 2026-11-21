@@ -5,7 +5,7 @@
  */
 import { spawnSync } from 'node:child_process'
 import * as fs from 'node:fs'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, watch, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -33,9 +33,10 @@ const SELF = 4_343
 // Root writes through any folder's mode.
 const asRoot = process.getuid?.() === 0
 
-const roots: string[] = []
+const roots: string[] = [], startFolder = process.cwd()
 afterEach(() => {
   vi.useRealTimers()
+  process.chdir(startFolder)
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
 
@@ -220,6 +221,13 @@ describe('the move at a start', () => {
     expect(logOf(t, env)).toEqual([line, line])
     expect(existsSync(t.data)).toBe(false)
     expect(t.execs).toEqual([])
+  })
+
+  it('a relative ADAPTER_DATA_DIR is the home\'s: the line goes to its harness.log, whatever folder the start runs in', async () => {
+    const t = legacyHome()
+    process.chdir(fresh('move-start-folder-'))
+    await moveHomeAtStart(argvOf(t, '__harnessd'), { ADAPTER_DATA_DIR: 'data' }, t.deps({ ptyHostRuns: () => true }))
+    expect(logOf(t, { ADAPTER_DATA_DIR: join(t.home, 'data') })).toEqual(['home move: waiting pty-host · close the agents, then harness start'])
   })
 
   it('a moved home logs "home move: moved · data <root> · state <root>" in the data folder\'s harness.log where it is now, and on a terminal', async () => {
@@ -431,11 +439,13 @@ describe('the move at a start', () => {
     const firstAsked = new Promise<void>((done) => { asked = done })
     let watching = (): void => {}
     const secondWaits = new Promise<'waits'>((done) => { watching = () => done('waits') })
+    // The fake watch, woken by the test: fs.watch on macOS (FSEvents) starts telling changes some time after it returns,
+    // and may never tell the first start's release, which left the second to its look LOCK_LOOK_MS later.
     const lock = (pid: number, onWatch = (): void => {}): LockDeps => ({
       pid, startTime: (other) => other === SELF || other === OTHER ? 1 : null,
       watch: (folder, onChange) => {
         onWatch()
-        return watch(folder, onChange)
+        return t.lockAs(pid).watch(folder, onChange)
       },
     })
     const first = moveHomeAtStart(argvOf(t, '__harnessd'), {}, t.deps({
@@ -450,7 +460,10 @@ describe('the move at a start', () => {
     const second = moveHomeAtStart(argvOf(t, 'start', '--if-down'), { XDG_STATE_HOME: otherState }, t.deps({ lock: lock(OTHER, watching) }))
     expect(await Promise.race([second.then(() => 'went on'), secondWaits])).toBe('waits')
     answer(false)
-    await Promise.all([first, second])
+    await first
+    // Its release took the lock's folder away: a change beside the lock.
+    t.wake()
+    await second
     expect(readBridge(t.state)).toMatchObject({ oldHome: t.legacy })
     expect(existsSync(otherState)).toBe(false)
   })

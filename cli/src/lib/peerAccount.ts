@@ -15,7 +15,7 @@ import { readFile } from 'node:fs/promises'
 import type { Socket } from 'node:net'
 import { patientExec, type ExecDone, type PatientExecOptions } from './patientExec.js'
 import { ptyHostBinary } from './ptyHost/binary.js'
-import { runPowershellAsync } from './windows/powershell.js'
+import { modulesByPath, runPowershellAsync } from './windows/powershell.js'
 import { errorKind } from './log.js'
 
 /** Yes, no, or `unanswered`: the lookup did not finish in time, which is not a no. The listener answers a retryable 503. */
@@ -199,6 +199,7 @@ const runWindowsPeer: WindowsPeerRun = nativeFirst(runWindowsNative, (script, in
 export function windowsPeerQuery(peerPort: number, ownPort: number, daemonPid: number = process.pid): { script: string; inputs: Record<string, string> } {
   return {
     script: [
+      modulesByPath('NetTCPIP', 'CimCmdlets'),
       '$rows = @(Get-NetTCPConnection -State Established -LocalAddress 127.0.0.1 -LocalPort ([int]$env:HARNESS_PEER_PORT) -RemoteAddress 127.0.0.1 -RemotePort ([int]$env:HARNESS_OWN_PORT) -ErrorAction SilentlyContinue)',
       "if ($rows.Count -ne 1) { 'no: ' + $rows.Count + ' connections match'; exit 0 }",
       '$process = Get-CimInstance Win32_Process -Filter ("ProcessId = " + [int]$rows[0].OwningProcess)',
@@ -241,6 +242,7 @@ export function windowsPeerQuery(peerPort: number, ownPort: number, daemonPid: n
 export function windowsListenerQuery(port: number): { script: string; inputs: Record<string, string> } {
   return {
     script: [
+      modulesByPath('NetTCPIP', 'CimCmdlets'),
       // Only these keep 127.0.0.1's port from being bound; this account's listener on ::1 or 127.0.0.2 must not keep the bridge
       // waiting on another account's 127.0.0.1 (Quinn 2's review of #2608).
       "$rows = @(Get-NetTCPConnection -State Listen -LocalPort ([int]$env:HARNESS_LISTEN_PORT) -ErrorAction SilentlyContinue | Where-Object { $_.LocalAddress -in @('127.0.0.1', '0.0.0.0', '::') })",

@@ -3,9 +3,9 @@ import { once } from 'node:events'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PtyHostClient, type PtyHostDiscovery } from './client.js'
-import { encodeFrame, FrameKind, FrameReader, helloAuth, helloProof, PTY_PROTOCOL, type PtyEvent } from './protocol.js'
+import { encodeFrame, FrameKind, FrameReader, helloAuth, helloProof, PTY_PROTOCOL, type PtyEvent, type PtyOp } from './protocol.js'
 
 type Request = { id: number; op: string } & Record<string, unknown>
 interface FakeHostOptions {
@@ -365,6 +365,50 @@ describe('PtyHostClient.call', () => {
       onRequest: (r, s) => { s.write('garbage\n\n[1]\n'); line(s, { id: r.id, ok: true, titles: {} }) },
     })
     expect(await client.call({ op: 'titles' })).toEqual({ state: 'ok', value: { titles: {} } })
+  })
+})
+
+describe('PtyHostClient.call deadlines', () => {
+  /** A host that answers only when the test does, and its client with the deadlines' clock faked. */
+  async function answeredByTest() {
+    let take: (got: { request: Request; socket: net.Socket }) => void = () => {}
+    const received = new Promise<{ request: Request; socket: net.Socket }>(resolve => { take = resolve })
+    const { client } = await connected({ onRequest: (request, socket) => take({ request, socket }) })
+    // Only the timers: the sockets keep their real I/O, and settling a call uses setImmediate.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    cleanup.push(() => vi.useRealTimers())
+    return { client, received }
+  }
+  const paneStarts: PtyOp[] = [
+    { op: 'create', command: ['x'], cols: 80, rows: 24, owner: 'o', hold: true },
+    { op: 'respawn', pane: '%1', command: ['x'] },
+  ]
+
+  for (const op of paneStarts) {
+    it(`a ${op.op} reply at 6 s still succeeds`, async () => {
+      const { client, received } = await answeredByTest()
+      const result = client.call(op)
+      const { request, socket } = await received
+      await vi.advanceTimersByTimeAsync(6_000)
+      line(socket, { id: request.id, ok: true })
+      expect(await result).toEqual({ state: 'ok', value: {} })
+    })
+
+    it(`a ${op.op} with no reply by 15 s is no reply within 15000 ms`, async () => {
+      const { client, received } = await answeredByTest()
+      const result = client.call(op)
+      await received
+      await vi.advanceTimersByTimeAsync(15_000)
+      expect(await result).toEqual({ state: 'unknown', dispatch: 'possibly_executed', reason: 'no reply within 15000 ms' })
+    })
+  }
+
+  it('another op still has 5 s', async () => {
+    const { client, received } = await answeredByTest()
+    const result = client.call({ op: 'inventory' })
+    await received
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(await result).toEqual({ state: 'unknown', dispatch: 'possibly_executed', reason: 'no reply within 5000 ms' })
   })
 })
 

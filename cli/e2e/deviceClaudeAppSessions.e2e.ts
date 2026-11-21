@@ -4,26 +4,35 @@
  * the daemon's home (src/testing/claudeAppFixture.ts) is what the Claude app writes, and a fake dial on the desk lists
  * its sessions that are not archived, idle, and taps one open by the app's link.
  *
- * The real Claude app, its Application Support folder, `~/.claude` and `/usr/bin/open` are never touched: the store is a
- * fixture in the daemon's throwaway home, checked to be inside its root before it starts; the session with a process is
- * the suite's fake Claude Code, given the Claude app's hints in its own environment only; and `open` is the harness's
- * fake (HARNESS_OPEN_BIN, harness/daemon.ts), which only records its arguments. No backend: nothing is spoken.
+ * macOS and Linux. The real Claude app, its store folder, `~/.claude`, `/usr/bin/open` and `xdg-open` are never touched:
+ * the store is a fixture in the daemon's throwaway home, checked to be inside its root before it starts; the session
+ * with a process is the suite's fake Claude Code, given the Claude app's hints in its own environment only, and on Linux
+ * run under a fake of the app (harness/outsideAgent.ts); `open`, and on Linux `xdg-open`, is the harness's fake
+ * (HARNESS_OPEN_BIN, harness/daemon.ts), which only records its arguments; and on Linux the `claude` scheme's app is
+ * named by a fake `xdg-mime` (harness/schemeApps.ts). No backend: nothing is spoken.
  */
 import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { isAbsolute, join, relative } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { claudeStoreRoots } from '../src/cable/hosts/appPlaces.js'
 import { observedAgentId } from '../src/cable/hosts/observed.js'
 import { ACCOUNT, ORG, claudeAppFixture, type FixtureSession } from '../src/testing/claudeAppFixture.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { Outside } from './harness/outsideAgent.js'
+import { writeSchemeApps } from './harness/schemeApps.js'
 
 /** What the round dial's firmware says in its greeting: it holds one app's ring (docs/specs/2026-11-14-dial-app-filter.md). */
 const FILTER = { appFilter: 'v1' }
 const CLAUDE_APP = 'com.anthropic.claudefordesktop'
-const continued = (localId: string): string[] => ['-b', CLAUDE_APP, `claude://code/continue?session=${localId}`]
+const LINUX = process.platform === 'linux'
+/** A tap's open: by the app's bundle on macOS; on Linux the link alone, as `xdg-open` takes it. */
+const continued = (localId: string): string[] => {
+  const url = `claude://code/continue?session=${localId}`
+  return LINUX ? [url] : ['-b', CLAUDE_APP, url]
+}
 /** Every line the source says (Global Constraints): fixed words and counts, never a title, folder, path or id. */
 const LINE = /^\[claude-app\] (watch · (on|none)|listed · \d+ sessions|read · \d+ ms · \d+ parsed · \d+ skipped|over · \d+)$/
 
@@ -52,7 +61,7 @@ const sourceLines = (d: IsolatedDaemon): string[] =>
 const session = (over: Partial<FixtureSession> & { cwd: string }): FixtureSession =>
   ({ localId: `local_${randomUUID()}`, cliSessionId: randomUUID(), ...over })
 
-describe.skipIf(process.platform !== 'darwin')("the Claude app's Code sessions on the dial, from a fixture store and a fake process", () => {
+describe.skipIf(process.platform === 'win32')("the Claude app's Code sessions on the dial, from a fixture store and a fake process", () => {
   let daemon: IsolatedDaemon | undefined
   let desk: Desk | undefined
   const outside: Outside[] = []
@@ -75,7 +84,7 @@ describe.skipIf(process.platform !== 'darwin')("the Claude app's Code sessions o
     expect(relative(d.root, open).startsWith('..'), open).toBe(false)
     expect(relative(d.root, d.env.HOME!).startsWith('..'), d.env.HOME).toBe(false)
     expect(d.env.CLAUDE_CODE_HOST_SESSION_ID).toBeUndefined()
-    const root = join(d.env.HOME!, 'Library', 'Application Support', 'Claude', 'claude-code-sessions')
+    const root = claudeStoreRoots(process.platform, d.env, d.env.HOME!)[0].root
     expect(relative(d.root, root).startsWith('..'), root).toBe(false)
     const store = claudeAppFixture(root)
     store.org()
@@ -83,6 +92,8 @@ describe.skipIf(process.platform !== 'darwin')("the Claude app's Code sessions o
     const file = join(d.root, 'dials.json')
     d.env.HARNESSD_TEST_DIAL_PORT = file
     writeFileSync(file, '[]')
+    // Both apps' links have their app, as on a desktop with both installed.
+    if (LINUX) writeSchemeApps(d, { claude: 'com.anthropic.Claude.desktop', codex: 'chatgpt.desktop' })
     const theDesk = new Desk(file)
     desk = theDesk
     onTestFailed(() => {
@@ -90,6 +101,8 @@ describe.skipIf(process.platform !== 'darwin')("the Claude app's Code sessions o
       console.log(`---- hooks the engines ran\n${d.hookLog().split('\n').slice(-40).join('\n')}`)
     })
     await d.start()
+    // Claude Code started by hand reads its hooks once, as it starts: they must be in by then.
+    await d.hooksInstalled(['claude'])
     return { d, desk: theDesk, store }
   }
 
@@ -152,13 +165,19 @@ describe.skipIf(process.platform !== 'darwin')("the Claude app's Code sessions o
     const LIVE = 'local_6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c'
     const { d, desk, store } = await fresh([])
 
-    // 1. Its hooked copy, on the Claude app's page: the hints are the fake's alone.
+    // 1. Its hooked copy, on the Claude app's page: the hints are the fake's alone. Linux has no bundle id: there the
+    // walk of its parents names the Claude app, a fake of it above the engine, and its host stays a terminal's
+    // (hostDetect.ts agentPlaceName).
     const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0c', FILTER)
     await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
-    const engine = await Outside.start(d, 'e2e-live', { __CFBundleIdentifier: CLAUDE_APP, CLAUDE_CODE_HOST_SESSION_ID: LIVE })
+    let since = dial.messages.length
+    const engine = LINUX
+      ? await Outside.start(d, 'e2e-live', { CLAUDE_CODE_HOST_SESSION_ID: LIVE }, 'claude-app')
+      : await Outside.start(d, 'e2e-live', { __CFBundleIdentifier: CLAUDE_APP, CLAUDE_CODE_HOST_SESSION_ID: LIVE })
     outside.push(engine)
-    expect(await showing(dial, 'its hooked copy', (r) => r.length === 1 && r[0].id === engine.id))
-      .toEqual([expect.objectContaining({ id: engine.id, host: 'claude' })])
+    await dial.next((m) => m.t === 'apps' && m.shown === 'claude', 45_000, "the Claude app's page", since)
+    expect(await showing(dial, 'its hooked copy', (r) => r.length === 1 && r[0].id === engine.id, since))
+      .toEqual([expect.objectContaining({ id: engine.id, host: LINUX ? 'terminal' : 'claude' })])
 
     // 2. The app's store names the same session: still one row, the same id.
     store.write({ localId: LIVE, cliSessionId: engine.sessionId, title: 'Fixture Live', cwd: join(d.projectsDir, 'e2e-live'),
@@ -169,7 +188,7 @@ describe.skipIf(process.platform !== 'darwin')("the Claude app's Code sessions o
     expect((await showing(dial, 'the list it asked for', () => true, asked)).map((row) => row.id)).toEqual([engine.id])
 
     // 3. Its real state, which a store row has not.
-    let since = dial.messages.length
+    since = dial.messages.length
     engine.type('hello from the Claude app')
     await dial.next((m) => m.t === 'turn.started' && m.agentId === engine.id, 45_000, 'its turn started', since)
     await dial.next((m) => m.t === 'turn.done' && m.agentId === engine.id, 45_000, 'its turn done', since)

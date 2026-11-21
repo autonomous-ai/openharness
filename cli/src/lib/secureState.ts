@@ -22,8 +22,9 @@ import * as fs from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
-import { basename, dirname, win32 } from 'node:path'
+import { basename, dirname, win32, type PlatformPath } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { homePath } from '../config/envFields.js'
 import { errorKind } from './log.js'
 
 const PRIVATE_DIRECTORY_MODE = 0o700
@@ -76,10 +77,10 @@ function isMissing(error: unknown): boolean {
  * administrators can write; new folders and files in it inherit that. So state must be in the profile, or in the
  * data folder the person configured themselves (`ADAPTER_DATA_DIR`), whose ACL is then theirs to choose. Node
  * cannot set an ACL: state is created with the same modes as on Unix, which Windows ignores but for read-only.
+ * Read by [p], the host's path module unless given.
  */
-export function windowsStateRoots(environment: NodeJS.ProcessEnv = process.env, home: string = homedir()): string[] {
-  const configured = environment.ADAPTER_DATA_DIR?.trim()
-  return [home, ...(configured ? [configured] : [])].filter(Boolean)
+export function windowsStateRoots(environment: NodeJS.ProcessEnv = process.env, home: string = homedir(), p?: PlatformPath): string[] {
+  return [home, homePath(environment.ADAPTER_DATA_DIR?.trim() ?? '', home, p)].filter(Boolean)
 }
 
 /** Whether the real path [target] is one of [roots] or below one, compared as Windows does (case-insensitively). */

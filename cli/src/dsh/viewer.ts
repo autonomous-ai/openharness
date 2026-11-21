@@ -27,6 +27,7 @@ import { resolveDshCommand } from './materialize.js'
 import { isShellNoise, killProcessGroup, spawnDshCommand } from './shell.js'
 import type { ViewerLedger } from './viewerLedger.js'
 import { errorKind } from '../lib/log.js'
+import { pathToWatch } from '../lib/pathToWatch.js'
 import { viewerTarget } from '../lib/viewerWire.js'
 
 /** The viewer that will actually run for a harness: its own, or the package it points at. */
@@ -286,28 +287,37 @@ export class DshViewerManager {
   }
 
   private watchArtifacts(state: ViewerState, extensions: readonly string[]): void {
-    const watcher = chokidar.watch(state.workspace, {
+    // On Windows by its long name: by a short one, as an agent's folder can be, its first change would abort the process
+    // (lib/pathToWatch.ts). chokidar names each change under it, so each is judged against it.
+    const root = pathToWatch(state.workspace)
+    if (root === undefined) return
+    const watcher = chokidar.watch(root, {
       ignoreInitial: true,
       persistent: true,
       depth: 6,
-      ignored: (path: string) => path !== state.workspace
-        && path.slice(state.workspace.length).split(/[\\/]/).some((segment) => segment && (isArtifactDirIgnored(segment) || segment.startsWith('.'))),
+      ignored: (path: string) => path !== root
+        && path.slice(root.length).split(/[\\/]/).some((segment) => segment && (isArtifactDirIgnored(segment) || segment.startsWith('.'))),
     })
+    const rescan = (): void => {
+      const next = newestArtifact(state.workspace, extensions)?.path ?? null
+      if (next === state.scannedArtifact) return
+      state.scannedArtifact = next
+      this.publish(state)
+    }
     const bump = (path: string): void => {
       if (state.stopping) return
       // Judged inside the workspace: a workspace under a `build/` or `inputs/` folder is not ignored.
-      if (!isCandidateArtifact(relative(state.workspace, path), extensions)) return
+      if (!isCandidateArtifact(relative(root, path), extensions)) return
       if (state.rescanTimer) clearTimeout(state.rescanTimer)
       state.rescanTimer = setTimeout(() => {
         state.rescanTimer = null
-        const next = newestArtifact(state.workspace, extensions)?.path ?? null
-        if (next === state.scannedArtifact) return
-        state.scannedArtifact = next
-        this.publish(state)
+        rescan()
       }, RESCAN_DEBOUNCE_MS)
       state.rescanTimer.unref?.()
     }
     watcher.on('add', bump).on('change', bump).on('unlink', bump)
+      // chokidar's first read of the workspace counts a file written since start()'s scan as already there, unannounced.
+      .on('ready', rescan)
       .on('error', (error: unknown) => this.log(`[dsh] artifact watch error · ${errorKind(error)}`))
     state.watcher = watcher
   }

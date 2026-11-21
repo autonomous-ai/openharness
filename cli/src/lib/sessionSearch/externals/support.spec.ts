@@ -231,6 +231,21 @@ describe('processes', () => {
     expect(calls).toHaveLength(1)
   })
 
+  it('reads no tty, cwd or open file on Windows, and runs neither ps nor lsof', async () => {
+    const calls: string[] = []
+    const exec = async (command: string, args: readonly string[]) => {
+      calls.push(`${command} ${args.join(' ')}`)
+      return command === 'lsof' ? 'p7\nn/f\n' : '  7 ttys001\n'
+    }
+    expect(await processTtys([7], exec, 'win32')).toEqual(new Map())
+    expect(await processCwds([7], exec, 'win32')).toEqual(new Map())
+    const view = processView(exec, undefined, undefined, undefined, 'win32')
+    expect(await view.openFiles([7])).toEqual(new Map())
+    expect(await view.openFilesOf(['codex'])).toEqual(new Map())
+    expect(await view.cwds([7])).toEqual(new Map())
+    expect(calls).toEqual([])
+  })
+
   it('keys a folder the same however it is spelled', async () => {
     const dir = home()
     mkdirSync(join(dir, 'project'))

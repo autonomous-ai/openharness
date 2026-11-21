@@ -13,7 +13,8 @@ import { psEnv } from './childLocale.js'
 import { ownProcessGroup } from './windows/noWindow.js'
 import { errorKind } from './log.js'
 
-const REQUEST_MS = 5_000
+// Every registry write's bound: the queue's and confirmLaunch's (registry.ts). Specs read it too (testing/registryDeadline.ts).
+export const REGISTRY_WRITE_DEADLINE_MS = 5_000
 const LOCK_MS = 2_000
 const WAIT_MS = 20
 const OWNERLESS_MS = 5_000
@@ -79,14 +80,14 @@ export class RegistryWriteQueue {
 
   run<T>(apply: (deadline: RegistryWriteDeadline) => Promise<T>, expires = Infinity): Promise<T> {
     try { this.assertOpen() } catch (error) { return Promise.reject(error) }
-    return this.enqueue(apply, Math.min(expires, performance.now() + REQUEST_MS))
+    return this.enqueue(apply, Math.min(expires, performance.now() + REGISTRY_WRITE_DEADLINE_MS))
   }
 
   /** The exit caller retains process ownership until every accepted OS request has settled. */
   finish(apply: (deadline: RegistryWriteDeadline) => Promise<void>): Promise<void> {
     if (this.closing) return this.closing
     this.closed = true
-    const expires = performance.now() + REQUEST_MS
+    const expires = performance.now() + REGISTRY_WRITE_DEADLINE_MS
     return this.closing = (async () => {
       await this.settlement
       try { await this.enqueue(apply, expires) }
@@ -124,7 +125,7 @@ export class RegistryWriteQueue {
       }, Math.max(0, expires - performance.now()))
       const run = async () => {
         running = true
-        measure('queue', expires - REQUEST_MS, this.waiting.length)
+        measure('queue', expires - REGISTRY_WRITE_DEADLINE_MS, this.waiting.length)
         const queue = this
         try {
           check()

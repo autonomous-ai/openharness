@@ -82,6 +82,9 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
   a person's computer. Test from the app.
 - `-EncodedCommand` makes PowerShell write CLIXML to stderr. Use `-Command` when anyone reads the error.
   Inside `-Command`, `-ErrorAction Stop` needs `try`/`catch` for the script to end.
+- **Windows' own programs run by their full paths.** Node on Windows looks for a bare name in the folder it runs in
+  before PATH. `powershellPath()` and `systemProgram()` (`cli/src/lib/windows/powershell.ts`) name System32's.
+  Test: `cli/src/lib/windows/systemProgram.spec.ts`.
 
 - **A paste can arrive as keys.** The Mac gets one paste event, so Enter after it is safe. Codex on Windows gets a stream of key
   presses, and an Enter within 120 ms of the last becomes a newline in the paste (codex-rs `paste_burst.rs`): the message stays in
@@ -131,6 +134,29 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
   a process that serves anything: ask in the background, bounded in time, and answer with what is known meanwhile (the
   `codex` on PATH until the ChatGPT app's folder is known, `cli/src/cable/hosts/codexQueue.ts`). Tests:
   `cli/src/lib/windows/storePackage.spec.ts` (the 10 s bound), `cli/src/cable/hosts/codexQueue.spec.ts`.
+- **A PowerShell script imports each module it calls by path, with autoload off.** Autoload finds a command by
+  searching every module on `PSModulePath`: the first command it had to find cost a Windows PowerShell 5.1 process
+  22-29 s on windows-11-arm and 0.25-0.8 s on windows-latest (runs 43581413308, 43582091190), and the peer query
+  (`cli/src/lib/peerAccount.ts`) timed out at 93.7 s against its 45 s bound. `ptySignatures.ts`, importing by path, took
+  1.8 s on the same runner. A script starts with `modulesByPath(...)` (`cli/src/lib/windows/powershell.ts`):
+  `$PSModuleAutoLoadingPreference = 'None'`, then each module by its folder in `$PSHOME\Modules`, as a string, since
+  `Join-Path` is itself a module's command and LocalAccounts keeps its manifest in a version folder (`1.0.0.0`). With
+  autoload off, a command of a module not imported is "not recognized", Management's `Join-Path` and Utility's
+  `Select-Object` too. Utility is always imported first: importing CimCmdlets runs Utility's `Set-Alias`, NetTCPIP
+  its `New-Alias` (from its `.psm1` files) and Appx its `Set-Alias`, and without Utility the peer, listener and
+  uninstall scripts stopped on both runners (run 44827687986). A script that runs a vendor's installer keeps autoload
+  on: that script may call any module.
+  Test: `cli/src/lib/windows/powershellModules.spec.ts`.
+- **A console process that listens for SIGHUP holds its console's close until it is killed.** The host closes a
+  pane's console (`ClosePseudoConsole`) to end its process, and Node hears that `CTRL_CLOSE_EVENT` as SIGHUP. With a
+  listener, libuv's handler sleeps so the loop can act (`src/win/signal.c`), and the process lives until Windows' own
+  timeout or the host's kill; with none, it ends at once. The held pane listened for SIGHUP beside Ctrl-C and
+  Ctrl-Break, so every respawn over it waited the host's 2 s grace (`RESPAWN_GRACE`, `pty/src/panes.rs`): six panes
+  reopened after a reboot, two past the daemon's 5 s deadline (#4517's VM run). A process a respawn replaces listens
+  for SIGINT and SIGBREAK only: the held pane (`windowsHeldPaneArgv`, `cli/src/lib/windows/engineStart.ts`) and a
+  move's waiting pane (`moveWaitingArgv`, `cli/src/core/agents/hostMove.ts`). Tests:
+  `cli/src/lib/windows/engineStart.spec.ts` ("ends on a hangup"), `cli/src/core/agents/hostMove.spec.ts` ("the new
+  pane ends on a hangup"), `cli/src/lib/ptyHostBackend.restart.spec.ts` (a respawn over the held pane under 2 s).
 - **A Store app's install folder is asked, never built.** The Store's ChatGPT app is package `OpenAI.Codex`, in
   `%ProgramFiles%\WindowsApps\OpenAI.Codex_<version>_<arch>__<publisher id>`: a folder named for each version, which
   a standard user cannot list. Its window is `ChatGPT.exe`'s, and it holds a Codex of its own,
@@ -184,6 +210,15 @@ Claude Code's plugins on Windows (Claude Code 2.1.328 and 2.1.329, VM, 2026-11-2
   2026-11-20). VS Code holds its output channel's file open, so the gate's scroll cases timed out. To follow such a
   file, read its size (`watchFile`). Test: the real-VS Code gate's scroll and page cases
   (`plugins/harness-device-vscode/gate/realVscode.gate.ts`).
+- **A folder watched by an 8.3 short name aborts the process at its first change.** libuv asserts that each change's
+  long path starts with the folder it watches (`Assertion failed: !_wcsnicmp(filename, dir, dirlen)`,
+  `src\win\fs-event.c`). A console session's TEMP was `C:\Users\HXDIAL~1\AppData\Local\Temp`, and the core, which runs
+  every service on Windows, crashed at its first change; with TEMP in its long form the same run passed (VM,
+  2026-11-20). A watch of a file is never checked so, but chokidar watches the nearest folder of a file not there yet.
+  Every folder watch (`fs.watch`, chokidar) is given its path through `pathToWatch` (`cli/src/lib/pathToWatch.ts`): a
+  path with a `~`, as every short name Windows makes has, is watched by its long name; any other as given. Tests:
+  `cli/src/lib/pathToWatch.spec.ts` and the "on Windows" cases of `watcher/watcher.spec.ts`,
+  `core/engines/liveWatcher.spec.ts`, `cable/hosts/folderWatch.spec.ts`, `dsh/verdict.spec.ts` and `dsh/viewer.spec.ts`.
 
 ## 4. Screens a person sees
 
@@ -214,6 +249,10 @@ Claude Code's plugins on Windows (Claude Code 2.1.328 and 2.1.329, VM, 2026-11-2
   the Unix Node 22 readiness fixture then checked for a Windows terminal host and failed on both Windows architectures.
   `desktop/test/environment_provisioner_test.dart` sets all three; the Windows fixture does the same in
   `environment_provisioner_windows_test.dart`.
+- A function given another platform's path module passes it to every path helper it calls. `homePath` read with the
+  host's own, so on both Windows architectures `forbiddenDirs`' posix cases fenced `/tmp/c` as `C:\tmp\c` (run
+  44827687986). Test: the posix case of `cli/src/config/envFields.win32.spec.ts`, under Windows' `node:path` on any
+  host.
 - Test in the person's session (session 1) and in the signed build. Windows behaves differently in session 0 and for an
   unsigned file.
 - Smart App Control blocks a local `flutter build windows` (Bad Image on `flutter_windows.dll`). To show a Dart-only

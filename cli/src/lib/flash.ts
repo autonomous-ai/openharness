@@ -29,6 +29,7 @@ import { env } from '../config/env.js'
 import { FLASHER_DIR } from './flasherDir.js'
 import { completeFlash } from './flashRecovery.js'
 import { atomicWriteFile } from './secureState.js'
+import { powershellPath } from './windows/powershell.js'
 
 const FETCH_TIMEOUT_MS = 20_000
 
@@ -54,7 +55,7 @@ export function flasherScript(platform: NodeJS.Platform = process.platform): Fla
       kind: 'the PowerShell flasher',
       // -ExecutionPolicy Bypass for this one process: a user's policy may refuse scripts. The file came from fetch,
       // which marks nothing as downloaded, so no SmartScreen or zone check is involved.
-      command: (scriptPath, args) => ({ file: 'powershell.exe', args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...args] }),
+      command: (scriptPath, args) => ({ file: powershellPath(), args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...args] }),
       byHand: (url) => [`  irm ${url} -OutFile flash-circle.ps1`, '  powershell -NoProfile -ExecutionPolicy Bypass -File flash-circle.ps1'],
       missing: 'Windows PowerShell (powershell.exe) was not found, and the flasher is a PowerShell script.\nRun it yourself from a PowerShell window:',
     }
@@ -197,11 +198,13 @@ export async function flashCommand(args: string[], overrides: Partial<FlashDeps>
     // product's own device — and the check that actually prevents damage is the script's refusal to write
     // to anything that is not an ESP32-S3. A confirmation in front of a customer converting the device
     // they own is friction wearing the clothes of safety. The user's own flags follow and still win.
+    // The script would read a relative HARNESS_FLASHER_CACHE against its own folder; it gets the one folder the CLI resolved.
+    const cacheEnvironment = { ...environment, HARNESS_FLASHER_CACHE: FLASHER_DIR }
     const childEnvironment = platform === 'win32' ? {
-      ...environment,
+      ...cacheEnvironment,
       HARNESS_FLASH_RECOVERY_NODE: process.execPath,
       HARNESS_FLASH_RECOVERY_ARGS: JSON.stringify([...process.execArgv, process.argv[1]]),
-    } : environment
+    } : cacheEnvironment
     return await deps.run(cached, ['--yes', ...args], childEnvironment)
   } catch (err) {
     // The only way `spawn` itself fails here in practice: the script's interpreter is missing. Say what to do

@@ -113,6 +113,7 @@ static void on_wire(const char *what, const char *id) {
     snprintf(CAB.wire + n, sizeof CAB.wire - n, "%s %s;", what, id);
 }
 bool pro_cable_send_open(const char *id) { CHECK(LOCK_DEPTH == 0); (void)id; CAB.opens++; return true; }
+bool pro_cable_send_app_pick(const char *app) { CHECK(LOCK_DEPTH == 0); (void)app; return true; }
 bool pro_cable_send_scroll(pro_scroll_phase_t p, int dy, int v) { CHECK(LOCK_DEPTH == 0); (void)p; (void)dy; (void)v; return true; }
 bool pro_cable_request_library(int offset, uint32_t request) { CHECK(LOCK_DEPTH == 0); (void)offset; (void)request; return true; }
 bool pro_cable_library_supported(void) { return false; }
@@ -238,7 +239,7 @@ static void situation(void) {
     pro_voice_close(); pro_voice_link_lost();   // the real state machine starts clean, like a fresh boot
     memset(&REC, 0, sizeof REC); REC.init_ok = true;
     LOCK_DEPTH = 0;
-    pod_roster_row_t rows[] = {{"a1", "Alpha", "claude", "Mac"}, {"a2", "Bravo", "codex", "Mac"}, {"a3", "Charlie", "claude", "Box"}};
+    pod_roster_row_t rows[] = {{"a1", "Alpha", "claude", "Mac", NULL, 0}, {"a2", "Bravo", "codex", "Mac", NULL, 0}, {"a3", "Charlie", "claude", "Box", NULL, 0}};
     pod_ui_roster(&U, rows, 3);
     cable_swarm_t sw[1] = {{.agents = 2, .panes = 2}};
     snprintf(sw[0].id, sizeof sw[0].id, "s0"); snprintf(sw[0].name, sizeof sw[0].name, "Backend");

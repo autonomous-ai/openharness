@@ -8,6 +8,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
+import { heldPaneArgv } from '../core/agents/heldLaunches.js'
 import { PtyHostBackend } from './ptyHostBackend.js'
 import { listDiscoveries } from './ptyHost/launch.js'
 import { PTY_PROTOCOL } from './ptyHost/protocol.js'
@@ -166,6 +167,23 @@ const screen = async (backend: PtyHostBackend, runtime: PtyRuntimeRef): Promise<
       expect(await until(() => screen(backend, replaced), (text) => /^engine-up$/m.test(text))).toMatch(/^engine-up$/m)
       expect(await backend.isHeld(replaced, token)).toBe(false)
       expect((await backend.kill(replaced)).state).toBe('succeeded')
+    })
+  }, CASE_TIMEOUT_MS)
+
+  it('a respawn over this platform\'s own held pane replies before the host\'s 2 s grace', async () => {
+    await withHost(async (backend) => {
+      const token = '6d0a1c2e-4b3f-4a5d-9e8f-7a6b5c4d3e2f'
+      const pane = await created(backend, heldPaneArgv('why', token))
+      // Its line follows its signal handling, so the respawn's hangup meets the pane as restore's would.
+      expect(await until(() => screen(backend, pane), (text) => /^why$/m.test(text))).toMatch(/^why$/m)
+      const started = performance.now()
+      const respawned = await backend.respawn(pane, { command: SHELL, expectedHeldToken: token })
+      const ms = Math.round(performance.now() - started)
+      console.log(`respawn over the held pane: ${ms} ms`)
+      expect(respawned).toEqual({ state: 'succeeded', dispatch: 'executed' })
+      // The host gives a child that outlives the hangup 2 s (RESPAWN_GRACE, pty/src/panes.rs) before it kills it.
+      expect(ms).toBeLessThan(2_000)
+      expect((await backend.kill(pane)).state).toBe('succeeded')
     })
   }, CASE_TIMEOUT_MS)
 

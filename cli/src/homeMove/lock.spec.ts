@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, watch, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -14,7 +14,7 @@ const STARTED = new Map([[1001, 7], [1002, 8]])
 const as = (pid: number, started = STARTED): LockDeps => ({ pid, startTime: (other) => started.get(other) ?? null, watch: (path, onChange) => watch(path, onChange) })
 
 /** A wait for a move that never commits, saying nothing. */
-const UNCOMMITTED: LockWait = { committed: () => false, long: () => {} }
+const UNCOMMITTED: LockWait = { committed: () => false, long: () => {}, log: () => {} }
 
 /** A lock left by [pid], which started at [start]. */
 function heldBy(legacy: string, pid: number, start: number): void {
@@ -43,7 +43,9 @@ describe('the move lock', () => {
     expect(existsSync(moveLockPath(legacy))).toBe(false)
   })
 
-  it('a second start waits, then sees the lock gone', async () => {
+  // Where the move runs: inotify tells every change made once fs.watch returns. macOS's FSEvents starts telling some
+  // time after it returns, and may never tell this release.
+  it.runIf(process.platform === 'linux')('a second start waits, then sees the lock gone', async () => {
     // The limit never comes: only the watch can wake the second start.
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     const legacy = legacyHome(), order: string[] = []
@@ -89,7 +91,7 @@ describe('the move lock', () => {
     const run = vi.fn(async () => 'moved')
     const long = vi.fn()
     let settled = false
-    const waiting = withMoveLock(legacy, run, { committed: () => false, long }, as(1001, started)).finally(() => { settled = true })
+    const waiting = withMoveLock(legacy, run, { committed: () => false, long, log: () => {} }, as(1001, started)).finally(() => { settled = true })
     expect(LOCK_LOOK_MS).toBe(30_000)
     await vi.advanceTimersByTimeAsync(LOCK_LOOK_MS - 1)
     expect(long).not.toHaveBeenCalled()
@@ -103,13 +105,29 @@ describe('the move lock', () => {
     expect(await waiting).toEqual({ held: true, value: 'moved' })
   })
 
+  it('a watch that cannot start (ENOSPC) still waits, and takes the lock at the next look', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const legacy = legacyHome()
+    heldBy(legacy, 1002, 8)
+    const log = vi.fn()
+    // Linux's fs.watch throws as it starts once inotify's watches are used up.
+    const unwatched: LockDeps = { ...as(1001), watch: () => { throw Object.assign(new Error('watch failed'), { code: 'ENOSPC' }) } }
+    const waiting = withMoveLock(legacy, async () => 'moved', { committed: () => false, long: () => {}, log }, unwatched)
+    await vi.advanceTimersByTimeAsync(0)
+    // The owner lets go, which no watch tells: the next look sees it.
+    rmSync(moveLockPath(legacy), { recursive: true })
+    await vi.advanceTimersByTimeAsync(LOCK_LOOK_MS)
+    expect(await waiting).toEqual({ held: true, value: 'moved' })
+    expect(log.mock.calls).toEqual([['home move: lock watch ENOSPC · looking every 30 s']])
+  })
+
   it('a move the lock is held for that is committed ends the wait, the lock left to its owner', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     const legacy = legacyHome()
     heldBy(legacy, 1002, 8)
     let committed = false
     const run = vi.fn(async () => 'moved')
-    const waiting = withMoveLock(legacy, run, { committed: () => committed, long: () => {} }, as(1001))
+    const waiting = withMoveLock(legacy, run, { committed: () => committed, long: () => {}, log: () => {} }, as(1001))
     committed = true
     await vi.advanceTimersByTimeAsync(LOCK_LOOK_MS)
     expect(await waiting).toEqual({ held: false })
@@ -135,7 +153,7 @@ describe('the move lock', () => {
     // This process holds it: a second call from it, reading /proc, finds the owner live and waits, until told the move is committed.
     let looked = false
     const seen = await withMoveLock(legacy, async () => {
-      const inner = withMoveLock(legacy, async () => 'taken', { committed: () => looked, long: () => { looked = true } })
+      const inner = withMoveLock(legacy, async () => 'taken', { committed: () => looked, long: () => { looked = true }, log: () => {} })
       await vi.advanceTimersByTimeAsync(LOCK_LOOK_MS)
       return inner
     }, UNCOMMITTED)

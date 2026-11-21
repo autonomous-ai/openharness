@@ -11,7 +11,7 @@ import type { MemoryInference } from './learner.js'
 import type { InferenceTarget } from './queue.js'
 import type { MemoryDraft, SourceEvent } from './types.js'
 
-let directory: string, runtime: CodingMemoryRuntime, now: number, context: MemoryHostContext
+let directory: string, runtime: CodingMemoryRuntime, now: number, clock: number, context: MemoryHostContext
 let sessions: MemoryHostSession[], inference: MemoryInference, target: InferenceTarget
 let locate: Mock<(workspace: string) => Promise<ProjectContext>>
 let create: Mock<(profileId: string) => MemoryPort & { close(): Promise<void> }>
@@ -53,6 +53,9 @@ async function learn(): Promise<void> {
 beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), 'memory-runtime-'))
   now = 1_000
+  // The recall deadline's clock is held: October 6 full CI (run 44482400232) hit it during
+  // SQLite writes. A test moves it to reach the deadline on purpose.
+  clock = 0
   context = { experimental: true, watching: true, profileId: 'owner_a' }
   sessions = [{ agentId: 'agent', engine: 'claude', cliVersion: '2.1.286', sessionId: 'native', workspace: '/authorized/project',
     transcriptPath: join(directory, 'conversation.jsonl'), busy: false, coding: true }]
@@ -72,7 +75,8 @@ beforeEach(() => {
       return value
     }, async close() { store.close() } }
   })
-  runtime = new CodingMemoryRuntime({ directory, context: () => context, sessions: () => sessions, inference, locate, create, now: () => now })
+  runtime = new CodingMemoryRuntime({ directory, context: () => context, sessions: () => sessions, inference, locate, create, now: () => now,
+    deadlineClock: () => clock })
 })
 afterEach(async () => {
   intercept = undefined
@@ -319,14 +323,17 @@ it.each(['forgotten', 'corrected'] as const)('withholds a prepared packet when i
       store.correctFromUser(item.id, item.revision, { ...draft, claim: 'Group related coding changes together.' }, access)
     }
   }
-  // October 6 full CI hit the separate recall deadline during SQLite writes. Hold that clock
-  // here so this test reaches the policy recheck after the memory changes.
-  const clock = vi.spyOn(performance, 'now').mockReturnValue(0)
-  try {
-    const result = await runtime.preparePromptRecall('agent', { query: 'coding changes' })
-    expect(result.packet.status).toBe('denied')
-    expect(result.receipt).toBeNull()
-  } finally { clock.mockRestore() }
+  const result = await runtime.preparePromptRecall('agent', { query: 'coding changes' })
+  expect(result.packet.status).toBe('denied')
+  expect(result.receipt).toBeNull()
+})
+
+it('a recall whose clock passes 200 ms inside prepareRecall times out with no receipt', async () => {
+  await learn()
+  intercept = async operation => { if (operation === 'prepareRecall') clock += 201 }
+  const result = await runtime.preparePromptRecall('agent', { query: 'coding' })
+  expect(result.packet.status).toBe('timeout')
+  expect(result.receipt).toBeNull()
 })
 
 it('learns explicit personal coding preferences in the collection conversation and recalls them in other projects', async () => {

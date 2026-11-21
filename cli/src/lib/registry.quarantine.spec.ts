@@ -3,6 +3,7 @@ import { rmSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'f
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 // The one way a corrupt registry is still refused: it cannot even be moved aside.
 const rename = vi.hoisted(() => ({ fails: false as false | 'error' | 'string' }))
@@ -17,6 +18,10 @@ vi.mock('fs', async (real) => {
     },
   }
 })
+
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
+vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
 
 let dataDir = ''
 const stores = new Set<typeof import('./sessionStorage.js')['sessionStorage']>()
@@ -38,6 +43,8 @@ async function loadRegistry() {
 describe('a registry no version can load', () => {
   let error: ReturnType<typeof vi.spyOn>
   beforeEach(() => {
+    // No test here means the write deadline to pass: how fast this machine writes the registry never fails them.
+    deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS)
     dataDir = mkdtempSync(join(tmpdir(), 'adapter-registry-quarantine-'))
     rename.fails = false
     error = vi.spyOn(console, 'error').mockImplementation(() => {})

@@ -4,7 +4,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from './registry.js'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
+vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
 vi.mock('./bootId.js', async original => ({ ...await original<object>(), currentBootId: () => 'fixture-boot', bootChanged: () => false }))
 vi.mock('./processLiveness.js', async original => ({ ...await original<object>(),
   processLockIdentity: () => ({ startMarker: 'fixture-start', generationMarker: 'fixture-generation' }), lockOwnerAlive: () => true,
@@ -17,6 +21,8 @@ const instances = new Set<typeof import('./registry.js')['registry']>()
 let root: string
 let lines: string[]
 beforeEach(() => {
+  // No test here means the write deadline to pass: how fast this machine writes the registry never fails them.
+  deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS)
   root = mkdtempSync(join(tmpdir(), 'registry-first-task-'))
   vi.stubEnv('ADAPTER_DATA_DIR', root)
   lines = []

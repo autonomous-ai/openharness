@@ -26,6 +26,8 @@ import { artifactLog, artifactsEnabled } from './artifacts.js'
 import { daemonEnvironment } from '../../src/testing/daemonEnvironment.js'
 import { writeExecutable } from '../../src/testing/executableFixture.js'
 import { GH_FORBIDDEN_STUB } from '../../src/testing/ghStub.js'
+import { hooks as claudeHooks } from '../../src/engines/claude/hookContract.js'
+import { hooks as codexHooks } from '../../src/engines/codex/hookContract.js'
 import { readAdoptedHomes } from '../../src/engines/kit/homeAdoption.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
 import { endRootProcesses } from '../../src/testing/rootProcesses.js'
@@ -186,6 +188,20 @@ const NATIVE_HOOK_PATHS: Record<string, readonly string[]> = {
   grok: ['GROK_HOME'], agy: ['AGY_CONFIG_DIR'], copilot: ['COPILOT_HOME'],
 }
 const HOOK_ENGINES = new Set(['claude', 'codex', ...Object.keys(NATIVE_HOOK_PATHS)])
+
+/** The lines each engine's install may end on, from its own contract. */
+const HOOK_INSTALL_MESSAGES = { claude: claudeHooks.settings.messages, codex: codexHooks.settings.messages }
+type HookInstallEngine = keyof typeof HOOK_INSTALL_MESSAGES
+/**
+ * A line saying how [engine]'s hook install went: the first line of each message its contract declares but `after`,
+ * `{…}` standing for anything. Any outcome counts, a failed write or a malformed file too: the install is over, and
+ * what came of it is the test's to judge. A message's later lines, like `after`, only follow a first one, and may be
+ * another engine's too: Codex's "fix the file, then restart harness login" is also Grok's and Agy's.
+ */
+export const installOutcome = (engine: HookInstallEngine): RegExp => new RegExp(Object.entries(HOOK_INSTALL_MESSAGES[engine])
+  .filter(([key]) => key !== 'after').flatMap(([, said]) => [said ?? []].flat().slice(0, 1))
+  .map((template) => template.split(/\{\w+\}/).map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*'))
+  .join('|'))
 /** The shell profiles a login shell in a pane reads, where a person moves an engine's home. */
 const PROFILES = { ZDOTDIR: ['.zshenv', '.zprofile', '.zshrc', '.zlogin'], HOME: ['.bash_profile', '.bash_login', '.profile', '.bashrc'] }
 
@@ -302,6 +318,8 @@ export const fakeEngineShim = (name: 'claude' | 'codex', config: EngineConfig & 
 export class IsolatedDaemon {
   child: ChildProcess | null = null
   private output = ''
+  /** Where the last start's lines begin in `output`. */
+  private startedAt = 0
   /** Every start not yet closed: each master leads a process group, numbered by its pid (`start`). */
   private readonly groups = new Set<ChildProcess>()
 
@@ -318,6 +336,8 @@ export class IsolatedDaemon {
     private readonly opensLog: string,
     /** The names of the settings the harness gives every daemon, before a test's own (`shellEnv`). */
     private readonly settingNames: readonly string[],
+    /** Its own fakes and stubs, first on its PATH: a test writes a fake of a command there (harness/schemeApps.ts). */
+    readonly binDir: string,
   ) {}
 
   static async create(options: DaemonOptions = {}): Promise<IsolatedDaemon> {
@@ -386,7 +406,8 @@ export class IsolatedDaemon {
     // never turned guest access on.
     await writeFile(join(dirs.bin, 'sudo'), '#!/bin/sh\necho "sudo: a password is required" >&2\nexit 1\n', { mode: 0o755 })
     // Nor does it ask this computer's scheme handlers: on Linux a link opens only once xdg-mime names the scheme's app
-    // (cable/hosts/appLink.ts), and one that prints nothing names none, so no link reaches the developer's own apps.
+    // (cable/hosts/appLink.ts), and one that prints nothing names none, so no link reaches the developer's own apps,
+    // until a test names the apps of its own (harness/schemeApps.ts).
     await writeFile(join(dirs.bin, 'xdg-mime'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
     // Nor does a tap raise a window on the developer's own X display. A daemon with no DISPLAY finds the lowest X server
     // socket of root's or this account's in /tmp/.X11-unix (cable/hosts/linuxDesktop.ts), whatever its home, and
@@ -528,7 +549,7 @@ esac
       TERMINAL_RECONCILE_INTERVAL_MS: '5000',
     }
     const env = daemonEnvironment(tmux.env, { ...settings, ...options.env })
-    return new IsolatedDaemon(root, tmux, port, env, options, config, opensLog, Object.keys(settings))
+    return new IsolatedDaemon(root, tmux, port, env, options, config, opensLog, Object.keys(settings), dirs.bin)
   }
 
   /** What the fake engines noted of every hook they ran (fakeEngine.mjs `hookLog`); kept once the root is gone. */
@@ -602,7 +623,7 @@ esac
     const heap = this.options.heapMiB ? [`--max-old-space-size=${this.options.heapMiB}`] : []
     const entry = this.options.noMaster ? ['__run'] : this.options.foreground ? ['start', '-f'] : ['__harnessd']
     // Readiness is judged from what this start prints, never from an earlier boot's lines.
-    const from = this.output.length
+    const from = this.startedAt = this.output.length
     // A test's own bundle (an old release), the run's bundle (`E2E_BUNDLE`, see bundle.ts), or the sources.
     const bundle = this.options.withoutProcessImages ? undefined : this.options.scriptPath ?? process.env.E2E_BUNDLE_PATH
     // From the sources on macOS, the helper a release embeds comes in by a preload (processImages.ts): without it the
@@ -652,10 +673,25 @@ esac
       // test); this line is printed once they are.
       if (options.ready !== 'port') {
         await until('the daemon to finish starting', () => /\[cli\] ready/.test(this.output.slice(from)), 60_000, 100)
-        // Optional hook installation continues after readiness; external-engine fixtures await their own files.
+        // The hooks it has installed so far: the rest come after it says it is ready (`hooksInstalled`).
         this.assertHooksStayedInside()
       }
     })()])
+  }
+
+  /**
+   * Resolves once the last start's log says how the install of each of [engines]' hooks went, then checks they stayed
+   * inside the root. A daemon installs them after it says it is ready, by design (src/startupOrder.spec.ts), and a
+   * launch of its own waits for its engine's; an engine a test runs by hand, or a daemon it stops, right after start
+   * does not.
+   */
+  async hooksInstalled(engines: readonly HookInstallEngine[]): Promise<void> {
+    const outcomes = engines.map(installOutcome)
+    await until(`the daemon to install the hooks of ${engines.join(', ')}`, () => {
+      const lines = this.output.slice(this.startedAt).split('\n')
+      return outcomes.every((outcome) => lines.some((line) => outcome.test(line)))
+    }, 60_000, 100)
+    this.assertHooksStayedInside()
   }
 
   /**

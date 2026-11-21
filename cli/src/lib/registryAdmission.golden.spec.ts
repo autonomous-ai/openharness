@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from './registry.js'
 import type { SessionStorage } from './sessionStorage.js'
 import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 vi.mock('node:child_process', async original => {
   const actual = await original<typeof import('node:child_process')>()
@@ -30,40 +31,11 @@ vi.mock('./bootId.js', async original => ({ ...await original<object>(), current
 vi.mock('./processLiveness.js', async original => ({ ...await original<object>(),
   processLockIdentity: () => ({ startMarker: 'fixture-start', generationMarker: 'fixture-generation' }), lockOwnerAlive: () => true,
 }))
-// A registry image flush that outlives every real wait from 250 ms up to the 5 s write deadline, as a loaded
-// disk's does: each one still running fires as the sync returns, if not before.
-const slowSync = vi.hoisted(() => ({ due: new Map<unknown, () => void>() }))
-vi.mock('node:fs/promises', async original => {
-  const actual = await original<typeof import('node:fs/promises')>()
-  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
-    const handle = await actual.open(...args), sync = handle.sync.bind(handle)
-    handle.sync = async () => {
-      await sync()
-      if (!(String(args[0]).includes('registry.json.') && String(args[0]).endsWith('.tmp'))) return
-      for (const [timer, fire] of slowSync.due) { slowSync.due.delete(timer); fire() }
-    }
-    return handle
-  } }
-})
-const realTimeout = globalThis.setTimeout, realClear = globalThis.clearTimeout
-function slowTimeout(callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) {
-  if (ms === undefined || ms < 250 || ms > 5_000) return realTimeout(callback, ms, ...args)
-  const timer = realTimeout(() => { slowSync.due.delete(timer); callback(...args) }, ms)
-  slowSync.due.set(timer, () => { realClear(timer); callback(...args) })
-  return timer
-}
-// The registry expires a write after 5 s. No case here means to, so that timer is never scheduled: how fast this
-// machine writes the registry never changes the golden.
-function ownedTimeout(callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) {
-  return ms === 5_000 ? realTimeout(() => {}, 0) : slowTimeout(callback, ms, ...args)
-}
-beforeEach(() => {
-  vi.spyOn(globalThis, 'setTimeout').mockImplementation(ownedTimeout as typeof setTimeout)
-  vi.spyOn(globalThis, 'clearTimeout').mockImplementation(((timer?: Parameters<typeof clearTimeout>[0]) => {
-    slowSync.due.delete(timer); realClear(timer)
-  }) as typeof clearTimeout)
-})
-afterEach(() => { vi.restoreAllMocks(); slowSync.due.clear() })
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
+vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
+// No case here means the write deadline to pass: how fast this machine writes the registry never changes the golden.
+beforeEach(() => { deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS) })
+afterEach(() => { vi.restoreAllMocks() })
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/registry-admission.golden.json', import.meta.url))
 const RECORD = process.env.RECORD_REGISTRY_ADMISSION_GOLDEN === '1'

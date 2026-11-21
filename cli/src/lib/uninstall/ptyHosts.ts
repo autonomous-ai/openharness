@@ -19,7 +19,6 @@ import { discoveredHostDead, listDiscoveries, pidAlive, reachPtyHost, type HostL
 import { SHUTDOWN_PROTOCOL, SUPPORTED_PTY_PROTOCOLS } from '../ptyHost/protocol.js'
 import { startedNoLaterThan, startMarkerMs } from '../processProof.js'
 import { argvTokens, processRows, type ProcessRow } from '../processTable.js'
-import { windowsProcessRows } from '../windows/processTable.js'
 import { terminateVerified } from '../windows/terminate.js'
 
 /** As long as `harness stop` gives the daemon (daemonStop.ts STOP_GRACE_MS). */
@@ -186,9 +185,7 @@ function writtenAt(file: string): number | null {
 
 /** This computer's hosts, in HARNESS_PTY_DIR. */
 export function ptyHostsDeps(home: string = env.HARNESS_PTY_DIR): PtyHostsDeps {
-  // The process table on every platform: Windows reads it from harness-pty, Unix from `ps` (with `lstart` markers).
-  const rows = process.platform === 'win32' ? () => windowsProcessRows(null) : processRows
-  const liveness: HostLiveness = { alive: pidAlive, rows }
+  const liveness: HostLiveness = { alive: pidAlive, rows: processRows }
   return {
     platform: process.platform,
     home,
@@ -207,7 +204,7 @@ export function ptyHostsDeps(home: string = env.HARNESS_PTY_DIR): PtyHostsDeps {
     },
     alive: pidAlive,
     dead: (discovery) => discoveredHostDead(home, discovery, liveness),
-    rows,
+    rows: processRows,
     terminate: process.platform === 'win32'
       ? (pid, marker) => terminateVerified(pid, marker)
       : (pid, marker) => terminateVerified(pid, marker, { rows: processRows, kill: (target) => { process.kill(target, 'SIGTERM') } }),

@@ -103,6 +103,8 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     desk = new Desk(file)
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-200).join('\n')}`) })
     await d.start()
+    // Claude Code started by hand reads its hooks once, as it starts: they must be in by then.
+    await d.hooksInstalled(['claude'])
     const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a', FILTER)
     await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
     return { d, dial }

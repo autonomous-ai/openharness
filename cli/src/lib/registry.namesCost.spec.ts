@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { registry as Registry } from './registry.js'
 import type { SessionStorage } from './sessionStorage.js'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 const io = vi.hoisted(() => ({ file: '', namesPublished: false, failDirectorySync: false,
   publications: [] as string[], read: undefined as undefined | (() => Promise<void>),
@@ -34,9 +35,14 @@ vi.mock('node:fs', async original => {
     },
   }
 })
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
 vi.mock('./bootId.js', async original => ({ ...await original<object>(),
   currentBootId: () => 'fixture-boot', bootChanged: () => false,
 }))
+// Loads the module graph once, before any hook's time limit: cold, it takes seconds on a loaded machine. Each test
+// still imports fresh modules (vi.resetModules), now from the warm transform cache.
+await import('./registry.js')
 
 const ID = 'names-cost-agent', CHOSEN = 'Chosen name'
 let root = '', registry: typeof Registry | undefined, release: (() => void) | undefined
@@ -68,6 +74,8 @@ function hold(boundary: 'read' | 'prepare') {
 }
 
 beforeEach(async () => {
+  // No test here means the write deadline to pass: how fast this machine writes the registry never fails them.
+  deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS)
   vi.resetModules()
   registry = undefined; storage = undefined; release = undefined; accepted.length = 0
   io.namesPublished = false; io.failDirectorySync = false; io.publications = []

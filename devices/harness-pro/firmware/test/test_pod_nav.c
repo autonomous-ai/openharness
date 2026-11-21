@@ -924,13 +924,19 @@ static void nav_test_home_lands_on_room_tab(void) {
 
 // ---- Home's page list: Notices (-2) while there are notices, Working (-1) while an agent works, then the tabs ----
 static const char *pages(void) {
-    static char b[96];
-    int16_t p[POD_TABS_MAX + 2];
-    int n = pod_home_pages(&M, p, POD_TABS_MAX + 2), k = 0;
+    static char b[128];
+    int16_t p[POD_HOME_PAGES_MAX];
+    int n = pod_home_pages(&N, &M, p, POD_HOME_PAGES_MAX), k = 0;
     b[k++] = '{';
     for (int i = 0; i < n; i++) k += snprintf(b + k, sizeof b - k, "%s%d", i ? "," : "", p[i]);
     b[k++] = '}'; b[k] = 0;
     return b;
+}
+static bool has_page(int page) {
+    int16_t p[POD_HOME_PAGES_MAX];
+    const int n = pod_home_pages(&N, &M, p, POD_HOME_PAGES_MAX);
+    for (int i = 0; i < n; i++) if (p[i] == page) return true;
+    return false;
 }
 static void nav_test_home_pages(void) {
     fresh();   // a1 works, a4 asks
@@ -993,10 +999,429 @@ static void nav_test_working_card_room(void) {
     CHECK(pod_nav_follow_tab(&N, &M) && N.depth == 3 && !strcmp(top()->agent, "a4") && N.stack[0].scroll == 1);
 }
 
+// ---- Home's list knows the apps: with a window and another app the Tabs | Apps pill picks the list, with no window it is the app cards ----
+static const pod_app_t k_apps[3] = {{"harness", "Harness", 4, 1, 1}, {"codex", "ChatGPT", 2, 0, 1}, {"vscode", "VS Code", 3, 1, 0}};
+// fresh() with the daemon's app list (count / waiting / working), Harness's ring shown.
+static void fresh_apps(void) {
+    fresh();
+    pod_model_apps_switch(&M, true);
+    pod_model_apps(&M, k_apps, 3, "harness");
+}
+// The window closes: the swarms list no tab and agents.end names none.
+static void no_window(void) {
+    pod_model_swarms(&M, NULL, NULL, NULL, 0, "", NULL, 0);
+    pod_model_view(&M, true, false);
+}
+// The window opens again on fresh()'s two tabs, `selected` chosen.
+static void window_back(const char *selected) {
+    static const char *x[] = {"a1", "a2", "a3"}, *y[] = {"a4"};
+    const char *const *ids[2] = {x, y};
+    uint8_t cnt[2] = {3, 1};
+    cable_swarm_t it[2] = {{"s1", "Build", 3, 3}, {"s2", "Docs", 1, 1}};
+    pod_model_swarms(&M, it, ids, cnt, 2, selected, NULL, 0);
+    pod_model_view(&M, false, true);
+}
+// The app list in this order (NULL ends it): k_apps' rows by id, any other id at count 1. Harness's ring shown.
+static void apps_of(const char *a, const char *b, const char *c) {
+    const char *ids[3] = {a, b, c};
+    pod_app_t r[3];
+    int n = 0;
+    memset(r, 0, sizeof r);
+    for (; n < 3 && ids[n]; n++) {
+        snprintf(r[n].id, sizeof r[n].id, "%s", ids[n]);
+        r[n].count = 1;
+        for (int k = 0; k < 3; k++) if (!strcmp(k_apps[k].id, ids[n])) r[n] = k_apps[k];
+    }
+    pod_model_apps(&M, r, n, "harness");
+}
+static const char *cards(void) {
+    static char b[64];
+    uint8_t c[POD_APPS_MAX];
+    int n = pod_home_app_cards(&M, c, POD_APPS_MAX), k = 0;
+    b[k++] = '{';
+    for (int i = 0; i < n; i++) k += snprintf(b + k, sizeof b - k, "%s%d", i ? "," : "", c[i]);
+    b[k++] = '}'; b[k] = 0;
+    return b;
+}
+static void nav_test_home_switch(void) {
+    fresh_apps();
+    CHECK(pod_home_switch(&M));
+    pod_model_apps_switch(&M, false);
+    CHECK(!pod_home_switch(&M));
+    pod_model_apps_switch(&M, true);
+    no_window();
+    CHECK(!pod_home_switch(&M));
+    pod_model_view(&M, false, true);   // the window is back
+    CHECK(pod_home_switch(&M));
+    pod_app_t r[3];
+    memcpy(r, k_apps, sizeof r);
+    r[1].count = r[2].count = 0;   // only Harness has agents: no other app
+    pod_model_apps(&M, r, 3, "harness");
+    CHECK(!pod_home_switch(&M));
+}
+static void nav_test_home_app_cards(void) {
+    fresh_apps();
+    CHECK(!strcmp(cards(), "{1,2}") && pod_home_app_cards(&M, NULL, 0) == 2);   // the pill shows: Harness is the Tabs list
+    no_window();
+    CHECK(!strcmp(cards(), "{0,1,2}"));
+    pod_app_t r[3];
+    memcpy(r, k_apps, sizeof r);
+    r[2].count = 0;
+    pod_model_apps(&M, r, 3, "harness");
+    CHECK(!strcmp(cards(), "{0,1}"));
+}
+static void nav_test_home_pages_with_apps(void) {
+    fresh_apps();   // a1 works, a4 asks
+    CHECK(!strcmp(pages(), "{-2,-1,0,1}") && !pod_home_apps(&N, &M));
+    act(POD_A_HOME_APPS, 0, 0);
+    CHECK(!strcmp(pages(), "{-2,-1,32,33}") && pod_home_apps(&N, &M) && pod_tabs_pages_of(&N, &M) == 4);
+    CHECK(has_page(33) && !has_page(34) && !has_page(0));
+    no_window();
+    pod_nav_sync(&N, &M);
+    CHECK(!strcmp(pages(), "{-2,-1,32,33,34}") && !N.home_apps && pod_home_apps(&N, &M));
+    pod_model_apps(&M, NULL, 0, "");
+    CHECK(!strcmp(pages(), "{-2,-1}") && !pod_home_apps(&N, &M));
+}
+static void nav_test_home_tabs_apps_cells(void) {
+    fresh_apps();
+    M.selected = 1;
+    pod_out_t o = act(POD_A_HOME_APPS, 0, 0);
+    CHECK(o.fx == POD_FX_NONE && N.home_apps && top()->scroll == 32 && !strcmp(N.home_app, "codex"));
+    o = act(POD_A_HOME_APPS, 0, 0);   // the filled cell does nothing
+    CHECK(o.fx == POD_FX_NONE && N.home_apps && top()->scroll == 32 && !strcmp(N.home_app, "codex"));
+    o = act(POD_A_HOME_TABS, 0, 0);   // the desktop's selected tab
+    CHECK(o.fx == POD_FX_NONE && !N.home_apps && top()->scroll == 1 && !N.home_app[0]);
+    act(POD_A_HOME_TABS, 0, 0);
+    CHECK(!N.home_apps && top()->scroll == 1 && !N.home_app[0]);
+    M.selected = M.tab_count;   // no tab selected: the first tab
+    act(POD_A_HOME_APPS, 0, 0);
+    act(POD_A_HOME_TABS, 0, 0);
+    CHECK(!N.home_apps && top()->scroll == 0);
+    pod_model_apps_switch(&M, false);   // no pill: no cell to tap
+    act(POD_A_HOME_APPS, 0, 0);
+    CHECK(!N.home_apps && top()->scroll == 0);
+    pod_model_apps_switch(&M, true);
+    to_agent(0, 0);
+    act(POD_A_HOME_APPS, 0, 0);   // only Home has the pill
+    CHECK(!N.home_apps && N.depth == 3 && N.stack[0].scroll == 0 && !N.home_app[0]);
+}
+static void nav_test_home_app_kept_by_id(void) {
+    fresh_apps();
+    act(POD_A_HOME_APPS, 0, 0);
+    act(POD_A_SCROLL, 1, 0);
+    CHECK(top()->scroll == 33 && !strcmp(N.home_app, "vscode"));
+    apps_of("vscode", "harness", "codex");   // reordered: the person stays on VS Code
+    pod_nav_sync(&N, &M);
+    CHECK(top()->scroll == 32 && !strcmp(N.home_app, "vscode"));
+    apps_of("harness", "vscode", NULL);   // ChatGPT goes
+    pod_nav_sync(&N, &M);
+    CHECK(top()->scroll == 32 && !strcmp(N.home_app, "vscode"));
+    fresh_apps();
+    act(POD_A_HOME_APPS, 0, 0);
+    act(POD_A_SCROLL, 1, 0);
+    apps_of("harness", "codex", "cursor");   // VS Code goes, Cursor takes its place
+    pod_nav_sync(&N, &M);
+    CHECK(top()->scroll == 33 && !strcmp(N.home_app, "cursor"));
+    act(POD_A_SCROLL, POD_HOME_WORKING - top()->scroll, 0);   // to the Working card, as the glue's swipe does: it is not an app
+    CHECK(top()->scroll == -1 && !N.home_app[0]);
+}
+static void nav_test_home_pill_goes(void) {
+    fresh_apps();
+    act(POD_A_HOME_APPS, 0, 0);
+    apps_of("harness", NULL, NULL);   // the last other app goes: Tabs, on the selected tab (s1: the clamp alone would reach the last)
+    pod_nav_sync(&N, &M);
+    CHECK(!N.home_apps && top()->scroll == 0 && !pod_home_apps(&N, &M));
+    pod_model_apps(&M, k_apps, 3, "harness");
+    pod_nav_sync(&N, &M);
+    CHECK(pod_home_switch(&M) && !pod_home_apps(&N, &M) && top()->scroll == 0);
+}
+static void nav_test_home_window_returns(void) {   // the PM's open question 3: Tabs, on the selected tab
+    fresh_apps();
+    no_window();
+    pod_nav_sync(&N, &M);
+    act(POD_A_SCROLL, 1, 0);
+    CHECK(top()->scroll == 33 && !strcmp(N.home_app, "codex"));
+    window_back("s1");   // the first tab: the clamp alone would reach the last
+    pod_nav_sync(&N, &M);
+    CHECK(!pod_home_apps(&N, &M) && top()->scroll == 0 && !N.home_app[0]);
+}
+static void nav_test_follow_tab_leaves_apps(void) {
+    fresh_apps();
+    act(POD_A_HOME_APPS, 0, 0);
+    M.selected = 1;
+    CHECK(!pod_nav_follow_tab(&N, &M) && top()->scroll == 32);
+}
+static void nav_test_app_agents(void) {
+    fresh_apps();
+    pod_model_agent_app(&M, "a2", "codex", POD_CAPS_ALL);
+    pod_model_agent_app(&M, "a3", "codex", POD_CAPS_ALL);
+    pod_model_agent_app(&M, "a4", "vscode", POD_CAPS_ALL);
+    pod_model_apps(&M, k_apps, 3, "codex");
+    const pod_agent_t *l[POD_AGENTS_MAX];
+    CHECK(pod_app_agents(&M, "codex", l, POD_AGENTS_MAX) == 2 && !strcmp(l[0]->id, "a2") && !strcmp(l[1]->id, "a3"));
+    CHECK(pod_app_agents(&M, "codex", l, 1) == 1 && !strcmp(l[0]->id, "a2"));
+    CHECK(pod_app_agents(&M, "vscode", l, POD_AGENTS_MAX) == 0);   // not the ring shown: a stale host is not the app's
+    pod_model_apps(&M, k_apps, 3, "harness");
+    CHECK(pod_app_agents(&M, "codex", l, POD_AGENTS_MAX) == 0);
+}
+static void nav_test_home_sixteen_apps(void) {
+    fresh_apps();
+    no_window();
+    pod_app_t r[POD_APPS_MAX];
+    memset(r, 0, sizeof r);
+    for (int i = 0; i < POD_APPS_MAX; i++) { snprintf(r[i].id, sizeof r[i].id, "app%d", i); r[i].count = 1; }
+    pod_model_apps(&M, r, POD_APPS_MAX, "");
+    pod_nav_sync(&N, &M);
+    CHECK(pod_tabs_pages_of(&N, &M) == 18 && !strcmp(pages(), "{-2,-1,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47}"));
+    act(POD_A_SCROLL, 47 - top()->scroll, 0);
+    CHECK(top()->scroll == 47 && !strcmp(N.home_app, "app15"));
+    act(POD_A_SCROLL, 1, 0);
+    CHECK(top()->scroll == 47);
+}
+// A tap on an app card asks the Mac for that app's ring (app.pick) and stays on Home: the room opens when the ring lands.
+static void nav_test_pick_app(void) {
+    fresh_apps();
+    act(POD_A_HOME_APPS, 0, 0);
+    pod_out_t o = act(POD_A_PICK_APP, 1, 0);
+    CHECK(o.fx == POD_FX_APP_PICK && !strcmp(o.agent, "codex") && N.depth == 1 && top()->scroll == 32);
+    CHECK(act(POD_A_PICK_APP, 7, 0).fx == POD_FX_NONE && act(POD_A_PICK_APP, -1, 0).fx == POD_FX_NONE);   // no such row
+    pod_app_t r[3];
+    memcpy(r, k_apps, sizeof r);
+    r[1].count = 0;   // ChatGPT has no agents left: nothing to show
+    pod_model_apps(&M, r, 3, "harness");
+    CHECK(act(POD_A_PICK_APP, 1, 0).fx == POD_FX_NONE);
+    pod_model_apps(&M, k_apps, 3, "harness");
+    to_agent(0, 0);
+    CHECK(act(POD_A_PICK_APP, 1, 0).fx == POD_FX_NONE && N.depth == 3);   // only Home has app cards
+}
+
+// ---- the app's ring: the agents of the app shown, a frame with tab POD_TAB_APP and tab_id the app id ----
+// fresh_apps() with ChatGPT's ring shown: a5 and a6, two codex threads (a6 cannot hear the Pro: no v).
+static void ring(void) {
+    fresh_apps();
+    pod_model_agent(&M, "a5", "Thread one", "codex", "mac");
+    pod_model_agent(&M, "a6", "Thread two", "codex", "mac");
+    pod_model_agent_app(&M, "a5", "codex", POD_CAPS_ALL);
+    pod_model_agent_app(&M, "a6", "codex", POD_CAP_S | POD_CAP_F);
+    pod_model_apps(&M, k_apps, 3, "codex");
+    pod_nav_sync(&N, &M);
+}
+static int agent_ix(const char *id) { return (int)(pod_model_find(&M, id) - M.agents); }
+static int unread_ix(const char *id) { int u = 0; while (strcmp(M.unread[u].agent, id)) u++; return u; }
+static void nav_test_follow_into_app_ring(void) {
+    ring();
+    CHECK(pod_nav_follow(&N, &M, "a5", 0) && N.depth == 3);
+    CHECK(N.stack[1].view == POD_V_TAB && N.stack[1].tab == POD_TAB_APP && !strcmp(N.stack[1].tab_id, "codex"));
+    CHECK(!strcmp(top()->agent, "a5") && top()->tab == POD_TAB_APP);
+    const pod_agent_t *l[POD_AGENTS_MAX];
+    CHECK(pod_nav_list(&N, &M, l, POD_AGENTS_MAX) == 2 && !strcmp(l[0]->id, "a5") && !strcmp(l[1]->id, "a6"));
+}
+static void nav_test_app_ring_wraps(void) {
+    ring();
+    pod_nav_follow(&N, &M, "a5", 0);
+    pod_out_t o = act(POD_A_NEXT, 0, 0);
+    CHECK(o.fx == POD_FX_AGENT_OPEN && !strcmp(o.agent, "a6") && top()->tab == POD_TAB_APP);
+    o = act(POD_A_NEXT, 0, 0);
+    CHECK(o.fx == POD_FX_AGENT_OPEN && !strcmp(o.agent, "a5"));
+    o = act(POD_A_PREV, 0, 0);
+    CHECK(o.fx == POD_FX_AGENT_OPEN && !strcmp(o.agent, "a6") && N.depth == 3);
+}
+static void nav_test_stale_host_outside_ring(void) {
+    ring();
+    pod_model_apps(&M, k_apps, 3, "vscode");   // the daemon sends VS Code's ring: a5's codex host is stale
+    CHECK(pod_nav_follow(&N, &M, "a5", 0) && top()->tab == POD_TAB_RECENT);
+}
+static void nav_test_app_room_up_to_its_card(void) {
+    ring();
+    pod_nav_follow(&N, &M, "a5", 0);
+    act(POD_A_TABS, 0, 0);
+    CHECK(N.depth == 1 && N.home_apps && top()->scroll == 32 && !strcmp(N.home_app, "codex"));
+    ring();
+    no_window();
+    pod_nav_sync(&N, &M);
+    pod_nav_follow(&N, &M, "a5", 0);
+    act(POD_A_TABS, 0, 0);   // no pill: Harness is card 0
+    CHECK(N.depth == 1 && !N.home_apps && top()->scroll == 33 && !strcmp(N.home_app, "codex"));
+}
+static void nav_test_app_ring_goes(void) {
+    ring();
+    pod_nav_follow(&N, &M, "a5", 0);   // from Home on tab 0
+    pod_model_apps(&M, k_apps, 3, "harness");   // the daemon turns back to Harness's tabs
+    pod_nav_sync(&N, &M);
+    CHECK(N.depth == 1 && N.home_apps && top()->scroll == 32 && !strcmp(N.home_app, "codex"));
+    ring();
+    pod_nav_follow(&N, &M, "a5", 0);
+    pod_model_agents_begin(&M);   // the app's agents leave
+    pod_model_agent(&M, "a1", "Alpha", "claude", "mac");
+    pod_model_agent(&M, "a2", "Beta", "codex", "mac");
+    pod_model_agent(&M, "a3", "Gamma", "gemini", "box");
+    pod_model_agent(&M, "a4", "Delta", "claude", "box");
+    pod_model_agents_end(&M);
+    pod_nav_sync(&N, &M);
+    CHECK(!pod_model_find(&M, "a5") && N.depth == 1 && N.home_apps && top()->scroll == 32 && !strcmp(N.home_app, "codex"));
+    ring();
+    pod_nav_follow(&N, &M, "a5", 0);
+    apps_of("harness", "vscode", NULL);   // ChatGPT is no longer listed: Home's page by today's clamp
+    pod_nav_sync(&N, &M);
+    CHECK(N.depth == 1 && !N.home_apps && top()->scroll == 0);
+}
+// Up from a tab's room shows Tabs on that tab, whatever Home listed: the mirror of an app's room landing on Apps.
+static void nav_test_tab_room_up_from_apps(void) {
+    fresh_apps();
+    act(POD_A_HOME_APPS, 0, 0);
+    act(POD_A_SCROLL, 1, 0);   // Apps, on VS Code
+    pod_nav_follow(&N, &M, "a1", 0);   // the Mac focuses a1 in Build
+    act(POD_A_TABS, 0, 0);
+    CHECK(N.depth == 1 && !N.home_apps && top()->scroll == 0 && !N.home_app[0]);
+    pod_nav_sync(&N, &M);
+    CHECK(!pod_home_apps(&N, &M) && top()->scroll == 0);
+    act(POD_A_HOME_APPS, 0, 0);
+    pod_nav_follow(&N, &M, "a4", 0);   // Docs
+    act(POD_A_BACK, 0, 0);
+    pod_nav_sync(&N, &M);
+    CHECK(N.depth == 1 && !pod_home_apps(&N, &M) && top()->scroll == 1 && !N.home_app[0]);
+}
+// The window's selected tab moves the room while Home lists apps: Home stays on its card (follow_tab moves Home only
+// while it lists tabs), and up from the room shows Tabs on that tab.
+static void nav_test_follow_tab_room_from_apps(void) {
+    fresh_apps();
+    act(POD_A_HOME_APPS, 0, 0);
+    act(POD_A_SCROLL, 1, 0);   // Apps, on VS Code
+    pod_nav_follow(&N, &M, "a1", 0);
+    M.selected = 1;   // a1 is not in Docs: the room moves to a4
+    CHECK(pod_nav_follow_tab(&N, &M) && !strcmp(top()->agent, "a4"));
+    pod_nav_sync(&N, &M);
+    CHECK(N.home_apps && N.stack[0].scroll == 33 && !strcmp(N.home_app, "vscode"));
+    act(POD_A_TABS, 0, 0);
+    CHECK(N.depth == 1 && !N.home_apps && top()->scroll == 1 && !N.home_app[0]);
+    fresh_apps();
+    static const char *x[] = {"a1", "a2", "a3"}, *y[] = {"a4", "a1"};   // a1 in both tabs
+    const char *const *ids[2] = {x, y};
+    uint8_t cnt[2] = {3, 2};
+    cable_swarm_t it[2] = {{"s1", "Build", 3, 3}, {"s2", "Docs", 2, 2}};
+    pod_model_swarms(&M, it, ids, cnt, 2, "s1", NULL, 0);
+    act(POD_A_HOME_APPS, 0, 0);
+    act(POD_A_SCROLL, 1, 0);
+    pod_nav_follow(&N, &M, "a1", 0);
+    M.selected = 1;   // the same agent, now in Docs
+    CHECK(pod_nav_follow_tab(&N, &M) && !strcmp(top()->agent, "a1") && top()->tab == 1);
+    pod_nav_sync(&N, &M);
+    CHECK(N.home_apps && N.stack[0].scroll == 33 && !strcmp(N.home_app, "vscode"));
+    act(POD_A_BACK, 0, 0);
+    CHECK(N.depth == 1 && !N.home_apps && top()->scroll == 1 && !N.home_app[0]);
+    // The room opened from the Inbox over Home on Apps: back through the Inbox lands where the person left Home.
+    pod_model_swarms(&M, it, ids, cnt, 2, "s1", NULL, 0);
+    act(POD_A_HOME_APPS, 0, 0);
+    act(POD_A_SCROLL, 1, 0);
+    pod_model_unread_append(&M, "a1", "Alpha", "", "more", 100);
+    act(POD_A_INBOX, 0, 0);
+    act(POD_A_OPEN_NOTIF, 0, 0);
+    CHECK(N.depth == 3 && !strcmp(top()->agent, "a1") && top()->tab == 0);
+    M.selected = 1;
+    CHECK(pod_nav_follow_tab(&N, &M) && top()->tab == 1);
+    pod_nav_sync(&N, &M);
+    act(POD_A_BACK, 0, 0);
+    CHECK(N.depth == 2 && top()->view == POD_V_INBOX);
+    act(POD_A_BACK, 0, 0);
+    pod_nav_sync(&N, &M);
+    CHECK(N.depth == 1 && N.home_apps && top()->scroll == 33 && !strcmp(N.home_app, "vscode"));
+}
+// The ring goes while the Inbox is open over an app's room: Home lands on the app's card, as with no Inbox.
+static void nav_test_app_ring_goes_under_inbox(void) {
+    ring();
+    pod_nav_follow(&N, &M, "a5", 0);
+    act(POD_A_INBOX, 0, 0);
+    CHECK(N.depth == 4);
+    pod_model_apps(&M, k_apps, 3, "harness");
+    pod_nav_sync(&N, &M);
+    CHECK(N.depth == 1 && N.home_apps && top()->scroll == 32 && !strcmp(N.home_app, "codex"));
+}
+static void nav_test_app_room_survives_window_change(void) {
+    ring();
+    pod_nav_follow(&N, &M, "a5", 0);
+    no_window();   // the pill goes: the room stays
+    pod_nav_sync(&N, &M);
+    CHECK(N.depth == 3 && !strcmp(top()->agent, "a5"));
+    window_back("s1");
+    pod_nav_sync(&N, &M);
+    CHECK(N.depth == 3 && !strcmp(top()->agent, "a5"));
+    act(POD_A_TABS, 0, 0);
+    CHECK(N.depth == 1 && N.home_apps && top()->scroll == 32 && !strcmp(N.home_app, "codex"));
+}
+static void nav_test_one_list_choice(void) {
+    ring();
+    pod_model_unread_add(&M, "a5", "Thread one", "Done.", 0, 30);
+    act(POD_A_INBOX, 0, 0);
+    act(POD_A_OPEN_NOTIF, unread_ix("a5"), 0);
+    CHECK(!strcmp(top()->agent, "a5") && top()->tab == POD_TAB_APP && !strcmp(top()->tab_id, "codex"));
+    ring();
+    pod_model_turn(&M, "a5", "started", NULL, 0, 40);
+    N.stack[0].scroll = POD_HOME_WORKING;
+    pod_out_t o = act(POD_A_FOLLOW, agent_ix("a5"), 0);   // a pet on the Working card
+    CHECK(o.fx == POD_FX_AGENT_OPEN && N.depth == 2 && top()->tab == POD_TAB_APP);
+    pod_nav_sync(&N, &M);
+    CHECK(N.depth == 2 && !strcmp(top()->agent, "a5"));
+    fresh();
+    static const char *x[] = {"a1", "a2", "a3"}, *y[] = {"a4", "a1"};   // a1 in both tabs, Docs selected
+    const char *const *ids[2] = {x, y};
+    uint8_t cnt[2] = {3, 2};
+    cable_swarm_t it[2] = {{"s1", "Build", 3, 3}, {"s2", "Docs", 2, 2}};
+    pod_model_swarms(&M, it, ids, cnt, 2, "s2", NULL, 0);
+    pod_model_unread_add(&M, "a1", "Alpha", "Done.", 0, 30);
+    act(POD_A_INBOX, 0, 0);
+    act(POD_A_OPEN_NOTIF, unread_ix("a1"), 0);
+    CHECK(!strcmp(top()->agent, "a1") && top()->tab == 1 && !strcmp(top()->tab_id, "s2"));
+}
+// A pick of the app already shown opens its first agent's room at once; the pick still goes to the Mac.
+static void nav_test_pick_shown_app_opens(void) {
+    ring();
+    act(POD_A_HOME_APPS, 0, 0);
+    pod_out_t o = act(POD_A_PICK_APP, 1, 0);
+    CHECK(o.fx == POD_FX_APP_PICK && !strcmp(o.agent, "codex") && N.depth == 3 && !strcmp(top()->agent, "a5"));
+    CHECK(N.stack[1].tab == POD_TAB_APP && N.stack[0].scroll == 32 && N.home_apps);
+    CHECK(!pod_nav_open_app(&N, &M, "vscode") && N.depth == 3 && !strcmp(top()->agent, "a5"));   // not the app shown
+    act(POD_A_TABS, 0, 0);
+    pod_model_apps(&M, k_apps, 3, "vscode");   // shown, but none of its agents on the roster
+    CHECK(!pod_nav_open_app(&N, &M, "vscode") && N.depth == 1);
+    no_window();
+    pod_model_agent_app(&M, "a1", "harness", POD_CAPS_ALL);
+    pod_model_apps(&M, k_apps, 3, "harness");
+    pod_nav_sync(&N, &M);
+    o = act(POD_A_PICK_APP, 0, 0);   // Harness's agents are the tabs: they come back with the window, no room opens
+    CHECK(o.fx == POD_FX_APP_PICK && !strcmp(o.agent, "harness") && N.depth == 1);
+    ring();
+    pod_nav_follow(&N, &M, "a6", 0);
+    act(POD_A_TALK, 0, 0);
+    CHECK(top()->view == POD_V_TALK && !pod_nav_open_app(&N, &M, "codex"));
+    CHECK(N.depth == 3 && top()->view == POD_V_TALK && !strcmp(top()->agent, "a6"));
+}
+
 int main(void) {
     nav_test_home_notices_scroll();
     nav_test_home_pages();
     nav_test_home_clamp();
+    nav_test_home_switch();
+    nav_test_home_app_cards();
+    nav_test_home_pages_with_apps();
+    nav_test_home_tabs_apps_cells();
+    nav_test_home_app_kept_by_id();
+    nav_test_home_pill_goes();
+    nav_test_home_window_returns();
+    nav_test_follow_tab_leaves_apps();
+    nav_test_app_agents();
+    nav_test_home_sixteen_apps();
+    nav_test_pick_app();
+    nav_test_follow_into_app_ring();
+    nav_test_app_ring_wraps();
+    nav_test_stale_host_outside_ring();
+    nav_test_app_room_up_to_its_card();
+    nav_test_app_ring_goes();
+    nav_test_app_room_survives_window_change();
+    nav_test_tab_room_up_from_apps();
+    nav_test_follow_tab_room_from_apps();
+    nav_test_app_ring_goes_under_inbox();
+    nav_test_one_list_choice();
+    nav_test_pick_shown_app_opens();
     nav_test_working_card_room();
     nav_test_home_lands_on_room_tab();
     nav_test_enter_tab_pushes();

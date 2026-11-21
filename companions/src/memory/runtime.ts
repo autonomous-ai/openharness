@@ -48,6 +48,7 @@ interface RuntimeDeps {
   create?: (profileId: string) => Connection
   locate?: (workspace: string) => Promise<ProjectContext>
   now?: () => number
+  deadlineClock?: () => number
   quietMs?: number
 }
 interface ActiveProfile {
@@ -77,9 +78,11 @@ export class CodingMemoryRuntime {
   private lastActivityAt: number
   private failure: string | null = null
   private readonly now: () => number
+  private readonly deadlineClock: () => number
 
   constructor(private readonly deps: RuntimeDeps) {
     this.now = deps.now ?? Date.now
+    this.deadlineClock = deps.deadlineClock ?? (() => performance.now())
     this.lastActivityAt = this.now()
   }
 
@@ -300,8 +303,8 @@ export class CodingMemoryRuntime {
   }
 
   private async recallBound(agentId: string, request: RecallRequest, route: 'prompt_hook' | 'mcp' | null): Promise<PreparedRecall> {
-    const deadline = performance.now() + 200
-    const remaining = (): number => Math.max(1, deadline - performance.now())
+    const deadline = this.deadlineClock() + 200
+    const remaining = (): number => Math.max(1, deadline - this.deadlineClock())
     const unavailable = (status: RecallPacket['status']): PreparedRecall => ({ packet: empty(status), receipt: null })
     try {
       const active = this.requireActive()
@@ -320,7 +323,7 @@ export class CodingMemoryRuntime {
           { engine: session.engine, sessionId: session.sessionId, projectId: project.projectId, route }, access], remaining())
         : { packet: await active.port.request('recall', [request, access], remaining()), receipt: null }
       const current = await active.port.request('capturePolicy', [project.projectId, session.engine, session.sessionId], remaining())
-      if (performance.now() >= deadline) return unavailable('timeout')
+      if (this.deadlineClock() >= deadline) return unavailable('timeout')
       if (!current.included || current.generation !== policy.generation || current.knowledgeEpoch !== policy.knowledgeEpoch
         || !active.preferences.recall || !this.sameSession(session)) return unavailable('denied')
       return result

@@ -5,8 +5,9 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterAll, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from './lib/registry.js'
+import { REGISTRY_WRITE_DEADLINE_MS } from './lib/registryPersistence.js'
 
 vi.mock('node:child_process', async original => {
   const actual = await original<typeof import('node:child_process')>()
@@ -27,6 +28,13 @@ vi.mock('./lib/bootId.js', async original => ({ ...await original<object>(), cur
 vi.mock('./lib/processLiveness.js', async original => ({ ...await original<object>(),
   processLockIdentity: () => ({ startMarker: 'fixture-start', generationMarker: 'fixture-generation' }), lockOwnerAlive: () => true,
 }))
+
+const deadline = await vi.hoisted(() => import('./testing/registryDeadline.js'))
+vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
+// The hook server answers a commit still in flight after 250 ms, and the registry expires a write at its deadline. No
+// case here means either to fire, so both are held: how fast this machine writes the registry never changes the golden.
+beforeEach(() => { deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS, { hold: [250] }) })
+afterEach(() => { vi.restoreAllMocks() })
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/hook-admission.golden.json', import.meta.url))
 const RECORD = process.env.RECORD_HOOK_ADMISSION_GOLDEN === '1'

@@ -280,17 +280,26 @@ describe('two daemons on one computer', () => {
     // and neither platform starts a clean exit again: the daemon stayed down until the next login.
     const gone = 2_000_000_000
     const restarted = await make('restarted', { env: { HARNESSD_INITIAL_BACKOFF_MS: '200' } })
-    const orphan = createServer((_req, res) => res.end(JSON.stringify({ pid: gone, corePid: process.pid })))
+    // The old core leaves once it has answered twice: the new start asked, waited a round and asked again. A timer
+    // could fire before a slow start asked at all, and the start would never have waited.
+    let answered = 0
+    const orphan = createServer((req, res) => {
+      res.end(JSON.stringify({ pid: gone, corePid: process.pid }))
+      if (req.url === '/api/status' && ++answered === 2) orphan.close()
+    })
     await new Promise<void>((resolve) => orphan.listen(restarted.socketPath, resolve))
-    setTimeout(() => orphan.close(), 3_000)
-    await restarted.start({ ready: 'none' })
-    await until('the new core to finish starting', () => /\[cli\] ready/.test(restarted.log()) || null, 90_000, 200)
-    expect(restarted.log()).toContain(`of a master that is gone (pid ${gone}) — waiting for it to leave`)
-    expect(restarted.log()).not.toMatch(/core stopped for good/)
-    const client = await LocalClient.connect(restarted)
-    const agent = await create(restarted, client, 'claude', 'after-the-orphan')
-    await turn(client, agent.id, 'served once the old core left')
-    client.close()
+    try {
+      await restarted.start({ ready: 'none' })
+      await until('the new core to finish starting', () => /\[cli\] ready/.test(restarted.log()) || null, 90_000, 200)
+      expect(restarted.log()).toContain(`of a master that is gone (pid ${gone}) — waiting for it to leave`)
+      expect(restarted.log()).not.toMatch(/core stopped for good/)
+      const client = await LocalClient.connect(restarted)
+      const agent = await create(restarted, client, 'claude', 'after-the-orphan')
+      await turn(client, agent.id, 'served once the old core left')
+      client.close()
+    } finally {
+      orphan.close()
+    }
 
     // A daemon that answers for itself, with no master that is gone, is another daemon: refused at once.
     const refused = await make('refused', { env: { HARNESSD_INITIAL_BACKOFF_MS: '200' } })

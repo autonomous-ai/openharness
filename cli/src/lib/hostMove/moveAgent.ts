@@ -12,6 +12,7 @@
 
 import type { AgentEngine } from '../../engines/types.js'
 import type { TerminateOutcome } from '../deleteAgentFallback.js'
+import { PANE_START_TIMEOUT_MS } from '../ptyHost/client.js'
 import type { LaunchPublication, RegisteredSession } from '../registry.js'
 import { AtomicWriteUnconfirmed } from '../secureState.js'
 import { KILL_CONFIRMED } from '../restartAgent.js'
@@ -33,22 +34,22 @@ const MOVE_TIMEOUT_MS = 30_000
 export const MOVE_PROBE_INTERVAL_MS = 500
 
 /**
- * Bounds on every step, so the whole move ends well under 120 s on every path: a mailbox message held longer is sent
+ * Bounds on every step, so the whole move ends under 120 s on every path: a mailbox message held longer is sent
  * again (gate.ts), and the routes the move holds have no auto-release. A step that overruns is abandoned and fails the
- * move as any failure there does.
+ * move as any failure there does. The new pane's create and respawn have the host client's own bound on them
+ * (PANE_START_TIMEOUT_MS, 15 s): a move onto a host just installed is their cold start, and a shorter bound here wins.
  *
- * Before the hold: capture 5 + launch 10 + create 5 = 20 s. Held, on the longest path (a fallback whose every step
- * takes its whole bound): stop 10 + prepare 5 + respawn 5 + probe 30 + close the new pane 5 + relaunch 20 = 75 s.
- * Held, on the longest success: stop 10 + prepare 5 + respawn 5 + probe 30 + retarget 5 + release 5 + close the old
- * pane 5 = 65 s. At most 95 s in all.
+ * Before the hold: capture 5 + launch 10 + create 15 = 30 s. Held, on the longest path (a fallback whose every step
+ * takes its whole bound): stop 10 + prepare 5 + respawn 15 + probe 30 + close the new pane 5 + relaunch 20 = 85 s.
+ * Held, on the longest success: stop 10 + prepare 5 + respawn 15 + probe 30 + retarget 5 + release 5 + close the old
+ * pane 5 = 75 s. At most 115 s in all.
  */
 export const MOVE_CAPTURE_TIMEOUT_MS = 5_000
 /** Restore's launch waits for the grid's or the Store's answer (`relaunchOverrides`) and the permission check. */
 export const MOVE_LAUNCH_TIMEOUT_MS = 10_000
-export const MOVE_CREATE_TIMEOUT_MS = 5_000
 /** The old engine's stop: its native conversation released, then SIGTERM and, after a grace, SIGKILL. */
 export const MOVE_STOP_TIMEOUT_MS = 10_000
-/** Each single host or core call while held: preparing the conversation, respawn, retarget, release, a pane's close. */
+/** Each single host or core call while held but the respawn: preparing the conversation, retarget, release, a pane's close. */
 export const MOVE_STEP_TIMEOUT_MS = 5_000
 /** What the conversation's repair leaves of its step's bound: a chunk read and the flushes after it. */
 const MOVE_PREPARE_MARGIN_MS = 1_000
@@ -306,7 +307,7 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
 
     // 3. The new pane, waiting with no engine.
     const creating = Promise.resolve().then(() => deps.createSeeded(session, seed))
-    const made = await bounded(() => creating, MOVE_CREATE_TIMEOUT_MS, 'opening the new pane')
+    const made = await bounded(() => creating, PANE_START_TIMEOUT_MS, 'opening the new pane')
     if (!made.done) {
       // A create answered after its bound made a pane nothing will use: close it then.
       void creating.then(async (late) => {
@@ -347,7 +348,7 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
     // 6. The engine resumes in the new pane, over its scrollback.
     respawned = true
     const newPane = created
-    const spawn = await bounded(() => deps.respawn(newPane, launch), MOVE_STEP_TIMEOUT_MS, `starting ${engine} in the new pane`)
+    const spawn = await bounded(() => deps.respawn(newPane, launch), PANE_START_TIMEOUT_MS, `starting ${engine} in the new pane`)
     if (!spawn.done) return await recover(spawn.reason)
     if (!spawn.value.ok) return await recover(`could not start ${engine} in the new pane: ${spawn.value.reason ?? 'unknown reason'}`)
     if (!deps.current()) return await recover(CANCELLED)

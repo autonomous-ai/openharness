@@ -24,7 +24,7 @@ import { homedir, tmpdir } from 'node:os'
 import { posix, win32 } from 'node:path'
 import { HARNESS_ENTRIES, HARNESS_HOME_NAME, xdgRoots, type HarnessEntry } from '../../config/harnessHome.js'
 import { removeLink } from '../removePath.js'
-import { runPowershell, type PowershellRun } from '../windows/powershell.js'
+import { modulesByPath, runPowershell, type PowershellRun } from '../windows/powershell.js'
 import { UNINSTALL_MARKER } from './marker.js'
 
 export interface RootEntry { name: string; dir: boolean; link?: true }
@@ -373,7 +373,8 @@ export function manualRemoval(plan: RemovalPlan): string {
  * name is digits and dashes. /v:off keeps a `!` a `!` even where the registry turns delayed expansion on for every cmd;
  * /d skips the AutoRun commands the registry may give every cmd.
  */
-const START_OUTSIDE_JOB = String.raw`$startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
+export const START_OUTSIDE_JOB = String.raw`${modulesByPath('CimCmdlets')}
+$startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
 $command = '"' + $env:HARNESS_CMD + '" /d /v:off /c .\' + $env:HARNESS_UNINSTALL_SCRIPT
 $result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $command; CurrentDirectory = $env:HARNESS_UNINSTALL_CWD; ProcessStartupInformation = $startup }
 if ($result.ReturnValue -ne 0) { [Console]::Error.Write("Win32_Process.Create returned $($result.ReturnValue)"); exit 3 }`

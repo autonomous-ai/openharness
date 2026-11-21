@@ -3,7 +3,7 @@ import type { RegisteredSession } from '../registry.js'
 import type { TerminalBackend } from '../terminalBackend.js'
 import type { ProcessIdentity, TerminalInventoryResult, TerminalRuntimeRef } from '../terminalTypes.js'
 import { terminalRouteKey } from '../terminalRuntime.js'
-import { MoveGate } from './gate.js'
+import { HOLD_WAIT_MS, MoveGate } from './gate.js'
 import { AtomicWriteUnconfirmed } from '../secureState.js'
 import { MOVE_MARKER_ENV, MOVE_STEP_TIMEOUT_MS, moveAgent, moveCreateRequest, removeOrphanMovePanes, type MoveAgentDeps, type MoveOutcome } from './moveAgent.js'
 
@@ -289,25 +289,26 @@ describe('moveAgent', () => {
     }
   })
 
-  it('the hold, and the whole move, end well under two minutes when every step is slow or hangs', async () => {
+  it('the hold, and the whole move, end within their bounds when every step is slow or hangs', async () => {
     const slowest = harness({
       capture: vi.fn(() => after(4_000, 'old')),
       buildLaunch: vi.fn(() => after(9_000, LAUNCH)),
-      createSeeded: vi.fn(() => after(4_000, { ok: true as const, runtime: NEW })),
+      createSeeded: vi.fn(() => after(14_000, { ok: true as const, runtime: NEW })),
       stopEngine: vi.fn(() => after(9_000, 'terminated' as const)),
       prepareResume: vi.fn(() => after(4_000, undefined)),
-      respawn: vi.fn(() => after(4_000, { ok: true })),
+      respawn: vi.fn(() => after(14_000, { ok: true })),
       probeProcess: vi.fn(() => never<ProcessIdentity | null>()),
       killPane: vi.fn(() => after(4_000, true)),
       relaunchOld: vi.fn(() => never<boolean>()),
     })
     await run(slowest.deps)
-    // Held: stop 9 + prepare 4 + respawn 4 + probe 30 + closing the new pane 4 + relaunch 20. Before it: 4 + 9 + 4.
-    // Every bound was waited out, and no more.
-    expect(slowest.heldMs()!).toBeGreaterThan(65_000)
-    expect(slowest.heldMs()!).toBeLessThan(80_000)
-    expect(movedMs).toBeGreaterThan(80_000)
-    expect(movedMs).toBeLessThan(100_000)
+    // Held: stop 9 + prepare 4 + respawn 14 + probe 30 + closing the new pane 4 + relaunch 20. Before it: 4 + 9 + 14.
+    // Every bound was waited out, and no more: the hold within what a control waits for it (gate.ts), the move within
+    // the mailbox's 120 s.
+    expect(slowest.heldMs()!).toBeGreaterThan(80_000)
+    expect(slowest.heldMs()!).toBeLessThan(HOLD_WAIT_MS)
+    expect(movedMs).toBeGreaterThan(105_000)
+    expect(movedMs).toBeLessThan(120_000)
 
     const hangs = harness({
       stopEngine: vi.fn(() => never<'terminated'>()),
@@ -334,6 +335,16 @@ describe('moveAgent', () => {
     expect(h.events).not.toContain('hold')
     expect(h.holdRoute).not.toHaveBeenCalled()
     expect(h.routes.size).toBe(0)
+  })
+
+  // The host client gives create and respawn the host's own waits and a cold start (ptyHost/client.ts); a move onto a
+  // host just installed is that cold start, and a shorter bound here would win.
+  it('a create or a respawn the host answers after 6 s still moves', async () => {
+    for (const slow of [{ createSeeded: vi.fn(() => after(6_000, { ok: true as const, runtime: NEW })) },
+      { respawn: vi.fn(() => after(6_000, { ok: true })) }]) {
+      const h = harness(slow)
+      expect(await run(h.deps), Object.keys(slow)[0]).toEqual({ moved: true, resumed: true })
+    }
   })
 
   it('a create answered after its bound closes the pane it made', async () => {

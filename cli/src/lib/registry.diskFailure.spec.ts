@@ -5,7 +5,10 @@ import { join } from 'node:path'
 import { namesTheDisk } from '../harnessd/supervisor.js'
 import { errorKind } from './log.js'
 import type { registry as Registry } from './registry.js'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
 const refuse = vi.hoisted(() => ({ directorySync: undefined as string | undefined }))
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
@@ -17,6 +20,9 @@ vi.mock('node:fs', async original => {
     actual.fsync(fd, callback)
   } }
 })
+// Loads the module graph once, before any hook's time limit: cold, it takes seconds on a loaded machine. Each test
+// still imports fresh modules (vi.resetModules), now from the warm transform cache.
+await import('./registry.js')
 
 let directory: string
 let registry: typeof Registry
@@ -26,6 +32,8 @@ let AtomicWriteUnconfirmed: typeof import('./secureState.js').AtomicWriteUnconfi
 const input = { agentId: 'persisted-agent', engine: 'claude' as const, tmuxPane: '%1',
   processIdentity: { pid: 101, executable: '/fixture/claude', startMarker: 'fixture-101' } }
 beforeEach(async () => {
+  // No test here means the write deadline to pass: how fast this machine writes the registry never fails them.
+  deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS)
   vi.resetModules()
   directory = mkdtempSync(join(tmpdir(), 'registry-disk-'))
   for (const name of ['home', 'data', 'runtime']) mkdirSync(join(directory, name), { mode: 0o700 })

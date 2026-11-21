@@ -18,6 +18,7 @@ import { StoppedAgentStore } from './stoppedAgents.js'
 import { sessionStorage } from './sessionStorage.js'
 import { MoveGate } from './hostMove/gate.js'
 import { AtomicWriteUnconfirmed } from './secureState.js'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import { createBinding } from '../core/agents/bind.js'
 import { createStopAgentService } from './stopAgentService.js'
@@ -27,6 +28,8 @@ import type { DiscoveredTerminalAgent } from './terminalAgentDiscovery.js'
 import { createAgentUpdate } from '../core/agents/update.js'
 import type { AgentFrame } from './agentFrame.js'
 
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
 const image = vi.hoisted(() => ({
   match: undefined as undefined | ((rows: RegisteredSession[]) => boolean),
   wait: undefined as undefined | (() => Promise<void>), release: undefined as undefined | (() => void),
@@ -91,6 +94,7 @@ const stoppedStore = (directory: string): StoppedAgentStore => {
   stores.push(store)
   return store
 }
+let writeDeadline: ReturnType<typeof deadline.holdRegistryDeadline>
 const deferred = () => { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done }); return { promise, resolve } }
 function holdImage(match: (rows: RegisteredSession[]) => boolean, phase: 'prepare' | 'directory' = 'prepare') {
   const entered = deferred(), held = deferred()
@@ -101,6 +105,8 @@ function holdImage(match: (rows: RegisteredSession[]) => boolean, phase: 'prepar
 const persisted = (): RegisteredSession[] => JSON.parse(readFileSync(join(env.ADAPTER_DATA_DIR, 'registry.json'), 'utf8'))
 
 beforeEach(async () => {
+  // Only queue expiry means the write deadline to pass: how fast this machine writes the registry never fails the rest.
+  writeDeadline = deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS)
   vi.clearAllMocks()
   const prepare = sessionStorage.prepare.bind(sessionStorage)
   vi.spyOn(sessionStorage, 'prepare').mockImplementation(async (...args) => {
@@ -590,6 +596,10 @@ it.each((['name', 'model'] as const).flatMap(choice => ['owner', 'uncertain', 'q
     await held.entered
     const pending = update.agentUpdate(request, reply)
     try {
+      // The update queues its write a few turns after the call, behind the blocking flush's: its deadline passes once
+      // both are held.
+      await vi.waitFor(() => expect(writeDeadline.deadlines()).toBe(2))
+      writeDeadline.expire()
       await pending
       expect(reply).toHaveBeenCalledExactlyOnceWith({ error: 'PERSISTENCE_UNCONFIRMED' })
     } finally { held.release(); await blocking }

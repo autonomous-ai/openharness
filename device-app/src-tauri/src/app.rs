@@ -74,6 +74,7 @@ impl App {
         desktop_installed: bool,
         now: u64,
         install_exits_app: bool,
+        follow_switch: bool,
     ) -> (App, Vec<Effect>) {
         let keep = KeepAlive::new();
         let state = AppState {
@@ -86,7 +87,7 @@ impl App {
             app_update: AppUpdate::None,
             cli_version: None,
             logs: LogsExport::Idle,
-            follow: FollowState::default(),
+            follow: FollowState { switch: follow_switch, ..FollowState::default() },
         };
         let mut app = App {
             state,
@@ -302,6 +303,11 @@ impl App {
                     effects.push(Effect::Menu(self.menu.clone()));
                 }
                 MenuAction::FollowSettings => effects.extend([Effect::OpenAxSettings, Effect::Menu(self.menu.clone())]),
+                // The check flipped itself to the new switch, and the door's answer (`Event::Follow`) keeps it there.
+                MenuAction::FollowSwitch => {
+                    self.remember(|saved| saved.follow_off = !saved.follow_off, effects);
+                    effects.push(Effect::FollowSwitch(!self.state.saved.follow_off));
+                }
             },
             Event::Act(action) => self.act(action, effects),
             // Decision 2: closing answers an offer, and never stops what runs.
@@ -335,7 +341,8 @@ impl App {
             }
             // Offered once by itself, remembered once it shows (`show`); the menu's item opens the screen again.
             Event::FollowOffer => {
-                if self.state.saved.asked_follow {
+                // Off macOS there is no screen to offer: the switch is the item's.
+                if self.state.saved.asked_follow || self.state.follow.switch {
                     return;
                 }
                 self.state.follow.waiting = true;
@@ -687,6 +694,7 @@ mod tests {
         login_item: true,
         asked_follow: false,
         asked_ax: false,
+        follow_off: false,
     };
 
     fn found() -> App {
@@ -695,16 +703,16 @@ mod tests {
 
     /// Found, where installing the app's update ends the app (`true`) or not.
     fn found_where(install_exits_app: bool) -> App {
-        App::new(SEEN, true, false, B, install_exits_app).0
+        App::new(SEEN, true, false, B, install_exits_app, false).0
     }
 
     /// No CLI, never seen.
     fn fresh() -> App {
-        App::new(Saved { login_item: true, ..Saved::default() }, false, false, B, false).0
+        App::new(Saved { login_item: true, ..Saved::default() }, false, false, B, false, false).0
     }
 
     fn removed() -> App {
-        App::new(SEEN, false, false, B, false).0
+        App::new(SEEN, false, false, B, false, false).0
     }
 
     fn has(effects: &[Effect], effect: &Effect) -> bool {
@@ -802,7 +810,7 @@ mod tests {
 
     #[test]
     fn a_found_cli_is_watched_and_read() {
-        let (app, effects) = App::new(Saved::default(), true, false, B, false);
+        let (app, effects) = App::new(Saved::default(), true, false, B, false, false);
         let seen = Saved { cli_seen: true, ..Saved::default() };
         let asked =
             [Effect::SpawnWatch, Effect::ReadAuth, Effect::ReadVersion, Effect::Save(seen), Effect::RegisterLoginItem];
@@ -813,13 +821,13 @@ mod tests {
         assert!(shows(&effects).is_empty());
         assert_eq!(app.view(), None);
 
-        let (_, effects) = App::new(SEEN, true, false, B, false);
+        let (_, effects) = App::new(SEEN, true, false, B, false, false);
         assert!(!effects.iter().any(|effect| matches!(effect, Effect::Save(_))));
     }
 
     #[test]
     fn no_cli_ever_seen_installs_on_its_own() {
-        let (app, effects) = App::new(Saved::default(), false, false, B, false);
+        let (app, effects) = App::new(Saved::default(), false, false, B, false, false);
         assert!(has(&effects, &Effect::RunInstall));
         assert!(!has(&effects, &Effect::SpawnWatch));
         assert_eq!(shows(&effects), [shown(Screen::Install, Phase::Working, &[GETTING_READY])]);
@@ -829,7 +837,7 @@ mod tests {
 
     #[test]
     fn a_cli_that_was_seen_and_is_gone_is_never_reinstalled() {
-        let (app, effects) = App::new(SEEN, false, false, B, false);
+        let (app, effects) = App::new(SEEN, false, false, B, false, false);
         assert!(effects.iter().all(|effect| matches!(effect, Effect::Menu(_) | Effect::Log(_))), "{effects:?}");
         assert_eq!(rows(&effects), ["Harness removed", "Install", "About", "Quit"]);
         assert_eq!(app.view(), None);
@@ -867,15 +875,15 @@ mod tests {
     #[test]
     fn the_login_item_is_registered_once() {
         let saved = Saved { cli_seen: true, ..Saved::default() };
-        let (mut app, effects) = App::new(saved, true, false, B, false);
+        let (mut app, effects) = App::new(saved, true, false, B, false, false);
         assert!(has(&effects, &Effect::RegisterLoginItem));
         let registered = Saved { login_item: true, ..saved };
         assert_eq!(app.handle(Event::LoginItem(true)), [Effect::Save(registered)]);
 
-        let (_, effects) = App::new(registered, true, false, B, false);
+        let (_, effects) = App::new(registered, true, false, B, false, false);
         assert!(!has(&effects, &Effect::RegisterLoginItem));
 
-        let (mut app, _) = App::new(saved, true, false, B, false);
+        let (mut app, _) = App::new(saved, true, false, B, false, false);
         assert!(app.handle(Event::LoginItem(false)).is_empty());
     }
 
@@ -923,7 +931,7 @@ mod tests {
     #[test]
     fn the_install_screen_shows_its_step() {
         let at = |step: &str| shown(Screen::Install, Phase::Working, &[step]);
-        let (mut app, effects) = App::new(Saved::default(), false, false, B, false);
+        let (mut app, effects) = App::new(Saved::default(), false, false, B, false, false);
         assert_eq!(shows(&effects), [at(GETTING_READY)]);
         assert_eq!(shows(&app.handle(Event::InstallStep(INSTALLING_TMUX))), [at(INSTALLING_TMUX)]);
         assert!(shows(&app.handle(Event::InstallStep(INSTALLING_TMUX))).is_empty());
@@ -969,7 +977,7 @@ mod tests {
         assert_eq!(shows(&app.handle(Event::Auth(Some(true)))), [None]);
 
         let asked = Saved { asked_sign_in: true, ..SEEN };
-        let mut app = App::new(asked, true, false, B, false).0;
+        let mut app = App::new(asked, true, false, B, false, false).0;
         assert!(shows(&answer(&mut app, false)).is_empty());
         assert_eq!(app.view(), None);
     }
@@ -1059,7 +1067,7 @@ mod tests {
         assert!(has(&effects, &Effect::Save(later)));
         assert_eq!(shows(&effects), [None]);
 
-        let mut app = App::new(later, true, false, B, false).0;
+        let mut app = App::new(later, true, false, B, false, false).0;
         assert!(shows(&answer(&mut app, false)).is_empty());
     }
 
@@ -1086,7 +1094,7 @@ mod tests {
 
     #[test]
     fn the_menu_opening_runs_nothing_of_orca() {
-        let (mut app, mut effects) = App::new(SEEN, true, false, B, false);
+        let (mut app, mut effects) = App::new(SEEN, true, false, B, false, false);
         effects.extend(answer(&mut app, true));
         // Past five minutes, when the menu once asked Orca again.
         effects.extend(app.handle(Event::MenuOpened { now: B + 300, desktop_installed: false }));
@@ -1095,7 +1103,7 @@ mod tests {
 
     #[test]
     fn a_new_cli_version_runs_nothing_of_orca() {
-        let (mut app, mut effects) = App::new(SEEN, true, false, B, false);
+        let (mut app, mut effects) = App::new(SEEN, true, false, B, false, false);
         effects.extend(answer(&mut app, true));
         effects.extend(app.handle(Event::CliVersion(Some("0.6.66".into()))));
         effects.extend(app.handle(Event::CliVersion(Some("0.6.67".into()))));
@@ -1614,7 +1622,7 @@ mod tests {
         starts_the_held_install(&app.handle(tick(B + 20)));
 
         // The CLI installing, from the menu after it was removed, its window closed.
-        let mut app = App::new(SEEN, false, false, B, true).0;
+        let mut app = App::new(SEEN, false, false, B, true, false).0;
         assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
         app.handle(Event::Menu(MenuAction::Install));
         app.handle(Event::WindowClosed);
@@ -1688,7 +1696,7 @@ mod tests {
         ];
         for (kind, word) in kinds {
             // Kept from the start, so the last menu in it is the one shown.
-            let (mut app, mut sent) = App::new(SEEN, true, false, B, false);
+            let (mut app, mut sent) = App::new(SEEN, true, false, B, false, false);
             sent.extend(app.handle(tick(B + 5)));
             // A check fails on its own; the others fail installing what it found.
             if kind != UpdateFailure::Check {
@@ -1939,7 +1947,7 @@ mod tests {
         assert!(!saves(&effects));
 
         // Remembered across a start.
-        let mut app = with_chatgpt(App::new(Saved { asked_follow: true, ..SEEN }, true, false, B, false).0);
+        let mut app = with_chatgpt(App::new(Saved { asked_follow: true, ..SEEN }, true, false, B, false, false).0);
         answer(&mut app, true);
         assert!(app.handle(Event::FollowOffer).is_empty());
     }
@@ -2115,6 +2123,60 @@ mod tests {
         let effects = app.handle(follow(false, false));
         assert!(!rows(&effects).contains(&"Follow ChatGPT".to_string()));
         assert!(logs(&effects).is_empty());
+    }
+
+    /// Off macOS: signed in, the dial attached and ChatGPT installed, with following as `saved` has it.
+    fn switching(saved: Saved) -> App {
+        let mut app = App::new(saved, true, false, B, false, true).0;
+        answer(&mut app, true);
+        app.handle(attached());
+        app.handle(follow(!saved.follow_off, true));
+        app
+    }
+
+    fn switch_item(on: bool) -> MenuItem {
+        MenuItem::Check(MenuAction::FollowSwitch, "Follow ChatGPT".into(), on)
+    }
+
+    #[test]
+    fn off_macos_a_click_on_the_switch_saves_it_and_turns_following_off_and_on() {
+        let mut app = switching(SEEN);
+        let effects = app.handle(Event::Menu(MenuAction::FollowSwitch));
+        assert_eq!(effects, [Effect::Save(Saved { follow_off: true, ..SEEN }), Effect::FollowSwitch(false)]);
+        assert_eq!(app.view(), None);
+        // The door answers: the item is drawn unchecked, and the log says so.
+        let effects = app.handle(follow(false, true));
+        assert!(menu_of(&effects).contains(&switch_item(false)));
+        assert_eq!(logs(&effects), ["chatgpt: follow off"]);
+
+        let effects = app.handle(Event::Menu(MenuAction::FollowSwitch));
+        assert_eq!(effects, [Effect::Save(SEEN), Effect::FollowSwitch(true)]);
+        let effects = app.handle(follow(true, true));
+        assert!(menu_of(&effects).contains(&switch_item(true)));
+        assert_eq!(logs(&effects), ["chatgpt: follow on"]);
+        assert_eq!(app.view(), None);
+    }
+
+    #[test]
+    fn off_macos_a_switch_saved_off_is_turned_on_by_the_click() {
+        let mut app = switching(Saved { follow_off: true, ..SEEN });
+        assert_eq!(app.handle(Event::Menu(MenuAction::FollowSwitch)), [Effect::Save(SEEN), Effect::FollowSwitch(true)]);
+    }
+
+    #[test]
+    fn off_macos_the_offer_shows_nothing_and_saves_nothing() {
+        let mut app = switching(Saved { follow_off: true, ..SEEN });
+        assert!(app.handle(Event::FollowOffer).is_empty());
+        assert_eq!(app.view(), None);
+        assert!(!app.state.saved.asked_follow);
+        // Closing Sign in shows no Follow screen behind it.
+        let mut app = App::new(SEEN, true, false, B, false, true).0;
+        answer(&mut app, false);
+        app.handle(follow(false, true));
+        assert!(app.handle(Event::FollowOffer).is_empty());
+        let effects = app.handle(Event::WindowClosed);
+        assert_eq!(shows(&effects), [None]);
+        assert!(has(&effects, &Effect::Save(Saved { asked_sign_in: true, ..SEEN })));
     }
 
     #[test]

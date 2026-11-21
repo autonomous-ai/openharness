@@ -2,7 +2,7 @@
 
 use crate::account::{self, Login, NO_RESULT};
 use crate::cli::{self, Cli, HarnessCli, START_DEADLINE};
-use crate::follow::{AX_SETTINGS, CHATGPT_BUNDLE, ChatgptFollow, FollowDoor, Heard, Observer, Shown, TRUST_AGAIN};
+use crate::follow::{AX_SETTINGS, ChatgptFollow, FollowDoor, Heard, Observer, Shown, TRUST_AGAIN, is_chatgpt_front};
 use crate::front::{FrontFeed, FrontSource};
 use crate::install::{self, Shell};
 use crate::loginitem::LoginItem;
@@ -403,6 +403,14 @@ impl Runner {
             // On the caller's thread: macOS shows its own dialog and does not wait for it.
             Effect::AskAx => shared.doors.follow.prompt(),
             Effect::OpenAxSettings => shared.open(|open| open.url(AX_SETTINGS), "accessibility settings"),
+            // Read back here, the one way the rules hear the switch: no notice comes for it. The rules stop observing
+            // before this returns, so no title heard after the click is written, and the follow thread drops the
+            // observation.
+            Effect::FollowSwitch(on) => {
+                shared.doors.follow.switch(on);
+                let trusted = shared.doors.follow.trusted();
+                shared.chatgpt.tell(|follow| follow.trusted(trusted));
+            }
         }
         None
     }
@@ -537,7 +545,7 @@ impl Shared {
     fn front_changed(&self, value: &str) {
         self.tabs.tell(|follow| follow.front(value));
         // Read before the offer is judged: a permission given since macOS's last notice is no reason to offer.
-        let trusted = (value == CHATGPT_BUNDLE).then(|| self.doors.follow.trusted());
+        let trusted = is_chatgpt_front(value).then(|| self.doors.follow.trusted());
         self.chatgpt.tell(|follow| {
             if let Some(trusted) = trusted {
                 follow.trusted(trusted);
@@ -684,7 +692,7 @@ mod tests {
     use super::*;
     use crate::account::NO_RESULT;
     use crate::app::App;
-    use crate::follow::{AX_SETTINGS, AxTrust, CHATGPT_BUNDLE, ChatgptWindow, Heard, NoFollow};
+    use crate::follow::{AX_SETTINGS, AxTrust, CHATGPT_BUNDLE, ChatgptWindow, Heard, NoFollow, Switched};
     use crate::front::{FrontSource, NoFront};
     use crate::install::{FINISH_IN_TERMINAL, GETTING_READY, INSTALLING_TMUX, NOT_INSTALLED, Place, Run, Shell, runs};
     use crate::loginitem::LoginItem;
@@ -1079,7 +1087,7 @@ mod tests {
     }
 
     /// The same, with the ChatGPT door a test tells.
-    fn world_following(now: &str, door: &Arc<ChatgptDoor>) -> (World, Arc<Fronts>) {
+    fn world_following(now: &str, door: &Arc<impl FollowDoor + 'static>) -> (World, Arc<Fronts>) {
         let fronts = Arc::new(Fronts { now: now.into(), changed: Mutex::default() });
         let (source, follow) = (fronts.clone(), door.clone());
         let w = world_where(move |doors| {
@@ -1374,6 +1382,7 @@ mod tests {
             Effect::Reveal(PathBuf::from("/tmp/harness-logs-20261118-1030.zip")),
             Effect::AskAx,
             Effect::OpenAxSettings,
+            Effect::FollowSwitch(true),
         ];
         for effect in others {
             assert_eq!(w.runner.run(effect.clone()), None, "{effect:?}");
@@ -1543,6 +1552,11 @@ mod tests {
         fn start(&self, changed: Box<dyn Fn() + Send + Sync>) {
             self.with(|state| state.changed = Some(Arc::from(changed)));
         }
+    }
+
+    /// A door off macOS, as every door there is: the test's window, and the switch.
+    fn switched(window: &ChatgptDoor, on: bool) -> Arc<Switched<ChatgptDoor>> {
+        Arc::new(Switched::new(ChatgptDoor(window.0.clone()), on))
     }
 
     #[test]
@@ -2178,6 +2192,49 @@ mod tests {
     }
 
     #[test]
+    fn chatgpt_exe_in_front_reads_the_permission_before_the_offer_is_judged_as_the_bundle_id_does() {
+        let door = ChatgptDoor::answering(true, false);
+        let (w, fronts) = world_following(VSCODE, &door);
+        w.fake.script("hardware watch --json", &ATTACHED);
+        assert_eq!(w.runner.run(Effect::SpawnWatch), None);
+        w.next_in_any_order(&[a_dial(), follow(false, true)]);
+        fronts.tell("ChatGPT.exe");
+        assert_eq!(w.next(), Event::FollowOffer);
+        // Switched on since: the read as ChatGPT comes to the front finds it, nothing is offered, and it observes.
+        fronts.tell(VSCODE);
+        door.trust(&[true]);
+        fronts.tell("ChatGPT.exe");
+        assert_eq!(w.next(), follow(true, true));
+        door.observed(1);
+        assert_eq!(w.rest(), [Event::WatchExit(Some(0))]);
+    }
+
+    #[test]
+    fn the_switch_turned_off_drops_the_observation_at_once_and_turned_on_writes_the_first_title_again() {
+        let door = ChatgptDoor::answering(false, false);
+        let (w, _fronts) = world_following(CHATGPT_BUNDLE, &switched(&door, true));
+        assert_eq!(w.next(), follow(true, false));
+        w.fake.script("hardware watch --json", &ATTACHED);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        door.observed(1);
+        door.hear(0, title("Fix login"));
+        assert_eq!(w.runner.run(Effect::FollowSwitch(false)), None);
+        // Read back once at the click: off macOS no notice comes, and so no read a moment later either.
+        assert!(w.runner.0.chatgpt.state.lock().unwrap().trust_at.is_none());
+        // Heard after the click, before the follow thread has dropped its box: no line.
+        door.hear(0, title("Plan the trip"));
+        door.dropped(0);
+        assert_eq!(w.next(), follow(false, false));
+        assert_eq!(w.runner.run(Effect::FollowSwitch(true)), None);
+        assert_eq!(w.next(), follow(true, false));
+        door.observed(2);
+        // The same title as the last one written: a new observation writes its first.
+        door.hear(1, title("Fix login"));
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [CHATGPT_LINE, FIX_LOGIN, FIX_LOGIN]);
+    }
+
+    #[test]
     fn no_observer_is_one_log_line_each_time_observing_starts() {
         let door = ChatgptDoor::answering(false, true);
         let (w, fronts) = world_following(CHATGPT_BUNDLE, &door);
@@ -2299,7 +2356,7 @@ mod tests {
         w.fake.script("hardware watch --json", &[r#"{"attached":true,"fw":"0.0.95"}"#, "@stdin"]);
         w.fake.script("auth status --json", &[r#"{"loggedIn":true}"#]);
         w.fake.script("--version", &["0.6.58"]);
-        let (mut app, mut effects) = App::new(Saved::default(), w.runner.find_cli(), false, B, false);
+        let (mut app, mut effects) = App::new(Saved::default(), w.runner.find_cli(), false, B, false, false);
         let connected = MenuItem::Text("Device ready".into());
         let (mut dial, mut auth, mut version) = (false, false, false);
         loop {

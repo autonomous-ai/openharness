@@ -167,6 +167,9 @@ export interface CableHostWiring {
   appSettled?: (app: string) => void
   /** A dial sent a pick from its list of apps, whatever came of it: the picker's measure. A notice's pick is none. */
   appPicked?: () => void
+  /** A pick on the dial that switched nothing, and why: the shown app was picked again, or the pick was ignored. Never
+   *  for a notice. */
+  appPickKept?: (answer: 'same' | 'ignored') => void
   /** A pick on the dial switched the shown app, or with a window turned the view to Harness's tab: the devices bring
    *  that app to the front. Never for a notice, nor for Harness with no window. */
   appBrought?: (app: string) => void
@@ -756,6 +759,7 @@ export class DaemonCableHost implements CableHost {
   pickApp(app: string, cause: 'pick' | 'notice' = 'pick'): AppPick {
     if (cause === 'pick') this.wiring.appPicked?.()
     const answer = this.answerPick(app, cause)
+    if (cause === 'pick' && (answer === 'same' || answer === 'ignored')) this.wiring.appPickKept?.(answer)
     // A notice brings its own app with its open. Harness with no window is only its ring: no Desktop to bring.
     if (cause === 'pick' && (answer === 'tabs' || (answer === 'switched' && app !== 'harness'))) this.wiring.appBrought?.(app)
     return answer
@@ -980,7 +984,7 @@ export class DaemonCableHost implements CableHost {
     const rows = at < APP_LIMIT ? all.slice(0, APP_LIMIT) : [...all.slice(0, APP_LIMIT - 1), all[at]]
     return {
       shown,
-      apps: rows.map((a) => ({ id: a.id, name: appDisplayName(a.id), count: a.count, waiting: a.waiting })),
+      apps: rows.map((a) => ({ id: a.id, name: appDisplayName(a.id), count: a.count, waiting: a.waiting, working: a.working })),
     }
   }
 
@@ -990,7 +994,7 @@ export class DaemonCableHost implements CableHost {
   private tabApps(agents: HostAgent[]): AppList {
     this.rings.update(agents, this.ranks)
     const rows = this.rings.apps().filter((a) => a.id !== 'harness').slice(0, APP_LIMIT)
-    return { shown: 'harness', apps: rows.map((a) => ({ id: a.id, name: appDisplayName(a.id), count: a.count, waiting: a.waiting })) }
+    return { shown: 'harness', apps: rows.map((a) => ({ id: a.id, name: appDisplayName(a.id), count: a.count, waiting: a.waiting, working: a.working })) }
   }
 
   /** How many agents the account has across every machine — the overview's number, sent beside the

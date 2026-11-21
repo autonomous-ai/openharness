@@ -180,11 +180,9 @@ describe('a daemon under test', () => {
     ['is killed, as a run\'s timeout kills it', 'waits', (child) => { child.kill('SIGKILL') }],
     ['is interrupted with Ctrl-C, which reaches its terminal\'s process group', 'waits', (child) => { process.kill(-child.pid!, 'SIGINT') }],
   ])('is gone, tmux server and all, once the worker that started it %s', async (_, mode, end) => {
-    // Not a Vitest run: it keeps no artifacts, which only a test can file.
-    const { E2E_ARTIFACTS_DIR: _artifacts, ...env } = process.env
     // A process group of its own, as a terminal gives the run it starts.
     const child = worker = spawn(process.execPath, ['--import', 'tsx', 'e2e/harness/abandonedWorker.ts', mode], {
-      cwd: CLI_ROOT, env, stdio: ['pipe', 'pipe', 'inherit'], ...ownProcessGroup(),
+      cwd: CLI_ROOT, stdio: ['pipe', 'pipe', 'inherit'], ...ownProcessGroup(),
     })
     let out = ''
     child.stdout!.on('data', (chunk: Buffer) => { out += chunk.toString() })

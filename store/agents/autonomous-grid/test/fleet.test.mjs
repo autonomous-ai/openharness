@@ -152,7 +152,7 @@ test('grid.sh does the same, HARNESS_GRID_BIN and ADAPTER_RUNTIME_DIR first',asy
   // A copy outside the package, so no .venv of a developer's checkout answers first.
   const pkg=await temporary(t),gridSh=join(pkg,'toolchain','grid.sh');
   await mkdir(join(pkg,'toolchain'));await copyFile(fileURLToPath(new URL('../toolchain/grid.sh',import.meta.url)),gridSh);
-  const runs=env=>spawnSync('/bin/bash',[gridSh,'--version'],{encoding:'utf8',env});
+  const runs=(env,cwd)=>spawnSync('/bin/bash',[gridSh,'--version'],{encoding:'utf8',env,cwd});
   for(const c of RUNTIME_HOMES){
     const {home,grid,env}=await gridHome(t,c),want=await grid(join(home,c.runtime));
     const run=runs(env);
@@ -162,5 +162,7 @@ test('grid.sh does the same, HARNESS_GRID_BIN and ADAPTER_RUNTIME_DIR first',asy
   await grid(join(home,RUNTIME_HOMES[0].runtime));
   const own=await grid(join(home,'own'));
   assert.equal(runs({...env,ADAPTER_RUNTIME_DIR:join(home,'own')}).stdout,own,'ADAPTER_RUNTIME_DIR');
+  // As the CLI reads it (cli/src/config/envFields.ts homePath): a pane runs in its project, never the home.
+  assert.equal(runs({...env,ADAPTER_RUNTIME_DIR:'own'},pkg).stdout,own,'a relative ADAPTER_RUNTIME_DIR');
   assert.equal(runs({...env,ADAPTER_RUNTIME_DIR:join(home,'own'),HARNESS_GRID_BIN:'/bin/echo'}).stdout,'--version\n','HARNESS_GRID_BIN');
 });

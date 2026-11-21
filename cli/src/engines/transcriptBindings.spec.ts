@@ -117,7 +117,7 @@ it('does not let an unwritten locator borrow a dangling directory or leaf alias'
     [join(base, 'session.jsonl'), join(base, 'session.jsonl')]]) {
     fs.symlinkSync(join(root, 'outside-absent'), link)
     expect(() => bindings.transcriptEvidence('commandcode', path, undefined, 'derived')).toThrow('absent leaf')
-    fs.rmSync(link)
+    fs.unlinkSync(link)
   }
 })
 it('requires owned surviving ancestry and keeps a derived locator inside its declared root', () => {

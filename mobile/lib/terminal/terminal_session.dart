@@ -1949,11 +1949,13 @@ class TerminalSession extends ChangeNotifier {
     if (isBoundary) unawaited(_flushInput());
     var offset = 0;
     while (offset < bytes.length) {
-      final available = 8 * 1024 - _inputBytes.length;
+      final available = kInputFrameMaxBytes - _inputBytes.length;
       final take = min(available, bytes.length - offset);
       _inputBytes.addAll(bytes.sublist(offset, offset + take));
       offset += take;
-      if (_inputBytes.length == 8 * 1024) unawaited(_flushInput());
+      if (_inputBytes.length == kInputFrameMaxBytes) {
+        unawaited(_flushInput());
+      }
     }
     if (isBoundary) {
       unawaited(_flushInput());
@@ -2031,42 +2033,24 @@ class TerminalSession extends ChangeNotifier {
       // had the very next keystroke refused and the whole pane frozen. The
       // tail runs one closure at a time, which is what keeps the numbers in
       // order.
-      //
-      // Never larger than the daemon accepts, either — split rather than let
-      // one oversized frame be refused with the counter intact behind it.
-      for (
-        var offset = 0;
-        offset < bytes.length;
-        offset += kInputFrameMaxBytes
-      ) {
-        if (!_isCurrent(generation) ||
-            !acceptsInput ||
-            streamId != currentStreamId) {
-          return;
-        }
-        final end = min(offset + kInputFrameMaxBytes, bytes.length);
-        final frame = TerminalBinaryFrame(
-          kind: TerminalBinaryKind.input,
-          streamId: currentStreamId,
-          seq: _inputSeq++,
-          bytes: Uint8List.fromList(bytes.sublist(offset, end)),
-          compressed: false,
+      final frame = TerminalBinaryFrame(
+        kind: TerminalBinaryKind.input,
+        streamId: currentStreamId,
+        seq: _inputSeq++,
+        bytes: Uint8List.fromList(bytes),
+        compressed: false,
+      );
+      final sendStarted = kTypingTrace ? typingNowMs() : 0;
+      final sent = await sendBinary(frame);
+      if (kTypingTrace) {
+        _lastInputSentMs = typingNowMs();
+        typingTrace(
+          'pty sent seq=${frame.seq} ${frame.bytes.length}B ok=$sent'
+          ' in ${typingNowMs() - sendStarted}ms via=${linkMode ?? '?'}',
         );
-        final sendStarted = kTypingTrace ? typingNowMs() : 0;
-        final sent = await sendBinary(frame);
-        if (kTypingTrace) {
-          _lastInputSentMs = typingNowMs();
-          typingTrace(
-            'pty sent seq=${frame.seq} ${frame.bytes.length}B ok=$sent'
-            ' in ${typingNowMs() - sendStarted}ms via=${linkMode ?? '?'}',
-          );
-        }
-        if (!_isCurrent(generation)) return;
-        if (!sent) {
-          transportLost('Terminal input was not sent');
-          return;
-        }
       }
+      if (!_isCurrent(generation)) return;
+      if (!sent) transportLost('Terminal input was not sent');
     });
     _inputSendTail = queued
         .catchError((_) {
@@ -2100,9 +2084,10 @@ class TerminalSession extends ChangeNotifier {
   /// latency paid for a batch that mostly never materializes.
   static const _inputCoalesceWindow = Duration(milliseconds: 4);
 
-  /// The daemon's ceiling on one input frame (`INPUT_MAX_BYTES` in
-  /// `cli/src/lib/terminalStreamManager.ts`). Larger is refused, not split.
-  static const kInputFrameMaxBytes = 64 * 1024;
+  /// The most one input frame carries: typing buffers up to this and flushes at it, so a frame
+  /// stays below the daemon's 64 KiB ceiling (`INPUT_MAX_BYTES` in
+  /// `cli/src/lib/terminalStreamManager.ts`), which refuses a larger frame rather than splitting it.
+  static const kInputFrameMaxBytes = 8 * 1024;
   static const _resizeCoalesceWindow = Duration(milliseconds: 50);
 
   void resize(int width, int height) {

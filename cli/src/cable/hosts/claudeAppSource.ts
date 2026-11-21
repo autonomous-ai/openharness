@@ -12,8 +12,9 @@
  *
  * A log line says only fixed words and counts: the store names people's folders and sessions.
  */
-import { basename, dirname, join, sep } from 'node:path'
+import { basename, join, sep } from 'node:path'
 import { errorKind } from '../../lib/log.js'
+import type { ClaudeStoreRoot } from './appPlaces.js'
 import { claudePaneKey } from './claudeApp.js'
 import { localIdOf } from './claudeAppStore.js'
 import type { ClaudeAppSession, ClaudeAppStore, StoreFolders, StoreRead } from './claudeAppStore.js'
@@ -26,14 +27,14 @@ const GAP_MS = 250
 /** The names waiting for a pass: past it, one listing of the folders reads them all (the app rewrites hundreds of
  *  files at its start or an update). */
 const MAX_WAITING = 256
-const NO_FOLDERS: StoreFolders = { accounts: [], orgs: [] }
+const NO_FOLDERS: StoreFolders = { roots: [], accounts: [], orgs: [] }
 
 export interface ClaudeAppSourceDeps {
-  /** The store's reader (claudeAppStore.ts), on `root`. */
+  /** The store's reader (claudeAppStore.ts), on the roots' `root`s in the same order. */
   store: Pick<ClaudeAppStore, 'folders' | 'files' | 'touch' | 'read' | 'forget'>
-  /** The store's root, computed once by devices.ts. The folder above it is the Claude app's, watched while the root is
-   *  not there. */
-  root: string
+  /** The store's roots and their watch chains (appPlaces.ts), computed once by devices.ts. A root not there is waited
+   *  for from the nearest folder of its chain. */
+  roots: readonly ClaudeStoreRoot[]
   /** One watch on the nearest existing folder of the list (folderWatch.ts watchNearest), telling the changed entry's
    *  name when the OS gave one. Its stop. */
   watch(folders: readonly string[], changed: (file?: string) => void): () => void
@@ -93,7 +94,8 @@ export class ClaudeAppSource implements HostSource {
   private running = false
   /** The count of stops: a pass started before the last stop takes nothing. */
   private stops = 0
-  private unwatch: (() => void) | undefined
+  /** The roots' watches' stops. */
+  private unwatch: Array<() => void> = []
   /** The account and org folders' watches, by folder. */
   private readonly watches = new Map<string, () => void>()
   /** What waits for the next pass: a listing of the folders, the names touched (by org folder), or one more read. */
@@ -102,8 +104,9 @@ export class ClaudeAppSource implements HostSource {
   private named = 0
   private again = false
   private pass: Pass | undefined
-  /** Whether the root was there, as last said: kept across a detach, so a dial plugged in again says nothing. */
-  private there: boolean | undefined
+  /** The roots there at the last listing, none before the first: kept across a detach, so a dial plugged in again
+   *  says nothing. */
+  private there: ReadonlySet<string> | undefined
   /** The slowest read said this start, the count of rows last said, and of what the bounds left out. */
   private slowest: number | undefined
   private said: number | undefined
@@ -118,9 +121,8 @@ export class ClaudeAppSource implements HostSource {
     this.running = true
     this.slowest = undefined
     this.failed = false
-    const { root } = this.deps
     // Held before the folders are listed, so a store made between the two is still heard.
-    this.unwatch = this.deps.watch([root, dirname(root)], (file) => this.rootChanged(file))
+    this.unwatch = this.deps.roots.map((root) => this.deps.watch(root.watch, (file) => this.rootChanged(root, file)))
     this.relist()
   }
 
@@ -128,8 +130,8 @@ export class ClaudeAppSource implements HostSource {
     if (!this.running) return
     this.running = false
     this.stops++
-    this.unwatch?.()
-    this.unwatch = undefined
+    for (const stop of this.unwatch) stop()
+    this.unwatch = []
     this.watchFolders(NO_FOLDERS)
     this.listing = false
     this.names.clear()
@@ -195,11 +197,13 @@ export class ClaudeAppSource implements HostSource {
     this.emit()
   }
 
-  /** An event of the root's watch. While the root is not there it holds the app's folder, whose other entries the app
-   *  writes as it runs: only the root's own name, or no name, looks again. */
-  private rootChanged(file?: string): void {
-    if (this.there === false && file !== undefined && file !== basename(this.deps.root)) return
-    if (file !== undefined) this.unwatchBelow(join(this.deps.root, file))
+  /** An event of a root's watch. While the root is not there it holds a folder of the root's chain, whose other entries
+   *  other apps and packages, and the Claude app as it runs, write: only the name of a folder of that chain, or no
+   *  name, looks again. */
+  private rootChanged(root: ClaudeStoreRoot, file?: string): void {
+    const waiting = this.there?.has(root.root) === false
+    if (waiting && file !== undefined && !root.watch.some((folder) => basename(folder) === file)) return
+    if (file !== undefined) this.unwatchBelow(join(root.root, file))
     this.relist()
   }
 
@@ -283,8 +287,8 @@ export class ClaudeAppSource implements HostSource {
       if (listing) {
         const folders = await this.deps.store.folders()
         if (this.stops !== stops) return
-        this.look(folders !== undefined)
-        // Set before the files are listed, so a file written meanwhile is still heard. With no root, the root's watch
+        this.look(folders?.roots ?? [])
+        // Set before the files are listed, so a file written meanwhile is still heard. A root not there, its own watch
         // waits for it.
         this.watchFolders(folders ?? NO_FOLDERS)
         if (!folders) {
@@ -313,11 +317,12 @@ export class ClaudeAppSource implements HostSource {
     }
   }
 
-  /** Whether the root is there, said when that changed. */
-  private look(there: boolean): void {
-    if (there === this.there) return
-    this.there = there
-    this.deps.log(`[claude-app] watch · ${there ? 'on' : 'none'}`)
+  /** Which roots are there; whether any is, said when that changed. */
+  private look(roots: readonly string[]): void {
+    const before = this.there
+    this.there = new Set(roots)
+    if (before !== undefined && (before.size > 0) === (roots.length > 0)) return
+    this.deps.log(`[claude-app] watch · ${roots.length > 0 ? 'on' : 'none'}`)
   }
 
   /** One watch a folder read, kept while it is read: an account's event lists the folders again, an org's names a

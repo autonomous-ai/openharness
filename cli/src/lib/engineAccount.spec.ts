@@ -113,6 +113,15 @@ describe('engineAccount', () => {
     expect((await engineAccount('codex', { home: root, env: {}, run: signedOut.run })).signedIn).toBe(false)
   })
 
+  it('reads the saved model API from a relative ADAPTER_DATA_DIR in the home, as config/env.ts reads it', async () => {
+    const root = home()
+    const data = join(root, 'own-data', 'api-connections')
+    mkdirSync(data, { recursive: true })
+    writeFileSync(join(data, 'connections.json'), JSON.stringify({ version: 1, connections: [{ id: 'openrouter', provider: 'openrouter',
+      name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', keyEnv: 'OPENROUTER_API_KEY', authHeader: 'Authorization', authPrefix: 'Bearer', apiKey: 'sk-x' }] }))
+    expect((await engineAccount('claude', { home: root, env: { ADAPTER_DATA_DIR: 'own-data' }, run: cli().run })).signedIn).toBe(true)
+  })
+
   // The checked read every launch holds the file to decides, loaded only where an API was saved: a file it refuses
   // would not serve a launch, and a machine that said "signed in" on it was sent work it could not start.
   it('counts no saved API the launch could not use: another header, or a file the checked read refuses', async () => {

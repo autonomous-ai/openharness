@@ -5,9 +5,12 @@ name: CLI end to end
 # until this workflow it ran only on developers' machines, and a full run held a laptop for over an
 # hour. Here it is eight shards on standard Linux runners, free for a public repository.
 #
-# ADVISORY until it has stayed green, and so it does not run on pull requests. A failing check on a
-# PR, required or not, makes GitHub report the PR UNSTABLE, and scripts/merge-validated-pr.py (`make
-# merge-pr`) refuses to merge anything GitHub does not report clean: a per-PR run that failed would
+# The full suite is ADVISORY until it has stayed green, and so it does not run on pull requests.
+# PR CI runs a PR's own e2e files instead (ci.yml's `linux-e2e`, set up through the same action as
+# the shards here, .github/actions/cli-e2e-setup) and the dial hosts (ci.yml's `dial-hosts`, the
+# same workflow as here, cli-e2e-dial-hosts.yml). A failing check on a PR, required or not, makes
+# GitHub report the PR UNSTABLE, and scripts/merge-validated-pr.py (`make merge-pr`) refuses to
+# merge anything GitHub does not report clean: a per-PR run of the full suite that failed would
 # block every CLI merge. The suite had only ever run on macOS, and its first Linux runs found real
 # failures (zsh's new-user menu took every agent's pane, engineLaunch.ts zshNewUserGuard) beside
 # runner-specific ones. So it runs every night and on demand from a branch (Actions -> CLI end to
@@ -69,44 +72,12 @@ jobs:
       SHELL: /bin/zsh
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      # The shells the tests launch through, and the real backend its specs run against.
+      - uses: ./.github/actions/cli-e2e-setup
         with:
           node-version: ${{ env.CLI_NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: cli/package-lock.json
-      - name: Install tmux, test shells, and private clipboard test tools
-        run: |
-          # Through a mirror outage: one DNS outage failed every shard here before any test ran (#4186).
-          sudo bash ../scripts/apt-install.sh tmux zsh tcsh dash lsof xvfb xclip
-          # Every daemon watches its data folder and the engines' transcript folders, and a file
-          # starts dozens of daemons one after another; the runner's default instance limit is 128.
-          sudo sysctl -w fs.inotify.max_user_instances=1024 fs.inotify.max_user_watches=524288
-          tmux -V && zsh --version && tcsh --version && command -v dash
-          # Ubuntu's global zshrc runs compinit, which stops at "insecure directories ... continue [y]
-          # or abort compinit [n]?" when a completion folder is writable by others or owned by someone
-          # else, and the runner image ships /usr/share/zsh and its vendor-completions that way: every
-          # zsh agent's pane waited at that question and no engine started. A person's machine has
-          # none, or they fix it as zsh says, which is this. Fails here if any is left.
-          insecure=$(zsh -fc 'autoload -U compaudit && compaudit' 2>/dev/null | grep '^/' | sort -u || true)
-          if [ -n "$insecure" ]; then
-            echo "$insecure" | xargs sudo chown root:root
-            echo "$insecure" | xargs sudo chmod g-w,o-w
-          fi
-          zsh -fc 'autoload -U compaudit && compaudit'
-      - run: npm ci --no-audit --no-fund
-      # The specs that run against the real backend (e2e/harness/realBackend.ts: shared tabs, socket
-      # churn, the two-account spike) need it and its in-memory Mongo and Redis. Without them they
-      # skip, and they did here until 2026-11-10: Desktop's Swarm then broke twice in production
-      # behind tests whose fake backend still answered the old way.
-      - name: Set up the real backend and its in-memory Mongo and Redis
-        run: |
-          sudo bash ../scripts/apt-install.sh redis-server
-          (cd ../backend && npm ci --no-audit --no-fund)
-          mkdir -p "$RUNNER_TEMP/test-services" && cd "$RUNNER_TEMP/test-services"
-          echo '{"name":"test-services","private":true}' > package.json
-          REDISMS_DISABLE_POSTINSTALL=1 npm install --no-audit --no-fund mongodb-memory-server@10 redis-memory-server@0.12
-          echo "HARNESS_E2E_SERVICES_DIR=$RUNNER_TEMP/test-services" >> "$GITHUB_ENV"
-          echo "HARNESS_E2E_REDIS_SERVER=$(command -v redis-server)" >> "$GITHUB_ENV"
+          packages: tcsh dash xvfb xclip
+          real-backend: 'true'
       # The complete file list, before sharding: the summary requires each file exactly once.
       - name: Discover the complete end-to-end inventory
         run: npx vitest list --config vitest.e2e.ci.config.ts --filesOnly --json="$RUNNER_TEMP/inventory-${{ matrix.shard }}.json"
@@ -233,27 +204,15 @@ jobs:
       SHELL: /bin/zsh
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: ./.github/actions/cli-e2e-setup
         with:
           node-version: ${{ env.CLI_NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: cli/package-lock.json
-      - name: Install tmux and zsh, and record Podman
+      - name: Record Podman
         run: |
-          sudo bash ../scripts/apt-install.sh tmux zsh lsof
           # The runner image ships Podman; installed only if a future image does not.
           command -v podman || sudo bash ../scripts/apt-install.sh podman
-          # As in the shards: zsh's compinit stops every agent's pane at a question while a
-          # completion folder is writable by others.
-          insecure=$(zsh -fc 'autoload -U compaudit && compaudit' 2>/dev/null | grep '^/' | sort -u || true)
-          if [ -n "$insecure" ]; then
-            echo "$insecure" | xargs sudo chown root:root
-            echo "$insecure" | xargs sudo chmod g-w,o-w
-          fi
-          zsh -fc 'autoload -U compaudit && compaudit'
           podman --version | tee -a "$GITHUB_STEP_SUMMARY"
           podman info
-      - run: npm ci --no-audit --no-fund
       - name: The agent browser on real Podman
         timeout-minutes: 40
         env:
@@ -287,105 +246,7 @@ jobs:
           overwrite: true
           retention-days: 7
 
-  # The dial's hosts (cli/e2e/harness/dialHosts.ts): herdr, WezTerm and Zellij from their own releases, kitty from Ubuntu,
-  # an X11 desktop (Xvfb, openbox) and sway, which the files start themselves. Each program is version pinned and checksum checked, and
-  # E2E_DIAL_HOSTS fails a file whose program is missing, where elsewhere it skips.
+  # The dial's hosts: one workflow, which ci.yml's `dial-hosts` calls for a pull request too.
   dial-hosts:
-    name: e2e (dial hosts)
     if: ${{ !inputs.agent_browser_podman }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    defaults:
-      run:
-        working-directory: cli
-    env:
-      LANG: C.UTF-8
-      SHELL: /bin/zsh
-      E2E_DIAL_HOSTS: '1'
-      # cli/src/testing/recordedZellij.ts: the version the Zellij adapter's recordings were made with.
-      ZELLIJ_VERSION: 0.44.3
-      ZELLIJ_SHA256: 0f7c346788627f506c0a28296517768633cff24fc822a739f8264b640ecad751
-      # The newest stable, what a person installs today; the herdr adapter was built on 0.8.0. It publishes no checksum
-      # file, so the sha256 is the release asset's digest on GitHub.
-      HERDR_VERSION: 0.9.5
-      HERDR_SHA256: 14d9e8bc8b4a9e0118d77c32266f76d461f09b40342eb23752960bd89f59929d
-      # The newest stable release. It has no Ubuntu 24.04 build; the 22.04 one installs, as 24.04's libssl3t64
-      # provides the libssl3 it depends on.
-      WEZTERM_VERSION: 20240203-110809-5046fc22
-      WEZTERM_SHA256: 86358dab5794a4fb63f7c91dd68d4fdc3da58faad648a58fc77d2bd51c7b0686
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: ${{ env.CLI_NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: cli/package-lock.json
-      - name: Install the dial's hosts, tmux and zsh
-        shell: bash
-        run: |
-          downloads="$RUNNER_TEMP/dial-hosts"
-          mkdir -p "$downloads" "$HOME/.local/bin"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          curl -fsSL --retry 3 -o "$downloads/herdr" \
-            "https://github.com/herdrdev/herdr/releases/download/v$HERDR_VERSION/herdr-linux-x86_64"
-          curl -fsSL --retry 3 -o "$downloads/zellij.tar.gz" \
-            "https://github.com/zellij-org/zellij/releases/download/v$ZELLIJ_VERSION/zellij-x86_64-unknown-linux-musl.tar.gz"
-          curl -fsSL --retry 3 -o "$downloads/wezterm.deb" \
-            "https://github.com/wezterm/wezterm/releases/download/$WEZTERM_VERSION/wezterm-$WEZTERM_VERSION.Ubuntu22.04.deb"
-          printf '%s  %s\n' "$HERDR_SHA256" "$downloads/herdr" "$ZELLIJ_SHA256" "$downloads/zellij.tar.gz" \
-            "$WEZTERM_SHA256" "$downloads/wezterm.deb" | sha256sum -c
-          install -m 0755 "$downloads/herdr" "$HOME/.local/bin/herdr"
-          tar -xzf "$downloads/zellij.tar.gz" -C "$HOME/.local/bin" zellij
-          # A .deb installs its programs in /usr/bin, and apt brings the libraries it needs.
-          # kitty draws through Mesa's software renderer, and exits at start without fontconfig and a font
-          # (cli/src/testing/recordedKitty.ts).
-          sudo bash ../scripts/apt-install.sh tmux zsh lsof xvfb openbox wmctrl xterm x11-utils sway foot \
-            kitty libgl1-mesa-dri fontconfig fonts-dejavu-core "$downloads/wezterm.deb"
-          # As in the shards: zsh's compinit stops every agent's pane at a question while a
-          # completion folder is writable by others.
-          insecure=$(zsh -fc 'autoload -U compaudit && compaudit' 2>/dev/null | grep '^/' | sort -u || true)
-          if [ -n "$insecure" ]; then
-            echo "$insecure" | xargs sudo chown root:root
-            echo "$insecure" | xargs sudo chmod g-w,o-w
-          fi
-          zsh -fc 'autoload -U compaudit && compaudit'
-          {
-            "$HOME/.local/bin/herdr" --version
-            "$HOME/.local/bin/zellij" --version
-            wezterm --version
-            kitty --version
-            sway --version
-          } | tee -a "$GITHUB_STEP_SUMMARY"
-      - run: npm ci --no-audit --no-fund
-      - name: The dial's hosts
-        timeout-minutes: 20
-        env:
-          E2E_BUNDLE: '1'
-          E2E_ARTIFACTS_DIR: ${{ runner.temp }}/e2e-daemon-logs
-        run: >-
-          npx vitest run --config vitest.e2e.dialHosts.config.ts
-          --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/dial-hosts.json"
-      # A skipped case reads as a pass: every case must run and pass.
-      - name: Require every case to pass without skipping
-        env:
-          RESULT: ${{ runner.temp }}/dial-hosts.json
-        run: >-
-          node -e 'const r = JSON.parse(require("node:fs").readFileSync(process.env.RESULT, "utf8"));
-          if (r.numTotalTests === 0 || r.numPassedTests !== r.numTotalTests) process.exit(1)'
-      - name: Preserve the result
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: cli-e2e-dial-hosts
-          path: ${{ runner.temp }}/dial-hosts.json
-          if-no-files-found: error
-          retention-days: 7
-      - name: Preserve the failing cases' daemon logs
-        if: ${{ failure() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: cli-e2e-daemon-logs-dial-hosts
-          path: ${{ runner.temp }}/e2e-daemon-logs/
-          if-no-files-found: ignore
-          overwrite: true
-          retention-days: 7
+    uses: ./.github/workflows/cli-e2e-dial-hosts.yml

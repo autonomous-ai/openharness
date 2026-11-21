@@ -12,6 +12,7 @@
  * from a person is ever interpolated into PowerShell source. Account passwords are made inside the processor and handed
  * only to Task Scheduler's COM call.
  */
+import { modulesByPath } from './powershell.js'
 import { ps } from './powershellQuote.js'
 import { WINDOWS_GUEST_ANSWERS, WINDOWS_GUEST_RECORDS, WINDOWS_GUEST_REQUESTS, WINDOWS_GUEST_ROOT, WINDOWS_GUEST_SCRIPTS, WINDOWS_GUEST_SETUP_VERSION, WINDOWS_GUEST_VERSION_FILE } from './guestTree.js'
 import { WINDOWS_GUEST_TASK, WINDOWS_GUEST_TASK_NAME, WINDOWS_GUEST_TASK_PATH } from './guestSetupClient.js'
@@ -94,6 +95,8 @@ export function buildWindowsGuestInstallScript(input: WindowsGuestInstallInput):
   return [
     '# Harness guest sharing install (cli/src/lib/windows/guestScript.ts), run once elevated behind User Account Control.',
     '# Running it again repairs the group, tree, sentinel and task; it never removes a guest.',
+    modulesByPath('Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Security', 'Microsoft.PowerShell.LocalAccounts',
+      'ScheduledTasks'),
     ...PRELUDE,
     `$OWNER = ${ps(input.owner)}`,
     `$OWNER_HOME = ${ps(input.ownerHome)}`,
@@ -239,6 +242,8 @@ export function buildWindowsGuestProcessorScript(input: { owner: string; ownerHo
   return [
     '# Harness guest setup processor (cli/src/lib/windows/guestScript.ts), run by the SYSTEM task. No arguments: it',
     '# accepts exactly one request file, checks it, performs one operation, writes one answer and deletes the request.',
+    modulesByPath('Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Security', 'Microsoft.PowerShell.LocalAccounts',
+      'CimCmdlets'),
     ...PRELUDE,
     `$OWNER = ${ps(input.owner)}`,
     `$OWNER_HOME = ${ps(input.ownerHome)}`,

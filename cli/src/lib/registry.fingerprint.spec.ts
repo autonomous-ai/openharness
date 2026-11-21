@@ -4,6 +4,7 @@ import { fsync, fsyncSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmS
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type { registry as Registry } from './registry.js'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 // Rows are compared without regard to key order. These cases check that this hides only key order:
 // another writer's real changes still land, local real changes still write, and the file keeps its format.
@@ -11,6 +12,12 @@ vi.mock('fs', async (importOriginal) => {
   const fs = await importOriginal<typeof import('fs')>()
   return { ...fs, fsync: vi.fn(fs.fsync), fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync), mkdirSync: vi.fn(fs.mkdirSync) }
 })
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
+vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
+// Loads the module graph once, before any hook's time limit: cold, it takes seconds on a loaded machine. Each test
+// still imports fresh modules (vi.resetModules), now from the warm transform cache.
+await import('./registry.js')
 
 type Row = Record<string, unknown>
 let directory: string
@@ -57,9 +64,11 @@ async function freshRegistry(): Promise<typeof Registry> {
 }
 
 beforeEach(async () => {
+  // No test here means the write deadline to pass: how fast this machine writes the registry never fails them.
+  deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS)
   vi.resetModules()
   loaded.length = 0
-  // Only row timestamps are fixed; real lock retries and write deadlines must still advance.
+  // Only row timestamps are fixed; real lock retries must still advance.
   vi.useFakeTimers({ toFake: ['Date'] })
   vi.setSystemTime(1790900000000)
   directory = mkdtempSync(join(tmpdir(), 'registry-fingerprint-'))

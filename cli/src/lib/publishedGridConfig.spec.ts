@@ -5,12 +5,14 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { removeLink } from './removePath.js'
 
 const fault = vi.hoisted(() => ({ fail: false, current: true, onSync: undefined as (() => void) | undefined }))
+// A disk flush settles on a later turn without reaching the disk: a loaded runner's real flush took the
+// publication past its 5 s deadline, and no case here is about how fast the disk is.
 vi.mock('node:fs', async real => {
   const actual = await real<typeof import('node:fs')>()
-  return { ...actual, fsync: (fd: number, done: (error: NodeJS.ErrnoException | null) => void) => {
+  return { ...actual, fsync: (_fd: number, done: (error: NodeJS.ErrnoException | null) => void) => {
     fault.onSync?.()
-    if (fault.fail) queueMicrotask(() => done(Error('fixture disk unavailable')))
-    else actual.fsync(fd, done)
+    const error = fault.fail ? Error('fixture disk unavailable') : null
+    setImmediate(() => done(error))
   } }
 })
 let root: string

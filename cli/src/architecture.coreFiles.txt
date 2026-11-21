@@ -381,6 +381,7 @@ lib/pasteArtifact.ts
 lib/pasteOnScreen.ts
 lib/pasteText.ts
 lib/pathContainment.ts
+lib/pathToWatch.ts
 lib/patientExec.ts
 lib/peerAccount.ts
 lib/piSessionHome.ts

@@ -2,6 +2,8 @@ name: Windows
 
 # On demand (Actions -> Windows -> Run workflow): build, test and contract-test the host, and run the Windows
 # CLI specs, on each architecture's own runner.
+# Called by ci.yml's windows-e2e for a pull request whose paths select it, x64 alone unless a Windows-only file changed
+# (scripts/ci-plan.py).
 # Called by release.yml with `release: true`: build the release payload only, stamped with the CLI's version
 # (HARNESS_PTY_VERSION, pty/src/cli.rs), for the staging publish. A release is not a test suite
 # (docs/validation-and-release.md); the staging E2E is the gate before production.
@@ -33,46 +35,60 @@ on:
         type: boolean
         required: false
         default: false
+      # Call only: a by-hand run and the release build both architectures.
+      x64_only:
+        description: 'Run the x64 leg alone'
+        type: boolean
+        required: false
+        default: false
 
-concurrency:
-  # When called, github.workflow is the caller's name, so a release run never cancels an on-demand one, nor the reverse.
-  group: windows-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+# No concurrency of its own: called from ci.yml, one group would let a pull request's ready_for_review run cancel its
+# synchronize run. The callers hold the lock (ci.yml per event action, release.yml's cli-release).
 
 permissions:
   contents: read
 
 jobs:
+  # The architectures both matrices run, written once: a matrix cannot drop an include row by exclude.
+  legs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      include: ${{ steps.legs.outputs.include }}
+    steps:
+      - id: legs
+        env:
+          X64_ONLY: ${{ inputs.x64_only }}
+        # timeout is the windows-pty limit per architecture, in minutes. One limit of 40 cancelled the arm64 job in its
+        # last test step (run 43565271777); with every step run it then took 44.8 minutes, and x64 16.8 (run
+        # 43576955663). The cause, measured (runs 43581413308 and 43582091190): the first command a Windows PowerShell
+        # 5.1 process has module autoload find costs 22 to 29 s on windows-11-arm and 0.25 to 0.8 s on windows-latest,
+        # once per process, whatever PSModulePath is; a start that runs no such command takes 0.24 to 0.38 s.
+        # installPs1.spec.ts paid it at each of its PowerShell starts, about 1390 s of that job. Its library calls now
+        # share one PowerShell (cli/src/testing/windowsPowerShell.ts). arm64 keeps 60 until several runs show the new time.
+        run: |
+          x64='{"runner":"windows-latest","target":"x86_64-pc-windows-msvc","arch":"x64","artifact":"harness-pty-windows-x64","timeout":40}'
+          arm64='{"runner":"windows-11-arm","target":"aarch64-pc-windows-msvc","arch":"arm64","artifact":"harness-pty-windows-arm64","timeout":60}'
+          if [ "$X64_ONLY" = true ]; then include="[$x64]"; else include="[$x64,$arm64]"; fi
+          echo "include=$include" >> "$GITHUB_OUTPUT"
+
   windows-pty:
+    needs: legs
     # The matrix without its limit: the jobs keep the names GitHub gave them before it had one.
     name: windows-pty (${{ matrix.runner }}, ${{ matrix.target }}, ${{ matrix.arch }}, ${{ matrix.artifact }})
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: windows-latest
-            target: x86_64-pc-windows-msvc
-            arch: x64
-            artifact: harness-pty-windows-x64
-            timeout: 40
-          - runner: windows-11-arm
-            target: aarch64-pc-windows-msvc
-            arch: arm64
-            artifact: harness-pty-windows-arm64
-            timeout: 60
+        include: ${{ fromJSON(needs.legs.outputs.include) }}
     # Each runner builds and tests its own native target. Cross-building the other
     # target is dropped: it needs extra MSVC components and adds little signal.
     runs-on: ${{ matrix.runner }}
-    # A limit per architecture, in minutes. One limit of 40 cancelled the arm64 job in its last test step (run
-    # 43565271777); with every step run it then took 44.8 minutes, and x64 16.8 (run 43576955663). The cause,
-    # measured (runs 43581413308 and 43582091190): the first command a Windows PowerShell 5.1 process has module
-    # autoload find costs 22 to 29 s on windows-11-arm and 0.25 to 0.8 s on windows-latest, once per process,
-    # whatever PSModulePath is; a start that runs no such command takes 0.24 to 0.38 s. installPs1.spec.ts paid it
-    # at each of its PowerShell starts, about 1390 s of that job. Its library calls now share one PowerShell
-    # (cli/src/testing/windowsPowerShell.ts). arm64 keeps 60 until several runs show the new time.
     timeout-minutes: ${{ matrix.timeout }}
     steps:
+      # The head ci.yml tested: a pull request's own head, not GitHub's merge commit; else the run's commit.
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -186,6 +202,8 @@ jobs:
         if: ${{ !inputs.release }}
         working-directory: cli
         run: npm ci
+      # Vitest takes each name as a case-insensitive part of a spec's path: a folder ends in '/', or it takes look-alikes
+      # too ('src/lib/windows' ran src/lib/windowSurfaces.spec.ts).
       - name: Contract suite against the real host, and the Windows CLI specs
         if: ${{ !inputs.release }}
         working-directory: cli
@@ -196,7 +214,7 @@ jobs:
           # serialWindows.spec.ts runs the real harness-serial.exe, placed beside the host by the payload step.
           HARNESS_SERIAL_BIN: ${{ github.workspace }}\pty\target\${{ matrix.target }}\release\harness-serial.exe
         run: |
-          $paths = @('src/lib/ptyHostBackend.contract.spec.ts', 'src/lib/ptyHost', 'src/lib/windows', 'src/scripts/windowsCiChecks.spec.ts', 'src/team/windowsTeamRemove.real.spec.ts', 'src/lib/uninstall', 'src/engines/kit/hookRemoval.spec.ts', 'src/engines/kit/windowsHooks.spec.ts', 'src/engines/kit/windowsFiles.spec.ts', 'src/engines/kit/nativePaths.windows.spec.ts', 'src/engines/kit/launchExecutable.windows.spec.ts', 'src/dsh/runtime.windows.spec.ts', 'src/engines/removeHooks.spec.ts', 'src/engines/windowsHomes.spec.ts', 'src/cable/windowsSerial.spec.ts', 'src/cable/serialWindows.spec.ts', 'src/superTabs/start.spec.ts', 'src/engines/kit/folderTrust.spec.ts', 'src/lib/tied.spec.ts', 'src/lib/connectors/call.spec.ts', 'src/lib/secureState.spec.ts', 'src/lib/registryLock.publish.spec.ts', 'src/lib/pidFileSettle.spec.ts', 'src/devices/listenerPipe.windows.real.spec.ts', 'src/devices/claudePlugin.windows.real.spec.ts', 'src/deviceClaude/inbox.windows.real.spec.ts', 'src/hookCaller.windows.real.spec.ts', 'src/harnessDevicePlugin.spec.ts', '../plugins/harness-device-vscode/src', 'src/lib/engineBin.pathEntries.spec.ts')
+          $paths = @('src/lib/ptyHostBackend.contract.spec.ts', 'src/lib/ptyHostBackend.spec.ts', 'src/lib/ptyHostBackend.restart.spec.ts', 'src/lib/ptyHost/', 'src/lib/windows/', 'src/scripts/windowsCiChecks.spec.ts', 'src/lib/uninstall/', 'src/engines/kit/hookRemoval.spec.ts', 'src/engines/kit/windowsHooks.spec.ts', 'src/engines/kit/windowsFiles.spec.ts', 'src/engines/kit/nativePaths.windows.spec.ts', 'src/engines/kit/launchExecutable.windows.spec.ts', 'src/dsh/runtime.windows.spec.ts', 'src/engines/removeHooks.spec.ts', 'src/engines/windowsHomes.spec.ts', 'src/cable/windowsSerial.spec.ts', 'src/cable/serialWindows.spec.ts', 'src/engines/kit/folderTrust.spec.ts', 'src/lib/tied.spec.ts', 'src/lib/connectors/call.spec.ts', 'src/lib/secureState.spec.ts', 'src/lib/registryLock.publish.spec.ts', 'src/lib/pidFileSettle.spec.ts', 'src/devices/listenerPipe.windows.real.spec.ts', 'src/devices/claudePlugin.windows.real.spec.ts', 'src/deviceClaude/inbox.windows.real.spec.ts', 'src/hookCaller.windows.real.spec.ts', 'src/harnessDevicePlugin.spec.ts', '../plugins/harness-device-vscode/src/', 'src/lib/engineBin.pathEntries.spec.ts')
           npx vitest run @paths --maxWorkers=1
       # The dial end to end (e2e/dialWindows.e2e.ts): a daemon from the run's bundle in a temp root, and a stand-in dial
       # (e2e/harness/windowsDaemon.ts). It reaches nothing outside the runner: the daemon is signed out, its URLs local.
@@ -236,6 +254,7 @@ jobs:
           name: ${{ matrix.artifact }}
           path: payload/
           if-no-files-found: error
+          retention-days: 7
       # Keep the tested serial/PTY payload available for independent hardware checks if the flasher gate fails.
       # The Windows flasher (sub-project E), as Windows PowerShell 5.1 runs it, with no board: its version, a refused
       # port name, and a download and check of the newest published firmware into a cache folder whose name a shell
@@ -260,8 +279,22 @@ jobs:
           # Built from [char] codes: this step's own source must not depend on how the runner encodes it.
           $odd = "Nguy$([char]0x1EC5)n V$([char]0x0103)n A' & 100%"
           $env:HARNESS_FLASHER_CACHE = Join-Path (Join-Path $env:RUNNER_TEMP $odd) 'flasher'
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ps1 --no-flash
-          if ($LASTEXITCODE -ne 0) { throw "--no-flash exited $LASTEXITCODE" }
+          # The newest firmware comes from the public release: a failed read of it, or an image that is not the one the
+          # manifest names (a CDN mid-publish), is retried, and after 3 tries named as the download's failure. Any other
+          # failure is the flasher's, and fails at once.
+          $stderr = Join-Path $env:RUNNER_TEMP 'flasher.stderr'
+          for ($try = 1; ; $try++) {
+            $run = Start-Process powershell.exe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ps1, '--no-flash' -Wait -PassThru -NoNewWindow -RedirectStandardError $stderr
+            $said = Get-Content -Raw -LiteralPath $stderr
+            if ($said) { Write-Host $said }
+            if ($run.ExitCode -eq 0) { break }
+            if ($said -notmatch 'cannot read the release manifest|download failed|firmware sha256 mismatch|firmware size mismatch') { throw "--no-flash exited $($run.ExitCode)" }
+            $last = @(($said -split "`r?`n") | Where-Object { $_ })[-1]
+            if ($try -eq 3) { throw "The firmware download from the public release failed 3 times: the CDN or the release download failed, not this pull request's code ($last)" }
+            $wait = @(15, 45)[$try - 1]
+            Write-Host "the firmware download failed (try $try of 3), trying again in $wait s: $last"
+            Start-Sleep -Seconds $wait
+          }
           $images = @(Get-ChildItem -LiteralPath (Join-Path $env:HARNESS_FLASHER_CACHE 'firmware\commander') -Filter '*.bin')
           if ($images.Count -ne 1 -or $images[0].Length -lt 100000) { throw "expected one firmware image, found $($images.Count)" }
           Write-Host "ok   $($images[0].Name), $($images[0].Length) bytes, checked against the manifest"
@@ -269,19 +302,15 @@ jobs:
   # install.ps1 as a person runs it, from a manifest of this build's own files: the runtime, the CLI and the pty payload
   # (spec section 6). Then what the install promises, and `harness uninstall --yes` leaving nothing.
   install:
-    needs: windows-pty
+    needs: [legs, windows-pty]
+    # The names the jobs had before the rows carried every field.
+    name: install (${{ matrix.runner }}, ${{ matrix.arch }}, ${{ matrix.artifact }})
     # Not when release.yml calls this workflow for the release payload (B1.13): a release is not a test suite.
     if: ${{ !inputs.release }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: windows-latest
-            arch: x64
-            artifact: harness-pty-windows-x64
-          - runner: windows-11-arm
-            arch: arm64
-            artifact: harness-pty-windows-arm64
+        include: ${{ fromJSON(needs.legs.outputs.include) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     env:
@@ -289,6 +318,8 @@ jobs:
       CLI_VERSION: 0.0.0-dev.ci${{ github.run_id }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@v7
         with:
           node-version: 24.22.2
@@ -427,3 +458,4 @@ jobs:
           name: install-logs-${{ matrix.arch }}
           path: ${{ runner.temp }}/logs
           include-hidden-files: true
+          retention-days: 7

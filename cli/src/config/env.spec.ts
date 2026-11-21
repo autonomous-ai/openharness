@@ -1,9 +1,10 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { harnessPath } from './harnessHome.js'
 
 // env.ts reads the environment once, as it loads: each case is a process of its own, in a throwaway
 // home, so the legacy-state adoption it runs on load never sees a real ~/.harness.
@@ -14,12 +15,17 @@ afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: 
 
 const READ = ['NODE_ENV', 'PORT', 'WEB_URL', 'HARNESS_STORE_REF', 'HARNESS_STORE_CATALOG_URL', 'HOOK_INSTALL_ENGINES', 'TERMINAL_BACKENDS', 'RECAP_WITHOUT_DEVICE', 'DISABLE_HOOK_INSTALL', 'TERMINAL_RECONCILE_INTERVAL_MS', 'ADAPTER_DATA_DIR', 'OPENCLAW_STATE_DIR']
 
-function load(variables: Record<string, string>) {
-  const home = mkdtempSync(join(tmpdir(), 'harness-env-'))
-  roots.push(home)
-  const childEnv: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: home, ADAPTER_DATA_DIR: join(home, 'data'), ...variables }
-  const script = `import { env } from ${JSON.stringify(module)}; console.log(JSON.stringify(Object.fromEntries(${JSON.stringify(READ)}.map((k) => [k, env[k] instanceof Set ? [...env[k]] : env[k] ?? null]))))`
-  const run = spawnSync(process.execPath, [tsx, '--eval', script], { cwd: home, env: childEnv, encoding: 'utf8', timeout: 20_000 })
+function folder(): string {
+  const root = mkdtempSync(join(tmpdir(), 'harness-env-'))
+  roots.push(root)
+  return root
+}
+
+/** env.ts loaded in a process of its own, started in [cwd], which prints the variables of [read]. */
+function load(variables: Record<string, string>, { home = folder(), cwd = home, read = READ }: { home?: string; cwd?: string; read?: readonly string[] } = {}) {
+  const childEnv: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: home, USERPROFILE: home, ADAPTER_DATA_DIR: join(home, 'data'), ...variables }
+  const script = `import { env } from ${JSON.stringify(module)}; console.log(JSON.stringify(Object.fromEntries(${JSON.stringify(read)}.map((k) => [k, env[k] instanceof Set ? [...env[k]] : env[k] ?? null]))))`
+  const run = spawnSync(process.execPath, [tsx, '--eval', script], { cwd, env: childEnv, encoding: 'utf8', timeout: 20_000 })
   return { status: run.status, stderr: run.stderr, env: run.status === 0 ? JSON.parse(run.stdout) as Record<string, unknown> : null, home }
 }
 
@@ -48,6 +54,21 @@ describe('the environment, as env.ts reads it', () => {
     expect(load({ OPENCLAW_HOME: '/h' }).env).toMatchObject({ OPENCLAW_STATE_DIR: '/h/.openclaw' })
     expect(load({ OPENCLAW_STATE_DIR: ' ~/x ', OPENCLAW_HOME: '/h' }).env).toMatchObject({ OPENCLAW_STATE_DIR: '/h/x' })
     expect(load({ OPENCLAW_STATE_DIR: '/s' }).env).toMatchObject({ OPENCLAW_STATE_DIR: '/s' })
+  })
+
+  // The master resolved a relative folder against the folder it was started from, the core against the home.
+  it('a relative Harness folder is the home\'s, whatever folder the process starts in', () => {
+    const home = folder(), elsewhere = folder()
+    // The legacy identity's place in the data folder, and a folder of the same name where the process starts.
+    for (const [root, id] of [[home, 'a'.repeat(32)], [elsewhere, 'b'.repeat(32)]]) {
+      mkdirSync(join(root, 'data'))
+      writeFileSync(join(root, 'data', 'computer-id'), `${id}\n`)
+    }
+    const loaded = load({ ADAPTER_DATA_DIR: 'data', HARNESS_PTY_DIR: 'pty' }, { home, cwd: elsewhere, read: ['ADAPTER_DATA_DIR', 'HARNESS_PTY_DIR'] })
+    expect(loaded.status, loaded.stderr).toBe(0)
+    expect(loaded.env).toEqual({ ADAPTER_DATA_DIR: join(home, 'data'), HARNESS_PTY_DIR: join(home, 'pty') })
+    expect(readFileSync(harnessPath('computer-id', home), 'utf8')).toBe(`${'a'.repeat(32)}\n`)
+    expect(existsSync(join(elsewhere, 'data', 'computer-id'))).toBe(true)
   })
 
   it('ignores a store setting it cannot use, which under zod stopped every `harness` command as it loaded', () => {
