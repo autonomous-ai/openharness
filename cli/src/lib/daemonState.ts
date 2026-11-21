@@ -14,7 +14,7 @@ import { hasAuthSession } from './authSession.js'
 import { readOrMintComputerId } from './computerIdentity.js'
 import { savedDaemonPort } from './daemonRecord.js'
 import { errorKind } from './log.js'
-import { atomicWriteFile, probeState, StateFileUnreadable } from './secureState.js'
+import { atomicWriteFile, probeState, StateFileUnreadable, unreadableSentence } from './secureState.js'
 
 export const PID_FILE = join(env.ADAPTER_DATA_DIR, 'adapter.pid')
 /** The daemon's console: the master's and its core's stdout and stderr. Capped (lib/log.ts). */
@@ -140,10 +140,10 @@ export const failForegroundStart = (err: unknown, code = 1): never =>
  *  file if it is this process's, and exit. A command's own way is lib/commandFailure.ts `onError`. */
 export function exitSaying(err: unknown, code: number, sayFault: () => void): never {
   // A trust file that cannot be read is the person's to move aside, not a fault in Harness: no stack, and the
-  // file's full path is in `harness status`, kept out of the error itself. Said from its fields, its own file's name
-  // and why, not its message: a daemon's start says it in the daemon's log too.
+  // file's full path is in `harness status`, kept out of the error itself. Said from its fields, its own file's name,
+  // why and what to do, not its message: a daemon's start says it in the daemon's log too.
   if (err instanceof StateFileUnreadable) {
-    console.error(`✗ ${err.base} cannot be read (${err.failure})`)
+    console.error(`✗ ${unreadableSentence(err.base, err.failure, err.readFailed)}`)
     console.error('  harness status shows where it is')
   } else {
     sayFault()

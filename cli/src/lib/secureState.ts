@@ -453,12 +453,17 @@ const REMEMBERED_FILES = 64
  */
 export type StateRead<T> = { state: 'ok'; value: T } | { state: 'missing' } | { state: 'unreadable'; failure: string; readFailed?: true }
 
+/** What a person is told of a file a write would replace that cannot be read: its base name, why, and what to do. */
+export function unreadableSentence(base: string, failure: string, readFailed: boolean): string {
+  return readFailed ? `${base} could not be read (${failure}), so it was not changed.`
+    : `${base} cannot be read (${failure}). Move it aside to start over.`
+}
+
 /** A file a write would replace that cannot be read. The message holds the file's base name only. */
 export class StateFileUnreadable extends Error {
   override readonly name = 'StateFileUnreadable'
-  constructor(readonly base: string, readonly failure: string, readFailed = false) {
-    super(readFailed ? `${base} could not be read (${failure}), so it was not changed.`
-      : `${base} cannot be read (${failure}). Move it aside to start over.`)
+  constructor(readonly base: string, readonly failure: string, readonly readFailed = false) {
+    super(unreadableSentence(base, failure, readFailed))
   }
 }
 
