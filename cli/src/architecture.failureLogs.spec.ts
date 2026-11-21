@@ -415,10 +415,13 @@ function failureLogs(code: string, file = 'file.ts'): string[] {
   return found
 }
 
-/** The hits in every file of the daemon: every .ts under cli/src but tests, scripts of tests, the TUI and the terminal list. */
+/**
+ * The hits in every file of the daemon: every .ts under cli/src but tests, end-to-end scripts, the TUI and the terminal
+ * list. `testing/` is read: its shapes mirror the daemon's own wiring.
+ */
 const daemonHits = (): string[] => readdirSync(SRC, { recursive: true, encoding: 'utf8' })
   .map((file) => file.split(sep).join('/'))
-  .filter((file) => file.endsWith('.ts') && !/\.(spec|test|d)\.ts$/.test(file) && !/^(e2e|tui|testing)\//.test(file)
+  .filter((file) => file.endsWith('.ts') && !/\.(spec|test|d)\.ts$/.test(file) && !/^(e2e|tui)\//.test(file)
     && !/(^|\/)__fixtures__\//.test(file) && !TERMINAL.includes(file))
   .flatMap((file) => failureLogs(readFileSync(join(SRC, file), 'utf8'), file))
 
@@ -458,6 +461,21 @@ it.each([
   "const stay = (why: string) => deps.log(`[x] ${why} — keeping`); const keep = (why: string) => { removeMarker(); stay(why) }; run().catch((error) => keep(`failed (${describe(error)})`))",
   "let busy = 'the lock is busy'; await lock().catch((error) => { busy = `could not take the lock (${message(error)})` }); deps.log(`[x] ${busy}`)",
   "process.on('uncaughtException', (error) => { writeSync(fd, `[x] stopped: ${error instanceof Error ? error.stack ?? error.message : format(error)}\\n`) })",
+  "try { run() } catch (error) { console.warn(`[x] not unpacked (${error.reason})`) }",
+  "try { run() } catch (error) { console.error('[x] git refused:', (error as { stderr?: string }).stderr) }",
+  "console.warn(`[agent] create refused · ${engine} · ${refusal.detail}`)",
+  "const detail = 'Too many unverified hooks are pending'; console.log(`[hooks] held · ${detail}`)",
+  "console.log(`[backend] connected → ${this.url}`)",
+  "console.warn(`[x] exec exited (${code}): ${stream.stderr.trim()}`)",
+  "console.log(`[turn] aborted by codex error · ${preview(message)}`)",
+  "const tally = (tier: string, detail: string) => log(`notify · ${tier} · ${detail}`)",
+  "console.log(`[harnessd] services run from ${config.serviceScriptPath}`)",
+  "console.warn(`[state] ${basename(file)} could not be set aside`)",
+  "function run() { const r = probe(); log(`[x] ${r.reason}`) } function probe() { try { return { ok: true } } catch (err) { return { ok: false, reason: (err as Error).message } } }",
+  "async function run() { const r = await probe(); log(`[x] ${r.why}`) } async function probe() { return { ok: false, why: stderr } }",
+  "let outcome; try { outcome = await move() } catch (error) { outcome = { moved: false, reason: error instanceof Error ? error.message : String(error) } } log(`[x] ${outcome.reason}`)",
+  "this.host.log(`cable: ${port.path} is in use by another program`)",
+  "console.warn(`[x] ${error instanceof HookPreparationHeld ? error.reason : errorKind(error)}`)",
 ])('finds %s', (code) => expect(failureLogs(code)).not.toEqual([]))
 
 it.each([
@@ -491,16 +509,42 @@ it.each([
   // A function's own words are checked only where it logs them: here the error's go to the reply, its kind to the log.
   "const refused = (id: string, error: unknown, detail: string) => { log(`[x] ${id} refused · ${errorKind(error)}`); reply({ detail }) }; try { run() } catch (error) { refused('a', error, (error as Error).message) }",
   "const sizeOf = (line: string) => log(`[x] a line of ${line.length} chars`); try { run() } catch (error) { sizeOf((error as Error).message) }",
-  // Not yet: the follow-up task moves these two to `finds` when it adds the stored fields (answer 6).
-  "try { run() } catch (error) { console.warn(`[x] not unpacked (${error.reason})`) }",
-  "try { run() } catch (error) { console.error('[x] git refused:', (error as { stderr?: string }).stderr) }",
+  "console.warn(`[agent] create refused · ${engine} · ${codeOrLength(refusal.error)}`)",
+  "console.log(`[backend] connected · ${hashOf(this.url)}`)",
+  "console.warn(`[x] exec exited (${code}): ${stream.stderr.length} B`)",
+  "console.log(`[x] ${Buffer.byteLength(stderr)} B`)",
+  "this.host.log(`cable: ${serialPortName(port.path)} is in use by another program`)",
+  "const say = (message: string) => console.log(message)",
+  "const deps = { log: (line: string) => console.log(line) }",
+  "import path from 'node:path'; console.log(`[x] ${path.sep}`)",
+  "function run() { const r = probe(); log(`[x] ${r.reason}`) } function probe() { return { ok: false, reason: 'busy' } }",
+  "function openOf(p: unknown) { return { session: { engine: 'codex', transcriptPath: p } } } const ask = openOf(payload); console.warn(`[engine ${ask.session.engine}] LIVE_OPEN_FAILED`)",
+  "console.warn(`[x] ${Boolean(err.reason) ? 'not a lock this CLI made' : 'held'}`)",
+  "console.warn(`[x] ${error instanceof HookPreparationHeld ? error.hold : errorKind(error)}`)",
 ])('passes %s', (code) => expect(failureLogs(code)).toEqual([]))
 
-it('no daemon log line carries an error\'s words or hides its kind', () => {
-  expect(daemonHits(), 'A daemon log line names a failure by its kind, '
+it('a pending line excuses its file\'s hits and no more', () => {
+  const planted = failureLogs('try { run() } catch (error) { console.error(error) } try { run() } catch (error) { console.warn(error.message) }', 'planted.ts')
+  const excused = (hits: number): string[] => unexcused(planted, [{ list: 'planted.txt', file: 'planted.ts', hits }])
+  expect(planted).toHaveLength(2)
+  expect(excused(2)).toEqual([])
+  expect(excused(1)).toEqual(planted)
+  expect(excused(3)).toEqual(planted)
+})
+
+it('no daemon log line carries an error\'s words, a stored string, process output, a path or a URL, or hides its kind', () => {
+  expect(unexcused(daemonHits(), pendingExcuses()), 'A daemon log line names a failure by its kind, '
     + '`errorKind(error)` from lib/log.ts, and never prints an error\'s message, stack or the error itself: those can quote '
     + 'the person\'s files and prompts, and Export logs sends the log off the machine. A catch that logs binds what it '
-    + 'caught and names its kind, so someone can act on the line.').toEqual([])
+    + 'caught and names its kind, so someone can act on the line. A stored or peer string is logged as '
+    + '`codeOrLength(value)`, a path, URL or label as a fixed word or `hashOf(text)`, process output as its length.').toEqual([])
+})
+
+it('every pending line names a file with exactly that many hits', () => {
+  expect(pendingExcuses().flatMap(({ list, file, hits }) => {
+    const found = existsSync(join(SRC, file)) ? failureLogs(readFileSync(join(SRC, file), 'utf8'), file).length : 0
+    return found === hits ? [] : [`${list}: ${file} ${hits}, found ${found}`]
+  })).toEqual([])
 })
 
 it('every terminal file exists', () => {
