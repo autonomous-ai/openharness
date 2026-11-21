@@ -46,18 +46,26 @@ export function installClock(): void {
 }
 
 const turn = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
-const busy = (inFlight: () => number): boolean =>
-  inFlight() > 0 || fsCalls > 0 || process.getActiveResourcesInfo().some((resource) => PENDING_IO.has(resource))
+/** What the world is waiting on: the counts in flight, then each kind of real read under way; none when it is quiet. */
+function pending(inFlight: () => number): string[] {
+  const reads = inFlight()
+  const requests = [...new Set(process.getActiveResourcesInfo().filter((resource) => PENDING_IO.has(resource)))]
+  return reads === 0 && fsCalls === 0 && requests.length === 0 ? []
+    : [`${reads} store reads`, `${fsCalls} node:fs/promises calls`, ...requests]
+}
 
-/** Resolves once no store read and no call into node:fs/promises is in flight and no real read is under way, on two
- *  real turns in a row. */
-export async function quiet(inFlight: () => number): Promise<void> {
+/**
+ * Resolves once no store read and no call into node:fs/promises is in flight and no real read is under way, on two
+ * real turns in a row. `withinMs` is for this file's tests: past it of real time the world is stuck, and says on what.
+ */
+export async function quiet(inFlight: () => number, withinMs = QUIET_WITHIN_MS): Promise<void> {
   const since = process.hrtime.bigint()
   for (let calm = 0; calm < 2;) {
     await turn()
-    calm = busy(inFlight) ? 0 : calm + 1
-    if (calm === 0 && process.hrtime.bigint() - since > BigInt(QUIET_WITHIN_MS) * 1_000_000n) {
-      throw new Error(`the world was not quiet in ${QUIET_WITHIN_MS} ms: ${inFlight()} store reads in flight`)
+    const waiting = pending(inFlight)
+    calm = waiting.length > 0 ? 0 : calm + 1
+    if (calm === 0 && process.hrtime.bigint() - since > BigInt(withinMs) * 1_000_000n) {
+      throw new Error(`the world was not quiet in ${withinMs} ms: ${waiting.join(', ')} in flight`)
     }
   }
 }
