@@ -51,10 +51,12 @@ function devices(world: TierAWorld): DevicesPort {
 const engineOf = (s: SessionDef): 'claude' | 'codex' => (s.app === 'claude' ? 'claude' : 'codex')
 
 /**
- * The hints the hook sends from the session's app (hook/notify.mjs hostHints). The Claude app gives its Claude Code its
+ * The hints the hook sends from the session's app (hook/notify.mjs hostHints), as tier B's sessions send them
+ * (e2e/harness/appEvalClaude.ts, appEvalChatgpt.ts) and dialCodexApp.e2e.ts's. The Claude app gives its Claude Code its
  * own session id and entrypoint everywhere, and macOS its bundle id; on Windows the hook names the app itself
  * (lookUpWindowsApp), the Claude app by that entrypoint and the ChatGPT app by its program in the hook's parents. The
- * ChatGPT app's Codex names no app on macOS or Linux, and a Codex CLI in a terminal none anywhere.
+ * ChatGPT app's Codex inherits the app's bundle id on macOS and names no app on Linux. A Codex CLI names its terminal,
+ * Ghostty.
  */
 function hintsOf(s: SessionDef, platform: Platform): Record<string, string> {
   if (s.app === 'claude') {
@@ -63,7 +65,8 @@ function hintsOf(s: SessionDef, platform: Platform): Record<string, string> {
       CLAUDE_CODE_HOST_SESSION_ID: s.localId!, CLAUDE_CODE_ENTRYPOINT: 'claude-desktop',
     }
   }
-  return platform === 'win32' && !s.cli ? { __CFBundleIdentifier: APP_BUNDLES.codex } : {}
+  if (s.cli) return { TERM_PROGRAM: 'ghostty' }
+  return platform === 'linux' ? {} : { __CFBundleIdentifier: APP_BUNDLES.codex }
 }
 
 /** The app a process table walk names for the session (scannedApp.ts learnApps): macOS and Linux walk an app's
