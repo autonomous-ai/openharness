@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { RECORDED_HERDR } from '../../testing/recordedHerdr.js'
+import { RECORDED_ORCA } from '../../testing/recordedOrca.js'
 import { ObservedSource, type ObservedDeps } from './observed.js'
 import {
   appRoots, learnApps, parseProcessNames, ptyMaker, ptyOwner, readBundleId, readProcessNames, readPtyMaker, readPtyOwner,
@@ -309,6 +310,25 @@ describe('the host that owns a process\'s terminal', () => {
     // Any other terminal or editor owns no pane the dial types into.
     for (const other of ['code', 'cursor', 'ghostty', '/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal', 'orca', 'login']) {
       expect(owned(other), other).toBeUndefined()
+    }
+  })
+
+  // Every Orca mode recorded, the record walked so that a mode added to it is tested too.
+  it('ptyOwner over each recorded Orca chain is orca', () => {
+    // macOS's chain has no pids: each step's parent is the next, the terminal host's launchd.
+    const macos = RECORDED_ORCA.macos.chain.map(({ comm, tty }, i, all): PtyProcess =>
+      ({ pid: 10 + i, ppid: i + 1 < all.length ? 11 + i : 1, executable: comm, ...(tty === null ? {} : { tty }) }))
+    expect(ptyOwner(10, macos)).toBe('orca')
+    for (const [mode, { chain }] of Object.entries(RECORDED_ORCA.linux)) {
+      const rows = chain.map(({ pid, ppid, tty, comm }): PtyProcess => ({ pid, ppid, executable: comm, ...(tty === null ? {} : { tty }) }))
+      expect(ptyOwner(chain[0].pid, rows), mode).toBe('orca')
+    }
+  })
+
+  it('a renamed terminal host (a made-up name) is no host', () => {
+    // Orca's Linux daemon whose rename failed keeps its binary's name (RECORDED_ORCA.notCovered): never a host.
+    for (const name of ['node', 'orca-agents-x', 'Orca Agent', '/opt/Orca/orca-helper']) {
+      expect(ptyOwner(10, table([[10, 9, 'claude', 'pts/3'], [9, 8, 'bash', 'pts/3'], [8, 1, name]])), name).toBeUndefined()
     }
   })
 
