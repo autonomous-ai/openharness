@@ -52,7 +52,8 @@ class GitProgram {
 
   /// Where Git for Windows puts its git.exe (cli lib/windows/gitBash.ts's
   /// roots): its installer's, for everyone or for this user alone, then
-  /// Scoop's shims, for this user then for everyone.
+  /// Scoop's shims for this user. Never Scoop's root for everyone
+  /// (SCOOP_GLOBAL, %ProgramData%\scoop): any member of Users can make it.
   List<String> _gitForWindows() {
     final env = _environment;
     final installs = [
@@ -65,8 +66,6 @@ class GitProgram {
     final scoops = [
       env['SCOOP'],
       if (env['USERPROFILE'] case final home?) p.windows.join(home, 'scoop'),
-      env['SCOOP_GLOBAL'],
-      if (env['ProgramData'] case final data?) p.windows.join(data, 'scoop'),
     ];
     return [
       for (final root in installs.nonNulls) p.windows.join(root, 'Git', 'cmd'),
