@@ -463,6 +463,18 @@ it('a delivery with no known target is a wrong send', () => {
   ])
 })
 
+it('a delivery belongs to the latest voice step whose words it carries, else to the latest voice step', () => {
+  const s = scenario([{ kind: 'voice', transcript: 'Eval to a', target: 'a' }, { kind: 'voice', transcript: 'Eval to b', target: 'b' }])
+  const deliveries: Seen['deliveries'] = [
+    // a's words, landing after b's step: a's, and right.
+    { at: 600, path: 'mod', target: 'a', text: 'Eval to a' },
+    { at: 700, path: 'mod', target: 'b', text: 'Eval to b' },
+    // Words no step spoke: the latest step's, so they reached the wrong session.
+    { at: 800, path: 'mod', target: 'a', text: 'Eval else' },
+  ]
+  expect(wrongSends(s, seen(s, [100, 500], { deliveries }))).toEqual([{ scenario: 'S1', target: 'b', got: 'a', path: 'mod', at: 800 }])
+})
+
 it('a ring check with D7 is one pass/fail result', () => {
   const s = scenario([write])
   const check: Check = { id: 'r', kind: 'ring', dim: 'D7', page: 'claude', expect: ['a', 'b', 'c'], after: 'w', timed: true }
