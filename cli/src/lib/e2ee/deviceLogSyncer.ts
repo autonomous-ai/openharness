@@ -498,10 +498,9 @@ export class DeviceLogSyncer {
       fingerprint: fp(holder.pub), afterJoin: holder.seq > (file.joinedSeq ?? 0),
     }
     this.deps.store.write({ ...file, conflict })
-    const who = `${conflict.label || '(no name)'} (${conflict.fingerprint})`
     this.deps.log?.(conflict.afterJoin
-      ? `[devlog] ⚠ another key took this computer's place on your account after it joined: ${who} — if you did not set up Harness here again, remove that key from another device now`
-      : `[devlog] this computer is held by another key on your account: ${who} — if that was an earlier install of this computer, remove it from another device; this computer joins on its own once it is gone`)
+      ? `[devlog] ⚠ another key took this computer's place on your account after it joined: ${conflict.fingerprint} — if you did not set up Harness here again, remove that key from another device now`
+      : `[devlog] this computer is held by another key on your account: ${conflict.fingerprint} — if that was an earlier install of this computer, remove it from another device; this computer joins on its own once it is gone`)
     this.deps.conflict?.(conflict)
     this.deps.changed?.()
   }
@@ -714,7 +713,7 @@ export class DeviceLogSyncer {
       })
       for (const pub of pubs) {
         const c = confirmed[pub]
-        this.deps.log?.(`[devlog] ${state.active[pub].label || '(no name)'} (${fp(pub)}) was confirmed as yours on ${c.label || 'another device'} (${fp(c.by)}): no longer new here`)
+        this.deps.log?.(`[devlog] ${fp(pub)} was confirmed as yours on ${fp(c.by)}: no longer new here`)
       }
       this.deps.changed?.()
     } catch (err) {
@@ -1250,7 +1249,7 @@ export class DeviceLogSyncer {
       if (!member) return false
       const ack = signDevAck({ v: DEVACK_VERSION, acct: state.acct, pub, addSeq: member.seq, signer: selfPub, at: this.now() }, priv)
       const kept = await post(ack)
-      if (!kept) this.deps.log?.(`[devlog] could not tell your other devices that ${member.label || '(no name)'} (${fp(pub)}) is yours: they still show it as new`)
+      if (!kept) this.deps.log?.(`[devlog] could not tell your other devices that ${fp(pub)} is yours: they still show it as new`)
       return kept
     } catch (err) {
       this.deps.log?.(`[devlog] could not share "It's mine": ${errorKind(err)}`)
