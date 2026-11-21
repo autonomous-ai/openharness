@@ -36,6 +36,7 @@ export function heldOut(): Scenario[] {
         { kind: 'hook', session: 'a', event: 'start' },
         { kind: 'hook', session: 'b', event: 'start' },
         { kind: 'hook', session: 'b', event: 'turn-start' },
+        listed('claude', ['a', 'b']),
         { kind: 'swipe', session: 'a' },
         { label: 'voice', kind: 'voice', transcript: 'Eval words for alpha.', target: 'a' },
       ],
@@ -70,6 +71,7 @@ export function heldOut(): Scenario[] {
       dims: ['D5'], sessions: [...threads(['t1', 't2']), chatgptGhost],
       steps: [
         { kind: 'codex.write', sessions: ['t1', 't2'] },
+        listed('chatgpt', ['t1', 't2']),
         { kind: 'front', app: 'chatgpt' },
         { kind: 'swipe', session: 't1' },
         { label: 'follow', kind: 'thread', title: titleOf('t2') },

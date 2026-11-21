@@ -115,6 +115,7 @@ export const MAIN: Scenario[] = [
       { kind: 'claude.write', sessions: ['a', 'b'] },
       { kind: 'hook', session: 'a', event: 'start' },
       { kind: 'hook', session: 'b', event: 'start' },
+      listed('claude', ['a', 'b']),
       { kind: 'front', app: 'claude' },
       { kind: 'swipe', session: 'a' },
       { label: 'attach', kind: 'attach', session: 'b' },
@@ -157,6 +158,7 @@ export const MAIN: Scenario[] = [
     dims: ['D3', 'D5'], sessions: [claudeSession('a', MIN, { resumable: true }), claudeGhost],
     steps: [
       { kind: 'claude.write', sessions: ['a'] },
+      listed('claude', ['a']),
       { kind: 'front', app: 'claude' },
       { kind: 'swipe', session: 'a' },
       { label: 'voice', kind: 'voice', transcript: 'Eval words for alpha.', target: 'a' },
@@ -173,6 +175,7 @@ export const MAIN: Scenario[] = [
     steps: [
       { kind: 'front', app: 'claude' },
       { kind: 'claude.write', sessions: ['a'] },
+      listed('claude', ['a']),
       { label: 'swipe', kind: 'swipe', session: 'a' },
       { label: 'hook', kind: 'hook', session: 'a', event: 'start' },
     ],
@@ -237,6 +240,7 @@ export const MAIN: Scenario[] = [
     dims: ['D2'], sessions: [...threads(['t1', 't2']), chatgptGhost],
     steps: [
       { kind: 'codex.write', sessions: ['t1', 't2'] },
+      listed('chatgpt', ['t1', 't2']),
       { kind: 'front', app: 'chatgpt' },
       { kind: 'swipe', session: 't1' },
       { label: 'title', kind: 'thread', title: titleOf('t2') },
@@ -266,6 +270,7 @@ export const MAIN: Scenario[] = [
     dims: ['D3'], sessions: [...threads(['t1']), chatgptGhost],
     steps: [
       { kind: 'codex.write', sessions: ['t1'] },
+      listed('chatgpt', ['t1']),
       { label: 'tap', kind: 'tap', session: 't1' },
     ],
     checks: [{ id: 'open', kind: 'open', dim: 'D3', session: 't1', link: true, after: 'tap' }],
@@ -276,6 +281,7 @@ export const MAIN: Scenario[] = [
     dims: ['D3'], sessions: [...threads(['t1']), chatgptGhost], world: { linkFails: ['chatgpt'] },
     steps: [
       { kind: 'codex.write', sessions: ['t1'] },
+      listed('chatgpt', ['t1']),
       { label: 'tap', kind: 'tap', session: 't1' },
     ],
     checks: [{ id: 'open', kind: 'open', dim: 'D3', session: 't1', link: false, after: 'tap' }],
@@ -325,6 +331,7 @@ export const MAIN: Scenario[] = [
     steps: [
       { kind: 'codex.write', sessions: ['t1'] },
       { kind: 'hook', session: 't1', event: 'start' },
+      listed('chatgpt', ['t1']),
       { kind: 'swipe', session: 't1' },
       { label: 'voice', kind: 'voice', transcript: 'Eval words for one.', target: 't1' },
     ],
@@ -349,6 +356,7 @@ export const MAIN: Scenario[] = [
     dims: ['D2', 'D7'], sessions: [...threads(['t1', 't2', 't3']), chatgptGhost],
     steps: [
       { kind: 'codex.write', sessions: ['t1', 't2', 't3'] },
+      listed('chatgpt', ['t1', 't2', 't3']),
       { kind: 'front', app: 'chatgpt' },
       { kind: 'swipe', session: 't1' },
       { kind: 'thread', title: titleOf('t2') },
