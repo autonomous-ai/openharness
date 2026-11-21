@@ -1069,6 +1069,30 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(s.counts).toEqual(['too-long', 'no-answer', 'no-answer'])
   })
 
+  // A terminal or an editor started in a herdr pane keeps HERDR_PANE_ID: the hooked agent there only holds that pane, and
+  // whatever folds with it takes no words into the pane by herdr's row either (herdr.ts, observed.ts holds).
+  it('a row whose pane the observed agents hold takes no words: not_that_agent, and no prompt runs', async () => {
+    const session = { source: 'herdr:claude', agent: 'claude', kind: 'id', value: 's-1' }
+    server.agents = [agent('w1:p1', 'idle', { agent_session: session })]
+    const held = vi.fn((_paneKey: string, _asker: { engine: string; sessionId?: string }) => true)
+    const s = setup({ held })
+    await live(s)
+    expect(await s.source.send(row(s, 'w1:p1')!, 'run the tests')).toEqual({ ok: false, reason: 'api did not answer.' })
+    expect(held.mock.calls).toEqual([['herdr:w1:p1', { engine: 'claude', sessionId: 's-1' }]])
+    expect(s.prompt).not.toHaveBeenCalled()
+    expect(s.counts).toEqual(['no-answer'])
+  })
+
+  it('a row whose pane is not held is prompted as today', async () => {
+    server.agents = [agent('w1:p1')]
+    const held = vi.fn((_paneKey: string, _asker: { engine: string; sessionId?: string }) => false)
+    const s = setup({ held })
+    await live(s)
+    expect(await s.source.send(row(s, 'w1:p1')!, 'run the tests')).toEqual({ ok: true })
+    expect(held.mock.calls).toEqual([['herdr:w1:p1', { engine: 'claude' }]])
+    expect(s.prompt.mock.calls).toEqual([['w1:p1', 'claude', 'run the tests']])
+  })
+
   it('a tap focuses the agent\'s pane through deps.focus; one no longer listed is false', async () => {
     server.agents = [agent('w1:p1')]
     const s = setup()

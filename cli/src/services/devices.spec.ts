@@ -6424,6 +6424,21 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
     expect(core.turns.send).not.toHaveBeenCalled()
   })
 
+  // PM answer 2 (docs/plans/2026-11-21-dial-linux-followups-design.md, Decided): until the read of its caller's maker
+  // lands, the hooked agent only holds its herdr pane, and herdr's row of that pane still folds into it.
+  it('herdr\'s row of a pane a hooked agent holds until its maker is read folds into it, one row, and a voice to either id types nothing into that pane', async () => {
+    // The process table never answers: the read of its caller's maker does not land.
+    readers.processes.mockReturnValue(new Promise(() => {}))
+    const { herdr, port, live } = withHerdr()
+    await live()
+    const [{ id: row }] = await listed()
+    port.observed(hook('session-start'))
+    expect((await listed()).map(({ id }) => id)).toEqual([ID])
+    expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false })
+    expect(await host().sendTurn(row, 'run the tests')).toMatchObject({ ok: false })
+    expect(herdr.asked.filter(([what]) => what === 'prompt')).toEqual([])
+  })
+
   it('the dial\'s words reach an idle herdr agent, and each refusal is said once', async () => {
     const { herdr, live, status } = withHerdr()
     await live()
@@ -11266,6 +11281,33 @@ describe('Orca\'s ring is the worktree on screen (docs/plans/2026-11-18-dial-orc
     expect(await ring()).toEqual([agent(2), agent(3), agent(4)])
     listener.orcaFront([H(3)])
     expect(await ring()).toEqual([agent(3)])
+  })
+
+  // Review Focus 2: an xterm started from Orca terminal 1 keeps its handle, and agent 1 runs in the xterm. Orca's terminal
+  // host made agent 2's terminal; agent 3, which the attach scan found, really runs in terminal 1.
+  it('an agent whose Orca terminal is held takes no rank or scope from it, is placed by its folder, and leaves that terminal\'s handle to place another', async () => {
+    readers.processes.mockResolvedValue([
+      { pid: 4241, ppid: 4100, tty: 'pts/5', executable: 'claude' }, { pid: 4100, ppid: 4010, tty: 'pts/1', executable: 'xterm' },
+      { pid: 4010, ppid: 4000, tty: 'pts/1', executable: 'bash' },
+      { pid: 4242, ppid: 4020, tty: 'pts/2', executable: 'claude' }, { pid: 4020, ppid: 4000, tty: 'pts/2', executable: 'bash' },
+      { pid: 4000, ppid: 1, executable: '/opt/Orca/orca-agents' },
+    ])
+    const { port, fake, listener, settle } = withOrca(0)
+    port.observed(hook(1, { cwd: '/work/web' }))
+    port.observed(hook(2))
+    scanned(3)
+    seen.host.watching!(true)
+    await settled()
+    const terminals = [claudeIn(1), claudeIn(2), { handle: H(3), worktreePath: '/work/web', agentIdentity: 'claude' }]
+    await land(fake, [H(1), H(2), H(3)], terminals)
+    await land(fake, [H(1), H(2), H(3)], terminals)
+    listener.dial()
+    await settle('orca')
+    // Agent 1 at terminal 3 by its folder, agent 3 at terminal 1 by elimination: in tab order.
+    expect(await ring()).toEqual([agent(3), agent(2), agent(1)])
+    listener.orcaFront([H(1)])
+    expect(await ring()).toEqual([agent(3)])
+    expect(logs.filter((line) => line === '[device] orca · held')).toEqual(['[device] orca · held'])
   })
 
   it('a terminal with no agent, and no terminal at all, give an empty ring', async () => {

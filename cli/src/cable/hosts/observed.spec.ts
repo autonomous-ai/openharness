@@ -3237,6 +3237,91 @@ describe('ObservedSource and a pane that only holds the agent', () => {
   })
 })
 
+// VS Code from `code .`, a terminal or an editor started in an Orca terminal or a herdr pane keeps its handle or pane id:
+// the real Orca and herdr adapters type by it only once their host made the caller's terminal.
+describe('ObservedSource and an Orca terminal or a herdr pane that only holds the agent', () => {
+  const ORCA = { ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE }
+  const IN_EDITOR = { TERM_PROGRAM: 'vscode' }
+
+  /** A source with the real Orca and herdr adapters on an inert runner, their lines kept, and after them an editor that
+   *  types into the terminal it made; each read of a caller's maker answered by hand, in the order they began. */
+  function inOrcaOrHerdr() {
+    const reads: Array<{ answer(owner?: string): Promise<void>; fail(): Promise<void> }> = []
+    const ptyOwner = vi.fn((_pid: number) => new Promise<string | undefined>((resolve, reject) => {
+      reads.push({
+        answer: (owner) => { resolve(owner); return flushed() },
+        fail: () => { reject(new Error('ps timed out')); return flushed() },
+      })
+    }))
+    const run = vi.fn(async (_file: string, _args: string[], _timeoutMs: number) => ({ code: 0, stdout: '' }))
+    const deps: OrcaDeps = { run, onPath: (name) => `/fake/bin/${name}`, exists: () => false, platform: 'darwin' }
+    const lines: string[] = []
+    const log = (line: string) => { lines.push(line) }
+    const herdrPrompt = vi.fn(async (_pane: string, _kind: string, _text: string): Promise<HerdrPrompt> => ({ outcome: 'sent' }))
+    const typed = vi.fn(async (_pane: Pane, _text: string, _engine: string): Promise<TypeResult> => true)
+    const editor: HostAdapter = { id: 'editor', tap: 'before', canFocus: () => true, focus: async () => true, type: typed,
+      paneOf: (place) => (place.hints.TERM_PROGRAM === 'vscode' ? { adapter: 'editor', id: 'e1' } : undefined) }
+    const adapters = [
+      createHerdrAdapter({ ...deps, log, client: { prompt: herdrPrompt, socketStamp: () => '1:1', binary: () => undefined }, front: () => undefined }),
+      createOrcaAdapter(deps, { worktreeOf: () => undefined, log, switching: () => {} }),
+      editor,
+    ]
+    const { actions } = fakeActions()
+    const s = setup({ actions: { ...actions, adapters }, ptyOwner })
+    const agent = () => s.src.list()[0]
+    /** The `orca terminal send`s that ran. */
+    const sends = () => run.mock.calls.filter(([, args]) => args[1] === 'send')
+    return { ...s, actions, ptyOwner, reads, run, lines, herdrPrompt, typed, agent, sends }
+  }
+
+  it('an agent in an editor started from an Orca terminal gets its words in the editor, never through orca terminal send', async () => {
+    const s = inOrcaOrHerdr()
+    s.src.ingest(s.ev('turn-stop', { hostHints: { ...ORCA, ...IN_EDITOR } }))
+    expect(await s.src.send(s.agent(), 'one')).toEqual({ ok: true })
+    // VS Code made its terminal: no host's.
+    await s.reads[0].answer(undefined)
+    expect(await s.src.send(s.agent(), 'two')).toEqual({ ok: true })
+    expect(s.typed.mock.calls.map(([pane, text]) => [pane.id, text])).toEqual([['e1', 'one'], ['e1', 'two']])
+    expect(await s.src.focus(s.agent())).toBe(true)
+    expect(s.actions.open.mock.calls.map(([, target]) => target.pane)).toEqual([{ adapter: 'editor', id: 'e1' }])
+    expect(s.sends()).toEqual([])
+  })
+
+  it('the same from a herdr pane, never through herdr\'s socket', async () => {
+    const s = inOrcaOrHerdr()
+    s.src.ingest(s.ev('turn-stop', { hostHints: { HERDR_PANE_ID: 'w1:p2', ...IN_EDITOR } }))
+    expect(await s.src.send(s.agent(), 'one')).toEqual({ ok: true })
+    await s.reads[0].answer(undefined)
+    expect(await s.src.send(s.agent(), 'two')).toEqual({ ok: true })
+    expect(s.typed.mock.calls.map(([pane, text]) => [pane.id, text])).toEqual([['e1', 'one'], ['e1', 'two']])
+    expect(await s.src.focus(s.agent())).toBe(true)
+    expect(s.actions.open.mock.calls.map(([, target]) => target.pane)).toEqual([{ adapter: 'editor', id: 'e1' }])
+    expect(s.herdrPrompt).not.toHaveBeenCalled()
+  })
+
+  it('a maker read that fails leaves the Orca terminal held, says no held line, and is read again on an event 10 s later', async () => {
+    const s = inOrcaOrHerdr()
+    s.src.ingest(s.ev('turn-stop', { hostHints: ORCA }))
+    await s.reads[0].fail()
+    expect(s.src.paneOf(s.agent().id, 'orca')).toBeUndefined()
+    expect(s.src.capabilities(s.agent())).toMatchObject({ voice: false, focus: true })
+    expect(await s.src.send(s.agent(), 'next')).toMatchObject({ ok: false })
+    s.clock.t += 9_999
+    s.src.ingest(s.ev('turn-start', { hostHints: ORCA }))
+    expect(s.ptyOwner).toHaveBeenCalledTimes(1)
+    s.clock.t += 1
+    s.src.ingest(s.ev('turn-stop', { hostHints: ORCA }))
+    expect(s.ptyOwner).toHaveBeenCalledTimes(2)
+    expect(s.sends()).toEqual([])
+    expect(s.lines).toEqual([])
+    await s.reads[1].answer('orca')
+    expect(s.src.paneOf(s.agent().id, 'orca')).toBe(HANDLE)
+    expect(await s.src.send(s.agent(), 'next')).toEqual({ ok: true })
+    expect(s.sends()).toHaveLength(1)
+    expect(s.lines).toEqual([])
+  })
+})
+
 describe('ObservedSource panes', () => {
   const OTHER = 'term_9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
   const inOrca = (handle = HANDLE) => ({ hostHints: { ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: handle } })
