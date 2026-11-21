@@ -36,15 +36,19 @@ export async function quiet(inFlight: () => number): Promise<void> {
   }
 }
 
-/** Lets the world run for `ms` of virtual time, or until `until` holds once it is quiet. */
-export async function settle(ms: number, until: (() => boolean) | undefined, inFlight: () => number): Promise<void> {
+/**
+ * Lets the world run for `ms` of virtual time, or until `until` holds once it is quiet. `maxAdvances` is for this
+ * file's tests: each advance waits real turns, so reaching the product's limit takes as long as the host is loaded.
+ */
+export async function settle(ms: number, until: (() => boolean) | undefined, inFlight: () => number,
+  maxAdvances = MAX_ADVANCES): Promise<void> {
   let ended = false
   const end = setTimeout(() => { ended = true }, ms)
   try {
     for (let advances = 0; ; advances++) {
       await quiet(inFlight)
       if (ended || until?.()) return
-      if (advances === MAX_ADVANCES) throw new Error(`runaway timers: ${MAX_ADVANCES} timers ran and a settle of ${ms} ms never reached its end`)
+      if (advances === maxAdvances) throw new Error(`runaway timers: ${maxAdvances} timers ran and a settle of ${ms} ms never reached its end`)
       vi.advanceTimersToNextTimer()
     }
   } finally {
