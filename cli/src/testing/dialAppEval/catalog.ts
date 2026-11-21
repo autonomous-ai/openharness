@@ -171,18 +171,22 @@ export const MAIN: Scenario[] = [
   }),
   scenario({
     id: 'C9', app: 'claude', title: 'A new session with no hook yet: a swipe reaches it, and its hook makes the two one row',
-    dims: ['D3', 'D1', 'D7'], sessions: [...claudeSessions(['a']), claudeGhost],
+    dims: ['D3', 'D1', 'D7'], sessions: [...claudeSessions(['b', 'a']), claudeGhost],
+    // The person turns from the older session to the new one and rests on it past the open's half mark; its hook comes
+    // only after.
     steps: [
       { kind: 'front', app: 'claude' },
-      { kind: 'claude.write', sessions: ['a'] },
-      listed('claude', ['a']),
-      { label: 'swipe', kind: 'swipe', session: 'a' },
-      { label: 'hook', kind: 'hook', session: 'a', event: 'start' },
+      { kind: 'claude.write', sessions: ['a', 'b'] },
+      listed('claude', ['b', 'a']),
+      { kind: 'swipe', session: 'a' },
+      { label: 'swipe', kind: 'swipe', session: 'b' },
+      { kind: 'wait', ms: 3 * S },
+      { label: 'hook', kind: 'hook', session: 'b', event: 'start' },
     ],
     checks: [
-      { id: 'open', kind: 'open', dim: 'D3', session: 'a', link: true, after: 'swipe' },
-      { id: 'ring', kind: 'ring', dim: 'D1', page: 'claude', expect: ['a'], after: 'hook' },
-      { id: 'ringKept', kind: 'ring', dim: 'D7', page: 'claude', expect: ['a'] },
+      { id: 'open', kind: 'open', dim: 'D3', session: 'b', link: true, after: 'swipe', at: 'hook' },
+      { id: 'ring', kind: 'ring', dim: 'D1', page: 'claude', expect: ['b', 'a'], after: 'hook' },
+      { id: 'ringKept', kind: 'ring', dim: 'D7', page: 'claude', expect: ['b', 'a'] },
     ],
     probes: [{ id: 'open', kind: 'open', dim: 'D3', session: 'z', link: true, after: 'swipe' }],
   }),
