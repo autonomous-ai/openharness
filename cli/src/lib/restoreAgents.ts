@@ -44,7 +44,7 @@ import type { TerminalDispatchControl, TerminalRuntimeRef } from './terminalType
 import type { WindowsPaneLaunch } from './windows/engineStart.js'
 import { processAmong, sameProcessIdentity, sameTerminalPlacement, terminalInstanceId, terminalRouteKey } from './terminalRuntime.js'
 import { resumesConversation } from './resumeCapability.js'
-import { errorKind } from './log.js'
+import { codeOrLength, errorKind } from './log.js'
 
 export interface RestoreLaunch {
   nativeToken?: string
@@ -619,7 +619,7 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
       }
       if (!created.ok) {
         summary.failed.push({ agentId: entry.agentId, reason: created.reason })
-        deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not open a pane to wait in · ${created.reason}`)
+        deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not open a pane to wait in · ${codeOrLength(created.reason)}`)
         return false
       }
       pane = created.runtime
@@ -669,7 +669,7 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
       if ('error' in launch) {
         summary.failed.push({ agentId: entry.agentId, reason: launch.detail })
         deps.registry.setLaunch(entry.agentId, { state: 'failed', error: launch.error, detail: launch.detail })
-        deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not build its launch · ${launch.detail}`)
+        deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not build its launch · ${codeOrLength(launch.error)}`)
         if (alive) await deps.killPane?.(dead)
         continue
       }
@@ -727,7 +727,7 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
               }
             }
             summary.failed.push({ agentId: entry.agentId, reason: created.reason })
-            deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not open a pane · ${created.reason}`)
+            deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not open a pane · ${codeOrLength(created.reason)}`)
             return
           }
           const key = terminalRouteKey(created.runtime)
@@ -808,7 +808,7 @@ async function watchRestoredPane(
   const fail = (error: string, detail: string): void => {
     if (!current()) return
     deps.registry.setLaunch(agentId, { state: 'failed', error, detail })
-    deps.log(`[restore] ${engine} · agent ${agentId} · failed · ${detail}`)
+    deps.log(`[restore] ${engine} · agent ${agentId} · failed · ${codeOrLength(error)}`)
   }
   /** Its fresh launch asks a service that could not be asked: held in this pane, never failed. */
   const holdHere = async ({ held: service, detail }: Extract<RestoreLaunchResult, { held: string }>): Promise<false> => inPane(deps, entry, current, async owns => {
@@ -820,7 +820,7 @@ async function watchRestoredPane(
     if (!spawned.ok) {
       const detail = `${launch.detail} Its waiting pane could not be shown: ${spawned.reason ?? 'unknown reason'}. Pane recovery is still pending.`
       deps.registry.setLaunch(agentId, { ...launch, detail })
-      deps.log(`[restore] ${engine} · agent ${agentId} · held · ${detail}`)
+      deps.log(`[restore] ${engine} · agent ${agentId} · held · ${codeOrLength(detail)}`)
       return false
     }
     deps.registry.setLaunch(agentId, launch)

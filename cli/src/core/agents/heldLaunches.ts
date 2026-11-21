@@ -14,7 +14,7 @@
  * A separate flight for each agent, after the boot: two passes never dispatch the same agent twice. An agent
  * the person stopped or closed meanwhile is no longer held, and is left alone.
  */
-import { errorKind, sid } from '../../lib/log.js'
+import { codeOrLength, errorKind, sid } from '../../lib/log.js'
 import { windowsHeldPaneArgv } from '../../lib/windows/engineStart.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import type { RestoreSummary } from '../../lib/restoreAgents.js'
@@ -123,7 +123,7 @@ export function createHeldLaunches({ registry, restore, log }: HeldLaunchesDeps)
     for (const { agentId, reason } of summary.failed) {
       if (lastReason.get(agentId) === reason) continue
       lastReason.set(agentId, reason)
-      log(`[restore] ${sid(agentId)} · could not launch from held · ${reason}`)
+      log(`[restore] ${sid(agentId)} · could not launch from held · ${codeOrLength(reason)}`)
     }
     // A pass runs every 500 ms while the flights are full: on Windows, 2026-11-04, that was two lines a second for good.
     const pass = `${service ?? 'every service'} · launched ${summary.restored.length} of ${held.length}`

@@ -97,7 +97,7 @@ describe('a registry no version can load', () => {
     registry.load()
     const aside = readdirSync(dataDir).filter((name) => name.startsWith('registry.json.corrupt-'))
     expect(aside).toHaveLength(1)
-    const lines = error.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+    const lines = error.mock.calls.map((call: unknown[]) => call.map(String).join(' ')).join('\n')
     expect(lines).not.toContain('sentinel')
     expect(lines).toContain(`[registry] registry root is not an array; moved it aside to ${hashOf(join(dataDir, aside[0]))} and started empty`)
   })
