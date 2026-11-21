@@ -78,7 +78,6 @@ const TERMINAL = [
   'lib/machineEngines.ts', // harness machines engines
   'lib/updateCommand.ts', // harness update
   'lib/windows/ptyUpdateCommand.ts', // harness update, its terminal host step
-  'lib/daemonState.ts', // onError, how a command fails; failForegroundStart, a daemon's, keeps the rule by hand (its spec)
 ]
 
 const unwrap = (node: ts.Expression): ts.Expression =>

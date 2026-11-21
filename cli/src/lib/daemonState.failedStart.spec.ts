@@ -36,18 +36,17 @@ describe('failForegroundStart', () => {
     ])
     expect(exited.mock.calls).toEqual([[1], [3]])
   })
-})
 
-describe('onError', () => {
-  // A command's own terminal: the person who ran it reads the whole error.
-  it('prints the error whole', async () => {
-    const { onError } = await daemonState()
+  // A trust file that cannot be read is the person's to move aside: said by its own name and why, read off the error's
+  // fields, never its message.
+  it('says a trust file that cannot be read by its name and why', async () => {
+    const { failForegroundStart } = await daemonState()
+    const { StateFileUnreadable } = await import('./secureState.js')
     const said = vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(process, 'exit').mockImplementation(((code: number) => { throw new Error(`exit ${code}`) }) as never)
-    const error = new Error('could not reach the backend')
 
-    expect(() => onError(error)).toThrow('exit 1')
+    expect(() => failForegroundStart(new StateFileUnreadable('paired.json', 'not valid JSON'))).toThrow('exit 1')
 
-    expect(said.mock.calls).toEqual([['Failed to start adapter:', error]])
+    expect(said.mock.calls).toEqual([['✗ paired.json cannot be read (not valid JSON)'], ['  harness status shows where it is']])
   })
 })
