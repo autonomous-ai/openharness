@@ -3175,8 +3175,8 @@ describe('ObservedSource and a pane that only holds the agent', () => {
     expect(s.agent().name).toBe('Build')
   })
 
-  // The devices scope Orca's ring by it: an agent whose terminal is held still runs in that terminal's worktree.
-  it('shownAt answers the pane a rest and a tap show: its own, else its place, else its held one; none once its session ended', async () => {
+  // The devices scope Orca's ring by it: an agent whose terminal is held was started from that terminal's worktree.
+  it('shownAt answers the pane a rest and a tap read: its own, else its place, else its held one; none once its session ended', async () => {
     const s = holding([fake('a', unlessMadeBy('a')).adapter])
     s.src.ingest(s.ev('session-start', { hostHints: HINTS }))
     const id = s.agent().id

@@ -526,8 +526,8 @@ export class ObservedSource implements HostSource {
   }
 
   /** Its pane in that adapter as a rest, a tap and its name read it: its own; else the one its caller placed it at; else
-   *  its held one. A held pane counts as none for the devices (paneOf), which place the agent where it runs, while the
-   *  held pane shows only where it was started from. */
+   *  its held one. A held pane counts as none for paneOf, which the devices read to place the agent where it runs,
+   *  while the held pane shows only where it was started from. */
   private placeIn(e: Entry, adapter: string): Pane | undefined {
     const own = e.panes.find(({ pane }) => pane.adapter === adapter)?.pane
     if (own && !own.held) return own
@@ -599,9 +599,10 @@ export class ObservedSource implements HostSource {
     return e && this.live(e) ? { pid: e.outer?.pid ?? e.outerPid ?? e.caller ?? e.pid, app: e.agent.app } : undefined
   }
 
-  /** A live agent's pane id in that adapter as a rest and a tap show it (placeIn); none once its session ended. Orca's
-   *  ring for the worktree on screen reads this, not paneOf: a held terminal is still in the worktree the agent was
-   *  started from, while words and the focus watch keep to its own panes. */
+  /** A live agent's pane id in that adapter as a rest, a tap and its name read it (placeIn), a held one too, which
+   *  only a tap shows; none once its session ended. Orca's ring for the worktree on screen reads this, not paneOf: a
+   *  held terminal is still in the worktree the agent was started from, while words and the focus watch keep to its
+   *  own panes. */
   shownAt(agentId: string, adapter: string): string | undefined {
     const e = this.entries.get(agentId)
     return e && this.live(e) ? this.placeIn(e, adapter)?.id : undefined
