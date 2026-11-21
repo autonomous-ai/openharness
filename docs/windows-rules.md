@@ -76,8 +76,23 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
 - `-EncodedCommand` makes PowerShell write CLIXML to stderr. Use `-Command` when anyone reads the error.
   Inside `-Command`, `-ErrorAction Stop` needs `try`/`catch` for the script to end.
 - **Windows' own programs run by their full paths.** Node on Windows looks for a bare name in the folder it runs in
-  before PATH. `powershellPath()` and `systemProgram()` (`cli/src/lib/windows/powershell.ts`) name System32's.
-  Test: `cli/src/lib/windows/systemProgram.spec.ts`.
+  before PATH. `powershellPath()` and `systemProgram()` (`cli/src/lib/windows/powershell.ts`) name System32's, and
+  `windowsFolder()` and `windowsSystemProgram()` in Desktop (`desktop/lib/core/windows_folder.dart`). Windows' folder
+  is asked of the file system (`systemRoot()`, `windowsFolder()`), never read from `SystemRoot`, `windir` or `ComSpec`:
+  whoever starts the process sets those, and they can name another folder. Tests:
+  `cli/src/lib/windows/systemProgram.spec.ts`, `desktop/test/windows_folder_test.dart`.
+- **git, gh and any program run in a project's folder run by an absolute path, found once.** Node and Dart on Windows
+  run a `git.exe` in the child's working folder before PATH, so a `git.exe` committed to a repository would run as
+  `git` there, and adding a folder to PATH cannot stop it. Take PATH's drive or share folders only, the `.exe` alone
+  (a `.cmd` needs `cmd.exe`), then the installers' folders: `gitPath()` and `ghPath()` (`cli/src/lib/gitOnPath.ts`),
+  `ProgramPath` in Desktop, for git, ssh and winget (`desktop/lib/core/program_path.dart`). Never Scoop's machine-wide
+  root (`SCOOP_GLOBAL`, `%ProgramData%\scoop`): any user can write there. Tests: `cli/src/lib/gitOnPath.spec.ts`,
+  `desktop/test/program_path_test.dart`.
+- **A link opens with no shell.** `cmd.exe /c start` ends the command at a URL's `&` and runs the rest, splits it at a
+  space and expands its `%`, and a sign-in URL is full of `&`. Open it through System32's
+  `rundll32.exe url.dll,FileProtocolHandler <url>` (`browserCommand` in `cli/src/lib/openInBrowser.ts`), and refuse a
+  URL holding whitespace or a quote: Node quotes an argument holding a space, a tab or a double quote. Test:
+  `cli/src/lib/openInBrowser.spec.ts`.
 
 - **A paste can arrive as keys.** The Mac gets one paste event, so Enter after it is safe. Codex on Windows gets a stream of key
   presses, and an Enter within 120 ms of the last becomes a newline in the paste (codex-rs `paste_burst.rs`): the message stays in
@@ -248,6 +263,14 @@ Claude Code's plugins on Windows (Claude Code 2.1.328 and 2.1.329, VM, 2026-11-2
   host.
 - Test in the person's session (session 1) and in the signed build. Windows behaves differently in session 0 and for an
   unsigned file.
+- **Over SSH a standard user is denied CIM.** SSH is a network logon, and CIM refuses it: `Get-CimInstance` and the
+  `ScheduledTasks` cmdlets, which go through CIM, fail, and so does `taskkill` (it lists processes through WMI: `Access
+  denied`, nothing ended), while `Stop-Process` on one pid works. A test tool starts its task through the Task
+  Scheduler's own COM object (`Schedule.Service`), an interactive logon with no password stored, and knows the account
+  is signed in when the task starts: one that stays "has not yet run" (`0x41303`) has no session to run in. Not
+  `quser.exe`: Windows Home has none. A tree is ended by `taskkill /t` in a task of its own in the session
+  (`cli/scripts/windows-dial-e2e/console.ps1`). Test: the VM run of `console.ps1`, as the VM's standard test user and as
+  the user at its console.
 - Smart App Control blocks a local `flutter build windows` (Bad Image on `flutter_windows.dll`). To show a Dart-only
   change before a release, copy the installed signed version folder and replace only `data\app.so` and
   `data\flutter_assets` with a release build made by the same Flutter version (`FLUTTER_VERSION` in

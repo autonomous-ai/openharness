@@ -19,6 +19,8 @@ vi.mock('node:child_process', () => {
   return { execFile, execFileSync: forbidden, exec: forbidden, execSync: forbidden,
     spawn: forbidden, spawnSync: forbidden, fork: forbidden }
 })
+// The fixture git above answers by name: the host's absolute git, or a login-shell search for it, never reaches it.
+vi.mock('../lib/gitOnPath.js', async original => ({ ...await original<object>(), gitPath: async () => 'git' }))
 const summaryFault = vi.hoisted(() => ({ fail: false }))
 vi.mock('../lib/compactSummary.js', async original => {
   const actual = await original<typeof import('../lib/compactSummary.js')>()

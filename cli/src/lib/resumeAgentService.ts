@@ -258,7 +258,9 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         current: owns,
         refresh: async () => { if (!isTerminalEngine(selected.engine) && (await checkPidRuntime(selected)).state !== 'gone') throw new IdentityReadUnavailable('the previous engine is not confirmed stopped') },
       })
-      if (retained.state !== 'confirmed') throw new IdentityReadUnavailable('the previous engine exit is not durably confirmed')
+      // Refused because the row was retired ahead of this one (the reconciler removing the row of a pane that died): nothing
+      // is left to retain, and the resume checks the harness again, as when the row changed before this began (above).
+      if (retained.state !== 'confirmed' && owns()) throw new IdentityReadUnavailable('the previous engine exit is not durably confirmed')
     },
     // A launch already made: its record is the row's, written when its pane was registered (`refreshGridWebSearch`).
     waitForReady: saved => waitForResume(saved, current, launchedGrid(saved.gridLaunch), launchArgs),

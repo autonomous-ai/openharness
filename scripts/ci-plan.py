@@ -4,8 +4,9 @@
 A PR runs the unit suite of each component it changes and of each suite that reads a changed file (PR_READS), and each
 end-to-end suite (E2E: windows-e2e, linux-e2e, dial-hosts, device-app-e2e, device-app-update, device-app-desktop,
 device-app-install) whose own path list names a changed file; linux-e2e runs the CLI e2e files the PR adds or modifies.
-A change to this planner, its test, the tables it reads or the CLI lists they copy runs the repository-wide cross-read
-scan and the planner's other full-checkout tests on a full checkout.
+A change to a component, to a file an end-to-end suite runs as its own, to this planner, its test, the tables it reads
+or the CLI lists they copy runs the repository-wide cross-read scan and the planner's other full-checkout tests on a
+full checkout.
 Merge groups run only the plan and process checks: the PR run already covered the code.
 After GitHub merges main into a PR head whose ci/required passed, a component whose
 inputs main's new commits left untouched reuses that run's result instead of running
@@ -80,9 +81,12 @@ ALSO.update({"plugins/harness-device-vscode/": "cli"})
 # Orca's plugin: the CLI's build inlines the folder.
 ALSO.update({"plugins/harness-device-orca/": "cli"})
 # test_ci_plan's repository-wide scan and its other full-checkout tests skip in process-checks' sparse checkout, where
-# two undeclared reads slipped in: their own job runs them on a full checkout. They guard the planner's tables only, so
-# they run for a change to the planner, its test, the tables it reads (DEPENDS takes the desktop's from
-# record-ci-validation.py) and the CLI's lists its tables copy (dialHosts.ts's DIAL_HOST_FILES, the CI config's exclude).
+# two undeclared reads slipped in: their own job runs them on a full checkout. They run for a change to the planner, its
+# test, the tables it reads (DEPENDS takes the desktop's from record-ci-validation.py) and the CLI's lists its tables
+# copy (dialHosts.ts's DIAL_HOST_FILES, the CI config's exclude), and select() adds them for any change to a file a
+# component or an end-to-end suite runs as its own: an undeclared read an ordinary component pull request added was
+# found only by the next planner pull request or make merge-pr's reuse check, and the scan costs about 0.5
+# runner-minutes (measured in #4526).
 ALSO.update({path: "cross-read-scan" for path in ("scripts/ci-plan.py", "scripts/tests/test_ci_plan.py",
                                                   "scripts/record-ci-validation.py", "cli/e2e/harness/dialHosts.ts",
                                                   "cli/vitest.e2e.ci.config.ts")})
@@ -262,7 +266,7 @@ DEPENDS.update({
     "device-app-desktop": DEPENDS["device-app"] + DEPENDS["desktop"] + ("device-app/", "desktop/"),
     "device-app-install": DEPENDS["device-app"] + ("device-app/", "website/scripts/device-install.sh"),
     # The scan reads every component's files and the docs their strings may name; the planner's tables name them all.
-    # Only a PR that changes the CLI's lists alone may reuse it (its other files are under scripts/, a shared input).
+    # So after Update branch it is reused only when main's new commits change none of them.
     "cross-read-scan":tuple(sorted({path.split("/", 1)[0] + "/" for path in (*COMPONENTS, *ALSO, *SUBCOMPONENTS)}
                                     | {"docs/"})),
 })
@@ -511,15 +515,19 @@ def owns(suite, path):
 
 def select(paths, present=None):
     """Each changed path runs its owners' suites, the end-to-end suites whose own paths include it, and every suite
-    that declares reading it (PR_READS). linux-e2e runs an e2e file only when the diff leaves it in the tree (present:
-    the paths it adds or modifies; None, all of them), its canary for any change to what it runs for, and the Orca
-    files for any change to what they cover."""
+    that declares reading it (PR_READS); a path a suite owns, a component or an end-to-end one, runs the cross-read
+    scan too. linux-e2e runs an e2e file only when the diff leaves it in the tree (present: the paths it adds or
+    modifies; None, all of them), its canary for any change to what it runs for, and the Orca files for any change to
+    what they cover."""
     selected, reasons = set(), {}
     for path in paths:
         if not isinstance(path, str) or not path or path.startswith("/") or ".." in path.split("/"):
             raise ValueError("invalid changed path")
-        scopes = owners(path) | e2e_owners(path) | {
+        own = owners(path)
+        scopes = own | e2e_owners(path) | {
             suite for suite, entries in PR_READS.items() if any(covers(entry, path) for entry in entries)}
+        if (own | e2e_owners(path)) - {"cross-read-scan"}:
+            scopes.add("cross-read-scan")
         if present is not None and path not in present and not (linux_e2e_canary_path(path)
                                                                  or linux_e2e_orca_path(path)):
             scopes.discard("linux-e2e")
@@ -554,9 +562,9 @@ YAML_ALIAS = re.compile(r"(?m)(?:^[ \t]*-|:)[ \t]+\*([\w-]+)")
 
 def edited_job_suites(root, base, head):
     """The suites whose ci.yml jobs head edits, adds or removes: a job's definition is part of what its suite tests, with
-    what it takes from the rest of the file (the env variables it names, the permissions and defaults, the anchors it
-    names). device-app-build's are the Device suites that install its packages; the plan, process and gate jobs run
-    none."""
+    what it takes from the rest of the file (the env variables it names, the permissions, defaults and concurrency, the
+    anchors it names). device-app-build's are the Device suites that install its packages; the plan, process and gate
+    jobs run none."""
     def top(commit):
         try:
             return yaml_entries(git(root, "show", f"{commit}:{CI_WORKFLOW}") + "\n")
@@ -567,7 +575,7 @@ def edited_job_suites(root, base, head):
     old, new = yaml_entries(old_top.get("jobs", "")), yaml_entries(new_top.get("jobs", ""))
     jobs = old.keys() | new.keys()
     edited = {job for job in jobs if old.get(job) != new.get(job)}
-    if any(old_top.get(key) != new_top.get(key) for key in ("permissions", "defaults")):
+    if any(old_top.get(key) != new_top.get(key) for key in ("permissions", "defaults", "concurrency")):
         edited |= jobs
     old_env, new_env = yaml_entries(old_top.get("env", "")), yaml_entries(new_top.get("env", ""))
     variables = [re.escape(name) for name in old_env.keys() | new_env.keys() if old_env.get(name) != new_env.get(name)]

@@ -11,6 +11,7 @@ import { withinRoots } from './pathContainment.js'
 import { ownProcessGroup } from './windows/noWindow.js'
 import { systemProgram } from './windows/powershell.js'
 import { errorKind } from './log.js'
+import { gitPath } from './gitOnPath.js'
 
 const exec = promisify(execFile)
 
@@ -26,7 +27,7 @@ function diskFull(error: unknown): boolean {
 }
 
 async function git(path: string, args: string[], timeout = 4000): Promise<string> {
-  return (await exec('git', gitArgs(path, args), {
+  return (await exec(await gitPath(), gitArgs(path, args), {
     timeout, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024,
     env: gitEnv(process.env),
   })).stdout.replace(/\r?\n$/, '')
@@ -451,13 +452,17 @@ type WorktreeAdd = { ok: true } | WorktreeAddFailure
  *  the timeout the whole group is killed (on Windows, git's process tree), and the result waits until no process
  *  holds git's stderr any more: until then something git started may still be writing the folder. If that takes
  *  as long again as the timeout (at most a minute), the result says it is `running`. */
-function worktreeAdd(source: string, args: string[], timeout: number): Promise<WorktreeAdd> {
+async function worktreeAdd(source: string, args: string[], timeout: number): Promise<WorktreeAdd> {
+  let file: string
+  try { file = await gitPath() } catch (error) {
+    return { ok: false, reason: (error as NodeJS.ErrnoException).code ?? 'could not run git', stderr: '', timedOut: false, diskFull: false, running: false }
+  }
   return new Promise(resolve => {
     let stderr = '', timedOut = false, settled = false, waited: NodeJS.Timeout | undefined
     const done = (result: WorktreeAdd) => { if (!settled) { settled = true; clearTimeout(timer); clearTimeout(waited); resolve(result) } }
     const failed = (reason: string, running = false): WorktreeAddFailure => ({ ok: false, reason, stderr, timedOut, diskFull: diskFull({ stderr }), running })
     const late = () => `timed out after ${Math.round(timeout / 1000)} s`
-    const child = spawn('git', gitArgs(source, args), {
+    const child = spawn(file, gitArgs(source, args), {
       env: gitEnv(process.env), stdio: ['ignore', 'ignore', 'pipe'], ...ownProcessGroup(),
     })
     child.stderr.on('data', (chunk: Buffer) => { if (stderr.length < 64 * 1024) stderr += chunk.toString() })

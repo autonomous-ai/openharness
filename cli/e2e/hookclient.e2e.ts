@@ -385,10 +385,14 @@ setInterval(() => {}, 1000)
 
     // Back, the daemon lists no agent for it, and a prompt typed there, its hook now answered, makes none.
     await d.start()
+    const said = d.log().length
     const client = await LocalClient.connect(d)
     await type(d, pane, 'typed in a session of my own')
     await until('the engine to take the prompt', () => ran(hooksSince(d, from), / UserPromptSubmit /), 30_000, 100)
-    await new Promise((done) => setTimeout(done, 6_000))
+    // The hook's post can reach the daemon after the engine ran it: wait until the daemon took the event, then
+    // for passes that looked after it, so a row it would wrongly make has had its chance to appear.
+    await until('the daemon to take the prompt\'s event', () => d.log().slice(said).includes(`[hooks] paneless ${engine} turn-start`), 30_000, 100)
+    await d.twoMorePasses('after the prompt')
     expect((await rows(client)).filter((one) => one.tmuxPane === pane)).toEqual([])
     client.close()
   })

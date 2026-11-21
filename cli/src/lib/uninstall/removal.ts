@@ -24,7 +24,7 @@ import { homedir, tmpdir } from 'node:os'
 import { posix, win32 } from 'node:path'
 import { HARNESS_ENTRIES, HARNESS_HOME_NAME, xdgRoots, type HarnessEntry } from '../../config/harnessHome.js'
 import { removeLink } from '../removePath.js'
-import { modulesByPath, runPowershell, type PowershellRun } from '../windows/powershell.js'
+import { modulesByPath, runPowershell, systemRoot, type PowershellRun } from '../windows/powershell.js'
 import { UNINSTALL_MARKER } from './marker.js'
 
 export interface RootEntry { name: string; dir: boolean; link?: true }
@@ -423,7 +423,7 @@ export function finalRemovalDeps(): FinalRemovalDeps {
   return {
     pid: process.pid,
     tempDir: tmpdir(),
-    systemRoot: process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows',
+    systemRoot: systemRoot(),
     now: () => Date.now(),
     write: (path, text) => writeFileSync(path, text, 'utf8'),
     remove: (path) => rmSync(path, { force: true }),

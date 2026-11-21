@@ -1517,3 +1517,44 @@ it('preserves unrelated observations made while resumed authority waits in the q
   try { held.resolve(); await first; expect(await confirmation).toMatchObject({ state: 'confirmed', entry: { title: 'New title while queued' } }) }
   finally { held.resolve(); await first; await confirmation }
 })
+
+// The reconciler lists the row of a pane that died as stopped, saves its conversation, and only then saves the row's
+// removal (core/agents/forget.ts). A resume asked in between finds the row still live (e2e/machine.e2e.ts, nightly
+// 2026-11-20): the removal is held here at its durable write.
+describe('a resume asked the moment the row reads stopped after its pane died', () => {
+  async function removalHeld() {
+    await live({ resumeOnly: undefined, processIdentity: identity, launch: { state: 'ready' } })
+    inventory.mockResolvedValue(listed())
+    const arrived = deferred<void>(), held = deferred<void>()
+    publication.agent = saved.agentId; publication.retire = true
+    publication.release = () => held.resolve()
+    publication.wait = async () => { publication.wait = undefined; arrived.resolve(); await held.promise }
+    deps.stoppedAgents.save(registry.byAgent(saved.agentId)!)
+    const saving = registry.confirmEngineExit(saved.agentId, 'remove')
+    await arrived.promise
+    return { release: () => held.resolve(), saved: saving }
+  }
+
+  it('opens the conversation when the removal is saved while the resume checks the row', async () => {
+    const removal = await removalHeld()
+    inventory.mockImplementationOnce(async () => { removal.release(); await removal.saved; return listed() })
+    expect(await start()).toMatchObject({ ok: true, resumed: true })
+    expect(create).toHaveBeenCalledOnce()
+    expect(registry.byAgent(saved.agentId)).toMatchObject({ sessionId: saved.sessionId, launch: { state: 'ready' } })
+  })
+
+  it('opens the conversation when the removal is saved before the retirement the resume queued behind it', async () => {
+    const removal = await removalHeld()
+    // As retainExitedSession.ts answers: a retirement the registry refuses is not published.
+    deps.retainExitedSession = vi.fn(async (row, alive, authority) => {
+      deps.stoppedAgents.save(row)
+      const retained = registry.confirmEngineExit(row.agentId, alive ? 'successor' : 'remove', authority)
+        .catch(() => ({ state: 'not-published' as const }))
+      removal.release()
+      return retained
+    })
+    expect(await start()).toMatchObject({ ok: true, resumed: true })
+    expect(create).toHaveBeenCalledOnce()
+    expect(registry.byAgent(saved.agentId)).toMatchObject({ sessionId: saved.sessionId, launch: { state: 'ready' } })
+  })
+})

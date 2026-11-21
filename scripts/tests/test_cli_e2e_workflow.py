@@ -50,6 +50,49 @@ class CliE2eWorkflowTests(unittest.TestCase):
         for step in runs:
             self.assertRegex(step, r"(?m)^ *shell: bash$")
 
+    def test_the_real_backends_mongod_comes_from_a_cache_main_fills(self):
+        backend = [step for step in steps(read(ACTION)) if "if: inputs.real-backend == 'true'" in step]
+        found = [step for step in backend if re.search(r"(?m)^ *id: ", step)
+                 and "mongodb-memory-server/package.json').version" in step and '>> "$GITHUB_OUTPUT"' in step
+                 and 'echo "MONGOMS_DOWNLOAD_DIR=${{ runner.temp }}/mongodb-binaries" >> "$GITHUB_ENV"' in step]
+        self.assertEqual(len(found), 1)
+        # CI's npm does not run the package's postinstall: this only guards against one that would download mongod
+        # before the cache is looked at.
+        self.assertIn("MONGOMS_DISABLE_POSTINSTALL=1 ", found[0])
+        output = re.search(r'echo "([\w-]+)=\$\(node -p "require\(\'mongodb-memory-server/package\.json\'\)\.version"\)" >> "\$GITHUB_OUTPUT"', found[0])
+        self.assertTrue(output)
+        version = "${{ steps.%s.outputs.%s }}" % (re.search(r"(?m)^ *id: ([\w-]+)$", found[0])[1], output[1])
+
+        def cache(action):
+            step = next((step for step in backend if f"uses: actions/cache/{action}@v4" in step), "")
+            self.assertIn("path: ${{ runner.temp }}/mongodb-binaries\n", step)
+            key = re.search(r"(?m)^ *key: (.*)$", step)
+            self.assertTrue(key)
+            for part in (version, "${{ runner.os }}", "${{ runner.arch }}"):
+                self.assertIn(part, key[1])
+            return step, key[1]
+
+        restore, key = cache("restore")
+        cache_id = re.search(r"(?m)^ *id: ([\w-]+)$", restore)
+        self.assertTrue(cache_id)
+        miss = f"steps.{cache_id[1]}.outputs.cache-hit != 'true'"
+        download = [step for step in backend if miss in step and "MongoBinary.getPath()" in step
+                    and "require('mongodb-memory-server')" in step]
+        self.assertEqual(len(download), 1)
+        # mongodb-memory-server retries only 416, 429, 500 and 503: a 504 must not fail every shard at setup, where
+        # only the real-backend specs need mongod. A bounded retry, each attempt logged, then a warning and on.
+        download_id = re.search(r"(?m)^ *id: ([\w-]+)$", download[0])
+        self.assertTrue(download_id)
+        self.assertRegex(download[0], r"(?m)^ *continue-on-error: true$")
+        self.assertRegex(download[0], r"ATTEMPTS=3\b")
+        self.assertRegex(download[0], r"\btimeout \d+ node -e ")
+        self.assertIn("sleep ", download[0])
+        self.assertIn("::warning", download[0])
+        save, saved_key = cache("save")
+        self.assertEqual(saved_key, key)
+        self.assertIn(f"steps.{download_id[1]}.outcome == 'success'", save)
+        self.assertIn("github.ref == 'refs/heads/main'", save)
+
     def test_the_dial_hosts_job_is_one_reusable_workflow(self):
         job = jobs(read(CLI_E2E)).get("dial-hosts", "")
         self.assertIn("uses: ./.github/workflows/cli-e2e-dial-hosts.yml", job)

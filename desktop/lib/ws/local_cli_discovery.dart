@@ -281,6 +281,10 @@ class LocalCliDiscovery {
   /// now holds them (on Windows the removal then fails) and undoes the uninstall (UninstallMarker).
   bool spawnHeld() => _flashing() || _uninstalling();
 
+  /// `harness uninstall` holds its marker: the CLI itself is being removed, so nothing may run it either. A flash
+  /// holds only the daemon down; the CLI stays.
+  bool uninstallHeld() => _uninstalling();
+
   static Duration Function() _stopwatchClock() {
     final watch = Stopwatch()..start();
     return () => watch.elapsed;

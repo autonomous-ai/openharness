@@ -788,6 +788,24 @@ esac
     return { ...extra, 'X-Harness-Local': this.hookCredential() }
   }
 
+  /** Discovery passes the running core has completed since it started (`/api/status`). */
+  async discoveryPasses(): Promise<number> {
+    const response = await fetch(`http://127.0.0.1:${this.port}/api/status`, { headers: this.localHeaders(), signal: AbortSignal.timeout(10_000) })
+    const passes = ((await response.json()) as { discoveryPasses?: unknown }).discoveryPasses
+    if (typeof passes !== 'number') throw new Error(`/api/status answered ${response.status} with no discoveryPasses`)
+    return passes
+  }
+
+  /**
+   * Resolves once two more discovery passes than now have completed, so at least one whole pass began after now and
+   * looked: what a check that something did not happen waits on. A fixed time ends before any pass looked once a pass
+   * is slow or overdue under load, and the check passes falsely.
+   */
+  async twoMorePasses(what: string): Promise<void> {
+    const from = await this.discoveryPasses()
+    await until(`two discovery passes ${what}`, async () => await this.discoveryPasses() >= from + 2, 60_000, 250)
+  }
+
   /**
    * What every pane on this daemon's tmux server shows, for a failing test's artifacts: its command, how
    * it started, and its screen with some history. A pane is the one thing the daemon's log cannot say:

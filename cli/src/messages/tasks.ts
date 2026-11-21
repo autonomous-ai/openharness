@@ -8,7 +8,6 @@
  * loosely; the marker in the body is the real filter, so an issue that merely mentions the id is not a task.
  */
 import { ciOf, ghError, ghRun, MERGE_STATES, pooled, type CiState, type Run } from '../lib/github.js'
-export { findGh, resetGhPath, GH_DIRS } from '../lib/github.js'
 export type { CiState, Run } from '../lib/github.js'
 import { validPullRequestUrl } from '../lib/sessionWorkWire.js'
 import { MessageError } from './model.js'

@@ -1,6 +1,5 @@
 /** `harness connections`: connect services once, for every local agent. */
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { label, services } from './catalog.js'
 import { sync } from './agents.js'
@@ -9,7 +8,7 @@ import { call, CallFailure, OFFICIAL_HOSTS, type Output } from './call.js'
 import * as gateway from './gateway.js'
 import { forgetPage, PageServer, rememberPage, runningPage } from './page.js'
 import { refresh, refreshDue } from './renew.js'
-import { ownProcessGroup } from '../windows/noWindow.js'
+import { openInBrowser } from '../openInBrowser.js'
 import { ConnectorError, locked, RENAMED, Store, validateCode } from './store.js'
 
 export const connectionsUsage = `Connected services (Linear, Notion, GitHub, Google…), shared by every local agent:
@@ -26,18 +25,6 @@ export const connectionsUsage = `Connected services (Linear, Notion, GitHub, Goo
   harness connections call <code> <METHOD> <https-url> [--query K=V] [--json BODY|-] [--data K=V]
                                        [--form K=V|K=@file] [--header K:V]
                                        one REST request with the account's token, which you never see`
-
-/** Best-effort: the address is printed too. Harness OS opens it in its own browser. */
-export function openInBrowser(url: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  const harnessBrowser = ['/usr/bin/hn-browser'].find(existsSync)
-  const command = harnessBrowser ?? (process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open')
-  try {
-    const child = spawn(command, [url], { stdio: 'ignore', ...ownProcessGroup(), shell: process.platform === 'win32', env })
-    child.on('error', () => { /* No browser here (headless, ssh): the printed address is the way. */ })
-    child.unref()
-    return true
-  } catch { return false }
-}
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 

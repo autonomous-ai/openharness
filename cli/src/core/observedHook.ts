@@ -3,7 +3,8 @@ import { ENGINES, type AgentEngine } from '../engines/types.js'
 /**
  * A paneless agent's hook event, checked and bounded here and then handed on. The core keeps nothing of it:
  * which agents exist outside a pane, and what they said, is the devices process's work (observed source),
- * so a flood or a forged body costs the core one small parse and a counter, never state.
+ * so a flood or a forged body costs the core one small parse and a counter, never state, and its log a line an event
+ * at most 20 times a second across sessions: the rest are counted with the losses, in one line a minute.
  */
 export type ObservedEventName = 'session-start' | 'turn-start' | 'needs-input' | 'turn-stop' | 'turn-error' | 'session-end'
   | 'turn-aborted' | 'subagent-start' | 'subagent-stop'
@@ -56,6 +57,9 @@ const EVENTS_PER_SECOND = 20
 /** Sessions whose counter is kept at once; a counter idle for a second is full again, so it is forgotten rather than stored. */
 const MAX_COUNTERS = 256
 const MAX_COUNTERS_HARD = 1024
+/** Events a second noted in a line each, across sessions: each session's rate bounds only its own, and 1024 sessions
+ *  at once were 20,480 lines a second. The rest are counted in the minute's line. */
+const NOTES_PER_SECOND = 20
 
 /** Same rule as hookServer's optionalBoundedString: a bounded string with no control character (a path or id with one is forged). */
 export const bounded = (value: unknown, max: number): value is string =>
@@ -105,25 +109,39 @@ export interface ObservedHookDeps {
   /** Hand the event to the devices process; false when it is not there (the event is dropped). */
   forward: (event: ObservedEvent) => boolean
   now: () => number
+  /** Losses, a few lines a minute at most. */
   log?: (line: string) => void
+  /** One line per handled event, NOTES_PER_SECOND a second at most: it says what happened to an event without its
+   *  session or path. */
+  note?: (line: string) => void
 }
 
-/** How often counts of refused and dropped calls are logged, at most: a flood is one line a minute. */
+/** How long losses are counted after the first one, before their count is logged: a flood is a few lines a minute. */
 const REPORT_MS = 60_000
 
 /**
- * Counts of calls refused or dropped, logged as one line a minute at most. Counts only, never a session or a path: what
- * was lost is seen, and what it said stays out of the log.
+ * Each loss: said at once when [lines.now] gives a line and its kind was not said in this minute, else counted. A minute
+ * after the first loss, one line of the counts, only when one was counted. Counts and fixed text only, never a session or
+ * a path: what was lost is seen when it happens, and what it said stays out of the log.
  */
-export function minuteCounts<K extends string>(kinds: readonly K[], line: (counts: Readonly<Record<K, number>>) => string, log: (line: string) => void) {
+export function minuteCounts<K extends string>(kinds: readonly K[],
+  lines: { now: (kind: K) => string | null; minute: (counts: Readonly<Record<K, number>>) => string },
+  log: (line: string) => void): (kind: K) => void {
   const counts = Object.fromEntries(kinds.map((kind) => [kind, 0])) as Record<K, number>
+  const said = new Set<K>()
   let report: ReturnType<typeof setTimeout> | null = null
   return (kind: K): void => {
-    counts[kind] += 1
+    const line = said.has(kind) ? null : lines.now(kind)
+    if (line === null) counts[kind] += 1
+    else {
+      said.add(kind)
+      log(line)
+    }
     if (report) return
     report = setTimeout(() => {
-      log(line(counts))
+      if (kinds.some((each) => counts[each] > 0)) log(lines.minute(counts))
       for (const each of kinds) counts[each] = 0
+      said.clear()
       report = null
     }, REPORT_MS)
     // A count waiting to be logged never keeps the daemon from exiting.
@@ -131,8 +149,21 @@ export function minuteCounts<K extends string>(kinds: readonly K[], line: (count
   }
 }
 
+interface Bucket { tokens: number; at: number }
+
+/** One of a bucket's tokens, which refill at `perSecond`; false when none is left. */
+function spend(bucket: Bucket, now: number, perSecond: number): boolean {
+  // A clock that stepped back refills nothing, rather than owe the bucket the time it went back.
+  bucket.tokens = Math.min(perSecond, bucket.tokens + Math.max(0, now - bucket.at) * perSecond / 1000)
+  bucket.at = now
+  if (bucket.tokens < 1) return false
+  bucket.tokens -= 1
+  return true
+}
+
 export function createObservedHook(deps: ObservedHookDeps) {
-  const buckets = new Map<string, { tokens: number; at: number }>()
+  const buckets = new Map<string, Bucket>()
+  const notes: Bucket = { tokens: NOTES_PER_SECOND, at: deps.now() }
 
   const take = (key: string, now: number): boolean => {
     let bucket = buckets.get(key)
@@ -142,27 +173,47 @@ export function createObservedHook(deps: ObservedHookDeps) {
       bucket = { tokens: EVENTS_PER_SECOND, at: now }
       buckets.set(key, bucket)
     }
-    // A clock that stepped back refills nothing, rather than owe the bucket the time it went back.
-    bucket.tokens = Math.min(EVENTS_PER_SECOND, bucket.tokens + Math.max(0, now - bucket.at) * EVENTS_PER_SECOND / 1000)
-    bucket.at = now
-    if (bucket.tokens < 1) return false
-    bucket.tokens -= 1
-    return true
+    return spend(bucket, now, EVENTS_PER_SECOND)
   }
 
-  const tally = minuteCounts(['invalid', 'dropped'] as const,
-    (lost) => `[devices] paneless hook events in the last minute: ${lost.invalid} refused, ${lost.dropped} dropped`, deps.log ?? console.warn)
-  const count = (result: 'invalid' | 'dropped'): typeof result => {
-    tally(result)
-    return result
-  }
+  // A machine with no dial has no devices process, so no devices is said once a devices-down period, not per event; the
+  // daemon's start counts as devices seen up.
+  let devicesUp = true
+  const tally = minuteCounts(['invalid', 'over', 'no-devices', 'unnoted'] as const, {
+    // A refused body is a broken or forged hook, whose events are lost as the others' are: said at once as well, as a
+    // refused dial hook call is (deviceHookCalls.ts).
+    now: (kind) => kind === 'invalid' ? '[devices] a paneless hook event was refused; more are counted once a minute'
+      : kind === 'over'
+        ? `[devices] a paneless hook event was dropped: over ${EVENTS_PER_SECOND} a second for its session; more are counted once a minute`
+        : kind === 'no-devices' && devicesUp ? '[devices] a paneless hook event was dropped: no devices process; more are counted once a minute'
+          : null,
+    minute: (lost) => `[devices] paneless hook events in the last minute: ${lost.invalid} refused, ${lost.over} over the rate, `
+      + `${lost['no-devices']} with no devices process, ${lost.unnoted} handled without a line`,
+  }, deps.log ?? console.warn)
+  const note = deps.note ?? console.log
 
   return {
     onObserved(body: unknown): 'ok' | 'invalid' | 'dropped' {
       const event = parseObservedHook(body)
-      if (!event) return count('invalid')
-      if (!take(`${event.engine}:${event.sessionId}`, deps.now())) return count('dropped')
-      return deps.forward(event) ? 'ok' : count('dropped')
+      if (!event) {
+        tally('invalid')
+        return 'invalid'
+      }
+      const now = deps.now()
+      if (!take(`${event.engine}:${event.sessionId}`, now)) {
+        tally('over')
+        return 'dropped'
+      }
+      const forwarded = deps.forward(event)
+      if (spend(notes, now, NOTES_PER_SECOND)) note(`[hooks] paneless ${event.engine} ${event.event} · ${forwarded ? 'forwarded' : 'no devices'}`)
+      else tally('unnoted')
+      if (forwarded) {
+        devicesUp = true
+        return 'ok'
+      }
+      tally('no-devices')
+      devicesUp = false
+      return 'dropped'
     },
   }
 }

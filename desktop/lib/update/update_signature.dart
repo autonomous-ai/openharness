@@ -18,7 +18,6 @@ import 'package:flutter/foundation.dart';
 
 import '../bootstrap/environment_provisioner.dart' show windowsPowerShellPath;
 import '../core/hidden_process.dart';
-import '../core/runtime_platform.dart';
 
 /// Long enough for a cold `codesign --deep` over a 300 MB bundle or a
 /// PowerShell start on a busy PC; a check that takes longer refuses.
@@ -457,7 +456,7 @@ Future<T> _readWindowsScript<T>(
     utf16[i * 2 + 1] = units[i] >> 8;
   }
   final result = await _run(
-    windowsPowerShellPath(RuntimePlatform.environment),
+    windowsPowerShellPath(),
     [
       '-NoProfile',
       '-NonInteractive',

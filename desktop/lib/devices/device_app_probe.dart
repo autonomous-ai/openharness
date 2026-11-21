@@ -4,8 +4,8 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 
-import '../bootstrap/environment_provisioner.dart' show windowsPowerShellPath;
 import '../core/runtime_platform.dart';
+import '../core/windows_folder.dart';
 import 'device_app.dart';
 import 'device_app_installer.dart' show runDeviceAppTool;
 
@@ -110,10 +110,6 @@ Future<bool> windowsDeviceAppRunning({
   if (user == null || user.isEmpty) {
     throw StateError('tasklist: no USERNAME');
   }
-  // System32 is three folders above Windows PowerShell, so SystemRoot is read one way.
-  final system32 = p.windows.dirname(
-    p.windows.dirname(p.windows.dirname(windowsPowerShellPath(env))),
-  );
   final tasklist =
       run ??
       (executable, arguments) => runDeviceAppTool(
@@ -121,7 +117,7 @@ Future<bool> windowsDeviceAppRunning({
         arguments,
         timeout: const Duration(seconds: 10),
       );
-  final result = await tasklist(p.windows.join(system32, 'tasklist.exe'), [
+  final result = await tasklist(windowsSystemProgram('tasklist.exe'), [
     '/FI',
     'IMAGENAME eq $deviceAppWindowsExe',
     '/FI',

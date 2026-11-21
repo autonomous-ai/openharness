@@ -239,7 +239,10 @@ def flutter_test_folder(check, root):
     # The repo's desktop test commands (docs/validation-and-release.md) run `flutter test` in desktop/ themselves.
     if any(Path(arg).name == "test-desktop.py" for arg in argv) or (Path(argv[0]).name == "make" and "desktop-test" in argv[1:]):
         return (root / "desktop").resolve()
-    if Path(argv[0]).name == "flutter" and next((arg for arg in argv[1:] if not arg.startswith("-")), None) == "test":
+    # Any flutter run with a `test` argument holds its folder, whatever wraps it (`env -u TMUX`, xvfb-run, timeout,
+    # fvm) or global options (`-d macos`) come first: holding a folder by mistake only serialises checks.
+    flutter = next((i for i, arg in enumerate(argv) if Path(arg).name.lower() in ("flutter", "flutter.bat")), None)
+    if flutter is not None and "test" in argv[flutter + 1:]:
         return (root / check.get("cwd", ".")).resolve()
     return None
 

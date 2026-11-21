@@ -3,20 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // The default runner is tried through a fake `execFile`: no test here ever starts the real `gh`.
 const child = vi.hoisted(() => ({ execFile: vi.fn() }))
 vi.mock('node:child_process', () => ({ execFile: child.execFile }))
+// The gh the default runner starts is the one ghPath finds (lib/gitOnPath.ts), which every caller of gh shares.
+const GH = '/opt/gh/bin/gh'
+const program = vi.hoisted(() => ({ gh: (): Promise<string> => Promise.resolve('/opt/gh/bin/gh') }))
+vi.mock('../lib/gitOnPath.js', async (original) => ({ ...await original<object>(), ghPath: () => program.gh() }))
 
 import { markerLabel, markerName } from './sharedDirectory.js'
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { createTaskReader, findGh, resetGhPath, TASKS_FAILED_MS, TASKS_FRESH_MS, type Run } from './tasks.js'
-
-/** A folder holding an executable named gh, which nothing runs: the tests read where it is, never start it. */
-function ghFolder(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'gh-'))
-  writeFileSync(join(dir, 'gh'), '#!/bin/sh\nexit 1\n')
-  chmodSync(join(dir, 'gh'), 0o755)
-  return dir
-}
+import { createTaskReader, TASKS_FAILED_MS, TASKS_FRESH_MS, type Run } from './tasks.js'
 
 const ID = 'a'.repeat(24)
 const OTHER = 'b'.repeat(24)
@@ -44,8 +37,11 @@ const failing = (error: unknown): Run => async () => { throw error }
 const reason = async (p: Promise<unknown>) => p.then(() => 'resolved', (e: { code?: string; message: string }) => `${e.code}: ${e.message}`)
 
 describe('Tasks search', () => {
-  beforeEach(() => { child.execFile.mockReset(); vi.stubEnv('VITEST', ''); resetGhPath() })
-  afterEach(() => { vi.unstubAllEnvs() })
+  beforeEach(() => { child.execFile.mockReset(); vi.stubEnv('VITEST', '') })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    program.gh = () => Promise.resolve(GH)
+  })
 
   it('runs gh for the tab\'s issues and pull requests with the brief\'s arguments, the tab id one argument, then each linked PR\'s CI', async () => {
     const { run, calls } = gh([issue(1)], [pr(5, 1)])
@@ -344,32 +340,23 @@ describe('Tasks search', () => {
     })
   })
 
-  it('the default runner starts gh by its full path with a timeout, SIGKILL, a 1 MiB buffer and no prompts, the arguments untouched', async () => {
-    const dir = ghFolder()
-    vi.stubEnv('PATH', dir)
+  it('the default runner starts the gh ghPath finds, with a timeout, SIGKILL, a 1 MiB buffer and no prompts, the arguments untouched', async () => {
     child.execFile.mockImplementation((...all: unknown[]) => { const done = all.at(-1) as (e: unknown, r: { stdout: string; stderr: string }) => void
       done(null, { stdout: '[]', stderr: '' })
     })
     await createTaskReader()(ID)
     const [command, args, options] = child.execFile.mock.calls[0]
-    expect(command).toBe(join(dir, 'gh'))
+    expect(command).toBe(GH)
     expect(args.slice(0, 3)).toEqual(['search', 'issues', `harness-tab:${ID}`])
     expect(options).toMatchObject({ timeout: 8000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024, env: { GH_PROMPT_DISABLED: '1', GIT_TERMINAL_PROMPT: '0' } })
-    expect(child.execFile.mock.calls.every(([c]) => c === join(dir, 'gh'))).toBe(true)
-    rmSync(dir, { recursive: true, force: true })
+    expect(child.execFile.mock.calls.every(([c]) => c === GH)).toBe(true)
   })
 
-  it('finds gh off the daemon\'s PATH: in the usual install folders, then on the login shell\'s PATH, and the shell only when needed', async () => {
-    // A daemon started by launchd has the bare system PATH: Homebrew's gh was "not installed" beside a working one (2026-10-17).
-    const onPath = ghFolder(), installed = ghFolder(), inShell = ghFolder(), empty = mkdtempSync(join(tmpdir(), 'nogh-'))
-    const shell = vi.fn(async () => inShell)
-    expect(await findGh({ PATH: onPath }, [installed], shell)).toBe(join(onPath, 'gh'))
-    expect(await findGh({ PATH: empty }, [empty, installed], shell)).toBe(join(installed, 'gh'))
-    expect(shell).not.toHaveBeenCalled()
-    expect(await findGh({ PATH: empty }, [empty], shell)).toBe(join(inShell, 'gh'))
-    expect(await findGh({}, [], async () => undefined)).toBeNull()
-    expect(await findGh({ PATH: empty }, [empty], async () => empty)).toBeNull()
-    for (const dir of [onPath, installed, inShell, empty]) rmSync(dir, { recursive: true, force: true })
+  it('the default runner reports a gh ghPath does not find as GH_MISSING, and starts nothing', async () => {
+    program.gh = () => Promise.reject(Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT', syscall: 'spawn gh', path: 'gh' }))
+    child.execFile.mockImplementation((...all: unknown[]) => { (all.at(-1) as (e: unknown, r: { stdout: string; stderr: string }) => void)(null, { stdout: '[]', stderr: '' }) })
+    expect(await reason(createTaskReader()(ID))).toMatch(/^GH_MISSING: /)
+    expect(child.execFile).not.toHaveBeenCalled()
   })
 
   it('the default runner refuses to start gh under a test runner, whatever the caller', async () => {
@@ -382,7 +369,7 @@ describe('Tasks search', () => {
     expect(await reason(createTaskReader(failing({ code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', killed: true, stderr: '' }))(ID))).toBe('GH_FAILED: GitHub returned too many or too large results.')
   })
 
-  it('the default runner reports a missing gh as GH_MISSING', async () => {
+  it('the default runner reports a gh gone since it was found as GH_MISSING', async () => {
     child.execFile.mockImplementation((_c: string, _a: string[], _o: unknown, done: (e: unknown) => void) => done(Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' })))
     expect(await reason(createTaskReader()(ID))).toMatch(/^GH_MISSING: /)
   })

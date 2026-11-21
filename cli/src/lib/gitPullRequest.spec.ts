@@ -1,5 +1,16 @@
-import { describe, it, expect, vi } from 'vitest'
-import { boundedPullRequestRunner, createPullRequestReader, createPullRequestUrlReader, githubRepository } from './gitPullRequest.js'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { isAbsolute, join } from 'node:path'
+import { afterEach, describe, it, expect, vi } from 'vitest'
+import { boundedPullRequestRunner, createPullRequestReader, createPullRequestUrlReader, githubRepository, readGitPullRequest, readPullRequestUrl } from './gitPullRequest.js'
+
+const GIT = '/opt/git/bin/git'
+const GH = '/opt/gh/bin/gh'
+const program = vi.hoisted(() => ({ gh: (): Promise<string> => Promise.resolve('/opt/gh/bin/gh') }))
+vi.mock('./gitOnPath.js', () => ({ gitPath: async () => '/opt/git/bin/git', ghPath: () => program.gh() }))
+// The real runner's exec, answering as git and gh would for a GitHub checkout with one open pull request.
+const execFile = vi.hoisted(() => vi.fn())
+vi.mock('node:child_process', async (original) => ({ ...await original<typeof import('node:child_process')>(), execFile }))
 const row = (extra = {}) => ({ number: 12, html_url: 'https://github.com/acme/repo/pull/12', state: 'open', draft: false, merged_at: null, head: { ref: 'feature', repo: { full_name: 'acme/repo' } }, ...extra })
 function fixture(rows: unknown = [row()]) {
   let branch = 'feature'
@@ -8,6 +19,69 @@ function fixture(rows: unknown = [row()]) {
     : JSON.stringify(args.at(-1)?.includes('/pulls?') ? rows : { full_name: 'acme/repo' }))
   return { run, read: createPullRequestReader(run), branch: (b: string) => { branch = b } }
 }
+const checkouts: string[] = []
+afterEach(() => {
+  program.gh = () => Promise.resolve(GH)
+  for (const folder of checkouts.splice(0)) rmSync(folder, { recursive: true, force: true })
+})
+/** A folder insideGitCheckout reads as a checkout; each test its own, as the reader caches by folder. */
+function checkout(): string {
+  const folder = mkdtempSync(join(tmpdir(), 'pr-checkout-'))
+  mkdirSync(join(folder, '.git'))
+  checkouts.push(folder)
+  return folder
+}
+/** Each test checks out a branch of its own: the reader keeps a branch's pull request for a minute. */
+function answerAsGitAndGh(branch: string) {
+  const open = row({ head: { ref: branch, repo: { full_name: 'acme/repo' } } })
+  execFile.mockReset()
+  execFile.mockImplementation((file: string, args: string[], _options: unknown, done: (error: unknown, result: unknown) => void) => {
+    const stdout = file === GIT
+      ? args[0] === 'symbolic-ref' ? branch : 'git@github.com:acme/repo.git'
+      : JSON.stringify(args.at(-1)?.includes('/pulls?') ? [open] : args.at(-1)?.includes('/pulls/') ? open : { full_name: 'acme/repo' })
+    done(null, { stdout, stderr: '' })
+  })
+}
+describe('the programs the pull request reader runs', () => {
+  it('runs git by its absolute path, with the pane\'s folder as cwd', async () => {
+    answerAsGitAndGh('git-path')
+    const cwd = checkout()
+    await readGitPullRequest(cwd)
+    const gits = execFile.mock.calls.filter(([, args]) => args[0] === 'symbolic-ref' || args[0] === 'remote')
+    expect(gits.length).toBeGreaterThan(0)
+    for (const [file, , options] of gits) {
+      expect(isAbsolute(file)).toBe(true)
+      expect(file).toBe(GIT)
+      expect(options).toMatchObject({ cwd })
+    }
+  })
+  it('runs gh by its absolute path, with the pane\'s folder as cwd', async () => {
+    answerAsGitAndGh('gh-path')
+    const cwd = checkout()
+    expect(await readGitPullRequest(cwd)).toMatchObject({ status: 'found', number: 12 })
+    const ghs = execFile.mock.calls.filter(([, args]) => args[0] === 'api')
+    expect(ghs.length).toBeGreaterThan(0)
+    for (const [file, , options] of ghs) {
+      expect(isAbsolute(file)).toBe(true)
+      expect(file).toBe(GH)
+      expect(options).toMatchObject({ cwd })
+    }
+  })
+  it('runs gh by its absolute path for a recorded pull request, from the temporary folder', async () => {
+    answerAsGitAndGh('gh-url')
+    expect(await readPullRequestUrl('https://github.com/acme/repo/pull/12')).toMatchObject({ status: 'found', number: 12 })
+    expect(execFile.mock.calls).toHaveLength(1)
+    const [file, , options] = execFile.mock.calls[0]!
+    expect(file).toBe(GH)
+    expect(options).toMatchObject({ cwd: tmpdir() })
+  })
+  it('is unavailable when no gh is found, as a missing gh gives', async () => {
+    answerAsGitAndGh('gh-missing')
+    program.gh = () => Promise.reject(Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' }))
+    expect(await readGitPullRequest(checkout())).toEqual({ status: 'unavailable' })
+    expect(execFile.mock.calls.filter(([file]) => file !== GIT)).toHaveLength(0)
+  })
+})
 describe('worktree PR status', () => {
   it('keeps GitHub lifecycle dates separate from lookup time and discards malformed dates', async () => {
     const run = vi.fn(async () => JSON.stringify(row({ state: 'closed',

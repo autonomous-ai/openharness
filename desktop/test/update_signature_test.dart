@@ -427,7 +427,7 @@ void main() {
 
       final pair = await readWindowsSignerPair(
         file: empty,
-        runningExe: windowsPowerShellPath(Platform.environment),
+        runningExe: windowsPowerShellPath(),
       );
       expect(pair.running.status, 'Valid');
       expect(pair.running.subject, contains('Microsoft'));

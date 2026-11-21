@@ -13,7 +13,7 @@
  * this machine's.
  */
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, uptime, userInfo } from 'node:os'
 import { dirname, isAbsolute, join, win32 } from 'node:path'
 
@@ -402,10 +402,26 @@ export function currentUid(proc: { getuid?: () => number } = process): number {
   return typeof proc.getuid === 'function' ? proc.getuid() : 0
 }
 
-/** [command] in System32, as lib/windows/powershell.ts's `systemProgram` names it: the master imports no feature code. */
-function windowsProgram(command: string, env: NodeJS.ProcessEnv): string {
-  const root = [env.SystemRoot, env.windir].find((folder) => /^[A-Za-z]:\\/.test(folder ?? ''))
-  return win32.join(root ?? 'C:\\Windows', 'System32', `${command}.exe`)
+let askedRoot: string | undefined
+
+/** Windows' own folder, asked of the file system: SystemRoot and windir are whoever runs the command's, and can name
+ *  another folder. A copy of lib/windows/powershell.ts's `systemRoot`, its check included: the master imports only
+ *  Node, its own folder and the log trimmer (src/harnessd/AGENTS.md). Without [real], asked once a process. */
+export function systemRoot(real?: (path: string) => string): string {
+  if (!real) return askedRoot ??= systemRoot(realpathSync.native)
+  try {
+    const root = real('\\\\?\\GLOBALROOT\\SystemRoot')
+    // A drive's folder that cmd.exe reads as itself between quotes: no variable, no `!`, no quote, no operator.
+    if (/^[A-Za-z]:\\[^%!"^&|<>]*$/.test(root)) return root
+  } catch {
+    // Not there off Windows, or not readable: the folder Windows installs to.
+  }
+  return 'C:\\Windows'
+}
+
+/** [command] in System32 of [systemRoot]. */
+function windowsProgram(command: string): string {
+  return win32.join(systemRoot(), 'System32', `${command}.exe`)
 }
 
 /**
@@ -420,7 +436,7 @@ export function defaultPlatformDeps(options: { env?: NodeJS.ProcessEnv; uid?: nu
   return {
     run: (command, args, output) => {
       // `launchctl print` lists the whole job, and a domain's listing runs to hundreds of kilobytes.
-      const result = spawnSync(process.platform === 'win32' ? windowsProgram(command, env) : command, args, {
+      const result = spawnSync(process.platform === 'win32' ? windowsProgram(command) : command, args, {
         env, encoding: 'utf8', timeout: COMMAND_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024, stdio: ['pipe', output?.stdout ?? 'pipe', 'pipe'],
       })
       return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '', ...(result.error ? { error: result.error.message } : {}) }

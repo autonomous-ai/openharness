@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  expandFolder, folderValues, KNOWN_FOLDERS_TIMEOUT_MS, readAppDataFolders, RegFailure, regQuery, SHELL_FOLDERS, systemRoot,
+  expandFolder, folderValues, KNOWN_FOLDERS_TIMEOUT_MS, readAppDataFolders, RegFailure, regQuery, SHELL_FOLDERS,
   USER_SHELL_FOLDERS, type AppDataFolders, type RegQuery, type RegRun,
 } from './knownFolders.js'
 
@@ -27,26 +27,6 @@ const shown = (answers: unknown[]): string[] => answers.map(answer => answer ins
   : Buffer.isBuffer(answer) ? answer.toString('latin1') : `not an answer: ${String(answer)}`)
 
 afterEach(() => vi.unstubAllEnvs())
-
-describe('systemRoot', () => {
-  it('is where \\\\?\\GLOBALROOT\\SystemRoot leads, asked of the file system', () => {
-    const asked: string[] = []
-    expect(systemRoot(path => { asked.push(path); return 'D:\\Windows' })).toBe('D:\\Windows')
-    expect(asked).toEqual(['\\\\?\\GLOBALROOT\\SystemRoot'])
-  })
-
-  it('is C:\\Windows when that does not resolve to a drive\'s folder, whatever the environment says', () => {
-    vi.stubEnv('SystemRoot', 'Z:\\evil')
-    vi.stubEnv('windir', 'Z:\\evil')
-    expect(systemRoot(() => { throw new Error('ENOENT') })).toBe('C:\\Windows')
-    expect(systemRoot(() => '\\\\server\\share\\Windows')).toBe('C:\\Windows')
-    expect(systemRoot(() => '\\\\?\\GLOBALROOT\\Device\\X')).toBe('C:\\Windows')
-  })
-
-  it('is C:\\Windows when cmd.exe would read the folder\'s name as something else', () => {
-    for (const name of ['D:\\Win%OS%', 'D:\\a!b', 'D:\\a&b', 'D:\\a"b']) expect(systemRoot(() => name), name).toBe('C:\\Windows')
-  })
-})
 
 // This Mac's systemRoot() is C:\Windows: the GLOBALROOT path does not resolve here.
 describe('regQuery', () => {

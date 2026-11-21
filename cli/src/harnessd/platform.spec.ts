@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { fakePlatform, type FakePlatform } from '../testing/fakePlatform.js'
 import {
   COMMAND_TIMEOUT_MS, LAUNCHD_LABEL, OS_SYSTEMD_UNIT, OS_UNIT_FILE, PLATFORM_ENV, PLATFORM_LABEL, PlatformService, RESTART_THROTTLE_S, STOP_TIMEOUT_S, SYSTEMD_UNIT,
-  TASK_REPEAT, WHOAMI_ARGS, currentUid, defaultPlatformDeps, launchdPlist, logonTaskName, platformFor, platformFromEnv, stoppedThisBoot, systemdUnit, taskName, taskSchedulerXml, whoamiSid,
+  TASK_REPEAT, WHOAMI_ARGS, currentUid, defaultPlatformDeps, launchdPlist, logonTaskName, platformFor, platformFromEnv, stoppedThisBoot, systemdUnit, systemRoot, taskName, taskSchedulerXml, whoamiSid,
   type CommandResult, type PlatformDeps, type ServiceDefinition,
 } from './platform.js'
 
@@ -195,17 +195,28 @@ describe('the default dependencies', { timeout: FAKE_COMMANDS_TIMEOUT_MS }, () =
     const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
     Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
     try {
-      const deps = defaultPlatformDeps({ env: { PATH: fake.bin, SystemRoot: 'C:\\Windows' }, uid: 501, home: join(dir, 'home') })
-      expect(deps.run('schtasks', ['/Query']).error).toContain('C:\\Windows\\System32\\schtasks.exe')
-      expect(deps.run('whoami', ['/user']).error).toContain('C:\\Windows\\System32\\whoami.exe')
-      // Windows' folder by windir when SystemRoot is not set, else where Windows installs.
-      expect(defaultPlatformDeps({ env: { PATH: fake.bin, windir: 'D:\\Win' } }).run('schtasks', []).error).toContain('D:\\Win\\System32\\schtasks.exe')
-      expect(defaultPlatformDeps({ env: { PATH: fake.bin } }).run('schtasks', []).error).toContain('C:\\Windows\\System32\\schtasks.exe')
-      // An empty or relative value would name a folder under the one the command runs in.
-      expect(defaultPlatformDeps({ env: { PATH: fake.bin, SystemRoot: '', windir: 'Windows' } }).run('schtasks', []).error).toContain('C:\\Windows\\System32\\schtasks.exe')
+      // Windows' own folder, as the file system names it: SystemRoot and windir are whoever runs the command's.
+      const deps = defaultPlatformDeps({ env: { PATH: fake.bin, SystemRoot: 'D:\\Elsewhere', windir: 'D:\\Elsewhere' }, uid: 501, home: join(dir, 'home') })
+      const schtasks = deps.run('schtasks', ['/Query']).error
+      expect(schtasks).not.toContain('Elsewhere')
+      expect(schtasks).toContain(`${systemRoot()}\\System32\\schtasks.exe`)
+      expect(deps.run('whoami', ['/user']).error).toContain(`${systemRoot()}\\System32\\whoami.exe`)
       expect(fake.calls()).toEqual([])
     } finally {
       Object.defineProperty(process, 'platform', platform)
+    }
+  })
+
+  it('find Windows\' own folder where \\\\?\\GLOBALROOT\\SystemRoot leads, asked of the file system', () => {
+    const asked: string[] = []
+    expect(systemRoot((path) => { asked.push(path); return 'D:\\Windows' })).toBe('D:\\Windows')
+    expect(asked).toEqual(['\\\\?\\GLOBALROOT\\SystemRoot'])
+  })
+
+  it('take C:\\Windows when that is no drive\'s folder cmd.exe reads as itself', () => {
+    expect(systemRoot(() => { throw new Error('ENOENT') })).toBe('C:\\Windows')
+    for (const name of ['\\\\server\\share\\Windows', '\\\\?\\GLOBALROOT\\Device\\X', 'D:\\Win%OS%', 'D:\\a!b', 'D:\\a&b', 'D:\\a"b']) {
+      expect(systemRoot(() => name), name).toBe('C:\\Windows')
     }
   })
 

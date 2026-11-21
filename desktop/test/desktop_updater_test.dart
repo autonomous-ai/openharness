@@ -96,6 +96,11 @@ final String? _macOnly = Platform.isMacOS
     ? null
     : 'needs a macOS host: `ditto` builds the .app archive this unpacks';
 
+/// Staging an AppImage runs `chmod +x`, which Windows lacks.
+final String? _posixOnly = Platform.isWindows
+    ? 'needs a POSIX host: staging an AppImage runs chmod +x'
+    : null;
+
 /// Stand-in bytes for a host with no `ditto`.
 ///
 /// Enough for anything that only serves the archive over HTTP and checks its
@@ -1126,6 +1131,7 @@ void main() {
         expect(mode, contains('x'), reason: 'staged AppImage should be +x');
         await Directory(staged.stagingDirPath).delete(recursive: true);
       },
+      skip: _posixOnly,
     );
 
     test(
@@ -1269,7 +1275,7 @@ void main() {
             'the UI isolate went ${longest.inMilliseconds} ms without an event; '
             'hashing these bytes here takes ${onThisIsolate.inMilliseconds} ms',
       );
-    });
+    }, skip: _posixOnly);
 
     test('the background digest is the sha256 the manifest carries', () async {
       expect(

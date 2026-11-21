@@ -2,7 +2,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { checkRemovable, finalRemovalScript, listEntries, removalPlan, removeNow, scheduleFinalRemoval, type FinalRemovalDeps, type PlanInput, type RemovalPlan, type RootEntry } from './removal.js'
+import { systemRoot } from '../windows/powershell.js'
+import { checkRemovable, finalRemovalDeps, finalRemovalScript, listEntries, removalPlan, removeNow, scheduleFinalRemoval, type FinalRemovalDeps, type PlanInput, type RemovalPlan, type RootEntry } from './removal.js'
 import { UNINSTALL_MARKER } from './marker.js'
 
 const d = (name: string): RootEntry => ({ name, dir: true })
@@ -558,5 +559,18 @@ describe('scheduleFinalRemoval', () => {
     expect(() => scheduleFinalRemoval(plan, deps({ tempDir: 'c:\\u\\.HARNESS' }).base)).toThrow(/Harness will not remove/)
     expect(t.written).toEqual([])
     expect(t.scripts).toEqual([])
+  })
+})
+
+describe('finalRemovalDeps', () => {
+  afterEach(() => { vi.unstubAllEnvs() })
+
+  // The step's cmd.exe and the tools in its script: a SystemRoot or windir variable is whoever runs the command's.
+  it('finds Windows\' own folder through the file system, never a SystemRoot or windir variable', () => {
+    vi.stubEnv('SystemRoot', 'D:\\Elsewhere')
+    vi.stubEnv('windir', 'D:\\Elsewhere')
+    const deps = finalRemovalDeps()
+    expect(deps.systemRoot).not.toContain('Elsewhere')
+    expect(deps.systemRoot).toBe(systemRoot())
   })
 })

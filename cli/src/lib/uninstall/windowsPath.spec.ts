@@ -1,5 +1,6 @@
+import { win32 } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { encodedCommandArgs, powershellPath, withPrelude, type PowershellResult } from '../windows/powershell.js'
+import { encodedCommandArgs, powershellPath, systemRoot, withPrelude, type PowershellResult } from '../windows/powershell.js'
 import { expandWindowsVariables, PATH_UNANNOUNCED_NOTE, READ_USER_PATH, removeUserPathEntry, withoutPathEntry, WRITE_USER_PATH } from './windowsPath.js'
 
 const env = { USERPROFILE: 'C:\\Users\\u', LOCALAPPDATA: 'C:\\Users\\u\\AppData\\Local' }
@@ -30,7 +31,7 @@ describe('withoutPathEntry', () => {
 
 describe('powershell', () => {
   it('runs Windows PowerShell by its full path, with the script encoded', () => {
-    expect(powershellPath({ SystemRoot: 'C:\\Windows' })).toBe('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
+    expect(powershellPath()).toBe(win32.join(systemRoot(), 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'))
     const args = encodedCommandArgs('Write-Output "é"')
     expect(args.slice(0, 5)).toEqual(['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand'])
     expect(Buffer.from(args[5], 'base64').toString('utf16le')).toBe('Write-Output "é"')

@@ -97,8 +97,7 @@ look of a dial that was not attached); 6 the dial's pets changed. A desk refuses
 
 ## console.ps1
 
-Run over SSH as the account whose console session it is, from the folder it is in. That account must be the owner or
-an administrator: over SSH a standard user is denied `Get-CimInstance Win32_ComputerSystem`, which finds the session.
+Run over SSH as the account whose console session it is, from the folder it is in; a standard user will do.
 
 - `console.ps1 -Script run-desk.ps1 -ArgsJson '["--dial-read","COM3","--out","C:\\…\\first-read.json","--serial-bin","C:\\…\\harness-serial.exe"]'`
   waits for the script (`-TimeoutSec`, 600 by default), prints its output and `exit <code>`, and exits with that code.
@@ -109,7 +108,14 @@ an administrator: over SSH a standard user is denied `Get-CimInstance Win32_Comp
 
 It registers a one-shot task under this account with an interactive logon and no stored password, and starts the script
 through Windows' own `conhost.exe --headless`, so no window shows and nothing is compiled. Exit 3: this account has no
-console session. A task still running at its timeout is ended with everything it started.
+console session, as the task says: an interactive task runs only in its account's session, so with none it has not
+started within 20 s (last result `0x41303`, "has not yet run"), and it is deleted with its files. The same on every
+edition: Windows Home has no `quser.exe`. A task still running at its timeout is ended with everything it started.
+
+It uses no CIM, which an SSH logon's network token is denied (the `ScheduledTasks` cmdlets go through it too): the Task
+Scheduler's own `Schedule.Service` COM object registers, runs, stops and deletes the task, and the wrapper writes its
+pid to `<name>.pid`, by which `taskkill /t` ends what it started. taskkill lists processes through WMI too, so over SSH
+it says `Access denied` and ends nothing: it runs as a task of its own in the session (`<name>-end`, no window).
 
 ## The VM
 

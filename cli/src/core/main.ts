@@ -2216,6 +2216,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // handoff. Informational: nothing should build readiness on a field the server stops serving.
       restarting: updateHandoff.restarting(),
       discoveryReady,
+      // Discovery passes completed since start: what a test waits on to know a pass looked after its change.
+      discoveryPasses: agentReconciler.passes,
       discoveryError: discoveryError ?? (terminalUnavailable ? `${terminalUnavailable.backend} unavailable: ${terminalUnavailable.reason}` : null),
       // Present only when start-up failed and this daemon is holding the machine open until a fix
       // arrives. Clients key on `discoveryReady`; this says WHY, in one word, for a person reading it.

@@ -1331,7 +1331,8 @@ jobs:
           bash device-app/scripts/e2e/linux-install.sh "${found[0]}"
 
   # test_ci_plan.CrossReadTests' repository-wide scan, which skips in process-checks' sparse checkout: here on a full
-  # one, for a change to the planner, its test or the tables it reads (scripts/ci-plan.py ALSO).
+  # one, for a change to a component, a file an end-to-end suite runs as its own, the planner, its test or the tables
+  # it reads (scripts/ci-plan.py ALSO and select()).
   cross-read-scan:
     concurrency:
       group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-cross-read-scan
@@ -1349,15 +1350,12 @@ jobs:
         # The planner tests that need every file: with this set, a missing file fails them instead of skipping.
         env:
           CROSS_READ_SCAN_REQUIRED: '1'
-        shell: bash
-        run: |
-          python3 -m unittest discover -s scripts/tests -p test_ci_plan.py -v \
-            -k test_every_cross_read_in_this_repository_is_declared \
-            -k test_the_dial_host_files_are_the_ones_cli_e2e_leaves_out \
-            -k test_every_declared_input_exists \
-            -k test_every_desktop_file_the_phone_tests_read_selects_mobile 2>&1 | tee "$RUNNER_TEMP/scan.log"
-          # A renamed test matches no -k and would leave the scan passing without it.
-          grep -Eq '^Ran 4 tests in ' "$RUNNER_TEMP/scan.log" || { echo "::error::the scan ran fewer or more than its 4 tests"; exit 1; }
+        # The names are FullCheckoutTests.NAMES, which its own test keeps complete; a name that is no test fails to
+        # load, so a renamed one fails the job instead of leaving it out.
+        working-directory: scripts/tests
+        run: >-
+          python3 -c 'import unittest, test_ci_plan;
+          unittest.main(module="test_ci_plan", argv=["cross-read-scan", "-v", *test_ci_plan.FullCheckoutTests.NAMES])'
 
   required:
     name: ci/required

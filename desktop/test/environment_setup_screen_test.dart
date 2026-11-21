@@ -11,6 +11,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/color_palette.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/widgets/environment_setup_screen.dart';
+import 'package:harness/ws/local_cli_discovery.dart';
 
 import 'support/guest_app.dart';
 
@@ -97,13 +98,22 @@ Future<void> _mount(
   await tester.pump();
 }
 
-AppNotifier _app(SetupProvisioner provisioner) =>
+AppNotifier _app(
+  SetupProvisioner provisioner, {
+  bool Function()? uninstalling,
+}) =>
     GuestTestApp(
         config: AppConfig.dev,
         authSession: AuthSession(),
         configStore: null,
         cliLogin: SetupLogin(),
         environmentProvisioner: provisioner,
+        localCliDiscovery: uninstalling == null
+            ? null
+            : LocalCliDiscovery(
+                config: AppConfig.dev,
+                uninstalling: uninstalling,
+              ),
       )
       ..status = AppStatus.preparingEnvironment
       ..environmentReadiness = setupReview;
@@ -254,6 +264,47 @@ void main() {
         false,
         true,
       ]);
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+    },
+  );
+
+  // `harness uninstall` holds its marker while it removes the CLI: setup runs the CLI and may install it again.
+  testWidgets(
+    'Retry while harness uninstall holds its marker runs no setup and ends on the sign-in page',
+    (tester) async {
+      final provisioner = SetupProvisioner();
+      final app = _app(provisioner, uninstalling: () => true)
+        ..environmentReadiness = setupReview.copyWith(
+          phase: EnvironmentSetupPhase.failed,
+          mode: EnvironmentSetupMode.automatic,
+          failure: const EnvironmentFailure(
+            title: 'Checking this computer took too long',
+            detail: 'A required tool did not respond.',
+          ),
+        );
+      await _mount(tester, app);
+      await tester.tap(find.text('Retry'));
+      await tester.pump();
+      expect(provisioner.attempts, isEmpty);
+      expect(app.status, AppStatus.unauthenticated);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+    },
+  );
+
+  testWidgets(
+    'Install while harness uninstall holds its marker runs no setup and ends on the sign-in page',
+    (tester) async {
+      final provisioner = SetupProvisioner();
+      final app = _app(provisioner, uninstalling: () => true);
+      await _mount(tester, app);
+      await tester.tap(find.text('Install 2 tools'));
+      await tester.pump();
+      expect(provisioner.attempts, isEmpty);
+      expect(app.status, AppStatus.unauthenticated);
+      expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       app.dispose();
     },

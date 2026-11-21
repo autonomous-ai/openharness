@@ -5860,8 +5860,7 @@ class AppNotifier extends ChangeNotifier {
         // Beside the tool probe, as neither waits on the other (task #2169). A fresh computer has no CLI yet: a check that
         // fails is asked again after. One from before a sign-out or an install says nothing about now.
         final askedAt = _authRevision;
-        final early = cliLogin
-            .checkStatus()
+        final early = _checkAuthStatus()
             .then<CliAuthStatus?>((status) {
               _markStartup('signed-in check');
               return status;
@@ -6046,12 +6045,19 @@ class AppNotifier extends ChangeNotifier {
     });
   }
 
+  /// Every setup run: launch, the setup screen's Install, Retry and Recheck, and the 5 s recheck. Setup runs the CLI
+  /// (`node cli.js version`) and may install it again, so none while `harness uninstall` holds its marker (see
+  /// [_checkAuthStatus]): it throws, and its caller ends where a failed signed-in check ends, on the sign-in page.
   Future<EnvironmentReadiness> _runProvisioner({
     EnvironmentReadiness? resumeFrom,
     bool install = false,
     EnvironmentSetupMode? mode,
     bool quiet = false,
   }) async {
+    if (_discovery.uninstallHeld()) {
+      appLog.info('setup', 'no setup: harness uninstall holds its marker');
+      throw CliNotAvailableException('harness uninstall is removing the CLI');
+    }
     final provisioner = environmentProvisioner ?? EnvironmentProvisioner();
     if (install) _installedThisBoot = true;
     final result = await provisioner.ensureReady(
@@ -6116,7 +6122,7 @@ class AppNotifier extends ChangeNotifier {
           await _openFromKeptSignIn(early, revision)) {
         return;
       }
-      final authStatus = await early ?? await cliLogin.checkStatus();
+      final authStatus = await early ?? await _checkAuthStatus();
       _markStartup('signed-in check');
       if (!_authWorkCurrent(revision)) return;
       signedIn = authStatus.loggedIn;
@@ -6152,6 +6158,22 @@ class AppNotifier extends ChangeNotifier {
       }
       notifyListeners();
     }
+  }
+
+  /// `harness auth status` for a launch. While `harness uninstall` holds its marker the CLI is being removed: a run
+  /// starts it from the files going away, and on Windows holds them so the removal fails. No answer then, as when the
+  /// CLI is missing, so the launch ends on the login screen. A dial being flashed holds only the daemon down, so the
+  /// check still runs then. A viewer has no local CLI to remove.
+  Future<CliAuthStatus> _checkAuthStatus() async {
+    if (viewer == null && _discovery.uninstallHeld()) {
+      // A launch asks two or three times, so the log says why it ended on the login screen without flooding it.
+      appLog.info(
+        'auth',
+        'no harness auth status: harness uninstall holds its marker',
+      );
+      throw CliNotAvailableException('harness uninstall is removing the CLI');
+    }
+    return cliLogin.checkStatus();
   }
 
   /// Opens the window as the account this computer was last proven signed in as, while `harness auth status` still
@@ -6197,7 +6219,7 @@ class AppNotifier extends ChangeNotifier {
   ) async {
     CliAuthStatus? answer;
     try {
-      answer = await check ?? await cliLogin.checkStatus();
+      answer = await check ?? await _checkAuthStatus();
     } catch (error) {
       debugPrint('bootstrap: signed-in check failed behind the window: $error');
     }
@@ -6289,6 +6311,10 @@ class AppNotifier extends ChangeNotifier {
         return;
       }
       await _continueAfterEnvironmentReady();
+    } on CliNotAvailableException {
+      // Held by `harness uninstall` ([_runProvisioner]).
+      currentUser = null;
+      status = AppStatus.unauthenticated;
     } finally {
       _environmentSetupInFlight = false;
       notifyListeners();
@@ -6314,6 +6340,10 @@ class AppNotifier extends ChangeNotifier {
         result = await _installUnattended(result);
       }
       if (result.isReady) await _continueAfterEnvironmentReady();
+    } on CliNotAvailableException {
+      // Held by `harness uninstall` ([_runProvisioner]).
+      currentUser = null;
+      status = AppStatus.unauthenticated;
     } finally {
       _environmentSetupInFlight = false;
       notifyListeners();
@@ -7005,10 +7035,13 @@ class AppNotifier extends ChangeNotifier {
         // reason to stop, either: it starts WITHOUT a session and serves this computer. So the window
         // is told it has become a guest (a banner, and the sheet on the next reach for another
         // machine) and the supervisor goes on bringing the daemon back.
-        final authStatus = await cliLogin.checkStatus();
-        if (!_authWorkCurrent(revision)) return;
-        if (!authStatus.loggedIn && signedIn) {
-          _signedOutAtRuntime(_signedOutMessage);
+        // Not while `harness uninstall` holds its marker: the CLI it would run is being removed (see [_checkAuthStatus]).
+        if (!discovery.uninstallHeld()) {
+          final authStatus = await cliLogin.checkStatus();
+          if (!_authWorkCurrent(revision)) return;
+          if (!authStatus.loggedIn && signedIn) {
+            _signedOutAtRuntime(_signedOutMessage);
+          }
         }
         throw StateError(
           'The local Harness daemon did not start. Try running `harness start` yourself, then reopen the app.',
@@ -7694,6 +7727,15 @@ class AppNotifier extends ChangeNotifier {
   /// button of its own to name it — the browser opens on the sign-in page's chooser.
   Future<void> login([SignInProvider? provider]) async {
     if (_disposed || signingIn || signingOut || signOutError != null) return;
+    // `harness login --force` runs the CLI `harness uninstall` is removing (see [_checkAuthStatus]): nothing runs, and
+    // the person stays on the sign-in page, as a launch while the marker is held ends.
+    if (viewer == null && _discovery.uninstallHeld()) {
+      appLog.info(
+        'auth',
+        'no harness login: harness uninstall holds its marker',
+      );
+      return;
+    }
     final measureSignIn = productMeasurement.begin(ProductFlow.signIn);
     var signedInHere = false;
     final wasGuest = isGuest;

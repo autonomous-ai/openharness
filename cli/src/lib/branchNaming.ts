@@ -2,13 +2,14 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { sessionBranchNames } from './branchNames.js'
 import { HARNESS_BRANCH_KEY, inRepositoryTurn, insideGitCheckout } from './gitProject.js'
+import { gitPath } from './gitOnPath.js'
 
 const exec = promisify(execFile)
 
 async function git(cwd: string, args: string[]): Promise<string> {
   const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }
   for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE']) delete (env as NodeJS.ProcessEnv)[key]
-  return (await exec('git', ['-C', cwd, ...args], { timeout: 10_000, killSignal: 'SIGKILL', maxBuffer: 256 * 1024, env }))
+  return (await exec(await gitPath(), ['-C', cwd, ...args], { timeout: 10_000, killSignal: 'SIGKILL', maxBuffer: 256 * 1024, env }))
     .stdout.replace(/\r?\n$/, '')
 }
 
