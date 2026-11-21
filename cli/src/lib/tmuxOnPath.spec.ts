@@ -83,7 +83,7 @@ describe('ensureTmuxOnPath', () => {
 
     expect(outcome.state).toBe('adopted')
     if (outcome.state !== 'adopted') return
-    expect(outcome.from).toBe(binDir)
+    expect(outcome.from).toBe('login shell')
     // The point of the whole exercise: every later execFile('tmux', …) now resolves.
     expect(env.PATH?.split(delimiter)[0]).toBe(binDir)
     expect(env.PATH).toContain('/nonexistent-for-this-test')

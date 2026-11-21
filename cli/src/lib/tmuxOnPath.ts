@@ -25,11 +25,14 @@ import { interactiveEngineShell } from './engineLaunch.js'
 // availability probe uses, so a command name can never be interpolated into shell source.
 const RESOLVE_SCRIPT = 'command -v "$1" 2>/dev/null'
 
+/** Where a binary off the PATH was found, in fixed words a log can print: the folder would name the person's home. */
+export type FoundFrom = 'login shell' | 'managed runtime' | 'standard install location' | 'PATH'
+
 export type TmuxPathOutcome =
   /** Already resolvable; the daemon's PATH was left alone. */
   | { state: 'present'; path?: string }
   /** Found — through the managed runtime or the user's shell — and its directory prepended to PATH. */
-  | { state: 'adopted'; path: string; from: string }
+  | { state: 'adopted'; path: string; from: FoundFrom }
   /** Not resolvable either way — tmux is genuinely absent, or there is no usable login shell. */
   | { state: 'absent'; reason: string }
 
@@ -165,7 +168,7 @@ export async function ensureTmuxOnPath(
   if (resolved) {
     const dir = dirname(resolved)
     env.PATH = env.PATH ? `${dir}${delimiter}${env.PATH}` : dir
-    return { state: 'adopted', path: resolved, from: dir }
+    return { state: 'adopted', path: resolved, from: 'login shell' }
   }
   const managed = managedTmuxPath(runtimeDir)
   if (managed) {

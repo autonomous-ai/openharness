@@ -639,10 +639,10 @@ describe('kitty as the core finds tmux', () => {
     expect((await kitty()).state).toBe('absent')
     expect(shell.asked).toEqual(['kitten'])
     const path = install(where.HARNESS_BIN_DIR)
-    expect(await kitty()).toEqual(adopted(path))
+    expect(await kitty()).toEqual(adopted(path, 'standard install location'))
     expect(shell.asked).toEqual(['kitten', 'kitten'])
     // Found, it holds.
-    expect(await kitty()).toEqual(adopted(path))
+    expect(await kitty()).toEqual(adopted(path, 'standard install location'))
     expect(shell.asked).toHaveLength(2)
   })
 
@@ -651,6 +651,6 @@ describe('kitty as the core finds tmux', () => {
     const kitty = kittyFinder(where, 'linux')
     expect((await kitty()).state).toBe('absent')
     const path = install(where.PATH, 'kitty')
-    expect(await kitty()).toEqual(adopted(path))
+    expect(await kitty()).toEqual(adopted(path, 'PATH'))
   })
 })

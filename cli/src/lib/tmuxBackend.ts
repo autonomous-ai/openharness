@@ -237,8 +237,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
       return { state: 'unavailable', code: 'TMUX_UNAVAILABLE', reason: tmuxPath.reason }
     }
     if (tmuxPath.state === 'adopted') {
-      // Not where from: a login shell's answer is a folder of the person's (`tmuxOnPath.ts`).
-      console.log('[tmux] not on the daemon PATH · adopted tmux')
+      console.log(`[tmux] not on the daemon PATH · adopted tmux from the ${tmuxPath.from}`)
     }
     // Before the first inventory: sessions a pre-prefix build named `<engine>-<ts>` are renamed to
     // `harness-<engine>-<ts>` so discovery's whitelist sees the registry's own panes again.
