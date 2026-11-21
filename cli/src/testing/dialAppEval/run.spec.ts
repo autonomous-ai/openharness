@@ -30,10 +30,16 @@ beforeEach(() => {
 })
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
-interface Call { cmd: string; args: string[]; out: string | undefined }
+interface Call { cmd: string; args: string[]; out: string | undefined; env: NodeJS.ProcessEnv }
+type Source = Parameters<typeof writeResults>[1]
+const EMPTY: RunResults = { schema: 1, results: [], wrongSends: [], gaps: [] }
 
-/** A fake exec: tier A's run writes `a`, tier B's `b` (when given), and each exits with its code. */
-function harness(written: { a?: RunResults; b?: RunResults }, opts: { platform?: NodeJS.Platform; codes?: Partial<Record<Tier, number>> } = {}) {
+/**
+ * A fake exec: tier A's run writes `a` as the spec's file, tier B's `b` as the Claude file and an empty ChatGPT and
+ * held-out file (when `b` is given), save the sources `unwritten` names, and each exits with its code.
+ */
+function harness(written: { a?: RunResults; b?: RunResults },
+  opts: { platform?: NodeJS.Platform; codes?: Partial<Record<Tier, number>>; unwritten?: Source[] } = {}) {
   const calls: Call[] = []
   const lines: string[] = []
   const deps = {
@@ -42,10 +48,13 @@ function harness(written: { a?: RunResults; b?: RunResults }, opts: { platform?:
     platform: opts.platform ?? 'darwin',
     log: (line: string) => { lines.push(line) },
     async exec(cmd: string, args: string[], env: NodeJS.ProcessEnv): Promise<number> {
-      calls.push({ cmd, args, out: env.DIAL_EVAL_OUT })
+      calls.push({ cmd, args, out: env.DIAL_EVAL_OUT, env })
       const tier: Tier = args.includes('vitest.e2e.config.ts') ? 'b' : 'a'
       const file = written[tier]
-      if (file && env.DIAL_EVAL_OUT) writeResults(env.DIAL_EVAL_OUT, tier === 'a' ? 'spec' : 'claude', file)
+      const files: Array<[Source, RunResults]> = tier === 'a' ? [['spec', file ?? EMPTY]] : [['claude', file ?? EMPTY], ['chatgpt', EMPTY], ['heldOut', EMPTY]]
+      for (const [source, results] of files) {
+        if (file && env.DIAL_EVAL_OUT && !opts.unwritten?.includes(source)) writeResults(env.DIAL_EVAL_OUT, source, results)
+      }
       return opts.codes?.[tier] ?? 0
     },
   }
@@ -118,11 +127,32 @@ it('results an earlier run left in DIAL_EVAL_OUT are not read', async () => {
   expect(report().byTier.b.claude.score).toBeNull()
 })
 
-it('a low score exits 0, and a tier\'s own failure is printed, not fatal', async () => {
-  const h = harness({ a: results('a', 0), b: results('b', 0) }, { codes: { a: 1 } })
+it('a low score exits 0', async () => {
+  const h = harness({ a: results('a', 0), b: results('b', 0) })
   expect(await main([], h.deps)).toBe(0)
   expect(report().apps.claude.score).toBe(0)
+})
+
+it('a tier whose vitest fails exits 1, its report still written', async () => {
+  const h = harness({ a: results('a', 1), b: results('b', 1) }, { codes: { a: 1 } })
+  expect(await main([], h.deps)).toBe(1)
   expect(h.log()).toContain('tier a: vitest exited 1')
+  expect(report().apps.claude.score).toBe(100)
+})
+
+it('the tiers skip their own ratchet: the command judges it from the merged results, and prints it, not fatal', async () => {
+  writeBaseline({ schema: 1, checks: { 'a/darwin/C1/ring.recall': 1, 'b/darwin/C1/ring.recall': 1 }, apps: {} })
+  const h = harness({ a: results('a', 0.5), b: results('b', 0) })
+  expect(await main([], h.deps)).toBe(0)
+  expect(h.calls.map((c) => c.env.DIAL_EVAL_SKIP_RATCHET)).toEqual(['1', '1'])
+  expect(h.log()).toContain('tier A ratchet: regression: a/darwin/C1/ring.recall')
+  expect(h.log()).toContain('tier B ratchet: regression: b/darwin/C1/ring.recall')
+})
+
+it('a results file a tier did not write exits 1, named', async () => {
+  const h = harness({ a: results('a', 1), b: results('b', 1) }, { unwritten: ['heldOut'] })
+  expect(await main([], h.deps)).toBe(1)
+  expect(h.log()).toContain('results-b-heldOut.json was not written')
 })
 
 it('--update-baseline writes the baseline, keeping the tier not run', async () => {
@@ -142,6 +172,35 @@ it('and refuses on a wrong send', async () => {
   expect(await main(['--tier', 'a', '--update-baseline'], h.deps)).toBe(1)
   expect(readBaseline()).toEqual(before)
   expect(h.log()).toContain('a voice prompt reached another session: stop and ask the PM before a baseline is written')
+})
+
+it('and refuses unless every tier passed and wrote every results file', async () => {
+  const before = { schema: 1, checks: { 'a/darwin/C1/ring.recall': 0.5 }, apps: { a: { claude: 50, chatgpt: null } } } as const
+  writeBaseline(before)
+  const failed = harness({ a: results('a', 1), b: results('b', 1) }, { codes: { b: 1 } })
+  expect(await main(['--update-baseline'], failed.deps)).toBe(1)
+  expect(readBaseline()).toEqual(before)
+  expect(failed.log()).toContain('no baseline written')
+  const unwritten = harness({ a: results('a', 1), b: results('b', 1) }, { unwritten: ['chatgpt'] })
+  expect(await main(['--update-baseline'], unwritten.deps)).toBe(1)
+  expect(readBaseline()).toEqual(before)
+})
+
+it('and refuses to drop a check of a scenario the catalog still runs, with no gap, naming it', async () => {
+  // C1 is still in the catalog: its order went missing. C99 is not: its check goes.
+  const before = { schema: 1, checks: { 'a/darwin/C1/ring.order': 1, 'a/darwin/C1/ring.recall': 1, 'a/darwin/C99/ring.recall': 1 },
+    apps: {} } as const
+  writeBaseline(before)
+  const h = harness({ a: results('a', 1) })
+  expect(await main(['--tier', 'a', '--update-baseline'], h.deps)).toBe(1)
+  expect(readBaseline()).toEqual(before)
+  const refusal = h.lines.find((line) => line.startsWith('no baseline written'))
+  expect(refusal).toContain('a/darwin/C1/ring.order')
+  expect(refusal).not.toContain('C99')
+
+  writeBaseline({ ...before, checks: { 'a/darwin/C1/ring.recall': 1, 'a/darwin/C99/ring.recall': 1 } })
+  expect(await main(['--tier', 'a', '--update-baseline'], harness({ a: results('a', 1) }).deps)).toBe(0)
+  expect(readBaseline().checks).toEqual({ 'a/darwin/C1/ring.recall': 1 })
 })
 
 it('a wrong send exits 1 without --update-baseline too', async () => {
