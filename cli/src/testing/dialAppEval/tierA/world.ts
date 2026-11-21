@@ -161,6 +161,8 @@ export class World implements TierAWorld {
     // not this world's.
     for (const name of ['HOME', 'USERPROFILE']) vi.stubEnv(name, root)
     for (const name of ['LOCALAPPDATA', 'APPDATA', 'XDG_CONFIG_HOME', 'HARNESS_APPLICATIONS_DIR', 'HARNESS_OPEN_BIN']) vi.stubEnv(name, '')
+    // The welcome's voice language follows LANG (cableHost.ts voiceLang): the same on every host.
+    vi.stubEnv('LANG', 'en_US.UTF-8')
     // The readers read the fixture's root on every platform; where the platform's own root is a path of this host, the
     // fixture is there, so the store's watch on it hears its writes as the app's.
     const own = claudeStoreRoots(platform, process.env, root)[0]!.root
