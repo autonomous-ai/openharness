@@ -603,7 +603,7 @@ it('discovery cannot retire an engine that appeared while its exit image was pre
     terminals: { backendFor: () => terminal } })
   vi.mocked(resolvePaneEngineProcess).mockResolvedValue(null)
   const held = holdImage(rows => rows.some(entry => entry.engine === 'terminal'))
-  const pending = handlers.onDormant(structuredClone(row), 'engine exited')
+  const pending = handlers.onDormant(structuredClone(row), 'engine process absent after 2 confirmed scans')
   await held.entered
   vi.mocked(resolvePaneEngineProcess).mockResolvedValue(newProcess)
   held.release(); await pending

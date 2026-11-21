@@ -15,6 +15,9 @@ import { errorKind } from './log.js'
 
 const MISS_LIMIT = 2
 
+/** Why the reconciler retires an agent: fixed words, so the core's discovery lines may print it as it is. */
+export type AbsenceReason = `${'engine process' | 'terminal runtime'} absent after ${number} confirmed scans`
+
 /**
  * How long one reconcile pass may take before the core stops waiting on it.
  *
@@ -48,8 +51,8 @@ export interface TerminalAgentReconcilerDeps {
   backendOrder: readonly string[]
   onDiscovered: (agent: DiscoveredTerminalAgent) => void | Promise<void>
   onObserved: (agent: DiscoveredTerminalAgent, current: RegisteredSession) => void | Promise<void>
-  onDormant: (current: RegisteredSession, reason: string) => void | Promise<void>
-  onRemoved: (current: RegisteredSession, reason: string) => void | Promise<void>
+  onDormant: (current: RegisteredSession, reason: AbsenceReason) => void | Promise<void>
+  onRemoved: (current: RegisteredSession, reason: AbsenceReason) => void | Promise<void>
   onTerminalAvailability?: (current: RegisteredSession, available: boolean) => void | Promise<void>
   onReconciled?: (agents: readonly DiscoveredTerminalAgent[]) => void
   onProbeStatus?: (status: { ready: true; error: string | null }) => void

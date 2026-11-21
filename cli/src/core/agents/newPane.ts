@@ -8,10 +8,10 @@
  */
 import { OPENCLAW_LOCAL, OPENCLAW_STATES, openclawFolderInUse, readOpenclawScreen } from '../../engines/openclaw/contract.js'
 import type { AgentEngine } from '../../engines/types.js'
-import { describeAgentCreateFailure, summarizePaneOutput } from '../../lib/agentCreateDiagnosis.js'
+import { describeAgentCreateFailure } from '../../lib/agentCreateDiagnosis.js'
 import type { engineInstallRecipe } from '../../lib/engineInstall.js'
 import { commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
-import { errorKind, sid } from '../../lib/log.js'
+import { codeOrLength, errorKind, sid } from '../../lib/log.js'
 import { matchesLaunchReceipt, RegistryOwnershipChanged, type LaunchPublication, type registry, type RegisteredSession, type RegistryAuthority } from '../../lib/registry.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
@@ -180,7 +180,7 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
             : `${engine} is not installed, or its automatic install failed. See the terminal output for details.`
           const failed = registry.setLaunch(pending.agentId, { state: 'failed', error, detail })
           if (failed) announceSession(failed)
-          console.warn(`[agent] create failed · ${engine} · ${detail}`)
+          console.warn(`[agent] create failed · ${engine} · ${codeOrLength(error)}`)
           return
         }
         // The engine started and was gone again before it was ever seen (a flag it refused, a
@@ -209,18 +209,21 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
           if (refused) {
             const failed = registry.setLaunch(pending.agentId, { state: 'failed', ...refused })
             if (failed) announceSession(failed)
-            console.warn(`[agent] create failed · ${engine} · ${refused.detail}`)
+            console.warn(`[agent] create failed · ${engine} · ${refused.error}`)
             return
           }
+          // The pane's words and the binary's path can name the person's files, and Export logs sends this line
+          // off the machine: it says how much the pane printed, and the engine by its name.
+          const printed = (captured ?? '').split('\n').filter((line) => line.trim()).length
           console.warn(`[agent] create · ${engine} · agent ${sid(pending.agentId)} · `
             + describeAgentCreateFailure({
               state: { dead: true, exitStatus: paneState.engineExit, command: engine },
-              output: summarizePaneOutput(captured ?? ''),
-              engineBin: command[0],
+              output: '',
+              engineBin: engine,
               shellName: null,
               processes: [],
               elapsedMs: Date.now() - startedAt,
-            }))
+            }) + ` · pane output ${printed} lines`)
           // A hook may have bound a conversation while this watcher was awaiting its probe.
           // Archive the current row, not the pre-hook pending snapshot.
           const row = registry.byAgent(pending.agentId)
