@@ -5,9 +5,9 @@ import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SpawnLockBusyError } from '../daemonSpawnLock.js'
 import { PTY_PROTOCOL } from '../ptyHost/protocol.js'
-import { restore as restoreCli, startSelfUpdater } from '../selfUpdate.js'
+import { DigestMismatchError, restore as restoreCli, startSelfUpdater } from '../selfUpdate.js'
 import { installPreparedPty, rejectedPtyVersions } from './ptyInstall.js'
-import { PTY_PAYLOAD_FILES, PtyPayloadRefused, PtyPayloadUnpackFailed, type PreparedPty, type PtyEntry } from './ptyPayload.js'
+import { PTY_PAYLOAD_FILES, PtyPayloadRefused, PtyPayloadUnpackFailed, preparePtyPayload, type PreparedPty, type PtyEntry } from './ptyPayload.js'
 import {
   installedPtyProtocol, keepStaged, ptyOnProbation, ptyUnjudged, rollBackStaged, startPtyUpdater, sweepPtyLeftovers, takeBackPty,
   type PtyPoller, type PtyUpdaterDeps,
@@ -149,6 +149,28 @@ describe('startPtyUpdater', () => {
     expect(h.lines.filter((l) => l.includes('no longer an update'))).toHaveLength(1)
   })
 
+  it('says a refusal and a failed unpack by their codes, never their words', async () => {
+    const said = (h: { lines: string[] }, part: string) => vi.waitFor(() => expect(h.lines.find((l) => l.includes(part))).toBeDefined(), { timeout: 2_000 })
+    const mismatch = harness({ prepare: (entry, runtimeDir, verified) => preparePtyPayload(entry, runtimeDir, { download: async () => { throw new DigestMismatchError('sentinel digest') } }, verified) })
+    await said(mismatch, 'was refused')
+    expect(mismatch.lines).toContain('[update] terminal host 0.11.0 was refused (PtyPayloadRefused DIGEST_MISMATCH) — not trying it again for 40 ms')
+    mismatch.poller.stop()
+    const full = harness({
+      prepare: (entry, runtimeDir, verified) => preparePtyPayload(entry, runtimeDir, {
+        download: async () => Buffer.from('zip'), unzip: async () => { throw Object.assign(new Error('ENOSPC: no space left, write /Users/sentinel'), { code: 'ENOSPC' }) },
+      }, verified),
+    })
+    await said(full, 'could not be unpacked')
+    expect(full.lines).toContain('[update] terminal host 0.11.0 was downloaded but could not be unpacked (PtyPayloadUnpackFailed ENOSPC) — unpacking it again next check, from the bytes already verified')
+    full.poller.stop()
+    mkdirSync(join(ptyRoot, '0.11.0'))
+    for (const name of PTY_PAYLOAD_FILES) writeFileSync(join(ptyRoot, '0.11.0', name), `other ${name}`)
+    const differs = harness()
+    await said(differs, 'was refused')
+    expect(differs.lines).toContain('[update] terminal host 0.11.0 was refused (PtyPayloadRefused VERSION_FOLDER_DIFFERS) — not trying it again for 40 ms')
+    expect([...mismatch.lines, ...full.lines, ...differs.lines].join('\n')).not.toContain('sentinel')
+  })
+
   it('a refused payload backs off', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
     let sha = 'a'
@@ -158,13 +180,13 @@ describe('startPtyUpdater', () => {
       entry: () => entryOf('0.11.0', sha),
       prepare: async (entry) => {
         prepared.push(entry.sha256[0])
-        if (entry.sha256[0] === 'a') throw new PtyPayloadRefused('digest mismatch: nope')
+        if (entry.sha256[0] === 'a') throw new PtyPayloadRefused('DIGEST_MISMATCH', 'digest mismatch: nope')
         return stagingFor(entry.version)
       },
     })
     await vi.advanceTimersByTimeAsync(1_000)
     expect(prepared).toEqual(['a'])
-    expect(h.lines).toContain('[update] terminal host 0.11.0 was refused (PtyPayloadRefused) — not trying it again for 2 s')
+    expect(h.lines).toContain('[update] terminal host 0.11.0 was refused (PtyPayloadRefused DIGEST_MISMATCH) — not trying it again for 2 s')
     // Two intervals before it is tried again: the check between downloads nothing.
     await vi.advanceTimersByTimeAsync(1_000)
     expect(prepared).toEqual(['a'])
