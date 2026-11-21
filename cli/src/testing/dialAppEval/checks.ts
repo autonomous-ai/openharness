@@ -196,10 +196,13 @@ function stillParts(check: CheckOf<'still'>, world: World, w: Window | undefined
   return [{ part: 'still', score: moved.length === 0 ? 1 : 0, timed: false, evidence }]
 }
 
+/** Each app's link scheme: the ChatGPT app's threads are Codex's. */
+const SCHEMES: Readonly<Record<App, string>> = { claude: 'claude://', chatgpt: 'codex://' }
+
 /** The session's own link: the Claude app opens its store's `local_` id, the ChatGPT app the Codex thread. */
 function linkOf(session: SessionDef): string | undefined {
-  if (session.app === 'chatgpt') return `codex://threads/${session.id}`
-  return session.localId && `claude://code/continue?session=${session.localId}`
+  if (session.app === 'chatgpt') return `${SCHEMES.chatgpt}threads/${session.id}`
+  return session.localId && `${SCHEMES.claude}code/continue?session=${session.localId}`
 }
 
 /**
@@ -220,7 +223,12 @@ function openParts(check: CheckOf<'open'>, world: World, w: Window | undefined, 
   const link = linkOf(session)
   const commands = w ? world.seen.commands.filter((c) => within(c.at, w)) : []
   const linked = commands.filter((c) => link !== undefined && c.argv.includes(link))
-  const front = commands.find((c) => fronts(c.argv, platform, session.app, link))
+  // A command that failed, or that hands an app a link it refuses (world.linkFails), brought nothing up, whatever it
+  // names: X5's tap must bring its app up another way.
+  const refused = world.scenario.world?.linkFails ?? []
+  const brings = (c: Seen['commands'][number]): boolean => c.ok
+    && !c.argv.some((arg) => refused.some((app) => arg.startsWith(SCHEMES[app]))) && fronts(c.argv, platform, session.app, link)
+  const front = commands.find(brings)
   // The dial's inputs first, so an input that opened nothing fails with what the driver saw. Commands carry paths: the
   // evidence says only what each one was.
   const inputs = w ? world.seen.steps.filter((s) => within(s.at, w)).flatMap((s) => {
@@ -228,7 +236,7 @@ function openParts(check: CheckOf<'open'>, world: World, w: Window | undefined, 
     return step.kind === 'tap' || step.kind === 'swipe' ? [`${step.kind} on ${step.session} at ${s.at}`] : []
   }) : []
   const evidence = bounded([...inputs, ...commands.map((c) =>
-    `command at ${c.at}: ${[linked.includes(c) && 'link', fronts(c.argv, platform, session.app, link) && 'front'].filter(Boolean).join(' ') || 'other'}`),
+    `command at ${c.at}: ${[linked.includes(c) && 'link', brings(c) && 'front', !c.ok && 'failed'].filter(Boolean).join(' ') || 'other'}`),
   ...(inputs.length > 0 && commands.length === 0 ? ['no command'] : [])])
   const latency = front && w ? front.at - w.from : null
   return [
