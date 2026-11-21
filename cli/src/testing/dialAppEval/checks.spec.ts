@@ -142,6 +142,24 @@ describe('ring', () => {
     expect(never.find((r) => r.check === 'r.change')?.timed).toBe(true)
   })
 
+  it('apart: the other pages of the apps frame with the ring count exactly its sessions, so one merged into the ring fails', () => {
+    const s = scenario([{ kind: 'codex.write', sessions: ['t', 'u'], label: 'w' }], [T, U])
+    const check: Check = { id: 'r', kind: 'ring', dim: 'D1', page: 'chatgpt', expect: ['t'], apart: ['u'], after: 'w' }
+    const counted = (ghostty: number): Seen['frames'] => [frame(200, { t: 'apps', shown: 'codex',
+      apps: [{ id: 'ghostty', name: 'Ghostty', count: ghostty, waiting: 0 }, { id: 'codex', name: 'ChatGPT', count: 1, waiting: 0 }] }),
+    ...list(200, 'codex', [T]).slice(1)]
+    const apart = (frames: Seen['frames']): CheckResult => run(check, s, seen(s, [100], { frames })).find((r) => r.check === 'r.apart')!
+    expect(apart(counted(1))).toMatchObject({ score: 1, dim: 'D1', timed: false })
+    expect(apart(counted(1)).evidence).toContain('apps at 200: ghostty 1, codex 1')
+    // u merged into t's row: no other page counts it.
+    expect(apart(counted(0)).score).toBe(0)
+    expect(apart(counted(2)).score).toBe(0)
+    expect(apart(list(200, 'codex', [T])).score).toBe(0)
+    // A ring check that names no sessions apart has no such part.
+    expect(run({ ...ring }, scenario([write]), seen(scenario([write]), [100], { frames: list(200, 'claude', [A, B, C]) }))
+      .some((r) => r.check === 'r.apart')).toBe(false)
+  })
+
   it('a probe on a ghost session fails with what was observed', () => {
     const s = scenario([write])
     const probe: Check = { ...ring, expect: ['ghost'] }

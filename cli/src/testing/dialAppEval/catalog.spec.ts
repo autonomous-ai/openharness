@@ -19,7 +19,7 @@ function stepKeys(step: Step): SessionKey[] {
 /** The session keys a check names. */
 function checkKeys(check: Check): SessionKey[] {
   switch (check.kind) {
-    case 'ring': return check.expect
+    case 'ring': return [...check.expect, ...check.apart ?? []]
     case 'focus': case 'open': case 'state': case 'voice': case 'recap': return [check.session]
     default: return []
   }
@@ -46,6 +46,12 @@ describe('the catalog', () => {
 
   it('each scenario\'s check ids are its own, so no two results share a key', () => {
     for (const s of ALL) expect(new Set(s.checks.map((c) => c.id)).size, s.id).toBe(s.checks.length)
+  })
+
+  it('X10 counts the Codex CLI session apart from the thread, on another page, and its probe asks for one more there', () => {
+    const x10 = byId('X10')
+    expect(x10.checks.find((c) => c.id === 'ring')).toMatchObject({ kind: 'ring', expect: ['t1'], apart: ['c1'] })
+    expect(x10.probes).toContainEqual(expect.objectContaining({ id: 'apart', kind: 'ring', expect: ['t1'], apart: ['c1', 'z'] }))
   })
 
   it('X3 is macOS only', () => {
