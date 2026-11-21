@@ -285,6 +285,25 @@ describe('createObservedHook', () => {
     quiet(log)
   })
 
+  it('notes each handled paneless event in one line, with no session or path', () => {
+    const body = { ...full, event: 'turn-start', sessionId: 'secret-session', hostHints: { TERM_PROGRAM: 'secret-hint' } }
+    const note = vi.fn()
+    let devices = true
+    const hook = createObservedHook({ forward: () => devices, now: () => 0, note, log: () => {} })
+    hook.onObserved(body)
+    expect(note.mock.calls).toEqual([['[hooks] paneless claude turn-start · forwarded']])
+    devices = false
+    hook.onObserved(body)
+    expect(note.mock.calls[1]).toEqual(['[hooks] paneless claude turn-start · no devices'])
+    // Over the rate and refused bodies are the loss lines' to say.
+    for (let i = 0; i < 19; i += 1) hook.onObserved(body)
+    expect(note).toHaveBeenCalledTimes(20)
+    expect(hook.onObserved(body)).toBe('dropped')
+    expect(hook.onObserved({ nope: 1 })).toBe('invalid')
+    expect(note).toHaveBeenCalledTimes(20)
+    expect(JSON.stringify(note.mock.calls)).not.toMatch(/secret|\/work|\.jsonl/)
+  })
+
   it('forwards a valid event and answers ok', () => {
     const forward = vi.fn(() => true)
     expect(createObservedHook({ forward, now: () => 7 }).onObserved(full)).toBe('ok')
