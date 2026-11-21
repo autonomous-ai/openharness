@@ -19,6 +19,15 @@
  * unix:/tmp/kitty python3 raw.py w1`, then `kitten @ --to unix:/tmp/kitty launch --type=window python3 raw.py w2`,
  * which made window 2 active (`ls` said so before and after). `raw.py` puts its tty in raw mode and appends each read
  * to its file as Python's repr, so `landed` is the bytes each window's program read, untranslated, keyed by window id.
+ *
+ * The focus by process (`focusWindowPid`, `focusWindowPidDescendant`, `focusWindowPidMissing`) was recorded
+ * 2026-11-21 the same way, with python3 3.12.3-0ubuntu2.1 and procps 2:4.0.4-4ubuntu3.3 (for `ps`) also installed:
+ * `kitty -o allow_remote_control=socket-only --listen-on unix:/tmp/kitty --directory /work sh -c 'sh -c "sleep
+ * 100000; true"; true'`, then `kitten @ --to unix:/tmp/kitty launch --type=tab --title other cat`, which made tab 2
+ * (window 2) active and left window 1 in the inactive tab 1. Window 1's processes, by `ps`: `sh` 1430 (kitty's child),
+ * its `sh` 1431 and that one's `sleep` 1432, all one process group, the tty's foreground one. Before each focus
+ * `focus-window --match id:2` made tab 2 active again. Whether window 1 and its tab became active was read from `ls`:
+ * its `is_active` fields alone.
  */
 export const RECORDED_KITTY = {
   source: 'recorded',
@@ -220,6 +229,29 @@ export const RECORDED_KITTY = {
     args: ['kitten', '@', '--to', 'unix:/tmp/nothing', 'ls'],
     code: 1,
     stderr: 'Error: dial unix /tmp/nothing: connect: no such file or directory\n',
+  },
+  /** `pid:` names window 1's own process, kitty's child: tab 1 became active, with window 1 its active window. It
+   *  printed nothing. */
+  focusWindowPid: {
+    args: ['kitten', '@', '--to', 'unix:/tmp/kitty', 'focus-window', '--match', 'pid:1430'],
+    code: 0,
+    windowActive: true,
+    tabActive: true,
+  },
+  /** A process two levels below window 1's own (`sleep` 1432) matches no window, although `ls` lists it among the
+   *  window's `foreground_processes`: `pid:` matches the window's own process alone. The one level below (`sh` 1431)
+   *  answered the same. Tab 2 stayed active; window 1 stayed what it was before, its own tab's active window. */
+  focusWindowPidDescendant: {
+    args: ['kitten', '@', '--to', 'unix:/tmp/kitty', 'focus-window', '--match', 'pid:1432'],
+    code: 1,
+    stderr: 'Error: No matching windows for expression: pid:1432\n',
+    tabActive: false,
+  },
+  /** A pid no window holds. Tab 2 stayed active. */
+  focusWindowPidMissing: {
+    args: ['kitten', '@', '--to', 'unix:/tmp/kitty', 'focus-window', '--match', 'pid:99999'],
+    code: 1,
+    stderr: 'Error: No matching windows for expression: pid:99999\n',
   },
   missingWindow: {
     args: ['kitten', '@', '--to', 'unix:/tmp/kitty', 'focus-window', '--match', 'id:99'],
