@@ -13,7 +13,7 @@ publisher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(publisher)
 
 
-def make_parts(directory, version, base_url):
+def make_parts(directory, version, base_url, signer):
     directory.mkdir(parents=True, exist_ok=True)
     entries = {}
     for name, keys in publisher.PARTS.items():
@@ -22,6 +22,8 @@ def make_parts(directory, version, base_url):
             payload = f"Publication contract fixture: {version} {key}\n".encode()
             part[key] = dict(version=version, url=f"{base_url}/{key}",
                              size=len(payload), sha256=hashlib.sha256(payload).hexdigest())
+            if file_name := publisher.verification.SIGNED.get(key):
+                part[key]["signature"] = signer.sign(payload, desktop_comment(file_name, version))
             (directory / key).write_bytes(payload)
         (directory / name).write_text(json.dumps(part))
         entries.update(part)

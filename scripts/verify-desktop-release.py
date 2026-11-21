@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Verify all nine public Desktop downloads concurrently, without storing the binaries.
 
-Uses the updater's Dart user agent, full SHA-256/size checks and curl's total
-transfer deadline (a socket idle timeout alone does not bound a slow transfer).
+Uses the updater's Dart user agent, full SHA-256/size checks, each Linux AppImage's
+Tauri signature against the key Harness Device pins, and curl's total transfer
+deadline (a socket idle timeout alone does not bound a slow transfer).
 Only reads public endpoints; never publishes or changes a manifest.
 
 With --signed, checks Linux AppImages on disk against their Tauri signatures (<AppImage>.sig) and the key Harness
@@ -90,6 +91,13 @@ def entries_for_version(manifest, version, keys=KEYS):
         if not isinstance(entry.get("url"), str):
             raise ValueError(f"{key}: missing URL")
         curl_command(entry["url"], 1)  # Validate every entry before starting downloads.
+        if key in SIGNED:
+            # Publish and promotion hold no file to check it over, so they refuse what cannot be a signature;
+            # verify_artifact checks it against the key once it has the bytes.
+            try:
+                parse_signature(entry.get("signature"))
+            except SignatureRefused as error:
+                raise ValueError(f"{key}: {error}") from None
         entries.append((key, entry))
     return entries
 
@@ -99,8 +107,11 @@ class ConnectionDropped(ValueError):
 
 
 def download(entry, timeout):
-    """The file's size and digest. A timeout is not retried: it would break the deadline this check promises."""
-    digest = hashlib.sha256()
+    """The file's size, SHA-256 and BLAKE2b-512 (what a Tauri signature signs), in one pass.
+
+    A timeout is not retried: it would break the deadline this check promises.
+    """
+    sha256, blake2b = hashlib.sha256(), hashlib.blake2b()
     size = 0
     with subprocess.Popen(
         curl_command(entry["url"], timeout) + ["--max-filesize", str(entry["size"])],
@@ -109,7 +120,8 @@ def download(entry, timeout):
         try:
             for chunk in iter(lambda: process.stdout.read(1024 * 1024), b""):
                 size += len(chunk)
-                digest.update(chunk)
+                sha256.update(chunk)
+                blake2b.update(chunk)
             error = process.stderr.read().decode(errors="replace").strip()
             code = process.wait()
             if code in CONNECTION_DROPPED:
@@ -120,20 +132,20 @@ def download(entry, timeout):
             if process.poll() is None:
                 process.kill()
                 process.wait()
-    return size, digest
+    return size, sha256, blake2b
 
 
-def verify_artifact(item, timeout):
+def verify_artifact(item, timeout, public_key=None):
     key, entry = item
     started = time.monotonic()
     result = {field: entry[field] for field in ("version", "url", "sha256", "size")}
     result.update(key=key, started_at=utc_now(), status="failed")
-    digest = hashlib.sha256()
+    sha256 = hashlib.sha256()
     size = 0
     try:
         for attempt in range(1, DOWNLOAD_TRIES + 1):
             try:
-                size, digest = download(entry, timeout)
+                size, sha256, blake2b = download(entry, timeout)
                 break
             except ConnectionDropped:
                 if attempt == DOWNLOAD_TRIES:
@@ -141,12 +153,15 @@ def verify_artifact(item, timeout):
                 time.sleep(attempt * RETRY_PAUSE_SECONDS)
         if size != entry["size"]:
             raise ValueError(f"size mismatch: expected {entry['size']}, received {size}")
-        if digest.hexdigest() != entry["sha256"]:
+        if sha256.hexdigest() != entry["sha256"]:
             raise ValueError("SHA-256 mismatch")
+        if key in SIGNED:
+            # The check a Linux Desktop makes before it installs, so a release never publishes what it would refuse.
+            check_signature(entry.get("signature"), blake2b.digest(), SIGNED[key], entry["version"], public_key)
         result["status"] = "passed"
     except (OSError, ValueError) as error:
         result["error"] = str(error)
-    result.update(actual_size=size, actual_sha256=digest.hexdigest(),
+    result.update(actual_size=size, actual_sha256=sha256.hexdigest(),
                   finished_at=utc_now(), duration_seconds=round(time.monotonic() - started, 3))
     print(f"{key}: {result['status']} ({result['duration_seconds']}s)" +
           (f" — {result['error']}" if "error" in result else ""), flush=True)
@@ -262,7 +277,7 @@ def check_signed(version, paths):
     return 1 if failed else 0
 
 
-def verify(version, manifest_url=MANIFEST, jobs=3, timeout=90):
+def verify(version, manifest_url=MANIFEST, jobs=3, timeout=90, public_key=None):
     started = time.monotonic()
     receipt = dict(version=version, manifest_url=manifest_url, started_at=utc_now(),
                    source_sha=os.environ.get("GITHUB_SHA"), run_id=os.environ.get("GITHUB_RUN_ID"),
@@ -271,7 +286,7 @@ def verify(version, manifest_url=MANIFEST, jobs=3, timeout=90):
         manifest, receipt["manifest_sha256"] = read_manifest(manifest_url, min(20, timeout))
         entries = entries_for_version(manifest, version)
         with ThreadPoolExecutor(max_workers=jobs) as pool:
-            receipt["artifacts"] = list(pool.map(lambda item: verify_artifact(item, timeout), entries))
+            receipt["artifacts"] = list(pool.map(lambda item: verify_artifact(item, timeout, public_key), entries))
         if all(item["status"] == "passed" for item in receipt["artifacts"]):
             receipt["status"] = "passed"
     except (OSError, ValueError, subprocess.TimeoutExpired) as error:

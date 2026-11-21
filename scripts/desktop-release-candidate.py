@@ -167,7 +167,7 @@ def describe(uri):
     return json.loads(publisher.gcloud('storage', 'objects', 'describe', uri, '--format=json'))
 
 
-def seal(version, bucket, prefix, parts, identity):
+def seal(version, bucket, prefix, parts, identity, public_key=None):
     """Verify immutable source generations and retain their hashes in GitHub."""
     check_bucket(bucket)
     check_prefix(prefix, identity['run_id'], identity['run_attempt'])
@@ -190,7 +190,7 @@ def seal(version, bucket, prefix, parts, identity):
         require(int(metadata.get('size', -1)) == entry['size'], 'source size differs from the build manifest')
         pinned[key] = dict(entry, generation=generation, url=entry['url'] + '?generation=' + generation)
     with ThreadPoolExecutor(max_workers=3) as pool:
-        results = list(pool.map(lambda item: verification.verify_artifact(item, 90), pinned.items()))
+        results = list(pool.map(lambda item: verification.verify_artifact(item, 90, public_key), pinned.items()))
     require(all(item['status'] == 'passed' for item in results), 'candidate downloads failed verification')
     return dict(schema=2, status='passed', version=version, bucket=bucket, prefix=prefix,
                 created_at=verification.utc_now(), **identity, artifacts=pinned)
@@ -334,6 +334,8 @@ def promote(receipt, destination, scratch):
     require(destination == f'harness/desktop/{version}' or
             re.fullmatch(r'harness/desktop/\.candidate-check/[1-9][0-9]*-[1-9][0-9]*/artifacts', destination), 'invalid promotion destination')
     require(re.fullmatch(r'harness/desktop/\.ci/[1-9][0-9]*-[1-9][0-9]*', scratch), 'invalid scratch prefix')
+    # Publish refuses parts without a Linux signature: refuse such a receipt before the first immutable copy.
+    verification.entries_for_version(receipt['artifacts'], version)
     def copy(key):
         publisher.gcloud('storage', 'cp', source_uri(receipt, key), f'gs://{bucket}/{destination}/{FILES[key]}',
                          '--if-generation-match=0', '--cache-control=public, max-age=31536000, immutable')
@@ -345,6 +347,8 @@ def promote(receipt, destination, scratch):
             entries = {key: {field: receipt['artifacts'][key][field] for field in ('version', 'size', 'sha256')} for key in keys}
             for key, entry in entries.items():
                 entry['url'] = f'{base}/{destination}/{FILES[key]}'
+                if key in verification.SIGNED:
+                    entry['signature'] = receipt['artifacts'][key]['signature']
             path = Path(folder) / name
             path.write_text(json.dumps(entries) + '\n')
             publisher.gcloud('storage', 'cp', str(path), f'gs://{bucket}/{scratch}/{name}', '--if-generation-match=0',

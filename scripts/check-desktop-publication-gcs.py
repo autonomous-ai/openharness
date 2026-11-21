@@ -13,7 +13,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).with_name("tests")))
-from desktop_publication_fixture import artifact_upload_script, make_parts, publisher
+from desktop_publication_fixture import FixtureSigner, artifact_upload_script, make_parts, publisher
 
 
 def must_reject(operation):
@@ -37,23 +37,26 @@ def main():
         with tempfile.TemporaryDirectory(prefix="desktop-publication-check-") as folder:
             root = Path(folder)
             parts = root / "parts"
+            # A throwaway key signs the Linux fakes, and only this run's verify trusts it: the release key never leaves sign-linux.
+            signer = FixtureSigner(root / "signer")
             for version in ("0.0.1", "0.0.3"):
-                entries = make_parts(parts, version, f"https://storage.googleapis.com/{bucket}/{prefix}/{version}")
+                entries = make_parts(parts, version, f"https://storage.googleapis.com/{bucket}/{prefix}/{version}", signer)
                 files = [str(parts / key) for key in entries]
                 publisher.gcloud("storage", "cp", *files, f"{base}/{version}/", "--if-generation-match=0")
                 publisher.publish(uri, version, parts, allow_initialize=True)
-                receipt = publisher.verification.verify(version, f"https://storage.googleapis.com/{bucket}/{prefix}/metadata.json")
+                receipt = publisher.verification.verify(version, f"https://storage.googleapis.com/{bucket}/{prefix}/metadata.json",
+                                                        public_key=signer.public_key)
                 assert receipt["status"] == "passed", receipt
                 print(f"PASS: publish and verify all {len(entries)} {version} fixtures", flush=True)
 
             live, generation = publisher.read_live(uri)
             for version in ("0.0.2", "0.0.3"):
-                make_parts(parts, version, "https://fixture.invalid/never-uploaded")
+                make_parts(parts, version, "https://fixture.invalid/never-uploaded", signer)
                 must_reject(lambda: publisher.publish(uri, version, parts))
             assert publisher.read_live(uri) == (live, generation)
             print("PASS: late older and duplicate releases preserve the current version", flush=True)
 
-            make_parts(parts, "0.0.4", "https://fixture.invalid/never-uploaded")
+            make_parts(parts, "0.0.4", "https://fixture.invalid/never-uploaded", signer)
             (parts / "linux-arm64.json").unlink()
             must_reject(lambda: publisher.publish(uri, "0.0.4", parts))
             assert publisher.read_live(uri) == (live, generation)
