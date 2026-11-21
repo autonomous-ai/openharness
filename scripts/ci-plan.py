@@ -132,9 +132,10 @@ DEVICE_APP_PATHS = {
                           "device-app/scripts/release-build.sh", "device-app/scripts/release-check.sh",
                           "device-app/scripts/release-setup.sh", "device-app/src-tauri/tauri*.conf.json",
                           "device-app/src-tauri/Cargo.toml", "device-app/src-tauri/Cargo.lock"),
-    # Desktop installs the app: Desktop's half, the signature check it runs on Linux and the update check that one
-    # extends, the end-to-end install test and the test signer it imports (CI compiles integration_test/ nowhere else),
-    # the Flutter its jobs set up on each arch, and the app's install, packaging and instance code.
+    # Desktop installs the app: Desktop's half, the Linux signature check it runs (with the update check that one
+    # extends), the end-to-end install test and the test signer it signs the Device package with, so a change to how
+    # that package's signature is made or checked runs it; the Flutter its jobs set up on each arch, and the app's
+    # install, packaging and instance code.
     "device-app-desktop": (DEVICE_APP_SETUP, ".github/actions/desktop-flutter/", ".github/actions/desktop-flutter-arm64/",
                            "desktop/lib/devices/", "desktop/lib/update/tauri_signature.dart",
                            "desktop/lib/update/update_signature.dart",
