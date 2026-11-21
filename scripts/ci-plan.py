@@ -4,8 +4,9 @@
 A PR runs the unit suite of each component it changes and of each suite that reads a changed file (PR_READS), and each
 end-to-end suite (E2E: windows-e2e, linux-e2e, dial-hosts, device-app-e2e, device-app-update, device-app-desktop,
 device-app-install) whose own path list names a changed file; linux-e2e runs the CLI e2e files the PR adds or modifies.
-A change to this planner, its test, the tables it reads or the CLI lists they copy runs the repository-wide cross-read
-scan and the planner's other full-checkout tests on a full checkout.
+A change to a component, to a file an end-to-end suite runs as its own, to this planner, its test, the tables it reads
+or the CLI lists they copy runs the repository-wide cross-read scan and the planner's other full-checkout tests on a
+full checkout.
 Merge groups run only the plan and process checks: the PR run already covered the code.
 After GitHub merges main into a PR head whose ci/required passed, a component whose
 inputs main's new commits left untouched reuses that run's result instead of running
@@ -265,7 +266,7 @@ DEPENDS.update({
     "device-app-desktop": DEPENDS["device-app"] + DEPENDS["desktop"] + ("device-app/", "desktop/"),
     "device-app-install": DEPENDS["device-app"] + ("device-app/", "website/scripts/device-install.sh"),
     # The scan reads every component's files and the docs their strings may name; the planner's tables name them all.
-    # Only a PR that changes the CLI's lists alone may reuse it (its other files are under scripts/, a shared input).
+    # So after Update branch it is reused only when main's new commits change none of them.
     "cross-read-scan":tuple(sorted({path.split("/", 1)[0] + "/" for path in (*COMPONENTS, *ALSO, *SUBCOMPONENTS)}
                                     | {"docs/"})),
 })

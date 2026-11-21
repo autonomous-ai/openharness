@@ -1331,7 +1331,8 @@ jobs:
           bash device-app/scripts/e2e/linux-install.sh "${found[0]}"
 
   # test_ci_plan.CrossReadTests' repository-wide scan, which skips in process-checks' sparse checkout: here on a full
-  # one, for a change to the planner, its test or the tables it reads (scripts/ci-plan.py ALSO).
+  # one, for a change to a component, a file an end-to-end suite runs as its own, the planner, its test or the tables
+  # it reads (scripts/ci-plan.py ALSO and select()).
   cross-read-scan:
     concurrency:
       group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-cross-read-scan

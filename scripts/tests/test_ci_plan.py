@@ -467,7 +467,7 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual([path for path in through if path not in planner.LINUX_E2E_ORCA_FILES
                           and path not in MACOS_ONLY_ORCA_E2E and not planner.dial_hosts_path(path)], [])
 
-    def test_the_planner_and_the_tables_it_scans_with_alone_run_the_cross_read_scan(self):
+    def test_the_planner_its_tables_and_every_suites_own_files_run_the_cross_read_scan(self):
         # process-checks' checkout is sparse, where the repository-wide scan skips: two undeclared reads slipped in so.
         for path in ("scripts/ci-plan.py", "scripts/tests/test_ci_plan.py", "scripts/record-ci-validation.py"):
             with self.subTest(path=path):
@@ -496,9 +496,8 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(planner.MANUAL["cross-read-scan"], {"cross-read-scan"})
 
     def test_the_cross_read_scan_reads_every_file_it_scans(self):
-        # Its result depends on every component's files. A PR that changes only the CLI's lists the planner mirrors
-        # (dialHosts.ts, the CI config) may reuse it after Update branch, so any of them changed on main reruns it; the
-        # planner's own files are under scripts/, a shared input, and never reuse.
+        # Its result depends on every component's files, so any of them changed on main reruns it after Update branch;
+        # the planner's own files are under scripts/, a shared input, which reruns every suite.
         for path in ("cli/src/a.ts", "tests/a.ts", "desktop/lib/a.dart", "devices/harness-pro/a.c", "term/src/a.rs",
                      "plugins/harness-device-vscode/src/a.ts", "device-app/src-tauri/src/a.rs", "docs/guide.md"):
             with self.subTest(path=path):
