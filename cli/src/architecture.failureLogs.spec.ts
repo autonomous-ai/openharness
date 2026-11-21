@@ -14,7 +14,7 @@
  * handler binds, a name on the left of `instanceof` in the expression at hand, a name spelled as one (`e`, `err`,
  * `error`, `ex`, `exception`, `…Error`, `…Err`) that is not a parameter typed `string`, and the `.cause` of any of
  * these. A log call is found when it prints an error's `.message`, `.stack`, `.reason`, `.detail`, `.stderr`,
- * `.stdout`, `.path` or `.toString()`, an error whole (as itself, in a template, a sum, an object, a branch, the right
+ * `.stdout`, `.path`, `.dest`, `.cmd`, `.spawnargs` or `.toString()`, an error whole (as itself, in a template, a sum, an object, a branch, the right
  * side of `&&`, a method's receiver or what a callback returns, handed to any function but the safe ones below, or
  * built in place), or a local made from either (its initializer, or a value a `let` is given later); when it runs in a
  * catch that binds nothing; and when it says "fail" in a catch that binds one and names nothing it caught. It is
@@ -396,8 +396,11 @@ const OPERAND_OPERATORS = [ts.SyntaxKind.PlusToken, ts.SyntaxKind.QuestionQuesti
 
 const shown = (node: ts.Node): string => node.getText().replace(/\s+/g, ' ')
 
-/** An error's fields that hold its words: what it says and where, what it stored, what a process printed, a path. */
-const ERROR_WORDS = ['message', 'stack', 'reason', 'detail', 'stderr', 'stdout', 'path']
+/**
+ * An error's fields that hold its words: what it says and where, what it stored, what a process printed, and Node's
+ * own: a path and where it went, the command line that ran, a child's arguments.
+ */
+const ERROR_WORDS = ['message', 'stack', 'reason', 'detail', 'stderr', 'stdout', 'path', 'dest', 'cmd', 'spawnargs']
 
 /** Names that hold content, of any value: what a process printed, free text, where a person's things are, and a name a person chose. */
 const CONTENT_NAMES: ReadonlyArray<readonly [string, RegExp]> = [
