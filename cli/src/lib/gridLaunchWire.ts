@@ -10,7 +10,6 @@
  */
 import { join } from 'node:path'
 import type { AgentEngine } from '../engines/types.js'
-import { hashOf } from './log.js'
 
 /** The variable an engine is told to read the key from, where the engine supports that indirection. Codex names it
  *  in `env_key`; Pi's provider extension writes it as a `$VAR` reference. */
@@ -440,15 +439,17 @@ function webSearchReason(engine: AgentEngine, webSearch: GridWebSearchStatus): s
 
 /** One log line naming where an agent was sent — grid, model, engine, and whether it got web
  *  search (with the reason when the contracts are what took it away). Never the key, never
- *  the MCP url, and the grid by its hash: its name is one the person can choose, and Export logs sends the line
- *  off the machine. The core's to say, from a launch it holds (create's, or the record a relaunch built). */
+ *  the MCP url, and never the grid's name, nor a hash of it: a person chooses it and it is short enough that its
+ *  hash is guessed, and Export logs sends the line off the machine. A grid keeps its id; a saved API's id is made
+ *  from the name the person gave it, so it is "an API". The core's to say, from a launch it holds (create's, or
+ *  the record a relaunch built). */
 export function describeGridLaunch(
   engine: AgentEngine,
   override: GridLaunchOverride,
   webSearch: GridWebSearchStatus,
 ): string {
   const reason = webSearchReason(engine, webSearch)
-  return `[grid] ${engine} -> ${hashOf(override.networkName)} (${override.networkId})`
+  return `[grid] ${engine} -> ${isApiLaunch(override) ? 'an API' : `a grid (${override.networkId})`}`
     + ` · ${override.model ?? 'model chosen by the engine'} · web search ${webSearch}`
     + (reason ? ` (${reason})` : '')
 }
