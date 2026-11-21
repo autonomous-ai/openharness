@@ -92,6 +92,23 @@ describe.skipIf(WIN32)('the dial eval, tier B: the Claude app', () => {
     await expect(driver.stop()).rejects.toThrow('harness hardware watch ended before its scenario')
   })
 
+  it("the fake Claude app killed with SIGKILL goes at once, its sessions with it, as the driver's last resort", async () => {
+    const c10 = { ...SCENARIOS.find((s) => s.id === 'C10')!, fresh: true as const }
+    await driver.start(c10, HOST)
+    try {
+      // Its sessions written, and a's Claude Code running.
+      for (const step of c10.steps.slice(0, 2)) await driver.step(step as Exclude<typeof step, { kind: 'wait' }>)
+      const { d, children } = driver.lastWorld()
+      const app = children.find((child) => child.spawnargs.includes('process.stdin.resume()'))!
+      const exited = once(app, 'exit')
+      app.kill('SIGKILL')
+      await exited
+      expect(d.hookLog()).not.toMatch(/SessionEnd/)
+    } finally {
+      await driver.stop()
+    }
+  })
+
   it('a stop whose world failed to close still ends its cost, so the next scenario starts', async () => {
     const c1 = SCENARIOS.find((s) => s.id === 'C1')!
     await driver.start(c1, HOST)
