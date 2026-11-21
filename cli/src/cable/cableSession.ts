@@ -30,7 +30,7 @@ import { PACK_VERSION } from './pets/pack.js'
 import { planPetSync } from './pets/sync.js'
 import { MAX_PACKS, type PetStore } from './pets/store.js'
 import type { PetDialState } from './pets/sync.js'
-import { SerialLink, findDialPort } from './serial.js'
+import { SerialLink, findDialPort, serialPortName } from './serial.js'
 import { PortAccessError } from './portAccess.js'
 import { PLAYER_PAGE_SIZE, playerPage, type PlayerSession } from './playerLibrary.js'
 import { PassageCarry, withCarriedPassage, type CarryRead } from './passageCarry.js'
@@ -39,7 +39,7 @@ import { dialText, noticeSummary } from './dialText.js'
 import { QuestionInbox, type ReviewedAnswer, type AnswerReceipt, type QuestionSpeech } from './questionInbox.js'
 import { notificationReadToken, type UnreadNotification } from '../lib/notificationRead.js'
 import { partitionTexts } from '../lib/questionController.js'
-import { errorKind } from '../lib/log.js'
+import { codeOrLength, errorKind } from '../lib/log.js'
 
 /** Bumped when the VOCABULARY changes. Separate from the frame version, which is the envelope. */
 export const CABLE_PROTO_VERSION = 3   // 3: + question.close (a question answered on another client)
@@ -1081,7 +1081,7 @@ export class CableSession {
       // fail to open rather than steal it back — this interval only decides how soon we would find OUR
       // dial if the user unplugged theirs and plugged ours into the same socket.
       this.foreignRetryAt = Date.now() + 60_000
-      this.log(`cable: ${this.link.path} is not a Harness dial (${this.bytesSinceOpen} B, no frames) — releasing it`)
+      this.log(`cable: ${serialPortName(this.link.path)} is not a Harness dial (${this.bytesSinceOpen} B, no frames) — releasing it`)
       this.reportForeign(this.link.path, `${this.bytesSinceOpen} B, no frames`)
       await this.link.close('not ours')
       this.link = null
@@ -1255,7 +1255,7 @@ export class CableSession {
     // keyed by MAC and outlives the port precisely so this one does not have to.
     this.offered.clear()
     this.lastRx = Date.now()
-    this.log(`cable: open on ${opened.path}`)
+    this.log(`cable: open on ${serialPortName(opened.path)}`)
   }
 
   private clearOpenProblem(): void {
@@ -2120,9 +2120,9 @@ export class CableSession {
         // memory and busy will not change within this link; crc, version and shape would fail identically on a
         // resend of the same bytes. All are recorded and none retried until the link comes back.
         this.petErrors.set(id, reason)
-        this.log(`cable: dial refused pet ${id}: ${reason}`)
+        this.log(`cable: dial refused pet ${id}: ${codeOrLength(reason)}`)
         if (this.petTransfer?.id === id) {
-          this.petTransfer.xfer.finish(`refused: ${reason}`)
+          this.petTransfer.xfer.finish(`refused: ${codeOrLength(reason)}`)
           this.petTransfer = null
           this.clearPetStall()
         }
