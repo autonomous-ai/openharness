@@ -58,8 +58,9 @@ export interface HerdrOuterDeps {
   inner: OuterLookup
 }
 
-/** The app that holds the herdr client showing an agent's pane, and that client's tty when it names a tab; or, with no
- *  app, the process to raise (the client's, or the client of the multiplexer it runs in). */
+/** The app that holds the herdr client showing an agent's pane, that client's tty when it names a tab, and its process,
+ *  which kitty's tabs find the client's window by and Linux's raise brings; or, with no app, the process
+ *  to raise alone. */
 interface ClientPlace { app?: string; tty?: string; pid?: number }
 /** The step of a lookup that could not be read, as its line names it: the process table, the sockets, the ttys, the
  *  clients' app. */
@@ -252,7 +253,7 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
     const app = apps.get(client)
     const tty = ttyOf.get(client)
     // A tty out of form names no tab.
-    return tty && isClientTty(tty) ? { app, tty } : { app }
+    return tty && isClientTty(tty) ? { app, tty, pid: client } : { app, pid: client }
   }
 
   async function lookUp(hints: Readonly<Record<string, string>>, pid: number): Promise<ClientPlace> {
