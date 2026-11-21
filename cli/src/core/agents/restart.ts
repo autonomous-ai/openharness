@@ -10,7 +10,7 @@ import { engineInstallRecipe } from '../../lib/engineInstall.js'
 import { buildEngineLaunchArgv, commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
 import { launchedGrid, type GridAssignment } from '../../lib/gridAssignmentWire.js'
 import { windowsPaneLaunch } from '../../lib/windows/engineStart.js'
-import { hashOf, sid } from '../../lib/log.js'
+import { sid } from '../../lib/log.js'
 import { matchesLaunchReceipt, type LaunchPublicationInput, type ProcessIdentity, type registry, type RegisteredSession } from '../../lib/registry.js'
 import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
 import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
@@ -270,9 +270,9 @@ export function createAgentRestarter({
         launchedGrid(built.overrides.gridLaunchRecord?.override), place, dispatchCurrent,
         { launchArgs, ...(built.overrides.gridLaunchRecord ? { gridLaunchRecord: built.overrides.gridLaunchRecord } : {}) }, operation)
       if (typeof refreshed === 'string') return changed
-      // A grid's name is one the person can choose: the log names it by its hash.
+      // A grid's name is one the person can choose, short enough to be guessed from a hash: the log says only that it is one.
       console.log(`[restart] ${sid(session.agentId)} ${engine} · ${outcome.resumed ? 'resumed' : 'fresh session'}`
-        + (session.gridLaunch ? ` · grid ${hashOf(session.gridLaunch.networkName)}` : ''))
+        + (session.gridLaunch ? ' · on a grid' : ''))
       return { ok: true, session: refreshed, resumed: outcome.resumed }
     } finally {
       releaseRoute()

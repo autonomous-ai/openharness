@@ -44,7 +44,7 @@ import type { TerminalDispatchControl, TerminalRuntimeRef } from './terminalType
 import type { WindowsPaneLaunch } from './windows/engineStart.js'
 import { processAmong, sameProcessIdentity, sameTerminalPlacement, terminalInstanceId, terminalRouteKey } from './terminalRuntime.js'
 import { resumesConversation } from './resumeCapability.js'
-import { codeOrLength, errorKind, hashOf } from './log.js'
+import { codeOrLength, errorKind } from './log.js'
 
 export interface RestoreLaunch {
   nativeToken?: string
@@ -756,7 +756,8 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
           summary.restored.push(entry.agentId)
           deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · pane ${dead.paneId} → ${created.runtime.paneId}`
             + (resumeSessionId ? ` · resuming ${resumeSessionId.slice(0, 8)}` : ' · fresh session')
-            + (entry.gridLaunch ? ` · grid ${hashOf(entry.gridLaunch.networkName)}` : ''))
+            // A grid's name is one the person can choose, short enough to be guessed from a hash.
+            + (entry.gridLaunch ? ' · on a grid' : ''))
           const currentWatch = restoreOwner(deps, deps.registry.byAgent(entry.agentId)!)
           const releaseWatch = release!
           watching = true
@@ -822,7 +823,7 @@ async function watchRestoredPane(
     if (!spawned.ok) {
       const detail = `${launch.detail} Its waiting pane could not be shown: ${spawned.reason ?? 'unknown reason'}. Pane recovery is still pending.`
       deps.registry.setLaunch(agentId, { ...launch, detail })
-      deps.log(`[restore] ${engine} · agent ${agentId} · held · ${codeOrLength(detail)}`)
+      deps.log(`[restore] ${engine} · agent ${agentId} · held · waiting for ${service} · its waiting pane could not be shown`)
       return false
     }
     deps.registry.setLaunch(agentId, launch)
