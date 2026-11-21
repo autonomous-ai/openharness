@@ -47,6 +47,7 @@ export function heldOut(): Scenario[] {
       dims: ['D1'], tiers: ['a'], sessions: [...threads(['t1', 't2']), chatgptGhost],
       steps: [
         { kind: 'codex.write', sessions: ['t1', 't2'] },
+        ...listed('chatgpt', ['t1', 't2']),
         // Only Codex's names change: the threads' rows stay as they were.
         { label: 'rename', kind: 'codex.write', sessions: [], names: { t1: 'Eval Renamed' } },
       ],
