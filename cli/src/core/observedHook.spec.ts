@@ -194,7 +194,7 @@ describe('parseObservedHook: title', () => {
     expect(parseObservedHook({ ...body, title: 'Tho' })).toBeNull()
   })
 
-  it('counts a refused title and logs none of it', () => {
+  it('says a refused title is refused, and logs none of it', () => {
     vi.useFakeTimers()
     const log = vi.fn()
     const hook = createObservedHook({ forward: () => true, now: () => 0, log })
@@ -202,13 +202,18 @@ describe('parseObservedHook: title', () => {
     expect(hook.onObserved(named('turn-stop', 'secret-title'))).toBe('invalid')
     expect(hook.onObserved(named('turn-start', 'secret\u0007title'))).toBe('invalid')
     vi.advanceTimersByTime(60_000)
-    expect(log.mock.calls).toEqual([['[devices] paneless hook events in the last minute: 2 refused, 0 over the rate, 0 with no devices process']])
+    expect(log.mock.calls).toEqual([
+      ['[devices] a paneless hook event was refused; more are counted once a minute'],
+      ['[devices] paneless hook events in the last minute: 1 refused, 0 over the rate, 0 with no devices process'],
+    ])
+    expect(JSON.stringify(log.mock.calls)).not.toMatch(/secret/)
   })
 })
 
 describe('createObservedHook', () => {
   afterEach(() => { vi.useRealTimers() })
 
+  const REFUSED = '[devices] a paneless hook event was refused; more are counted once a minute'
   const OVER = '[devices] a paneless hook event was dropped: over 20 a second for its session; more are counted once a minute'
   const NO_DEVICES = '[devices] a paneless hook event was dropped: no devices process; more are counted once a minute'
   const minute = (refused: number, over: number, none: number): string =>
@@ -267,21 +272,24 @@ describe('createObservedHook', () => {
     quiet(log)
   })
 
-  it('counts a refused body, says none at once, and keeps each kind apart', () => {
+  // A refused body is a broken or forged hook, whose events are lost as the others' are.
+  it('says the first refused body at once, as the other losses, and keeps each kind apart', () => {
     vi.useFakeTimers()
     const log = vi.fn()
     let devices = true
     const hook = createObservedHook({ forward: () => devices, now: () => 0, log })
     hook.onObserved({ nope: 1 })
+    expect(log.mock.calls).toEqual([[REFUSED]])
+    hook.onObserved({ ...full, sessionId: 'secret\nsession' })
     hook.onObserved({ ...full, sessionId: 'secret-session', hostHints: { TERM_PROGRAM: 'secret' } })
-    expect(log).not.toHaveBeenCalled()
+    expect(log).toHaveBeenCalledTimes(1)
     for (let i = 0; i < 22; i += 1) hook.onObserved(full)
     devices = false
     hook.onObserved({ ...full, sessionId: 's2' })
     hook.onObserved({ ...full, sessionId: 's2' })
-    expect(log.mock.calls).toEqual([[OVER], [NO_DEVICES]])
+    expect(log.mock.calls).toEqual([[REFUSED], [OVER], [NO_DEVICES]])
     vi.advanceTimersByTime(60_000)
-    expect(log.mock.calls[2]).toEqual([minute(1, 1, 1)])
+    expect(log.mock.calls[3]).toEqual([minute(1, 1, 1)])
     quiet(log)
   })
 
