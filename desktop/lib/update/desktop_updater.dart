@@ -11,6 +11,8 @@ import '../core/runtime_architecture.dart';
 import '../core/runtime_platform.dart';
 import '../core/app_version.dart';
 import '../core/staging_build.dart';
+import '../logging/app_log.dart';
+import 'tauri_signature.dart';
 import 'update_signature.dart';
 import 'windows_update_swap.dart';
 
@@ -67,11 +69,16 @@ class UpdateInfo {
   final String sha256;
   final int size;
 
+  /// Harness's Tauri signature of a Linux AppImage, as its manifest entry
+  /// carries it. macOS and Windows check their builds' own signers instead.
+  final String? signature;
+
   const UpdateInfo({
     required this.version,
     required this.url,
     required this.sha256,
     required this.size,
+    this.signature,
   });
 }
 
@@ -193,7 +200,7 @@ String _sha256Hex(List<int> bytes) => const DartSha256()
 /// On macOS this walks up from the running executable to the enclosing
 /// `.app` bundle — `.../Harness.app/Contents/MacOS/Harness` -> `.../Harness.app`.
 /// On Linux the packaged build is a single `.AppImage` file (see
-/// `scripts/upload-desktop-linux.sh`), and a running AppImage executes from a temporary FUSE mount,
+/// `scripts/package-desktop-linux.sh`), and a running AppImage executes from a temporary FUSE mount,
 /// not from that file — so the file's own path comes from [appImagePath] (tests) or the `APPIMAGE`
 /// environment variable the AppImage runtime sets on launch (production), never from
 /// `RuntimePlatform.resolvedExecutable`.
@@ -248,6 +255,7 @@ class DesktopUpdater {
   final String? _windowsInstallRoot;
   final Future<void> Function(String, List<String>)? _startDetached;
   final UpdateSignatureCheck? _verifySignature;
+  final String _tauriPublicKey;
   final _checksInFlight = <String?, Future<DesktopUpdateCheck>>{};
 
   /// How often the background poll asks the manifest.
@@ -291,6 +299,9 @@ class DesktopUpdater {
     // Defaults to checking against the running app's own signature. Tests
     // whose fixtures are not signed pass their own.
     UpdateSignatureCheck? verifySignature,
+    // The key a Linux AppImage must be signed with: Harness's, pinned in the
+    // app. Tests pass the key they signed their fixtures with.
+    this._tauriPublicKey = tauriUpdatePublicKey,
   }) : _dio =
            dio ??
            Dio(
@@ -327,7 +338,9 @@ class DesktopUpdater {
     version: version,
   );
 
-  /// Linux AppImages carry no signature, so Linux keeps the sha256 check.
+  /// The running app's own signer, on macOS and Windows. A Linux AppImage has
+  /// none: Harness's Tauri signature of it is checked before it is staged
+  /// ([_checkAppImageSignature]).
   Future<void> _signedLikeThisApp(
     String staged, {
     String? launcher,
@@ -341,7 +354,6 @@ class DesktopUpdater {
         version: version,
       );
     }
-    if (_isLinux) return;
     final running = currentBundlePath(isLinux: false, isWindows: false);
     if (running == null) throw cannotCheckSignature;
     return verifyMacUpdate(stagedBundle: staged, runningBundle: running);
@@ -424,6 +436,7 @@ class DesktopUpdater {
     final url = entry['url'];
     final sha256 = entry['sha256'];
     final size = entry['size'];
+    final signature = entry['signature'];
     if (version is! String ||
         _parseSemverCore(version) == null ||
         url is! String ||
@@ -431,7 +444,13 @@ class DesktopUpdater {
         size is! int) {
       return null;
     }
-    return UpdateInfo(version: version, url: url, sha256: sha256, size: size);
+    return UpdateInfo(
+      version: version,
+      url: url,
+      sha256: sha256,
+      size: size,
+      signature: signature is String ? signature : null,
+    );
   }
 
   /// Checks once immediately, then every [interval] — calls [onUpdateAvailable] each time a newer
@@ -470,10 +489,11 @@ class DesktopUpdater {
   /// Downloads [info] and verifies its sha256 BEFORE trusting the bytes. On macOS, unpacks the zip
   /// and confirms the staged bundle's own Info.plist really carries [info].version — the archive
   /// holds more than the hash alone authenticates. On Linux, the download itself is the artifact (a
-  /// single AppImage file), so the sha256 check already covers everything there is: it is made
-  /// executable and staged as-is, with nothing to unpack or recheck.
+  /// single AppImage file, `scripts/package-desktop-linux.sh`), so it must carry Harness's Tauri
+  /// signature for this file and version before anything is written; it is then made executable
+  /// and staged as-is, with nothing to unpack or recheck.
   /// On macOS and Windows the unpacked build must also be signed by whoever
-  /// signed the running app ([UpdateSignatureCheck]); a refusal deletes what
+  /// signed the running app ([UpdateSignatureCheck]). A refusal deletes what
   /// was staged and throws [UpdateRefused], whose message says why.
   /// Returns null (and cleans up anything partially written) on any other verification failure.
   /// [onProgress] reports the DOWNLOAD only — bytes received out of
@@ -511,6 +531,7 @@ class DesktopUpdater {
         );
         return null;
       }
+      if (!_isWindows && _isLinux) await _checkAppImageSignature(info, bytes);
 
       stagingDir = await Directory.systemTemp.createTemp('harness-update-');
 
@@ -620,6 +641,24 @@ class DesktopUpdater {
       debugPrint('DesktopUpdater.downloadAndStage: $error');
       await _deleteQuietly(stagingDir);
       return null;
+    }
+  }
+
+  /// Refuses [bytes] unless Harness signed them as this architecture's
+  /// AppImage of [info]'s version. The sha256 they matched proves nothing on
+  /// its own: the manifest that names it sits in the same bucket.
+  Future<void> _checkAppImageSignature(UpdateInfo info, List<int> bytes) async {
+    try {
+      await checkTauriSignature(
+        info.signature,
+        fileName: 'Harness-linux-$_architecture.AppImage',
+        versionField: 'desktop-version:${info.version}',
+        digest: () => blake2b512OfBytes(bytes),
+        publicKey: _tauriPublicKey,
+      );
+    } on TauriSignatureRefused catch (refused) {
+      appLog.warn('update', 'signature refused (${refused.reason.name})');
+      rethrow;
     }
   }
 
