@@ -1184,6 +1184,24 @@ void main() {
       await expectLater(stageOffered(url), _refused(SignatureRefusal.comment));
     });
 
+    // Whoever can write the bucket could offer an older genuine release as
+    // the new one; only the version its signature names tells.
+    test('a genuine signature for another version is refused', () async {
+      final url = await serveLinuxMetadataAndAppImage(
+        manifestVersion: newVersion,
+        signature: await signAppImage(appImageBytes, version: '1.2.2'),
+      );
+      final temp = Directory(p.join(scratch.path, 'temp'))..createSync();
+      await expectLater(
+        IOOverrides.runZoned(
+          () => stageOffered(url),
+          getSystemTempDirectory: () => temp,
+        ),
+        _refused(SignatureRefusal.comment),
+      );
+      expect(temp.listSync(), isEmpty);
+    });
+
     test('a refusal logs one line with its reason and no path', () async {
       final log = _RecordedLog();
       final previous = appLog;
