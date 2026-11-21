@@ -134,8 +134,10 @@ class _App extends AppNotifier {
   }
 }
 
-class _Speed implements AppLog {
-  _Speed(this.lines);
+/// The app log's lines of one category.
+class _Recorded implements AppLog {
+  _Recorded(this.category, this.lines);
+  final String category;
   final List<String> lines;
   @override
   void record(
@@ -145,7 +147,7 @@ class _Speed implements AppLog {
     Object? error,
     StackTrace? stackTrace,
   }) {
-    if (category == 'speed') lines.add(message);
+    if (category == this.category) lines.add(message);
   }
 }
 
@@ -208,7 +210,7 @@ void main() {
       await keptFrom('machine-a');
       final before = appLog;
       final speed = <String>[];
-      appLog = _Speed(speed);
+      appLog = _Recorded('speed', speed);
       addTearDown(() => appLog = before);
       speedMarks.restart();
 
@@ -357,6 +359,22 @@ void main() {
       expect(cli.asked, 0);
       expect(app.status, AppStatus.unauthenticated);
       expect(app.lastError, isNull);
+    },
+  );
+
+  test(
+    'a launch while uninstall holds its marker says why in the app log, a few lines at most',
+    () async {
+      final before = appLog;
+      final lines = <String>[];
+      appLog = _Recorded('auth', lines);
+      addTearDown(() => appLog = before);
+      uninstalling = () => true;
+      await app.bootstrap();
+      await _ticks();
+      expect(lines, isNotEmpty);
+      expect(lines.length, lessThanOrEqualTo(3));
+      expect(lines.toSet().single, contains('harness uninstall'));
     },
   );
 
