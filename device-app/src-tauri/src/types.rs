@@ -54,8 +54,8 @@ pub enum CliState {
     Removed,
 }
 
-/// state.json: `{ "version": 1, "cliSeen", "askedSignIn", "loginItem", "askedFollow", "askedAx" }`. Default: version
-/// 1, all false. The keys of the Claude Code and Codex offers an older app wrote are ignored.
+/// state.json: `{ "version": 1, "cliSeen", "askedSignIn", "loginItem", "askedFollow", "askedAx", "followOff" }`.
+/// Default: version 1, all false. The keys of the Claude Code and Codex offers an older app wrote are ignored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Saved {
@@ -69,6 +69,9 @@ pub struct Saved {
     /// macOS's Accessibility prompt was called: it shows its dialog only the first time.
     #[serde(default)]
     pub asked_ax: bool,
+    /// The person turned Follow ChatGPT off, off macOS, where it is Harness's own switch: following is on until then.
+    #[serde(default)]
+    pub follow_off: bool,
 }
 
 impl Default for Saved {
@@ -80,6 +83,7 @@ impl Default for Saved {
             login_item: false,
             asked_follow: false,
             asked_ax: false,
+            follow_off: false,
         }
     }
 }
@@ -137,6 +141,8 @@ pub enum MenuAction {
     FollowChatgpt,
     /// The checked one: System Settings' Accessibility list.
     FollowSettings,
+    /// Off macOS, the item is Harness's own switch: a click turns following off or on.
+    FollowSwitch,
 }
 
 /// Text is a disabled line. Check: the action a click does, the label, whether it is checked. Submenu: its label and
@@ -186,12 +192,14 @@ pub struct AppState {
 }
 
 /// Following the ChatGPT window, as the menu and the window show it. Waiting: the screen opened by itself waits behind
-/// Install or Sign in.
+/// Install or Sign in. Switch: off macOS no permission gates the title, so the item is Harness's own switch, which
+/// `trusted` then mirrors, and there is no screen.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FollowState {
     pub trusted: bool,
     pub installed: bool,
     pub waiting: bool,
+    pub switch: bool,
 }
 
 /// AuthorizeUrl holds an `https:` URL only (account.rs lets no other through).
@@ -283,6 +291,8 @@ pub enum Effect {
     AskAx,
     /// System Settings' Accessibility list.
     OpenAxSettings,
+    /// Off macOS: `true` turns following on.
+    FollowSwitch(bool),
 }
 
 /// A finished run.
@@ -484,7 +494,8 @@ mod tests {
             "askedSignIn": false,
             "loginItem": false,
             "askedFollow": false,
-            "askedAx": false
+            "askedAx": false,
+            "followOff": false
         });
         assert_eq!(serde_json::to_value(Saved::default()).unwrap(), keys);
         assert_eq!(serde_json::from_value::<Saved>(keys).unwrap(), Saved::default());

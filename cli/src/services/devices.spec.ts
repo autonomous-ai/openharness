@@ -3,10 +3,11 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
-import { delimiter, dirname, join, parse, sep } from 'node:path'
+import { delimiter, dirname, join, parse, posix, sep, win32 } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { CableHostWiring, DaemonCableHost } from '../cable/cableHost.js'
 import { AppFilter, FRONT_SETTLE_MS } from '../cable/hosts/appFilter.js'
+import { claudeStoreRoots } from '../cable/hosts/appPlaces.js'
 import type { CodexRunEnd } from '../cable/hosts/codexQueue.js'
 import type { ClaudeAppSession } from '../cable/hosts/claudeAppStore.js'
 import type { CodexAppRead, CodexAppThread } from '../cable/hosts/codexAppThreads.js'
@@ -565,7 +566,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; storePackageFolder?: DevicesDeps['storePackageFolder']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const apps = over.orca ?? orca
   // None, and no read under way, unless the spec gives its own; null leaves the devices to read this computer's.
@@ -597,6 +598,8 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     // plutil on this Mac's /Applications. null leaves each out.
     codexAppThreads: over.codexAppThreads === null ? undefined : over.codexAppThreads ?? noCodexApp,
     bundleId: over.bundleId === null ? undefined : over.bundleId ?? (async () => undefined),
+    // No ChatGPT package on Windows unless the spec gives its own: no spec runs PowerShell.
+    storePackageFolder: over.storePackageFolder ?? (async () => null),
     decideTier: over.decideTier === null ? undefined : over.decideTier ?? (async () => ({ tier: 'alert', by: 'test', detail: '', ms: 0 })),
     faults: new Set(over.faults ?? []),
     log: (line) => { logs.push(line) },
@@ -8852,9 +8855,9 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
    *  read in `orcaRuns`. */
   const onMac = { ...orca, platform: 'darwin' as const, onPath: (name: string) => (name === 'herdr-app' ? null : `/opt/${name}/bin/${name}`) }
   /** The watch the Claude app's store source holds on macOS beside opencode's, on its root and the app's folder: in the
-   *  throwaway home neither is there. */
-  const claudeStore = join(homedir(), 'Library', 'Application Support', 'Claude')
-  const claudeStoreWatch = [[join(claudeStore, 'claude-code-sessions'), claudeStore], expect.any(Function)]
+   *  throwaway home neither is there. Joined as on macOS, whatever OS runs the suite (cable/hosts/appPlaces.ts). */
+  const claudeStore = posix.join(homedir(), 'Library', 'Application Support', 'Claude')
+  const claudeStoreWatch = [[posix.join(claudeStore, 'claude-code-sessions'), claudeStore], expect.any(Function)]
   const host = () => seen.dial as unknown as DaemonCableHost
   /** A dial on the cable, on this computer's agents: no window. */
   const attach = (port: DevicesPort) => { seen.host.watching!(true); port.swarms(null) }
@@ -9175,10 +9178,11 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
 })
 
 describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-dial-claude-app-sessions-design.md)", () => {
-  /** The store's root in the suite's throwaway home, never the person's own. */
-  const ROOT = join(homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions')
-  const ACCOUNT_DIR = join(ROOT, 'acc')
-  const ORG_DIR = join(ACCOUNT_DIR, 'org')
+  /** The store's root in the suite's throwaway home, never the person's own: macOS's, joined as on macOS whatever OS runs
+   *  the suite (cable/hosts/appPlaces.ts). */
+  const ROOT = posix.join(homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions')
+  const ACCOUNT_DIR = posix.join(ROOT, 'acc')
+  const ORG_DIR = posix.join(ACCOUNT_DIR, 'org')
   /** Claude Code's id of a session, and the Claude app's id of it; a second session of the store. */
   const SESSION = '0b7c2f4e-8a1d-4c3b-9e5f-6a7b8c9d0e1f'
   const LOCAL = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
@@ -9222,7 +9226,7 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
   const withStore = (over: Parameters<typeof start>[0] = {}) => {
     const fake = { sessions: [session()], calls: [] as unknown[][], hold: false, held: [] as Array<() => void>, failing: 0 }
     const store: NonNullable<DevicesDeps['claudeAppStore']> = {
-      folders: async () => { fake.calls.push(['folders']); return { accounts: [ACCOUNT_DIR], orgs: [ORG_DIR] } },
+      folders: async () => { fake.calls.push(['folders']); return { roots: [ROOT], accounts: [ACCOUNT_DIR], orgs: [ORG_DIR] } },
       files: async () => { fake.calls.push(['files']) },
       touch: async (folder, name) => { fake.calls.push(['touch', folder, name]) },
       read: async () => {
@@ -9271,7 +9275,7 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
     expect(host().appOf(ID)).toBe('claude')
     // Idle: no turn is told.
     expect(calls('turnStarted')).toEqual([])
-    expect(watchedFolders.calls).toEqual(expect.arrayContaining([[[ROOT, dirname(ROOT)], expect.any(Function)],
+    expect(watchedFolders.calls).toEqual(expect.arrayContaining([[[ROOT, posix.dirname(ROOT)], expect.any(Function)],
       [[ACCOUNT_DIR], expect.any(Function)], [[ORG_DIR], expect.any(Function)]]))
     expect(logs).toEqual(expect.arrayContaining(['[claude-app] watch · on', '[claude-app] listed · 1 sessions']))
     seen.host.watching!(false)
@@ -9280,14 +9284,48 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
     expect(fake.calls.at(-1)).toEqual(['forget'])
   })
 
-  it.each([['off macOS', 'linux', true], ['with HARNESS_DEVICE_OBSERVED off', 'darwin', false]] as const)('%s there is no source', async (_, platform, on) => {
+  it('with HARNESS_DEVICE_OBSERVED off there is no source', async () => {
     const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
-    switched.HARNESS_DEVICE_OBSERVED = on
+    switched.HARNESS_DEVICE_OBSERVED = false
     onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
-    const { fake, live } = withStore({ orca: { ...orca, platform } })
+    const { fake, live } = withStore()
     await live()
     expect(fake.calls).toEqual([])
     expect(watchedFolders.calls.filter(([folders]) => (folders as string[]).includes(ROOT))).toEqual([])
+  })
+
+  // Windows has two stores, the Store app's private copy and %APPDATA%'s; Linux one, under its config folder
+  // (docs/plans/2026-11-20-dial-app-sessions-win-linux-design.md).
+  it.each([['win32', 2], ['linux', 1]] as const)('on %s with a dial attached its sessions are listed, each of its %i roots watched from its own chain', async (platform, count) => {
+    const { fake, live } = withStore({ orca: { ...orca, platform } })
+    await live()
+    const roots = claudeStoreRoots(platform, process.env, homedir())
+    expect(roots).toHaveLength(count)
+    expect(watchedFolders.calls.map(([folders]) => folders)).toEqual(expect.arrayContaining(roots.map(({ watch }) => watch)))
+    expect(fake.calls).toContainEqual(['read'])
+    expect(await ids()).toEqual([ID])
+  })
+
+  it('on Linux a tap on a store row runs xdg-open on its continue link, once xdg-mime named the scheme\'s app', async () => {
+    const run = async (file: string, args: string[], timeoutMs: number) => {
+      orcaRuns.push([file, args, timeoutMs])
+      return { code: 0, stdout: file === '/usr/bin/xdg-mime' ? 'claude-desktop.desktop\n' : '' }
+    }
+    const { live } = withStore({ orca: { ...orca, platform: 'linux', onPath: (name: string) => `/usr/bin/${name}`, run } })
+    await live()
+    // The tap is the first look at the scheme's app: it waits for xdg-mime's answer rather than being dropped.
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns).toEqual([['/usr/bin/xdg-mime', ['query', 'default', 'x-scheme-handler/claude'], 10_000],
+      ['/usr/bin/xdg-open', [`claude://code/continue?session=${LOCAL}`], 10_000]])
+  })
+
+  it('on Windows a tap on a store row is the Windows raise\'s link, with the Claude app\'s bundle', async () => {
+    const windows = fakeWindowsRaise()
+    const { live } = withStore({ orca: { ...orca, platform: 'win32' }, windowsRaise: windows.raise })
+    await live()
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(windows.links).toEqual([[`claude://code/continue?session=${LOCAL}`, BUNDLE]])
+    expect(orcaRuns).toEqual([])
   })
 
   it('a change of a session\'s file reaches the dial\'s list', async () => {
@@ -9470,9 +9508,10 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
 describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-dial-chatgpt-ring-and-follow-design.md)", () => {
   /** The app's Codex home in the suite's throwaway home, never the person's own. */
   const CODEX_HOME = join(homedir(), '.codex')
-  /** Where the app is looked for: /Applications, then the home's own Applications. */
-  const APPS = join('/Applications', 'ChatGPT.app')
-  const HOME_APPS = join(homedir(), 'Applications', 'ChatGPT.app')
+  /** Where the app is looked for: /Applications, then the home's own Applications, joined as on macOS whatever OS runs
+   *  the suite (cable/hosts/appPlaces.ts). */
+  const APPS = posix.join('/Applications', 'ChatGPT.app')
+  const HOME_APPS = posix.join(homedir(), 'Applications', 'ChatGPT.app')
   const BUNDLE = 'com.openai.codex'
   /** A thread of the app (Codex's session id), and two more. */
   const THREAD = '7d3e9a10-2b4c-4d5e-8f60-1a2b3c4d5e6f'
@@ -9584,14 +9623,101 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
     expect(rank.mock.lastCall).toEqual(['codex', undefined])
   })
 
-  it.each([['off macOS', 'linux', true], ['with HARNESS_DEVICE_OBSERVED off', 'darwin', false]] as const)('%s there is no source', async (_, platform, on) => {
+  it('with HARNESS_DEVICE_OBSERVED off there is no source', async () => {
     const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
-    switched.HARNESS_DEVICE_OBSERVED = on
+    switched.HARNESS_DEVICE_OBSERVED = false
     onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
-    const { fake, live } = withThreads({ orca: { ...orca, platform } })
+    const { fake, live } = withThreads()
     await live()
     expect(fake.calls).toEqual([])
     expect(fake.asked).toEqual([])
+  })
+
+  /** HARNESS_APPLICATIONS_DIR at a folder of the test's own, standing in for /usr/lib: what is at `chatgpt/ChatGPT` in
+   *  it, where the .deb and the .rpm put the app's program. */
+  const linuxApps = (at: 'file' | 'folder' | 'nothing') => {
+    const apps = join(dataDir, 'apps')
+    mkdirSync(join(apps, 'chatgpt', at === 'folder' ? 'ChatGPT' : ''), { recursive: true })
+    if (at === 'file') writeFileSync(join(apps, 'chatgpt', 'ChatGPT'), '')
+    // Linux takes only a folder absolute as on Linux: on a Windows host, the same folder from the current drive's root.
+    vi.stubEnv('HARNESS_APPLICATIONS_DIR', process.platform === 'win32' ? apps.slice(parse(apps).root.length - 1).replaceAll(sep, '/') : apps)
+    return apps
+  }
+  /** Windows' answer for the ChatGPT app's Store package: `answer`, and each package asked of. */
+  const storePackage = (answer: string | null) => {
+    const asked: string[] = []
+    return { asked, query: async (name: string) => { asked.push(name); return answer } }
+  }
+
+  it.each([
+    ['its program there', 'file', true],
+    ['nothing there', 'nothing', false],
+    ['a folder in its place', 'folder', false],
+  ] as const)('on Linux the source runs only with the app\'s program in its place: %s', async (_, at, starts) => {
+    linuxApps(at)
+    const { fake, live } = withThreads({ orca: { ...orca, platform: 'linux' } })
+    await live()
+    expect(fake.calls).toEqual(starts ? ['there', 'read'] : [])
+    expect(await listed()).toEqual(starts ? [ROW] : [])
+    // Linux has no bundle to read.
+    expect(fake.asked).toEqual([])
+  })
+
+  it('on Linux the program is looked for at each attach: installed while detached, the next attach starts the source', async () => {
+    const apps = linuxApps('nothing')
+    const { fake, live } = withThreads({ orca: { ...orca, platform: 'linux' } })
+    await live()
+    expect(fake.calls).toEqual([])
+    seen.host.watching!(false)
+    writeFileSync(join(apps, 'chatgpt', 'ChatGPT'), '')
+    await live()
+    expect(fake.calls).toEqual(['there', 'read'])
+  })
+
+  it.skipIf(process.platform !== 'win32')('on Windows the seam holding the package\'s ChatGPT.exe starts the source, and no package is asked', async () => {
+    const apps = join(dataDir, 'apps')
+    mkdirSync(join(apps, 'OpenAI.Codex', 'app'), { recursive: true })
+    writeFileSync(join(apps, 'OpenAI.Codex', 'app', 'ChatGPT.exe'), '')
+    vi.stubEnv('HARNESS_APPLICATIONS_DIR', apps)
+    const store = storePackage(dataDir)
+    const { fake, live } = withThreads({ orca: { ...orca, platform: 'win32' }, storePackageFolder: store.query })
+    await live()
+    expect(fake.calls).toEqual(['there', 'read'])
+    expect(store.asked).toEqual([])
+  })
+
+  it('on Windows the seam set, no package is asked: with no ChatGPT.exe in it there is no source', async () => {
+    vi.stubEnv('HARNESS_APPLICATIONS_DIR', win32.join('C:\\', 'e2e', 'apps'))
+    const store = storePackage(dataDir)
+    const { fake, live } = withThreads({ orca: { ...orca, platform: 'win32' }, storePackageFolder: store.query })
+    await live()
+    expect(fake.calls).toEqual([])
+    expect(store.asked).toEqual([])
+  })
+
+  it('on Windows with no seam the app\'s Store package is asked: a folder answered starts the source', async () => {
+    const store = storePackage(dataDir)
+    const { fake, live } = withThreads({ orca: { ...orca, platform: 'win32' }, storePackageFolder: store.query })
+    await live()
+    expect(store.asked).toEqual(['OpenAI.Codex'])
+    expect(fake.calls).toEqual(['there', 'read'])
+    expect(await listed()).toEqual([ROW])
+    expect(fake.asked).toEqual([])
+  })
+
+  // Each ask is a PowerShell of up to 1.8 s: no package is asked again only 10 minutes later.
+  it('on Windows with no seam and no package there is no source, and the package is asked again only 10 minutes later', async () => {
+    const store = storePackage(null)
+    const { fake, live } = withThreads({ orca: { ...orca, platform: 'win32' }, storePackageFolder: store.query })
+    await live()
+    seen.host.watching!(false)
+    await live()
+    expect(store.asked).toEqual(['OpenAI.Codex'])
+    seen.host.watching!(false)
+    await wait(600_000)
+    await live()
+    expect(store.asked).toEqual(['OpenAI.Codex', 'OpenAI.Codex'])
+    expect(fake.calls).toEqual([])
   })
 
   // The PM, 2026-11-19 (question 2): a Mac with Codex CLI alone gets no ChatGPT page of threads a tap cannot open.
@@ -9660,7 +9786,7 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
   })
 
   it.each([
-    ['/tmp/apps', [join('/tmp/apps', 'ChatGPT.app'), HOME_APPS]],
+    ['/tmp/apps', [posix.join('/tmp/apps', 'ChatGPT.app'), HOME_APPS]],
     ['apps', [APPS, HOME_APPS]],
   ] as const)('HARNESS_APPLICATIONS_DIR, when absolute, is looked in for the app in place of /Applications; a relative one is ignored: %s', async (dir, asked) => {
     vi.stubEnv('HARNESS_APPLICATIONS_DIR', dir)
@@ -9971,8 +10097,23 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
       expect(asked()).toEqual([[ID, 'thread']])
     })
 
-    it('off macOS there are no threads: a report matches none', async () => {
-      const { front, report, live } = following({ orca: { ...orca, platform: 'linux' } })
+    // Harness Device names the app codex for its program in front: ChatGPT.exe on Windows, ChatGPT on Linux.
+    it.each(['win32', 'linux'] as const)('on %s, the app installed and in front, a report follows its thread and the dial\'s answer is said', async (platform) => {
+      if (platform === 'linux') linuxApps('file')
+      const { front, report, live } = following({ orca: { ...orca, platform }, storePackageFolder: storePackage(dataDir).query })
+      await live()
+      await front('codex')
+      expect(report(TITLE)).toBeUndefined()
+      expect(asked()).toEqual([[ID, 'thread']])
+      seen.host.localFollowed!('thread', 'moved')
+      expect(threadLines()).toEqual(['[device] thread · moved'])
+    })
+
+    it('with HARNESS_DEVICE_OBSERVED off there are no threads: a report matches none', async () => {
+      const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
+      switched.HARNESS_DEVICE_OBSERVED = false
+      onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
+      const { front, report, live } = following()
       await live()
       await front('codex')
       report(TITLE)

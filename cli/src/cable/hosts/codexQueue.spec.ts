@@ -6,6 +6,7 @@ import { delimiter, dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { appCodexCandidates, CODEX_THREAD, codexQueueDeps, createCodexQueue, type CodexQueueDeps, type CodexRunEnd } from './codexQueue.js'
 import { MAX_TEXT } from './orca.js'
+import { storePackageLook } from '../../lib/windows/storePackage.js'
 import { writeExecutable } from '../../testing/executableFixture.js'
 
 // The real execFile, watched: a spec reads how the child of a run ended.
@@ -596,7 +597,7 @@ describe('codex queue on Windows', () => {
       onTestFinished(() => { vi.useRealTimers() })
       const app = appPackage('26.1117.3838.0')
       const { asked, answers, query } = packageQuery()
-      const { appBinary } = codexQueueDeps(query)
+      const { appBinary } = codexQueueDeps(storePackageLook('OpenAI.Codex', query))
       expect(appBinary()).toBeNull()
       vi.advanceTimersByTime(30_000)
       expect(appBinary()).toBeNull()
@@ -615,7 +616,7 @@ describe('codex queue on Windows', () => {
       vi.useFakeTimers({ toFake: ['performance'] })
       onTestFinished(() => { vi.useRealTimers() })
       const { asked, answers, query } = packageQuery()
-      const { appBinary } = codexQueueDeps(query)
+      const { appBinary } = codexQueueDeps(storePackageLook('OpenAI.Codex', query))
       const empty = appPackage('26.1100.0.0')
       rmSync(empty.codex)
       expect(appBinary()).toBeNull()
@@ -652,11 +653,11 @@ describe('codex queue on Windows', () => {
       onTestFinished(() => { vi.useRealTimers() })
       const asked: string[] = []
       // Not installed, then a query that fails.
-      const { appBinary } = codexQueueDeps(async (name) => {
+      const { appBinary } = codexQueueDeps(storePackageLook('OpenAI.Codex', async (name) => {
         asked.push(name)
         if (asked.length === 1) return null
         throw new Error('no PowerShell')
-      })
+      }))
       expect(appBinary()).toBeNull()
       await settled()
       for (const ask of [1, 2]) {

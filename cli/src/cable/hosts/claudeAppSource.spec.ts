@@ -1,5 +1,6 @@
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { ClaudeStoreRoot } from './appPlaces.js'
 import { observedAgentId } from './observed.js'
 import { ClaudeAppSource, type ClaudeAppSourceDeps } from './claudeAppSource.js'
 import type { ClaudeAppSession, StoreFolders, StoreRead } from './claudeAppStore.js'
@@ -13,7 +14,28 @@ const LOCAL = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
 const SESSION = '0b7c2f4e-8a1d-4c3b-9e5f-6a7b8c9d0e1f'
 const ID = observedAgentId('claude', SESSION)
 const T = 1_763_000_000_000
-const FOLDERS: StoreFolders = { accounts: [ACCOUNT], orgs: [ORG] }
+const FOLDERS: StoreFolders = { roots: [ROOT], accounts: [ACCOUNT], orgs: [ORG] }
+/** Two roots as Windows has them, the Store app's private copy first, each watched up to its stop folder: in this OS's
+ *  own paths, as the source joins them (docs/plans/2026-11-20-dial-app-sessions-win-linux-design.md). */
+const PACKAGES = join('/u', 'Local', 'Packages')
+const FAMILY = join(PACKAGES, 'Claude_pzs8sxrjxfjjc')
+const MSIX_CLAUDE = join(FAMILY, 'LocalCache', 'Roaming', 'Claude')
+const MSIX = join(MSIX_CLAUDE, 'claude-code-sessions')
+const MSIX_ROOT: ClaudeStoreRoot = {
+  root: MSIX,
+  watch: [MSIX, MSIX_CLAUDE, join(FAMILY, 'LocalCache', 'Roaming'), join(FAMILY, 'LocalCache'), FAMILY, PACKAGES],
+}
+const ROAMING = join('/u', 'Roaming')
+const APPDATA = join(ROAMING, 'Claude', 'claude-code-sessions')
+const APPDATA_ROOT: ClaudeStoreRoot = { root: APPDATA, watch: [APPDATA, join(ROAMING, 'Claude'), ROAMING] }
+const ROOTS = [MSIX_ROOT, APPDATA_ROOT]
+const MSIX_ACCOUNT = join(MSIX, 'acc')
+const MSIX_ORG = join(MSIX_ACCOUNT, 'org')
+const APPDATA_ACCOUNT = join(APPDATA, 'acc')
+const APPDATA_ORG = join(APPDATA_ACCOUNT, 'org')
+const BOTH: StoreFolders = { roots: [MSIX, APPDATA], accounts: [MSIX_ACCOUNT, APPDATA_ACCOUNT], orgs: [MSIX_ORG, APPDATA_ORG] }
+const ONLY_MSIX: StoreFolders = { roots: [MSIX], accounts: [MSIX_ACCOUNT], orgs: [MSIX_ORG] }
+const ONLY_APPDATA: StoreFolders = { roots: [APPDATA], accounts: [APPDATA_ACCOUNT], orgs: [APPDATA_ORG] }
 const LOG =
   /^\[claude-app\] (watch · (on|none)|listed · \d+ sessions|read · (\d+ ms · \d+ parsed · \d+ skipped|failed · [A-Za-z][A-Za-z0-9_$]*( [A-Z][A-Z0-9_]+)?)|over · \d+)$/
 
@@ -83,7 +105,7 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
         read: () => call<StoreRead>('read'),
         forget: () => { calls.push({ name: 'forget', args: [], resolve: () => {}, reject: () => {} }) },
       },
-      root: ROOT,
+      roots: [{ root: ROOT, watch: [ROOT, dirname(ROOT)] }],
       watch: (folders, changed) => {
         const one = { folders, changed, stopped: false, at: calls.length }
         watches.push(one)
@@ -270,7 +292,7 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
 
     it('a folder that left loses its watch, a new one gets one, and none is set twice', async () => {
       const s = await started()
-      s.answers.folders = { accounts: [ACCOUNT], orgs: [ORG2] }
+      s.answers.folders = { roots: [ROOT], accounts: [ACCOUNT], orgs: [ORG2] }
       await after(s, () => s.fire(ACCOUNT, 'org2'))
       expect(s.watching()).toEqual([[ROOT, dirname(ROOT)], [ACCOUNT], [ORG2]])
       await after(s, () => s.fire(ACCOUNT, undefined))
@@ -342,6 +364,138 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
       expect(s.changes).toBe(2)
       expect(s.watching()).toEqual([[ROOT, dirname(ROOT)]])
       expect(s.log.at(-1)).toBe('[claude-app] watch · none')
+    })
+  })
+
+  describe('each root', () => {
+    /** Started on both roots, the store answering `folders`, its first pass landed and its 250 ms passed. */
+    async function both(folders: StoreFolders | undefined): Promise<Setup> {
+      const s = setup({ roots: ROOTS })
+      s.answers.folders = folders
+      s.source.start()
+      await s.land()
+      s.gap()
+      return s
+    }
+
+    it('the start sets one watch a root, on its chain, in the roots\' order; the stop stops them and the account and org watches', async () => {
+      const s = setup({ roots: ROOTS })
+      s.answers.folders = BOTH
+      s.source.start()
+      expect(s.watches.map(({ folders, at }) => [folders, at])).toEqual([[MSIX_ROOT.watch, 0], [APPDATA_ROOT.watch, 0]])
+      expect(s.calls()).toEqual(['folders'])
+      await s.land()
+      expect(s.watching()).toEqual([
+        MSIX_ROOT.watch, APPDATA_ROOT.watch, [MSIX_ACCOUNT], [APPDATA_ACCOUNT], [MSIX_ORG], [APPDATA_ORG],
+      ])
+      s.source.stop()
+      expect(s.watching()).toEqual([])
+    })
+
+    /** Below each root's stop folder, its chain's names nearest last, and names its folders also hold: another package,
+     *  another app, the app's own files. */
+    const waits = {
+      [MSIX]: {
+        chain: ['Claude_pzs8sxrjxfjjc', 'LocalCache', 'Roaming', 'Claude', 'claude-code-sessions'],
+        others: ['Microsoft.WindowsCalculator_8wekyb3d8bbwe', 'Local', 'Cookies', 'config.json'],
+      },
+      [APPDATA]: { chain: ['Claude', 'claude-code-sessions'], others: ['Microsoft', 'Code', 'Cookies', 'config.json'] },
+    }
+
+    // Review Focus 2: a busy sibling wakes nothing, whatever the other root is.
+    it.each([
+      ['only %APPDATA%\'s there', ONLY_APPDATA, [MSIX]],
+      ['only the Store app\'s there', ONLY_MSIX, [APPDATA]],
+      ['neither there', undefined, [MSIX, APPDATA]],
+    ] as const)('a root not there lists again only for no name or a folder of its own chain: %s', async (_, folders, waiting) => {
+      const s = await both(folders)
+      const listing = folders ? ['folders', 'files', 'read'] : ['folders']
+      for (const root of waiting) {
+        const calls = s.calls().length
+        const timers = s.timers.length
+        for (const name of waits[root].others) s.fire(root, name)
+        await turn()
+        expect(s.calls()).toHaveLength(calls)
+        expect(s.timers).toHaveLength(timers)
+        for (const name of [...waits[root].chain, undefined]) expect(await after(s, () => s.fire(root, name))).toEqual(listing)
+      }
+      // A root that is there lists again for any name, as one root does.
+      for (const root of [MSIX, APPDATA].filter((root) => !waiting.includes(root))) {
+        expect(await after(s, () => s.fire(root, waits[root].others[0]))).toEqual(listing)
+      }
+    })
+
+    // Review Focus 2: the Store app installed while a dial is attached.
+    it('the Store app\'s store made folder by folder after the start is listed at its last folder, with no other event', async () => {
+      const s = await both(undefined)
+      // The watch moves nearer as each folder is made (folderWatch.ts), and names the folder made in the one it held,
+      // beside a busy sibling there.
+      const steps = [
+        ['Microsoft.WindowsCalculator_8wekyb3d8bbwe', 'Claude_pzs8sxrjxfjjc'],
+        ['LocalState', 'LocalCache'],
+        ['Local', 'Roaming'],
+        ['Microsoft', 'Claude'],
+        ['Cookies', 'claude-code-sessions'],
+      ]
+      for (const [at, [sibling, made]] of steps.entries()) {
+        s.fire(MSIX, sibling)
+        await turn()
+        if (at === steps.length - 1) s.answers.folders = ONLY_MSIX
+        expect(await after(s, () => s.fire(MSIX, made))).toEqual(at === steps.length - 1 ? ['folders', 'files', 'read'] : ['folders'])
+      }
+      await turn()
+      expect(s.calls()).toEqual(['folders', 'folders', 'folders', 'folders', 'folders', 'folders', 'files', 'read'])
+      expect(s.source.list().map(({ id }) => id)).toEqual([ID])
+      expect(s.watching()).toEqual([MSIX_ROOT.watch, APPDATA_ROOT.watch, [MSIX_ACCOUNT], [MSIX_ORG]])
+      expect(s.log).toEqual([
+        '[claude-app] watch · none', '[claude-app] watch · on', '[claude-app] read · 0 ms · 1 parsed · 0 skipped',
+        '[claude-app] listed · 1 sessions',
+      ])
+    })
+
+    it('an event of a root that is there naming an account sets that root\'s watches below it again, not the other\'s', async () => {
+      const s = await both(BOTH)
+      await after(s, () => s.fire(APPDATA, 'acc'))
+      expect(s.watches.filter(({ stopped }) => stopped).map(({ folders }) => folders)).toEqual([[APPDATA_ACCOUNT], [APPDATA_ORG]])
+      await after(s, () => s.fire(MSIX, 'acc'))
+      expect(s.watches.filter(({ stopped }) => stopped).map(({ folders }) => folders)).toEqual([
+        [MSIX_ACCOUNT], [APPDATA_ACCOUNT], [MSIX_ORG], [APPDATA_ORG],
+      ])
+      expect(s.watching()).toEqual([
+        MSIX_ROOT.watch, APPDATA_ROOT.watch, [APPDATA_ACCOUNT], [APPDATA_ORG], [MSIX_ACCOUNT], [MSIX_ORG],
+      ])
+    })
+
+    it('watch · on is said once any root is there, watch · none once none is, each once a change', async () => {
+      const s = await both(undefined)
+      for (const folders of [ONLY_APPDATA, BOTH, ONLY_MSIX, undefined, undefined, ONLY_APPDATA]) {
+        s.answers.folders = folders
+        await after(s, () => s.fire(MSIX, undefined))
+      }
+      expect(s.log.filter((line) => line.includes('watch'))).toEqual([
+        '[claude-app] watch · none', '[claude-app] watch · on', '[claude-app] watch · none', '[claude-app] watch · on',
+      ])
+    })
+
+    it('the two roots\' events within 250 ms give one pass, and one pass runs at a time across both', async () => {
+      const s = setup({ roots: ROOTS })
+      s.answers.folders = BOTH
+      s.source.start()
+      await s.land()
+      s.fire(MSIX, 'acc')
+      s.fire(APPDATA, 'acc')
+      await turn()
+      expect(s.calls()).toEqual(['folders', 'files', 'read'])
+      s.gap()
+      expect(s.calls()).toEqual(['folders', 'files', 'read', 'folders'])
+      s.fire(MSIX, undefined)
+      s.fire(APPDATA, undefined)
+      await s.land()
+      s.gap()
+      await s.land()
+      s.gap()
+      await turn()
+      expect(s.calls()).toEqual(['folders', 'files', 'read', 'folders', 'files', 'read', 'folders', 'files', 'read'])
     })
   })
 

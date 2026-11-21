@@ -74,7 +74,8 @@ describe('the VS Code adapter', () => {
     expect(recorder({ inFront: () => false }).adapter.canShow(pane)).toBe(false)
     for (const platform of ['linux', 'win32'] as const) {
       const elsewhere = recorder({ platform })
-      expect(elsewhere.adapter.canFocus(pane), platform).toBe(false)
+      // On Linux the first look answers yes while xdg-mime is read: a tap's focus waits for that read (appLink.ts).
+      expect(elsewhere.adapter.canFocus(pane), platform).toBe(platform === 'linux')
       expect(elsewhere.adapter.canShow(pane), platform).toBe(false)
       expect(await elsewhere.adapter.focus(pane), platform).toBe(false)
       expect(await elsewhere.adapter.show(pane, 'a1'), platform).toBe('failed')
@@ -157,7 +158,8 @@ describe('a tap on a session in the VS Code extension\'s tab (docs/specs/2026-11
     expect(failed.logs).toEqual(['[device] open · vscode · fallback'])
     expect(failed.logs.join()).not.toContain(UUID)
     const linux = recorder({ platform: 'linux' })
-    expect(linux.opener.can(target(TAB))).toBe(false)
+    // The first look answers yes while xdg-mime is read (appLink.ts): none is on PATH, so the tap opens nothing.
+    expect(linux.opener.can(target(TAB))).toBe(true)
     expect(await linux.opener.open('a1', target(TAB))).toBe(false)
     expect(linux.calls).toEqual([])
   })
@@ -321,7 +323,8 @@ describe('an agent in VS Code\'s integrated terminal (docs/plans/2026-11-17-dial
       windows.held = HELD
       for (const id of ids) {
         expect(termPid(id), id).toBeUndefined()
-        expect(adapter.canFocus(pane(id)), id).toBe(platform === 'darwin')
+        // On Linux the first look answers yes while xdg-mime is read, as macOS does: focus still refuses the id.
+        expect(adapter.canFocus(pane(id)), id).toBe(platform === 'darwin' || id === ids[0])
         expect(await adapter.focus(pane(id)), id).toBe(false)
         expect(await adapter.show(pane(id), 'a1'), id).toBe('failed')
       }

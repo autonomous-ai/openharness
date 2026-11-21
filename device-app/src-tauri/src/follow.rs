@@ -2,13 +2,23 @@
 //! offer the Follow ChatGPT screen. The window's title is private like a tty: it goes on the watch's stdin and nowhere
 //! else, never into the log, an Event, the state file or the window.
 
+use crate::front::{LinuxFront, linux_front};
 use crate::tabs::Out;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+#[cfg(unix)]
+use {std::io, std::net::Shutdown, std::os::unix::net::UnixStream, std::sync::Mutex};
 
 /// The ChatGPT app's bundle id, the CLI's too: the app that runs Codex threads.
 pub const CHATGPT_BUNDLE: &str = "com.openai.codex";
+/// The front value of the ChatGPT app on Windows: its program's file name, which Windows matches without case.
+pub const CHATGPT_EXE: &str = "ChatGPT.exe";
+/// The front value of the ChatGPT app on Linux: its program's name.
+pub const CHATGPT_LINUX: &str = "ChatGPT";
+/// Where the Linux app's `.deb` and `.rpm` both install its program.
+pub const CHATGPT_PROGRAM: &str = "/usr/lib/chatgpt/ChatGPT";
 /// The CLI keeps a title of up to 256 UTF-16 units (a JavaScript string's length): past it, the empty title, so the
 /// two never disagree.
 pub const TITLE_MAX: usize = 256;
@@ -35,12 +45,44 @@ pub fn chatgpt_installed(home: &Path, applications: &Path, bundle_id: &dyn Fn(&P
         .any(|app| bundle_id(app).as_deref() == Some(CHATGPT_BUNDLE))
 }
 
+/// Whether the app in front is ChatGPT: its bundle id on macOS, its program's name on Windows and Linux. One rule for
+/// every OS: on macOS the names match no real bundle id. Another program by that name is told apart by the door's
+/// observer, which checks the window's own process.
+pub fn is_chatgpt_front(value: &str) -> bool {
+    value == CHATGPT_BUNDLE || value.eq_ignore_ascii_case(CHATGPT_EXE) || value == CHATGPT_LINUX
+}
+
+/// A program is installed when its path is a regular file.
+pub fn program_installed(program: &Path) -> bool {
+    program.is_file()
+}
+
+/// Whether the Linux app is installed: every Linux door's answer.
+pub fn linux_installed() -> bool {
+    program_installed(Path::new(CHATGPT_PROGRAM))
+}
+
+/// Whether process `pid` runs the Linux app: every Linux door checks the window's own process, so another program
+/// named ChatGPT in front is not followed.
+pub fn runs_chatgpt(pid: u32) -> bool {
+    runs_program(Path::new("/proc"), pid, Path::new(CHATGPT_PROGRAM))
+}
+
+/// Whether process `pid` runs `program`, by its `exe` link under `proc_root` (`/proc`). A package upgrade that
+/// replaces the program while it runs makes the kernel add ` (deleted)` to the link: still the same app, as the front
+/// source reads it (`front::exe_name`), or following hears only the empty title until ChatGPT restarts.
+pub fn runs_program(proc_root: &Path, pid: u32, program: &Path) -> bool {
+    let mut replaced = program.as_os_str().to_owned();
+    replaced.push(" (deleted)");
+    std::fs::read_link(proc_root.join(pid.to_string()).join("exe")).is_ok_and(|exe| exe == program || exe == replaced)
+}
+
 /// What an observation hears.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Heard {
     /// The focused window's title; None with no focused window.
     Title(Option<String>),
-    /// The observer could not be made: nothing follows until the next start.
+    /// The observer could not be made, or its window system ended it: nothing follows until the next start.
     NoObserver,
 }
 
@@ -58,13 +100,123 @@ pub trait AxTrust: Send + Sync {
     fn trusted(&self) -> bool;
     /// macOS's own prompt.
     fn prompt(&self);
-    /// `changed` is called each time the permission may have changed.
+    /// `changed` is called each time macOS may have changed the permission. Off macOS nothing changes it but the
+    /// switch, which the runner reads back.
     fn start(&self, changed: Box<dyn Fn() + Send + Sync>);
+    /// Off macOS, Harness's own switch stands for the permission: the person turns following on or off.
+    fn switch(&self, _on: bool) {}
 }
 
 pub trait FollowDoor: ChatgptWindow + AxTrust {}
 
 impl<T: ChatgptWindow + AxTrust> FollowDoor for T {}
+
+/// Every door off macOS: its window, and Harness's own switch, which stands for the permission since nothing gates
+/// reading a window's title there.
+pub struct Switched<W> {
+    window: W,
+    on: AtomicBool,
+}
+
+impl<W> Switched<W> {
+    pub fn new(window: W, on: bool) -> Switched<W> {
+        Switched { window, on: AtomicBool::new(on) }
+    }
+}
+
+impl<W: ChatgptWindow> ChatgptWindow for Switched<W> {
+    fn installed(&self) -> bool {
+        self.window.installed()
+    }
+
+    fn observe(&self, heard: Box<dyn Fn(Heard) + Send + Sync>) -> Option<Box<dyn Send>> {
+        self.window.observe(heard)
+    }
+}
+
+impl<W: Send + Sync> AxTrust for Switched<W> {
+    fn trusted(&self) -> bool {
+        self.on.load(Ordering::SeqCst)
+    }
+
+    /// Nothing to ask.
+    fn prompt(&self) {}
+
+    /// Nothing to hear: the runner reads the switch back at each click.
+    fn start(&self, _changed: Box<dyn Fn() + Send + Sync>) {}
+
+    fn switch(&self, on: bool) {
+        self.on.store(on, Ordering::SeqCst);
+    }
+}
+
+/// What an observation on a socket and its thread share: whether it was dropped, and once connected, the
+/// connection's other end.
+#[cfg(unix)]
+#[derive(Default)]
+struct Socket {
+    stopped: bool,
+    stream: Option<UnixStream>,
+}
+
+/// An observation on a socket: dropped, it shuts its connection down, which wakes its thread out of the read it waits
+/// in, or ends a thread still connecting once it connects. Returns at once either way.
+#[cfg(unix)]
+struct SocketObservation(Arc<Mutex<Socket>>);
+
+#[cfg(unix)]
+impl Drop for SocketObservation {
+    fn drop(&mut self) {
+        let mut socket = self.0.lock().unwrap();
+        socket.stopped = true;
+        if let Some(stream) = &socket.stream {
+            let _ = stream.shutdown(Shutdown::Both);
+        }
+    }
+}
+
+/// Keeps `ends` for the observation to shut down; false when it was already dropped.
+#[cfg(unix)]
+fn kept(socket: &Mutex<Socket>, ends: UnixStream) -> bool {
+    let mut socket = socket.lock().unwrap();
+    if !socket.stopped {
+        socket.stream = Some(ends);
+    }
+    !socket.stopped
+}
+
+/// `listen` on the connection `connect` makes, on a thread of its own, until the handle is dropped: sway's and
+/// Hyprland's observation. A failed connect, no thread, or a `listen` that ends not by the drop (the compositor quit,
+/// or refused) is NoObserver, once.
+#[cfg(unix)]
+pub fn observe_socket(
+    connect: impl FnOnce() -> io::Result<UnixStream> + Send + 'static,
+    listen: impl FnOnce(UnixStream, &dyn Fn(Heard)) + Send + 'static,
+    heard: Box<dyn Fn(Heard) + Send + Sync>,
+) -> Box<dyn Send> {
+    let socket = Arc::new(Mutex::new(Socket::default()));
+    let held = Arc::clone(&socket);
+    let heard: Arc<dyn Fn(Heard) + Send + Sync> = Arc::from(heard);
+    let told = Arc::clone(&heard);
+    // Connecting can wait on a stalled compositor: never on the runner's follow thread.
+    let spawned = std::thread::Builder::new().name("chatgpt-observer".into()).spawn(move || {
+        let Ok((ends, stream)) = connect().and_then(|stream| Ok((stream.try_clone()?, stream))) else {
+            return told(Heard::NoObserver);
+        };
+        if !kept(&held, ends) {
+            return;
+        }
+        listen(stream, &*told);
+        if !held.lock().unwrap().stopped {
+            told(Heard::NoObserver);
+        }
+    });
+    // No thread to observe on: told as an observer not made, where a panic would end the runner's follow thread.
+    if spawned.is_err() {
+        heard(Heard::NoObserver);
+    }
+    Box::new(SocketObservation(socket))
+}
 
 /// Reads nothing and asks nothing: a platform with no ChatGPT app to follow.
 pub struct NoFollow;
@@ -89,13 +241,49 @@ impl AxTrust for NoFollow {
     fn start(&self, _changed: Box<dyn Fn() + Send + Sync>) {}
 }
 
-/// The door this platform has: only macOS has the ChatGPT app to follow.
-pub fn system(#[cfg_attr(not(target_os = "macos"), expect(unused_variables))] home: PathBuf) -> Arc<dyn FollowDoor> {
-    #[cfg(target_os = "macos")]
-    let door = crate::follow_macos::MacFollow::new(home);
-    #[cfg(not(target_os = "macos"))]
-    let door = NoFollow;
-    Arc::new(door)
+/// Which door follows the ChatGPT app's window.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DoorKind {
+    Mac,
+    Windows,
+    /// The session's DISPLAY.
+    X11(String),
+    Sway,
+    Hyprland,
+    None,
+}
+
+/// `linux` is `front::linux_front`'s answer: the window system the front source reads is the one the door reads.
+pub fn door_kind(os: &str, linux: Option<LinuxFront>) -> DoorKind {
+    match (os, linux) {
+        ("macos", _) => DoorKind::Mac,
+        ("windows", _) => DoorKind::Windows,
+        (_, Some(LinuxFront::X11(display))) => DoorKind::X11(display),
+        (_, Some(LinuxFront::Sway)) => DoorKind::Sway,
+        (_, Some(LinuxFront::Hyprland)) => DoorKind::Hyprland,
+        _ => DoorKind::None,
+    }
+}
+
+/// The door this platform and session have. `switch_on` is Harness's saved switch, which gates every door off macOS.
+pub fn system(
+    #[cfg_attr(not(target_os = "macos"), expect(unused_variables))] home: PathBuf,
+    #[cfg_attr(target_os = "macos", expect(unused_variables))] switch_on: bool,
+) -> Arc<dyn FollowDoor> {
+    let linux = cfg!(target_os = "linux").then(|| linux_front(&|name| std::env::var(name).ok()));
+    match door_kind(std::env::consts::OS, linux) {
+        #[cfg(target_os = "macos")]
+        DoorKind::Mac => Arc::new(crate::follow_macos::MacFollow::new(home)),
+        #[cfg(windows)]
+        DoorKind::Windows => Arc::new(Switched::new(crate::follow_windows::WindowsFollow, switch_on)),
+        #[cfg(target_os = "linux")]
+        DoorKind::X11(display) => Arc::new(Switched::new(crate::follow_x11::X11Follow::new(display), switch_on)),
+        #[cfg(target_os = "linux")]
+        DoorKind::Sway => Arc::new(Switched::new(crate::follow_sway::SwayFollow, switch_on)),
+        #[cfg(target_os = "linux")]
+        DoorKind::Hyprland => Arc::new(Switched::new(crate::follow_hyprland::HyprlandFollow, switch_on)),
+        _ => Arc::new(NoFollow),
+    }
 }
 
 /// What to do with the observation.
@@ -137,9 +325,9 @@ pub struct ChatgptFollow {
 }
 
 impl ChatgptFollow {
-    /// The bundle id of the app in front.
+    /// The value the front source tells: on macOS the bundle id of the app in front.
     pub fn front(&mut self, bundle: &str) {
-        let chatgpt = bundle == CHATGPT_BUNDLE;
+        let chatgpt = is_chatgpt_front(bundle);
         if self.fronted && chatgpt && !self.chatgpt {
             self.offer = self.watching && self.attached && self.installed && !self.trusted;
         }
@@ -468,6 +656,77 @@ mod tests {
     }
 
     #[test]
+    fn chatgpt_exe_in_any_case_and_chatgpt_are_chatgpt_in_front_as_the_bundle_id_is() {
+        for value in [CHATGPT_BUNDLE, "ChatGPT.exe", "chatgpt.EXE", "ChatGPT"] {
+            let mut follow = offering(VS_CODE);
+            follow.front(value);
+            assert!(follow.take_offer(), "{value}");
+            follow.trusted(true);
+            assert!(follow.observes(), "{value}");
+            assert!(matches!(follow.observer(), Observer::Start(_)), "{value}");
+        }
+        // Linux's program name is matched exactly, and a macOS bundle's file name is no front value.
+        for value in ["chatgpt", "ChatGPT.app"] {
+            let mut follow = offering(VS_CODE);
+            follow.front(value);
+            assert!(!follow.take_offer(), "{value}");
+            follow.trusted(true);
+            assert!(!follow.observes(), "{value}");
+        }
+    }
+
+    #[test]
+    fn a_program_is_installed_only_as_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("ChatGPT");
+        std::fs::write(&program, "").unwrap();
+        assert!(program_installed(&program));
+        assert!(!program_installed(dir.path()));
+        assert!(!program_installed(&dir.path().join("missing")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_process_runs_the_program_its_exe_links_to() {
+        let proc_root = tempfile::tempdir().unwrap();
+        let program = Path::new("/usr/lib/chatgpt/ChatGPT");
+        let link = |pid: u32, to: &str| {
+            std::fs::create_dir(proc_root.path().join(pid.to_string())).unwrap();
+            std::os::unix::fs::symlink(to, proc_root.path().join(pid.to_string()).join("exe")).unwrap();
+        };
+        link(7, "/usr/lib/chatgpt/ChatGPT");
+        link(8, "/usr/local/bin/ChatGPT");
+        // A package upgrade replaced the program while it runs: the kernel marks the link.
+        link(10, "/usr/lib/chatgpt/ChatGPT (deleted)");
+        link(11, "/usr/lib/chatgpt/ChatGPT (deleted) (deleted)");
+        assert!(runs_program(proc_root.path(), 7, program));
+        assert!(!runs_program(proc_root.path(), 8, program));
+        assert!(!runs_program(proc_root.path(), 9, program));
+        assert!(runs_program(proc_root.path(), 10, program));
+        assert!(!runs_program(proc_root.path(), 11, program));
+    }
+
+    #[test]
+    fn off_macos_the_switch_is_the_permission_and_nothing_is_asked_or_told() {
+        assert!(!Switched::new(NoFollow, false).trusted());
+        let door = Switched::new(NoFollow, true);
+        assert!(door.trusted());
+        let told = Arc::new(Mutex::new(0));
+        let count = told.clone();
+        door.start(Box::new(move || *count.lock().unwrap() += 1));
+        // The menu's click: the runner reads it back.
+        door.switch(false);
+        assert!(!door.trusted());
+        door.prompt();
+        assert!(!door.trusted());
+        door.switch(false);
+        assert!(!door.trusted());
+        door.switch(true);
+        assert!(door.trusted());
+        assert_eq!(*told.lock().unwrap(), 0);
+    }
+
+    #[test]
     fn installed_is_looked_for_once_each_attach() {
         let mut follow = ChatgptFollow::default();
         assert!(!follow.take_look());
@@ -524,6 +783,18 @@ mod tests {
         let (found, asked) = installed(&[]);
         assert!(!found);
         assert_eq!(asked, [system, own]);
+    }
+
+    #[test]
+    fn the_door_is_the_one_of_the_os_or_of_the_desktop_the_front_source_reads() {
+        use crate::front::LinuxFront;
+        assert_eq!(door_kind("macos", None), DoorKind::Mac);
+        assert_eq!(door_kind("windows", None), DoorKind::Windows);
+        assert_eq!(door_kind("linux", Some(LinuxFront::X11(":1".into()))), DoorKind::X11(":1".into()));
+        assert_eq!(door_kind("linux", Some(LinuxFront::Sway)), DoorKind::Sway);
+        assert_eq!(door_kind("linux", Some(LinuxFront::Hyprland)), DoorKind::Hyprland);
+        assert_eq!(door_kind("linux", Some(LinuxFront::None)), DoorKind::None);
+        assert_eq!(door_kind("linux", None), DoorKind::None);
     }
 
     #[test]

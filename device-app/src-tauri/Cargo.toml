@@ -47,10 +47,11 @@ x11rb = "0.14"
 # Whether a tray host is on the session bus (tray_host.rs). Already in Tauri's Linux tree.
 dbus = "0.9"
 
-# The Win32 calls (child processes, the app in front, the login item, the theme, the opener, Desktop's folder).
+# The Win32 calls (child processes, the app in front, the login item, the theme, the opener, Desktop's folder, and
+# the ChatGPT follow: its window's title and its package family).
 # Tauri's own copy: no new crate.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Accessibility", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_Storage_Packaging_Appx", "Win32_System_Com", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Accessibility", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
 
 [build-dependencies]
 # As `cargo tauri build` writes it back: any other form, and every build rewrites this line.

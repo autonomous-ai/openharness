@@ -778,7 +778,7 @@ Windows and Linux, named **Harness** wherever a person sees it; only its file
 stays `Harness Device.app`, and its installed name `Harness Device` on Windows.
 It sets up
 Harness, keeps it running and shows the dial's state; it offers sign-in and,
-on a Mac with the ChatGPT app, Follow ChatGPT. Claude Code, Codex and Orca
+with the ChatGPT app, Follow ChatGPT. Claude Code, Codex and Orca
 need no setting: Harness sets them up once a dial is plugged in. The desktop
 app offers and installs it ([Surface families](#surface-families), Menu-bar app offer).
 
@@ -851,6 +851,10 @@ differences, each an OS limit:
   and the same credits line: macOS's standard panel is AppKit's.
 - **Export logs** selects the zip in Explorer on Windows; on Linux it opens the
   zip's folder, as the file manager cannot select a file.
+- `Follow ChatGPT` is a plain on/off check item, as Sound, with no screen:
+  nothing gates reading a window's title, so the permission rule is macOS's
+  only. GNOME and KDE on Wayland show no item, as they give no other program
+  the window in front.
 - The window has no taskbar button, as it has no Dock icon on macOS.
 
 The menu, top to bottom:

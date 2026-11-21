@@ -142,8 +142,8 @@ pane it left (PM, 2026-11-15).
 | Adapter | File | `paneOf` | `type` | `focus` | `show` |
 |---|---|---|---|---|---|
 | `orca` | `hosts/orca.ts` (the Orca adapter) | `ORCA_TERMINAL_HANDLE` matching `ORCA_HANDLE` | `orca terminal send` | `orca terminal switch` | `orca terminal switch` |
-| `claude` | `hosts/claudeApp.ts` (new, from `open.ts` and #4326) | the Claude app's bundle id and a `local_…` session | none | the `claude://code/continue` link to the Claude app alone (`open -b com.anthropic.claudefordesktop <url>`) through `hosts/appLink.ts`, macOS only | the link through `hosts/appLink.ts`, while the Claude app is in front |
-| `codex` | `hosts/codexApp.ts` | the app `codex`, the engine `codex` and a thread id (`CODEX_THREAD`); no hint read | none | the `codex://threads/<id>` link to the Codex app alone (`open -b com.openai.codex <url>`) through `hosts/appLink.ts`, macOS only; `open -b com.openai.codex` when the link fails | the link through `hosts/appLink.ts`, while the Codex app is in front |
+| `claude` | `hosts/claudeApp.ts` (new, from `open.ts` and #4326) | the Claude app's bundle id (on Linux, which has none, the scan's app `claude`) and a `local_…` session | none | the `claude://code/continue` link through `hosts/appLink.ts`: on macOS to the Claude app alone (`open -b com.anthropic.claudefordesktop <url>`), on Windows by `harness-pty open-link` (`hosts/windowsRaise.ts`), on Linux by `xdg-open` once `xdg-mime` names an app for `claude` | the link through `hosts/appLink.ts`, while the Claude app is in front |
+| `codex` | `hosts/codexApp.ts` | the app `codex`, the engine `codex` and a thread id (`CODEX_THREAD`); no hint read | none | the `codex://threads/<id>` link through `hosts/appLink.ts`: on macOS to the Codex app alone (`open -b com.openai.codex <url>`), on Windows by `harness-pty open-link` (`hosts/windowsRaise.ts`), on Linux by `xdg-open` once `xdg-mime` names an app for `codex`; when the link fails, `open -b com.openai.codex` on macOS and Windows' raise of the app on Windows | the link through `hosts/appLink.ts`, while the Codex app is in front |
 | `vscode` | `hosts/vscode.ts` | the engine `claude`, `CLAUDE_CODE_ENTRYPOINT=claude-vscode`, VS Code's bundle id and a UUID session | none | the `vscode://anthropic.claude-code/open?session=<id>` link to VS Code alone (`open -b com.microsoft.VSCode <url>`) through `hosts/appLink.ts`, macOS only | the link through `hosts/appLink.ts`, while VS Code is in front |
 | `tabs` | `hosts/tabs.ts` (#4331's file) | a tab app and a learnt tty | none | the watch's select with raise | the watch's select, while a watch is open |
 | `wezterm` | `hosts/wezterm.ts` (new, from `open.ts`) | `WEZTERM_PANE`; its own when WezTerm made the agent's terminal | `wezterm cli send-text --no-paste`, then Enter on its own ([dial on Linux](../plans/2026-11-19-dial-linux-design.md#15-wezterm-types)) | `wezterm cli activate-pane` | none |
@@ -167,10 +167,16 @@ opencode's sessions come from a listing source alone, with no adapter ([opencode
 
 The Claude app's sessions with no process come from a listing source of the app's store, folded with the hooked copy
 by session id or by the adapter's pane key `claude-app:<local id>` ([Claude app](../plans/2026-11-19-dial-claude-app-sessions-design.md)).
+On macOS, Windows and Linux, from each store root the OS has: on Windows the Store app's private copy first, then
+`%APPDATA%\Claude`; on Linux `$XDG_CONFIG_HOME/Claude`, else `~/.config/Claude` (`hosts/appPlaces.ts`,
+[Windows and Linux](../plans/2026-11-20-dial-app-sessions-win-linux-design.md)).
 
 The ChatGPT app's Codex threads with no process come from a listing source of the app's metadata (`codex-app`),
 folded with the hooked copy by session id, the thread id, and ranked in the app's sidebar order
-([ChatGPT app](../plans/2026-11-19-dial-chatgpt-ring-and-follow-design.md)).
+([ChatGPT app](../plans/2026-11-19-dial-chatgpt-ring-and-follow-design.md)). On macOS, Windows and Linux, once the
+ChatGPT app is installed: `ChatGPT.app` on macOS, the Store's package `OpenAI.Codex` on Windows
+(`lib/windows/storePackage.ts`), `/usr/lib/chatgpt/ChatGPT` on Linux (`hosts/appPlaces.ts`,
+[Windows and Linux](../plans/2026-11-20-dial-app-sessions-win-linux-design.md)).
 
 `open.ts` keeps only what every app shares:
 

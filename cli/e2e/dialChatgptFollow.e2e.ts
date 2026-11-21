@@ -4,27 +4,33 @@
  * `harness hardware watch --json`, and the devices match it to Codex's name of one thread of a fixture Codex home
  * (src/testing/codexAppFixture.ts) and turn a fake dial on the desk to it.
  *
- * The real ChatGPT app, `~/.codex`, /Applications and `/usr/bin/open` are never touched, as in
- * deviceCodexAppThreads.e2e.ts: the Codex home is a fixture in the daemon's throwaway home and the app a fake Info.plist
- * in its `~/Applications`, both checked to be inside its root before it starts. No Harness Device runs and nothing reads
- * a window: the test writes the lines it would. The watch runs under the daemon's environment only, as in
- * dialTerminalFollow.e2e.ts, so it never reaches this Mac's daemon. No backend.
+ * macOS and Linux. The real ChatGPT app, `~/.codex`, /Applications, /usr/lib, `/usr/bin/open` and `xdg-open` are never
+ * touched, as in deviceCodexAppThreads.e2e.ts: the Codex home is a fixture in the daemon's throwaway home and the app a
+ * fake Info.plist in its `~/Applications` on macOS and a file in the root's stand-in for /usr/lib on Linux, all checked
+ * to be inside its root before it starts. No Harness Device runs and nothing reads a window: the test writes the lines
+ * it would. The watch runs under the daemon's environment only, as in dialTerminalFollow.e2e.ts, so it never reaches
+ * this computer's daemon. No backend.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
-import { isAbsolute, join, relative, sep } from 'node:path'
+import { dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { chatGptPlaces } from '../src/cable/hosts/appPlaces.js'
 import { observedAgentId } from '../src/cable/hosts/observed.js'
 import { devicesListenerPath } from '../src/devices/listenerPath.js'
 import { NEVER_READ, codexAppFixture } from '../src/testing/codexAppFixture.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
+import { writeSchemeApps } from './harness/schemeApps.js'
 
 /** What the round dial's firmware says in its greeting: it holds one app's ring (docs/specs/2026-11-14-dial-app-filter.md). */
 const FILTER = { appFilter: 'v1' }
 const CODEX_APP = 'com.openai.codex'
-/** The everyday daemon's port: a watch under test that reached it would tell this Mac's dial. */
+const LINUX = process.platform === 'linux'
+/** The ChatGPT app in front, as Harness Device names it: its bundle id on macOS, its window's process on Linux. */
+const CHATGPT_FRONT = LINUX ? 'ChatGPT' : CODEX_APP
+/** The everyday daemon's port: a watch under test that reached it would tell this computer's dial. */
 const EVERYDAY_PORT = '18473'
 /** Every thread line the devices say: an outcome, never a title, a name or a thread. */
 const LINE = /^\[device\] thread · (moved|skipped · (echo|not in front|no match|ambiguous|no tile))$/
@@ -46,7 +52,7 @@ const inside = (root: string, path: string): boolean => isAbsolute(path) && !rel
 const said = (d: IsolatedDaemon, line: string) =>
   until(`"${line}" in the daemon's log`, () => d.log().split('\n').some((logged) => logged.endsWith(line)), 30_000, 50)
 
-describe.skipIf(process.platform !== 'darwin')('the dial follows the ChatGPT thread', () => {
+describe.skipIf(process.platform === 'win32')('the dial follows the ChatGPT thread', () => {
   let daemon: IsolatedDaemon | undefined
   let desk: Desk | undefined
   const children: ChildProcess[] = []
@@ -61,14 +67,21 @@ describe.skipIf(process.platform !== 'darwin')('the dial follows the ChatGPT thr
   it("the dial follows the thread opened in the ChatGPT app, from the window title on the watch's stdin", async () => {
     const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false' } })
     daemon = d
-    // Before anything runs: its open, its /Applications and its home, and so the app and the Codex home it reads, are
-    // the root's; and its /Applications holds no ChatGPT app, so only the home's fake is found.
+    // Before anything runs: its open, its /Applications (or /usr/lib) and its home, and so the app and the Codex home it
+    // reads, are the root's; and on macOS its /Applications holds no ChatGPT app, so only the home's fake is found.
     const apps = d.env.HARNESS_APPLICATIONS_DIR ?? ''
     for (const path of [d.env.HARNESS_OPEN_BIN ?? '', apps, d.env.HOME ?? '']) expect(inside(d.root, path), path).toBe(true)
-    expect(existsSync(join(apps, 'ChatGPT.app')), apps).toBe(false)
-    const contents = join(d.env.HOME!, 'Applications', 'ChatGPT.app', 'Contents')
-    mkdirSync(contents, { recursive: true })
-    writeFileSync(join(contents, 'Info.plist'), INFO_PLIST)
+    if (LINUX) {
+      const [program] = chatGptPlaces('linux', apps, d.env.HOME!)
+      expect(inside(d.root, program), program).toBe(true)
+      mkdirSync(dirname(program), { recursive: true })
+      writeFileSync(program, '')
+    } else {
+      expect(existsSync(join(apps, 'ChatGPT.app')), apps).toBe(false)
+      const contents = join(d.env.HOME!, 'Applications', 'ChatGPT.app', 'Contents')
+      mkdirSync(contents, { recursive: true })
+      writeFileSync(join(contents, 'Info.plist'), INFO_PLIST)
+    }
     // The app's Codex home, not the CODEX_HOME Harness runs Codex under (`<root>/codex`).
     const home = join(d.env.HOME!, '.codex')
     expect(inside(d.root, home), home).toBe(true)
@@ -90,6 +103,8 @@ describe.skipIf(process.platform !== 'darwin')('the dial follows the ChatGPT thr
     const file = join(d.root, 'dials.json')
     d.env.HARNESSD_TEST_DIAL_PORT = file
     writeFileSync(file, '[]')
+    // Both apps' links have their app, as on a desktop with both installed.
+    if (LINUX) writeSchemeApps(d, { claude: 'com.anthropic.Claude.desktop', codex: 'chatgpt.desktop' })
     desk = new Desk(file)
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-200).join('\n')}`) })
     await d.start()
@@ -109,8 +124,8 @@ describe.skipIf(process.platform !== 'darwin')('the dial follows the ChatGPT thr
     }, 45_000, 50)
 
     // 2. The watch as Harness Device runs it, under the daemon's environment only: this daemon's data folder and the
-    // devices' socket in it, never this Mac's. ChatGPT is in front from its first line.
-    const env = { ...d.env, TMUX_PANE: '' }
+    // devices' socket in it, never this computer's. ChatGPT is in front from its first line.
+    const env: NodeJS.ProcessEnv = { ...d.env, TMUX_PANE: '' }
     expect(env.ADAPTER_DATA_DIR).toBe(d.dataDir)
     expect(d.dataDir.startsWith(d.root + sep)).toBe(true)
     expect(devicesListenerPath(d.dataDir, process.platform, env.HOME)).toBe(join(d.dataDir, 'devices.sock'))
@@ -118,7 +133,7 @@ describe.skipIf(process.platform !== 'darwin')('the dial follows the ChatGPT thr
     const watch = spawn(process.execPath, [...CLI_ENTRY, 'hardware', 'watch', '--json'], { cwd: CLI_ROOT, env, stdio: ['pipe', 'ignore', 'ignore'] })
     children.push(watch)
     const write = (value: unknown): void => { watch.stdin!.write(`${JSON.stringify(value)}\n`) }
-    write({ front: CODEX_APP })
+    write({ front: CHATGPT_FRONT })
 
     // 3. The window shows the named thread: the dial turns to it. The report waits for ChatGPT's settle by itself.
     let since = dial.messages.length

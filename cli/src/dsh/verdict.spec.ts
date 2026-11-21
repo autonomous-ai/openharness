@@ -1,10 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FSWatcher } from 'chokidar'
 import { once } from 'node:events'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { PathToWatchDeps } from '../lib/pathToWatch.js'
 import { DshVerdictWatcher, parseVerdict, type DshVerdict } from './verdict.js'
+
+/** This computer, unless a case says Windows. */
+const toWatch = vi.hoisted(() => ({ deps: undefined as PathToWatchDeps | undefined }))
+vi.mock('../lib/pathToWatch.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/pathToWatch.js')>()
+  return { pathToWatch: (path: string) => actual.pathToWatch(path, toWatch.deps) }
+})
 
 /**
  * The chokidar instance behind one agent's watch: to wait for its `ready`, or announce what chokidar would. A spec writes
@@ -316,5 +324,42 @@ describe('DshVerdictWatcher, event by event', () => {
     expect(clock.pending).toBe(1)
     clock.run()
     expect(seen).toEqual([])
+  })
+})
+
+describe('DshVerdictWatcher, on Windows', () => {
+  let workspace: string
+  let watcher: DshVerdictWatcher | null = null
+  beforeEach(() => { workspace = mkdtempSync(join(tmpdir(), 'dsh-verdict-windows-')) })
+  afterEach(async () => {
+    await watcher?.stop()
+    watcher = null
+    toWatch.deps = undefined
+    rmSync(workspace, { recursive: true, force: true })
+  })
+
+  // libuv aborts the process at the first change in a folder watched by an 8.3 short name (lib/pathToWatch.ts), as an
+  // agent's folder can be. A short name is another name of the same folder, as a link is here.
+  it('watches the verdict\'s folder by its long name, and publishes the verdict written there', async () => {
+    const long = join(workspace, 'hxdialtest')
+    const short = join(workspace, 'HXDIAL~1')
+    mkdirSync(long)
+    symlinkSync(long, short)
+    toWatch.deps = { platform: 'win32', realpath: (path) => realpathSync.native(path), log: () => {} }
+    const seen: Array<string | null> = []
+    const clock = heldDebounce()
+    watcher = new DshVerdictWatcher({ onChange: (_id, v) => seen.push(v ? v.summary : null), debounce: clock.debounce })
+    watcher.watch('a', join(short, '.harness', 'verdict.json'))
+    const inner = innerWatcher(watcher, 'a')
+    await once(inner, 'ready')
+    const dir = join(realpathSync.native(long), '.harness')
+    expect(Object.keys(inner.getWatched())).toContain(dir)
+    expect(Object.keys(inner.getWatched())).not.toContain(join(short, '.harness'))
+    // announced by hand, by the path chokidar names under the folder it watches
+    const file = join(dir, 'verdict.json')
+    writeFileSync(file, JSON.stringify({ spec: 1, ready: true, summary: 'first' }))
+    inner.emit('add', file)
+    clock.run()
+    expect(seen).toEqual(['first'])
   })
 })

@@ -66,6 +66,8 @@ const FAKE_APPS = {
   vscode: { bundle: 'Visual Studio Code', id: 'com.microsoft.VSCode', exe: 'code' },
   cursor: { bundle: 'Cursor', id: 'com.todesktop.230313mzl4w4u92', exe: 'cursor' },
   'terminal-app': { bundle: 'Terminal', id: 'com.apple.Terminal', exe: 'Terminal' },
+  // The Claude app, whose Code sessions run Claude Code under it.
+  'claude-app': { bundle: 'Claude', id: 'com.anthropic.claudefordesktop', exe: 'claude-desktop' },
 } as const
 export type FakeApp = keyof typeof FAKE_APPS
 

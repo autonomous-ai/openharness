@@ -13,6 +13,7 @@ import chokidar, { type FSWatcher } from 'chokidar'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { basename, dirname } from 'node:path'
 import { errorKind } from '../lib/log.js'
+import { pathToWatch } from '../lib/pathToWatch.js'
 import { viewerTarget } from '../lib/viewerWire.js'
 
 export type DshPhaseState = 'done' | 'active' | 'pending' | 'failed'
@@ -152,8 +153,12 @@ export class DshVerdictWatcher {
       this.deps.log?.(`[dsh] verdict dir could not be created · ${errorKind(error)}`)
       return
     }
+    // On Windows by its long name: by a short one, as an agent's folder can be, its first change would abort the process
+    // (lib/pathToWatch.ts). A change is judged by its file's name, which the folder's name does not change.
+    const watchedAs = pathToWatch(dir)
+    if (watchedAs === undefined) return
     const name = basename(file)
-    const watcher = chokidar.watch(dir, { ignoreInitial: true, depth: 0, persistent: true })
+    const watcher = chokidar.watch(watchedAs, { ignoreInitial: true, depth: 0, persistent: true })
     const entry: Watched = { file, watcher, cancel: null, last: null }
     const schedule = (): void => {
       entry.cancel?.()
