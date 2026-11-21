@@ -157,6 +157,15 @@ describe('focus', () => {
     expect(scores(run(focus, s, seen(s, [500], { faces: [face(3501, A)] }))).latency).toBe(0)
   })
 
+  it('a face already on the session when the window opens lands at its start, and noBounce is judged from there', () => {
+    const check: Check = { ...focus, noBounce: true }
+    const already = run(check, s, seen(s, [500], { faces: [face(100, A)] }))
+    expect(scores(already)).toEqual({ lands: 1, latency: 1, noBounce: 1 })
+    expect(ms(already, 'latency')).toBe(0)
+    // It left and came back: a bounce, though the last face is on it again.
+    expect(scores(run(check, s, seen(s, [500], { faces: [face(100, A), face(700, B), face(800, A)] })))).toMatchObject({ lands: 1, noBounce: 0 })
+  })
+
   it('noBounce fails when the face visits another session after landing', () => {
     const check: Check = { ...focus, noBounce: true }
     expect(scores(run(check, s, seen(s, [500], { faces: [face(600, A)] }))).noBounce).toBe(1)
