@@ -12,7 +12,7 @@
  */
 import { homedir, tmpdir } from 'node:os'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { MAIN, scenariosFor } from './catalog.js'
+import { claudeGhost, claudeSessions, listed, MAIN, scenario, scenariosFor } from './catalog.js'
 import { loadBaseline, tierAVerdict } from './grade.js'
 import { describeAttempt, guardThisProcess } from './netGuard.js'
 import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from './runner.js'
@@ -145,6 +145,23 @@ describe('tier A', () => {
   it('reaches no network: a fetch to example.invalid fails and the guard names it', async () => {
     await expect(fetch('http://example.invalid/')).rejects.toThrow()
     expect(guard.taken().map(describeAttempt)).toEqual(['node net example.invalid:80'])
+  })
+
+  it('a voice step whose target the face never shows leaves its scenario ungraded, and says so', async () => {
+    // The person turns the dial to b and the step speaks to a: the glass never showed a.
+    const voice = scenario({
+      id: 'V1', app: 'claude', title: 'Eval voice to a session not on the face', dims: ['D5'], tiers: ['a'],
+      sessions: [...claudeSessions(['a', 'b']), claudeGhost],
+      steps: [
+        { kind: 'claude.write', sessions: ['a', 'b'] },
+        ...listed('claude', ['a', 'b']),
+        { kind: 'swipe', session: 'b' },
+        { label: 'voice', kind: 'voice', transcript: 'Eval words for alpha.', target: 'a' },
+      ],
+      checks: [], probes: [],
+    })
+    const run = await runScenario(new TierADriver({ startDevices }), voice, 'darwin')
+    expect(run.gaps.map((g) => g.reason)).toEqual(['voice step 4: the face never showed a'])
   })
 
   it('C1 twice gives the same frames at the same virtual times', async () => {
