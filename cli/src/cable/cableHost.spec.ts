@@ -350,8 +350,9 @@ describe('DaemonCableHost.listAgentsFlat across machines, and the tab the dial g
 
     machines[0].state = 'offline'
     expect((await settled(host)).map((a) => a.id)).toEqual([])
-    // An agent leaving the carousel is the one event that cannot be diagnosed from its absence.
-    expect(log.mock.calls.flat().join('\n')).toContain('left the carousel')
+    // An agent leaving the carousel is the one event that cannot be diagnosed from its absence. The machine is said by
+    // its id: its name is a person's, or the computer's.
+    expect(log).toHaveBeenCalledWith('cable: other is offline — its 1 agents left the carousel')
   })
 
   it('holds a tile the window has open even when its machine goes offline', async () => {

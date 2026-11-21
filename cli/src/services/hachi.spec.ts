@@ -12,7 +12,7 @@ import { FOLLOW_EVERY_MS, startHachi, startHachiInCore, type HachiDeps } from '.
 import { WAKE_COALESCE_MS } from './hachiWakes.js'
 
 const NOW = Date.parse('2026-11-12T12:00:00Z')
-const SELF = 'machine-1'
+const SELF = '11111111-self'
 
 const row = (agentId: string, over: Partial<RegisteredSession> = {}) =>
   ({ agentId, sessionId: `s-${agentId}`, registeredAt: NOW - 60_000, active: true, ...over }) as RegisteredSession
@@ -48,7 +48,7 @@ let dir: string
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'hachi-'))
   writeFileSync(join(dir, 'machine-name'), 'studio\n')
-  writeFileSync(join(dir, 'machines.json'), JSON.stringify({ machines: [{ machineId: 'machine-2', name: 'Mac mini' }] }))
+  writeFileSync(join(dir, 'machines.json'), JSON.stringify({ machines: [{ machineId: '22222222-away', name: 'Mac mini' }] }))
 })
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); signedOutForTest(); vi.useRealTimers() })
 
@@ -107,9 +107,9 @@ describe('Hachi\'s wakes, from what its harnesses push', () => {
     setAgentSettingsForTest(dir, { hachi: true })
     const t = setup([hachiRow(), row('api'), row('kid')])
     startedByHachi('api', SELF, 'api-fix')
-    startedByHachi('far', 'machine-2', 'reviewer')
+    startedByHachi('far', '22222222-away', 'reviewer')
     await t.look()
-    const here = t.lineFor(SELF, 'api'), away = t.lineFor('machine-2', 'far'), self = t.lineFor(SELF, 'hachi')
+    const here = t.lineFor(SELF, 'api'), away = t.lineFor('22222222-away', 'far'), self = t.lineFor(SELF, 'hachi')
     expect(here.watched.at(-1)).toEqual(['api'])
     expect(away.watched.at(-1)).toEqual(['far'])
     here.push('api', 'agent_activity', { state: 'working' })
@@ -133,7 +133,7 @@ describe('Hachi\'s wakes, from what its harnesses push', () => {
     // Started after the service: working until heard otherwise. Here, it answered before its watch was asked.
     live.push(row('quick'), row('went'))
     for (const agentId of ['quick', 'went']) new Ledger(ledgerPath(dir)).append({ at: NOW + 1_000, depth: 1, by: { machineId: SELF, agentId: 'hachi', name: 'Hachi', engine: 'claude', hachi: true }, child: { machineId: SELF, agentId, name: agentId } })
-    new Ledger(ledgerPath(dir)).append({ at: NOW + 1_000, depth: 1, by: { machineId: SELF, agentId: 'hachi', name: 'Hachi', engine: 'claude', hachi: true }, child: { machineId: 'machine-2', agentId: 'far', name: 'far' } })
+    new Ledger(ledgerPath(dir)).append({ at: NOW + 1_000, depth: 1, by: { machineId: SELF, agentId: 'hachi', name: 'Hachi', engine: 'claude', hachi: true }, child: { machineId: '22222222-away', agentId: 'far', name: 'far' } })
     const original = Line.prototype.request
     Line.prototype.request = async function (type, payload) {
       // `went` closed before it was followed: a list of the live ones leaves it out.
@@ -193,9 +193,9 @@ describe('Hachi\'s wakes, from what its harnesses push', () => {
   it('follows again what changed at each look, renews another machine\'s lease, and starts over on a line that dropped', async () => {
     setAgentSettingsForTest(dir, { hachi: true })
     const t = setup([hachiRow(), row('api')])
-    startedByHachi('far', 'machine-2')
+    startedByHachi('far', '22222222-away')
     await t.look()
-    const away = t.lineFor('machine-2', 'far')
+    const away = t.lineFor('22222222-away', 'far')
     await t.look()
     expect(away.watched).toHaveLength(1)
     t.tick(4 * 60_000)
@@ -210,13 +210,14 @@ describe('Hachi\'s wakes, from what its harnesses push', () => {
     away.close()
     t.tick(4 * 60_000)
     await t.look()
-    expect(t.log).toHaveBeenCalledWith('[hachi] could not follow what Hachi started on Mac mini: Error. Asked again at the next look.')
+    // Said by the machine's id: its name (Mac mini) is a person's, or the computer's.
+    expect(t.log).toHaveBeenCalledWith('[hachi] could not follow what Hachi started on 22222222: Error. Asked again at the next look.')
     await t.look()
-    expect(t.lineFor('machine-2', 'far')).not.toBe(away)
+    expect(t.lineFor('22222222-away', 'far')).not.toBe(away)
     // Handed to the person, it is no longer Hachi's to follow.
-    new Ledger(ledgerPath(dir)).append({ at: NOW, from: { machineId: SELF, agentId: 'hachi' }, handed: { machineId: 'machine-2', agentId: 'far' } })
+    new Ledger(ledgerPath(dir)).append({ at: NOW, from: { machineId: SELF, agentId: 'hachi' }, handed: { machineId: '22222222-away', agentId: 'far' } })
     await t.look()
-    expect(t.lines.filter((l) => l.machineId === 'machine-2' && !l.closed)).toEqual([])
+    expect(t.lines.filter((l) => l.machineId === '22222222-away' && !l.closed)).toEqual([])
     t.service.stop()
   })
 
@@ -299,12 +300,12 @@ describe('Hachi\'s wakes, what can go wrong', () => {
     setAgentSettingsForTest(dir, { hachi: true })
     writeFileSync(join(dir, 'machines.json'), '{}')
     const t = setup([hachiRow()])
-    startedByHachi('far', 'machine-2')
+    startedByHachi('far', '22222222-away')
     await t.look()
-    const away = t.lineFor('machine-2', 'far'), self = t.lineFor(SELF, 'hachi')
+    const away = t.lineFor('22222222-away', 'far'), self = t.lineFor(SELF, 'hachi')
     away.push('far', 'harness_event', { state: 'needs_person' })
     await t.advance(WAKE_COALESCE_MS)
-    expect(self.requests.find(([type]) => type === 'agent_messages')![1].items).toEqual([{ name: 'far', machine: 'machine-', state: 'needs_person' }])
+    expect(self.requests.find(([type]) => type === 'agent_messages')![1].items).toEqual([{ name: 'far', machine: '22222222', state: 'needs_person' }])
     t.service.stop()
   })
 
@@ -312,7 +313,7 @@ describe('Hachi\'s wakes, what can go wrong', () => {
     setAgentSettingsForTest(dir, { hachi: true })
     const t = setup([hachiRow(), row('api')])
     startedByHachi('api')
-    startedByHachi('far', 'machine-2')
+    startedByHachi('far', '22222222-away')
     await t.look()
     const here = t.lineFor(SELF, 'api'), self = t.lineFor(SELF, 'hachi')
     self.answers.agent_messages = { error: 'HACHI_OFF' }
@@ -322,14 +323,14 @@ describe('Hachi\'s wakes, what can go wrong', () => {
     expect(t.log).toHaveBeenCalledWith('[hachi] the wake was not taken: HACHI_OFF')
     expect(t.count).toHaveBeenCalledWith('hachi_mailbox_failed')
     // Another machine refused the watch (four others watch it), or answered with no list.
-    const away = t.lineFor('machine-2', 'far')
+    const away = t.lineFor('22222222-away', 'far')
     away.harnessWatch = async () => ({ error: 'TOO_MANY' })
     t.tick(4 * 60_000)
     await t.look()
-    expect(t.log).toHaveBeenCalledWith('[hachi] could not follow what Hachi started on Mac mini: TOO_MANY. Asked again at the next look.')
+    expect(t.log).toHaveBeenCalledWith('[hachi] could not follow what Hachi started on 22222222: TOO_MANY. Asked again at the next look.')
     t.tick(1)
     await t.look()
-    const again = t.lineFor('machine-2', 'far')
+    const again = t.lineFor('22222222-away', 'far')
     again.harnessWatch = async (ids, heard) => { again.heard = heard; return { leaseMs: 1, agents: 'none' } as never }
     t.tick(4 * 60_000)
     await t.look()
@@ -339,7 +340,7 @@ describe('Hachi\'s wakes, what can go wrong', () => {
     // This daemon too old to push to a tool.
     here.watch = async () => false
     await t.look()
-    expect(t.log).toHaveBeenCalledWith('[hachi] could not follow what Hachi started on studio: Error. Asked again at the next look.')
+    expect(t.log).toHaveBeenCalledWith('[hachi] could not follow what Hachi started on 11111111: Error. Asked again at the next look.')
     t.service.stop()
   })
 
@@ -447,7 +448,7 @@ describe('Hachi\'s wakes, what can go wrong', () => {
     const service = startHachi(core)
     await vi.advanceTimersByTimeAsync(FOLLOW_EVERY_MS)
     // No daemon listens in a test: the line to it fails, and is said.
-    expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[hachi\] could not follow what Hachi started on studio: /))
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[hachi\] could not follow what Hachi started on 11111111: /))
     service.stop()
     // On lines that answer, a wake waits on a real timer, which a stop cancels.
     const lines: Line[] = []

@@ -134,7 +134,8 @@ describe('which machine an agent is on', () => {
     expect(router.isLocalAgent('local-1')).toBe(true)
     expect(router.isLocalAgent('ghost')).toBe(true)
     expect(router.isLocalAgent('r1')).toBe(false)
-    expect(log).toHaveBeenCalledWith('cable: office-imac → 1 agents')
+    // A machine is said by its id: its name (office-imac) is a person's, or the computer's.
+    expect(log).toHaveBeenCalledWith('cable: other → 1 agents')
     // Asked once a round, not on every read: the list changes when a person starts an agent.
     await router.listAgentsFlat()
     expect(fleet.listAgents).toHaveBeenCalledTimes(2)
@@ -153,7 +154,7 @@ describe('which machine an agent is on', () => {
     expect(fleet.listAgents).toHaveBeenCalledTimes(1)
     answer([{ id: 'r1', name: 'api' }] as never)
     await flush()
-    expect(log).toHaveBeenCalledWith('cable: office-imac → 1 agents')
+    expect(log).toHaveBeenCalledWith('cable: other → 1 agents')
     log.mockClear()
     vi.spyOn(Date, 'now').mockReturnValue(now + 12_000)
     await router.listAgentsFlat()
@@ -174,7 +175,7 @@ describe('which machine an agent is on', () => {
     expect((await settled(router)).map((a) => a.id)).toEqual(['r1'])
     vi.spyOn(Date, 'now').mockReturnValue(now + 60_000)
     await settled(router)
-    expect(log).toHaveBeenCalledWith('cable: office-imac dropped off the carousel (Error)')
+    expect(log).toHaveBeenCalledWith('cable: other dropped off the carousel (Error)')
     expect(await router.listAgentsFlat()).toEqual([])
     // Already empty: a later failure past the grace has nothing to drop and says nothing.
     log.mockClear()
@@ -217,7 +218,7 @@ describe('which machine an agent is on', () => {
       vi.spyOn(Date, 'now').mockReturnValue(now + later)
       await settled(router)
     }
-    expect(log).toHaveBeenCalledWith('cable: office-imac dropped off the carousel (Error)')
+    expect(log).toHaveBeenCalledWith('cable: other dropped off the carousel (Error)')
     expect(link.resetSession).toHaveBeenCalledWith('other')
     expect(fleet.reachable('other')).toMatchObject({ ok: false })
   })
@@ -238,7 +239,7 @@ describe('which machine an agent is on', () => {
     }
     vi.spyOn(Date, 'now').mockReturnValue(now + 95_000)
     await settled(router)
-    expect(log).toHaveBeenCalledWith('cable: office-imac dropped off the carousel (Error)')
+    expect(log).toHaveBeenCalledWith('cable: other dropped off the carousel (Error)')
     expect(await router.listAgentsFlat()).toEqual([])
     // It answers, so it is up: its session stays, and nothing about it is called unreachable.
     expect(link.resetSession).not.toHaveBeenCalled()
@@ -307,7 +308,7 @@ describe('which machine an agent is on', () => {
     expect(await at(75_000)).toEqual(['r1'])
     expect(log).not.toHaveBeenCalledWith(expect.stringContaining('dropped off the carousel'))
     await at(85_000)
-    expect(log).toHaveBeenCalledWith('cable: office-imac dropped off the carousel (Error)')
+    expect(log).toHaveBeenCalledWith('cable: other dropped off the carousel (Error)')
     expect(await router.listAgentsFlat()).toEqual([])
   })
 
@@ -357,7 +358,7 @@ describe('which machine an agent is on', () => {
     expect((await settled(router)).map((a) => a.id)).toEqual(['r1'])
     machines[0].state = 'offline'
     expect((await settled(router)).map((a) => a.id)).toEqual([])
-    expect(log).toHaveBeenCalledWith('cable: office-imac is offline — its 1 agents left the carousel')
+    expect(log).toHaveBeenCalledWith('cable: other is offline — its 1 agents left the carousel')
     // Already empty: nothing more to say.
     log.mockClear()
     await settled(router)
@@ -486,7 +487,7 @@ describe('a turn, delivered and said so', () => {
     expect(router.sendTurn('r1', 'fine')).toEqual({ ok: true })
     fleet.reachable = () => ({ ok: false, at: Date.now() - 4_000 })
     expect(router.sendTurn('r1', 'deaf')).toEqual({ ok: false, machine: 'office-imac', reason: 'the last request to it did not come back' })
-    expect(log).toHaveBeenCalledWith('cable: refused a turn for r1 — office-imac last failed 4s ago')
+    expect(log).toHaveBeenCalledWith('cable: refused a turn for r1 — other last failed 4s ago')
     expect(router.lastRouted()?.agentId).toBe('r1')
     expect(fleet.sendTurn).toHaveBeenCalledTimes(2)
     // Heard from but never listed: the refusal names the machine by its id.

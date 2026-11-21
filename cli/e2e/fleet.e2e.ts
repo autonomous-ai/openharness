@@ -159,7 +159,7 @@ describe('two machines in one fleet', () => {
       return sent.ok === false ? sent : null
     }, 45_000, 500)
     expect(refused).toMatchObject({ ok: false, machine: 'machine-b', reason: 'the last request to it did not come back' })
-    expect(a.daemon.log()).toContain(`cable: refused a turn for ${agentId.slice(0, 8)} — machine-b last failed`)
+    expect(a.daemon.log()).toContain(`cable: refused a turn for ${agentId.slice(0, 8)} — ${b.machineId.slice(0, 8)} last failed`)
 
     // B comes back with its agent, which lived on in its terminal. A asks again, opens a new session with
     // the new process, lists the agent again, and delivers to it.

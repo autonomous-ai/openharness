@@ -1725,10 +1725,12 @@ describe('⌘K, the Wi-Fi device\'s borrowed walk, the voice router and stopping
     expect(await port.routeSend('nameless', 'go')).toMatchObject({ ok: false, machine: '' })
     expect(logs).toEqual(expect.arrayContaining([
       '[route] ⌘K → a1 · bytes=2',
-      `[route] ⌘K → far · bytes=2 · REFUSED: text(${FAR_REFUSED.length}) (mac-mini)`,
+      `[route] ⌘K → far · bytes=2 · REFUSED: text(${FAR_REFUSED.length})`,
       '[route] ⌘K → nameless · bytes=2 · REFUSED: text(13)',
     ]))
+    // The machine's name is a person's, or the computer's: the router's own line names it by its id.
     expect(logs.join('\n')).not.toContain('sentinel')
+    expect(logs.join('\n')).not.toContain('mac-mini')
   })
 
   it('answer a window\'s ⌘K frames as the local WebSocket did: an empty task picks no agent, and nothing is sent without both', async () => {
