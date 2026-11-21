@@ -112,9 +112,17 @@ bool ph_home_moves(const pod_nav_t *nav, const pod_model_t *m)
     int t = home_at(nav, m), working = 0;
     if (t == HOME_NONE) return true;   // the first screen's shimmer and bar
     if (t == POD_HOME_WORKING) return true;   // the pets
-    if (t >= POD_HOME_APP0) {   // an app card: its row's numbers drive the pills
+    if (t >= POD_HOME_APP0) {   // an app card: its row's numbers drive the pills, its ring agents the marks (an older daemon's row has no `working`)
         const int row = app_row(m, t);
-        return row >= 0 && (m->apps[row].working > 0 || m->apps[row].waiting > 0);
+        if (row < 0) return false;
+        if (m->apps[row].working > 0 || m->apps[row].waiting > 0) return true;
+        const pod_agent_t *ring[POD_AGENTS_MAX];
+        const int n = pod_app_agents(m, m->apps[row].id, ring, POD_AGENTS_MAX);
+        for (int k = 0; k < n; k++) {
+            const pod_state_t st = pod_model_eff(m, ring[k]);
+            if (st == POD_WORKING || st == POD_ASKING) return true;
+        }
+        return false;
     }
     if (t < 0 || t >= m->tab_count) return false;   // the Notices card is still
     tab_agents(m, t, &working);

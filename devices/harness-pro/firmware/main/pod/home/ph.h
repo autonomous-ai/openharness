@@ -50,7 +50,7 @@ unsigned ph_mix(unsigned a, unsigned b, unsigned pct);
 // edge on the name's line (the name cut LABEL_GAP short of it), marks only for the app shown's agents (pod_app_agents). Neighbours: gradient and
 // name, no icon. One POD_A_PICK_APP hit over the card (arg = the row in m->apps, id = the app id).
 void ph_view_home(pod_out_frame_t *, const pod_nav_t *, pod_model_t *, uint32_t now_ms);
-// Whether Home has something that moves (a working agent's equaliser, an asking agent's pulse; on an app card its row's working or waiting) and the ms to its next step (the 66 ms beat, else 1000).
+// Whether Home has something that moves (a working agent's equaliser, an asking agent's pulse; on an app card its row's working or waiting, or a ring agent of it working or asking) and the ms to its next step (the 66 ms beat, else 1000).
 bool ph_home_moves(const pod_nav_t *, const pod_model_t *);
 bool ph_home_brand(const pod_nav_t *, const pod_model_t *);   // Home shows the first screen (the wordmark): no tabs, no notices, linked or not
 uint32_t ph_home_next_ms(const pod_nav_t *, const pod_model_t *, uint32_t now_ms);
