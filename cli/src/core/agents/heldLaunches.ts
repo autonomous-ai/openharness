@@ -54,7 +54,7 @@ export function createHeldLaunches({ registry, restore, log }: HeldLaunchesDeps)
   // whose synchronous spawns held the event loop the terminals' keystrokes wait on.
   let quietPasses = 0
   let lastPass = ''
-  const lastReason = new Map<string, string>()
+  const lastCode = new Map<string, string>()
   const active = new Map<string, Promise<RestoreSummary>>()
   let nextAgent = 0
   const empty = (): RestoreSummary => ({ restored: [], skipped: [], failed: [], held: [], unsurveyed: [] })
@@ -119,11 +119,12 @@ export function createHeldLaunches({ registry, restore, log }: HeldLaunchesDeps)
     }
     retryContention(summary)
     if (rejected) throw failure
-    // Each reason an agent stays held, once until it changes: it was dropped, so eight agents waited with nothing to say why.
-    for (const { agentId, reason } of summary.failed) {
-      if (lastReason.get(agentId) === reason) continue
-      lastReason.set(agentId, reason)
-      log(`[restore] ${sid(agentId)} · could not launch from held · ${codeOrLength(reason)}`)
+    // Why an agent stays held, by its failure's code, once until it changes: it was dropped, so eight agents waited with
+    // nothing to say why. A launch's own error code is typed a string, so one that is not a code is said by its length.
+    for (const { agentId, code } of summary.failed) {
+      if (lastCode.get(agentId) === code) continue
+      lastCode.set(agentId, code)
+      log(`[restore] ${sid(agentId)} · could not launch from held · ${codeOrLength(code)}`)
     }
     // A pass runs every 500 ms while the flights are full: on Windows, 2026-11-04, that was two lines a second for good.
     const pass = `${service ?? 'every service'} · launched ${summary.restored.length} of ${held.length}`

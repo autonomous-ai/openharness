@@ -184,7 +184,9 @@ export interface RestoreSummary {
   /** Agents whose pane was recreated; their engine process is bound in the background. */
   restored: string[]
   skipped: Array<{ agentId: string; reason: string }>
-  failed: Array<{ agentId: string; reason: string }>
+  /** [code] is what a log says of the failure (a fixed code, or the launch's own error code), [reason] what a person is
+   *  shown: a pane's refusal or a launch's detail, which can name the person's folders. */
+  failed: Array<{ agentId: string; code: string; reason: string }>
   /** Agents held for a service their launch asks (`heldLaunch`), each in a pane that says so. */
   held: string[]
   /** Agents left as they were because tmux or `ps` could not say whether their pane or engine lives.
@@ -366,7 +368,7 @@ async function allocateWaitingPanes(deps: RestoreAgentsDeps, missing: MissingPan
         const allocated = await deps.createPane(item.entry, deps.waitingLaunch?.(item.entry, launch) ?? { argv: [] }, { current: item.current })
           .catch(error => ({ ok: false as const, reason: error instanceof Error ? error.message : String(error) }))
         if (!allocated.ok) {
-          if (owns()) summary.failed.push({ agentId: item.entry.agentId, reason: allocated.reason })
+          if (owns()) summary.failed.push({ agentId: item.entry.agentId, code: 'WAITING_PANE_FAILED', reason: allocated.reason })
           continue
         }
         created.set(item, { runtime: allocated.runtime, owns })
@@ -596,7 +598,7 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
    } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
     if (error instanceof Unsurveyed) summary.unsurveyed.push(entry.agentId)
-    else summary.failed.push({ agentId: entry.agentId, reason })
+    else summary.failed.push({ agentId: entry.agentId, code: 'SURVEY_FAILED', reason })
     deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not be surveyed · ${errorKind(error)}`)
    }
   }
@@ -618,7 +620,7 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
         return false
       }
       if (!created.ok) {
-        summary.failed.push({ agentId: entry.agentId, reason: created.reason })
+        summary.failed.push({ agentId: entry.agentId, code: 'WAITING_PANE_FAILED', reason: created.reason })
         deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not open a pane to wait in · ${codeOrLength(created.reason)}`)
         return false
       }
@@ -645,7 +647,7 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
       const resumeSessionId = entry.sessionId || undefined
       if (entry.resumeOnly && !resumeSessionId && !isTerminalEngine(entry.engine)) {
         const reason = 'The saved conversation is no longer available. Start a new conversation separately.'
-        summary.failed.push({ agentId: entry.agentId, reason })
+        summary.failed.push({ agentId: entry.agentId, code: 'RESUME_UNAVAILABLE', reason })
         deps.registry.setLaunch(entry.agentId, { state: 'failed', error: 'RESUME_UNAVAILABLE', detail: reason })
         if (alive) await deps.killPane?.(dead)
         continue
@@ -667,7 +669,7 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
         continue
       }
       if ('error' in launch) {
-        summary.failed.push({ agentId: entry.agentId, reason: launch.detail })
+        summary.failed.push({ agentId: entry.agentId, code: launch.error, reason: launch.detail })
         deps.registry.setLaunch(entry.agentId, { state: 'failed', error: launch.error, detail: launch.detail })
         deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not build its launch · ${codeOrLength(launch.error)}`)
         if (alive) await deps.killPane?.(dead)
@@ -726,7 +728,7 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
                 }
               }
             }
-            summary.failed.push({ agentId: entry.agentId, reason: created.reason })
+            summary.failed.push({ agentId: entry.agentId, code: 'PANE_FAILED', reason: created.reason })
             deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not open a pane · ${codeOrLength(created.reason)}`)
             return
           }
