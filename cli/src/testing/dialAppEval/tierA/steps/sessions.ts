@@ -11,7 +11,7 @@ import { APP_BUNDLES } from '../../../../cable/hosts/hostDetect.js'
 import { observedTitle } from '../../../../cable/hosts/observedTitle.js'
 import type { DevicesPort } from '../../../../core/api.js'
 import type { InboxAnswer } from '../../../../core/deviceHookCalls.js'
-import type { ObservedEventName, ObservedHookEvent } from '../../../../core/observedHook.js'
+import { parseObservedHook, type ObservedEvent, type ObservedEventName } from '../../../../core/observedHook.js'
 import type { App, Platform, SessionDef, SessionKey } from '../../types.js'
 import type { StepHandler, TierAWorld } from '../world.js'
 
@@ -101,15 +101,21 @@ function promptLine(s: SessionDef): string {
   return `${JSON.stringify(line)}\n`
 }
 
+/** The hook's body as the core takes it (core/observedHook.ts parseObservedHook): one it would refuse fails the step. */
+function observe(world: TierAWorld, key: SessionKey, body: ObservedEvent): void {
+  const event = parseObservedHook(body)
+  if (!event) throw new Error(`scenario ${world.scenario.id}: the core refuses ${key}'s ${body.event} hook`)
+  devices(world).observed(event)
+}
+
 function tell(world: TierAWorld, key: SessionKey, live: Live, event: ObservedEventName): void {
   const s = world.session(key)
   // Claude Code says the name the app gave the session on these two (hook/notify.mjs observedBody).
   const title = s.app === 'claude' && (event === 'session-start' || event === 'turn-start') ? observedTitle(s.title) : undefined
-  const body: ObservedHookEvent = {
+  observe(world, key, {
     engine: engineOf(s), sessionId: s.id, event, cwd: s.cwd, callerPid: live.pid, transcriptPath: live.transcriptPath,
     hostHints: hintsOf(s, world.platform), ...(title === undefined ? {} : { title }),
-  }
-  devices(world).observed(body)
+  })
 }
 
 /** The mod's loop: one poll held open at a time, the next asked as soon as one is answered. */
@@ -176,7 +182,7 @@ export const sessionsSteps: { hook: StepHandler<'hook'>; quit: StepHandler<'quit
         tell(world, step.session, live, 'needs-input')
         // Claude Code's PermissionRequest hook runs the plugin's client too (deviceClaude/asked.ts): what the prompt is for.
         if (s.app === 'claude' && step.asks === 'permission') {
-          devices(world).observed({ engine: 'claude', sessionId: s.id, event: 'asked', cwd: s.cwd, tool: 'Bash', summary: 'Eval check' })
+          observe(world, step.session, { engine: 'claude', sessionId: s.id, event: 'asked', cwd: s.cwd, tool: 'Bash', summary: 'Eval check' })
         }
         break
       case 'turn-stop':
