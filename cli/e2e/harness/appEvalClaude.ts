@@ -25,7 +25,7 @@ import { APP_BUNDLES } from '../../src/cable/hosts/hostDetect.js'
 import { fetchOverSocket } from '../../src/lib/localTransport.js'
 import { claudeAppFixture } from '../../src/testing/claudeAppFixture.js'
 import type { SessionDef, SessionKey } from '../../src/testing/dialAppEval/types.js'
-import { speak, type AppSteps, type OpenRun, type TierBWorld } from './appEvalDriver.js'
+import { inside, speak, type AppSteps, type OpenRun, type TierBWorld } from './appEvalDriver.js'
 import { CLI_ROOT, until, type IsolatedDaemon } from './daemon.js'
 import { inboxPoll } from './modInbox.js'
 import { Outside } from './outsideAgent.js'
@@ -40,6 +40,10 @@ const END_MS = 10_000
 /** The mod waits a minute after a poll the devices could not hold (503), and a second after one they did not hold. */
 const OFF_RETRY_MS = 60_000
 const HELD_MS = 1_000
+/** For `harness device claude link --json`, which asks the daemon once: past it, it is ended and the attach fails. */
+const LINK_MS = 30_000
+/** The end of the link's stderr a failure says. */
+const STDERR_KEPT = 2_000
 
 interface Live {
   outside: Outside
@@ -233,23 +237,41 @@ async function attach(world: TierBWorld, key: SessionKey): Promise<void> {
   if (answer.status !== 204) throw new Error(`the mod's attach was answered ${answer.status}`)
 }
 
-/** The devices' socket, as the mod finds it: the real link. */
+/**
+ * The devices' socket a run of `harness device claude link --json` that ended with [code] named in [stdout], checked to
+ * be inside the daemon's [root], so the attach reaches no other daemon's devices; a failure says the end of [stderr].
+ */
+export function linkedSocket(root: string, code: number | null, stdout: string, stderr: string): string {
+  let path: unknown
+  if (code === 0) try { path = (JSON.parse(stdout) as { devicesSocket?: unknown }).devicesSocket } catch { /* it named none */ }
+  if (typeof path !== 'string' || path === '') {
+    throw new Error(`harness device claude link --json named no devices' socket (exit ${code}): ${stderr.slice(-STDERR_KEPT).trim()}`)
+  }
+  if (!inside(root, path)) throw new Error("harness device claude link --json named a devices' socket outside the daemon's root")
+  return path
+}
+
+/** The devices' socket, as the mod finds it: the real link, asked again after a look that failed. */
 function devicesSocket(world: TierBWorld): Promise<string> {
   const { d } = world
   let socket = sockets.get(d)
   if (socket) return socket
   socket = (async () => {
     installMod(d)
-    const child = spawn(process.execPath, [...CLI_ENTRY, 'device', 'claude', 'link', '--json'], { cwd: CLI_ROOT, env: d.env, stdio: ['ignore', 'pipe', 'ignore'] })
+    const child = spawn(process.execPath, [...CLI_ENTRY, 'device', 'claude', 'link', '--json'], { cwd: CLI_ROOT, env: d.env, stdio: ['ignore', 'pipe', 'pipe'] })
     world.children.push(child)
     let said = ''
+    let stderr = ''
     child.stdout!.on('data', (chunk: Buffer) => { said += chunk.toString('utf8') })
-    const code = await new Promise<number | null>((resolve) => child.once('exit', resolve))
-    const path = code === 0 ? (JSON.parse(said) as { devicesSocket?: string }).devicesSocket : undefined
-    if (!path) throw new Error(`harness device claude link --json named no devices' socket (exit ${code})`)
-    return path
+    child.stderr!.on('data', (chunk: Buffer) => { stderr = (stderr + chunk.toString('utf8')).slice(-STDERR_KEPT) })
+    const timer = setTimeout(() => child.kill('SIGKILL'), LINK_MS)
+    // Its output read to the end.
+    const code = await new Promise<number | null>((resolve) => child.once('close', resolve))
+    clearTimeout(timer)
+    return linkedSocket(d.root, code, said, stderr)
   })()
   sockets.set(d, socket)
+  socket.catch(() => { if (sockets.get(d) === socket) sockets.delete(d) })
   return socket
 }
 

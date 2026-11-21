@@ -105,7 +105,7 @@ const CHATGPT_INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 </plist>
 `
 
-const inside = (root: string, path: string | undefined): boolean => !!path && isAbsolute(path) && !relative(root, path).startsWith('..')
+export const inside = (root: string, path: string | undefined): boolean => !!path && isAbsolute(path) && !relative(root, path).startsWith('..')
 /** The file beside the recording open that has the links of an app fail while it is there. */
 const failsFile = (open: string, app: App): string => join(dirname(open), `${SCHEME[app]}.fails`)
 
