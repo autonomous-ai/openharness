@@ -31,6 +31,8 @@ const pageOf = (app: App): string => (app === 'chatgpt' ? 'codex' : 'claude')
 const ratio = (part: number, whole: number): number => (whole === 0 ? 1 : part / whole)
 const bounded = (lines: string[]): string[] =>
   lines.length <= MAX_EVIDENCE ? lines : [...lines.slice(0, MAX_EVIDENCE), `… ${lines.length - MAX_EVIDENCE} more`]
+/** Session keys on one line, as many as lines a check may give: a ring of 2,000 rows stays one readable line. */
+const keyList = (keys: string[]): string => bounded(keys).join(' ')
 
 class World {
   private readonly keys = new Map<string, SessionKey>()
@@ -110,23 +112,23 @@ function ringParts(check: CheckOf<'ring'>, world: World, w: Window | undefined):
   } else {
     const ids = last.rows.map((r) => r.id)
     const unique = new Set(ids)
-    evidence.push(`list at ${last.at} on ${page}: ${ids.length} rows ${ids.map((id) => world.keyOf(id)).join(' ')}`.trimEnd())
+    evidence.push(`list at ${last.at} on ${page}: ${ids.length} rows ${keyList(ids.map((id) => world.keyOf(id)))}`.trimEnd())
     // Over the rows the list has: a missing row is recall's to lose, not names'.
     const present = check.expect.filter((key) => unique.has(agentIdOf(world.session(key))))
-    const named = present.filter((key) => {
+    const right = present.filter((key) => {
       const row = last.rows.find((r) => r.id === agentIdOf(world.session(key)))
       return row!.name === observedTitle(titleOf(world, key, w!.to))
     })
-    const misnamed = present.filter((key) => !named.includes(key))
-    if (misnamed.length > 0) evidence.push(`names wrong: ${misnamed.join(' ')}`)
+    const misnamed = present.filter((key) => !right.includes(key))
+    if (misnamed.length > 0) evidence.push(`names wrong: ${keyList(misnamed)}`)
     const archived = [...archivedBefore(world, w!.to)].filter((key) => unique.has(agentIdOf(world.session(key))))
-    if (archived.length > 0) evidence.push(`archived rows: ${archived.join(' ')}`)
+    if (archived.length > 0) evidence.push(`archived rows: ${keyList(archived)}`)
     const scored: Array<[string, number]> = [
       ['recall', ratio(expected.filter((id) => unique.has(id)).length, expected.length)],
       // A duplicate or an unknown id is an extra row: only one row per expected id is right.
       ['precision', ratio(new Set(ids.filter((id) => expected.includes(id))).size, ids.length)],
       ['order', ratio(expected.filter((id, i) => ids[i] === id).length, expected.length)],
-      ['names', ratio(named.length, present.length)],
+      ['names', ratio(right.length, present.length)],
       ['cap', ids.length <= RING_CAP ? 1 : 0],
       ['archived', archived.length === 0 ? 1 : 0],
     ]
