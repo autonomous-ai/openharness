@@ -34,12 +34,11 @@ SOURCE_INPUTS = {
     # The release scripts' tests read the Device app's update key from its Tauri config.
     "process": (".github/", "scripts/", "desktop/scripts/", "cli/scripts/release-cli.sh", "backend/scripts/release-be.sh",
                 "device-app/src-tauri/tauri.conf.json", ".gitattributes", ".gitignore", ".gitmodules", "Makefile"),
-    # VM tests also read CLI protocol definitions, shared layout fixtures,
-    # daemon metadata and store catalog/artwork, including docs/images posters,
-    # the Hub's publication rules that desktop/lib/community/hub_contract.dart mirrors, its usage
-    # counters that desktop/lib/measurement/hub_usage.dart sends (test/hub_usage_contract_test.dart), and the
-    # phone's P2P/E2EE sources the web's copies are checked against (test/p2p/mobile_parity_test.dart), and the
-    # Device app's update key Desktop pins (test/tauri_signature_test.dart).
+    # VM tests also read CLI protocol definitions, shared layout fixtures, daemon metadata and store catalog/artwork
+    # (docs/images posters too); the Hub's publication rules that desktop/lib/community/hub_contract.dart mirrors and
+    # its usage counters that desktop/lib/measurement/hub_usage.dart sends (test/hub_usage_contract_test.dart); the
+    # phone's P2P/E2EE sources the web's copies are checked against (test/p2p/mobile_parity_test.dart); and the Device
+    # app's update key Desktop pins (test/tauri_signature_test.dart).
     "desktop": (".github/", "scripts/", "desktop/", "cli/", "tests/", "daemons/", "store/", "docs/images/",
                 "mobile/pubspec.lock", "backend/src/lib/communityContract.ts", "backend/src/lib/hubMetricsContract.ts",
                 "mobile/lib/p2p/terminal_p2p_plugin.dart", "mobile/lib/p2p/terminal_p2p_link.dart", "mobile/lib/p2p/terminal_p2p_policy.dart",

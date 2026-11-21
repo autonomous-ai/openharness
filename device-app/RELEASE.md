@@ -155,7 +155,11 @@ The app reads `platforms` (its updater ignores the rest). The website reads only
 `device-<os>[-<arch>]-<package>`: `device-macos-dmg`, `device-macos-arm64-dmg` and the installer keys above. Desktop
 reads `device-macos-arm64`/`device-macos` and the installer keys above; on Windows it runs the installer with `/S`, and
 on Linux it puts the AppImage at `~/.local/opt/Harness-Device.AppImage` and lists it in the app list as
-`harness-device.desktop`, removed at Desktop's next launch once the AppImage is gone.
+`harness-device.desktop`, removed at Desktop's next launch once the AppImage is gone. A Linux Desktop also reads
+`platforms.linux-<x86_64|aarch64>`'s `signature`, but only when its `url` equals the `device-linux-<arch>-appimage`
+entry's `url` exactly and that entry's `version` is X.Y.Z, and checks it names
+`file:Harness-Device-linux-<arch>.AppImage` and `version:<that version>`: keep the two urls equal and the `version`,
+or Desktop refuses the install.
 
 ## Linux
 
@@ -194,7 +198,8 @@ The updater key pair is made with `cargo tauri signer generate -w ~/.tauri/harne
 `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`. Keep the private key safe beyond the secret too: losing it
 means installed apps can never update again. The same key signs Desktop's Linux AppImages (`release-desktop.yml`'s
 `sign-linux`), and Desktop pins its public half too (`desktop/lib/update/tauri_signature.dart`, held equal to
-`tauri.conf.json` by its test), so a new key is a release of both apps.
+`tauri.conf.json` by its test), so a new key is a release of both apps. Each app's release that pins the new key must
+itself be signed with the old one, or installed apps (Linux Desktop and Harness Device) refuse it.
 
 ## When it fails
 

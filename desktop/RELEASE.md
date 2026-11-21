@@ -243,8 +243,8 @@ bash scripts/publish-macos-variant.sh apple-silicon 1.3.0
 bash scripts/publish-macos-variant.sh intel 1.3.0 --build-only   # build + pin the renderer, publish nothing
 ```
 
-**Linux has no by-hand path.** Its AppImages must be signed with a key no person holds, so Linux releases go through
-`release-desktop.yml` alone ("Linux" below).
+**Linux has no by-hand path.** Its AppImages are signed with Harness Device's Tauri key, a repository secret only
+`release-desktop.yml`'s `sign-linux` reads, so Linux releases go through that workflow alone ("Linux" below).
 
 **macOS takes an explicit version.** Two runs have to publish one version, and `upload-desktop.sh`'s own
 auto-bump reads the manifest — the second run would see the first one's upload and bump again.
@@ -409,7 +409,8 @@ which doesn't reliably pick up the quarantine flag in the first place).
    signature for that file and version, made with the key pinned in the app (`lib/update/tauri_signature.dart`,
    "Linux" below). Rotating keys: a new Developer ID certificate or a renewed
    Artifact Signing certificate changes neither the team nor the identity, so nothing is needed. A new team or a new
-   identity validation needs one bridge release, signed the old way, whose rule also accepts the new signer.
+   identity validation needs one bridge release, signed the old way, whose rule also accepts the new signer. On Linux,
+   the release that pins a new Tauri key must itself be signed with the old one, or installed apps refuse it.
 5. Checks on launch (including the sign-in screen) and every minute. When a newer build exists,
    it shows a non-blocking notification. The user chooses **Update now** to download and install it,
    or **Skip version** to silence that exact version. A later version is shown normally; the account
@@ -518,8 +519,9 @@ job that runs build code holds the bucket write or the signing key:
 The trusted comment is `timestamp:<unix>`, `file:Harness-linux-<arch>.AppImage` and `desktop-version:<X.Y.Z>`,
 tab-separated; the app matches the file and version fields whole. It has no `version:` field: Harness Device's
 updater trusts the same key and reads only `version:`, so a Desktop AppImage must never pass as a Device update. The
-release refuses a Desktop signature that carries one. Publish, promotion and the public download check verify every
-Linux signature again.
+release refuses a Desktop signature that carries one. `upload-linux` checks each signature against the pinned key
+before it uploads; publish and promotion refuse an entry whose signature is missing or malformed; the public download
+check verifies every Linux signature against the pinned key again.
 
 One `make release-desktop` covers every build, which is also why the nine `desktop-*` keys stay on one version.
 

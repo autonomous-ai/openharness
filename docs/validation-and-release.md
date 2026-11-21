@@ -97,7 +97,7 @@ component's unit suite. When selected, each suite's jobs gate `ci/required` like
 | `cli/e2e/dialHost*.e2e.ts`, `cli/e2e/deviceHerdr.e2e.ts`, `cli/vitest.e2e.dialHosts.config.ts`, all of `cli/src/cable/hosts/` (the daemon runs every adapter from its bundle, and they share the folder's code), `cableFrame.ts`, `portAccess.ts` and `roundGlyphs.ts` in `cli/src/cable/`, the harness files the dial hosts' files drive (`dialHosts.ts`, `desk.ts`, `fakeBackend.ts`, `fakeDial.ts`, `herdrServer.ts`, `kittyWindow.ts`, `outsideAgent.ts`, `swayDesk.ts`, `weztermMux.ts`, `x11Desk.ts`, `zellijSession.ts` in `cli/e2e/harness/`), `.github/workflows/cli-e2e-dial-hosts.yml`, `.github/actions/cli-e2e-setup/` | `dial-hosts`: calls `cli-e2e-dial-hosts.yml`, the nightly's `e2e (dial hosts)` job (herdr, WezTerm, Zellij, kitty, an X11 desktop and sway; a missing host or a skipped case fails) | about 4 min |
 | Any `device-app/` change but Markdown and the release scripts' Python tests (`device-app/scripts/test_*.py`) | `device-app-e2e`: `device-app-linux` (`linux.sh`, with the app's real install lines, on `ubuntu-22.04` and `ubuntu-22.04-arm`) and `device-app-windows` (`windows.ps1` on `windows-latest` and `windows-11-arm`) | Linux about 10 min and Windows about 15 min each arch, after the builds; in 24 commits |
 | `device-app/src-tauri/src/update.rs`, `device-app/scripts/e2e/update-pair.sh`, `linux.sh` and `windows.ps1` there, `release-build.sh`, `release-check.sh`, `release-setup.sh`, `tauri*.conf.json`, `Cargo.toml`, `Cargo.lock` | `device-app-update`: `update-pair.sh` builds 0.0.1 and 0.0.2, then `linux.sh --update` or `windows.ps1 -Update`, on `ubuntu-22.04`, `ubuntu-22.04-arm` and `windows-latest` | 13–29 min each |
-| `desktop/lib/devices/`, `desktop/lib/update/tauri_signature.dart`, `desktop/integration_test/device_app_install_windows_linux_native_test.dart`, the Flutter its jobs set up (`.github/actions/desktop-flutter/`, `desktop-flutter-arm64/`), the app's `install.rs`, `packaging.rs`, `instance.rs`, `tauri*.conf.json` | `device-app-desktop`: that Desktop test installs the app on `windows-latest`, `windows-11-arm`, `ubuntu-22.04` and `ubuntu-22.04-arm`; the Linux legs install a package the test signs with a key made for the run | 9–19 min each, after the builds |
+| `desktop/lib/devices/`, `desktop/lib/update/tauri_signature.dart` and the `update_signature.dart` it extends, `desktop/integration_test/device_app_install_windows_linux_native_test.dart` and the `desktop/test/support/tauri_test_signer.dart` it imports, the Flutter its jobs set up (`.github/actions/desktop-flutter/`, `desktop-flutter-arm64/`), the app's `install.rs`, `packaging.rs`, `instance.rs`, `tauri*.conf.json` | `device-app-desktop`: that Desktop test installs the app on `windows-latest`, `windows-11-arm`, `ubuntu-22.04` and `ubuntu-22.04-arm`; the Linux legs install a package the test signs with a key made for the run | 9–19 min each, after the builds |
 | `website/scripts/device-install.sh`, `device-app/scripts/e2e/linux-install.sh`, `https-fake-cdn.py` there, the app's `appimage_env.rs`, `packaging.rs`, `tauri*.conf.json` | `device-app-install`: `linux-install.sh`, the one-line install with no `libfuse2` against a stand-in CDN, on `ubuntu-22.04`, `ubuntu-24.04` and `ubuntu-26.04` (x64), one at a time | about 1 min each, after the x64 AppImage build |
 
 The Device jobs' setup action, `.github/actions/device-app-setup/`, selects all four Device suites.
@@ -335,8 +335,10 @@ Desktop build jobs check out the complete `desktop/` component, their local
 actions and shared packaging helpers. Keep these sparse checkout inputs current
 if a build starts using another component. The existing pub-cache key also reads
 `mobile/pubspec.lock`, which remains included so sparse and full checkouts restore
-the same dependency cache. Linux builders reuse a working Google Cloud CLI at or
-above the validated version, with the normal install path as a fallback.
+the same dependency cache. The Ubuntu jobs that reach the bucket (`upload-linux`,
+`publish` and the others; `build-linux` has no Google Cloud access) reuse a working
+Google Cloud CLI at or above the validated version, with the normal install path
+as a fallback.
 When installation is needed, hosted jobs use the extracted SDK directly instead
 of copying it into the runner's discarded local tool cache. Authentication still
 runs normally; self-hosted runners retain the upstream tool-cache behavior.
@@ -365,12 +367,16 @@ GitHub Actions. It neither tags nor updates the product manifest or Release page
 
 After validation and review pass, merge and release that version normally. The
 workflow automatically looks for a candidate with the same version and Desktop
-build inputs. It compares Git objects for the whole `desktop/` and `scripts/`
-trees, `.github/actions/`, the release workflow (including its SDK/runner pins),
-`mobile/pubspec.lock` when present, and root `.gitattributes`, `.gitignore` and
-`.gitmodules` files. File contents, additions, removals and executable modes are
-covered. Extend this input contract before a build starts reading another component;
-the process suite checks that it covers every native builder's sparse checkout.
+build inputs, `BUILD_INPUTS` in `scripts/desktop-release-candidate.py`. It compares
+Git objects for the whole `desktop/` and `scripts/` trees, the trees the Windows
+builds read, `.github/actions/`, the release workflow (including its SDK/runner
+pins), `device-app/scripts/release-setup.sh` (`sign-linux`'s pinned minisign),
+`device-app/src-tauri/tauri.conf.json` (the key its signatures are checked
+against), `mobile/pubspec.lock` when present, and root `.gitattributes`,
+`.gitignore` and `.gitmodules` files. File contents, additions, removals and
+executable modes are covered. Extend this input contract before a build starts
+reading another component; the process suite checks that it covers every native
+builder's sparse checkout.
 
 Unrelated CLI, firmware and documentation merges, or a clean squash, can preserve
 those inputs even when the full repository tree changes. Any Desktop source, asset,
@@ -563,12 +569,14 @@ artifacts, and changing run/PR state cannot become a successful record.
 For `process` and `desktop`, CI records a `ci-source-inputs` artifact and verifies
 each required job's sparse checkout before running its checks. The collector
 checks that artifact's immutable digest, run/source/attempt identity and recorded
-Git objects, then independently compares the selected inputs with the target:
+Git objects, then independently compares the selected inputs with the target.
+The complete boundary is `SOURCE_INPUTS` in `scripts/record-ci-validation.py`; in
+short:
 
-| CI scope | Complete input boundary |
+| CI scope | Input boundary |
 | --- | --- |
-| `process` | `.github/`, `scripts/`, `desktop/scripts/`, root Git configuration files and `Makefile` |
-| `desktop` | `.github/`, `scripts/`, `desktop/`, `cli/`, `tests/`, `daemons/`, `store/`, `docs/images/`, `mobile/pubspec.lock`, root Git configuration files and `Makefile` |
+| `process` | `.github/`, `scripts/`, `desktop/scripts/`, the CLI's and the backend's release commands, `device-app/src-tauri/tauri.conf.json`, root Git configuration files and `Makefile` |
+| `desktop` | `.github/`, `scripts/`, `desktop/`, `cli/`, `tests/`, `daemons/`, `store/`, `docs/images/`, `mobile/pubspec.lock`, the backend's Hub contracts and the phone's P2P/E2EE sources Desktop's tests compare with, `device-app/src-tauri/tauri.conf.json`, root Git configuration files and `Makefile` |
 
 The root Git files are `.gitattributes`, `.gitignore` and `.gitmodules`. Directory
 objects include every tracked descendant; file modes, additions and removals are
