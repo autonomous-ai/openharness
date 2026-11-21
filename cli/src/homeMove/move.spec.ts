@@ -5,7 +5,7 @@
 import * as fs from 'node:fs'
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, relative } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { HARNESS_ENTRIES } from '../config/harnessHome.js'
 import { createHomeAdopter, readAdoptedHomes } from '../engines/kit/homeAdoption.js'
@@ -32,8 +32,9 @@ const UNKNOWN = 'notes'
 const ENTRIES = Object.keys(HARNESS_ENTRIES).length + 1
 const asRoot = process.getuid?.() === 0
 
-const roots: string[] = []
+const roots: string[] = [], startFolder = process.cwd()
 afterEach(() => {
+  process.chdir(startFolder)
   for (const root of roots.splice(0)) {
     // The cases that take write permission away give it back, so the folder can go.
     for (const folder of [join('h', '.local', 'bin'), join('h', '.local', 'share')]) {
@@ -94,8 +95,9 @@ async function legacyHome({ env: envOf = () => ({}), bases = true, absent = [] }
   put(engineHomes, JSON.stringify({ claude: [at('claude-profiles', 'work')], codex: [] }))
   createHomeAdopter(engineHomes).adopt({ claude: ['/elsewhere/.claude'], codex: [at('claude-profiles', 'codex-work')] })
 
-  const dataDir = env.ADAPTER_DATA_DIR || at('cli', 'data')
-  const binDir = env.HARNESS_BIN_DIR || join(home, '.local', 'bin')
+  // A relative override is the home's, as config/env.ts reads it.
+  const dataDir = resolve(home, env.ADAPTER_DATA_DIR || at('cli', 'data'))
+  const binDir = resolve(home, env.HARNESS_BIN_DIR || join(home, '.local', 'bin'))
   put(join(binDir, 'harness'), `#!/bin/sh\nexec '${at(NODE)}' '${at('cli', 'cli.js')}' "$@"\n`, 0o755)
   const unitFile = join(env.XDG_CONFIG_HOME || join(home, '.config'), 'systemd', 'user', 'harnessd.service')
   put(unitFile, systemdUnit({ nodePath: at(NODE), scriptPath: at('cli', 'cli.js'), logFile: join(dataDir, 'harness.log'), home, env: {} }), 0o644)
@@ -418,6 +420,21 @@ describe('the move', () => {
     put(index, JSON.stringify([notes]))
     expect(await runMove(t.check, t.env, t.deps())).toMatchObject({ state: 'bridged' })
     expect(json(index)).toEqual([{ ...notes, setup: 'pending' }])
+  })
+
+  it('a relative override is the home\'s, whatever folder the start runs in', async () => {
+    process.chdir(fresh())
+    const t = await legacyHome({ env: () => ({ ADAPTER_DATA_DIR: join('own', 'data'), DSH_DIR: join('own', 'dsh'), HARNESS_BIN_DIR: join('own', 'bin') }) })
+    const dataDir = join(t.home, 'own', 'data')
+    put(join(dataDir, 'registry.json'), JSON.stringify([{ id: 'a1', claudeHome: join(t.legacy, 'claude-profiles', 'work') }]))
+    const notes = { id: 'acme/notes', dir: join(t.home, 'own', 'dsh', 'acme', 'notes'), linked: false }
+    const index = join(t.home, 'own', 'dsh', 'installed.json')
+    put(index, JSON.stringify([notes]))
+    expect(await runMove(t.check, t.env, t.deps())).toEqual({ state: 'bridged', entries: ENTRIES, bytesCopied: 0, panes: 0 })
+    expect(json(join(dataDir, 'registry.json'))).toEqual([{ id: 'a1', claudeHome: `${t.plan.data}/claude-profiles/work` }])
+    expect(readBridge(t.plan.state)).toMatchObject({ oldDataDir: dataDir })
+    expect(json(index)).toEqual([{ ...notes, setup: 'pending' }])
+    expect(readFileSync(join(t.home, 'own', 'bin', 'harness'), 'utf8')).toContain(`'${t.plan.data}/cli/cli.js'`)
   })
 
   it('a run after success does nothing', async () => {

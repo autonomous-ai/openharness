@@ -5,6 +5,7 @@
  */
 import { lstatSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { homePath } from '../config/envFields.js'
 import { agentTmpFolder, prepareAgentTmp } from '../lib/agentTmp.js'
 
 /** 80% of the smaller of what the engines keep of a command's output: Claude Code 30,000 characters (measured), Codex 10,000
@@ -23,7 +24,8 @@ export class BrowserFilesError extends Error {}
  * as /tmp: one that cannot be made private gives no files.
  */
 export function browserFolder(env: NodeJS.ProcessEnv): string {
-  const folder = join(env.TMPDIR || agentTmpFolder(env.ADAPTER_DATA_DIR || undefined), 'browser')
+  // A relative data folder is the home's, as config/env.ts reads it.
+  const folder = join(env.TMPDIR || agentTmpFolder(homePath(env.ADAPTER_DATA_DIR ?? '') || undefined), 'browser')
   // prepareAgentTmp refuses a file, a link or another account's folder in its place, so nothing is written through one.
   if (!prepareAgentTmp(folder)) throw new BrowserFilesError(`Can't save browser files in ${folder}`)
   return folder

@@ -9,6 +9,7 @@ import { placeholderBranch, worktreeFolderName } from './branchNames.js'
 import { redactSecretsInText } from './redactSecrets.js'
 import { withinRoots } from './pathContainment.js'
 import { ownProcessGroup } from './windows/noWindow.js'
+import { systemProgram } from './windows/powershell.js'
 import { errorKind } from './log.js'
 
 const exec = promisify(execFile)
@@ -483,7 +484,7 @@ export function stopTree(pid: number | undefined): Promise<string | null> {
   }
   return new Promise(resolve => {
     let output = ''
-    const taskkill = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+    const taskkill = spawn(systemProgram('taskkill.exe'), ['/pid', String(pid), '/T', '/F'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
     taskkill.stdout.on('data', (chunk: Buffer) => { output += chunk.toString() })
     taskkill.stderr.on('data', (chunk: Buffer) => { output += chunk.toString() })
     taskkill.once('error', error => resolve(`taskkill: ${error.message}`))

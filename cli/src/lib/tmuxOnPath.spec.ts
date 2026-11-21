@@ -249,6 +249,10 @@ esac
       .toEqual(['/custom/bin', '/custom/brew/bin'])
   })
 
+  it('a relative HARNESS_BIN_DIR is the home\'s, as config/env.ts reads it', () => {
+    expect(tmuxInstallDirectories({ HOME: '/home/new-user', HARNESS_BIN_DIR: 'bin' }, 'linux')).toEqual([join('/home/new-user', 'bin')])
+  })
+
   it('skips a broken install candidate and adopts the next runnable tmux', async () => {
     const broken = scratch('tmux-onpath-broken-')
     writeFileSync(join(broken, 'tmux'), '#!/bin/sh\nexit 1\n', { mode: 0o700 })

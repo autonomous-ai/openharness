@@ -170,7 +170,11 @@ async function created(backend: PtyHostBackend, engine: AgentEngine) {
   it('holds a pane in the daemon\'s Node, which says why and outlasts Ctrl-C', async () => {
     await withBackend(async (backend) => {
       const token = '0f0e0d0c-0b0a-4908-8706-050403020100'
-      const created = await backend.create({ command: heldPaneArgv('Waiting for the Store.', token) })
+      // Nothing a held pane does says it took a Ctrl-C, so this copy's handler says so: once it has, the pane lives on.
+      const [node, flag, script, ...rest] = heldPaneArgv('Waiting for the Store.', token)
+      const telling = script!.replace('process.on(s,()=>{})', 'process.on(s,()=>process.stdout.write(s+"\\r\\n"))')
+      expect(telling).not.toBe(script)
+      const created = await backend.create({ command: [node!, flag!, telling, ...rest] })
       if (created.state !== 'succeeded') throw new Error(`create failed: ${JSON.stringify(created)}`)
       const shown = await until(() => backend.capture(created.runtime, { mode: 'visible', ansi: false }),
         (s) => s.state === 'succeeded' && s.value.includes('Waiting for the Store.'))
@@ -179,7 +183,9 @@ async function created(backend: PtyHostBackend, engine: AgentEngine) {
       const host = (backend as unknown as { client: { call(op: object): Promise<unknown> } }).client
       await host.call({ op: 'key', pane: created.runtime.paneId, key: 'C-c' })
       await host.call({ op: 'write', pane: created.runtime.paneId, data: Buffer.from('\u0003').toString('base64') })
-      await new Promise((resolve) => setTimeout(resolve, 1_500))
+      const handled = await until(() => backend.capture(created.runtime, { mode: 'visible', ansi: false }),
+        (s) => s.state === 'succeeded' && s.value.includes('SIGINT'))
+      expect(handled.state === 'succeeded' && handled.value).toContain('SIGINT')
       expect(await backend.paneState(created.runtime)).toMatchObject({ dead: false })
       expect(await backend.rootProcess(created.runtime)).toEqual(expect.any(Number))
       await backend.kill(created.runtime)

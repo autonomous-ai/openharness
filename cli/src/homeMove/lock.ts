@@ -1,5 +1,6 @@
 import { linkSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, watch, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { errorKind } from '../lib/log.js'
 
 /**
  * How often a start waiting for another start's move looks again: an owner killed changes nothing beside the lock, and
@@ -13,6 +14,8 @@ export interface LockWait {
   committed(): boolean
   /** Called once, LOCK_LOOK_MS into a wait. */
   long(): void
+  /** A line for the log. */
+  log(line: string): void
 }
 
 /** What the lock reads of this computer. */
@@ -66,7 +69,7 @@ export async function withMoveLock<T>(legacy: string, run: () => Promise<T>, wai
  */
 async function waitFor(lock: string, deps: LockDeps, me: string, wait: LockWait): Promise<boolean> {
   let wake = (): void => {}
-  const watcher = deps.watch(dirname(lock), () => wake())
+  const watcher = watchBeside(lock, deps, wait, () => wake())
   let timer: NodeJS.Timeout | undefined
   const look = (): Promise<'look'> => new Promise((done) => { timer = setTimeout(done, LOCK_LOOK_MS, 'look') })
   let next = look()
@@ -89,6 +92,19 @@ async function waitFor(lock: string, deps: LockDeps, me: string, wait: LockWait)
   } finally {
     watcher.close()
     clearTimeout(timer)
+  }
+}
+
+/**
+ * The watch on the lock's folder. On Linux fs.watch throws as it starts once inotify's watches are used up (ENOSPC): the
+ * wait then goes on by its looks every LOCK_LOOK_MS, with a watch that never fires.
+ */
+function watchBeside(lock: string, deps: LockDeps, wait: LockWait, onChange: () => void): { close(): void } {
+  try {
+    return deps.watch(dirname(lock), onChange)
+  } catch (error) {
+    wait.log(`home move: lock watch ${errorKind(error)} · looking every ${LOCK_LOOK_MS / 1000} s`)
+    return { close: () => {} }
   }
 }
 

@@ -8,8 +8,16 @@ import { win32 } from 'node:path'
 
 export const POWERSHELL_TIMEOUT_MS = 30_000
 
+/** One of Windows' own programs by its full path in System32: Node on Windows looks for a bare name in the folder it
+ *  runs in before PATH (systemProgram.spec.ts). Windows' folder is the first of SystemRoot and windir that names a
+ *  drive's folder: an empty or relative one would name a folder under the one the command runs in. */
+export function systemProgram(name: string, env: NodeJS.ProcessEnv = process.env): string {
+  const root = [env.SystemRoot, env.windir].find((folder) => /^[A-Za-z]:\\/.test(folder ?? ''))
+  return win32.join(root ?? 'C:\\Windows', 'System32', name)
+}
+
 export function powershellPath(env: NodeJS.ProcessEnv = process.env): string {
-  return win32.join(env.SystemRoot ?? env.windir ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  return systemProgram('WindowsPowerShell\\v1.0\\powershell.exe', env)
 }
 
 export function encodedCommandArgs(script: string): string[] {
@@ -34,6 +42,28 @@ export const POWERSHELL_PRELUDE = [
 
 export function withPrelude(script: string): string {
   return `${POWERSHELL_PRELUDE}\n${script}`
+}
+
+/** The modules of Windows PowerShell 5.1 a script here imports ([modulesByPath]). */
+export type PowershellModule = 'Appx' | 'CimCmdlets' | 'Microsoft.PowerShell.LocalAccounts' | 'Microsoft.PowerShell.Management'
+  | 'Microsoft.PowerShell.Security' | 'Microsoft.PowerShell.Utility' | 'NetTCPIP' | 'ScheduledTasks'
+
+/**
+ * The lines a script starts with, before its first command: autoload off, then each of [modules] imported from this
+ * PowerShell's own folder. Autoload finds a command by searching every module on PSModulePath: the first one it had to
+ * find cost a 5.1 process 22-29 s on windows-11-arm and 0.25-0.8 s on windows-latest (runs 43581413308, 43582091190),
+ * and the peer query timed out at 93.7 s against WINDOWS_PEER_MS's 45 s, while ptySignatures.ts, importing by path,
+ * took 1.8 s on the same runner. Off, a command of a module not imported is "not recognized", Join-Path and Select-Object
+ * among them (powershellModules.spec.ts names one first). A module goes in by its folder, a string (Join-Path is a
+ * module's command): PowerShell finds its manifest there or in a version folder, where LocalAccounts keeps it (1.0.0.0).
+ * Each import stops the script when it fails: these lines come before a script's own `$ErrorActionPreference = 'Stop'`,
+ * and under -File a failed import is only printed. Utility comes first, always: importing CimCmdlets runs its Set-Alias,
+ * NetTCPIP its New-Alias and Appx its Set-Alias, and without Utility those imports stopped the peer, listener and
+ * uninstall scripts on both Windows runners (windows.yml run 44827687986: "The term 'New-Alias' is not recognized").
+ */
+export function modulesByPath(...modules: Exclude<PowershellModule, 'Microsoft.PowerShell.Utility'>[]): string {
+  return ["$PSModuleAutoLoadingPreference = 'None'",
+    ...['Microsoft.PowerShell.Utility', ...modules].map((module) => `Import-Module -Name "$PSHOME\\Modules\\${module}" -ErrorAction Stop`)].join('\n')
 }
 
 export interface PowershellResult { status: number | null; stdout: string; stderr: string; error?: Error }

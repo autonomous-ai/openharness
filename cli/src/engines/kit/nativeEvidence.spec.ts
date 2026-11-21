@@ -39,6 +39,20 @@ it('passes a decreasing shared timeout, hard kill and byte limit to every probe'
   expect(vi.mocked(execFile).mock.calls[0][2]).toMatchObject({ timeout: 1000, killSignal: 'SIGKILL', maxBuffer: 1234, encoding: 'buffer', env: { LC_TIME: 'C' } })
   expect(vi.mocked(execFile).mock.calls[1][2]).toMatchObject({ timeout: 900 })
 })
+it('a native probe on Windows is unavailable, and spawns nothing', async () => {
+  vi.mocked(execFile).mockImplementation(((...args: unknown[]) => {
+    (args.at(-1) as Function)(null, Buffer.from('complete\n'), Buffer.alloc(0))
+  }) as never)
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+  try {
+    for (const command of ['ps', 'lsof'] as const) {
+      await expect(nativeProbe(command, [], new NativeEvidenceBudget()))
+        .rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE', message: expect.stringContaining('do not run on Windows') })
+    }
+  } finally { Object.defineProperty(process, 'platform', platform) }
+  expect(execFile).not.toHaveBeenCalled()
+})
 it('bounds cumulative bytes, operations and subprocesses, not just one read', () => {
   expect(() => new NativeEvidenceBudget().step(16 * 1024 * 1024 + 1)).toThrow('work limit')
   const work = new NativeEvidenceBudget()

@@ -6,7 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LESSONS_BEGIN, LESSONS_END, LESSONS_MARK, NOTES_EXCLUDE, addExcludeEntry, excludeNotes, findProject, isLink, isPlainDir, isPlainFile, installLessons, notesPath, publishNote, runtimeLessons, unpublishNote, withdrawSkill } from './publish.js'
@@ -186,12 +186,12 @@ describe('notes: never through a link, never into what is not a plain file', () 
     symlinkSync(join(outside, 'victim.md'), notesPath(ws))
     expect(publishNote(ws, note('abc1'))).toMatchObject({ ok: false, error: 'NOT_A_FILE', detail: `${notesPath(ws)} is not a plain file` })
     expect(readFileSync(join(outside, 'victim.md'), 'utf8')).toBe('victim\n')
-    rmSync(notesPath(ws))
+    unlinkSync(notesPath(ws))
     // Dangling: writing would create the target outside the project.
     symlinkSync(join(outside, 'created-through-link.md'), notesPath(ws))
     expect(publishNote(ws, note('abc1'))).toMatchObject({ ok: false, error: 'NOT_A_FILE' })
     expect(existsSync(join(outside, 'created-through-link.md'))).toBe(false)
-    rmSync(notesPath(ws))
+    unlinkSync(notesPath(ws))
     mkdirSync(notesPath(ws))
     expect(publishNote(ws, note('abc1'))).toMatchObject({ ok: false, error: 'NOT_A_FILE' })
     rmSync(join(ws, '.harness'), { recursive: true })
@@ -208,7 +208,7 @@ describe('notes: never through a link, never into what is not a plain file', () 
     symlinkSync(join(outside, 'AGENTS.md'), join(ws, 'AGENTS.md'))
     expect(publishNote(ws, note('abc1'), { agentsMd: true, create: true })).toMatchObject({ ok: false, error: 'NOT_A_FILE', detail: `${join(ws, 'AGENTS.md')} is not a plain file` })
     expect(existsSync(join(outside, 'AGENTS.md'))).toBe(false)
-    rmSync(join(ws, 'AGENTS.md'))
+    unlinkSync(join(ws, 'AGENTS.md'))
     writeFileSync(join(outside, 'CLAUDE.md'), 'theirs\n')
     symlinkSync(join(outside, 'CLAUDE.md'), join(ws, 'CLAUDE.md'))
     expect(publishNote(ws, note('abc1'), { agentsMd: true, create: true })).toMatchObject({ ok: false, error: 'NOT_A_FILE' })

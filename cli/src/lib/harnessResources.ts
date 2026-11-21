@@ -55,6 +55,8 @@ export function parseResourceProcesses(text: string): ResourceProcess[] {
 }
 
 async function sampleProcesses(): Promise<ResourceProcess[]> {
+  // Windows has no `ps` (docs/windows-rules.md §3): no readings, and nothing spawned to find that out.
+  if (process.platform === 'win32') throw new Error('Process readings unavailable')
   const { stdout } = await exec('ps', ['-axo', 'pid=,ppid=,rss=,time=,lstart='], {
     encoding: 'utf8', timeout: 2000, maxBuffer: 8 * 1024 * 1024,
     env: { ...process.env, LC_ALL: 'C' },

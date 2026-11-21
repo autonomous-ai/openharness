@@ -111,6 +111,8 @@ describe.skipIf(process.platform !== 'darwin' || !herdrBinary)("an agent in the 
     expect(relative(d.root, open).startsWith('..'), open).toBe(false)
     const others = othersNow()
     await d.start()
+    // Claude Code started by hand reads its hooks once, as it starts: they must be in by then.
+    await d.hooksInstalled(['claude'])
     const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a', FILTER)
     await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
     // Pane ids with letters, as a person's herdr gives once a workspace has had nine panes: `w2:pE`, never `w1:p1` alone.

@@ -70,6 +70,8 @@ describe.skipIf(!x11Installed)("a tap raises the agent's window on X11", () => {
     writeFileSync(file, '[]')
     desk = new Desk(file)
     await d.start()
+    // Claude Code started by hand reads its hooks once, as it starts: they must be in by then.
+    await d.hooksInstalled(['claude'])
     const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
     await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
     await said(d, '[device] raise · x11')

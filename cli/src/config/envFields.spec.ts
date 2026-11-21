@@ -1,6 +1,8 @@
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { EnvIssue, flag, matching, maybe, maybeNumber, number, oneOf, parseEnv, text, unlessFalse, url } from './envFields.js'
+import { envFilePath, EnvIssue, flag, homePath, homeRelative, matching, maybe, maybeNumber, number, oneOf, parseEnv, text, unlessFalse, url } from './envFields.js'
 
 // The values a variable can arrive with: unset, empty, padded, and the ones each kind is about.
 const VALUES = [undefined, '', ' ', 'true', 'false', 'TRUE', '0', '42', ' 7 ', 'x', 'test', 'prod', 'stag',
@@ -48,6 +50,36 @@ describe('an environment variable read as zod read it', () => {
 
   it('says what one of a few must be', () => {
     expect(() => oneOf(['prod', 'stag'], 'prod')('dev')).toThrow('Invalid option: expected one of "prod"|"stag"')
+  })
+})
+
+describe('a Harness folder or file override', () => {
+  it('is an absolute value as given and a relative one under the home, never under the current folder', () => {
+    expect(homePath('/abs', '/h')).toBe('/abs')
+    expect(homePath('data', '/h')).toBe(join('/h', 'data'))
+    expect(homePath('', '/h')).toBe('')
+  })
+
+  // The daemon's socket folder is named by a hash of the data folder as written (lib/localSocket.ts), and Desktop and
+  // the Store's clients keep an absolute one as given: a tidied one would name another socket.
+  it('is an absolute value exactly as written, untidy or not', () => {
+    for (const value of ['/abs/', '/abs//data', '/abs/./data/../data']) expect(homePath(value, '/h')).toBe(value)
+  })
+
+  // `ADAPTER_DATA_DIR=` in an env file must never make the home itself the data folder.
+  it('is its default when unset or empty', () => {
+    const field = homeRelative('/fallback')
+    expect(field(undefined)).toBe('/fallback')
+    expect(field('')).toBe('/fallback')
+    expect(field('data')).toBe(join(homedir(), 'data'))
+    expect(field('/abs')).toBe('/abs')
+  })
+
+  it('names the env file HARNESS_ENV_FILE names, else DOTENV_CONFIG_PATH, trimmed and under the home', () => {
+    expect(envFilePath({ HARNESS_ENV_FILE: ' harness.env ', DOTENV_CONFIG_PATH: '/other.env' }, '/h')).toBe(join('/h', 'harness.env'))
+    expect(envFilePath({ HARNESS_ENV_FILE: ' ', DOTENV_CONFIG_PATH: ' /other.env ' }, '/h')).toBe('/other.env')
+    expect(envFilePath({ DOTENV_CONFIG_PATH: 'dot.env' })).toBe(join(homedir(), 'dot.env'))
+    expect(envFilePath({ HARNESS_ENV_FILE: '' }, '/h')).toBeNull()
   })
 })
 

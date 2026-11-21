@@ -96,6 +96,8 @@ describe.skipIf(process.platform !== 'darwin')("an agent in the person's tmux, o
     expect(isAbsolute(open), open).toBe(true)
     expect(relative(d.root, open).startsWith('..'), open).toBe(false)
     await d.start()
+    // Claude Code started by hand reads its hooks once, as it starts: they must be in by then.
+    await d.hooksInstalled(['claude'])
     const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a', FILTER)
     await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
     const b = await Outside.start(d, 'b', { __CFBundleIdentifier: TERMINAL })

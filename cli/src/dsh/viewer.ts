@@ -293,6 +293,12 @@ export class DshViewerManager {
       ignored: (path: string) => path !== state.workspace
         && path.slice(state.workspace.length).split(/[\\/]/).some((segment) => segment && (isArtifactDirIgnored(segment) || segment.startsWith('.'))),
     })
+    const rescan = (): void => {
+      const next = newestArtifact(state.workspace, extensions)?.path ?? null
+      if (next === state.scannedArtifact) return
+      state.scannedArtifact = next
+      this.publish(state)
+    }
     const bump = (path: string): void => {
       if (state.stopping) return
       // Judged inside the workspace: a workspace under a `build/` or `inputs/` folder is not ignored.
@@ -300,14 +306,13 @@ export class DshViewerManager {
       if (state.rescanTimer) clearTimeout(state.rescanTimer)
       state.rescanTimer = setTimeout(() => {
         state.rescanTimer = null
-        const next = newestArtifact(state.workspace, extensions)?.path ?? null
-        if (next === state.scannedArtifact) return
-        state.scannedArtifact = next
-        this.publish(state)
+        rescan()
       }, RESCAN_DEBOUNCE_MS)
       state.rescanTimer.unref?.()
     }
     watcher.on('add', bump).on('change', bump).on('unlink', bump)
+      // chokidar's first read of the workspace counts a file written since start()'s scan as already there, unannounced.
+      .on('ready', rescan)
       .on('error', (error: unknown) => this.log(`[dsh] artifact watch error · ${errorKind(error)}`))
     state.watcher = watcher
   }

@@ -13,6 +13,7 @@ import { existsSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
 import { runGuestCommand, type GuestRunner } from '../lib/guestRunner.js'
 import type { RunAdmin } from '../lib/windows/elevated.js'
+import { systemProgram } from '../lib/windows/powershell.js'
 import { WHOAMI_USER_ARGS, windowsUserSid } from '../lib/windows/whoami.js'
 import { readTeamConfig, teamConfigFile } from './config.js'
 import { REMOVE_REFUSED, buildLinuxRemoveScript, buildRemoveScript, type RemoveScriptInput } from './removeScript.js'
@@ -116,7 +117,7 @@ async function runAsRoot(deps: TeamRemovalDeps, script: string): Promise<RootRun
 
 async function runOnWindows(deps: TeamRemovalDeps, target: TeamRemovalTarget): Promise<RootRun> {
   // The owner's SID from this process's own token, for the staging folder's ACL: a bare name could be another account's.
-  const who = await deps.runner('whoami', WHOAMI_USER_ARGS, { timeoutMs: 30_000 })
+  const who = await deps.runner(systemProgram('whoami.exe'), WHOAMI_USER_ARGS, { timeoutMs: 30_000 })
   const ownerSid = who.code === 0 ? windowsUserSid(who.stdout) : null
   if (!ownerSid) return { ok: false, cancelled: false, message: 'Could not read this account\'s SID (whoami /user).', status: null }
   // Loaded only here: the PowerShell builders are Windows' alone.

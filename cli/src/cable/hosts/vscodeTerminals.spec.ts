@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { REFUSED, type ListenerStream, type StreamEnd } from '../../services/devicesListener.js'
 import type { PageAgent } from './adapter.js'
-import { PS_MAX_BYTES, PS_TIMEOUT_MS, type Exec } from './scannedApp.js'
+import { PS_TIMEOUT_MS, type Exec } from './scannedApp.js'
+import { setProcessTableSource, type ProcessRow } from '../../lib/processTable.js'
 import {
   CHAIN_RETRY_MS, GROUPS_MAX_BYTES, readForeground, readProcessParents, VSCODE_GUARD_MS, VSCODE_OPEN_MAX_BYTES, VSCODE_OPEN_PER_SECOND,
   VSCODE_SCROLL_MAX, VSCODE_STATE_MAX_BYTES, VSCODE_STATE_PER_SECOND, VSCODE_TERMINALS, VSCODE_WINDOWS, vscodeStreams,
@@ -50,7 +51,7 @@ function fakeStream() {
  *  test moves; each timer kept, and whether it was cancelled, to be run by hand; and every line logged. */
 function harness(table: ReadonlyArray<readonly [number, number]> = TREE) {
   let at = 0
-  const reads: Array<{ resolve(rows: Array<{ pid: number; ppid: number }>): void; reject(error: Error): void }> = []
+  const reads: Array<{ resolve(rows: Array<{ pid: number; ppid: number; startMarker?: string }>): void; reject(error: Error): void }> = []
   const groupReads: Array<{ resolve(groups: ProcessGroups | undefined): void; reject(error: Error): void }> = []
   const timers: Array<{ ms: number; run: () => void; cancelled: boolean }> = []
   const logged: string[] = []
@@ -93,8 +94,9 @@ function harness(table: ReadonlyArray<readonly [number, number]> = TREE) {
     },
     state: (window: string, shells: unknown, over: Record<string, unknown> = {}) =>
       report.handle({ type: 'vscode-state', window, terminals: shells, active: null, focused: true, ...over }, new AbortController().signal),
-    answer: async (rows = table) => {
-      reads.shift()!.resolve(rows.map(([pid, ppid]) => ({ pid, ppid })))
+    /** The read in flight answered with [rows], each with its start marker in [started] when that names it. */
+    answer: async (rows = table, started: Readonly<Record<number, string>> = {}) => {
+      reads.shift()!.resolve(rows.map(([pid, ppid]) => ({ pid, ppid, ...(started[pid] ? { startMarker: started[pid] } : {}) })))
       await landed()
     },
     fail: async () => {
@@ -215,6 +217,24 @@ describe('VS Code\'s windows', () => {
     h.state(W1, [900])
     await h.answer()
     expect(h.terminals.terminalOf(900)).toStrictEqual({ window: W1, shell: 900 })
+  })
+
+  // Windows hands a freed pid to the next process and never reparents: a shell on the old pid of an agent's parent,
+  // started after it, is another process, and pairing them would raise the wrong terminal.
+  it('a parent that started after its child ends the chain, where the table says when each started', async () => {
+    const stale = harness()
+    stale.open(W1)
+    stale.terminals.agents([900])
+    stale.state(W1, [700])
+    await stale.answer(TREE, { 600: 'w:100', 700: 'w:500', 800: 'w:300', 900: 'w:400' })
+    expect(stale.terminals.terminalOf(900)).toBeUndefined()
+
+    const inOrder = harness()
+    inOrder.open(W1)
+    inOrder.terminals.agents([900])
+    inOrder.state(W1, [700])
+    await inOrder.answer(TREE, { 600: 'w:100', 700: 'w:200', 800: 'w:300', 900: 'w:400' })
+    expect(inOrder.terminals.terminalOf(900)).toStrictEqual({ window: W1, shell: 700 })
   })
 
   it('a pid in no window has no terminal', async () => {
@@ -812,20 +832,29 @@ describe('VS Code\'s windows', () => {
 })
 
 describe('the process table the match reads', () => {
-  it('is each process\'s pid and parent alone, from one ps read within its bounds', async () => {
-    const exec = vi.fn<Exec>(async () => '  600     1\n  700   600\nnot a row\n')
-    expect(await readProcessParents(exec)).toEqual([{ pid: 600, ppid: 1 }, { pid: 700, ppid: 600 }])
-    expect(exec.mock.calls).toEqual([['ps', ['-axo', 'pid=,ppid='], { timeout: PS_TIMEOUT_MS, maxBuffer: PS_MAX_BYTES }]])
+  const row = (pid: number, parentPid: number): ProcessRow =>
+    ({ pid, parentPid, executable: 'node', startMarker: 'w:1', args: 'node SECRET-TOKEN rotate the key' })
+
+  it('reads each process\'s parent and start from the process table, Windows included', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+    setProcessTableSource(async () => [row(600, 1), row(700, 600)])
+    try {
+      expect(await readProcessParents()).toEqual([{ pid: 600, ppid: 1, startMarker: 'w:1' }, { pid: 700, ppid: 600, startMarker: 'w:1' }])
+    } finally {
+      setProcessTableSource(null)
+      Object.defineProperty(process, 'platform', platform)
+    }
   })
 
-  it('a ps that failed or listed nobody is an error that says nothing of what it printed', async () => {
-    for (const out of [null, '', 'SECRET-TOKEN rotate the key\n']) {
-      expect(await readProcessParents(async () => out).catch((e: unknown) => e)).toEqual(new Error('process table not read'))
+  it('a table that was not read or listed nobody is an error that says nothing of what it held', async () => {
+    for (const rows of [null, []]) {
+      expect(await readProcessParents(async () => rows).catch((e: unknown) => e)).toEqual(new Error('process table not read'))
     }
   })
 
   it.skipIf(process.platform === 'win32')('this machine\'s holds this process under its parent', async () => {
-    expect(await readProcessParents()).toContainEqual({ pid: process.pid, ppid: process.ppid })
+    expect(await readProcessParents()).toContainEqual(expect.objectContaining({ pid: process.pid, ppid: process.ppid }))
   })
 })
 
@@ -860,6 +889,12 @@ describe('the foreground group the page guard reads', () => {
     '  700   700   900\n  700   700   900\n', '  700   700   900\n  900   900   900\n  900   900   900\n',
   ])('a ps that failed, or printed anything but one row of three numbers for each, is none: %j', async (out) => {
     expect(await readForeground(900, 700, async () => out)).toBeUndefined()
+  })
+
+  it('has no foreground group to read on Windows, and runs no ps', async () => {
+    const exec = vi.fn<Exec>(async () => '  700   700   900\n  900   900   900\n')
+    expect(await readForeground(900, 700, exec, 'win32')).toBeUndefined()
+    expect(exec).not.toHaveBeenCalled()
   })
 
   it.skipIf(process.platform === 'win32')('this machine\'s: this process has a group, and its parent a foreground group', async () => {

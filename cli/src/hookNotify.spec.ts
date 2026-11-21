@@ -2,10 +2,11 @@ import { execFileSync, spawn, spawnSync } from 'child_process'
 import { createHash, randomBytes } from 'crypto'
 import { createServer, type IncomingHttpHeaders } from 'http'
 import { connect as netConnect, createServer as createNetServer } from 'net'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
-import { dirname, join } from 'path'
+import { dirname, join, win32 } from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
+import { runInNewContext } from 'vm'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { APP_BUNDLES } from './cable/hosts/hostDetect.js'
 import { observedTitle } from './cable/hosts/observedTitle.js'
@@ -113,6 +114,8 @@ interface RunHookOpts {
   /** Run as on Windows: the process table comes from `harness-pty ps --json` (a fake), and `ps` fails. */
   windowsProcessTable?: boolean
   env?: Record<string, string>
+  /** The folder the hook runs in: an agent's project. */
+  cwd?: string
   dataDir?: string
   claudeProjectsDir?: string
   codexHome?: string
@@ -338,6 +341,7 @@ fs.readFileSync = (path, ...args) => {
     const [command, ...argv] = [...(opts.via ?? []).flat(), process.execPath, ...args]
     const child = spawn(command, argv, {
       env,
+      cwd: opts.cwd,
       stdio: ['pipe', 'pipe', 'inherit'],
     })
     let stdout = ''
@@ -2297,19 +2301,19 @@ describe('the hook finds Harness\'s folders by the rule', () => {
   }
 
   /** A hook whose command names no data folder reaches the daemon serving [dataDir]. */
-  async function reachesData(dataDir: string, env: Record<string, string>): Promise<boolean> {
+  async function reachesData(dataDir: string, env: Record<string, string>, cwd?: string): Promise<boolean> {
     const daemon = await daemonIn(dataDir)
-    await runHook({ port: daemon.port, tmuxPane: '%42', env })
+    await runHook({ port: daemon.port, tmuxPane: '%42', env, cwd })
     return daemon.requests.length === 1
   }
 
   /** A hook in another daemon's pane follows that daemon's route record in [routes]. */
-  async function followsRoute(routes: string, home: string, env: Record<string, string>): Promise<boolean> {
+  async function followsRoute(routes: string, home: string, env: Record<string, string>, cwd?: string): Promise<boolean> {
     const ownerDir = join(home, 'owner'), ownDir = join(home, 'own')
     const owner = await daemonIn(ownerDir)
     const own = await daemonIn(ownDir)
     publishHookRoute(ownerDir, owner.port, routes)
-    await runHook({ port: own.port, dataDir: ownDir, tmuxPane: '%7', paneOwner: harnessPaneOwner(ownerDir), env })
+    await runHook({ port: own.port, dataDir: ownDir, tmuxPane: '%7', paneOwner: harnessPaneOwner(ownerDir), env, cwd })
     return owner.requests.length === 1 && own.requests.length === 0
   }
 
@@ -2408,13 +2412,17 @@ describe('the hook finds Harness\'s folders by the rule', () => {
     it('has it in the state root\'s s when XDG_RUNTIME_DIR is a link, open to others, or not absolute', async () => {
       const linked = `${runtime}-link`
       symlinkSync(runtime, linked)
-      tmpDirs.push(linked)
       const looser = mkdtempSync('/tmp/hr-')
       tmpDirs.push(looser)
       chmodSync(looser, 0o755)
-      for (const value of [linked, looser, 'run/user']) {
-        const home = movedHome()
-        expect(await reachesShortSocket(join(xdgDefaults(home).state, 's'), home, asOn('linux', home, { XDG_RUNTIME_DIR: value })), value).toBe(true)
+      try {
+        for (const value of [linked, looser, 'run/user']) {
+          const home = movedHome()
+          expect(await reachesShortSocket(join(xdgDefaults(home).state, 's'), home, asOn('linux', home, { XDG_RUNTIME_DIR: value })), value).toBe(true)
+        }
+      } finally {
+        // Removed here, not with the folders: once its folder is gone the link dangles, which rmSync leaves on Node 23-24.3.
+        unlinkSync(linked)
       }
     })
 
@@ -2429,6 +2437,34 @@ describe('the hook finds Harness\'s folders by the rule', () => {
     const env = asOn('linux', home, { ADAPTER_DATA_DIR: join(home, 'mine', 'data'), HARNESS_HOOK_ROUTES_DIR: join(home, 'mine', 'routes') })
     expect(await reachesData(join(home, 'mine', 'data'), env)).toBe(true)
     expect(await followsRoute(join(home, 'mine', 'routes'), home, env)).toBe(true)
+  })
+
+  // As every other process reads them (config/envFields.ts homePath): the hook runs in the agent's project.
+  it('a relative HARNESS_HOOK_ROUTES_DIR is the home\'s, not the project\'s', async () => {
+    const home = homeWith('.harness')
+    const env = asOn('linux', home, { HARNESS_HOOK_ROUTES_DIR: 'routes' })
+    expect(await followsRoute(join(home, 'routes'), home, env, shortHome())).toBe(true)
+  })
+
+  it('a relative ADAPTER_DATA_DIR is the home\'s, not the project\'s', async () => {
+    const home = homeWith('.harness')
+    const env = asOn('linux', home, { ADAPTER_DATA_DIR: 'data' })
+    expect(await reachesData(join(home, 'data'), env, shortHome())).toBe(true)
+  })
+})
+
+// Node picks its path rules as it starts, so a hook run with a preload's win32 platform still joins as POSIX does: the
+// hook's own homePath is run here, from its text, with Windows paths and a Windows home.
+describe('the hook\'s Harness folder override, with Windows paths', () => {
+  const hookHomePath = (): ((value: string) => string) => {
+    const source = /^function homePath\(value\) \{\n[\s\S]*?\n\}$/m.exec(readFileSync(HOOK, 'utf8'))?.[0]
+    if (!source) throw new Error('hook/notify.mjs has no homePath')
+    return runInNewContext(`(${source})`, { ...win32, homedir: () => 'C:\\Users\\me' }) as (value: string) => string
+  }
+
+  it('is under the home: relative, root-relative on its drive and drive-relative; absolute as given; empty as it is', () => {
+    expect(['data', '\\data', 'C:data', 'D:\\data', 'D:\\data\\', ''].map(hookHomePath()))
+      .toEqual(['C:\\Users\\me\\data', 'C:\\data', 'C:\\Users\\me\\data', 'D:\\data', 'D:\\data\\', ''])
   })
 })
 
@@ -3840,6 +3876,25 @@ describe('hook notify: the caller a hook names', () => {
     const runs = psRunLog()
     expect(await onWindows({ windowsAncestors: [powershell, codexExe], psRunLog: runs, ...opts }, false, 0)).toEqual([])
     expect(existsSync(runs)).toBe(false)
+  })
+
+  // As every other process reads it (config/envFields.ts homePath): the hook runs in the agent's project.
+  it('on Windows a relative ADAPTER_RUNTIME_DIR finds the installed pty host under the home, not the project', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'adapter-hook-home-')), project = mkdtempSync(join(tmpdir(), 'adapter-hook-project-'))
+    tmpDirs.push(home, project)
+    const pty = join(home, 'rt', 'pty')
+    mkdirSync(join(pty, '1.2.3'), { recursive: true })
+    writeFileSync(join(pty, 'current-pty'), '1.2.3\n')
+    // The hook's PowerShell under codex.exe (9001), each started after its parent.
+    const shell = ['powershell.exe', '-NoProfile', '-Command', '& x']
+    const rows = [
+      { pid: process.pid, parentPid: 9001, executable: shell[0], startMarker: 'w:2', args: shell.join(' '), nativeArgv: shell },
+      { pid: 9001, parentPid: 9002, executable: 'codex.exe', startMarker: 'w:1', args: 'codex.exe', nativeArgv: ['codex.exe'] },
+    ]
+    writeExecutable(join(pty, '1.2.3', 'harness-pty.exe'), `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ rows })}'\n`)
+    expect(await onWindows({ cwd: project, env: { HOME: home, HARNESS_PTY_BIN: '', ADAPTER_RUNTIME_DIR: 'rt' } })).toEqual([
+      { url: '/api/hook/turn-stop', body: expect.objectContaining({ callerPid: 9001 }) },
+    ])
   })
 
   it('on Windows a helper that fails names the hook\'s parent', async () => {

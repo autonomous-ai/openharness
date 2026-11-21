@@ -84,6 +84,8 @@ describe.skipIf(!kittyInstalled)('the dial reaches an agent in a kitty window', 
     const windows = new KittyWindows(d, x)
     kitty = windows
     await d.start()
+    // Claude Code started by hand reads its hooks once, as it starts: they must be in by then.
+    await d.hooksInstalled(['claude'])
     const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
     await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
     return { d, relay, windows, dial }

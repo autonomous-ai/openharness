@@ -681,10 +681,15 @@ describe('readUserEnvironment', () => {
   /** A `reg` that answers [stdout], or fails with [error]; recording what it was asked. */
   const reg = (stdout: string, error: Error | null = null) => vi.fn<RegRun>((_file, _args, _options, done) => { done(error, stdout) })
 
-  it('reads a value from HKCU\\Environment with reg query, bounded and with no window', async () => {
+  it('reads a value from HKCU\\Environment with System32\'s reg query, bounded and with no window', async () => {
     const run = reg('\r\nHKEY_CURRENT_USER\\Environment\r\n    PORT    REG_SZ    18621\r\n\r\n')
-    await expect(readUserEnvironment('PORT', run)).resolves.toBe('18621')
-    expect(run).toHaveBeenCalledWith('reg', ['query', 'HKCU\\Environment', '/v', 'PORT'], { timeout: USER_ENVIRONMENT_TIMEOUT_MS, windowsHide: true }, expect.any(Function))
+    vi.stubEnv('SystemRoot', 'C:\\Windows')
+    try {
+      await expect(readUserEnvironment('PORT', run)).resolves.toBe('18621')
+    } finally { vi.unstubAllEnvs() }
+    // By its full path: Windows looks for a bare name in the folder the command runs in before PATH.
+    expect(run).toHaveBeenCalledWith('C:\\Windows\\System32\\reg.exe', ['query', 'HKCU\\Environment', '/v', 'PORT'],
+      { timeout: USER_ENVIRONMENT_TIMEOUT_MS, windowsHide: true }, expect.any(Function))
     expect(USER_ENVIRONMENT_TIMEOUT_MS).toBe(3_000)
     // Its name in any case, as Windows reads names; an expandable string as it is written.
     await expect(readUserEnvironment('PORT', reg('    Port    REG_EXPAND_SZ    18622\n'))).resolves.toBe('18622')

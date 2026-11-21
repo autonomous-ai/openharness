@@ -111,10 +111,18 @@ export function parseVerdict(text: string): DshVerdict | null {
 
 const DEBOUNCE_MS = 150
 
+/** A timer that does not keep the daemon alive; returns its cancel. */
+function debounceTimer(run: () => void, ms: number): () => void {
+  const timer = setTimeout(run, ms)
+  timer.unref?.()
+  return () => clearTimeout(timer)
+}
+
 interface Watched {
   file: string
   watcher: FSWatcher
-  timer: NodeJS.Timeout | null
+  /** Cancels the publish still in its debounce. */
+  cancel: (() => void) | null
   last: string | null
 }
 
@@ -122,6 +130,8 @@ export interface DshVerdictWatcherDeps {
   /** The verdict changed (or went away → null). */
   onChange: (agentId: string, verdict: DshVerdict | null) => void
   log?: (line: string) => void
+  /** Test seam: waits out the debounce, then runs [run]; returns its cancel. A real timer by default. */
+  debounce?: (run: () => void, ms: number) => () => void
 }
 
 export class DshVerdictWatcher {
@@ -144,20 +154,21 @@ export class DshVerdictWatcher {
     }
     const name = basename(file)
     const watcher = chokidar.watch(dir, { ignoreInitial: true, depth: 0, persistent: true })
-    const entry: Watched = { file, watcher, timer: null, last: null }
+    const entry: Watched = { file, watcher, cancel: null, last: null }
     const schedule = (): void => {
-      if (entry.timer) clearTimeout(entry.timer)
-      entry.timer = setTimeout(() => {
-        entry.timer = null
+      entry.cancel?.()
+      entry.cancel = (this.deps.debounce ?? debounceTimer)(() => {
+        entry.cancel = null
         this.publish(agentId, entry)
       }, DEBOUNCE_MS)
-      entry.timer.unref?.()
     }
     const relevant = (path: string): boolean => basename(path) === name
     watcher
       .on('add', (path: string) => { if (relevant(path)) schedule() })
       .on('change', (path: string) => { if (relevant(path)) schedule() })
       .on('unlink', (path: string) => { if (relevant(path)) schedule() })
+      // chokidar's first read of the directory counts a verdict written since watch() as already there, unannounced.
+      .on('ready', () => this.publish(agentId, entry))
       .on('error', (error: unknown) => this.deps.log?.(`[dsh] verdict watch error · ${errorKind(error)}`))
     this.watched.set(agentId, entry)
     // What is already there counts: a restored agent's last verdict is still its verdict.
@@ -186,7 +197,7 @@ export class DshVerdictWatcher {
     const entry = this.watched.get(agentId)
     if (!entry) return
     this.watched.delete(agentId)
-    if (entry.timer) clearTimeout(entry.timer)
+    entry.cancel?.()
     void entry.watcher.close()
   }
 
@@ -194,7 +205,7 @@ export class DshVerdictWatcher {
     const entries = [...this.watched.values()]
     this.watched.clear()
     await Promise.all(entries.map((entry) => {
-      if (entry.timer) clearTimeout(entry.timer)
+      entry.cancel?.()
       return entry.watcher.close()
     }))
   }

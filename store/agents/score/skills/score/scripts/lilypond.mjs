@@ -30,7 +30,11 @@ function harnessStateRoot(env,platform,exists,isFile){
   const base=(name,...fallback)=>isAbsolute(env[name]??'')?env[name]:join(home,...fallback);
   return isFile(join(base('XDG_DATA_HOME','.local','share'),'harness','.harness-root'))||!exists(legacy)?join(base('XDG_STATE_HOME','.local','state'),'harness'):legacy;
 }
-export function runtimeRoot(env=process.env,platform=process.platform,exists=existsSync,isFile=isRegularFile){return env.SCORE_RUNTIME_DIR||join(env.ADAPTER_RUNTIME_DIR||join(harnessStateRoot(env,platform,exists,isFile),'runtime'),'score');}
+// A relative ADAPTER_RUNTIME_DIR is under the home, as the CLI reads it (cli/src/config/envFields.ts homePath): a render runs in its workspace.
+export function runtimeRoot(env=process.env,platform=process.platform,exists=existsSync,isFile=isRegularFile){
+  const own=env.ADAPTER_RUNTIME_DIR&&resolve(platform==='win32'?homedir():env.HOME||homedir(),env.ADAPTER_RUNTIME_DIR);
+  return env.SCORE_RUNTIME_DIR||join(own||join(harnessStateRoot(env,platform,exists,isFile),'runtime'),'score');
+}
 export function probeLilypond(bin,env=process.env){
   const result=spawnSync(bin,['--version'],{env,encoding:'utf8',timeout:10000,maxBuffer:256*1024});
   const line=(result.stdout||'').split('\n')[0],match=line.match(/^GNU LilyPond (\d+)\.(\d+)\.(\d+)/);

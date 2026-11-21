@@ -92,6 +92,13 @@ describe('one dial failing', () => {
   it('is dropped alone after five faults, its port looked at again after a wait, while the other dial goes on', async () => {
     const f = fixture({ faults: new Set(['dial.AA:01']), dropBackoffMs: 300 })
     const scan = () => (f.fleet as unknown as { scan(): Promise<void> }).scan()
+    // The wait is stamped with Date.now(): a held clock, set by hand, keeps a loaded machine's
+    // stalls from running the wait out before the scan that must find it still on.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    // The faults land after vi.waitFor has moved the held clock a poll or more, so the wait's start is
+    // read where the fleet stamps it: the drop's log line is written in that same call.
+    let at = 0
+    vi.mocked(f.host.log).mockImplementation((line: string) => { if (line.includes(' dropped ')) at = Date.now() })
     try {
       f.fleet.start()
       await vi.waitFor(() => expect(f.ports).toHaveLength(2))
@@ -107,40 +114,48 @@ describe('one dial failing', () => {
       await f.fleet.turnStarted('a', 'working')
       await vi.waitFor(() => expect(healthy.sent.some((m) => m.t === 'turn.started')).toBe(true))
       expect(f.fleet.isConnected).toBe(true)
-      // Not before its wait is over; then it is opened again.
+      // Not before its wait is over; then it is opened again. Absolute times: vi.waitFor moves a faked clock per poll.
+      vi.setSystemTime(at + 299)
       await scan()
       expect(f.ports).toHaveLength(2)
-      await new Promise((resolve) => setTimeout(resolve, 350))
+      vi.setSystemTime(at + 300)
       await scan()
       expect(f.ports).toHaveLength(3)
-    } finally { await f.fleet.stop() }
+    } finally { vi.useRealTimers(); await f.fleet.stop() }
   })
 
   it('is dropped at once when it floods the port with what no dial sends, and waits longer each time it does again', async () => {
     const f = fixture({ dropBackoffMs: 100 })
     const scan = () => (f.fleet as unknown as { scan(): Promise<void> }).scan()
+    // Held, as in the test above. A flood is dropped within raw(), so the clock read just before it is the wait's start.
+    vi.useFakeTimers({ toFake: ['Date'] })
     try {
       await f.start()
       const [flooding, healthy] = f.ports
+      let at = Date.now()
       flooding.raw(Buffer.alloc(70 * 1024, 0x41))
       await vi.waitFor(() => expect(flooding.isOpen).toBe(false))
       expect(f.host.log).toHaveBeenCalledWith(expect.stringMatching(/cable: flooded · 716\d\d B that are no frames in a second, more than a dial sends/))
       expect(f.host.log).toHaveBeenCalledWith(expect.stringMatching(/\/dev\/tim dropped \(flooding the port\) — this dial alone; its port is looked at again in 0 s/))
       expect(healthy.isOpen).toBe(true)
-      await new Promise((resolve) => setTimeout(resolve, 150))
+      vi.setSystemTime(at + 99)
+      await scan()
+      expect(f.ports).toHaveLength(2)
+      vi.setSystemTime(at + 100)
       await scan()
       expect(f.ports).toHaveLength(3)
       // Again, soon after: the wait doubles.
+      at = Date.now()
       f.ports[2].raw(Buffer.alloc(70 * 1024, 0x41))
       await vi.waitFor(() => expect(f.host.log).toHaveBeenCalledWith(expect.stringMatching(/\/dev\/tim dropped .* looked at again in 0 s/)))
       await vi.waitFor(() => expect(f.ports[2].isOpen).toBe(false))
-      await new Promise((resolve) => setTimeout(resolve, 120))
+      vi.setSystemTime(at + 199)
       await scan()
       expect(f.ports).toHaveLength(3)
-      await new Promise((resolve) => setTimeout(resolve, 150))
+      vi.setSystemTime(at + 200)
       await scan()
       expect(f.ports).toHaveLength(4)
-    } finally { await f.fleet.stop() }
+    } finally { vi.useRealTimers(); await f.fleet.stop() }
   })
 
   it('is dropped for a flood of frames, or for frames that take the decoder too long', async () => {
@@ -705,12 +720,11 @@ describe('a board that is not a dial', () => {
     // Skipped without lsof; the fleet treats "cannot tell" as free, so there is nothing to prove there.
     const file = join(mkdtempSync(join(tmpdir(), 'held-')), 'tty')
     writeFileSync(file, '')
+    const lsofExists = await new Promise<boolean>(r => spawn('lsof', ['-v'], { stdio: 'ignore' }).on('error', () => r(false)).on('exit', () => r(true)))
     const holder = spawn('tail', ['-f', file], { stdio: 'ignore' })
     try {
-      await new Promise(r => setTimeout(r, 300))
-      const held = await portInUse(file)
-      const lsofExists = await new Promise<boolean>(r => spawn('lsof', ['-v'], { stdio: 'ignore' }).on('error', () => r(false)).on('exit', () => r(true)))
-      if (lsofExists) expect(held).toBe(true)
+      // Held once tail has opened the file, a moment after it starts.
+      if (lsofExists) await vi.waitFor(async () => expect(await portInUse(file)).toBe(true), { timeout: 10_000, interval: 50 })
     } finally {
       holder.kill()
       await new Promise(r => holder.on('exit', r))

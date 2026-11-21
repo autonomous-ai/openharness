@@ -99,8 +99,6 @@ import '../core/project_preview.dart';
 import '../core/repository_clone.dart';
 import '../core/retry.dart';
 import '../core/process_responsibility.dart';
-import '../core/serial_port_lease.dart';
-import '../core/uninstall_marker.dart';
 import '../autonomous_device/autonomous_device_cli.dart';
 import '../settings/config_store.dart';
 import '../settings/experimental_features.dart';
@@ -975,8 +973,7 @@ class AppNotifier extends ChangeNotifier {
           probe: MacResponsibilityProbe(),
           ownPid: pid,
           // An uninstall at work as well: this restart is a `harness stop` and a start beside it.
-          paused: () =>
-              SerialPortLease.heldByAnotherProcess() || UninstallMarker.held(),
+          paused: _discovery.spawnHeld,
           restart: () async {
             final probe = await _discovery.restart();
             return probe.ready ? probe.pid : null;

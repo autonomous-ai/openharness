@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -185,7 +185,8 @@ describe('endRootProcesses', () => {
       expect(kill).not.toHaveBeenCalled()
     } finally {
       kill.mockRestore()
-      rmSync(link, { force: true })
+      // The link itself: Node 23 to 24.3's rmSync refuses a link to a folder without `recursive` (ERR_FS_EISDIR).
+      unlinkSync(link)
     }
   })
 })

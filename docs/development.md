@@ -90,8 +90,8 @@ brings up a second machine in Docker so the remote path can be exercised from on
 
 A dev CLI uses the production backend and existing machine identity unless explicitly configured
 otherwise. Running it from a repository does not load that repository's `.env`. For an intentional
-local/staging daemon, export the settings or set `HARNESS_ENV_FILE` to an absolute config path
-(see [CLI configuration](../cli/README.md)). Keep its
+local/staging daemon, export the settings or set `HARNESS_ENV_FILE` to a config path, absolute,
+or relative to your home (see [CLI configuration](../cli/README.md)). Keep its
 `ADAPTER_DATA_DIR`, `HARNESS_AUTH_DIR`, `ADAPTER_COMPUTER_ID_FILE` and port separate from the
 everyday daemon. `harness status` reports the running daemon's backend and account environment.
 

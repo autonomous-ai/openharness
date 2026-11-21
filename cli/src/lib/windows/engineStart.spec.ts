@@ -49,19 +49,48 @@ describe('a held pane on Windows', () => {
   })
 
   // A signal here; on Windows, Node's kill is TerminateProcess, and Ctrl-C in a pane is a console event
-  // (engineStart.real.spec.ts sends it there).
+  // (engineStart.real.spec.ts sends it there). Nothing a held pane does says it took the interrupt, so this copy's
+  // handler says so: once it has, the pane lives on. A second signal sent behind it is no order: a Node of several
+  // threads that does not listen for SIGINT ended by SIGTERM 8 times in 300 when sent SIGINT and SIGTERM (macOS).
   it.skipIf(process.platform === 'win32')('says why and keeps waiting through an interrupt', async () => {
-    const [node, ...args] = windowsHeldPaneArgv('Waiting for the Store.', undefined, process.execPath)
-    const child = spawn(node!, args, { stdio: ['ignore', 'pipe', 'ignore'] })
+    const [node, flag, script, ...rest] = windowsHeldPaneArgv('Waiting for the Store.', undefined, process.execPath)
+    const telling = script!.replace('process.on(s,()=>{})', 'process.on(s,()=>process.stdout.write(s+"\\r\\n"))')
+    expect(telling).not.toBe(script)
+    const child = spawn(node!, [flag!, telling, ...rest], { stdio: ['ignore', 'pipe', 'ignore'] })
+    const ended = new Promise<string>((resolve) => child.once('exit', (_code, signal) => resolve(`ended by ${signal}`)))
+    let output = ''
+    const waiting: Array<() => void> = []
+    child.stdout.on('data', (chunk: Buffer) => { output += chunk; for (const wake of waiting.splice(0)) wake() })
+    const said = async (text: string) => {
+      while (!output.includes(text)) await new Promise<void>((resolve) => waiting.push(resolve))
+      return output
+    }
     try {
-      let output = ''
-      await new Promise<void>((resolve) => child.stdout.on('data', (chunk: Buffer) => { output += chunk; if (output.includes('\n')) resolve() }))
-      expect(output).toBe('Waiting for the Store.\r\n')
+      expect(await Promise.race([said('\n'), ended])).toBe('Waiting for the Store.\r\n')
       child.kill('SIGINT')
-      await new Promise((resolve) => setTimeout(resolve, 300))
+      expect(await Promise.race([said('SIGINT'), ended])).toBe('Waiting for the Store.\r\nSIGINT\r\n')
       expect(child.exitCode).toBeNull()
       expect(child.signalCode).toBeNull()
     } finally { child.kill('SIGKILL') }
+  })
+
+  // Node on Windows hears the console's close as SIGHUP (libuv src/win/signal.c), the close a respawn over the pane sends.
+  it.skipIf(process.platform === 'win32')('ends on a hangup, as the held pane elsewhere does', async () => {
+    const [node, ...args] = windowsHeldPaneArgv('Waiting for the Store.', undefined, process.execPath)
+    const child = spawn(node!, args, { stdio: ['ignore', 'pipe', 'ignore'] })
+    let bound: NodeJS.Timeout | undefined
+    try {
+      // Its line follows its listeners: a hangup sent before it would end Node before the script ran.
+      let output = ''
+      await new Promise<void>((resolve) => child.stdout.on('data', (chunk: Buffer) => { output += chunk; if (output.includes('\n')) resolve() }))
+      const exited = new Promise<NodeJS.Signals | null>((resolve) => child.once('exit', (_code, signal) => resolve(signal)))
+      child.kill('SIGHUP')
+      const stillRunning = new Promise<string>((resolve) => { bound = setTimeout(resolve, 5_000, 'still running after 5 s') })
+      expect(await Promise.race([exited, stillRunning])).toBe('SIGHUP')
+    } finally {
+      clearTimeout(bound)
+      child.kill('SIGKILL')
+    }
   })
 })
 

@@ -15,6 +15,7 @@ import { WINDOWS_GUEST_SETUP_VERSION, WINDOWS_GUEST_VERSION_FILE, buildWindowsGu
   buildWindowsGuestProcessorScript } from './guestScript.js'
 import { WINDOWS_GUEST_TASK } from './guestSetupClient.js'
 import type { RunAdmin } from './elevated.js'
+import { systemProgram } from './powershell.js'
 import type { GuestHelperInstallOptions, GuestHelperInstallResult, GuestHelperStatus, GuestHelperStatusDeps } from '../guestHelperInstall.js'
 
 /** The Windows one-time install: the proven UAC runner, the guest tree/task, one prompt. */
@@ -28,7 +29,7 @@ export async function installWindowsGuestHelper(options: GuestHelperInstallOptio
   if (!/^[A-Za-z]:\\Users\\[A-Za-z0-9_.-]+$/.test(ownerHome)) {
     return { ok: false, code: 'FAILED', message: 'Could not find the owner\'s Windows profile (%USERPROFILE%).' }
   }
-  const who = await runner('whoami', WHOAMI_USER_ARGS, { timeoutMs: 30_000 })
+  const who = await runner(systemProgram('whoami.exe'), WHOAMI_USER_ARGS, { timeoutMs: 30_000 })
   const ownerSid = who.code === 0 ? windowsUserSid(who.stdout) : null
   if (!ownerSid) return { ok: false, code: 'FAILED', message: 'Could not read this account\'s SID (whoami /user).' }
   const processor = buildWindowsGuestProcessorScript({ owner, ownerHome, ownerSid, version: String(WINDOWS_GUEST_SETUP_VERSION) })
@@ -49,6 +50,6 @@ export async function windowsGuestHelperStatus(deps: GuestHelperStatusDeps,
   if (!Number.isInteger(version) || version < WINDOWS_GUEST_SETUP_VERSION) {
     return { state: 'outdated', version: Number.isFinite(version) ? version : null }
   }
-  const task = await (deps.runner ?? runGuestCommand)('schtasks.exe', ['/query', '/tn', WINDOWS_GUEST_TASK], { timeoutMs: 10_000 })
+  const task = await (deps.runner ?? runGuestCommand)(systemProgram('schtasks.exe'), ['/query', '/tn', WINDOWS_GUEST_TASK], { timeoutMs: 10_000 })
   return { state: task.code === 0 ? 'ready' : 'missing', version }
 }

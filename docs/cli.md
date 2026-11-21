@@ -115,8 +115,8 @@ What you export in your shell's startup files still reaches your agents: every p
 login shell.
 
 Anything else the daemon or its agents need, `HC_SESSION`, `TYPESAFE_CREDENTIALS`, `GIT_SSH_COMMAND` and
-`CLAUDE_CODE_OAUTH_TOKEN` among them, goes in the file `HARNESS_ENV_FILE` names, which every daemon process reads as
-it starts.
+`CLAUDE_CODE_OAUTH_TOKEN` among them, goes in the file `HARNESS_ENV_FILE` names (absolute, or relative to your home),
+which every daemon process reads as it starts.
 
 Provider keys will move to `HARNESS_ENV_FILE` next.
 

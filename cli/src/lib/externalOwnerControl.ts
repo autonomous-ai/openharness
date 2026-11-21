@@ -7,6 +7,8 @@ function run(command: string, args: string[], timeout: number): Promise<string |
 
 /** Failed process evidence is distinct from verified non-leadership for new core admissions. */
 export async function verifiedForegroundJob(pid: number, exec: typeof run = run): Promise<number | null | 'unknown'> {
+  // Windows has no `ps` and no foreground process group (docs/windows-rules.md §3).
+  if (process.platform === 'win32') return 'unknown'
   const out = await exec('ps', ['-o', 'pgid=,tpgid=', '-p', String(pid)], 3_000)
   if (!out) return 'unknown'
   const values = out.trim().split(/\s+/).map(Number)

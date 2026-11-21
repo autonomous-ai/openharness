@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { PROCESS_ENGINES } from '../engines/types.js'
@@ -18,9 +18,15 @@ import { HARNESS_INSTRUCTIONS, joinedInstructions } from '../lib/agentAttributio
 import { env } from '../config/env.js'
 import { harnessPath } from '../config/harnessHome.js'
 import { setAgentSettingsForTest, signedOutForTest } from '../testing/agentSettings.js'
+import { AtomicWriteUnconfirmed, atomicWriteFile } from '../lib/secureState.js'
 
 // Harness's status line rides every Claude launch beside what these pin (engines/claude/statusLine.spec.ts).
 vi.mock('../engines/kit/statusLine.js', async (original) => ({ ...await original<object>(), statusLineSetting: () => null }))
+// The real write, watched: which files a launch writes durably and which as a rebuilt cache.
+vi.mock('../lib/secureState.js', async (original) => {
+  const real = await original<typeof import('../lib/secureState.js')>()
+  return { ...real, atomicWriteFile: vi.fn(real.atomicWriteFile) }
+})
 
 let root: string
 let ws: string
@@ -315,6 +321,52 @@ describe('runtime validation and file ownership', () => {
     symlinkSync(`${join(pkg.realDir, 'skills/draw')}/`, skill)
     expect(() => prepareHarnessLaunch(pkg, ws, 'codex', 'key')).not.toThrow()
     expect(readFileSync(join(skill, 'SKILL.md'), 'utf8')).toContain('# Draw')
+  })
+
+  // CONTEXT.md is rebuilt at every launch, restore and fork, so its flushes only slowed each one down (~75 per
+  // portability case); runtime.json and the person's instruction file are written once and must survive a power cut.
+  it('writes CONTEXT.md as a rebuilt file, and runtime.json and the instruction file durably', () => {
+    vi.mocked(atomicWriteFile).mockClear()
+    const launch = prepareHarnessLaunch(pkg, ws, 'codex', 'key')
+    expect(atomicWriteFile).toHaveBeenCalledWith(launch.env.HARNESS_CONTEXT_FILE, expect.anything(), 'cache', expect.objectContaining({ durable: false }))
+    expect(atomicWriteFile).toHaveBeenCalledWith(join(harnessRuntimeDir(ws, 'key'), 'runtime.json'), expect.anything(), 'cache', expect.objectContaining({ durable: true }))
+    expect(atomicWriteFile).toHaveBeenCalledWith(join(ws, 'AGENTS.md'), expect.anything(), 'cache', expect.objectContaining({ durable: true }))
+  })
+
+  // A file system that refuses a folder's flush: the rename put each file whole in place, only its durability is unconfirmed.
+  it('launches when the folder does not confirm a durable file already in place', async () => {
+    const real = await vi.importActual<typeof import('../lib/secureState.js')>('../lib/secureState.js')
+    vi.mocked(atomicWriteFile).mockImplementation((file, data, kind, options) => {
+      real.atomicWriteFile(file, data, kind, { ...options, durable: false })
+      if (options?.durable) throw new AtomicWriteUnconfirmed(Object.assign(new Error('folder flush refused'), { code: 'EINVAL' }))
+      return true
+    })
+    try {
+      const launch = prepareHarnessLaunch(pkg, ws, 'codex', 'key')
+      expect(JSON.parse(readFileSync(join(harnessRuntimeDir(ws, 'key'), 'runtime.json'), 'utf8'))).toMatchObject({ version: 1, engine: 'codex' })
+      expect(readFileSync(join(ws, 'AGENTS.md'), 'utf8')).toContain(HARNESS_BOOTSTRAP)
+      expect(readFileSync(launch.env.HARNESS_CONTEXT_FILE!, 'utf8')).toContain('# Make a drawing')
+    } finally {
+      vi.mocked(atomicWriteFile).mockImplementation(real.atomicWriteFile)
+    }
+  })
+
+  it('fails the launch when a file cannot be written', async () => {
+    const real = await vi.importActual<typeof import('../lib/secureState.js')>('../lib/secureState.js')
+    vi.mocked(atomicWriteFile).mockImplementation(() => { throw Object.assign(new Error('disk full'), { code: 'ENOSPC' }) })
+    try {
+      expect(() => prepareHarnessLaunch(pkg, ws, 'codex', 'key')).toThrow('disk full')
+    } finally {
+      vi.mocked(atomicWriteFile).mockImplementation(real.atomicWriteFile)
+    }
+  })
+
+  it('keeps the mode of the person\'s instruction file', () => {
+    write(join(ws, 'AGENTS.md'), '# Repository rules\n')
+    chmodSync(join(ws, 'AGENTS.md'), 0o644)
+    prepareHarnessLaunch(pkg, ws, 'codex', 'key')
+    expect(readFileSync(join(ws, 'AGENTS.md'), 'utf8')).toContain(HARNESS_BOOTSTRAP)
+    expect(lstatSync(join(ws, 'AGENTS.md')).mode & 0o777).toBe(0o644)
   })
 
   it('a relaunch leaves a saved runtime\'s bytes alone, however it is spelled', () => {

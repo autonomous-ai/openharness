@@ -9,7 +9,7 @@
  * Every script runs with runPowershell's prelude: the first error ends it with exit 1.
  */
 import { win32 } from 'node:path'
-import type { PowershellRun } from '../windows/powershell.js'
+import { modulesByPath, type PowershellRun } from '../windows/powershell.js'
 
 /** How Windows compares PATH folders: case-insensitively, quotes and trailing separators aside. */
 function folderKey(entry: string): string {
@@ -78,7 +78,8 @@ export const ANNOUNCE_ENVIRONMENT_CHANGE = String.raw`try {
  * values differing by a soft hyphen, a combining mark or a NUL for equal. No action, or another word, writes nothing and fails: an input that went
  * missing must never read as "delete". It announces the change only for the real Environment key.
  */
-export const WRITE_USER_PATH = String.raw`${KEY}
+export const WRITE_USER_PATH = String.raw`${modulesByPath()}
+${KEY}
 $action = $env:HARNESS_PATH_ACTION
 if ($action -cne 'set' -and $action -cne 'delete') { throw "no PATH action was given ('$action')" }
 if ($env:HARNESS_PATH_KIND -cne 'String' -and $env:HARNESS_PATH_KIND -cne 'ExpandString') { throw "Harness does not write a '$($env:HARNESS_PATH_KIND)' value" }

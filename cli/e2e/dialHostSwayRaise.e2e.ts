@@ -63,6 +63,8 @@ describe.skipIf(!swayInstalled)("a tap focuses the agent's window on sway", () =
       console.log(`---- sway's log\n${desktop.log().split('\n').slice(-40).join('\n')}`)
     })
     await d.start()
+    // Claude Code started by hand reads its hooks once, as it starts: they must be in by then.
+    await d.hooksInstalled(['claude'])
     const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0b')
     await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
     await said(d, '[device] raise · sway')

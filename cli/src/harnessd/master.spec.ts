@@ -316,9 +316,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
 
   it('starts the core through a link named after it, so Activity Monitor tells it from node', async () => {
     const runtime = join(dir, 'runtime')
-    const bin = join(runtime, 'node-v1', 'bin')
-    mkdirSync(bin, { recursive: true })
-    const node = join(bin, 'node')
+    const node = join(runtime, 'node-v1', 'bin', 'node')
     placeNode(node, [join(runtime, 'node-v1', 'libexec', 'harnessd')])
     const ran = join(dir, 'ran')
     const core = join(dir, 'core.cjs')
@@ -1368,7 +1366,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
       const runtime = join(dir, 'runtime')
       const v22 = join(runtime, 'node-v22.23.2-test', 'bin', 'node')
       const v24 = join(runtime, 'node-v24.22.2-test', 'bin', 'node')
-      for (const node of [v22, v24]) { mkdirSync(dirname(node), { recursive: true }); placeNode(node, [join(dirname(dirname(node)), 'libexec', 'harnessd')]) }
+      for (const node of [v22, v24]) placeNode(node, [join(dirname(dirname(node)), 'libexec', 'harnessd')])
       const script = bundle('process.exit(3)')
       const lines: string[] = []
       const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { lines.push(line) })
@@ -1401,7 +1399,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
       const runtime = join(dir, 'runtime')
       const v22 = join(runtime, 'node-v22.23.2-test', 'bin', 'node')
       const v24 = join(runtime, 'node-v24.22.2-test', 'bin', 'node')
-      for (const node of [v22, v24]) { mkdirSync(dirname(node), { recursive: true }); placeNode(node, [join(dirname(dirname(node)), 'libexec', 'harnessd')]) }
+      for (const node of [v22, v24]) placeNode(node, [join(dirname(dirname(node)), 'libexec', 'harnessd')])
       // The update's build comes up and dies on its probation; the build before it, put back on disk, stays up. (The
       // words it looks for are written apart here, so that this line is not what it finds.)
       const script = bundle(`if (!fs.readFileSync(__filename, 'utf8').includes('the build ' + 'before')) process.exit(3)`)
@@ -1429,7 +1427,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
       const runtime = join(dir, 'runtime')
       const system = join(runtime, 'system-node', 'bin', 'node')
       const other = join(runtime, 'other-node', 'bin', 'node')
-      for (const node of [system, other]) { mkdirSync(dirname(node), { recursive: true }); placeNode(node, [join(dirname(dirname(node)), 'libexec', 'harnessd')]) }
+      for (const node of [system, other]) placeNode(node, [join(dirname(dirname(node)), 'libexec', 'harnessd')])
       const script = bundle('process.exit(3)')
       const lines: string[] = []
       const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { lines.push(line) })

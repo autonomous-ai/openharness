@@ -82,6 +82,8 @@ const fresh = async (): Promise<{ d: IsolatedDaemon; desk: Desk; relay: FakeBack
     console.log(`---- hooks the engines ran\n${d.hookLog().split('\n').slice(-40).join('\n')}`)
   })
   await d.start()
+  // Claude Code started by hand reads its hooks once, as it starts: they must be in by then.
+  await d.hooksInstalled(['claude'])
   return { d, desk: theDesk, relay, hidden }
 }
 

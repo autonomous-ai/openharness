@@ -166,6 +166,14 @@ describe('harness flash — where it points', () => {
     expect(scriptUrl('darwin')).toMatch(/^https?:\/\/.+\/flash-circle\.sh$/)
     expect(scriptUrl('linux')).toBe(scriptUrl('darwin'))
   })
+
+  // The script would read a relative HARNESS_FLASHER_CACHE against its own folder; the CLI reads it against the home.
+  it.each(['darwin', 'win32'] as const)('hands the script the cache folder the CLI resolved, on %s', async (platform) => {
+    let child: NodeJS.ProcessEnv | undefined
+    const { deps } = harness({ platform, fetchScript: async () => (platform === 'win32' ? '# flash-circle.ps1\n' : SCRIPT), run: async (_path, _args, given) => { child = given; return 0 } })
+    await flashCommand([], { ...deps, environment: { HARNESS_FLASHER_CACHE: 'flasher' } })
+    expect(child?.HARNESS_FLASHER_CACHE).toBe(FLASHER_DIR)
+  })
 })
 
 describe('harness flash — on Windows', () => {
@@ -213,14 +221,18 @@ describe('harness flash — on Windows', () => {
     expect(calls.args).toEqual([['--yes']])
   })
 
-  it('runs Windows PowerShell with the path and arguments untouched and no profile or prompt', () => {
+  it('runs Windows PowerShell from System32 with the path and arguments untouched and no profile or prompt', () => {
     const path = "C:\\Users\\Nguyễn Văn A' & 100%\\.harness\\flasher\\flash-circle.ps1"
     const args = ['--yes', '--port', 'COM3', '--unknown', "x y' & 100%"]
 
-    expect(flasherScript('win32').command(path, args)).toEqual({
-      file: 'powershell.exe',
-      args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path, ...args],
-    })
+    // By its full path: Windows looks for a bare name in the folder `harness flash` runs in before PATH.
+    vi.stubEnv('SystemRoot', 'C:\\Windows')
+    try {
+      expect(flasherScript('win32').command(path, args)).toEqual({
+        file: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+        args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path, ...args],
+      })
+    } finally { vi.unstubAllEnvs() }
     expect(flasherScript('darwin').command('/x/flash-circle.sh', ['--yes'])).toEqual({
       file: 'bash', args: ['/x/flash-circle.sh', '--yes'],
     })

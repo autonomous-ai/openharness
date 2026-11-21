@@ -17,6 +17,7 @@ import { accessSync, constants, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join, sep } from 'node:path'
 import { env as appEnv } from '../config/env.js'
+import { homePath } from '../config/envFields.js'
 import { binaryOnPath } from './binaryOnPath.js'
 import { interactiveEngineShell } from './engineLaunch.js'
 
@@ -58,7 +59,8 @@ export function tmuxInstallDirectories(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
 ): string[] {
-  const userBin = env.HARNESS_BIN_DIR || join(env.HOME || homedir(), '.local', 'bin')
+  const home = env.HOME || homedir()
+  const userBin = homePath(env.HARNESS_BIN_DIR ?? '', home) || join(home, '.local', 'bin')
   const brew = platform === 'darwin'
     ? (env.HARNESS_HOMEBREW_PREFIXES ?? '/opt/homebrew /usr/local').split(/\s+/).filter(Boolean)
       .map(prefix => join(prefix, 'bin'))

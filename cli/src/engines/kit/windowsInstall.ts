@@ -11,7 +11,7 @@ import { stripVTControlCharacters } from 'node:util'
 import { ENGINE_WINDOWS_INSTALL, npmEnginePrefix, type EngineInstallRecipe, type WindowsInstall } from '../../lib/engineInstall.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { atomicWriteFile } from '../../lib/secureState.js'
-import { powershellPath } from '../../lib/windows/powershell.js'
+import { powershellPath, systemProgram } from '../../lib/windows/powershell.js'
 import { endProcessTree, processTreeKillDeps } from '../../lib/windows/treeKill.js'
 import type { AgentEngine } from '../types.js'
 import type { NativeInstallation } from './nativeInstall.js'
@@ -100,7 +100,7 @@ export function createWindowsInstallations({ directory, spawn = nodeSpawn, alive
   const places = where ?? (() => {
     const node = managedNodePath()
     const nodeDir = dirname(node)
-    return { node, nodeDir, npm: join(nodeDir, 'npm.cmd'), prefix: npmEnginePrefix(), comspec: process.env.ComSpec ?? 'cmd.exe', powershell: powershellPath() }
+    return { node, nodeDir, npm: join(nodeDir, 'npm.cmd'), prefix: npmEnginePrefix(), comspec: process.env.ComSpec ?? systemProgram('cmd.exe'), powershell: powershellPath() }
   })
   const recordFile = (engine: AgentEngine) => join(directory, `${engine}.json`)
   const read = (engine: AgentEngine): InstallRecord | null => {

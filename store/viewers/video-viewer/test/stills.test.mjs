@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { keepStill } from '../lib/stills.mjs'
@@ -33,11 +33,11 @@ test('still writes cannot follow symlinked workspace subdirectories or existing 
     symlinkSync(outside, join(root, '.harness'))
     assert.throws(() => keepStill(root, 'frame', png()), /real workspace directory/)
     assert.deepEqual(readdirSync(outside), [])
-    rmSync(join(root, '.harness')); mkdirSync(join(root, '.harness'))
+    unlinkSync(join(root, '.harness')); mkdirSync(join(root, '.harness'))
     symlinkSync(outside, join(root, '.harness/stills'))
     assert.throws(() => keepStill(root, 'frame', png()), /real workspace directory/)
     assert.deepEqual(readdirSync(outside), [])
-    rmSync(join(root, '.harness/stills'))
+    unlinkSync(join(root, '.harness/stills'))
     const saved = keepStill(root, 'frame', png())
     const other = join(outside, 'untouched.png'); writeFileSync(other, 'outside')
     rmSync(saved.abs); symlinkSync(other, saved.abs)
