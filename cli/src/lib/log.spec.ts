@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from 'fs'
+import { execFileSync } from 'child_process'
 import { createHash } from 'crypto'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -295,9 +296,27 @@ describe('exitOnFatal', () => {
 })
 
 describe('hashOf', () => {
-  it('a hash is the first 8 hex of the text\'s SHA-256, the same each time, and holds none of it', () => {
-    expect(hashOf('/Users/sentinel/.claude/settings.json')).toBe(createHash('sha256').update('/Users/sentinel/.claude/settings.json').digest('hex').slice(0, 8))
+  const path = '/Users/sentinel/.claude/settings.json'
+
+  it('a tag is 8 hex, the same each time in this process, and holds none of the text', () => {
+    expect(hashOf(path)).toMatch(/^[0-9a-f]{8}$/)
+    expect(hashOf(path)).toBe(hashOf(path))
     expect(hashOf('/Users/sentinel/a')).not.toBe(hashOf('/Users/sentinel/b'))
-    expect(hashOf('x')).toMatch(/^[0-9a-f]{8}$/)
+  })
+
+  // A plain hash of a guessed path (`/Users/<name>/…`) or a short name would confirm the guess from an exported log.
+  it('a tag is not the text\'s plain SHA-256, and another process tags the same text differently', () => {
+    expect(hashOf(path)).not.toBe(createHash('sha256').update(path).digest('hex').slice(0, 8))
+    const script = `const { hashOf } = await import(${JSON.stringify(new URL('./log.ts', import.meta.url).href)})\n`
+      + `process.stdout.write(hashOf(${JSON.stringify(path)}))`
+    const other = execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], { timeout: 10_000, encoding: 'utf8' })
+    expect(other).toMatch(/^[0-9a-f]{8}$/)
+    expect(other).not.toBe(hashOf(path))
+  })
+
+  // A spec that resets its modules loads this one again beside the code it tests, in the same process.
+  it('a second load in the same process tags alike', async () => {
+    vi.resetModules()
+    expect((await import('./log.js')).hashOf(path)).toBe(hashOf(path))
   })
 })
