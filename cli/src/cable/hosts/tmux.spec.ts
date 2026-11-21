@@ -521,6 +521,7 @@ describe('the outer place of an agent in the person\'s tmux', () => {
       ['display-message fails', lookup({}, [1], ONE), [asked], notRead('pane')],
       ['display-message says no fact', lookup({}, [], { ...ONE, pane: 'abc\n' }), [asked], notRead('pane')],
       ['the table is not read', lookup({ processes: async () => { throw new Error('process table not read') } }, [], ONE), [asked], notRead('processes')],
+      ['the caller\'s terminal is not read', lookup({ tty: async () => { throw new Error('tty not read') } }, [], ONE), [asked], notRead('processes')],
       ['list-clients fails', lookup({}, [0, 1], ONE), [asked, clientsAsked], notRead('clients')],
       ['the app scan throws', lookup({ roots }, [], ONE), [asked, clientsAsked], notRead('app')],
       ['a client with no activity', lookup({}, [], { ...ONE, clients: 'soon|4300|/dev/ttys004\n' }), [asked, clientsAsked], none],

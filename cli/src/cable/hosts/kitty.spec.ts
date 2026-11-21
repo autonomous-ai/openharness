@@ -415,9 +415,10 @@ const KITTY_TTYS: ReadonlyMap<number, string> = new Map([[1430, '/dev/pts/0'], [
 const WINDOW_PROCESS = focusWindowPid.args.at(-1)!
 
 /** kitty's tab adapter, with a runner that answers as the recorded kitty did: `focus-window --match pid:` finds a window
- *  on a socket in form only by its own process; [table] is the machine's processes, and kitty is in front. */
+ *  on a socket in form only by its own process; [table] is the machine's processes, [tty] reads a
+ *  process's terminal, and kitty is in front. */
 function tabRecorder(over: Partial<KittyDeps> = {}, table: () => Promise<readonly ProcessName[]> = async () => KITTY_TABLE,
-  ttys: ReadonlyMap<number, string> = KITTY_TTYS) {
+  tty: (pid: number) => Promise<string | undefined> = async (pid) => KITTY_TTYS.get(pid)) {
   const calls: Call[] = []
   const owners: string[] = []
   let front: string | undefined = 'kitty'
@@ -438,7 +439,7 @@ function tabRecorder(over: Partial<KittyDeps> = {}, table: () => Promise<readonl
     ...over,
     front: () => front,
     processes: () => { reads++; return table() },
-    tty: async (pid: number) => ttys.get(pid),
+    tty,
   })
   return { calls, owners, adapter, reads: () => reads, toFront: (app: string | undefined) => { front = app } }
 }
@@ -523,14 +524,14 @@ describe("kitty's tab of an outer place", () => {
       { pid: 1460, ppid: 1450, executable: 'herdr' },
     ]
     const ttys = new Map([[1430, '/dev/pts/0'], [1440, '/dev/pts/0'], [1450, '/dev/pts/1'], [1460, '/dev/pts/1']])
-    const { calls, adapter } = tabRecorder({}, async () => table, ttys)
+    const { calls, adapter } = tabRecorder({}, async () => table, async (pid) => ttys.get(pid))
     const client = tab(`1460@${env.KITTY_LISTEN_ON}`)
     expect(await adapter.show(client, 'agent-1')).toBe('failed')
     expect(await adapter.focus(client)).toBe(false)
     expect(calls).toEqual([])
   })
 
-  it("no kitty among the client's parents: nothing runs", async () => {
+  it("no kitty among the client's parents, or its terminal not read: nothing runs", async () => {
     const noKitty = KITTY_TABLE.map((p) => (p.executable === 'kitty' ? { ...p, executable: 'gnome-terminal-server' } : p))
     const tables = [async () => noKitty, async () => KITTY_TABLE.filter((p) => p.pid !== CLIENT),
       async (): Promise<ProcessName[]> => { throw new Error('process table not read') }]
@@ -540,6 +541,10 @@ describe("kitty's tab of an outer place", () => {
       expect(await adapter.focus(CLIENT_TAB)).toBe(false)
       expect(calls).toEqual([])
     }
+    // The client's terminal could not be read: no maker, no window.
+    const unread = tabRecorder({}, async () => KITTY_TABLE, async () => { throw new Error('tty not read') })
+    expect(await unread.adapter.show(CLIENT_TAB, 'agent-1')).toBe('failed')
+    expect(unread.calls).toEqual([])
   })
 
   // Another account's kitty would show that account's window. An abstract socket has no owner to read: a focus there
