@@ -28,6 +28,7 @@ import type { AgentEngine } from '../engines/types.js'
 import type { TerminalBackendCapabilities } from '../lib/terminalTypes.js'
 import { gridLaunchRequestIn } from '../services/modelsProcess.js'
 import { gridLaunchInProcess } from './gridLaunchInProcess.js'
+import { errorKind } from '../lib/log.js'
 
 export interface LaunchWorld {
   /** The data folder: saved APIs, and the config directories written for file-configured engines. */
@@ -59,7 +60,7 @@ export function launchShapes(world: LaunchWorld) {
   const prepareApiTools = (cwd: string | null | undefined, engine: string): void => {
     if (!cwd) return
     try { prepareApiInstructions(savedApiList, cwd, engine, world.projectsRoot) }
-    catch { console.warn('[apis] Tool instructions could not be added. Saved connections remain available through harness api.') }
+    catch (error) { console.warn(`[apis] Tool instructions could not be added. Saved connections remain available through harness api. · ${errorKind(error)}`) }
   }
   // The models service's side of the launch port: what its port answers the core with (services/models.ts), across
   // the process boundary as models in its own process is asked (core/modelsLink.ts → services/modelsProcess.ts),

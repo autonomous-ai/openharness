@@ -1,5 +1,6 @@
 import type { HomeCatalog } from '../../engines/kit/homeCatalog.js'
 import type { SessionStoreEngine } from '../../engines/sessionStoreContracts.js'
+import { errorKind } from '../../lib/log.js'
 
 export interface HomeAdoptionDeps {
   read(): HomeCatalog
@@ -31,7 +32,6 @@ export function createHomeAdoptions(deps: HomeAdoptionDeps) {
     const key = JSON.stringify([engine, home])
     if (!installed.has(key)) installs.set(key, [engine, home])
   }
-  const reason = (error: unknown): string => error instanceof Error ? error.message : String(error)
   const retry = (): void => {
     if (closed) return
     let held: string | null = null
@@ -41,14 +41,14 @@ export function createHomeAdoptions(deps: HomeAdoptionDeps) {
         for (const engine of ['claude', 'codex'] as const) if (confirmed[engine]) queue(engine, confirmed[engine])
         requests.delete(key)
         restoring = true // Confirmation may also have recovered another writer's home.
-      } catch (error) { held ??= reason(error) }
+      } catch (error) { held ??= errorKind(error) }
     }
     if (restoring) {
       try {
         const homes = deps.read()
         for (const engine of ['claude', 'codex'] as const) for (const home of homes[engine]) queue(engine, home)
         restoring = false
-      } catch (error) { held ??= reason(error) }
+      } catch (error) { held ??= errorKind(error) }
     }
     catalogHold = held
     for (const [key, [engine, home]] of installs) {
@@ -60,10 +60,10 @@ export function createHomeAdoptions(deps: HomeAdoptionDeps) {
         inFlight.add(key)
         void result.then(() => {
           if (!closed) confirm()
-        }, error => { if (!closed) failures.set(key, reason(error)) }).finally(() => {
+        }, error => { if (!closed) failures.set(key, errorKind(error)) }).finally(() => {
           inFlight.delete(key); progress()
         })
-      } catch (error) { failures.set(key, reason(error)) }
+      } catch (error) { failures.set(key, errorKind(error)) }
     }
     progress()
   }

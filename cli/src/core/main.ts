@@ -278,7 +278,7 @@ import { RuntimeProfileState, type RuntimeModelOption } from '../lib/runtimeProf
 import { createRuntimeProfiles } from './engines/runtimeProfiles.js'
 import { createRuntimeTransport } from './engines/runtimeTransport.js'
 import { RuntimeProfileController } from '../lib/runtimeControl.js'
-import { installTimestampedConsole, sid, errorKind, prepareLogFile, trimLogFile, LOG_CHECK_INTERVAL_MS, ts } from '../lib/log.js'
+import { installTimestampedConsole, sid, errorKind, hashOf, prepareLogFile, trimLogFile, LOG_CHECK_INTERVAL_MS, ts } from '../lib/log.js'
 import { enterHome } from '../lib/workingFolder.js'
 
 // Daemon stdout/stderr. Capped at LOG_MAX_BYTES — see prepareLogFile/trimLogFile in lib/log.ts.
@@ -3207,7 +3207,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // (`restartDaemonForIdentity`), so nothing here has to watch for one arriving.
   if (session) {
     backend.connect()
-    console.log(`[cli] dialing ${env.BACKEND_WS_URL}/api/adapter-ws · watching registered sessions for ${ENGINES.length} engines`)
+    console.log(`[cli] dialing the backend (${hashOf(env.BACKEND_WS_URL)}) · watching registered sessions for ${ENGINES.length} engines`)
   } else {
     backend.serveThisComputerOnly()
     console.log(`[cli] not signed in — serving this computer only · watching registered sessions for ${ENGINES.length} engines`)
