@@ -11,7 +11,7 @@ import { scenariosFor } from './catalog.js'
 import { BASELINE_PATH, SKIP_RATCHET_ENV, droppedKeys, grade, loadBaseline, tierAVerdict, tierBVerdict, updateBaseline } from './grade.js'
 import { REPORT_FILES, summary, writeReport } from './report.js'
 import { readResults, RESULTS_FILE, resultsName, SOURCES } from './runner.js'
-import type { Platform, RunResults, Tier } from './types.js'
+import type { Platform, RunResults, Scenario, Tier } from './types.js'
 
 const USAGE = 'usage: npm run eval:dial-apps -- [--tier a|b] [--update-baseline]'
 const CLI_DIR = fileURLToPath(new URL('../../..', import.meta.url))
@@ -55,9 +55,9 @@ export function parseArgs(argv: string[]): { tiers: Tier[]; update: boolean } {
 
 const ran = (results: RunResults, tier: Tier): boolean =>
   results.results.some((r) => r.tier === tier) || results.gaps.some((g) => g.tier === tier)
-/** Each tier/platform/scenario the catalog runs now: a scenario taken out of it may leave the baseline. */
-const catalogRuns = (tiers: readonly Tier[]): Set<string> => new Set(tiers.flatMap((tier) =>
-  PLATFORMS.flatMap((platform) => scenariosFor(tier, platform).map((s) => `${tier}/${platform}/${s.id}`))))
+/** Each tier/platform/scenario the catalog runs now, by its key: a scenario taken out of it may leave the baseline. */
+const catalogRuns = (tiers: readonly Tier[]): Map<string, Scenario> => new Map(tiers.flatMap((tier) =>
+  PLATFORMS.flatMap((platform) => scenariosFor(tier, platform).map((s) => [`${tier}/${platform}/${s.id}`, s] as const))))
 
 export async function main(argv: string[], deps: EvalDeps): Promise<number> {
   let args: ReturnType<typeof parseArgs>

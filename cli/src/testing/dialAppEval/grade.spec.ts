@@ -283,7 +283,13 @@ describe('droppedKeys', () => {
     'a/darwin/C1/ring.recall': 1, 'a/darwin/C1/ring.order': 1, 'a/linux/C1/ring.order': 1, 'a/darwin/X2/ring.recall': 1,
     'a/darwin/C9/ring.recall': 1, 'b/darwin/C1/ring.recall': 1, 'b/linux/C1/ring.recall': 1,
   })
-  const catalog = new Set(['a/darwin/C1', 'a/linux/C1', 'a/darwin/X2', 'b/darwin/C1', 'b/linux/C1'])
+  // C1 as the catalog has it now: its condition wait is step 1, and its only check its ring.
+  const c1 = scenario({
+    id: 'C1', app: 'claude', title: 'Eval C1', dims: ['D1'], tiers: ['a'], sessions: [...claudeSessions(['a']), claudeGhost],
+    steps: [{ kind: 'claude.write', sessions: ['a'] }, ...listed('claude', ['a'])],
+    checks: [{ id: 'ring', kind: 'ring', dim: 'D1', page: 'claude', expect: ['a'] }], probes: [],
+  })
+  const catalog = new Map(['a/darwin/C1', 'a/linux/C1', 'a/darwin/X2', 'b/darwin/C1', 'b/linux/C1'].map((key) => [key, c1]))
   const ran = run([result({ check: 'ring.recall', dim: 'D1', score: 1 })],
     { gaps: [{ tier: 'a', platform: 'darwin', scenario: 'X2', app: 'chatgpt', heldOut: false, reason: 'a platform read' }] })
 
@@ -296,11 +302,6 @@ describe('droppedKeys', () => {
 
   it('lets go of a wait whose step is no condition wait now, and of a check its scenario no longer has', () => {
     // A catalog edit moved C1's condition wait from step 2 to step 1, and dropped its focus check.
-    const c1 = scenario({
-      id: 'C1', app: 'claude', title: 'Eval C1', dims: ['D1'], tiers: ['a'], sessions: [...claudeSessions(['a']), claudeGhost],
-      steps: [{ kind: 'claude.write', sessions: ['a'] }, ...listed('claude', ['a'])],
-      checks: [{ id: 'ring', kind: 'ring', dim: 'D1', page: 'claude', expect: ['a'] }], probes: [],
-    })
     const was = baseline({
       'a/darwin/C1/ring.recall': 1, 'a/darwin/C1/ring.order': 1, 'a/darwin/C1/wait.1': 1, 'a/darwin/C1/wait.2': 1,
       'a/darwin/C1/wait.3': 1, 'a/darwin/C1/focus.lands': 1,

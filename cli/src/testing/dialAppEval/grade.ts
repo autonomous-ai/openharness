@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import {
   DIMENSIONS, WEIGHTS, resultKey,
   type App, type AppScores, type Baseline, type CheckResult, type CoverageGap, type Dimension, type Group,
-  type Platform, type Report, type RunResults, type Tier, type Verdict,
+  type Platform, type Report, type RunResults, type Scenario, type Tier, type Verdict,
 } from './types.js'
 
 export const BASELINE_PATH = fileURLToPath(new URL('./baseline.json', import.meta.url))
@@ -226,14 +226,27 @@ export function updateBaseline(baseline: Baseline | null, results: RunResults, t
 
 /**
  * The baseline checks an update would drop with nothing to say why: each of a subset it replaces that the run no longer
- * gives, while its scenario had no gap and `catalog` (each tier/platform/scenario the catalog runs now) still has it.
+ * gives, while its scenario had no gap and `catalog` (each tier/platform/scenario the catalog runs now, by its runKey)
+ * still asks for it: a `wait.<i>` while its step i is a condition wait, any other while the scenario has its check.
  */
-export function droppedKeys(baseline: Baseline | null, results: RunResults, tiers: readonly Tier[], catalog: ReadonlySet<string>): string[] {
+export function droppedKeys(baseline: Baseline | null, results: RunResults, tiers: readonly Tier[],
+  catalog: ReadonlyMap<string, Scenario>): string[] {
   const subsets = replaced(results, tiers)
   const given = new Set(results.results.map(resultKey))
   const gapRuns = new Set(results.gaps.map(runKey))
+  const asked = (key: string): boolean => {
+    const scenario = catalog.get(runOfKey(key))
+    if (!scenario) return false
+    const check = key.split('/').slice(3).join('/')
+    const wait = /^wait\.(\d+)$/.exec(check)
+    if (wait) {
+      const step = scenario.steps[Number(wait[1])]
+      return step?.kind === 'wait' && step.until !== undefined
+    }
+    return scenario.checks.some((c) => c.id === check.split('.', 1)[0])
+  }
   return Object.keys(baseline?.checks ?? {})
-    .filter((key) => subsets.has(subsetOfKey(key)) && !given.has(key) && !gapRuns.has(runOfKey(key)) && catalog.has(runOfKey(key)))
+    .filter((key) => subsets.has(subsetOfKey(key)) && !given.has(key) && !gapRuns.has(runOfKey(key)) && asked(key))
     .sort(byText)
 }
 
