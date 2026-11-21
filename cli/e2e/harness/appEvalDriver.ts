@@ -238,7 +238,8 @@ class World implements TierBWorld {
   readonly children: ChildProcess[] = []
   readonly steps: Seen['steps'] = []
   readonly gaps: string[] = []
-  readonly carousel = new DialCarousel()
+  /** The firmware's, from its last power on. */
+  carousel = new DialCarousel()
   cost: Seen['cost']
   /** Time 0, ms since the epoch: set as the scenario starts. */
   origin = Date.now()
@@ -289,9 +290,13 @@ class World implements TierBWorld {
     this.plugged = await this.desk.plug(SERIAL, MAC, FILTER)
     this.heard = 0
   }
+  /** The glass goes dark, and the dial that comes back powers on with no tile: its firmware keeps nothing. */
   async unplug(): Promise<void> {
     this.read()
     this.plugged = undefined
+    this.page = ''
+    this.carousel = new DialCarousel()
+    this.face(Date.now())
     await this.desk.unplug(SERIAL)
   }
 
