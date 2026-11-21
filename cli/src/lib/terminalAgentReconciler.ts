@@ -277,11 +277,17 @@ export class TerminalAgentReconciler {
   private probeGivenUp = false
   private get passDeadlineMs(): number { return this.deps.passDeadlineMs ?? RECONCILE_PASS_DEADLINE_MS }
 
+  /** Passes completed with a probe that answered. A check that something did not happen waits for two more
+   *  than it read after its change: at least one whole pass then began after the change and looked. */
+  get passes(): number { return this.completedPasses }
+  private completedPasses = 0
+
   private async drain(): Promise<void> {
     while (this.pending) {
       this.pending = false
       this.refused = false
       await this.reconcileOnce()
+      if (!this.probeGivenUp) this.completedPasses++
       if (!this.refused) this.outageSaid = false
     }
   }
