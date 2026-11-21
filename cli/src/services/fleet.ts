@@ -63,7 +63,7 @@ export interface FleetRouting {
   hasLane(): boolean
   /** Hold the lane for a dial, attached to no machine. Resolves with how it went, and why when the lane said
    *  (cable/machineFleet.ts LANE_*); never rejects. */
-  online(): Promise<{ ok: true } | { ok: false; message: string; code?: string }>
+  online(): Promise<{ ok: true } | { ok: false; kind: string; code?: string }>
   select(machineId: string): Promise<SelectResult>
   release(immediate?: boolean): void
 }

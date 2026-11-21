@@ -429,8 +429,8 @@ export class DaemonCableHost implements CableHost {
       // by the catch below, by its kind.
       const online = await this.viaFleet((r) => r.online())
       if (!online.ok) {
-        // The message is the backend's or the error's words: the line says the code, or only how long it is.
-        const why = online.code ?? codeOrLength(online.message)
+        // The lane's code, or the failure's kind: a code that is not one is said by its length.
+        const why = online.code === undefined ? online.kind : codeOrLength(online.code)
         // A session that is over is not tried again: each try would be a refused refresh and two log lines every 30 s
         // until someone signs in (security review 2 on #2483). The next sign-in and plug-in open it.
         if (online.code === LANE_SESSION_OVER) {
