@@ -605,13 +605,14 @@ describe('the lane, held while a dial is plugged in', () => {
 
   it('answers a lane that will not open and a refused selection, rather than throwing them', async () => {
     const fleet = fleetOf([REMOTE])
-    fleet.online = vi.fn(async () => { throw new Error('backend unreachable') })
+    fleet.online = vi.fn(async () => { throw new Error('backend unreachable at /Users/sentinel') })
     fleet.select = vi.fn(async (machineId: string) => {
       if (machineId === 'other') throw new FleetError('NEEDS_LINK', 'Link office-imac to this computer first')
       throw new Error('socket closed')
     })
     const router = new FleetRouter(localOf(), fleet)
-    expect(await router.online()).toEqual({ ok: false, message: 'backend unreachable' })
+    // The error's words can quote the person's files: only its kind is carried, for the log line it ends in.
+    expect(await router.online()).toEqual({ ok: false, kind: 'Error' })
     expect(await router.select('other')).toEqual({ ok: false, code: 'NEEDS_LINK', message: 'Link office-imac to this computer first' })
     expect(await router.select('third')).toEqual({ ok: false, code: 'UNREACHABLE', message: 'socket closed' })
   })
@@ -620,12 +621,12 @@ describe('the lane, held while a dial is plugged in', () => {
     const fleet = fleetOf([REMOTE])
     const router = new FleetRouter(localOf(), fleet)
     fleet.online = vi.fn(async () => { throw Object.assign(new Error('the sign-in could not be refreshed'), { code: 'TOKEN_UNAVAILABLE' }) })
-    expect(await router.online()).toEqual({ ok: false, message: 'the sign-in could not be refreshed', code: 'TOKEN_UNAVAILABLE' })
+    expect(await router.online()).toEqual({ ok: false, kind: 'TOKEN_UNAVAILABLE', code: 'TOKEN_UNAVAILABLE' })
     fleet.online = vi.fn(async () => { throw Object.assign(new Error('sign in again'), { code: 'SESSION_OVER' }) })
-    expect(await router.online()).toEqual({ ok: false, message: 'sign in again', code: 'SESSION_OVER' })
+    expect(await router.online()).toEqual({ ok: false, kind: 'SESSION_OVER', code: 'SESSION_OVER' })
     // Only a word: anything else on the error stays behind.
     fleet.online = vi.fn(async () => { throw Object.assign(new Error('odd'), { code: 42 }) })
-    expect(await router.online()).toEqual({ ok: false, message: 'odd' })
+    expect(await router.online()).toEqual({ ok: false, kind: 'Error' })
   })
 })
 

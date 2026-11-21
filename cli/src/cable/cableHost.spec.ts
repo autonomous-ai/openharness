@@ -2411,10 +2411,16 @@ describe('the dial reaches the fleet through the core\'s port', () => {
     expect(fleet.release).toHaveBeenCalledWith()
     await new Promise((r) => setTimeout(r, 0))
     expect(log).toHaveBeenCalledWith('cable: could not announce mine (NEEDS_LINK)')
-    fleet.online = vi.fn(async () => ({ ok: false as const, message: 'backend unreachable' }))
+    // The router carries a failure by its kind, and a code the lane gave; a code that is not one is said by its length.
+    fleet.online = vi.fn(async () => ({ ok: false as const, kind: 'TypeError' }))
     host.onDialAttached()
     await new Promise((r) => setTimeout(r, 0))
-    expect(log).toHaveBeenCalledWith('cable: could not open the lane (text(19))')
+    expect(log).toHaveBeenCalledWith('cable: could not open the lane (TypeError)')
+    fleet.online = vi.fn(async () => ({ ok: false as const, kind: 'Error', code: '/Users/sentinel' }))
+    host.onDialAttached()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(log).toHaveBeenCalledWith('cable: could not open the lane (text(15))')
+    expect(log.mock.calls.flat().join('\n')).not.toContain('sentinel')
     host.onDialGone()
     expect(fleet.release).toHaveBeenLastCalledWith(true)
     // No lane to hold: nothing is opened, and a remote machine cannot be chosen.
