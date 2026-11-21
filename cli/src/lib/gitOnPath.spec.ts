@@ -57,6 +57,13 @@ describe('findGit on Windows', () => {
     expect(disk.asked.filter((path) => !win32.isAbsolute(path))).toEqual([])
   })
 
+  it("reads a PATH folder in quotes as Node's spawn does: without them, and with any `;` inside", async () => {
+    const disk = windowsDisk('D:\\Apps\\Git\\cmd\\git.exe', 'D:\\a;b\\gh.exe')
+    expect(await findGit({ platform: 'win32', env: { PATH: 'C:\\Windows\\System32;"D:\\Apps\\Git\\cmd"' }, isFile: disk.isFile })).toBe('D:\\Apps\\Git\\cmd\\git.exe')
+    expect(await findGit({ platform: 'win32', env: { PATH: "'D:\\Apps\\Git\\cmd'" }, isFile: disk.isFile })).toBe('D:\\Apps\\Git\\cmd\\git.exe')
+    expect(await findGh({ platform: 'win32', env: { PATH: '"D:\\a;b";C:\\X' }, isFile: disk.isFile })).toBe('D:\\a;b\\gh.exe')
+  })
+
   it('takes git.exe alone from PATH, never a git.cmd, which only cmd.exe runs', async () => {
     const disk = windowsDisk('C:\\X\\git.cmd')
     expect(await findGit({ platform: 'win32', env: { PATH: 'C:\\X' }, isFile: disk.isFile })).toBeNull()

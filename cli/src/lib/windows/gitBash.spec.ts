@@ -24,6 +24,11 @@ describe('findGitBash', () => {
     expect(findGitBash({ env: { LOCALAPPDATA: 'C:\\Users\\ana\\AppData\\Local' }, isFile: user })).toBe('C:\\Users\\ana\\AppData\\Local\\Programs\\Git\\bin\\bash.exe')
   })
 
+  it("finds the git of a PATH folder in quotes, as Node's spawn reads it", () => {
+    const quoted = disk('D:\\Apps\\Git\\cmd\\git.exe', 'D:\\Apps\\Git\\bin\\bash.exe')
+    expect(findGitBash({ env: { PATH: 'C:\\Windows\\System32;"D:\\Apps\\Git\\cmd"' }, isFile: quoted })).toBe('D:\\Apps\\Git\\bin\\bash.exe')
+  })
+
   it('prefers the git on PATH over an older install in Program Files', () => {
     const both = disk('C:\\Program Files\\Git\\bin\\bash.exe', 'D:\\Git\\cmd\\git.exe', 'D:\\Git\\bin\\bash.exe')
     expect(findGitBash({ env: { PATH: 'D:\\Git\\cmd', ProgramFiles: 'C:\\Program Files' }, isFile: both })).toBe('D:\\Git\\bin\\bash.exe')
