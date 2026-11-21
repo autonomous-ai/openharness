@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { Place } from './adapter.js'
 import { MAX_TEXT, type OrcaDeps } from './orca.js'
-import { createWeztermAdapter } from './wezterm.js'
+import { RECORDED_WEZTERM } from '../../testing/recordedWezterm.js'
+import { createWeztermAdapter, createWeztermTabAdapter, LISTED_PANES_MAX } from './wezterm.js'
 
 const APP_WEZTERM = '/Applications/WezTerm.app/Contents/MacOS/wezterm'
 const FAKE_PATH_WEZTERM = '/fake/bin/wezterm'
@@ -208,5 +209,138 @@ describe('the WezTerm adapter', () => {
       expect(await adapter.focus(pane(id)), id).toBe(false)
     }
     expect(calls).toEqual([])
+  })
+})
+
+/** A runner that runs nothing and answers each call the next of [answers], then exit 1: WezTerm's tab adapter reads
+ *  what `list` printed. */
+function tabRecorder(answers: Array<{ code: number | null; stdout: string }>, over: Partial<OrcaDeps> = {}) {
+  const calls: Call[] = []
+  let front: string | undefined = 'wezterm'
+  const deps: OrcaDeps = {
+    run: async (file, args, timeoutMs) => {
+      calls.push({ file, args, timeoutMs })
+      return answers.shift() ?? { code: 1, stdout: '' }
+    },
+    onPath: (name) => (name === 'wezterm' ? FAKE_PATH_WEZTERM : null),
+    exists: () => false,
+    platform: 'linux',
+    ...over,
+  }
+  const adapter = createWeztermTabAdapter({ ...deps, front: () => front })
+  return { calls, adapter, toFront: (app: string | undefined) => { front = app } }
+}
+
+/** An agent in a multiplexer whose client is in a WezTerm pane, as the outer lookup placed it. */
+const outerPlace = (outer?: Place['outer']): Place => ({ host: 'herdr', app: 'wezterm', hints: {}, ...(outer ? { outer } : {}) })
+const tab = (tty: string) => ({ adapter: 'wezterm-tab', id: tty })
+const list: Call = { file: FAKE_PATH_WEZTERM, args: ['cli', '--no-auto-start', 'list', '--format', 'json'], timeoutMs: 10_000 }
+const listed = { code: 0, stdout: RECORDED_WEZTERM.list }
+const done = { code: 0, stdout: '' }
+const recordedEntries = JSON.parse(RECORDED_WEZTERM.list) as Array<Record<string, unknown>>
+
+describe("WezTerm's tab of an outer place", () => {
+  it("a place in WezTerm's window by its client's tty is a tab that comes after the app", () => {
+    const { adapter } = tabRecorder([])
+    expect(adapter.id).toBe('wezterm-tab')
+    expect(adapter.tap).toBe('after')
+    expect(adapter.paneOf(outerPlace({ app: 'wezterm', tty: '/dev/pts/0', pid: 41 }))).toStrictEqual(tab('/dev/pts/0'))
+    expect(adapter.canFocus(tab('/dev/pts/0'))).toBe(true)
+    const mac = tabRecorder([], { platform: 'darwin' }).adapter
+    expect(mac.paneOf(outerPlace({ app: 'wezterm', tty: '/dev/ttys004' }))).toStrictEqual(tab('/dev/ttys004'))
+    expect(mac.paneOf(outerPlace({ app: 'wezterm', tty: '/dev/pts/0' }))).toBeUndefined()
+    const notTabs: Array<Place['outer']> = [undefined, { app: 'kitty', tty: '/dev/pts/0' }, { app: 'wezterm' }, { app: 'wezterm', pid: 41 },
+      ...['/dev/ttys004', '/dev/pts/../x', '/dev/pts/0 ', 'pts/0', ''].map((tty) => ({ app: 'wezterm', tty }))]
+    for (const outer of notTabs) expect(adapter.paneOf(outerPlace(outer)), JSON.stringify(outer)).toBeUndefined()
+    // An agent in WezTerm's own pane is WezTerm's own adapter's.
+    expect(adapter.paneOf({ host: 'wezterm', app: 'wezterm', hints: { WEZTERM_PANE: '7' }, tty: '/dev/pts/0' })).toBeUndefined()
+    const windows = tabRecorder([], { platform: 'win32' }).adapter
+    expect(windows.paneOf(outerPlace({ app: 'wezterm', tty: '/dev/pts/0' }))).toBeUndefined()
+    expect(windows.canFocus(tab('/dev/pts/0'))).toBe(false)
+    expect(adapter.canFocus(tab('/dev/pts/../x'))).toBe(false)
+  })
+
+  it('a rest shows it only while WezTerm is in front', () => {
+    const { adapter, toFront, calls } = tabRecorder([])
+    expect(adapter.canShow(tab('/dev/pts/0'))).toBe(true)
+    expect(adapter.canShow(tab('/dev/ttys004'))).toBe(false)
+    for (const app of ['kitty', 'terminal-app', undefined]) {
+      toFront(app)
+      expect(adapter.canShow(tab('/dev/pts/0')), String(app)).toBe(false)
+    }
+    toFront('wezterm')
+    expect(adapter.canShow(tab('/dev/pts/0'))).toBe(true)
+    expect(calls).toEqual([])
+  })
+
+  // Activating a pane in a tab not in front also makes that tab its window's active one (the recording's
+  // tabBecameActive), so no activate-tab runs.
+  it("show lists once and activates the pane holding the client's tty", async () => {
+    const recorded: Call = { file: FAKE_PATH_WEZTERM, args: RECORDED_WEZTERM.activatePane.argv.slice(1), timeoutMs: 10_000 }
+    const { calls, adapter } = tabRecorder([listed, done, listed, done, listed])
+    expect(await adapter.show(tab('/dev/pts/0'), 'agent-1')).toBe('ok')
+    expect(calls).toEqual([list, recorded])
+    expect(await adapter.focus(tab('/dev/pts/2'))).toBe(true)
+    expect(calls.slice(2)).toEqual([list, activate(FAKE_PATH_WEZTERM, '2')])
+    // No pane holds the client's tty: nothing is activated.
+    expect(await adapter.show(tab('/dev/pts/9'), 'agent-1')).toBe('failed')
+    expect(calls.slice(4)).toEqual([list])
+  })
+
+  it('a list out of form activates nothing and fails', async () => {
+    const target = recordedEntries[0]!
+    const other = recordedEntries[1]!
+    const entries = (...more: unknown[]) => JSON.stringify([target, ...more])
+    const panes = (count: number) => JSON.stringify(Array.from({ length: count }, (_, n) => ({ ...target, pane_id: n, tty_name: `/dev/pts/${n}` })))
+    const outOfForm = [
+      '',
+      'not json',
+      '{}',
+      JSON.stringify(target),
+      entries(null),
+      entries('pane'),
+      entries({ ...other, pane_id: '1' }),
+      entries({ ...other, pane_id: -1 }),
+      entries({ ...other, pane_id: 1.5 }),
+      entries({ ...other, pane_id: 1234567890 }),
+      entries({ ...other, pane_id: undefined }),
+      entries({ ...other, tty_name: undefined }),
+      entries({ ...other, tty_name: null }),
+      panes(LISTED_PANES_MAX + 1),
+    ]
+    expect(LISTED_PANES_MAX).toBe(256)
+    for (const stdout of outOfForm) {
+      const { calls, adapter } = tabRecorder([{ code: 0, stdout }, { code: 0, stdout }])
+      expect(await adapter.show(tab('/dev/pts/0'), 'agent-1'), stdout.slice(0, 80)).toBe('failed')
+      expect(await adapter.focus(tab('/dev/pts/0')), stdout.slice(0, 80)).toBe(false)
+      expect(calls).toEqual([list, list])
+    }
+    // At the bound, the list is read.
+    const { calls, adapter } = tabRecorder([{ code: 0, stdout: panes(LISTED_PANES_MAX) }, done])
+    expect(await adapter.show(tab('/dev/pts/255'), 'agent-1')).toBe('ok')
+    expect(calls).toEqual([list, activate(FAKE_PATH_WEZTERM, '255')])
+  })
+
+  it('a list that failed: failed, and wezterm is looked for again', async () => {
+    let looks = 0
+    const failed = { code: 1, stdout: '' }
+    const { calls, adapter } = tabRecorder([failed, { code: null, stdout: '' }, listed, done, listed, failed, listed],
+      { onPath: () => { looks++; return FAKE_PATH_WEZTERM } })
+    expect(await adapter.show(tab('/dev/pts/0'), 'agent-1')).toBe('failed')
+    expect(looks).toBe(1)
+    expect(await adapter.focus(tab('/dev/pts/0'))).toBe(false)
+    expect(looks).toBe(2)
+    expect(await adapter.show(tab('/dev/pts/0'), 'agent-1')).toBe('ok')
+    expect(looks).toBe(3)
+    // An activate that failed is looked for again too.
+    expect(await adapter.show(tab('/dev/pts/0'), 'agent-1')).toBe('failed')
+    expect(looks).toBe(3)
+    expect(await adapter.show(tab('/dev/pts/9'), 'agent-1')).toBe('failed')
+    expect(looks).toBe(4)
+    expect(calls).toEqual([list, list, list, activate(FAKE_PATH_WEZTERM, '0'), list, activate(FAKE_PATH_WEZTERM, '0'), list])
+    // None found: nothing runs.
+    const none = tabRecorder([], { onPath: () => null })
+    expect(await none.adapter.show(tab('/dev/pts/0'), 'agent-1')).toBe('failed')
+    expect(none.calls).toEqual([])
   })
 })
