@@ -52,6 +52,12 @@ describe("tier A's world", () => {
     expect(world.seen([]).commands.map(({ argv, ok }) => [argv[1], ok])).toEqual([['raise', false], ['open-link', true]])
   })
 
+  it("speaks the same language on every host: the devices' voice language follows LANG", () => {
+    vi.stubEnv('LANG', 'vi_VN.UTF-8')
+    worldOn('darwin')
+    expect(process.env.LANG).toBe('en_US.UTF-8')
+  })
+
   it("the core's turns.send reaches no session: tier A has no Harness agent, so a real core would refuse it", () => {
     const { world, core } = worldOn('darwin')
     core.turns.send(world.agentId('a'), 'Eval words for alpha.')
