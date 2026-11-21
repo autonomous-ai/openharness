@@ -15,14 +15,15 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { isAbsolute, join, relative } from 'node:path'
-import { claudeStoreRoots } from '../../src/cable/hosts/appPlaces.js'
+import { dirname, isAbsolute, join, relative } from 'node:path'
+import { chatGptPlaces, claudeStoreRoots } from '../../src/cable/hosts/appPlaces.js'
 import { claudeAppFixture } from '../../src/testing/claudeAppFixture.js'
 import { describeAttempt, guardThisProcess, netGuardEnv, readNetGuard, type NetAttempt } from '../../src/testing/dialAppEval/netGuard.js'
 import { agentIdOf, StepNotBuilt, type App, type Delivery, type EvalDriver, type Platform, type Scenario, type Seen,
   type SessionDef, type SessionKey, type Step, type StepKind, type StepOf } from '../../src/testing/dialAppEval/types.js'
 import { CAROUSEL_REFRESH_MS, DialCarousel, type DialMessage } from '../../src/testing/dialCarousel.js'
 import { beginCost, costEnv } from './appEvalCost.js'
+import { writeAppCodex } from './codexAppCli.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './daemon.js'
 import { Desk } from './desk.js'
 import { FakeBackend, type FakeMachine } from './fakeBackend.js'
@@ -82,6 +83,17 @@ interface Rig {
   given: number
 }
 
+/** The ChatGPT app's bundle as the devices read it (`plutil`): its id and nothing else of the app. */
+const CHATGPT_INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>com.openai.codex</string>
+</dict>
+</plist>
+`
+
 const inside = (root: string, path: string | undefined): boolean => !!path && isAbsolute(path) && !relative(root, path).startsWith('..')
 /** The files in [dir] and below gone, its folders kept: the daemon's watches on them stay. */
 function emptied(dir: string): void {
@@ -131,6 +143,15 @@ async function openRig(): Promise<Rig> {
     mkdirSync(places['Codex home']!, { recursive: true })
     // Both apps' links have their app, as on a desktop with both installed.
     if (process.platform === 'linux') writeSchemeApps(d, { claude: 'com.anthropic.Claude.desktop', codex: 'chatgpt.desktop' })
+    // The ChatGPT app installed before any dial comes, as the devices look for it at each attach: its bundle in the home's
+    // Applications on macOS, its program in the root's stand-in for /usr/lib on Linux, and its own Codex CLI.
+    const chatgpt = process.platform === 'linux'
+      ? chatGptPlaces('linux', d.env.HARNESS_APPLICATIONS_DIR, home!)[0]!
+      : join(home!, 'Applications', 'ChatGPT.app', 'Contents', 'Info.plist')
+    if (!inside(d.root, chatgpt)) throw new Error("the daemon's ChatGPT app is not inside its root")
+    mkdirSync(dirname(chatgpt), { recursive: true })
+    writeFileSync(chatgpt, process.platform === 'linux' ? '' : CHATGPT_INFO_PLIST)
+    writeAppCodex(d)
     const dials = join(d.root, 'dials.json')
     d.env.HARNESSD_TEST_DIAL_PORT = dials
     writeFileSync(dials, '[]')
