@@ -5,20 +5,22 @@
  * the scenario's model of the machine (tierA/machine.ts), so the devices see the scenario's processes and none of the
  * host's.
  *
- * Nothing real is reached. The network guard (netGuard.ts) is the one way this spec refuses the network: a connection
- * to anything but this machine fails, and fails the case it happened in, named by host and port. A child process fails
- * the case too: the devices must start no `claude`, `codex`, `orca`, `open`, `xdg-open` or `ps`. The homes, the stores
- * and the transcripts are throwaway folders.
+ * Nothing real is reached. The network guard (netGuard.ts) is the one way this spec refuses the network: installed
+ * before any import, a connection to anything but this machine fails, and fails the case it happened in, named by host
+ * and port. A child process fails the case too: the devices must start no `claude`, `codex`, `orca`, `open`, `xdg-open`
+ * or `ps`. The homes, the stores and the transcripts are throwaway folders.
  */
 import { homedir, tmpdir } from 'node:os'
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { claudeGhost, claudeSessions, listed, MAIN, scenario, scenariosFor } from './catalog.js'
 import { loadBaseline, tierAVerdict } from './grade.js'
-import { describeAttempt, guardThisProcess } from './netGuard.js'
+import { describeAttempt } from './netGuard.js'
 import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from './runner.js'
 import { TierADriver } from './tierA/driver.js'
-import type { Platform, Seen } from './types.js'
+import type { Platform } from './types.js'
 
+// First of all, so no import below opens a connection unguarded.
+const guard = await vi.hoisted(async () => (await import('./netGuard.js')).guardThisProcess())
 const { machine } = await vi.hoisted(async () => await import('./tierA/machine.js'))
 
 /** The processes started past the stand-ins. Each fails the case it happened in. */
@@ -116,23 +118,32 @@ vi.mock('../../devices/orcaHomes.js', async (real) => ({
 const { startDevices } = await import('../../services/devices.js')
 
 const PLATFORMS: readonly Platform[] = ['darwin', 'win32', 'linux']
+/**
+ * Tier A runs on a Mac or a Linux host. On a Windows one a platform's store paths flip (a posix path is no path of that
+ * host, tierA/storeWatch.ts onHost), a temp folder a reader still holds is EBUSY to remove, and secureState's retries
+ * wait in real time (lib/secureState.ts pauseSync): its virtual times would not be the baseline's.
+ */
+const WINDOWS_HOST = process.platform === 'win32'
 /** Every scenario run, in the order run: what the results file holds. */
 const runs: ScenarioRun[] = []
 
-let guard: ReturnType<typeof guardThisProcess>
-beforeAll(() => { guard = guardThisProcess() })
 beforeEach(() => { reached.length = 0 })
 afterEach(() => {
   expect(guard.taken().map(describeAttempt)).toEqual([])
   expect(reached).toEqual([])
 })
 afterAll(() => {
-  guard.uninstall()
   const out = process.env.DIAL_EVAL_OUT
   if (out) writeResults(out, 'spec', collect(runs))
+  // What was refused after the last case, in the hooks, fails the file.
+  try {
+    expect(guard.taken().map(describeAttempt)).toEqual([])
+  } finally {
+    guard.uninstall()
+  }
 })
 
-describe.each(PLATFORMS)('tier A on %s', (platform) => {
+describe.skipIf(WINDOWS_HOST).each(PLATFORMS)('tier A on %s', (platform) => {
   it.for(scenariosFor('a', platform))('$id', async (scenario) => {
     const run = await runScenario(new TierADriver({ startDevices }), scenario, platform)
     runs.push(run)
@@ -141,7 +152,7 @@ describe.each(PLATFORMS)('tier A on %s', (platform) => {
   })
 })
 
-describe('tier A', () => {
+describe.skipIf(WINDOWS_HOST)('tier A', () => {
   it('reaches no network: a fetch to example.invalid fails and the guard names it', async () => {
     await expect(fetch('http://example.invalid/')).rejects.toThrow()
     expect(guard.taken().map(describeAttempt)).toEqual(['node net example.invalid:80'])
@@ -164,17 +175,18 @@ describe('tier A', () => {
     expect(run.gaps.map((g) => g.reason)).toEqual(['voice step 4: the face never showed a'])
   })
 
-  it('C1 twice gives the same frames at the same virtual times', async () => {
+  it('C1 twice gives the same frames, faces, commands and deliveries at the same virtual times', async () => {
     const c1 = MAIN.find((s) => s.id === 'C1')!
-    const seen = async (): Promise<Seen> => {
+    const seen = async () => {
       const driver = new TierADriver({ startDevices })
       await runScenario(driver, c1, 'darwin')
-      return driver.seen()
+      const { frames, faces, commands, deliveries } = driver.seen()
+      return { frames, faces, commands, deliveries }
     }
     const first = await seen()
     const second = await seen()
     expect(first.frames.length).toBeGreaterThan(0)
-    expect(second.frames).toEqual(first.frames)
+    expect(second).toEqual(first)
   })
 
   // The baseline is written on a Mac and checked on Linux: a result naming this host's folders would differ there.
