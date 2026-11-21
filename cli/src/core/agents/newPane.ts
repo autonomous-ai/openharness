@@ -194,10 +194,6 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
           // anywhere — frame, registry, archive — records that an engine was ever meant to be here
           // or why it left. openharness#285 was exactly this: opencode printed its help over a flag
           // it did not know, and the only trace was one line saying the pane had become a terminal.
-          // `describeAgentCreateFailure` was written for this and had no caller.
-          // `dead: true` describes the ENGINE, which is what the diagnosis is about, not the pane —
-          // the pane is alive and about to become a terminal. That is the sentence this state
-          // selects ("started and exited with status N"), and it is the true one here.
           const captured = await captureTerminal(pending.agentId, 40)
           if (!current()) return
           // An OpenClaw the person fixes outside the pane: a local run another OpenClaw's lock turned away (it needs
@@ -216,13 +212,7 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
           // off the machine: it says how much the pane printed, and the engine by its name.
           const printed = (captured ?? '').split('\n').filter((line) => line.trim()).length
           console.warn(`[agent] create · ${engine} · agent ${sid(pending.agentId)} · `
-            + describeAgentCreateFailure({
-              state: { dead: true, exitStatus: paneState.engineExit, command: engine },
-              engineBin: engine,
-              shellName: null,
-              processes: [],
-              elapsedMs: Date.now() - startedAt,
-            }) + ` · pane output ${printed} lines`)
+            + describeAgentCreateFailure(engine, paneState.engineExit, Date.now() - startedAt) + ` · pane output ${printed} lines`)
           // A hook may have bound a conversation while this watcher was awaiting its probe.
           // Archive the current row, not the pre-hook pending snapshot.
           const row = registry.byAgent(pending.agentId)
