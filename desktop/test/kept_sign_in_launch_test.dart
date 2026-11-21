@@ -118,7 +118,7 @@ class _App extends AppNotifier {
     LocalKeyValueStore storage, {
     bool Function()? uninstalling,
     bool Function()? flashing,
-    ViewerServices? viewer,
+    super.viewer,
   }) : super(
          config: AppConfig.dev,
          authSession: AuthSession(),
@@ -129,7 +129,6 @@ class _App extends AppNotifier {
            flashing: flashing,
          ),
          paneLayoutStore: PaneLayoutStore(storage: storage),
-         viewer: viewer,
        );
   Completer<void>? daemon;
   @override
