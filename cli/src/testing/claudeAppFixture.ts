@@ -44,6 +44,13 @@ function canonical(path: string): string {
   return process.platform === 'darwin' || process.platform === 'win32' ? named.toLowerCase() : named
 }
 
+/** Whether `place` is `folder` or inside it, however either is spelled: the one check of every fixture that must never
+ *  write a real store. */
+export function withinReal(folder: string, place: string): boolean {
+  const inside = relative(canonical(folder), canonical(place))
+  return inside.split(sep)[0] !== '..' && !isAbsolute(inside)
+}
+
 // The env as this module was loaded: tier A empties XDG_CONFIG_HOME, APPDATA and LOCALAPPDATA before it makes a fixture,
 // which must not take the store those named off the refused list.
 const LOADED_ENV = { ...process.env }
@@ -66,12 +73,8 @@ export function claudeAppFixture(root: string): {
   /** Removes the file and leaves a 13-byte `deleted_<uuid>` in its place. */
   remove(localId: string, place?: FixturePlace): void
 } {
-  const asked = canonical(root)
-  for (const real of realRoots()) {
-    const inside = relative(canonical(real), asked)
-    if (inside.split(sep)[0] !== '..' && !isAbsolute(inside)) {
-      throw new Error('the Claude app fixture never writes the real Claude app store')
-    }
+  if (realRoots().some((real) => withinReal(real, root))) {
+    throw new Error('the Claude app fixture never writes the real Claude app store')
   }
   const org = (place: FixturePlace = {}): string => {
     const folder = join(root, place.account ?? ACCOUNT, place.org ?? ORG)
