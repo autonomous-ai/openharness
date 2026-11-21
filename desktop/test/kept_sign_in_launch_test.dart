@@ -413,8 +413,9 @@ void main() {
     () async {
       await keptFrom('machine-a');
       cli.fails = true;
-      // The uninstall starts right after the early check has run.
-      uninstalling = () => cli.asked > 0;
+      // The uninstall starts right after setup has run: held any earlier, the launch ends before the window opens.
+      uninstalling = () =>
+          (app.environmentProvisioner! as _Environment).runs > 0;
       await app.bootstrap();
       await _ticks();
       expect(cli.asked, 1);

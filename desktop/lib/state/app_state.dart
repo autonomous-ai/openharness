@@ -5866,13 +5866,9 @@ class AppNotifier extends ChangeNotifier {
               return status;
             })
             .catchError((Object _) => null);
-        // Setup runs the CLI (`node cli.js version`) and may install it again, so not while `harness uninstall` holds
-        // its marker: the launch goes on to the signed-in check, which has no answer then (see [_checkAuthStatus]).
-        if (!_discovery.uninstallHeld()) {
-          final environmentReady = await _prepareEnvironment();
-          _markStartup('tools');
-          if (!environmentReady) return;
-        }
+        final environmentReady = await _prepareEnvironment();
+        _markStartup('tools');
+        if (!environmentReady) return;
         await _continueAfterEnvironmentReady(
           early: _installedThisBoot || askedAt != _authRevision ? null : early,
         );
@@ -6049,12 +6045,19 @@ class AppNotifier extends ChangeNotifier {
     });
   }
 
+  /// Every setup run: launch, the setup screen's Install, Retry and Recheck, and the 5 s recheck. Setup runs the CLI
+  /// (`node cli.js version`) and may install it again, so none while `harness uninstall` holds its marker (see
+  /// [_checkAuthStatus]): it throws, and its caller ends where a failed signed-in check ends, on the sign-in page.
   Future<EnvironmentReadiness> _runProvisioner({
     EnvironmentReadiness? resumeFrom,
     bool install = false,
     EnvironmentSetupMode? mode,
     bool quiet = false,
   }) async {
+    if (_discovery.uninstallHeld()) {
+      appLog.info('setup', 'no setup: harness uninstall holds its marker');
+      throw CliNotAvailableException('harness uninstall is removing the CLI');
+    }
     final provisioner = environmentProvisioner ?? EnvironmentProvisioner();
     if (install) _installedThisBoot = true;
     final result = await provisioner.ensureReady(
@@ -6308,6 +6311,10 @@ class AppNotifier extends ChangeNotifier {
         return;
       }
       await _continueAfterEnvironmentReady();
+    } on CliNotAvailableException {
+      // Held by `harness uninstall` ([_runProvisioner]).
+      currentUser = null;
+      status = AppStatus.unauthenticated;
     } finally {
       _environmentSetupInFlight = false;
       notifyListeners();
@@ -6333,6 +6340,10 @@ class AppNotifier extends ChangeNotifier {
         result = await _installUnattended(result);
       }
       if (result.isReady) await _continueAfterEnvironmentReady();
+    } on CliNotAvailableException {
+      // Held by `harness uninstall` ([_runProvisioner]).
+      currentUser = null;
+      status = AppStatus.unauthenticated;
     } finally {
       _environmentSetupInFlight = false;
       notifyListeners();
