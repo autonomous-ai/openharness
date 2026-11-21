@@ -3,7 +3,7 @@
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { EVAL_EPOCH, installClock, settle } from './clock.js'
+import { EVAL_EPOCH, installClock, MAX_ADVANCES, settle } from './clock.js'
 
 const nothingInFlight = (): number => 0
 /** Virtual ms since the clock was installed. */
@@ -42,6 +42,11 @@ describe("tier A's clock", () => {
       for (;;) await new Promise((resolve) => setTimeout(resolve, 0))
     }
     void forever()
-    await expect(settle(1_000, undefined, nothingInFlight)).rejects.toThrow(/runaway timers/)
+    // A small limit: each advance waits real turns, so the product's would take as long as the host is loaded.
+    await expect(settle(1_000, undefined, nothingInFlight, 100)).rejects.toThrow(/^runaway timers: 100 timers ran/)
+  })
+
+  it('the runaway limit is 100,000 timers a settle', () => {
+    expect(MAX_ADVANCES).toBe(100_000)
   })
 })
