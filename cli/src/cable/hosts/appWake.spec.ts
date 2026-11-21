@@ -493,6 +493,31 @@ describe("the Claude app's wake (docs/plans/2026-11-21-dial-claude-app-wake-send
     expect(t.opens).toHaveLength(2)
   })
 
+  it('waitsFor: the session it opens, while the link runs and while it waits; never once its words are handed on, or it ended', async () => {
+    const t = setup()
+    expect(t.wake.waitsFor(SESSION)).toBe(false)
+    const sent = track(t.wake.send(TARGET, WORDS))
+    expect(t.wake.waitsFor(SESSION)).toBe(true)
+    expect(t.wake.waitsFor(SECOND)).toBe(false)
+    t.opens[0].resolve(true)
+    await turn()
+    t.list(copy(SESSION))
+    expect(t.wake.waitsFor(SESSION)).toBe(true)
+    // Its own words go through the observed source, which asks as they go: by then it no longer waits.
+    let asked: boolean | undefined
+    t.answer = async () => { asked = t.wake.waitsFor(SESSION); return { ok: true } }
+    t.poll(SESSION)
+    expect(asked).toBe(false)
+    await turn()
+    expect(sent.value).toEqual({ ok: true })
+    expect(t.wake.waitsFor(SESSION)).toBe(false)
+    const again = track(t.wake.send(TARGET, WORDS))
+    t.wake.stop()
+    await turn()
+    expect(again.value).toEqual({ ok: false, reason: 'Fix the build did not answer.' })
+    expect(t.wake.waitsFor(SESSION)).toBe(false)
+  })
+
   it('a prompt while the words are being delivered is still refused busy; a stop then keeps the send\'s answer', async () => {
     const t = setup()
     let answer!: (result: SendResult) => void

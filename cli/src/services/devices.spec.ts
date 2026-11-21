@@ -9733,6 +9733,26 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
       expect(orcaRuns).toEqual([continued(LOCAL)])
     })
 
+    it('words its own path takes while it still waits never go ahead of the first: refused, though its last run left its mod ready', async () => {
+      const { port, live } = withStore()
+      await live()
+      // Its last run: its mod polled, then the app ended it. The inbox counts its mod ready for 35 s after that poll.
+      port.observed(hook('session-start'))
+      const last = poll(port, 'p0', SESSION)
+      port.observed(hook('session-end'))
+      port.inboxGone('p0')
+      expect(await last).toEqual({})
+      const first = host().sendTurn(ID, 'first')
+      await flush()
+      // The hooked copy holds the row again before its mod polls: these words take its own path.
+      port.observed(hook('session-start'))
+      const second = host().sendTurn(ID, 'second')
+      expect(await poll(port, 'p1', SESSION)).toEqual({ text: 'first' })
+      expect(await first).toEqual({ ok: true })
+      expect(await second).toEqual(refused('api has not taken your last words yet.'))
+      expect(orcaRuns).toEqual([continued(LOCAL)])
+    })
+
     // Review Focus 2: two opens of one link do no harm.
     it('a tap while it opens runs the link again and the words still go once', async () => {
       const { port, live } = withStore()
