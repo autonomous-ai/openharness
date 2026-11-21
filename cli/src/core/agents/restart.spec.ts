@@ -12,7 +12,6 @@ import { commitRelaunchedEngine, createAgentRestarter, type RestartDeps } from '
 import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
 import type { RestartTarget } from '../../lib/terminalBackend.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
-import { hashOf } from '../../lib/log.js'
 import { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 
 vi.mock('../../lib/engineBin.js', async (real) => ({ ...await real<object>(), enginePathOverride: vi.fn(() => undefined) }))
@@ -592,7 +591,7 @@ describe('restarting an agent', () => {
       expect(run.deps.agentReconciler.releaseRoute).toHaveBeenCalledWith(routeKey)
     })
 
-    it('without a mode or a yes, launches with no mode and no bypass; a fresh session on a grid says both, the grid by its hash', async () => {
+    it('without a mode or a yes, launches with no mode and no bypass; a fresh session on a grid says both, never which grid', async () => {
       // A grid's name is one the person can choose, and Export logs sends the line off the machine.
       const grid = agent({ gridLaunch: { networkName: 'Home sentinel' } } as Partial<RegisteredSession>)
       const run = setup(grid, { downgradedPermission: vi.fn(async () => ({ bypassPermission: false })) as never })
@@ -602,7 +601,7 @@ describe('restarting an agent', () => {
       expect(vi.mocked(restartAgent).mock.calls[0][1]).toBe(false)
       const lines = vi.mocked(console.log).mock.calls.map((call) => call.map(String).join(' ')).join('\n')
       expect(lines).not.toContain('sentinel')
-      expect(lines).toContain(`[restart] a1 claude · fresh session · grid ${hashOf('Home sentinel')}`)
+      expect(lines).toContain('[restart] a1 claude · fresh session · on a grid')
     })
 
     it('writes on the row the grid its launch record puts the engine on, never the grid the row had', async () => {

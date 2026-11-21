@@ -6,7 +6,6 @@ import { registry as realRegistry, type AgentLaunch, type ProcessIdentity, type 
 import type { TerminalRuntimeRef, TmuxRuntimeRef } from './terminalTypes.js'
 import { GRID_CREDENTIAL_REQUIRED, heldLaunch, restoreAgents, terminalSurvey, type RestoreAgentsDeps, type RestoreLaunch, type RestoreLaunchResult } from './restoreAgents.js'
 import type { GridLaunchOverride } from './gridLaunch.js'
-import { hashOf } from './log.js'
 import { createStopAgentService, type StopAgentServiceDeps } from './stopAgentService.js'
 import { AgentRestartCoordinator } from './restartAgent.js'
 import { createHeldLaunches } from '../core/agents/heldLaunches.js'
@@ -760,7 +759,7 @@ describe('restoreAgents — which agents get a pane back', () => {
     await settled(h, 1, 1)
   })
 
-  it('names the grid it restored onto by its hash: a person chose its name', async () => {
+  it('says it restored onto a grid, never which: a person chose its name, and a short one is guessed from a hash', async () => {
     const h = harness([row({ agentId: 'gridded', grid: { baseUrl: GRID.baseUrl, model: null }, gridLaunch: { ...GRID, networkName: 'sentinel grid' } })])
     h.probes.set('%0', [identity(7)])
     const log = vi.fn()
@@ -769,7 +768,7 @@ describe('restoreAgents — which agents get a pane back', () => {
     await settled(h, 1, 1)
     const lines = log.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
     expect(lines).not.toContain('sentinel')
-    expect(lines).toContain(` · grid ${hashOf('sentinel grid')}`)
+    expect(lines).toMatch(/· pane %0 → %\d+ · resuming session- · on a grid$/m)
   })
 
   it('the fresh fallback of a grid agent is a grid launch too', async () => {
@@ -1100,6 +1099,29 @@ describe('restoreAgents — held until the service a launch asks is ready', () =
     expect((await restoreAgents(stuck.deps)).restored).toEqual(['gridded'])
     await settled(stuck, 2, 1)
     expect(stuck.rows.get('gridded')?.sessionId).toBe('session-gridded')
+  })
+
+  it('a waiting pane that could not be shown is logged by the service it waits for, never the pane\'s refusal', async () => {
+    const h = harness([row({ terminalHost: true, engine: 'claude', gridLaunch: GRID })])
+    h.deps.needs = () => null
+    h.deps.waitingLaunch = (_entry, held) => ({ argv: ['wait', held.detail] })
+    const build = h.deps.buildLaunch
+    let asks = 0
+    h.deps.buildLaunch = async (entry, o) => (++asks === 2 ? { held: 'models' } : build(entry, o))
+    const respawn = h.deps.respawn
+    // A terminal host's refusal can quote the folder of the pane it was asked to show.
+    h.deps.respawn = async (runtime, launch, control) => launch.argv[0] === 'wait'
+      ? { ok: false, reason: 'the pane at /Users/sentinel/x is gone' } : respawn(runtime, launch, control)
+    const log = vi.fn()
+    h.deps.log = log
+    h.probes.set('%0', [null, null])
+    h.states.set('%0', [{ dead: true }])
+    await restoreAgents(h.deps)
+    // The person still reads why, on the row.
+    await vi.waitFor(() => expect(h.rows.get('agent-a')?.launch).toMatchObject({ state: 'held', detail: expect.stringContaining('/Users/sentinel/x') }))
+    const lines = log.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+    expect(lines).not.toContain('sentinel')
+    expect(lines).toContain('[restore] claude · agent agent-a · held · waiting for models · its waiting pane could not be shown')
   })
 
   it('holds a terminal whose adopted engine needs a service to come back, too', async () => {
