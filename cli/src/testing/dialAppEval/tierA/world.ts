@@ -246,14 +246,19 @@ export class World implements TierAWorld {
     }
   }
 
-  /** A command the devices ran: recorded at its virtual time, and answered by the world's rules. */
+  /** A command the devices ran: answered by the world's rules, and recorded at its virtual time with whether it ran to a
+   *  good end. */
   private ran(argv: string[]): Required<Answer> {
-    this.commands.push({ at: Date.now(), argv })
+    let answer: Answer = { code: 0 }
     for (const rule of this.rules) {
-      const answer = rule(argv)
-      if (answer) return { stdout: '', ...answer }
+      const said = rule(argv)
+      if (said) {
+        answer = said
+        break
+      }
     }
-    return { code: 0, stdout: '' }
+    this.commands.push({ at: Date.now(), argv, ok: answer.code === 0 })
+    return { stdout: '', ...answer }
   }
 
   /** The agent's session key, or none for an agent the scenario does not know. */
