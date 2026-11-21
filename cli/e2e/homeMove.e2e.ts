@@ -101,7 +101,7 @@ class Start {
       IsolatedDaemon.killGroup(start.child)
       forgetGroup(pid)
       const outside = hooksOutside(start.said, h.d.root)
-      if (outside.length) throw new Error(`a daemon of this file wrote hooks outside ${h.d.root}, to the files its log names by these hashes: ${outside.join(', ')}`)
+      if (outside.length) throw new Error(`a daemon of this file wrote hooks outside ${h.d.root}; its lines:\n${outside.join('\n')}`)
     })
     onTestFailed(() => { console.log(`---- the daemon ${pid} ${args.join(' ')}\n${start.said.split('\n').slice(-150).join('\n')}`) })
     return start
