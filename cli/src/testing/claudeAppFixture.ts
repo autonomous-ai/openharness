@@ -5,7 +5,9 @@
  * temp file and renamed over, and a deleted session's file swapped for a 13-byte `deleted_<uuid>`.
  */
 import { mkdirSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { userInfo } from 'node:os'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { claudeStoreRoots } from '../cable/hosts/appPlaces.js'
 
 /** The account and org folders a fixture writes to unless told another. */
 export const ACCOUNT = '5c0e7a1d-2b3f-4c8e-9d6a-7f1b2c3d4e5f'
@@ -30,6 +32,14 @@ export function claudeAppFixture(root: string): {
   /** Removes the file and leaves a 13-byte `deleted_<uuid>` in its place. */
   remove(localId: string, place?: FixturePlace): void
 } {
+  // The account's own home, from the user database: a test or a benchmark moves HOME, which homedir() follows.
+  const asked = resolve(root)
+  for (const real of claudeStoreRoots(process.platform, process.env, userInfo().homedir)) {
+    const inside = relative(real.root, asked)
+    if (inside.split(sep)[0] !== '..' && !isAbsolute(inside)) {
+      throw new Error('the Claude app fixture never writes the real Claude app store')
+    }
+  }
   const org = (place: FixturePlace = {}): string => {
     const folder = join(root, place.account ?? ACCOUNT, place.org ?? ORG)
     mkdirSync(folder, { recursive: true })
