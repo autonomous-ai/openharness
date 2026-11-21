@@ -44,6 +44,17 @@ function canonical(path: string): string {
   return process.platform === 'darwin' || process.platform === 'win32' ? named.toLowerCase() : named
 }
 
+// The env as this module was loaded: tier A empties XDG_CONFIG_HOME, APPDATA and LOCALAPPDATA before it makes a fixture,
+// which must not take the store those named off the refused list.
+const LOADED_ENV = { ...process.env }
+
+/** Every root the account's own store may have: from the env as loaded, the env now, and no env (the profile's
+ *  defaults). The account's own home, from the user database: a test or a benchmark moves HOME, which homedir() follows. */
+function realRoots(): string[] {
+  const home = userInfo().homedir
+  return [LOADED_ENV, process.env, {}].flatMap((env) => claudeStoreRoots(process.platform, env, home).map(({ root }) => root))
+}
+
 /** A store of the Claude app's in `root`, a folder the caller made: never a real one. */
 export function claudeAppFixture(root: string): {
   readonly root: string
@@ -55,10 +66,9 @@ export function claudeAppFixture(root: string): {
   /** Removes the file and leaves a 13-byte `deleted_<uuid>` in its place. */
   remove(localId: string, place?: FixturePlace): void
 } {
-  // The account's own home, from the user database: a test or a benchmark moves HOME, which homedir() follows.
   const asked = canonical(root)
-  for (const real of claudeStoreRoots(process.platform, process.env, userInfo().homedir)) {
-    const inside = relative(canonical(real.root), asked)
+  for (const real of realRoots()) {
+    const inside = relative(canonical(real), asked)
     if (inside.split(sep)[0] !== '..' && !isAbsolute(inside)) {
       throw new Error('the Claude app fixture never writes the real Claude app store')
     }
