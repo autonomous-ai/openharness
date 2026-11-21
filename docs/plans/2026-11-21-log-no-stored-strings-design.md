@@ -55,6 +55,19 @@ From harness-pm (2026-11-21), for the user:
    its body (windows-e2e is the PR's own CI, not a dispatch); a peer's `p2p_abort` reason is dropped where it arrives,
    so the backend metric says `peer_aborted`. The temporary pending mechanism is removed whole by the last task.
 
+7. **The hash is keyed per process** (after the final review, 2026-11-21): an unsalted SHA-256 prefix of a guessable
+   value (a path under `/Users/<name>`, a short name) can be confirmed by anyone holding an exported log. `hashOf` is an
+   HMAC-SHA-256 with a random key made once per process, held in memory only: no file, nothing exported. The same
+   text reads the same within one process, which is what reading one log needs; across processes and restarts it does
+   not. A short guessable value takes a fixed word instead (a grid's name: "a grid"); the backend the daemon dials is
+   named in fixed words ("the production backend" / "another backend"), the same in every process. The e2e
+   hooks-stayed-inside check needs no key: it counts each core's hook files against the root's.
+8. **The Hermes hook entries stay reachable outside the log**: the daemon's line says to run `harness hooks hermes`,
+   which prints the exact entries on the person's own terminal (a noun-first command with the engine as its argument;
+   other engines are refused, Harness writes their hooks itself).
+9. **A failed foreground start** (`harness start -f`, whose output is the daemon's log under launchd and systemd)
+   prints the error's kind and fixed words; every other command's failure prints on its terminal as on `main`.
+
 From the audit (earlier): serial port names may stay (a device's name, not personal content).
 
 ## Approaches
@@ -86,9 +99,9 @@ One way per kind of content, through `lib/log.ts` (already in the core's process
   literal union of fixed words in its type (an `ended.reason` of `'closed' | 'timeout'`), the line keeps it as it is
   and its behaviour test pins that the words are fixed.
 - **A path, URL or a person-chosen label** (a device's name): dropped, or replaced by a fixed word for what it is
-  ("the data folder", "the lean bundle"), or by a hash (proposed `hashOf(text: string): string`, the first 8 hex of
-  its SHA-256, as `sid` hashes an OpenClaw key) where telling two apart helps debugging. A device keeps its
-  fingerprint (`fp`), which lines already carry.
+  ("the data folder", "the lean bundle"), or by a tag (`hashOf(text: string): string`, 8 hex of an HMAC keyed once
+  per process, Decision 7) where telling two apart within a run helps debugging. A device keeps its fingerprint
+  (`fp`), which lines already carry.
 - **Process output:** its byte length or line count and the exit code or signal, never a line of it.
 - **A URL whose host matters** (the backend the daemon dials): a fixed word or the hash; never the URL.
 
