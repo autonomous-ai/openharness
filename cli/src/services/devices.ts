@@ -2251,8 +2251,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // own machine instead of being looked for in this computer's registry.
     routeSend: async (agentId, text): Promise<SendResult> => {
       const sent = fleet?.routeSend(agentId, text) ?? { ok: false as const, machine: '', reason: NO_AGENT_LIST }
+      // The refused machine's name stays in the reply: the fleet's router logs that machine by its id.
       log(`[route] ⌘K → ${sid(agentId)} · bytes=${Buffer.byteLength(text, 'utf8')}`
-        + (sent.ok ? '' : ` · REFUSED: ${codeOrLength(sent.reason)}${sent.machine ? ` (${sent.machine})` : ''}`))
+        + (sent.ok ? '' : ` · REFUSED: ${codeOrLength(sent.reason)}`))
       return sent
     },
     // The Wi-Fi device borrows the dial's walk along the desk and its stroke, until it is one of the devices.

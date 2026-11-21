@@ -23,7 +23,7 @@ import { Ledger, ledgerPath, type Started } from '../agentClient/ledger.js'
 import type { CoreApi, ServiceRequests } from '../core/api.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
 import { agentSettingsPath, readAgentSettings } from '../lib/agentSettings.js'
-import { codeOrLength, errorKind } from '../lib/log.js'
+import { codeOrLength, errorKind, sid } from '../lib/log.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { watchSettingFile } from '../messages/settingWatch.js'
 import { createHachiWakes, type HeardState, type WakeChild } from './hachiWakes.js'
@@ -168,7 +168,8 @@ export function startHachi(core: CoreApi, given: Partial<HachiDeps> = {}): { sto
       current.ids = named
       current.renewAt = deps.now() + RENEW_MS
     } catch (error) {
-      deps.log(`[hachi] could not follow what Hachi started on ${names(machineId, core.daemon.machineId())}: ${errorKind(error)}. Asked again at the next look.`)
+      // By the machine's id: its name is a person's, or the computer's, and Export logs sends the log off the machine.
+      deps.log(`[hachi] could not follow what Hachi started on ${sid(machineId)}: ${errorKind(error)}. Asked again at the next look.`)
       unfollow(key)
     }
   }
