@@ -204,7 +204,7 @@ describe('parseObservedHook: title', () => {
     vi.advanceTimersByTime(60_000)
     expect(log.mock.calls).toEqual([
       ['[devices] a paneless hook event was refused; more are counted once a minute'],
-      ['[devices] paneless hook events in the last minute: 1 refused, 0 over the rate, 0 with no devices process'],
+      ['[devices] paneless hook events in the last minute: 1 refused, 0 over the rate, 0 with no devices process, 0 handled without a line'],
     ])
     expect(JSON.stringify(log.mock.calls)).not.toMatch(/secret/)
   })
@@ -216,8 +216,8 @@ describe('createObservedHook', () => {
   const REFUSED = '[devices] a paneless hook event was refused; more are counted once a minute'
   const OVER = '[devices] a paneless hook event was dropped: over 20 a second for its session; more are counted once a minute'
   const NO_DEVICES = '[devices] a paneless hook event was dropped: no devices process; more are counted once a minute'
-  const minute = (refused: number, over: number, none: number): string =>
-    `[devices] paneless hook events in the last minute: ${refused} refused, ${over} over the rate, ${none} with no devices process`
+  const minute = (refused: number, over: number, none: number, unnoted = 0): string =>
+    `[devices] paneless hook events in the last minute: ${refused} refused, ${over} over the rate, ${none} with no devices process, ${unnoted} handled without a line`
   // What a session said, where it runs and which engine it is stay out of the log.
   const quiet = (log: ReturnType<typeof vi.fn>): void => {
     expect(JSON.stringify(log.mock.calls)).not.toMatch(/s1|s2|secret|\/work|\.jsonl|ghostty|claude/)
@@ -289,7 +289,8 @@ describe('createObservedHook', () => {
     hook.onObserved({ ...full, sessionId: 's2' })
     expect(log.mock.calls).toEqual([[REFUSED], [OVER], [NO_DEVICES]])
     vi.advanceTimersByTime(60_000)
-    expect(log.mock.calls[3]).toEqual([minute(1, 1, 1)])
+    // 23 handled in the second, 3 past the 20 noted.
+    expect(log.mock.calls[3]).toEqual([minute(1, 1, 1, 3)])
     quiet(log)
   })
 
@@ -310,6 +311,24 @@ describe('createObservedHook', () => {
     expect(hook.onObserved({ nope: 1 })).toBe('invalid')
     expect(note).toHaveBeenCalledTimes(20)
     expect(JSON.stringify(note.mock.calls)).not.toMatch(/secret|\/work|\.jsonl/)
+  })
+
+  // Each session's rate bounds only its own lines: 1024 sessions at 20 a second each were 20,480 lines a second.
+  it('notes at most 20 events a second across sessions, and counts the rest in the minute\'s line', () => {
+    vi.useFakeTimers()
+    let clock = 0
+    const note = vi.fn()
+    const log = vi.fn()
+    const hook = createObservedHook({ forward: () => true, now: () => clock, note, log })
+    for (let i = 0; i < 30; i += 1) expect(hook.onObserved({ ...full, sessionId: `s${i % 3}` })).toBe('ok')
+    expect(note).toHaveBeenCalledTimes(20)
+    expect(log).not.toHaveBeenCalled()
+    clock += 1000
+    expect(hook.onObserved({ ...full, sessionId: 's3' })).toBe('ok')
+    expect(note).toHaveBeenCalledTimes(21)
+    vi.advanceTimersByTime(60_000)
+    expect(log.mock.calls).toEqual([[minute(0, 0, 0, 10)]])
+    quiet(log)
   })
 
   it('forwards a valid event and answers ok', () => {
