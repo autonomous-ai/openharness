@@ -279,6 +279,31 @@ void main() {
     expect(tauriUpdatePublicKey, conf['plugins']['updater']['pubkey']);
   });
 
+  // Only tests hand the checks another key, so a release build trusts the
+  // pinned one alone. App code may forward its own `tauriPublicKey` parameter:
+  // its callers are checked here too, and every such parameter defaults to the
+  // pinned key.
+  test('app code trusts no other Tauri key', () {
+    final passed = RegExp(r'\btauriPublicKey\s*:\s*([^,;)}]+)');
+    final defaulted = RegExp(r'\b_?tauriPublicKey\s*=\s*([^,;)}]+)');
+    final offenders = <String>[];
+    for (final file in Directory('lib').listSync(recursive: true)) {
+      if (file is! File || !file.path.endsWith('.dart')) continue;
+      final source = file.readAsStringSync();
+      for (final (pattern, allowed) in [
+        (passed, 'tauriPublicKey'),
+        (defaulted, 'tauriUpdatePublicKey'),
+      ]) {
+        for (final match in pattern.allMatches(source)) {
+          if (match[1]!.trim() != allowed) {
+            offenders.add('${file.path}: ${match[0]}');
+          }
+        }
+      }
+    }
+    expect(offenders, isEmpty);
+  });
+
   test('BLAKE2b-512 of bytes and of a file agree', () async {
     const abc =
         'ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d1'
