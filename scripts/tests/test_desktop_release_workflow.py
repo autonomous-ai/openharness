@@ -34,6 +34,30 @@ def needs(job):
     return set(re.search(r"(?m)^    needs: \[(.+)\]$", job).group(1).split(", "))
 
 
+def checkout(job):
+    """The paths a job's sparse checkout lists."""
+    listed = re.search(r"(?m)^          sparse-checkout: \|\n((?:            .+\n)+)", job).group(1)
+    return {line.strip().lstrip("/") for line in listed.splitlines()}
+
+
+def modules(path):
+    """path and the repository modules it loads, and theirs in turn, in each way the release scripts load one."""
+    loaded, pending = set(), [Path(path)]
+    while pending:
+        path = pending.pop()
+        if path.as_posix() in loaded:
+            continue
+        loaded.add(path.as_posix())
+        text = (ROOT / path).read_text()
+        pending += [path.parent / name for name in re.findall(r"""with_name\(['"]([\w-]+\.py)['"]\)""", text)]
+        pending += [path.parent / f"{name}.py" for name in re.findall(r"""\bsibling\(['"]([\w-]+)['"]\)""", text)]
+        pending += [Path(name) for name in re.findall(r"""ROOT / ['"]([\w/-]+\.py)['"]""", text)]
+        # The GCS checks put scripts/tests/ on sys.path for the fixture they share with the tests.
+        pending += [path.parent / "tests" / f"{name}.py" for name in re.findall(r"(?m)^from (\w+) import", text)
+                    if (ROOT / path.parent / "tests" / f"{name}.py").is_file()]
+    return loaded
+
+
 class ReleaseDesktopWorkflowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -125,6 +149,20 @@ class ReleaseDesktopWorkflowTests(unittest.TestCase):
                 # They check the Linux signatures against the key Harness Device pins.
                 self.assertIn("            /device-app/src-tauri/tauri.conf.json\n", job)
         self.assertLessEqual({"sign-linux", "upload-linux"}, needs(self.job("cleanup")))
+
+    def test_the_publication_check_checks_out_every_module_it_loads_and_every_upload_script_it_runs(self):
+        # Only a dispatched run uses this checkout, and the only real runs of the create-only uploads, seal and promote
+        # are there: a file left out fails them with FileNotFoundError.
+        job = self.job("publication-test")
+        checks = re.findall(r"python3 (scripts/[\w-]+\.py)", job)
+        self.assertEqual(sorted(checks), ["scripts/check-desktop-candidate-gcs.py", "scripts/check-desktop-publication-gcs.py"])
+        needed = set().union(*(modules(check) for check in checks))
+        # Reached only through the fixture and the publisher, so a walk that stopped at the checks would miss it.
+        self.assertIn("scripts/verify-desktop-release.py", needed)
+        # The scripts whose gcs_cp and upload line the publication check runs, from desktop/scripts/.
+        uploads = re.findall(r'"([\w-]+\.sh)"', (ROOT / "scripts/check-desktop-publication-gcs.py").read_text())
+        needed |= {f"desktop/scripts/{name}" for name in uploads}
+        self.assertEqual(sorted(needed - checkout(job)), [])
 
 
 if __name__ == "__main__":
