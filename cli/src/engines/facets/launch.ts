@@ -186,7 +186,7 @@ export interface ResumeRepairContract {
   backup: string
   temporary: string
   /** How the person, and the daemon's log, name the history file, the history and what was repaired. */
-  names: { file: string; history: string; items: string }
+  names: { record: string; history: string; items: string }
 }
 
 /**
