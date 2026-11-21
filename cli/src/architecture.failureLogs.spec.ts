@@ -691,7 +691,17 @@ it.each([
   "console.log(`[x] paired with ${machineName}`)",
   "log(`[x] shared by ${share.machine}`)",
   "log(`[x] shared by ${peerMachineName}`)",
+  // A helper is trusted by the module that holds it, not by its name.
+  "const hashOf = (text: string) => text; console.log(`[x] ${hashOf(file)}`)",
+  "function errorKind(error: unknown) { return String(error) } try { run() } catch (error) { console.error(`[x] ${errorKind(error)}`) }",
+  "import { sid } from './agentIds.js'; console.log(`[x] ${sid(transcriptPath)}`)",
+  "import { codeOrLength as sid } from './lib/log.js'; import { preview as hashOf } from './lib/log.js'; console.log(`[x] ${hashOf(message)}`)",
+  "const Number = (value: unknown) => value; console.log(`[x] ${Number(stderr)}`)",
 ])('finds %s', (code) => expect(failureLogs(code)).not.toEqual([]))
+
+/** The safe helpers, imported as the daemon's files import them: each is trusted from its own module alone. */
+const withHelpers = (code: string): string => "import { codeOrLength, errorKind, hashOf, sid } from './lib/log.js'; "
+  + "import { serialPortName } from './cable/serial.js'; import { backendName } from './config/env.js'; " + code
 
 it.each([
   "try { run() } catch (error) { console.error(`[x] save failed · ${errorKind(error)}`) }",
@@ -739,7 +749,13 @@ it.each([
   "function openOf(p: unknown) { return { session: { engine: 'codex', transcriptPath: p } } } const ask = openOf(payload); console.warn(`[engine ${ask.session.engine}] LIVE_OPEN_FAILED`)",
   "console.warn(`[x] ${Boolean(err.reason) ? 'not a lock this CLI made' : 'held'}`)",
   "console.warn(`[x] ${error instanceof HookPreparationHeld ? error.hold : errorKind(error)}`)",
-])('passes %s', (code) => expect(failureLogs(code)).toEqual([]))
+  "console.log(`[backend] connected · ${backendName(this.url)}`)",
+])('passes %s', (code) => expect(failureLogs(withHelpers(code))).toEqual([]))
+
+it('trusts a helper its own module calls', () => {
+  expect(failureLogs("export function errorKind(error: unknown): string { return typeof error } "
+    + "process.on('uncaughtException', (error) => { writeSync(fd, `[x] stopped: ${errorKind(error)}\\n`) })", 'lib/log.ts')).toEqual([])
+})
 
 it('no daemon log line carries an error\'s words, a stored string, process output, a path or a URL, or hides its kind', () => {
   expect(daemonHits(), 'A daemon log line names a failure by its kind, '
