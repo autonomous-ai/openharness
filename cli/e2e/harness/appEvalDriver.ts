@@ -28,7 +28,7 @@ import { CAROUSEL_REFRESH_MS, DialCarousel, type DialMessage } from '../../src/t
 import { writeExecutable } from '../../src/testing/executableFixture.js'
 import { beginCost, costEnv } from './appEvalCost.js'
 import { writeAppCodex } from './codexAppCli.js'
-import { CLI_ROOT, IsolatedDaemon, until } from './daemon.js'
+import { IsolatedDaemon, SOURCES_CLI, until } from './daemon.js'
 import { Desk, devicesPids } from './desk.js'
 import { FakeBackend, type FakeMachine } from './fakeBackend.js'
 import type { FakeDial } from './fakeDial.js'
@@ -58,8 +58,9 @@ const CHILD_END_MS = 5_000
 const MOD_READY_MS = 36_000
 /** What a scenario refused before its world began saw. */
 const NOTHING_SEEN: Seen = { frames: [], faces: [], commands: [], deliveries: [], steps: [] }
-// How the real CLI is started: the run's bundle when there is one (E2E_BUNDLE), as the daemon runs.
-const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : ['--import', 'tsx', 'src/cli.ts']
+// How the real CLI is started: the run's bundle when there is one (E2E_BUNDLE), as the daemon runs. Either runs from any
+// folder, so each run here works in the daemon's root, where the cost counts what a scenario leaves running.
+const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : SOURCES_CLI
 
 /** One run of the recording open: the command it stands for, and whether it exited 0. */
 export type OpenRun = Omit<Seen['commands'][number], 'at'>
@@ -341,7 +342,7 @@ class World implements TierBWorld {
     if (this.closed) return
     if (!this.watch) {
       this.watch = spawn(process.execPath, [...CLI_ENTRY, 'hardware', 'watch', '--json'], {
-        cwd: CLI_ROOT, env: { ...this.d.env, TMUX_PANE: '' }, stdio: ['pipe', 'ignore', 'ignore'],
+        cwd: this.d.root, env: { ...this.d.env, TMUX_PANE: '' }, stdio: ['pipe', 'ignore', 'ignore'],
       })
       this.children.push(this.watch)
     }

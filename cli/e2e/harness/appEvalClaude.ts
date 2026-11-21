@@ -26,13 +26,13 @@ import { fetchOverSocket } from '../../src/lib/localTransport.js'
 import { claudeAppFixture } from '../../src/testing/claudeAppFixture.js'
 import type { SessionDef, SessionKey } from '../../src/testing/dialAppEval/types.js'
 import { inside, speak, type AppSteps, type OpenRun, type TierBWorld } from './appEvalDriver.js'
-import { CLI_ROOT, until, type IsolatedDaemon } from './daemon.js'
+import { SOURCES_CLI, until, type IsolatedDaemon } from './daemon.js'
 import { inboxPoll } from './modInbox.js'
 import { Outside } from './outsideAgent.js'
 
 const LINUX = process.platform === 'linux'
-// How the real CLI is started: the run's bundle when there is one (E2E_BUNDLE), as the daemon runs.
-const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : ['--import', 'tsx', 'src/cli.ts']
+// How the real CLI is started: the run's bundle when there is one (E2E_BUNDLE), as the daemon runs, from any folder.
+const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : SOURCES_CLI
 /** For a hook the fake ran to be in its log. */
 const HOOK_MS = 30_000
 /** For a session's SessionEnd hook as it leaves: past it, its process goes all the same. */
@@ -102,7 +102,7 @@ function appOf(world: TierBWorld): FakeApp {
   const state = stateOf(world)
   if (state.app) return state.app
   // Only the app's lifetime: what it does is in this file.
-  const child = spawn(process.execPath, ['-e', 'process.stdin.resume()'], { env: world.d.env, stdio: ['pipe', 'ignore', 'ignore'] })
+  const child = spawn(process.execPath, ['-e', 'process.stdin.resume()'], { cwd: world.d.root, env: world.d.env, stdio: ['pipe', 'ignore', 'ignore'] })
   world.children.push(child)
   const app: FakeApp = { process: child, live: new Map(), starting: new Map(), closed: false }
   // Only the links run since it started reach it.
@@ -241,7 +241,7 @@ function installMod(d: IsolatedDaemon): void {
   const settings = join(d.env.HOME!, '.claude', 'settings.json')
   const current = JSON.parse(readFileSync(settings, 'utf8')) as { enabledPlugins?: Record<string, boolean>; hooks?: Record<string, unknown[]> }
   const quoted = (word: string): string => `'${word.replaceAll("'", "'\\''")}'`
-  const asked = `cd ${quoted(CLI_ROOT)} && ${[process.execPath, ...CLI_ENTRY, 'device', 'claude', 'asked'].map(quoted).join(' ')} >/dev/null 2>&1`
+  const asked = `${[process.execPath, ...CLI_ENTRY, 'device', 'claude', 'asked'].map(quoted).join(' ')} >/dev/null 2>&1`
   writeFileSync(settings, JSON.stringify({
     ...current,
     enabledPlugins: { ...current.enabledPlugins, 'harness-device@openharness': true },
@@ -280,7 +280,7 @@ function devicesSocket(world: TierBWorld): Promise<string> {
   if (socket) return socket
   socket = (async () => {
     installMod(d)
-    const child = spawn(process.execPath, [...CLI_ENTRY, 'device', 'claude', 'link', '--json'], { cwd: CLI_ROOT, env: d.env, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(process.execPath, [...CLI_ENTRY, 'device', 'claude', 'link', '--json'], { cwd: d.root, env: d.env, stdio: ['ignore', 'pipe', 'pipe'] })
     world.children.push(child)
     let said = ''
     let stderr = ''
