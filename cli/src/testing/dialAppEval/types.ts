@@ -11,6 +11,8 @@ export type SessionKey = string
 export type Label = string
 
 export const DIMENSIONS: readonly Dimension[] = ['D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D8']
+/** The wire's name for an app's page, which is its app id on the host too (hostDetect.ts): the ChatGPT app's threads are Codex's. */
+export const PAGE: Readonly<Record<App, string>> = { claude: 'claude', chatgpt: 'codex' }
 
 /** Each dimension's weight in an app's score: voice send counts most, since a wrong-session send is the worst failure. */
 export const WEIGHTS: Readonly<Record<Dimension, number>> = {
@@ -179,7 +181,6 @@ export interface EvalDriver {
   step(step: Exclude<Step, { kind: 'wait' }>): Promise<void>
   /** Let the world run up to ms, or until `until` holds. */
   settle(ms: number, until?: () => boolean): Promise<void>
-  now(): number
   /** Still read after stop(). */
   seen(): Seen
   gaps(): string[]

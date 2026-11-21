@@ -2,16 +2,15 @@
 // Task 5). Evidence names session keys and times only, never a title, a folder or spoken text, and lists only what was
 // observed: a driver that observes nothing leaves it empty, so its probes fail.
 import { windowClasses } from '../../cable/hosts/frontApp.js'
+import { APP_BUNDLES } from '../../cable/hosts/hostDetect.js'
 import { observedTitle } from '../../cable/hosts/observedTitle.js'
 import { WINDOWS_APPS } from '../../cable/hosts/windowsRaise.js'
-import { agentIdOf, THRESHOLDS, type App, type Check, type CheckResult, type Platform, type Scenario, type Seen,
+import { CAROUSEL_TILES } from '../dialCarousel.js'
+import { agentIdOf, PAGE, THRESHOLDS, type App, type Check, type CheckResult, type Platform, type Scenario, type Seen,
   type SessionDef, type SessionKey, type Tier, type Until, type WrongSend } from './types.js'
 
-/** The firmware's carousel holds 16 tiles (cable_client.h `CABLE_MAX_AGENTS`). */
-const RING_CAP = 16
 /** A failing check's evidence stays readable in the report, however long the scenario ran. */
 const MAX_EVIDENCE = 20
-const BUNDLES: Readonly<Record<App, string>> = { claude: 'com.anthropic.claudefordesktop', chatgpt: 'com.openai.codex' }
 
 /** [full, half], inclusive (≤); never seen scores 0. */
 export function graded(value: number | null, threshold: readonly [number, number]): 0 | 0.5 | 1 {
@@ -26,8 +25,6 @@ interface Ring { at: number; page: string; rows: Array<{ id: string; name: strin
 
 type CheckOf<K extends Check['kind']> = Extract<Check, { kind: K }>
 
-/** The wire's name for an app's page: the ChatGPT app's threads are Codex's. */
-const pageOf = (app: App): string => (app === 'chatgpt' ? 'codex' : 'claude')
 const ratio = (part: number, whole: number): number => (whole === 0 ? 1 : part / whole)
 const bounded = (lines: string[]): string[] =>
   lines.length <= MAX_EVIDENCE ? lines : [...lines.slice(0, MAX_EVIDENCE), `… ${lines.length - MAX_EVIDENCE} more`]
@@ -94,7 +91,7 @@ const within = (at: number, w: Window): boolean => at >= w.from && at < w.to
 
 function ringParts(check: CheckOf<'ring'>, world: World, w: Window | undefined): Part[] {
   const expected = check.expect.map((key) => agentIdOf(world.session(key)))
-  const page = pageOf(check.page)
+  const page = PAGE[check.page]
   const all = world.rings()
   const lists = w ? all.filter((r) => r.page === page && within(r.at, w)) : []
   const last = lists.at(-1)
@@ -129,7 +126,7 @@ function ringParts(check: CheckOf<'ring'>, world: World, w: Window | undefined):
       ['precision', ratio(new Set(ids.filter((id) => expected.includes(id))).size, ids.length)],
       ['order', ratio(expected.filter((id, i) => ids[i] === id).length, expected.length)],
       ['names', ratio(right.length, present.length)],
-      ['cap', ids.length <= RING_CAP ? 1 : 0],
+      ['cap', ids.length <= CAROUSEL_TILES ? 1 : 0],
       ['archived', archived.length === 0 ? 1 : 0],
     ]
     for (const [part, score] of scored) parts.push({ part, score, timed: false, evidence })
@@ -232,14 +229,12 @@ function linkOf(session: SessionDef): string | undefined {
  */
 function fronts(argv: string[], platform: Platform, app: App, link: string | undefined): boolean {
   const exe = (argv[0] ?? '').split(/[\\/]/).at(-1)!.replace(/\.exe$/, '')
-  const bundle = BUNDLES[app]
+  const id = PAGE[app]
+  const bundle = APP_BUNDLES[id]!
   switch (platform) {
     case 'darwin': return argv.some((a, i) => a === '-b' && argv[i + 1] === bundle)
-    case 'linux': {
-      const id = pageOf(app)
-      return (exe === 'xdg-open' && link !== undefined && argv.includes(link))
-        || (exe === 'raise' && argv.slice(1).some((a) => a === id || windowClasses(id).includes(a)))
-    }
+    case 'linux': return (exe === 'xdg-open' && link !== undefined && argv.includes(link))
+      || (exe === 'raise' && argv.slice(1).some((a) => a === id || windowClasses(id).includes(a)))
     case 'win32': {
       const program = WINDOWS_APPS[bundle]!.toLowerCase()
       return exe === 'harness-pty' && ((argv[1] === 'open-link' && link !== undefined && argv[2] === link)
@@ -309,7 +304,7 @@ const STATE_MARKS = { working: THRESHOLDS.working, 'needs-you': THRESHOLDS.needs
 function stateParts(check: CheckOf<'state'>, world: World, w: Window | undefined): Part[] {
   const session = world.session(check.session)
   const id = agentIdOf(session)
-  const page = pageOf(session.app)
+  const page = PAGE[session.app]
   const rings = world.rings().filter((r) => r.page === page)
   // Every session's changes, not only this one's: the evidence lists those in the window, so a probe on a session that
   // never changes still says what the driver saw.
