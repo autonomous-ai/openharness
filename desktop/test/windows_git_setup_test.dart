@@ -51,6 +51,16 @@ void main() {
     expect(setup().gitIsThere, isFalse);
   });
 
+  // A relative PATH entry is a folder of the app's working folder: a git.exe
+  // put there would stop setup from installing Git.
+  test('a git.exe by a relative PATH entry is not Git', () {
+    final there = setup(
+      environment: {'USERPROFILE': home.path, 'PATH': r'tools;.;\tools'},
+      files: {r'tools\git.exe', r'.\git.exe', r'\tools\git.exe'},
+    ).gitIsThere;
+    expect(there, isFalse);
+  });
+
   test('installs it for this user alone, asking nothing', () async {
     await setup().start();
     expect(runs.single.first, 'winget');
