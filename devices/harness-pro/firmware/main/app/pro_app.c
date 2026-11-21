@@ -328,6 +328,7 @@ void pro_app_link(bool up, const char *machine)
 void pro_app_agents(const pro_agent_row_t *rows, int n, bool machine_view, bool tab_open)
 {
     pro_app_lock();
+    pod_model_clock(&s_pod.model, ms());   // a pick's wait is timed on this clock, which otherwise stands still while the glass sleeps
     int m = 0;
     memset(s_info, 0, sizeof s_info);
     for (int i = 0; i < n && m < POD_AGENTS_MAX; i++) {
