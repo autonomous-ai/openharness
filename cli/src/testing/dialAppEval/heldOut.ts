@@ -3,7 +3,7 @@
 //
 // Scored and reported apart, never in the headline score. A function, not a list: the catalog imports it and it uses
 // the catalog's builders, so it is called once the catalog has them.
-import { chatgptGhost, claudeGhost, claudeSession, claudeSessions, keys, listed, S, scenario, thread, threads, titleOf } from './catalog.js'
+import { chatgptGhost, claudeGhost, claudeSession, claudeSessions, keys, listed, S, scenario, threads, titleOf } from './catalog.js'
 import type { Scenario } from './types.js'
 
 export function heldOut(): Scenario[] {
@@ -56,14 +56,17 @@ export function heldOut(): Scenario[] {
     }, true),
     scenario({
       id: 'XH2', app: 'chatgpt', title: 'A thread opened in the app while the dial shows the Claude app\'s page: the dial moves to it',
-      dims: ['D2'], sessions: [claudeSession('a', 60 * S), thread('t1', 60 * S), chatgptGhost], world: { front: 'claude' },
+      dims: ['D2'], sessions: [claudeSession('a', 60 * S), ...threads(['t1', 't2']), chatgptGhost], world: { front: 'claude' },
+      // The ChatGPT page opens on its first tile, t1: only the title line can land the dial on t2.
       steps: [
         { kind: 'claude.write', sessions: ['a'] },
-        { kind: 'codex.write', sessions: ['t1'] },
+        { kind: 'codex.write', sessions: ['t1', 't2'] },
+        ...listed('claude', ['a']),
         { label: 'front', kind: 'front', app: 'chatgpt' },
-        { label: 'title', kind: 'thread', title: titleOf('t1') },
+        ...listed('chatgpt', ['t1', 't2']),
+        { label: 'title', kind: 'thread', title: titleOf('t2') },
       ],
-      checks: [{ id: 'focus', kind: 'focus', dim: 'D2', session: 't1', after: 'title' }],
+      checks: [{ id: 'focus', kind: 'focus', dim: 'D2', session: 't2', after: 'title' }],
       probes: [{ id: 'focus', kind: 'focus', dim: 'D2', session: 'z', after: 'title' }],
     }, true),
     scenario({
