@@ -248,7 +248,7 @@ export function startPtyUpdater(opts: {
         // A busy lock is no failed check: the payload is good and waiting, and the next tick tries again. A lock this CLI
         // did not make is said in fixed words: its `reason` quotes the lock's path and an error's message.
         if (!(error instanceof SpawnLockBusyError)) throw error
-        once('busy', version, () => d.log(`[update] terminal host ${version} is ready but the daemon spawn lock is ${error.owner ? `held (${describeSpawnLockOwner(error.owner)})` : Boolean(error.reason) ? 'not a lock this CLI made — remove it by hand' : 'held by an unknown process'} — trying again next check`))
+        once('busy', version, () => d.log(`[update] terminal host ${version} is ready but the daemon spawn lock is ${error.owner ? `held (${describeSpawnLockOwner(error.owner)})` : error.reason ? 'not a lock this CLI made — remove it by hand' : 'held by an unknown process'} — trying again next check`))
       })
     } catch (error) {
       d.error(`[update] terminal host check failed (will retry): ${errorKind(error)}`)

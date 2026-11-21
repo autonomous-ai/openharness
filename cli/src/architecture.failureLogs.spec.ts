@@ -27,13 +27,13 @@
  * forwarder's: a plain parameter handed on bare by a function whose callers are checked where they call it, one bound
  * to a logger's name (`log: (line) => …`, `deps.log ?? (…)`) or a function of the file's own. And when it prints whole
  * a property of a local given a function of the file's own's result (awaited or not) or an object literal, and the
- * value there is found by the rules above. A `.length` or a `.size`, a type test, a comparison, and what these
- * return carry no words: `errorKind`, `codeOrLength`, `hashOf` and `sid` (lib/log.ts), `serialPortName`
- * (cable/serial.ts, the one way a serial port's name is logged) and `backendName` (config/env.ts, which backend a URL
- * names, in fixed words), each imported from its module under its own name or called in that module; and Node's
- * `Number`, `Boolean` and `Buffer.byteLength` where the file declares no such name. What a function of the file's own logs of a parameter (a function, a
- * `const` one, a method called on `this`), and what a `writeSync` writes, are found the same way, but for the catch
- * they run in.
+ * value there is found by the rules above. A `.length` or a `.size`, a type test, a comparison, a `?:`'s condition (it
+ * is tested, never printed), and what these return carry no words: `errorKind`, `codeOrLength`, `hashOf` and `sid`
+ * (lib/log.ts), `serialPortName` (cable/serial.ts, the one way a serial port's name is logged) and `backendName`
+ * (config/env.ts, which backend a URL names, in fixed words), each imported from its module under its own name or
+ * called in that module; and Node's `Number`, `Boolean` and `Buffer.byteLength` where the file declares no such name.
+ * What a function of the file's own logs of a parameter (a function, a `const` one, a method called on `this`), and
+ * what a `writeSync` writes, are found the same way, but for the catch they run in.
  *
  * Its limits: a logger under another name; text carried two locals away or through a local of the function that logs
  * it; a local whose value is content of a name the rules read (`const shown = basename(file)`), never followed; what a
@@ -464,7 +464,7 @@ const firstPrinted = (parts: readonly ts.Node[], whole: boolean, hand: Hand): st
 /**
  * What [node] prints of an error or of content, or undefined. [whole] says its value is printed as it is (an argument,
  * a template's part, a branch, a method's receiver): an error there is printed whole, and so is a name of content.
- * Elsewhere (a property read, a condition) only an error's words can be.
+ * Elsewhere (a property read, the left side of `&&`) only an error's words can be.
  */
 function printed(node: ts.Node, whole: boolean, hand: Hand): string | undefined {
   const inner = ts.isExpression(node) ? unwrap(node) : node
@@ -506,7 +506,8 @@ function printed(node: ts.Node, whole: boolean, hand: Hand): string | undefined 
   if (ts.isArrowFunction(inner) || ts.isFunctionExpression(inner)) return first(returnsOf(inner), whole)
   if (ts.isNewExpression(inner)) return first(inner.arguments ?? [], true)
   if (ts.isTemplateExpression(inner)) return first(inner.templateSpans.map((span) => span.expression), true)
-  if (ts.isConditionalExpression(inner)) return printed(inner.condition, false, hand) ?? first([inner.whenTrue, inner.whenFalse], true)
+  // A condition is tested, never printed: only a branch is.
+  if (ts.isConditionalExpression(inner)) return first([inner.whenTrue, inner.whenFalse], true)
   if (ts.isBinaryExpression(inner)) {
     const operands = OPERAND_OPERATORS.includes(inner.operatorToken.kind)
     // `&&` prints its right side whenever its left is truthy.

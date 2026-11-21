@@ -907,7 +907,7 @@ export function startSelfUpdater(opts: {
         // the swap again. Say so, or a minute of "check failed" reads as the updater being broken. A lock this CLI did
         // not make is said in fixed words: its `reason` quotes the lock's path and an error's message.
         if (!(err instanceof SpawnLockBusyError)) throw err
-        console.log(`[update] ${ready.version} is ready but the daemon spawn lock is ${err.owner ? `held (${describeSpawnLockOwner(err.owner)})` : Boolean(err.reason) ? 'not a lock this CLI made — remove it by hand' : 'held by an unknown process'} — trying again next check`)
+        console.log(`[update] ${ready.version} is ready but the daemon spawn lock is ${err.owner ? `held (${describeSpawnLockOwner(err.owner)})` : err.reason ? 'not a lock this CLI made — remove it by hand' : 'held by an unknown process'} — trying again next check`)
       })
     } catch (err) {
       console.error('[update] check failed (will retry):', errorKind(err))
