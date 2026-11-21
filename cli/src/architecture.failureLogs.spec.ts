@@ -8,21 +8,21 @@
  * reads every file of the daemon, `testing/` too (its shapes mirror the daemon's wiring), as code, so that a comment or
  * a string naming an error is no finding.
  *
- * A log call is a `console` call (`console.warn`, `console[stream]`), or a call named `log`, `warn`, `error` or
- * `info`, bare or on anything but `console` and `Math`, or a call of one picked by `??`, `||` or `?:`, or of a name a
+ * A log call is a `console` call (`console.warn`, `console[stream]`), or a call named `log`, `warn`, `error` or `info`,
+ * bare or on anything but `console` and `Math`, or a call of one picked by `??`, `||` or `?:`, or of a name a
  * parameter's default or a `const` binds to one, whose value is not thrown. An error is what a catch or an error
  * handler binds, a name on the left of `instanceof` in the expression at hand, a name spelled as one (`e`, `err`,
  * `error`, `ex`, `exception`, `…Error`, `…Err`) that is not a parameter typed `string`, and the `.cause` of any of
  * these. A log call is found when it prints an error's `.message`, `.stack`, `.reason`, `.detail`, `.stderr`,
- * `.stdout`, `.path`, `.dest`, `.cmd`, `.spawnargs` or `.toString()`, an error whole (as itself, in a template, a sum, an object, a branch, the right
- * side of `&&`, a method's receiver or what a callback returns, handed to any function but the safe ones below, or
- * built in place), or a local made from either (its initializer, or a value a `let` is given later); when it runs in a
- * catch that binds nothing; and when it says "fail" in a catch that binds one and names nothing it caught. It is
- * found, too, when it prints whole, as an identifier or a property read's last name, a name of any value that holds
- * content: process output (`stderr`, `stdout`, `output`, `…Stderr`, `…Stdout`, `…Output`), free text (`detail`,
- * `details`, `message`, `…Detail`, `…Message`), a path or URL (`path`, `cwd`, `dir`, `folder`, `file`, `home`, `url`,
- * `workspace`, `…Path`, `…Cwd`, `…Dir`, `…Folder`, `…File`, `…Home`, `…Url`, `…URL`, `…Workspace`, and constants
- * `…_PATH`, `…_DIR`, `…_FOLDER`, `…_FILE`, `…_HOME`, `…_URL`), a machine's name (`machine`, `machineName`,
+ * `.stdout`, `.path`, `.dest`, `.cmd`, `.spawnargs` or `.toString()`, an error whole (as itself, in a template, a sum,
+ * an object, a branch, the right side of `&&`, a method's receiver or what a callback returns, handed to any function
+ * but the safe ones below, or built in place), or a local made from either (its initializer, or a value a `let` is
+ * given later); when it runs in a catch that binds nothing; and when it says "fail" in a catch that binds one and names
+ * nothing it caught. It is found, too, when it prints whole, as an identifier or a property read's last name, a name of
+ * any value that holds content: process output (`stderr`, `stdout`, `output`, `…Stderr`, `…Stdout`, `…Output`), free
+ * text (`detail`, `details`, `message`, `…Detail`, `…Message`), a path or URL (`path`, `cwd`, `dir`, `folder`, `file`,
+ * `home`, `url`, `workspace`, `…Path`, `…Cwd`, `…Dir`, `…Folder`, `…File`, `…Home`, `…Url`, `…URL`, `…Workspace`, and
+ * constants `…_PATH`, `…_DIR`, `…_FOLDER`, `…_FILE`, `…_HOME`, `…_URL`), a machine's name (`machine`, `machineName`,
  * `…MachineName`); but not a module of Node's own by its default or namespace name (`path` of `node:path`), nor a
  * forwarder's: a plain parameter handed on bare by a function whose callers are checked where they call it, one bound
  * to a logger's name (`log: (line) => …`, `deps.log ?? (…)`) or a function of the file's own. And when it prints whole
@@ -35,17 +35,20 @@
  * What a function of the file's own logs of a parameter (a function, a `const` one, a method called on `this`), and
  * what a `writeSync` writes, are found the same way, but for the catch they run in.
  *
- * Its limits: a logger under another name; text carried two locals away or through a local of the function that logs
- * it; a local whose value is content of a name the rules read (`const shown = basename(file)`), never followed; what a
- * function of the file's own returns, but at a property of a local given it; a local destructured from an error or a
- * result; an error's or a value's words read by element access (`error['message']`); an `AggregateError`'s `.errors`;
- * a catch with a binding that logs without the word "fail"; a name the rules do not read (`reason`, `why`, a string
- * `error`: a syntactic rule cannot tell a literal union's fixed words from free text; `label`, which on the tree names
- * engines, runtimes and tallies in fixed words); a path read from a call (`process.cwd()`, `os.homedir()`, `tmpdir()`)
- * or from the environment's own `HOME` or `PATH`; a hold's sentence (`HookPreparationHeld`'s `hold`), which no rule
+ * Its limits: a logger under another name, or read by element access on anything but `console` (`deps[level]`); text
+ * carried two locals away or through a local of the function that logs it; a local whose value is content of a name the
+ * rules read (`const shown = basename(file)`), never followed; what a function of the file's own returns, but at a
+ * property of a local given it, and what a function handed by its name returns (`.map(describe)`); a local destructured
+ * from an error or a result; an error's or a value's words read by element access (`error['message']`); an
+ * `AggregateError`'s `.errors`; a catch with a binding that logs without the word "fail"; a name the rules do not read
+ * (`reason`, `why`, a string `error`: a syntactic rule cannot tell a literal union's fixed words from free text;
+ * `label`, which on the tree names engines, runtimes and tallies in fixed words); a path read from a call
+ * (`process.cwd()`, `os.homedir()`, `tmpdir()`) or from the environment's own `HOME` or `PATH`; what a forwarder of the
+ * file's own is handed by callers in another file; a hold's sentence (`HookPreparationHeld`'s `hold`), which no rule
  * reads and `architecture.hookHolds.spec.ts` keeps to string literals; and a value built in one file and logged in
- * another (a hold's reason, a peer's answer, a probe's result, a stream's close reason), each fixed at its sink with a
- * behaviour test (docs/plans/2026-11-21-log-no-stored-strings-plan.md).
+ * another (an admission hold's reason, `AdmissionHold` of core/engines/pendingAdmission.ts; a peer's answer; a probe's
+ * result; a stream's close reason), each fixed at its sink with a behaviour test
+ * (docs/plans/2026-11-21-log-no-stored-strings-plan.md).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, posix } from 'node:path'
