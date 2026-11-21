@@ -28,6 +28,7 @@
 //
 // A prompt can carry directives that script the turn: `!slow <ms>` holds the answer back, `!until <name>` until the
 // test writes `<name>.release` in the root (a minute at most), as an agent's turn goes on while a command it runs works,
+// and answers with that file's text when it holds any, so a test can give the turn's exact last answer,
 // `!tool <command>` runs a tool call first, `!background <command>` (Claude Code) starts the command in the background as
 // its Bash tool's `run_in_background` does, as the engine's own direct child, and ends the turn while it runs, `!commentary <text>` (Codex) says what it is about to do in a message of its own first,
 // `!grow <MiB>` appends that much compaction history
@@ -2085,8 +2086,15 @@ export async function run(engine, config = {}, { native = false } = {}) {
       if (!open) return
     }
     if (directive?.[1] === 'until') {
-      await released(join(config.root, `${directive[2]}.release`))
+      const release = join(config.root, `${directive[2]}.release`)
+      await released(release)
       if (!open) return
+      let answer = ''
+      try { answer = readFileSync(release, 'utf8') } catch { /* not written within the minute */ }
+      if (answer) {
+        await finish(answer)
+        return
+      }
     }
     await finish(`answer ${turn}: ${prompt}`)
   }
