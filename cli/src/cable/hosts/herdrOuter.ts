@@ -50,7 +50,7 @@ export interface HerdrOuterDeps {
   bundleId(bundle: string): Promise<string | undefined>
   /** A tty's access time (ttyAtime); nothing when it cannot be read. */
   atime(tty: string): Promise<number | undefined>
-  /** Where Linux's `ss` is. */
+  /** Where Linux's `ss` and `ps` are: NixOS has no /bin/ps. */
   onPath: OrcaDeps['onPath']
   /** The socket inodes among a process's descriptors (procSockets); nothing when they cannot be read. */
   sockets(pid: number): Promise<readonly string[] | undefined>
@@ -226,7 +226,8 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
       if (connected === undefined) return 'sockets'
       if (connected.size) candidates = others.filter((other) => connected.has(other))
     }
-    const ttys = await output(deps.run, '/bin/ps', ['-o', 'pid=,tty=', '-p', candidates.join(',')])
+    const ps = deps.platform === 'linux' ? deps.onPath('ps') : '/bin/ps'
+    const ttys = ps ? await output(deps.run, ps, ['-o', 'pid=,tty=', '-p', candidates.join(',')]) : undefined
     if (ttys === undefined) return 'ttys'
     const ttyOf = new Map<number, string>()
     for (const line of ttys.split('\n')) {
