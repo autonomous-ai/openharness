@@ -16,6 +16,8 @@ afterEach(() => { vi.useRealTimers() })
 describe("tier A's clock", () => {
   it('settle advances to the next timer only once the world is quiet', async () => {
     installClock()
+    // Work queued ahead of the read on the thread pool holds it for many real turns, as a loaded host does.
+    const backlog = Array.from({ length: 64 }, () => promisify(pbkdf2)('eval', 'salt', 20_000, 32, 'sha256'))
     const fired: number[] = []
     // The timer is set only once a real read lands: advancing first would run the end of the settle before it.
     void readFile(fileURLToPath(import.meta.url)).then(() => {
@@ -24,6 +26,7 @@ describe("tier A's clock", () => {
     await settle(1_000, undefined, nothingInFlight)
     expect(fired).toEqual([500])
     expect(now()).toBe(1_000)
+    await Promise.all(backlog)
   })
 
   it('quiet waits for a file that is closing, the last step of every read', async () => {
