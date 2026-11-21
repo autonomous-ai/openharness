@@ -64,4 +64,12 @@ describe("tier B's gaps", () => {
     expect(driver.tierBGaps(byId('X5'), 'darwin')).toEqual([])
     expect(driver.tierBGaps(byId('X4'), 'linux')).toEqual([])
   })
+
+  it('refuses a world it does not build: no ChatGPT app installed, a Claude Code that asks a question', () => {
+    expect(() => driver.tierBGaps({ ...byId('X4'), world: { chatgptInstalled: false } }, 'darwin')).toThrow('no ChatGPT app')
+    const c7 = byId('C7')
+    const question = { ...c7, steps: c7.steps.map((step) => step.kind === 'hook' && step.event === 'needs-input' ? { ...step, asks: 'question' as const } : step) }
+    expect(() => driver.tierBGaps(question, 'darwin')).toThrow('question')
+    expect(driver.tierBGaps(c7, 'darwin')).toEqual([])
+  })
 })
