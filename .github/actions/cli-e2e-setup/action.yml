@@ -48,7 +48,13 @@ runs:
     # churn, the two-account spike) need it and its in-memory Mongo and Redis. Without them they
     # skip, and they did here until 2026-11-10: Desktop's Swarm then broke twice in production
     # behind tests whose fake backend still answered the old way.
+    #
+    # mongod comes from a cache keyed by the installed mongodb-memory-server, which picks its version: on 2026-11-16
+    # fastdl.mongodb.org answered 504 and every shard of run 43902144004 failed before a test ran. Only main saves it,
+    # as backend-cache.yml does (#2804, #2822): a cache saved on main is visible to every PR, one saved on a PR to that
+    # PR alone. The specs find it through MONGOMS_DOWNLOAD_DIR, which mongodb-memory-server reads.
     - name: Set up the real backend and its in-memory Mongo and Redis
+      id: services
       if: inputs.real-backend == 'true'
       shell: bash
       working-directory: cli
@@ -57,6 +63,24 @@ runs:
         (cd ../backend && npm ci --no-audit --no-fund)
         mkdir -p "$RUNNER_TEMP/test-services" && cd "$RUNNER_TEMP/test-services"
         echo '{"name":"test-services","private":true}' > package.json
-        REDISMS_DISABLE_POSTINSTALL=1 npm install --no-audit --no-fund mongodb-memory-server@10 redis-memory-server@0.12
+        MONGOMS_DISABLE_POSTINSTALL=1 REDISMS_DISABLE_POSTINSTALL=1 npm install --no-audit --no-fund mongodb-memory-server@10 redis-memory-server@0.12
+        echo "mongodb-memory-server=$(node -p "require('mongodb-memory-server/package.json').version")" >> "$GITHUB_OUTPUT"
+        echo "MONGOMS_DOWNLOAD_DIR=${{ runner.temp }}/mongodb-binaries" >> "$GITHUB_ENV"
         echo "HARNESS_E2E_SERVICES_DIR=$RUNNER_TEMP/test-services" >> "$GITHUB_ENV"
         echo "HARNESS_E2E_REDIS_SERVER=$(command -v redis-server)" >> "$GITHUB_ENV"
+    - id: mongod
+      if: inputs.real-backend == 'true'
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ runner.temp }}/mongodb-binaries
+        key: cli-e2e-mongod-${{ steps.services.outputs.mongodb-memory-server }}-${{ runner.os }}-${{ runner.arch }}
+    - name: Download mongod
+      if: inputs.real-backend == 'true' && steps.mongod.outputs.cache-hit != 'true'
+      shell: bash
+      working-directory: ${{ runner.temp }}/test-services
+      run: node -e "require('mongodb-memory-server').MongoBinary.getPath().then(path => console.log(path))"
+    - if: inputs.real-backend == 'true' && steps.mongod.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ runner.temp }}/mongodb-binaries
+        key: cli-e2e-mongod-${{ steps.services.outputs.mongodb-memory-server }}-${{ runner.os }}-${{ runner.arch }}
