@@ -77,7 +77,9 @@ class _Cli extends CliLogin {
   Future<void> logout() async {}
 }
 
+/// Setup, ready at once. It runs the CLI (`node cli.js version`) and may install it, so [runs] counts it.
 class _Environment extends EnvironmentProvisioner {
+  int runs = 0;
   @override
   Future<EnvironmentReadiness> ensureReady({
     required void Function(EnvironmentReadiness value) onProgress,
@@ -85,6 +87,7 @@ class _Environment extends EnvironmentProvisioner {
     bool install = true,
     EnvironmentSetupMode? mode,
   }) async {
+    runs++;
     final ready = EnvironmentReadiness(
       steps: {
         for (final step in EnvironmentStep.values)
@@ -352,6 +355,18 @@ void main() {
       await app.bootstrap();
       await _ticks();
       expect(cli.asked, 0);
+      expect(app.status, AppStatus.unauthenticated);
+      expect(app.lastError, isNull);
+    },
+  );
+
+  test(
+    'a launch while uninstall holds its marker runs no setup, which would run the CLI or install it again',
+    () async {
+      uninstalling = () => true;
+      await app.bootstrap();
+      await _ticks();
+      expect((app.environmentProvisioner! as _Environment).runs, 0);
       expect(app.status, AppStatus.unauthenticated);
       expect(app.lastError, isNull);
     },
