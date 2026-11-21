@@ -131,11 +131,25 @@ function ringParts(check: CheckOf<'ring'>, world: World, w: Window | undefined):
     ]
     for (const [part, score] of scored) parts.push({ part, score, timed: false, evidence })
   }
+  if (check.apart) parts.push(apartPart(check.apart, page, world, w))
   if (check.timed) {
     const lines = changed ? [`first right list at ${changed.at}`] : evidence
     parts.push({ part: 'change', score: graded(change, THRESHOLDS.ringChange), timed: true, ms: change, evidence: lines })
   }
   return parts
+}
+
+/**
+ * The last `apps` frame in the window on the ring's page: its other pages count exactly the sessions apart, no fewer (one
+ * merged into the ring) and no more (one shown twice). Counts name no session, so a check apart from no other is exact.
+ */
+function apartPart(apart: SessionKey[], page: string, world: World, w: Window | undefined): Part {
+  const frame = w ? world.seen.frames.filter((f) => f.message.t === 'apps' && f.message.shown === page && within(f.at, w)).at(-1) : undefined
+  const apps = Array.isArray(frame?.message.apps) ? frame.message.apps as Array<{ id?: unknown; count?: unknown }> : []
+  const counts = apps.map((a) => ({ id: String(a.id), count: typeof a.count === 'number' ? a.count : 0 }))
+  const elsewhere = counts.filter((a) => a.id !== page).reduce((sum, a) => sum + a.count, 0)
+  const evidence = frame ? [`apps at ${frame.at}: ${counts.map((a) => `${a.id} ${a.count}`).join(', ')}`.trimEnd()] : []
+  return { part: 'apart', score: elsewhere === apart.length ? 1 : 0, timed: false, evidence }
 }
 
 /** The title a row should carry at `to`: the latest `codex.write` that renamed it before then, else the fixture's. */

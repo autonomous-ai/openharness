@@ -90,7 +90,11 @@ export type StepOf<K extends StepKind> = Extract<Step, { kind: K }>
 export const CHECK_KINDS = ['ring', 'focus', 'still', 'open', 'state', 'voice', 'recap', 'cost'] as const
 export type CheckKind = (typeof CHECK_KINDS)[number]
 export type Check = { id: string; dim: Dimension; after?: Label; at?: Label } & (
-  | { kind: 'ring'; page: App; expect: SessionKey[]; timed?: true }
+  /**
+   * apart: sessions on other pages (a terminal's), each counted there as a row of its own. The dial is sent no list of a
+   * page it has not picked, so they are read from the `apps` frame's counts: one merged into this page's rows is missing there.
+   */
+  | { kind: 'ring'; page: App; expect: SessionKey[]; timed?: true; apart?: SessionKey[] }
   | { kind: 'focus'; session: SessionKey; noBounce?: true }
   | { kind: 'still'; ms: number }
   | { kind: 'open'; session: SessionKey; link: boolean }

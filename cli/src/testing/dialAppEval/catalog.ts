@@ -375,8 +375,12 @@ export const MAIN: Scenario[] = [
       { kind: 'codex.write', sessions: ['t1', 'c1'] },
       { kind: 'hook', session: 'c1', event: 'start' },
     ],
-    checks: [{ id: 'ring', kind: 'ring', dim: 'D1', page: 'chatgpt', expect: ['t1'] }],
-    probes: [{ id: 'ring', kind: 'ring', dim: 'D1', page: 'chatgpt', expect: ['t1', 'z'] }],
+    // c1 is on its terminal's page, whose list the dial is not sent: the apps frame's counts say it is a row of its own.
+    checks: [{ id: 'ring', kind: 'ring', dim: 'D1', page: 'chatgpt', expect: ['t1'], apart: ['c1'] }],
+    probes: [
+      { id: 'ring', kind: 'ring', dim: 'D1', page: 'chatgpt', expect: ['t1', 'z'] },
+      { id: 'apart', kind: 'ring', dim: 'D1', page: 'chatgpt', expect: ['t1'], apart: ['c1', 'z'] },
+    ],
   }),
   scenario({
     id: 'X11', app: 'chatgpt', title: 'Two windows switched three times 300 ms apart: the dial ends on the last and never bounces back',
