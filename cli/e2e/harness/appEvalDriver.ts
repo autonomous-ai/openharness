@@ -53,6 +53,8 @@ const VOICE_PCM = Buffer.alloc(3_200, 1)
 /** For the dial to be found, welcomed and shown its list: the fleet looks every 2 s, the dial greets every 2 s. */
 const START_WITHIN_MS = 45_000
 const CHILD_END_MS = 5_000
+/** What a scenario refused before its world began saw. */
+const NOTHING_SEEN: Seen = { frames: [], faces: [], commands: [], deliveries: [], steps: [] }
 // How the real CLI is started: the run's bundle when there is one (E2E_BUNDLE), as the daemon runs.
 const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : ['--import', 'tsx', 'src/cli.ts']
 
@@ -425,9 +427,10 @@ export class TierBDriver implements EvalDriver {
   constructor(private readonly appSteps: Partial<Record<App, AppSteps>>) {}
 
   async start(scenario: Scenario, platform: Platform): Promise<void> {
-    if (platform !== process.platform) throw new Error(`tier B runs on its host's platform, not ${platform}`)
-    // No world is seen until this one starts, and one refused here leaves the daemon as the last stop left it.
+    // Nothing of the last scenario is this one's, even when this one goes no further than its checks here, which leave the
+    // daemon as the last stop left it.
     this.world = undefined
+    if (platform !== process.platform) throw new Error(`tier B runs on its host's platform, not ${platform}`)
     const gaps = tierBGaps(scenario, platform)
     this.ready = false
     this.next = 0
@@ -486,10 +489,11 @@ export class TierBDriver implements EvalDriver {
     while (!until() && Date.now() < deadline) await world.nextRead()
   }
 
-  seen(): Seen { return this.need().seen() }
+  /** What the scenario saw; nothing for one refused before its world began, which the runner still reads. */
+  seen(): Seen { return this.world?.seen() ?? NOTHING_SEEN }
   /** The last scenario's world, kept after its stop: for a test that reads what its daemon did. */
   lastWorld(): TierBWorld { return this.need() }
-  gaps(): string[] { return [...this.need().gaps] }
+  gaps(): string[] { return [...this.world?.gaps ?? []] }
 
   async stop(): Promise<void> {
     const world = this.world
