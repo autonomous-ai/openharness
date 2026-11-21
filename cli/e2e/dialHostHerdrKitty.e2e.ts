@@ -51,7 +51,11 @@ describe.skipIf(!herdrBinary || !kittyInstalled)("herdr's client in kitty", () =
   let x11: X11Desk | undefined
   let kitty: KittyWindows | undefined
   const children: ChildProcess[] = []
+  /** What the case's daemon must not log: its folder, session, pane, tty, socket, handles and config folder. */
+  const unsaid: string[] = []
   afterEach(async () => {
+    const log = daemon?.log() ?? ''
+    const leaked = unsaid.splice(0).filter((secret) => log.includes(secret))
     for (const child of children.splice(0)) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
     // kitty first, then the X11 desk it draws on and herdr: its window holds the client, and the daemon's close sweeps
     // what names its root.
@@ -65,6 +69,7 @@ describe.skipIf(!herdrBinary || !kittyInstalled)("herdr's client in kitty", () =
     herdr = undefined
     desk = undefined
     daemon = undefined
+    expect(leaked).toEqual([])
   })
 
   /**
@@ -101,6 +106,9 @@ describe.skipIf(!herdrBinary || !kittyInstalled)("herdr's client in kitty", () =
     await windows.tab(client)
     expect(await windows.activeTab(client)).toBe(false)
     const agent = await server.hooked('api')
+    const tty = (await execFileAsync('/bin/ps', ['-o', 'tty=', '-p', String(client.pid)])).stdout.trim()
+    expect(tty).toMatch(/^pts\/[0-9]+$/)
+    unsaid.push(join(d.projectsDir, 'api'), agent.sessionId, agent.pane, tty, client.listenOn!, join(d.env.HOME!, '.config', 'herdr'))
     await said(d, '[device] herdr client · found')
     await dial.next((m) => m.t === 'agent' && m.id === agent.id && m.host === 'herdr', 45_000, 'the agent listed')
     // herdr focuses only an agent it has seen, and its detection lags the hook by a moment (herdr 0.9.5).
@@ -126,7 +134,7 @@ describe.skipIf(!herdrBinary || !kittyInstalled)("herdr's client in kitty", () =
   /** The daemon's rest lines, each from its `[device]` on. */
   const swipes = (d: IsolatedDaemon): string[] => lines(d, '[device] swipe ·')
 
-  it("lists the agent on kitty's page, one row, and on no herdr page", async () => {
+  it("lists the agent on kitty's page, one row, and on no other page", async () => {
     const { dial, agent } = await fresh()
     const apps = (m: DialMessage) => m.apps as Array<{ id: string; count: number }>
     const frame = await until("kitty's page holding the agent", () => {
@@ -159,21 +167,15 @@ describe.skipIf(!herdrBinary || !kittyInstalled)("herdr's client in kitty", () =
     expect(await windows.activeTab(client)).toBe(true)
     expect(await windows.active(client)).toBe(true)
     await until("the agent's pane focused in herdr", async () => await herdr.focused() === agent.pane, 30_000, 100)
-
-    // No folder, session, pane, tty, socket or config folder of the case's in the daemon's log.
-    const tty = (await execFileAsync('/bin/ps', ['-o', 'tty=', '-p', String(client.pid)])).stdout.trim()
-    expect(tty).toMatch(/^pts\/[0-9]+$/)
-    for (const secret of [join(d.projectsDir, 'api'), agent.sessionId, agent.pane, tty, client.listenOn!,
-      join(d.env.HOME!, '.config', 'herdr')]) {
-      expect(d.log()).not.toContain(secret)
-    }
   })
 
   it('with another app in front a rest moves neither the window nor the herdr pane', async () => {
     const { d, dial, herdr, windows, client, agent } = await fresh()
     // Orca in front, with an agent of its own: the dial, holding kitty's ring, turns to Orca's once Orca settled there,
     // so the front line has landed.
-    const orca = new InOrca(d, 'o', children, { ORCA_TERMINAL_HANDLE: `term_${randomUUID()}` })
+    const handle = `term_${randomUUID()}`
+    unsaid.push(handle)
+    const orca = new InOrca(d, 'o', children, { ORCA_TERMINAL_HANDLE: handle })
     const since = dial.messages.length
     await orca.hook('SessionStart', { source: 'startup' })
     watch(d, APP_BUNDLES.orca)

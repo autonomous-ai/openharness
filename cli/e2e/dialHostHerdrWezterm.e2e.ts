@@ -47,7 +47,11 @@ describe.skipIf(!herdrBinary || !weztermBinary)("herdr's client in WezTerm", () 
   let herdr: PrivateHerdr | undefined
   let wezterm: PrivateWezterm | undefined
   const children: ChildProcess[] = []
+  /** What the case's daemon must not log: its folder, session, pane, tty, sockets, handles and config folder. */
+  const unsaid: string[] = []
   afterEach(async () => {
+    const log = daemon?.log() ?? ''
+    const leaked = unsaid.splice(0).filter((secret) => log.includes(secret))
     for (const child of children.splice(0)) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
     // WezTerm first, then herdr: its panes hold the client and the daemon's engine, and the daemon's close sweeps what
     // names its root.
@@ -59,6 +63,7 @@ describe.skipIf(!herdrBinary || !weztermBinary)("herdr's client in WezTerm", () 
     herdr = undefined
     desk = undefined
     daemon = undefined
+    expect(leaked).toEqual([])
   })
 
   /**
@@ -88,19 +93,23 @@ describe.skipIf(!herdrBinary || !weztermBinary)("herdr's client in WezTerm", () 
     herdr = server
     const mux = await PrivateWezterm.start(d)
     wezterm = mux
-    // The client's process is its pane's session leader: the shell that execs herdr.
+    // The client's process is the one on its pane's tty whose parent is the mux server: the shell that execs herdr, told
+    // by its parent as macOS's ps has no `sid` to tell a session leader by.
     const client = await server.client(async (argv, env) => {
       const pane = await mux.run(argv, env)
-      const { stdout } = await execFileAsync('/bin/ps', ['-o', 'pid=,sid=', '-t', pane.tty.replace(/^\/dev\//, '')])
-      const leader = stdout.split('\n').map((row) => row.trim().split(/\s+/)).find(([pid, sid]) => pid && pid === sid)
-      if (!leader) throw new Error(`no session leader on WezTerm's pane ${pane.pane}`)
-      return { ...pane, pid: Number(leader[0]) }
+      const { stdout } = await execFileAsync('/bin/ps', ['-o', 'pid=,ppid=', '-t', pane.tty.replace(/^\/dev\//, '')])
+      const own = stdout.split('\n').map((row) => row.trim().split(/\s+/)).find(([pid, ppid]) => pid && ppid === String(mux.pid))
+      if (!own) throw new Error(`no process of the mux server's on WezTerm's pane ${pane.pane}`)
+      return { ...pane, pid: Number(own[0]) }
     })
     // Another tab of the client's window, which a new tab makes the active one.
     const other = (await mux.cli('spawn', '--pane-id', client.pane, '--', '/bin/cat')).trim()
     expect(await mux.activeTab(other)).toBe(true)
     expect(await mux.activeTab(client.pane)).toBe(false)
     const agent = await server.hooked('api')
+    // A tty by its name alone too.
+    unsaid.push(join(d.projectsDir, 'api'), agent.sessionId, agent.pane, client.tty.slice('/dev/'.length),
+      join(d.env.HOME!, 'wezterm', 'sock'), join(d.env.HOME!, '.config', 'herdr'))
     await said(d, '[device] herdr client · found')
     await dial.next((m) => m.t === 'agent' && m.id === agent.id && m.host === 'herdr', 45_000, 'the agent listed')
     // herdr focuses only an agent it has seen, and its detection lags the hook by a moment (herdr 0.9.5).
@@ -126,7 +135,7 @@ describe.skipIf(!herdrBinary || !weztermBinary)("herdr's client in WezTerm", () 
   /** The daemon's rest lines, each from its `[device]` on. */
   const swipes = (d: IsolatedDaemon): string[] => lines(d, '[device] swipe ·')
 
-  it("lists the agent on WezTerm's page, one row, and on no herdr page", async () => {
+  it("lists the agent on WezTerm's page, one row, and on no other page", async () => {
     const { dial, agent } = await fresh()
     const apps = (m: DialMessage) => m.apps as Array<{ id: string; count: number }>
     const frame = await until("WezTerm's page holding the agent", () => {
@@ -159,18 +168,15 @@ describe.skipIf(!herdrBinary || !weztermBinary)("herdr's client in WezTerm", () 
     expect(await mux.activeTab(client.pane)).toBe(true)
     expect(await mux.active(client.pane)).toBe(true)
     await until("the agent's pane focused in herdr", async () => await herdr.focused() === agent.pane, 30_000, 100)
-
-    // No folder, session, pane, tty or config folder of the case's in the daemon's log: a tty by its name alone too.
-    for (const secret of [join(d.projectsDir, 'api'), agent.sessionId, agent.pane, client.tty.slice('/dev/'.length), join(d.env.HOME!, '.config', 'herdr')]) {
-      expect(d.log()).not.toContain(secret)
-    }
   })
 
   it('with another app in front a rest moves neither the tab nor the herdr pane', async () => {
     const { d, dial, herdr, mux, client, agent } = await fresh()
     // Orca in front, with an agent of its own: the dial, holding WezTerm's ring, turns to Orca's once Orca settled
     // there, so the front line has landed.
-    const orca = new InOrca(d, 'o', children, { ORCA_TERMINAL_HANDLE: `term_${randomUUID()}` })
+    const handle = `term_${randomUUID()}`
+    unsaid.push(handle)
+    const orca = new InOrca(d, 'o', children, { ORCA_TERMINAL_HANDLE: handle })
     const since = dial.messages.length
     await orca.hook('SessionStart', { source: 'startup' })
     watch(d, APP_BUNDLES.orca)

@@ -1,5 +1,5 @@
 /**
- * An agent in a herdr pane whose client runs in a terminal with no page of its own stays on its pane's page, and a tap
+ * An agent in a herdr pane whose client runs in a terminal with no page of its own stays on the Other page, and a tap
  * brings that terminal's window forward (docs/plans/2026-11-21-dial-linux-followups-design.md § 2), on the real daemon:
  * herdr's client attached to a herdr server of the test's own (harness/herdrServer.ts) runs in an xterm on an X11
  * desktop of the test's own (harness/x11Desk.ts), another xterm in front of it, and the suite's hooked fake Claude Code
@@ -50,7 +50,7 @@ describe.skipIf(!herdrBinary || !x11Installed)("herdr's client in an xterm", () 
     daemon = undefined
   })
 
-  it("keeps the agent on its herdr pane's page, and a tap raises the client's xterm and focuses the agent's pane", async () => {
+  it("keeps the agent on the Other page, and a tap raises the client's xterm and focuses the agent's pane", async () => {
     const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false' } })
     daemon = d
     ownHerdrsOnly(d)
@@ -81,13 +81,12 @@ describe.skipIf(!herdrBinary || !x11Installed)("herdr's client in an xterm", () 
     await until('the other xterm active', async () => await x.active() === other.window, 20_000, 100)
 
     // 2. The hooked agent in a herdr pane, started once the client is attached, so its first lookup finds it. xterm is
-    // no app the dial lists: the client's place is its process alone, and the agent stays on the page herdr's pane
-    // gives it, as with no client. That pane says TERM_PROGRAM=herdr, which names no app, and no app is among its
-    // parents: Other's (herdr 0.9.5).
+    // no app the dial lists: the client's place is its process alone, and the agent stays on the Other page, as with no
+    // client: its herdr pane says TERM_PROGRAM=herdr, which names no app, and no app is among its parents (herdr 0.9.5).
     const agent = await server.hooked('api')
     await said(d, '[device] herdr client · none')
     const apps = (m: DialMessage) => m.apps as Array<{ id: string; count: number }>
-    const frame = await until("herdr's pane's page holding the agent", () => {
+    const frame = await until('the Other page holding the agent', () => {
       const last = dial.messages.filter((m) => m.t === 'apps').at(-1)
       return last && apps(last).some((a) => a.id === 'terminal' && a.count === 1) ? last : undefined
     }, 45_000, 100)
