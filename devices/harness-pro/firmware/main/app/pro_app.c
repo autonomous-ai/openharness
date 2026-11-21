@@ -150,6 +150,7 @@ static void perform(const pod_out_t *o)
     case POD_FX_VOICE_BEGIN: voice_begin_effect(o->agent); break;
     case POD_FX_VOICE_END: voice_end_effect(); break;
     case POD_FX_VOICE_ABORT: pro_voice_end(false); break;
+    case POD_FX_APP_PICK: pro_cable_send_app_pick(o->agent); break;
     case POD_FX_NONE: break;
     }
 }
@@ -310,8 +311,9 @@ void pro_app_link(bool up, const char *machine)
         s_lib_pending = false;
         s_sweep_offset = 0;
         // Another computer on a live link: the last one's apps are not its, and an older daemon there sends none to replace
-        // them. Its welcome said apps.switch just before this; the agents.end it is asked for says the view.
-        if (was) pod_model_apps(&s_pod.model, NULL, 0, "");
+        // them. Its welcome said apps.switch just before this; the agents.end it is asked for says the view. Through the glue,
+        // so a pick waiting for the last computer's ring ends here.
+        if (was) settle(pod_ui_apps(&s_pod, NULL, 0, "", ms()));
         const pod_out_t fx = pod_ui_link(&s_pod, true);
         if (was) s_pod.sweep.restart = true;   // another computer: look the library up again
         settle(fx);
@@ -326,7 +328,7 @@ void pro_app_link(bool up, const char *machine)
 void pro_app_agents(const pro_agent_row_t *rows, int n, bool machine_view, bool tab_open)
 {
     pro_app_lock();
-    int src[POD_AGENTS_MAX];   // the row each roster entry came from: its host and caps go on after the roster
+    pod_model_clock(&s_pod.model, ms());   // a pick's wait is timed on this clock, which otherwise stands still while the glass sleeps
     int m = 0;
     memset(s_info, 0, sizeof s_info);
     for (int i = 0; i < n && m < POD_AGENTS_MAX; i++) {
@@ -337,19 +339,15 @@ void pro_app_agents(const pro_agent_row_t *rows, int n, bool machine_view, bool 
             if (!strcmp(s_rows[k].id, r->id)) dup = true;
         if (dup) continue;
         s_rows[m] = (pod_roster_row_t){r->id, r->name && r->name[0] ? r->name : r->id, r->engine ? r->engine : "",
-                                       r->machine ? r->machine : ""};
+                                       r->machine ? r->machine : "", r->host, r->caps_off};
         copy_cut(s_info[m].id, ID_MAX, r->id);
         // An oversize machine id is no id (UH 5579-5740): the agent then has no machine to gate on.
         if (r->machine_id && strnlen(r->machine_id, ID_MAX) < ID_MAX) copy_cut(s_info[m].machine_id, ID_MAX, r->machine_id);
-        src[m++] = i;
+        m++;
     }
-    // The glue's roster row has no host or caps, so they are set right after it, inside the same lock: no frame sees an
-    // agent without its caps.
-    const pod_out_t fx = pod_ui_roster(&s_pod, s_rows, m);
-    for (int k = 0; k < m; k++)
-        pod_model_agent_app(&s_pod.model, s_rows[k].id, rows[src[k]].host, POD_CAPS_ALL & ~rows[src[k]].caps_off);
+    // The view before the roster's nav sync: whether Home lists tabs or app cards is settled on this frame, not the next.
     pod_model_view(&s_pod.model, machine_view, tab_open);
-    settle(fx);
+    settle(pod_ui_roster(&s_pod, s_rows, m));
     leave();
 }
 
@@ -362,20 +360,19 @@ void pro_app_swarms(const cable_swarm_t *items, int n, const cable_swarm_members
     leave();
 }
 
-// The model bumps its revision only on a change, so settle redraws only then: the same list again costs nothing.
+// Through the glue, which syncs the nav: a picked app's room opens on the frame that shows its ring. The model bumps its
+// revision only on a change, so settle redraws only then: the same list again costs nothing.
 void pro_app_apps(const cable_app_t *rows, int n, const char *shown)
 {
     pro_app_lock();
-    pod_model_apps(&s_pod.model, rows, n, shown);
-    settle((pod_out_t){0});
+    settle(pod_ui_apps(&s_pod, rows, n, shown, ms()));
     leave();
 }
 
 void pro_app_apps_switch(bool on)
 {
     pro_app_lock();
-    pod_model_apps_switch(&s_pod.model, on);
-    settle((pod_out_t){0});
+    settle(pod_ui_apps_switch(&s_pod, on));
     leave();
 }
 
@@ -698,7 +695,7 @@ static void voice_begin_effect(const char *agent)
         pod_ui_talk_over(&s_pod);
         const uint32_t now = ms();
         pod_ui_notice(&s_pod, why ? why : !s_linked ? "Not connected" : was_open ? "Still sending the last message" : "Can't talk right now", now);
-        if (see_it) s_pod.notice_until = now + 2000;
+        if (see_it) s_pod.notice_until = now + POD_SEE_IT_MS;
         change();
         pro_app_unlock();
     }

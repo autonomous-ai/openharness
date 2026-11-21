@@ -62,6 +62,8 @@ void pro_display_set_brightness(uint8_t l) { (void)l; }
 void pro_display_power(bool on) { (void)on; }
 pro_touch_sample_t pro_touch_poll(int *x, int *y) { (void)x; (void)y; return PRO_TOUCH_NONE; }
 bool pro_cable_send_open(const char *id) { CHECK(LOCK_DEPTH == 0); (void)id; return true; }
+static int g_picks;
+bool pro_cable_send_app_pick(const char *app) { CHECK(LOCK_DEPTH == 0); (void)app; g_picks++; return true; }
 bool pro_cable_send_scroll(pro_scroll_phase_t phase, int dy, int velocity) { (void)phase; (void)dy; (void)velocity; return true; }
 static int lib_req_offset = -1;
 static uint32_t lib_req_id;
@@ -158,6 +160,15 @@ static void send_agents(int a)
     pro_app_agents(&r, 1, false, true);
 }
 
+// The welcome's apps.switch and the daemon's app list: Home has the Tabs | Apps pill, so random taps choose Apps and pick
+// cards while the other feeds run.
+static void send_apps(void)
+{
+    static const cable_app_t apps[3] = {{"harness", "Harness", 3, 0, 1}, {"codex", "ChatGPT", 2, 0, 1}, {"vscode", "VS Code", 1, 0, 0}};
+    pro_app_apps_switch(true);
+    pro_app_apps(apps, 3, "harness");
+}
+
 static void answer_library(void)
 {
     if (lib_req_offset < 0) return;
@@ -183,6 +194,7 @@ int main(int argc, char **argv)
     mk_ids();
     pro_app_start();
     pro_app_link(true, "Diego's Mac");
+    send_apps();
     render_pass();
     for (long it = 0; it < iters; it++) {
         g_step = (int)it;
@@ -214,7 +226,7 @@ int main(int argc, char **argv)
             pro_app_turn(agent_id[roster_agent], k[rnd() % 5], "Reading files", -1);
             break;
         }
-        case 8: if (rnd() % 50 == 0) { pro_app_link(false, NULL); pro_app_link(true, "Diego's Mac"); } break;
+        case 8: if (rnd() % 50 == 0) { pro_app_link(false, NULL); pro_app_link(true, "Diego's Mac"); send_apps(); } break;
         default: break;
         }
         CHECK(LOCK_DEPTH == 0);
@@ -223,7 +235,7 @@ int main(int argc, char **argv)
         render_pass();
     }
     alarm(0);
-    printf("stress_pro_app: %ld steps, no hang; min wake %u ms, zero wakes %u\n", iters, (unsigned)g_wake_min, (unsigned)g_zero_wakes);
+    printf("stress_pro_app: %ld steps, no hang; min wake %u ms, zero wakes %u, picks %d\n", iters, (unsigned)g_wake_min, (unsigned)g_zero_wakes, g_picks);
     printf("frames per view:");
     for (int v = 0; v < 16; v++) if (g_views[v]) printf(" v%d=%ld", v, g_views[v]);
     printf("; most tabs %ld\n", g_maxtabs);

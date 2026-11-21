@@ -24,20 +24,56 @@ static int tab_list(const pod_model_t *m, int tab, const pod_agent_t *out[], int
     return n;
 }
 
-// Home pages: the TABS frame's scroll is a page of pod_home_pages: the tab index, or POD_HOME_NOTICES / POD_HOME_WORKING, which exist only while there
+// The app card at Home's page, or -1 (a page that is not a card, or Home lists tabs): its index into m->apps.
+static int home_card(const pod_nav_t *n, const pod_model_t *m, int page)
+{
+    uint8_t c[POD_APPS_MAX];
+    const int k = page - POD_HOME_APP0;
+    if (k < 0 || !pod_home_apps(n, m) || k >= pod_home_app_cards(m, c, POD_APPS_MAX)) return -1;
+    return c[k];
+}
+// home_app follows the page Home is on, so the next apps frame re-finds that card by id.
+static void home_app_follows(pod_nav_t *n, const pod_model_t *m)
+{
+    const int a = home_card(n, m, n->stack[0].scroll);
+    pod_copy_str(n->home_app, sizeof n->home_app, a >= 0 ? m->apps[a].id : "");
+}
+// Home on the app's card, Apps chosen when the pill shows; an app that is not a card leaves Home's page to the clamp.
+static void home_on_app(pod_nav_t *n, const pod_model_t *m, const char *id)
+{
+    uint8_t c[POD_APPS_MAX];
+    const int cn = pod_home_app_cards(m, c, POD_APPS_MAX);
+    int k = 0;
+    while (k < cn && strcmp(m->apps[c[k]].id, id)) k++;
+    if (k < cn && pod_home_switch(m)) n->home_apps = true;
+    pod_frame_t *h = &n->stack[0];
+    h->scroll = (int16_t)pod_home_clamp(n, m, k < cn && pod_home_apps(n, m) ? POD_HOME_APP0 + k : h->scroll);
+    home_app_follows(n, m);
+}
+// Home on a tab's card lists Tabs (the mirror of home_on_app): left on Apps, Home would draw the first card and the next sync jump to home_app.
+// Only leaving a room lands it (land_on_tab): the window's tab moving the room leaves Home on Apps (pod_nav_follow_tab).
+static void home_on_tab(pod_nav_t *n, int tab)
+{
+    n->stack[0].scroll = (int16_t)tab;
+    n->home_apps = false;
+    n->home_app[0] = 0;
+}
+
+// Home pages: the TABS frame's scroll is a page of pod_home_pages: the tab index (or POD_HOME_APP0 + k for an app card), or POD_HOME_NOTICES / POD_HOME_WORKING, which exist only while there
 // are notices / working agents, so they are positions that do not move when they come or go: the tab under the person stays the tab under the person.
-// Leaving a room for Home lands on that room's tab card, never on the Notices or Working card.
+// Leaving a room for Home lands on that room's tab card (an app's ring: its app card), never on the Notices or Working card.
 static void land_on_tab(pod_nav_t *n, const pod_model_t *m, const pod_frame_t *from)
 {
     if (n->depth != 1 || n->stack[0].view != POD_V_TABS) return;
     if (n->stack[0].scroll == POD_HOME_WORKING) return;   // a room opened from the Working card: Home stays on that card
+    if (from->tab == POD_TAB_APP) { home_on_app(n, m, from->tab_id); return; }
     int idx = -1;
     if (from->tab_id[0]) {
         for (int t = 0; t < m->tab_count; t++) if (!strcmp(m->tabs[t].id, from->tab_id)) { idx = t; break; }
     } else if (from->tab >= 0 && from->tab < m->tab_count) {
         idx = from->tab;
     }
-    if (idx >= 0) n->stack[0].scroll = (int16_t)idx;
+    if (idx >= 0) home_on_tab(n, idx);
     else if (n->stack[0].scroll < 0) n->stack[0].scroll = 0;   // Recent has no card: the first tab
 }
 
@@ -47,7 +83,9 @@ static bool is_agent_view(pod_view_t v) { return v == POD_V_AGENT || v == POD_V_
 
 // The list a frame's agent steps through. For an agent frame in the Recent tab the open agent stays in the list
 // (at the end, if it has dropped out of the newest 8) even after it falls off, so the user is not thrown out of it.
+// An app's ring keeps nobody: a room whose agent leaves it closes.
 static int frame_list(const pod_model_t *m, const pod_frame_t *f, const pod_agent_t *out[], int max) {
+    if (f->tab == POD_TAB_APP) return pod_app_agents(m, f->tab_id, out, max);
     int n = tab_list(m, f->tab, out, max);
     if (f->tab != POD_TAB_RECENT || !is_agent_view(f->view)) return n;
     for (int i = 0; i < n; i++) if (!strcmp(out[i]->id, f->agent)) return n;
@@ -74,6 +112,23 @@ static bool push(pod_nav_t *n, const pod_frame_t *f) {
     if (n->depth >= 4) return false;
     n->stack[n->depth++] = *f;
     return true;
+}
+
+// The list an agent opens in when no list was tapped (follow, a notice, a Working-card pet): the window's selected tab when it
+// holds the agent, else the first tab that does, else the app's ring when it is one of the app shown's agents, else Recent.
+static int list_of(const pod_model_t *m, const char *id)
+{
+    if (m->selected < m->tab_count && index_in(m, m->selected, id) >= 0) return m->selected;
+    for (int t = 0; t < m->tab_count; t++) if (index_in(m, t, id) >= 0) return t;
+    const pod_agent_t *l[POD_AGENTS_MAX];
+    const int cnt = pod_app_agents(m, m->app_shown, l, POD_AGENTS_MAX);
+    for (int i = 0; i < cnt; i++) if (!strcmp(l[i]->id, id)) return POD_TAB_APP;
+    return POD_TAB_RECENT;
+}
+static void set_tab(pod_frame_t *f, const pod_model_t *m, int tab)
+{
+    f->tab = (int8_t)tab;
+    pod_copy_str(f->tab_id, sizeof f->tab_id, tab >= 0 ? m->tabs[tab].id : tab == POD_TAB_APP ? m->app_shown : "");
 }
 
 static pod_view_t view_for(const pod_model_t *m, const pod_agent_t *a) { return pod_model_opens_on_recap(m, a) ? POD_V_RECAP : POD_V_AGENT; }
@@ -169,10 +224,7 @@ static pod_out_t nav_act(pod_nav_t *n, pod_model_t *m, pod_action_t a, int arg, 
         pod_frame_t t; memset(&t, 0, sizeof t);
         const pod_state_t st = pod_model_eff(m, ag);
         t.view = st != POD_WORKING && st != POD_ASKING && st != POD_OFFLINE ? POD_V_RECAP : view_for(m, ag);   // an entry is a finished or failed run, told by the recap
-        t.tab = POD_TAB_RECENT;
-        // the room is the agent's own tab, so a sideways swipe stays among its tab-mates (Recent only when no tab holds it)
-        for (int k = 0; k < m->tab_count; k++)
-                if (index_in(m, k, id) >= 0) { t.tab = (int8_t)k; set_id(t.tab_id, m->tabs[k].id); break; }
+        set_tab(&t, m, list_of(m, id));   // the agent's own list, so a sideways swipe stays among its tab-mates
         set_id(t.agent, id);
         if (n->depth >= 4) { n->stack[1] = *f; n->depth = 2; }   // the stack is full: drop what the Inbox was opened over
         if (push(n, &t)) {
@@ -242,10 +294,31 @@ static pod_out_t nav_act(pod_nav_t *n, pod_model_t *m, pod_action_t a, int arg, 
         break;
     case POD_A_SCROLL: {
         long s = (long)f->scroll + arg;
-        if (f->view == POD_V_TABS) { f->scroll = (int16_t)pod_home_clamp(m, s < -32768 ? -32768 : s > 32767 ? 32767 : (int)s); n->work_page = 0; break; }
+        if (f->view == POD_V_TABS) {
+            f->scroll = (int16_t)pod_home_clamp(n, m, s < -32768 ? -32768 : s > 32767 ? 32767 : (int)s);
+            n->work_page = 0;
+            home_app_follows(n, m);
+            break;
+        }
         f->scroll = (int16_t)(s < 0 ? 0 : s > 32767 ? 32767 : s);
         break;
     }
+    case POD_A_HOME_APPS:
+        if (n->depth != 1 || f->view != POD_V_TABS || !pod_home_switch(m) || n->home_apps) break;
+        n->home_apps = true;
+        f->scroll = POD_HOME_APP0;
+        home_app_follows(n, m);
+        break;
+    case POD_A_HOME_TABS:
+        if (n->depth != 1 || f->view != POD_V_TABS || !n->home_apps) break;
+        n->home_apps = false;
+        f->scroll = (int16_t)(m->selected < m->tab_count ? m->selected : pod_home_clamp(n, m, 0));
+        n->home_app[0] = 0;
+        break;
+    case POD_A_PICK_APP:   // the Mac shows that app's ring; the room opens when the ring lands, at once when it is already here
+        if (n->depth != 1 || f->view != POD_V_TABS || arg < 0 || arg >= m->app_count || !m->apps[arg].count) break;
+        if (strcmp(m->apps[arg].id, POD_APP_HARNESS)) pod_nav_open_app(n, m, m->apps[arg].id);   // Harness's agents are the tabs
+        return out_fx(POD_FX_APP_PICK, m->apps[arg].id);
     case POD_A_NONE:
     case POD_A_BANNER:
         break;
@@ -311,7 +384,18 @@ void pod_nav_flip_recaps(pod_nav_t *n, pod_model_t *m) {
 pod_out_t pod_nav_sync(pod_nav_t *n, pod_model_t *m) {
     if (!n->depth) { pod_nav_init(n); return out_none(); }
     if (n->stack[0].view == POD_V_TABS) {   // tabs that went away take their pages with them
-        n->stack[0].scroll = (int16_t)pod_home_clamp(m, n->stack[0].scroll);   // Home: the scroll is a page of the list
+        pod_frame_t *h = &n->stack[0];
+        if (!pod_home_switch(m)) n->home_apps = false;   // the pill went: Apps is no longer a choice
+        if (pod_home_apps(n, m)) {   // the card under the person, found again by id (the list can reorder)
+            uint8_t c[POD_APPS_MAX];
+            const int cn = pod_home_app_cards(m, c, POD_APPS_MAX);
+            for (int k = 0; k < cn && n->home_app[0]; k++)
+                if (!strcmp(m->apps[c[k]].id, n->home_app)) { h->scroll = (int16_t)(POD_HOME_APP0 + k); break; }
+        } else if (h->scroll >= POD_HOME_APP0) {   // the list turned from apps to tabs: the selected tab (the PM's rule), else the first
+            h->scroll = (int16_t)(m->selected < m->tab_count ? m->selected : 0);
+        }
+        h->scroll = (int16_t)pod_home_clamp(n, m, h->scroll);   // Home: the scroll is a page of the list
+        home_app_follows(n, m);
         const int pages = (pod_home_working(m) + 2) / 3;   // the Working card's pet pages: the stored page follows the working set down
         if (n->depth != 1 || n->stack[0].scroll != POD_HOME_WORKING) n->work_page = 0;
         else if (n->work_page >= pages) n->work_page = (uint8_t)(pages > 0 ? pages - 1 : 0);
@@ -319,7 +403,7 @@ pod_out_t pod_nav_sync(pod_nav_t *n, pod_model_t *m) {
     uint8_t keep = n->depth;
     for (uint8_t i = 1; i < n->depth; i++) {
         pod_frame_t *f = &n->stack[i];
-        if (f->tab != POD_TAB_RECENT) {
+        if (f->tab != POD_TAB_RECENT && f->tab != POD_TAB_APP) {   // an app's ring is no tab: its agent alone keeps it
             int idx = -1;
             if (f->tab_id[0]) {
                 for (int t = 0; t < m->tab_count; t++) if (!strcmp(m->tabs[t].id, f->tab_id)) { idx = t; break; }
@@ -337,14 +421,18 @@ pod_out_t pod_nav_sync(pod_nav_t *n, pod_model_t *m) {
         if (!found) { keep = i > 1 ? (uint8_t)(i) : 1; break; }
     }
     pod_out_t o = out_none();
+    const uint8_t was = n->depth;
     if (keep < n->depth) {
-        const pod_frame_t *top = &n->stack[n->depth - 1];
-        if (top->view == POD_V_TALK) o = out_fx(POD_FX_VOICE_ABORT, top->agent);
+        const pod_frame_t *gone = &n->stack[n->depth - 1];
+        if (gone->view == POD_V_TALK) o = out_fx(POD_FX_VOICE_ABORT, gone->agent);
         n->sending = false;
         n->depth = keep;
     }
     // The TAB frame is never shown: an agent popped from under it (or a tab closed) lands on Home.
     if (n->depth > 1 && n->stack[n->depth - 1].view == POD_V_TAB) n->depth = 1;
+    // The ring went: Home on that app's card while it is listed. The frame just above Home holds the app id even when
+    // the top was something else (the Inbox over the room); a pop leaves the stack's memory as it was.
+    if (was > 1 && n->depth == 1 && n->stack[1].tab == POD_TAB_APP) land_on_tab(n, m, &n->stack[1]);
     pod_nav_flip_recaps(n, m);
     return o;
 }
@@ -365,17 +453,14 @@ bool pod_nav_follow(pod_nav_t *n, pod_model_t *m, const char *agent_id, uint32_t
     const pod_frame_t *cur = &n->stack[n->depth - 1];
     if (cur->view == POD_V_TALK) return false;
     if ((cur->view == POD_V_AGENT || cur->view == POD_V_RECAP) && !strcmp(cur->agent, a->id)) return false;
-    int tab = POD_TAB_RECENT;
-    if (m->selected < m->tab_count && index_in(m, m->selected, a->id) >= 0) tab = m->selected;
-    else for (int t = 0; t < m->tab_count; t++) if (index_in(m, t, a->id) >= 0) { tab = t; break; }
+    const int tab = list_of(m, a->id);
     int row = index_in(m, tab, a->id);
     pod_frame_t tabs, tf, af;
     memset(&tabs, 0, sizeof tabs); memset(&tf, 0, sizeof tf); memset(&af, 0, sizeof af);
     tabs.view = POD_V_TABS;
     tabs.scroll = n->stack[0].scroll;   // the grid stays on the page it was on
     tf.view = POD_V_TAB;
-    tf.tab = (int8_t)tab;
-    if (tab != POD_TAB_RECENT) set_id(tf.tab_id, m->tabs[tab].id);
+    set_tab(&tf, m, tab);
     tf.scroll = (int16_t)(row > 3 ? row - 3 : 0);   // the view clamps it at the list's end; the row stays in sight
     af = tf;
     af.view = view_for(m, a);
@@ -399,7 +484,7 @@ bool pod_nav_follow_tab(pod_nav_t *n, pod_model_t *m) {
     const int sel = m->selected;
     pod_frame_t *cur = &n->stack[n->depth - 1];
     if (cur->view == POD_V_TABS && n->depth == 1) {
-        if (cur->scroll == sel) return false;
+        if (cur->scroll == sel || pod_home_apps(n, m)) return false;   // Home listing apps has no tab card to move to
         cur->scroll = (int16_t)sel;
         n->work_page = 0;
         return true;
@@ -413,7 +498,9 @@ bool pod_nav_follow_tab(pod_nav_t *n, pod_model_t *m) {
             n->stack[i].tab = (int8_t)sel;
             set_id(n->stack[i].tab_id, m->tabs[sel].id);
         }
-        if (n->stack[0].scroll != POD_HOME_WORKING) n->stack[0].scroll = (int16_t)sel;   // a room opened from the Working card keeps Home on it
+        // Home moves only while it lists tabs (up from the room lands on the tab, land_on_tab); a room opened from the
+        // Working card keeps Home on it.
+        if (n->stack[0].scroll != POD_HOME_WORKING && !pod_home_apps(n, m)) n->stack[0].scroll = (int16_t)sel;
         return true;
     }
     const pod_agent_t *l[POD_AGENTS_MAX];
@@ -421,7 +508,7 @@ bool pod_nav_follow_tab(pod_nav_t *n, pod_model_t *m) {
     pod_frame_t tabs, tf, af;
     memset(&tabs, 0, sizeof tabs); memset(&tf, 0, sizeof tf);
     tabs.view = POD_V_TABS;
-    tabs.scroll = (int16_t)sel;
+    tabs.scroll = pod_home_apps(n, m) ? n->stack[0].scroll : (int16_t)sel;
     tf.view = POD_V_TAB;
     tf.tab = (int8_t)sel;
     set_id(tf.tab_id, m->tabs[sel].id);
@@ -431,6 +518,30 @@ bool pod_nav_follow_tab(pod_nav_t *n, pod_model_t *m) {
     n->stack[0] = tabs; n->stack[1] = tf; n->stack[2] = af;
     n->depth = 3;
     n->sending = false;
+    opened(n, m, af.agent);
+    pod_nav_flip_recaps(n, m);
+    return true;
+}
+
+bool pod_nav_open_app(pod_nav_t *n, pod_model_t *m, const char *app_id) {
+    if (!n->depth) pod_nav_init(n);
+    if (n->stack[n->depth - 1].view == POD_V_TALK) return false;
+    const pod_agent_t *l[POD_AGENTS_MAX];
+    if (pod_app_agents(m, app_id, l, POD_AGENTS_MAX) < 1) return false;
+    pod_frame_t tabs, tf, af;
+    memset(&tabs, 0, sizeof tabs); memset(&tf, 0, sizeof tf);
+    tabs.view = POD_V_TABS;
+    tabs.scroll = n->stack[0].scroll;
+    tf.view = POD_V_TAB;
+    set_tab(&tf, m, POD_TAB_APP);
+    af = tf;
+    af.view = view_for(m, l[0]);
+    set_id(af.agent, l[0]->id);
+    n->stack[0] = tabs; n->stack[1] = tf; n->stack[2] = af;
+    n->depth = 3;
+    n->sending = false;
+    n->work_page = 0;
+    home_on_app(n, m, app_id);
     opened(n, m, af.agent);
     pod_nav_flip_recaps(n, m);
     return true;
