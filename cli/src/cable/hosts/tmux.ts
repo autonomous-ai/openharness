@@ -17,7 +17,7 @@ import { APP_IDS } from './hostDetect.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 import type { OuterLookup } from './outer.js'
 import { parentChain, scannedApps, type ProcessName } from './scannedApp.js'
-import { TAB_TTY } from './tabs.js'
+import { clientTtyForm } from './tabs.js'
 
 const TMUX_PANE_ID = /^%[0-9]{1,9}$/
 /** A process id as the table and the hooks give it; the herdr and Zellij lookups hold their pids to it too
@@ -202,7 +202,7 @@ export interface TmuxOuterDeps {
   bundleId(bundle: string): Promise<string | undefined>
 }
 
-/** The app that holds the tmux client showing an agent's pane, that client's tty when it names a tab, and its process. */
+/** The app that holds the tmux client showing an agent's pane, that client's tty when it is in its platform's form, and its process. */
 interface ClientPlace { app?: string; tty?: string; pid?: number }
 /** The step of a lookup that could not be read, as its line names it: no tmux found, the pane's facts, the process
  *  table, the session's clients, the client's app. */
@@ -244,8 +244,8 @@ export function createTmuxOuter(deps: TmuxOuterDeps): OuterLookup {
     const apps = await scannedApps([client.pid], { platform: deps.platform, roots: deps.roots, processes: async () => rows, bundleId: deps.bundleId })
     const app = apps.get(client.pid)
     if (!app) return {}
-    // A tty out of form names no tab: a control client has none, and Linux's are no tab the dial selects.
-    return TAB_TTY.test(client.tty) ? { app, tty: client.tty, pid: client.pid } : { app, pid: client.pid }
+    // A tty out of the platform's form names no tab: a control client has none.
+    return clientTtyForm(deps.platform)?.test(client.tty) ? { app, tty: client.tty, pid: client.pid } : { app, pid: client.pid }
   }
 
   async function lookUp(id: string, pid: number): Promise<ClientPlace> {

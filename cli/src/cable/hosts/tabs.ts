@@ -13,6 +13,12 @@ export const TAB_APPS = ['terminal-app', 'iterm', 'ghostty'] as const
 export type TabApp = (typeof TAB_APPS)[number]
 
 export const TAB_TTY = /^\/dev\/ttys[0-9]{1,4}$/
+export const PTS_TTY = /^\/dev\/pts\/[0-9]{1,6}$/
+
+/** The form of a multiplexer client's tty on [platform]: macOS's TAB_TTY, Linux's PTS_TTY; none elsewhere. */
+export function clientTtyForm(platform: NodeJS.Platform): RegExp | undefined {
+  return platform === 'darwin' ? TAB_TTY : platform === 'linux' ? PTS_TTY : undefined
+}
 
 /** The devices listener's last line on a stream a newer watch took, as its watch reads it. */
 export const REPLACED_LINE = '{"replaced":true}'
