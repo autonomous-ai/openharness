@@ -4903,10 +4903,17 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   // An agent may have a pane in more than one app: each verb takes the first in the devices' fixed order (herdr, WezTerm,
   // Orca, the Claude app, tabs), wired here as in production.
   it('a tap on an agent with a WezTerm pane and an Orca handle activates the WezTerm pane, then brings WezTerm forward', async () => {
+    // WezTerm's own pane: its GUI made the pseudo-terminal of the agent's shell, so that pane is the agent's and not held.
+    readers.processes.mockResolvedValue([
+      { pid: 4242, ppid: 4000, tty: 'ttys005', executable: 'codex' }, { pid: 4000, ppid: 3900, tty: 'ttys005', executable: 'zsh' },
+      { pid: 3900, ppid: 1, executable: '/Applications/WezTerm.app/Contents/MacOS/wezterm-gui' },
+    ])
     const { port } = startHere({ orca: { ...mac, onPath: (name: string) => `/opt/${name}/bin/${name}` } })
     port.observed(hook('session-start', { engine: 'codex', sessionId: 'cx-1',
       hostHints: { TERM_PROGRAM: 'WezTerm', WEZTERM_PANE: '7', ORCA_TERMINAL_HANDLE: HANDLE } }))
     attach(port)
+    // The read of its terminal's maker has landed.
+    await new Promise((done) => setImmediate(done))
     expect(await host().openAgent(CODEX)).toBeUndefined()
     expect(orcaRuns).toEqual([
       ['/opt/wezterm/bin/wezterm', ['cli', '--no-auto-start', 'activate-pane', '--pane-id', '7'], 10_000],
