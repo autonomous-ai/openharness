@@ -132,10 +132,10 @@ DEVICE_APP_PATHS = {
                           "device-app/scripts/release-build.sh", "device-app/scripts/release-check.sh",
                           "device-app/scripts/release-setup.sh", "device-app/src-tauri/tauri*.conf.json",
                           "device-app/src-tauri/Cargo.toml", "device-app/src-tauri/Cargo.lock"),
-    # Desktop installs the app: Desktop's half and its test, the Flutter its jobs set up on each arch, and the app's
-    # install, packaging and instance code.
+    # Desktop installs the app: Desktop's half, the signature check it runs on Linux and its test, the Flutter its jobs
+    # set up on each arch, and the app's install, packaging and instance code.
     "device-app-desktop": (DEVICE_APP_SETUP, ".github/actions/desktop-flutter/", ".github/actions/desktop-flutter-arm64/",
-                           "desktop/lib/devices/",
+                           "desktop/lib/devices/", "desktop/lib/update/tauri_signature.dart",
                            "desktop/integration_test/device_app_install_windows_linux_native_test.dart",
                            "device-app/src-tauri/src/install.rs", "device-app/src-tauri/src/packaging.rs",
                            "device-app/src-tauri/src/instance.rs", "device-app/src-tauri/tauri*.conf.json"),
@@ -299,7 +299,9 @@ PR_READS = {
                 "cli/src/sharing/protocol.ts", "daemons/frames.json", "docs/images/",
                 "daemons/plates.json",
                 "daemons/roster.json", "daemons/tools/illustrated/appearance.py", "daemons/tools/illustrated/daemon_art.py",
-                "daemons/tools/illustrated/generate.py", "mobile/lib/e2ee/relay_session_crypto.dart",
+                "daemons/tools/illustrated/generate.py",
+                # tauri_signature_test.dart holds Desktop's pinned update key to the Device app's.
+                "device-app/src-tauri/tauri.conf.json", "mobile/lib/e2ee/relay_session_crypto.dart",
                 "mobile/lib/p2p/terminal_p2p_link.dart", "mobile/lib/p2p/terminal_p2p_plugin.dart",
                 "mobile/lib/p2p/terminal_p2p_policy.dart", "mobile/lib/ws/relay_codec.dart",
                 "mobile/lib/ws/terminal_transport_plugin.dart", "mobile/pubspec.lock", "store/",

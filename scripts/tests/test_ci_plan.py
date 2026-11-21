@@ -1343,7 +1343,7 @@ class ReuseTests(ReuseFixture):
     def test_a_reused_device_app_suite_skips_while_another_rebuilds(self):
         # Review Focus 4: main changed only Desktop's half, so only the Desktop install runs again; it still needs all
         # four packages, and the reused suites' jobs (device-app-linux among them) must skip.
-        _, main, head = self.scenario(["device-app/src-tauri/tauri.conf.json"], ["desktop/lib/devices/x.dart"])
+        _, main, head = self.scenario(["device-app/src-tauri/tauri.linux.conf.json"], ["desktop/lib/devices/x.dart"])
         plan = self.plan(head, main)
         self.assertEqual(plan["suites"], ["device-app", "device-app-desktop", "device-app-e2e", "device-app-install",
                                           "device-app-update"])

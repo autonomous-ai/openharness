@@ -155,6 +155,7 @@ jobs:
             /desktop/scripts/
             /cli/scripts/release-cli.sh
             /backend/scripts/release-be.sh
+            /device-app/src-tauri/tauri.conf.json
             /.gitattributes
             /.gitignore
             /.gitmodules
@@ -225,6 +226,7 @@ jobs:
             /mobile/lib/ws/terminal_transport_plugin.dart
             /mobile/lib/ws/relay_codec.dart
             /mobile/lib/e2ee/relay_session_crypto.dart
+            /device-app/src-tauri/tauri.conf.json
             /.gitattributes
             /.gitignore
             /.gitmodules
