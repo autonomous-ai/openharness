@@ -75,6 +75,15 @@ describe('the catalog', () => {
     ])
   })
 
+  it('a timed ring change comes after a listing, so it times the change and not the first read of the store', () => {
+    for (const s of ALL) {
+      for (const c of s.checks.filter((c) => c.kind === 'ring' && c.timed)) {
+        const step = s.steps.findIndex((step) => step.label === c.after)
+        expect(s.steps.slice(0, step).some((step) => step.kind === 'wait' && step.until !== undefined), `${s.id} ${c.id}`).toBe(true)
+      }
+    }
+  })
+
   it('an open window closed by a step is longer than the open\'s half mark, so a late open still scores half', () => {
     // The window leaves out its closing step's instant: a person's wait of exactly the half mark would leave out an open
     // that lands on it.
