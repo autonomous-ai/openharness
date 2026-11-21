@@ -14,7 +14,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { scenariosFor } from '../src/testing/dialAppEval/catalog.js'
 import { loadBaseline, tierBVerdict } from '../src/testing/dialAppEval/grade.js'
 import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from '../src/testing/dialAppEval/runner.js'
-import { StepNotBuilt, type Platform } from '../src/testing/dialAppEval/types.js'
+import type { Platform } from '../src/testing/dialAppEval/types.js'
 import { chatgptSteps } from './harness/appEvalChatgpt.js'
 import { TierBDriver } from './harness/appEvalDriver.js'
 
@@ -25,38 +25,20 @@ const SCENARIOS = WIN32 ? [] : scenariosFor('b', HOST).filter((s) => s.app === '
 describe.skipIf(WIN32)('the dial eval, tier B: the ChatGPT app', () => {
   let driver: TierBDriver
   const runs: ScenarioRun[] = []
-  const skipped: string[] = []
-  beforeAll(() => { driver = new TierBDriver(chatgptSteps) })
+  beforeAll(() => { driver = new TierBDriver({ chatgpt: chatgptSteps }) })
   afterAll(async () => {
     await driver?.close()
     if (process.env.DIAL_EVAL_OUT) writeResults(process.env.DIAL_EVAL_OUT, 'chatgpt', collect(runs))
   })
 
-  it.for(SCENARIOS)('$id: $title', async (scenario, { skip }) => {
+  it.for(SCENARIOS)('$id: $title', async (scenario) => {
     const began = Date.now()
-    let run: ScenarioRun | undefined
-    let notBuilt: StepNotBuilt | undefined
-    try {
-      run = await runScenario(driver, scenario, HOST)
-    } catch (error) {
-      if (!(error instanceof StepNotBuilt)) throw error
-      notBuilt = error
-    }
-    console.log(`[dial eval] ${scenario.id}: ${Date.now() - began} ms${notBuilt ? `, skipped: ${notBuilt.message}` : ''}`)
-    // Also for a skipped one: a step before the one not built may have reached out.
+    const run = await runScenario(driver, scenario, HOST)
+    console.log(`[dial eval] ${scenario.id}: ${Date.now() - began} ms`)
     expect(driver.networkReached()).toEqual([])
-    if (!run) {
-      skipped.push(scenario.id)
-      return skip(notBuilt!.message)
-    }
     runs.push(run)
     expect(run.wrongSends).toEqual([])
     expect(uncaughtProbes(run)).toEqual([])
-  })
-
-  it('ran every ChatGPT scenario of tier B', () => {
-    expect(skipped).toEqual([])
-    expect(runs.map((r) => r.scenario)).toEqual(SCENARIOS.map((s) => s.id))
   })
 
   it("matches this platform's baseline", () => {

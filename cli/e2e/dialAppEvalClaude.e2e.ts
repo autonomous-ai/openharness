@@ -1,7 +1,7 @@
 /**
  * Tier B of the dial eval for the Claude app (docs/plans/2026-11-21-dial-app-eval-design.md, "Tier B"): each main
  * scenario of the catalog that runs in tier B, on the real daemon and devices process, through the tier B driver
- * (harness/appEvalDriver.ts). A scenario whose step is not built yet is skipped.
+ * (harness/appEvalDriver.ts).
  *
  * macOS and Linux. Every daemon has a throwaway home, its open, its home and the apps' stores checked inside its root
  * before it starts, the harness's recording `open` (HARNESS_OPEN_BIN) and the fake backend only. The real Claude app,
@@ -14,7 +14,7 @@ import { scenariosFor } from '../src/testing/dialAppEval/catalog.js'
 import { loadBaseline, tierBVerdict } from '../src/testing/dialAppEval/grade.js'
 import { readNetGuard } from '../src/testing/dialAppEval/netGuard.js'
 import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from '../src/testing/dialAppEval/runner.js'
-import { StepNotBuilt, type Platform } from '../src/testing/dialAppEval/types.js'
+import type { Platform } from '../src/testing/dialAppEval/types.js'
 import { claudeSteps } from './harness/appEvalClaude.js'
 import { TierBDriver } from './harness/appEvalDriver.js'
 
@@ -25,9 +25,7 @@ const SCENARIOS = WIN32 ? [] : scenariosFor('b', HOST).filter((s) => s.app === '
 describe.skipIf(WIN32)('the dial eval, tier B: the Claude app', () => {
   let driver: TierBDriver
   const runs: ScenarioRun[] = []
-  /** The scenarios a step not built yet skipped. */
-  const skipped: string[] = []
-  beforeAll(() => { driver = new TierBDriver(claudeSteps) })
+  beforeAll(() => { driver = new TierBDriver({ claude: claudeSteps }) })
   afterAll(async () => {
     await driver?.close()
     if (process.env.DIAL_EVAL_OUT) writeResults(process.env.DIAL_EVAL_OUT, 'claude', collect(runs))
@@ -50,31 +48,14 @@ describe.skipIf(WIN32)('the dial eval, tier B: the Claude app', () => {
     expect(driver.networkReached()).toEqual([])
   })
 
-  it.for(SCENARIOS)('$id: $title', async (scenario, { skip }) => {
+  it.for(SCENARIOS)('$id: $title', async (scenario) => {
     const began = Date.now()
-    let run: ScenarioRun | undefined
-    let notBuilt: StepNotBuilt | undefined
-    try {
-      run = await runScenario(driver, scenario, HOST)
-    } catch (error) {
-      if (!(error instanceof StepNotBuilt)) throw error
-      notBuilt = error
-    }
-    console.log(`[dial eval] ${scenario.id}: ${Date.now() - began} ms${notBuilt ? `, skipped: ${notBuilt.message}` : ''}`)
-    // Also for a skipped one: a step before the one not built may have reached out.
+    const run = await runScenario(driver, scenario, HOST)
+    console.log(`[dial eval] ${scenario.id}: ${Date.now() - began} ms`)
     expect(driver.networkReached()).toEqual([])
-    if (!run) {
-      skipped.push(scenario.id)
-      return skip(notBuilt!.message)
-    }
     runs.push(run)
     expect(run.wrongSends).toEqual([])
     expect(uncaughtProbes(run)).toEqual([])
-  })
-
-  it('ran every Claude scenario of tier B', () => {
-    expect(skipped).toEqual([])
-    expect(runs.map((run) => run.scenario)).toEqual(SCENARIOS.map((s) => s.id))
   })
 
   it("matches this platform's baseline", () => {

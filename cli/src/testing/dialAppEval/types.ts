@@ -165,7 +165,6 @@ export interface EvalDriver {
   readonly tier: Tier
   /** Time 0: devices up, dial welcomed, page and front set. */
   start(scenario: Scenario, platform: Platform): Promise<void>
-  /** Throws StepNotBuilt for a kind it cannot run yet. */
   step(step: Exclude<Step, { kind: 'wait' }>): Promise<void>
   /** Let the world run up to ms, or until `until` holds. */
   settle(ms: number, until?: () => boolean): Promise<void>
@@ -174,14 +173,6 @@ export interface EvalDriver {
   seen(): Seen
   gaps(): string[]
   stop(): Promise<void>
-}
-
-/** A step kind a driver has no handler for yet: the specs mark that scenario skipped. */
-export class StepNotBuilt extends Error {
-  constructor(readonly kind: StepKind, readonly tier: Tier) {
-    super(`step ${kind} is not built in tier ${tier}`)
-    this.name = 'StepNotBuilt'
-  }
 }
 
 /** The agent id the daemon's observed sources give this session: the ChatGPT app's threads are Codex's. */

@@ -24,7 +24,7 @@ import { APP_BUNDLES } from '../../src/cable/hosts/hostDetect.js'
 import { fetchOverSocket } from '../../src/lib/localTransport.js'
 import { claudeAppFixture } from '../../src/testing/claudeAppFixture.js'
 import type { SessionDef, SessionKey } from '../../src/testing/dialAppEval/types.js'
-import { notBuilt, speak, type AppSteps, type TierBWorld } from './appEvalDriver.js'
+import { speak, type AppSteps, type TierBWorld } from './appEvalDriver.js'
 import { CLI_ROOT, until, type IsolatedDaemon } from './daemon.js'
 import { inboxPoll } from './modInbox.js'
 import { Outside } from './outsideAgent.js'
@@ -248,7 +248,7 @@ function devicesSocket(world: TierBWorld): Promise<string> {
   return socket
 }
 
-export const claudeSteps: AppSteps = {
+export const claudeSteps = {
   /** Each session's file written as the app writes it, last active `ageMs` ago and written now. */
   'claude.write': async (world, step) => {
     appOf(world)
@@ -261,7 +261,6 @@ export const claudeSteps: AppSteps = {
         isArchived: step.archived === true }, { mtime: now })
     }
   },
-  'codex.write': notBuilt('codex.write'),
   hook: async (world, step) => {
     const { d } = world
     if (step.event === 'start') {
@@ -323,4 +322,4 @@ export const claudeSteps: AppSteps = {
     const app = appOf(world)
     for (const key of state.quit.splice(0)) await start(world, app, key)
   },
-}
+} satisfies AppSteps

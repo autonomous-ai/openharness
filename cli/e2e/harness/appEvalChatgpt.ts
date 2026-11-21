@@ -16,8 +16,9 @@ import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { onTestFinished } from 'vitest'
 import { codexAppFixture } from '../../src/testing/codexAppFixture.js'
-import { StepNotBuilt, type SessionDef, type SessionKey } from '../../src/testing/dialAppEval/types.js'
-import { notBuilt, speak, type AppSteps, type TierBWorld } from './appEvalDriver.js'
+import type { SessionDef, SessionKey } from '../../src/testing/dialAppEval/types.js'
+import { claudeSteps } from './appEvalClaude.js'
+import { speak, type AppSteps, type TierBWorld } from './appEvalDriver.js'
 import { CodexOutside } from './codexOutside.js'
 import { writeSchemeApps } from './schemeApps.js'
 
@@ -113,7 +114,8 @@ function hear(world: TierBWorld): void {
 }
 
 export const chatgptSteps: AppSteps = {
-  'claude.write': notBuilt('claude.write'),
+  // The Claude app's store beside the ChatGPT app's threads (XH2), as the Claude app's steps write it.
+  'claude.write': claudeSteps['claude.write'],
   /**
    * The rows of `sessions` and `archived` written as the app writes them, last active their age (or `ages`) ago; the
    * sidebar's projects in `projects` order with each session's project; Codex's name of each thread it has not named
@@ -171,10 +173,9 @@ export const chatgptSteps: AppSteps = {
         return end(world, step.session)
       // No ChatGPT scenario asks: its PermissionRequest is not built.
       case 'needs-input':
-        throw new StepNotBuilt('hook', 'b')
+        throw new Error(`scenario ${world.scenario.id}: tier B has no ChatGPT thread that asks`)
     }
   },
-  attach: notBuilt('attach'),
   voice: async (world, step) => {
     hear(world)
     await speak(world, step)

@@ -17,7 +17,7 @@ import { loadBaseline, tierAVerdict } from './grade.js'
 import { describeAttempt, guardThisProcess } from './netGuard.js'
 import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from './runner.js'
 import { TierADriver } from './tierA/driver.js'
-import { StepNotBuilt, type Platform, type Seen } from './types.js'
+import type { Platform, Seen } from './types.js'
 
 const { machine } = await vi.hoisted(async () => await import('./tierA/machine.js'))
 
@@ -129,15 +129,8 @@ afterAll(() => {
 })
 
 describe.each(PLATFORMS)('tier A on %s', (platform) => {
-  it.for(scenariosFor('a', platform))('$id', async (scenario, { skip }) => {
-    let run: ScenarioRun
-    try {
-      run = await runScenario(new TierADriver({ startDevices }), scenario, platform)
-    } catch (error) {
-      // A step family not built yet (Task 22 removes this skip).
-      if (error instanceof StepNotBuilt) return skip(error.message)
-      throw error
-    }
+  it.for(scenariosFor('a', platform))('$id', async (scenario) => {
+    const run = await runScenario(new TierADriver({ startDevices }), scenario, platform)
     runs.push(run)
     expect(run.wrongSends).toEqual([])
     expect(uncaughtProbes(run)).toEqual([])

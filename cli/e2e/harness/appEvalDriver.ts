@@ -19,7 +19,7 @@ import { dirname, isAbsolute, join, relative } from 'node:path'
 import { chatGptPlaces, claudeStoreRoots } from '../../src/cable/hosts/appPlaces.js'
 import { claudeAppFixture } from '../../src/testing/claudeAppFixture.js'
 import { describeAttempt, guardThisProcess, netGuardEnv, readNetGuard, type NetAttempt } from '../../src/testing/dialAppEval/netGuard.js'
-import { agentIdOf, StepNotBuilt, type App, type Delivery, type EvalDriver, type Platform, type Scenario, type Seen,
+import { agentIdOf, type App, type Delivery, type EvalDriver, type Platform, type Scenario, type Seen,
   type SessionDef, type SessionKey, type Step, type StepKind, type StepOf } from '../../src/testing/dialAppEval/types.js'
 import { CAROUSEL_REFRESH_MS, DialCarousel, type DialMessage } from '../../src/testing/dialCarousel.js'
 import { beginCost, costEnv } from './appEvalCost.js'
@@ -65,14 +65,9 @@ export type TierBHandler<K extends StepKind> = (world: TierBWorld, step: StepOf<
 /** The steps this driver runs itself, on the dial and the watch. */
 type GenericKind = 'front' | 'thread' | 'tap' | 'swipe' | 'unplug' | 'replug'
 /** The steps on an app's sessions and stores, and its voice, whose words land on that app's paths: each app's file gives
- *  them (appEvalClaude.ts, appEvalChatgpt.ts). */
-export type AppSteps = { [K in Exclude<StepKind, 'wait' | GenericKind>]: TierBHandler<K> }
+ *  those its scenarios take (appEvalClaude.ts, appEvalChatgpt.ts). */
+export type AppSteps = { [K in Exclude<StepKind, 'wait' | GenericKind>]?: TierBHandler<K> }
 type Run = Exclude<Step, { kind: 'wait' }>
-
-/** A step with no handler yet: the e2e file skips that scenario. */
-export function notBuilt<K extends StepKind>(kind: K): TierBHandler<K> {
-  return async () => { throw new StepNotBuilt(kind, 'b') }
-}
 
 /** A daemon, its desk and its backend, kept across the scenarios that do not ask for a fresh one. */
 interface Rig {
@@ -337,7 +332,8 @@ export class TierBDriver implements EvalDriver {
   /** The running scenario's cost, ended at its stop after its children. */
   private costEnd: (() => Promise<NonNullable<Seen['cost']>>) | undefined
 
-  constructor(private readonly appSteps: AppSteps) {}
+  /** Each scenario runs on its own app's steps. */
+  constructor(private readonly appSteps: Partial<Record<App, AppSteps>>) {}
 
   async start(scenario: Scenario, platform: Platform): Promise<void> {
     if (platform !== process.platform) throw new Error(`tier B runs on its host's platform, not ${platform}`)
@@ -372,8 +368,10 @@ export class TierBDriver implements EvalDriver {
     if (index < 0) throw new Error(`${world.scenario.id}: a ${step.kind} step that is not its next`)
     this.next = index + 1
     world.steps.push({ at: Date.now(), index, kind: step.kind, ...(step.label === undefined ? {} : { label: step.label }) })
-    const handler = (Object.hasOwn(GENERIC, step.kind) ? GENERIC[step.kind as GenericKind] : this.appSteps[step.kind as keyof AppSteps]) as
-      (world: World, step: Run) => Promise<void>
+    const { app } = world.scenario
+    const handler = (Object.hasOwn(GENERIC, step.kind) ? GENERIC[step.kind as GenericKind] : this.appSteps[app]?.[step.kind as keyof AppSteps]) as
+      ((world: World, step: Run) => Promise<void>) | undefined
+    if (!handler) throw new Error(`${world.scenario.id}: tier B has no ${step.kind} step for the ${app} app`)
     await handler(world, step)
   }
 

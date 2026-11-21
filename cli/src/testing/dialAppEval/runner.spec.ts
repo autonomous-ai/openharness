@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { collect, readResults, runScenario, SETTLE_END_MS, uncaughtProbes, writeResults, type ScenarioRun } from './runner.js'
-import { agentIdOf, StepNotBuilt, type Check, type EvalDriver, type Platform, type Scenario, type Seen, type SessionDef,
+import { agentIdOf, type Check, type EvalDriver, type Platform, type Scenario, type Seen, type SessionDef,
   type Step, type StepKind, type Tier } from './types.js'
 
 const uuid = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -208,8 +208,4 @@ it('the driver stops when a step throws', async () => {
   const failing = new Scripted({ throwOn: { kind: 'tap', error: new Error('boom') } })
   await expect(runScenario(failing, scenario([write, tap]), 'darwin')).rejects.toThrow('boom')
   expect(failing.calls.at(-1)).toBe('stop')
-
-  const unbuilt = new Scripted({ throwOn: { kind: 'tap', error: new StepNotBuilt('tap', 'a') } })
-  await expect(runScenario(unbuilt, scenario([write, tap]), 'darwin')).rejects.toBeInstanceOf(StepNotBuilt)
-  expect(unbuilt.calls.at(-1)).toBe('stop')
 })
