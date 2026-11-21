@@ -19,7 +19,7 @@ import { resolveViaLoginShell, tmuxInstallDirectories, type TmuxPathOutcome } fr
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { APP_BUNDLES } from './hostDetect.js'
 import { CONTROL, MAX_TEXT, RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
-import { parentChain, type ProcessName } from './scannedApp.js'
+import { parentChain, readPtyMaker, type ProcessName } from './scannedApp.js'
 import { PID } from './tmux.js'
 import type { PaneSwitch } from './types.js'
 
@@ -148,12 +148,12 @@ export function createKittyAdapter(deps: KittyDeps): HostAdapter & Required<Pick
   }
 }
 
-const isKitty = (p: ProcessName): boolean => p.executable.split('/').pop() === 'kitty'
-
 /** The kitty window holding a multiplexer's client, by the client's process: a rest focuses it while kitty is in front,
  *  and a tap once kitty came forward. Windows' kitty has no remote control the hints name. */
 export function createKittyTabAdapter(deps: KittyDeps & {
-  front(): string | undefined; processes(): Promise<readonly ProcessName[]> }):
+  front(): string | undefined; processes(): Promise<readonly ProcessName[]>
+  /** The terminal a process runs on (readTtyName); none on none. */
+  tty(pid: number): Promise<string | undefined> }):
 HostAdapter & Required<Pick<HostAdapter, 'canShow' | 'show'>> {
   const tabOf = (pane: Pane): { pid: number; listenOn: string; path?: string } | undefined => {
     const parts = deps.platform === 'win32' ? null : TAB.exec(pane.id)
@@ -161,17 +161,17 @@ HostAdapter & Required<Pick<HostAdapter, 'canShow' | 'show'>> {
     return socket ? { pid: Number(parts[1]), ...socket } : undefined
   }
   // kitty matches a window by its own process, kitty's child, never by one below it (RECORDED_KITTY
-  // focusWindowPidDescendant): of the client and its parents, the one kitty started. One table read a verb.
+  // focusWindowPidDescendant): of the client and its parents, the one started by the kitty that made the client's
+  // terminal. A kitty further up holds a terminal started from its window (an xterm, an Alacritty), whose window the
+  // agent is not in. One table read a verb.
   const focus = async (pane: Pane): Promise<boolean> => {
     const at = tabOf(pane)
     if (!at || !ours(deps, at.path)) return false
     const rows = await deps.processes().catch(() => undefined)
     if (!rows) return false
-    const chain = parentChain(at.pid, new Map(rows.map((p) => [p.pid, p])))
-    const own = chain.find((_, i) => {
-      const parent = chain[i + 1]
-      return parent !== undefined && isKitty(parent)
-    })
+    const maker = await readPtyMaker(at.pid, rows, deps.tty).catch(() => undefined)
+    if (maker?.host !== 'kitty') return false
+    const own = parentChain(at.pid, new Map(rows.map((p) => [p.pid, p]))).find((p) => p.ppid === maker.pid)
     return own !== undefined && await remote(deps, at.listenOn, ['focus-window', '--match', `pid:${own.pid}`])
   }
   return {

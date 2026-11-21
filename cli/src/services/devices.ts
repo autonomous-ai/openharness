@@ -595,7 +595,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // The WezTerm pane and the kitty window holding a multiplexer's client, as the tabs adapter's tab of Terminal,
     // iTerm2 and Ghostty.
     createWeztermTabAdapter({ ...apps, front: () => cableHost.latestFront() }),
-    createKittyTabAdapter({ ...kittyDeps, front: () => cableHost.latestFront(), processes: readProcessNames }),
+    createKittyTabAdapter({ ...kittyDeps, front: () => cableHost.latestFront(), processes: readProcessNames, tty: readTtyName }),
     createTabsAdapter({
       isOpen: () => tabs.isOpen(),
       select: (tab, raise) => {
