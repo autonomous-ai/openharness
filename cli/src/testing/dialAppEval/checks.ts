@@ -1,7 +1,9 @@
 // The dial eval's check evaluators: pure functions from what a driver saw to scores (docs/plans/2026-11-21-dial-app-eval-plan.md,
 // Task 5). Evidence names session keys and times only, never a title, a folder or spoken text, and lists only what was
 // observed: a driver that observes nothing leaves it empty, so its probes fail.
+import { windowClasses } from '../../cable/hosts/frontApp.js'
 import { observedTitle } from '../../cable/hosts/observedTitle.js'
+import { WINDOWS_APPS } from '../../cable/hosts/windowsRaise.js'
 import { agentIdOf, THRESHOLDS, type App, type Check, type CheckResult, type Platform, type Scenario, type Seen,
   type SessionDef, type SessionKey, type Tier, type Until, type WrongSend } from './types.js'
 
@@ -206,19 +208,34 @@ function linkOf(session: SessionDef): string | undefined {
 }
 
 /**
- * The command that brings the app to the front on each platform (the eval sees commands, not windows): macOS sends to
- * the app by its bundle; Linux runs xdg-open with the link, or a raise, which tier A records as `raise …`; Windows asks
- * harness-pty to open the link or raise the app. Null `platform`: any of them, for a wait that knows none.
+ * Whether a command brings the session's app to the front (the eval sees commands, not windows), in the form the
+ * devices run it on each platform, or tier A records it (tierA/world.ts):
+ * - macOS: `open -b <the app's bundle> [<link>]`.
+ * - Linux: `xdg-open <the session's link>`, or `raise [<pid>] [<app id>]`, tier A's record of linuxRaise's call. A raise
+ *   counts only naming the session's app, by its app id or one of its window classes (frontApp.ts windowClasses): a pid
+ *   alone does not, as the eval is told no session's process.
+ * - Windows: `harness-pty open-link <the session's link>`, or `harness-pty raise` naming the app, by its bundle (tier
+ *   A's record of windowsRaise.app) or by `--exe <its program>` (the helper's own form, windowsRaise.ts), any case.
  */
-function fronts(argv: string[], platform: Platform | null, app: App, link: string | undefined): boolean {
+function fronts(argv: string[], platform: Platform, app: App, link: string | undefined): boolean {
   const exe = (argv[0] ?? '').split(/[\\/]/).at(-1)!.replace(/\.exe$/, '')
-  const on = (p: Platform): boolean => platform === null || platform === p
-  return (on('darwin') && argv.some((a, i) => a === '-b' && argv[i + 1] === BUNDLES[app]))
-    || (on('linux') && ((exe === 'xdg-open' && link !== undefined && argv.includes(link)) || exe === 'raise'))
-    || (on('win32') && exe === 'harness-pty' && ((argv[1] === 'open-link' && link !== undefined && argv[2] === link) || argv[1] === 'raise'))
+  const bundle = BUNDLES[app]
+  switch (platform) {
+    case 'darwin': return argv.some((a, i) => a === '-b' && argv[i + 1] === bundle)
+    case 'linux': {
+      const id = pageOf(app)
+      return (exe === 'xdg-open' && link !== undefined && argv.includes(link))
+        || (exe === 'raise' && argv.slice(1).some((a) => a === id || windowClasses(id).includes(a)))
+    }
+    case 'win32': {
+      const program = WINDOWS_APPS[bundle]!.toLowerCase()
+      return exe === 'harness-pty' && ((argv[1] === 'open-link' && link !== undefined && argv[2] === link)
+        || (argv[1] === 'raise' && (argv[2] === bundle || (argv[2] === '--exe' && argv[3]?.toLowerCase() === program))))
+    }
+  }
 }
 
-function openParts(check: CheckOf<'open'>, world: World, w: Window | undefined, platform: Platform | null): Part[] {
+function openParts(check: CheckOf<'open'>, world: World, w: Window | undefined, platform: Platform): Part[] {
   const session = world.session(check.session)
   const link = linkOf(session)
   const commands = w ? world.seen.commands.filter((c) => within(c.at, w)) : []
@@ -338,7 +355,7 @@ function costParts(seen: Seen): Part[] {
   ]
 }
 
-function partsOf(check: Check, scenario: Scenario, seen: Seen, platform: Platform | null): Part[] {
+function partsOf(check: Check, scenario: Scenario, seen: Seen, platform: Platform): Part[] {
   const world = new World(scenario, seen)
   const w = world.window(check)
   switch (check.kind) {
@@ -373,8 +390,9 @@ export function evaluate(check: Check, scenario: Scenario, seen: Seen, tier: Tie
  * evidence is what the dial had, for a wait that reaches its limit.
  */
 export function condition(until: Until, scenario: Scenario, seen: Seen): { holds: boolean; evidence: string[] } {
-  // The id and dim name no result: only the parts are read.
-  const untimed = partsOf({ id: 'until', dim: scenario.dims[0]!, ...until }, scenario, seen, null).filter((p) => !p.timed)
+  // The id and dim name no result: only the parts are read, from the start.
+  const world = new World(scenario, seen)
+  const untimed = ringParts({ id: 'until', dim: scenario.dims[0]!, ...until }, world, { from: 0, to: Infinity }).filter((p) => !p.timed)
   return { holds: untimed.length > 0 && untimed.every((p) => p.score === 1), evidence: [...new Set(untimed.flatMap((p) => p.evidence))] }
 }
 
