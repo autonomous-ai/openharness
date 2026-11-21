@@ -476,8 +476,14 @@ class SelectionTests(unittest.TestCase):
         for path in ("cli/e2e/harness/dialHosts.ts", "cli/vitest.e2e.ci.config.ts"):
             with self.subTest(path=path):
                 self.assertIn("cross-read-scan", planner.select([path])[0])
+        # A component change can add an undeclared read, which the next planner pull request or make merge-pr's reuse
+        # check found long after: every component change runs the scan.
+        for path in ("cli/src/x.ts", "cli/src/lib/relayFrames.ts", "desktop/lib/devices/x.dart", "backend/src/app.ts",
+                     "pty/src/stream.rs", "devices/harness-pro/firmware/main/app/pro_app.c"):
+            with self.subTest(path=path):
+                self.assertIn("cross-read-scan", planner.select([path])[0])
         for path in ("scripts/local-checks.py", "scripts/tests/test_pr_e2e_jobs.py", ".github/workflows/ci.yml",
-                     "cli/src/lib/relayFrames.ts", "desktop/lib/devices/x.dart"):
+                     "docs/guide.md"):
             with self.subTest(path=path):
                 self.assertNotIn("cross-read-scan", planner.select([path])[0])
         self.assertEqual(planner.JOBS["cross-read-scan"], {"cross-read-scan"})
