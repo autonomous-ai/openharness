@@ -304,6 +304,7 @@ export const MAIN: Scenario[] = [
     dims: ['D1', 'D7'], sessions: [...threads(['t1', 't2', 't3']), chatgptGhost],
     steps: [
       { kind: 'codex.write', sessions: ['t1', 't2', 't3'] },
+      ...listed('chatgpt', ['t1', 't2', 't3']),
       { label: 'archive', kind: 'codex.write', sessions: ['t2', 't3'], archived: ['t2'], ages: { t3: 1 * S } },
     ],
     checks: [
