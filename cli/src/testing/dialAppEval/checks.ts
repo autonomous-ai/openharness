@@ -295,9 +295,12 @@ function voiceParts(check: CheckOf<'voice'>, world: World, w: Window | undefined
   const deliveries = w ? world.seen.deliveries.filter((d) => within(d.at, w)) : []
   const mine = deliveries.filter((d) => d.target === check.session)
   const exact = mine.length > 0 && mine.every((d) => d.text === check.text)
+  // What the dial was told of the voice (a refusal is a voice.error), so a voice that reached nobody says why.
+  const told = w ? world.seen.frames.filter((f) => typeof f.message.t === 'string' && f.message.t.startsWith('voice.') && within(f.at, w)) : []
   // Spoken text is never printed: only whether it matched.
-  const evidence = bounded(deliveries.map((d) =>
-    `delivery at ${d.at} via ${d.path} to ${d.target ?? 'none'}${d.target === check.session ? `, text ${d.text === check.text ? 'exact' : 'differs'}` : ''}`))
+  const evidence = bounded([...told.map((f) => `${String(f.message.t)} at ${f.at}`), ...deliveries.map((d) =>
+    `delivery at ${d.at} via ${d.path} to ${d.target ?? 'none'}${d.target === check.session ? `, text ${d.text === check.text ? 'exact' : 'differs'}` : ''}`),
+  ...(told.length > 0 && deliveries.length === 0 ? ['no delivery'] : [])])
   return [
     { part: 'reached', score: mine.length > 0 ? 1 : 0, timed: false, evidence },
     { part: 'once', score: mine.length === 1 ? 1 : 0, timed: false, evidence },
