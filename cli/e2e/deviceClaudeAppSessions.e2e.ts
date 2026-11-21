@@ -325,4 +325,24 @@ describe.skipIf(process.platform === 'win32')("the Claude app's Code sessions on
     expect(log).toContain('[device] voice · wake-busy')
     for (const secret of ['Fixture Wake', 'e2e-wake', LOCAL, app.sessionId, first, second]) expect(log).not.toContain(secret)
   })
+
+  it('a session the Claude app resumes runs under its store id: its hooks name it, and it stays one row', async () => {
+    const resumed = session({ title: 'Fixture Resumed', cwd: '/work/e2e-resumed', lastActivityAt: Date.now() })
+    const { d, desk } = await fresh([{ session: resumed, mtime: Date.now() }])
+    const id = observedAgentId('claude', resumed.cliSessionId)
+    const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0c', FILTER)
+    await showing(dial, 'its store row', (r) => r.length === 1 && r[0].id === id)
+
+    const hints = { CLAUDE_CODE_HOST_SESSION_ID: resumed.localId }
+    const engine = LINUX
+      ? await Outside.start(d, 'e2e-resumed', hints, 'claude-app', { resume: resumed.cliSessionId })
+      : await Outside.start(d, 'e2e-resumed', { ...hints, __CFBundleIdentifier: CLAUDE_APP }, undefined, { resume: resumed.cliSessionId })
+    outside.push(engine)
+    expect(engine.sessionId).toBe(resumed.cliSessionId)
+    expect(d.hookLog()).toContain(`SessionStart(resume) session=${resumed.cliSessionId} ran`)
+    const since = dial.messages.length
+    engine.type('hello again')
+    await dial.next((m) => m.t === 'turn.started' && m.agentId === id, 45_000, 'its turn started', since)
+    for (const rows of rosters(dial)) expect(rows.every((row) => row.id === id) && rows.length <= 1, JSON.stringify(rows)).toBe(true)
+  })
 })
