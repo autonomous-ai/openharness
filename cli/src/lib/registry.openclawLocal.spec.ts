@@ -26,7 +26,19 @@ beforeEach(() => {
   vi.stubEnv('ADAPTER_DATA_DIR', root)
   for (const level of ['log', 'warn', 'error'] as const) vi.spyOn(console, level).mockImplementation(() => {})
 })
-afterEach(async () => { for (const instance of instances) await instance.flush({ exiting: true }).catch(() => {}); instances.clear(); await Promise.all([...stores].map(closeSessionStorageFixture)); stores.clear(); vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.resetModules(); rmSync(root, { recursive: true, force: true }) })
+afterEach(async () => {
+  let settled = false
+  try {
+    await Promise.allSettled([...instances].map(registry => registry.flush({ exiting: true })))
+    const closed = await Promise.allSettled([...stores].map(closeSessionStorageFixture))
+    const failures = closed.filter(result => result.status === 'rejected').map(result => result.reason)
+    if (failures.length) throw new AggregateError(failures, 'registry fixture cleanup failed')
+    settled = true
+  } finally {
+    instances.clear(); stores.clear(); vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.resetModules()
+    if (settled) rmSync(root, { recursive: true, force: true })
+  }
+})
 
 async function load() { vi.resetModules(); stores.add(deadline.slowSessionStorage((await import('./sessionStorage.js')).sessionStorage)); const mod = await import('./registry.js'); instances.add(mod.registry); await mod.registry.load(); return mod }
 const disk = (): RegisteredSession[] => JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))

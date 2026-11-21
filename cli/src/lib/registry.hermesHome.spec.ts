@@ -45,11 +45,17 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  for (const instance of instances) await instance.flush({ exiting: true }).catch(() => {})
-  instances.clear()
-  await Promise.all([...stores].map(closeSessionStorageFixture)); stores.clear()
-  vi.restoreAllMocks(); vi.unstubAllEnvs()
-  rmSync(directory, { recursive: true, force: true })
+  let settled = false
+  try {
+    await Promise.allSettled([...instances].map(registry => registry.flush({ exiting: true })))
+    const closed = await Promise.allSettled([...stores].map(closeSessionStorageFixture))
+    const failures = closed.filter(result => result.status === 'rejected').map(result => result.reason)
+    if (failures.length) throw new AggregateError(failures, 'registry fixture cleanup failed')
+    settled = true
+  } finally {
+    instances.clear(); stores.clear(); vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.resetModules()
+    if (settled) rmSync(directory, { recursive: true, force: true })
+  }
 })
 
 it('keeps the mark with the home through a save, a load and a rebind', async () => {

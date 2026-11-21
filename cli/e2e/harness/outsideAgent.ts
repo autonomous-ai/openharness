@@ -6,7 +6,6 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { waitForNativeHooks } from './nativeHooks.js'
 import { promisify } from 'node:util'
 import { observedAgentId } from '../../src/cable/hosts/observed.js'
 import { until, type IsolatedDaemon } from './daemon.js'
@@ -154,7 +153,7 @@ export class Outside {
    */
   static async start(d: IsolatedDaemon, folder: string, hints: Record<string, string>, app?: FakeApp,
     { shell = false } = {}): Promise<Outside> {
-    await waitForNativeHooks(d, 'claude')
+    await d.hooksInstalled(['claude'])
     const { tab, pid, shellPid } = await Outside.open(d, folder, hints, app, shell)
     // Its conversation, as its SessionStart hook named it once that hook had run.
     const started = new RegExp(`claude pid=${pid} SessionStart\\(startup\\) session=(\\S+) ran`)

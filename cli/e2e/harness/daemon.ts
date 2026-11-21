@@ -26,8 +26,6 @@ import { artifactLog, artifactsEnabled } from './artifacts.js'
 import { daemonEnvironment } from '../../src/testing/daemonEnvironment.js'
 import { writeExecutable } from '../../src/testing/executableFixture.js'
 import { GH_FORBIDDEN_STUB } from '../../src/testing/ghStub.js'
-import { hooks as claudeHooks } from '../../src/engines/claude/hookContract.js'
-import { hooks as codexHooks } from '../../src/engines/codex/hookContract.js'
 import { readAdoptedHomes } from '../../src/engines/kit/homeAdoption.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
 import { endRootProcesses } from '../../src/testing/rootProcesses.js'
@@ -189,19 +187,7 @@ const NATIVE_HOOK_PATHS: Record<string, readonly string[]> = {
 }
 const HOOK_ENGINES = new Set(['claude', 'codex', ...Object.keys(NATIVE_HOOK_PATHS)])
 
-/** The lines each engine's install may end on, from its own contract. */
-const HOOK_INSTALL_MESSAGES = { claude: claudeHooks.settings.messages, codex: codexHooks.settings.messages }
-type HookInstallEngine = keyof typeof HOOK_INSTALL_MESSAGES
-/**
- * A line saying how [engine]'s hook install went: the first line of each message its contract declares but `after`,
- * `{…}` standing for anything. Any outcome counts, a failed write or a malformed file too: the install is over, and
- * what came of it is the test's to judge. A message's later lines, like `after`, only follow a first one, and may be
- * another engine's too: Codex's "fix the file, then restart harness login" is also Grok's and Agy's.
- */
-export const installOutcome = (engine: HookInstallEngine): RegExp => new RegExp(Object.entries(HOOK_INSTALL_MESSAGES[engine])
-  .filter(([key]) => key !== 'after').flatMap(([, said]) => [said ?? []].flat().slice(0, 1))
-  .map((template) => template.split(/\{\w+\}/).map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*'))
-  .join('|'))
+type HookInstallEngine = 'claude' | 'codex'
 /** The shell profiles a login shell in a pane reads, where a person moves an engine's home. */
 const PROFILES = { ZDOTDIR: ['.zshenv', '.zprofile', '.zshrc', '.zlogin'], HOME: ['.bash_profile', '.bash_login', '.profile', '.bashrc'] }
 
@@ -679,18 +665,20 @@ esac
     })()])
   }
 
-  /**
-   * Resolves once the last start's log says how the install of each of [engines]' hooks went, then checks they stayed
-   * inside the root. A daemon installs them after it says it is ready, by design (src/startupOrder.spec.ts), and a
-   * launch of its own waits for its engine's; an engine a test runs by hand, or a daemon it stops, right after start
-   * does not.
-   */
+  /** External CLIs snapshot hooks at launch; startup readiness does not wait for optional setup. */
   async hooksInstalled(engines: readonly HookInstallEngine[]): Promise<void> {
-    const outcomes = engines.map(installOutcome)
-    await until(`the daemon to install the hooks of ${engines.join(', ')}`, () => {
-      const lines = this.output.slice(this.startedAt).split('\n')
-      return outcomes.every((outcome) => lines.some((line) => outcome.test(line)))
-    }, 60_000, 100)
+    for (const engine of engines) {
+      const home = engine === 'claude' ? this.env.CLAUDE_CONFIG_DIR || join(this.env.HOME!, '.claude') : this.env.CODEX_HOME!
+      const file = join(home, engine === 'claude' ? 'settings.json' : 'hooks.json')
+      // Setup workers publish quietly. Old install messages say nothing about the current file or bound port.
+      await until(`${engine} startup hooks published in its private home`, () => {
+        const settings = JSON.parse(readFileSync(file, 'utf8'))
+        const port = new RegExp(`--port(?:=|\\s+)${this.port}(?:\\s|$|['"])`)
+        return settings.hooks?.SessionStart?.some((block: { hooks?: Array<{ type?: string; command?: string }> }) =>
+          block.hooks?.some(hook => hook.type === 'command' && hook.command?.includes('notify.mjs')
+            && port.test(hook.command))) || null
+      }, 60_000, 100)
+    }
     this.assertHooksStayedInside()
   }
 

@@ -42,6 +42,7 @@ export function registryImageSynced(): void { runPass(due, () => true) }
 
 /** Simulate slow registry image syncs at the storage child's reply, where preparation actually finishes. */
 export function slowSessionStorage(storage: SessionStorage, afterSync?: (value: unknown) => Promise<void>): SessionStorage {
+  if (vi.isMockFunction(storage.prepare)) throw new Error('storage preparation is already instrumented')
   const prepare = storage.prepare.bind(storage)
   vi.spyOn(storage, 'prepare').mockImplementation(async (...args) => {
     const prepared = await prepare(...args)

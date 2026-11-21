@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, watch, writeFileSync, type FSWatcher } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -32,7 +32,12 @@ describe('the watch on the setting\'s file while Agent Messages are off', () => 
     write(root, false)
     const observed: boolean[] = []
     const changed = vi.fn(() => { observed.push(JSON.parse(readFileSync(agentSettingsPath(root), 'utf8')).agentMessages) })
-    const stop = watchSettingFile(agentSettingsPath(root), changed)
+    const watches: FSWatcher[] = [], closed = new Set<FSWatcher>()
+    const stop = watchSettingFile(agentSettingsPath(root), changed, { watch: (path, listener) => {
+      const watcher = watch(path, { persistent: false }, listener)
+      watches.push(watcher); watcher.once('close', () => { closed.add(watcher) })
+      return watcher
+    } })
     try {
       // fs.watch can coalesce or repeat events; the caller must read each new state.
       await vi.waitFor(() => expect(observed.at(-1)).toBe(false))
@@ -44,8 +49,9 @@ describe('the watch on the setting\'s file while Agent Messages are off', () => 
     stop()
     const after = changed.mock.calls.length
     write(root, true)
-    // Drain the watch's queued next-turn reads after stop; the fake-watch case also sends late native events.
-    await new Promise((settle) => setImmediate(settle))
+    // Prove the native handles actually closed, not just that callbacks have not arrived yet.
+    try { await vi.waitFor(() => expect(closed.size).toBe(watches.length)) }
+    finally { for (const watcher of watches) watcher.close() }
     expect(changed).toHaveBeenCalledTimes(after)
   })
 

@@ -153,3 +153,8 @@ it('runs every timer it fires, and throws a failing one on its own afterwards', 
   expect(thrown).toHaveLength(1)
   expect(thrown[0]).toThrow('fixture timer failed')
 })
+
+it('refuses to instrument the same preparation twice', () => {
+  storage = deadline.slowSessionStorage(new SessionStorage(root))
+  expect(() => deadline.slowSessionStorage(storage!)).toThrow('already instrumented')
+})

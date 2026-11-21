@@ -47,9 +47,21 @@ async function loadRegistry() {
   return module
 }
 let root: string | undefined
-afterEach(async () => { slow.release(); slow.image = undefined; slow.holds = 0;
-  await Promise.allSettled([...registries].map(registry => registry.flush({ exiting: true }))); registries.clear()
-  await Promise.all([...stores].map(closeSessionStorageFixture)); stores.clear(); vi.restoreAllMocks(); fault.beforeVerify = undefined; fault.onDirectoryOpen = undefined; fault.captures = 0; vi.doUnmock('./engineHomes.js'); vi.unstubAllEnvs(); vi.resetModules(); if (root) rmSync(root, { recursive: true, force: true }) })
+afterEach(async () => {
+  slow.release(); slow.image = undefined; slow.holds = 0
+  let settled = false
+  try {
+    await Promise.allSettled([...registries].map(registry => registry.flush({ exiting: true })))
+    const closed = await Promise.allSettled([...stores].map(closeSessionStorageFixture))
+    const failures = closed.filter(result => result.status === 'rejected').map(result => result.reason)
+    if (failures.length) throw new AggregateError(failures, 'registry fixture cleanup failed')
+    settled = true
+  } finally {
+    registries.clear(); stores.clear(); vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.resetModules()
+    fault.beforeVerify = undefined; fault.onDirectoryOpen = undefined; fault.captures = 0; vi.doUnmock('./engineHomes.js')
+    if (settled && root) rmSync(root, { recursive: true, force: true })
+  }
+})
 
 it('repairs a child-overwritten parent from an adopted Codex home before the login shell is read', async () => {
   // Found by QA on a quiet machine: restart searched only the default home and discarded this parent binding.
@@ -88,7 +100,7 @@ it('repairs a child-overwritten parent from an adopted Codex home before the log
   // A changed ancestor is incomplete evidence, even when another CI fixture
   // caused it. The preserved binding can be repaired by the next fresh read.
   const reloaded = registry.load()
-  await vi.waitFor(() => expect(slow.holds).toBeGreaterThan(0))
+  await vi.waitFor(() => expect(slow.holds).toBeGreaterThan(0), { timeout: 3_000 })
   expect(JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))[0].transcriptPath).toBe(child)
   slow.release()
   await reloaded

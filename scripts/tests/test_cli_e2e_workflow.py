@@ -28,13 +28,11 @@ class CliE2eWorkflowTests(unittest.TestCase):
         nightly = jobs(read(CLI_E2E))
         for job in (nightly.get("e2e", ""), nightly.get("agent-browser-podman", ""), jobs(read(DIAL_HOSTS)).get("dial-hosts", "")):
             self.assertIn(SETUP, job)
-        # CI's unit-test job also needs shell completion repair. This contract owns only its e2e setup.
-        for path, text in ((CLI_E2E, read(CLI_E2E)), (DIAL_HOSTS, read(DIAL_HOSTS)),
-                           (CI, jobs(read(CI)).get("linux-e2e", ""))):
+        for path in (CLI_E2E, DIAL_HOSTS, CI):
             with self.subTest(path=path.name):
-                self.assertIn(SETUP, text)
-                self.assertNotIn("compaudit", text)
-                self.assertNotIn("fs.inotify", text)
+                self.assertNotIn("compaudit", read(path))
+                self.assertNotIn("fs.inotify", read(path))
+        self.assertIn(SETUP, jobs(read(CI)).get("cli-tests", ""))
         action = read(ACTION)
         # One copy of each fix: the compaudit repair and the inotify limits.
         self.assertEqual(len(re.findall(r"(?m)^.*insecure=\$\(zsh -fc 'autoload -U compaudit && compaudit'.*$", action)), 1)
