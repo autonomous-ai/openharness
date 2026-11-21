@@ -239,15 +239,11 @@ test("studio metadata updates without rebuilding the game or clearing readiness"
     JSON.stringify({ title: "A new title", controls: "Arrow keys" }),
   );
   await published(viewer, (state) => state.project.title === "A new title");
-  // The viewer handles its file events in order: once this later write is published, a rebuild
-  // the title change caused would already show.
-  writeFileSync(
-    join(workspace, ".harness/progress.json"),
-    JSON.stringify({ phase: "play", message: "Tuning the jump height" }),
-  );
-  await published(
-    viewer,
-    (state) => state.progress.message === "Tuning the jump height",
+  // Every file event the viewer treats as game source records an edit in the same callback,
+  // before it schedules the rebuild, so this proves the title change scheduled none.
+  assert.deepEqual(
+    viewer.state.activity.filter((item) => item.kind === "edit"),
+    [],
   );
   assert.equal(viewer.state.latest.number, number);
   assert.equal(viewer.state.status, "ready");
