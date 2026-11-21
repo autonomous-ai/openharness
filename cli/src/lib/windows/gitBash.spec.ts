@@ -53,6 +53,15 @@ describe('findGitBash', () => {
     expect(findGitBash({ env: { ProgramData: 'C:\\ProgramData' }, isFile: programData })).toBe('C:\\ProgramData\\scoop\\apps\\git\\current\\bin\\bash.exe')
   })
 
+  it('never follows a relative PATH entry, which names a folder of whatever folder the daemon runs in', () => {
+    // Every file exists, so a relative entry followed anywhere would give a bash; `\tools` is relative to the drive.
+    const everywhere = (path: string) => /(?:git|bash)\.exe$/i.test(path)
+    for (const relative of ['tools\\Git\\cmd', '.\\cmd', '\\tools\\Git\\cmd', 'C:Git\\cmd']) {
+      expect(findGitBash({ env: { PATH: relative }, isFile: everywhere })).toBeNull()
+    }
+    expect(findGitBash({ env: { PATH: 'cmd;D:\\Git\\cmd' }, isFile: everywhere })).toBe('D:\\Git\\bin\\bash.exe')
+  })
+
   it('is null on a computer with no Git for Windows at all', () => {
     expect(findGitBash({ env: { PATH: 'C:\\Windows\\System32', ProgramFiles: 'C:\\Program Files' }, isFile: disk() })).toBeNull()
     expect(findGitBash({ env: {}, isFile: disk() })).toBeNull()
