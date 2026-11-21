@@ -96,7 +96,8 @@ export function createZellijAdapter(deps: ZellijDeps): HostAdapter & Required<Pi
       // herdr, Rex, tmux, a terminal or an editor started in a Zellij pane keeps its variables, and that pane shows
       // whichever of their panes is in front, or a shell that runs what is typed: only a pane Zellij's server made the
       // agent's terminal for takes words. Any other only focuses.
-      return { adapter: 'zellij', id: `${place.ptyOwner === 'zellij' ? '' : HELD}${at.session}:${at.id}` }
+      const paneId = `${at.session}:${at.id}`
+      return place.ptyOwner === 'zellij' ? { adapter: 'zellij', id: paneId } : { adapter: 'zellij', id: `${HELD}${paneId}`, held: true }
     },
     // An agent in a Zellij pane has a zellij on this machine: whether it is found is asked at the verb, and a tap that
     // finds none brings its app forward, as tmux's does.

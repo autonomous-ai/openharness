@@ -39,7 +39,7 @@ export function createWeztermAdapter(deps: OrcaDeps): HostAdapter {
       // A multiplexer, a terminal or an editor started in a WezTerm pane keeps its variables, and that pane shows whichever
       // of their panes is in front, or a shell that runs what is typed: only a pane WezTerm made the agent's terminal for
       // takes words. Any other only focuses.
-      return { adapter: 'wezterm', id: place.ptyOwner === 'wezterm' ? id : `${HELD}${id}` }
+      return place.ptyOwner === 'wezterm' ? { adapter: 'wezterm', id } : { adapter: 'wezterm', id: `${HELD}${id}`, held: true }
     },
     // `wezterm cli` runs on every platform.
     canFocus: () => true,

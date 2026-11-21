@@ -107,7 +107,8 @@ export function createKittyAdapter(deps: KittyDeps): HostAdapter & Required<Pick
       // A multiplexer, a terminal or an editor started in a kitty window keeps its variables, and that window shows
       // whichever of their panes is in front, or a shell that runs what is typed: only a window kitty made the agent's
       // terminal for takes words. Any other only focuses.
-      return { adapter: 'kitty', id: `${place.ptyOwner === 'kitty' ? '' : HELD}${id}@${listenOn}` }
+      const windowId = `${id}@${listenOn}`
+      return place.ptyOwner === 'kitty' ? { adapter: 'kitty', id: windowId } : { adapter: 'kitty', id: `${HELD}${windowId}`, held: true }
     },
     // Whether kitty is found is asked at the verb, and a tap that finds none brings its app forward.
     canFocus: (pane) => windowOf(pane) !== undefined,

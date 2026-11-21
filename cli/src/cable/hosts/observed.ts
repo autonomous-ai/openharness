@@ -126,9 +126,9 @@ export interface ObservedDeps {
   outer?: OuterLookup
 }
 
-/** The hints of the panes that take words only on the terminal their host made (Place.ptyOwner: wezterm.ts, kitty.ts,
- *  zellij.ts): no other caller's terminal is read. */
-const PTY_HINTS = ['WEZTERM_PANE', 'KITTY_WINDOW_ID', 'ZELLIJ_PANE_ID']
+/** The hints of the panes that take words only on the terminal their host made (Place.ptyOwner): no other caller's
+ *  terminal is read. */
+const PTY_HINTS = ['WEZTERM_PANE', 'KITTY_WINDOW_ID', 'ZELLIJ_PANE_ID', 'HERDR_PANE_ID', 'ORCA_TERMINAL_HANDLE']
 
 /** Whether a caller's app is learnt from its parents: its hints name none, or name VS Code by TERM_PROGRAM alone, which
  *  Cursor's terminal says too. Only a bundle id tells the two apart, and Linux has none. */
@@ -177,10 +177,12 @@ interface Located {
   pane: Pane
 }
 
+// A held pane (Pane.held) shows the terminal, editor or multiplexer the agent was started from, and whatever is in front
+// there: words typed into it would run at another's prompt, and a rest would show something else.
 /** The dial's words go to the first pane whose app types now. */
-const words = (adapter: HostAdapter, pane: Pane): boolean => !!adapter.type && (adapter.canType?.(pane) ?? true)
+const words = (adapter: HostAdapter, pane: Pane): boolean => !pane.held && !!adapter.type && (adapter.canType?.(pane) ?? true)
 /** A rest shows the first pane its app can show now, without coming forward. */
-const rest = (adapter: HostAdapter, pane: Pane): boolean => !!adapter.show && (adapter.canShow?.(pane) ?? true)
+const rest = (adapter: HostAdapter, pane: Pane): boolean => !pane.held && !!adapter.show && (adapter.canShow?.(pane) ?? true)
 /** A tap hands the opener the first pane its app brings forward here, before or instead of the app: one after it is
  *  raised once the app came. */
 const tapped = (adapter: HostAdapter, pane: Pane): boolean => adapter.tap !== 'after' && adapter.canFocus(pane)
@@ -210,10 +212,10 @@ interface Entry {
   tty?: string
   /** When the read of ttyPid began, once that read failed. */
   ttyFailedAt?: number
-  /** The caller the host that made its terminal was read for, that host once read, and when that read began, once it
-   *  failed (learnPtyOwner). */
+  /** The caller the host that made its terminal was read for, that host once read (null: none the dial types into), and
+   *  when that read began, once it failed (learnPtyOwner). */
   ptyPid?: number
-  ptyOwner?: string
+  ptyOwner?: string | null
   ptyFailedAt?: number
   /** The caller and hints its outer place was last asked for (ObservedDeps.outer), while it runs nested: only that ask's
    *  answer lands. */
@@ -266,8 +268,12 @@ export class ObservedSource implements HostSource {
 
   list(): HostAgent[] {
     return [...this.entries.values()].map((e) => {
-      // The keys a listing source knows its panes by (registry.ts).
-      const paneKeys = e.panes.flatMap(({ adapter, pane }) => (adapter.paneKey ? [adapter.paneKey(pane)] : []))
+      // The keys a listing source knows its panes by (registry.ts). A held pane's would fold another agent's row there
+      // into this one; until its maker is read, it may be this agent's own, and its key folds that source's row of it, so
+      // the list shows no two rows in the first moments after a hook
+      // (docs/plans/2026-11-21-dial-linux-followups-design.md, Decided).
+      const paneKeys = e.panes.flatMap(({ adapter, pane }) =>
+        (adapter.paneKey && (!pane.held || e.ptyOwner === undefined) ? [adapter.paneKey(pane)] : []))
       // An ended session gives its row to another source's live copy. It keeps its pane keys to find one whose session id
       // differs (the Claude app's store, before it names the new id): the registry folds nothing by an ended copy's keys.
       if (!this.live(e)) return { ...e.agent, ended: true, ...(paneKeys.length && { paneKeys }) }
@@ -484,8 +490,10 @@ export class ObservedSource implements HostSource {
   private target(e: Entry): OpenTarget {
     const panes = this.shownOnly(e)
     // The pane of the host that made its terminal is where it is: one before it in the adapters' order only holds it
-    // (tmux inside a Zellij pane).
+    // (tmux inside a Zellij pane). A held pane comes after its others: switched to, it shows the terminal, editor or
+    // multiplexer the agent was started from, not the one it runs in.
     const near = panes.find(({ adapter, pane }) => adapter.id === e.ptyOwner && tapped(adapter, pane))
+      ?? panes.find(({ adapter, pane }) => !pane.held && tapped(adapter, pane))
       ?? panes.find(({ adapter, pane }) => tapped(adapter, pane))
     const bundle = e.bundle ?? near?.adapter.bundle
     return { ...(bundle ? { bundle } : {}), ...(near ? { pane: near.pane } : {}) }
@@ -537,10 +545,24 @@ export class ObservedSource implements HostSource {
     return found && { ...found.agent }
   }
 
-  /** A live agent's pane id in that adapter; none when it has no pane there, or its session ended. */
+  /** A live agent's pane id in that adapter; none when it has no pane there, or its session ended. A held pane is not
+   *  its own: the devices' paths that read this (Orca's ring and scope, the scroll) take it for none. */
   paneOf(agentId: string, adapter: string): string | undefined {
     const e = this.entries.get(agentId)
-    return e && this.live(e) ? e.panes.find(({ pane }) => pane.adapter === adapter)?.pane.id : undefined
+    return e && this.live(e) ? e.panes.find(({ pane }) => pane.adapter === adapter && !pane.held)?.pane.id : undefined
+  }
+
+  /** Whether a live agent holds a pane its adapter keys [key] (Pane.held) and the asker's row folds into it: that
+   *  agent's maker is not read yet, so the pane may be its own, or the asker carries its session, the same agent another
+   *  source lists. A source that types into panes asks it first, so what folds with a held pane takes no words there by
+   *  that source's route either. */
+  holds(key: string, asker: { engine: string; sessionId?: string }): boolean {
+    for (const e of this.entries.values()) {
+      if (!this.live(e) || !e.panes.some(({ adapter, pane }) => pane.held && adapter.paneKey?.(pane) === key)) continue
+      if (e.ptyOwner === undefined) return true
+      if (asker.sessionId !== undefined && asker.engine === e.agent.engine && asker.sessionId === e.agent.sessionId) return true
+    }
+    return false
   }
 
   /** A live agent's latest process, the one whose window a raise brings forward, and its app; none once its session
@@ -628,7 +650,9 @@ export class ObservedSource implements HostSource {
    * The host that made its caller's terminal (Place.ptyOwner), read once per process in the background, as its tty is,
    * and only for a caller whose hints name a pane that asks it (PTY_HINTS): until it lands, a terminal's or a
    * multiplexer's pane only holds the agent, and takes no words. An answer lands only while that process is still its
-   * caller. A read that failed said nothing of the host: a later event reads it again, no sooner than TTY_RETRY_MS.
+   * caller, null when it named no host: placed again, its adapters know the read landed, and may say so. Only a host
+   * named is told: none leaves every pane held, as it was while the read ran. A read that failed said nothing of the
+   * host: a later event reads it again, no sooner than TTY_RETRY_MS.
    */
   private learnPtyOwner(entry: Entry, pid: number): void {
     if (!this.deps.ptyOwner || !PTY_HINTS.some((key) => entry.hints[key] !== undefined)) return
@@ -639,10 +663,10 @@ export class ObservedSource implements HostSource {
     entry.ptyFailedAt = undefined
     this.deps.ptyOwner(pid).then((owner) => {
       if (entry.ptyPid !== pid) return
-      entry.ptyOwner = owner
-      if (owner === undefined || !this.live(entry)) return
+      entry.ptyOwner = owner ?? null
+      if (!this.live(entry)) return
       this.locate(entry)
-      this.emit()
+      if (owner !== undefined) this.emit()
     }, (error) => {
       if (entry.ptyPid === pid) entry.ptyFailedAt = now
       // Its kind only: never the pid or the session.

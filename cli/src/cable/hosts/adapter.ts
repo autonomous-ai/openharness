@@ -36,10 +36,11 @@ export interface Place {
   /** The app and tab of the terminal holding the multiplexer's client the agent runs in, from observed.ts; only the tmux,
    *  herdr and tabs adapters read it. */
   outer?: Outer
-  /** The host that made the pseudo-terminal its caller runs on, once read (scannedApp.ts ptyOwner, observed.ts): a
-   *  terminal's or a multiplexer's pane is the agent's own only when that host's, and takes words only then. A hint names
-   *  the pane a program was started in, which a terminal, an editor or a multiplexer started there inherits. */
-  ptyOwner?: string
+  /** The host that made the pseudo-terminal its caller runs on (scannedApp.ts ptyOwner, observed.ts): a terminal's or a
+   *  multiplexer's pane is the agent's own only when that host's, and takes words only then. A hint names the pane a
+   *  program was started in, which a terminal, an editor or a multiplexer started there inherits. Undefined while not
+   *  read; null once read, when no host the dial types into made it. */
+  ptyOwner?: string | null
 }
 
 /** What a page guard knows of the agent: whether it waits on the person, the folder its session started in (its
@@ -51,6 +52,24 @@ export interface PageAgent { asking: boolean; cwd?: string; transcriptPath?: str
 export interface Pane {
   adapter: string
   id: string
+  /** The pane holds the agent's terminal but its host did not make it: a tap alone, after the agent's other panes. */
+  held?: true
+}
+
+/** Callers a line is kept said for: more than the agents the observed source lists (MAX_SESSIONS, 50). */
+const CALLERS_KEPT = 64
+
+/** Says [line] once per caller process, at most CALLERS_KEPT (64) kept, the oldest going first: an adapter places an
+ *  agent at every event, and its log would say the same of one caller at each. */
+export function oncePerCaller(log: (line: string) => void, line: string): (pid: number | undefined) => void {
+  // A Set keeps the order its callers came in.
+  const said = new Set<number | undefined>()
+  return (pid) => {
+    if (said.has(pid)) return
+    said.add(pid)
+    if (said.size > CALLERS_KEPT) said.delete(said.values().next().value)
+    log(line)
+  }
 }
 
 /** One app the dial reaches an outside agent through. */
