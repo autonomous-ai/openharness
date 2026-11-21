@@ -200,6 +200,7 @@ Machine:
   harness service uninstall    undo that: the daemon goes back to \`harness start\`
   harness service status       what launchd, systemd or Task Scheduler has registered, and whether it runs (--json)
   harness logs export          zip the last 7 days of logs (app, CLI, dial, daemon) to the Desktop
+  harness hermes-hooks         the hook entries to add by hand to a Hermes config.yaml with its own hooks:
   harness tui                  all of Harness in this terminal: tabs, panes, every machine (⌥O ⌥P ⌥N)
   harness new [agent] [--machine <name>] [folder|name] [-- task]
                                make a harness from a shell: \`harness new\` is claude here; see \`harness new -h\`
