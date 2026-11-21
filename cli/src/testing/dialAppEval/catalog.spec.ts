@@ -75,10 +75,11 @@ describe('the catalog', () => {
     ])
   })
 
-  it('a timed ring change comes after a listing, so it times the change and not the first read of the store', () => {
+  it('a ring read after a write comes after a listing, so it reads the change and not the first read of the store', () => {
     for (const s of ALL) {
-      for (const c of s.checks.filter((c) => c.kind === 'ring' && c.timed)) {
+      for (const c of s.checks.filter((c) => c.kind === 'ring' && c.after !== undefined)) {
         const step = s.steps.findIndex((step) => step.label === c.after)
+        if (!['claude.write', 'codex.write'].includes(s.steps[step]!.kind)) continue
         expect(s.steps.slice(0, step).some((step) => step.kind === 'wait' && step.until !== undefined), `${s.id} ${c.id}`).toBe(true)
       }
     }
