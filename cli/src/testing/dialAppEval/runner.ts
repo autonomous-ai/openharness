@@ -59,7 +59,7 @@ export async function runScenario(driver: EvalDriver, scenario: Scenario, platfo
   const seen = driver.seen()
   const { tier } = driver
   const on = { tier, platform }
-  const gaps = driver.gaps().map((reason) => ({ ...on, scenario: scenario.id, app: scenario.app, reason }))
+  const gaps = driver.gaps().map((reason) => ({ ...on, scenario: scenario.id, app: scenario.app, heldOut: scenario.heldOut, reason }))
   // A wrong send fails the run whatever else holds, so a gap does not hide one.
   const wrong = wrongSends(scenario, seen).map((w) => ({ ...on, ...w }))
   const score = (checks: readonly Check[]): CheckResult[] => gaps.length > 0 ? []

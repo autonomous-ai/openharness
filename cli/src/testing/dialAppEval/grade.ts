@@ -79,10 +79,8 @@ function rankedGroups(failing: ReadonlyArray<CheckResult & { pointsLost: number 
 export function grade(results: RunResults, baseline: Baseline | null): Report {
   const scored = scoredResults(results)
   const main = scored.filter((r) => !r.heldOut)
-  // A gap's run has no results to say it is held out, so a scenario held out in any other run counts as held out.
-  const heldOutScenarios = new Set(results.results.filter((r) => r.heldOut).map((r) => r.scenario))
-  const mainGaps = results.gaps.filter((g) => !heldOutScenarios.has(g.scenario))
-  const heldOutGaps = results.gaps.filter((g) => heldOutScenarios.has(g.scenario))
+  const mainGaps = results.gaps.filter((g) => !g.heldOut)
+  const heldOutGaps = results.gaps.filter((g) => g.heldOut)
 
   const apps = table(main, mainGaps)
   const byTier = {

@@ -138,7 +138,7 @@ export interface CheckResult {
 export interface WrongSend { tier: Tier; platform: Platform; scenario: string; target: SessionKey; got: SessionKey | null;
   path: Delivery['path']; at: number }
 /** A scenario × platform the injected platform cannot drive: left out of the scores, neither pass nor fail. */
-export interface CoverageGap { tier: Tier; platform: Platform; scenario: string; app: App; reason: string }
+export interface CoverageGap { tier: Tier; platform: Platform; scenario: string; app: App; heldOut: boolean; reason: string }
 export interface RunResults { schema: 1; results: CheckResult[]; wrongSends: WrongSend[]; gaps: CoverageGap[] }
 /** checks: keyed by resultKey. */
 export interface Baseline { schema: 1; checks: Record<string, number>; apps: Record<App, number | null> }
