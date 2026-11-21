@@ -3,10 +3,11 @@
  * child's working folder before PATH, so a `git.exe` committed to a repository would run as `git` there. The bare names
  * are read as text, as systemProgram.spec.ts reads Windows' own programs.
  */
-import { readdirSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { sourceFiles } from '../testing/sourceFiles.js'
 
 /** git or gh by its bare name, as what a call runs: a spawn's or an exec's first argument, a command's `file`, the
  *  fallback for a variable that names one (`GIT ?? 'git'`), or the first word of a shell command. */
@@ -29,8 +30,7 @@ describe('git and gh by their paths', () => {
   // Test code runs in the repository; what a person runs does not.
   it('no file under cli/src runs one by its bare name', () => {
     const src = fileURLToPath(new URL('..', import.meta.url))
-    const bare = readdirSync(src, { recursive: true, encoding: 'utf8' })
-      .map((file) => file.split('\\').join('/'))
+    const bare = sourceFiles(src)
       .filter((file) => /\.(ts|mts|js|mjs)$/.test(file) && !/\.(spec|test)\.ts$/.test(file) && !file.startsWith('testing/'))
       .flatMap((file) => [...readFileSync(join(src, file), 'utf8').matchAll(BARE)].map((match) => `${file}: ${match[0]}`))
     expect(bare).toEqual([])
