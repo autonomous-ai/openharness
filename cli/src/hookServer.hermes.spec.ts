@@ -116,7 +116,7 @@ async function fixture(options: { waitOnResolution?: number; sharedGateway?: boo
     return body
   }
   const current = () => registry.byAgent(agent.agentId)!
-  // A hold's sentence reaches the core (and the person), never the log, which gives its length alone.
+  // A hold's sentence reaches the core (and the person), never the log, which names the hold by its code.
   const held = (words: string) => admissionHeld.mock.calls.some(([, reason]) => reason?.includes(words) ?? false)
   return { home, store, policy, hook, current, registered, admissionHeld, held, logs, markDeleted, resume: () => resume(), flush: () => registry.flush(),
     knownHome: (home: string) => registry.setHermesHome(agent.agentId, home),
@@ -251,6 +251,12 @@ it('includes the known custom home and cannot authorize its hook from a differen
   f.store(f.home, [])
   await vi.waitFor(() => expect(f.logs.some(line => line.includes('ignored · hermes_subagent'))).toBe(true), { timeout: 4_000 })
   expect(f.registered).not.toHaveBeenCalled()
+  // The known-home and ambiguous holds' sentences are the same length: the log tells them apart by their codes.
+  expect(f.logs.filter(line => line.includes(' held · '))).toEqual([
+    `[hooks] ${own.slice(0, 8)} SessionStart held · HERMES_SOURCE_UNAVAILABLE · IdentityReadUnavailable IDENTITY_UNAVAILABLE`,
+    `[hooks] ${own.slice(0, 8)} SessionStart held · HERMES_SOURCE_ELSEWHERE`,
+    `[hooks] ${own.slice(0, 8)} SessionStart held · HERMES_SOURCE_AMBIGUOUS`,
+  ])
 })
 
 it('holds incomplete source pools, then rejects a proven delegated session after recovery', async () => {

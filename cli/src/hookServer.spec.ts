@@ -286,7 +286,7 @@ describe('process-owned hook server', () => {
     expect(handlers.onSessionEnd).toHaveBeenLastCalledWith('session-1', '/Users/sentinel/x')
   })
 
-  it('a held hook is logged by its reason\'s length', async () => {
+  it('a held hook is logged by its hold\'s code and its failure\'s kind', async () => {
     vi.spyOn(engineHooks.codex, 'admit').mockReturnValue({ accepted: true })
     const agent = { engine: 'codex', agentId: 'parent', runtimes: [{ backend: 'tmux', paneId: '%41' }], primaryRuntimeKey: 'tmux\u0000%41', processIdentity: { pid: 4242, startMarker: 'fixture', executable: '<codex>' } } as RegisteredSession
     vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
@@ -297,11 +297,23 @@ describe('process-owned hook server', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     await fetch(`${base}/api/hook/session-start`, { method: 'POST', headers,
       body: JSON.stringify({ engine: 'codex', tmuxPane: '%41', sessionId: 'session-held', hookEvent: 'SessionStart' }) })
-    const reason = 'Waiting for durable hook admission: the store at /Users/sentinel/x is gone'
-    await vi.waitFor(() => expect(onAdmissionHeld).toHaveBeenCalledWith('parent', reason))
+    await vi.waitFor(() => expect(onAdmissionHeld).toHaveBeenCalledWith('parent', 'Waiting for durable hook admission: the store at /Users/sentinel/x is gone'))
     const lines = log.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
     expect(lines).not.toContain('sentinel')
-    expect(lines).toContain(`[hooks] session- SessionStart held · text(${reason.length})`)
+    expect(lines).toContain('[hooks] session- SessionStart held · DURABLE_ADMISSION_WAIT · Error')
+  })
+
+  it('a hook held behind a settling Stop is logged by that hold\'s own code', async () => {
+    vi.spyOn(engineHooks.codex, 'admit').mockReturnValue({ accepted: true })
+    const agent = { engine: 'codex', agentId: 'parent', runtimes: [{ backend: 'tmux', paneId: '%41' }], primaryRuntimeKey: 'tmux\u0000%41', processIdentity: { pid: 4242, startMarker: 'fixture', executable: '<codex>' } } as RegisteredSession
+    vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
+    const onAdmissionHeld = vi.fn()
+    const { base, headers } = await start({ resolveHookAgent: async () => agent, onAdmissionHeld, hookAdmissionBlocked: () => true })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    await fetch(`${base}/api/hook/session-start`, { method: 'POST', headers,
+      body: JSON.stringify({ engine: 'codex', tmuxPane: '%41', sessionId: 'session-held', hookEvent: 'SessionStart' }) })
+    await vi.waitFor(() => expect(onAdmissionHeld).toHaveBeenCalledWith('parent', 'Waiting for Stop to settle before admitting the hook.'))
+    expect(log.mock.calls.map((call) => call.map(String).join(' '))).toContain('[hooks] session- SessionStart held · STOP_SETTLING')
   })
 
   it('rejects every unauthenticated mutating hook request', async () => {

@@ -63,11 +63,9 @@ setInterval(() => {}, 1000)
   const row = async () => (await c.request('agents_list', {})).agents.find((agent: { id: string }) => agent.id === agentId)
   const child = '20261009_120000_aaaaaa', own = '20261009_120001_bbbbbb'
   await hook(own)
-  // The log names a hold by its length alone, and the row shows the core's own hold on the unreadable store first:
-  // this length is the source hold's sentence, with the store's reason, and no other hold's.
-  const sourceHold = 'Hermes session source is unavailable; keeping the current conversation. '
-    + 'Conversation identity is held: a native store query is unavailable.'
-  await until('an explicit source hold', () => d.log().includes(`SessionStart held · text(${sourceHold.length})`) || null, 10_000, 100)
+  // The log names a hold by its code, and the row shows the core's own hold on the unreadable store first: this is the
+  // source hold, with the store's failure by its kind.
+  await until('an explicit source hold', () => d.log().includes('SessionStart held · HERMES_SOURCE_UNAVAILABLE · IdentityReadUnavailable IDENTITY_UNAVAILABLE') || null, 10_000, 100)
   // A delegated hook on the same pane must not erase its parent's held intent.
   await hook(child)
   expect((await row()).sessionId).toBeFalsy()
