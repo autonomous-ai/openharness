@@ -111,14 +111,24 @@ class ValidationTests(unittest.TestCase):
         (self.root / "scripts").mkdir()
         (self.root / "scripts" / "test-desktop.py").write_text(f"import subprocess, sys\nsys.exit(subprocess.call([{str(tool)!r}]))\n")
         (self.root / "Makefile").write_text(f"desktop-test:\n\t{tool}\n")
+        bat = tool.with_name("flutter.bat")
+        bat.write_text(tool.read_text())
+        bat.chmod(0o755)
+        fvm = tool.with_name("fvm")
+        fvm.write_text(f"#!{sys.executable}\nimport os, sys\nos.execv({str(tool)!r}, [{str(tool)!r}, *sys.argv[2:]])\n")
+        fvm.chmod(0o755)
         desktop = [
             {"name": "script", "argv": [sys.executable, "scripts/test-desktop.py", "test/a_test.dart"], "timeout_seconds": 5},
             {"name": "make", "argv": ["make", "desktop-test", "ARGS=test/b_test.dart"], "timeout_seconds": 5},
             {"name": "verbose", "argv": [str(tool), "-v", "test"], "cwd": "desktop", "timeout_seconds": 5},
+            {"name": "device", "argv": [str(tool), "-d", "macos", "test"], "cwd": "desktop", "timeout_seconds": 5},
+            {"name": "device-id", "argv": [str(tool), "--device-id", "macos", "test"], "cwd": "desktop", "timeout_seconds": 5},
+            {"name": "bat", "argv": [str(bat), "test"], "cwd": "desktop", "timeout_seconds": 5},
+            {"name": "fvm", "argv": [str(fvm), "flutter", "test"], "cwd": "desktop", "timeout_seconds": 5},
         ]
         result, receipt = self.run_plan([*desktop, self.beside_flutter()])
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-        self.assertEqual({c["name"]: c["status"] for c in receipt["checks"]}, dict.fromkeys(("script", "make", "verbose", "other"), "passed"))
+        self.assertEqual({c["name"]: c["status"] for c in receipt["checks"]}, dict.fromkeys(("script", "make", "verbose", "device", "device-id", "bat", "fvm", "other"), "passed"))
         self.assertFalse((self.root / ".harness" / "overlap").exists())
 
     def test_failure_does_not_hide_other_results(self):
