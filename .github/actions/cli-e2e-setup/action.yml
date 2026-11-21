@@ -76,7 +76,8 @@ runs:
         path: ${{ runner.temp }}/mongodb-binaries
         key: cli-e2e-mongod-${{ steps.services.outputs.mongodb-memory-server }}-${{ runner.os }}-${{ runner.arch }}
     # mongodb-memory-server retries only 416, 429, 500 and 503, and fastdl answered 504. Only the real-backend specs
-    # need mongod, so a download that keeps failing warns and the shard goes on; those specs then try once more.
+    # need mongod, so a download that keeps failing warns and the shard goes on; those specs then try once more. Each
+    # attempt is bounded too: the package sets no deadline of its own, and a stalled one would hold the shard to its 45 min.
     - name: Download mongod
       id: mongod-download
       if: inputs.real-backend == 'true' && steps.mongod.outputs.cache-hit != 'true'
@@ -87,7 +88,7 @@ runs:
         ATTEMPTS=3
         wait_s=15
         for attempt in $(seq "$ATTEMPTS"); do
-          if node -e "require('mongodb-memory-server').MongoBinary.getPath().then(path => console.log(path))"; then
+          if timeout 300 node -e "require('mongodb-memory-server').MongoBinary.getPath().then(path => console.log(path))"; then
             exit 0
           fi
           echo "mongod: attempt $attempt of $ATTEMPTS could not download"
