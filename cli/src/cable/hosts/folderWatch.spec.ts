@@ -148,10 +148,16 @@ describe('one watch on the nearest existing folder', () => {
     try {
       // Failed before its folder's change is told, which it then never is.
       rmSync(b, { recursive: true })
+      vi.advanceTimersByTime(3_000)
       watches.on(b).fail()
       expect(watches.open()).toEqual([a])
+      // The watch it moved to looks 5 s after it started, not 5 s after the one that failed.
+      vi.advanceTimersByTime(2_000)
+      expect(changes).toEqual([])
+      vi.advanceTimersByTime(3_000)
+      expect(changes).toEqual([undefined])
       watches.on(a).tell('c')
-      expect(changes).toEqual(['c'])
+      expect(changes).toEqual([undefined, 'c'])
     } finally {
       stop()
     }

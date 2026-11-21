@@ -41,8 +41,10 @@ export function watchNearest(folders: readonly string[], changed: (file?: string
       } catch {
         continue
       }
-      // A watch that fails tells nothing more, and throws nothing into the devices process. Its folder gone, it moves out.
+      // A watch that fails tells nothing more, its look neither, and throws nothing into the devices process. Its folder
+      // gone, it moves out, and the watch it starts there looks once it is live.
       watcher.on('error', () => {
+        clearTimeout(live)
         watcher.close()
         hold()
       })
