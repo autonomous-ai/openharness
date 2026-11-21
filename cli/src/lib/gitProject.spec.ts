@@ -294,6 +294,21 @@ exec '${realGit}' "$@"
     }
   })
 
+  it('says a branch it could not mark as Harness\'s by the failure\'s kind, never the branch a person named', async () => {
+    // A held lock on the repository's config: the mark, the one config write of this start, fails.
+    await writeFile(join(repo, '.git', 'config.lock'), '')
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const named = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'fix/sentinel-login' })
+      expect(await current(named)).toBe('fix/sentinel-login')
+      const lines = error.mock.calls.map(call => call.map(String).join(' '))
+      expect(lines.join('\n')).not.toContain('sentinel')
+      expect(lines).toEqual(["[worktree] could not mark its branch as Harness's, so it is not renamed after its session: Error"])
+    } finally {
+      error.mockRestore()
+    }
+  })
+
   it('creates a named branch once, and refuses names Git would not take', async () => {
     const named = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'fix/login' })
     expect(named).toBe(join(worktrees(), 'login'))
