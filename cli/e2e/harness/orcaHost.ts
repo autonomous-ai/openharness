@@ -19,7 +19,8 @@ import { dialHost } from './dialHosts.js'
 
 const execFileAsync = promisify(execFile)
 
-/** The cc that builds the host, or null to skip the files that need it; on a dial-hosts run a null throws (dialHosts.ts). */
+/** The cc that builds the host, or null when none is installed: a case may skip on it, but a terminal started with none
+ *  fails, never skips; on a dial-hosts run a null throws (dialHosts.ts). */
 export const orcaHostCc: string | null = process.platform === 'win32' ? null : dialHost('cc', resolveBinaryOnPath('cc'))
 
 /** The terminal host's name on this OS: macOS's helper bundle executable; on Linux the name the daemon gives itself,
@@ -80,20 +81,19 @@ process.on('message', ({ id, file, args, env, stdin, cwd }) => {
 process.send({ ready: process.pid })
 `
 
-export interface Ran { stdout: string; stderr: string; code: number | null; ms: number }
+interface Ran { stdout: string; stderr: string; code: number | null; ms: number }
 
 /** A stand-in for Orca's terminal host: a forkpty helper built with cc under the name Orca's host has on this OS
  *  (RECORDED_ORCA: `Orca Agents` on macOS, the recorded comm on Linux), whose child, on that pty, is one long-lived
  *  runner that starts each command it is sent with pipes. The runner is the caller of every hook run through it. */
 export interface OrcaTerminal {
-  /** The runner's process. */
-  readonly pid: number
   run(file: string, args: string[], env: NodeJS.ProcessEnv, stdin: string, cwd: string): Promise<Ran>
-  close(): Promise<void>
 }
 
 /** Built once a daemon root, however many terminals start at once. */
 const built = new Map<string, Promise<string>>()
+/** How long the runner has to say it is ready: a Node start, on a slow worker. */
+const READY_MS = 20_000
 
 function build(d: IsolatedDaemon): Promise<string> {
   let host = built.get(d.root)
@@ -132,9 +132,17 @@ export async function orcaTerminal(d: IsolatedDaemon, children: ChildProcess[]):
   const pending = new Map<number, { resolve: (ran: Ran) => void; reject: (error: Error) => void }>()
   let gone: Error | undefined
   const runner = new Promise<number>((resolve, reject) => {
+    const late = setTimeout(() => {
+      host.kill('SIGKILL')
+      reject(new Error(`Orca's terminal host stand-in's runner was not ready in ${READY_MS / 1000} s: ${stderr.trim()}`))
+    }, READY_MS)
+    host.once('exit', () => clearTimeout(late))
     host.on('message', (raw) => {
       const message = raw as { ready?: number; id?: number } & Ran
-      if (message.ready !== undefined) resolve(message.ready)
+      if (message.ready !== undefined) {
+        clearTimeout(late)
+        resolve(message.ready)
+      }
       else if (message.id !== undefined) {
         pending.get(message.id)?.resolve({ stdout: message.stdout, stderr: message.stderr, code: message.code, ms: message.ms })
         pending.delete(message.id)
@@ -159,7 +167,6 @@ export async function orcaTerminal(d: IsolatedDaemon, children: ChildProcess[]):
   }
   let next = 0
   return {
-    pid,
     run(file, args, env, stdin, cwd) {
       if (gone) return Promise.reject(gone)
       const id = next++
@@ -171,14 +178,6 @@ export async function orcaTerminal(d: IsolatedDaemon, children: ChildProcess[]):
           reject(error)
         })
       })
-    },
-    async close() {
-      if (host.exitCode !== null || host.signalCode !== null) return
-      const exited = new Promise<void>((done) => host.once('exit', () => done()))
-      host.disconnect()
-      const timer = setTimeout(() => host.kill('SIGKILL'), 10_000)
-      await exited
-      clearTimeout(timer)
     },
   }
 }
