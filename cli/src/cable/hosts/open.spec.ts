@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { RECORDED_GNOME_SHELL } from '../../testing/recordedGnomeShell.js'
 import type { HostAdapter, Pane } from './adapter.js'
 import { createClaudeAppAdapter } from './claudeApp.js'
 import { createCodexAppAdapter } from './codexApp.js'
@@ -6,6 +7,7 @@ import { windowClasses } from './frontApp.js'
 import { createHerdrAdapter } from './herdr.js'
 import { detectApp, detectHost } from './hostDetect.js'
 import { createLinuxRaise, type LinuxRaise, type RaiseTarget } from './linuxRaise.js'
+import { createGnomeRaise } from './linuxRaiseGnome.js'
 import { bundleOf, createOpenActions, type OpenTarget } from './open.js'
 import { createOrcaAdapter, type OrcaDeps } from './orca.js'
 import { createTabsAdapter } from './tabs.js'
@@ -650,17 +652,61 @@ describe('a tap on Linux brings the window forward through the raise', () => {
     expect(found.opener.can({})).toBe(true)
   })
 
-  // On GNOME the raise takes an app's class alone: an agent in an app with none would answer false at every tap.
-  it('Linux: can() asks the raise for an agent\'s window in the app its bundle names', () => {
+  // On GNOME the raise takes an app's class alone: a check that asked about another app than the raise is handed would
+  // refuse a tap the raise can bring, or offer one it cannot.
+  it('Linux: can() asks the raise about the agent\'s own window app, the one the raise uses', async () => {
     const asked: Array<{ agent: boolean; app?: string }> = []
+    const raised: Window[] = []
     const r = recorder({
       platform: 'linux',
-      raise: { ready: (window) => { asked.push(window); return window?.app === 'kitty' }, raise: async () => true },
+      raise: {
+        ready: (window) => { asked.push(window); return window.app === 'claude' },
+        raise: async (window) => { raised.push(window); return true },
+      },
+      windowOf: (agentId) => agentId === 'a1' ? { pid: 4242, app: 'claude' } : undefined,
     })
-    expect(r.opener.can(target({ KITTY_WINDOW_ID: '1' }))).toBe(true)
-    expect(r.opener.can(WARP)).toBe(false)
-    expect(r.opener.can({})).toBe(false)
-    expect(asked).toEqual([{ agent: true, app: 'kitty' }, { agent: true, app: 'warp' }, { agent: true }])
+    // Its bundle names another app, or none: the agent's own window app is asked about.
+    expect(r.opener.can('a1', WARP)).toBe(true)
+    expect(r.opener.can('a1', {})).toBe(true)
+    // An agent the source knows no window of.
+    expect(r.opener.can('a2', {})).toBe(false)
+    expect(asked).toEqual([{ agent: true, app: 'claude' }, { agent: true, app: 'claude' }, { agent: true }])
+    expect(await r.opener.open('a1', {})).toBe(true)
+    expect(raised).toEqual([{ pid: 4242, app: 'claude' }])
+  })
+
+  it('GNOME: the check and the raise ask about the same class', async () => {
+    const bus = 'unix:abstract=/tmp/dbus-u'
+    const gdbus: Array<{ file: string; args: string[] }> = []
+    // The raise itself over a GNOME it found, its extension answering as recorded: only gdbus is made up.
+    const raise = createLinuxRaise({
+      find: async () => ({ kind: 'gnome', bus }),
+      backend: () => createGnomeRaise({
+        run: async (file, args) => {
+          gdbus.push({ file, args })
+          return { code: 0, stdout: RECORDED_GNOME_SHELL.activateHit.stdout }
+        },
+        onPath: (name) => `/usr/bin/${name}`,
+      }, bus),
+      processes: async () => [],
+      classes: windowClasses,
+      log: () => {},
+    })
+    await vi.waitFor(() => expect(raise.ready({ agent: false, app: 'claude' })).toBe(true))
+    // a1's app was learnt from its parents, so its target names no bundle; herdr has no class.
+    const windows: Record<string, Window> = { a1: { pid: 4242, app: 'claude' }, a2: { pid: 4343, app: 'herdr' } }
+    const r = recorder({ platform: 'linux', raise, windowOf: (agentId) => windows[agentId] })
+    expect(r.opener.can('a1', {})).toBe(true)
+    expect(await r.opener.open('a1', {})).toBe(true)
+    expect(gdbus).toEqual([{ file: '/usr/bin/gdbus', args: [
+      'call', '--address', bus, '--dest', 'org.gnome.Shell', '--object-path', '/de/lucaswerkmeister/ActivateWindowByTitle',
+      '--method', 'de.lucaswerkmeister.ActivateWindowByTitle.activateByWmClass', 'com.anthropic.Claude',
+    ] }])
+    gdbus.length = 0
+    expect(r.opener.can('a2', {})).toBe(false)
+    expect(await r.opener.open('a2', {})).toBe(false)
+    expect(gdbus).toEqual([])
+    expect(r.calls).toEqual([])
   })
 })
 
