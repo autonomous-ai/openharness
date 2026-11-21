@@ -1,7 +1,8 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/core/git_program.dart';
+import 'package:harness/core/program_path.dart';
+import 'package:harness/core/windows_folder.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
@@ -13,7 +14,7 @@ void main() {
   group('on Windows', () {
     test('a git.exe planted in the working folder is never run', () {
       final asked = <String>[];
-      final git = GitProgram(
+      final git = ProgramPath.git(
         isWindows: true,
         environment: {
           'PATH': r'.;;tools;\tools;C:\Tools',
@@ -34,7 +35,7 @@ void main() {
     });
 
     test('runs git.exe alone, never a git.cmd that needs cmd.exe', () {
-      final git = GitProgram(
+      final git = ProgramPath.git(
         isWindows: true,
         environment: {'PATH': r'C:\Scripts;C:\Git\cmd'},
         isProgram: {
@@ -62,7 +63,7 @@ void main() {
         r'D:\scoop\shims\git.exe',
         r'C:\Users\ana\scoop\shims\git.exe',
       ]) {
-        final git = GitProgram(
+        final git = ProgramPath.git(
           isWindows: true,
           environment: environment,
           isProgram: {found}.contains,
@@ -73,7 +74,7 @@ void main() {
 
     // Any member of Users can make %ProgramData%\scoop, so a shim there is anyone's.
     test("never runs a git from Scoop's root for everyone", () {
-      final git = GitProgram(
+      final git = ProgramPath.git(
         isWindows: true,
         environment: {
           'PATH': r'C:\Windows\System32',
@@ -90,12 +91,9 @@ void main() {
     });
 
     test('PATH comes before the install folders', () {
-      final git = GitProgram(
+      final git = ProgramPath.git(
         isWindows: true,
-        environment: {
-          'PATH': r'C:\Tools',
-          'ProgramFiles': r'C:\Program Files',
-        },
+        environment: {'PATH': r'C:\Tools', 'ProgramFiles': r'C:\Program Files'},
         isProgram: {
           r'C:\Program Files\Git\cmd\git.exe',
           r'C:\Tools\git.exe',
@@ -104,11 +102,64 @@ void main() {
 
       expect(git.resolve(), r'C:\Tools\git.exe');
     });
+
+    test("an ssh.exe planted in the working folder or beside the app is never run, OpenSSH's in System32 is", () {
+      final openSsh = p.windows.join(
+        windowsFolder(),
+        'System32',
+        'OpenSSH',
+        'ssh.exe',
+      );
+      final asked = <String>[];
+      final ssh = ProgramPath.ssh(
+        isWindows: true,
+        environment: {'PATH': r'.;;tools;\tools;C:\Windows\System32'},
+        isProgram: (path) {
+          asked.add(path);
+          return !windowsAbsolute(path) ||
+              path == r'C:\Program Files\Harness\ssh.exe' ||
+              path == openSsh;
+        },
+      );
+
+      expect(ssh.resolve(), openSsh);
+      expect(asked.where((path) => !windowsAbsolute(path)), isEmpty);
+    });
+
+    // Git for Windows' own ssh.exe, for one, as a bare `ssh` would find it.
+    test("PATH's ssh.exe comes before OpenSSH's", () {
+      final ssh = ProgramPath.ssh(
+        isWindows: true,
+        environment: {'PATH': r'C:\Program Files\Git\usr\bin'},
+        isProgram: (path) => path.endsWith(r'\ssh.exe'),
+      );
+
+      expect(ssh.resolve(), r'C:\Program Files\Git\usr\bin\ssh.exe');
+    });
+
+    test('no ssh throws what a failed Process.start of ssh throws', () {
+      final ssh = ProgramPath.ssh(
+        isWindows: true,
+        environment: {'PATH': r'C:\Tools'},
+        isProgram: (_) => false,
+      );
+
+      expect(
+        ssh.resolve,
+        throwsA(
+          isA<ProcessException>().having(
+            (error) => error.executable,
+            'executable',
+            'ssh',
+          ),
+        ),
+      );
+    });
   });
 
   group('on macOS and Linux', () {
     test('takes the first git in PATH order', () {
-      final git = GitProgram(
+      final git = ProgramPath.git(
         isWindows: false,
         environment: {'PATH': '/opt/homebrew/bin:/usr/bin'},
         isProgram: {'/opt/homebrew/bin/git', '/usr/bin/git'}.contains,
@@ -117,33 +168,29 @@ void main() {
       expect(git.resolve(), '/opt/homebrew/bin/git');
     });
 
-    test(
-      'passes over a git it cannot run, a file without an execute bit',
-      () {
-        final folder = Directory.systemTemp.createTempSync('git-program-');
-        addTearDown(() => folder.deleteSync(recursive: true));
-        String git(String name, String mode) {
-          final path = p.join(folder.path, name, 'git');
-          File(path).createSync(recursive: true);
-          Process.runSync('/bin/chmod', [mode, path]);
-          return path;
-        }
+    test('passes over a git it cannot run, a file without an execute bit', () {
+      final folder = Directory.systemTemp.createTempSync('git-program-');
+      addTearDown(() => folder.deleteSync(recursive: true));
+      String git(String name, String mode) {
+        final path = p.join(folder.path, name, 'git');
+        File(path).createSync(recursive: true);
+        Process.runSync('/bin/chmod', [mode, path]);
+        return path;
+      }
 
-        final plain = git('plain', '644');
-        final runnable = git('bin', '755');
-        final found = GitProgram(
-          isWindows: false,
-          environment: {'PATH': '${p.dirname(plain)}:${p.dirname(runnable)}'},
-        ).resolve();
+      final plain = git('plain', '644');
+      final runnable = git('bin', '755');
+      final found = ProgramPath.git(
+        isWindows: false,
+        environment: {'PATH': '${p.dirname(plain)}:${p.dirname(runnable)}'},
+      ).resolve();
 
-        expect(found, runnable);
-      },
-      skip: Platform.isWindows,
-    );
+      expect(found, runnable);
+    }, skip: Platform.isWindows);
 
     test('never looks in the working folder', () {
       final asked = <String>[];
-      final git = GitProgram(
+      final git = ProgramPath.git(
         isWindows: false,
         environment: {'PATH': '.:bin::/usr/bin'},
         isProgram: (path) {
@@ -158,7 +205,7 @@ void main() {
   });
 
   test('no git throws what a failed Process.start of git throws', () {
-    final git = GitProgram(
+    final git = ProgramPath.git(
       isWindows: false,
       environment: {'PATH': '/usr/bin'},
       isProgram: (_) => false,
@@ -177,7 +224,7 @@ void main() {
   test('a miss looks again, a find is kept', () {
     var installed = false;
     var asks = 0;
-    final git = GitProgram(
+    final git = ProgramPath.git(
       isWindows: false,
       environment: {'PATH': '/usr/bin'},
       isProgram: (path) {

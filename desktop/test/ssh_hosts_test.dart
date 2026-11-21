@@ -87,4 +87,24 @@ Host gh-d gh-e
     hostnames['gh-443'] = 'ssh.github.com';
     expect(await hosts().githubAliases(), ['gh-443']);
   });
+
+  test("runs the resolver's ssh", () async {
+    // Answers as `ssh -G` does, by an absolute path a bare `ssh` would never find.
+    final ssh = File(p.join(home.path, 'bin', 'ssh'))
+      ..createSync(recursive: true)
+      ..writeAsStringSync('#!/bin/sh\necho "hostname github.com"\n');
+    Process.runSync('/bin/chmod', ['755', ssh.path]);
+    expect(
+      await SshHosts(
+        home: home.path,
+        program: () => ssh.path,
+      ).resolveHost('gh-work'),
+      'github.com',
+    );
+    String noSsh() => throw const ProcessException('ssh', [], 'not found', 2);
+    expect(
+      await SshHosts(home: home.path, program: noSsh).resolveHost('gh-work'),
+      isNull,
+    );
+  }, skip: Platform.isWindows);
 }
