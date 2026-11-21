@@ -50,29 +50,34 @@ class GitProgram {
         .where((git) => path.isAbsolute(git) && !path.isRootRelative(git));
   }
 
-  /// Where Git for Windows puts its git.exe (cli lib/windows/gitBash.ts's
-  /// roots): its installer's, for everyone or for this user alone, then
+  /// Where Git for Windows puts its git.exe: its installer's `cmd`, then
   /// Scoop's shims for this user. Never Scoop's root for everyone
   /// (SCOOP_GLOBAL, %ProgramData%\scoop): any member of Users can make it.
   List<String> _gitForWindows() {
     final env = _environment;
-    final installs = [
-      env['ProgramFiles'],
-      env['ProgramW6432'],
-      env['ProgramFiles(x86)'],
-      if (env['LOCALAPPDATA'] case final local?)
-        p.windows.join(local, 'Programs'),
-    ];
     final scoops = [
       env['SCOOP'],
       if (env['USERPROFILE'] case final home?) p.windows.join(home, 'scoop'),
     ];
     return [
-      for (final root in installs.nonNulls) p.windows.join(root, 'Git', 'cmd'),
+      for (final root in gitForWindowsRoots(env)) p.windows.join(root, 'cmd'),
       for (final root in scoops.nonNulls) p.windows.join(root, 'shims'),
     ];
   }
 }
+
+/// Where Git for Windows' installer puts it, for everyone or for this user
+/// alone (cli lib/windows/gitBash.ts's gitForWindowsRoots).
+List<String> gitForWindowsRoots(Map<String, String> environment) => [
+  for (final root in [
+    environment['ProgramFiles'],
+    environment['ProgramW6432'],
+    environment['ProgramFiles(x86)'],
+  ].nonNulls)
+    p.windows.join(root, 'Git'),
+  if (environment['LOCALAPPDATA'] case final local?)
+    p.windows.join(local, 'Programs', 'Git'),
+];
 
 final _processGit = GitProgram();
 

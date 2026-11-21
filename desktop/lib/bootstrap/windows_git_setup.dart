@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import '../core/git_program.dart';
 import '../core/harness_home.dart';
 import '../core/hidden_process.dart';
 import '../core/home_dir.dart';
@@ -52,27 +53,22 @@ class WindowsGitSetup {
     return result.exitCode;
   }
 
-  /// Where the CLI looks (cli lib/windows/gitBash.ts): a `git` on PATH, then
-  /// where its installer puts it, for everyone or for this user.
+  /// Where the CLI looks (cli lib/windows/gitBash.ts): the git Desktop runs
+  /// ([GitProgram], which never takes one by a relative PATH entry), then Git
+  /// for Windows' bash where its installer puts it.
   bool get gitIsThere {
-    final path = _environment['PATH'] ?? _environment['Path'] ?? '';
-    if (path
-        .split(';')
-        .any(
-          (dir) => dir.isNotEmpty && _isFile(p.windows.join(dir, 'git.exe')),
-        )) {
+    try {
+      GitProgram(
+        environment: _environment,
+        isWindows: true,
+        isFile: _isFile,
+      ).resolve();
       return true;
+    } on ProcessException {
+      return gitForWindowsRoots(_environment).any(
+        (root) => _isFile(p.windows.join(root, 'bin', 'bash.exe')),
+      );
     }
-    final roots = [
-      _environment['ProgramFiles'],
-      _environment['ProgramW6432'],
-      _environment['ProgramFiles(x86)'],
-      if (_environment['LOCALAPPDATA'] case final local?)
-        p.windows.join(local, 'Programs'),
-    ];
-    return roots.whereType<String>().any(
-      (root) => _isFile(p.windows.join(root, 'Git', 'bin', 'bash.exe')),
-    );
   }
 
   String? get _marker {
