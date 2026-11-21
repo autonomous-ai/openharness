@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import 'home_dir.dart';
 import 'runtime_platform.dart';
 import 'windows_folder.dart';
 
@@ -97,7 +98,8 @@ class ProgramPath {
   static List<String> _gitForWindows(Map<String, String> env) {
     final scoops = [
       env['SCOOP'],
-      if (env['USERPROFILE'] case final home?) p.windows.join(home, 'scoop'),
+      if (maybeHomeDir(environment: env, isWindows: true) case final home?)
+        p.windows.join(home, 'scoop'),
     ];
     return [
       for (final root in gitForWindowsRoots(env)) p.windows.join(root, 'cmd'),
