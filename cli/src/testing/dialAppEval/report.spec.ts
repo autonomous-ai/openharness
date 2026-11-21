@@ -114,26 +114,28 @@ it('the gate counts wrong-session sends by that name', () => {
   expect(markdown(report({ gate: { passed: false, wrongSends: [send, send] } }))).toContain('Gate: failed, 2 wrong-session sends')
 })
 
-it('evidence holding os.tmpdir(), HOME or a /work/eval- folder is printed with that part replaced by <path>', () => {
+it('evidence holding os.tmpdir(), HOME or a /work/eval- folder is printed with that path replaced by <path>, to a quote, a bracket or the line\'s end', () => {
   const r = report({
     failing: [failing([
       `command open ${join(tmpdir(), 'eval-x1', 'link')}`,
-      `read ${join(homedir(), '.claude', 'store.json')} twice`,
+      // A folder's name may hold a space: the rest of it is the path's too.
+      `read ${join(homedir(), 'My Work', 'store.json')} twice`,
       'frame agent cwd=/work/eval-alpha/sub title',
+      `open "${join(tmpdir(), 'a b')}" then (${join(homedir(), 'c d')}) and [${join(tmpdir(), 'e f')}]`,
     ])],
     gaps: [{ tier: 'a', platform: 'linux', scenario: 'C3', app: 'claude', heldOut: false, reason: `platform read in ${homedir()}/x.ts` }],
   })
   const dir = mkdtempSync(join(tmpdir(), 'report-spec-'))
   dirs.push(dir)
   const written = writeReport(dir, r)
-  for (const text of [summary(r), markdown(r), readFileSync(written.json, 'utf8'), readFileSync(written.md, 'utf8')]) {
-    expect(text).toContain('command open <path>')
-    expect(text).toContain('read <path> twice')
-    expect(text).toContain('frame agent cwd=<path> title')
+  const lines = ['command open <path>', 'read <path>', 'frame agent cwd=<path>', 'open "<path>" then (<path>) and [<path>]']
+  expect((JSON.parse(readFileSync(written.json, 'utf8')) as Report).failing[0]!.evidence).toEqual(lines)
+  for (const text of [summary(r), markdown(r), readFileSync(written.md, 'utf8')]) {
+    for (const line of lines) expect(text).toContain(`    ${line}\n`)
     expect(text).toContain('platform read in <path>')
-    expect(text).not.toContain(tmpdir())
-    expect(text).not.toContain(homedir())
-    expect(text).not.toContain('/work/eval-')
+  }
+  for (const text of [summary(r), markdown(r), readFileSync(written.json, 'utf8'), readFileSync(written.md, 'utf8')]) {
+    for (const part of [tmpdir(), homedir(), '/work/eval-', 'My Work', 'store.json']) expect(text).not.toContain(part)
   }
 })
 
