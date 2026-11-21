@@ -110,9 +110,9 @@ async function holderMessage(label: string): Promise<unknown> {
   } finally { controller.abort() }
 }
 
-async function locked(mode?: 'ignore-term') {
+async function locked(mode?: 'ignore-term', execArgv: string[] = []) {
   holder = fork(fileURLToPath(new URL('./__fixtures__/registryLockOwner.cjs', import.meta.url)), [directory, ...(mode ? [mode] : [])], {
-    ...ownProcessGroup(), execArgv: [], stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+    ...ownProcessGroup(), execArgv, stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
   })
   holder.stderr?.resume()
   expect(await holderMessage('legacy lock holder')).toBe('locked')
@@ -241,6 +241,15 @@ it('starts a legacy lock holder while an earlier write is still releasing the lo
   const ready = locked()
   holder!.on('message', message => { if (message === 'waiting') release() })
   try { await ready } finally { release() }
+})
+
+it('takes the legacy lock while the file system watch service stalls', async () => {
+  // A loaded Mac stalls FSEvents for seconds, and closing a watch waits for it: a holder that watched hung there,
+  // its lock made and its owner never written. This holder's every watch closes only after its 20 s lifetime.
+  const stalled = `import fs from 'node:fs'
+    const watch = fs.watch
+    fs.watch = (...args) => Object.assign(watch(...args), { close: () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20_000) })`
+  await locked(undefined, ['--import', 'data:text/javascript,' + encodeURIComponent(stalled)])
 })
 
 it('owns its candidate values while preserving later edits through a live row alias', async () => {
