@@ -117,6 +117,30 @@ void main() {
       expect(git.resolve(), '/opt/homebrew/bin/git');
     });
 
+    test(
+      'passes over a git it cannot run, a file without an execute bit',
+      () {
+        final folder = Directory.systemTemp.createTempSync('git-program-');
+        addTearDown(() => folder.deleteSync(recursive: true));
+        String git(String name, String mode) {
+          final path = p.join(folder.path, name, 'git');
+          File(path).createSync(recursive: true);
+          Process.runSync('/bin/chmod', [mode, path]);
+          return path;
+        }
+
+        final plain = git('plain', '644');
+        final runnable = git('bin', '755');
+        final found = GitProgram(
+          isWindows: false,
+          environment: {'PATH': '${p.dirname(plain)}:${p.dirname(runnable)}'},
+        ).resolve();
+
+        expect(found, runnable);
+      },
+      skip: Platform.isWindows,
+    );
+
     test('never looks in the working folder', () {
       final asked = <String>[];
       final git = GitProgram(
