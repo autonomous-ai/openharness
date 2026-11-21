@@ -408,6 +408,10 @@ describe('the outer place of an agent in the person\'s herdr', () => {
       ['ps prints nothing', lookup({}, [0, 1], { ...ONE, ps: '' }), [lsofAsked('80,4300'), psAsked('4300')], notRead('ttys')],
       ['ps times out', lookup({}, [0, null], ONE), [lsofAsked('80,4300'), psAsked('4300')], notRead('ttys')],
       ['the app scan throws', lookup({ roots }, [], ONE), [lsofAsked('80,4300'), psAsked('4300')], notRead('app')],
+      ['the terminal of a client in no app is not read', lookup({
+        bundleId: async () => 'com.example.other',
+        tty: async (pid) => { if (pid === 4300) throw new Error('tty not read'); return TABLE.find((p) => p.pid === pid)?.tty },
+      }, [], ONE), [lsofAsked('80,4300'), psAsked('4300')], notRead('ttys')],
     ]
     for (const [name, { calls, logs, outer }, ran, said] of cases) {
       expect(await outer(PANE, 100), name).toEqual({})
