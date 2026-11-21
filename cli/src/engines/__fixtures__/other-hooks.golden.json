@@ -7156,18 +7156,16 @@
     {
      "logs": [
       "error [hooks] <hash <root>/home/.hermes/config.yaml> has its own `hooks:` block — leaving it untouched.",
-      "error [hooks] add these entries under it manually to mirror Hermes sessions:",
-      "error [hooks]   on_session_start: [{ command: \"'<node>' '<script>' --port 19473 --data-dir '<root>/data' --claude-projects-dir '<root>/home/.claude/projects' --codex-home '<root>/home/.codex' --grok-home '<root>/home/.grok' --cursor-home '<root>/home/.cursor' --hermes-home '<root>/home/.hermes' --commandcode-home '<root>/home/.commandcode' --devin-home '<root>/home/.local/share/devin/cli' --agy-home '<root>/home/.gemini/antigravity-cli' --copilot-home '<root>/home/.copilot' --engine hermes\", timeout: 10 }]",
-      "error [hooks]   pre_llm_call: [{ command: \"'<node>' '<script>' --port 19473 --data-dir '<root>/data' --claude-projects-dir '<root>/home/.claude/projects' --codex-home '<root>/home/.codex' --grok-home '<root>/home/.grok' --cursor-home '<root>/home/.cursor' --hermes-home '<root>/home/.hermes' --commandcode-home '<root>/home/.commandcode' --devin-home '<root>/home/.local/share/devin/cli' --agy-home '<root>/home/.gemini/antigravity-cli' --copilot-home '<root>/home/.copilot' --engine hermes\", timeout: 10 }]"
+      "error [hooks] run `harness hooks hermes` for the entries to add under it to mirror Hermes sessions",
+      "warn [hooks] hermes install skipped · native hook preparation is unavailable"
      ],
      "threw": null
     },
     {
      "logs": [
       "error [hooks] <hash <root>/home/.hermes/config.yaml> has its own `hooks:` block — leaving it untouched.",
-      "error [hooks] add these entries under it manually to mirror Hermes sessions:",
-      "error [hooks]   on_session_start: [{ command: \"'<node>' '<script>' --port 19473 --data-dir '<root>/data' --claude-projects-dir '<root>/home/.claude/projects' --codex-home '<root>/home/.codex' --grok-home '<root>/home/.grok' --cursor-home '<root>/home/.cursor' --hermes-home '<root>/home/.hermes' --commandcode-home '<root>/home/.commandcode' --devin-home '<root>/home/.local/share/devin/cli' --agy-home '<root>/home/.gemini/antigravity-cli' --copilot-home '<root>/home/.copilot' --engine hermes\", timeout: 10 }]",
-      "error [hooks]   pre_llm_call: [{ command: \"'<node>' '<script>' --port 19473 --data-dir '<root>/data' --claude-projects-dir '<root>/home/.claude/projects' --codex-home '<root>/home/.codex' --grok-home '<root>/home/.grok' --cursor-home '<root>/home/.cursor' --hermes-home '<root>/home/.hermes' --commandcode-home '<root>/home/.commandcode' --devin-home '<root>/home/.local/share/devin/cli' --agy-home '<root>/home/.gemini/antigravity-cli' --copilot-home '<root>/home/.copilot' --engine hermes\", timeout: 10 }]"
+      "error [hooks] run `harness hooks hermes` for the entries to add under it to mirror Hermes sessions",
+      "warn [hooks] hermes install skipped · native hook preparation is unavailable"
      ],
      "threw": null
     }
