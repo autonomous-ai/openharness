@@ -83,7 +83,8 @@ function sections(r: Report): Array<[string, string[]]> {
       `- ${APP_NAMES[g.app]} ${g.dim} ${g.scenario}: ${num(g.pointsLost)} (${g.checks.join(', ')})`)],
     ['Coverage gaps', r.gaps.map((g) => `- ${g.tier}/${g.platform}/${g.scenario} (${APP_NAMES[g.app]}): ${g.reason}`)],
     ['Delta', [
-      ...APPS.map((app) => `- ${APP_NAMES[app]}: ${num(r.delta.apps[app].before)} → ${num(r.delta.apps[app].after)}`),
+      ...Object.entries(r.delta.apps).flatMap(([subset, apps]) =>
+        APPS.map((app) => `- ${subset}, ${APP_NAMES[app]}: ${num(apps[app].before)} → ${num(apps[app].after)}`)),
       ...r.delta.checks.map((c) => `- ${c.key}: ${num(c.before)} → ${num(c.after)}`),
     ]],
   ]

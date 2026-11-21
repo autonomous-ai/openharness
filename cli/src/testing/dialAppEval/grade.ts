@@ -23,7 +23,6 @@ const subsetOfKey = (key: string): string => {
   return subsetOf({ tier, platform })
 }
 const platformKey = (r: Pick<CheckResult, 'tier' | 'platform'>): string => `${r.tier}/${r.platform}`
-const platformOfKey = (key: string): string => key.split('/', 2).join('/')
 const mean = (values: readonly number[]): number => values.reduce((sum, v) => sum + v, 0) / values.length
 // Code-unit order, not localeCompare: the baseline and the report read the same on every host.
 const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
@@ -50,6 +49,16 @@ function appScores(results: readonly CheckResult[], gaps: readonly CoverageGap[]
 
 function table(results: readonly CheckResult[], gaps: readonly CoverageGap[]): Record<App, AppScores> {
   return Object.fromEntries(APPS.map((app) => [app, appScores(results, gaps, app)])) as Record<App, AppScores>
+}
+
+/** Each subset's main-set app scores, for the subsets given. */
+function subsetScores(results: RunResults, subsets: Iterable<string>): Map<string, Record<App, number | null>> {
+  const main = scoredResults(results).filter((r) => !r.heldOut)
+  const gaps = results.gaps.filter((g) => !g.heldOut)
+  return new Map([...subsets].map((subset) => {
+    const scores = table(main.filter((r) => subsetOf(r) === subset), gaps.filter((g) => subsetOf(g) === subset))
+    return [subset, { claude: scores.claude.score, chatgpt: scores.chatgpt.score }]
+  }))
 }
 
 /** 100 · (w_d / Σw) · (1 − score) / n_d per check, Σw over the app's dimensions with a check. */
@@ -96,8 +105,9 @@ export function grade(results: RunResults, baseline: Baseline | null): Report {
 
   const after = new Map(scored.map((r) => [resultKey(r), r.score]))
   const before = baseline?.checks ?? {}
-  // A baseline entry of a tier × platform this run did not drive is not a change.
-  const keys = new Set([...after.keys(), ...Object.keys(before).filter((key) => ran.includes(platformOfKey(key)))])
+  // A baseline entry of a subset this run did not drive is not a change.
+  const subsets = new Set([...results.results, ...results.gaps].map(subsetOf))
+  const keys = new Set([...after.keys(), ...Object.keys(before).filter((key) => subsets.has(subsetOfKey(key)))])
   const checks = [...keys].sort()
     .map((key) => ({ key, before: before[key] ?? null, after: after.get(key) ?? null }))
     .filter((c) => c.before !== c.after)
@@ -113,8 +123,9 @@ export function grade(results: RunResults, baseline: Baseline | null): Report {
     groups: rankedGroups(failing),
     gaps: results.gaps,
     delta: {
-      apps: Object.fromEntries(APPS.map((app) =>
-        [app, { before: baseline?.apps[app] ?? null, after: apps[app].score }])) as Report['delta']['apps'],
+      apps: Object.fromEntries([...subsetScores(results, [...subsets].sort())].map(([subset, now]) => [subset,
+        Object.fromEntries(APPS.map((app) => [app, { before: baseline?.apps[subset]?.[app] ?? null, after: now[app] }])) as
+          Report['delta']['apps'][string]])),
       checks,
     },
   }
@@ -169,37 +180,23 @@ export function tierBVerdict(results: RunResults, baseline: Baseline, platform: 
     : { ok: true, message: `tier B on ${platform} holds its baseline` }
 }
 
-/**
- * Replaces the given tiers' entries and keeps the rest. Tier A always runs every platform by injection, so all of its
- * entries go; tier B only those of the platforms this run drove.
- */
-export function updateBaseline(baseline: Baseline | null, results: RunResults, tiers: readonly Tier[]): Baseline {
-  const ran = new Set([...results.results, ...results.gaps].map(platformKey))
-  const replaced = (key: string): boolean => {
-    const tier = key.split('/', 1)[0] as Tier
-    return tiers.includes(tier) && (tier === 'a' || ran.has(platformOfKey(key)))
-  }
-  const fresh = scoredResults(results).filter((r) => tiers.includes(r.tier))
-  const entries = [
-    ...Object.entries(baseline?.checks ?? {}).filter(([key]) => !replaced(key)),
-    ...fresh.map((r) => [resultKey(r), r.score] as const),
-  ].sort(([a], [b]) => byText(a, b))
-  const given: RunResults = {
-    ...results,
-    results: results.results.filter((r) => tiers.includes(r.tier)),
-    gaps: results.gaps.filter((g) => tiers.includes(g.tier)),
-  }
-  const apps = grade(given, null).apps
-  return {
-    schema: 1,
-    checks: Object.fromEntries(entries),
-    apps: { claude: apps.claude.score, chatgpt: apps.chatgpt.score },
-  }
-}
-
 /** The subsets an update with these tiers replaces: those the run drove. */
 function replaced(results: RunResults, tiers: readonly Tier[]): Set<string> {
   return new Set([...results.results, ...results.gaps].filter((r) => tiers.includes(r.tier)).map(subsetOf))
+}
+
+/** Replaces the checks and app scores of each subset of the given tiers this run drove, and keeps the rest. */
+export function updateBaseline(baseline: Baseline | null, results: RunResults, tiers: readonly Tier[]): Baseline {
+  const subsets = replaced(results, tiers)
+  const kept = Object.entries(baseline?.checks ?? {}).filter(([key]) => !subsets.has(subsetOfKey(key)))
+  const keptSubsets = new Set(kept.map(([key]) => subsetOfKey(key)))
+  const fresh = scoredResults(results).filter((r) => subsets.has(subsetOf(r)))
+  const checks = [...kept, ...fresh.map((r) => [resultKey(r), r.score] as const)].sort(([a], [b]) => byText(a, b))
+  const apps = [
+    ...Object.entries(baseline?.apps ?? {}).filter(([subset]) => keptSubsets.has(subset)),
+    ...subsetScores(results, subsets),
+  ].sort(([a], [b]) => byText(a, b))
+  return { schema: 1, checks: Object.fromEntries(checks), apps: Object.fromEntries(apps) }
 }
 
 /**

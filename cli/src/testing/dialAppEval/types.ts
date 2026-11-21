@@ -140,8 +140,11 @@ export interface WrongSend { tier: Tier; platform: Platform; scenario: string; t
 /** A scenario × platform the injected platform cannot drive: left out of the scores, neither pass nor fail. */
 export interface CoverageGap { tier: Tier; platform: Platform; scenario: string; app: App; heldOut: boolean; reason: string }
 export interface RunResults { schema: 1; results: CheckResult[]; wrongSends: WrongSend[]; gaps: CoverageGap[] }
-/** checks: keyed by resultKey. */
-export interface Baseline { schema: 1; checks: Record<string, number>; apps: Record<App, number | null> }
+/**
+ * checks: keyed by resultKey. apps: each subset's app scores, keyed `a` (tier A, every platform at once, as it runs them
+ * all by injection) or `b/<platform>`, so a run is compared only with the subsets it drove.
+ */
+export interface Baseline { schema: 1; checks: Record<string, number>; apps: Record<string, Record<App, number | null>> }
 export interface AppScores {
   score: number | null; dims: Record<Dimension, number | null>
   /** That app's tier × platform × scenario runs left out for a gap. */
@@ -157,7 +160,8 @@ export interface Report {
   /** groups ranked, most points lost first. */
   failing: Array<CheckResult & { pointsLost: number }>; groups: Group[]
   gaps: CoverageGap[]
-  delta: { apps: Record<App, { before: number | null; after: number | null }>;
+  /** apps: keyed by subset, as the baseline's, for each subset this run drove. */
+  delta: { apps: Record<string, Record<App, { before: number | null; after: number | null }>>;
            checks: Array<{ key: string; before: number | null; after: number | null }> }
 }
 export interface Verdict { ok: boolean; message: string }
