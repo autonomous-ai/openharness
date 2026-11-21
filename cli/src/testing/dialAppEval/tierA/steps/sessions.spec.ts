@@ -133,7 +133,7 @@ describe("tier A's live sessions", () => {
     const stop = (sessionId: string) =>
       w.told.find((e): e is ObservedHookEvent => e.sessionId === sessionId && e.event === 'turn-stop')
     expect(stop(a.id)).toMatchObject({ engine: 'claude', callerPid: 41000, transcriptPath: machine.owners.get(a.id)!.transcriptPath })
-    expect(stop(t1.id)).toMatchObject({ engine: 'codex', callerPid: 41002, transcriptPath: machine.owners.get(t1.id)!.transcriptPath })
+    expect(stop(t1.id)).toMatchObject({ engine: 'codex', callerPid: machine.owners.get(t1.id)!.pid, transcriptPath: machine.owners.get(t1.id)!.transcriptPath })
     const read = (engine: 'claude' | 'codex', path: string, root: string) =>
       readLastAnswer(engine, path, { roots: [root], maxBytes: 262_144, deadlineMs: 1_000 })
     expect(await read('claude', stop(a.id)!.transcriptPath!, w.world.folders.claudeProjects)).toBe('Eval answer one.')
@@ -172,7 +172,7 @@ describe("tier A's live sessions", () => {
     ])
   })
 
-  it('quit ends the app\'s sessions and relaunch starts them again', async () => {
+  it('quit ends the app\'s sessions and relaunch starts them again, each in a process of its own', async () => {
     const w = fakeWorld('darwin')
     await w.hook('a', 'start')
     await w.hook('b', 'start')
@@ -187,8 +187,11 @@ describe("tier A's live sessions", () => {
     expect(w.open()).toEqual([])
     w.told.length = 0
     await sessionsSteps.relaunch(w.world, { kind: 'relaunch', app: 'claude' })
-    expect(w.told.map((e) => [e.sessionId, e.event])).toEqual([[a.id, 'session-start'], [b.id, 'session-start']])
-    expect([...machine.processes.keys()].sort()).toEqual([41000, 41001, 41002])
+    // A process that ended is not back: the relaunched sessions' are new ones.
+    expect(w.told.map((e) => [e.sessionId, e.event, (e as ObservedHookEvent).callerPid])).toEqual([
+      [a.id, 'session-start', 41003], [b.id, 'session-start', 41004],
+    ])
+    expect([...machine.processes.keys()].sort()).toEqual([41002, 41003, 41004])
     expect(w.open()).toEqual([a.id, b.id])
   })
 })
