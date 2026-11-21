@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Place } from './adapter.js'
 import { APP_IDS } from './hostDetect.js'
-import { TAB_APPS, TAB_TTY, createTabsAdapter, isTabApp, readTty, tabOf, type RunPs, type TabsDeps } from './tabs.js'
+import { TAB_APPS, TAB_TTY, clientTtyForm, createTabsAdapter, isTabApp, readTty, tabOf, type RunPs, type TabsDeps } from './tabs.js'
 
 describe('tabs', () => {
   it('the tab apps are three of the app ids', () => {
@@ -25,6 +25,16 @@ describe('tabs', () => {
     ]) {
       expect(TAB_TTY.test(tty)).toBe(false)
     }
+  })
+
+  it('clientTtyForm: macOS ttys, Linux pts, none on Windows', () => {
+    const passes = (platform: NodeJS.Platform, tty: string) => clientTtyForm(platform)?.test(tty) ?? false
+    expect(passes('linux', '/dev/pts/3')).toBe(true)
+    expect(passes('darwin', '/dev/pts/3')).toBe(false)
+    expect(passes('darwin', '/dev/ttys004')).toBe(true)
+    expect(passes('linux', '/dev/ttys004')).toBe(false)
+    for (const tty of ['/dev/pts/../x', '/dev/pts/', '/dev/pts/1234567', '/dev/pts/3\n', '/dev/pts/3; x']) expect(passes('linux', tty), tty).toBe(false)
+    expect(clientTtyForm('win32')).toBeUndefined()
   })
 
   it('tabOf takes an app of the three and a tty, and no other key', () => {

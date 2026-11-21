@@ -481,11 +481,15 @@ describe('the outer place of an agent in the person\'s tmux', () => {
     expect(logs).toEqual(none)
   })
 
-  it('on Linux the app is read from the names, and no tty passes', async () => {
-    const processes = async () => [...TABLE, { pid: 4300, ppid: 4299, executable: 'tmux' }, { pid: 4299, ppid: 1, executable: 'ghostty' }]
+  // The app is read from the names; the pts names the WezTerm or kitty tab holding the client (the dial-linux follow-ups
+  // spec), and a macOS tty there names none.
+  it('Linux: a client in a WezTerm window on /dev/pts/3: its app, tty and process', async () => {
+    const processes = async () => [...TABLE, { pid: 4300, ppid: 4299, executable: 'tmux' }, { pid: 4299, ppid: 1, executable: 'wezterm-gui' }]
     const { logs, outer } = lookup({ platform: 'linux', processes }, [], { ...ONE, clients: places(1794700050, 4300, '/dev/pts/3') })
-    expect(await outer(NESTED, 100)).toStrictEqual({ app: 'ghostty', pid: 4300 })
+    expect(await outer(NESTED, 100)).toStrictEqual({ app: 'wezterm', tty: '/dev/pts/3', pid: 4300 })
     expect(logs).toEqual(found)
+    const mac = lookup({ platform: 'linux', processes }, [], ONE)
+    expect(await mac.outer(NESTED, 100)).toStrictEqual({ app: 'wezterm', pid: 4300 })
   })
 
   it('tmux or ps that fails: {} and not read, with the step, never a rejection', async () => {
