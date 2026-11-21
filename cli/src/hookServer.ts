@@ -19,7 +19,7 @@ import { paneReadIdentity } from './core/transcripts/readIdentity.js'
 import { processIdentityKey } from './lib/terminalRuntime.js'
 import { isRecentlyDeleted } from './lib/deletedSessions.js'
 import { registry, type RegisterInput, type RegisteredSession } from './lib/registry.js'
-import { errorKind, sid } from './lib/log.js'
+import { codeOrLength, errorKind, hashOf, sid } from './lib/log.js'
 import { VERSION } from './version.js'
 import { env } from './config/env.js'
 import { hookCredentialMatches, loadOrCreateHookCredential, loadOrCreateHookToken } from './lib/hookAuth.js'
@@ -491,11 +491,13 @@ export function startHookServer(
       // Before any route, reads included. See lib/loopbackRequest.ts.
       if (!trustedLocal && !isLoopbackRequest(req, hosts)) {
         // At most one line a minute: enough to explain a client that was refused, not a lever for a
-        // page to flood the log. Host and Origin are the sender's, so they are escaped and bounded.
+        // page to flood the log. The address, Host and Origin are the sender's (a page's URL can name the person's
+        // work), so the address is its length and each header, when sent, a hash that reads the same each time.
         if (Date.now() - lastRefusalLogAt > 60_000) {
           lastRefusalLogAt = Date.now()
-          const shown = (v: unknown) => JSON.stringify(String(v ?? '').slice(0, 80))
-          console.warn(`[hooks] refused ${req.method} ${url.slice(0, 80)} · host=${shown(req.headers.host)} origin=${shown(req.headers.origin)}`)
+          const sent = ([['host', req.headers.host], ['origin', req.headers.origin]] as const)
+            .flatMap(([name, value]) => value ? [`${name}=${hashOf(value)}`] : [])
+          console.warn(`[hooks] refused ${req.method} (${url.length} chars)${sent.length ? ` · ${sent.join(' ')}` : ''}`)
         }
         json(403, { error: 'FORBIDDEN_HOST' }); return
       }
@@ -745,7 +747,7 @@ export function startHookServer(
           const holds = admissionHolds.get(processAgent.agentId) ?? new Map<string, string>()
           holds.set(deliveryId, reason); admissionHolds.set(processAgent.agentId, holds)
           publishHold()
-          console.log(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} held · ${reason}`)
+          console.log(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} held · ${codeOrLength(reason)}`)
           answer(200, { pending: true })
         }
         const clearHold = () => {
@@ -881,7 +883,7 @@ export function startHookServer(
           // Core cleared the live admission hold; the durable commit reply is a detached snapshot.
           result.entry = structuredClone(owner)
           console.log(`[hooks] ${sid(result.entry.sessionId)} ${body.hookEvent ?? 'session-start'} · engine=${result.entry.engine} · isNew=${result.isNew}`
-            + (engine === 'hermes' ? ` · after a source check${result.entry.hermesHome ? ` · home=${result.entry.hermesHome}` : ''}` : ''))
+            + (engine === 'hermes' ? ` · after a source check${result.entry.hermesHome ? ` · home=${hashOf(result.entry.hermesHome)}` : ''}` : ''))
           const optional = (call: () => void | Promise<void>) => {
             try { void Promise.resolve(call()).catch(error => console.warn('[hooks] committed admission notification failed', errorKind(error))) }
             catch (error) { console.warn('[hooks] committed admission notification failed', errorKind(error)) }
@@ -945,7 +947,7 @@ export function startHookServer(
           } else {
             saveReceipt(history.records, deliveryId)
             const detail = 'Too many unverified hooks are pending; this hook was not queued. Retry after recovery.'
-            console.log(`[hooks] ${sid(body.sessionId ?? '?')} held · ${detail}`)
+            console.log(`[hooks] ${sid(body.sessionId ?? '?')} held · HOOK_ADMISSION_BUSY`)
             answer(429, { pending: false, error: 'HOOK_ADMISSION_BUSY', detail })
           }
         }
@@ -979,7 +981,7 @@ export function startHookServer(
       if (req.method === 'POST' && url === '/api/hook/session-end') {
         const hook = await boundHook('session-end')
         if (!hook) return
-        console.log(`[hooks] ${sid(hook.sessionId)} session-end${hook.reason ? ` · reason=${hook.reason}` : ''}`)
+        console.log(`[hooks] ${sid(hook.sessionId)} session-end${hook.reason ? ` · reason=${codeOrLength(hook.reason)}` : ''}`)
         handlers.onSessionEnd(hook.sessionId, hook.reason)
         json(200, { ok: true })
         return
@@ -1185,7 +1187,7 @@ export function startHookServer(
       // must not survive on a random port while another one owns this user's socket.
       listenLocalSocket(handle, socketPath, { token: options.pipeToken ?? undefined }).then(
         (localSocket) => {
-          console.log(`[hooks] listening on ${socketPath}`)
+          console.log('[hooks] listening on the private socket')
           resolve({ server, port: actual, localSocket })
         },
         (error: unknown) => {
