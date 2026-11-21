@@ -8,9 +8,9 @@
  * reads every file of the daemon, `testing/` too (its shapes mirror the daemon's wiring), as code, so that a comment or
  * a string naming an error is no finding.
  *
- * A log call is a `console` call, or a call named `log`, `warn`, `error` or `info`, bare or on anything but `console`
- * and `Math`, or a call of one picked by `??`, `||` or `?:`, or of a name a parameter's default or a `const` binds to
- * one, whose value is not thrown. An error is what a catch or an error handler binds, a name on the left of
+ * A log call is a `console` call (`console.warn`, `console[stream]`), or a call named `log`, `warn`, `error` or
+ * `info`, bare or on anything but `console` and `Math`, or a call of one picked by `??`, `||` or `?:`, or of a name a
+ * parameter's default or a `const` binds to one, whose value is not thrown. An error is what a catch or an error handler binds, a name on the left of
  * `instanceof` in the expression at hand, a name spelled as one (`e`, `err`, `error`, `ex`, `exception`, `…Error`,
  * `…Err`) that is not a parameter typed `string`, and the `.cause` of any of these. A log call is found when it prints
  * an error's `.message`, `.stack`, `.reason`, `.detail`, `.stderr`, `.stdout`, `.path` or `.toString()`, an error whole
@@ -79,12 +79,17 @@ const unwrap = (node: ts.Expression): ts.Expression =>
 const LOGGERS = ['log', 'warn', 'error', 'info']
 
 /**
- * `console.*`, a logger by its name on anything but `console` and `Math`, one picked by `??`, `||` or `?:`
- * (`(deps.log ?? console.warn)(…)`), and a name a parameter's default or a `const` binds to one (`say = console.log`).
+ * `console.*`, by name or by element access (`console[stream]`), a logger by its name on anything but `console` and
+ * `Math`, one picked by `??`, `||` or `?:` (`(deps.log ?? console.warn)(…)`), and a name a parameter's default or a
+ * `const` binds to one (`say = console.log`).
  */
 const isLogger = (node: ts.Expression): boolean => {
   const callee = unwrap(node)
   if (ts.isConditionalExpression(callee)) return isLogger(callee.whenTrue) || isLogger(callee.whenFalse)
+  if (ts.isElementAccessExpression(callee)) {
+    const on = unwrap(callee.expression)
+    return ts.isIdentifier(on) && on.text === 'console'
+  }
   if (ts.isBinaryExpression(callee)) {
     return [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(callee.operatorToken.kind)
       && (isLogger(callee.left) || isLogger(callee.right))
