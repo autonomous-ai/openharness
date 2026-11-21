@@ -15,6 +15,8 @@ import 'package:harness/measurement/speed_marks.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/state/profile_cache.dart';
+import 'package:harness/viewer/viewer_key_store.dart';
+import 'package:harness/viewer/viewer_services.dart';
 import 'package:harness/ws/local_cli_discovery.dart';
 
 // Task #3561: the signed-in check (`harness auth status`, ~245 ms on a release build) no longer holds up the window.
@@ -116,6 +118,7 @@ class _App extends AppNotifier {
     LocalKeyValueStore storage, {
     bool Function()? uninstalling,
     bool Function()? flashing,
+    ViewerServices? viewer,
   }) : super(
          config: AppConfig.dev,
          authSession: AuthSession(),
@@ -126,6 +129,7 @@ class _App extends AppNotifier {
            flashing: flashing,
          ),
          paneLayoutStore: PaneLayoutStore(storage: storage),
+         viewer: viewer,
        );
   Completer<void>? daemon;
   @override
@@ -416,6 +420,28 @@ void main() {
       await _ticks();
       expect(cli.asked, 1);
       expect(app.status, AppStatus.unauthenticated);
+    },
+  );
+
+  // A viewer has no CLI on this computer for an uninstall to remove: its sign-in check is its own.
+  test(
+    'a viewer still asks its sign-in check while uninstall holds its marker',
+    () async {
+      final viewer = _App(
+        cli,
+        storage,
+        uninstalling: () => true,
+        viewer: ViewerServices(
+          config: AppConfig.dev,
+          session: AuthSession(),
+          keys: ViewerKeyStore(storage: _Memory()),
+        ),
+      )..api = api;
+      addTearDown(viewer.dispose);
+      cli.answer.complete(const CliAuthStatus(loggedIn: false));
+      await viewer.bootstrap();
+      await _ticks();
+      expect(cli.asked, 1);
     },
   );
 
