@@ -27,7 +27,7 @@ import { isWindowsHeldPane, windowsPaneLaunch } from './windows/engineStart.js'
 import { sameProcessIdentity, sameTerminalPlacement } from './terminalRuntime.js'
 import type { TerminalRuntimeRef } from './terminalTypes.js'
 import { harnessPermissionEnvironment } from './harnessDefaults.js'
-import { errorKind } from './log.js'
+import { codeOrLength, errorKind } from './log.js'
 
 export interface ResumeAgentServiceDeps {
   registry: Pick<typeof liveRegistry, 'byAgent' | 'bySession' | 'resumePendingAgent' | 'setLaunch' | 'confirmLaunch'>
@@ -200,7 +200,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       // Logged like the confirmation above, and for the same reason: this verdict clears `active`,
       // makes the desk refuse to open the harness, and is the one a person comes asking about —
       // openharness#189 was hard to place precisely because the resume path said nothing either way.
-      console.log(`[resume] ${sid(saved.agentId)} ${result.error} · engine=${saved.engine}${result.detail ? ` · ${result.detail}` : ''}`)
+      console.log(`[resume] ${sid(saved.agentId)} ${codeOrLength(result.error)} · engine=${saved.engine}`)
       announceSession(failed!)
       // A verified exit releases the reservation and keeps the shell/output. Unknown startup
       // keeps both runtime and reservation; another Enter cannot launch a duplicate process.
