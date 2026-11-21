@@ -14,7 +14,7 @@ import 'package:harness/ws/ws_conn.dart';
 /// A daemon that answers whatever the test says, with the supervisor's callbacks captured so the
 /// test can fire "it became ready" itself.
 class _ScriptedDiscovery extends LocalCliDiscovery {
-  _ScriptedDiscovery(this.answers, {super.uninstalling})
+  _ScriptedDiscovery(this.answers, {super.uninstalling, super.flashing})
     : super(config: AppConfig.dev);
 
   final List<LocalCliProbe> answers;
@@ -360,6 +360,22 @@ void main() {
 
       await expectLater(notifier.ensureCliDaemonReady(), throwsStateError);
       held = false;
+      await expectLater(notifier.ensureCliDaemonReady(), throwsStateError);
+      expect(cli.checks, 1);
+    },
+  );
+
+  // A flash holds the daemon down so esptool can have the port; the CLI is still there to answer.
+  test(
+    'ensureCliDaemonReady still asks harness auth status while a dial is being flashed',
+    () async {
+      final discovery = _ScriptedDiscovery([
+        const LocalCliProbe.down('connection refused'),
+      ], flashing: () => true);
+      final cli = _SignedInCli();
+      final notifier = _Notifier(discovery, cli: cli);
+      addTearDown(notifier.dispose);
+
       await expectLater(notifier.ensureCliDaemonReady(), throwsStateError);
       expect(cli.checks, 1);
     },

@@ -98,8 +98,8 @@ class _Environment extends EnvironmentProvisioner {
 }
 
 class _Discovery extends LocalCliDiscovery {
-  _Discovery(bool Function()? uninstalling)
-    : super(config: AppConfig.dev, uninstalling: uninstalling);
+  _Discovery({super.uninstalling, super.flashing})
+    : super(config: AppConfig.dev);
   @override
   Future<String?> computerId() async => null;
   @override
@@ -108,15 +108,22 @@ class _Discovery extends LocalCliDiscovery {
 }
 
 class _App extends AppNotifier {
-  _App(_Cli cli, LocalKeyValueStore storage, {bool Function()? uninstalling})
-    : super(
-        config: AppConfig.dev,
-        authSession: AuthSession(),
-        cliLogin: cli,
-        environmentProvisioner: _Environment(),
-        localCliDiscovery: _Discovery(uninstalling),
-        paneLayoutStore: PaneLayoutStore(storage: storage),
-      );
+  _App(
+    _Cli cli,
+    LocalKeyValueStore storage, {
+    bool Function()? uninstalling,
+    bool Function()? flashing,
+  }) : super(
+         config: AppConfig.dev,
+         authSession: AuthSession(),
+         cliLogin: cli,
+         environmentProvisioner: _Environment(),
+         localCliDiscovery: _Discovery(
+           uninstalling: uninstalling,
+           flashing: flashing,
+         ),
+         paneLayoutStore: PaneLayoutStore(storage: storage),
+       );
   Completer<void>? daemon;
   @override
   Future<void> ensureCliDaemonReady() async {
@@ -168,15 +175,22 @@ void main() {
   late _Cli cli;
   late _Api api;
   late _App app;
-  // Whether `harness uninstall` holds its marker, asked each time.
+  // Whether `harness uninstall` holds its marker, and whether a dial is being flashed, asked each time.
   late bool Function() uninstalling;
+  late bool Function() flashing;
 
   setUp(() {
     storage = _Memory();
     cli = _Cli();
     api = _Api();
     uninstalling = () => false;
-    app = _App(cli, storage, uninstalling: () => uninstalling())..api = api;
+    flashing = () => false;
+    app = _App(
+      cli,
+      storage,
+      uninstalling: () => uninstalling(),
+      flashing: () => flashing(),
+    )..api = api;
     // The CLI's sign-in file is on this computer.
     app.cliSessionOnDisk = () => true;
   });
@@ -369,6 +383,19 @@ void main() {
       await _ticks();
       expect(cli.asked, 1);
       expect(app.status, AppStatus.unauthenticated);
+    },
+  );
+
+  // A flash holds the daemon down so esptool can have the port; the CLI is still there to answer.
+  test(
+    'a launch while a dial is being flashed still asks harness auth status',
+    () async {
+      flashing = () => true;
+      cli.answer.complete(const CliAuthStatus(loggedIn: true));
+      await app.bootstrap();
+      await _ticks();
+      expect(cli.asked, 1);
+      expect(_screen(app), 'workspace');
     },
   );
 
