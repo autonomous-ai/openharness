@@ -25,7 +25,7 @@ import { DEVICES_FALLBACKS, DEVICES_REQUESTS, type CoreApi, type CorePorts, type
 import { CableFleet, testDialDiscovery, type CableFleetOptions } from '../cable/cableFleet.js'
 import { isLocalOnly } from '../lib/cardUpdate.js'
 import { TurnStats, type TurnStatsFields } from '../cable/turnStats.js'
-import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, DaemonCableHost } from '../cable/cableHost.js'
+import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, DaemonCableHost, type CableHostWiring } from '../cable/cableHost.js'
 import { CableSession, SHOWN_ONLY_PREFIX, type DialStatus, type FollowCause } from '../cable/cableSession.js'
 import type { HostAdapter, Pane } from '../cable/hosts/adapter.js'
 import { chatGptPlaces, claudeStoreRoots } from '../cable/hosts/appPlaces.js'
@@ -169,6 +169,11 @@ export interface DevicesDeps {
   claudeAppStore?: ClaudeAppSourceDeps['store']
   /** For this service's tests: the reader of the ChatGPT app's threads (cable/hosts/codexAppThreads.ts). */
   codexAppThreads?: CodexAppSourceDeps['threads']
+  /** For this service's tests: the watch on the Claude app's store and the ChatGPT app's Codex home; `watchNearest`
+   *  (cable/hosts/folderWatch.ts) by default. */
+  watchStore?: (folders: readonly string[], changed: (file?: string) => void) => () => void
+  /** For this service's tests: the transcriber of a dial's speech, handed to the dial's host in place of the backend's. */
+  transcribe?: CableHostWiring['transcribe']
   /** For this service's tests: an app bundle's id from its Info.plist; `readBundleId` (cable/hosts/scannedApp.ts) by
    *  default. */
   bundleId?: (app: string) => Promise<string | undefined>
@@ -872,7 +877,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const claudeAppSource = claudeWake ? new ClaudeAppSource({
     store: deps.claudeAppStore ?? new ClaudeAppStore(claudeAppRoots.map(({ root }) => root)),
     roots: claudeAppRoots,
-    watch: (folders, changed) => watchNearest(folders, changed),
+    watch: deps.watchStore ?? watchNearest,
     after: timerIn('claude-app'),
     // Through the opener, as a hooked agent's tap: noted before it, and its attach the link's echo.
     focus: (localId, agentId) => {
@@ -897,7 +902,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  (registry.ts). */
   const codexAppSource = observed ? new CodexAppSource({
     threads: deps.codexAppThreads ?? new CodexAppThreads(codexAppHome),
-    watch: (changed) => watchNearest([codexAppHome], changed),
+    watch: (changed) => (deps.watchStore ?? watchNearest)([codexAppHome], changed),
     after: timerIn('codex-app'),
     // Through the opener, as a hooked agent's tap. The noted adapter notes the dial's move, once.
     focus: (threadId, agentId) => opener.open(agentId, { bundle: APP_BUNDLES.codex, pane: codexPane(threadId) }),
@@ -1089,6 +1094,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     signedIn: () => core.account.signedIn(),
     accessToken: (opts) => core.account.accessToken(opts),
     environment: () => core.account.environment(),
+    transcribe: deps.transcribe,
     watching: (on) => {
       core.clients.dialWatching(on)
       // Before the scan the attach starts, so that scan finds the dial recorded; and before each editor's pass, which
