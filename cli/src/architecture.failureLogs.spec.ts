@@ -10,24 +10,26 @@
  *
  * A log call is a `console` call (`console.warn`, `console[stream]`), or a call named `log`, `warn`, `error` or
  * `info`, bare or on anything but `console` and `Math`, or a call of one picked by `??`, `||` or `?:`, or of a name a
- * parameter's default or a `const` binds to one, whose value is not thrown. An error is what a catch or an error handler binds, a name on the left of
- * `instanceof` in the expression at hand, a name spelled as one (`e`, `err`, `error`, `ex`, `exception`, `…Error`,
- * `…Err`) that is not a parameter typed `string`, and the `.cause` of any of these. A log call is found when it prints
- * an error's `.message`, `.stack`, `.reason`, `.detail`, `.stderr`, `.stdout`, `.path` or `.toString()`, an error whole
- * (as itself, in a template, a sum, an object, a branch, the right side of `&&`, a method's receiver or what a callback
- * returns, handed to any function but the safe ones below, or built in place), or a local made from either (its initializer, or a value a `let` is given later);
- * when it runs in a catch that binds nothing; and when it says "fail" in a catch that binds one and names nothing it
- * caught. It is found, too, when it prints whole, as an identifier or a property read's last name, a name of any value
- * that holds content: process output (`stderr`, `stdout`, `output`, `…Stderr`, `…Stdout`, `…Output`), free text
- * (`detail`, `details`, `message`, `…Detail`, `…Message`), a path or URL (`path`, `cwd`, `dir`, `folder`, `file`,
- * `home`, `url`, `…Path`, `…Cwd`, `…Dir`, `…Folder`, `…File`, `…Home`, `…Url`, `…URL`); but not a name an `import`
- * binds, nor a forwarder's, a plain parameter of the function the log call is in handed on bare, whose callers are
- * checked where they call it. And when it prints whole a property of a local given a function of the file's own's
- * result (awaited or not) or an object literal, and the value there is found by the rules above. A `.length` or a
- * `.size`, a type test, a comparison, and what `errorKind`, `codeOrLength`, `hashOf`, `sid`, `serialPortName` (the one
- * way a serial port's name is logged), `Number`, `Boolean` and `Buffer.byteLength` return carry no words. What a
- * function of the file's own logs of a parameter (a function, a `const` one, a method called on `this`), and what a
- * `writeSync` writes, are found the same way, but for the catch they run in.
+ * parameter's default or a `const` binds to one, whose value is not thrown. An error is what a catch or an error
+ * handler binds, a name on the left of `instanceof` in the expression at hand, a name spelled as one (`e`, `err`,
+ * `error`, `ex`, `exception`, `…Error`, `…Err`) that is not a parameter typed `string`, and the `.cause` of any of
+ * these. A log call is found when it prints an error's `.message`, `.stack`, `.reason`, `.detail`, `.stderr`,
+ * `.stdout`, `.path` or `.toString()`, an error whole (as itself, in a template, a sum, an object, a branch, the right
+ * side of `&&`, a method's receiver or what a callback returns, handed to any function but the safe ones below, or
+ * built in place), or a local made from either (its initializer, or a value a `let` is given later); when it runs in a
+ * catch that binds nothing; and when it says "fail" in a catch that binds one and names nothing it caught. It is
+ * found, too, when it prints whole, as an identifier or a property read's last name, a name of any value that holds
+ * content: process output (`stderr`, `stdout`, `output`, `…Stderr`, `…Stdout`, `…Output`), free text (`detail`,
+ * `details`, `message`, `…Detail`, `…Message`), a path or URL (`path`, `cwd`, `dir`, `folder`, `file`, `home`, `url`,
+ * `…Path`, `…Cwd`, `…Dir`, `…Folder`, `…File`, `…Home`, `…Url`, `…URL`); but not a name an `import` binds, nor a
+ * forwarder's: a plain parameter handed on bare by a function whose callers are checked where they call it, one bound
+ * to a logger's name (`log: (line) => …`, `deps.log ?? (…)`) or a function of the file's own. And when it prints whole
+ * a property of a local given a function of the file's own's result (awaited or not) or an object literal, and the
+ * value there is found by the rules above. A `.length` or a `.size`, a type test, a comparison, and what `errorKind`,
+ * `codeOrLength`, `hashOf`, `sid`, `serialPortName` (the one way a serial port's name is logged), `Number`, `Boolean`
+ * and `Buffer.byteLength` return carry no words. What a function of the file's own logs of a parameter (a function, a
+ * `const` one, a method called on `this`), and what a `writeSync` writes, are found the same way, but for the catch
+ * they run in.
  *
  * Its limits: a logger under another name; text carried two locals away or through a local of the function that logs
  * it; a local whose value is content of a name the rules read (`const shown = basename(file)`), never followed; what a
@@ -534,12 +536,35 @@ const hidden = (call: ts.CallExpression): string | undefined => {
 }
 
 /**
- * What a forwarder hands on as it is: an argument that is, bare, a plain parameter of the function the call is in. Its
- * callers are checked where they call it, a logger by its name or a function of the file's own through its forwarding.
+ * Whether [fn]'s callers are checked where they call it: it is bound to a logger's name (`log: (line) => …`,
+ * `const log = deps.log ?? ((line) => …)`), so each of its calls is a log call, or it is a function of the file's own
+ * (`calleeOf`), whose calls are read through its forwarding.
+ */
+const callersChecked = (fn: ts.SignatureDeclaration): boolean => {
+  const named = (name: ts.Node | undefined): boolean => !!name && ts.isIdentifier(name) && LOGGERS.includes(name.text)
+  if (ts.isFunctionDeclaration(fn)) return true
+  if (ts.isMethodDeclaration(fn)) return ts.isClassLike(fn.parent) || named(fn.name)
+  let bound: ts.Node = fn
+  while (ts.isParenthesizedExpression(bound.parent) || ts.isAsExpression(bound.parent) || ts.isSatisfiesExpression(bound.parent)) bound = bound.parent
+  if ((ts.isVariableDeclaration(bound.parent) || (ts.isPropertyDeclaration(bound.parent) && ts.isClassLike(bound.parent.parent)))
+    && bound.parent.initializer === bound) return true
+  // A logger's name binds it through `??`, `||` and `?:` too: what is picked is called as that logger.
+  let picked: ts.Node = fn
+  while (ts.isParenthesizedExpression(picked.parent) || ts.isConditionalExpression(picked.parent) || (ts.isBinaryExpression(picked.parent)
+    && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(picked.parent.operatorToken.kind))) picked = picked.parent
+  const binding = picked.parent
+  return (ts.isPropertyAssignment(binding) || ts.isVariableDeclaration(binding) || ts.isParameter(binding) || ts.isPropertyDeclaration(binding))
+    && named(binding.name)
+}
+
+/**
+ * What a forwarder hands on as it is: an argument that is, bare, a plain parameter of the function the call is in, when
+ * that function's callers are checked where they call it.
  */
 const passedOn = (call: ts.CallExpression, logged: readonly ts.Expression[]): Set<ts.Node> => {
   let fn: ts.Node = call.parent
   while (!ts.isFunctionLike(fn) && !ts.isSourceFile(fn)) fn = fn.parent
+  if (!ts.isFunctionLike(fn) || !callersChecked(fn)) return new Set()
   return new Set(logged.map(unwrap).filter((argument) => {
     const declaration = ts.isIdentifier(argument) ? declarationOf(argument) : undefined
     return !!declaration && ts.isParameter(declaration) && declaration.parent === fn && ts.isIdentifier(declaration.name)
