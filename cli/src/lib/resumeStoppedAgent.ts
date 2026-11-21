@@ -56,19 +56,19 @@ export async function resumeStoppedAgent(deps: ResumeStoppedDeps): Promise<Resta
       if (liveIdentity(latest) !== identity) return resumeChanged
       if (runtime.state === 'unknown') return resumeUnconfirmed
       if (runtime.state === 'alive') {
-        if (latest!.resumeOnly && latest!.launch?.state === 'failed') {
+        if (latest.resumeOnly && latest.launch?.state === 'failed') {
           // Never confirmed is not the same as disproved: the engine is running, so ask for
           // confirmation again rather than repeating the old verdict.
-          if (latest!.launch.error === 'RESUME_UNCONFIRMED') return deps.waitForReady(latest!)
+          if (latest.launch.error === 'RESUME_UNCONFIRMED') return deps.waitForReady(latest)
           // Any other verdict is reported as ITSELF. Relabelling them all "not confirmed yet" told
           // somebody whose resume had reopened the wrong conversation to go and check the terminal,
           // and hid the one fact that would have explained what they were looking at.
-          return { ok: false, error: latest!.launch.error, detail: latest!.launch.detail }
+          return { ok: false, error: latest.launch.error, detail: latest.launch.detail }
         }
-        return { ok: true, session: latest!, resumed: true }
+        return { ok: true, session: latest, resumed: true }
       }
-      saved = { ...latest! }
-      await deps.retain(latest!)
+      saved = { ...latest }
+      await deps.retain(latest)
     }
   }
   if (!deps.current()) return resumeChanged
