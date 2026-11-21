@@ -85,7 +85,7 @@ function hermesHooksAsToday(port: number, selectedHome: string | undefined, opti
     { ...options, createMissing: !!selectedHome && !!options?.environment })
 }
 
-/** The hook line Harness installs in Hermes [home]; `harness hermes-hooks` prints the same. */
+/** The hook line Harness installs in Hermes [home]; `harness hooks hermes` prints the same. */
 export function hermesHookCommand(port: number, home: string, environment?: Readonly<Record<string, string>>, platform: NodeJS.Platform = hostPlatform()): string {
   return command(port, 'hermes', env.CODEX_HOME, home, environment, platform === 'win32' ? 'cmd' : 'bash')
 }

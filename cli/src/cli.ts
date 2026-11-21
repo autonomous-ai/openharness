@@ -200,7 +200,7 @@ Machine:
   harness service uninstall    undo that: the daemon goes back to \`harness start\`
   harness service status       what launchd, systemd or Task Scheduler has registered, and whether it runs (--json)
   harness logs export          zip the last 7 days of logs (app, CLI, dial, daemon) to the Desktop
-  harness hermes-hooks         the hook entries to add by hand to a Hermes config.yaml with its own hooks:
+  harness hooks hermes         the hook entries to add by hand to a Hermes config.yaml with its own hooks:
   harness tui                  all of Harness in this terminal: tabs, panes, every machine (⌥O ⌥P ⌥N)
   harness new [agent] [--machine <name>] [folder|name] [-- task]
                                make a harness from a shell: \`harness new\` is claude here; see \`harness new -h\`
@@ -3193,8 +3193,8 @@ switch (cmd) {
   case 'status':
     status().catch(onError)
     break
-  case 'hermes-hooks': // loaded only here: the engines' hook declarations are not every command's
-    import('./engines/hermesHooksCommand.js').then(({ hermesHooksCommand }) => hermesHooksCommand(daemonPort())).catch(onError)
+  case 'hooks': // loaded only here: the engines' hook declarations are not every command's
+    import('./engines/hooksCommand.js').then(({ hooksCommand }) => { process.exitCode = hooksCommand(args[0], daemonPort()) }).catch(onError)
     break
   case 'logs':
     if (args[0] === 'export') {

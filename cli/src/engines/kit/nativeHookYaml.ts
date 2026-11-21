@@ -179,7 +179,7 @@ function hooksBlock(rule: NativeYamlHooks, cmd: string): string {
 
 /**
  * What a person adds by hand to a config whose own `hooks:` mapping Harness leaves alone: the managed block's entries,
- * and the names for the passthrough list. `harness hermes-hooks` prints it on their terminal.
+ * and the names for the passthrough list. `harness hooks hermes` prints it on their terminal.
  */
 export function manualHookEntries(rule: NativeYamlHooks, cmd: string): string {
   const mapping = hooksMapping(rule, cmd)
