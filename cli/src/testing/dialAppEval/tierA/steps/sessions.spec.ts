@@ -121,7 +121,8 @@ describe("tier A's live sessions", () => {
     await w.hook('t1', 'start')
     await w.hook('t1', 'turn-start')
     await w.hook('t1', 'turn-stop', { lastAnswer: 'Eval codex answer.' })
-    const stop = (sessionId: string) => w.told.find((e) => e.sessionId === sessionId && e.event === 'turn-stop')
+    const stop = (sessionId: string) =>
+      w.told.find((e): e is ObservedHookEvent => e.sessionId === sessionId && e.event === 'turn-stop')
     expect(stop(a.id)).toMatchObject({ engine: 'claude', callerPid: 41000, transcriptPath: machine.owners.get(a.id)!.transcriptPath })
     expect(stop(t1.id)).toMatchObject({ engine: 'codex', callerPid: 41002, transcriptPath: machine.owners.get(t1.id)!.transcriptPath })
     const read = (engine: 'claude' | 'codex', path: string, root: string) =>
