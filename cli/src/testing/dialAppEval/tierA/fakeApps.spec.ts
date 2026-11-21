@@ -142,14 +142,14 @@ describe("tier A's fake apps", () => {
     expect(w.gaps).toEqual([])
   })
 
-  it("the ChatGPT app's title reaches the watch only from the front, and never without Accessibility (X3)", async () => {
+  it("the ChatGPT app's title reaches the watch only from the front, and never on a world with no Accessibility", async () => {
     const behind = fakeWorld('darwin', { front: 'claude' })
     behind.ran(opener('darwin', codexLink(t2.id), CHATGPT_APP))
     await later()
     expect(behind.shown.titles).toEqual([])
-    const x3 = fakeWorld('darwin', { front: 'chatgpt', of: { ...scenario, id: 'X3' } })
-    x3.ran(opener('darwin', codexLink(t2.id), CHATGPT_APP))
+    const denied = fakeWorld('darwin', { front: 'chatgpt', of: { ...scenario, world: { accessibility: false } } })
+    denied.ran(opener('darwin', codexLink(t2.id), CHATGPT_APP))
     await later()
-    expect(x3.shown.titles).toEqual([])
+    expect(denied.shown.titles).toEqual([])
   })
 })

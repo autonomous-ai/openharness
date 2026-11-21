@@ -58,8 +58,9 @@ describe('the catalog', () => {
     for (const s of ALL) expect(s.platforms, s.id).toEqual(s.id === 'X3' ? ['darwin'] : ['darwin', 'win32', 'linux'])
   })
 
-  it('X3 starts with another app in front, so its front step brings the ChatGPT app up', () => {
-    expect(byId('X3').world?.front).toBe('other')
+  it('X3 starts with another app in front, so its front step brings the ChatGPT app up, on a world with no Accessibility', () => {
+    expect(byId('X3').world).toEqual({ front: 'other', accessibility: false })
+    for (const s of ALL) if (s.id !== 'X3') expect(s.world?.accessibility, s.id).toBeUndefined()
   })
 
   it('X3\'s still window ends at its tap, so the tap is not the dial moving by itself', () => {
