@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from 'fs'
+import { createHash } from 'crypto'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
-  ts, sid, preview, installTimestampedConsole, logFrame, errorKind,
+  ts, sid, preview, installTimestampedConsole, logFrame, errorKind, codeOrLength, hashOf,
   adoptLegacyLog, prepareLogFile, trimLogFile, LOG_MAX_BYTES,
 } from './log.js'
 
@@ -241,4 +242,27 @@ describe('errorKind', () => {
 
   it('the release bundle keeps class names, which a typed error\'s kind is', () =>
     expect(readFileSync(join(__dirname, '..', '..', 'build-bundle.mjs'), 'utf8')).toMatch(/keepNames: true/))
+})
+
+describe('codeOrLength', () => {
+  it.each([
+    ['a code', 'SERVICE_UNAVAILABLE', 'SERVICE_UNAVAILABLE'],
+    ['a lower-case word', 'peer_failed', 'text(11)'],
+    ['a sentence with a path', 'could not read /Users/sentinel/notes', 'text(36)'],
+    ['41 characters', `E${'X'.repeat(40)}`, 'text(41)'],
+    ['one letter', 'E', 'text(1)'],
+    ['empty', '', 'text(0)'],
+    ['a number', 5, 'number'],
+    ['undefined', undefined, 'undefined'],
+    ['null', null, 'object'],
+    ['an object', { code: 'ENOENT' }, 'object'],
+  ])('a value that is %s reads %s', (_, value, shown) => expect(codeOrLength(value)).toBe(shown))
+})
+
+describe('hashOf', () => {
+  it('a hash is the first 8 hex of the text\'s SHA-256, the same each time, and holds none of it', () => {
+    expect(hashOf('/Users/sentinel/.claude/settings.json')).toBe(createHash('sha256').update('/Users/sentinel/.claude/settings.json').digest('hex').slice(0, 8))
+    expect(hashOf('/Users/sentinel/a')).not.toBe(hashOf('/Users/sentinel/b'))
+    expect(hashOf('x')).toMatch(/^[0-9a-f]{8}$/)
+  })
 })
