@@ -707,6 +707,8 @@ export async function run(engine, config = {}, { native = false } = {}) {
     cwd,
     hook_event_name: event,
     ...(engine === 'codex' ? { model: current.model, permission_mode: permissionMode } : {}),
+    // A Claude app session's Claude Code names the app's title for it; a test gives the fake one by its environment.
+    ...(engine === 'claude' && process.env.FAKE_CLAUDE_SESSION_TITLE ? { session_title: process.env.FAKE_CLAUDE_SESSION_TITLE } : {}),
     ...fields,
   })
   /**

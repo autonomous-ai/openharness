@@ -128,9 +128,9 @@ function start(world: TierBWorld, app: FakeApp, key: SessionKey): Promise<Live> 
       const s = world.session(key)
       if (!s.localId) throw new Error(`scenario ${world.scenario.id}: Claude session ${key} has no localId`)
       // The Claude app's hints (hook/notify.mjs hostHints): its session id and entrypoint everywhere, and macOS its
-      // bundle id; Linux names the app by the process above the engine.
+      // bundle id; Linux names the app by the process above the engine. Its hooks name the app's title (session_title).
       const hints: Record<string, string> = {
-        CLAUDE_CODE_HOST_SESSION_ID: s.localId, CLAUDE_CODE_ENTRYPOINT: 'claude-desktop',
+        CLAUDE_CODE_HOST_SESSION_ID: s.localId, CLAUDE_CODE_ENTRYPOINT: 'claude-desktop', FAKE_CLAUDE_SESSION_TITLE: s.title,
         ...(LINUX ? {} : { __CFBundleIdentifier: APP_BUNDLES.claude }),
       }
       const folder = basename(s.cwd)
