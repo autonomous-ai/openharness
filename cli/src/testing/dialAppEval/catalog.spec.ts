@@ -105,6 +105,24 @@ describe('the catalog', () => {
     expect(xh2.sessions.filter((d) => d.app === 'chatgpt' && !d.ghost).map((d) => [d.key, d.ageMs])).toEqual([['t1', 60_000], ['t2', 120_000]])
   })
 
+  it('a state is timed from a step after the dial listed its row, and a turn lasts at least 2 s', () => {
+    // Before the first list the row is not on the dial, and the latency would time the first list, not the change. A
+    // stop right after its start replaces working before a person could see it.
+    for (const s of ALL) {
+      for (const c of s.checks.filter((c) => c.kind === 'state')) {
+        const step = s.steps.findIndex((step) => step.label === c.after)
+        const listed = s.steps.slice(0, step).some((w) => w.kind === 'wait' && w.until?.expect.includes(c.session) === true)
+        expect(listed, `${s.id} ${c.id}`).toBe(true)
+      }
+      for (const [i, step] of s.steps.entries()) {
+        if (step.kind !== 'hook' || step.event !== 'turn-stop') continue
+        const start = s.steps.slice(0, i).findLastIndex((h) => h.kind === 'hook' && h.event === 'turn-start' && h.session === step.session)
+        const ms = s.steps.slice(start, i).reduce((sum, w) => sum + (w.kind === 'wait' && w.until === undefined ? w.ms : 0), 0)
+        expect(ms, `${s.id} turn of ${step.session}`).toBeGreaterThanOrEqual(2_000)
+      }
+    }
+  })
+
   it('a voice speaks to a session with a running process, or to one its link resumes', () => {
     // Words for a session with no process are refused before any send: the voice check and the gate then test nothing.
     for (const s of ALL) {
@@ -199,8 +217,8 @@ describe('the catalog', () => {
       return is === kind ? [`${s.id} ${step.ms}`] : []
     }))
     // C6's turn, C9's rests on a and on b, C10's gap between quit and relaunch, C11's rest and its time unplugged, X3's
-    // still window, X11's and XH3's switches.
-    expect(waits('own')).toEqual(['C6 5000', 'C9 1000', 'C9 3500', 'C10 2000', 'C11 1000', 'C11 3000', 'X3 5000', 'X11 300', 'X11 300', 'XH3 200'])
+    // still window, X8's turn, X11's and XH3's switches.
+    expect(waits('own')).toEqual(['C6 5000', 'C9 1000', 'C9 3500', 'C10 2000', 'C11 1000', 'C11 3000', 'X3 5000', 'X8 2000', 'X11 300', 'X11 300', 'XH3 200'])
     expect(new Set(waits('condition').map((w) => w.split(' ')[1]))).toEqual(new Set(['10000']))
     // The person reading the face once the list is there.
     expect(new Set(waits('reading').map((w) => w.split(' ')[1]))).toEqual(new Set(['1000']))
