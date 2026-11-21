@@ -149,7 +149,8 @@ export interface ObservedActions {
   /** The session's mod has a poll open, or closed one moments ago. */
   modReady(sessionId: string): boolean
   toMod(sessionId: string, text: string): Promise<Delivery>
-  /** Whether a tap can open the target here: macOS brings an app forward, elsewhere only a pane's own command runs. */
+  /** Whether a tap can open the target here (open.ts can): a pane its adapter brings forward, its app by bundle on macOS
+   *  and Windows, or on Linux the agent's window, found by [agentId] (windowOf), as a target names no window. */
   canOpen(agentId: string, target: OpenTarget): boolean
   /** A tap: the agent's pane and its app, in the order the pane's adapter keeps (open.ts). */
   open(agentId: string, target: OpenTarget): Promise<boolean>
