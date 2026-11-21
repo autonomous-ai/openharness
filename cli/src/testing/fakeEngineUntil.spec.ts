@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -11,7 +11,7 @@ const { fakeEngineShim } = await import('../../e2e/harness/daemon.js' as string)
   fakeEngineShim: (name: 'claude' | 'codex', config: Record<string, unknown>) => string
 }
 
-/** The hooks the fake runs here: each writes its input as one line of hooks.jsonl. */
+/** The hooks the fake runs here: each writes its input to a file of its own, as two can run at once. */
 const EVENTS = ['UserPromptSubmit', 'Stop', 'PermissionRequest', 'Notification']
 /** Under the 6 s a permission dialog waits before Claude Code says so to its Notification hooks. */
 const AT_ONCE_MS = 3_000
@@ -29,9 +29,10 @@ afterEach(() => {
 function start(): { hooks(): Array<Record<string, unknown>>; type(text: string): void; hooked(event: string, test?: (input: Record<string, unknown>) => boolean, timeout?: number): Promise<Record<string, unknown>> } {
   root = mkdtempSync(join(tmpdir(), 'fake-until-'))
   const home = join(root, 'home')
-  const log = join(root, 'hooks.jsonl')
+  const ran = join(root, 'hooks')
+  mkdirSync(ran)
   mkdirSync(join(home, '.claude'), { recursive: true })
-  const command = `cat >> '${log}'; echo >> '${log}'`
+  const command = `cat > '${ran}'/$$.json`
   writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({
     hooks: Object.fromEntries(EVENTS.map((event) => [event, [{ hooks: [{ type: 'command', command }] }]])),
   }))
@@ -43,9 +44,10 @@ function start(): { hooks(): Array<Record<string, unknown>>; type(text: string):
   // Only its own home: none of this machine's Claude Code settings reach it.
   engine = spawn(bin, [], { cwd: root, env: { PATH: process.env.PATH, HOME: home }, stdio: ['pipe', 'ignore', 'ignore'] })
   const hooks = (): Array<Record<string, unknown>> => {
-    let text = ''
-    try { text = readFileSync(log, 'utf8') } catch { /* none ran yet */ }
-    return text.split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>)
+    const inputs: Array<Record<string, unknown>> = []
+    // A hook still writing its file is read at the next look.
+    for (const name of readdirSync(ran)) try { inputs.push(JSON.parse(readFileSync(join(ran, name), 'utf8')) as Record<string, unknown>) } catch { /* half written */ }
+    return inputs
   }
   return {
     hooks,

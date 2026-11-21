@@ -28,7 +28,9 @@
 //
 // A prompt can carry directives that script the turn: `!slow <ms>` holds the answer back, `!until <name>` until the
 // test writes `<name>.release` in the root (a minute at most), as an agent's turn goes on while a command it runs works,
-// and answers with that file's text when it holds any, so a test can give the turn's exact last answer,
+// and answers with that file's text when it holds any, so a test can give the turn's exact last answer; while it
+// holds, `<name>.permit` asks permission to run that file's command at once, its Notification without the 6 s wait, as
+// a dialog the person has left (a scenario's needs-input step), and the turn goes on as `!permit`'s,
 // `!tool <command>` runs a tool call first, `!background <command>` (Claude Code) starts the command in the background as
 // its Bash tool's `run_in_background` does, as the engine's own direct child, and ends the turn while it runs, `!commentary <text>` (Codex) says what it is about to do in a message of its own first,
 // `!grow <MiB>` appends that much compaction history
@@ -790,9 +792,10 @@ export async function run(engine, config = {}, { native = false } = {}) {
   // requests were read late.
   let lateStop = null
   let latePrompt = null
-  /** Until the test writes `file`, for at most a minute: a test that failed first does not leave this waiting. */
-  const released = async (file) => {
-    for (const end = Date.now() + 60_000; !existsSync(file) && Date.now() < end;) await new Promise((resolve) => setTimeout(resolve, 20))
+  /** Until the test writes `file` (or [other]), for at most a minute: a test that failed first does not leave this waiting. */
+  const released = async (file, other) => {
+    const written = () => existsSync(file) || (other !== undefined && existsSync(other))
+    for (const end = Date.now() + 60_000; !written() && Date.now() < end;) await new Promise((resolve) => setTimeout(resolve, 20))
   }
   const hookHeld = () => {
     const file = join(config.root, `held-hook-${randomUUID()}`)
@@ -1546,17 +1549,17 @@ export async function run(engine, config = {}, { native = false } = {}) {
   // "Claude needs your permission to use Bash"; `elicitation_dialog`): each key starts the wait again, and an answer in
   // time sends none. Codex has no such hook.
   const PERMIT_NOTICE_MS = 6_000
-  const noticeDialog = (state, notice) => {
+  const noticeDialog = (state, notice, noticeMs = PERMIT_NOTICE_MS) => {
     eraseComposer()
-    dialog = { cursor: 0, drawn: 0, ...state, idle: setTimeout(() => { void runHooks('Notification', notice) }, PERMIT_NOTICE_MS) }
+    dialog = { cursor: 0, drawn: 0, ...state, idle: setTimeout(() => { void runHooks('Notification', notice) }, noticeMs) }
     drawDialog()
   }
   /** What a permission request hands its hooks: the tool and its input, as each CLI names them. */
   const permitInput = (command) => engine === 'claude'
     ? { tool_name: 'Bash', tool_input: { command }, permission_suggestions: [] }
     : { turn_id: open, tool_name: 'exec_command', tool_input: { cmd: command } }
-  const permitDialog = (command, resolve) => {
-    noticeDialog({ kind: 'permit', command, resolve }, { message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt' })
+  const permitDialog = (command, resolve, noticeMs) => {
+    noticeDialog({ kind: 'permit', command, resolve }, { message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt' }, noticeMs)
     // Claude Code runs its PermissionRequest hooks beside the dialog it has just drawn, not before it, in the lead's
     // own session (2.1.209 and 2.1.326, facts-claude §2).
     if (engine === 'claude') void runHooks('PermissionRequest', permitInput(command))
@@ -1565,10 +1568,10 @@ export async function run(engine, config = {}, { native = false } = {}) {
    * Asks permission to run [command]: Codex first runs its PermissionRequest hooks and waits for them (facts-codex §2),
    * then draws the request; Claude Code draws it at once. [resolve] takes the row chosen.
    */
-  const askPermission = (command, resolve) => {
+  const askPermission = (command, resolve, noticeMs) => {
     const hooks = engine === 'codex' ? runHooks('PermissionRequest', permitInput(command)) : undefined
-    if (hooks) void hooks.then(() => permitDialog(command, resolve))
-    else permitDialog(command, resolve)
+    if (hooks) void hooks.then(() => permitDialog(command, resolve, noticeMs))
+    else permitDialog(command, resolve, noticeMs)
   }
   /**
    * A question asked through the engine's question tool, its dialog drawn from [state]: the tool's PreToolUse hooks
@@ -2087,8 +2090,15 @@ export async function run(engine, config = {}, { native = false } = {}) {
     }
     if (directive?.[1] === 'until') {
       const release = join(config.root, `${directive[2]}.release`)
-      await released(release)
+      const permit = join(config.root, `${directive[2]}.permit`)
+      await released(release, permit)
       if (!open) return
+      if (!existsSync(release) && existsSync(permit)) {
+        const command = readFileSync(permit, 'utf8').trim() || 'printf hi'
+        const row = await new Promise((resolve) => askPermission(command, resolve, 0))
+        await permitted(command, row)
+        return
+      }
       let answer = ''
       try { answer = readFileSync(release, 'utf8') } catch { /* not written within the minute */ }
       if (answer) {
