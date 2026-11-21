@@ -457,12 +457,19 @@ jobs:
           sparse-checkout: |
             /.github/actions/setup-gcloud/
             /desktop/scripts/upload-desktop-linux.sh
+            /scripts/verify-desktop-release.py
+            /device-app/src-tauri/tauri.conf.json
           sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v4
         with:
           pattern: desktop-linux-*
           path: linux-release
           merge-multiple: true
+      # The merge holds build-linux's artifact too, which build code made: sign-linux's check, on the files that go up.
+      - name: Check the signatures
+        run: |
+          python3 scripts/verify-desktop-release.py "$VERSION" \
+            --signed linux-release/Harness-linux-x64.AppImage linux-release/Harness-linux-arm64.AppImage
       - name: Authenticate to GCP (workload identity federation)
         uses: google-github-actions/auth@v2
         with:
