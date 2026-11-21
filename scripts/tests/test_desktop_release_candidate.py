@@ -1,4 +1,5 @@
 """Candidate identity, artifact promotion and bounded discovery contracts."""
+import contextlib
 import copy
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -14,6 +15,8 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
+import desktop_publication_fixture as fixture
+
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('candidate', ROOT / 'scripts/desktop-release-candidate.py')
 candidate = importlib.util.module_from_spec(spec)
@@ -26,6 +29,16 @@ TREE = 'b' * 40
 PREFIX = 'harness/desktop-candidates/123-1-' + 'c' * 32
 VERSION = '1.2.55'
 NOW = datetime.now(timezone.utc)
+LINUX = ('desktop-linux-x64', 'desktop-linux-arm64')
+
+
+def setUpModule():
+    # One throwaway key for the module: make_receipt runs in most tests, and signing is two OpenSSL calls.
+    global SIGNER, SIGNATURES
+    folder = tempfile.TemporaryDirectory()
+    unittest.addModuleCleanup(folder.cleanup)
+    SIGNER = fixture.FixtureSigner(folder.name)
+    SIGNATURES = {key: SIGNER.sign(key.encode(), fixture.desktop_comment(candidate.FILES[key], VERSION)) for key in LINUX}
 
 
 def tree_entry(path, number, kind='tree'):
@@ -54,6 +67,8 @@ def make_receipt():
         payload = key.encode()
         entries[key] = dict(version=VERSION, size=len(payload), sha256=hashlib.sha256(payload).hexdigest(),
                             generation=str(index), url=f'https://storage.googleapis.com/{BUCKET}/{PREFIX}/{filename}?generation={index}')
+        if key in SIGNATURES:
+            entries[key]['signature'] = SIGNATURES[key]
     return dict(schema=2, status='passed', version=VERSION, bucket=BUCKET, prefix=PREFIX, repository=REPOSITORY,
                 run_id=123, run_attempt=1, source_sha=SHA, source_tree=TREE, build_inputs=copy.deepcopy(INPUTS),
                 created_at=(NOW - timedelta(seconds=10)).isoformat(), artifacts=entries)
@@ -500,7 +515,16 @@ class CandidatePromotionTests(unittest.TestCase):
                 (Path(folder) / name).write_bytes(objects[f'gs://{BUCKET}/harness/desktop/.ci/456-1/{name}'])
             entries = candidate.publisher.read_parts(Path(folder), VERSION)
         self.assertTrue(all(entry['url'].startswith(f'https://cdn.autonomous.ai/harness/desktop/{VERSION}/') for entry in entries.values()))
+        self.assertEqual({key: entries[key].get('signature') for key in LINUX}, SIGNATURES)
         self.assertFalse(any('metadata.json' in call[3] for call in calls))
+
+    def test_promotion_refuses_a_receipt_whose_linux_entry_has_no_signature_before_any_write(self):
+        receipt = make_receipt()
+        del receipt['artifacts']['desktop-linux-arm64']['signature']
+        with patch.object(candidate.publisher, 'gcloud') as gcloud:
+            with self.assertRaisesRegex(ValueError, r'desktop-linux-arm64: signature refused \(missing\)'):
+                candidate.promote(receipt, f'harness/desktop/{VERSION}', 'harness/desktop/.ci/456-1')
+            gcloud.assert_not_called()
 
     def test_destinations_and_source_generations_are_checked_before_writes(self):
         receipt = make_receipt()
@@ -539,6 +563,30 @@ class CandidatePromotionTests(unittest.TestCase):
                 (path / 'linux-arm64.json').unlink()
                 with self.assertRaisesRegex(ValueError, 'expected 6 platform manifests'):
                     candidate.seal(VERSION, BUCKET, PREFIX, path, identity)
+
+    def test_sealing_checks_linux_signatures_with_the_key_it_is_given(self):
+        receipt = make_receipt()
+        identity = {key: receipt[key] for key in ['repository', 'run_id', 'run_attempt', 'source_sha', 'source_tree', 'build_inputs']}
+        def key_of(uri):
+            return next(key for key, filename in candidate.FILES.items() if uri.split('?')[0].endswith('/' + filename))
+        def describe(uri):
+            return dict(generation='7', size=receipt['artifacts'][key_of(uri)]['size'])
+        def download(entry, timeout):
+            # Only the network is replaced: these are the bytes the receipt's sums and signatures were made over.
+            data = key_of(entry['url']).encode()
+            return len(data), hashlib.sha256(data), hashlib.blake2b(data)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)
+            for name, keys in candidate.publisher.PARTS.items():
+                part = {key: dict(receipt['artifacts'][key], url=f'https://storage.googleapis.com/{BUCKET}/{PREFIX}/{candidate.FILES[key]}')
+                        for key in keys}
+                (path / name).write_text(json.dumps(part))
+            with patch.object(candidate.publisher, 'gcloud'), patch.object(candidate, 'describe', side_effect=describe), \
+                    patch.object(candidate.verification, 'download', side_effect=download), contextlib.redirect_stdout(io.StringIO()):
+                sealed = candidate.seal(VERSION, BUCKET, PREFIX, path, identity, public_key=SIGNER.public_key)
+                with self.assertRaisesRegex(ValueError, 'failed verification'):
+                    candidate.seal(VERSION, BUCKET, PREFIX, path, identity)
+        self.assertEqual({key: sealed['artifacts'][key]['signature'] for key in LINUX}, SIGNATURES)
 
     def test_cleanup_never_selects_production_recent_unknown_or_unpinned_objects(self):
         def object_at(prefix, name, days=8, generation='17'):
