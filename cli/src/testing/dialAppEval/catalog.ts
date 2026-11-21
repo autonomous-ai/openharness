@@ -136,6 +136,7 @@ export const MAIN: Scenario[] = [
     steps: [
       { kind: 'claude.write', sessions: ['a'] },
       { kind: 'hook', session: 'a', event: 'start' },
+      ...listed('claude', ['a']),
       { label: 'turn', kind: 'hook', session: 'a', event: 'turn-start' },
       { kind: 'wait', ms: 5 * S },
       { label: 'stop', kind: 'hook', session: 'a', event: 'turn-stop', lastAnswer: 'Eval answer one.' },
@@ -154,6 +155,7 @@ export const MAIN: Scenario[] = [
       { kind: 'claude.write', sessions: ['a', 'b'] },
       { kind: 'hook', session: 'a', event: 'start' },
       { kind: 'hook', session: 'b', event: 'start' },
+      ...listed('claude', ['a', 'b']),
       { kind: 'hook', session: 'a', event: 'turn-start' },
       { label: 'ask', kind: 'hook', session: 'a', event: 'needs-input', asks: 'permission' },
     ],
@@ -326,7 +328,9 @@ export const MAIN: Scenario[] = [
     steps: [
       { kind: 'codex.write', sessions: ['t1'] },
       { kind: 'hook', session: 't1', event: 'start' },
+      ...listed('chatgpt', ['t1']),
       { label: 'turn', kind: 'hook', session: 't1', event: 'turn-start' },
+      { kind: 'wait', ms: 2 * S },
       { label: 'stop', kind: 'hook', session: 't1', event: 'turn-stop', lastAnswer: 'Eval codex answer.' },
     ],
     checks: [
