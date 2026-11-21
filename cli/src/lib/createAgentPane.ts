@@ -26,7 +26,7 @@ import type { ExternalResumeIntent } from './externalResume.js'
 import type { WindowsPaneLaunch } from './windows/engineStart.js'
 import type { StartedBy } from './agentAttribution.js'
 import type { LaunchModel } from './launchModel.js'
-import { codeOrLength, errorKind } from './log.js'
+import { errorKind } from './log.js'
 
 const DEFAULT_MAX_ATTEMPTS = 3
 
@@ -154,9 +154,9 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
       ...(deps.paneLaunch?.env || deps.env ? { env: { ...(deps.paneLaunch?.env ?? {}), ...(deps.env ?? {}) } } : {}),
     })
     if (spawned.state !== 'succeeded') {
-      console.warn(`[agent] create ${deps.engine} failed · tmux could not open a pane · ${codeOrLength(spawned.reason ?? '')}`)
-      const missing = spawned.reason === 'tmux is unavailable'
-      return { ok: false, error: missing ? 'TMUX_UNAVAILABLE' : 'SPAWN_FAILED', detail: spawned.reason }
+      const error = spawned.reason === 'tmux is unavailable' ? 'TMUX_UNAVAILABLE' : 'SPAWN_FAILED'
+      console.warn(`[agent] create ${deps.engine} failed · tmux could not open a pane · ${error}`)
+      return { ok: false, error, detail: spawned.reason }
     }
     let pending: RegisteredSession | null
     try {
