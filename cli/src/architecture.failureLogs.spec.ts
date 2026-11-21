@@ -27,9 +27,7 @@
  * `.size`, a type test, a comparison, and what `errorKind`, `codeOrLength`, `hashOf`, `sid`, `serialPortName` (the one
  * way a serial port's name is logged), `Number`, `Boolean` and `Buffer.byteLength` return carry no words. What a
  * function of the file's own logs of a parameter (a function, a `const` one, a method called on `this`), and what a
- * `writeSync` writes, are found the same way, but for the catch they run in. Until the sweep of
- * docs/plans/2026-11-21-log-no-stored-strings-plan.md lands, its pending lists excuse each of its files exactly the
- * hits it has.
+ * `writeSync` writes, are found the same way, but for the catch they run in.
  *
  * Its limits: a logger under another name; text carried two locals away or through a local of the function that logs
  * it; a local whose value is content of a name the rules read (`const shown = basename(file)`), never followed; what a
@@ -42,7 +40,7 @@
  * close reason), each fixed at its sink with a behaviour test (docs/plans/2026-11-21-log-no-stored-strings-plan.md).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
-import { join, sep } from 'node:path'
+import { join } from 'node:path'
 import typescript from 'typescript'
 import { expect, it } from 'vitest'
 
@@ -109,7 +107,7 @@ const isLogCall = (call: ts.CallExpression): boolean => {
   return !ts.isThrowStatement(at.parent) && isLogger(call.expression)
 }
 
-/** The master writes its fatal line to the log's fd with `writeSync` (masterProcess.ts `writeFatalTo`). */
+/** The master writes its fatal line to the log's fd with `writeSync` (lib/log.ts `exitOnFatal`). */
 const isWriteSync = (call: ts.CallExpression): boolean => {
   const callee = unwrap(call.expression)
   return (ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : '') === 'writeSync'
@@ -559,33 +557,21 @@ function failureLogs(code: string, file = 'file.ts'): string[] {
   return found
 }
 
+/**
+ * Every file under [dir], as a path from cli/src with `/`. A dot-folder (`.tmp`) holds no daemon code but specs'
+ * scratch folders, which a spec running beside this one deletes mid-scan: walked, it failed the scan with ENOENT.
+ */
+const filesUnder = (dir: string): string[] => readdirSync(join(SRC, dir), { withFileTypes: true })
+  .flatMap((entry) => {
+    const file = dir ? `${dir}/${entry.name}` : entry.name
+    return entry.isDirectory() ? (entry.name.startsWith('.') ? [] : filesUnder(file)) : [file]
+  })
+
 /** The hits in every file of the daemon: every .ts under cli/src but tests, e2e scripts, the TUI and the terminal list. */
-const daemonHits = (): string[] => readdirSync(SRC, { recursive: true, encoding: 'utf8' })
-  .map((file) => file.split(sep).join('/'))
+const daemonHits = (): string[] => filesUnder('')
   .filter((file) => file.endsWith('.ts') && !/\.(spec|test|d)\.ts$/.test(file) && !/^(e2e|tui)\//.test(file)
     && !/(^|\/)__fixtures__\//.test(file) && !TERMINAL.includes(file))
   .flatMap((file) => failureLogs(readFileSync(join(SRC, file), 'utf8'), file))
-
-/**
- * The pending lists: the hits on the tree a task of docs/plans/2026-11-21-log-no-stored-strings-plan.md fixes, one
- * list a task, one line a file, `<path from cli/src> <hits>`. Each task deletes its own list; Task 23 deletes the
- * pending lists and this code.
- */
-const PENDING_LISTS = join(SRC, 'architecture.failureLogs.pending')
-
-type Pending = { list: string, file: string, hits: number }
-
-const pendingExcuses = (): Pending[] => readdirSync(PENDING_LISTS).flatMap((list) => readFileSync(join(PENDING_LISTS, list), 'utf8')
-  .split('\n').filter(Boolean).map((line) => {
-    const [file = '', hits] = line.split(' ')
-    return { list, file, hits: Number(hits) }
-  }))
-
-const fileOf = (hit: string): string => hit.slice(0, hit.indexOf(':'))
-
-/** The hits no pending line excuses: a file's are excused only when its line names exactly that many. */
-const unexcused = (hits: readonly string[], pending: readonly Pending[]): string[] => hits.filter((hit) => !pending.some(({ file, hits: count }) =>
-  file === fileOf(hit) && hits.filter((other) => fileOf(other) === file).length === count))
 
 it.each([
   "try { run() } catch (error) { console.error('[x] failed:', error) }",
@@ -685,28 +671,12 @@ it.each([
   "console.warn(`[x] ${error instanceof HookPreparationHeld ? error.hold : errorKind(error)}`)",
 ])('passes %s', (code) => expect(failureLogs(code)).toEqual([]))
 
-it('a pending line excuses its file\'s hits and no more', () => {
-  const planted = failureLogs('try { run() } catch (error) { console.error(error) } try { run() } catch (error) { console.warn(error.message) }', 'planted.ts')
-  const excused = (hits: number): string[] => unexcused(planted, [{ list: 'planted.txt', file: 'planted.ts', hits }])
-  expect(planted).toHaveLength(2)
-  expect(excused(2)).toEqual([])
-  expect(excused(1)).toEqual(planted)
-  expect(excused(3)).toEqual(planted)
-})
-
 it('no daemon log line carries an error\'s words, a stored string, process output, a path or a URL, or hides its kind', () => {
-  expect(unexcused(daemonHits(), pendingExcuses()), 'A daemon log line names a failure by its kind, '
+  expect(daemonHits(), 'A daemon log line names a failure by its kind, '
     + '`errorKind(error)` from lib/log.ts, and never prints an error\'s message, stack or the error itself: those can quote '
     + 'the person\'s files and prompts, and Export logs sends the log off the machine. A catch that logs binds what it '
     + 'caught and names its kind, so someone can act on the line. A stored or peer string is logged as '
     + '`codeOrLength(value)`, a path, URL or label as a fixed word or `hashOf(text)`, process output as its length.').toEqual([])
-})
-
-it('every pending line names a file with exactly that many hits', () => {
-  expect(pendingExcuses().flatMap(({ list, file, hits }) => {
-    const found = existsSync(join(SRC, file)) ? failureLogs(readFileSync(join(SRC, file), 'utf8'), file).length : 0
-    return found === hits ? [] : [`${list}: ${file} ${hits}, found ${found}`]
-  })).toEqual([])
 })
 
 it('every terminal file exists', () => {
