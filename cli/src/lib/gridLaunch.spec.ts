@@ -19,6 +19,7 @@ import {
 import { piProviderExtensionIn } from './gridAssignmentWire.js'
 import { ENGINES, type AgentEngine } from '../engines/types.js'
 import { buildEngineLaunchArgv } from './engineLaunch.js'
+import { hashOf } from './log.js'
 
 /** The shape the desktop actually sends, with values read off the live control plane. */
 const WIRE = {
@@ -309,9 +310,12 @@ describe('the engines that cannot', () => {
 })
 
 describe('describeGridLaunch', () => {
-  it('names the grid and the model, and never the key', () => {
-    const line = describeGridLaunch('claude', WITH_MODEL, 'on')
-    expect(line).toContain('autonomous.ai')
+  it('names the grid by its hash and the model, and never the key', () => {
+    // The line goes to the daemon log (agent create and retarget), which Export logs sends off the machine,
+    // and a grid's name is one the person can choose.
+    const line = describeGridLaunch('claude', { ...WITH_MODEL, networkName: 'Home sentinel' }, 'on')
+    expect(line).not.toContain('sentinel')
+    expect(line).toContain(`-> ${hashOf('Home sentinel')} (${WITH_MODEL.networkId})`)
     expect(line).toContain('GLM-4.7-Flash')
     expect(line).not.toContain(WIRE.apiKey)
     expect(describeGridLaunch('claude', OVERRIDE, 'on')).not.toContain(WIRE.apiKey)
