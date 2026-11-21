@@ -874,6 +874,18 @@ describe('the passes count', () => {
     }
   })
 
+  // It looked at no agent: a check that something did not happen would read it as a look.
+  it('does not count a pass that saw no process table', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const run = reconciler(async () => ({ ...probe([]), processTableAvailable: false }))
+      await expect(run.trigger()).resolves.toBe(true)
+      expect(run.passes).toBe(0)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   it('does not count a pass that throws', async () => {
     const run = reconciler(async () => { throw new Error('ps timed out') })
     await expect(run.trigger()).rejects.toThrow('ps timed out')
