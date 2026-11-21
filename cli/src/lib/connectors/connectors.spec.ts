@@ -8,6 +8,7 @@ import { createServer, request as httpRequest } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { hashOf } from '../log.js'
 import { managedNodePath } from '../nodeRuntime.js'
 import { FakeGateway, FakeService } from '../../testing/connectorServers.js'
 import { bridgeKey, harnessKey, resetProfileCache, sync, syncProfileHome } from './agents.js'
@@ -198,14 +199,17 @@ describe('the bridge', () => {
     expect(vault.status('linear', 'Linear', vault.token('linear')).state).toBe('reconnect')
   })
 
-  it('logs why a service refused a renewal, in its own words', async () => {
+  it('logs a refused renewal by the service\'s hash and the refusal\'s kind, never the service\'s words', async () => {
     vault.save('linear', { ...vault.token('linear')!, expires_at: Math.floor(Date.now() / 1000) + 60 })
     fake.revoked = true
+    const issuer = vault.token('linear')!.issuer!
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       await expect(refresh(vault, 'linear')).rejects.toThrow('connected again')
       const said = warn.mock.calls.map(([line]) => String(line)).find(line => line.includes('refused to renew'))
-      expect(said).toMatch(/^\[connections\] linear: .+ refused to renew it \(400 invalid_grant, issued \d{4}-/)
+      expect(said).toMatch(new RegExp(`^\\[connections\\] linear: ${hashOf(issuer)} refused to renew it \\(SignInError, issued \\d{4}-`))
+      expect(said).not.toContain(issuer)
+      expect(said).not.toContain('invalid_grant')
       expect(said).not.toContain('refresh-1')
     } finally { warn.mockRestore() }
   })

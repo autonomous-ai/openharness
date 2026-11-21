@@ -436,6 +436,19 @@ describe('durable orchestrator lifecycle', () => {
     service.stop(); service = new OrchestratorService(deps)
     expect(service.snapshot(id).directorId).toBe('created-before-storage-failure')
   })
+  it('says a background error by its kind, while the project keeps its words', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let fail = false
+    deps.changed = () => { if (fail) { fail = false; throw new Error('the store at /Users/sentinel/x is gone') } }
+    deps.create = async () => { fail = true; return { agentId: 'agent-1' } }
+    service = new OrchestratorService(deps)
+    await start()
+    await vi.waitFor(() => expect(service.snapshot(id).state).toBe('paused'))
+    expect(service.snapshot(id).error).toContain('/Users/sentinel/x')
+    const lines = error.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+    expect(lines).not.toContain('sentinel')
+    expect(lines).toContain('[orchestrator] project paused after a background error · Error')
+  })
   it('keeps cancellation authoritative when director creation later rejects', async () => {
     let reject!: (error: Error) => void
     deps.create = () => new Promise((_resolve, r) => { reject = r })

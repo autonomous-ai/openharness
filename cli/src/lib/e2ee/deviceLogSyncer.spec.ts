@@ -2191,6 +2191,16 @@ describe('DeviceLogSyncer — register refusals', () => {
     expect(t.syncer.list().registerError).toBeUndefined()
   })
 
+  it('says a refusal in words by its length, never its words', async () => {
+    const lines: string[] = []
+    const t = setup({ log: (line) => lines.push(line) })
+    t.backend.append.mockImplementationOnce(async () => ({ error: 'peer said /Users/sentinel/x' }))
+    await t.syncer.register()
+    expect(t.syncer.list().registerError).toBe('peer said /Users/sentinel/x')
+    expect(lines.join('\n')).not.toContain('sentinel')
+    expect(lines).toContain('[devlog] register refused: text(27)')
+  })
+
   it('a race (STALE_HEAD) is not a refusal', async () => {
     const t = setup()
     t.backend.append.mockImplementation(async () => ({ error: 'STALE_HEAD' }))
@@ -2235,7 +2245,7 @@ describe('DeviceLogSyncer.sweepStale', () => {
     expect(active(stale.pub)).toBe(false)
     expect([usedLately, young, suspended, larger, me].every((k) => active(k.pub))).toBe(true)
     expect(t.backend.entries.at(-1)).toMatchObject({ op: 'remove', pub: stale.pub, signer: me.pub })
-    expect(lines).toContain(`[devlog] removed unused device old-browser (${fingerprint(b64d(stale.pub))}), not used since 1970-01-01`)
+    expect(lines).toContain(`[devlog] removed unused device ${fingerprint(b64d(stale.pub))}, not used since 1970-01-01`)
   })
 
   it('a key last used over 180 days ago goes whatever the record says of the others', async () => {
@@ -2246,7 +2256,7 @@ describe('DeviceLogSyncer.sweepStale', () => {
     await t.syncer.register()
     await t.syncer.sweepStale()
     expect(active(old.pub)).toBe(false)
-    expect(lines).toContain(`[devlog] removed unused device app (${fingerprint(b64d(old.pub))}), last used 1970-01-01`)
+    expect(lines).toContain(`[devlog] removed unused device ${fingerprint(b64d(old.pub))}, last used 1970-01-01`)
   })
 
   it('a key with no last use is unused only when the record has run since before the cutoff', async () => {

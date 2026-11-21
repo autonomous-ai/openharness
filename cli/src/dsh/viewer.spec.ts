@@ -337,7 +337,11 @@ describe('viewer.use (spec 1.1)', () => {
       const bare = new DshViewerManager({ onUrl: () => undefined, log: (l) => logs.push(l), lookup: () => undefined })
       await bare.start('a10', dsh({ use: 'acme/viewer' }), '/ws')
       expect(bare.url('a10')).toBeNull()
-      expect(logs.join(' ')).toContain('not installed')
+      expect(logs.join(' ')).toContain('[dsh] text(74) · agent a10 has no viewer pane')
+      // The viewer a manifest names is someone else's words: the line says how long the refusal is, never what it says.
+      await bare.start('a11', dsh({ use: '/Users/sentinel/x' }), '/ws')
+      expect(logs.join('\n')).not.toContain('sentinel')
+      expect(logs).toContain('[dsh] text(80) · agent a11 has no viewer pane')
     } finally {
       await manager.stopAll()
     }
