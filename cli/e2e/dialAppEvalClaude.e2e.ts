@@ -54,6 +54,13 @@ describe.skipIf(WIN32)('the dial eval, tier B: the Claude app', () => {
     expect(driver.lastWorld().d.log().split('\n').filter((line) => line.includes('[device] attach ·'))).not.toEqual([])
   })
 
+  it('the dial unplugged shows nothing, and its glass starts afresh when plugged in again', async () => {
+    await runScenario(driver, SCENARIOS.find((s) => s.id === 'C11')!, HOST)
+    const { steps, faces } = driver.seen()
+    const replug = steps.find((s) => s.kind === 'replug')!.at
+    expect(faces.filter((f) => f.at < replug).at(-1)).toEqual({ at: expect.any(Number), page: '', tiles: [], active: null })
+  })
+
   it.for(SCENARIOS)('$id: $title', async (scenario) => {
     const began = Date.now()
     const run = await runScenario(driver, scenario, HOST)
