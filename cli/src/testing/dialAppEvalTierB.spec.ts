@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { App, Platform } from './dialAppEval/types.js'
+import { MAIN } from './dialAppEval/catalog.js'
+import type { App, Platform, Scenario } from './dialAppEval/types.js'
 
 // The dial eval's tier B harness, the parts that need no daemon. It is outside tsconfig's rootDir (src), so it is loaded
 // untyped, as fakeEngineUntil.spec.ts loads the harness.
@@ -11,6 +12,7 @@ const driver = await import('../../e2e/harness/appEvalDriver.js' as string) as {
   writeRecordingOpen(path: string, runs: string): void
   linksFail(path: string, apps: readonly App[]): void
   openRuns(runs: string, platform: Platform): Array<{ argv: string[]; ok: boolean }>
+  tierBGaps(scenario: Scenario, platform: Platform): string[]
 }
 
 let dir = ''
@@ -51,5 +53,15 @@ describe("tier B's recording open", () => {
   it('has noted nothing before its first run', () => {
     const o = open()
     expect(driver.openRuns(o.runs, 'darwin')).toEqual([])
+  })
+})
+
+const byId = (id: string): Scenario => MAIN.find((s) => s.id === id)!
+
+describe("tier B's gaps", () => {
+  it('leaves out on Linux an open check whose link fails: the fallback there is the raise, which no fake records', () => {
+    expect(driver.tierBGaps(byId('X5'), 'linux')).toEqual([expect.stringContaining('raise')])
+    expect(driver.tierBGaps(byId('X5'), 'darwin')).toEqual([])
+    expect(driver.tierBGaps(byId('X4'), 'linux')).toEqual([])
   })
 })
