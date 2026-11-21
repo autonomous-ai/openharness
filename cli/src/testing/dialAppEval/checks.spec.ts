@@ -177,8 +177,17 @@ describe('still', () => {
   const s = scenario([tap])
   const still: Check = { id: 's', kind: 'still', dim: 'D7', ms: 1000, after: 'go' }
 
-  it('no face change in ms after `after` passes', () => {
-    expect(run(still, s, seen(s, [500], { faces: [face(100, A), face(1600, B)] })).map((r) => [r.check, r.score])).toEqual([['s', 1]])
+  it('no face change in ms after `after` passes, naming the face held', () => {
+    const results = run(still, s, seen(s, [500], { faces: [face(100, A), face(1600, B)] }))
+    expect(results.map((r) => [r.check, r.score, r.evidence])).toEqual([['s', 1, ['face at 100: a']]])
+  })
+
+  it('a face that moves at the window\'s first ms moved: the window opens on the face before it', () => {
+    expect(scores(run(still, s, seen(s, [500], { faces: [face(100, A), face(500, B)] }))).s).toBe(0)
+  })
+
+  it('no face seen at all is not still: it scores 0 with nothing to show', () => {
+    expect(run(still, s, seen(s, [500])).map((r) => [r.score, r.evidence])).toEqual([[0, []]])
   })
 
   it('a face change inside the window fails', () => {
@@ -468,6 +477,7 @@ it('evidence is empty when nothing was seen', () => {
     { id: 'st', kind: 'state', dim: 'D4', session: 'a', state: 'working' },
     { id: 'v', kind: 'voice', dim: 'D5', session: 'a', text: 'Eval hi', after: 'go' },
     { id: 'c', kind: 'recap', dim: 'D6', session: 'a', text: 'Eval hi' },
+    { id: 's', kind: 'still', dim: 'D2', ms: 1000 },
   ]
   for (const check of checks) {
     const results = run(check, s, seen(s, [50, 500]))
