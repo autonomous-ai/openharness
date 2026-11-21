@@ -431,7 +431,8 @@ const isHelper = (name: ts.Identifier): boolean => {
   if (!home || !declaration) return false
   const file = name.getSourceFile().fileName
   if (ts.isFunctionDeclaration(declaration)) return file.replace(/\.ts$/, '') === home
-  const bindings = ts.isImportDeclaration(declaration) ? declaration.importClause?.namedBindings : undefined
+  if (!ts.isImportDeclaration(declaration)) return false
+  const bindings = declaration.importClause?.namedBindings
   return !!bindings && ts.isNamedImports(bindings) && ts.isStringLiteral(declaration.moduleSpecifier)
     && posix.join(posix.dirname(file), declaration.moduleSpecifier.text).replace(/\.[jt]s$/, '') === home
     && bindings.elements.some((element) => element.name.text === name.text && (element.propertyName ?? element.name).text === name.text)
