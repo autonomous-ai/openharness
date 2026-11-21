@@ -17,6 +17,7 @@ const driver = await import('../../e2e/harness/appEvalDriver.js' as string) as {
 
 const claude = await import('../../e2e/harness/appEvalClaude.js' as string) as {
   linkedSocket(root: string, code: number | null, stdout: string, stderr: string): string
+  typedPrompts(transcript: string): Array<{ at?: number; text: string }>
 }
 
 let dir = ''
@@ -94,5 +95,25 @@ describe("tier B's Claude mod: the socket its link names", () => {
   it('says what the link printed on its stderr when it named none', () => {
     expect(() => claude.linkedSocket(root, 1, '', 'no devices process\n')).toThrow('no devices process')
     expect(() => claude.linkedSocket(root, 0, 'not json', '')).toThrow("named no devices' socket")
+  })
+})
+
+describe("tier B's Claude sessions: the words typed into one", () => {
+  const row = (type: string, content: unknown, timestamp?: string): string =>
+    JSON.stringify({ type, ...(timestamp ? { timestamp } : {}), message: { role: type, content } })
+
+  it('are each prompt its transcript took that no step typed, at the time its own row says', () => {
+    const transcript = [
+      row('user', '!until eval-turn-3', '2026-11-21T10:00:00.000Z'),
+      row('assistant', [{ type: 'text', text: 'answer' }], '2026-11-21T10:00:01.000Z'),
+      row('user', 'Eval words for alpha.', '2026-11-21T10:00:05.250Z'),
+      row('user', [{ type: 'tool_result', tool_use_id: 'call', content: 'ran' }], '2026-11-21T10:00:06.000Z'),
+      '{"half a row',
+    ].join('\n')
+    expect(claude.typedPrompts(transcript)).toEqual([{ at: Date.parse('2026-11-21T10:00:05.250Z'), text: 'Eval words for alpha.' }])
+  })
+
+  it('has no time for a prompt whose row names none', () => {
+    expect(claude.typedPrompts(row('user', 'Eval words.'))).toEqual([{ text: 'Eval words.' }])
   })
 })
