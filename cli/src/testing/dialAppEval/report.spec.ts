@@ -63,6 +63,14 @@ it('each app\'s score shows its runs left out beside it', () => {
   }
 })
 
+it('a tier that did not run has no row', () => {
+  // Tier B ran nowhere: byPlatform has tier A's platform alone.
+  for (const text of [summary(report()), markdown(report())]) {
+    expect(text).toMatch(/^(\| )?a +(\| )?the Claude app/m)
+    expect(text).not.toMatch(/^(\| )?b +(\| )?the/m)
+  }
+})
+
 it('held-out is its own table, each score with its runs left out beside it', () => {
   const r = report({ heldOut: both(scores(70, { D2: 70 }, 3), scores(null)) })
   const md = markdown(r)
