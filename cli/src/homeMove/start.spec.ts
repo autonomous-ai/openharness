@@ -235,7 +235,7 @@ describe('the move at a start', () => {
     put(join(t.legacy, 'cli', 'data', 'harness.log'), 'a line from before\n')
     const printed: string[] = []
     await moveHomeAtStart(argvOf(t, 'start'), {}, t.deps({ print: (line) => printed.push(line) }))
-    const lines = ['home move: unknown entry notes · moved to data', moved(t)]
+    const lines = ['home move: 1 unknown entry · moved to data', moved(t)]
     expect(readFileSync(join(t.data, 'cli', 'data', 'harness.log'), 'utf8')).toBe(`a line from before\n${lines.join('\n')}\n`)
     expect(printed).toEqual(lines)
     expect(readMoveRecord(t.home, {})).toMatchObject({ state: 'bridged' })

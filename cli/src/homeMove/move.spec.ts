@@ -322,13 +322,13 @@ describe('the move', () => {
     expect([existsSync(`${plan.data}.moving`), existsSync(`${plan.state}.moving`)]).toEqual([false, false])
   })
 
-  it('an entry the table does not know lands in data and is named in one log line', async () => {
+  it('an entry the table does not know lands in data and is counted in one log line, never named: a person named it', async () => {
     const t = await legacyHome()
     expect(entryNamed(t, UNKNOWN)).toMatchObject({ known: false, kind: 'data' })
     await runMove(t.check, t.env, t.deps())
     expect(readFileSync(join(t.plan.data, UNKNOWN, 'keep'), 'utf8')).toBe(`${UNKNOWN}\n`)
     expect(readlinkSync(join(t.legacy, UNKNOWN))).toBe(join(t.plan.data, UNKNOWN))
-    expect(t.logs).toEqual([expect.stringContaining(UNKNOWN)])
+    expect(t.logs).toEqual(['home move: 1 unknown entry · moved to data'])
   })
 
   it('an entry not there at the move gets its link too: an old process writing it late fails, and puts nothing in the bridge', async () => {
@@ -354,7 +354,7 @@ describe('the move', () => {
     put(join(t.legacy, 'cli', 'data', 'claude-profiles.json'), '{ not json')
     for (const agent of ['agent-7f3a', 'agent-8e2b']) put(join(t.legacy, 'cli', 'data', 'stopped-agents', `${agent}.json`), '{ cut')
     expect(await runMove(t.check, t.env, t.deps())).toMatchObject({ state: 'bridged' })
-    expect(t.logs.filter((line) => !line.includes(UNKNOWN))).toEqual(['home move: 3 records left unchanged · claude-profiles.json, stopped-agents'])
+    expect(t.logs.filter((line) => !line.includes('unknown entr'))).toEqual(['home move: 3 records left unchanged · claude-profiles.json, stopped-agents'])
     // And counted in the record, for harness status and the fleet scan.
     expect(readMoveRecord(t.home, t.env)).toMatchObject({ state: 'bridged', left: 3 })
     expect(readFileSync(join(t.plan.data, 'cli', 'data', 'claude-profiles.json'), 'utf8')).toBe('{ not json')
