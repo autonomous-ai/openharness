@@ -28,8 +28,9 @@ describe.skipIf(WIN32)('the dial eval, tier B: the held-out set', () => {
   const runs: ScenarioRun[] = []
   beforeAll(() => { driver = new TierBDriver({ claude: claudeSteps, chatgpt: chatgptSteps }) })
   afterAll(async () => {
-    await driver?.close()
     if (process.env.DIAL_EVAL_OUT) writeResults(process.env.DIAL_EVAL_OUT, 'heldOut', collect(runs))
+    // It throws naming each attempt off this machine not asserted on yet, the last daemon's as it closed among them.
+    await driver?.close()
   })
 
   it.for(SCENARIOS)('$id: $title', async (scenario) => {

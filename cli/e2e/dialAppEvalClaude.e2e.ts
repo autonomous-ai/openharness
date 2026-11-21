@@ -27,8 +27,9 @@ describe.skipIf(WIN32)('the dial eval, tier B: the Claude app', () => {
   const runs: ScenarioRun[] = []
   beforeAll(() => { driver = new TierBDriver({ claude: claudeSteps }) })
   afterAll(async () => {
-    await driver?.close()
     if (process.env.DIAL_EVAL_OUT) writeResults(process.env.DIAL_EVAL_OUT, 'claude', collect(runs))
+    // It throws naming each attempt off this machine not asserted on yet, the last daemon's as it closed among them.
+    await driver?.close()
   })
 
   it('the network guard is in the core and the devices process, and a connection from the devices process to 192.0.2.1 fails the run naming it', async () => {

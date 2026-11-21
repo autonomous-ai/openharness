@@ -5,9 +5,10 @@
  * first scenario and every one after it, reset, until a scenario asks for one of its own (`fresh`).
  *
  * Isolation: each daemon's open (HARNESS_OPEN_BIN, which only records: `writeRecordingOpen`), its home, its apps' folder
- * and both apps' stores are checked to be inside its root before it starts, and it is signed in to the fake backend alone. The network
- * guard (src/testing/dialAppEval/netGuard.ts) is in this process and preloaded into every process of the daemon and every
- * child started here: a start whose core or devices process did not load it fails.
+ * and both apps' stores are checked to be inside its root before it starts, and it is signed in to the fake backend alone.
+ * The network guard (src/testing/dialAppEval/netGuard.ts) is in this process and preloaded into every process of the
+ * daemon and every child started here: a start whose running core or devices process did not load it fails, and the
+ * driver's close fails on any attempt not yet handed on, those its last daemon made as it closed among them.
  *
  * What it saw: the frames the dial received, at their arrival; the faces of the firmware's carousel model, fed those
  * frames and the person's own turns (a swipe moves the glass before the daemon hears of it); the commands of the
@@ -15,7 +16,8 @@
  * (appEvalCost.ts).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative } from 'node:path'
 import { chatGptPlaces, claudeStoreRoots } from '../../src/cable/hosts/appPlaces.js'
 import { claudeAppFixture } from '../../src/testing/claudeAppFixture.js'
@@ -27,7 +29,7 @@ import { writeExecutable } from '../../src/testing/executableFixture.js'
 import { beginCost, costEnv } from './appEvalCost.js'
 import { writeAppCodex } from './codexAppCli.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './daemon.js'
-import { Desk } from './desk.js'
+import { Desk, devicesPids } from './desk.js'
 import { FakeBackend, type FakeMachine } from './fakeBackend.js'
 import type { FakeDial } from './fakeDial.js'
 import { writeSchemeApps } from './schemeApps.js'
@@ -85,7 +87,8 @@ interface Rig {
   d: IsolatedDaemon; desk: Desk; backend: FakeBackend
   /** Where its recording open notes its runs. */
   runs: string
-  /** The network guard's file, in the root: the processes it was loaded into and what it refused there. */
+  /** The network guard's file: the processes it was loaded into and what it refused there. Outside the root, which goes
+   *  with the daemon, so what its processes tried as they ended is read after. */
   guard: string
   /** How many of its attempts were handed on. */
   given: number
@@ -181,7 +184,7 @@ async function end(child: ChildProcess): Promise<void> {
   clearTimeout(timer)
 }
 
-async function openRig(): Promise<Rig> {
+async function openRig(guard: string): Promise<Rig> {
   const backend = await FakeBackend.start()
   backend.addMachine(ME)
   let d: IsolatedDaemon | undefined
@@ -189,7 +192,6 @@ async function openRig(): Promise<Rig> {
     d = await IsolatedDaemon.create({ env: {
       CABLE_DISABLE: 'false', BACKEND_WS_URL: backend.wsUrl, WEB_URL: backend.httpUrl, ADAPTER_COMPUTER_ID: ME.computerId,
     } })
-    const guard = join(d.root, 'net-guard.jsonl')
     const cost = costEnv(d.root)
     // As enginehomes.e2e.ts preloads its fault: the master hands NODE_OPTIONS on to the core and every service.
     Object.assign(d.env, cost.env, netGuardEnv(guard, cost.nodeOptions))
@@ -406,6 +408,9 @@ const GENERIC: { [K in GenericKind]: (world: World, step: StepOf<K>) => Promise<
 export class TierBDriver implements EvalDriver {
   readonly tier = 'b' as const
   private readonly guard = guardThisProcess()
+  /** This driver's own folder, outside every daemon's root: each daemon's guard file. */
+  private readonly own = mkdtempSync(join(tmpdir(), 'dial-eval-b-'))
+  private daemons = 0
   private rig: Rig | undefined
   private world: World | undefined
   /** The world started to its time 0: one that is not had its daemon left in no known state. */
@@ -429,7 +434,7 @@ export class TierBDriver implements EvalDriver {
     this.next = 0
     if (this.rig && scenario.fresh) await this.closeRig()
     if (this.rig) await this.reset(this.rig)
-    const rig = this.rig ??= await openRig()
+    const rig = this.rig ??= await openRig(join(this.own, `net-guard-${++this.daemons}.jsonl`))
     const world = this.world = new World(rig, scenario, platform)
     for (const reason of gaps) world.gap(reason)
     linksFail(rig.d.env.HARNESS_OPEN_BIN!, scenario.world?.linkFails ?? [])
@@ -444,8 +449,14 @@ export class TierBDriver implements EvalDriver {
     // The person picks the app's page. While no session of it is listed the devices keep the ring they show, and the
     // app in front decides it once one is.
     world.pick(PAGE[front === 'other' ? scenario.app : front])
-    const loaded = readNetGuard(rig.guard).loaded.map((p) => p.process)
-    for (const name of ['core', 'devices']) if (!loaded.includes(name)) throw new Error(`the network guard is not in the ${name} process`)
+    // The processes running now, by pid: a line of one the master has since started again proves nothing of this one.
+    const { loaded } = readNetGuard(rig.guard)
+    const running = { core: [rig.d.corePid()], devices: devicesPids(rig.d) }
+    for (const [name, pids] of Object.entries(running)) {
+      if (pids.length === 0 || !pids.every((pid) => loaded.some((l) => l.process === name && l.pid === pid))) {
+        throw new Error(`the network guard is not in the ${name} process`)
+      }
+    }
     const cost = await beginCost(rig.d)
     world.origin = Date.now()
     this.costEnd = cost.end
@@ -507,13 +518,19 @@ export class TierBDriver implements EvalDriver {
     return [...this.guard.taken(), ...this.reached.splice(0)].map(describeAttempt)
   }
 
-  /** One per e2e file, in its afterAll. */
+  /** One per e2e file, in its afterAll: it throws naming each attempt off this machine not handed on before. */
   async close(): Promise<void> {
+    let failed: unknown
     try {
       if (this.rig) await this.closeRig()
-    } finally {
-      this.guard.uninstall()
+    } catch (error) {
+      failed = error
     }
+    this.guard.uninstall()
+    const reached = this.networkReached()
+    rmSync(this.own, { recursive: true, force: true })
+    if (reached.length > 0) throw new Error(`tier B reached beyond this machine: ${reached.join('; ')}`)
+    if (failed) throw failed
   }
 
   /** The last scenario's fixtures gone (its children ended at its stop), and its dial unplugged. */
@@ -531,15 +548,16 @@ export class TierBDriver implements EvalDriver {
     rig.given = attempts.length
   }
 
-  /** Read before it goes: the guard's file goes with the root. */
+  /** Its guard file read once the daemon is gone, so what it tried as it closed is handed on too. */
   private async closeRig(): Promise<void> {
     const rig = this.rig!
     this.rig = undefined
-    this.collect(rig)
     try {
       await rig.desk.close()
       await rig.d.close()
     } finally {
+      this.collect(rig)
+      rmSync(rig.guard, { force: true })
       await rig.backend.close()
     }
   }

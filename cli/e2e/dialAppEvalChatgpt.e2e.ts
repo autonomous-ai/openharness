@@ -28,8 +28,9 @@ describe.skipIf(WIN32)('the dial eval, tier B: the ChatGPT app', () => {
   const runs: ScenarioRun[] = []
   beforeAll(() => { driver = new TierBDriver({ chatgpt: chatgptSteps }) })
   afterAll(async () => {
-    await driver?.close()
     if (process.env.DIAL_EVAL_OUT) writeResults(process.env.DIAL_EVAL_OUT, 'chatgpt', collect(runs))
+    // It throws naming each attempt off this machine not asserted on yet, the last daemon's as it closed among them.
+    await driver?.close()
   })
 
   /** The thread reports the devices had from the watch, each by what they made of it: on a daemon of its own, the
