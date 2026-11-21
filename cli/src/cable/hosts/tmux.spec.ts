@@ -4,6 +4,7 @@ import { bundleOf, createOpenActions, type OpenTarget } from './open.js'
 import { tmuxFinder } from '../../lib/binaryFinder.js'
 import type { TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
 import { createTmuxAdapter, createTmuxOuter, type TmuxDeps, type TmuxOuterDeps } from './tmux.js'
+import type { PtyProcess } from './scannedApp.js'
 
 const OPEN = '/usr/bin/open'
 /** tmux on the process's PATH, as the core finds it. */
@@ -11,10 +12,10 @@ const PRESENT = async (): Promise<TmuxPathOutcome> => ({ state: 'present' })
 
 interface Call { file: string; args: string[]; timeoutMs: number }
 
-/** The agent (100) in its shell (90), the pane's process, under tmux's server (80). */
-const TABLE = [
-  { pid: 100, ppid: 90, executable: 'claude' }, { pid: 90, ppid: 80, executable: 'zsh' }, { pid: 80, ppid: 1, executable: 'tmux' },
-  { pid: 4242, ppid: 1, executable: 'other' },
+/** The agent (100) in its shell (90), the pane's process, under tmux's server (80), which made their terminal. */
+const TABLE: PtyProcess[] = [
+  { pid: 100, ppid: 90, tty: 'ttys010', executable: 'claude' }, { pid: 90, ppid: 80, tty: 'ttys010', executable: 'zsh' },
+  { pid: 80, ppid: 1, executable: 'tmux' }, { pid: 4242, ppid: 1, executable: 'other' },
 ]
 
 /** A recording runner that runs nothing, so no spec moves a tmux client or brings the developer's own apps forward: each
@@ -378,11 +379,16 @@ const none = ['[device] tmux client · none']
 /** The lookup's line when a step could not be read, naming that step. */
 const notRead = (why: 'tmux' | 'pane' | 'processes' | 'clients' | 'app') => [`[device] tmux client · not read · ${why}`]
 
-/** A recording runner as `recorder`, for the lookup: it runs nothing, each call answers the next of [codes], then exit 0. */
-function lookup(over: Partial<TmuxOuterDeps> = {}, codes: Array<number | null> = [], said: { pane?: string; clients?: string } = {}) {
+/** A recording runner as `recorder`, for the lookup: it runs nothing, each call answers the next of [codes], then exit 0,
+ *  and a process's terminal is the one the table gives it. */
+function lookup(
+  over: Partial<Omit<TmuxOuterDeps, 'processes'>> & { processes?: () => Promise<readonly PtyProcess[]> } = {},
+  codes: Array<number | null> = [], said: { pane?: string; clients?: string } = {},
+) {
   const calls: Call[] = []
   const logs: string[] = []
   const clock = { t: 1_000_000 }
+  const table = over.processes ?? (async () => [...TABLE, ...CLIENT_CHAIN])
   let reads = 0
   const outer = createTmuxOuter({
     run: async (file, args, timeoutMs) => {
@@ -390,14 +396,15 @@ function lookup(over: Partial<TmuxOuterDeps> = {}, codes: Array<number | null> =
       const stdout = args[0] === 'display-message' ? said.pane ?? '' : args[0] === 'list-clients' ? said.clients ?? '' : ''
       return { code: codes.length ? codes.shift()! : 0, stdout }
     },
-    processes: async () => { reads++; return [...TABLE, ...CLIENT_CHAIN] },
     tmux: PRESENT,
     log: (line) => { logs.push(line) },
     now: () => clock.t,
     platform: 'darwin',
     roots: ['/Users/u/Applications/'],
     bundleId: async (bundle) => (bundle === '/Users/u/Applications/Terminal.app' ? 'com.apple.Terminal' : undefined),
+    tty: async (pid) => (await table()).find((p) => p.pid === pid)?.tty,
     ...over,
+    processes: async () => { reads++; return table() },
   })
   return { calls, logs, clock, reads: () => reads, outer }
 }
@@ -434,6 +441,19 @@ describe('the outer place of an agent in the person\'s tmux', () => {
   // A second tmux server of the person's (`-L`) can have a pane of the same id.
   it('a pane not in the caller\'s chain answers {}', async () => {
     const { calls, logs, outer } = lookup({}, [], { ...ONE, pane: says(4242) })
+    expect(await outer(NESTED, 100)).toEqual({})
+    expect(calls).toEqual([asked])
+    expect(logs).toEqual(none)
+  })
+
+  // Linux: an xterm or WezTerm started from a tmux pane is that pane's child and keeps its TMUX_PANE, yet its agents
+  // are in no tmux pane: the walk up holds the pane, the terminal's maker does not.
+  it('a terminal started from a tmux pane: {}', async () => {
+    const processes = async () => [
+      { pid: 100, ppid: 96, tty: 'pts/7', executable: 'claude' }, { pid: 96, ppid: 95, tty: 'pts/7', executable: 'bash' },
+      { pid: 95, ppid: 90, tty: 'ttys010', executable: 'xterm' }, ...TABLE.filter((p) => p.pid !== 100), ...CLIENT_CHAIN,
+    ]
+    const { calls, logs, outer } = lookup({ processes }, [], ONE)
     expect(await outer(NESTED, 100)).toEqual({})
     expect(calls).toEqual([asked])
     expect(logs).toEqual(none)
