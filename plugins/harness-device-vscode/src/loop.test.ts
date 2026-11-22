@@ -592,6 +592,19 @@ describe('startLoop', () => {
     expect(w.logs.at(-1)).toBe('in the last minute: 1 shows, 0 not found, 6 lines skipped, 1 states sent, 0 not sent, 0 typed, 0 entered, 0 type not found, 0 page keys, 0 scroll lines, 0 dropped')
   })
 
+  // The devices type every control character as a space: one here would submit part of the words (a newline, a CR) or
+  // steer the screen (an escape), so the line is out of form and nothing of it reaches the terminal.
+  it('a words line holding a control character is skipped and counted, and nothing of it is typed', async () => {
+    const win = fakeWindow({ terminals: [101] })
+    const { w, stream } = await connected(win)
+    const lines = ['done\n', 'a\rb', '\x1b[2J', 'tab\there', 'x\u0085', 'x\x7f'].map((words) => JSON.stringify({ type: words, pid: 101 }))
+    stream.send(`${lines.join('\n')}\n{"show":101}\n`)
+    await w.until(() => win.shows.length === 1)
+    expect(win.typed).toEqual([])
+    await w.to(60_000)
+    expect(w.logs.at(-1)).toBe('in the last minute: 1 shows, 0 not found, 6 lines skipped, 1 states sent, 0 not sent, 0 typed, 0 entered, 0 type not found, 0 page keys, 0 scroll lines, 0 dropped')
+  })
+
   it('a words line VS Code refuses is counted not found, and the stream goes on', async () => {
     const win = fakeWindow({ terminals: [101] })
     win.window.type = () => {
