@@ -193,6 +193,23 @@ describe("tier A's fake extension", () => {
       { window: 'eval-w1-1', line: { type: 'vscode-state', terminals: ['a', 'b'], active: 'b', focused: true } })
   })
 
+  it('a window focused takes the focus from the one that had it: that one says so first, as tier B\'s windows do', async () => {
+    const w = fakeWorld()
+    await w.start('a', 'b', 'c')
+    await w.window({ window: 'w1', active: 'a', focused: false })
+    await w.window({ window: 'w2', active: 'c', focused: true })
+    const before = w.states.length
+    await w.focus('b')
+    expect(w.states.slice(before)).toEqual([
+      { type: 'vscode-state', window: 'eval-w2-1', terminals: [w.shell('c')], active: w.shell('c'), focused: false },
+      { type: 'vscode-state', window: 'eval-w1-1', terminals: [w.shell('a'), w.shell('b')], active: w.shell('b'), focused: true },
+    ])
+    // A focus in the window that has it says nothing of the others.
+    const again = w.states.length
+    await w.focus('a')
+    expect(w.states.slice(again).map((s) => [s.window, s.focused])).toEqual([['eval-w1-1', true]])
+  })
+
   it("a terminal's close drops its shell from the state, ends its agent's and its shell's processes, and sends its end hook", async () => {
     const w = fakeWorld()
     await w.start('a', 'b')
