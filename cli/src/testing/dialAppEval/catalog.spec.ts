@@ -27,13 +27,32 @@ function checkKeys(check: Check): SessionKey[] {
 }
 
 describe('the catalog', () => {
-  it('the ids are C1-C12, X1-X11, V1-V15, U1-U14 and the six held out, 6 of 58', () => {
+  it('the main ids are C1-C12, X1-X11, V1-V15 and U1-U14', () => {
     const range = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => `${prefix}${i + 1}`)
     expect(MAIN.map((s) => s.id)).toEqual([...range('C', 12), ...range('X', 11), ...range('V', 15), ...range('U', 14)])
-    expect(HELD_OUT.map((s) => s.id)).toEqual(['CH1', 'CH2', 'CH3', 'XH1', 'XH2', 'XH3'])
     expect(MAIN.every((s) => !s.heldOut)).toBe(true)
+  })
+
+  it('the held out are CH1-CH3, XH1-XH3, VH1-VH4 and UH1-UH3: 13 of 65, VS Code 4 of 19, Cursor 3 of 17', () => {
+    expect(HELD_OUT.map((s) => s.id)).toEqual(['CH1', 'CH2', 'CH3', 'XH1', 'XH2', 'XH3', 'VH1', 'VH2', 'VH3', 'VH4', 'UH1', 'UH2', 'UH3'])
     expect(HELD_OUT.every((s) => s.heldOut)).toBe(true)
-    expect(ALL).toHaveLength(58)
+    expect(ALL).toHaveLength(65)
+    const of = (app: string) => [HELD_OUT.filter((s) => s.app === app).length, ALL.filter((s) => s.app === app).length]
+    expect([of('vscode'), of('cursor')]).toEqual([[4, 19], [3, 17]])
+  })
+
+  it('VH1 and UH3 are D5 alone, UH1 macOS only', () => {
+    for (const id of ['VH1', 'UH3']) expect(byId(id).dims.filter((d) => d !== 'D8'), id).toEqual(['D5'])
+    expect(byId('UH1').platforms).toEqual(['darwin'])
+  })
+
+  it('VH2\'s two windows both list a, the focused w2 last; UH2\'s agent has two folders, its cwd the first', () => {
+    expect(byId('VH2').steps.filter((s) => s.kind === 'editor.window')).toEqual([
+      { kind: 'editor.window', window: 'w1', terminals: ['a'], active: 'a', focused: false },
+      { kind: 'editor.window', window: 'w2', terminals: ['a'], active: 'a', focused: true },
+    ])
+    const c = byId('UH2').sessions.find((d) => d.key === 'c')!
+    expect([c.place, c.folders, c.cwd]).toEqual(['agent', ['/work/eval-c1', '/work/eval-c2'], '/work/eval-c1'])
   })
 
   it('each scenario\'s checks cover exactly its dims', () => {
@@ -55,8 +74,8 @@ describe('the catalog', () => {
     expect(x10.probes).toContainEqual(expect.objectContaining({ id: 'apart', kind: 'ring', expect: ['t1'], apart: ['c1', 'z'] }))
   })
 
-  it('X3 and V11 are macOS only', () => {
-    const mac = ['X3', 'V11']
+  it('X3, V11 and UH1 are macOS only', () => {
+    const mac = ['X3', 'V11', 'UH1']
     for (const s of ALL) expect(s.platforms, s.id).toEqual(mac.includes(s.id) ? ['darwin'] : ['darwin', 'win32', 'linux'])
   })
 
@@ -248,14 +267,15 @@ describe('the catalog', () => {
     // (started), so each V scenario has one wait fewer than its starts; then V7's turn and its wait on the person, V10's
     // pause after the reload, V11's rests between its tap, strokes and close, V13's rest before the stroke, V14's gap
     // between quit and relaunch, and V15's rest and its time unplugged; U8's turn, U12's pause after the close and U13's
-    // gap between quit and relaunch.
+    // gap between quit and relaunch; VH1's rest on a and UH3's voice 200 ms after the prompt.
     const starts = (id: string, n: number): string[] => Array<string>(n - 1).fill(`${id} 1000`)
     expect(waits('own')).toEqual(['C6 5000', 'C9 1000', 'C9 3500', 'C10 2000', 'C11 1000', 'C11 3000', 'X3 5000', 'X8 2000',
       'X11 300', 'X11 300', ...starts('V1', 4), ...starts('V2', 20), ...starts('V3', 2), ...starts('V4', 2), ...starts('V5', 2),
       'V7 2000', 'V7 2000', ...starts('V10', 2), 'V10 2000', 'V11 1000', 'V11 1000', 'V11 1000', 'V13 1000',
       ...starts('V14', 3), 'V14 2000', ...starts('V15', 2), 'V15 1000', 'V15 3000',
       ...starts('U1', 4), ...starts('U2', 2), ...starts('U3', 2), ...starts('U4', 2), 'U8 2000', 'U12 2000', ...starts('U13', 3),
-      'U13 2000', ...starts('U14', 2), 'CH3 1000', 'XH3 200'])
+      'U13 2000', ...starts('U14', 2), 'CH3 1000', 'XH3 200',
+      ...starts('VH1', 2), 'VH1 1000', ...starts('VH3', 2), ...starts('UH3', 2), 'UH3 200'])
     expect(new Set(waits('condition').map((w) => w.split(' ')[1]))).toEqual(new Set(['10000']))
     // The person reading the face once the list is there.
     expect(new Set(waits('reading').map((w) => w.split(' ')[1]))).toEqual(new Set(['1000']))
