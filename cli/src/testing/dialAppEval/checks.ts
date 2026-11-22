@@ -108,14 +108,16 @@ const within = (at: number, w: Window): boolean => at >= w.from && at < w.to
 
 /**
  * The untimed parts read the ring the dial holds as the window ends, even one that landed before it opened: a step that
- * leaves the ring as it was needs no push, and a stale ring that differs from the one expected still fails. Only the
- * timed `change` needs a list in the window.
+ * leaves the ring as it was needs no push, and a stale ring that differs from the one expected still fails. The dial holds
+ * its last whole list alone: one of another page, or with none, after the page's own means the page's ring is gone (PM
+ * 2026-11-22). Only the timed `change` needs a list in the window.
  */
 function ringParts(check: CheckOf<'ring'>, world: World, w: Window | undefined): Part[] {
   const expected = check.expect.map((key) => agentIdOf(world.session(key)))
   const page = PAGE[check.page]
   const all = world.rings()
-  const last = w ? all.filter((r) => r.page === page && world.held(r.at, w.to)).at(-1) : undefined
+  const held = w ? all.filter((r) => world.held(r.at, w.to)).at(-1) : undefined
+  const last = held?.page === page ? held : undefined
   const lists = w ? all.filter((r) => r.page === page && within(r.at, w)) : []
   const right = (r: Ring): boolean => {
     const ids = new Set(r.rows.map((row) => row.id))
@@ -126,7 +128,10 @@ function ringParts(check: CheckOf<'ring'>, world: World, w: Window | undefined):
   const parts: Part[] = []
   const evidence: string[] = []
   if (!last) {
-    if (all.length > 0) evidence.push(`no whole list held on ${page}; ${all.length} whole lists seen`)
+    if (held) {
+      evidence.push(`list at ${held.at} on ${held.page || 'none'}, not ${page}: ${held.rows.length} rows ${
+        keyList(held.rows.map((r) => world.keyOf(r.id)))}`.trimEnd())
+    } else if (all.length > 0) evidence.push(`no whole list held on ${page}; ${all.length} whole lists seen`)
     for (const part of ['recall', 'precision', 'order', 'names', 'cap', 'archived']) parts.push({ part, score: 0, timed: false, evidence })
   } else {
     const ids = last.rows.map((r) => r.id)
@@ -163,18 +168,18 @@ function ringParts(check: CheckOf<'ring'>, world: World, w: Window | undefined):
 }
 
 /**
- * The last `apps` frame on the ring's page the dial holds as the window ends: its other pages count exactly the sessions
- * apart, no fewer (one merged into the ring) and no more (one shown twice). An editor's session apart is counted on its
- * own app's page, as U2's VS Code row is while Cursor's page is shown: one filed under Terminal is not where the person
- * looks for it. A base app's may be on any, as X10's Codex CLI is on its terminal's. Counts name no session, so a check
- * apart from no other is exact.
+ * The last `apps` frame the dial holds as the window ends, which must show the ring's page as the ring's list must: its
+ * other pages count exactly the sessions apart, no fewer (one merged into the ring) and no more (one shown twice). An
+ * editor's session apart is counted on its own app's page, as U2's VS Code row is while Cursor's page is shown: one filed
+ * under Terminal is not where the person looks for it. A base app's may be on any, as X10's Codex CLI is on its
+ * terminal's. Counts name no session, so a check apart from no other is exact.
  */
 function apartPart(apart: SessionKey[], page: string, world: World, w: Window | undefined): Part {
-  const frame = w
-    ? world.seen.frames.filter((f) => f.message.t === 'apps' && f.message.shown === page && world.held(f.at, w.to)).at(-1)
-    : undefined
+  const frame = w ? world.seen.frames.filter((f) => f.message.t === 'apps' && world.held(f.at, w.to)).at(-1) : undefined
   // With no apps frame nothing was counted, so it cannot pass. It says so only to a driver that saw frames.
   if (!frame) return { part: 'apart', score: 0, timed: false, evidence: world.seen.frames.length > 0 ? ['no apps frame'] : [] }
+  const shown = typeof frame.message.shown === 'string' ? frame.message.shown : ''
+  if (shown !== page) return { part: 'apart', score: 0, timed: false, evidence: [`apps at ${frame.at} on ${shown || 'none'}, not ${page}`] }
   const apps = Array.isArray(frame.message.apps) ? frame.message.apps as Array<{ id?: unknown; count?: unknown }> : []
   const counts = apps.map((a) => ({ id: String(a.id), count: typeof a.count === 'number' ? a.count : 0 }))
   // The ring's own page counts its rows: no session apart is counted there.
