@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { FRONT_NONE, frontAppId, windowClasses } from './frontApp.js'
 import { APP_IDS, detectApp } from './hostDetect.js'
 import { RECORDED_LINUX_APPS } from '../../testing/recordedLinuxApps.js'
+import { RECORDED_ORCA } from '../../testing/recordedOrca.js'
 import { RECORDED_WEZTERM } from '../../testing/recordedWezterm.js'
 
 const BUNDLES: [string, string][] = [
@@ -39,12 +40,17 @@ const EXES: [string, string][] = [
   // The Claude app's window on Windows is its claude.exe's (dial-windows VM notes, Task 37 §1).
   ['Claude.exe', 'claude'],
   ['claude.exe', 'claude'],
+  // Orca's window on Windows is its Orca.exe's (dial-windows VM notes, "### 1. Window owners").
+  ['Orca.exe', 'orca'],
+  ['orca.exe', 'orca'],
 ]
 
-// The Claude and ChatGPT apps' Linux processes, by the comm their recording shows (ChatGPT's as recorded, capitalised).
+// The Claude, ChatGPT and Orca apps' Linux processes, by the comm their recording shows (ChatGPT's as recorded,
+// capitalised; Orca's is its main process, the maker when no daemon runs).
 const LINUX_APPS: [string, string][] = [
   [RECORDED_LINUX_APPS.claude.comm, 'claude'],
   [RECORDED_LINUX_APPS.chatgpt.comm, 'codex'],
+  [RECORDED_ORCA.linux.inProcess.makerComm, 'orca'],
 ]
 
 describe('frontAppId', () => {
@@ -53,11 +59,11 @@ describe('frontAppId', () => {
     expect(detectApp({ __CFBundleIdentifier: bundle })).toBe(id)
   })
 
-  it.each(EXES)('Code.exe, Cursor.exe, WindowsTerminal.exe, ChatGPT.exe, Claude.exe, wezterm-gui, kitty, ghostty and harness map: %s', (exe, id) => {
+  it.each(EXES)('Code.exe, Cursor.exe, WindowsTerminal.exe, ChatGPT.exe, Claude.exe, Orca.exe, wezterm-gui, kitty, ghostty and harness map: %s', (exe, id) => {
     expect(frontAppId(exe)).toBe(id)
   })
 
-  it.each(LINUX_APPS)('the Claude and ChatGPT apps on Linux map by their recorded comm: %s', (comm, id) => {
+  it.each(LINUX_APPS)('the Claude, ChatGPT and Orca apps on Linux map by their recorded comm: %s', (comm, id) => {
     expect(frontAppId(comm)).toBe(id)
   })
 
@@ -70,7 +76,9 @@ describe('frontAppId', () => {
     'constructor', '__proto__', 'toString', 'COM.MITCHELLH.GHOSTTY', 'com.openai.chat', 'codex', 'Codex.exe',
     'com.cmuxterm.app.nightly', 'cmux',
     // The Linux processes' names are Linux's alone, and the Claude app's claude.exe is Windows' alone.
-    'claude-desktop.exe', 'claude'])(
+    'claude-desktop.exe', 'claude', 'orca-ide.exe',
+    // A bare orca on Linux is GNOME's screen reader (/usr/bin/orca), not the Orca app.
+    'orca', 'Orca'])(
     'an unknown app, the empty string and a 128-character string are none: %j', (value) => {
       expect(frontAppId(value)).toBe(FRONT_NONE)
     })
