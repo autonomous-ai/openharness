@@ -1,10 +1,18 @@
 import { describe, expect, it } from 'vitest'
+import { APP_BUNDLES } from '../cable/hosts/hostDetect.js'
+import { MAIN } from './dialAppEval/catalog.js'
+import type { Platform, Scenario, SessionDef } from './dialAppEval/types.js'
 
 // The dial eval's tier B editor steps, the parts that need no daemon. They are outside tsconfig's rootDir (src), so they
 // are loaded untyped, as dialAppEvalTierB.spec.ts loads the harness.
 const editor = await import('../../e2e/harness/appEvalEditor.js' as string) as {
   windowRecords(window: string, keyOf: (pid: number) => string | undefined,
     record: (line: Record<string, unknown>, at: number) => void): (printed: Record<string, unknown>, at: number) => void
+  hintsOf(world: { platform: Platform; scenario: Scenario }, s: SessionDef): Record<string, string>
+}
+const cursor = await import('../../e2e/harness/cursorOutside.js' as string) as {
+  hookRun(codexLine: string, env: NodeJS.ProcessEnv, hints: Record<string, string>, event: string,
+    session: { sessionId: string; cwd: string; transcriptPath: string }): { command: string; env: NodeJS.ProcessEnv; input: string }
 }
 
 describe("tier B's editor windows", () => {
@@ -40,5 +48,38 @@ describe("tier B's editor windows", () => {
       { at: 110, line: { show: 'a' } },
       { at: 111, line: { show: 'other' } },
     ])
+  })
+})
+
+describe("tier B's Cursor agents", () => {
+  it("Cursor's agent's hook carries engine cursor and no TERM_PROGRAM, cursor-agent's TERM_PROGRAM=vscode", () => {
+    // U1: cursor-agent in a terminal (b) and Cursor's own agent (c).
+    const u1 = MAIN.find((s) => s.id === 'U1')!
+    const codexLine = "'/eval/node' '/eval/hook/notify.mjs' --port 1 --data-dir /eval/data --engine codex"
+    const run = (platform: Platform, key: string, event = 'start') => {
+      const s = u1.sessions.find((one) => one.key === key)!
+      return cursor.hookRun(codexLine, { HOME: '/eval/home' }, editor.hintsOf({ platform, scenario: u1 }, s), event,
+        { sessionId: s.id, cwd: `/eval/projects/eval-${key}`, transcriptPath: `/eval/${key}.jsonl` })
+    }
+    const [agent, cli] = [run('darwin', 'c'), run('darwin', 'b')]
+    for (const one of [agent, cli]) {
+      expect(one.command).toBe("'/eval/node' '/eval/hook/notify.mjs' --port 1 --data-dir /eval/data --engine cursor")
+      expect(one.env).toMatchObject({ HOME: '/eval/home', __CFBundleIdentifier: APP_BUNDLES.cursor })
+    }
+    expect(agent.env).not.toHaveProperty('TERM_PROGRAM')
+    expect(cli.env.TERM_PROGRAM).toBe('vscode')
+    // On Linux Cursor's agent names no app: the walk finds Cursor above it.
+    expect(run('linux', 'c').env).toEqual({ HOME: '/eval/home' })
+    // Each event in Cursor's own words, on its conversation and its workspace's folder.
+    const c = u1.sessions.find((s) => s.key === 'c')!
+    const inputs = ['start', 'turn-start', 'turn-stop', 'end'].map((event) => JSON.parse(run('darwin', 'c', event).input) as Record<string, unknown>)
+    expect(inputs.map((input) => input.hook_event_name)).toEqual(['sessionStart', 'beforeSubmitPrompt', 'stop', 'sessionEnd'])
+    for (const input of inputs) {
+      expect(input).toMatchObject({ conversation_id: c.id, workspace_roots: ['/eval/projects/eval-c'], transcript_path: '/eval/c.jsonl' })
+    }
+    expect(inputs[2]!.status).toBe('completed')
+    // A line the daemon did not write for Codex is not Cursor's to run.
+    expect(() => cursor.hookRun('/eval/other', {}, {}, 'start', { sessionId: c.id, cwd: '/eval', transcriptPath: '/eval/c.jsonl' }))
+      .toThrow("Codex's hook line")
   })
 })
