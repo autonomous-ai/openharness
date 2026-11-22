@@ -3126,6 +3126,23 @@ describe('ObservedSource and an editor started from Terminal', () => {
     expect(await s.src.focus(agent)).toBe(true)
     expect(s.actions.open.mock.calls).toEqual([[agent.id, { bundle }]])
   })
+
+  // Off macOS no app inherits a bundle id: on Windows the hook finds it from the process's parents, the Claude app's
+  // own word first (notify.mjs lookUpWindowsApp), and a Claude app session can carry an editor's TERM_PROGRAM.
+  it.each(['win32', 'linux'] as const)('on %s a bundle id beside TERM_PROGRAM=vscode is kept: a Claude app session stays on the Claude page', async (platform) => {
+    const SESSION = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+    const CLAUDE_APP = 'com.anthropic.claudefordesktop'
+    const { actions } = fakeActions({}, platform)
+    const s = setup({ platform, actions })
+    s.src.ingest(s.ev('session-start', { hostHints: { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: CLAUDE_APP,
+      CLAUDE_CODE_ENTRYPOINT: 'claude-desktop', CLAUDE_CODE_HOST_SESSION_ID: SESSION } }))
+    await flushed()
+    const agent = s.src.list()[0]
+    expect([agent.host, agent.app]).toEqual(['claude', 'claude'])
+    expect(s.src.paneOf(agent.id, 'claude')).toBe(SESSION)
+    expect(await s.src.focus(agent)).toBe(true)
+    expect(actions.open.mock.calls[0][1].bundle).toBe(CLAUDE_APP)
+  })
 })
 
 // A terminal or an editor started from another host's pane keeps that pane's variables, so only the process that made
