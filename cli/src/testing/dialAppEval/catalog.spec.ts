@@ -46,13 +46,13 @@ describe('the catalog', () => {
     expect(byId('UH1').platforms).toEqual(['darwin'])
   })
 
-  it('VH2\'s two windows both list a, the focused w2 last; UH2\'s agent has two folders, its cwd the first', () => {
+  it('VH2\'s two windows both list a, the focused w2 last; UH2\'s agent has two folders, neither its cwd: a tap that opens the cwd fails', () => {
     expect(byId('VH2').steps.filter((s) => s.kind === 'editor.window')).toEqual([
       { kind: 'editor.window', window: 'w1', terminals: ['a'], active: 'a', focused: false },
       { kind: 'editor.window', window: 'w2', terminals: ['a'], active: 'a', focused: true },
     ])
     const c = byId('UH2').sessions.find((d) => d.key === 'c')!
-    expect([c.place, c.folders, c.cwd]).toEqual(['agent', ['/work/eval-c1', '/work/eval-c2'], '/work/eval-c1'])
+    expect([c.place, c.folders, c.cwd]).toEqual(['agent', ['/work/eval-c1', '/work/eval-c2'], '/work/eval-c'])
   })
 
   it('VH3\'s split is in a second window, behind the first, so its focus brings that window up and is not V3\'s', () => {

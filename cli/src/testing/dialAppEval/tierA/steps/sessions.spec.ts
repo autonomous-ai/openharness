@@ -298,6 +298,18 @@ describe("tier A's live sessions", () => {
     expect(lastCursorTurnText(lines)).toEqual({ userMessage: 'Eval prompt.', assistantText: 'Eval cursor answer.' })
   })
 
+  it("Cursor's hook says its workspace's first folder as its cwd, as notify.mjs takes it, not the agent's own folder", async () => {
+    const roots = ['/work/eval-c1', '/work/eval-c2']
+    const multiRoot: Scenario = { ...editors, id: 'S4',
+      sessions: [editorSession('c', 'cursor', { place: 'agent', cwd: '/work/eval-c', folders: roots }), editorSession('e', 'cursor', { engine: 'cursor' })] }
+    const w = fakeWorld('darwin', multiRoot)
+    await w.hook('c', 'start')
+    await w.hook('e', 'start')
+    expect(toldOf(w.told, multiRoot.sessions[0]!.id).cwd).toBe('/work/eval-c1')
+    // One with no folders of its own says its cwd.
+    expect(toldOf(w.told, multiRoot.sessions[1]!.id).cwd).toBe('/work/eval-e')
+  })
+
   it('cursor-agent in a terminal says TERM_PROGRAM=vscode', async () => {
     const hints: Partial<Record<Platform, unknown>> = {}
     for (const platform of PLATFORMS) {
