@@ -12,7 +12,7 @@
  */
 import { homedir, tmpdir } from 'node:os'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { claudeGhost, claudeSessions, listed, MAIN, scenario, scenariosFor } from './catalog.js'
+import { claudeGhost, claudeSessions, editorGhost, editorSession, listed, MAIN, scenario, scenariosFor, started } from './catalog.js'
 import { loadBaseline, SKIP_RATCHET_ENV, tierAVerdict } from './grade.js'
 import { describeAttempt } from './netGuard.js'
 import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from './runner.js'
@@ -188,6 +188,57 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     const second = await seen()
     expect(first.frames.length).toBeGreaterThan(0)
     expect(second).toEqual(first)
+  })
+
+  /** VS Code's V5 (docs/plans/2026-11-22-dial-eval-vscode-cursor-plan.md, Task 7): a in w1, b in w2, b's window focused. */
+  const v5 = scenario({
+    id: 'V5', app: 'vscode', title: 'Eval a tap on a terminal in the second window', dims: ['D3', 'D7'], tiers: ['a'],
+    sessions: [editorSession('a', 'vscode'), editorSession('b', 'vscode', { window: 'w2' }), editorGhost('vscode')],
+    steps: [
+      ...started(['b', 'a']),
+      { kind: 'editor.window', window: 'w1', active: 'a', focused: false },
+      { kind: 'editor.window', window: 'w2', active: 'b', focused: true },
+      ...listed('vscode', ['a', 'b']),
+      { label: 'tap', kind: 'tap', session: 'b' },
+    ],
+    checks: [
+      { id: 'open', kind: 'open', dim: 'D3', session: 'b', link: false, after: 'tap' },
+      { id: 'openKept', kind: 'open', dim: 'D7', session: 'b', link: false, after: 'tap' },
+    ],
+    probes: [{ id: 'open', kind: 'open', dim: 'D3', session: 'z', link: false, after: 'tap' }],
+  })
+
+  it("V5 on darwin: a tap on b, in the second window, writes show with raise for b's shell on that window's stream alone, and runs open -b com.microsoft.VSCode", async () => {
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, v5, 'darwin')
+    expect(run.error).toBeUndefined()
+    const { streams = [], commands, steps } = driver.seen()
+    const tap = steps.find((s) => s.label === 'tap')!
+    const shows = streams.filter((l) => l.line.show !== undefined)
+    expect(shows.map(({ window, line }) => ({ window, line }))).toEqual([{ window: 'eval-w2-1', line: { show: 'b', raise: true } }])
+    expect(shows[0]!.at).toBeGreaterThanOrEqual(tap.at)
+    expect(commands.filter((c) => c.at >= tap.at).map((c) => c.argv)).toEqual([['/usr/bin/open', '-b', 'com.microsoft.VSCode']])
+  })
+
+  it('V5 twice gives the same streams, frames and commands at the same virtual times', async () => {
+    const seen = async () => {
+      const driver = new TierADriver({ startDevices })
+      await runScenario(driver, v5, 'darwin')
+      const { streams, frames, commands } = driver.seen()
+      return { streams, frames, commands }
+    }
+    const first = await seen()
+    const second = await seen()
+    expect(first.streams?.length).toBeGreaterThan(0)
+    expect(second).toEqual(first)
+  })
+
+  it("the devices' log lines are seen at their virtual times: each of V5's windows opens its stream at its step", async () => {
+    const driver = new TierADriver({ startDevices })
+    await runScenario(driver, v5, 'darwin')
+    const { logs = [], steps } = driver.seen()
+    const windows = steps.filter((s) => s.kind === 'editor.window').map((s) => s.at)
+    expect(logs.filter((l) => l.line.startsWith('[devices] vscode stream · open')).map((l) => l.at)).toEqual(windows)
   })
 
   // The baseline is written on a Mac and checked on Linux: a result naming this host's folders would differ there.
