@@ -14,7 +14,7 @@ import { dirname, join } from 'node:path'
 import { expect } from 'vitest'
 import { inside } from './appEvalDriver.js'
 import { until, type IsolatedDaemon } from './daemon.js'
-import { closeTab, hookTab, type HookRun, type Tab } from './outsideAgent.js'
+import { closeTab, hookTab, killTab, type HookRun, type Tab } from './outsideAgent.js'
 
 /** For the daemon's Codex hooks to be in their file: Cursor's line is made from theirs. */
 const LINE_MS = 30_000
@@ -107,5 +107,10 @@ export class CursorOutside {
   /** Its process and tab gone, with no hook: as Cursor ends its agent. */
   close(): Promise<void> {
     return closeTab(this.tab, this.cwd)
+  }
+
+  /** The same at once, with no wait (outsideAgent.ts killTab). */
+  killTab(): void {
+    killTab(this.tab)
   }
 }

@@ -133,8 +133,8 @@ export function appOf(world: TierBWorld, host: ClaudeHost = CLAUDE_APP): FakeApp
   // Only the links run since it started reach it.
   world.onOpen((run) => follow(world, app, run))
   // Ended, it ends its sessions first, and only then goes: the driver's end of its children waits for that. SIGKILL, the
-  // driver's last resort when that takes too long, ends it and its sessions' Claude Code at once, as a crash does: no
-  // SessionEnd, the words typed into each still read.
+  // driver's last resort when that takes too long, ends it and its sessions' Claude Code at once, each with its tab and
+  // shell, as a crash does: no SessionEnd, the words typed into each still read.
   const kill = child.kill.bind(child)
   let ending: Promise<void> | undefined
   child.kill = (signal?: NodeJS.Signals | number) => {
@@ -143,7 +143,7 @@ export function appOf(world: TierBWorld, host: ClaudeHost = CLAUDE_APP): FakeApp
       if (state.app === app) state.app = undefined
       for (const [key, live] of app.live) {
         live.mod.abort()
-        live.outside.kill()
+        live.outside.killTab()
         typedInto(world, key, live)
       }
       app.live.clear()

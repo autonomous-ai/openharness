@@ -199,6 +199,14 @@ export async function closeTab(tab: Tab, what: string): Promise<void> {
   }
 }
 
+/** The tab gone at once, with no wait: its command, its shell and the tab killed, as the driver's last resort ends what
+ *  it cannot wait for. The pseudo-terminal's helper ends with its terminal. */
+export function killTab(tab: Tab): void {
+  killNow(tab.pid)
+  if (tab.shellPid !== undefined) killNow(tab.shellPid)
+  tab.process.kill('SIGKILL')
+}
+
 /**
  * A tab of a fake [app] running [argv] on a pseudo-terminal of its own (PTY), under [env] alone: its parents are the
  * pseudo-terminal's helper, the app, the test; under iTerm2's server, the helper, the server, launchd. [pid] is the
@@ -457,6 +465,11 @@ export class Outside {
   /** The process gone at once, with no hook: a crash, a closed terminal. */
   kill(): void {
     killNow(this.pid)
+  }
+
+  /** Its whole tab gone at once (killTab): the engine, its shell and the tab, with no hook. */
+  killTab(): void {
+    killTab(this.tab)
   }
 
   close(): Promise<void> {

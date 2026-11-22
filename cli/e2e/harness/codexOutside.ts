@@ -13,7 +13,7 @@ import { dirname, join } from 'node:path'
 import { expect } from 'vitest'
 import { observedAgentId } from '../../src/cable/hosts/observed.js'
 import { until, type IsolatedDaemon } from './daemon.js'
-import { closeTab, HOOK_RUNNER, hookRuns, hookTab, type HookRun, type Tab, type TabOptions } from './outsideAgent.js'
+import { closeTab, HOOK_RUNNER, hookRuns, hookTab, killTab, type HookRun, type Tab, type TabOptions } from './outsideAgent.js'
 
 export interface CodexOutsideOptions {
   /** Its thread: a new one when none is given. */
@@ -57,12 +57,14 @@ export class CodexOutside {
   /**
    * Its own process the foreground job of a shell in a tab of a fake app (outsideAgent.ts openTab), as an editor's
    * terminal runs Codex: [shellPid] is the shell the editor reports for that terminal. The tab's terminal is its stdio,
-   * so its hooks come and go on a socket in the daemon's root. Ended by `end`, which closes the tab.
+   * so its hooks come and go on a socket in the daemon's root. Ended by `end`, which closes the tab; the tab goes in
+   * [children] too, the driver's last resort when it was not.
    */
   static async inTab(d: IsolatedDaemon, folder: string, children: ChildProcess[], hints: Record<string, string>,
     tab: TabOptions, options: Omit<CodexOutsideOptions, 'own'> = {}): Promise<CodexOutside> {
     const codex = new CodexOutside(d, folder, children, hints, options)
     const { tab: opened, run } = await hookTab(d, codex.cwd, { ...codex.env, TERM: 'xterm-256color' }, { ...tab, shell: true }, `the Codex in ${folder}`)
+    children.push(opened.process)
     codex.tab = opened
     codex.ownRun = run
     return codex
@@ -104,6 +106,11 @@ export class CodexOutside {
     const exited = new Promise<void>((done) => own.once('exit', () => done()))
     own.kill('SIGTERM')
     await exited
+  }
+
+  /** In a tab, the tab gone at once (outsideAgent.ts killTab), with no wait. */
+  killTab(): void {
+    if (this.tab) killTab(this.tab)
   }
 
   private async run(command: string, env: NodeJS.ProcessEnv, input: string): Promise<{ code: number | null; stderr: string }> {

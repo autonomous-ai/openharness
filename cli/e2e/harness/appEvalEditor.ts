@@ -18,7 +18,7 @@
  * Every process goes in `world.children`, or is the editor's: its own process, ended at stop, first ends the Codex, Cursor
  * and tmux sessions it runs (as the Claude app's ends its sessions, appEvalClaude.ts), so nothing of a scenario outlives it.
  */
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { copyFileSync, mkdtempSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { APP_BUNDLES } from '../../src/cable/hosts/hostDetect.js'
@@ -49,8 +49,8 @@ interface State {
   running: SessionKey[]
   codex: Map<SessionKey, CodexOutside>
   cursor: Map<SessionKey, CursorOutside>
-  /** How each tmux session ends, by its session. */
-  tmux: Map<SessionKey, () => Promise<void>>
+  /** How each tmux session ends, by its session, and how it goes at once. */
+  tmux: Map<SessionKey, { end(): Promise<void>; kill(): void }>
   /** In the order of their last states: of two windows that list one shell, the later holds it, as the devices take it
    *  (vscodeTerminals.ts). */
   windows: Map<string, Open>
@@ -128,12 +128,21 @@ function editorOf(world: TierBWorld): State {
   const kill = child.kill.bind(child)
   let ending: Promise<void> | undefined
   child.kill = (signal?: NodeJS.Signals | number) => {
-    // The driver's last resort, when the end takes too long.
-    if (signal === 'SIGKILL') return kill('SIGKILL')
-    // Its windows and its Claude Code are children of their own; its Codex, Cursor and tmux sessions it ends itself.
+    // The driver's last resort, when the end takes too long: what it runs goes at once with it, with no hook.
+    if (signal === 'SIGKILL') {
+      for (const codex of state.codex.values()) codex.killTab()
+      for (const cursor of state.cursor.values()) cursor.killTab()
+      for (const tmux of state.tmux.values()) tmux.kill()
+      return kill('SIGKILL')
+    }
+    // Its windows and its Claude Code are children of their own; its Codex, Cursor and tmux sessions it ends itself, and
+    // one it could not end fails the scenario.
     ending ??= Promise.allSettled([...[...state.codex.values()].map((codex) => codex.end()), ...[...state.cursor.values()].map(endCursor),
-      ...[...state.tmux.values()].map((end) => end())])
-      .then(() => { kill('SIGKILL') })
+      ...[...state.tmux.values()].map((tmux) => tmux.end())])
+      .then((ended) => {
+        for (const one of ended) if (one.status === 'rejected') world.fail(one.reason)
+        kill('SIGKILL')
+      })
     return true
   }
   return state
@@ -190,13 +199,20 @@ async function endCursor(cursor: CursorOutside): Promise<void> {
 async function inTmux(world: TierBWorld, state: State, s: SessionDef, folder: string): Promise<number> {
   const { d } = world
   const name = `eval-${s.key}`
-  const killed = (): Promise<void> => d.tmux.run('kill-session', '-t', name).then(() => {}, () => { /* already gone */ })
-  state.tmux.set(s.key, killed)
+  // At once, so the driver's last resort can end it as it kills the editor; one already gone fails nothing.
+  const killed = (): void => { spawnSync('tmux', ['-S', d.tmux.socket, '-f', '/dev/null', 'kill-session', '-t', name], { env: d.tmux.env }) }
+  state.tmux.set(s.key, { end: async () => killed(), kill: killed })
   await InOwnTmux.start(d, name, folder, { resume: s.id, env: { ...hintsOf(world, s), FAKE_CLAUDE_SESSION_TITLE: s.title } })
   const client = await tabClient(d, name, s.app as Editor)
-  state.tmux.set(s.key, async () => {
-    await client.close()
-    await killed()
+  state.tmux.set(s.key, {
+    end: async () => {
+      await client.close()
+      killed()
+    },
+    kill: () => {
+      killed()
+      try { process.kill(client.pid, 'SIGKILL') } catch { /* already gone */ }
+    },
   })
   return client.pid
 }
@@ -235,7 +251,7 @@ async function endSession(world: TierBWorld, key: SessionKey): Promise<void> {
   state.tmux.delete(key)
   if (codex) await codex.end()
   else if (cursor) await endCursor(cursor)
-  else if (tmux) await tmux()
+  else if (tmux) await tmux.end()
   else await claudeSteps.hook(world, { kind: 'hook', session: key, event: 'end' })
 }
 
