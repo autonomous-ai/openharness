@@ -932,8 +932,10 @@ export class ObservedSource implements HostSource {
     let source: PromptSource | undefined
     switch (e.event) {
       case 'session-start':
-        // A start must not undo a state a faster event already set.
+        // Where cursor-agent's idle is read until a turn starts (idleKnown); a turn already under way stays busy by its
+        // state.
         entry.startedAtPrompt = true
+        // A start must not undo a state a faster event already set.
         break
       case 'turn-start':
         entry.startedAtPrompt = undefined
