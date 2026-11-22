@@ -12,7 +12,8 @@
  *
  * The driver (driver/run.cjs) runs as VS Code's extension tests and is the gate's hands: it makes the terminals and says
  * which is active. What the extension reports, and what it does with a `show`, is read at the listener. A page key's
- * bytes are read from a fake alt-screen app's record (driver/altScreenApp.cjs): never Claude Code itself.
+ * bytes, and the dial's typed words and their Enter, are read from a fake alt-screen app's record
+ * (driver/altScreenApp.cjs): never Claude Code itself.
  */
 import { downloadAndUnzipVSCode, resolveCliPathFromVSCodeExecutablePath, runTests } from '@vscode/test-electron'
 import { exec, execFile } from 'node:child_process'
@@ -461,6 +462,39 @@ describe('the extension in a real, throwaway VS Code', () => {
     expect(streams.scroll({ window, shell: app }, -45, true)).toBe(true)
     await until('5 page keys', () => (scrollCounts(channelFile()).keys === 5 ? true : undefined))
     expect(readFileSync(record)).toEqual(Buffer.from('\x1b[5~'.repeat(5)))
+  })
+
+  // The dial's words must reach an agent as typed keys: a paste (ESC[200~, which the app turned on as Claude Code and
+  // Codex do) shows as "[Pasted text]" and is not submitted. Its Enter is one CR of its own, after the words.
+  it('a words line reaches the terminal as plain keys, and an Enter line then sends one CR alone', async () => {
+    const WORDS = 'Eval words for bravo, café 中文.'
+    const record = join(root, 'typed.bin')
+    expect(inside(record)).toBe(true)
+    writeFileSync(record, '')
+    const app = (await ask('app', { node: process.execPath, script: fileURLToPath(new URL('driver/altScreenApp.cjs', import.meta.url)), record })).app as number
+    const started = await startedAt(app)
+    if (started !== undefined) shellStarts.set(app, started)
+    await until('a state listing the app', () => (states.some(({ terminals }) => terminals.includes(app)) ? true : undefined))
+    // As the channel file is watched in the scroll case, and for the same reasons.
+    let unwatch: () => void
+    if (WINDOWS) {
+      watchFile(record, { interval: 250 }, changed)
+      unwatch = () => unwatchFile(record, changed)
+    } else {
+      const watcher = watch(record, changed)
+      unwatch = () => watcher.close()
+    }
+    try {
+      expect(opened[0]!.stream.write({ type: WORDS, pid: app })).toBe(true)
+      await until('the words in the record', () => (readFileSync(record).equals(Buffer.from(WORDS)) ? true : undefined))
+      const typed = readFileSync(record).toString('latin1')
+      for (const mark of ['\x1b[200~', '\x1b[201~', '\r']) expect(typed).not.toContain(mark)
+      expect(opened[0]!.stream.write({ enter: app })).toBe(true)
+      await until('the Enter in the record', () => (readFileSync(record).length > Buffer.byteLength(WORDS) ? true : undefined))
+      expect(readFileSync(record)).toEqual(Buffer.from(`${WORDS}\r`))
+    } finally {
+      unwatch()
+    }
   })
 
   it('VS Code exits with code 0, and the stream ends gone', async () => {
