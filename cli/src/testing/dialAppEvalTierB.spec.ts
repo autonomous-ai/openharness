@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process'
+import { EventEmitter } from 'node:events'
 import { createServer, type Server } from 'node:http'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -23,6 +24,7 @@ const driver = await import('../../e2e/harness/appEvalDriver.js' as string) as {
   RAISE_TOOLS: readonly string[]
   World: new (rig: unknown, scenario: Scenario, platform: Platform) => {
     plug(): Promise<void>; read(): void; forgetBefore(cut: number): void; seen(): import('./dialAppEval/types.js').Seen; close(): Promise<void>
+    readonly children: unknown[]; onStop(what: string, end: () => Promise<void>): void
   }
   writeRaiseFakes(bin: string): void
   raiseToolsOutside(root: string, env: NodeJS.ProcessEnv): string[]
@@ -301,6 +303,56 @@ describe("tier B's world at its start", () => {
     } finally {
       await world.close()
     }
+  })
+})
+
+describe("tier B's world as it stops", () => {
+  /** A child the world ends: its signals, and its exit at once. */
+  const child = (killed: string[]) => Object.assign(new EventEmitter(), {
+    exitCode: null, signalCode: null as string | null,
+    kill(this: EventEmitter & { signalCode: string | null }, signal: string) {
+      killed.push(signal)
+      this.signalCode = signal
+      process.nextTick(() => this.emit('exit'))
+      return true
+    },
+  })
+  const world = () => {
+    dir = mkdtempSync(join(tmpdir(), 'tier-b-stop-'))
+    const rig = { d: { log: () => '' }, runs: join(dir, 'runs.log'), cursorRuns: join(dir, 'cursor-runs.log'), projects: [] }
+    return new driver.World(rig, byId('O3'), 'darwin')
+  }
+  afterEach(() => { vi.useRealTimers() })
+
+  it("an app's own end runs before its children end, for longer than a child's end may take: Orca's quit of 32 agents", async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    const w = world()
+    const killed: string[] = []
+    w.children.push(child(killed))
+    let ended!: () => void
+    w.onStop("Eval's agents", () => new Promise<void>((done) => { ended = done }))
+    const closing = w.close()
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(killed).toEqual([])
+    ended()
+    await closing
+    expect(killed).toEqual(['SIGTERM'])
+  })
+
+  it('an end past its bound fails the stop once, naming it, its children still ended, and what it does after is dropped', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    const w = world()
+    const killed: string[] = []
+    w.children.push(child(killed))
+    let late!: (error: Error) => void
+    w.onStop("Eval's agents", () => new Promise<void>((_, fail) => { late = fail }))
+    const closing = expect(w.close()).rejects.toThrow("Eval's agents did not end within 30 s")
+    await vi.advanceTimersByTimeAsync(30_000)
+    await closing
+    expect(killed).toEqual(['SIGTERM'])
+    // Its agents' hooks fail once their stand-ins are gone: no failure of the scenario, nor an unhandled one.
+    late(new Error('a hook on a gone stand-in'))
+    await vi.advanceTimersByTimeAsync(0)
   })
 })
 
