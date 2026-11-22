@@ -55,6 +55,17 @@ describe('the catalog', () => {
     expect([c.place, c.folders, c.cwd]).toEqual(['agent', ['/work/eval-c1', '/work/eval-c2'], '/work/eval-c1'])
   })
 
+  it('VH3\'s split is in a second window, behind the first, so its focus brings that window up and is not V3\'s', () => {
+    const vh3 = byId('VH3')
+    expect(vh3.sessions.filter((d) => !d.ghost).map((d) => [d.key, d.window])).toEqual([['a', 'w1'], ['c', 'w2'], ['b', 'w2']])
+    expect(vh3.steps.filter((s) => s.kind === 'editor.window' || s.kind === 'editor.focus')).toEqual([
+      { kind: 'editor.window', window: 'w1', terminals: ['a'], active: 'a', focused: true },
+      { kind: 'editor.window', window: 'w2', terminals: ['c', 'b'], active: 'c', focused: false },
+      { label: 'focus', kind: 'editor.focus', session: 'b' },
+    ])
+    expect(vh3.checks.filter((c) => c.kind !== 'cost')).toEqual([{ id: 'focus', kind: 'focus', dim: 'D2', session: 'b', after: 'focus' }])
+  })
+
   it('each scenario\'s checks cover exactly its dims', () => {
     for (const s of ALL) {
       expect(new Set(s.dims).size, s.id).toBe(s.dims.length)
@@ -288,7 +299,7 @@ describe('the catalog', () => {
       ...starts('V14', 3), 'V14 45000', ...starts('V15', 2), 'V15 1000', 'V15 3000',
       ...starts('U1', 4), ...starts('U2', 2), ...starts('U3', 2), ...starts('U4', 2), 'U8 2000', 'U12 2000', ...starts('U13', 3),
       'U13 45000', ...starts('U14', 2), 'CH3 1000', 'XH3 200',
-      ...starts('VH1', 2), 'VH1 1000', ...starts('VH3', 2), ...starts('UH3', 2), 'UH3 200'])
+      ...starts('VH1', 2), 'VH1 1000', ...starts('VH3', 3), ...starts('UH3', 2), 'UH3 200'])
     expect(new Set(waits('condition').map((w) => w.split(' ')[1]))).toEqual(new Set(['10000']))
     // The person reading the face once the list is there.
     expect(new Set(waits('reading').map((w) => w.split(' ')[1]))).toEqual(new Set(['1000']))
