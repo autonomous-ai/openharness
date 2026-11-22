@@ -177,6 +177,19 @@ describe("tier B's gaps", () => {
     expect(driver.tierBGaps(tapped('vscode'), 'darwin')).toEqual([])
     expect(driver.tierBGaps(tapped('claude'), 'linux')).toEqual([])
   })
+
+  it("keeps on Linux an open check on a Cursor terminal row whose window closed before the tap: the recorded Cursor CLI opens its folder (U12)", () => {
+    const u12 = byId('U12')
+    expect(driver.tierBGaps(u12, 'linux')).toEqual([])
+    // Its window open again before the tap, or no window closed: the raise brings Cursor.
+    const reopened = { ...u12, steps: u12.steps.flatMap((step) => step.label === 'tap' ? [{ kind: 'editor.window' as const, window: 'w1', active: 'a', focused: true }, step] : [step]) }
+    expect(driver.tierBGaps(reopened, 'linux')).toEqual([expect.stringContaining("Linux's raise")])
+    expect(driver.tierBGaps({ ...u12, steps: u12.steps.filter((step) => step.kind !== 'editor.close') }, 'linux'))
+      .toEqual([expect.stringContaining("Linux's raise")])
+    // VS Code has no folder row: its terminal row's tap brings VS Code by the raise, window or none.
+    const vscode = { ...u12, app: 'vscode' as const, sessions: u12.sessions.map((s) => ({ ...s, app: 'vscode' as const })) }
+    expect(driver.tierBGaps(vscode, 'linux')).toEqual([expect.stringContaining("Linux's raise")])
+  })
 })
 
 describe("tier B's Claude mod: the socket its link names", () => {
