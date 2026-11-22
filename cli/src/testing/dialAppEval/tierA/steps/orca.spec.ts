@@ -292,6 +292,19 @@ describe("tier A's Orca", () => {
     expect(atStart).toEqual([[a], [a], [a, c], []])
   })
 
+  it('a layout without the worktree on screen tells it again with no terminals: its panes went with it', async () => {
+    const { world, deps } = worldOn('darwin', layout())
+    const door = await pluginDoor(deps)
+    await started(world, ['a', 'd'])
+    await orcaModelSteps['orca.layout'](world, { kind: 'orca.layout', worktrees: ['w1', 'w2'] })
+    await plugin(world, true)
+    await front(world, 'w2')
+    await orcaModelSteps['orca.layout'](world, { kind: 'orca.layout', worktrees: ['w1'] })
+    expect(door.fronts).toEqual([[orcaTerminalHandle('d')], []])
+    // A front the scenario names, though, must be laid out.
+    await expect(front(world, 'w2')).rejects.toThrow(/w2, which Orca has not laid out/)
+  })
+
   it('a front with no stream open throws', async () => {
     const { world, deps } = worldOn('darwin', layout())
     const door = await pluginDoor(deps)

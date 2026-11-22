@@ -167,11 +167,10 @@ function endPlugin(world: TierAWorld): void {
   model.front = undefined
 }
 
-/** The handles of a worktree's open panes, in Orca's order. */
-function terminalsOf(world: TierAWorld, worktree: string): string[] {
+/** The handles of a worktree's open panes, in Orca's order; none when Orca does not lay it out. */
+function terminalsOf(world: TierAWorld, worktree: string): string[] | undefined {
   const shown = orcaLayout(world.scenario, modelOf(world).layout, (key) => orcaHandleOf(world, key)).find((w) => w.key === worktree)
-  if (!shown) throw new Error(`scenario ${world.scenario.id}: orca.front names ${worktree}, which Orca has not laid out`)
-  return shown.panes.map((pane) => pane.handle)
+  return shown?.panes.map((pane) => pane.handle)
 }
 
 /** The plugin tells the devices the worktree on Orca's screen: its open panes' handles. */
@@ -185,12 +184,13 @@ async function tellFront(world: TierAWorld, worktree: string, terminals: string[
  * A pane of Orca's opened, closed or was renamed: Orca's `workspace.changed`, on which the plugin tells the worktree on
  * screen again (docs/plans/2026-11-18-dial-orca-tab-scope-design.md), so a front told before its agents started lists
  * them once they do. Terminals it told already it does not send again (plugins/harness-device-orca/src/dial.ts push), as
- * after a rename. Nothing while its stream is closed or no worktree was told on it.
+ * after a rename. Nothing while its stream is closed or no worktree was told on it. A layout without that worktree took
+ * its panes with it: the plugin sends what Orca gives it, no terminals.
  */
 export async function panesChanged(world: TierAWorld): Promise<void> {
   const front = models.get(world)?.front
   if (!front) return
-  const terminals = terminalsOf(world, front.worktree)
+  const terminals = terminalsOf(world, front.worktree) ?? []
   if (JSON.stringify(terminals) !== front.told) await tellFront(world, front.worktree, terminals)
 }
 
@@ -222,8 +222,12 @@ export const orcaModelSteps: { [K in 'orca.layout' | 'orca.focus' | 'orca.front'
     if (handle === undefined) throw new Error(`scenario ${world.scenario.id}: orca.focus names ${step.session}, whose pane is not open`)
     tell(world, handle)
   },
-  // The plugin tells the worktree on Orca's screen.
-  'orca.front': async (world, step) => tellFront(world, step.worktree, terminalsOf(world, step.worktree)),
+  // The plugin tells the worktree on Orca's screen, which must be one Orca lays out.
+  'orca.front': async (world, step) => {
+    const terminals = terminalsOf(world, step.worktree)
+    if (!terminals) throw new Error(`scenario ${world.scenario.id}: orca.front names ${step.worktree}, which Orca has not laid out`)
+    await tellFront(world, step.worktree, terminals)
+  },
   // With no plugin in Orca no stream ever opens, as with no extension in an editor.
   'orca.plugin': async (world, step) => {
     if (world.scenario.world?.orca?.plugin === false) return
