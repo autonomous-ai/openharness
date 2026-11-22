@@ -54,12 +54,14 @@ interface Model {
   front?: { worktree: string; told: string }
   /** Whether the plugin's stream was open as Orca quit, for its relaunch. */
   reopen?: boolean
+  /** The echoes of switches still to be told: Orca's quit drops them with their panes. */
+  echoes: Set<ReturnType<typeof setTimeout>>
 }
 const models = new WeakMap<TierAWorld, Model>()
 
 function modelOf(world: TierAWorld): Model {
   let model = models.get(world)
-  if (!model) models.set(world, model = { watches: new Set() })
+  if (!model) models.set(world, model = { watches: new Set(), echoes: new Set() })
   return model
 }
 
@@ -88,7 +90,14 @@ export function answerOrca(world: TierAWorld): void {
       }
       case 'terminal switch': {
         const handle = flagOf(argv, '--terminal')
-        if (handle !== undefined) setTimeout(() => tellFocus(world, handle), ORCA_ECHO_MS)
+        if (handle !== undefined) {
+          const { echoes } = modelOf(world)
+          const echo = setTimeout(() => {
+            echoes.delete(echo)
+            tellFocus(world, handle)
+          }, ORCA_ECHO_MS)
+          echoes.add(echo)
+        }
         return { code: 0 }
       }
       case 'worktree activate':
@@ -178,10 +187,13 @@ export async function panesChanged(world: TierAWorld): Promise<void> {
 }
 
 /** Orca quit: each watch ends with it, and so does the plugin's stream, kept for its relaunch. The pane in focus went
- *  with it: a watch after the relaunch prints nothing until Orca tells a focus again. */
+ *  with it, and those of the echoes still to come: a watch after the relaunch prints nothing until Orca tells a focus
+ *  again. */
 export function closeOrca(world: TierAWorld): void {
   const model = modelOf(world)
   for (const watch of [...model.watches]) watch.end()
+  for (const echo of model.echoes) clearTimeout(echo)
+  model.echoes.clear()
   model.last = undefined
   model.reopen = model.plugin !== undefined
   if (model.reopen) endPlugin(world)
