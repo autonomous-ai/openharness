@@ -38,6 +38,7 @@ import { VoiceDraft, type DraftPin } from './voiceDraft.js'
 import { dialText, noticeSummary } from './dialText.js'
 import { QuestionInbox, type ReviewedAnswer, type AnswerReceipt, type QuestionSpeech } from './questionInbox.js'
 import { notificationReadToken, type UnreadNotification } from '../lib/notificationRead.js'
+import { semverGt } from '../lib/selfUpdate.js'
 import { partitionTexts } from '../lib/questionController.js'
 import { codeOrLength, errorKind } from '../lib/log.js'
 
@@ -134,9 +135,27 @@ const AGENTS_PUSH_GAP_MS = 1_000
  * different agents with nothing to correct them, which is exactly the report that followed.
  *
  * So it stays only as long as a stale echo from an OLDER firmware could take, and every report it drops
- * now says so in the log.
+ * now says so in the log. It opens only for a dial that echoes (`echoesCodeMoves`): for every other a turn inside it is
+ * a hand's, and the window swallowed it, the turn made just after the second ring push on Linux, whose voice caps
+ * arrive a tick after the first.
  */
 const APP_FOCUS_SETTLE_MS = 750
+/** The first round firmware in which a move made by code is not reported. */
+const FIRST_QUIET_FW = '0.0.59'
+
+/**
+ * Whether a dial reports a move the daemon made as though a hand made it: the echo `APP_FOCUS_SETTLE_MS` waits out.
+ *
+ * Round firmware stopped it at the source (carousel_goto, muted) in a fix that `7348a91187` names (2026-09-08, in the
+ * retired firmware repo); 0.0.59, the first firmware in this repo (`80f4bc84c4`, 2026-09-14, ui_screens.c "muted: code
+ * moved it, not a hand"), has it. Which version before it got the fix is in the retired repo, so every one counts as
+ * echoing. The Harness Pro's own firmware (`d93bf11386`, 2026-10-11, pro_cable.c) has never sent `focus` at all, whatever
+ * its `fw`. A greeting with no `fw` (`'?'`) comes from no shipped firmware, and none yet (null) sends no `focus`.
+ */
+export function echoesCodeMoves(fw: string | null, board: string | undefined): boolean {
+  if (board === 'pro' || fw === null) return false
+  return semverGt(FIRST_QUIET_FW, fw)
+}
 /** How long the dial stays on an agent before its pane is switched to: a swipe through five tiles switches one pane, the
  *  last, rather than flicking the app through all five. */
 export const SWIPE_REST_MS = 400
@@ -1024,6 +1043,14 @@ export class CableSession {
   private log(line: string): void {
     this.host.log(line)
     this.dialLog.daemon(line.replace(/^cable: /, ''))
+  }
+
+  /** Waits out the echo of a focus the daemon commands, read from the latest greeting: a dial updated in place greets
+   *  again on its new firmware. */
+  private armFocusEcho(agentId: string): void {
+    if (!echoesCodeMoves(this.greetedFw, this.greetedBoard)) return
+    this.expectedAppFocusEcho = agentId
+    this.expectedAppFocusEchoUntil = Date.now() + APP_FOCUS_SETTLE_MS
   }
 
   get isConnected(): boolean {
@@ -2977,8 +3004,7 @@ export class CableSession {
     // it there, then switched — and a focus the dial cannot land is a frame it holds for five seconds and
     // a warning per push; the tab switch is what un-focused it, and the next click sets a new record.
     if (this.desiredFocus && agents.some((a) => a.id === this.desiredFocus)) {
-      this.expectedAppFocusEcho = this.desiredFocus
-      this.expectedAppFocusEchoUntil = Date.now() + APP_FOCUS_SETTLE_MS
+      this.armFocusEcho(this.desiredFocus)
       await this.focusAgent(this.desiredFocus)
     } else if (view === 'machine' && heldNone && agents.length > 0 && !this.appFocusUnsent) {
       // A machine list that follows none (an attach, an emptied list, the dial's own agents.list, a split's empty
@@ -2989,8 +3015,7 @@ export class CableSession {
       // goes on the face, as a picked app's does. Not while a follow is in flight: it wrote its record before this push
       // and sends its own focus after it, and a landing first would step the dial through the first agent. A window's
       // tab never lands: the window says where the dial goes.
-      this.expectedAppFocusEcho = agents[0].id
-      this.expectedAppFocusEchoUntil = Date.now() + APP_FOCUS_SETTLE_MS
+      this.armFocusEcho(agents[0].id)
       await this.focusAgent(agents[0].id)
     }
 
@@ -3758,8 +3783,7 @@ export class CableSession {
         // Said before the frame goes out, not after: the frame itself succeeds either way.
         const unknown = this.host.knows?.(agentId) === false
         this.log(`cable: following the app to agent ${agentId}${unknown ? ' — NOT in this daemon\'s list, the dial has no tile for it' : ''}`)
-        this.expectedAppFocusEcho = agentId
-        this.expectedAppFocusEchoUntil = Date.now() + APP_FOCUS_SETTLE_MS
+        this.armFocusEcho(agentId)
         // THE LIST FIRST, THEN THE FOCUS — the fix for "clicking a rail agent that has no tile does not
         // move the dial".
         //
