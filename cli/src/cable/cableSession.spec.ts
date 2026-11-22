@@ -9,7 +9,7 @@
 import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it, vi, type Mock } from 'vitest'
+import { describe, expect, it, onTestFinished, vi, type Mock } from 'vitest'
 
 import { CABLE_MAX_FRAME, CABLE_MAX_PAYLOAD, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DaemonCableHost } from './cableHost.js'
@@ -119,6 +119,13 @@ const AGENTS: CableAgent[] = [
 /** The last round firmware that reports a move code made (0.0.59 is the first that does not): the old dial the 750 ms
  *  echo guard is kept for. */
 const ECHOING = { fw: '0.0.58' }
+
+/** Date moves only when the test moves it. On the real clock a loaded machine let the 750 ms echo window (and the 1 s
+ *  switch repaint) close between the command and the report, and a test of that window failed for the machine's speed. */
+function stillClock() {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  onTestFinished(() => { vi.useRealTimers() })
+}
 
 function makeHost(over: Partial<CableHost> = {}) {
   const host: CableHost = {
@@ -1548,6 +1555,7 @@ describe('cable session', () => {
   })
 
   it('says again where the window is looking after the list is re-sorted', async () => {
+    stillClock()
     // The gap left by making re-anchors silent: the dial rebuilds when a re-sorted list lands, and if it
     // lands on the wrong tile nobody notices. Measured — a swipe pulled `a2` into a pane, the window
     // showed `a2`, the dial sat on the first agent. The daemon is the only side that knows both, so it
@@ -1602,6 +1610,7 @@ describe('cable session', () => {
   })
 
   it('a swipe made DURING a slow machine switch still reaches the window', async () => {
+    stillClock()
     // Measured on the real desk: selecting a remote machine took ten seconds, and for all ten every dial
     // report was discarded as "the window is mid-switch". The dial walked on, the window stayed put, and
     // the two screens named different agents with nothing left to correct them.
@@ -1631,7 +1640,6 @@ describe('cable session', () => {
 
     finishSelection()
     await following
-    vi.useRealTimers()
     await session.stop()
   })
 
@@ -1662,6 +1670,7 @@ describe('cable session', () => {
   })
 
   it('ignores stale dial focus while the app switches to a remote machine', async () => {
+    stillClock()
     let selected = 'mac-local'
     let finishSelection!: () => void
     const selectionGate = new Promise<void>((resolve) => { finishSelection = resolve })
@@ -1730,6 +1739,7 @@ describe('cable session', () => {
   })
 
   it('does not bounce a local app selection back to the previous remote agent', async () => {
+    stillClock()
     let selected = 'remote-machine'
     let finishSelection!: () => void
     const selectionGate = new Promise<void>((resolve) => { finishSelection = resolve })
@@ -8130,6 +8140,7 @@ describe('a prompt in the app in front', () => {
   })
 
   it("the move's echo starts no Orca switch", async () => {
+    stillClock()
     const swipeSwitches = vi.fn(() => true)
     const markSeen = vi.fn()
     const { session, port, host } = await greeted({ swipeSwitches, swipeEnded: vi.fn(), markSeen }, ECHOING)
