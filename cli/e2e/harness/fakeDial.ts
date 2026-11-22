@@ -25,10 +25,10 @@ const here = dirname(fileURLToPath(import.meta.url))
 /**
  * The firmware version it greets with: the round firmware in this repo, so the daemon treats it as a dial of today, whose
  * moves made by code are not reported (cableSession.ts `echoesCodeMoves`). The `-e2e` suffix is on purpose: the echo
- * guard reads only its X.Y.Z prefix, while an update is offered only to a plain X.Y.Z (fwPush.ts `shouldOffer`), so the
- * daemon under test never goes after the real OTA manifest.
+ * guard reads only its X.Y.Z prefix, while an image is offered only to a plain X.Y.Z (fwPush.ts `shouldOffer`), so even a
+ * daemon under test that reads a manifest (CABLE_FW_DISABLE off) never offers this dial one.
  */
-export const FAKE_DIAL_FW = `${roundFirmwareVersion()}-e2e`
+const FAKE_DIAL_FW = `${roundFirmwareVersion()}-e2e`
 
 function roundFirmwareVersion(): string {
   const file = join(here, '../../../devices/harness-device/firmware/version.txt')

@@ -17,8 +17,8 @@
  * loop finds the daemon through a launcher in the throwaway home alone, never this computer's own daemon or `harness`.
  *
  * The match follows the window's report and a `ps` read, and nothing says when it is done: the dial turns to the agent
- * again every 2 s until the window shows it (`FakeDial.turnUntil`), which also outlasts the 750 ms after the dial's landing
- * on A and each re-assert of it, when a turn is dropped. Every later wait is a frame or a line, never a fixed time.
+ * again every 2 s until the window shows it (`FakeDial.turnUntil`), which also outlasts the repaint of a switch the daemon
+ * drives, when a turn is dropped. Every later wait is a frame or a line, never a fixed time.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdirSync, realpathSync, writeFileSync } from 'node:fs'
