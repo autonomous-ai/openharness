@@ -16,6 +16,11 @@ const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : 
 /** The everyday daemon's port: a `link` under test that reached it would hand the loop this computer's devices' socket. */
 const EVERYDAY_PORT = '18473'
 
+/** One line the window printed (vscodeWindow.ts). */
+export interface Printed {
+  state?: string; show?: number; raise?: true; scroll?: 'up' | 'down'; key?: 'up' | 'down'; pid?: number; took?: WindowState; log?: string
+}
+
 /** The extension's loop over a fake window, running. */
 export interface EditorWindow {
   /** Each state it told, in order. */
@@ -32,6 +37,8 @@ export interface EditorWindow {
   took: WindowState[]
   /** Its channel's lines, then anything it wrote on stderr. */
   logs: string[]
+  /** Each line it prints from now on, with when it came (ms since the epoch). */
+  onLine(listener: (line: Printed, at: number) => void): void
   /** The window's terminals change, as VS Code tells it. */
   set(state: Partial<WindowState>): void
   /** Ends its stdin, which stops it; its exit code, once it exits within 10 s. */
@@ -74,6 +81,7 @@ export function startEditorWindow(d: IsolatedDaemon, children: ChildProcess[]): 
   const keys: { key: 'up' | 'down'; pid: number }[] = []
   const took: WindowState[] = []
   const logs: string[] = []
+  const listeners: Array<(line: Printed, at: number) => void> = []
   const lines = (from: NodeJS.ReadableStream, take: (line: string) => void): void => {
     let rest = ''
     from.setEncoding('utf8')
@@ -84,9 +92,8 @@ export function startEditorWindow(d: IsolatedDaemon, children: ChildProcess[]): 
     })
   }
   lines(child.stdout, (line) => {
-    const said = JSON.parse(line) as {
-      state?: string; show?: number; raise?: true; scroll?: 'up' | 'down'; key?: 'up' | 'down'; pid?: number; took?: WindowState; log?: string
-    }
+    const at = Date.now()
+    const said = JSON.parse(line) as Printed
     if (said.state !== undefined) states.push(said.state)
     if (said.show !== undefined) shows.push(said.show)
     if (said.raise) raised.push(shows.length)
@@ -94,6 +101,7 @@ export function startEditorWindow(d: IsolatedDaemon, children: ChildProcess[]): 
     if (said.key !== undefined) keys.push({ key: said.key, pid: said.pid! })
     if (said.took !== undefined) took.push(said.took)
     if (said.log !== undefined) logs.push(said.log)
+    for (const listener of listeners) listener(said, at)
   })
   lines(child.stderr, (line) => logs.push(line))
   let exited: { code: number | null } | undefined
@@ -101,6 +109,7 @@ export function startEditorWindow(d: IsolatedDaemon, children: ChildProcess[]): 
   onTestFailed(() => { console.log(`---- the window's states\n${states.join('\n')}\n---- its shows\n${shows.join('\n')}\n---- its raises, after so many shows\n${raised.join(' ')}\n---- its scrolls\n${scrolls.join(' ')}\n---- its page keys\n${keys.map(({ key, pid }) => `${key} ${pid}`).join(' ')}\n---- its log\n${logs.join('\n')}`) })
   return {
     states, shows, raised, scrolls, keys, took, logs,
+    onLine: (listener) => { listeners.push(listener) },
     set: (state) => { child.stdin.write(`${JSON.stringify(state)}\n`) },
     stop: async () => {
       child.stdin.end()

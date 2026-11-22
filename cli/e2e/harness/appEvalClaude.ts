@@ -28,7 +28,7 @@ import type { SessionDef, SessionKey } from '../../src/testing/dialAppEval/types
 import { inside, speak, type AppSteps, type OpenRun, type TierBWorld } from './appEvalDriver.js'
 import { SOURCES_CLI, until, type IsolatedDaemon } from './daemon.js'
 import { inboxPoll } from './modInbox.js'
-import { Outside } from './outsideAgent.js'
+import { Outside, type FakeApp as OutsideApp } from './outsideAgent.js'
 
 const LINUX = process.platform === 'linux'
 // How the real CLI is started: the run's bundle when there is one (E2E_BUNDLE), as the daemon runs, from any folder.
@@ -45,7 +45,14 @@ const LINK_MS = 30_000
 /** The end of the link's stderr a failure says. */
 const STDERR_KEPT = 2_000
 
-interface Live {
+/**
+ * How an app starts a session's Claude Code (outsideAgent.ts Outside.start): the hints its hooks send beside the
+ * session's title, the fake app it runs under, whether as a terminal's shell's job, and the app that app was started from.
+ */
+export type ClaudeHost = (world: TierBWorld, s: SessionDef) => {
+  hints: Record<string, string>; app?: OutsideApp; shell?: boolean; launchedFrom?: 'terminal-app'
+}
+export interface Live {
   outside: Outside
   /** Ends the mod's poll. */
   mod: AbortController
@@ -60,6 +67,8 @@ interface Live {
 }
 interface FakeApp {
   process: ChildProcess
+  /** How it starts its sessions. */
+  host: ClaudeHost
   live: Map<SessionKey, Live>
   /** Each start in flight, so a link and a step never start one session twice. */
   starting: Map<SessionKey, Promise<Live>>
@@ -97,14 +106,26 @@ export function writeWhole(file: string, text: string): void {
   renameSync(`${file}.tmp`, file)
 }
 
-/** The app, running: started at the first step on it. */
-function appOf(world: TierBWorld): FakeApp {
+/**
+ * The Claude app's (hook/notify.mjs hostHints): its session id and entrypoint everywhere, and macOS its bundle id; Linux
+ * names the app by the process above the engine, a fake of the app.
+ */
+const CLAUDE_APP: ClaudeHost = (world, s) => {
+  if (!s.localId) throw new Error(`scenario ${world.scenario.id}: Claude session ${s.key} has no localId`)
+  return {
+    hints: { CLAUDE_CODE_HOST_SESSION_ID: s.localId, CLAUDE_CODE_ENTRYPOINT: 'claude-desktop', ...(LINUX ? {} : { __CFBundleIdentifier: APP_BUNDLES.claude }) },
+    ...(LINUX ? { app: 'claude-app' as const } : {}),
+  }
+}
+
+/** The app, running: started at the first step on it, its sessions started as [host] says. */
+export function appOf(world: TierBWorld, host: ClaudeHost = CLAUDE_APP): FakeApp {
   const state = stateOf(world)
   if (state.app) return state.app
   // Only the app's lifetime: what it does is in this file.
   const child = spawn(process.execPath, ['-e', 'process.stdin.resume()'], { cwd: world.d.root, env: world.d.env, stdio: ['pipe', 'ignore', 'ignore'] })
   world.children.push(child)
-  const app: FakeApp = { process: child, live: new Map(), starting: new Map(), closed: false }
+  const app: FakeApp = { process: child, host, live: new Map(), starting: new Map(), closed: false }
   // Only the links run since it started reach it.
   world.onOpen((run) => follow(world, app, run))
   // Ended, it ends its sessions first, and only then goes: the driver's end of its children waits for that. SIGKILL, the
@@ -141,26 +162,22 @@ function follow(world: TierBWorld, app: FakeApp, run: OpenRun): void {
 }
 
 /** The session's Claude Code, its start hook run, and the mod's poll held. */
-function start(world: TierBWorld, app: FakeApp, key: SessionKey): Promise<Live> {
+export function start(world: TierBWorld, app: FakeApp, key: SessionKey): Promise<Live> {
   const running = app.live.get(key)
   if (running) return Promise.resolve(running)
   let starting = app.starting.get(key)
   if (!starting) {
     starting = (async () => {
       const s = world.session(key)
-      if (!s.localId) throw new Error(`scenario ${world.scenario.id}: Claude session ${key} has no localId`)
-      // The Claude app's hints (hook/notify.mjs hostHints): its session id and entrypoint everywhere, and macOS its
-      // bundle id; Linux names the app by the process above the engine. Its hooks name the app's title (session_title).
-      const hints: Record<string, string> = {
-        CLAUDE_CODE_HOST_SESSION_ID: s.localId, CLAUDE_CODE_ENTRYPOINT: 'claude-desktop', FAKE_CLAUDE_SESSION_TITLE: s.title,
-        ...(LINUX ? {} : { __CFBundleIdentifier: APP_BUNDLES.claude }),
-      }
+      const { hints, app: under, shell, launchedFrom } = app.host(world, s)
       const folder = basename(s.cwd)
       const transcript = join(world.d.env.CLAUDE_PROJECTS_DIR!, join(world.d.projectsDir, folder).replace(/[^a-zA-Z0-9]/g, '-'), `${s.id}.jsonl`)
       let from = 0
       try { from = statSync(transcript).size } catch { /* its first run */ }
       installMod(world.d)
-      const outside = await Outside.start(world.d, folder, hints, LINUX ? 'claude-app' : undefined, { resume: s.id })
+      // Its hooks name the session's title (session_title).
+      const outside = await Outside.start(world.d, folder, { ...hints, FAKE_CLAUDE_SESSION_TITLE: s.title }, under,
+        { shell, launchedFrom, resume: s.id })
       const live: Live = { outside, mod: new AbortController(), turns: 0, stops: 0, transcript, from }
       app.live.set(key, live)
       void holdMod(world, key, s.id, live.mod.signal)
