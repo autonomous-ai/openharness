@@ -174,9 +174,10 @@ describe('the committed scenarios', () => {
     }
   })
 
-  it("hold asks the oracle's ring shows whole, with its state and suggestion, so its line can pass", async () => {
-    for (const s of loadScenarios()) {
-      if (s.ask === null) continue
+  // One test per scenario: staged one after another in a single test, the asks overran its timeout under suite load.
+  it.each(loadScenarios().flatMap((s) => (s.ask === null ? [] : [[s.id, s] as const])))(
+    "%s: hold an ask the oracle's ring shows whole, with its state and suggestion, so its line can pass",
+    async (_id, s) => {
       const st = stage(s, 'oracle', { skill: false })
       try {
         await runAgent('oracle', s, st, { ...AGENT_CONFIG, timeoutMs: 0 })
@@ -186,8 +187,8 @@ describe('the committed scenarios', () => {
       } finally {
         unstage(st)
       }
-    }
-  })
+    },
+  )
 })
 
 describe('caseId', () => {
