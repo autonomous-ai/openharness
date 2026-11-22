@@ -5856,6 +5856,24 @@ describe('a machine list lands a dial that holds no agent (docs/plans/2026-11-18
       expect(said(host).filter((l) => l.includes('dropped dial focus'))).toEqual([])
     } finally { await session.stop(); vi.useRealTimers() }
   })
+
+  // A greeting on the same firmware is a keepalive: the 0.0.58 dial's echo is still coming, so its window stays.
+  it('a window opened for 0.0.58 stays when the dial greets again on 0.0.58', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    let caps = 'sf'
+    const { session, port, host } = await landed(() => machine(SAME_RING(caps)), { log: vi.fn() }, ECHOING)
+    try {
+      vi.advanceTimersByTime(1_100)
+      caps = 'svf'
+      await session.syncAgents()
+      port.say({ ...HELLO, ...ECHOING })
+      await settle()
+      port.say({ t: 'focus', agentId: 'b1' })
+      await settle()
+      expect(host.focus).not.toHaveBeenCalled()
+      expect(said(host)).toContain('cable: dropped dial focus b1 — waiting for a1')
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
 })
 
 describe('which dial echoes a move code made', () => {
