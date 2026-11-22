@@ -763,9 +763,10 @@ function fakeListener() {
     })).toBeUndefined()
     return { lines, end: (reason: string) => ended.abort(reason), break: () => { broken = true } }
   }
-  /** A window's shells, as its extension reports them, the first one active unless the test names another. */
-  const vscodeState = (window: string, terminals: number[], active = terminals[0] ?? null): unknown => (given[0].handlers['vscode-state'] as ListenerHandler)
-    .handle({ type: 'vscode-state', window, terminals, active, focused: true }, new AbortController().signal)
+  /** A window's shells, as its extension reports them, the first one active and the window focused unless the test says
+   *  otherwise. */
+  const vscodeState = (window: string, terminals: number[], active = terminals[0] ?? null, focused = true): unknown => (given[0].handlers['vscode-state'] as ListenerHandler)
+    .handle({ type: 'vscode-state', window, terminals, active, focused }, new AbortController().signal)
   return { given, close, listen, front, attach, notify, notice, orcaFront, tabs, dial, vscode, vscodeState }
 }
 
@@ -4829,11 +4830,11 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   let editorClock = 0
   /** Two agents in one window's two terminals, ID's under SHELL and B's under SHELL_B, both chains read, the window's
    *  first state on SHELL. `bundle` Cursor's: both are Cursor's. */
-  const twoTerminals = async (bundle = VSCODE) => {
+  const twoTerminals = async (bundle = VSCODE, over: Parameters<typeof start>[0] = {}) => {
     editorClock = 0
-    const started = await inVscodeTerminal({ now: () => editorClock }, {}, bundle)
+    const started = await inVscodeTerminal({ now: () => editorClock, ...over }, {}, bundle)
     processTable.rows = [...TERMINAL_TREE, { pid: 4343, ppid: SHELL_B }, { pid: SHELL_B, ppid: 1 }]
-    const named: Record<string, string> = bundle !== VSCODE ? { __CFBundleIdentifier: bundle } : {}
+    const named: Record<string, string> = over.orca?.platform === 'darwin' || bundle !== VSCODE ? { __CFBundleIdentifier: bundle } : {}
     started.port.observed(hook('session-start', { sessionId: 'sess-2', callerPid: 4343, transcriptPath: '/t/sess-2.jsonl', hostHints: { TERM_PROGRAM: 'vscode', ...named } }))
     const window = started.listener.vscode(WINDOW_ID)
     expect(started.listener.vscodeState(WINDOW_ID, [SHELL, SHELL_B])).toBeUndefined()
@@ -4954,6 +4955,23 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     editorClock = 200
     turnTo(ID)
     await land()
+    expect(editorFollows()).toEqual([])
+    expect(editorLines()).toEqual(['[device] vscode · skipped · echo'])
+  })
+
+  // As the Claude app's settle and the ChatGPT app's: a tap brings the app forward on what its window had.
+  it('a window that came into focus as the dial\'s own tap brought VS Code forward is that tap\'s echo at the settle', async () => {
+    const { front, settle, listener, port } = await twoTerminals(VSCODE, { orca: mac })
+    port.observed(hook('session-start', { sessionId: UUID, hostHints: extension }))
+    // The person left VS Code for Ghostty.
+    expect(listener.vscodeState(WINDOW_ID, [SHELL, SHELL_B], SHELL, false)).toBeUndefined()
+    await settle('ghostty')
+    // A tap on the session in VS Code's Claude Code tab opens it there: the window comes into focus on the terminal it had.
+    expect(await host().openAgent(V1)).toBeUndefined()
+    expect(orcaRuns.at(-1)).toEqual(tabLink(UUID))
+    front('vscode')
+    expect(listener.vscodeState(WINDOW_ID, [SHELL, SHELL_B], SHELL)).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
     expect(editorFollows()).toEqual([])
     expect(editorLines()).toEqual(['[device] vscode · skipped · echo'])
   })
