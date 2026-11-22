@@ -657,8 +657,13 @@ describe('the extension\'s tab on Linux', () => {
     for (const place of cases) expect(adapter.paneOf(place), JSON.stringify(place)).toBeUndefined()
   })
 
-  it('on macOS the scan\'s app alone names no tab', () => {
-    expect(recorder().adapter.paneOf(at('vscode'))).toBeUndefined()
+  // On macOS the bundle id an editor started from Terminal inherited is dropped (hostDetect.ts ownHints): there too the
+  // app its parents named is the editor.
+  it('on macOS too the app the caller\'s parents named has the tab, on Windows it names none', () => {
+    expect(recorder().adapter.paneOf(at('vscode'))).toEqual({ adapter: 'vscode', id: UUID })
+    expect(recorder({}, [], 'cursor').adapter.paneOf(at('cursor'))).toEqual({ adapter: 'cursor', id: UUID })
+    expect(recorder().adapter.paneOf(at('cursor'))).toBeUndefined()
+    expect(recorder({ platform: 'win32' }).adapter.paneOf(at('vscode'))).toBeUndefined()
   })
 
   it.each([

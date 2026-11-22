@@ -3128,6 +3128,23 @@ describe('ObservedSource and an editor started from Terminal', () => {
     expect(s.actions.open.mock.calls).toEqual([[agent.id, { bundle }]])
   })
 
+  // The extension's tab runs with the editor's own environment, which has Terminal's bundle id and no TERM_PROGRAM.
+  it.each([
+    ['VS Code', 'vscode', 'com.microsoft.VSCode'],
+    ['Cursor', 'cursor', 'com.todesktop.230313mzl4w4u92'],
+  ])('a session in the extension\'s tab of %s started from Terminal is in that editor, at its tab, and a tap opens it there', async (_, app, bundle) => {
+    const sessionId = '8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+    const s = editors(app)
+    s.src.ingest(s.ev('session-start', { sessionId,
+      hostHints: { __CFBundleIdentifier: 'com.apple.Terminal', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' } }))
+    await flushed()
+    const agent = s.src.list()[0]
+    expect(agent.app).toBe(app)
+    expect(s.src.paneOf(agent.id, app)).toBe(sessionId)
+    expect(await s.src.focus(agent)).toBe(true)
+    expect(s.actions.open.mock.calls).toEqual([[agent.id, { bundle, pane: { adapter: app, id: sessionId } }]])
+  })
+
   // Off macOS no app inherits a bundle id: on Windows the hook finds it from the process's parents, the Claude app's
   // own word first (notify.mjs lookUpWindowsApp), and a Claude app session can carry an editor's TERM_PROGRAM.
   it.each(['win32', 'linux'] as const)('on %s a bundle id beside TERM_PROGRAM=vscode is kept: a Claude app session stays on the Claude page', async (platform) => {

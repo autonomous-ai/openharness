@@ -328,4 +328,20 @@ describe('ownHints', () => {
     const iterm = { TERM_PROGRAM: 'iTerm.app', __CFBundleIdentifier: APP_BUNDLES['terminal-app'] }
     expect(ownHints(iterm)).toEqual(iterm)
   })
+
+  // The extension's tab runs with the editor's own environment: Terminal's bundle id, and no TERM_PROGRAM.
+  // Its word names no app, VS Code's forks say it too: the caller's parents name the editor (observed.ts walked).
+  it('drops a bundle id the extension\'s tab inherited, and names no app', () => {
+    const hints = ownHints({ __CFBundleIdentifier: APP_BUNDLES['terminal-app'], CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' })
+    expect(hints).toEqual({ CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' })
+    expect(detectApp(hints)).toBe(UNKNOWN_APP)
+  })
+
+  it('keeps an editor\'s own bundle id beside the extension\'s word', () => {
+    for (const editor of ['vscode', 'cursor']) {
+      const hints = { __CFBundleIdentifier: APP_BUNDLES[editor], CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' }
+      expect(ownHints(hints)).toEqual(hints)
+      expect(detectApp(hints)).toBe(editor)
+    }
+  })
 })
