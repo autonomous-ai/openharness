@@ -19,8 +19,14 @@ export interface WindowFacade {
   /** One line toward older lines (`up`) or newer, in the active terminal. */
   scrollLine(up: boolean): Promise<void>
   /** Presses PageUp (`up`, toward older lines) or PageDown in the terminal whose shell has that pid: one of two fixed
-   *  key sequences, with no newline. False when no terminal has that shell. The one member that writes to a terminal. */
+   *  key sequences, with no newline. False when no terminal has that shell. */
   pageKey(pid: number, up: boolean): boolean
+  /** Types the words into the terminal whose shell has that pid, as keys, with no newline and no bracketed paste.
+   *  False when no terminal has that shell. */
+  type(pid: number, words: string): boolean
+  /** Presses Enter (a lone CR) in the terminal whose shell has that pid. False when no terminal has that shell.
+   *  The members that write to a terminal are pageKey, type and enter. */
+  enter(pid: number): boolean
 }
 
 /** The first 32 distinct shells whose pid is known (an integer in 2..2^31-1), in order; `active` only when it is one of them. */

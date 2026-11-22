@@ -7434,6 +7434,21 @@ describe('what the dial cannot do for an agent', () => {
     } finally { await session.stop() }
   })
 
+  // U10: Cursor's own agent takes no words; its host says why in its own sentence instead of "comes in an update".
+  it('voice to an agent whose host has a sentence of its own answers that sentence on voice.end, with no transcription', async () => {
+    const transcribe = vi.fn(async () => 'fix the login screen')
+    const host = caps({ transcribe,
+      voiceRefusal: (id) => (id === 'a1' ? "Voice can't reach Cursor's agent. Type in Cursor." : undefined) })
+    const { session, port } = await greeted(host)
+    try {
+      speak(port, 'a1', 'u1')
+      port.say({ t: 'voice.end', uploadId: 'u1' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'voice.error', uploadId: 'u1',
+        message: "Voice can't reach Cursor's agent. Type in Cursor." }))
+      expect(transcribe).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+
   it('words that name no agent are routed only among the agents the dial may talk to', async () => {
     const route = vi.fn(async () => ({ agentId: 'a2', confidence: 0.9, reason: 'name matched' }))
     const host = caps({ route })

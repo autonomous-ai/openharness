@@ -96,6 +96,8 @@ export interface HostSource {
   markSeen?(agentId: string): void
   /** The dial's words for one of its agents, answered once they are delivered or refused. A source without it takes none. */
   send?(agent: HostAgent, text: string): Promise<SendResult>
+  /** A sentence of the agent's own app for words no route reaches, said in place of the generic one; none keeps that. */
+  voiceRefusal?(agent: HostAgent): string | undefined
   /** A tap: bring the agent's terminal forward; false when it did not come. A source without it opens nothing. */
   focus?(agent: HostAgent): Promise<boolean>
   /** Whether the agent has a pane its app can show without coming forward. A source without it has none. */

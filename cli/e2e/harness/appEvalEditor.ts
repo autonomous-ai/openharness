@@ -13,7 +13,7 @@
  *   devices' socket. What the loop printed is the window's stream in tier A's shapes (the plan's Decision 1): the stream
  *   `eval-<window>-<n>`, the window's nth in the scenario, its shells named by their sessions' keys, never by a pid;
  * - words reach these agents by the Claude mod's inbox and the prompts typed into a Claude Code (appEvalClaude.ts), and
- *   by the Codex queue (appEvalChatgpt.ts hear): the extension types none.
+ *   by the Codex queue (appEvalChatgpt.ts hear), and by the words the extension types into a terminal (windowTyped).
  *
  * Every process goes in `world.children`, or is the editor's: its own process, ended at stop, first ends the Codex, Cursor
  * and tmux sessions it runs (as the Claude app's ends its sessions, appEvalClaude.ts), so nothing of a scenario outlives it;
@@ -25,7 +25,7 @@ import { copyFileSync, mkdtempSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { APP_BUNDLES } from '../../src/cable/hosts/hostDetect.js'
 import { NET_GUARD_FILE_ENV } from '../../src/testing/dialAppEval/netGuard.js'
-import { EDITORS, engineOf, placeOf, type App, type Editor, type SessionDef, type SessionKey } from '../../src/testing/dialAppEval/types.js'
+import { EDITORS, engineOf, placeOf, type App, type Delivery, type Editor, type SessionDef, type SessionKey } from '../../src/testing/dialAppEval/types.js'
 import type { WindowState } from '../../../plugins/harness-device-vscode/src/window.ts'
 import { hear } from './appEvalChatgpt.js'
 import { appOf, claudeSteps, start as startClaude, type ClaudeHost } from './appEvalClaude.js'
@@ -92,6 +92,17 @@ export function windowRecords(window: string, keyOf: (pid: number) => SessionKey
     } else if (printed.show !== undefined) record(shown = { show: named(printed.show) }, at)
     else if (printed.scroll !== undefined) record({ scroll: printed.scroll, pid: named(active) }, at)
     else if (printed.key !== undefined) record({ scroll: printed.key, pid: named(printed.pid ?? null) }, at)
+  }
+}
+
+/**
+ * Each words the window typed into a terminal, as a typed delivery to the session whose shell it was, none for a shell no
+ * session has: what the extension types is what the agent there hears.
+ */
+export function windowTyped(keyOf: (pid: number) => SessionKey | undefined,
+  deliver: (d: Omit<Delivery, 'at'>, at: number) => void): (printed: Printed, at: number) => void {
+  return (printed, at) => {
+    if (printed.typed !== undefined) deliver({ path: 'typed', target: keyOf(printed.pid!) ?? null, text: printed.typed }, at)
   }
 }
 
@@ -288,6 +299,7 @@ async function openWindow(world: TierBWorld, key: string, look: Look): Promise<v
   const id = `eval-${key}-${n}`
   const loop = startEditorWindow(world.d, world.children, guardEnv(world.d))
   loop.onLine(windowRecords(id, (pid) => keyOfShell(state, pid), (line, at) => world.stream(id, line, at)))
+  loop.onLine(windowTyped((pid) => keyOfShell(state, pid), (d, at) => world.deliver(d, at)))
   state.windows.delete(key)
   state.windows.set(key, { ...look, id, loop })
   loop.set(told)

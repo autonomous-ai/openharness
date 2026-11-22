@@ -872,6 +872,18 @@ describe('the dial with no window: this computer\'s agents', () => {
     expect([host.capsOf('h1'), host.hostOf('h1')]).toEqual([undefined, undefined])
   })
 
+  it('voice refusal comes from the agent\'s source with no window, and is undefined on a window\'s tab or for an agent no source lists', async () => {
+    const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
+    expect(host.voiceRefusal('o1')).toBeUndefined()
+    const voiceRefusal = vi.fn((agent: HostAgent) => (agent.id === 'o1' ? 'Its own sentence.' : undefined))
+    host.setRegistry(new HostRegistry([host.harness, { ...observed([observedAgent({ id: 'o1' })]), voiceRefusal }]))
+    await host.listAgentSnapshot()
+    expect([host.voiceRefusal('o1'), host.voiceRefusal('h1'), host.voiceRefusal('nobody')]).toEqual(['Its own sentence.', undefined, undefined])
+    expect(voiceRefusal.mock.calls.map(([agent]) => agent.id)).toEqual(['o1'])
+    onTab(host, ['h1'])
+    expect(host.voiceRefusal('o1')).toBeUndefined()
+  })
+
   it('describes an agent the fleet never listed from the registry, so its summary and question carry a name', () => {
     const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
     host.setRegistry(new HostRegistry([host.harness, observed([observedAgent({ id: 'o1', engine: 'codex' })])]))

@@ -81,7 +81,7 @@ describe("tier A's fake extension", () => {
     expect(w.opened.map((o) => o.message)).toEqual([{ type: 'vscode', window: 'eval-w1-1' }])
     // The window's own terminals alone: c's is in w2, and the panel runs in none.
     expect(w.states).toEqual([
-      { type: 'vscode-state', window: 'eval-w1-1', terminals: [w.shell('a'), w.shell('b')], active: w.shell('b'), focused: true },
+      { type: 'vscode-state', window: 'eval-w1-1', terminals: [w.shell('a'), w.shell('b')], active: w.shell('b'), focused: true, types: true },
     ])
     expect(w.lines()).toEqual([
       { window: 'eval-w1-1', line: { type: 'vscode', window: 'eval-w1-1' } },
@@ -171,6 +171,24 @@ describe("tier A's fake extension", () => {
     ])
   })
 
+  it('an Enter line is recorded with its shell named by its session\'s key, and is no delivery', async () => {
+    const w = fakeWorld()
+    await w.start('a', 'b')
+    await w.window({ window: 'w1', active: 'a', focused: true })
+    const { stream } = w.opened[0]!
+    stream.write({ type: 'Eval words for bravo.', pid: w.shell('b') })
+    stream.write({ enter: w.shell('b') })
+    stream.write({ enter: 99_999 })
+    expect(w.lines().slice(2)).toEqual([
+      { window: 'eval-w1-1', line: { type: 'Eval words for bravo.', pid: 'b' } },
+      { window: 'eval-w1-1', line: { enter: 'b' } },
+      { window: 'eval-w1-1', line: { enter: 'other' } },
+    ])
+    expect(w.deliveries).toEqual([{ path: 'typed', target: 'b', text: 'Eval words for bravo.' }])
+    const record = JSON.stringify(w.lines())
+    for (const pid of machine.processes.keys()) expect(record).not.toContain(String(pid))
+  })
+
   it('an open or a state the devices refuse fails the step', async () => {
     const w = fakeWorld()
     await w.start('a')
@@ -188,7 +206,7 @@ describe("tier A's fake extension", () => {
     await w.window({ window: 'w2', active: 'c', focused: true })
     await w.focus('b')
     expect(w.states.at(-1)).toEqual(
-      { type: 'vscode-state', window: 'eval-w1-1', terminals: [w.shell('a'), w.shell('b')], active: w.shell('b'), focused: true })
+      { type: 'vscode-state', window: 'eval-w1-1', terminals: [w.shell('a'), w.shell('b')], active: w.shell('b'), focused: true, types: true })
     expect(w.lines().at(-1)).toEqual(
       { window: 'eval-w1-1', line: { type: 'vscode-state', terminals: ['a', 'b'], active: 'b', focused: true } })
   })
@@ -201,8 +219,8 @@ describe("tier A's fake extension", () => {
     const before = w.states.length
     await w.focus('b')
     expect(w.states.slice(before)).toEqual([
-      { type: 'vscode-state', window: 'eval-w2-1', terminals: [w.shell('c')], active: w.shell('c'), focused: false },
-      { type: 'vscode-state', window: 'eval-w1-1', terminals: [w.shell('a'), w.shell('b')], active: w.shell('b'), focused: true },
+      { type: 'vscode-state', window: 'eval-w2-1', terminals: [w.shell('c')], active: w.shell('c'), focused: false, types: true },
+      { type: 'vscode-state', window: 'eval-w1-1', terminals: [w.shell('a'), w.shell('b')], active: w.shell('b'), focused: true, types: true },
     ])
     // A focus in the window that has it says nothing of the others.
     const again = w.states.length
@@ -216,7 +234,7 @@ describe("tier A's fake extension", () => {
     await w.window({ window: 'w1', active: 'b', focused: true })
     const [a, b, agent] = [w.shell('a'), w.shell('b'), agentPid(w.world, 'b')!]
     await w.closeTerminal('b')
-    expect(w.states.at(-1)).toEqual({ type: 'vscode-state', window: 'eval-w1-1', terminals: [a], active: null, focused: true })
+    expect(w.states.at(-1)).toEqual({ type: 'vscode-state', window: 'eval-w1-1', terminals: [a], active: null, focused: true, types: true })
     expect(w.lines().at(-1)).toEqual({ window: 'eval-w1-1', line: { type: 'vscode-state', terminals: ['a'], active: null, focused: true } })
     expect([machine.processes.has(agent), machine.processes.has(b), machine.processes.has(a)]).toEqual([false, false, true])
     expect(w.observed.at(-1)).toMatchObject({ event: 'session-end', sessionId: vscode.sessions[1]!.id, callerPid: agent })
@@ -230,7 +248,7 @@ describe("tier A's fake extension", () => {
     expect(w.ends()).toEqual(['gone', undefined])
     expect(w.opened.map((o) => o.message)).toEqual([{ type: 'vscode', window: 'eval-w1-1' }, { type: 'vscode', window: 'eval-w1-2' }])
     expect(w.states.at(-1)).toEqual(
-      { type: 'vscode-state', window: 'eval-w1-2', terminals: [w.shell('a'), w.shell('b')], active: w.shell('b'), focused: true })
+      { type: 'vscode-state', window: 'eval-w1-2', terminals: [w.shell('a'), w.shell('b')], active: w.shell('b'), focused: true, types: true })
     expect(w.lines().slice(2)).toEqual([
       { window: 'eval-w1-1', line: { ended: 'gone' } },
       { window: 'eval-w1-2', line: { type: 'vscode', window: 'eval-w1-2' } },
@@ -263,8 +281,8 @@ describe("tier A's fake extension", () => {
     for (const pid of after) expect(before).not.toContain(pid)
     expect(w.ends()).toEqual(['gone', 'gone', undefined, undefined])
     expect(w.states.slice(2)).toEqual([
-      { type: 'vscode-state', window: 'eval-w1-2', terminals: [after[0], after[1]], active: after[1], focused: true },
-      { type: 'vscode-state', window: 'eval-w2-2', terminals: [after[2]], active: after[2], focused: false },
+      { type: 'vscode-state', window: 'eval-w1-2', terminals: [after[0], after[1]], active: after[1], focused: true, types: true },
+      { type: 'vscode-state', window: 'eval-w2-2', terminals: [after[2]], active: after[2], focused: false, types: true },
     ])
   })
 })

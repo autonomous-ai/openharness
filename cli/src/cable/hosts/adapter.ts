@@ -94,11 +94,16 @@ export interface HostAdapter {
   show?(pane: Pane, agentId: string): Promise<PaneSwitch>
   /** Types a line at the agent's prompt and submits it; `engine` is the agent's, for an app that checks who holds the
    *  pane. The source decides that the prompt is free from the hooks; an app that knows better says `'busy'` or
-   *  `'waiting'`, or refuses in a fixed sentence of its own, which the dial shows as it is. Only `true` was sent. */
-  type?(pane: Pane, text: string, engine: string): Promise<TypeResult>
+   *  `'waiting'`, or refuses in a fixed sentence of its own, which the dial shows as it is. Only `true` was sent.
+   *  `atPrompt` is the source's check that the agent is still at its prompt in that very pane, for an adapter that waits
+   *  before its words or between them and their Enter: false then, it sends nothing more. */
+  type?(pane: Pane, text: string, engine: string, atPrompt?: () => boolean): Promise<TypeResult>
   /** Whether `type` can reach the pane now (its app's socket there): asked at each look. One that cannot leaves the words
    *  to the agent's next pane whose app types. */
   canType?(pane: Pane): boolean
+  /** Its own fixed sentence for an agent at that place whose words no route of its reaches, which the dial says in place
+   *  of the generic one; none for any other. */
+  voiceRefusal?(place: Place): string | undefined
   /** Whether a stroke on the dial may scroll that pane's view now, as far as the adapter knows without asking its app:
    *  its app in front and the pane in its window. */
   canScroll?(pane: Pane): boolean

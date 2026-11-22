@@ -8,7 +8,7 @@ import { type fileStamp, within } from '../../lib/sessionSearch/externals/suppor
 import type { ExternalEngine, RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { errorKind } from '../../lib/log.js'
 import { roundDrawable } from '../roundGlyphs.js'
-import type { HostAdapter, Outer, Pane } from './adapter.js'
+import type { HostAdapter, Outer, Pane, Place } from './adapter.js'
 import { CODEX_THREAD, type CodexQueue, type CodexQueueFailure, type CodexRan } from './codexQueue.js'
 import { agentPlaceName, APP_BUNDLES, detectApp, detectHost, UNKNOWN_APP } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
@@ -269,6 +269,8 @@ interface Entry {
   sentStop?: boolean
   /** When the dial's words reached it, oldest first, each until a turn starts for it. */
   dialPrompts: { at: number }[]
+  /** A session-start was heard and no turn-start since: where cursor-agent's idle is read (idleKnown). Never the scan's. */
+  startedAtPrompt?: true
 }
 
 /** A pane's name as its app shows it, and whether the person set it. */
@@ -321,6 +323,20 @@ export class ObservedSource implements HostSource {
       // Its prompts are answered in its own app: the dial only shows them.
       answer: false,
     }
+  }
+
+  /** The first sentence its adapters give, in their order, for a live agent no route of theirs takes words for: the
+   *  sentence is the app's, so this source names none. */
+  voiceRefusal(agent: HostAgent): string | undefined {
+    const e = this.entries.get(agent.id)
+    const actions = this.deps.actions
+    if (!e || !actions || !this.live(e) || this.capabilities(agent).voice) return undefined
+    const place = this.placeOf(e)
+    for (const adapter of actions.adapters) {
+      const sentence = adapter.voiceRefusal?.(place)
+      if (sentence) return sentence
+    }
+    return undefined
   }
 
   /** Only Claude Code runs the mod; another engine's session id is no poll. */
@@ -410,17 +426,24 @@ export class ObservedSource implements HostSource {
     }
     // In that wait the session may also have ended, moved to another terminal or gone: the old one holds something else.
     // Each event names its panes afresh, so the same pane is known by its adapter and id.
-    const still = this.first(e, words)
-    if (!typer || !this.live(e) || still?.pane.adapter !== typer.pane.adapter || still.pane.id !== typer.pane.id) return noAnswer()
+    if (!typer) return noAnswer()
+    const there = (): boolean => {
+      const still = this.first(e, words)
+      return this.live(e) && still?.pane.adapter === typer.pane.adapter && still.pane.id === typer.pane.id
+    }
+    if (!there()) return noAnswer()
     // A prompt open in the terminal takes what is typed as its answer: Enter there would allow what the dial only shows,
     // as the core never types into a Harness pane that shows one (lib/messageHolds.ts `permission_open`).
     if (e.agent.state === 'needs-you') return waiting()
     // A working turn may show a prompt not yet heard of: Codex's approval overlay, which takes `y` or Enter, has no hook, and
     // Claude Code's comes a few hundred ms after its prompt opens.
     if (e.agent.state === 'working' || !this.idleKnown(e)) return busy()
+    // The same checks, asked again by an adapter that waits before its words or their Enter: a turn that started, a
+    // prompt that opened or a pane that moved meanwhile gets nothing more.
+    const atPrompt = (): boolean => there() && e.agent.state !== 'needs-you' && e.agent.state !== 'working' && this.idleKnown(e)
     // Recorded first: `orca terminal send` returns once the prompt is submitted, and its turn's hook can be heard before.
     const record = this.dialPrompt(e)
-    const typed = await typer.adapter.type!(typer.pane, text, e.agent.engine)
+    const typed = await typer.adapter.type!(typer.pane, text, e.agent.engine, atPrompt)
     // Only `true` was sent: a refusal is an object, and truthy.
     if (typed !== true) {
       this.forgetDialPrompt(e, record)
@@ -452,10 +475,15 @@ export class ObservedSource implements HostSource {
   /**
    * Claude Code's and Codex's idle is their turn state, as the scan and checkWorking read it. Nothing reads another
    * engine's turn: it reads idle only as it was listed, before any hook told of a turn, so it is at its prompt only once a
-   * hook said its turn ended, done or errored.
+   * hook said its turn ended, done or errored. cursor-agent is also at its prompt from a heard session-start until a turn
+   * starts (docs/plans/2026-11-22-dial-vscode-cursor-voice-design.md, "cursor-agent's idle"): its turn under way stays
+   * busy, as its approval prompt sends no hook and a typed Enter would answer it. Unverified: that cursor-agent sends
+   * `sessionStart` as its screen opens rather than at its first submit; either way the turn-start after that submit
+   * clears it.
    */
   private idleKnown(e: Entry): boolean {
     return e.agent.engine === 'claude' || e.agent.engine === 'codex' || e.agent.state === 'done' || e.agent.state === 'error'
+      || (e.agent.engine === 'cursor' && e.startedAtPrompt === true)
   }
 
   /** Still listed, and its session has not ended. */
@@ -558,14 +586,19 @@ export class ObservedSource implements HostSource {
    *  terminal is where that terminal's hook would place it. A session the scan found has no caller until its first hook:
    *  its own process (the engine's record's, or the rollout's owner) places it. */
   private locate(entry: Entry): void {
-    const hints = entry.paired ? { HC_TERMINAL_ID: entry.paired.address } : entry.hints
-    const place = { host: entry.agent.host, app: entry.agent.app, hints, tty: entry.tty, hostSession: entry.hostSession,
-      pid: entry.caller ?? entry.pid, sessionId: entry.agent.sessionId, engine: entry.agent.engine, cwd: entry.agent.cwd,
-      outer: entry.outer, ptyOwner: entry.ptyOwner }
+    const place = this.placeOf(entry)
     entry.panes = (this.deps.actions?.adapters ?? []).flatMap((adapter) => {
       const pane = adapter.paneOf(place)
       return pane ? [{ adapter, pane }] : []
     })
+  }
+
+  /** Where it runs, as its adapters read it. */
+  private placeOf(entry: Entry): Place {
+    const hints = entry.paired ? { HC_TERMINAL_ID: entry.paired.address } : entry.hints
+    return { host: entry.agent.host, app: entry.agent.app, hints, tty: entry.tty, hostSession: entry.hostSession,
+      pid: entry.caller ?? entry.pid, sessionId: entry.agent.sessionId, engine: entry.agent.engine, cwd: entry.agent.cwd,
+      outer: entry.outer, ptyOwner: entry.ptyOwner }
   }
 
   /** The live agent in that app's tab: of two that read the same tty, the one heard from last. */
@@ -899,9 +932,13 @@ export class ObservedSource implements HostSource {
     let source: PromptSource | undefined
     switch (e.event) {
       case 'session-start':
+        // Where cursor-agent's idle is read until a turn starts (idleKnown); a turn already under way stays busy by its
+        // state.
+        entry.startedAtPrompt = true
         // A start must not undo a state a faster event already set.
         break
       case 'turn-start':
+        entry.startedAtPrompt = undefined
         this.dropStop(entry)
         this.setState(entry, 'working', now)
         a.unseenDone = false

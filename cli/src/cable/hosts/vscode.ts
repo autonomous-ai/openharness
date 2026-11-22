@@ -23,7 +23,11 @@
  * `{"scroll":<lines>,"pid":<shell>}` line while the editor is in front (§4): the extension runs
  * them only while that terminal is the active one, so the adapter has no `onScreen`. A stroke whose `pageKeys` passed
  * carries `"page":true`, and the extension also presses Claude Code's page keys in that terminal
- * (docs/plans/2026-11-18-dial-vscode-claude-fullscreen-scroll-design.md).
+ * (docs/plans/2026-11-18-dial-vscode-claude-fullscreen-scroll-design.md). The dial's words go to a terminal whose window
+ * says it types: the terminals type them there, then press Enter after a settle, only while the agent is that terminal's
+ * foreground job and the source says it is still at its prompt (vscodeTerminals.ts `type`,
+ * docs/plans/2026-11-22-dial-vscode-cursor-voice-design.md). Cursor's terminals are typed into as VS Code's (U11);
+ * Cursor's own agent takes no words, and its adapter's `voiceRefusal` says so (U10).
  */
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { createAppLink, type AppLinkDeps } from './appLink.js'
@@ -44,11 +48,22 @@ const VSCODE_SESSION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 /** A terminal pane's id: one form for each pid, so a pane's id and its pid read back the same. */
 const TERM_PANE = /^term:([1-9][0-9]{0,9})$/
 
-/** The engines an integrated terminal's pane is for: Claude Code, Codex, and cursor-agent only with TERM_PROGRAM, which
- *  a terminal sets. Cursor's own agent has the same engine but carries none, and its hook's pid may be a short-lived
- *  process: a pane for it would have the window stream's chain read it with `ps` every CHAIN_RETRY_MS, for nothing. */
+/** cursor-agent in a terminal, which sets TERM_PROGRAM. Cursor's own agent has the same engine but carries none, and its
+ *  hook's pid may be a short-lived process: a pane for it would have the window stream's chain read it with `ps` every
+ *  CHAIN_RETRY_MS, for nothing. */
+function cursorInTerminal(place: Place): boolean {
+  return place.engine === 'cursor' && !!place.hints.TERM_PROGRAM
+}
+
+/** Cursor's own agent, the chat inside Cursor (U10): Cursor's cursor engine out of any terminal, which a session the scan
+ *  found is too until its first hook says TERM_PROGRAM. */
+function cursorsOwnAgent(place: Place): boolean {
+  return place.app === 'cursor' && place.engine === 'cursor' && !cursorInTerminal(place)
+}
+
+/** The engines an integrated terminal's pane is for: Claude Code, Codex, and cursor-agent in a terminal. */
 function inTerminal(place: Place): boolean {
-  return place.engine === 'claude' || place.engine === 'codex' || (place.engine === 'cursor' && !!place.hints.TERM_PROGRAM)
+  return place.engine === 'claude' || place.engine === 'codex' || cursorInTerminal(place)
 }
 
 /** The agent's pid a terminal pane names (`term:<pid>`, 2..2^31-1); none for the panel's pane or any other id. */
@@ -60,7 +75,7 @@ export function termPid(paneId: string): number | undefined {
 export function createVscodeAdapter(
   editor: keyof typeof EDITORS,
   deps: AppLinkDeps & {
-    terminals: Pick<VscodeTerminals, 'terminalOf' | 'show' | 'scroll' | 'pageKeys'>
+    terminals: Pick<VscodeTerminals, 'terminalOf' | 'show' | 'scroll' | 'pageKeys' | 'canType' | 'type'>
     /** Brings a window forward on Linux; none elsewhere. */
     raise?: LinuxRaise['raise']
   },
@@ -142,5 +157,25 @@ export function createVscodeAdapter(
       const terminal = pid === undefined ? undefined : deps.terminals.terminalOf(pid)
       if (terminal) deps.terminals.scroll(terminal, lines, page)
     },
+    canType(pane) {
+      const pid = termPid(pane.id)
+      // The tab has no shell a window reports: its words go to its mod, never here.
+      return pid !== undefined && deps.terminals.canType(pid)
+    },
+    async type(pane, text, _engine, atPrompt) {
+      const pid = termPid(pane.id)
+      // The Enter waits a settle after the words: with no check that the agent is still at its prompt by then, it could
+      // answer a question or start a turn the words were never meant for.
+      if (pid === undefined || !atPrompt) return false
+      const typed = await deps.terminals.type(pid, text, atPrompt)
+      // Not in front (suspended, in the background): nothing was typed, and the person can bring it back (V9).
+      if (typed === 'background') return { refused: 'Bring it to the front of its terminal.' }
+      return typed === 'typed'
+    },
+    // Cursor documents no way to put words into one existing chat: its prompt link opens a new one, and its composer
+    // commands act on whichever chat is focused (docs/plans/2026-11-22-dial-vscode-cursor-voice-design.md, §2).
+    ...(editor === 'cursor' && {
+      voiceRefusal: (place: Place) => (cursorsOwnAgent(place) ? 'Voice can\'t reach Cursor\'s agent. Type in Cursor.' : undefined),
+    }),
   }
 }

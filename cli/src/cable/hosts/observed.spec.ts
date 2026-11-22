@@ -1459,7 +1459,8 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
     { ...claude, show: (pane, agentId) => fake.claudeShow(agentId, pane.id) },
     createCodexAppAdapter({ ...deps, inFront: () => fake.codexInFront(), log: () => {} }),
     createVscodeAdapter('vscode', { ...deps, inFront: () => true, terminals: {
-      terminalOf: () => undefined, show: () => false, scroll: () => false, pageKeys: () => false } }),
+      terminalOf: () => undefined, show: () => false, scroll: () => false, pageKeys: () => false,
+      canType: () => false, type: async () => 'failed' as const } }),
     createTabsAdapter({ isOpen: () => fake.tabsOpen(), select: (tab, raise) => fake.tabSelect(tab.app, tab.tty, raise) === 'ok' }),
   ]
   return { actions: { ...fake, adapters }, ready, ran }
@@ -1643,6 +1644,40 @@ describe('ObservedSource actions', () => {
     expect(await after('turn-error', 'five')).toEqual({ ok: true })
     expect(actions.orcaSend.mock.calls).toEqual([[HANDLE, 'two'], [HANDLE, 'three'], [HANDLE, 'five']])
     expect(counted(actions.count)).toEqual(['busy', 'busy', 'waiting', 'orca', 'orca', 'busy', 'orca'])
+  })
+
+  // U11: cursor-agent in an editor's terminal is typed into before its first turn ends (the spec's "cursor-agent's idle").
+  it('cursor-agent is at its prompt from its session-start until a turn starts', async () => {
+    vi.useFakeTimers()
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    const busy = { ok: false, reason: 'proj is busy. Say it when it is done.' }
+    const after = async (event: ObservedHookEvent['event'], text: string) => {
+      src.ingest(ev(event, { engine: 'cursor', ...withHandle }))
+      if (event === 'turn-stop') await graced()
+      return src.send(src.list()[0], text)
+    }
+    expect(await after('session-start', 'one')).toEqual({ ok: true })
+    expect(await after('turn-start', 'two')).toEqual(busy)
+    expect(await after('turn-stop', 'three')).toEqual({ ok: true })
+    expect(await after('session-start', 'four')).toEqual({ ok: true })
+    expect(await after('turn-start', 'five')).toEqual(busy)
+    expect(actions.orcaSend.mock.calls).toEqual([[HANDLE, 'one'], [HANDLE, 'three'], [HANDLE, 'four']])
+  })
+
+  it('a cursor session the scan found is busy until a hook: the scan says nothing of its prompt', async () => {
+    const type = vi.fn(async (_pane: Pane, _text: string, _engine: string): Promise<TypeResult> => true)
+    const { src, open, owners, externals, ev } = setup({ actions: { ...fakeActions().actions, adapters: [{ ...byFolder, type }] } })
+    open.set('s1', 'terminal')
+    owners.set('s1', { pid: 100, engine: 'cursor' })
+    externals.set('s1', { cwd: '/work/proj', transcriptPath: null })
+    await src.scanOpen()
+    expect(src.list()[0].state).toBe('idle')
+    expect(await src.send(src.list()[0], 'yes do it')).toEqual({ ok: false, reason: 'proj is busy. Say it when it is done.' })
+    expect(type).not.toHaveBeenCalled()
+    src.ingest(ev('session-start', { engine: 'cursor' }))
+    expect(await src.send(src.list()[0], 'next')).toEqual({ ok: true })
+    expect(type.mock.calls.map(([pane, text]) => [pane, text])).toEqual([[{ adapter: 'by-folder', id: '/work/proj' }, 'next']])
   })
 
   // The scan lists another engine's agent idle though its turn may run: its first hook with a handle is no turn's end.
@@ -1959,7 +1994,7 @@ describe('ObservedSource actions', () => {
     const { actions } = fakeActions({ open: vi.fn(async () => false) })
     const { src, ev } = setup({ actions })
     src.ingest(ev('session-start', { sessionId: 'orca', ...withHandle }))
-    src.ingest(ev('session-start', { sessionId: 'plain' }))
+    src.ingest(ev('session-start', { sessionId: 'plain', callerPid: 102 }))
     const agent = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!
     expect(await src.focus(agent('orca'))).toBe(false)
     expect(actions.open).toHaveBeenCalledWith(agent('orca').id, { bundle: 'com.stablyai.orca', pane: { adapter: 'orca', id: HANDLE } })
@@ -2032,6 +2067,80 @@ describe('ObservedSource actions', () => {
     src.ingest(ev('session-start', { engine: 'codex', sessionId: THREAD, hostHints: { __CFBundleIdentifier: 'com.microsoft.VSCode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' } }))
     expect(await src.focus(src.list()[0])).toBe(true)
     expect(actions.open.mock.calls).toEqual([[src.list()[0].id, { bundle: 'com.microsoft.VSCode' }]])
+  })
+
+  describe('a typer that waits between its words and their Enter', () => {
+    // Another Codex home's: not queue-able, so its words are typed (V9 at this layer).
+    const outside = {
+      engine: 'codex' as const, sessionId: THREAD, hostHints: { TYPER_PANE: 'p1' },
+      transcriptPath: `/other/.codex/sessions/2026/11/22/rollout-2026-11-22T10-00-00-${THREAD}.jsonl`,
+    }
+    /** An adapter whose pane is its hint's, and whose `type` keeps the prompt check it was handed and answers once told. */
+    const typing = () => {
+      let atPrompt: (() => boolean) | undefined
+      let answer!: (typed: TypeResult) => void
+      const type = vi.fn((_pane: Pane, _text: string, _engine: string, check?: () => boolean) => {
+        atPrompt = check
+        return new Promise<TypeResult>((resolve) => { answer = resolve })
+      })
+      const typer: HostAdapter = { id: 'typer', tap: 'before', canFocus: () => false, focus: async () => false, type,
+        paneOf: (place) => (place.hints.TYPER_PANE ? { adapter: 'typer', id: place.hints.TYPER_PANE } : undefined) }
+      const { actions } = fakeActions()
+      const t = setup({ actions: { ...actions, adapters: [typer] } })
+      t.src.ingest(t.ev('session-start', outside))
+      return { ...t, actions, type, atPrompt: () => atPrompt!(), answer: (typed: TypeResult) => answer(typed) }
+    }
+
+    it('a Codex outside Harness\'s own Codex home, at its prompt, with a pane whose app types, is typed there and counted by that adapter: no codex queue', async () => {
+      const { src, actions, type, answer } = typing()
+      const sent = src.send(src.list()[0], 'next')
+      await flushed()
+      answer(true)
+      expect(await sent).toEqual({ ok: true })
+      expect(type.mock.calls.map(([pane, text, engine]) => [pane, text, engine])).toEqual([[{ adapter: 'typer', id: 'p1' }, 'next', 'codex']])
+      expect(actions.codexQueue.send).not.toHaveBeenCalled()
+      expect(counted(actions.count)).toEqual(['typer'])
+    })
+
+    it.each([
+      ['a turn starts', 'turn-start', {}],
+      ['the agent waits', 'needs-input', {}],
+      ['its session ends', 'session-end', {}],
+      ['a hook gives it another pane', 'session-start', { hostHints: { TYPER_PANE: 'p2' } }],
+    ] as const)('the typer is handed the prompt check: true at the prompt, false once %s', async (_what, event, over) => {
+      const { src, ev, atPrompt, answer } = typing()
+      const sent = src.send(src.list()[0], 'next')
+      await flushed()
+      expect(atPrompt()).toBe(true)
+      src.ingest(ev(event, { ...outside, ...over }))
+      expect(atPrompt()).toBe(false)
+      answer(false)
+      await sent
+    })
+  })
+
+  // U10: the app's own adapter says why no route reaches its agent; the source names no app.
+  it('an agent with no voice says its first adapter\'s sentence; one with voice, an ended one, or one whose adapters have none, says none', () => {
+    const silent: HostAdapter = { id: 'silent', tap: 'instead', canFocus: () => false, focus: async () => false,
+      paneOf: () => undefined }
+    const saying = (id: string): HostAdapter => ({ ...silent, id,
+      voiceRefusal: (place) => (place.hints.OWN_AGENT ? `${id} says no.` : undefined) })
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions: { ...actions, adapters: [...actions.adapters, silent, saying('first'), saying('second')] } })
+    const agent = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!
+    src.ingest(ev('session-start', { sessionId: 'mute', callerPid: 101, hostHints: { OWN_AGENT: '1' } }))
+    expect(src.voiceRefusal(agent('mute'))).toBe('first says no.')
+    src.ingest(ev('session-start', { sessionId: 'plain', callerPid: 102 }))
+    expect(src.voiceRefusal(agent('plain'))).toBeUndefined()
+    src.ingest(ev('session-start', { sessionId: 'voiced', callerPid: 103, hostHints: { ...withHandle.hostHints, OWN_AGENT: '1' } }))
+    expect(src.capabilities(agent('voiced')).voice).toBe(true)
+    expect(src.voiceRefusal(agent('voiced'))).toBeUndefined()
+    src.ingest(ev('session-end', { sessionId: 'mute', callerPid: 101, hostHints: { OWN_AGENT: '1' } }))
+    expect(src.voiceRefusal(agent('mute'))).toBeUndefined()
+
+    const none = setup({ actions: { ...actions, adapters: [silent] } })
+    none.src.ingest(none.ev('session-start', { hostHints: { OWN_AGENT: '1' } }))
+    expect(none.src.voiceRefusal(none.src.list()[0])).toBeUndefined()
   })
 })
 
@@ -3150,7 +3259,7 @@ describe('ObservedSource and a pane that only holds the agent', () => {
     const s = holding([h.adapter, b.adapter])
     s.src.ingest(s.ev('turn-stop', { hostHints: HINTS }))
     expect(await s.src.send(s.agent(), 'next')).toEqual({ ok: true })
-    expect(b.typed.mock.calls).toEqual([[{ adapter: 'b', id: 'b1' }, 'next', 'claude']])
+    expect(b.typed.mock.calls).toEqual([[{ adapter: 'b', id: 'b1' }, 'next', 'claude', expect.any(Function)]])
     expect(await s.src.showPane(s.agent())).toBe('ok')
     expect(b.shown).toHaveBeenCalledTimes(1)
     expect(h.typed).not.toHaveBeenCalled()
@@ -3603,7 +3712,7 @@ describe('ObservedSource panes', () => {
       cwd: '/work/proj' })
     expect(a.src.capabilities(a.agent)).toMatchObject({ voice: true })
     expect(await a.src.send(a.agent, 'next')).toEqual({ ok: true })
-    expect(adapter.type.mock.calls).toEqual([[PANE, 'next', 'claude']])
+    expect(adapter.type.mock.calls).toEqual([[PANE, 'next', 'claude', expect.any(Function)]])
     expect(counted(a.actions.count).at(-1)).toBe('made-up')
     expect(a.actions.orcaSend).not.toHaveBeenCalled()
     expect(await a.src.showPane(a.agent)).toBe('busy')

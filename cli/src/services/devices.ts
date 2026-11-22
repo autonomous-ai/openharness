@@ -508,6 +508,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     foreground: deps.processGroups ?? readForeground,
     changed: () => part.call('dial', () => cable.syncAgents()),
     focused: (pid, terminal, at, regained) => part.call('dial', () => editorFocused(pid, terminal, at, regained)),
+    platform: apps.platform,
     now: monotonic,
     after: timerIn('vscode'),
     log,

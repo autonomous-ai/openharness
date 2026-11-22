@@ -481,6 +481,9 @@ export interface CableHost {
   /** What the dial may do with an agent of the machine list, as letters of s v f a; undefined (an older host, a
    *  window's tab, an agent it does not list) means everything, as before. */
   capsOf?(agentId: string, opts?: { apps?: boolean }): string | undefined
+  /** A sentence of the agent's own app for words no route reaches, said in place of the generic one; undefined keeps
+   *  that. */
+  voiceRefusal?(agentId: string, opts?: { apps?: boolean }): string | undefined
   /** The app or terminal that agent runs in (`orca`, `ghostty`, …), for the words of a refusal. */
   hostOf?(agentId: string, opts?: { apps?: boolean }): string | undefined
   /** The dial is on that agent: its finished answer counts as seen. */
@@ -2012,7 +2015,8 @@ export class CableSession {
         if (agentId && !formVoice && !searchVoice && !draftVoice && !questionVoice && this.lacks(agentId, 'v')) {
           this.voice = null
           this.voiceRefusal = { generation: this.voiceGeneration,
-            message: `This agent is in ${this.hostName(agentId)}. Talking to it from the device comes in an update.` }
+            message: this.host.voiceRefusal?.(agentId, this.asItself)
+              ?? `This agent is in ${this.hostName(agentId)}. Talking to it from the device comes in an update.` }
           return
         }
         this.voice = {

@@ -3,9 +3,10 @@ import { REFUSED, type ListenerStream, type StreamEnd } from '../../services/dev
 import type { PageAgent } from './adapter.js'
 import { PS_TIMEOUT_MS, type Exec } from './scannedApp.js'
 import { setProcessTableSource, type ProcessRow } from '../../lib/processTable.js'
+import { MAX_TEXT } from './orca.js'
 import {
-  CHAIN_RETRY_MS, GROUPS_MAX_BYTES, readForeground, readProcessParents, VSCODE_GUARD_MS, VSCODE_OPEN_MAX_BYTES, VSCODE_OPEN_PER_SECOND,
-  VSCODE_SCROLL_MAX, VSCODE_STATE_MAX_BYTES, VSCODE_STATE_PER_SECOND, VSCODE_TERMINALS, VSCODE_WINDOWS, vscodeStreams,
+  CHAIN_RETRY_MS, GROUPS_MAX_BYTES, readForeground, readProcessParents, VSCODE_GUARD_MS, VSCODE_LINE_MAX_BYTES, VSCODE_OPEN_MAX_BYTES,
+  VSCODE_OPEN_PER_SECOND, VSCODE_SCROLL_MAX, VSCODE_STATE_MAX_BYTES, VSCODE_STATE_PER_SECOND, VSCODE_TERMINALS, VSCODE_WINDOWS, vscodeStreams,
   type ProcessGroups, type VscodeTerminalsDeps,
 } from './vscodeTerminals.js'
 
@@ -49,7 +50,7 @@ function fakeStream() {
 /** The windows, with a `ps` that answers only when the test says, from a table the test sets; settings that draw every
  *  folder fullscreen unless the test says otherwise; a foreground read that answers only when the test says; a clock the
  *  test moves; each timer kept, and whether it was cancelled, to be run by hand; and every line logged. */
-function harness(table: ReadonlyArray<readonly [number, number]> = TREE) {
+function harness(table: ReadonlyArray<readonly [number, number]> = TREE, platform: NodeJS.Platform = 'darwin') {
   let at = 0
   const reads: Array<{ resolve(rows: Array<{ pid: number; ppid: number; startMarker?: string }>): void; reject(error: Error): void }> = []
   const groupReads: Array<{ resolve(groups: ProcessGroups | undefined): void; reject(error: Error): void }> = []
@@ -66,6 +67,7 @@ function harness(table: ReadonlyArray<readonly [number, number]> = TREE) {
     focused,
     fullscreen,
     foreground,
+    platform,
     now: () => at,
     after: (ms, run) => {
       const timer = { ms, run, cancelled: false }
@@ -163,6 +165,8 @@ describe('VS Code\'s windows', () => {
       type: 'vscode-state', window: 'a'.repeat(36), terminals: Array.from({ length: 32 }, (_, i) => 2 ** 31 - 1 - i), active: 2 ** 31 - 1, focused: false,
     }
     expect(Buffer.byteLength(JSON.stringify(largest))).toBe(473)
+    // A window that says it types adds 13 bytes.
+    expect(Buffer.byteLength(JSON.stringify({ ...largest, types: true }))).toBe(486)
   })
 
   it.each<[string, Record<string, unknown>]>([
@@ -922,6 +926,380 @@ describe('VS Code\'s windows', () => {
       // The one ps read is the table that placed the agents.
       '[devices] vscode · in the last minute: 0 shows, 0 taps, 0 refused states, 1 ps reads, 0 failed, 0 scroll lines, 0 dropped, 1 page strokes, guard refused: 1 renderer, 1 asking, 1 background, 2 ps, 1 slow',
     ])
+  })
+})
+
+describe('a window that types', () => {
+  it('canType is true only for an agent whose terminal a window holds and whose latest state said "types":true', async () => {
+    const h = harness()
+    h.open(W1)
+    h.terminals.agents([900])
+    h.state(W1, [700])
+    await h.answer()
+    expect(h.terminals.terminalOf(900)).toStrictEqual({ window: W1, shell: 700 })
+    expect(h.terminals.canType(900)).toBe(false)
+    for (const types of [false, 'yes', 1]) {
+      h.state(W1, [700], { types })
+      expect(h.terminals.canType(900), String(types)).toBe(false)
+    }
+    h.state(W1, [700], { types: true })
+    expect(h.terminals.canType(900)).toBe(true)
+    // A later window listing the shell holds it, and it says nothing of typing.
+    h.open(W2)
+    h.state(W2, [700])
+    expect(h.terminals.canType(900)).toBe(false)
+    // An agent in no window.
+    expect(h.terminals.canType(910)).toBe(false)
+  })
+
+  it('a window\'s types changing tells changed once, as a change of its terminals', async () => {
+    const h = harness()
+    h.open(W1)
+    h.terminals.agents([900])
+    h.state(W1, [700])
+    await h.answer()
+    expect(h.changed).toHaveBeenCalledTimes(1)
+    h.state(W1, [700], { types: true })
+    expect(h.changed).toHaveBeenCalledTimes(2)
+    h.state(W1, [700], { types: true })
+    expect(h.changed).toHaveBeenCalledTimes(2)
+  })
+
+  // An older extension ends its stream on a line of 1 KiB, so a new stream under a reused id may be one that cannot type.
+  it('a reused window id\'s new stream starts not typing', async () => {
+    const h = harness()
+    const older = h.open(W1)
+    h.terminals.agents([900])
+    h.state(W1, [700], { types: true })
+    await h.answer()
+    expect(h.terminals.canType(900)).toBe(true)
+    h.open(W1)
+    older.end('replaced')
+    expect(h.terminals.canType(900)).toBe(false)
+    h.state(W1, [700])
+    expect(h.terminals.canType(900)).toBe(false)
+    h.state(W1, [700], { types: true })
+    expect(h.terminals.canType(900)).toBe(true)
+  })
+})
+
+/** The harness with the agents 900 and 910 in W1's terminals, of the shells 700 and 710, W1 saying it types, and W1's
+ *  stream: their chains read with the start markers in [started]. */
+async function typing(platform: NodeJS.Platform = 'darwin', started: Readonly<Record<number, string>> = {}) {
+  const h = harness([...TREE, ...SECOND], platform)
+  const one = h.open(W1)
+  h.terminals.agents([900, 910])
+  h.state(W1, [700, 710], { types: true })
+  await h.answer(undefined, started)
+  return { ...h, one }
+}
+
+type Typing = Awaited<ReturnType<typeof typing>>
+
+/** 900 in front of its terminal: its group is the terminal's foreground group. */
+const FRONT: ProcessGroups = { pgid: 900, tpgid: 900 }
+const WORDS = 'Eval words for bravo.'
+/** The start 900's chain was read with on Windows. */
+const STARTED = { 900: 'w:1' }
+
+/** The settle a send waits on: the latest timer but the minute's. */
+const settle = (h: Typing) => h.timers.filter(({ ms }) => ms !== 60_000).at(-1)!
+
+describe('the dial\'s words typed into a terminal', () => {
+  it('typed: the words line, then after the settle the Enter line, the foreground read before each', async () => {
+    const h = await typing()
+    const sent = h.terminals.type(900, WORDS, () => true)
+    await h.landed()
+    expect(h.one.lines).toEqual([])
+    await h.groups(FRONT)
+    expect(h.one.lines).toEqual([{ type: WORDS, pid: 700 }])
+    expect(settle(h).ms).toBe(400)
+    h.one.drain()
+    settle(h).run()
+    await h.landed()
+    // No Enter before the guard has read again.
+    expect(h.one.lines).toHaveLength(1)
+    await h.groups(FRONT)
+    expect(h.one.lines).toEqual([{ type: WORDS, pid: 700 }, { enter: 700 }])
+    expect(await sent).toBe('typed')
+    expect(h.foreground.mock.calls).toEqual([[900, 700], [900, 700]])
+  })
+
+  it('every control character is typed as a space and a lone surrogate as U+FFFD; an emoji is kept', async () => {
+    for (const [words, typed] of [
+      ['fix it\r\nnow\x1b[2J\tok\u0085', 'fix it  now [2J ok '],
+      // A transcriber's trailing newline would submit before the Enter line.
+      ['done\n', 'done '],
+      ['\ud800a\udc00b😀', '�a�b😀'],
+    ]) {
+      const h = await typing()
+      void h.terminals.type(900, words, () => true)
+      await h.groups(FRONT)
+      expect(h.one.lines, JSON.stringify(words)).toEqual([{ type: typed, pid: 700 }])
+    }
+  })
+
+  it.each([[1, 400], [59, 400], [60, 401], [MAX_TEXT, 733]])('the settle is 400 ms and one more for each 60 characters: %i characters wait %i ms', async (length, ms) => {
+    const h = await typing()
+    void h.terminals.type(900, 'a'.repeat(length), () => true)
+    await h.groups(FRONT)
+    expect(settle(h).ms).toBe(ms)
+  })
+
+  it('the longest words fit one line', async () => {
+    expect(VSCODE_LINE_MAX_BYTES).toBe(65_536)
+    // Three bytes is the most UTF-8 takes for one UTF-16 unit, and no control character is left to escape as six.
+    expect(Buffer.byteLength(JSON.stringify({ type: '中'.repeat(MAX_TEXT), pid: 2 ** 31 - 1 })) + 1).toBeLessThanOrEqual(VSCODE_LINE_MAX_BYTES)
+    const h = await typing()
+    void h.terminals.type(900, '中'.repeat(MAX_TEXT), () => true)
+    await h.groups(FRONT)
+    expect(h.one.lines).toEqual([{ type: '中'.repeat(MAX_TEXT), pid: 700 }])
+  })
+
+  it('empty words or more than 20,000 characters is failed, with nothing read or written', async () => {
+    const h = await typing()
+    for (const words of ['', 'a'.repeat(MAX_TEXT + 1)]) expect(await h.terminals.type(900, words, () => true)).toBe('failed')
+    expect([h.foreground.mock.calls, h.one.lines]).toEqual([[], []])
+    expect(h.processes).toHaveBeenCalledTimes(1)
+  })
+
+  it('an agent with no terminal now, or whose window does not type, is failed with nothing read or written', async () => {
+    const h = await typing()
+    // 920 was never listed: it has no chain.
+    expect(await h.terminals.type(920, WORDS, () => true)).toBe('failed')
+    // An older extension's state says nothing of typing, and a words line over 1 KiB would end its stream.
+    h.state(W1, [700, 710])
+    expect(await h.terminals.type(900, WORDS, () => true)).toBe('failed')
+    expect([h.foreground.mock.calls, h.one.lines]).toEqual([[], []])
+  })
+
+  it('a second send for that terminal while one is under way is failed at once; once it ends the next types', async () => {
+    const h = await typing()
+    // Another terminal's send is no bar: the lock is its shell's.
+    const other = h.terminals.type(910, WORDS, () => true)
+    const first = h.terminals.type(900, 'one', () => true)
+    expect(await h.terminals.type(900, 'two', () => true)).toBe('failed')
+    expect(h.foreground.mock.calls).toEqual([[910, 710], [900, 700]])
+    await h.groups(undefined)
+    expect(await other).toBe('failed')
+    await h.groups(FRONT)
+    h.one.drain()
+    settle(h).run()
+    await h.landed()
+    await h.groups(FRONT)
+    expect(await first).toBe('typed')
+    h.one.drain()
+    void h.terminals.type(900, 'two', () => true)
+    await h.groups(FRONT)
+    expect(h.one.lines).toEqual([{ type: 'one', pid: 700 }, { enter: 700 }, { type: 'two', pid: 700 }])
+    // The send that failed holds its shell no more either.
+    void h.terminals.type(910, WORDS, () => true)
+    expect(h.foreground.mock.calls.at(-1)).toEqual([910, 710])
+  })
+
+  it('not in its terminal\'s foreground group (suspended, in the background, under script or sudo\'s use_pty) is background, with nothing written', async () => {
+    const h = await typing()
+    const sent = h.terminals.type(900, WORDS, () => true)
+    // The shell, or another of its jobs, holds the terminal: the words would run there as a command.
+    await h.groups({ pgid: 900, tpgid: 700 })
+    expect(await sent).toBe('background')
+    expect(h.one.lines).toEqual([])
+    expect(h.timers.map(({ ms }) => ms)).toEqual([60_000])
+  })
+
+  it.each<[string, (h: Typing) => Promise<void>]>([
+    ['no answer', (h) => h.groups(undefined)],
+    ['one that rejects', (h) => h.groupsFail()],
+    ['macOS, no terminal', (h) => h.groups({ pgid: 900, tpgid: 0 })],
+    ['Linux, no terminal', (h) => h.groups({ pgid: 900, tpgid: -1 })],
+  ])('a foreground read of %s is failed with nothing written', async (_, answer) => {
+    const h = await typing()
+    const sent = h.terminals.type(900, WORDS, () => true)
+    await answer(h)
+    expect(await sent).toBe('failed')
+    expect(h.one.lines).toEqual([])
+  })
+
+  // A turn that started, or a prompt that opened, while the guard read (ps, or Windows' whole table, up to 3 s): words
+  // typed there would be taken as its answer, and Codex's approval takes `y` as a yes.
+  it.each<[string, NodeJS.Platform, () => boolean, (h: Typing) => Promise<void>]>([
+    ['macOS, a prompt check that answers false', 'darwin', () => false, (h) => h.groups(FRONT)],
+    ['macOS, a prompt check that throws', 'darwin', () => { throw new Error('no state') }, (h) => h.groups(FRONT)],
+    ['Windows, a prompt check that answers false', 'win32', () => false, (h) => h.answer(undefined, STARTED)],
+  ])('%s once the guard has read gets no words: failed, and the terminal is free', async (_, platform, atPrompt, guard) => {
+    const h = await typing(platform, STARTED)
+    const sent = h.terminals.type(900, WORDS, atPrompt)
+    await guard(h)
+    expect(h.one.lines).toEqual([])
+    expect(h.timers.map(({ ms }) => ms)).toEqual([60_000])
+    expect(await sent).toBe('failed')
+    void h.terminals.type(900, WORDS, () => true)
+    await guard(h)
+    expect(h.one.lines).toEqual([{ type: WORDS, pid: 700 }])
+  })
+
+  it('a window opened again under its id while the guard reads gets no words, and the send is failed', async () => {
+    const h = await typing()
+    const sent = h.terminals.type(900, WORDS, () => true)
+    const newer = h.open(W1)
+    h.one.end('replaced')
+    h.state(W1, [700, 710], { types: true })
+    await h.groups(FRONT)
+    expect(await sent).toBe('failed')
+    expect([h.one.lines, newer.lines]).toEqual([[], []])
+  })
+
+  it('Windows: no ps; the table read again must give the agent its start and a chain to the shell', async () => {
+    const h = await typing('win32', STARTED)
+    const sent = h.terminals.type(900, WORDS, () => true)
+    await h.answer(undefined, STARTED)
+    expect(h.one.lines).toEqual([{ type: WORDS, pid: 700 }])
+    h.one.drain()
+    settle(h).run()
+    await h.landed()
+    await h.answer(undefined, STARTED)
+    expect(await sent).toBe('typed')
+    expect(h.one.lines).toEqual([{ type: WORDS, pid: 700 }, { enter: 700 }])
+    expect(h.foreground).not.toHaveBeenCalled()
+    expect(h.processes).toHaveBeenCalledTimes(3)
+  })
+
+  it.each<[string, (h: Typing) => Promise<void>]>([
+    // A dead agent's pid, handed to a new process.
+    ['another start on its pid', (h) => h.answer(undefined, { 900: 'w:2' })],
+    ['no start on its pid', (h) => h.answer()],
+    ['no row for its pid', (h) => h.answer([...TREE.slice(0, 3), ...SECOND])],
+    ['a chain that no longer reaches its shell', (h) => h.answer([[600, 1], [700, 600], [710, 600], [800, 710], [900, 800], [910, 710]], STARTED)],
+    ['a table that was not read', (h) => h.fail()],
+  ])('Windows: %s, before the words, is failed with nothing written', async (_, answer) => {
+    const h = await typing('win32', STARTED)
+    const sent = h.terminals.type(900, WORDS, () => true)
+    await answer(h)
+    expect(await sent).toBe('failed')
+    expect(h.one.lines).toEqual([])
+  })
+
+  it('Windows: another start on its pid after the settle sends no Enter, and is failed', async () => {
+    const h = await typing('win32', STARTED)
+    const sent = h.terminals.type(900, WORDS, () => true)
+    await h.answer(undefined, STARTED)
+    h.one.drain()
+    settle(h).run()
+    await h.landed()
+    await h.answer(undefined, { 900: 'w:2' })
+    expect(await sent).toBe('failed')
+    expect(h.one.lines).toEqual([{ type: WORDS, pid: 700 }])
+  })
+
+  it.each<[string, (h: Typing, prompt: { at: boolean }) => Promise<unknown[][]>, ProcessGroups]>([
+    ['its window\'s stream ended', async (h) => {
+      h.one.drain()
+      h.one.end('gone')
+      return []
+    }, FRONT],
+    // Review Focus 1: a reload under the same id, listing the same shell and saying it types, is another stream.
+    ['its window opened again under the same id', async (h) => {
+      h.one.drain()
+      const newer = h.open(W1)
+      h.one.end('replaced')
+      h.state(W1, [700, 710], { types: true })
+      return [newer.lines]
+    }, FRONT],
+    ['its window no longer says it types', async (h) => {
+      h.one.drain()
+      h.state(W1, [700, 710])
+      return []
+    }, FRONT],
+    // A nearer process of its chain listed as a terminal's: that one is its terminal now.
+    ['its terminal is another shell now', async (h) => {
+      h.one.drain()
+      h.state(W1, [700, 710, 800], { types: true })
+      return []
+    }, FRONT],
+    ['another window holds its shell now', async (h) => {
+      h.one.drain()
+      const other = h.open(W2)
+      h.state(W2, [700], { types: true })
+      return [other.lines]
+    }, FRONT],
+    // Its pid named another process, matched to the same terminal.
+    ['it left and its pid was matched anew', async (h) => {
+      h.one.drain()
+      h.terminals.agents([910])
+      h.terminals.agents([900, 910])
+      await h.answer()
+      return []
+    }, FRONT],
+    ['it left its terminal\'s foreground', async (h) => {
+      h.one.drain()
+      return []
+    }, { pgid: 900, tpgid: 700 }],
+    ['it is no longer at its prompt', async (h, prompt) => {
+      h.one.drain()
+      prompt.at = false
+      return []
+    }, FRONT],
+    // Review Focus 2: an Enter never waits behind another line.
+    ['the stream still drains a line', async () => [], FRONT],
+  ])('after the settle no Enter, and failed, when %s', async (_, during, again) => {
+    const h = await typing()
+    const prompt = { at: true }
+    const sent = h.terminals.type(900, WORDS, () => prompt.at)
+    await h.groups(FRONT)
+    const others = await during(h, prompt)
+    settle(h).run()
+    await h.landed()
+    await h.groups(again)
+    expect(await sent).toBe('failed')
+    expect(h.one.lines).toEqual([{ type: WORDS, pid: 700 }])
+    for (const lines of others) expect(lines).toEqual([])
+  })
+
+  it('a prompt check that throws after the settle sends no Enter, is failed, and leaves the terminal free', async () => {
+    const h = await typing()
+    let asked = 0
+    // At its prompt as the words go; the throw is the ask before the Enter.
+    const sent = h.terminals.type(900, WORDS, () => {
+      if (asked++) throw new Error('no state')
+      return true
+    })
+    await h.groups(FRONT)
+    h.one.drain()
+    settle(h).run()
+    await h.landed()
+    await h.groups(FRONT)
+    expect(await sent).toBe('failed')
+    expect(h.one.lines).toEqual([{ type: WORDS, pid: 700 }])
+    void h.terminals.type(900, WORDS, () => true)
+    expect(h.foreground).toHaveBeenCalledTimes(3)
+  })
+
+  // Review Focus 2.
+  it('a show written and drained during the settle does not stop the Enter', async () => {
+    const h = await typing()
+    const sent = h.terminals.type(900, WORDS, () => true)
+    await h.groups(FRONT)
+    h.one.drain()
+    h.terminals.show({ window: W1, shell: 700 }, false)
+    h.one.drain()
+    settle(h).run()
+    await h.landed()
+    await h.groups(FRONT)
+    expect(await sent).toBe('typed')
+    expect(h.one.lines).toEqual([{ type: WORDS, pid: 700 }, { show: 700 }, { enter: 700 }])
+  })
+
+  it('the words and Enter lines carry nothing but the words and the shell', async () => {
+    const h = await typing()
+    const sent = h.terminals.type(900, WORDS, () => true)
+    await h.groups(FRONT)
+    h.one.drain()
+    settle(h).run()
+    await h.landed()
+    await h.groups(FRONT)
+    expect(await sent).toBe('typed')
+    // As the stream writes them: the Enter line holds no string.
+    expect(h.one.lines.map((line) => JSON.stringify(line))).toEqual(['{"type":"Eval words for bravo.","pid":700}', '{"enter":700}'])
   })
 })
 

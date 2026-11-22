@@ -3,6 +3,7 @@ import type { PageAgent, Place } from './adapter.js'
 import { detectApp, detectHost } from './hostDetect.js'
 import { bundleOf, createOpenActions, type OpenTarget } from './open.js'
 import { createVscodeAdapter, termPid } from './vscode.js'
+import type { VscodeTyped } from './vscodeTerminals.js'
 import type { WindowsRaise } from './windowsRaise.js'
 
 const OPEN = '/usr/bin/open'
@@ -19,14 +20,18 @@ interface Terminal { window: string; shell: number }
 /** A recording runner that runs nothing, so no spec opens the developer's own VS Code: each call answers the next of
  *  [codes], then exit 0. VS Code is in front unless told. The opener holds this adapter alone. No window holds a
  *  terminal until a test sets `windows.held`; each show, scroll and page-key ask is recorded, and `asked` keeps the
- *  order of the terminal's looks beside a test's own. The terminals take page keys while the agent does not ask. The
+ *  order of the terminal's looks beside a test's own. The terminals take page keys while the agent does not ask. Each
+ *  window types while `windows.types` says so, and each send of words is recorded and answers `windows.typed`. The
  *  adapter is VS Code's unless [editor] names Cursor. */
 function recorder(over: Partial<Deps> = {}, codes: Array<number | null> = [], editor: 'vscode' | 'cursor' = 'vscode') {
   const calls: Call[] = []
   const logs: string[] = []
   const windows = { held: undefined as Terminal | undefined, writes: true, shows: [] as Array<{ terminal: Terminal; tap: boolean }>,
     scrolls: [] as Array<{ terminal: Terminal; lines: number; page?: boolean }>,
-    guards: [] as Array<{ pid: number; agent: PageAgent }> }
+    guards: [] as Array<{ pid: number; agent: PageAgent }>,
+    types: true, typed: 'typed' as VscodeTyped,
+    sends: [] as Array<{ pid: number; words: string; atPrompt: () => boolean }>,
+    typeAsks: [] as number[] }
   const asked: string[] = []
   const deps: Deps = {
     run: async (file, args, timeoutMs) => {
@@ -41,6 +46,8 @@ function recorder(over: Partial<Deps> = {}, codes: Array<number | null> = [], ed
       show: (terminal, tap) => { windows.shows.push({ terminal, tap }); return windows.writes },
       scroll: (terminal, lines, page) => { windows.scrolls.push({ terminal, lines, page }); return windows.writes },
       pageKeys: (pid, agent) => { windows.guards.push({ pid, agent }); return agent.asking ? false : Promise.resolve(true) },
+      canType: (pid) => { windows.typeAsks.push(pid); return windows.types },
+      type: async (pid, words, atPrompt) => { windows.sends.push({ pid, words, atPrompt }); return windows.typed },
     },
     ...over,
   }
@@ -68,7 +75,7 @@ describe('the VS Code adapter', () => {
     expect(adapter.tap).toBe('instead')
     expect(adapter.show).toBeTypeOf('function')
     expect(adapter.canShow).toBeTypeOf('function')
-    expect(adapter.type).toBeUndefined()
+    expect(adapter.type).toBeTypeOf('function')
     expect(adapter.canFocus(pane)).toBe(true)
     expect(adapter.canShow(pane)).toBe(true)
     expect(recorder({ inFront: () => false }).adapter.canShow(pane)).toBe(false)
@@ -392,6 +399,42 @@ describe('an agent in VS Code\'s integrated terminal (docs/plans/2026-11-17-dial
     expect(windows.scrolls).toEqual([{ terminal: HELD, lines: -3, page: true }, { terminal: HELD, lines: -3, page: false }])
   })
 
+  // The dial's words (docs/plans/2026-11-22-dial-vscode-cursor-voice-design.md): the terminals own the guard, the
+  // settle and the Enter; the adapter names the pane's pid and says why it was refused (V9).
+  it('canType: a terminal\'s pane only while the terminals say its window types; the panel\'s pane and a term id out of form never', () => {
+    const { adapter, windows } = recorder()
+    expect(adapter.canType!(pane())).toBe(true)
+    windows.types = false
+    expect(adapter.canType!(pane())).toBe(false)
+    windows.types = true
+    for (const id of [UUID, 'term:1', 'term:x', 'term:042']) expect(adapter.canType!(pane(id)), id).toBe(false)
+    expect(windows.typeAsks).toEqual([PID, PID])
+  })
+
+  it('type hands the terminals the agent\'s pid, the words and the caller\'s prompt check; typed is true', async () => {
+    const { adapter, windows, calls } = recorder()
+    const atPrompt = () => true
+    expect(await adapter.type!(pane(), 'Eval words for bravo.', 'codex', atPrompt)).toBe(true)
+    expect(windows.sends).toEqual([{ pid: PID, words: 'Eval words for bravo.', atPrompt }])
+    expect(windows.sends[0].atPrompt).toBe(atPrompt)
+    expect(calls).toEqual([])
+  })
+
+  it('not in front of its terminal: refused with "Bring it to the front of its terminal."; failed is false', async () => {
+    const { adapter, windows } = recorder()
+    windows.typed = 'background'
+    expect(await adapter.type!(pane(), 'hi', 'codex', () => true)).toEqual({ refused: 'Bring it to the front of its terminal.' })
+    windows.typed = 'failed'
+    expect(await adapter.type!(pane(), 'hi', 'codex', () => true)).toBe(false)
+  })
+
+  it('with no prompt check, or for the panel\'s pane, nothing is typed: false', async () => {
+    const { adapter, windows } = recorder()
+    expect(await adapter.type!(pane(), 'hi', 'codex')).toBe(false)
+    for (const id of [UUID, 'term:1', 'term:x']) expect(await adapter.type!(pane(id), 'hi', 'claude', () => true), id).toBe(false)
+    expect(windows.sends).toEqual([])
+  })
+
   it('it declares VS Code\'s bundle', () => {
     expect(recorder().adapter.bundle).toBe('com.microsoft.VSCode')
   })
@@ -425,6 +468,42 @@ describe('the adapter made for Cursor', () => {
     expect(cursor.paneOf(at({ __CFBundleIdentifier: VSCODE, CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' }))).toBeUndefined()
     expect(cursor.paneOf(at({ TERM_PROGRAM: 'vscode', __CFBundleIdentifier: VSCODE }))).toBeUndefined()
     expect(cursor.paneOf(at(TERM))).toEqual({ adapter: 'cursor', id: 'term:4242' })
+  })
+
+  it('cursor-agent\'s terminal in Cursor is typed into as VS Code\'s', async () => {
+    const r = recorder({}, [], 'cursor')
+    const pane = r.adapter.paneOf(at(TERM, { engine: 'cursor', sessionId: undefined }))!
+    expect(pane).toEqual({ adapter: 'cursor', id: 'term:4242' })
+    expect(r.adapter.canType!(pane)).toBe(true)
+    const atPrompt = () => true
+    expect(await r.adapter.type!(pane, 'Eval words for bravo.', 'cursor', atPrompt)).toBe(true)
+    expect(r.windows.sends).toEqual([{ pid: 4242, words: 'Eval words for bravo.', atPrompt }])
+  })
+
+  // U10: Cursor documents no way to put words into one existing chat (docs/plans/2026-11-22-dial-vscode-cursor-voice-design.md, §2).
+  it('a sentence for Cursor\'s own agent alone: none for cursor-agent with TERM_PROGRAM, Claude Code, Codex, its panel, or any agent of VS Code\'s adapter', () => {
+    const cursor = recorder({}, [], 'cursor').adapter
+    const vscode = recorder().adapter
+    const own = at({ __CFBundleIdentifier: CURSOR }, { engine: 'cursor', sessionId: undefined })
+    expect(cursor.voiceRefusal!(own)).toBe('Voice can\'t reach Cursor\'s agent. Type in Cursor.')
+    for (const place of [
+      at(TERM, { engine: 'cursor', sessionId: undefined }),
+      at(TERM),
+      at(TERM, { engine: 'codex' }),
+      at(PANEL),
+    ]) expect(cursor.voiceRefusal!(place), JSON.stringify(place)).toBeUndefined()
+    expect(vscode.voiceRefusal).toBeUndefined()
+  })
+
+  // Review Focus 5: the open scan gives no hints until the session's first hook.
+  it('a place with no hints (a session the scan found) is Cursor\'s own agent\'s; the same place with TERM_PROGRAM is not, and has its term pane', () => {
+    const { adapter } = recorder({}, [], 'cursor')
+    const scanned: Place = { host: 'terminal', app: 'cursor', hints: {}, engine: 'cursor', pid: 4242 }
+    expect(adapter.voiceRefusal!(scanned)).toBe('Voice can\'t reach Cursor\'s agent. Type in Cursor.')
+    expect(adapter.paneOf(scanned)).toBeUndefined()
+    const hooked = { ...scanned, hints: { TERM_PROGRAM: 'vscode' } }
+    expect(adapter.voiceRefusal!(hooked)).toBeUndefined()
+    expect(adapter.paneOf(hooked)).toEqual({ adapter: 'cursor', id: 'term:4242' })
   })
 
   it('a tap on a terminal in Cursor queues its show with the raise, then opens Cursor by its bundle', async () => {
