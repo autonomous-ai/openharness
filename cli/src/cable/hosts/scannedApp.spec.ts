@@ -11,8 +11,8 @@ import { RECORDED_HERDR } from '../../testing/recordedHerdr.js'
 import { RECORDED_ORCA } from '../../testing/recordedOrca.js'
 import { ObservedSource, type ObservedDeps } from './observed.js'
 import {
-  appRoots, learnApps, parseProcessNames, ptyMaker, readBundleId, readProcessNames, readPtyMaker, readPtyOwner,
-  readTtyName, scannedApps,
+  appRoots, learnApps, parseProcessNames, ptyMaker, readBundleId, readMadeBy, readProcessNames, readPtyMaker,
+  readPtyOwner, readTtyName, scannedApps,
   WALK_PARENTS, type ProcessName, type PtyProcess, type ScannedAppDeps,
 } from './scannedApp.js'
 
@@ -466,6 +466,83 @@ describe('the process that made a pseudo-terminal', () => {
   })
 })
 
+// Diego's report of 2026-11-22: an idle agent in tmux or herdr inside iTerm2, found by the open scan, sat on Other's
+// page. The scan reads the look's table once, and the terminal's maker only of a session under one of them.
+describe('the makers of the sessions a look lists', () => {
+  /** The look's table, which holds no terminal, and a reader of each row's terminal that rejects for [gone]; each read kept. */
+  function look(rows: Array<[number, number, string, string?]>, gone: readonly number[] = []) {
+    const read: number[] = []
+    const ttys = new Map(rows.map(([pid, , , tty]) => [pid, tty]))
+    return {
+      rows: rows.map(([pid, ppid, executable]): ProcessName => ({ pid, ppid, executable })),
+      tty: async (pid: number): Promise<string | undefined> => {
+        read.push(pid)
+        if (gone.includes(pid)) throw new Error('tty not read')
+        return ttys.get(pid)
+      },
+      read,
+    }
+  }
+  const HOSTS = ['tmux', 'herdr']
+
+  it('a session in a tmux pane and one in a herdr pane: each one\'s host, its maker and its own tty', async () => {
+    const mac = look([[100, 90, 'claude', 'ttys010'], [90, 80, 'zsh', 'ttys010'], [80, 1, 'tmux'],
+      [200, 190, 'claude', 'ttys020'], [190, 180, 'zsh', 'ttys020'], [180, 1, '/opt/homebrew/bin/herdr']])
+    expect(await readMadeBy([100, 200], mac.rows, mac.tty, HOSTS)).toEqual(new Map([
+      [100, { host: 'tmux', maker: 80, tty: 'ttys010' }], [200, { host: 'herdr', maker: 180, tty: 'ttys020' }]]))
+    const linux = look([[100, 90, 'claude', 'pts/3'], [90, 80, 'bash', 'pts/3'], [80, 1, 'tmux: server'],
+      [200, 190, 'claude', 'pts/4'], [190, 180, 'bash', 'pts/4'], [180, 1, 'herdr']])
+    expect(await readMadeBy([100, 200], linux.rows, linux.tty, HOSTS)).toEqual(new Map([
+      [100, { host: 'tmux', maker: 80, tty: 'pts/3' }], [200, { host: 'herdr', maker: 180, tty: 'pts/4' }]]))
+  })
+
+  it('no tty is read for a session with no tmux or herdr among its parents', async () => {
+    const at = look([[300, 290, 'claude', 'ttys005'], [290, 280, '-zsh', 'ttys005'], [280, 270, '/usr/bin/login', 'ttys005'],
+      [270, 1, '/Applications/iTerm.app/Contents/MacOS/iTerm2'],
+      [400, 390, 'claude', 'pts/2'], [390, 29, 'bash', 'pts/2'], [29, 1, 'zellij']])
+    expect(await readMadeBy([300, 400], at.rows, at.tty, HOSTS)).toEqual(new Map())
+    expect(at.read).toEqual([])
+  })
+
+  it('a terminal started from a tmux pane is not tmux\'s', async () => {
+    const at = look([[500, 499, 'claude', 'ttys030'], [499, 498, '-zsh', 'ttys030'],
+      [498, 497, GHOSTTY, 'ttys010'], [497, 80, '-zsh', 'ttys010'], [80, 1, 'tmux']])
+    expect(await readMadeBy([500], at.rows, at.tty, HOSTS)).toEqual(new Map())
+    expect(at.read).toEqual([500, 499, 498])
+  })
+
+  it('a pid whose tty read rejects is left out, and the next is still read', async () => {
+    // Its shell gone between the table's read and its terminal's.
+    const at = look([[100, 90, 'claude', 'ttys010'], [90, 80, 'zsh', 'ttys010'], [80, 1, 'tmux'],
+      [200, 190, 'claude', 'ttys011'], [190, 80, 'zsh', 'ttys011']], [90])
+    expect(await readMadeBy([100, 200], at.rows, at.tty, HOSTS)).toEqual(new Map([[200, { host: 'tmux', maker: 80, tty: 'ttys011' }]]))
+    expect(at.read).toEqual([100, 90, 200, 190, 80])
+  })
+
+  it('one pid at a time', async () => {
+    const at = look([[100, 90, 'claude', 'ttys010'], [90, 80, 'zsh', 'ttys010'], [80, 1, 'tmux'],
+      [200, 190, 'claude', 'ttys011'], [190, 80, 'zsh', 'ttys011']])
+    let reading = 0
+    let most = 0
+    const tty = async (pid: number): Promise<string | undefined> => {
+      most = Math.max(most, ++reading)
+      await Promise.resolve()
+      reading--
+      return at.tty(pid)
+    }
+    expect([...(await readMadeBy([100, 200], at.rows, tty, HOSTS)).keys()]).toEqual([100, 200])
+    expect(most).toBe(1)
+    expect(at.read).toEqual([100, 90, 80, 200, 190, 80])
+  })
+
+  it.skipIf(process.platform === 'win32')('learnApps over the look\'s rows runs no ps', async () => {
+    patient.answers = { plutil: 'com.mitchellh.ghostty\n' }
+    const top = process.platform === 'darwin' ? GHOSTTY : 'ghostty'
+    expect(await learnApps([100], table([[100, 90, 'claude'], [90, 1, top]]))).toEqual(new Map([[100, 'ghostty']]))
+    expect(patient.calls.map(([, file]) => file)).not.toContain('ps')
+  })
+})
+
 describe('the process table the scan reads', () => {
   // Recorded as `ps -axo pid=,ppid=,comm=` prints it on macOS, the names made up: `comm` last is the whole path. With a
   // column after it (`comm=,lstart=,args=`), the first rows' names came cut to `/Users/someone/A` and `/Applications/Vi`.
@@ -513,7 +590,7 @@ describe('the process table the scan reads', () => {
 
   it.skipIf(process.platform === 'win32')('runs one ps with comm last: no command line, no environment, under 3 s and 1 MiB', async () => {
     const exec = vi.fn(async (): Promise<string | null> => '  100     1 claude\n')
-    await learnApps([100], exec)
+    await learnApps([100], undefined, exec)
     expect(exec.mock.calls).toEqual([['ps', ['-axo', 'pid=,ppid=,comm='], { timeout: 3_000, maxBuffer: 1024 * 1024 }]])
   })
 
@@ -548,7 +625,7 @@ describe.skipIf(process.platform === 'win32')('the scan\'s process read', () => 
       fileStamp: async () => null,
       excluded: [],
       log: () => {},
-      apps: (pids) => learnApps(pids, exec),
+      apps: (pids) => learnApps(pids, undefined, exec),
     })
     const open = (...ids: string[]): void => { for (const id of ids) owners.set(id, { pid: 100 + owners.size, engine: 'claude', record: id }) }
     await src.tick()
