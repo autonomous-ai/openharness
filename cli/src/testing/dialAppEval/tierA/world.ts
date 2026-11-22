@@ -9,7 +9,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { isAbsolute, join, relative } from 'node:path'
+import { isAbsolute, join, relative, win32 } from 'node:path'
 import { vi } from 'vitest'
 import { chatGptPlaces, claudeStoreRoots } from '../../../cable/hosts/appPlaces.js'
 import { ClaudeAppStore } from '../../../cable/hosts/claudeAppStore.js'
@@ -22,7 +22,7 @@ import type { OpencodeClient } from '../../../cable/hosts/opencodeClient.js'
 import type { OrcaReadDeps, OrcaReads } from '../../../cable/hosts/orca.js'
 import { env } from '../../../config/env.js'
 import { emptyPorts, type CoreApi, type CorePorts } from '../../../core/api.js'
-import type { VscodeEditor, VscodeExtensionDeps } from '../../../devices/vscodeExtension.js'
+import { VSCODE_EXTENSION_ID, type VscodeEditor, type VscodeExtensionDeps } from '../../../devices/vscodeExtension.js'
 import type { DevicesDeps, startDevices } from '../../../services/devices.js'
 import type { ListenerHandler, ListenerStreamHandler } from '../../../services/devicesListener.js'
 import { claudeAppFixture } from '../../claudeAppFixture.js'
@@ -85,9 +85,10 @@ const LINUX_TOOLS: ReadonlySet<string> = new Set(['xdg-mime', 'xdg-open'])
 /** Made-up places, recorded and never run. */
 const CODEX_BIN = '/opt/eval/bin/codex'
 const APP_CODEX_BIN = '/opt/eval/ChatGPT.app/codex'
+const CURSOR_BIN = '/opt/eval/bin/cursor'
 /** The programs whose commands the world answers as the scenario says, by name: macOS's and Linux's openers, the scheme
- *  lookup, the Windows helper and the Linux raise. A command of any other is one tier A does not model. */
-const ANSWERED: ReadonlySet<string> = new Set(['open', 'xdg-open', 'xdg-mime', 'harness-pty', 'raise'])
+ *  lookup, the Windows helper, the Linux raise and Cursor's CLI. A command of any other is one tier A does not model. */
+const ANSWERED: ReadonlySet<string> = new Set(['open', 'xdg-open', 'xdg-mime', 'harness-pty', 'raise', 'cursor'])
 
 /** Harness's own engine homes are the suite's throwaway ones (vitest.setup.ts): never a folder outside this run's. */
 function emptied(folder: string): string {
@@ -114,6 +115,25 @@ const noEditor = (editor: VscodeEditor, platform: Platform, root: string): Vscod
   executable: () => false, read: () => null, run: async () => ({ code: null, timedOut: false }), files: () => null,
   tempDir: () => join(root, 'vsix'), write: () => {}, remove: () => {},
 })
+/** The extension as this made-up build carries it, and the same version on in Cursor's record. */
+const EXTENSION_VERSION = '0.0.0-eval'
+/**
+ * Cursor installed, its CLI at a made-up path (`bin`, as HARNESS_CURSOR_BIN names one), with this build's extension on:
+ * the folder row's tap finds the CLI on Linux, and the extension's setup finds nothing to do. A run of the CLI is the
+ * setup's alone, never modelled: a gap.
+ */
+const cursorInstalled = (platform: Platform, root: string, gap: (reason: string) => void): VscodeExtensionDeps => {
+  const record = (platform === 'win32' ? win32.join : join)(root, '.cursor', 'extensions', 'extensions.json')
+  return {
+    ...noEditor('cursor', platform, root), bin: CURSOR_BIN, executable: (path) => path === CURSOR_BIN,
+    files: () => ({ manifest: JSON.stringify({ version: EXTENSION_VERSION }), main: '' }),
+    read: (path) => (path === record ? JSON.stringify([{ identifier: { id: VSCODE_EXTENSION_ID }, version: EXTENSION_VERSION }]) : null),
+    run: async () => {
+      gap("the editor extension's setup ran")
+      return { code: null, timedOut: false }
+    },
+  }
+}
 /**
  * herdr, Herdr Core and opencode with nobody listening, as their clients say when there is no socket or service. Tier A
  * models no pane of theirs: words one is asked to put in a pane are `typed` into no session, which the gate counts.
@@ -190,6 +210,8 @@ export class World implements TierAWorld {
     const codexHome = join(root, '.codex')
     this.codexHome = codexAppFixture(codexHome)
     if (installed) this.install(root, codexHome)
+    // The sessions' folders are there, the only ones: what Cursor's folder row opens.
+    for (const s of scenario.sessions) for (const folder of [s.cwd, ...s.folders ?? []]) machine.folders.add(folder)
     this.folders = { claudeProjects: emptied(env.CLAUDE_PROJECTS_DIR), codexSessions: emptied(join(env.CODEX_HOME, 'sessions')),
       cursorProjects: emptied(join(env.CURSOR_HOME, 'projects')), codexHomes: join(root, 'codex-homes') }
     this.dial = new LoopbackDial(() => Date.now())
@@ -424,7 +446,7 @@ export class World implements TierAWorld {
       claude: async () => null,
       orcaHomes: { get: () => ({ claude: [], codex: [] }), answered: () => true, refresh: async () => false },
       vscodeExtension: noEditor('vscode', platform, root),
-      cursorExtension: noEditor('cursor', platform, root),
+      cursorExtension: cursorInstalled(platform, root, (reason) => this.gap(reason)),
       orcaPlugin: { orca: () => null, run: async () => ({ code: null, stdout: '', timedOut: false }), files: () => null, folder: join(root, 'orca-plugin') },
       processParents: async () => [...machine.processes.values()].map(({ pid, ppid }) => ({ pid, ppid })),
       claudeFullscreen: async () => false,

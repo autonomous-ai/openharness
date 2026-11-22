@@ -82,6 +82,11 @@ vi.mock('../../cable/hosts/scannedApp.js', async (real) => ({
   readTtyName: async (pid: number) => machine.processes.get(pid)?.tty,
   readBundleId: async (bundle: string) => machine.bundleIds.get(bundle),
 }))
+// The folders there are the model's: Cursor's folder row opens a session's own, never one of this machine's.
+vi.mock('../../cable/hosts/cursorFolder.js', async (real) => ({
+  ...await real<typeof import('../../cable/hosts/cursorFolder.js')>(),
+  isFolder: (path: string) => machine.folders.has(path),
+}))
 // No folder or socket of this machine is watched: the stores' watch is the world's (tierA/storeWatch.ts), and nothing
 // else of the machine changes.
 vi.mock('../../cable/hosts/folderWatch.js', () => ({ watchNearest: () => () => {} }))

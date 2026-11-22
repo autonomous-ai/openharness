@@ -15,6 +15,8 @@ export interface MachineModel {
   processes: Map<number, LiveProcess>
   /** An app's bundle id by the path of its bundle, as its Info.plist would give it. */
   bundleIds: Map<string, string>
+  /** The folders there: the sessions' own, which Cursor's folder row opens (cable/hosts/cursorFolder.ts isFolder). */
+  folders: Set<string>
   reset(): void
   start(p: LiveProcess): void
   /** The process ends, and the sessions it had open with it. */
@@ -28,10 +30,12 @@ export interface MachineModel {
 export const machine: MachineModel = {
   processes: new Map(),
   bundleIds: new Map(),
+  folders: new Set(),
   owners: new Map(),
   reset() {
     this.processes.clear()
     this.bundleIds.clear()
+    this.folders.clear()
     this.owners.clear()
   },
   start(p) {
