@@ -68,9 +68,11 @@ PM, 2026-11-22:
    person expects the ring or the dial to follow a change and the code has no path for it today, the scenario grades
    the expectation and fails at baseline. Those failures are the hill-climb items. Two such cases:
    - a pane closed while its agent was running, with no end hook (O15);
-   - Orca in front on Linux and Windows: `frontAppId` (`cable/hosts/frontApp.ts`) maps no Linux or Windows front name to
-     Orca, so the scope, the focus watch and the prompt follow never start there. Every platform is graded on the same
-     expectation, and the front goes through `frontAppId` with the platform's own front name in both tiers (below).
+   - Orca in front on Linux and Windows: `frontAppId` (`cable/hosts/frontApp.ts`) mapped no Linux or Windows front name
+     to Orca until #4548. Every platform is graded on the same expectation, and the front goes through `frontAppId` with
+     the platform's own front name in both tiers (below).
+   - Orca's CLI on Windows: the devices' Orca reads give `orcaBinary` no `localAppData`, so they find no `orca.exe`
+     where Orca's installer puts it (found by this eval's review).
 
 ## What the dial does with Orca (from the code)
 
@@ -205,10 +207,8 @@ them.
 - **OH1.** Voice on the focused Codex agent while another Orca agent is working → only the focused one gets the words.
   (D5, gate)
 - **OH2.** Voice 200 ms after a focus line moved the dial → the text reaches the newly focused agent's pane. (D5, gate)
-  macOS only for now (PM, 2026-11-22): on Linux and Windows the dial never follows (decision 3's `frontAppId` gap), so
-  the words reach the agent the dial still shows, a wrong-session send. Those two platforms are listed as a coverage gap
-  beside the score, named for that cause, until the item "Orca in front on Linux and Windows (`frontAppId`)" merges;
-  then OH2 runs on all three.
+  On all three platforms: #4548 taught `frontAppId` Orca's Linux and Windows names, which OH2 waited for (PM,
+  2026-11-22).
 - **OH3.** A tap on an agent in a held pane → its pane is switched and Orca brought forward. (D3)
 - **OH4.** Two Claude Code agents in the same worktree, one with no handle in its hook (elimination) → each is its own
   row, in tab order. (D1)
@@ -219,8 +219,8 @@ A bug reported from now on in Orca becomes a scenario in this catalog.
 
 - **O15's close, O14's removal:** the leave waits for the observed tick (30 s) and the 10 s end delay.
 - **O12:** the watch restarts only at Orca's next settle, so a focus line right after the relaunch may be missed.
-- **Linux and Windows:** every check that needs Orca in front (O2–O6, O12, OH2), since `frontAppId` has no Orca entry
-  there (decision 3).
+- **Windows:** every check that needs Orca's CLI (the layout's order, the switch, typed words), since the devices find
+  no `orca.exe` there (decision 3).
 - **O11 on macOS, unscoped:** with the bundle id an agent under tmux is an Orca agent with no pane; it is out of the
   scope, but listed whenever no scope holds.
 
