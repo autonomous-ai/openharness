@@ -7,8 +7,8 @@
  * the VS Code adapter's or Cursor's by its hook's bundle id (vscode.ts, docs/plans/2026-11-18-dial-cursor-design.md §1).
  *
  * A focused window whose active terminal changes, or that comes into focus on one, tells the devices the listed agent
- * running there, the nearest its shell when several, so the dial can follow the person (devices.ts). A window's first
- * state on its stream follows nothing: a reload or a reopen must not pull the dial.
+ * running there, the nearest its shell when several, or none, and when that state came, so the dial can follow the
+ * person (devices.ts). A window's first state on its stream follows nothing: a reload or a reopen must not pull the dial.
  *
  * The match is the process tree: an agent runs under the shell VS Code started for its terminal, or is that terminal's
  * own process, so the window that lists a pid of its chain holds it. A process's name is outside text (a process can
@@ -127,8 +127,9 @@ export interface VscodeTerminalsDeps {
   foreground(agent: number, shell: number): Promise<ProcessGroups | undefined>
   /** Which agents have a terminal changed. */
   changed(): void
-  /** A person focused the terminal the listed agent with that pid runs in. */
-  focused(agentPid: number, terminal: VscodeTerminal): void
+  /** A person focused that terminal at `at` (now's clock): the pid of the listed agent running there, none when no
+   *  listed agent does. Each replaces the one before it, none too. */
+  focused(agentPid: number | undefined, terminal: VscodeTerminal, at: number): void
   /** Monotonic milliseconds. */
   now(): number
   after(ms: number, run: () => void): () => void
@@ -186,8 +187,9 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
   const failedAt = new Map<number, number>()
   let reading = false
   let again = false
-  /** The latest focus not yet told: it waits while a chain that may be its agent's is read. */
-  let focus: VscodeTerminal | undefined
+  /** The latest focus not yet told, the window whose state made it and when that came: it waits while a chain that may
+   *  be its agent's is read. */
+  let focus: { terminal: VscodeTerminal; window: Window; at: number } | undefined
   /** Each listed agent's terminal, as the devices were last told. */
   let told = new Map<number, string>()
   /** Each agent's guard still reading, by its pid: an ask meanwhile joins it rather than reading again. */
@@ -277,15 +279,18 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
   /** Tells the devices the agent in the focused terminal once no chain that could be its is still read. */
   const place = (): void => {
     if (!focus || (reading && [...listed].some((pid) => !chains.has(pid)))) return
-    const { window, shell } = focus
+    const { terminal, window, at } = focus
     focus = undefined
+    // A read takes up to ps's 3 s: a state since that left that terminal or the window's focus, or a newer stream of its
+    // id, is where the person is now, and this focus is over.
+    if (windows.get(terminal.window) !== window || !window.focused || window.active !== terminal.shell) return
     let nearest: { pid: number; depth: number } | undefined
     for (const pid of listed) {
-      const at = terminalOf(pid)
-      const depth = chains.get(pid)?.indexOf(shell) ?? -1
-      if (at?.window === window && at.shell === shell && (!nearest || depth < nearest.depth)) nearest = { pid, depth }
+      const its = terminalOf(pid)
+      const depth = chains.get(pid)?.indexOf(terminal.shell) ?? -1
+      if (its?.window === terminal.window && its.shell === terminal.shell && (!nearest || depth < nearest.depth)) nearest = { pid, depth }
     }
-    if (nearest) deps.focused(nearest.pid, { window, shell })
+    deps.focused(nearest?.pid, terminal, at)
   }
 
   /** The agent's guard still reading, or a new one. The settings first, and `ps` only when they say fullscreen: most
@@ -374,7 +379,7 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
           tell()
           ask()
           if (!moved) return
-          focus = { window: id, shell: active as number }
+          focus = { terminal: { window: id, shell: active as number }, window, at: deps.now() }
           place()
         },
       },

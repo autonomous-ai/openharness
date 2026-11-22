@@ -507,7 +507,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     fullscreen: deps.claudeFullscreen ?? ((cwd, transcriptPath) => readFullscreen(cwd, transcriptPath, renderer)),
     foreground: deps.processGroups ?? readForeground,
     changed: () => part.call('dial', () => cable.syncAgents()),
-    focused: (pid, terminal) => part.call('dial', () => editorFocused(pid, terminal)),
+    focused: (pid, terminal, at) => part.call('dial', () => editorFocused(pid, terminal, at)),
     now: monotonic,
     after: timerIn('vscode'),
     log,
@@ -2232,23 +2232,31 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    * settled in front (docs/plans/2026-11-17-dial-vscode-extension-design.md, "PR B, decided now" 3). Each line is an
    * outcome, never the editor, the window, the shell or the agent.
    */
-  /** A focus report: the agent, its editor and terminal, when it came and how many moves the dial had made by then. */
+  /** A focus report: the agent, its editor and terminal, when its window's state came and how many moves the dial had
+   *  made by the time it was told. */
   type EditorReport = { agentId: string; app: string; terminal: string; at: number; moves: number }
   let editorReport: EditorReport | undefined
   /** Uses up the report: with no dial linked nothing is followed or counted, as with a prompt. */
   const followEditor = (report: EditorReport): Promise<void> | undefined => {
     editorReport = undefined
     if (!cable.isConnected) return
-    // The dial moved since, or showed that terminal itself: by when the report came, as a tab's.
-    if (report.moves !== dialMoves || vscodeShows.echo(report.terminal, report.at)) { log('[device] vscode · skipped · echo'); return }
+    // The dial moved since the state came, while its agent's chain was read or while it waited for the settle, or showed
+    // that terminal itself: by when the state came, as a tab's by when its report came.
+    if (report.moves !== dialMoves || (dialMovedAt !== undefined && dialMovedAt > report.at)
+      || vscodeShows.echo(report.terminal, report.at)) {
+      log('[device] vscode · skipped · echo')
+      return
+    }
     return cable.followLocal(report.agentId, 'vscode')
   }
-  const editorFocused = (pid: number, { window, shell }: VscodeTerminal): Promise<void> | undefined => {
-    if (!observed) return
+  /** The person's latest focus replaces one waiting for the settle, a terminal no agent runs in too. */
+  const editorFocused = (pid: number | undefined, { window, shell }: VscodeTerminal, at: number): Promise<void> | undefined => {
+    editorReport = undefined
+    if (!observed || pid === undefined) return
     for (const { id } of observed.list()) {
       const app = (['vscode', 'cursor'] as const).find((editor) => observed.paneOf(id, editor) === `term:${pid}`)
       if (!app) continue
-      const report = { agentId: id, app, terminal: `${window} ${shell}`, at: monotonic(), moves: dialMoves }
+      const report = { agentId: id, app, terminal: `${window} ${shell}`, at, moves: dialMoves }
       if (cableHost.settledApp() === app) return followEditor(report)
       editorReport = report
       return
