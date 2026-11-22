@@ -351,7 +351,10 @@ and on again).
 
 - (3) A window's state with `focused: true` and a new `active` shell, while VS Code is the settled app in front, moves
   the dial to the agent in that terminal (`followLocal`, cause `vscode`), with the 2 s echo guard of the dial's own
-  shows; a report before the settle waits for it, as a tab's does.
+  shows; a report before the settle waits for it, as a tab's does, and the person's next focus replaces it. A window
+  coming into focus on the terminal it had within 2 s of the dial's move is that move's echo (a tap on the Claude Code
+  tab or Cursor's folder brings the editor forward so). Each is judged by when its state came, also one that waited on
+  a chain read. Done, for VS Code and Cursor alike (fix/dial-editor-terminal-focus).
 - The Claude Code extension's panel: the extension adds the active tab's label when it is that extension's panel; the
   devices match it against each panel session's title (custom title, else AI title, read from its transcript, cut to
   24 characters and `…` as the panel cuts it) and follow only when exactly one matches. The title is used for the match

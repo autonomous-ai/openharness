@@ -466,8 +466,9 @@ function fakeOrcaHomes(homes: OrcaHomes = { claude: [], codex: [] }) {
 }
 
 /** The process table VS Code's windows match their agents by (services/devices.ts processParents): the spec's own, empty
- *  unless a spec sets it, and each read counted, so no spec reads this machine's processes. */
-const processTable = { rows: [] as Array<{ pid: number; ppid: number }>, reads: 0 }
+ *  unless a spec sets it, and each read counted, so no spec reads this machine's processes. While `held`, a read waits
+ *  until the spec runs its `land`. */
+const processTable = { rows: [] as Array<{ pid: number; ppid: number }>, reads: 0, held: false, land: [] as Array<() => void> }
 /** Whether a session's settings draw it fullscreen (services/devices.ts claudeFullscreen): the spec's own, fullscreen
  *  unless a spec sets it, each read's folder and transcript path kept, so no spec reads this machine's settings. */
 const claudeSettings = { fullscreen: true, reads: [] as Array<[string, string | undefined]> }
@@ -579,6 +580,8 @@ beforeEach(() => {
   readers.bundleId.mockResolvedValue(undefined)
   processTable.rows = []
   processTable.reads = 0
+  processTable.held = false
+  processTable.land = []
   claudeSettings.fullscreen = true
   claudeSettings.reads = []
   processGroups.answer = { pgid: 4242, tpgid: 4242 }
@@ -647,6 +650,7 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     orcaPlugin: over.orcaPlugin === null ? undefined : over.orcaPlugin ?? fakeOrcaPlugin({ running: false }).deps,
     processParents: async () => {
       processTable.reads++
+      if (processTable.held) await new Promise<void>((resolve) => { processTable.land.push(resolve) })
       return processTable.rows
     },
     // null leaves it out: the devices read the session's settings files.
@@ -759,9 +763,10 @@ function fakeListener() {
     })).toBeUndefined()
     return { lines, end: (reason: string) => ended.abort(reason), break: () => { broken = true } }
   }
-  /** A window's shells, as its extension reports them, the first one active. */
-  const vscodeState = (window: string, terminals: number[]): unknown => (given[0].handlers['vscode-state'] as ListenerHandler)
-    .handle({ type: 'vscode-state', window, terminals, active: terminals[0] ?? null, focused: true }, new AbortController().signal)
+  /** A window's shells, as its extension reports them, the first one active and the window focused unless the test says
+   *  otherwise. */
+  const vscodeState = (window: string, terminals: number[], active = terminals[0] ?? null, focused = true): unknown => (given[0].handlers['vscode-state'] as ListenerHandler)
+    .handle({ type: 'vscode-state', window, terminals, active, focused }, new AbortController().signal)
   return { given, close, listen, front, attach, notify, notice, orcaFront, tabs, dial, vscode, vscodeState }
 }
 
@@ -4765,7 +4770,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       await vi.waitFor(() => expect(calls('syncAgents')).toHaveLength(looks + 1))
       return window
     }
-    return { ...started, front, reported }
+    return { ...started, listener, front, reported }
   }
 
   it('an agent in VS Code\'s terminal gets its terminal once its window reports the shell, and the dials are told to look', async () => {
@@ -4816,6 +4821,216 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     attach(port)
     expect(await caps()).toEqual([{ id: ID, caps: 's' }])
     expect(processTable.reads).toBe(0)
+  })
+
+  // Focusing another terminal in VS Code or Cursor turns the dial to its agent once the editor has settled in front
+  // (docs/plans/2026-11-17-dial-vscode-extension-design.md, "PR B, decided now" 3).
+  const SHELL_B = 4100
+  const B = observedAgentId('claude', 'sess-2')
+  let editorClock = 0
+  /** Two agents in one window's two terminals, ID's under SHELL and B's under SHELL_B, both chains read, the window's
+   *  first state on SHELL. `bundle` Cursor's: both are Cursor's. */
+  const twoTerminals = async (bundle = VSCODE, over: Parameters<typeof start>[0] = {}) => {
+    editorClock = 0
+    const started = await inVscodeTerminal({ now: () => editorClock, ...over }, {}, bundle)
+    processTable.rows = [...TERMINAL_TREE, { pid: 4343, ppid: SHELL_B }, { pid: SHELL_B, ppid: 1 }]
+    const named: Record<string, string> = over.orca?.platform === 'darwin' || bundle !== VSCODE ? { __CFBundleIdentifier: bundle } : {}
+    started.port.observed(hook('session-start', { sessionId: 'sess-2', callerPid: 4343, transcriptPath: '/t/sess-2.jsonl', hostHints: { TERM_PROGRAM: 'vscode', ...named } }))
+    const window = started.listener.vscode(WINDOW_ID)
+    expect(started.listener.vscodeState(WINDOW_ID, [SHELL, SHELL_B])).toBeUndefined()
+    // Each agent's terminal found: a tap on it now reaches its window.
+    await vi.waitFor(async () => expect(await caps()).toEqual([{ id: ID, caps: 'sf' }, { id: B, caps: 'sf' }]))
+    const settle = async (app: string) => {
+      started.front(app)
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    }
+    const focus = (shell: number) => { expect(started.listener.vscodeState(WINDOW_ID, [SHELL, SHELL_B], shell)).toBeUndefined() }
+    return { ...started, window, settle, focus }
+  }
+  const editorFollows = () => calls('followLocal').filter(([, cause]) => cause === 'vscode')
+  const editorLines = () => logs.filter((line) => line.startsWith('[device] vscode ·'))
+  /** A third agent in VS Code's terminal, its chain read now and held: a focus meanwhile waits on that read. Its `land`
+   *  answers it. */
+  const holdRead = async (port: DevicesPort) => {
+    const reads = processTable.reads
+    processTable.held = true
+    port.observed(hook('session-start', { sessionId: 'sess-3', callerPid: 4444, transcriptPath: '/t/sess-3.jsonl', hostHints: { TERM_PROGRAM: 'vscode' } }))
+    await vi.waitFor(() => expect(processTable.reads).toBe(reads + 1))
+    return async () => {
+      processTable.held = false
+      for (const land of processTable.land.splice(0)) land()
+      await vi.advanceTimersByTimeAsync(0)
+    }
+  }
+
+  it('with VS Code settled in front, focusing another terminal turns the dial to its agent', async () => {
+    const { settle, focus } = await twoTerminals()
+    await settle('vscode')
+    focus(SHELL_B)
+    expect(editorFollows()).toEqual([[B, 'vscode']])
+    focus(SHELL)
+    expect(editorFollows()).toEqual([[B, 'vscode'], [ID, 'vscode']])
+  })
+
+  it('a focus before VS Code settles waits for the settle, and another app settling drops it', async () => {
+    const { front, settle, focus } = await twoTerminals()
+    await settle('ghostty')
+    front('vscode')
+    focus(SHELL_B)
+    expect(editorFollows()).toEqual([])
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    expect(editorFollows()).toEqual([[B, 'vscode']])
+    await settle('ghostty')
+    front('vscode')
+    focus(SHELL)
+    await settle('ghostty')
+    await settle('vscode')
+    expect(editorFollows()).toEqual([[B, 'vscode']])
+    expect(editorLines()).toEqual(['[device] vscode · skipped · not in front'])
+  })
+
+  it('the dial\'s own show of a terminal is its echo for 2 s: that terminal\'s focus moves nothing', async () => {
+    const { settle, focus, window } = await twoTerminals()
+    await settle('vscode')
+    expect(host().swipeSwitches(B)).toBe(true)
+    host().swipeEnded(B, 'rest')
+    await swiped('ok')
+    expect(window.lines).toEqual([{ show: SHELL_B }])
+    editorClock = 1_999
+    focus(SHELL_B)
+    expect(editorFollows()).toEqual([])
+    expect(editorLines()).toEqual(['[device] vscode · skipped · echo'])
+    // The person's own focus after it moves the dial.
+    focus(SHELL)
+    expect(editorFollows()).toEqual([[ID, 'vscode']])
+  })
+
+  // As a tab's report waiting for the settle (docs/specs/2026-11-15-dial-terminal-follow.md).
+  it('a focus waiting for the settle is set aside by a move the dial made since it came', async () => {
+    const { front, settle, focus } = await twoTerminals()
+    await settle('ghostty')
+    front('vscode')
+    focus(SHELL_B)
+    turnTo(ID)
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    expect(editorFollows()).toEqual([])
+    expect(editorLines()).toEqual(['[device] vscode · skipped · echo'])
+  })
+
+  it('a focus waiting for the settle is set aside by the person\'s next focus, also one on a terminal no agent runs in', async () => {
+    const { front, settle, focus, listener } = await twoTerminals()
+    await settle('ghostty')
+    front('vscode')
+    focus(SHELL_B)
+    // A plain shell's terminal the person opened and moved to.
+    expect(listener.vscodeState(WINDOW_ID, [SHELL, SHELL_B, 4200], 4200)).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    expect(editorFollows()).toEqual([])
+    expect(editorLines()).toEqual([])
+  })
+
+  it('a focus waiting for the settle is set aside by the person\'s next focus while that one waits on a chain read', async () => {
+    const { front, settle, focus, port } = await twoTerminals()
+    await settle('ghostty')
+    front('vscode')
+    focus(SHELL_B)
+    const land = await holdRead(port)
+    focus(SHELL)
+    // The settle comes during the read: the terminal the person left is not followed, then the one they are on is.
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    expect(editorFollows()).toEqual([])
+    await land()
+    expect(editorFollows()).toEqual([[ID, 'vscode']])
+  })
+
+  // A new agent's chain read can take up to ps's 3 s: what the dial did meanwhile is judged from the state's moment.
+  it('a focus that waited on a chain read is judged by when its state came: the dial\'s show before it is still its echo', async () => {
+    const { settle, focus, window, port } = await twoTerminals()
+    await settle('vscode')
+    expect(host().swipeSwitches(B)).toBe(true)
+    host().swipeEnded(B, 'rest')
+    await swiped('ok')
+    expect(window.lines).toEqual([{ show: SHELL_B }])
+    const land = await holdRead(port)
+    editorClock = 100
+    focus(SHELL_B)
+    editorClock = 2_500
+    await land()
+    expect(editorFollows()).toEqual([])
+    expect(editorLines()).toEqual(['[device] vscode · skipped · echo'])
+  })
+
+  it('a focus that waited on a chain read is set aside by a move the dial made after its state came', async () => {
+    const { settle, focus, port } = await twoTerminals()
+    await settle('vscode')
+    const land = await holdRead(port)
+    editorClock = 100
+    focus(SHELL_B)
+    editorClock = 200
+    turnTo(ID)
+    await land()
+    expect(editorFollows()).toEqual([])
+    expect(editorLines()).toEqual(['[device] vscode · skipped · echo'])
+  })
+
+  // As the Claude app's settle and the ChatGPT app's: a tap brings the app forward on what its window had.
+  it('a window that came into focus as the dial\'s own tap brought VS Code forward is that tap\'s echo at the settle', async () => {
+    const { front, settle, listener, port } = await twoTerminals(VSCODE, { orca: mac })
+    port.observed(hook('session-start', { sessionId: UUID, hostHints: extension }))
+    // The person left VS Code for Ghostty.
+    expect(listener.vscodeState(WINDOW_ID, [SHELL, SHELL_B], SHELL, false)).toBeUndefined()
+    await settle('ghostty')
+    // A tap on the session in VS Code's Claude Code tab opens it there: the window comes into focus on the terminal it had.
+    expect(await host().openAgent(V1)).toBeUndefined()
+    expect(orcaRuns.at(-1)).toEqual(tabLink(UUID))
+    front('vscode')
+    expect(listener.vscodeState(WINDOW_ID, [SHELL, SHELL_B], SHELL)).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    expect(editorFollows()).toEqual([])
+    expect(editorLines()).toEqual(['[device] vscode · skipped · echo'])
+  })
+
+  it('with VS Code settled, a window coming into focus on its terminal follows it, unless the dial\'s tap brought it within 2 s', async () => {
+    const { settle, listener, port } = await twoTerminals(VSCODE, { orca: mac })
+    port.observed(hook('session-start', { sessionId: UUID, hostHints: extension }))
+    await settle('vscode')
+    // Another VS Code window holds the focus; a tap on the session in its window's Claude Code tab brings this one.
+    expect(listener.vscodeState(WINDOW_ID, [SHELL, SHELL_B], SHELL, false)).toBeUndefined()
+    expect(await host().openAgent(V1)).toBeUndefined()
+    editorClock = 1_999
+    expect(listener.vscodeState(WINDOW_ID, [SHELL, SHELL_B], SHELL)).toBeUndefined()
+    expect(editorFollows()).toEqual([])
+    expect(editorLines()).toEqual(['[device] vscode · skipped · echo'])
+    // The person coming back to it later moves the dial, and choosing another terminal as it comes too.
+    expect(listener.vscodeState(WINDOW_ID, [SHELL, SHELL_B], SHELL, false)).toBeUndefined()
+    editorClock = 2_000
+    expect(listener.vscodeState(WINDOW_ID, [SHELL, SHELL_B], SHELL)).toBeUndefined()
+    expect(editorFollows()).toEqual([[ID, 'vscode']])
+    expect(await host().openAgent(V1)).toBeUndefined()
+    expect(listener.vscodeState(WINDOW_ID, [SHELL, SHELL_B], SHELL, false)).toBeUndefined()
+    expect(listener.vscodeState(WINDOW_ID, [SHELL, SHELL_B], SHELL_B)).toBeUndefined()
+    expect(editorFollows()).toEqual([[ID, 'vscode'], [B, 'vscode']])
+  })
+
+  it('with no dial linked a focus follows nothing and counts nothing', async () => {
+    const { front, settle, focus } = await twoTerminals()
+    await settle('vscode')
+    ;(seen.cable as unknown as { connected: boolean }).connected = false
+    focus(SHELL_B)
+    // Nor one that waited for a settle another app made.
+    await settle('ghostty')
+    front('vscode')
+    focus(SHELL)
+    await settle('ghostty')
+    expect(editorFollows()).toEqual([])
+    expect(editorLines()).toEqual([])
+  })
+
+  it('in Cursor, settled in front, focusing another terminal turns the dial to its agent, by the same cause', async () => {
+    const { settle, focus } = await twoTerminals(CURSOR)
+    await settle('cursor')
+    focus(SHELL_B)
+    expect(editorFollows()).toEqual([[B, 'vscode']])
   })
 
   it('a throw on the VS Code path costs the dial nothing', async () => {
