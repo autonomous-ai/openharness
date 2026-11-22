@@ -90,6 +90,10 @@ const RETRY_MS = 3_600_000
  *  (services/devices.ts OPEN_SCAN_MS), so at least one scan apart. A core that starts or restarts lists none of its
  *  agents until it has restored them, and a moment runs two passes within milliseconds. */
 const NONE_HELD_MS = 60_000
+/** Passes further apart than two scans saw nothing of the core between them (no dial attached, so no scan): a none read
+ *  after such a gap starts its wait over, as a dial that attaches while a restarted core restores its agents reads a
+ *  new none, not the one read before the dial went. */
+const NONE_GAP_MS = 2 * NONE_HELD_MS
 
 /** dial-skill.json is there but could not be read: what was removed is not known, so the pass stops, writing nothing
  *  more. */
@@ -139,8 +143,10 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
    *  agent brought. So not known turns nothing on and nothing off, and a read that does not know keeps what was known.
    *  A none is taken only once it has held NONE_HELD_MS: until then the answer before it stands. */
   let agents: ClaudeAgents = 'unknown'
-  /** When a read first said none since the last that listed one; undefined while the core lists one. */
+  /** When a read first said none since the last that listed one, and when the last said none; undefined while the core
+   *  lists one. */
   let noneSince: number | undefined
+  let noneLast = 0
 
   /** Read only inside a pass. */
   const removedNow = (): DialRemoved => {
@@ -160,7 +166,8 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
       return
     }
     const now = deps.now()
-    noneSince ??= now
+    if (noneSince === undefined || now - noneLast > NONE_GAP_MS) noneSince = now
+    noneLast = now
     if (now - noneSince >= NONE_HELD_MS) agents = 'none'
   }
 

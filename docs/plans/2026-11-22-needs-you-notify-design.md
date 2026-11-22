@@ -196,7 +196,8 @@ Details:
   made in the app, the last one gone) is a new stamp, and the next scan runs the start pass again.
 - A listed agent is taken at once. None is taken only once it has held 60 s on a monotonic clock: a core still
   restoring its agents lists none, and a start runs two passes milliseconds apart, so an empty list alone strips
-  nothing.
+  nothing. Held means read by passes no more than 120 s apart: after a longer gap (no dial, so no scan) a none starts
+  its 60 s over, so a dial that attaches while a restarted core restores its agents never acts on a none read before.
 - When the last one goes and the plugin does not read on, Claude is Off and the service removes our skill, as for a
   plugin uninstalled through `/plugin`: the first pass that reads none after none has held 60 s removes it. Scans run
   every 60 s while a dial is attached, so that is 1-3 minutes after the last Harness Claude agent goes.
