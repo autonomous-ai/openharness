@@ -12,6 +12,8 @@ import type { Platform, Scenario, SessionDef } from './dialAppEval/types.js'
 const editor = await import('../../e2e/harness/appEvalEditor.js' as string) as {
   windowRecords(window: string, keyOf: (pid: number) => string | undefined,
     record: (line: Record<string, unknown>, at: number) => void): (printed: Record<string, unknown>, at: number) => void
+  windowTyped(keyOf: (pid: number) => string | undefined,
+    deliver: (d: { path: string; target: string | null; text: string }, at: number) => void): (printed: Record<string, unknown>, at: number) => void
   editorHints(world: { platform: Platform; scenario: Scenario }, s: SessionDef): Record<string, string>
 }
 /** The parts of a daemon a Cursor agent's start reads. */
@@ -94,6 +96,22 @@ describe("tier B's editor windows", () => {
       { at: 109, line: { scroll: 'up', pid: 'b' } },
       { at: 110, line: { show: 'a' } },
       { at: 111, line: { show: 'other' } },
+    ])
+  })
+
+  it('a typed line is a typed delivery to the session whose shell it names, at its time; one for a shell no session has goes to none', () => {
+    const shells: Record<number, string> = { 41_001: 'a', 41_002: 'b' }
+    const deliveries: Array<{ at: number; d: Record<string, unknown> }> = []
+    const take = editor.windowTyped((pid) => shells[pid], (d, at) => deliveries.push({ at, d }))
+    const printed: Array<Record<string, unknown>> = [
+      { typed: 'Eval words for bravo.', pid: 41_002 },
+      { show: 41_001 },
+      { typed: 'x', pid: 41_999 },
+    ]
+    printed.forEach((line, i) => take(line, 100 + i))
+    expect(deliveries).toEqual([
+      { at: 100, d: { path: 'typed', target: 'b', text: 'Eval words for bravo.' } },
+      { at: 102, d: { path: 'typed', target: null, text: 'x' } },
     ])
   })
 })
