@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Worker } from 'node:worker_threads'
@@ -20,6 +20,9 @@ const driver = await import('../../e2e/harness/appEvalDriver.js' as string) as {
   deviceLines(log: string, from: number): { lines: string[]; next: number }
   workPaths(argv: readonly string[], projects: readonly string[]): string[]
   deskEmpty(messages: ReadonlyArray<Record<string, unknown>>): boolean
+  RAISE_TOOLS: readonly string[]
+  writeRaiseFakes(bin: string): void
+  raiseToolsOutside(root: string, env: NodeJS.ProcessEnv): string[]
 }
 
 const claude = await import('../../e2e/harness/appEvalClaude.js' as string) as {
@@ -96,6 +99,20 @@ describe("tier B's recording Cursor CLI", () => {
     expect(spawnSync(path, ['/work/eval-alpha']).status).toBe(0)
     expect(spawnSync(path, ['--uninstall-extension', 'autonomous.harness-device']).status).toBe(0)
     expect(driver.cliRuns(runs)).toEqual([{ argv: ['cursor', '/work/eval-alpha'], ok: true }])
+  })
+})
+
+describe("tier B's raise on Linux", () => {
+  it("finds each program Linux's raise runs in the daemon's own bin, before the computer's, and each refuses", () => {
+    dir = mkdtempSync(join(tmpdir(), 'tier-b-raise-'))
+    const bin = join(dir, 'bin')
+    mkdirSync(bin)
+    expect([...driver.RAISE_TOOLS].sort()).toEqual(['dbus-send', 'gdbus', 'hyprctl', 'swaymsg', 'wmctrl'])
+    // The computer's own folders hold none inside the root, whatever they hold.
+    expect(driver.raiseToolsOutside(dir, { PATH: '/usr/bin:/bin' })).toEqual([...driver.RAISE_TOOLS])
+    driver.writeRaiseFakes(bin)
+    expect(driver.raiseToolsOutside(dir, { PATH: `${bin}:/usr/bin:/bin` })).toEqual([])
+    for (const tool of driver.RAISE_TOOLS) expect(spawnSync(join(bin, tool), ['-l', '-p']).status).toBe(1)
   })
 })
 
