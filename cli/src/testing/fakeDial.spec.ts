@@ -23,20 +23,22 @@ it('greets as a round dial on the current firmware, which echoes no code moves a
   const endpoint = process.platform === 'win32' ? `\\\\.\\pipe\\fakedial-${process.pid}` : join(dir, 'dial.sock')
   const dial = await FakeDial.listen(endpoint)
   const daemon = connect(endpoint)
-  const greeted = dial.greet(10_000)
-  const hello = await new Promise<Record<string, unknown>>((resolve) => {
+  let hello: Record<string, unknown> | undefined
+  try {
+    // The daemon's end: each greeting is welcomed, and `greet` waits, bounded, for that welcome.
     const decoder = new CableDecoder()
     daemon.on('data', (chunk: Buffer) => decoder.feed(chunk, (frame) => {
       if (frame.type !== CableType.Json) return
+      hello ??= JSON.parse(Buffer.from(frame.payload).toString('utf8')) as Record<string, unknown>
       daemon.write(encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify({ t: 'welcome' }), 'utf8')))
-      resolve(JSON.parse(Buffer.from(frame.payload).toString('utf8')) as Record<string, unknown>)
     }))
-  })
-  await greeted
-  daemon.destroy()
-  await dial.close()
+    await dial.greet(10_000)
+  } finally {
+    daemon.destroy()
+    await dial.close()
+  }
 
-  const fw = hello.fw as string
+  const fw = hello?.fw as string
   expect(fw.startsWith(`${roundFw}-`)).toBe(true)
   expect(echoesCodeMoves(fw, undefined)).toBe(false)
   expect(shouldOffer(fw, '9.9.9')).toBe(false)
