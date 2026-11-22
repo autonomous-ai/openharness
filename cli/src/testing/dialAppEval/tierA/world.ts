@@ -2,8 +2,9 @@
  * One tier A scenario's world: the real devices (services/devices.ts) started in this process for one platform, with
  * the Claude app's store and the ChatGPT app's Codex home as fixtures in a fresh temp folder, the loopback dial on the
  * real cable, and every command, raise and send the devices make recorded with its virtual time and answered as the
- * scenario says. Nothing it hands the devices starts a process or reads this machine: the readers of the machine are
- * the spec's mocks (dialAppEval.spec.ts), answering from the model (machine.ts).
+ * scenario says, beside each line they log and each they write to an editor window. Nothing it hands the devices starts
+ * a process or reads this machine: the readers of the machine are the spec's mocks (dialAppEval.spec.ts), answering from
+ * the model (machine.ts).
  */
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -46,6 +47,10 @@ export interface TierAWorld {
    * CURSOR_HOME), emptied for each scenario, and the folder of the world's own that holds each Codex with a home of its own.
    */
   readonly folders: { claudeProjects: string; codexSessions: string; cursorProjects: string; codexHomes: string }
+  /** Each line on an editor window's stream, both ways (steps/editor.ts). */
+  readonly streams: NonNullable<Seen['streams']>
+  /** Every line the devices log, at its virtual time. */
+  readonly logs: NonNullable<Seen['logs']>
   /** What the devices' transcriber answers. */
   speech: string | null
   /** The app in front, as the last front step told the watch. */
@@ -155,6 +160,8 @@ export class World implements TierAWorld {
   front: App | 'other' = 'other'
   readonly commands: Seen['commands'] = []
   readonly deliveries: Seen['deliveries'] = []
+  readonly streams: NonNullable<Seen['streams']> = []
+  readonly logs: NonNullable<Seen['logs']> = []
   readonly gaps: string[] = []
   /** The virtual epoch ms of time 0: the driver sets it once the dial is welcomed and its page picked. */
   origin = Date.now()
@@ -249,7 +256,7 @@ export class World implements TierAWorld {
   seen(steps: Seen['steps']): Seen {
     const from0 = <T extends { at: number }>(rows: readonly T[]): T[] => rows.map((row) => ({ ...row, at: row.at - this.origin }))
     return { frames: from0(this.dial.frames), faces: from0(this.dial.faces), commands: from0(this.commands),
-      deliveries: from0(this.deliveries), steps: from0(steps) }
+      deliveries: from0(this.deliveries), steps: from0(steps), streams: from0(this.streams), logs: from0(this.logs) }
   }
 
   /** The devices stopped, on virtual time still, and whatever they were reading landed. */
@@ -407,7 +414,7 @@ export class World implements TierAWorld {
       transcribe: async () => this.speech ?? '',
       bundleId: async (app) => machine.bundleIds.get(app),
       storePackageFolder: async () => (installed && platform === 'win32' ? join(root, 'OpenAI.Codex') : null),
-      log: () => {},
+      log: (line) => { this.logs.push({ at: Date.now(), line }) },
       onExit: () => {},
       listen: async (handlers) => {
         this.listener = handlers

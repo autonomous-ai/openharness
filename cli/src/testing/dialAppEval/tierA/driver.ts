@@ -3,12 +3,13 @@
  * fresh world of its own (world.ts), the devices started for the platform it is run on, on virtual time.
  *
  * The platform reaches every part that reads it through the devices' deps: the `orca` deps (the taps' and the links'
- * commands), the Codex queue's, the raises and the store places. The `process.platform` reads left on the devices'
- * paths decide nothing a check reads, on a Mac or a Linux host alike: each is in a default the world replaces
- * (cable/hosts/codexQueue.ts, cmuxCli.ts, orca.ts, kitty.ts, scannedApp.ts, vscodeTerminals.ts; cable/serial.ts,
- * boardReset.ts, usbConsoleUser.ts), the address of a client it stands in for (herdrClient.ts, hcClient.ts,
- * opencodeClient.ts), or the dial setup's ownership of its files (devices/dialSkill.ts). A step that meets one that does
- * says so with `world.gap`, which leaves that scenario on that platform out of the scores.
+ * commands, and the editors' adapters', cable/hosts/vscode.ts, cursorFolder.ts, open.ts, appLink.ts), the Codex
+ * queue's, the raises and the store places. The `process.platform` reads left on the devices' paths decide nothing a
+ * check reads, on a Mac or a Linux host alike: each is in a default the world replaces (cable/hosts/codexQueue.ts,
+ * cmuxCli.ts, orca.ts, kitty.ts, scannedApp.ts, vscodeTerminals.ts readForeground, devices/vscodeExtension.ts
+ * vscodeExtensionDeps; cable/serial.ts, boardReset.ts, usbConsoleUser.ts), the address of a client it stands in for
+ * (herdrClient.ts, hcClient.ts, opencodeClient.ts), or the dial setup's ownership of its files (devices/dialSkill.ts). A
+ * step that meets one that does says so with `world.gap`, which leaves that scenario on that platform out of the scores.
  */
 import { vi } from 'vitest'
 import type { startDevices } from '../../../services/devices.js'
@@ -20,20 +21,18 @@ import { machine } from './machine.js'
 import { claudeStoreSteps } from './steps/claudeStore.js'
 import { codexStoreSteps } from './steps/codexStore.js'
 import { dialSteps } from './steps/dial.js'
+import { editorSteps } from './steps/editor.js'
 import { sessionsSteps } from './steps/sessions.js'
 import { recordTyping, voiceSteps } from './steps/voice.js'
 import { windowSteps } from './steps/window.js'
 import { World, type StepHandler, type TierAWorld } from './world.js'
 
 type Run = Exclude<Step, { kind: 'wait' }>
-/** The editors' steps, built by Tasks 3 and 4 of docs/plans/2026-11-22-dial-eval-vscode-cursor-plan.md: no scenario
- *  takes one before. */
+/** The stroke, built by Task 4 of docs/plans/2026-11-22-dial-eval-vscode-cursor-plan.md: no scenario takes one before. */
 const notBuilt = (kind: StepKind) => async (): Promise<void> => { throw new Error(`tier A: the ${kind} step is not built yet`) }
 const STEPS: { [K in Exclude<StepKind, 'wait'>]: StepHandler<K> } = {
-  ...claudeStoreSteps, ...codexStoreSteps, ...sessionsSteps, ...windowSteps, ...dialSteps, ...voiceSteps,
-  'editor.window': notBuilt('editor.window'), 'editor.focus': notBuilt('editor.focus'),
-  'editor.closeTerminal': notBuilt('editor.closeTerminal'), 'editor.reload': notBuilt('editor.reload'),
-  'editor.close': notBuilt('editor.close'), stroke: notBuilt('stroke'),
+  ...claudeStoreSteps, ...codexStoreSteps, ...sessionsSteps, ...windowSteps, ...dialSteps, ...voiceSteps, ...editorSteps,
+  stroke: notBuilt('stroke'),
 }
 /** Virtual time for the dial to be found and welcomed: the fleet looks every 2 s, the dial greets every 2 s. */
 const START_WITHIN_MS = 30_000
