@@ -29,16 +29,17 @@ function checkKeys(check: Check): SessionKey[] {
 }
 
 describe('the catalog', () => {
-  it('the main ids are C1-C12, X1-X11, V1-V15 and U1-U14', () => {
+  it('the main ids are C1-C12, X1-X11, V1-V15, U1-U14 and O1-O17', () => {
     const range = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => `${prefix}${i + 1}`)
-    expect(MAIN.map((s) => s.id)).toEqual([...range('C', 12), ...range('X', 11), ...range('V', 15), ...range('U', 14)])
+    expect(MAIN.map((s) => s.id)).toEqual([...range('C', 12), ...range('X', 11), ...range('V', 15), ...range('U', 14),
+      ...range('O', 17)])
     expect(MAIN.every((s) => !s.heldOut)).toBe(true)
   })
 
-  it('the held out are CH1-CH3, XH1-XH3, VH1-VH4 and UH1-UH3: 13 of 65, VS Code 4 of 19, Cursor 3 of 17', () => {
+  it('the held out are CH1-CH3, XH1-XH3, VH1-VH4 and UH1-UH3: 13 of 82, VS Code 4 of 19, Cursor 3 of 17', () => {
     expect(HELD_OUT.map((s) => s.id)).toEqual(['CH1', 'CH2', 'CH3', 'XH1', 'XH2', 'XH3', 'VH1', 'VH2', 'VH3', 'VH4', 'UH1', 'UH2', 'UH3'])
     expect(HELD_OUT.every((s) => s.heldOut)).toBe(true)
-    expect(ALL).toHaveLength(65)
+    expect(ALL).toHaveLength(82)
     const of = (app: string) => [HELD_OUT.filter((s) => s.app === app).length, ALL.filter((s) => s.app === app).length]
     expect([of('vscode'), of('cursor')]).toEqual([[4, 19], [3, 17]])
   })
@@ -301,14 +302,18 @@ describe('the catalog', () => {
     // (started), so each V scenario has one wait fewer than its starts; then V7's turn and its wait on the person, V10's
     // pause after the reload, V11's rests between its tap, strokes and close, V13's rest before the stroke, V14's gap
     // between quit and relaunch, and V15's rest and its time unplugged; U8's turn, U12's pause after the close and U13's
-    // gap between quit and relaunch; VH1's rest on a and UH3's voice 200 ms after the prompt.
+    // gap between quit and relaunch; O4's rests after the focus and the tap, O7's after the tap and the swipe, O8's two
+    // turns and the pause between them, O10's rest on b, O12's time quit and its rest after the focus, O16's agents a
+    // second apart, and O17's rest and its time unplugged; VH1's rest on a and UH3's voice 200 ms after the prompt.
     const starts = (id: string, n: number): string[] => Array<string>(n - 1).fill(`${id} 1000`)
     expect(waits('own')).toEqual(['C6 5000', 'C9 1000', 'C9 3500', 'C10 2000', 'C11 1000', 'C11 3000', 'X3 5000', 'X8 2000',
       'X11 300', 'X11 300', ...starts('V1', 4), ...starts('V2', 20), ...starts('V3', 2), ...starts('V4', 2), ...starts('V5', 2),
       'V7 2000', 'V7 2000', ...starts('V10', 2), 'V10 2000', 'V11 1000', 'V11 1000', 'V11 1000', 'V13 1000',
       ...starts('V14', 3), 'V14 45000', ...starts('V15', 2), 'V15 1000', 'V15 3000',
       ...starts('U1', 4), ...starts('U2', 2), ...starts('U3', 2), ...starts('U4', 2), 'U8 2000', 'U12 2000', ...starts('U13', 3),
-      'U13 45000', ...starts('U14', 2), 'CH3 1000', 'XH3 200',
+      'U13 45000', ...starts('U14', 2),
+      'O4 2000', 'O4 3000', 'O7 4000', 'O7 2000', 'O8 2000', 'O8 2000', 'O8 6000', 'O8 2000', 'O10 1000', 'O12 2000', 'O12 2000',
+      ...starts('O16', 40), 'O17 1000', 'O17 3000', 'CH3 1000', 'XH3 200',
       ...starts('VH1', 2), 'VH1 1000', ...starts('VH3', 3), ...starts('UH3', 2), 'UH3 200'])
     expect(new Set(waits('condition').map((w) => w.split(' ')[1]))).toEqual(new Set(['10000']))
     // The person reading the face once the list is there.
@@ -321,7 +326,7 @@ describe('the catalog', () => {
     // swipe's rest, whose open makes the devices drop the next title as its echo: no person does either. X11's switches
     // 300 ms apart and XH3's voice 200 ms after the follow are those scenarios' point: only the input right after one of
     // their own short waits is let through.
-    const inputs = new Set<Step['kind']>(['tap', 'swipe', 'voice', 'attach', 'thread', 'stroke', 'editor.focus'])
+    const inputs = new Set<Step['kind']>(['tap', 'swipe', 'voice', 'attach', 'thread', 'stroke', 'editor.focus', 'orca.focus'])
     const quick = new Set(['X11', 'XH3'])
     for (const s of ALL) {
       // Since the last listing, or the last input once there is one. A condition wait may end at once: it counts 0.
