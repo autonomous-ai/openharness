@@ -731,8 +731,9 @@ export class ObservedSource implements HostSource {
    * at each turn's, as the person may have attached from another app since, and at an event whose caller or hints the
    * last ask was not for. Another caller or pane drops the place at once; a new ask keeps it until its answer, so the
    * agent does not leave its page meanwhile. The scan's place counts as such an ask at the first hook, when that hook is
-   * nested too: Diego's idle agent placed on iTerm2's page by the scan (2026-11-22) must not drop to tmux's page while its
-   * first hook's own lookup runs. Only the latest ask's answer lands, while the session lives. Whether it is nested: its
+   * nested too and comes from the process the scan found: Diego's idle agent placed on iTerm2's page by the scan
+   * (2026-11-22) must not drop to tmux's page while its first hook's own lookup runs, while a resume in another pane
+   * holds another client. Only the latest ask's answer lands, while the session lives. Whether it is nested: its
    * caller's tty is then the multiplexer's pane's, which no tab holds, so it is never read and an old one goes.
    */
   private askOuter(entry: Entry, e: ObservedHookEvent): boolean {
@@ -742,7 +743,7 @@ export class ObservedSource implements HostSource {
     entry.scanPlaced = undefined
     if (same && e.event !== 'session-start' && e.event !== 'turn-start') return true
     const answer = this.deps.outer?.(e.hostHints, e.callerPid)
-    if (!same && !(scanned && answer)) {
+    if (!same && !(scanned && answer && e.callerPid === entry.pid)) {
       entry.outer = undefined
       entry.outerPid = undefined
     }
