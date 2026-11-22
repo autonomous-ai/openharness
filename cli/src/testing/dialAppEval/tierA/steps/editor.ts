@@ -18,7 +18,11 @@ import type { StepHandler, TierAWorld } from '../world.js'
 import { agentPid, keyOfShell, sessionsSteps, shellOf } from './sessions.js'
 
 /** The fields of a line the devices write that name a shell by its pid (cable/hosts/vscodeTerminals.ts). */
-const SHELL_FIELDS = ['show', 'pid'] as const
+const SHELL_FIELDS: readonly string[] = ['show', 'pid']
+
+/** Every string in a value, at any depth: words in a list or a nested object are typed as much as a field's. */
+const stringsIn = (value: unknown): string[] => (typeof value === 'string' ? [value]
+  : typeof value === 'object' && value !== null ? Object.values(value).flatMap(stringsIn) : [])
 
 /** A window's open stream and what its last state said. */
 interface OpenWindow {
@@ -52,7 +56,7 @@ function stream(world: TierAWorld, window: string, ended: AbortSignal): Listener
   return {
     write: (written) => {
       const line = { ...(written as Record<string, unknown>) }
-      const words = Object.values(line).filter((value): value is string => typeof value === 'string')
+      const words = Object.entries(line).flatMap(([field, value]) => (SHELL_FIELDS.includes(field) ? [] : stringsIn(value)))
       const shell = SHELL_FIELDS.map((field) => line[field]).find((value): value is number => typeof value === 'number')
       for (const field of SHELL_FIELDS) {
         const pid = line[field]
