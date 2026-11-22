@@ -556,6 +556,34 @@ describe("tier A's Orca agents", () => {
     expect(w.open()).toEqual([])
   })
 
+  it("a drop or Orca's quit ends every process of the pane: a held one's maker, and tmux's client, server and shell", async () => {
+    const left: Record<string, string[]> = {}
+    for (const end of ['drop', 'quit'] as const) {
+      const w = fakeWorld('darwin', orcaAgents())
+      await w.hook('h', 'start')
+      await w.hook('t', 'start')
+      if (end === 'drop') {
+        await dropSession(w.world, 'h')
+        await dropSession(w.world, 't')
+      } else {
+        await sessionsSteps.quit(w.world, { kind: 'quit', app: 'orca' })
+      }
+      left[end] = [...machine.processes.values()].map((p) => basename(p.executable))
+    }
+    // Orca's terminal host runs on for its other panes, and goes with Orca.
+    expect(left).toEqual({ drop: ['Orca Agents'], quit: [] })
+  })
+
+  it("Orca's relaunch starts a terminal host of its own: the one before went with its quit", async () => {
+    const w = fakeWorld('linux', orcaAgents())
+    await w.hook('a', 'start')
+    const before = chainOf(w.world, 'a').maker.pid
+    await sessionsSteps.quit(w.world, { kind: 'quit', app: 'orca' })
+    await sessionsSteps.relaunch(w.world, { kind: 'relaunch', app: 'orca' })
+    const { maker } = chainOf(w.world, 'a')
+    expect([basename(maker.executable), maker.pid === before, machine.processes.has(before)]).toEqual(['orca-agents', false, false])
+  })
+
   it('a relaunched Orca session names its next handle in its hooks and its pane', async () => {
     const w = fakeWorld('linux', orcaAgents())
     await w.hook('a', 'start')
