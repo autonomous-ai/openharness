@@ -321,4 +321,17 @@ describe("tier A's Orca", () => {
     reopenOrca(world)
     expect([door.dial.isOpen(), door.opened.length]).toEqual([false, 2])
   })
+
+  it("a watch after Orca's relaunch prints no focus from before its quit: that terminal went with it", async () => {
+    const { world, deps } = worldOn('darwin', layout())
+    const reads = createOrcaReads(deps.orca!)
+    await started(world, ['a'])
+    await orcaModelSteps['orca.focus'](world, { kind: 'orca.focus', session: 'a' })
+    closeOrca(world)
+    reopenOrca(world)
+    const heard: Array<string | null> = []
+    reads.watchOrcaFocus((handle) => { heard.push(handle) })
+    await landed()
+    expect(heard).toEqual([])
+  })
 })
