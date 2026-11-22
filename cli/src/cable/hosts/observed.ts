@@ -233,8 +233,14 @@ interface Entry {
    *  answer lands. */
   outerAsk?: { pid: number; hints: Readonly<Record<string, string>> }
   /** The app and tab it is seen in, from that answer, while its caller and hints are those it was asked for; for a
-   *  session the scan found nested, from the scan's lookup (placeNested) until its first hook. */
+   *  session the scan found nested, from the scan's lookup (placeNested) until its first hook's own answer lands. */
   outer?: Outer
+  /** Its outer place is the scan's (placeNested), and no hook has come since: the first hook keeps it while that hook's
+   *  own ask runs (askOuter). */
+  scanPlaced?: true
+  /** The multiplexer's pane the scan's lookup placed a session found nested at, until its first hook: a rest and a tap
+   *  show it (placeIn), and it is never one of its panes, so no words reach it before a hook names the pane. */
+  placed?: Pane
   /** The client's process from an answer that named no app (a client in a terminal with no page): the raise's alone,
    *  never a page, a tab or a pane, while its caller and hints are those it was asked for. */
   outerPid?: number
@@ -526,10 +532,10 @@ export class ObservedSource implements HostSource {
     return { ...(bundle ? { bundle } : {}), ...(near ? { pane: near.pane } : {}) }
   }
 
-  /** What a rest and a tap may show: its panes, and in an adapter where it has none of its own, the pane its caller
-   *  placed it at (placeIn). A place is a guess: showing the wrong terminal costs a look, while words typed there would
-   *  run at another's prompt. So only these two, its name and Orca's scope (shownAt) read it, never words, `byPane` or
-   *  `paneOf`. */
+  /** What a rest and a tap may show: its panes, and in an adapter where it has none of its own, the pane the scan's
+   *  lookup or its caller placed it at (placeIn). A place is a guess: showing the wrong terminal costs a look, while
+   *  words typed there would run at another's prompt. So only these two, its name and Orca's scope (shownAt) read it,
+   *  never words, `byPane` or `paneOf`. */
   private shownOnly(e: Entry): readonly Located[] {
     return (this.deps.actions?.adapters ?? []).flatMap((adapter) => {
       const pane = this.placeIn(e, adapter.id)
@@ -537,12 +543,13 @@ export class ObservedSource implements HostSource {
     })
   }
 
-  /** Its pane in that adapter as a rest, a tap and its name read it: its own; else the one its caller placed it at; else
-   *  its held one. A held pane counts as none for paneOf, which the devices read to place the agent where it runs,
-   *  while the held pane shows only where it was started from. */
+  /** Its pane in that adapter as a rest, a tap and its name read it: its own; else the one the scan's lookup placed it
+   *  at (Entry.placed); else the one its caller placed it at; else its held one. A held pane counts as none for paneOf,
+   *  which the devices read to place the agent where it runs, while the held pane shows only where it was started from. */
   private placeIn(e: Entry, adapter: string): Pane | undefined {
     const own = e.panes.find(({ pane }) => pane.adapter === adapter)?.pane
     if (own && !own.held) return own
+    if (e.placed?.adapter === adapter) return e.placed
     const at = this.paneNames.get(adapter)?.placed.get(e.agent.id)
     return at === undefined ? own : { adapter, id: at }
   }
@@ -723,18 +730,22 @@ export class ObservedSource implements HostSource {
    * Terminal tab ran sat on a "herdr" page the same way (2026-11-19). Asked at its session's start and
    * at each turn's, as the person may have attached from another app since, and at an event whose caller or hints the
    * last ask was not for. Another caller or pane drops the place at once; a new ask keeps it until its answer, so the
-   * agent does not leave its page meanwhile. Only the latest ask's answer lands, while the session lives. Whether it is
-   * nested: its caller's tty is then the multiplexer's pane's, which no tab holds, so it is never read and an old one goes.
+   * agent does not leave its page meanwhile. The scan's place counts as such an ask at the first hook, when that hook is
+   * nested too: Diego's idle agent placed on iTerm2's page by the scan (2026-11-22) must not drop to tmux's page while its
+   * first hook's own lookup runs. Only the latest ask's answer lands, while the session lives. Whether it is nested: its
+   * caller's tty is then the multiplexer's pane's, which no tab holds, so it is never read and an old one goes.
    */
   private askOuter(entry: Entry, e: ObservedHookEvent): boolean {
     const last = entry.outerAsk
     const same = last !== undefined && last.pid === e.callerPid && sameHints(last.hints, e.hostHints)
-    if (!same) {
+    const scanned = entry.scanPlaced
+    entry.scanPlaced = undefined
+    if (same && e.event !== 'session-start' && e.event !== 'turn-start') return true
+    const answer = this.deps.outer?.(e.hostHints, e.callerPid)
+    if (!same && !(scanned && answer)) {
       entry.outer = undefined
       entry.outerPid = undefined
     }
-    if (same && e.event !== 'session-start' && e.event !== 'turn-start') return true
-    const answer = this.deps.outer?.(e.hostHints, e.callerPid)
     if (!answer) {
       entry.outerAsk = undefined
       return false
@@ -844,6 +855,8 @@ export class ObservedSource implements HostSource {
     if (entry.paired) a.app = entry.paired.app
     entry.paired = undefined
     entry.hostSession = undefined
+    // From its first hook, its panes are the hook's: the scan's pane goes, as the hook names the pane it runs in.
+    entry.placed = undefined
     // A hook says where a session runs: one the open scan found is not known yet until its first, unless its parent
     // processes named its app. A hook whose hints name no app (the Codex app's own Codex) learns it from its caller's
     // parents.
@@ -1179,14 +1192,16 @@ export class ObservedSource implements HostSource {
    * (ObservedDeps.nested): Diego's idle nested agents in iTerm2 sat on Other's page after the devices started again,
    * each until it was next hooked (2026-11-22). Asked, and its answer landing, only while it lives, no hook told of it
    * and no hc terminal holds it: a hook's word is newer. An answer that names an app places it there, known, with its
-   * client's tab and process, as a hook's outer answer does; one that names none leaves what the walk gave it. Whether
-   * it was placed.
+   * client's tab and process, as a hook's outer answer does, and at the multiplexer's pane it names, for a rest and a
+   * tap alone (Entry.placed); one that names none leaves what the walk gave it. Whether it was placed.
    */
   private async placeNested(entry: Entry, nest: Nested): Promise<boolean> {
     const unhooked = (): boolean => this.live(entry) && entry.caller === undefined && !entry.paired
     const place = unhooked() ? await this.deps.nested?.(nest) : undefined
     if (!place?.app || !unhooked()) return false
     entry.outer = { app: place.app, tty: place.tty, pid: place.pid }
+    entry.scanPlaced = true
+    entry.placed = place.pane
     entry.tty = place.tty
     entry.agent.app = place.app
     delete entry.agent.appPending
