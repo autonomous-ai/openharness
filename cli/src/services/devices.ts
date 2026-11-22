@@ -2244,8 +2244,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // that terminal itself: by when the state came, as a tab's by when its report came. A window that came into focus on
     // the terminal it had within ATTACH_ECHO_MS of the dial's move is that move's echo: a tap on a session in the Claude
     // Code tab or on Cursor's folder brings the editor forward with no terminal shown, as the Claude app's settle has.
-    if (report.moves !== dialMoves || (dialMovedAt !== undefined && dialMovedAt > report.at)
-      || (report.regained && dialMovedAt !== undefined && report.at - dialMovedAt < ATTACH_ECHO_MS)
+    const sinceMove = dialMovedAt === undefined ? Infinity : report.at - dialMovedAt
+    if (report.moves !== dialMoves || sinceMove < 0 || (report.regained && sinceMove < ATTACH_ECHO_MS)
       || vscodeShows.echo(report.terminal, report.at)) {
       log('[device] vscode · skipped · echo')
       return
