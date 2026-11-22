@@ -197,7 +197,7 @@ const readers = vi.hoisted(() => ({
   working: new Map<string, boolean>(),
   scans: 0,
   answer: vi.fn(async (..._args: unknown[]): Promise<string | undefined> => undefined),
-  apps: vi.fn(async (_pids: readonly number[]) => new Map<number, string>()),
+  apps: vi.fn(async (_pids: readonly number[], _rows?: readonly unknown[]) => new Map<number, string>()),
   record: vi.fn(async (..._args: unknown[]): Promise<{ name?: string; hostSession?: string }> => ({})),
   processes: vi.fn(async () => [] as Array<{ pid: number; ppid: number; tty?: string; executable: string }>),
   // A process's terminal, as its made-up row gives it: the table the devices read holds none.
@@ -1947,7 +1947,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     readers.working.set('sess-9', false)
     seen.host.watching!(true)
     await vi.waitFor(async () => expect((await machineList(port)).agents).toHaveLength(1))
-    expect(readers.apps.mock.calls).toEqual([[[77]]])
+    expect(readers.apps.mock.calls.map(([pids]) => pids)).toEqual([[77]])
   })
 
   // Windows' scan learns no app (scannedApp.ts), so there the agents it found count in the dial's default app (cableHost.ts).
@@ -3491,6 +3491,373 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     await swiped('ok')
     expect(stream.lines).toStrictEqual([{ app: 'terminal-app', tty: '/dev/ttys004' }])
     expect(orcaRuns.at(-1)).toEqual(['tmux', ['select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], 10_000])
+  })
+
+  // Diego's report of 2026-11-22: after the devices started again, an idle agent in his tmux inside an iTerm2 tab sat on
+  // Other's page until its next hook. The attach scan finds it, and the lookups the devices wire place it. Their own
+  // walks are tmux.spec.ts's, herdrOuter.spec.ts's and observed.spec.ts's.
+  describe('an agent the attach scan found in the person\'s tmux or herdr', () => {
+    /** iTerm2's server, which holds each tab's login (scannedApp.ts), under the home the devices read apps in. */
+    const server = join(homedir(), 'Library', 'Application Support', 'iTerm2', 'iTermServer-3.6.6')
+    const iterm = '/Applications/iTerm.app/Contents/MacOS/iTerm2'
+    /** The scan's one session [sessionId], idle, its owner [pid]. */
+    const found = (sessionId: string, pid: number) => {
+      readers.known.set(sessionId, 'terminal')
+      readers.owners.set(sessionId, { engine: 'claude', pid })
+      readers.rows.set(sessionId, { cwd: '/work/api', transcriptPath: null })
+      readers.working.set(sessionId, false)
+    }
+    /** The agent (4242) in a pane of the person's tmux, whose server made its terminal, on its own tty. */
+    const inTmux = [{ pid: 4242, ppid: 4000, tty: 'ttys030', executable: 'claude' },
+      { pid: 4000, ppid: 3900, tty: 'ttys030', executable: 'zsh' }, { pid: 3900, ppid: 1, executable: 'tmux' }]
+    /** A multiplexer's client (4300) in an iTerm2 tab: its shell, the tab's login and iTerm2's server, under [ppid]. */
+    const clientInIterm = (client: string, ppid: number) => [{ pid: 4300, ppid: 4299, executable: client },
+      { pid: 4299, ppid: 4298, executable: 'zsh' }, { pid: 4298, ppid: 4297, executable: 'login' },
+      { pid: 4297, ppid, executable: server }, ...ppid === 1 ? [] : [{ pid: ppid, ppid: 1, executable: iterm }]]
+    /** tmux's pane listing and the session's clients, and its pane's process when a tap checks it. */
+    const tmuxRun = async (file: string, args: string[], timeoutMs: number) => {
+      orcaRuns.push([file, args, timeoutMs])
+      const stdout = args[0] === 'list-panes' ? '%3|/dev/ttys030|4000|work|\n' : args[0] === 'list-clients' ? '1794700050|4300|/dev/ttys004\n'
+        : args[0] === 'display-message' ? '4000|work|\n' : ''
+      return { code: 0, stdout }
+    }
+    const scanLine = () => logs.filter((line) => line.startsWith('[observed] scan ·'))
+    const selected: [string, string[], number] = ['tmux', ['select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], 10_000]
+
+    it.each([['launchd', 1], ['iTerm2', 4296]])('Diego\'s case: a tmux agent idle in an iTerm2 tab, found by the attach scan, is on iTerm2\'s page; a rest selects its tab, then its pane; a tap selects the pane, brings iTerm2 forward and raises the tab (server under %s)', async (_, ppid) => {
+      readers.processes.mockResolvedValue([...inTmux, ...clientInIterm('tmux', ppid)])
+      found('sess-1', 4242)
+      const listener = fakeListener()
+      const { port } = startHere({ listen: listener.listen, orca: { ...mac, run: tmuxRun } })
+      attach(port)
+      await vi.waitFor(() => expect(scanLine()).toHaveLength(1))
+      expect(scanLine()[0]).toMatch(/ · 1 nested placed$/)
+      expect(said()).toEqual(['[device] tmux client · found'])
+      const apps = (await host().listAgentSnapshot({ apps: true })).apps?.apps
+      expect(apps).toContainEqual(expect.objectContaining({ id: 'iterm', count: 1 }))
+      expect(apps?.map(({ id }) => id)).not.toContain('tmux')
+      await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+      const stream = listener.tabs()
+      expect(listener.front('iterm')).toBeUndefined()
+      expect(host().swipeSwitches(ID)).toBe(true)
+      host().swipeEnded(ID, 'rest')
+      await swiped('ok')
+      expect(stream.lines).toStrictEqual([{ app: 'iterm', tty: '/dev/ttys004' }])
+      expect(orcaRuns.at(-1)).toEqual(selected)
+      const runs = orcaRuns.length
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(orcaRuns.slice(runs).slice(-2)).toEqual([selected, ['/usr/bin/open', ['-b', 'com.googlecode.iterm2'], 10_000]])
+      expect(stream.lines.at(-1)).toStrictEqual({ app: 'iterm', tty: '/dev/ttys004', raise: true })
+    })
+
+    it('a herdr agent idle in an iTerm2 tab, found by the attach scan, is on iTerm2\'s page with its tab', async () => {
+      readers.processes.mockResolvedValue([
+        { pid: 4242, ppid: 4000, tty: 'ttys030', executable: 'claude' }, { pid: 4000, ppid: 3900, tty: 'ttys030', executable: 'zsh' },
+        { pid: 3900, ppid: 1, executable: '/opt/homebrew/bin/herdr' }, ...clientInIterm('herdr', 1)])
+      found('sess-1', 4242)
+      // The server's client socket and the client connected to it, and the client's tty.
+      const sockets = 'p3900\nf5\nd0x1111\nn/Users/u/.config/herdr/herdr-client.sock\np4300\nf3\nd0x2222\nn->0x1111\n'
+      const listener = fakeListener()
+      const { port } = startHere({ listen: listener.listen, orca: { ...mac, onPath: (name: string) => `/opt/${name}/bin/${name}`,
+        run: async (file, args, timeoutMs) => {
+          orcaRuns.push([file, args, timeoutMs])
+          return { code: 0, stdout: file === '/usr/sbin/lsof' ? sockets : file === '/bin/ps' ? '4300 ttys004\n' : '' }
+        } } })
+      attach(port)
+      await vi.waitFor(() => expect(scanLine()).toHaveLength(1))
+      expect(scanLine()[0]).toMatch(/ · 1 nested placed$/)
+      expect(said()).toEqual(['[device] herdr client · found'])
+      const apps = (await host().listAgentSnapshot({ apps: true })).apps?.apps
+      expect(apps).toContainEqual(expect.objectContaining({ id: 'iterm', count: 1 }))
+      expect(apps?.map(({ id }) => id)).not.toContain('herdr')
+      await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+      const stream = listener.tabs()
+      expect(listener.front('iterm')).toBeUndefined()
+      host().swipeEnded(ID, 'rest')
+      await swiped('ok')
+      expect(stream.lines).toStrictEqual([{ app: 'iterm', tty: '/dev/ttys004' }])
+    })
+
+    it('a look reads the process table once, and the ttys of the nested sessions alone', async () => {
+      const table: ProcessRow[] = [...inTmux, ...clientInIterm('tmux', 1),
+        { pid: 5242, ppid: 5000, tty: 'ttys040', executable: 'claude' }, { pid: 5000, ppid: 4990, tty: 'ttys040', executable: 'zsh' },
+        { pid: 4990, ppid: 1, executable: '/Applications/Ghostty.app/Contents/MacOS/ghostty' }]
+      readers.processes.mockResolvedValue(table)
+      // Each tty from the table without reading it: every read of the table is the devices' own.
+      const own = readers.tty.getMockImplementation()!
+      readers.tty.mockImplementation(async (pid) => table.find((p) => p.pid === pid)?.tty)
+      onTestFinished(() => { readers.tty.mockImplementation(own) })
+      readers.apps.mockResolvedValueOnce(new Map([[5242, 'ghostty']]))
+      found('sess-1', 4242)
+      found('sess-2', 5242)
+      const tty = vi.fn(async (_pid: number) => 'ttys040')
+      const { port } = startHere({ tty, orca: { ...mac, run: tmuxRun } })
+      attach(port)
+      await vi.waitFor(() => expect(scanLine()).toHaveLength(1))
+      expect(scanLine()[0]).toMatch(/ · 1 nested placed$/)
+      expect(readers.processes).toHaveBeenCalledTimes(1)
+      const [rows] = readers.processes.mock.results.map(({ value }) => value)
+      expect(readers.apps.mock.calls).toEqual([[[4242, 5242], await rows]])
+      expect(readers.tty.mock.calls.map(([pid]) => pid).sort()).toEqual([3900, 4000, 4242])
+      // The Ghostty session's tab is read as before.
+      expect(tty.mock.calls).toEqual([[5242]])
+    })
+
+    it('a session in Zellij found by the scan asks no lookup and runs nothing', async () => {
+      readers.processes.mockResolvedValue([{ pid: 4242, ppid: 4000, tty: 'pts/5', executable: 'claude' },
+        { pid: 4000, ppid: 3900, tty: 'pts/5', executable: 'zsh' }, { pid: 3900, ppid: 1, executable: 'zellij' }])
+      found('sess-1', 4242)
+      const { port } = startHere({ orca: { ...orca, run: tmuxRun } })
+      attach(port)
+      await vi.waitFor(() => expect(scanLine()).toHaveLength(1))
+      expect(scanLine()[0]).toMatch(/ · 0 nested placed$/)
+      expect(readers.tty).not.toHaveBeenCalled()
+      expect(orcaRuns).toEqual([])
+    })
+
+    it('Windows: the scan reads no table and no tty, and runs no lookup', async () => {
+      readers.processes.mockResolvedValue(inTmux)
+      found('sess-1', 4242)
+      const { port } = startHere({ orca: { ...orca, platform: 'win32', run: tmuxRun } })
+      attach(port)
+      await vi.waitFor(() => expect(scanLine()).toHaveLength(1))
+      expect(scanLine()[0]).toMatch(/ · 0 nested placed$/)
+      expect(readers.processes).not.toHaveBeenCalled()
+      expect(readers.tty).not.toHaveBeenCalled()
+      expect(orcaRuns).toEqual([])
+    })
+
+    /** herdr's socket, listing a Claude Code row at each pane, with the session herdr's integration gave it, if any. The
+     *  dial attached, `live` lets the source's subscription start and awaits its list. */
+    const herdrRows = (rows: ReadonlyArray<readonly [pane: string, session?: string]>) => {
+      const subs: HerdrSubscriber[] = []
+      const prompts: unknown[][] = []
+      let list: Promise<HerdrAnswer> | undefined
+      const agents = rows.map(([pane, session]) => ({ pane_id: pane, agent: 'claude', agent_status: 'idle', cwd: '/work/api',
+        ...session ? { agent_session: { kind: 'id', agent: 'claude', value: session } } : {} }))
+      const client: HerdrClient = {
+        request: () => (list = Promise.resolve<HerdrAnswer>({ ok: true, result: { type: 'agent_list', agents } })),
+        subscribe: (_entries, to) => { subs.push(to); return { close: () => {} } },
+        prompt: async (...args) => { prompts.push(args); return { outcome: 'sent' } },
+        socketStamp: () => '1:1',
+        binary: () => undefined,
+      }
+      const live = async () => {
+        await vi.waitFor(() => expect(subs).toHaveLength(1))
+        subs[0].started()
+        await list
+      }
+      return { client, subs, prompts, live }
+    }
+    const rests = () => said().filter((line) => line.startsWith('[device] swipe ·'))
+
+    // herdr names a pane's Claude Code session only once the person ran `herdr integration install claude`
+    // (recordedHerdr.ts): with it, the scan's copy wins the fold over herdr's row by that session, and is placed at
+    // herdr's pane, as cmux's are.
+    describe('with herdr\'s own rows', () => {
+      /** The agent (4242) under herdr's server (3900), on the pane's terminal the server made. */
+      const inHerdr = [{ pid: 4242, ppid: 4000, tty: 'ttys030', executable: 'claude' },
+        { pid: 4000, ppid: 3900, tty: 'ttys030', executable: 'zsh' }, { pid: 3900, ppid: 1, executable: '/opt/homebrew/bin/herdr' }]
+      /** The server's client socket and the client connected to it, and the client's tty. */
+      const sockets = 'p3900\nf5\nd0x1111\nn/Users/u/.config/herdr/herdr-client.sock\np4300\nf3\nd0x2222\nn->0x1111\n'
+      const herdrRun = async (file: string, args: string[], timeoutMs: number) => {
+        orcaRuns.push([file, args, timeoutMs])
+        return { code: 0, stdout: file === '/usr/sbin/lsof' ? sockets : file === '/bin/ps' ? '4300 ttys004\n' : '' }
+      }
+      const focus = (pane: string): [string, string[], number] => ['/opt/herdr/bin/herdr', ['agent', 'focus', pane], 10_000]
+      const focused = () => orcaRuns.filter(([, args]) => args[0] === 'agent' && args[1] === 'focus')
+      const onMac = (run: typeof herdrRun) => ({ ...mac, onPath: (name: string) => `/opt/${name}/bin/${name}`, run })
+      /** The scan's herdr agent, its lookup landed and herdr's list read, the dial's tabs stream open. */
+      const scanned = async (rows: ReadonlyArray<readonly [string, string?]>, run = herdrRun, client = true) => {
+        readers.processes.mockResolvedValue([...inHerdr, ...client ? clientInIterm('herdr', 1) : []])
+        found('sess-1', 4242)
+        const herdr = herdrRows(rows)
+        const listener = fakeListener()
+        const { port } = startHere({ listen: listener.listen, herdr: herdr.client, orca: onMac(run) })
+        attach(port)
+        await vi.waitFor(() => expect(scanLine()).toHaveLength(1))
+        await herdr.live()
+        await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+        return { ...herdr, listener, stream: listener.tabs() }
+      }
+
+      it('a scan-found herdr agent whose herdr row has its session is one row on iTerm2\'s page; a rest selects its tab, then focuses its herdr pane; a tap focuses the pane, brings iTerm2 forward and raises the tab', async () => {
+        const { listener, stream, prompts } = await scanned([['w1:p2', 'sess-1']])
+        expect(scanLine()[0]).toMatch(/ · 1 nested placed$/)
+        expect((await listed()).map(({ id }) => id)).toEqual([ID])
+        expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual(expect.objectContaining({ id: 'iterm', count: 1 }))
+        expect(listener.front('iterm')).toBeUndefined()
+        host().swipeEnded(ID, 'rest')
+        await swiped('ok')
+        expect(stream.lines).toStrictEqual([{ app: 'iterm', tty: '/dev/ttys004' }])
+        expect(orcaRuns.at(-1)).toEqual(focus('w1:p2'))
+        expect(await host().openAgent(ID)).toBeUndefined()
+        expect(orcaRuns.slice(-2)).toEqual([focus('w1:p2'), ['/usr/bin/open', ['-b', 'com.googlecode.iterm2'], 10_000]])
+        expect(stream.lines.at(-1)).toStrictEqual({ app: 'iterm', tty: '/dev/ttys004', raise: true })
+        // A placed pane takes no words: the dial's voice never reaches herdr's prompt.
+        expect((await listed())[0].caps).not.toContain('v')
+        expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false })
+        expect(prompts).toEqual([])
+      })
+
+      it('with no session in herdr\'s row the scan\'s copy gets its tab alone, and herdr\'s row stays on herdr\'s page', async () => {
+        const { listener, stream } = await scanned([['w1:p2']])
+        const rows = await listed()
+        expect(rows).toHaveLength(2)
+        expect(rows.map(({ id }) => id)).toContain(ID)
+        expect(listener.front('iterm')).toBeUndefined()
+        host().swipeEnded(ID, 'rest')
+        await swiped('ok')
+        expect(stream.lines).toStrictEqual([{ app: 'iterm', tty: '/dev/ttys004' }])
+        expect(focused()).toEqual([])
+      })
+
+      // Review Focus 5: herdr's tap needs no app, its rest does.
+      it('an agent whose app is not known yet is placed by its pane alone: a tap focuses it, a rest does not', async () => {
+        // No client of herdr's is found: the lookup names no app.
+        const { listener } = await scanned([['w1:p2', 'sess-1']], async (file, args, timeoutMs) => {
+          orcaRuns.push([file, args, timeoutMs])
+          return { code: 0, stdout: '' }
+        }, false)
+        expect(scanLine()[0]).toMatch(/ · 0 nested placed$/)
+        expect((await listed()).map(({ id }) => id)).toEqual([ID])
+        expect(listener.front('iterm')).toBeUndefined()
+        host().swipeEnded(ID, 'rest')
+        await vi.waitFor(() => expect(rests()).toHaveLength(1))
+        expect(focused()).toEqual([])
+        await host().openAgent(ID)
+        expect(focused()).toEqual([focus('w1:p2')])
+      })
+
+      // herdr's list can land before the scan's lookup names the app: the scan's change places it again, with that app.
+      it('herdr\'s list read before the lookup names the app: a rest still selects its tab, then focuses its herdr pane', async () => {
+        let answer!: () => void
+        const held = new Promise<void>((done) => { answer = done })
+        readers.processes.mockResolvedValue([...inHerdr, ...clientInIterm('herdr', 1)])
+        found('sess-1', 4242)
+        const herdr = herdrRows([['w1:p2', 'sess-1']])
+        const listener = fakeListener()
+        const { port } = startHere({ listen: listener.listen, herdr: herdr.client, orca: onMac(async (file, args, timeoutMs) => {
+          if (file === '/usr/sbin/lsof') await held
+          return herdrRun(file, args, timeoutMs)
+        }) })
+        attach(port)
+        await herdr.live()
+        expect(scanLine()).toEqual([])
+        answer()
+        await vi.waitFor(() => expect(scanLine()).toEqual([expect.stringMatching(/ · 1 nested placed$/)]))
+        await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+        const stream = listener.tabs()
+        expect(listener.front('iterm')).toBeUndefined()
+        host().swipeEnded(ID, 'rest')
+        await swiped('ok')
+        expect(stream.lines).toStrictEqual([{ app: 'iterm', tty: '/dev/ttys004' }])
+        expect(orcaRuns.at(-1)).toEqual(focus('w1:p2'))
+      })
+
+      // The spec leaves Windows as it was: no `ps`, so the scan learns no app and places no herdr pane.
+      it('Windows: a tap on a scan-found agent whose herdr row has its session runs no herdr focus', async () => {
+        found('sess-1', 4242)
+        const herdr = herdrRows([['w1:p2', 'sess-1']])
+        const { port } = startHere({ herdr: herdr.client, orca: { ...orca, platform: 'win32', onPath: (name: string) => `/opt/${name}/bin/${name}` } })
+        attach(port)
+        await vi.waitFor(() => expect(scanLine()).toHaveLength(1))
+        await herdr.live()
+        await host().openAgent(ID)
+        expect(focused()).toEqual([])
+      })
+
+      it('the place goes with herdr\'s row', async () => {
+        const { subs } = await scanned([['w1:p2', 'sess-1']])
+        expect(await host().openAgent(ID)).toBeUndefined()
+        expect(focused()).toEqual([focus('w1:p2')])
+        subs[0].event('pane_closed', { pane_id: 'w1:p2' })
+        expect(await host().openAgent(ID)).toBeUndefined()
+        // iTerm2 still comes forward on its tab.
+        expect(orcaRuns.at(-1)).toEqual(['/usr/bin/open', ['-b', 'com.googlecode.iterm2'], 10_000])
+        expect(focused()).toEqual([focus('w1:p2')])
+      })
+    })
+
+    // Diego's report of 2026-11-22 whole: four Claude Codes in iTerm2, after a restart of the devices or each hooked.
+    describe('the exact case', () => {
+      /** A tab's shell and its login under iTerm2's server. */
+      const tab = (shell: number, login: number, ttyName?: string) => [
+        { pid: shell, ppid: login, ...ttyName ? { tty: ttyName } : {}, executable: '-zsh' }, { pid: login, ppid: 4297, executable: 'login' }]
+      const PLAIN = observedAgentId('claude', 'sess-p')
+      const P1 = observedAgentId('claude', 'sess-3')
+      const P2 = observedAgentId('claude', 'sess-4')
+      const table = (serverParent: number): ProcessRow[] => [
+        // ttys001: Claude Code itself.
+        { pid: 4101, ppid: 4102, tty: 'ttys001', executable: 'claude' }, ...tab(4102, 4103, 'ttys001'),
+        // ttys002: tmux's client; the agent in pane %3 under tmux's server.
+        ...inTmux, { pid: 4300, ppid: 4299, executable: 'tmux' }, ...tab(4299, 4298),
+        // ttys003: herdr's client; two agents under herdr's server, at w1:p1 and w1:p2.
+        { pid: 5242, ppid: 5000, tty: 'ttys040', executable: 'claude' }, { pid: 5000, ppid: 4900, tty: 'ttys040', executable: 'zsh' },
+        { pid: 5243, ppid: 5001, tty: 'ttys041', executable: 'claude' }, { pid: 5001, ppid: 4900, tty: 'ttys041', executable: 'zsh' },
+        { pid: 4900, ppid: 1, executable: '/opt/homebrew/bin/herdr' }, { pid: 4400, ppid: 4399, executable: 'herdr' }, ...tab(4399, 4398),
+        { pid: 4297, ppid: serverParent, executable: server }, ...serverParent === 1 ? [] : [{ pid: serverParent, ppid: 1, executable: iterm }],
+      ]
+      const sockets = 'p4900\nf5\nd0x1111\nn/Users/u/.config/herdr/herdr-client.sock\np4400\nf3\nd0x2222\nn->0x1111\n'
+      const run = async (file: string, args: string[], timeoutMs: number) => {
+        orcaRuns.push([file, args, timeoutMs])
+        const stdout = file === '/usr/sbin/lsof' ? sockets : file === '/bin/ps' ? '4400 ttys003\n'
+          : args[0] === 'list-panes' ? '%3|/dev/ttys030|4000|work|\n' : args[0] === 'list-clients' ? '1794700050|4300|/dev/ttys002\n'
+            : args[0] === 'display-message' ? '4000|work|\n' : ''
+        return { code: 0, stdout }
+      }
+      const hooked = (sessionId: string, callerPid: number, hostHints: Record<string, string>): ObservedHookEvent =>
+        ({ engine: 'claude', sessionId, event: 'session-start', cwd: '/work/api', callerPid, transcriptPath: `/t/${sessionId}.jsonl`, hostHints })
+
+      it.each([['hooked', 'iTerm2'], ['hooked', 'launchd'], ['found by the scan', 'iTerm2'], ['found by the scan', 'launchd']])('the exact case: a plain tab, tmux and two herdr panes in iTerm2 are four rows on iTerm2\'s page, each reached at its own tab and pane (%s, the server under %s)', async (how, parent) => {
+        readers.processes.mockResolvedValue(table(parent === 'launchd' ? 1 : 4296))
+        // The plain tab's own walk (scannedApp.spec.ts holds the server's row).
+        const own = readers.apps.getMockImplementation()!
+        readers.apps.mockImplementation(async (pids) => new Map(pids.filter((pid) => pid === 4101).map((pid) => [pid, 'iterm'])))
+        onTestFinished(() => { readers.apps.mockImplementation(own) })
+        const herdr = herdrRows([['w1:p1', 'sess-3'], ['w1:p2', 'sess-4']])
+        const listener = fakeListener()
+        const { port } = startHere({ listen: listener.listen, herdr: herdr.client, tty: async (pid) => pid === 4101 ? '/dev/ttys001' : undefined,
+          orca: { ...mac, onPath: (name: string) => `/opt/${name}/bin/${name}`, run } })
+        if (how === 'hooked') {
+          port.observed(hooked('sess-p', 4101, { TERM_PROGRAM: 'iTerm.app' }))
+          port.observed(hooked('sess-1', 4242, { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux' }))
+          port.observed(hooked('sess-3', 5242, { HERDR_PANE_ID: 'w1:p1' }))
+          port.observed(hooked('sess-4', 5243, { HERDR_PANE_ID: 'w1:p2' }))
+        } else {
+          found('sess-p', 4101)
+          found('sess-1', 4242)
+          found('sess-3', 5242)
+          found('sess-4', 5243)
+        }
+        attach(port)
+        if (how === 'hooked') await vi.waitFor(() => expect(said()).toEqual(expect.arrayContaining(['[device] tmux client · found', '[device] herdr client · found'])))
+        else await vi.waitFor(() => expect(scanLine()).toEqual([expect.stringMatching(/ · 3 nested placed$/)]))
+        await herdr.live()
+        await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+        const ids = [PLAIN, ID, P1, P2]
+        await vi.waitFor(async () => expect((await listed()).map(({ id }) => id).sort()).toEqual([...ids].sort()))
+        const apps = (await host().listAgentSnapshot({ apps: true })).apps?.apps ?? []
+        expect(apps.filter(({ count }) => count > 0)).toEqual([expect.objectContaining({ id: 'iterm', count: 4 })])
+        const stream = listener.tabs()
+        expect(listener.front('iterm')).toBeUndefined()
+        const reached: Array<[unknown, unknown]> = []
+        for (const id of ids) {
+          const runs = orcaRuns.length
+          host().swipeEnded(id, 'rest')
+          await vi.waitFor(() => expect(rests()).toHaveLength(reached.length + 1))
+          expect(rests().at(-1)).toBe('[device] swipe · ok')
+          const moved = orcaRuns.slice(runs).filter(([file, args]) => file !== '/bin/ps' && file !== '/usr/sbin/lsof' && args[0] !== 'display-message')
+          reached.push([stream.lines.at(-1), moved.at(-1)?.[1]])
+        }
+        expect(reached).toStrictEqual([
+          [{ app: 'iterm', tty: '/dev/ttys001' }, undefined],
+          [{ app: 'iterm', tty: '/dev/ttys002' }, ['select-window', '-t', '%3', ';', 'select-pane', '-t', '%3']],
+          [{ app: 'iterm', tty: '/dev/ttys003' }, ['agent', 'focus', 'w1:p1']],
+          [{ app: 'iterm', tty: '/dev/ttys003' }, ['agent', 'focus', 'w1:p2']],
+        ])
+      })
+    })
   })
 
   // The same on Linux, with the client in a WezTerm pane: WezTerm's tab adapter finds that pane by the client's tty
@@ -10764,7 +11131,7 @@ describe('the dial setup, from the devices\' own process (cable/dialSetup.ts)', 
     // The scan goes on past the setup to list what it found.
     seen.host.watching!(true)
     expect(held(env.CODEX_HOME)).toBeUndefined()
-    await vi.waitFor(() => expect(readers.apps.mock.calls).toEqual([[[77]]]))
+    await vi.waitFor(() => expect(readers.apps.mock.calls.map(([pids]) => pids)).toEqual([[77]]))
   })
 })
 

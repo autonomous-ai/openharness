@@ -8,8 +8,12 @@
  * it, and the test writes the `front` lines on the stdin of the real `harness hardware watch --json` and reads its
  * `select` lines on its stdout, as Harness Device does.
  *
- * Never the person's tmux server, Terminal, daemon, ~/.claude or ~/.codex: no Harness Device runs, no window opens, and
- * the daemon's `open` is the harness's fake (HARNESS_OPEN_BIN), checked to be inside the test's own root.
+ * And an agent idle in such a session when the devices start again, which only the open scan finds
+ * (docs/plans/2026-11-22-dial-iterm2-tmux-herdr-design.md): its client in a tab of a fake iTerm2 server, a Node at
+ * `$HOME/Library/Application Support/iTerm2/iTermServer-3.6.6` of the daemon's throwaway home that launchd adopted.
+ *
+ * Never the person's tmux server, Terminal, iTerm2, daemon, ~/.claude or ~/.codex: no Harness Device runs, no window
+ * opens, and the daemon's `open` is the harness's fake (HARNESS_OPEN_BIN), checked to be inside the test's own root.
  *
  * macOS only: off macOS no agent has a tab.
  */
@@ -19,6 +23,7 @@ import { writeFileSync } from 'node:fs'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import { createInterface } from 'node:readline'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { UNKNOWN_APP } from '../src/cable/hosts/hostDetect.js'
 import { devicesListenerPath } from '../src/devices/listenerPath.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
@@ -28,6 +33,7 @@ import { Outside } from './harness/outsideAgent.js'
 import { InOwnTmux, tabClient } from './harness/ownTmux.js'
 
 const TERMINAL = 'com.apple.Terminal'
+const ITERM = 'com.googlecode.iterm2'
 const ORCA = 'com.stablyai.orca'
 /** What the round dial's firmware says in its greeting: it holds one app's ring (docs/specs/2026-11-14-dial-app-filter.md). */
 const FILTER = { appFilter: 'v1' }
@@ -78,18 +84,15 @@ describe.skipIf(process.platform !== 'darwin')("an agent in the person's tmux, o
   /** The active pane of the person's session. */
   const active = (d: IsolatedDaemon): Promise<string> => d.tmux.run('display-message', '-p', '-t', SESSION, '#{pane_id}')
 
-  /**
-   * A daemon of its own, a dial that holds one app's ring shown its first list, B in a Terminal tab to swipe from, and the
-   * person's session: its first window a shell, attached from a Terminal tab, then the agent in a second window made in
-   * the background, so its first hook finds that client. Then the watch, with Terminal in front.
-   */
-  const fresh = async () => {
+  /** A daemon of its own, with an empty desk and Claude Code's hooks in. */
+  const started = async () => {
     const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false' } })
     daemon = d
     const file = join(d.root, 'dials.json')
     d.env.HARNESSD_TEST_DIAL_PORT = file
     writeFileSync(file, '[]')
-    desk = new Desk(file)
+    const theDesk = new Desk(file)
+    desk = theDesk
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-200).join('\n')}`) })
     // The open the daemon runs is the harness's fake in its root, never the real one.
     const open = d.env.HARNESS_OPEN_BIN ?? ''
@@ -98,6 +101,16 @@ describe.skipIf(process.platform !== 'darwin')("an agent in the person's tmux, o
     await d.start()
     // Claude Code started by hand reads its hooks once, as it starts: they must be in by then.
     await d.hooksInstalled(['claude'])
+    return { d, desk: theDesk }
+  }
+
+  /**
+   * A daemon of its own, a dial that holds one app's ring shown its first list, B in a Terminal tab to swipe from, and the
+   * person's session: its first window a shell, attached from a Terminal tab, then the agent in a second window made in
+   * the background, so its first hook finds that client. Then the watch, with Terminal in front.
+   */
+  const fresh = async () => {
+    const { d, desk } = await started()
     const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a', FILTER)
     await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
     const b = await Outside.start(d, 'b', { __CFBundleIdentifier: TERMINAL })
@@ -110,6 +123,50 @@ describe.skipIf(process.platform !== 'darwin')("an agent in the person's tmux, o
     const shell = await active(d)
     const agent = await InOwnTmux.startIn(d, SESSION, 'in-tmux')
     return { d, dial, b, client, shell, agent, run: watch(d) }
+  }
+
+  /**
+   * The devices starting again while the agent is idle (Diego's report of 2026-11-22): the person's session, attached
+   * from a tab under iTerm2's server, which launchd adopted, and the agent in it with a turn behind it, all before the
+   * dial is plugged. No device yet, so no devices process: its hooks reach nobody, and only the open scan the dial's
+   * attach runs finds it.
+   */
+  const foundByScan = async () => {
+    const { d, desk } = await started()
+    await d.tmux.run('new-session', '-d', '-s', SESSION, '-c', d.projectsDir, '/bin/sh')
+    const client = await tabClient(d, SESSION, 'iterm-server')
+    // Before the server goes with the daemon.
+    closing.unshift(() => client.close())
+    const agent = await InOwnTmux.startIn(d, SESSION, 'in-tmux')
+    // A turn, so its conversation is on disk for the scan to list.
+    await agent.type('before the dial')
+    const stopped = new RegExp(`claude pid=\\d+ Stop\\S* session=${agent.sessionId} ran`)
+    await until('its Stop hook to run', () => stopped.test(d.hookLog()), 30_000, 100)
+    const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a', FILTER)
+    return { d, dial, client, agent }
+  }
+  const appsOf = (m: DialMessage) => m.apps as Array<{ id: string; count: number }>
+  /** The last apps frame, once it holds [app]'s page with [count] agents. */
+  const pageOf = (dial: FakeDial, what: string, app: string, count: number): Promise<DialMessage> =>
+    until(what, () => {
+      const last = dial.messages.filter((m) => m.t === 'apps').at(-1)
+      return last && appsOf(last).some((a) => a.id === app && a.count === count) ? last : undefined
+    }, 45_000, 100)
+  /** Its ring's list, as the dial was last sent it, once it holds [agent]. */
+  const rosterWith = (dial: FakeDial, agent: InOwnTmux): Promise<DialMessage[]> =>
+    until('a list with the agent', () => {
+      const begin = dial.messages.map((m) => m.t).lastIndexOf('agents.begin')
+      const end = dial.messages.map((m) => m.t).lastIndexOf('agents.end')
+      const rows = begin >= 0 && end > begin ? dial.messages.slice(begin, end).filter((m) => m.t === 'agent') : []
+      return rows.some((m) => m.id === agent.id) ? rows : undefined
+    }, 45_000, 100)
+  /** Neither the tab's tty, by its name alone too (`ttys012` names the tab as well), nor a pane, the person's session's
+   *  name or a session id is in the daemon's log. */
+  const unsaid = (d: IsolatedDaemon, tty: string, agent: InOwnTmux, ...others: Outside[]): void => {
+    const log = d.log()
+    for (const secret of [tty.slice('/dev/'.length), agent.pane, SESSION, agent.sessionId, ...others.map((o) => o.sessionId)]) {
+      expect(log).not.toContain(secret)
+    }
   }
 
   /** The dial turns to B, then to the agent, again every 2 s until the watch prints [select]: the stream opens after
@@ -125,25 +182,41 @@ describe.skipIf(process.platform !== 'darwin')("an agent in the person's tmux, o
       return undefined
     }, 60_000, 50)
   }
-  const selectOf = (tty: string): string => JSON.stringify({ select: { app: 'terminal-app', tty } })
+  const selectOf = (tty: string, app = 'terminal-app'): string => JSON.stringify({ select: { app, tty } })
 
   it("an agent in the person's tmux is on Terminal's page, one row, and on no tmux page", async () => {
     const { d, dial, agent } = await fresh()
-    const apps = (m: DialMessage) => m.apps as Array<{ id: string; count: number }>
-    const frame = await until("Terminal's page holding both agents", () => {
-      const last = dial.messages.filter((m) => m.t === 'apps').at(-1)
-      return last && apps(last).some((a) => a.id === 'terminal-app' && a.count === 2) ? last : undefined
-    }, 45_000, 100)
-    expect(apps(frame).map((a) => a.id)).not.toContain('tmux')
-    // Its ring's list, as the dial was last sent it: the agent once.
-    const roster = await until('a list with the agent', () => {
-      const begin = dial.messages.map((m) => m.t).lastIndexOf('agents.begin')
-      const end = dial.messages.map((m) => m.t).lastIndexOf('agents.end')
-      const rows = begin >= 0 && end > begin ? dial.messages.slice(begin, end).filter((m) => m.t === 'agent') : []
-      return rows.some((m) => m.id === agent.id) ? rows : undefined
-    }, 45_000, 100)
-    expect(roster.filter((m) => m.id === agent.id)).toHaveLength(1)
+    const frame = await pageOf(dial, "Terminal's page holding both agents", 'terminal-app', 2)
+    expect(appsOf(frame).map((a) => a.id)).not.toContain('tmux')
+    expect((await rosterWith(dial, agent)).filter((m) => m.id === agent.id)).toHaveLength(1)
     expect(d.log()).toContain('[device] tmux client · found')
+  })
+
+  it("found by the scan after the devices start, an agent in the person's tmux whose client is in an iTerm2 tab is on iTerm2's page, one row, and on no tmux or Other page", async () => {
+    const { d, dial, client, agent } = await foundByScan()
+    const frame = await pageOf(dial, "iTerm2's page holding the agent", 'iterm', 1)
+    expect(appsOf(frame).map((a) => a.id)).not.toContain('tmux')
+    expect(appsOf(frame).map((a) => a.id)).not.toContain(UNKNOWN_APP)
+    expect((await rosterWith(dial, agent)).filter((m) => m.id === agent.id)).toHaveLength(1)
+    // Said once the lookups settled, a moment after the place reached the dial.
+    await until('the scan line', () => /\[observed\] scan · 1 found · .* · 1 nested placed/.test(d.log()), 30_000, 50)
+    expect(d.log()).toContain('[device] tmux client · found')
+    unsaid(d, await client.tty(), agent)
+  })
+
+  it("found by the scan, with iTerm2 in front a swipe selects the client's tab, then the agent's pane", async () => {
+    const { d, dial, client, agent } = await foundByScan()
+    await pageOf(dial, "iTerm2's page holding the agent", 'iterm', 1)
+    // After the scan, so it found the agent alone; in iTerm2 too, as the dial lists the ring of iTerm2's page alone.
+    const b = await Outside.start(d, 'b', { __CFBundleIdentifier: ITERM })
+    closing.push(() => b.close())
+    await dial.next((m) => m.t === 'agent' && m.id === b.id, 45_000, 'b listed')
+    const run = watch(d)
+    run.front(ITERM)
+    const tty = await client.tty()
+    await swipedTo(dial, b, agent, run, selectOf(tty, 'iterm'))
+    await until("the agent's pane active in the person's session", async () => (await active(d)) === agent.pane, 30_000, 50)
+    unsaid(d, tty, agent, b)
   })
 
   it("with Terminal in front a swipe selects the client's tab, then the agent's pane", async () => {
@@ -177,9 +250,7 @@ describe.skipIf(process.platform !== 'darwin')("an agent in the person's tmux, o
     const tty = await client.tty()
     await swipedTo(dial, b, agent, run, selectOf(tty))
     await until('the swipe ended', () => swipes(d).includes('[device] swipe · ok'), 30_000, 50)
-    const log = d.log()
-    expect(log).toContain('[device] tmux client · found')
-    // A tty by its name alone too: `ttys012` with no `/dev/` before it names the tab as well.
-    for (const secret of [tty.slice('/dev/'.length), agent.pane, SESSION, agent.sessionId, b.sessionId]) expect(log).not.toContain(secret)
+    expect(d.log()).toContain('[device] tmux client · found')
+    unsaid(d, tty, agent, b)
   })
 })

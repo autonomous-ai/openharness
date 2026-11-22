@@ -16,7 +16,7 @@ import type { HostAdapter, Pane, Place } from './adapter.js'
 import { CONTROL, MAX_TEXT, RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 import type { OuterLookup } from './outer.js'
 import { parentChain, readPtyOwner, scannedApps, type ProcessName } from './scannedApp.js'
-import { OUTER_EVERY_MS, PID } from './tmux.js'
+import { heldAnswers, PID } from './tmux.js'
 
 // Zellij takes spaces and `:` in a session name too; this form keeps a name no argument parser reads as a flag, and
 // lets `:` end the session in a pane id.
@@ -160,7 +160,7 @@ type NotRead = 'zellij' | 'processes' | 'clients' | 'app'
 export function createZellijOuter(deps: ZellijOuterDeps): OuterLookup {
   // By session and caller, as tmux's: a lookup in flight is shared past its 5 s, so a zellij that hangs to its timeout
   // runs no second one.
-  const asked = new Map<string, { at: number; answer: Promise<ClientPlace>; settled: boolean }>()
+  const asked = heldAnswers<ClientPlace>(deps.now)
 
   /** `{}` when the caller is on no terminal a Zellij server made, or the session's one client is not the machine's one
    *  or in no listed app; the step that could not be read, when one could not. */
@@ -203,15 +203,6 @@ export function createZellijOuter(deps: ZellijOuterDeps): OuterLookup {
   return (hints, pid) => {
     const session = hinted(deps.platform, hints)?.session
     if (!session || !PID.test(String(pid))) return undefined
-    const now = deps.now()
-    // Only sessions asked in the last 5 s, or still in flight, are kept.
-    for (const [key, ask] of asked) if (ask.settled && now - ask.at >= OUTER_EVERY_MS) asked.delete(key)
-    const key = `${session}:${pid}`
-    const last = asked.get(key)
-    if (last) return last.answer
-    const ask = { at: now, answer: lookUp(session, pid), settled: false }
-    void ask.answer.then(() => { ask.settled = true })
-    asked.set(key, ask)
-    return ask.answer
+    return asked(`${session}:${pid}`, () => lookUp(session, pid))
   }
 }

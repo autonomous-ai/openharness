@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { RECORDED_HERDR } from '../../testing/recordedHerdr.js'
 import {
-  createHerdrOuter, FDS_A_PROCESS, HERDR_CLIENTS_A_LOOKUP, procSockets, SKIPPED_IDS_KEPT, ttyAtime, type HerdrOuterDeps,
+  createHerdrNested, createHerdrOuter, FDS_A_PROCESS, HERDR_CLIENTS_A_LOOKUP, procSockets, SKIPPED_IDS_KEPT, ttyAtime, type HerdrOuterDeps,
 } from './herdrOuter.js'
 import { parseProcessNames, type PtyProcess } from './scannedApp.js'
 
@@ -51,6 +51,8 @@ const none = ['[device] herdr client · none']
 /** The lookup's line when a step could not be read, naming that step. */
 const notRead = (why: 'processes' | 'sockets' | 'ttys' | 'app') => [`[device] herdr client · not read · ${why}`]
 
+/** Past every step an ask that runs takes before its first run. */
+const ranBy = () => new Promise<void>((resolve) => { setImmediate(resolve) })
 /** A recording runner that runs nothing, so no spec reads a process of this machine's: each call answers the next of
  *  [codes], then exit 0, lsof, any ps and ss print what [said] gives them, a tty's access time and a process's sockets are
  *  [said]'s, ss and ps are on the PATH, and a process's terminal is the one the table gives it. */
@@ -66,7 +68,7 @@ function lookup(
   const clock = { t: 1_000_000 }
   const table = over.processes ?? (async () => TABLE)
   let reads = 0
-  const outer = createHerdrOuter({
+  const deps: HerdrOuterDeps = {
     run: async (file, args, timeoutMs) => {
       calls.push({ file, args, timeoutMs })
       const stdout = file === LSOF ? said.lsof ?? '' : file.endsWith('/ps') ? said.ps ?? '' : file === SS ? said.ss ?? '' : ''
@@ -83,8 +85,11 @@ function lookup(
     atime: async (tty) => { stats.push(tty); return said.atime?.[tty] },
     ...over,
     processes: async () => { reads++; return table() },
-  })
-  return { calls, logs, stats, ttys, held, clock, reads: () => reads, outer }
+  }
+  // The process form is made on its first ask: each form keeps answers of its own.
+  let nestedForm: ReturnType<typeof createHerdrNested> | undefined
+  const nested: ReturnType<typeof createHerdrNested> = (found) => (nestedForm ??= createHerdrNested(deps))(found)
+  return { calls, logs, stats, ttys, held, clock, reads: () => reads, outer: createHerdrOuter(deps), nested }
 }
 
 /** herdr's recorded Linux scene (RECORDED_HERDR): the default server with clients A and B, a `herdr agent wait`, the
@@ -459,26 +464,36 @@ describe('the outer place of an agent in the person\'s herdr', () => {
     expect([await first, await again]).toEqual([IN_TERMINAL, IN_TERMINAL])
     expect(lsofs()).toEqual([asked, asked])
     // The answer holds for that caller alone.
+    clock.t = at + 3
     const caller = outer(PANE, 90)
     await vi.waitFor(() => expect(lsofs().length).toBe(3))
     held[2]()
     expect(await caller).toEqual(IN_TERMINAL)
-    // Asked again within 5 s of its start: the last answer, with nothing run.
+    // Asked again within 5 s of its settle: the last answer, with nothing run.
     const count = calls.length
-    clock.t = at + 4_999
-    expect(await outer(PANE, 100)).toEqual(IN_TERMINAL)
-    expect(calls.length).toBe(count)
-    // At 5 s it runs again, while w1:p3's answer, asked later, still holds.
     clock.t = at + 5_000
+    const kept = outer(PANE, 100)
+    await ranBy()
+    expect(calls.length).toBe(count)
+    expect(await kept).toEqual(IN_TERMINAL)
+    // At 5 s from its settle it runs again, while the caller's answer, settled later, still holds.
+    clock.t = at + 5_001
     const later = outer(PANE, 100)
-    expect(await outer({ HERDR_PANE_ID: 'w1:p3' }, 100)).toEqual(IN_TERMINAL)
+    expect(await outer(PANE, 90)).toEqual(IN_TERMINAL)
     await vi.waitFor(() => expect(calls.slice(count)).toEqual([asked]))
     // Still in flight past its 5 s: one lookup, shared.
-    clock.t = at + 10_001
+    clock.t = at + 10_002
     const stuck = outer(PANE, 100)
     expect(calls.slice(count)).toEqual([asked])
     held[3]()
     expect([await later, await stuck]).toEqual([IN_TERMINAL, IN_TERMINAL])
+    // A lookup that ran 5 s holds 5 s from its settle, not its start: an lsof that hangs costs one timeout.
+    const settled = calls.length
+    clock.t = at + 15_001
+    const after = outer(PANE, 100)
+    await ranBy()
+    expect(calls.length).toBe(settled)
+    expect(await after).toEqual(IN_TERMINAL)
   })
 
   it('its lines name no pane, pid, tty, path, bundle or app', async () => {
@@ -644,6 +659,166 @@ describe('herdr\'s clients on Linux', () => {
     expect(lines).toEqual([...found, ...none, ...notRead('sockets')])
     for (const line of lines) {
       for (const id of ['w2:p1', ...Object.values(P).map(String), 'pts/', '/dev/', '/home/u', 'herdr-client.sock', 'wezterm', 'kitty']) {
+        expect(line).not.toContain(id)
+      }
+    }
+  })
+})
+
+// The open scan finds an idle agent whose terminal the person's herdr made, with no hook to name its pane (Diego's
+// iTerm2 tab running herdr, 2026-11-22): it has read the table and the agent's maker already, and asks from the server on.
+describe('the place of an agent the scan found in the person\'s herdr', () => {
+  it('the hooked form\'s answer, with no table read and no maker read of the agent\'s own', async () => {
+    const cases: Array<[string, Parameters<typeof lookup>[0]]> = [
+      ['a client in a Terminal tab', {}], ['a client in no listed app', { bundleId: async () => 'com.example.other' }],
+    ]
+    for (const [name, over] of cases) {
+      const hooked = lookup(over, [], ONE)
+      const answer = await hooked.outer(PANE, 100)
+      const { calls, logs, reads, ttys, nested } = lookup(over, [], ONE)
+      expect(await nested({ pid: 100, maker: 80, rows: TABLE }), name).toStrictEqual(answer)
+      expect(calls, name).toEqual(hooked.calls)
+      expect(reads(), name).toBe(0)
+      // Only a client in no app has its own terminal's maker read.
+      expect(ttys, name).toEqual(hooked.ttys.filter((pid) => ![100, 90, 80].includes(pid)))
+      expect(logs, name).toEqual(hooked.logs)
+    }
+    expect(await lookup({}, [], ONE).nested({ pid: 100, maker: 80, rows: TABLE })).toStrictEqual(IN_TERMINAL)
+  })
+
+  it('Linux: one client in a WezTerm window', async () => {
+    const table = scene({ [P.terminalA]: 'wezterm-gui' }, [P.clientB])
+    const { calls, logs, reads, ttys, nested } = onLinux(table, { ps: recordedTtys(P.clientA) })
+    expect(await nested({ pid: P.agent, maker: P.serverA, rows: table }))
+      .toStrictEqual({ app: 'wezterm', tty: '/dev/pts/0', pid: P.clientA })
+    expect(calls).toEqual([ssAsked, psAsked(String(P.clientA))])
+    expect([reads(), ttys, logs]).toEqual([0, [], found])
+  })
+
+  it('Windows, or a pid or maker out of form: undefined at once, and nothing runs', () => {
+    const off = lookup({ platform: 'win32' }, [], ONE)
+    expect(off.nested({ pid: 100, maker: 80, rows: TABLE })).toBeUndefined()
+    const on = lookup({}, [], ONE)
+    for (const bad of [0, -1, 1.5, Number.NaN]) {
+      expect(on.nested({ pid: bad, maker: 80, rows: TABLE }), `pid ${bad}`).toBeUndefined()
+      expect(on.nested({ pid: 100, maker: bad, rows: TABLE }), `maker ${bad}`).toBeUndefined()
+    }
+    for (const { calls, held, logs, reads, stats, ttys } of [off, on]) {
+      expect([calls, reads(), stats, ttys, held, logs]).toEqual([[], 0, [], [], [], []])
+    }
+  })
+
+  it('one lookup per server in flight, and one every 5 s: two agents of one server share it', async () => {
+    const held: Array<() => void> = []
+    const { calls, clock, nested } = lookup({
+      run: async (file, args, timeoutMs) => {
+        calls.push({ file, args, timeoutMs })
+        if (file === LSOF) await new Promise<void>((settle) => held.push(settle))
+        return { code: 0, stdout: file === LSOF ? ONE.lsof! : ONE.ps! }
+      },
+    })
+    // A second server (81), whose lookup is its own.
+    const rows = [...TABLE, { pid: 200, ppid: 90, tty: 'ttys010', executable: 'claude' }, { pid: 81, ppid: 1, executable: HERDR }]
+    const lsofs = () => calls.filter((call) => call.file === LSOF)
+    const asked = lsofAsked('80,81,4300')
+    const at = clock.t
+    const first = nested({ pid: 100, maker: 80, rows })
+    const again = nested({ pid: 200, maker: 80, rows })
+    await vi.waitFor(() => expect(lsofs()).toEqual([asked]))
+    // Another server is not held back by the first.
+    clock.t = at + 1
+    const other = nested({ pid: 100, maker: 81, rows })
+    await vi.waitFor(() => expect(lsofs()).toEqual([asked, lsofAsked('81,80,4300')]))
+    held[1]()
+    expect(await other).toEqual({})
+    held[0]()
+    expect([await first, await again]).toEqual([IN_TERMINAL, IN_TERMINAL])
+    // Asked again within 5 s of its settle, for any agent of that server: the last answer, with nothing run.
+    const count = calls.length
+    clock.t = at + 5_000
+    const kept = nested({ pid: 300, maker: 80, rows })
+    await ranBy()
+    expect(calls.length).toBe(count)
+    expect(await kept).toEqual(IN_TERMINAL)
+    // At 5 s from its settle it runs again; still in flight past its 5 s, one lookup, shared.
+    clock.t = at + 5_001
+    const later = nested({ pid: 100, maker: 80, rows })
+    await vi.waitFor(() => expect(calls.slice(count)).toEqual([asked]))
+    clock.t = at + 10_002
+    const stuck = nested({ pid: 200, maker: 80, rows })
+    expect(calls.slice(count)).toEqual([asked])
+    held[2]()
+    expect([await later, await stuck]).toEqual([IN_TERMINAL, IN_TERMINAL])
+  })
+
+  // The scan asks for its sessions one at a time: an answer kept from the lsof's start would be gone after an lsof that
+  // hung to its timeout, and every agent of that server asked after it would wait out one more.
+  it('an lsof that ran 10 s holds 5 s from its settle: the asks after it run none', async () => {
+    const held: Array<() => void> = []
+    const { calls, clock, nested } = lookup({
+      run: async (file, args, timeoutMs) => {
+        calls.push({ file, args, timeoutMs })
+        // The first lsof hangs; a second answers at once, so an ask that runs one fails rather than waits.
+        if (file === LSOF && !held.length) await new Promise<void>((settle) => held.push(settle))
+        return { code: 0, stdout: file === LSOF ? ONE.lsof! : ONE.ps! }
+      },
+    })
+    const rows = [...TABLE, { pid: 200, ppid: 90, tty: 'ttys010', executable: 'claude' }]
+    const lsofs = () => calls.filter((call) => call.file === LSOF)
+    const at = clock.t
+    const first = nested({ pid: 100, maker: 80, rows })
+    await vi.waitFor(() => expect(lsofs()).toHaveLength(1))
+    clock.t = at + 10_000
+    held[0]()
+    expect(await first).toEqual(IN_TERMINAL)
+    const count = calls.length
+    const next = nested({ pid: 200, maker: 80, rows })
+    await ranBy()
+    expect(calls.length).toBe(count)
+    expect(await next).toEqual(IN_TERMINAL)
+    clock.t = at + 14_999
+    expect(await nested({ pid: 300, maker: 80, rows })).toEqual(IN_TERMINAL)
+    expect(lsofs()).toHaveLength(1)
+    // 5 s from its settle, the next ask runs again.
+    clock.t = at + 15_000
+    expect(await nested({ pid: 100, maker: 80, rows })).toEqual(IN_TERMINAL)
+    expect(lsofs()).toHaveLength(2)
+  })
+
+  it('each step not read says its word and answers {}, never a rejection', async () => {
+    const roots = Object.assign([], { some: () => { throw new Error('roots not read') } })
+    const cases: Array<[string, ReturnType<typeof lookup>, Call[], string[]]> = [
+      ['lsof prints nothing', lookup({}, [1], { ...ONE, lsof: '' }), [lsofAsked('80,4300')], notRead('sockets')],
+      ['lsof times out', lookup({}, [null], ONE), [lsofAsked('80,4300')], notRead('sockets')],
+      ['lsof does not start', lookup({ run: async () => { throw new Error('spawn EACCES') } }, [], ONE), [], notRead('sockets')],
+      ['ps prints nothing', lookup({}, [0, 1], { ...ONE, ps: '' }), [lsofAsked('80,4300'), psAsked('4300')], notRead('ttys')],
+      ['ps times out', lookup({}, [0, null], ONE), [lsofAsked('80,4300'), psAsked('4300')], notRead('ttys')],
+      ['the app scan throws', lookup({ roots }, [], ONE), [lsofAsked('80,4300'), psAsked('4300')], notRead('app')],
+      ['the terminal of a client in no app is not read', lookup({
+        bundleId: async () => 'com.example.other',
+        tty: async (pid) => { if (pid === 4300) throw new Error('tty not read'); return TABLE.find((p) => p.pid === pid)?.tty },
+      }, [], ONE), [lsofAsked('80,4300'), psAsked('4300')], notRead('ttys')],
+    ]
+    for (const [name, { calls, logs, nested }, ran, said] of cases) {
+      expect(await nested({ pid: 100, maker: 80, rows: TABLE }), name).toEqual({})
+      expect(calls, name).toEqual(ran)
+      expect(logs, name).toEqual(said)
+    }
+    const table = scene({ [P.terminalA]: 'wezterm-gui' })
+    const noSs = onLinux(table, {}, { onPath: () => null })
+    expect(await noSs.nested({ pid: P.agent, maker: P.serverA, rows: table })).toEqual({})
+    expect([noSs.calls, noSs.logs]).toEqual([[], notRead('sockets')])
+  })
+
+  it('its lines name no pane, pid, tty, path or app', async () => {
+    const lines: string[] = []
+    for (const { logs, nested } of [lookup({}, [], ONE), lookup({}, [], { lsof: sockets({ 80: SERVER }), ps: '80 ??\n' }), lookup({}, [], { ...ONE, ps: '' })]) {
+      await nested({ pid: 100, maker: 80, rows: TABLE })
+      lines.push(...logs)
+    }
+    expect(lines).toEqual([...found, ...none, ...notRead('ttys')])
+    for (const line of lines) {
+      for (const id of ['80', '4300', '100', 'ttys004', CONFIG, 'herdr-client.sock', 'com.apple.Terminal', 'Terminal', 'terminal-app']) {
         expect(line).not.toContain(id)
       }
     }

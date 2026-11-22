@@ -14,8 +14,9 @@ import { agentPlaceName, APP_BUNDLES, detectApp, detectHost, UNKNOWN_APP } from 
 import type { Delivery } from './inbox.js'
 import { bundleOf, type OpenTarget } from './open.js'
 import { MAX_TEXT } from './orca.js'
-import type { OuterLookup } from './outer.js'
+import type { Nested, NestedLookup, NestedPlace, OuterLookup } from './outer.js'
 import type { SessionRecord } from './record.js'
+import type { ProcessName } from './scannedApp.js'
 import { isTabApp } from './tabs.js'
 import type { Caps, HostAgent, HostAgentState, HostSource, PaneSwitch, SendResult } from './types.js'
 
@@ -103,8 +104,18 @@ export interface ObservedDeps {
   log(line: string): void
   /** The routes for the dial's voice and tap; absent, an agent is status only. */
   actions?: ObservedActions
-  /** The app each of these processes runs in, where its parents name one (scannedApp.ts); absent, nothing is learned. */
-  apps?(pids: readonly number[]): Promise<ReadonlyMap<number, string>>
+  /** The machine's processes by name (scannedApp.ts readProcessNames), read once a look for its walk, its makers and its
+   *  nested lookups; rejects when unreadable. Absent, the walk reads its own and no maker is read. */
+  table?(): Promise<readonly ProcessName[]>
+  /** The app each of these processes runs in, where its parents name one (scannedApp.ts), walked over [rows] when given
+   *  (the look's table); absent, nothing is learned. */
+  apps?(pids: readonly number[], rows?: readonly ProcessName[]): Promise<ReadonlyMap<number, string>>
+  /** For each of these processes on a terminal a multiplexer with a lookup by process made, that host, its maker and
+   *  the process's own tty (scannedApp.ts readMadeBy), over the look's table. Absent, the scan asks no nested lookup. */
+  madeBy?(pids: readonly number[], rows: readonly ProcessName[]): Promise<ReadonlyMap<number, Omit<Nested, 'pid' | 'rows'>>>
+  /** Where the person sees a process the scan found nested, by the process alone (outer.ts NestedLookup), as devices.ts
+   *  sends each host to its multiplexer's lookup. Absent, the scan asks no nested lookup. */
+  nested?: NestedLookup
   /** What a Claude Code session's own process record gives (record.ts): the name the person gave it, and the Claude
    *  app's id of it; one that rejects gives nothing. Absent, the scan names by folder and places by its app alone. */
   record?(owner: Pick<SessionOwner, 'pid' | 'record'> & { sessionId: string }): Promise<SessionRecord>
@@ -221,8 +232,15 @@ interface Entry {
   /** The caller and hints its outer place was last asked for (ObservedDeps.outer), while it runs nested: only that ask's
    *  answer lands. */
   outerAsk?: { pid: number; hints: Readonly<Record<string, string>> }
-  /** The app and tab it is seen in, from that answer, while its caller and hints are those it was asked for. */
+  /** The app and tab it is seen in, from that answer, while its caller and hints are those it was asked for; for a
+   *  session the scan found nested, from the scan's lookup (placeNested) until its first hook's own answer lands. */
   outer?: Outer
+  /** Its outer place is the scan's (placeNested), and no hook has come since: the first hook keeps it while that hook's
+   *  own ask runs (askOuter). */
+  scanPlaced?: true
+  /** The multiplexer's pane the scan's lookup placed a session found nested at, until its first hook: a rest and a tap
+   *  show it (placeIn), and it is never one of its panes, so no words reach it before a hook names the pane. */
+  placed?: Pane
   /** The client's process from an answer that named no app (a client in a terminal with no page): the raise's alone,
    *  never a page, a tab or a pane, while its caller and hints are those it was asked for. */
   outerPid?: number
@@ -514,10 +532,10 @@ export class ObservedSource implements HostSource {
     return { ...(bundle ? { bundle } : {}), ...(near ? { pane: near.pane } : {}) }
   }
 
-  /** What a rest and a tap may show: its panes, and in an adapter where it has none of its own, the pane its caller
-   *  placed it at (placeIn). A place is a guess: showing the wrong terminal costs a look, while words typed there would
-   *  run at another's prompt. So only these two, its name and Orca's scope (shownAt) read it, never words, `byPane` or
-   *  `paneOf`. */
+  /** What a rest and a tap may show: its panes, and in an adapter where it has none of its own, the pane the scan's
+   *  lookup or its caller placed it at (placeIn). A place is a guess: showing the wrong terminal costs a look, while
+   *  words typed there would run at another's prompt. So only these two, its name and Orca's scope (shownAt) read it,
+   *  never words, `byPane` or `paneOf`. */
   private shownOnly(e: Entry): readonly Located[] {
     return (this.deps.actions?.adapters ?? []).flatMap((adapter) => {
       const pane = this.placeIn(e, adapter.id)
@@ -525,12 +543,13 @@ export class ObservedSource implements HostSource {
     })
   }
 
-  /** Its pane in that adapter as a rest, a tap and its name read it: its own; else the one its caller placed it at; else
-   *  its held one. A held pane counts as none for paneOf, which the devices read to place the agent where it runs,
-   *  while the held pane shows only where it was started from. */
+  /** Its pane in that adapter as a rest, a tap and its name read it: its own; else the one the scan's lookup placed it
+   *  at (Entry.placed); else the one its caller placed it at; else its held one. A held pane counts as none for paneOf,
+   *  which the devices read to place the agent where it runs, while the held pane shows only where it was started from. */
   private placeIn(e: Entry, adapter: string): Pane | undefined {
     const own = e.panes.find(({ pane }) => pane.adapter === adapter)?.pane
     if (own && !own.held) return own
+    if (e.placed?.adapter === adapter) return e.placed
     const at = this.paneNames.get(adapter)?.placed.get(e.agent.id)
     return at === undefined ? own : { adapter, id: at }
   }
@@ -711,18 +730,23 @@ export class ObservedSource implements HostSource {
    * Terminal tab ran sat on a "herdr" page the same way (2026-11-19). Asked at its session's start and
    * at each turn's, as the person may have attached from another app since, and at an event whose caller or hints the
    * last ask was not for. Another caller or pane drops the place at once; a new ask keeps it until its answer, so the
-   * agent does not leave its page meanwhile. Only the latest ask's answer lands, while the session lives. Whether it is
-   * nested: its caller's tty is then the multiplexer's pane's, which no tab holds, so it is never read and an old one goes.
+   * agent does not leave its page meanwhile. The scan's place counts as such an ask at the first hook, when that hook is
+   * nested too and comes from the process the scan found: Diego's idle agent placed on iTerm2's page by the scan
+   * (2026-11-22) must not drop to tmux's page while its first hook's own lookup runs, while a resume in another pane
+   * holds another client. Only the latest ask's answer lands, while the session lives. Whether it is nested: its
+   * caller's tty is then the multiplexer's pane's, which no tab holds, so it is never read and an old one goes.
    */
   private askOuter(entry: Entry, e: ObservedHookEvent): boolean {
     const last = entry.outerAsk
     const same = last !== undefined && last.pid === e.callerPid && sameHints(last.hints, e.hostHints)
-    if (!same) {
+    const scanned = entry.scanPlaced
+    entry.scanPlaced = undefined
+    if (same && e.event !== 'session-start' && e.event !== 'turn-start') return true
+    const answer = this.deps.outer?.(e.hostHints, e.callerPid)
+    if (!same && !(scanned && answer && e.callerPid === entry.pid)) {
       entry.outer = undefined
       entry.outerPid = undefined
     }
-    if (same && e.event !== 'session-start' && e.event !== 'turn-start') return true
-    const answer = this.deps.outer?.(e.hostHints, e.callerPid)
     if (!answer) {
       entry.outerAsk = undefined
       return false
@@ -832,6 +856,8 @@ export class ObservedSource implements HostSource {
     if (entry.paired) a.app = entry.paired.app
     entry.paired = undefined
     entry.hostSession = undefined
+    // From its first hook, its panes are the hook's: the scan's pane goes, as the hook names the pane it runs in.
+    entry.placed = undefined
     // A hook says where a session runs: one the open scan found is not known yet until its first, unless its parent
     // processes named its app. A hook whose hints name no app (the Codex app's own Codex) learns it from its caller's
     // parents.
@@ -1090,17 +1116,20 @@ export class ObservedSource implements HostSource {
     // session listed before its answer was read would never be restored. The loop's own check then sees a session a hook
     // told of during the reads, which keeps what it said.
     const learning = this.deps.now()
-    const apps = await this.appsOf(listing.map(([sessionId]) => owners.get(sessionId)!.pid))
+    const pids = listing.map(([sessionId]) => owners.get(sessionId)!.pid)
+    const table = await this.tableOf(pids)
+    const apps = table === null ? new Map<number, string>() : await this.appsOf(pids, table)
+    const nests = table ? await this.nestsOf(pids, table) : new Map<number, Nested>()
     const records = await this.recordsOf(listing, owners)
     const busy = await this.busyOf(listing, owners)
     const answers = await this.answersOf(listing, rows, busy)
-    // Every read of the look, so a slow one shows in the line.
-    const ms = this.deps.now() - learning
     let listed = 0
     let known = 0
     let named = 0
     let answered = 0
     let paired = 0
+    // The sessions on a terminal a multiplexer made, asked where the person sees them once every session is listed.
+    const asks: [Entry, Nested][] = []
     const now = this.deps.now()
     for (const [sessionId, engine] of listing) {
       // A hook may have told of it while the reads ran: it said more.
@@ -1125,7 +1154,13 @@ export class ObservedSource implements HostSource {
       // The Claude app's id of it: with its app, it places it until its first hook (claudeApp.ts).
       if (record?.hostSession) entry.hostSession = record.hostSession
       if (this.pair(entry)) paired++
-      this.learnTty(entry, owner.pid)
+      const nest = nests.get(owner.pid)
+      // Its tty is the multiplexer pane's pty, which on macOS has a tab's form: never read, as askOuter never reads a
+      // nested caller's. Paired, it is in an hc terminal, whose pane is its own.
+      if (nest && !entry.paired) {
+        this.locate(entry)
+        asks.push([entry, nest])
+      } else this.learnTty(entry, owner.pid)
       // Once its panes are known.
       entry.agent.name = this.nameOf(entry)
       // A turn it is in when found reads working, as checkWorking reads it, which ends it once its owner reads idle: listed
@@ -1140,10 +1175,50 @@ export class ObservedSource implements HostSource {
       }
     }
     if (!listed) return
-    // Counts only: an app, a pid or a path would say whose session runs where, and a name or an answer is the person's own.
-    this.deps.log(`[observed] scan · ${listed} found · ${known} app known · ${named} named · ${answered} answered · ${ms} ms`)
-    this.logPaired(paired)
+    // Listed before any lookup is asked: each may take its own timeout, and the dial's restore reads list().
     this.emit()
+    // One at a time: a busy machine is not handed fifty lookups at once.
+    let placed = 0
+    for (const [entry, nest] of asks) if (await this.placeNested(entry, nest)) placed++
+    // Every read of the look and every nested lookup, so a slow one shows in the line, in its one count: the line's
+    // readers match its form.
+    const ms = this.deps.now() - learning
+    // Counts only: an app, a pid or a path would say whose session runs where, and a name or an answer is the person's own.
+    this.deps.log(`[observed] scan · ${listed} found · ${known} app known · ${named} named · ${answered} answered · ${ms} ms`
+      + ` · ${placed} nested placed`)
+    this.logPaired(paired)
+  }
+
+  /**
+   * Where the person sees a session the scan found on a terminal a multiplexer made, before its first hook
+   * (ObservedDeps.nested): Diego's idle nested agents in iTerm2 sat on Other's page after the devices started again,
+   * each until it was next hooked (2026-11-22). Asked, and its answer landing, only while it lives, no hook told of it
+   * and no hc terminal holds it: a hook's word is newer. An answer that names an app places it there, known, with its
+   * client's tab and process, as a hook's outer answer does, and at the multiplexer's pane it names, for a rest and a
+   * tap alone (Entry.placed); one that names none, or fails, leaves what the walk gave it: a failed one must not stop
+   * the look's next. Whether it was placed.
+   */
+  private async placeNested(entry: Entry, nest: Nested): Promise<boolean> {
+    const unhooked = (): boolean => this.live(entry) && entry.caller === undefined && !entry.paired
+    let place: NestedPlace | undefined
+    try {
+      place = unhooked() ? await this.deps.nested?.(nest) : undefined
+    } catch (error) {
+      // Its kind, no error text: a path in it holds the account's name.
+      this.deps.log(`[observed] scan · lookup not read · ${errorKind(error)}`)
+      return false
+    }
+    if (!place?.app || !unhooked()) return false
+    entry.outer = { app: place.app, tty: place.tty, pid: place.pid }
+    entry.scanPlaced = true
+    entry.placed = place.pane
+    entry.tty = place.tty
+    entry.agent.app = place.app
+    delete entry.agent.appPending
+    entry.bundle = APP_BUNDLES[place.app]
+    this.locate(entry)
+    this.emit()
+    return true
   }
 
   /** Each session the scan found that no hook has told of yet, placed again in the hc terminal it runs in: Herdr's list
@@ -1252,16 +1327,44 @@ export class ObservedSource implements HostSource {
     return records
   }
 
-  /** None when there is no reader or it failed: every session is still listed, not known yet. */
-  private async appsOf(pids: readonly number[]): Promise<ReadonlyMap<number, string>> {
+  /** The look's process table, read once for its walk, its makers and its nested lookups, as one read per session would
+   *  cost a busy machine a `ps` each: none with no reader, null when it could not be read, and then every session is
+   *  still listed, not known yet. */
+  private async tableOf(pids: readonly number[]): Promise<readonly ProcessName[] | null | undefined> {
+    if (!this.deps.table || !pids.length) return undefined
+    try {
+      return await this.deps.table()
+    } catch (error) {
+      // Its kind, no error text: a path in it holds the account's name. The table feeds the walk, the makers and the
+      // lookups alike.
+      this.deps.log(`[observed] scan · processes not read · ${errorKind(error)}`)
+      return null
+    }
+  }
+
+  /** None when there is no reader or it failed: every session is still listed, not known yet. Walked over the look's
+   *  table when there is one. */
+  private async appsOf(pids: readonly number[], rows: readonly ProcessName[] | undefined): Promise<ReadonlyMap<number, string>> {
     if (!this.deps.apps || !pids.length) return new Map()
     try {
-      return await this.deps.apps(pids)
+      return await (rows ? this.deps.apps(pids, rows) : this.deps.apps(pids))
     } catch (error) {
       // Its kind, no error text: a path in it holds the account's name.
       this.deps.log(`[observed] scan · apps not read · ${errorKind(error)}`)
       return new Map()
     }
+  }
+
+  /** What each nested lookup is asked, by pid: none with no maker reader or no lookup to ask, or when the read failed,
+   *  and then each session has its tty read as before. */
+  private async nestsOf(pids: readonly number[], rows: readonly ProcessName[]): Promise<ReadonlyMap<number, Nested>> {
+    if (!this.deps.madeBy || !this.deps.nested) return new Map()
+    const made = await this.deps.madeBy(pids, rows).catch((error: unknown) => {
+      // Its kind, no error text: a path in it holds the account's name.
+      this.deps.log(`[observed] scan · makers not read · ${errorKind(error)}`)
+      return new Map<number, Omit<Nested, 'pid' | 'rows'>>()
+    })
+    return new Map([...made].map(([pid, maker]) => [pid, { ...maker, pid, rows }]))
   }
 
   /** Removals: ended sessions, dead or reused pids, and sessions with no generation silent for 12 h. Called every 30 s by the owner. */

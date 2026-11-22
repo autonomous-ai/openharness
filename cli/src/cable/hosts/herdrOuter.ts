@@ -18,7 +18,7 @@ import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 import type { OuterLookup } from './outer.js'
 import { readPtyMaker, scannedApps, type ProcessName } from './scannedApp.js'
 import { clientTtyForm } from './tabs.js'
-import { OUTER_EVERY_MS, PID } from './tmux.js'
+import { heldAnswers, PID } from './tmux.js'
 
 /** The herdr processes besides the server a lookup asks of at most: the highest pids, the newest. */
 export const HERDR_CLIENTS_A_LOOKUP = 16
@@ -144,6 +144,109 @@ function acceptedPeers(stdout: string, served: ReadonlySet<string>): Set<string>
   return peers
 }
 
+/** What the steps from the server on read with: the table comes from the caller, the hooked form's read or the scan's. */
+type ClientDeps = Omit<HerdrOuterDeps, 'processes'>
+
+/** Of the candidates (ascending pids), the one whose tty was typed into last: a tty's access time moves when the person
+ *  types into it, as `w`'s idle time does (macOS, 2026-11-19). One whose time cannot be read (a tty out of form, a stat
+ *  that failed) ranks below every one whose time was read; among equals the higher pid (PM, 2026-11-19). */
+async function usedLast(deps: ClientDeps, form: RegExp, pids: readonly number[], ttyOf: ReadonlyMap<number, string>): Promise<number> {
+  if (pids.length === 1) return pids[0]
+  const times = await Promise.all(pids.map((pid) => {
+    const tty = ttyOf.get(pid) ?? ''
+    return form.test(tty) ? deps.atime(tty).catch(() => undefined) : undefined
+  }))
+  let last = 0
+  // The pids ascend: on a tie the later one, the higher pid, wins.
+  for (let at = 1; at < pids.length; at++) if ((times[at] ?? -Infinity) >= (times[last] ?? -Infinity)) last = at
+  return pids[last]
+}
+
+/** macOS: which of [others] are connected to the server's client socket, from lsof's unix-socket rows of herdr's own
+ *  processes. Nothing when lsof could not be read. */
+async function lsofClients(deps: ClientDeps, server: number, others: readonly number[]): Promise<Set<number> | undefined> {
+  const sockets = await output(deps.run, '/usr/sbin/lsof', ['-a', '-U', '-p', [server, ...others].join(','), '-F', 'pdn'])
+  return sockets === undefined ? undefined : connectedOf(sockets, server, new Set(others))
+}
+
+/** Linux: which of [others] hold the peer of a connection the server accepted on its client socket, from ss's rows at
+ *  that path (SS_ARGS) and the socket inodes of herdr's own processes' descriptors: `ss -p` would read every process of
+ *  the account. A process whose descriptors cannot be read is left out. Nothing when ss or the server's descriptors
+ *  could not be read. */
+async function ssClients(deps: ClientDeps, server: number, others: readonly number[]): Promise<Set<number> | undefined> {
+  const ss = deps.onPath('ss')
+  if (!ss) return undefined
+  const [rows, served, held] = await Promise.all([
+    output(deps.run, ss, SS_ARGS), deps.sockets(server), Promise.all(others.map((pid) => deps.sockets(pid))),
+  ])
+  if (rows === undefined || served === undefined) return undefined
+  const peers = acceptedPeers(rows, new Set(served))
+  return new Set(others.filter((_, at) => held[at]?.some((inode) => peers.has(inode))))
+}
+
+/** From the server on, over [rows] (the table): `{}` when none of its clients (or itself, run with `--no-session`) is on
+ *  a tty, or the one used last of those in no listed app is inside a multiplexer; that client's process alone when it
+ *  is in no app; else its app, tty and process. The step that could not be read, when one could not. */
+async function clientsOf(deps: ClientDeps, form: RegExp, server: number, rows: readonly ProcessName[]): Promise<ClientPlace | NotRead> {
+  const others = rows.filter((p) => p.pid !== server && isHerdr(p)).map((p) => p.pid)
+    .sort((a, b) => a - b).slice(-HERDR_CLIENTS_A_LOOKUP)
+  // herdr before 0.9.0 ran the panes under the client itself with `--no-session`, on its tab's tty, with no client
+  // socket: with no other herdr, or none connected, the server is the one candidate.
+  let candidates = [server]
+  if (others.length) {
+    const connected = await (deps.platform === 'linux' ? ssClients : lsofClients)(deps, server, others)
+    if (connected === undefined) return 'sockets'
+    if (connected.size) candidates = others.filter((other) => connected.has(other))
+  }
+  const ps = deps.platform === 'linux' ? deps.onPath('ps') : '/bin/ps'
+  const ttys = ps ? await output(deps.run, ps, ['-o', 'pid=,tty=', '-p', candidates.join(',')]) : undefined
+  if (ttys === undefined) return 'ttys'
+  const ttyOf = new Map<number, string>()
+  for (const line of ttys.split('\n')) {
+    const row = PID_TTY.exec(line)
+    if (row && candidates.includes(Number(row[1]))) ttyOf.set(Number(row[1]), `/dev/${row[2]}`)
+  }
+  // A candidate ps does not list has gone. The server counts only on a client's tty: a detached one has none.
+  const left = candidates.filter((p) => ttyOf.has(p) && (p !== server || form.test(ttyOf.get(p) ?? '')))
+  if (!left.length) return {}
+  // A client inside tmux, Zellij or Herdr's terminal has parents that end at a detached server or holder: no app.
+  const apps = await scannedApps(left, { platform: deps.platform, roots: deps.roots, processes: async () => rows, bundleId: deps.bundleId })
+  const shown = left.filter((p) => apps.has(p))
+  if (!shown.length) {
+    const client = await usedLast(deps, form, left, ttyOf)
+    // A client whose own terminal tmux, Zellij or another herdr made is in no window a raise could bring, and herdr
+    // (0.9.5) strips their variables from its panes, so the agent's hints cannot name that multiplexer's pane. In a
+    // terminal with no page: the client's process alone, so Linux's raise brings its window.
+    const maker = await readPtyMaker(client, rows, deps.tty).catch(() => null)
+    if (maker === null) return 'ttys'
+    return maker?.host === 'tmux' || maker?.host === 'zellij' || maker?.host === 'herdr' ? {} : { pid: client }
+  }
+  const client = await usedLast(deps, form, shown, ttyOf)
+  const app = apps.get(client)
+  const tty = ttyOf.get(client)
+  // A tty out of form names no tab.
+  return tty && form.test(tty) ? { app, tty, pid: client } : { app, pid: client }
+}
+
+/** tmux's heldAnswers, each answer said by its line: an lsof or ss that hangs to its timeout costs one timeout, not one
+ *  an ask. */
+function saidAnswers(deps: ClientDeps): (key: string, place: () => Promise<ClientPlace | NotRead>) => Promise<ClientPlace> {
+  const held = heldAnswers<ClientPlace>(deps.now)
+
+  async function lookUp(place: () => Promise<ClientPlace | NotRead>): Promise<ClientPlace> {
+    // Every other step answers its own word: what is left to throw is the app scan.
+    const said = await place().catch((): NotRead => 'app')
+    if (typeof said === 'string') {
+      deps.log(`[device] herdr client · not read · ${said}`)
+      return {}
+    }
+    deps.log(`[device] herdr client · ${said.app ? 'found' : 'none'}`)
+    return said
+  }
+
+  return (key, place) => held(key, () => lookUp(place))
+}
+
 /**
  * Where the person sees an agent in a pane of their own herdr: in the app holding the herdr client they used last, at
  * that client's tty. Nothing at once on Windows, when the hints name no herdr pane in form or the caller is no pid; else
@@ -154,10 +257,8 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
   // Windows has no `ps` to read a client's tty with, and no form for one.
   const form = clientTtyForm(deps.platform)
   if (!form) return () => undefined
-  const isClientTty = (tty: string): boolean => form.test(tty)
-  // By pane and caller, as tmux's: a lookup in flight is shared past its 5 s, so an lsof or ss that hangs to its timeout
-  // runs no second one.
-  const asked = new Map<string, { at: number; answer: Promise<ClientPlace>; settled: boolean }>()
+  // By pane and caller, as tmux's.
+  const held = saidAnswers(deps)
   const skipped = new Set<string>()
 
   /** A herdr pane id the lookup cannot take is said, once an id: a lookup that answers nothing otherwise leaves the
@@ -169,47 +270,8 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
     deps.log('[device] herdr client · skipped · pane-id')
   }
 
-  /** Of the candidates (ascending pids), the one whose tty was typed into last: a tty's access time moves when the person
-   *  types into it, as `w`'s idle time does (macOS, 2026-11-19). One whose time cannot be read (a tty out of form, a stat
-   *  that failed) ranks below every one whose time was read; among equals the higher pid (PM, 2026-11-19). */
-  async function usedLast(pids: readonly number[], ttyOf: ReadonlyMap<number, string>): Promise<number> {
-    if (pids.length === 1) return pids[0]
-    const times = await Promise.all(pids.map((pid) => {
-      const tty = ttyOf.get(pid) ?? ''
-      return isClientTty(tty) ? deps.atime(tty).catch(() => undefined) : undefined
-    }))
-    let last = 0
-    // The pids ascend: on a tie the later one, the higher pid, wins.
-    for (let at = 1; at < pids.length; at++) if ((times[at] ?? -Infinity) >= (times[last] ?? -Infinity)) last = at
-    return pids[last]
-  }
-
-  /** macOS: which of [others] are connected to the server's client socket, from lsof's unix-socket rows of herdr's own
-   *  processes. Nothing when lsof could not be read. */
-  async function lsofClients(server: number, others: readonly number[]): Promise<Set<number> | undefined> {
-    const sockets = await output(deps.run, '/usr/sbin/lsof', ['-a', '-U', '-p', [server, ...others].join(','), '-F', 'pdn'])
-    return sockets === undefined ? undefined : connectedOf(sockets, server, new Set(others))
-  }
-
-  /** Linux: which of [others] hold the peer of a connection the server accepted on its client socket, from ss's rows at
-   *  that path (SS_ARGS) and the socket inodes of herdr's own processes' descriptors: `ss -p` would read every process of
-   *  the account. A process whose descriptors cannot be read is left out. Nothing when ss or the server's descriptors
-   *  could not be read. */
-  async function ssClients(server: number, others: readonly number[]): Promise<Set<number> | undefined> {
-    const ss = deps.onPath('ss')
-    if (!ss) return undefined
-    const [rows, served, held] = await Promise.all([
-      output(deps.run, ss, SS_ARGS), deps.sockets(server), Promise.all(others.map((pid) => deps.sockets(pid))),
-    ])
-    if (rows === undefined || served === undefined) return undefined
-    const peers = acceptedPeers(rows, new Set(served))
-    return new Set(others.filter((_, at) => held[at]?.some((inode) => peers.has(inode))))
-  }
-
-  /** `{}` when no herdr server made the caller's terminal, none of its clients (or itself, run with `--no-session`) is
-   *  on a tty, or the one used last of those in no listed app is inside a multiplexer; that client's process alone
-   *  otherwise; the step that could not be read, when one could not. */
-  async function placeOf(pid: number): Promise<ClientPlace | NotRead> {
+  /** `{}` when no herdr server made the caller's terminal; else the place from the server on. */
+  const placeOf = async (pid: number): Promise<ClientPlace | NotRead> => {
     // One read of the table serves the server's, the clients' and their apps' walks.
     const rows = await deps.processes().catch(() => undefined)
     if (!rows) return 'processes'
@@ -219,56 +281,7 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
     const maker = await readPtyMaker(pid, rows, deps.tty).catch(() => null)
     if (maker === null) return 'processes'
     if (maker?.host !== 'herdr') return {}
-    const server = maker.pid
-    const others = rows.filter((p) => p.pid !== server && isHerdr(p)).map((p) => p.pid)
-      .sort((a, b) => a - b).slice(-HERDR_CLIENTS_A_LOOKUP)
-    // herdr before 0.9.0 ran the panes under the client itself with `--no-session`, on its tab's tty, with no client
-    // socket: with no other herdr, or none connected, the server is the one candidate.
-    let candidates = [server]
-    if (others.length) {
-      const connected = await (deps.platform === 'linux' ? ssClients : lsofClients)(server, others)
-      if (connected === undefined) return 'sockets'
-      if (connected.size) candidates = others.filter((other) => connected.has(other))
-    }
-    const ps = deps.platform === 'linux' ? deps.onPath('ps') : '/bin/ps'
-    const ttys = ps ? await output(deps.run, ps, ['-o', 'pid=,tty=', '-p', candidates.join(',')]) : undefined
-    if (ttys === undefined) return 'ttys'
-    const ttyOf = new Map<number, string>()
-    for (const line of ttys.split('\n')) {
-      const row = PID_TTY.exec(line)
-      if (row && candidates.includes(Number(row[1]))) ttyOf.set(Number(row[1]), `/dev/${row[2]}`)
-    }
-    // A candidate ps does not list has gone. The server counts only on a client's tty: a detached one has none.
-    const left = candidates.filter((p) => ttyOf.has(p) && (p !== server || isClientTty(ttyOf.get(p) ?? '')))
-    if (!left.length) return {}
-    // A client inside tmux, Zellij or Herdr's terminal has parents that end at a detached server or holder: no app.
-    const apps = await scannedApps(left, { platform: deps.platform, roots: deps.roots, processes: async () => rows, bundleId: deps.bundleId })
-    const shown = left.filter((p) => apps.has(p))
-    if (!shown.length) {
-      const client = await usedLast(left, ttyOf)
-      // A client whose own terminal tmux, Zellij or another herdr made is in no window a raise could bring, and herdr
-      // (0.9.5) strips their variables from its panes, so the agent's hints cannot name that multiplexer's pane. In a
-      // terminal with no page: the client's process alone, so Linux's raise brings its window.
-      const maker = await readPtyMaker(client, rows, deps.tty).catch(() => null)
-      if (maker === null) return 'ttys'
-      return maker?.host === 'tmux' || maker?.host === 'zellij' || maker?.host === 'herdr' ? {} : { pid: client }
-    }
-    const client = await usedLast(shown, ttyOf)
-    const app = apps.get(client)
-    const tty = ttyOf.get(client)
-    // A tty out of form names no tab.
-    return tty && isClientTty(tty) ? { app, tty, pid: client } : { app, pid: client }
-  }
-
-  async function lookUp(pid: number): Promise<ClientPlace> {
-    // Every other step answers its own word: what is left to throw is the app scan.
-    const place = await placeOf(pid).catch((): NotRead => 'app')
-    if (typeof place === 'string') {
-      deps.log(`[device] herdr client · not read · ${place}`)
-      return {}
-    }
-    deps.log(`[device] herdr client · ${place.app ? 'found' : 'none'}`)
-    return place
+    return clientsOf(deps, form, maker.pid, rows)
   }
 
   return (hints, pid) => {
@@ -279,15 +292,23 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
       return undefined
     }
     if (!PID.test(String(pid))) return undefined
-    const now = deps.now()
-    // Only panes asked in the last 5 s, or still in flight, are kept.
-    for (const [key, ask] of asked) if (ask.settled && now - ask.at >= OUTER_EVERY_MS) asked.delete(key)
-    const key = `${id}:${pid}`
-    const last = asked.get(key)
-    if (last) return last.answer
-    const ask = { at: now, answer: lookUp(pid), settled: false }
-    void ask.answer.then(() => { ask.settled = true })
-    asked.set(key, ask)
-    return ask.answer
+    return held(`${id}:${pid}`, () => placeOf(pid))
+  }
+}
+
+/**
+ * Where the person sees an agent the open scan found in a pane of their own herdr, with no hook to name that pane
+ * (Diego's iTerm2 tab running herdr, 2026-11-22): the hooked form's place, from the server on. The scan read the table
+ * ([rows]) and the agent's terminal's maker ([maker], the server) already, so neither is read again. Nothing at once on
+ * Windows or when the pid or maker is no pid. Never rejects.
+ */
+export function createHerdrNested(deps: ClientDeps): (found: { pid: number; maker: number; rows: readonly ProcessName[] }) => Promise<ClientPlace> | undefined {
+  const form = clientTtyForm(deps.platform)
+  if (!form) return () => undefined
+  // The answer depends on the server alone: two panes of one herdr cost one lookup.
+  const held = saidAnswers(deps)
+  return ({ pid, maker, rows }) => {
+    if (!PID.test(String(pid)) || !PID.test(String(maker))) return undefined
+    return held(String(maker), () => clientsOf(deps, form, maker, rows))
   }
 }

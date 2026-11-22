@@ -6,16 +6,17 @@
  * that session shows it, and none is moved to another session. Those are the two things done there, each only once the
  * pane's process is checked to be the agent's or one of its parents, and never on a session Harness made: nothing is
  * typed, made or closed (Q1). Beside them, a lookup reads which client shows a pane's session, to place the agent on the
- * page of the app that holds it (createTmuxOuter). tmux is the daemon's, with no `-L` or `-S`: the master's PATH may hold
- * none, so the devices find it as the core does (tmuxFinder), the same binary and so the same server. Each value came
- * from a hook or from tmux, so it is checked against its form, and tmux runs with no shell.
+ * page of the app that holds it (createTmuxOuter), or, for an agent the open scan found with no hook, by the agent's own
+ * tty (createTmuxNested). tmux is the daemon's, with no `-L` or `-S`: the master's PATH may hold none, so the devices find
+ * it as the core does (tmuxFinder), the same binary and so the same server. Each value came from a hook, the scan or
+ * tmux, so it is checked against its form, and tmux runs with no shell.
  */
 import { HARNESS_OWNER_OPTION, isHarnessSession, paneOwnerFormat } from '../../lib/harnessSessionLabel.js'
 import type { TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { APP_IDS } from './hostDetect.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
-import type { OuterLookup } from './outer.js'
+import type { Nested, NestedPlace, OuterLookup } from './outer.js'
 import { parentChain, readPtyOwner, scannedApps, type ProcessName } from './scannedApp.js'
 import { clientTtyForm } from './tabs.js'
 
@@ -32,6 +33,14 @@ const PANE_AND_PID = /^(%[0-9]{1,9}):([1-9][0-9]{0,9})(?::([a-z-]{1,32}))?$/
 const TMUX_PANE_FACTS = `#{pane_pid}|#{session_name}|#{${HARNESS_OWNER_OPTION}}${paneOwnerFormat(false)}`
 /** One line of TMUX_PANE_FACTS: the tag is last, cut at the last bar, as the hook cuts it; the session may hold a bar. */
 const TMUX_PANE_FACT = /^([1-9][0-9]{0,9})\|(.*)\|([^|]*)$/
+/** Every pane of the server: its id and its tty, then its facts. */
+const TMUX_PANES = `#{pane_id}|#{pane_tty}|${TMUX_PANE_FACTS}`
+/** One line of TMUX_PANES, cut at its first two bars; one whose id is out of form is no pane. */
+const TMUX_PANE_LINE = /^(%[0-9]{1,9})\|([^|]*)\|(.*)$/
+/** The lines of one pane listing parsed, the rest passed over: tmux's whole output is still buffered, up to execFile's
+ *  limit. Harness's own panes share the person's server, and each is a line. A pane of the person's past the bound is
+ *  not found, and the agent stays where the scan put it. */
+export const PANES_A_LISTING = 1024
 /** Each client: when it was used last, its process, its name, the tag of the pane it shows, its session. The daemon's
  *  own names for the tag and the session prefix, which the hook mirrors. The session's name is last: it may hold a bar. */
 const TMUX_CLIENTS = `#{client_activity}|#{client_pid}|#{client_name}|#{${HARNESS_OWNER_OPTION}}|#{session_name}`
@@ -44,7 +53,7 @@ const MAX_SWITCHED = 16
 const TMUX_CLIENT_PLACES = '#{client_activity}|#{client_pid}|#{client_tty}'
 /** One line of TMUX_CLIENT_PLACES; one with no whole activity or no pid in form is no client. */
 const TMUX_CLIENT_PLACE = /^([0-9]+)\|([1-9][0-9]{0,9})\|(.*)$/
-/** How long a pane's answer holds, from its lookup's start: Command Code's turn-start comes at every tool call, and a
+/** How long a pane's answer holds, from when its lookup settled: Command Code's turn-start comes at every tool call, and a
  *  lookup is a `ps` and up to BUNDLES_A_PASS `plutil` runs. The herdr and Zellij lookups hold their answers as long
  *  (herdrOuter.ts, zellij.ts). */
 export const OUTER_EVERY_MS = 5_000
@@ -68,16 +77,21 @@ async function runTmux(deps: Pick<TmuxDeps, 'run' | 'tmux'>, args: string[]): Pr
   return deps.run(found.state === 'adopted' ? found.path : 'tmux', args, RUN_TIMEOUT_MS).catch(() => ({ code: null, stdout: '' }))
 }
 
-/** What tmux says of a pane: its process, and whether it is the person's by the rule the hook and the client filter
- *  hold (no daemon's tag, not in a session Harness named). `tmux` when no tmux was found, `pane` when tmux did not
- *  answer in form. */
+/** A pane's process, its session, and whether it is the person's by the rule the hook and the client filter hold (no
+ *  daemon's tag, not in a session Harness named), from one line of TMUX_PANE_FACTS; nothing when it is out of form. */
+function factsOf(line: string): { pid: number; session: string; persons: boolean } | undefined {
+  const facts = TMUX_PANE_FACT.exec(line)
+  if (!facts) return undefined
+  const [, pid, session, owner] = facts
+  return { pid: Number(pid), session, persons: !owner && !isHarnessSession(session) }
+}
+
+/** What tmux says of a pane (factsOf). `tmux` when no tmux was found, `pane` when tmux did not answer in form. */
 async function paneFacts(deps: Pick<TmuxDeps, 'run' | 'tmux'>, id: string): Promise<{ pid: number; persons: boolean } | 'tmux' | 'pane'> {
   const said = await runTmux(deps, ['display-message', '-p', '-t', id, TMUX_PANE_FACTS])
   if (!said) return 'tmux'
-  const facts = TMUX_PANE_FACT.exec(said.stdout.trim())
-  if (said.code !== 0 || !facts) return 'pane'
-  const [, pid, session, owner] = facts
-  return { pid: Number(pid), persons: !owner && !isHarnessSession(session) }
+  const facts = factsOf(said.stdout.trim())
+  return said.code === 0 && facts ? facts : 'pane'
 }
 
 /** Whether the pane's process is [pid] or one of its parents, as the open scan walks them: a second tmux server of the
@@ -205,9 +219,62 @@ export interface TmuxOuterDeps {
 
 /** The app that holds the tmux client showing an agent's pane, that client's tty when it is in its platform's form, and its process. */
 interface ClientPlace { app?: string; tty?: string; pid?: number }
-/** The step of a lookup that could not be read, as its line names it: no tmux found, the pane's facts, the process
- *  table or a terminal of the caller's, the session's clients, the client's app. */
+/** The step of a lookup that could not be read, as its line names it: no tmux found, the pane's facts or the pane
+ *  listing, the process table or a terminal of the caller's, the session's clients, the client's app. */
 type NotRead = 'tmux' | 'pane' | 'processes' | 'clients' | 'app'
+
+/**
+ * Answers by key, each held OUTER_EVERY_MS from when it settled: the scan asks one session at a time, so an answer kept
+ * from its start would be gone after a run that hung to its timeout, and each ask after it would wait out one more. One
+ * in flight is shared. Only keys settled in the last 5 s, or still in flight, are kept. [ask] never rejects.
+ */
+export function heldAnswers<T>(now: () => number): (key: string, ask: () => Promise<T>) => Promise<T> {
+  const asked = new Map<string, { answer: Promise<T>; settledAt?: number }>()
+  return (key, ask) => {
+    const at = now()
+    for (const [held, last] of asked) if (last.settledAt !== undefined && at - last.settledAt >= OUTER_EVERY_MS) asked.delete(held)
+    const last = asked.get(key)
+    if (last) return last.answer
+    const entry: { answer: Promise<T>; settledAt?: number } = { answer: ask() }
+    void entry.answer.then(() => { entry.settledAt = now() })
+    asked.set(key, entry)
+    return entry.answer
+  }
+}
+
+/** The client used last on the pane's session, walked over [rows], the table that proved the pane the agent's: `{}`
+ *  when the session has no client, or none in a listed app; `clients` when tmux did not list them. */
+async function clientOf(
+  deps: Pick<TmuxOuterDeps, 'run' | 'tmux' | 'platform' | 'roots' | 'bundleId'>, id: string, rows: readonly ProcessName[],
+): Promise<ClientPlace | NotRead> {
+  // By the pane id, which tmux resolves to its session: a session's name could read as another target (`$0`, `@1`).
+  const listed = await runTmux(deps, ['list-clients', '-t', id, '-F', TMUX_CLIENT_PLACES])
+  if (listed?.code !== 0) return 'clients'
+  let client: { activity: number; pid: number; tty: string } | undefined
+  for (const line of listed.stdout.split('\n')) {
+    const row = TMUX_CLIENT_PLACE.exec(line)
+    // tmux gives the activity in whole seconds: on a tie the one listed later, which attached later, wins (personsClient).
+    if (row && (!client || Number(row[1]) >= client.activity)) client = { activity: Number(row[1]), pid: Number(row[2]), tty: row[3] }
+  }
+  if (!client) return {}
+  const apps = await scannedApps([client.pid], { platform: deps.platform, roots: deps.roots, processes: async () => rows, bundleId: deps.bundleId })
+  const app = apps.get(client.pid)
+  if (!app) return {}
+  // A tty out of the platform's form names no tab: a control client has none.
+  return clientTtyForm(deps.platform)?.test(client.tty) ? { app, tty: client.tty, pid: client.pid } : { app, pid: client.pid }
+}
+
+/** A lookup's answer, with its line: `{}` for a step not read. Every other step answers its own word: what is left to
+ *  throw is the app scan. */
+async function said(log: TmuxOuterDeps['log'], placing: Promise<NestedPlace | NotRead>): Promise<NestedPlace> {
+  const place = await placing.catch((): NotRead => 'app')
+  if (typeof place === 'string') {
+    log(`[device] tmux client · not read · ${place}`)
+    return {}
+  }
+  log(`[device] tmux client · ${place.app ? 'found' : 'none'}`)
+  return place
+}
 
 /**
  * Where the person sees an agent in a pane of their own tmux: in the app that holds the client used last on the pane's
@@ -219,8 +286,8 @@ type NotRead = 'tmux' | 'pane' | 'processes' | 'clients' | 'app'
  */
 export function createTmuxOuter(deps: TmuxOuterDeps): OuterLookup {
   // By pane and caller: an answer holds for the caller whose chain held the pane, a pane of the same id may be another
-  // server's. A lookup in flight is shared past its 5 s, so a tmux that hangs to its timeout runs no second one.
-  const asked = new Map<string, { at: number; answer: Promise<ClientPlace>; settled: boolean }>()
+  // server's.
+  const asked = heldAnswers<ClientPlace>(deps.now)
 
   /** `{}` when the pane is not the person's, holds no process of the caller's, tmux made no terminal the caller runs on,
    *  or no client of its session is in a listed app; the step that could not be read, when one could not. */
@@ -238,46 +305,67 @@ export function createTmuxOuter(deps: TmuxOuterDeps): OuterLookup {
     const owner = await readPtyOwner(pid, rows, deps.tty).catch(() => null)
     if (owner === null) return 'processes'
     if (owner !== 'tmux') return {}
-    // By the pane id, which tmux resolves to its session: a session's name could read as another target (`$0`, `@1`).
-    const listed = await runTmux(deps, ['list-clients', '-t', id, '-F', TMUX_CLIENT_PLACES])
-    if (listed?.code !== 0) return 'clients'
-    let client: { activity: number; pid: number; tty: string } | undefined
-    for (const line of listed.stdout.split('\n')) {
-      const row = TMUX_CLIENT_PLACE.exec(line)
-      // tmux gives the activity in whole seconds: on a tie the one listed later, which attached later, wins (personsClient).
-      if (row && (!client || Number(row[1]) >= client.activity)) client = { activity: Number(row[1]), pid: Number(row[2]), tty: row[3] }
-    }
-    if (!client) return {}
-    const apps = await scannedApps([client.pid], { platform: deps.platform, roots: deps.roots, processes: async () => rows, bundleId: deps.bundleId })
-    const app = apps.get(client.pid)
-    if (!app) return {}
-    // A tty out of the platform's form names no tab: a control client has none.
-    return clientTtyForm(deps.platform)?.test(client.tty) ? { app, tty: client.tty, pid: client.pid } : { app, pid: client.pid }
-  }
-
-  async function lookUp(id: string, pid: number): Promise<ClientPlace> {
-    // Every other step answers its own word: what is left to throw is the app scan.
-    const place = await placeOf(id, pid).catch((): NotRead => 'app')
-    if (typeof place === 'string') {
-      deps.log(`[device] tmux client · not read · ${place}`)
-      return {}
-    }
-    deps.log(`[device] tmux client · ${place.app ? 'found' : 'none'}`)
-    return place
+    return clientOf(deps, id, rows)
   }
 
   return (hints, pid) => {
     const id = hints.TMUX_PANE
     if (!id || !TMUX_PANE_ID.test(id) || !PID.test(String(pid))) return undefined
-    const now = deps.now()
-    // Only panes asked in the last 5 s, or still in flight, are kept.
-    for (const [key, ask] of asked) if (ask.settled && now - ask.at >= OUTER_EVERY_MS) asked.delete(key)
-    const key = `${id}:${pid}`
-    const last = asked.get(key)
-    if (last) return last.answer
-    const ask = { at: now, answer: lookUp(id, pid), settled: false }
-    void ask.answer.then(() => { ask.settled = true })
-    asked.set(key, ask)
-    return ask.answer
+    return asked(`${id}:${pid}`, () => said(deps.log, placeOf(id, pid)))
+  }
+}
+
+/** The server's panes, the first PANES_A_LISTING lines; the step that could not be read, when one could not. */
+type PaneListing = readonly string[] | 'tmux' | 'pane'
+
+/**
+ * Where the person sees an agent the open scan found in a pane of their own tmux, with no hook to name the pane (Diego's
+ * report of 2026-11-22: an idle agent stayed on Other's page after the devices started again, until its next hook). The
+ * scan read the table and found that tmux made the agent's terminal: the pane is the person's one on the agent's own
+ * tty that holds the agent or one of its parents, and from there the place is the hooked form's, plus the pane with its
+ * app. Nothing at once when the platform names no client's tty, the agent is no pid or its tty is out of form; else the
+ * place, `{}` when none is found. Never rejects.
+ */
+export function createTmuxNested(deps: Omit<TmuxOuterDeps, 'processes' | 'tty'>): (found: Pick<Nested, 'pid' | 'tty' | 'rows'>) => Promise<NestedPlace> | undefined {
+  // The scan asks for up to fifty sessions a look: one listing serves them all, so a tmux that hangs costs the look one
+  // timeout, not one an ask.
+  const listings = heldAnswers<PaneListing>(deps.now)
+  // By the pane's session, failures too: every pane of a session has its clients, so a tmux that hangs on them costs
+  // the look one timeout, not one an agent.
+  const clients = heldAnswers<ClientPlace | NotRead>(deps.now)
+  // By tty and agent: an answer holds for the agent whose chain held the pane.
+  const asked = heldAnswers<NestedPlace>(deps.now)
+
+  async function listPanes(): Promise<PaneListing> {
+    const listed = await runTmux(deps, ['list-panes', '-a', '-F', TMUX_PANES])
+    if (!listed) return 'tmux'
+    if (listed.code !== 0) return 'pane'
+    const lines = listed.stdout.split('\n')
+    if (lines.at(-1) === '') lines.pop()
+    if (lines.length > PANES_A_LISTING) deps.log('[device] tmux client · over')
+    return lines.slice(0, PANES_A_LISTING)
+  }
+
+  /** `{}` when no pane of the person's on [tty] holds the agent or one of its parents, or no client of its session is
+   *  in a listed app; the step that could not be read, when one could not. */
+  async function placeOf(found: Pick<Nested, 'pid' | 'tty' | 'rows'>, tty: string): Promise<NestedPlace | NotRead> {
+    const panes = await listings('', listPanes)
+    if (typeof panes === 'string') return panes
+    for (const line of panes) {
+      const pane = TMUX_PANE_LINE.exec(line)
+      const facts = pane?.[2] === tty ? factsOf(pane[3]) : undefined
+      if (!pane || !facts) continue
+      if (!facts.persons || !holdsPane(found.rows, found.pid, facts.pid)) return {}
+      // The app scan is what can throw: a held answer never rejects.
+      const place = await clients(facts.session, () => clientOf(deps, pane[1], found.rows).catch((): NotRead => 'app'))
+      return typeof place !== 'string' && place.app ? { ...place, pane: { adapter: 'tmux', id: `${pane[1]}:${found.pid}:${place.app}` } } : place
+    }
+    return {}
+  }
+
+  return (found) => {
+    const tty = `/dev/${found.tty}`
+    if (!clientTtyForm(deps.platform)?.test(tty) || !PID.test(String(found.pid))) return undefined
+    return asked(`${found.tty}:${found.pid}`, () => said(deps.log, placeOf(found, tty)))
   }
 }

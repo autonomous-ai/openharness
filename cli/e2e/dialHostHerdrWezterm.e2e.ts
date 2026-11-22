@@ -8,6 +8,10 @@
  * `harness hardware watch --json`, as Harness Device does. No `herdr` or `wezterm` the daemon runs reaches the
  * developer's, and the daemon's process table hides every herdr outside the test's tree (ownHerdrsOnly).
  *
+ * The same agent found by the open scan, idle since before the devices started, is on WezTerm's page too
+ * (docs/plans/2026-11-22-dial-iterm2-tmux-herdr-design.md): its client found from herdr's server, and its herdr pane
+ * focused only when herdr's own row of it names its session.
+ *
  * Skipped where herdr (or the cc that builds its agent) or WezTerm is not installed; CI's `e2e (dial hosts)` job
  * installs both, and there a missing one fails the file (harness/dialHosts.ts).
  */
@@ -20,7 +24,7 @@ import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { APP_BUNDLES } from '../src/cable/hosts/hostDetect.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
-import type { DialMessage } from './harness/fakeDial.js'
+import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { herdrBinary, ownHerdrsOnly, PrivateHerdr } from './harness/herdrServer.js'
 import { InOrca } from './harness/inOrca.js'
 import { PrivateWezterm, weztermBinary } from './harness/weztermMux.js'
@@ -71,8 +75,13 @@ describe.skipIf(!herdrBinary || !weztermBinary)("herdr's client in WezTerm", () 
    * first list, a herdr server and a WezTerm mux server of the test's own, herdr's client in a WezTerm pane and another
    * tab of that window active, then the hooked agent in a herdr pane, started once the client is attached, so its first
    * lookup finds it.
+   *
+   * With [found], the dial is plugged only once the agent ran a turn and herdr sees it idle: its hooks ran while no
+   * devices process ran, so they reached nobody, and the scan the dial's attach runs finds it, as Diego's idle agents
+   * were found after the devices started again (2026-11-22). `session`: herdr's row of it names its session, as herdr's
+   * Claude Code integration tells it (RECORDED_HERDR byReport).
    */
-  const fresh = async () => {
+  const fresh = async (found?: 'session' | 'no session') => {
     const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false' } })
     daemon = d
     ownHerdrsOnly(d)
@@ -87,8 +96,12 @@ describe.skipIf(!herdrBinary || !weztermBinary)("herdr's client in WezTerm", () 
     await d.start()
     // Claude Code started by hand reads its hooks once, as it starts: they must be in by then.
     await d.hooksInstalled(['claude'])
-    const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a', FILTER)
-    await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
+    const plug = async (): Promise<FakeDial> => {
+      const plugged = await desk!.plug('E2E-A', 'e2:e0:00:00:00:0a', FILTER)
+      await plugged.next((m) => m.t === 'agents.end', 45_000, 'the first list')
+      return plugged
+    }
+    let dial = found ? undefined : await plug()
     const server = await PrivateHerdr.start(d)
     herdr = server
     const mux = await PrivateWezterm.start(d)
@@ -107,16 +120,35 @@ describe.skipIf(!herdrBinary || !weztermBinary)("herdr's client in WezTerm", () 
     expect(await mux.activeTab(other)).toBe(true)
     expect(await mux.activeTab(client.pane)).toBe(false)
     const agent = await server.hooked('api')
+    const pid = Number(d.hookLog().match(new RegExp(`claude pid=(\\d+) SessionStart\\(startup\\) session=${agent.sessionId} ran`))![1])
+    const { stdout: tty } = await execFileAsync('/bin/ps', ['-o', 'tty=', '-p', String(pid)])
     // A tty by its name alone too.
-    unsaid.push(join(d.projectsDir, 'api'), agent.sessionId, agent.pane, client.tty.slice('/dev/'.length),
+    unsaid.push(join(d.projectsDir, 'api'), agent.sessionId, agent.pane, client.tty.slice('/dev/'.length), tty.trim(),
       join(d.env.HOME!, 'wezterm', 'sock'), join(d.env.HOME!, '.config', 'herdr'))
-    await said(d, '[device] herdr client · found')
-    await dial.next((m) => m.t === 'agent' && m.id === agent.id && m.host === 'herdr', 45_000, 'the agent listed')
+    if (dial) {
+      await said(d, '[device] herdr client · found')
+      await dial.next((m) => m.t === 'agent' && m.id === agent.id && m.host === 'herdr', 45_000, 'the agent listed')
+    } else {
+      // A turn, so its conversation is on disk: the scan lists only a session its transcript holds.
+      await server.type(agent.pane, 'before the dial')
+      await until('its Stop hook to run',
+        () => new RegExp(`claude pid=${pid} Stop\\S* session=${agent.sessionId} ran`).test(d.hookLog()), 30_000, 100)
+    }
     // herdr focuses only an agent it has seen, and its detection lags the hook by a moment (herdr 0.9.5).
     await until('herdr to see the agent', async () => {
       const read = await server.rpc('agent.get', { target: agent.pane }).catch(() => undefined)
       return (read?.agent as { agent_status?: string } | undefined)?.agent_status === 'idle'
     }, 30_000, 100)
+    if (found === 'session') {
+      // As the integration's SessionStart hook sends it: herdr adds it to the row its detection found.
+      await server.rpc('pane.report_agent_session',
+        { pane_id: agent.pane, source: 'herdr:claude', agent: 'claude', agent_session_id: agent.sessionId })
+      await until('herdr to list the agent with its session', async () => {
+        const { agents } = await server.rpc('agent.list') as { agents: Array<{ pane_id: string; agent_session?: { value?: string } }> }
+        return agents.some((row) => row.pane_id === agent.pane && row.agent_session?.value === agent.sessionId)
+      }, 30_000, 100)
+    }
+    dial ??= await plug()
     expect(await server.focused()).not.toBe(agent.pane)
     return { d, dial, herdr: server, mux, client, agent }
   }
@@ -135,39 +167,84 @@ describe.skipIf(!herdrBinary || !weztermBinary)("herdr's client in WezTerm", () 
   /** The daemon's rest lines, each from its `[device]` on. */
   const swipes = (d: IsolatedDaemon): string[] => lines(d, '[device] swipe ·')
 
-  it("lists the agent on WezTerm's page, one row, and on no other page", async () => {
-    const { dial, agent } = await fresh()
-    const apps = (m: DialMessage) => m.apps as Array<{ id: string; count: number }>
-    const frame = await until("WezTerm's page holding the agent", () => {
-      const last = dial.messages.filter((m) => m.t === 'apps').at(-1)
-      return last && apps(last).some((a) => a.id === 'wezterm' && a.count === 1) ? last : undefined
-    }, 45_000, 100)
-    expect(apps(frame).filter((a) => a.count > 0)).toEqual([expect.objectContaining({ id: 'wezterm', count: 1 })])
-    // Its ring's list, as the dial was last sent it: the agent once, and nothing else.
-    const begin = dial.messages.map((m) => m.t).lastIndexOf('agents.begin')
-    const end = dial.messages.map((m) => m.t).lastIndexOf('agents.end')
-    expect(end).toBeGreaterThan(begin)
-    expect(dial.messages.slice(begin, end).filter((m) => m.t === 'agent').map((m) => m.id)).toEqual([agent.id])
-  })
-
-  it("with WezTerm in front a rest activates the client's pane and tab, then focuses the agent's herdr pane", async () => {
-    const { d, dial, herdr, mux, client, agent } = await fresh()
+  /** WezTerm in front, then a rest on the agent every 2 s until [done]: a rest before the watch's front line lands shows
+   *  nothing, and one before herdr's list places the scan's copy at its herdr pane focuses none. */
+  const restUntil = async (d: IsolatedDaemon, dial: FakeDial, agentId: string, what: string,
+    done: () => boolean | Promise<boolean>): Promise<void> => {
     watch(d, WEZTERM_FRONT)
-    // A rest before the watch's front line lands shows nothing: the dial rests on the agent again every 2 s until one
-    // is shown.
-    const before = swipes(d).filter((line) => line === '[device] swipe · ok').length
     let sent = 0
-    await until('a rest shown', () => {
-      if (swipes(d).filter((line) => line === '[device] swipe · ok').length > before) return true
+    await until(what, async () => {
+      if (await done()) return true
       if (Date.now() - sent >= 2_000) {
-        dial.send({ t: 'focus', agentId: agent.id })
+        dial.send({ t: 'focus', agentId })
         sent = Date.now()
       }
       return undefined
     }, 60_000, 50)
+  }
+  /** Rests on the agent until one is shown. */
+  const restShown = (d: IsolatedDaemon, dial: FakeDial, agentId: string): Promise<void> => {
+    const oks = () => swipes(d).filter((line) => line === '[device] swipe · ok').length
+    const before = oks()
+    return restUntil(d, dial, agentId, 'a rest shown', () => oks() > before)
+  }
+
+  /** The pages of an apps frame that hold an agent, each `<app> <count>`. */
+  const held = (m: DialMessage): string[] =>
+    (m.apps as Array<{ id: string; count: number }>).filter((a) => a.count > 0).map((a) => `${a.id} ${a.count}`).sort()
+  /** Until the dial's latest apps frame holds these pages and no other. */
+  const pages = (dial: FakeDial, ...want: string[]) => until(`the pages ${want.join(', ')}`, () => {
+    const last = dial.messages.filter((m) => m.t === 'apps').at(-1)
+    return last && held(last).join() === want.join() ? true : undefined
+  }, 45_000, 100)
+  /** Its ring's list, as the dial was last sent it. */
+  const ring = (dial: FakeDial): unknown[] => {
+    const begin = dial.messages.map((m) => m.t).lastIndexOf('agents.begin')
+    const end = dial.messages.map((m) => m.t).lastIndexOf('agents.end')
+    expect(end).toBeGreaterThan(begin)
+    return dial.messages.slice(begin, end).filter((m) => m.t === 'agent').map((m) => m.id)
+  }
+  /** The open scan's line once its lookup placed the one session it found. */
+  const scanPlaced = (d: IsolatedDaemon) => until("the scan's lookup to place the agent",
+    () => /\[observed\] scan · 1 found · .* · 1 nested placed/.test(d.log()), 45_000, 100)
+
+  it("lists the agent on WezTerm's page, one row, and on no other page", async () => {
+    const { dial, agent } = await fresh()
+    await pages(dial, 'wezterm 1')
+    // The agent once, and nothing else.
+    expect(ring(dial)).toEqual([agent.id])
+  })
+
+  it("with WezTerm in front a rest activates the client's pane and tab, then focuses the agent's herdr pane", async () => {
+    const { d, dial, herdr, mux, client, agent } = await fresh()
+    await restShown(d, dial, agent.id)
     expect(await mux.activeTab(client.pane)).toBe(true)
     expect(await mux.active(client.pane)).toBe(true)
     await until("the agent's pane focused in herdr", async () => await herdr.focused() === agent.pane, 30_000, 100)
+  })
+
+  it("found by the scan, with herdr's row of its session: one row on WezTerm's page; a rest with WezTerm in front activates the client's pane and tab, then focuses the agent's herdr pane", async () => {
+    const { d, dial, herdr, mux, client, agent } = await fresh('session')
+    await restUntil(d, dial, agent.id, "the agent's pane focused in herdr", async () => await herdr.focused() === agent.pane)
+    expect(await mux.activeTab(client.pane)).toBe(true)
+    expect(await mux.active(client.pane)).toBe(true)
+    await scanPlaced(d)
+    // herdr's row folds into the scan's copy by its session.
+    await pages(dial, 'wezterm 1')
+    expect(ring(dial)).toEqual([agent.id])
+  })
+
+  it("found by the scan, with no session in herdr's row: on WezTerm's page with its tab, and herdr's row on herdr's page", async () => {
+    const { d, dial, herdr, mux, client, agent } = await fresh('no session')
+    const focused = await herdr.focused()
+    await restShown(d, dial, agent.id)
+    expect(await mux.activeTab(client.pane)).toBe(true)
+    expect(await mux.active(client.pane)).toBe(true)
+    // The rest's line comes once its every step ran: no herdr pane was focused.
+    expect(await herdr.focused()).toBe(focused)
+    await scanPlaced(d)
+    await pages(dial, 'herdr 1', 'wezterm 1')
+    expect(ring(dial)).toEqual([agent.id])
   })
 
   it('with another app in front a rest moves neither the tab nor the herdr pane', async () => {

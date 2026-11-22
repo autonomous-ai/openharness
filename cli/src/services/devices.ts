@@ -42,14 +42,14 @@ import { watchNearest } from '../cable/hosts/folderWatch.js'
 import { createCodexAppAdapter } from '../cable/hosts/codexApp.js'
 import { CodexAppSource, type CodexAppSourceDeps } from '../cable/hosts/codexAppSource.js'
 import { CodexAppThreads } from '../cable/hosts/codexAppThreads.js'
-import { APP_BUNDLES } from '../cable/hosts/hostDetect.js'
+import { APP_BUNDLES, APP_IDS, UNKNOWN_APP } from '../cable/hosts/hostDetect.js'
 import { APP_PACKAGE, codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
 import { createHcClient, hcClientDeps, hcPaneKey, hcSocketPath, type HcClient } from '../cable/hosts/hcClient.js'
 import { HcSource } from '../cable/hosts/hcSource.js'
 import { createHerdrAdapter } from '../cable/hosts/herdr.js'
 import { createHerdrAppAdapter } from '../cable/hosts/herdrApp.js'
 import { createHerdrClient, herdrClientDeps, type HerdrClient } from '../cable/hosts/herdrClient.js'
-import { createHerdrOuter, procSockets, ttyAtime } from '../cable/hosts/herdrOuter.js'
+import { createHerdrNested, createHerdrOuter, procSockets, ttyAtime } from '../cable/hosts/herdrOuter.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import { createKittyAdapter, createKittyTabAdapter, kittyFinder } from '../cable/hosts/kitty.js'
 import { Inbox } from '../cable/hosts/inbox.js'
@@ -62,13 +62,13 @@ import { createOpenActions } from '../cable/hosts/open.js'
 import { createOpencodeClient, opencodeClientDeps, opencodeMessageId, type OpencodeClient } from '../cable/hosts/opencodeClient.js'
 import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
 import { createOrcaAdapter, createOrcaReads, orcaDeps, orcaHandle, type OrcaFocusWatch, type OrcaReadDeps, type OrcaReads, type OrcaTerminal } from '../cable/hosts/orca.js'
-import { firstOuter } from '../cable/hosts/outer.js'
+import { firstOuter, type NestedLookup } from '../cable/hosts/outer.js'
 import { readRecord } from '../cable/hosts/record.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
-import { appRoots, learnApps, readBundleId, readProcessNames, readPtyOwner, readTtyName, scanLearnsApps } from '../cable/hosts/scannedApp.js'
+import { appRoots, learnApps, readBundleId, readMadeBy, readProcessNames, readPtyOwner, readTtyName, scanLearnsApps } from '../cable/hosts/scannedApp.js'
 import { createScrollLines } from '../cable/hosts/scrollLines.js'
 import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
-import { createTmuxAdapter, createTmuxOuter } from '../cable/hosts/tmux.js'
+import { createTmuxAdapter, createTmuxNested, createTmuxOuter } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
 import { createVscodeAdapter, termPid } from '../cable/hosts/vscode.js'
@@ -292,7 +292,7 @@ function orcaHomesCache(now: () => number, log: (line: string) => void): OrcaHom
 function observedSource(
   dataDir: string, log: (line: string) => void, orcaHomes: Pick<OrcaHomesCache, 'get'>, actions: ObservedActions,
   tty: ObservedDeps['tty'], scanned: ObservedDeps['scanned'], herdrTerminal: ObservedDeps['herdrTerminal'],
-  outer: ObservedDeps['outer'], ptyOwnerOf: ObservedDeps['ptyOwner'],
+  outer: ObservedDeps['outer'], ptyOwnerOf: ObservedDeps['ptyOwner'], nesting: Pick<ObservedDeps, 'table' | 'madeBy' | 'nested'>,
 ): ObservedSource {
   // Worked out at each read: a home the person moved is adopted while the daemon runs, and Orca's follow its last read.
   const places = observedPlaces({
@@ -324,6 +324,7 @@ function observedSource(
     scanned,
     herdrTerminal,
     outer,
+    ...nesting,
   })
 }
 
@@ -703,6 +704,22 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  ids. */
   const outerDeps = { run: apps.run, processes: readProcessNames, log, now: monotonic, platform: apps.platform,
     roots: appRoots(homedir()), bundleId: readBundleId }
+  /** How the open scan places a session it found in a pane of the person's tmux or herdr, before its first hook: Diego's
+   *  idle agents in tmux inside iTerm2 sat on Other's page after the devices started again (2026-11-22). None where the
+   *  scan learns no app (Windows has no `ps`): there it lists them as before. */
+  const nesting = (): Pick<ObservedDeps, 'table' | 'madeBy' | 'nested'> => {
+    if (!scanLearnsApps(apps.platform)) return {}
+    // Each host with a lookup by process, and that lookup: the maker's read names only these, so each found has one.
+    const lookups: Record<string, NestedLookup> = {
+      tmux: createTmuxNested({ ...outerDeps, tmux: tmuxAt }),
+      herdr: createHerdrNested({ ...outerDeps, atime: ttyAtime, tty: readTtyName, onPath: apps.onPath, sockets: procSockets }),
+    }
+    return {
+      table: readProcessNames,
+      madeBy: (pids, rows) => readMadeBy(pids, rows, readTtyName, Object.keys(lookups)),
+      nested: (found) => lookups[found.host](found),
+    }
+  }
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, orcaHomes, {
     adapters,
     modReady: (sessionId) => inbox.ready(sessionId),
@@ -732,7 +749,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     firstOuter(createTmuxOuter({ ...outerDeps, tmux: tmuxAt, tty: readTtyName }),
       createZellijOuter({ ...outerDeps, zellij: zellijAt, tty: readTtyName }))),
   // Windows has no `ps`: there no terminal's pane is read as the agent's own, and none takes its words.
-  apps.platform === 'win32' ? undefined : async (pid) => readPtyOwner(pid, await readProcessNames(), readTtyName)) : null
+  apps.platform === 'win32' ? undefined : async (pid) => readPtyOwner(pid, await readProcessNames(), readTtyName), nesting()) : null
   // Orca is asked only for the parts that use its homes, the first time as the devices start: the start pass waits for
   // that read (at most its 5 s), so an Orca home gets the skill with the default one.
   if (skill || observed) void orcaHomes.refresh().then(() => {
@@ -1760,6 +1777,39 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const place = (): void => part.call('cmux', () => placeInCmux(observed, cmuxSource))
     observed.onChange(place)
     cmuxSource.onChange(place)
+  }
+
+  /**
+   * The open scan's copy of a session herdr lists with its session id, placed at that row's herdr pane: Diego's idle
+   * agents in herdr in an iTerm2 tab (2026-11-22) had no hook to name their pane after the devices started again, so a
+   * rest reached the tab alone. Only an agent with no herdr pane of its own. The place carries the app the agent is on,
+   * as a rest needs it (herdr.ts canShow); while that app is not known, the bare pane, which a tap still focuses. A place
+   * opens and shows, never takes words (observed.ts shownOnly).
+   */
+  let placedInHerdr = false
+  const placeInHerdr = (source: ObservedSource, listing: HerdrSource): void => {
+    const rows = listing.list()
+    // Each observed change lands here, herdr running or not: with no row and no place to drop, there is nothing to tell.
+    if (rows.length === 0 && !placedInHerdr) return
+    const placed = new Map<string, string>()
+    for (const { id, engine, sessionId } of rows) {
+      if (sessionId === undefined) continue
+      const agentId = observedAgentId(engine, sessionId)
+      if (source.paneOf(agentId, 'herdr') !== undefined) continue
+      const app = source.windowOf(agentId)?.app
+      // A row it lists has its pane.
+      const pane = listing.paneAt(id)!
+      placed.set(agentId, app !== undefined && app !== UNKNOWN_APP && APP_IDS.includes(app) ? `${pane}:${app}` : pane)
+    }
+    source.setPaneNames('herdr', new Map(), placed)
+    placedInHerdr = placed.size > 0
+  }
+  // As cmux's: after each change of either, and herdr's source stopping drops its rows, and with them every place. None
+  // where the scan learns no app (Windows): there herdr's rows are as before.
+  if (observed && herdr && scanLearnsApps(apps.platform)) {
+    const place = (): void => part.call('herdr', () => placeInHerdr(observed, herdr))
+    observed.onChange(place)
+    herdr.onChange(place)
   }
 
   // ── the worktree on Orca's screen ──────────────────────────────────────────────────────────────────

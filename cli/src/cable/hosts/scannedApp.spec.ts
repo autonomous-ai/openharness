@@ -11,8 +11,8 @@ import { RECORDED_HERDR } from '../../testing/recordedHerdr.js'
 import { RECORDED_ORCA } from '../../testing/recordedOrca.js'
 import { ObservedSource, type ObservedDeps } from './observed.js'
 import {
-  appRoots, learnApps, parseProcessNames, ptyMaker, readBundleId, readProcessNames, readPtyMaker, readPtyOwner,
-  readTtyName, scannedApps,
+  appRoots, learnApps, parseProcessNames, ptyMaker, readBundleId, readMadeBy, readProcessNames, readPtyMaker,
+  readPtyOwner, readTtyName, scannedApps,
   WALK_PARENTS, type ProcessName, type PtyProcess, type ScannedAppDeps,
 } from './scannedApp.js'
 
@@ -242,10 +242,13 @@ describe('scannedApps on macOS', () => {
       pid, ppid, executable, get args(): string { throw new Error('a command line was read') },
     })
     const d = deps([])
-    d.processes.mockResolvedValue([row(100, 90, `${MARK} deploy to prod with this key`), row(90, 1, GHOSTTY), row(200, 1, `${MARK}`)])
+    d.processes.mockResolvedValue([
+      row(100, 90, `${MARK} deploy to prod with this key`), row(90, 1, GHOSTTY), row(200, 1, `${MARK}`),
+      row(300, 290, `${MARK} and more`), row(290, 1, 'iTermServer-3.5.4'), row(400, 1, `iTermServer-3.5.4 ${MARK}`),
+    ])
     d.bundleId.mockResolvedValue('com.mitchellh.ghostty')
-    const answer = await scannedApps([100, 200], d)
-    expect(JSON.stringify([...answer])).toBe('[[100,"ghostty"]]')
+    const answer = await scannedApps([100, 200, 300, 400], d)
+    expect(JSON.stringify([...answer])).toBe('[[100,"ghostty"],[300,"iterm"]]')
   })
 })
 
@@ -280,6 +283,76 @@ describe('scannedApps elsewhere', () => {
     expect(await scannedApps([10], d)).toEqual(new Map())
     expect(d.processes).not.toHaveBeenCalled()
     expect(d.bundleId).not.toHaveBeenCalled()
+  })
+})
+
+// iTerm2 forks every shell from a copy of its server outside its bundle, which outlives iTerm2 when it relaunches
+// (docs/plans/2026-11-22-dial-iterm2-tmux-herdr-design.md, Gap 2).
+describe('iTerm2\'s server', () => {
+  const ITERM2 = '/Applications/iTerm.app/Contents/MacOS/iTerm2'
+  const ITERM_BUNDLE = { '/Applications/iTerm.app': 'com.googlecode.iterm2' }
+  const atHome = (rows: Array<[number, number, string]>, bundles: Record<string, string> = {}, platform: NodeJS.Platform = 'darwin') =>
+    ({ ...deps(rows, bundles, platform), home: HOME })
+  /** A plain tab's session under [server], whose parent is [parent]. */
+  const tab = (server: string, parent: number): Array<[number, number, string]> => [
+    [500, 499, 'claude'], [499, 498, '-zsh'], [498, 497, 'login'], [497, parent, server], [400, 1, ITERM2],
+  ]
+
+  it.each([
+    ['the Application Support copy', `${HOME}/Library/Application Support/iTerm2/iTermServer-3.5.4`],
+    ['the .iterm2 copy', `${HOME}/.iterm2/iTermServer-3.6.6`],
+    ['the bare name', 'iTermServer-3.5.4'],
+    ['a nightly', `${HOME}/Library/Application Support/iTerm2/iTermServer-3.6.0-nightly-20261120`],
+    ['the longest version', `iTermServer-3${'1'.repeat(31)}`],
+  ])('a plain tab under iTermServer is in iTerm2, in each form, with iTerm2 or launchd as its parent: %s', async (_, server) => {
+    const under = atHome(tab(server, 400), ITERM_BUNDLE)
+    expect(await scannedApps([500], under)).toEqual(new Map([[500, 'iterm']]))
+    // The row answers: iTerm2's own bundle past it is not read.
+    expect(under.bundleId).not.toHaveBeenCalled()
+    const adopted = atHome(tab(server, 1), ITERM_BUNDLE)
+    expect(await scannedApps([500], adopted)).toEqual(new Map([[500, 'iterm']]))
+    expect(adopted.bundleId).not.toHaveBeenCalled()
+  })
+
+  it('a tmux client and a herdr client in an iTerm2 tab name iTerm2 under a server launchd adopted', async () => {
+    const server = `${HOME}/Library/Application Support/iTerm2/iTermServer-3.5.4`
+    const d = atHome([
+      [600, 599, 'tmux'], [599, 598, '-zsh'], [598, 597, 'login'], [597, 1, server],
+      [700, 699, '/opt/homebrew/bin/herdr'], [699, 698, '-zsh'], [698, 697, 'login'], [697, 1, server],
+    ])
+    expect(await scannedApps([600, 700], d)).toEqual(new Map([[600, 'iterm'], [700, 'iterm']]))
+    expect(d.bundleId).not.toHaveBeenCalled()
+  })
+
+  it('near misses name nothing', async () => {
+    const names = [
+      'iTermServer', 'iTermServer-', 'iTermServer-x1', `iTermServer-3${'1'.repeat(32)}`, 'iTermServer-3.5.4 ',
+      '/tmp/iTermServer-3.5.4', '/Users/other/Library/Application Support/iTerm2/iTermServer-3.5.4',
+      `${HOME}/.iterm2/sub/iTermServer-3.5.4`, `${HOME}/Library/Application Support/iTerm2/../iTermServer-3.5.4`,
+    ]
+    const d = atHome(names.map((name, i) => [6000 + i, 1, name] as [number, number, string]))
+    expect(await scannedApps(names.map((_, i) => 6000 + i), d)).toEqual(new Map())
+    const linux = atHome([[10, 9, 'claude'], [9, 1, 'iTermServer-3.5.4']], {}, 'linux')
+    expect(await scannedApps([10], linux)).toEqual(new Map())
+  })
+
+  it('a nearer .app still wins', async () => {
+    const d = atHome([
+      [500, 499, 'claude'], [499, 498, '-zsh'], [498, 497, GHOSTTY], [497, 496, '-zsh'], [496, 495, 'login'],
+      [495, 1, 'iTermServer-3.5.4'],
+    ], { '/Applications/Ghostty.app': 'com.mitchellh.ghostty' })
+    expect(await scannedApps([500], d)).toEqual(new Map([[500, 'ghostty']]))
+  })
+
+  // The iTermServer session comes first: a slot it spent would leave the last app's bundle unread.
+  it('the row takes none of the 16 bundles a pass', async () => {
+    const pids = Array.from({ length: 16 }, (_, i) => 9000 + i)
+    const d = atHome([
+      [9500, 9499, 'claude'], [9499, 1, 'iTermServer-3.5.4'],
+      ...pids.flatMap((pid, i) => [[pid, pid + 100, 'claude'], [pid + 100, 1, `/Applications/App ${i}.app/Contents/MacOS/app`]] as Array<[number, number, string]>),
+    ], Object.fromEntries(pids.map((_, i) => [`/Applications/App ${i}.app`, 'com.mitchellh.ghostty'])))
+    expect(await scannedApps([9500, ...pids], d)).toEqual(new Map([[9500, 'iterm'], ...pids.map((pid) => [pid, 'ghostty'] as const)]))
+    expect(d.bundleId).toHaveBeenCalledTimes(16)
   })
 })
 
@@ -466,6 +539,83 @@ describe('the process that made a pseudo-terminal', () => {
   })
 })
 
+// Diego's report of 2026-11-22: an idle agent in tmux or herdr inside iTerm2, found by the open scan, sat on Other's
+// page. The scan reads the look's table once, and the terminal's maker only of a session under one of them.
+describe('the makers of the sessions a look lists', () => {
+  /** The look's table, which holds no terminal, and a reader of each row's terminal that rejects for [gone]; each read kept. */
+  function look(rows: Array<[number, number, string, string?]>, gone: readonly number[] = []) {
+    const read: number[] = []
+    const ttys = new Map(rows.map(([pid, , , tty]) => [pid, tty]))
+    return {
+      rows: rows.map(([pid, ppid, executable]): ProcessName => ({ pid, ppid, executable })),
+      tty: async (pid: number): Promise<string | undefined> => {
+        read.push(pid)
+        if (gone.includes(pid)) throw new Error('tty not read')
+        return ttys.get(pid)
+      },
+      read,
+    }
+  }
+  const HOSTS = ['tmux', 'herdr']
+
+  it('a session in a tmux pane and one in a herdr pane: each one\'s host, its maker and its own tty', async () => {
+    const mac = look([[100, 90, 'claude', 'ttys010'], [90, 80, 'zsh', 'ttys010'], [80, 1, 'tmux'],
+      [200, 190, 'claude', 'ttys020'], [190, 180, 'zsh', 'ttys020'], [180, 1, '/opt/homebrew/bin/herdr']])
+    expect(await readMadeBy([100, 200], mac.rows, mac.tty, HOSTS)).toEqual(new Map([
+      [100, { host: 'tmux', maker: 80, tty: 'ttys010' }], [200, { host: 'herdr', maker: 180, tty: 'ttys020' }]]))
+    const linux = look([[100, 90, 'claude', 'pts/3'], [90, 80, 'bash', 'pts/3'], [80, 1, 'tmux: server'],
+      [200, 190, 'claude', 'pts/4'], [190, 180, 'bash', 'pts/4'], [180, 1, 'herdr']])
+    expect(await readMadeBy([100, 200], linux.rows, linux.tty, HOSTS)).toEqual(new Map([
+      [100, { host: 'tmux', maker: 80, tty: 'pts/3' }], [200, { host: 'herdr', maker: 180, tty: 'pts/4' }]]))
+  })
+
+  it('no tty is read for a session with no tmux or herdr among its parents', async () => {
+    const at = look([[300, 290, 'claude', 'ttys005'], [290, 280, '-zsh', 'ttys005'], [280, 270, '/usr/bin/login', 'ttys005'],
+      [270, 1, '/Applications/iTerm.app/Contents/MacOS/iTerm2'],
+      [400, 390, 'claude', 'pts/2'], [390, 29, 'bash', 'pts/2'], [29, 1, 'zellij']])
+    expect(await readMadeBy([300, 400], at.rows, at.tty, HOSTS)).toEqual(new Map())
+    expect(at.read).toEqual([])
+  })
+
+  it('a terminal started from a tmux pane is not tmux\'s', async () => {
+    const at = look([[500, 499, 'claude', 'ttys030'], [499, 498, '-zsh', 'ttys030'],
+      [498, 497, GHOSTTY, 'ttys010'], [497, 80, '-zsh', 'ttys010'], [80, 1, 'tmux']])
+    expect(await readMadeBy([500], at.rows, at.tty, HOSTS)).toEqual(new Map())
+    expect(at.read).toEqual([500, 499, 498])
+  })
+
+  it('a pid whose tty read rejects is left out, and the next is still read', async () => {
+    // Its shell gone between the table's read and its terminal's.
+    const at = look([[100, 90, 'claude', 'ttys010'], [90, 80, 'zsh', 'ttys010'], [80, 1, 'tmux'],
+      [200, 190, 'claude', 'ttys011'], [190, 80, 'zsh', 'ttys011']], [90])
+    expect(await readMadeBy([100, 200], at.rows, at.tty, HOSTS)).toEqual(new Map([[200, { host: 'tmux', maker: 80, tty: 'ttys011' }]]))
+    expect(at.read).toEqual([100, 90, 200, 190, 80])
+  })
+
+  it('one pid at a time', async () => {
+    const at = look([[100, 90, 'claude', 'ttys010'], [90, 80, 'zsh', 'ttys010'], [80, 1, 'tmux'],
+      [200, 190, 'claude', 'ttys011'], [190, 80, 'zsh', 'ttys011']])
+    let reading = 0
+    let most = 0
+    const tty = async (pid: number): Promise<string | undefined> => {
+      most = Math.max(most, ++reading)
+      await Promise.resolve()
+      reading--
+      return at.tty(pid)
+    }
+    expect([...(await readMadeBy([100, 200], at.rows, tty, HOSTS)).keys()]).toEqual([100, 200])
+    expect(most).toBe(1)
+    expect(at.read).toEqual([100, 90, 80, 200, 190, 80])
+  })
+
+  it.skipIf(process.platform === 'win32')('learnApps over the look\'s rows runs no ps', async () => {
+    patient.answers = { plutil: 'com.mitchellh.ghostty\n' }
+    const top = process.platform === 'darwin' ? GHOSTTY : 'ghostty'
+    expect(await learnApps([100], table([[100, 90, 'claude'], [90, 1, top]]))).toEqual(new Map([[100, 'ghostty']]))
+    expect(patient.calls.map(([, file]) => file)).not.toContain('ps')
+  })
+})
+
 describe('the process table the scan reads', () => {
   // Recorded as `ps -axo pid=,ppid=,comm=` prints it on macOS, the names made up: `comm` last is the whole path. With a
   // column after it (`comm=,lstart=,args=`), the first rows' names came cut to `/Users/someone/A` and `/Applications/Vi`.
@@ -513,7 +663,7 @@ describe('the process table the scan reads', () => {
 
   it.skipIf(process.platform === 'win32')('runs one ps with comm last: no command line, no environment, under 3 s and 1 MiB', async () => {
     const exec = vi.fn(async (): Promise<string | null> => '  100     1 claude\n')
-    await learnApps([100], exec)
+    await learnApps([100], undefined, exec)
     expect(exec.mock.calls).toEqual([['ps', ['-axo', 'pid=,ppid=,comm='], { timeout: 3_000, maxBuffer: 1024 * 1024 }]])
   })
 
@@ -548,7 +698,7 @@ describe.skipIf(process.platform === 'win32')('the scan\'s process read', () => 
       fileStamp: async () => null,
       excluded: [],
       log: () => {},
-      apps: (pids) => learnApps(pids, exec),
+      apps: (pids) => learnApps(pids, undefined, exec),
     })
     const open = (...ids: string[]): void => { for (const id of ids) owners.set(id, { pid: 100 + owners.size, engine: 'claude', record: id }) }
     await src.tick()

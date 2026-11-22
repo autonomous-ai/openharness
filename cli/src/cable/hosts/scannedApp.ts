@@ -103,7 +103,25 @@ export interface ScannedAppDeps {
   roots: readonly string[]
   processes(): Promise<readonly ProcessName[]>
   bundleId(bundle: string): Promise<string | undefined>
+  /** The home whose iTerm2 folders hold iTerm2's server; homedir() when absent. */
+  home?: string
 }
+
+const ITERM_SERVER = /^iTermServer-[0-9][0-9A-Za-z.-]{0,31}$/
+
+/** Whether a process is iTerm2's server, by its path or its name alone. iTerm2 copies the server out of its bundle to
+ *  `iTermServer-<version>` in one of these folders and forks every shell from it; the copy outlives iTerm2 when it
+ *  relaunches with its sessions kept, under launchd then (iTerm2's iTermServerDeleter.swift). So a tab may have no
+ *  `.app` among its parents. Unmeasured: the form comes from iTerm2's source. */
+function isItermServer(executable: string, home: string): boolean {
+  const at = executable.lastIndexOf('/')
+  const folder = executable.slice(0, at + 1)
+  return ITERM_SERVER.test(executable.slice(at + 1))
+    && (folder === '' || folder === `${home}/Library/Application Support/iTerm2/` || folder === `${home}/.iterm2/`)
+}
+
+/** A step of a macOS walk: a bundle whose id names its app, or the app a fixed row names. */
+type Step = { bundle: string } | { app: string }
 
 /** A listed app, never the unknown one: the scan does not answer "Other", it leaves the session to its first hook. */
 const listed = (app: string): boolean => app !== UNKNOWN_APP && APP_IDS.includes(app)
@@ -126,23 +144,37 @@ export async function scannedApps(pids: readonly number[], deps: ScannedAppDeps)
     }
     return apps
   }
-  const bundles = walks.map(([pid, names]) => [pid, names.flatMap((name) => bundleOf(name, deps.roots) ?? [])] as const)
+  const home = deps.home ?? homedir()
+  // A walk ends at its first fixed row, which answers it: a bundle past that would spend a read and a slot of the pass.
+  const steps = walks.map(([pid, names]) => {
+    const of: Step[] = []
+    for (const name of names) {
+      if (isItermServer(name, home)) {
+        of.push({ app: 'iterm' })
+        break
+      }
+      const bundle = bundleOf(name, deps.roots)
+      if (bundle) of.push({ bundle })
+    }
+    return [pid, of] as const
+  })
   // Each bundle once a pass, all together, and a bounded number of them: a bundle past that is not read.
-  const read = [...new Set(bundles.flatMap(([, of]) => of))].slice(0, BUNDLES_A_PASS)
+  const read = [...new Set(steps.flatMap(([, of]) => of.flatMap((step) => ('bundle' in step ? [step.bundle] : []))))].slice(0, BUNDLES_A_PASS)
   const ids = new Map(await Promise.all(read.map(async (bundle) => [bundle, await deps.bundleId(bundle).catch(() => undefined)] as const)))
-  for (const [pid, of] of bundles) {
+  for (const [pid, of] of steps) {
     const app = nearestApp(of, ids)
     if (app) apps.set(pid, app)
   }
   return apps
 }
 
-/** The nearest listed app of a walk's bundles. A bundle with no id (not read this pass, or unreadable) ends the walk
+/** The nearest listed app of a walk's steps. A bundle with no id (not read this pass, or unreadable) ends the walk
  *  with none: it may be the session's own app, and an outer one would be a guess. One read but no table lists is
  *  passed over: a helper or an engine of its own. */
-function nearestApp(bundles: readonly string[], ids: ReadonlyMap<string, string | undefined>): string | undefined {
-  for (const bundle of bundles) {
-    const id = ids.get(bundle)
+function nearestApp(steps: readonly Step[], ids: ReadonlyMap<string, string | undefined>): string | undefined {
+  for (const step of steps) {
+    if ('app' in step) return step.app
+    const id = ids.get(step.bundle)
     if (!id) return undefined
     const app = frontAppId(id)
     if (listed(app)) return app
@@ -210,8 +242,14 @@ export function ptyMaker(pid: number, rows: readonly PtyProcess[]): PtyMaker | u
   if (own?.tty === undefined) return undefined
   const maker = parents.find((p) => p.tty !== own.tty)
   if (!maker) return undefined
-  const name = basename(maker.executable)
-  return Object.hasOwn(PTY_HOSTS, name) ? { pid: maker.pid, host: PTY_HOSTS[name] } : { pid: maker.pid }
+  const host = ptyHostOf(maker.executable)
+  return host ? { pid: maker.pid, host } : { pid: maker.pid }
+}
+
+/** The host PTY_HOSTS names for a process's name; none for any other. */
+function ptyHostOf(executable: string): string | undefined {
+  const name = basename(executable)
+  return Object.hasOwn(PTY_HOSTS, name) ? PTY_HOSTS[name] : undefined
 }
 
 /** ptyMaker over [rows], which hold no terminal: the caller's and its parents' are read one at a time ([tty],
@@ -235,9 +273,41 @@ export async function readPtyOwner(
   return (await readPtyMaker(pid, rows, tty))?.host
 }
 
-/** The app each of these processes runs in, read from this machine. */
-export function learnApps(pids: readonly number[], exec: Exec = execText): Promise<Map<number, string>> {
+/** A session a multiplexer made: its host as PTY_HOSTS names it, the maker's pid, and the session's own terminal
+ *  (readTtyName's `ttys004`, `pts/2`), which is the multiplexer pane's. */
+export interface MadeBy { host: string; maker: number; tty: string }
+
+/**
+ * The sessions of [pids] whose terminal one of [hosts] made, from the look's one table ([rows]). Diego's report of
+ * 2026-11-22: an agent in tmux or herdr inside iTerm2, found by the scan, sat on Other's page. A session with none of
+ * [hosts] among its parents reads no terminal: its maker cannot be one of them, and most sessions are plain tabs. One
+ * pid at a time, so a look of many sessions never runs their `ps` reads at once. A pid whose read fails (the process
+ * gone since the table) is left out; it never rejects.
+ */
+export async function readMadeBy(
+  pids: readonly number[], rows: readonly ProcessName[], tty: (pid: number) => Promise<string | undefined>, hosts: readonly string[],
+): Promise<Map<number, MadeBy>> {
+  const made = new Map<number, MadeBy>()
+  const table = new Map(rows.map((r) => [r.pid, r]))
+  for (const pid of pids) {
+    const [, ...parents] = parentChain(pid, table)
+    if (!parents.some((p) => hosts.includes(ptyHostOf(p.executable) ?? ''))) continue
+    let own: string | undefined
+    const keepOwn = async (at: number): Promise<string | undefined> => {
+      const on = await tty(at)
+      if (at === pid) own = on
+      return on
+    }
+    const maker = await readPtyMaker(pid, rows, keepOwn).catch(() => undefined)
+    if (maker?.host && own && hosts.includes(maker.host)) made.set(pid, { host: maker.host, maker: maker.pid, tty: own })
+  }
+  return made
+}
+
+/** The app each of these processes runs in, read from this machine; from [rows] when the look has read its table. */
+export function learnApps(pids: readonly number[], rows?: readonly ProcessName[], exec: Exec = execText): Promise<Map<number, string>> {
   return scannedApps(pids, {
-    platform: process.platform, roots: appRoots(homedir()), processes: () => readProcessNames(exec), bundleId: readBundleId,
+    platform: process.platform, roots: appRoots(homedir()),
+    processes: () => (rows ? Promise.resolve(rows) : readProcessNames(exec)), bundleId: readBundleId,
   })
 }
