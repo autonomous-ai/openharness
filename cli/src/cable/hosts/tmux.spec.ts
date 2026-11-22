@@ -3,7 +3,7 @@ import { detectApp, detectHost } from './hostDetect.js'
 import { bundleOf, createOpenActions, type OpenTarget } from './open.js'
 import { tmuxFinder } from '../../lib/binaryFinder.js'
 import type { TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
-import { createTmuxAdapter, createTmuxOuter, type TmuxDeps, type TmuxOuterDeps } from './tmux.js'
+import { createTmuxAdapter, createTmuxNested, createTmuxOuter, PANES_A_LISTING, type TmuxDeps, type TmuxOuterDeps } from './tmux.js'
 import type { PtyProcess } from './scannedApp.js'
 
 const OPEN = '/usr/bin/open'
@@ -58,8 +58,10 @@ const client = (activity: number, pid: number | string, name: string, tag: strin
 const says = (pid: number, session = 'work', owner = '') => `${pid}|${session}|${owner}\n`
 /** The pane holds the agent's shell, and the person's one client is on a session of their own. */
 const OWN = { pane: says(90), clients: client(1794700050, 5004, '/dev/ttys004', '', 'work') }
-const askedOf = (pane: string): Call => run('tmux', 'display-message', '-p', '-t', pane, '#{pane_pid}|#{session_name}|#{@harness_daemon}'
-  + '#{?#{m:/usr/bin/env HARNESS_DAEMON=*,#{pane_start_command}},#{=44:pane_start_command},#{?#{m:harness-*,#{session_name}},#{@harness_daemon},}}')
+/** A pane's process, session and daemon's tag, as tmux is asked for them. */
+const PANE_FACTS = '#{pane_pid}|#{session_name}|#{@harness_daemon}'
+  + '#{?#{m:/usr/bin/env HARNESS_DAEMON=*,#{pane_start_command}},#{=44:pane_start_command},#{?#{m:harness-*,#{session_name}},#{@harness_daemon},}}'
+const askedOf = (pane: string): Call => run('tmux', 'display-message', '-p', '-t', pane, PANE_FACTS)
 const asked = askedOf(PANE)
 const listed: Call = run('tmux', 'list-clients', '-F', '#{client_activity}|#{client_pid}|#{client_name}|#{@harness_daemon}|#{session_name}')
 const switched = (name = '/dev/ttys004'): Call => run('tmux', 'switch-client', '-c', name, '-t', PANE)
@@ -591,6 +593,203 @@ describe('the outer place of an agent in the person\'s tmux', () => {
     expect(lines).toEqual([...found, ...none, ...notRead('pane')])
     for (const line of lines) {
       for (const id of [PANE, '4300', '100', 'ttys004', 'work', 'com.apple.Terminal', 'Terminal', 'terminal-app']) expect(line).not.toContain(id)
+    }
+  })
+})
+
+/** The listing of every pane of the server, as the process form asks for it. */
+const panesListed: Call = run('tmux', 'list-panes', '-a', '-F', `#{pane_id}|#{pane_tty}|${PANE_FACTS}`)
+/** One line of that listing, as tmux prints it: the pane, its tty, then what tmux says of it. */
+const paneLine = (id: string, tty: string, facts = says(90)) => `${id}|${tty}|${facts}`
+/** The person's pane %3 on the agent's tty, beside another pane of theirs. */
+const PANES = paneLine('%1', '/dev/ttys009', says(50)) + paneLine(PANE, '/dev/ttys010')
+/** The agent the scan found: its process, its own tty as the maker read gave it, and the look's table. */
+const AGENT = { pid: 100, tty: 'ttys010', rows: [...TABLE, ...CLIENT_CHAIN] }
+/** The process form's answer for that agent: the hooked form's, and the pane with its app. */
+const PLACED = { app: 'terminal-app', tty: '/dev/ttys004', pid: 4300, pane: { adapter: 'tmux', id: '%3:100:terminal-app' } }
+const over = '[device] tmux client · over'
+
+/** A recording runner as `lookup`, for the process form: it runs nothing, each call answers the next of [codes], then
+ *  exit 0, and tmux prints what [said] gives it. */
+function nestedLookup(over: Partial<Omit<TmuxOuterDeps, 'processes' | 'tty'>> = {}, codes: Array<number | null> = [], said: { panes?: string; clients?: string } = {}) {
+  const calls: Call[] = []
+  const logs: string[] = []
+  const clock = { t: 1_000_000 }
+  const nested = createTmuxNested({
+    run: async (file, args, timeoutMs) => {
+      calls.push({ file, args, timeoutMs })
+      const stdout = args[0] === 'list-panes' ? said.panes ?? '' : args[0] === 'list-clients' ? said.clients ?? '' : ''
+      return { code: codes.length ? codes.shift()! : 0, stdout }
+    },
+    tmux: PRESENT,
+    log: (line) => { logs.push(line) },
+    now: () => clock.t,
+    platform: 'darwin',
+    roots: ['/Users/u/Applications/'],
+    bundleId: async (bundle) => (bundle === '/Users/u/Applications/Terminal.app' ? 'com.apple.Terminal' : undefined),
+    ...over,
+  })
+  return { calls, logs, clock, nested }
+}
+
+// Diego's report of 2026-11-22: an idle agent in his tmux, found by the open scan after the devices started again, was
+// on Other's page until its next hook. The scan has no hook's TMUX_PANE: the pane is found by the agent's own tty.
+describe('the place of an agent the scan found in the person\'s tmux', () => {
+  it('out of form: undefined at once, and nothing runs', () => {
+    const { calls, nested } = nestedLookup({}, [], { panes: PANES, clients: ONE.clients })
+    for (const pid of [0, -1, 1.5]) expect(nested({ ...AGENT, pid }), String(pid)).toBeUndefined()
+    for (const tty of ['ttys004; x', '/dev/ttys004', '', 'pts/2']) expect(nested({ ...AGENT, tty }), tty).toBeUndefined()
+    const windows = nestedLookup({ platform: 'win32' }, [], { panes: PANES, clients: ONE.clients })
+    expect(windows.nested(AGENT)).toBeUndefined()
+    expect([calls, windows.calls]).toEqual([[], []])
+  })
+
+  it('the person\'s pane on the agent\'s tty: its client\'s app, tty and process, and the pane with its app', async () => {
+    const { calls, logs, nested } = nestedLookup({}, [], { panes: PANES, clients: ONE.clients })
+    expect(await nested(AGENT)).toStrictEqual(PLACED)
+    // The scan read the table and the maker: no display-message, only the listing and the pane's clients.
+    expect(calls).toEqual([panesListed, clientsAsked])
+    expect(logs).toEqual(found)
+  })
+
+  it('Linux: pts/5 finds its pane on /dev/pts/5, the client in a WezTerm window', async () => {
+    const rows = [...TABLE, { pid: 4300, ppid: 4299, executable: 'tmux' }, { pid: 4299, ppid: 1, executable: 'wezterm-gui' }]
+    const { calls, logs, nested } = nestedLookup({ platform: 'linux' }, [], {
+      panes: paneLine('%1', '/dev/pts/4', says(50)) + paneLine(PANE, '/dev/pts/5'), clients: places(1794700050, 4300, '/dev/pts/3'),
+    })
+    expect(await nested({ pid: 100, tty: 'pts/5', rows })).toStrictEqual({
+      app: 'wezterm', tty: '/dev/pts/3', pid: 4300, pane: { adapter: 'tmux', id: '%3:100:wezterm' },
+    })
+    expect(calls).toEqual([panesListed, clientsAsked])
+    expect(logs).toEqual(found)
+  })
+
+  it('a daemon\'s or Harness\'s pane on that tty answers {} and lists no client', async () => {
+    for (const facts of HARNESS_PANES) {
+      const { calls, logs, nested } = nestedLookup({}, [], { panes: paneLine(PANE, '/dev/ttys010', facts), clients: ONE.clients })
+      expect(await nested(AGENT), facts).toEqual({})
+      expect(calls, facts).toEqual([panesListed])
+      expect(logs, facts).toEqual(none)
+    }
+  })
+
+  // A second tmux server of the person's (`-L`) can have a pane on another tty that holds the agent: only this server's
+  // pane on its own tty, holding its process or a parent, is its pane.
+  it('a tty in no pane, or a pane that holds another process: {}', async () => {
+    for (const panes of [paneLine('%1', '/dev/ttys009', says(50)), paneLine(PANE, '/dev/ttys010', says(4242)), '']) {
+      const { calls, logs, nested } = nestedLookup({}, [], { panes, clients: ONE.clients })
+      expect(await nested(AGENT), panes).toEqual({})
+      expect(calls, panes).toEqual([panesListed])
+      expect(logs, panes).toEqual(none)
+    }
+  })
+
+  // Review Focus 2: the agent stays where the scan put it.
+  it('a detached session, or a client in no listed app: {}', async () => {
+    const detached = nestedLookup({}, [], { panes: PANES, clients: '' })
+    const elsewhere = nestedLookup({ bundleId: async () => 'com.example.other' }, [], { panes: PANES, clients: ONE.clients })
+    for (const { calls, logs, nested } of [detached, elsewhere]) {
+      expect(await nested(AGENT)).toEqual({})
+      expect(calls).toEqual([panesListed, clientsAsked])
+      expect(logs).toEqual(none)
+    }
+  })
+
+  // Review Focus 3: Harness's own panes share the person's server, and every one of them is a line of the listing.
+  it('past 1024 lines it says over, once, and a pane past the bound is not found', async () => {
+    expect(PANES_A_LISTING).toBe(1024)
+    const others = Array.from({ length: PANES_A_LISTING }, (_, i) => paneLine(`%${i + 10}`, '/dev/ttys999', says(50))).join('')
+    const past = nestedLookup({}, [], { panes: others + paneLine(PANE, '/dev/ttys010'), clients: ONE.clients })
+    expect(await past.nested(AGENT)).toEqual({})
+    expect(past.calls).toEqual([panesListed])
+    expect(past.logs).toEqual([over, ...none])
+    const within = others.split('\n').slice(1).join('\n') + paneLine(PANE, '/dev/ttys010')
+    const bound = nestedLookup({}, [], { panes: within, clients: ONE.clients })
+    expect(await bound.nested(AGENT)).toStrictEqual(PLACED)
+    expect(bound.logs).toEqual(found)
+  })
+
+  it('lines out of form are passed over, and a session may hold a bar', async () => {
+    const panes = ['garbage\n', '%3|ttys010|90|work|\n', paneLine(PANE, '/dev/ttys010', says(90, 'my|work'))].join('')
+    const { calls, logs, nested } = nestedLookup({}, [], { panes, clients: ONE.clients })
+    expect(await nested(AGENT)).toStrictEqual(PLACED)
+    expect(calls).toEqual([panesListed, clientsAsked])
+    expect(logs).toEqual(found)
+  })
+
+  it('no tmux, or a listing or client read that fails: {} and not read, with the step, never a rejection', async () => {
+    const absent = async (): Promise<TmuxPathOutcome> => ({ state: 'absent', reason: 'tmux was not found' })
+    const roots = Object.assign([], { some: () => { throw new Error('roots not read') } })
+    const said = { panes: PANES, clients: ONE.clients }
+    const cases: Array<[string, ReturnType<typeof nestedLookup>, Call[], string[]]> = [
+      ['no tmux is found', nestedLookup({ tmux: absent }, [], said), [], notRead('tmux')],
+      ['tmux does not start', nestedLookup({ run: async () => { throw new Error('spawn /x/bin/tmux EACCES') } }, [], said), [], notRead('pane')],
+      ['list-panes fails', nestedLookup({}, [1], said), [panesListed], notRead('pane')],
+      ['list-clients fails', nestedLookup({}, [0, 1], said), [panesListed, clientsAsked], notRead('clients')],
+      ['the app scan throws', nestedLookup({ roots }, [], said), [panesListed, clientsAsked], notRead('app')],
+    ]
+    for (const [name, { calls, logs, nested }, ran, lines] of cases) {
+      expect(await nested(AGENT), name).toEqual({})
+      expect(calls, name).toEqual(ran)
+      expect(logs, name).toEqual(lines)
+    }
+  })
+
+  // The scan asks for up to fifty sessions a look: a tmux that hangs costs the look one timeout, not one an ask.
+  it('one listing serves every ask for 5 s, one in flight shared; one answer per tty and process', async () => {
+    // A second agent (200) in pane %4 on ttys011.
+    const rows = [...AGENT.rows, { pid: 200, ppid: 190, tty: 'ttys011', executable: 'claude' }, { pid: 190, ppid: 80, tty: 'ttys011', executable: 'zsh' }]
+    const second = { pid: 200, tty: 'ttys011', rows }
+    const first = { ...AGENT, rows }
+    const held: Array<() => void> = []
+    const { calls, clock, nested } = nestedLookup({
+      run: async (file, args, timeoutMs) => {
+        calls.push({ file, args, timeoutMs })
+        if (args[0] === 'list-panes') await new Promise<void>((settle) => held.push(settle))
+        return { code: 0, stdout: args[0] === 'list-panes' ? PANES + paneLine('%4', '/dev/ttys011', says(190)) : ONE.clients }
+      },
+    })
+    const clientsOf = (pane: string): Call => ({ ...clientsAsked, args: ['list-clients', '-t', pane, ...clientsAsked.args.slice(3)] })
+    const at = clock.t
+    const a = nested(first)
+    const again = nested(first)
+    const b = nested(second)
+    await vi.waitFor(() => expect(calls).toEqual([panesListed]))
+    held[0]()
+    const answerOf = (pid: number, pane: string) => ({ ...PLACED, pane: { adapter: 'tmux', id: `${pane}:${pid}:terminal-app` } })
+    expect([await a, await again, await b]).toEqual([PLACED, PLACED, answerOf(200, '%4')])
+    // One listing; each pane's clients once, the same agent's two asks sharing one answer.
+    expect(calls).toEqual([panesListed, clientsAsked, clientsOf('%4')])
+    // Within 5 s of the listing's start: the agent's answer with nothing run; another process on that tty lists only its clients.
+    clock.t = at + 4_999
+    expect(await nested(first)).toEqual(PLACED)
+    expect(await nested({ ...first, pid: 90 })).toEqual(answerOf(90, '%3'))
+    expect(calls.slice(3)).toEqual([clientsAsked])
+    // At 5 s the listing runs again, and is shared while in flight past its own 5 s.
+    clock.t = at + 5_000
+    const later = nested(first)
+    await vi.waitFor(() => expect(calls.slice(4)).toEqual([panesListed]))
+    clock.t = at + 10_001
+    const stuck = nested(first)
+    expect(calls.slice(4)).toEqual([panesListed])
+    held[1]()
+    expect([await later, await stuck]).toEqual([PLACED, PLACED])
+    expect(calls.slice(4)).toEqual([panesListed, clientsAsked])
+  })
+
+  it('its lines name no pane, pid, tty, session or app', async () => {
+    const others = Array.from({ length: PANES_A_LISTING }, (_, i) => paneLine(`%${i + 10}`, '/dev/ttys999', says(50))).join('')
+    const lines: string[] = []
+    for (const { logs, nested } of [
+      nestedLookup({}, [], { panes: PANES, clients: ONE.clients }), nestedLookup({}, [], { panes: PANES, clients: '' }),
+      nestedLookup({}, [1], { panes: PANES }), nestedLookup({}, [], { panes: others + PANES }),
+    ]) {
+      await nested(AGENT)
+      lines.push(...logs)
+    }
+    expect(lines).toEqual([...found, ...none, ...notRead('pane'), over, ...none])
+    for (const line of lines) {
+      for (const id of [PANE, '4300', '100', 'ttys004', 'ttys010', 'work', 'com.apple.Terminal', 'Terminal', 'terminal-app']) expect(line).not.toContain(id)
     }
   })
 })
