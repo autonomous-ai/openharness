@@ -4976,11 +4976,11 @@ describe('ObservedSource and a nested session the scan found', () => {
     const inTmux = (pane = '%3') => ({ hostHints: { TMUX_PANE: pane, TERM_PROGRAM: 'tmux' } })
 
     /** Session `a`, idle in tmux pane %3, as the scan placed it: on iTerm2's page, at its client's tab, with its pane,
-     *  iTerm2 in front. Its hooks' own outer lookups the test answers by hand, in the order asked, as tmux's answers an
-     *  event in a tmux pane; an event in no tmux pane is not nested. */
+     *  iTerm2 in front. Its hooks' own outer lookups the test answers by hand, in the order asked, as tmux's and herdr's
+     *  answer an event in their pane; an event in neither is not nested. */
     async function placed(fakes: Partial<Fakes> = {}, adapt?: (adapters: readonly HostAdapter[]) => readonly HostAdapter[]) {
       const hookAsks: Array<(place: { app?: string; tty?: string; pid?: number }) => Promise<void>> = []
-      const outer = vi.fn((hints: Readonly<Record<string, string>>, _pid: number) => (hints.TMUX_PANE
+      const outer = vi.fn((hints: Readonly<Record<string, string>>, _pid: number) => (hints.TMUX_PANE || hints.HERDR_PANE_ID
         ? new Promise<{ app?: string; tty?: string; pid?: number }>((resolve) => {
           hookAsks.push(async (place) => { resolve(place); await flushed() })
         })
@@ -5101,7 +5101,18 @@ describe('ObservedSource and a nested session the scan found', () => {
       expect(t.src.windowOf(t.id)).toEqual({ pid: 100, app: 'tmux' })
     })
 
-    it('the first hook takes the placed pane away', async () => {
+    it('a nested first hook in no tmux pane takes the placed pane away', async () => {
+      const t = await placed()
+      expect(t.src.shownAt(t.id, 'tmux')).toBe('%3:100:iterm')
+      // Resumed in a herdr pane: still nested, its lookup runs, and tmux's pane is no longer where it is.
+      t.src.ingest(t.ev('session-start', { sessionId: 'a', hostHints: { HERDR_PANE_ID: 'w1:p2' }, callerPid: 101 }))
+      expect(t.outer.mock.calls).toEqual([[{ HERDR_PANE_ID: 'w1:p2' }, 101]])
+      expect(t.src.shownAt(t.id, 'tmux')).toBeUndefined()
+      await t.hookAsks[0](ITERM)
+      expect(t.src.shownAt(t.id, 'tmux')).toBeUndefined()
+    })
+
+    it('the first hook\'s own tmux pane is shown and tapped, not the scan\'s', async () => {
       const t = await placed()
       expect(t.src.shownAt(t.id, 'tmux')).toBe('%3:100:iterm')
       t.src.ingest(t.ev('turn-start', { sessionId: 'a', ...inTmux('%4') }))
