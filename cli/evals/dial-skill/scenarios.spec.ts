@@ -2,7 +2,9 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { AGENT_CONFIG, runAgent } from './lib/agents.js'
 import { caseId, loadScenarios } from './lib/scenarios.js'
+import { readRings, stage, unstage } from './lib/stage.js'
 
 let root: string
 
@@ -172,11 +174,18 @@ describe('the committed scenarios', () => {
     }
   })
 
-  it("hold asks that fit the dial's one line of at most 120 characters, so the oracle's ring can pass", () => {
+  it("hold asks the oracle's ring shows whole, with its state and suggestion, so its line can pass", async () => {
     for (const s of loadScenarios()) {
       if (s.ask === null) continue
-      expect([...s.ask].length, s.id).toBeLessThanOrEqual(120)
-      expect(s.ask, s.id).not.toMatch(/[\r\n]/)
+      const st = stage(s, 'oracle', { skill: false })
+      try {
+        await runAgent('oracle', s, st, { ...AGENT_CONFIG, timeoutMs: 0 })
+        const [ring] = readRings(st)
+        expect(ring.line, s.id).toContain(s.ask)
+        expect(ring.line, s.id).not.toContain('…')
+      } finally {
+        unstage(st)
+      }
     }
   })
 })

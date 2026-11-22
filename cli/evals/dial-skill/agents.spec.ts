@@ -271,8 +271,9 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(SAMPLE)}))`)
 
 describe('runAgent stand-ins', () => {
   it.each([
-    ['oracle', 'need', need, [['device', 'notify', 'give WEATHER_API_KEY', '--waiting']], 'give WEATHER_API_KEY'],
-    ['oracle', 'need', decide, [['device', 'notify', 'choose the cache', '--proceeding', '--suggest', 'the first option']], 'choose the cache'],
+    // The answer states_ask passes: the ask, the recommendation, and whether it went on or waited.
+    ['oracle', 'need', need, [['device', 'notify', 'give WEATHER_API_KEY', '--waiting']], 'give WEATHER_API_KEY I recommend the first option. I am waiting for you.'],
+    ['oracle', 'need', decide, [['device', 'notify', 'choose the cache', '--proceeding', '--suggest', 'the first option']], 'choose the cache I recommend the first option. I went on with it.'],
     ['oracle', 'no-need', noNeed, [], ''],
     ['null', 'need', need, [], ''],
     ['always', 'no-need', noNeed, [['device', 'notify', 'Please check in']], ''],
