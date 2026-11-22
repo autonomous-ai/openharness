@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { condition, evaluate, graded, wrongSends } from './checks.js'
+import { uncaughtProbes } from './runner.js'
 import { agentIdOf, THRESHOLDS, type Check, type CheckResult, type Platform, type Scenario, type Seen, type SessionDef,
   type Step, type Tier, type Until } from './types.js'
 
@@ -812,6 +813,19 @@ describe('editors', () => {
       const sent = run(logged, s, seen(s, [500], { logs: [log(600, 'x [device] scroll · sent · 41234 /work/eval-va')] }))
       expect(sent.map((r) => [r.score, r.evidence])).toEqual([[0, ['log at 600: [device] scroll · sent · <n> <path>']]])
     })
+  })
+
+  it('a driver that saw nothing catches neither an open probe on a row never listed nor a ring probe apart: their evidence is empty', () => {
+    const ghost: SessionDef = { ...editor('z', 30, 'vscode'), ghost: true }
+    const s = scenario([{ kind: 'tap', session: 'va', label: 'go' }], [...sessions, ghost])
+    // The steps alone, as every driver records them.
+    const blind = seen(s, [500])
+    const probes = [
+      ...run({ id: 'open', kind: 'open', dim: 'D3', session: 'z', link: false, after: 'go' }, s, blind),
+      ...run({ id: 'apart', kind: 'ring', dim: 'D1', page: 'vscode', expect: ['va'], apart: ['z'], after: 'go' }, s, blind),
+    ]
+    expect(probes.flatMap((r) => r.evidence)).toEqual([])
+    expect(uncaughtProbes({ scenario: 'S1', platform: 'darwin', results: [], probes, wrongSends: [], gaps: [] })).toEqual(['open', 'apart'])
   })
 
   it('apart on an editor page with no apps frame held scores 0, saying so; a base app\'s scores as before', () => {
