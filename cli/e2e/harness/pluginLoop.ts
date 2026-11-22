@@ -31,25 +31,26 @@ const quoted = (word: string): string => `'${word.replaceAll("'", `'\\''`)}'`
 
 /**
  * The loop's whole environment: the throwaway home, and `/usr/bin:/bin`, which holds no `harness`: with no shim the loop
- * would say `noHarness`, never find this machine's launcher.
+ * would say `noHarness`, never find this machine's launcher. [env] is the test's own besides (the dial eval's network
+ * guard).
  */
-export function pluginLoopEnv(d: Pick<IsolatedDaemon, 'env'>): NodeJS.ProcessEnv {
-  return { HOME: d.env.HOME, PATH: '/usr/bin:/bin' }
+export function pluginLoopEnv(d: Pick<IsolatedDaemon, 'env'>, env: Readonly<Record<string, string>> = {}): NodeJS.ProcessEnv {
+  return { ...env, HOME: d.env.HOME, PATH: '/usr/bin:/bin' }
 }
 
 /**
  * The plugin's loop on [d], killed with [children]: the launcher in [d]'s home starts this checkout's CLI under the
- * daemon's environment and nothing else.
+ * daemon's environment and nothing else. [env] is the loop's own besides (pluginLoopEnv).
  */
-export function startPluginLoop(d: IsolatedDaemon, children: ChildProcess[]): PluginLoop {
+export function startPluginLoop(d: IsolatedDaemon, children: ChildProcess[], env: Readonly<Record<string, string>> = {}): PluginLoop {
   const bin = join(d.env.HOME!, '.local', 'bin')
   const shim = join(bin, 'harness')
   expect(shim.startsWith(d.root + sep)).toBe(true)
-  const env = Object.entries(d.env).flatMap(([name, value]) => (value === undefined ? [] : [quoted(`${name}=${value}`)]))
+  const daemonEnv = Object.entries(d.env).flatMap(([name, value]) => (value === undefined ? [] : [quoted(`${name}=${value}`)]))
   mkdirSync(bin, { recursive: true })
-  writeFileSync(shim, `#!/bin/sh\ncd ${quoted(CLI_ROOT)} && exec /usr/bin/env -i ${env.join(' ')} ${[process.execPath, ...CLI_ENTRY].map(quoted).join(' ')} "$@"\n`, { mode: 0o700 })
+  writeFileSync(shim, `#!/bin/sh\ncd ${quoted(CLI_ROOT)} && exec /usr/bin/env -i ${daemonEnv.join(' ')} ${[process.execPath, ...CLI_ENTRY].map(quoted).join(' ')} "$@"\n`, { mode: 0o700 })
   const child = spawn(process.execPath, ['--import', 'tsx', 'e2e/harness/pluginDial.ts'], {
-    cwd: CLI_ROOT, env: pluginLoopEnv(d), stdio: ['pipe', 'pipe', 'pipe'],
+    cwd: CLI_ROOT, env: pluginLoopEnv(d, env), stdio: ['pipe', 'pipe', 'pipe'],
   })
   children.push(child)
   const states: DialState[] = []

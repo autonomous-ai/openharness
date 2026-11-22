@@ -11,10 +11,12 @@
 import { execFileSync, type ChildProcess } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { engineOf, HELD_MAKER, type SessionDef } from '../../src/testing/dialAppEval/types.js'
+import { guardEnv } from './appEvalDriver.js'
 import { CodexOutside } from './codexOutside.js'
 import type { IsolatedDaemon } from './daemon.js'
 import { IN_ORCA, InOrca } from './inOrca.js'
 import { orcaTerminal, type OrcaTerminal } from './orcaHost.js'
+import { startPluginLoop, type PluginLoop } from './pluginLoop.js'
 
 /** Orca's names for the session's terminal, its made-up secrets beside them, with the session's own id (the plan's
  *  Decision 1), then its hints. */
@@ -25,6 +27,12 @@ const orcaNames = (s: Pick<SessionDef, 'key'>, hints: Record<string, string>): R
  *  and its hints (Decision 4); no value of this worker's. */
 export function orcaEnv(d: Pick<IsolatedDaemon, 'env'>, s: SessionDef, hints: Record<string, string>): NodeJS.ProcessEnv {
   return { ...d.env, ...orcaNames(s, hints) }
+}
+
+/** Orca's plugin's loop on [d] (harness/pluginLoop.ts), under the daemon's network guard as every process tier B starts
+ *  is, its environment otherwise its own. */
+export function startOrcaPlugin(d: IsolatedDaemon, children: ChildProcess[]): PluginLoop {
+  return startPluginLoop(d, children, guardEnv(d))
 }
 
 /** The environment [pid] was started with, as the OS keeps it (Linux's /proc, macOS's `ps -E`), each `name=value`: what
