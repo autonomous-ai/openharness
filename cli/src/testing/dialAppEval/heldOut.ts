@@ -1,6 +1,6 @@
-// Held out (docs/plans/2026-11-21-dial-app-eval-design.md, Held-out set, and
-// docs/plans/2026-11-22-dial-eval-vscode-cursor-design.md, Held-out set, for VS Code's and Cursor's): whoever fixes a
-// failing group of the dial eval does not read this file.
+// Held out (docs/plans/2026-11-21-dial-app-eval-design.md, Held-out set, and the editors'
+// docs/plans/2026-11-22-dial-eval-vscode-cursor-design.md, Held-out set): whoever fixes a failing group of the dial eval
+// does not read this file.
 //
 // Scored and reported apart, never in the headline score. A function, not a list: the catalog imports it and it uses
 // the catalog's builders, so it is called once the catalog has them.
