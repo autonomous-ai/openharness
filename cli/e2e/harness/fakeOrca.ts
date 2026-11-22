@@ -156,14 +156,19 @@ export class FakeOrca {
     this.put('accounts.json', { id: 'e2e', ok: true, result: { claude: engine(homes.claude), codex: engine(homes.codex), gemini: engine() } })
   }
 
-  /** A line on the watch's stdout: the terminal with focus, or none. A watch prints the last line told so far, then each new one. */
+  /** A line on the watch's stdout: the terminal with focus, or none. A watch prints the last line told since the last
+   *  endWatch, then each new one. */
   focus(handle: string | null): void { appendFileSync(join(this.dir, 'focus'), `${JSON.stringify({ handle })}\n`) }
 
   /** Whether a `watch-focus` of this fake still runs: a process whose command names its focus file. */
   watching(): boolean { return spawnSync('pgrep', ['-f', join(this.dir, 'focus')]).status === 0 }
 
-  /** Every `watch-focus` of this fake ends, as when Orca quits. */
-  endWatch(): void { spawnSync('pkill', ['-f', join(this.dir, 'focus')]) }
+  /** Every `watch-focus` of this fake ends, as when Orca quits, and the focus told goes with them: the terminal it
+   *  named went with Orca, so a watch after prints nothing until a focus is told. */
+  endWatch(): void {
+    spawnSync('pkill', ['-f', join(this.dir, 'focus')])
+    writeFileSync(join(this.dir, 'focus'), '')
+  }
 
   /** Renamed into place: a run that reads it meanwhile prints the old answer or the new, never half of one. */
   private put(name: string, json: object): void {
