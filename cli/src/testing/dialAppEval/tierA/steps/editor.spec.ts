@@ -89,14 +89,31 @@ describe("tier A's fake extension", () => {
     ])
   })
 
-  it('a second open of the same window is eval-w1-2', async () => {
+  it('a second open of the same window, once it closed, is eval-w1-2', async () => {
     const w = fakeWorld()
     await w.start('a', 'c')
     await w.window({ window: 'w1', active: 'a', focused: true })
     await w.window({ window: 'w2', active: null, focused: false, terminals: ['c'] })
+    await w.close('w1')
     await w.window({ window: 'w1', active: null, focused: false })
     expect(w.opened.map((o) => o.message.window)).toEqual(['eval-w1-1', 'eval-w2-1', 'eval-w1-2'])
     expect(w.states.map((s) => s.window)).toEqual(['eval-w1-1', 'eval-w2-1', 'eval-w1-2'])
+  })
+
+  it("a window opened while it is open is the scenario's mistake: the step throws, and the open stream stays the only one", async () => {
+    const w = fakeWorld()
+    await w.start('a')
+    await w.window({ window: 'w1', active: 'a', focused: true })
+    await expect(w.window({ window: 'w1', active: 'a', focused: true })).rejects.toThrow('window w1 is already open')
+    expect(w.opened.map((o) => o.message.window)).toEqual(['eval-w1-1'])
+    expect(w.ends()).toEqual([undefined])
+    // An editor relaunched onto a window opened again meanwhile throws too.
+    await sessionsSteps.quit(w.world, { kind: 'quit', app: 'vscode' })
+    closeWindows(w.world, 'vscode')
+    await sessionsSteps.relaunch(w.world, { kind: 'relaunch', app: 'vscode' })
+    await w.window({ window: 'w1', active: 'a', focused: true })
+    await expect(reopenWindows(w.world, 'vscode')).rejects.toThrow('window w1 is already open')
+    expect(w.ends()).toEqual(['gone', undefined])
   })
 
   it('with extension false no stream opens', async () => {
