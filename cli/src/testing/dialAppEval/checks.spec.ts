@@ -754,8 +754,9 @@ describe('editors', () => {
       expect(ran.map((r) => [r.check, r.score, r.timed])).toEqual([['sc.ran', 1, false]])
       expect(ran[0]!.evidence).toEqual([`scroll at 600 on ${W1} for va: ran`])
       // vb active: the extension dropped va's line.
-      const dropped = run(scroll, s, seen(s, [500], { streams: [...windows, scrolled(600, W1, 'va')] }))
-      expect(dropped.map((r) => [r.score, r.evidence])).toEqual([[0, [`scroll at 600 on ${W1} for va: dropped`]]])
+      const dropped = run(scroll, s, seen(s, [500], { streams: [...windows, scrolled(600, W1, 'va')], frames: list(0, 'vscode', [VA]) }))
+      expect(dropped.map((r) => [r.score, r.evidence])).toEqual([[0, ['stroke at 500', `scroll at 600 on ${W1} for va: dropped`,
+        'no scroll line ran for va']]])
       // Lines for another shell, alone or after va's, in its window or another.
       expect(scores(run(scroll, s, seen(s, [500], { streams: [...windows, scrolled(600, W1, 'vb')] }))).ran).toBe(0)
       expect(scores(run(scroll, s, seen(s, [500], { streams: [...activeVa, scrolled(600, W1, 'va'),
@@ -770,10 +771,21 @@ describe('editors', () => {
       expect(run(scroll, s, seen(s, [500])).map((r) => [r.score, r.evidence])).toEqual([[0, []]])
     })
 
-    it('a probe on a ghost editor session fails with the scroll lines observed', () => {
+    it('a probe on a ghost editor session fails with the strokes and scroll lines observed, and says it was never listed', () => {
       const probe: Check = { ...scroll, session: 'eghost' }
       const results = run(probe, s, seen(s, [500], { streams: [...activeVa, scrolled(600, W1, 'va')] }))
-      expect(results.map((r) => [r.score, r.evidence])).toEqual([[0, [`scroll at 600 on ${W1} for va: ran`]]])
+      expect(results.map((r) => [r.score, r.evidence])).toEqual([[0, ['eghost never listed', 'stroke at 500',
+        `scroll at 600 on ${W1} for va: ran`, 'no scroll line ran for eghost']]])
+    })
+
+    it('a probe on a ghost whose stroke scrolled nothing still says why, so the runner counts it caught', () => {
+      const probe: Check = { ...scroll, session: 'eghost' }
+      // The stroke ran no scroll line: only a frame was seen in its window.
+      const results = run(probe, s, seen(s, [500], { streams: activeVa, frames: list(600, 'vscode', [VA]) }))
+      expect(results.map((r) => [r.score, r.evidence])).toEqual([[0, ['eghost never listed', 'stroke at 500', 'no scroll line ran for eghost']]])
+      // A listed session that scrolled nothing is not said to be unlisted.
+      expect(run(scroll, s, seen(s, [500], { streams: windows, frames: list(600, 'vscode', [VA]) }))[0]!.evidence)
+        .toEqual(['stroke at 500', 'no scroll line ran for va'])
     })
   })
 
@@ -800,6 +812,21 @@ describe('editors', () => {
       const sent = run(logged, s, seen(s, [500], { logs: [log(600, 'x [device] scroll · sent · 41234 /work/eval-va')] }))
       expect(sent.map((r) => [r.score, r.evidence])).toEqual([[0, ['log at 600: [device] scroll · sent · <n> <path>']]])
     })
+  })
+
+  it('apart on an editor page with no apps frame held scores 0, saying so; a base app\'s scores as before', () => {
+    const s = scenario([{ kind: 'hook', session: 'va', event: 'start', label: 'w' }], sessions)
+    const ring = (page: 'vscode' | 'cursor', expect: string[]): Check => ({ id: 'r', kind: 'ring', dim: 'D1', page, expect, apart: [], after: 'w' })
+    // A whole ring with no apps frame before it.
+    const bare = (page: string, rows: Row[]): Seen['frames'] => list(200, page, rows).slice(1)
+    for (const [page, row] of [['vscode', VA], ['cursor', CT]] as const) {
+      const apart = run(ring(page, [row.key]), s, seen(s, [100], { frames: bare(page, [row]) })).find((r) => r.check === 'r.apart')!
+      expect([apart.score, apart.evidence]).toEqual([0, ['no apps frame']])
+      expect(run(ring(page, [row.key]), s, seen(s, [100], { frames: list(200, page, [row]) })).find((r) => r.check === 'r.apart')!.score).toBe(1)
+    }
+    const b = scenario([write])
+    const base: Check = { id: 'r', kind: 'ring', dim: 'D1', page: 'claude', expect: ['a'], apart: [], after: 'w' }
+    expect(run(base, b, seen(b, [100], { frames: bare('claude', [A]) })).find((r) => r.check === 'r.apart')).toMatchObject({ score: 1, evidence: [] })
   })
 
   it('a Codex or Cursor row\'s expected name is its folder\'s, a Claude Code row\'s its title', () => {
