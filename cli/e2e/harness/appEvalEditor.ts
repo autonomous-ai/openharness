@@ -6,9 +6,9 @@
  *   app's own session code (appEvalClaude.ts) with the editor's hints, a panel session under the editor with the
  *   extension's entrypoint. A Codex is a process of its own in such a tab (codexOutside.ts inTab), one with a home of its
  *   own in a home in the root that is not the daemon's CODEX_HOME. V12's Claude Code runs in a tmux session of the
- *   person's on the daemon's private server, its client attached from a terminal of the editor (ownTmux.ts tabClient).
- *   cursor-agent is a shell's job in such a tab of a fake Cursor, and Cursor's own agent a process under the fake Cursor
- *   (cursorOutside.ts), each telling the devices by Cursor's own hooks;
+ *   person's on the daemon's private server (ownTmux.ts InOwnTmux), its client attached from a terminal of the editor
+ *   (ownTmux.ts tabClient). cursor-agent is a shell's job in such a tab of a fake Cursor, and Cursor's own agent a process
+ *   of the fake Cursor's with no terminal (cursorOutside.ts), each telling the devices by Cursor's own hooks;
  * - each window is Harness's extension's own loop over a fake window (editorWindow.ts), reporting its shells on the real
  *   devices' socket. What the loop printed is the window's stream in tier A's shapes (the plan's Decision 1): the stream
  *   `eval-<window>-<n>`, the window's nth in the scenario, its shells named by their sessions' keys, never by a pid;
@@ -16,7 +16,9 @@
  *   by the Codex queue (appEvalChatgpt.ts hear): the extension types none.
  *
  * Every process goes in `world.children`, or is the editor's: its own process, ended at stop, first ends the Codex, Cursor
- * and tmux sessions it runs (as the Claude app's ends its sessions, appEvalClaude.ts), so nothing of a scenario outlives it.
+ * and tmux sessions it runs (as the Claude app's ends its sessions, appEvalClaude.ts), so nothing of a scenario outlives it;
+ * killed, it takes them with it at once. Each window's loop and the tmux pane's Claude Code are checked to run under the
+ * network guard, as the daemon's processes are (appEvalDriver.ts).
  */
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { copyFileSync, mkdtempSync } from 'node:fs'
