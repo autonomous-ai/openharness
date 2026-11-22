@@ -180,13 +180,22 @@ LINUX_E2E_ORCA_FILES = ("cli/e2e/dialOrcaFocus.e2e.ts", "cli/e2e/dialOrcaFullRin
 # to one runs them beside the PR's own files; its deletion too, as a canary path's does.
 LINUX_E2E_ORCA_PATHS = ("cli/e2e/harness/orcaHost.ts", "cli/e2e/harness/inOrca.ts", "cli/e2e/harness/fakeOrca.ts",
                         "cli/src/cable/hosts/orca.ts")
-# The dial app eval's tier B files (docs/plans/2026-11-21-dial-app-eval-design.md), and what they cover: the hosts'
-# adapters, the eval's catalog and grader, the carousel model and the tier B driver. A change to one runs them beside the
-# PR's own files; its deletion too, as the Orca paths' does.
+# The dial app eval's tier B files (docs/plans/2026-11-21-dial-app-eval-design.md, and
+# docs/plans/2026-11-22-dial-eval-vscode-cursor-design.md for VS Code's and Cursor's), and what they cover: the hosts'
+# adapters, the eval's catalog and grader, the carousel model and the tier B driver; for the editors, the devices
+# process, the hook, the extension and its setup, Cursor's engine and discovery, and the harness's editor windows and
+# outside agents. A change to one runs them beside the PR's own files; its deletion too, as the Orca paths' does.
 LINUX_E2E_APP_EVAL_FILES = ("cli/e2e/dialAppEvalClaude.e2e.ts", "cli/e2e/dialAppEvalChatgpt.e2e.ts",
+                            "cli/e2e/dialAppEvalVscode.e2e.ts", "cli/e2e/dialAppEvalCursor.e2e.ts",
                             "cli/e2e/dialAppEvalHeldOut.e2e.ts")
 LINUX_E2E_APP_EVAL_PATHS = ("cli/src/cable/hosts/", "cli/src/testing/dialAppEval/", "cli/src/testing/dialCarousel.ts",
-                            "cli/e2e/harness/appEval*.ts", *LINUX_E2E_APP_EVAL_FILES)
+                            "cli/e2e/harness/appEval*.ts", "cli/src/services/devices.ts", "cli/hook/notify.mjs",
+                            "plugins/harness-device-vscode/src/", "cli/src/devices/vscodeExtension.ts",
+                            "cli/src/cable/vscodeExtensionSetup.ts", "cli/src/engines/cursor/",
+                            "cli/src/core/engines/cursorDiscovery.ts",
+                            *(f"cli/e2e/harness/{name}.ts" for name in ("vscodeWindow", "outsideAgent", "codexOutside",
+                                                                         "cursorOutside", "editorWindow")),
+                            *LINUX_E2E_APP_EVAL_FILES)
 DIAL_HOST_FILES = ("cli/e2e/dialHost*.e2e.ts", "cli/e2e/deviceHerdr.e2e.ts")
 # dial-hosts: those files, the code they run and the job's own definition. The daemon runs every host adapter from its
 # bundle, and the adapters share their folder's code (observed.ts finds the hosts): the whole folder, and what it and the

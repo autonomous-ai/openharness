@@ -615,12 +615,14 @@ class SelectionTests(unittest.TestCase):
                 self.assertLessEqual(expected, planner.select([path])[0])
 
     def test_the_vscode_extension_belongs_to_the_cli_suite(self):
-        # cli/build.mjs inlines it and cli/vitest.config.ts runs its tests; windows-e2e runs the dial plugins on Windows.
-        for path in ("plugins/harness-device-vscode/src/loop.ts", "plugins/harness-device-vscode/package.json",
-                     "plugins/harness-device-vscode/gate/realVscode.gate.ts"):
+        # cli/build.mjs inlines it and cli/vitest.config.ts runs its tests; windows-e2e runs the dial plugins on Windows,
+        # and linux-e2e the dial app eval's editor files for its source.
+        for path, e2e in (("plugins/harness-device-vscode/src/loop.ts", {"windows-e2e", "linux-e2e"}),
+                          ("plugins/harness-device-vscode/package.json", {"windows-e2e"}),
+                          ("plugins/harness-device-vscode/gate/realVscode.gate.ts", {"windows-e2e"})):
             with self.subTest(path=path):
                 self.assertEqual(planner.owners(path), {"cli"})
-                self.assertEqual(planner.select([path])[0], {"cli", "cross-read-scan", "windows-e2e"})
+                self.assertEqual(planner.select([path])[0], {"cli", "cross-read-scan", *e2e})
                 self.assertTrue(planner.reads("cli", path))
                 self.assertIsNone(planner.shared_input(path))
         # A folder whose name only starts the same is not the extension's: it stays outside every component's suite.
