@@ -269,8 +269,8 @@
     "a/linux/X4/open.latency": 1,
     "a/linux/X4/open.link": 1,
     "a/linux/X4/wait.1": 1,
-    "a/linux/X5/open.front": 0,
-    "a/linux/X5/open.latency": 0,
+    "a/linux/X5/open.front": 1,
+    "a/linux/X5/open.latency": 1,
     "a/linux/X5/wait.1": 1,
     "a/linux/X6/ring.archived": 1,
     "a/linux/X6/ring.cap": 1,
@@ -665,7 +665,7 @@
   "apps": {
     "a": {
       "claude": 99.41520467836258,
-      "chatgpt": 97.89473684210526
+      "chatgpt": 100
     },
     "b/darwin": {
       "claude": 100,
