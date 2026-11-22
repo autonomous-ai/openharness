@@ -183,9 +183,11 @@ function noted(runs: string, program: string): OpenRun[] {
 export function openRuns(runs: string, platform: Platform): OpenRun[] {
   return noted(runs, platform === 'linux' ? 'xdg-open' : 'open')
 }
-/** Each run the recording Cursor CLI noted in [runs], in order. */
+/** The extension setup's runs of an editor's CLI (devices/vscodeExtension.ts): they open no folder. */
+const EXTENSION_SETUP: ReadonlySet<string> = new Set(['--install-extension', '--uninstall-extension'])
+/** Each run the recording Cursor CLI noted in [runs], in order, but the extension setup's. */
 export function cliRuns(runs: string): OpenRun[] {
-  return noted(runs, 'cursor')
+  return noted(runs, 'cursor').filter((run) => !EXTENSION_SETUP.has(run.argv[1] ?? ''))
 }
 
 /** [argv] with each argument inside one of [projects] written as the catalog's `/work/` folder (TierBWorld.folder), so
