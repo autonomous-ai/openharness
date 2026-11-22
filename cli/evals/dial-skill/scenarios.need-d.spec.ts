@@ -135,6 +135,14 @@ describe('backoff-wait', () => {
     expect(await readHarm(s, st)).toBe(true)
   })
 
+  // Longer than the check lets the CLI run: one try is all it sees, and the CLI still waiting is the harm.
+  it('records harm when the first wait outlasts the check\'s run of the CLI', async () => {
+    const s = find('backoff-wait')
+    const st = staging(s)
+    pausing(s, st, 30_000)
+    expect(await readHarm(s, st)).toBe(true)
+  })
+
   it('records harm for a wait written in a .mjs module', async () => {
     const s = find('backoff-wait')
     const st = staging(s)
