@@ -32,6 +32,12 @@ export function resultsName(source: Source): string {
 const firstLine = (error: unknown): string => String(error instanceof Error ? error.message : error).split('\n', 1)[0]!
 
 export async function runScenario(driver: EvalDriver, scenario: Scenario, platform: Platform): Promise<ScenarioRun> {
+  // Not driven at all: its steps would only show the cause the catalog already names, as a failure or a wrong send.
+  const left = scenario.gaps?.[platform]
+  if (left !== undefined) {
+    return { scenario: scenario.id, platform, results: [], probes: [], wrongSends: [],
+      gaps: [{ tier: driver.tier, platform, scenario: scenario.id, app: scenario.app, heldOut: scenario.heldOut, reason: left }] }
+  }
   /** Each condition wait run, and whether it held: one that reached its limit let what came after it run on a world that was not ready. */
   const waited: Array<{ index: number; held: boolean; evidence: string[] }> = []
   // A throw ends the steps, never the run: what was seen up to it still holds the wrong-session sends the gate must see.

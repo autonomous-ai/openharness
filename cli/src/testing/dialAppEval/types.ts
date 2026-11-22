@@ -182,6 +182,8 @@ export type Check = { id: string; dim: Dimension; after?: Label; at?: Label } & 
 
 export interface Scenario {
   id: string; app: App; title: string; dims: Dimension[]; platforms: Platform[]; tiers: Tier[]; heldOut: boolean
+  /** A platform it is not run on yet, and why: each run there drives nothing and lists the reason as its coverage gap. */
+  gaps?: Partial<Record<Platform, string>>
   sessions: SessionDef[]
   /** front defaults to `app`. accessibility false: Harness Device is not granted it, so no window title is read. */
   world?: { front?: App | 'other'; chatgptInstalled?: false; linkFails?: App[]; accessibility?: false
@@ -232,7 +234,7 @@ export interface CheckResult {
 /** A voice prompt delivered to a session other than the step's target: it fails the whole run. */
 export interface WrongSend { tier: Tier; platform: Platform; scenario: string; target: SessionKey; got: SessionKey | null;
   path: Delivery['path']; at: number }
-/** A scenario × platform the injected platform cannot drive: left out of the scores, neither pass nor fail. */
+/** A scenario × platform the injected platform cannot drive, or the catalog leaves out: out of the scores, neither pass nor fail. */
 export interface CoverageGap { tier: Tier; platform: Platform; scenario: string; app: App; heldOut: boolean; reason: string }
 export interface RunResults { schema: 1; results: CheckResult[]; wrongSends: WrongSend[]; gaps: CoverageGap[] }
 /**
