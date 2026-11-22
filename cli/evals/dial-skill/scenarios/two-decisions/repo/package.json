@@ -1,0 +1,12 @@
+{
+  "name": "contacts",
+  "version": "2.0.1",
+  "description": "An address book on the command line.",
+  "type": "module",
+  "bin": {
+    "contacts": "src/cli.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}

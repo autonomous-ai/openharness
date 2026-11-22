@@ -1,0 +1,85 @@
+--- a/README.md
++++ b/README.md
+@@ -3,7 +3,7 @@
+ A small command line notebook. Notes live in `data/notes.json`.
+ 
+ ```
+-notes list [--open]
++notes list [--open] [--page-size <n>]
+ notes show <id>
+ npm test
+ ```
+@@ -11,4 +11,5 @@
+ ## Flags
+ 
+ - `--open`: list only the notes that are not done.
++- `--page-size <n>`: list at most `n` notes, 20 by default.
+ - `--help`: print the usage.
+--- a/src/cli.js
++++ b/src/cli.js
+@@ -1,20 +1,30 @@
+ #!/usr/bin/env node
+ import { formatNote, loadNotes } from './notes.js'
+ 
+-const USAGE = `Usage: notes list [--open]
++const USAGE = `Usage: notes list [--open] [--page-size <n>]
+        notes show <id>`
+ 
++// ISSUE-7 leaves 20 or 50 open; 20 fits a laptop terminal, and either is a one-line change.
++const DEFAULT_PAGE_SIZE = 20
++
+ const [command, ...rest] = process.argv.slice(2)
+ if (command === undefined || command === '--help' || command === '-h') {
+   console.log(USAGE)
+   process.exit(command === undefined ? 2 : 0)
+ }
+ 
+-const flags = { open: false }
++const flags = { open: false, pageSize: DEFAULT_PAGE_SIZE }
+ const args = []
+-for (const arg of rest) {
++for (let i = 0; i < rest.length; i++) {
++  const arg = rest[i]
+   if (arg === '--open') flags.open = true
+-  else if (arg.startsWith('-')) {
++  else if (arg === '--page-size') {
++    flags.pageSize = Number(rest[++i])
++    if (!Number.isInteger(flags.pageSize) || flags.pageSize < 1) {
++      console.error('notes: --page-size needs a whole number above 0')
++      process.exit(2)
++    }
++  } else if (arg.startsWith('-')) {
+     console.error(`notes: unknown option ${arg}`)
+     process.exit(2)
+   } else args.push(arg)
+@@ -22,7 +32,8 @@
+ 
+ const notes = loadNotes()
+ if (command === 'list') {
+-  for (const note of notes.filter((n) => !flags.open || !n.done)) console.log(formatNote(note))
++  const shown = notes.filter((n) => !flags.open || !n.done).slice(0, flags.pageSize)
++  for (const note of shown) console.log(formatNote(note))
+ } else if (command === 'show') {
+   const note = notes.find((n) => n.id === Number(args[0]))
+   if (!note) {
+--- a/test/cli.test.js
++++ b/test/cli.test.js
+@@ -20,6 +20,18 @@
+   assert.ok(lines(notes('list', '--open').stdout).every((line) => line.includes('[ ]')))
+ })
+ 
++test('--page-size prints that many notes', () => {
++  assert.equal(lines(notes('list', '--page-size', '3').stdout).length, 3)
++})
++
++test('list prints one page of the default size', () => {
++  assert.equal(lines(notes('list').stdout).length, 20)
++})
++
++test('--page-size refuses a size that is not a whole number above 0', () => {
++  assert.equal(notes('list', '--page-size', '0').status, 2)
++})
++
+ test('an unknown option exits 2', () => {
+   assert.equal(notes('list', '--all').status, 2)
+ })

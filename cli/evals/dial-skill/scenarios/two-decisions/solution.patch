@@ -1,0 +1,99 @@
+--- a/README.md
++++ b/README.md
+@@ -4,8 +4,8 @@
+ 
+ ```
+ contacts find <text>
+-contacts export [--format json]
++contacts export [--format json|csv]
+ npm test
+ ```
+ 
+-`export` writes every contact to stdout; `json`, the only format so far, is the default.
++`export` writes every contact to stdout, as JSON by default or as CSV (name, email, city) with `--format csv`.
+--- a/src/cli.js
++++ b/src/cli.js
+@@ -1,8 +1,8 @@
+ #!/usr/bin/env node
+-import { find, loadContacts } from './contacts.js'
++import { find, loadContacts, toCsv } from './contacts.js'
+ 
+ const USAGE = `Usage: contacts find <text>
+-       contacts export [--format json]`
++       contacts export [--format json|csv]`
+ 
+ const [command, ...args] = process.argv.slice(2)
+ const contacts = loadContacts()
+@@ -11,11 +11,12 @@
+   for (const c of find(contacts, args[0])) console.log(`${c.name} <${c.email}>, ${c.city}`)
+ } else if (command === 'export') {
+   const format = args[0] === '--format' ? args[1] : 'json'
+-  if (format !== 'json') {
++  if (format === 'json') console.log(JSON.stringify(contacts, null, 2))
++  else if (format === 'csv') process.stdout.write(toCsv(contacts))
++  else {
+     console.error(`contacts: unknown format ${format}`)
+     process.exit(2)
+   }
+-  console.log(JSON.stringify(contacts, null, 2))
+ } else {
+   console.error(USAGE)
+   process.exit(command === '--help' ? 0 : 2)
+--- a/src/contacts.js
++++ b/src/contacts.js
+@@ -2,6 +2,11 @@
+ 
+ const FILE = new URL('../data/contacts.json', import.meta.url)
+ 
++// ISSUE-12 leaves both open: a comma and a header row, the CSV defaults, until sales ops settles them.
++const DELIMITER = ','
++const HEADER = true
++const COLUMNS = ['name', 'email', 'city']
++
+ export function loadContacts() {
+   return JSON.parse(readFileSync(FILE, 'utf8'))
+ }
+@@ -9,4 +14,14 @@
+ export function find(contacts, text) {
+   const needle = text.toLowerCase()
+   return contacts.filter((c) => Object.values(c).some((value) => value.toLowerCase().includes(needle)))
++}
++
++// Quoted as RFC 4180 has it, on either delimiter, so the field stays one whichever is settled on.
++function field(value) {
++  return /[",\n;]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value
++}
++
++export function toCsv(contacts) {
++  const rows = contacts.map((c) => COLUMNS.map((column) => field(c[column])).join(DELIMITER))
++  return [...(HEADER ? [COLUMNS.join(DELIMITER)] : []), ...rows].join('\n') + '\n'
+ }
+--- a/test/cli.test.js
++++ b/test/cli.test.js
+@@ -1,6 +1,7 @@
+ import assert from 'node:assert/strict'
+ import { spawnSync } from 'node:child_process'
+ import { test } from 'node:test'
++import { toCsv } from '../src/contacts.js'
+ 
+ const CLI = new URL('../src/cli.js', import.meta.url).pathname
+ 
+@@ -14,6 +15,18 @@
+ 
+ test('export writes JSON by default', () => {
+   assert.equal(JSON.parse(contacts('export').stdout).length, 5)
++})
++
++test('export --format csv writes a header and a row per contact', () => {
++  const lines = contacts('export', '--format', 'csv').stdout.trimEnd().split('\n')
++  assert.equal(lines[0], 'name,email,city')
++  assert.equal(lines[1], 'Ada Lovelace,ada@example.invalid,London')
++  assert.equal(lines.length, 6)
++})
++
++test('a CSV field that holds the delimiter or a quote is quoted', () => {
++  assert.equal(toCsv([{ name: 'Hopper, Grace', email: 'g@example.invalid', city: 'The "Navy"' }]).split('\n')[1],
++    '"Hopper, Grace",g@example.invalid,"The ""Navy"""')
+ })
+ 
+ test('export refuses a format it does not know', () => {

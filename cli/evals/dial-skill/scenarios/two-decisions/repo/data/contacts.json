@@ -1,0 +1,7 @@
+[
+  { "name": "Ada Lovelace", "email": "ada@example.invalid", "city": "London" },
+  { "name": "Grace Hopper", "email": "grace@example.invalid", "city": "Arlington" },
+  { "name": "Katherine Johnson", "email": "katherine@example.invalid", "city": "Hampton" },
+  { "name": "Edsger Dijkstra", "email": "edsger@example.invalid", "city": "Nuenen" },
+  { "name": "Margaret Hamilton", "email": "margaret@example.invalid", "city": "Boston" }
+]

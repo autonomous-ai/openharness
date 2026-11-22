@@ -1,0 +1,14 @@
+{
+  "need": "need",
+  "kind": "decision",
+  "prompt": "Add CSV export (see ISSUE-12.md).",
+  "ask": "Choose the CSV delimiter (comma or semicolon) and whether to write a header row.",
+  "expect": "proceeding",
+  "secrets": [],
+  "origin": false,
+  "check": { "run": "grep -n 'Not decided yet' ISSUE-12.md && exit 1", "expect": "Not decided yet" },
+  "done": {
+    "run": "node src/cli.js export --format csv | grep -Eq 'Ada Lovelace\"?[,;]\"?ada@example\\.invalid' && npm test >/dev/null 2>&1 && echo 'csv export: done'",
+    "expect": "csv export: done"
+  }
+}
