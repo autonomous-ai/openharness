@@ -191,10 +191,12 @@ export async function panesChanged(world: TierAWorld): Promise<void> {
   if (JSON.stringify(terminals) !== front.told) await tellFront(world, front.worktree, terminals)
 }
 
-/** Orca quit: each watch ends with it, and so does the plugin's stream, kept for its relaunch. */
+/** Orca quit: each watch ends with it, and so does the plugin's stream, kept for its relaunch. The pane in focus went
+ *  with it: a watch after the relaunch prints nothing until Orca tells a focus again. */
 export function closeOrca(world: TierAWorld): void {
   const model = modelOf(world)
   for (const watch of [...model.watches]) watch.end()
+  model.last = undefined
   model.reopen = model.plugin !== undefined
   if (model.reopen) endPlugin(world)
 }
