@@ -2,17 +2,18 @@
 // runs for it, and the Claude mod's inbox poll, recorded rather than run on the real devices. Every folder is a temp one.
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { readLastAnswer } from '../../../../cable/hosts/lastAnswer.js'
+import { ptyMaker } from '../../../../cable/hosts/scannedApp.js'
 import type { InboxAnswer, InboxPoll } from '../../../../core/deviceHookCalls.js'
 import type { ObservedEvent, ObservedHookEvent } from '../../../../core/observedHook.js'
 import { lastCursorTurnText } from '../../../../engines/cursor/normalizer.js'
-import { claudeSession, editorSession, thread } from '../../catalog.js'
-import type { Delivery, Platform, Scenario, SessionKey, StepOf } from '../../types.js'
+import { claudeSession, editorSession, orcaSession, thread } from '../../catalog.js'
+import { orcaTerminalHandle, type Delivery, type Platform, type Scenario, type SessionKey, type StepOf } from '../../types.js'
 import { machine } from '../machine.js'
 import type { TierAWorld } from '../world.js'
-import { agentPid, keyOfShell, sessionsSteps, shellOf } from './sessions.js'
+import { agentPid, keyOfOrcaHandle, keyOfShell, orcaHandleOf, sessionsSteps, shellOf } from './sessions.js'
 
 const roots: string[] = []
 afterEach(() => {
@@ -38,6 +39,14 @@ const editors: Scenario = {
 }
 /** VS Code started with `code .` from Terminal.app (V11). */
 const fromTerminal: Scenario = { ...editors, id: 'S3', platforms: ['darwin'], world: { launchedFrom: 'terminal-app' } }
+/** Orca's agents in w1: Claude Code, a Codex, one in a pane another program made, one under tmux, one whose hooks name no
+ *  handle. Made at each case, from the catalog's builder. */
+const orcaAgents = (): Scenario => ({
+  id: 'S5', app: 'orca', title: 'Eval Orca', dims: ['D1'], platforms: ['darwin', 'win32', 'linux'], tiers: ['a'],
+  heldOut: false, steps: [], checks: [], probes: [],
+  sessions: [orcaSession('a'), orcaSession('b', { engine: 'codex', tab: 1 }), orcaSession('h', { held: true, tab: 2 }),
+    orcaSession('t', { tmux: true, tab: 3 }), orcaSession('n', { handle: 'none', tab: 4 })],
+})
 
 /** A world whose devices record what they are told, and hold each mod poll until the test answers it. */
 function fakeWorld(platform: Platform, of: Scenario = scenario) {
@@ -410,6 +419,133 @@ describe("tier A's live sessions", () => {
       expect(w.told.map((e) => [e.engine, (e as ObservedHookEvent).title]))
         .toEqual([['claude', 'Eval Alpha'], ['codex', undefined], ['codex', undefined]])
       expect(shellOf(w.world, 'a')).toBeUndefined()
+    }
+  })
+})
+
+describe("tier A's Orca agents", () => {
+  /** The agent's process, its parent and its parent's: the pane's shell and the terminal's maker. */
+  const chainOf = (world: TierAWorld, key: SessionKey) => {
+    const agent = machine.processes.get(agentPid(world, key)!)!
+    const shell = machine.processes.get(agent.ppid)!
+    return { agent, shell, maker: machine.processes.get(shell.ppid)! }
+  }
+  const ORCA_BUNDLE = 'com.stablyai.orca'
+
+  it("an Orca agent runs on its shell's tty under Orca's terminal host, on no tty, named Orca Agents on macOS and "
+    + 'orca-agents on Linux', async () => {
+    for (const [platform, host, tty] of [['darwin', 'Orca Agents', /^ttys0\d\d$/], ['linux', 'orca-agents', /^pts\/\d+$/]] as const) {
+      const w = fakeWorld(platform, orcaAgents())
+      await w.hook('a', 'start')
+      await w.hook('b', 'start')
+      const [a, b] = [chainOf(w.world, 'a'), chainOf(w.world, 'b')]
+      for (const { agent, shell, maker } of [a, b]) {
+        expect(agent.tty).toMatch(tty)
+        expect(shell.tty).toBe(agent.tty)
+        expect([basename(maker.executable), maker.tty, maker.ppid]).toEqual([host, undefined, 1])
+        // The devices' own maker check names Orca's host.
+        expect(ptyMaker(agent.pid, [...machine.processes.values()]), platform).toEqual({ pid: maker.pid, host: 'orca' })
+      }
+      // One host for the world's panes, each pane a terminal of its own; no process of Orca's has an app id.
+      expect(b.maker.pid).toBe(a.maker.pid)
+      expect(b.agent.tty).not.toBe(a.agent.tty)
+      expect([a.agent, a.shell, a.maker].map((p) => p.app)).toEqual([undefined, undefined, undefined])
+    }
+    // Windows reads no maker: its panes are on no tty, under Orca's app.
+    const w = fakeWorld('win32', orcaAgents())
+    await w.hook('a', 'start')
+    const { agent, shell, maker } = chainOf(w.world, 'a')
+    expect([agent.tty, shell.tty, maker.tty, maker.executable, maker.ppid]).toEqual([undefined, undefined, undefined, 'Orca.exe', 1])
+  })
+
+  it("a held one's maker is eval-terminal", async () => {
+    for (const platform of ['darwin', 'linux'] as const) {
+      const w = fakeWorld(platform, orcaAgents())
+      await w.hook('h', 'start')
+      const { agent, shell, maker } = chainOf(w.world, 'h')
+      expect(shell.tty).toBe(agent.tty)
+      expect([maker.executable, maker.tty, maker.ppid]).toEqual(['eval-terminal', undefined, 1])
+      expect(ptyMaker(agent.pid, [...machine.processes.values()])).toEqual({ pid: maker.pid })
+    }
+  })
+
+  it("its hook says ORCA_AGENT_SESSION_ID and its handle on every platform, and Orca's bundle id on macOS alone", async () => {
+    for (const platform of PLATFORMS) {
+      const w = fakeWorld(platform, orcaAgents())
+      await w.hook('a', 'start')
+      await w.hook('b', 'start')
+      const [a, b] = orcaAgents().sessions
+      const bundle = platform === 'darwin' ? { __CFBundleIdentifier: ORCA_BUNDLE } : {}
+      expect(toldOf(w.told, a!.id)).toMatchObject({ engine: 'claude', cwd: '/work/eval-w1', title: 'Eval Alpha' })
+      expect(toldOf(w.told, a!.id).hostHints).toEqual({ ORCA_AGENT_SESSION_ID: 'eval-orca-a', ORCA_TERMINAL_HANDLE: orcaTerminalHandle('a'), ...bundle })
+      expect(toldOf(w.told, b!.id).engine).toBe('codex')
+      expect(toldOf(w.told, b!.id).hostHints).toEqual({ ORCA_AGENT_SESSION_ID: 'eval-orca-b', ORCA_TERMINAL_HANDLE: orcaTerminalHandle('b'), ...bundle })
+    }
+  })
+
+  it('one whose handle is none names no ORCA_TERMINAL_HANDLE', async () => {
+    for (const platform of PLATFORMS) {
+      const w = fakeWorld(platform, orcaAgents())
+      await w.hook('n', 'start')
+      expect(toldOf(w.told, orcaAgents().sessions[4]!.id).hostHints).toEqual({ ORCA_AGENT_SESSION_ID: 'eval-orca-n',
+        ...(platform === 'darwin' ? { __CFBundleIdentifier: ORCA_BUNDLE } : {}) })
+    }
+  })
+
+  it('under tmux its hook adds TMUX_PANE, and its agent runs under a tmux server', async () => {
+    for (const platform of ['darwin', 'linux'] as const) {
+      const w = fakeWorld(platform, orcaAgents())
+      await w.hook('t', 'start')
+      const hints = toldOf(w.told, orcaAgents().sessions[3]!.id).hostHints
+      expect(hints).toMatchObject({ ORCA_AGENT_SESSION_ID: 'eval-orca-t', ORCA_TERMINAL_HANDLE: orcaTerminalHandle('t') })
+      expect(hints.TMUX_PANE).toMatch(/^%\d+$/)
+      const { agent, shell, maker: server } = chainOf(w.world, 't')
+      expect([shell.tty, server.executable, server.tty, server.ppid]).toEqual([agent.tty, 'tmux', undefined, 1])
+      expect(ptyMaker(agent.pid, [...machine.processes.values()])).toEqual({ pid: server.pid, host: 'tmux' })
+      // The pane Orca made runs tmux's client, on the pane's own terminal under Orca's host.
+      const client = [...machine.processes.values()].find((p) => p.executable === 'tmux' && p.tty !== undefined)!
+      const paneShell = machine.processes.get(client.ppid)!
+      expect(client.tty).not.toBe(agent.tty)
+      expect(paneShell.tty).toBe(client.tty)
+      expect(ptyMaker(client.pid, [...machine.processes.values()])?.host).toBe('orca')
+    }
+  })
+
+  it('keyOfOrcaHandle finds a session by its open pane\'s handle, and none for another', async () => {
+    const w = fakeWorld('darwin', orcaAgents())
+    await w.hook('a', 'start')
+    await w.hook('n', 'start')
+    await w.hook('h', 'start')
+    expect(orcaHandleOf(w.world, 'a')).toBe(orcaTerminalHandle('a'))
+    expect(keyOfOrcaHandle(w.world, orcaTerminalHandle('a'))).toBe('a')
+    // Orca lays out a session whose hooks name no handle on its key's.
+    expect(keyOfOrcaHandle(w.world, orcaTerminalHandle('n'))).toBe('n')
+    // A held pane is laid out, but it is the terminal another program was started in: no agent owns what it is sent.
+    expect(orcaHandleOf(w.world, 'h')).toBe(orcaTerminalHandle('h'))
+    expect(keyOfOrcaHandle(w.world, orcaTerminalHandle('h'))).toBeUndefined()
+    // b has not started: its pane is not open.
+    expect(orcaHandleOf(w.world, 'b')).toBeUndefined()
+    expect(keyOfOrcaHandle(w.world, orcaTerminalHandle('b'))).toBeUndefined()
+    expect(keyOfOrcaHandle(w.world, 'term_00000000-0000-4000-8d00-00000000ffff')).toBeUndefined()
+    // Its pane closes as it ends.
+    await w.hook('a', 'end')
+    expect(keyOfOrcaHandle(w.world, orcaTerminalHandle('a'))).toBeUndefined()
+  })
+
+  it("the other apps' hooks, hints and processes are as before", async () => {
+    /** What the Claude app's, the ChatGPT app's and VS Code's sessions tell and run as, pids aside, with an Orca agent of
+     *  `orca`'s started first. */
+    const others = async (platform: Platform, orca: Scenario['sessions']) => {
+      const w = fakeWorld(platform, { ...scenario, sessions: [...scenario.sessions, ...editors.sessions.slice(0, 1).map((s) => ({ ...s, key: 'v' })), ...orca] })
+      for (const s of orca) await w.hook(s.key, 'start')
+      const theirs = new Set(machine.processes.keys())
+      for (const key of ['a', 't1', 'c1', 'v']) await w.hook(key, 'start')
+      return { told: w.told.slice(orca.length).map((e) => (e as ObservedHookEvent).hostHints),
+        processes: [...machine.processes.values()].filter((p) => !theirs.has(p.pid))
+          .map((p) => ({ executable: p.executable, tty: p.tty, app: p.app, walked: machine.appOf(p.pid) })) }
+    }
+    for (const platform of PLATFORMS) {
+      expect(await others(platform, [orcaSession('o', { tmux: true })]), platform).toEqual(await others(platform, []))
     }
   })
 })

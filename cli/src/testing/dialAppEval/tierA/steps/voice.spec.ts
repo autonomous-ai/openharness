@@ -1,13 +1,18 @@
 // Tier A's voice step (voice.ts): what the dial says over the cable when the person speaks, what the transcriber is
 // given to answer, and the words the devices type into a terminal recorded as a delivery the gate reads.
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CableDecoder, CableType, encodeCableFrame } from '../../../../cable/cableFrame.js'
 import { CAROUSEL_REFRESH_MS } from '../../../dialCarousel.js'
 import { wrongSends } from '../../checks.js'
-import { claudeSessions } from '../../catalog.js'
-import { agentIdOf, type Delivery, type Scenario, type Seen } from '../../types.js'
+import { claudeSessions, orcaSession } from '../../catalog.js'
+import { agentIdOf, orcaTerminalHandle, type Delivery, type Scenario, type Seen } from '../../types.js'
 import { LoopbackDial } from '../loopbackDial.js'
+import { machine } from '../machine.js'
 import type { TierAWorld } from '../world.js'
+import { sessionsSteps } from './sessions.js'
 import { recordTyping, voiceSteps } from './voice.js'
 
 const sessions = claudeSessions(['a', 'b'])
@@ -49,9 +54,51 @@ async function ringed(dial: LoopbackDial) {
   return heard
 }
 
+const WORDS = 'Eval words for alpha.'
+const roots: string[] = []
+
+/** Codex agents in Orca's panes, a and b, and h in a pane another program made, started (so no mod polls): the words the
+ *  devices type through Orca's `terminal send` to a handle, and what reached whom. */
+async function orcaWorld() {
+  const of = {
+    id: 'S2', app: 'orca', checks: [], probes: [], platforms: ['darwin'],
+    sessions: [orcaSession('a', { engine: 'codex' }), orcaSession('b', { engine: 'codex', tab: 1 }),
+      orcaSession('h', { engine: 'codex', tab: 2, held: true })],
+    steps: [{ label: 'voice', kind: 'voice', transcript: WORDS, target: 'a' }],
+  } as unknown as Scenario
+  const root = mkdtempSync(join(tmpdir(), 'dial-eval-voice-'))
+  roots.push(root)
+  machine.reset()
+  const deliveries: Delivery[] = []
+  const rules: Array<(argv: readonly string[]) => { code: number } | undefined> = []
+  const world = {
+    scenario: of, platform: 'darwin', machine, ports: { devices: { observed: () => true } },
+    folders: { claudeProjects: join(root, 'projects'), codexSessions: join(root, 'codex', 'sessions'),
+      cursorProjects: join(root, 'cursor', 'projects'), codexHomes: join(root, 'codex-homes') },
+    session: (key: string) => of.sessions.find((s) => s.key === key)!,
+    deliver: (d: Omit<Delivery, 'at'>) => { deliveries.push({ at: 600, ...d }) },
+    answer: (rule: (typeof rules)[number]) => { rules.push(rule) },
+  } as unknown as TierAWorld
+  recordTyping(world)
+  for (const session of ['a', 'b', 'h']) await sessionsSteps.hook(world, { kind: 'hook', session, event: 'start' })
+  /** Orca's send as the devices run it (cable/hosts/orca.ts). */
+  const send = (handle: string) => {
+    for (const rule of rules) rule(['/opt/eval/orca/resources/bin/orca-ide', 'terminal', 'send', '--terminal', handle, `--text=${WORDS}`,
+      '--enter', '--wait-submit', '5', '--json'])
+  }
+  const seen = (): Seen => ({ frames: [], faces: [], commands: [], deliveries, steps: [{ at: 500, index: 0, kind: 'voice', label: 'voice' }] })
+  return { of, deliveries, send, seen }
+}
+
+/** A handle no session's pane has. */
+const NOBODYS = 'term_00000000-0000-4000-8d00-00000000ffff'
+
 // The dial's refresh task runs on a timer: virtual, so none outlives the case.
 beforeEach(() => { vi.useFakeTimers() })
-afterEach(() => { vi.useRealTimers() })
+afterEach(() => {
+  vi.useRealTimers()
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
+})
 
 describe("tier A's voice step", () => {
   it('voice sets the transcript and sends voice.begin, the audio and voice.end', async () => {
@@ -98,5 +145,29 @@ describe("tier A's voice step", () => {
     world.deliver({ path: 'mod', target: sessions.find((s) => agentIdOf(s) === spokenTo)!.key, text: world.speech! })
     expect(deliveries.map((d) => d.target)).toEqual(['b'])
     expect(wrongSends(scenario, seen())).toEqual([{ scenario: 'S1', target: 'a', got: 'b', path: 'mod', at: 600 }])
+  })
+
+  it("a terminal send to a session's handle is a typed delivery to it, and to none for a handle no session owns", async () => {
+    const { deliveries, send } = await orcaWorld()
+    send(orcaTerminalHandle('a'))
+    send(orcaTerminalHandle('b'))
+    send(NOBODYS)
+    // A held pane is the terminal another program was started in: words sent there reach no agent.
+    send(orcaTerminalHandle('h'))
+    expect(deliveries).toEqual([
+      { at: 600, path: 'typed', target: 'a', text: WORDS }, { at: 600, path: 'typed', target: 'b', text: WORDS },
+      { at: 600, path: 'typed', target: null, text: WORDS }, { at: 600, path: 'typed', target: null, text: WORDS },
+    ])
+  })
+
+  it("the gate counts a send to another session's handle, and one to a handle no session owns, as wrong-session sends", async () => {
+    const { of, send, seen } = await orcaWorld()
+    send(orcaTerminalHandle('a'))
+    expect(wrongSends(of, seen())).toEqual([])
+    send(orcaTerminalHandle('b'))
+    send(NOBODYS)
+    expect(wrongSends(of, seen())).toEqual([
+      { scenario: 'S2', target: 'a', got: 'b', path: 'typed', at: 600 }, { scenario: 'S2', target: 'a', got: null, path: 'typed', at: 600 },
+    ])
   })
 })

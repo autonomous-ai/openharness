@@ -11,13 +11,15 @@
  * or `ps`. The homes, the stores and the transcripts are throwaway folders.
  */
 import { homedir, tmpdir } from 'node:os'
+import { basename } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { claudeGhost, claudeSessions, editorGhost, editorSession, listed, MAIN, scenario, scenariosFor, started } from './catalog.js'
+import { claudeGhost, claudeSessions, editorGhost, editorSession, keys, listed, MAIN, orcaGhost, orcaSession, orcaStarted, scenario,
+  scenariosFor, started } from './catalog.js'
 import { loadBaseline, SKIP_RATCHET_ENV, tierAVerdict } from './grade.js'
 import { describeAttempt } from './netGuard.js'
 import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from './runner.js'
 import { TierADriver } from './tierA/driver.js'
-import type { Platform, Step } from './types.js'
+import { agentIdOf, orcaTerminalHandle, orcaWorktreeId, type Platform, type Scenario, type Seen, type Step } from './types.js'
 
 // First of all, so no import below opens a connection unguarded.
 const guard = await vi.hoisted(async () => (await import('./netGuard.js')).guardThisProcess())
@@ -300,6 +302,113 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     const run = await runScenario(new TierADriver({ startDevices }), cursorAgent, platform)
     expect(run.error).toBeUndefined()
     expect(run.gaps).toEqual([])
+  })
+
+  /** Task 7's O1, before the catalog has it: two worktrees, five agents, Claude Code and Codex, c in a split of a's tab, d
+   *  in a tab the person renamed; the plugin's front unknown. */
+  const o1 = (): Scenario => scenario({
+    id: 'O1', app: 'orca', title: 'Eval five agents in two worktrees', dims: ['D1'], tiers: ['a'],
+    sessions: [orcaSession('a'), orcaSession('c', { split: 1 }), orcaSession('b', { engine: 'codex', tab: 1 }),
+      orcaSession('d', { worktree: 'w2' }), orcaSession('e', { engine: 'codex', worktree: 'w2', tab: 1 }), orcaGhost],
+    steps: [{ kind: 'orca.layout', worktrees: ['w1', 'w2'], renamed: { d: 'Eval Renamed' } }, ...orcaStarted(['e', 'd', 'c', 'b', 'a'])],
+    checks: [], probes: [],
+  })
+  /** The last whole list the dial was sent, each row by its session's key and its name, as checks.ts reads lists. */
+  const lastList = (seen: Seen, of: Scenario) => {
+    let rows: Array<{ key: string; name: unknown }> | undefined
+    let last: { at: number; rows: Array<{ key: string; name: unknown }> } | undefined
+    for (const { at, message } of seen.frames) {
+      if (message.t === 'agents.begin') rows = []
+      else if (message.t === 'agent' && rows) rows.push({ key: of.sessions.find((s) => agentIdOf(s) === message.id)?.key ?? 'other', name: message.name })
+      else if (message.t === 'agents.end' && rows) {
+        last = { at, rows }
+        rows = undefined
+      }
+    }
+    return last
+  }
+  const isList = (argv: string[]): boolean => argv[1] === 'terminal' && argv[2] === 'list'
+
+  it("O1 on darwin: the five are listed in Orca's tab order, by their names, after a terminal list", async () => {
+    const scenario = o1()
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, scenario, 'darwin')
+    expect(run.error).toBeUndefined()
+    const seen = driver.seen()
+    // Codex's hooks carry no title: its row is its tab's. c's own title wins over its tab's, a's; d's tab was renamed.
+    const list = lastList(seen, scenario)!
+    expect(list.rows).toEqual([{ key: 'a', name: 'Eval Alpha' }, { key: 'c', name: 'Eval Charlie' }, { key: 'b', name: 'Eval Bravo' },
+      { key: 'd', name: 'Eval Renamed' }, { key: 'e', name: 'Eval Echo' }])
+    const read = seen.commands.find((c) => isList(c.argv))
+    expect(read?.ok).toBe(true)
+    expect(list.at).toBeGreaterThanOrEqual(read!.at)
+  })
+
+  /** Task 7's O7, its tap: a and c in w1, b in w2. */
+  const tapInW2 = (): Scenario => scenario({
+    id: 'O7', app: 'orca', title: 'Eval a tap on an agent in the other worktree', dims: ['D3'], tiers: ['a'],
+    sessions: [orcaSession('a'), orcaSession('c', { tab: 1 }), orcaSession('b', { worktree: 'w2' }), orcaGhost],
+    steps: [{ kind: 'orca.layout', worktrees: ['w1', 'w2'] }, ...orcaStarted(['b', 'c', 'a']), ...listed('orca', ['a', 'c', 'b']),
+      { label: 'tap', kind: 'tap', session: 'b' }],
+    checks: [], probes: [],
+  })
+  /** What brings Orca forward on each platform: open's bundle, the window raise, Windows' raise of Orca's bundle. */
+  const raisesOrca: Readonly<Record<Platform, (argv: string[]) => boolean>> = {
+    darwin: (argv) => argv.join(' ') === '/usr/bin/open -b com.stablyai.orca',
+    linux: (argv) => argv[0] === 'raise',
+    win32: (argv) => argv.join(' ') === 'harness-pty raise com.stablyai.orca',
+  }
+
+  it.for(PLATFORMS)("a tap on b in the other worktree runs worktree activate for its worktree, terminal switch for its handle, then the platform's raise, in that order, on %s", async (platform) => {
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, tapInW2(), platform)
+    expect(run.error).toBeUndefined()
+    const { commands, steps } = driver.seen()
+    const tap = steps.find((s) => s.label === 'tap')!
+    const after = commands.filter((c) => c.at >= tap.at).map((c) => c.argv)
+    const orca = after[0]?.[0]
+    expect(after.slice(0, 2)).toEqual([[orca, 'worktree', 'activate', '--worktree', `id:${orcaWorktreeId('w2')}`, '--json'],
+      [orca, 'terminal', 'switch', '--terminal', orcaTerminalHandle('b'), '--json']])
+    expect(after).toHaveLength(3)
+    expect(raisesOrca[platform](after[2]!)).toBe(true)
+  })
+
+  it("a ring of 40 agents in 40 worktrees reads Orca's layout at most once per change in its agents, and not once in a minute with no change", async () => {
+    const agents = keys('k', 1, 40, 2)
+    const worktreeOf = (key: string): string => key.replace('k', 'w')
+    const forty = scenario({
+      id: 'O16', app: 'orca', title: 'Eval forty agents in forty worktrees', dims: ['D1'], tiers: ['a'],
+      sessions: [...agents.map((key) => orcaSession(key, { worktree: worktreeOf(key) })), orcaGhost],
+      steps: [{ kind: 'orca.layout', worktrees: agents.map(worktreeOf) }, ...started(agents), { kind: 'wait', ms: 60_000 }],
+      checks: [], probes: [],
+    })
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, forty, 'darwin')
+    expect(run.error).toBeUndefined()
+    const { commands, steps } = driver.seen()
+    const reads = commands.filter((c) => isList(c.argv))
+    // Each agent changes Orca's ring twice: as it starts, and as its maker read finds its pane Orca's own.
+    expect(reads.length).toBeGreaterThan(0)
+    expect(reads.length).toBeLessThanOrEqual(2 * agents.length)
+    expect(reads.every((c) => c.ok)).toBe(true)
+    // Nothing changed after the last start, for a minute and the end's settle.
+    const last = steps.at(-1)!.at
+    expect(reads.filter((c) => c.at > last)).toEqual([])
+  })
+
+  it('O1 twice gives the same frames, faces, commands and deliveries at the same virtual times', async () => {
+    const seen = async () => {
+      const driver = new TierADriver({ startDevices })
+      await runScenario(driver, o1(), 'darwin')
+      const { frames, faces, commands, deliveries } = driver.seen()
+      // Orca's CLI is in each world's own temp folder: a command is its program and its arguments.
+      return { frames, faces, deliveries,
+        commands: commands.map(({ argv: [program, ...args], ...command }) => ({ ...command, argv: [basename(program!), ...args] })) }
+    }
+    const first = await seen()
+    const second = await seen()
+    expect(first.commands.some((c) => isList(c.argv))).toBe(true)
+    expect(second).toEqual(first)
   })
 
   // The baseline is written on a Mac and checked on Linux: a result naming this host's folders would differ there.
