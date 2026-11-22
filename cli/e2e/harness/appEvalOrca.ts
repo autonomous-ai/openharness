@@ -299,9 +299,16 @@ async function startAgent(world: TierBWorld, state: State, key: SessionKey): Pro
   const s = world.session(key)
   const launch = state.launches.get(key) ?? 0
   const tmux = s.tmux ? await personsTmux(world, s) : undefined
-  const hints = orcaHints(s, launch, world.platform, tmux?.hints)
-  const home = engineOf(s) === 'codex' && s.codexHome === 'own' ? ownHome(world, key) : undefined
-  const agent = await OrcaAgent.start(world.d, world.children, s, hints, home)
+  let agent: OrcaAgent
+  try {
+    const hints = orcaHints(s, launch, world.platform, tmux?.hints)
+    const home = engineOf(s) === 'codex' && s.codexHome === 'own' ? ownHome(world, key) : undefined
+    agent = await OrcaAgent.start(world.d, world.children, s, hints, home)
+  } catch (error) {
+    // Not yet live, so no end kills it: left, a reused daemon's next start of it would fail on its duplicate name.
+    if (tmux) killTmux(world, tmux.name)
+    throw error
+  }
   const live: Live = { agent, ...(tmux ? { tmux: tmux.name } : {}) }
   state.live.set(key, live)
   // A held pane is a terminal another program was started in: what is typed there reaches no agent.
