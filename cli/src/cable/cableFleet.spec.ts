@@ -415,6 +415,33 @@ describe('USB dial fleet', () => {
     } finally { await f.fleet.stop() }
   })
 
+  it('brings an unplugged dial back on the agent it was turned to, not the first of the ring', async () => {
+    const f = fixture()
+    f.host.listAgentSnapshot = async () => ({
+      agents: [{ id: 'a', name: 'A', engine: 'codex' }, { id: 'b', name: 'B', engine: 'codex' }], tab: '', total: 2, view: 'machine',
+    })
+    const focuses = (port: Peer) => port.sent.filter((m) => m.t === 'focus')
+    const dial = device('/dev/tim', 'AA:01')
+    f.setPorts([dial])
+    try {
+      f.fleet.start()
+      await vi.waitFor(() => expect(f.ports).toHaveLength(1))
+      await f.greet([f.ports[0]])
+      await vi.waitFor(() => expect(focuses(f.ports[0])).toEqual([{ t: 'focus', agentId: 'a' }]))
+      // The landing's echo first, so the turn after it is the person's own and not a repaint.
+      f.ports[0].say({ t: 'focus', agentId: 'a' })
+      f.ports[0].say({ t: 'focus', agentId: 'b' })
+      await vi.waitFor(() => expect(f.host.focus).toHaveBeenCalledWith('b'))
+      f.setPorts([]); await f.fleet['scan']()
+      expect(f.ports[0].isOpen).toBe(false)
+      f.setPorts([dial]); await f.fleet['scan']()
+      await vi.waitFor(() => expect(f.ports).toHaveLength(2))
+      await f.greet([f.ports[1]])
+      await vi.waitFor(() => expect(focuses(f.ports[1]).length).toBeGreaterThan(0))
+      expect(focuses(f.ports[1])).toEqual([{ t: 'focus', agentId: 'b' }])
+    } finally { await f.fleet.stop() }
+  })
+
   it('logs an ioreg that hung, and the next scan still runs and finds the dial', async () => {
     vi.useFakeTimers()
     const dump = `+-o Tim <class IOUSBHostDevice>
