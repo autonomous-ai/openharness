@@ -1,17 +1,18 @@
 // Tier A's live sessions (sessions.ts) on a fake world: what each hook tells the devices, the process the machine model
 // runs for it, and the Claude mod's inbox poll, recorded rather than run on the real devices. Every folder is a temp one.
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { readLastAnswer } from '../../../../cable/hosts/lastAnswer.js'
 import type { InboxAnswer, InboxPoll } from '../../../../core/deviceHookCalls.js'
 import type { ObservedEvent, ObservedHookEvent } from '../../../../core/observedHook.js'
-import { claudeSession, thread } from '../../catalog.js'
+import { lastCursorTurnText } from '../../../../engines/cursor/normalizer.js'
+import { claudeSession, editorSession, thread } from '../../catalog.js'
 import type { Delivery, Platform, Scenario, SessionKey, StepOf } from '../../types.js'
 import { machine } from '../machine.js'
 import type { TierAWorld } from '../world.js'
-import { sessionsSteps } from './sessions.js'
+import { agentPid, keyOfShell, sessionsSteps, shellOf } from './sessions.js'
 
 const roots: string[] = []
 afterEach(() => {
@@ -26,8 +27,20 @@ const scenario: Scenario = {
     claudeSession('x', 60_000, { cwd: '/work/eval-\u0007' })],
 }
 
+/** One of each editor agent: a terminal Claude Code, a panel, a Codex with its own home, Cursor's own agent and
+ *  cursor-agent in a terminal. */
+const editors: Scenario = {
+  id: 'S2', app: 'vscode', title: 'Eval editors', dims: ['D1'], platforms: ['darwin', 'win32', 'linux'], tiers: ['a'],
+  heldOut: false, steps: [], checks: [], probes: [],
+  sessions: [editorSession('a', 'vscode'), editorSession('d', 'vscode', { place: 'panel' }),
+    editorSession('b', 'vscode', { engine: 'codex', codexHome: 'own' }),
+    editorSession('c', 'cursor', { place: 'agent', folders: ['/work/eval-c'] }), editorSession('e', 'cursor', { engine: 'cursor' })],
+}
+/** VS Code started with `code .` from Terminal.app (V11). */
+const fromTerminal: Scenario = { ...editors, id: 'S3', platforms: ['darwin'], world: { launchedFrom: 'terminal-app' } }
+
 /** A world whose devices record what they are told, and hold each mod poll until the test answers it. */
-function fakeWorld(platform: Platform) {
+function fakeWorld(platform: Platform, of: Scenario = scenario) {
   const root = mkdtempSync(join(tmpdir(), 'dial-eval-sessions-'))
   roots.push(root)
   machine.reset()
@@ -48,10 +61,12 @@ function fakeWorld(platform: Platform) {
     },
   }
   const world = {
-    scenario, platform, machine,
+    scenario: of, platform, machine,
     ports: { devices },
-    folders: { claudeProjects: join(root, 'projects'), codexSessions: join(root, 'codex', 'sessions') },
-    session: (key: SessionKey) => scenario.sessions.find((s) => s.key === key)!,
+    folders: { claudeProjects: join(root, 'projects'), codexSessions: join(root, 'codex', 'sessions'),
+      cursorProjects: join(root, 'cursor', 'projects'), codexHomes: join(root, 'codex-homes') },
+    codexHome: { home: join(root, '.codex') },
+    session: (key: SessionKey) => of.sessions.find((s) => s.key === key)!,
     deliver: (d: Omit<Delivery, 'at'>) => { deliveries.push(d) },
   } as unknown as TierAWorld
   const hook = (session: SessionKey, event: StepOf<'hook'>['event'], more: Partial<StepOf<'hook'>> = {}) =>
@@ -68,6 +83,14 @@ const b = scenario.sessions[1]!
 const t1 = scenario.sessions[2]!
 const CLAUDE_APP = 'com.anthropic.claudefordesktop'
 const CHATGPT_APP = 'com.openai.codex'
+const VSCODE = 'com.microsoft.VSCode'
+const CURSOR = 'com.todesktop.230313mzl4w4u92'
+const TERMINAL = 'com.apple.Terminal'
+const PLATFORMS: readonly Platform[] = ['darwin', 'win32', 'linux']
+
+const toldOf = (told: readonly ObservedEvent[], sessionId: string, event = 'session-start') =>
+  told.find((e): e is ObservedHookEvent => e.sessionId === sessionId && e.event === event)!
+const sessionOf = (key: SessionKey) => editors.sessions.find((s) => s.key === key)!
 
 describe("tier A's live sessions", () => {
   it('start puts the process in the machine, tells the devices and opens the mod\'s poll', async () => {
@@ -193,5 +216,188 @@ describe("tier A's live sessions", () => {
     ])
     expect([...machine.processes.keys()].sort()).toEqual([41002, 41003, 41004])
     expect(w.open()).toEqual([a.id, b.id])
+  })
+
+  it('a terminal Claude Code in VS Code runs under a shell under the editor, and its hook says TERM_PROGRAM=vscode with '
+    + "VS Code's bundle id on macOS and Windows, and TERM_PROGRAM alone on Linux", async () => {
+    const hints: Partial<Record<Platform, unknown>> = {}
+    for (const platform of PLATFORMS) {
+      const w = fakeWorld(platform, editors)
+      await w.hook('a', 'start')
+      const agent = agentPid(w.world, 'a')!
+      const shell = shellOf(w.world, 'a')!
+      const editor = machine.processes.get(shell)!.ppid
+      expect(machine.processes.get(agent)).toMatchObject({ ppid: shell, executable: 'claude' })
+      expect(machine.processes.get(editor)).toMatchObject({ ppid: 1 })
+      expect(keyOfShell(w.world, shell)).toBe('a')
+      expect(toldOf(w.told, sessionOf('a').id)).toMatchObject({ engine: 'claude', callerPid: agent })
+      hints[platform] = toldOf(w.told, sessionOf('a').id).hostHints
+    }
+    expect(hints).toEqual({
+      darwin: { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: VSCODE },
+      win32: { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: VSCODE },
+      linux: { TERM_PROGRAM: 'vscode' },
+    })
+  })
+
+  it('a panel session runs under the editor and says claude-vscode, with no TERM_PROGRAM', async () => {
+    const hints: Partial<Record<Platform, unknown>> = {}
+    for (const platform of PLATFORMS) {
+      const w = fakeWorld(platform, editors)
+      await w.hook('a', 'start')
+      await w.hook('d', 'start')
+      const editor = machine.processes.get(shellOf(w.world, 'a')!)!.ppid
+      expect(shellOf(w.world, 'd')).toBeUndefined()
+      // One editor process for both of its sessions.
+      expect(machine.processes.get(agentPid(w.world, 'd')!)).toMatchObject({ ppid: editor, executable: 'claude' })
+      hints[platform] = toldOf(w.told, sessionOf('d').id).hostHints
+    }
+    expect(hints).toEqual({
+      darwin: { __CFBundleIdentifier: VSCODE, CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' },
+      win32: { __CFBundleIdentifier: VSCODE, CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' },
+      linux: { CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' },
+    })
+  })
+
+  it("launched from Terminal.app: its hook says Terminal's bundle id with TERM_PROGRAM=vscode, and the editor's parent is "
+    + "Terminal's process", async () => {
+    const w = fakeWorld('darwin', fromTerminal)
+    await w.hook('a', 'start')
+    await w.hook('d', 'start')
+    expect(toldOf(w.told, sessionOf('a').id).hostHints).toEqual({ TERM_PROGRAM: 'vscode', __CFBundleIdentifier: TERMINAL })
+    expect(toldOf(w.told, sessionOf('d').id).hostHints).toEqual({ __CFBundleIdentifier: TERMINAL, CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' })
+    const editor = machine.processes.get(machine.processes.get(shellOf(w.world, 'a')!)!.ppid)!
+    const terminal = machine.processes.get(editor.ppid)!
+    expect(terminal.ppid).toBe(1)
+    // Each app's bundle holds its executable, with its id, as plutil would read it.
+    const bundleOf = (executable: string) => [...machine.bundleIds.keys()].find((bundle) => executable.startsWith(`${bundle}/`))
+    expect(machine.bundleIds.get(bundleOf(terminal.executable)!)).toBe(TERMINAL)
+    expect(machine.bundleIds.get(bundleOf(editor.executable)!)).toBe(VSCODE)
+  })
+
+  it("Cursor's own agent: engine cursor, no TERM_PROGRAM, its transcript under CURSOR_HOME's projects, its answer where the "
+    + 'Cursor normalizer reads it', async () => {
+    const hints: Partial<Record<Platform, unknown>> = {}
+    for (const platform of PLATFORMS) {
+      const w = fakeWorld(platform, editors)
+      await w.hook('c', 'start')
+      hints[platform] = toldOf(w.told, sessionOf('c').id).hostHints
+      const editor = machine.processes.get(machine.processes.get(agentPid(w.world, 'c')!)!.ppid)!
+      expect(editor).toMatchObject({ ppid: 1, app: platform === 'win32' ? undefined : 'cursor' })
+      expect(shellOf(w.world, 'c')).toBeUndefined()
+    }
+    expect(hints).toEqual({ darwin: { __CFBundleIdentifier: CURSOR }, win32: { __CFBundleIdentifier: CURSOR }, linux: {} })
+    const w = fakeWorld('darwin', editors)
+    await w.hook('c', 'start')
+    await w.hook('c', 'turn-start')
+    await w.hook('c', 'turn-stop', { lastAnswer: 'Eval cursor answer.' })
+    const stop = toldOf(w.told, sessionOf('c').id, 'turn-stop')
+    expect(stop.engine).toBe('cursor')
+    expect(stop.transcriptPath!.startsWith(join(w.world.folders.cursorProjects, 'work-eval-c', 'agent-transcripts'))).toBe(true)
+    const lines = readFileSync(stop.transcriptPath!, 'utf8').split('\n').filter(Boolean)
+    expect(lastCursorTurnText(lines)).toEqual({ userMessage: 'Eval prompt.', assistantText: 'Eval cursor answer.' })
+  })
+
+  it('cursor-agent in a terminal says TERM_PROGRAM=vscode', async () => {
+    const hints: Partial<Record<Platform, unknown>> = {}
+    for (const platform of PLATFORMS) {
+      const w = fakeWorld(platform, editors)
+      await w.hook('e', 'start')
+      expect(toldOf(w.told, sessionOf('e').id).engine).toBe('cursor')
+      expect(machine.processes.get(agentPid(w.world, 'e')!)!.ppid).toBe(shellOf(w.world, 'e'))
+      hints[platform] = toldOf(w.told, sessionOf('e').id).hostHints
+    }
+    expect(hints).toEqual({
+      darwin: { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: CURSOR },
+      win32: { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: CURSOR },
+      linux: { TERM_PROGRAM: 'vscode' },
+    })
+  })
+
+  it("a Codex with its own home writes its rollout under it, neither Harness's CODEX_HOME nor the ChatGPT app's", async () => {
+    const w = fakeWorld('darwin', editors)
+    await w.hook('b', 'start')
+    await w.hook('b', 'turn-start')
+    await w.hook('b', 'turn-stop', { lastAnswer: 'Eval own codex answer.' })
+    const stop = toldOf(w.told, sessionOf('b').id, 'turn-stop')
+    expect(stop).toMatchObject({ engine: 'codex', hostHints: { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: VSCODE } })
+    const path = stop.transcriptPath!
+    expect(path.startsWith(w.world.folders.codexHomes)).toBe(true)
+    expect(path.startsWith(w.world.folders.codexSessions)).toBe(false)
+    expect(path.startsWith(w.world.codexHome.home)).toBe(false)
+    // As Codex writes it: sessions/<year>/<month>/<day>/rollout-…-<id>.jsonl in its home.
+    expect(path).toMatch(new RegExp(`/sessions/\\d{4}/\\d{2}/\\d{2}/rollout-[^/]+-${sessionOf('b').id}\\.jsonl$`))
+    expect(await readLastAnswer('codex', path, { roots: [w.world.folders.codexHomes], maxBytes: 262_144, deadlineMs: 1_000 }))
+      .toBe('Eval own codex answer.')
+  })
+
+  it("only Claude Code's hook carries the title", async () => {
+    const w = fakeWorld('darwin', editors)
+    for (const key of ['a', 'd', 'b', 'c', 'e']) {
+      await w.hook(key, 'start')
+      await w.hook(key, 'turn-start')
+    }
+    const titles = (event: string) => Object.fromEntries(['a', 'd', 'b', 'c', 'e']
+      .map((key) => [key, toldOf(w.told, sessionOf(key).id, event).title]))
+    const said = { a: 'Eval Alpha', d: 'Eval Delta', b: undefined, c: undefined, e: undefined }
+    expect(titles('session-start')).toEqual(said)
+    expect(titles('turn-start')).toEqual(said)
+  })
+
+  it("the mod polls for every Claude Code session, the panel's included", async () => {
+    const w = fakeWorld('darwin', editors)
+    for (const key of ['a', 'd', 'b', 'c', 'e']) await w.hook(key, 'start')
+    expect(w.open()).toEqual([sessionOf('a').id, sessionOf('d').id])
+  })
+
+  it("the machine answers each pid with the nearest app of its chain, an editor's agent with the editor, and Windows with none", async () => {
+    const apps = async (platform: Platform, of: Scenario) => {
+      const w = fakeWorld(platform, of)
+      for (const key of ['a', 'd', 'c', 'e']) await w.hook(key, 'start')
+      return Object.fromEntries(['a', 'd', 'c', 'e'].flatMap((key) => {
+        const shell = shellOf(w.world, key)
+        return [[key, machine.appOf(agentPid(w.world, key)!)], ...(shell === undefined ? [] : [[`${key} shell`, machine.appOf(shell)]])]
+      }))
+    }
+    const walked = { a: 'vscode', 'a shell': 'vscode', d: 'vscode', c: 'cursor', e: 'cursor', 'e shell': 'cursor' }
+    expect(await apps('darwin', editors)).toEqual(walked)
+    expect(await apps('linux', editors)).toEqual(walked)
+    // Under Terminal, the editor is the nearer app.
+    expect(await apps('darwin', fromTerminal)).toEqual(walked)
+    expect(await apps('win32', editors)).toEqual({ a: undefined, 'a shell': undefined, d: undefined, c: undefined,
+      e: undefined, 'e shell': undefined })
+  })
+
+  it("an editor's quit ends its sessions, their shells and the editor's process, and its relaunch starts a new one", async () => {
+    const w = fakeWorld('darwin', editors)
+    // VS Code 41000, a's shell 41001 and agent 41002, d's agent 41003; Cursor 41004, c's agent 41005.
+    await w.hook('a', 'start')
+    await w.hook('d', 'start')
+    await w.hook('c', 'start')
+    await sessionsSteps.quit(w.world, { kind: 'quit', app: 'vscode' })
+    await landed()
+    expect([...machine.processes.keys()]).toEqual([41004, 41005])
+    expect(w.open()).toEqual([])
+    await sessionsSteps.relaunch(w.world, { kind: 'relaunch', app: 'vscode' })
+    expect(machine.processes.get(shellOf(w.world, 'a')!)!.ppid).toBe(41006)
+    expect(machine.processes.get(agentPid(w.world, 'd')!)!.ppid).toBe(41006)
+    expect(w.open()).toEqual([sessionOf('a').id, sessionOf('d').id])
+  })
+
+  it("the Claude app's and the ChatGPT app's hooks, hints and processes are as before", async () => {
+    for (const platform of PLATFORMS) {
+      const w = fakeWorld(platform)
+      for (const key of ['a', 't1', 'c1']) await w.hook(key, 'start')
+      // One process each, from 41000, whose parent is none of the machine's, and whose app is its own.
+      expect([...machine.processes.values()].map(({ pid, ppid, executable }) => ({ pid, ppid, executable }))).toEqual([
+        { pid: 41000, ppid: 1, executable: 'claude' }, { pid: 41001, ppid: 1, executable: 'codex' },
+        { pid: 41002, ppid: 1, executable: 'codex' },
+      ])
+      expect([41000, 41001, 41002].map((pid) => machine.appOf(pid)))
+        .toEqual(platform === 'win32' ? [undefined, undefined, undefined] : ['claude', 'codex', undefined])
+      expect(w.told.map((e) => [e.engine, (e as ObservedHookEvent).title]))
+        .toEqual([['claude', 'Eval Alpha'], ['codex', undefined], ['codex', undefined]])
+      expect(shellOf(w.world, 'a')).toBeUndefined()
+    }
   })
 })
