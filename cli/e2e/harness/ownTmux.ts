@@ -12,6 +12,10 @@ import { tabUnder, type FakeApp } from './outsideAgent.js'
 /** The variables a pane needs to run the fake engine against this daemon, as e2e/hookclient.e2e.ts passes them. */
 const ENGINE_ENV = ['HOME', 'ZDOTDIR', 'PATH', 'CODEX_HOME', 'CLAUDE_PATH', 'CODEX_PATH']
 
+/** How its Claude Code starts: going on in the conversation [resume] names (`--resume <id>`), as the person's own started
+ *  again does, and with [env] in its pane beside the engine's variables. */
+export interface OwnTmuxOptions { resume?: string; env?: Readonly<Record<string, string>> }
+
 /** Claude Code (the fake engine) in a tmux session the test opened on the daemon's private server, as a person opens
  *  one by hand: not a session Harness made, so its hooks tell the devices and register nothing. */
 export class InOwnTmux {
@@ -21,8 +25,8 @@ export class InOwnTmux {
   get id(): string { return observedAgentId('claude', this.sessionId) }
 
   /** In a new session, [session]. */
-  static start(d: IsolatedDaemon, session: string, folder: string): Promise<InOwnTmux> {
-    return InOwnTmux.begin(d, folder, ['new-session', '-d', '-s', session])
+  static start(d: IsolatedDaemon, session: string, folder: string, options: OwnTmuxOptions = {}): Promise<InOwnTmux> {
+    return InOwnTmux.begin(d, folder, ['new-session', '-d', '-s', session], options)
   }
 
   /** In a new window of [session], made in the background: the session's active window stays the one it had. */
@@ -31,18 +35,20 @@ export class InOwnTmux {
   }
 
   /** [made] is the tmux command that makes its pane. */
-  private static async begin(d: IsolatedDaemon, folder: string, made: readonly string[]): Promise<InOwnTmux> {
+  private static async begin(d: IsolatedDaemon, folder: string, made: readonly string[], { resume, env = {} }: OwnTmuxOptions = {}):
+    Promise<InOwnTmux> {
     const cwd = join(d.projectsDir, folder)
     mkdirSync(cwd, { recursive: true })
     const from = d.hookLog().length
     // The private server's environment is the daemon's allowlist (src/testing/daemonEnvironment.ts): no host hint
     // from the developer's shell reaches the pane.
+    const variables = { ...Object.fromEntries(ENGINE_ENV.map((name) => [name, d.env[name]])), ...env }
     const pane = await d.tmux.run(...made, '-P', '-F', '#{pane_id}', '-c', cwd,
-      ...ENGINE_ENV.flatMap((name) => ['-e', `${name}=${d.env[name]}`]),
-      d.env.CLAUDE_PATH!)
+      ...Object.entries(variables).flatMap(([name, value]) => ['-e', `${name}=${value}`]),
+      d.env.CLAUDE_PATH!, ...(resume === undefined ? [] : ['--resume', resume]))
     // Its conversation, as its SessionStart hook named it: the only engine starting now.
-    const [, sessionId] = await until(`${folder} to run its SessionStart hook`,
-      () => /claude pid=\d+ SessionStart\(startup\) session=(\S+) ran/.exec(d.hookLog().slice(from)), 30_000, 100)
+    const started = new RegExp(`claude pid=\\d+ SessionStart\\(${resume === undefined ? 'startup' : 'resume'}\\) session=(\\S+) ran`)
+    const [, sessionId] = await until(`${folder} to run its SessionStart hook`, () => started.exec(d.hookLog().slice(from)), 30_000, 100)
     return new InOwnTmux(d, pane, sessionId)
   }
 

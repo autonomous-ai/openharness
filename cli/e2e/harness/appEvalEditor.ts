@@ -31,16 +31,12 @@ import { CodexOutside } from './codexOutside.js'
 import { CursorOutside } from './cursorOutside.js'
 import { until } from './daemon.js'
 import { startEditorWindow, type EditorWindow, type Printed } from './editorWindow.js'
-import { tabClient } from './ownTmux.js'
+import { InOwnTmux, tabClient } from './ownTmux.js'
 
 /** For a window's loop to connect: it first asks the CLI's `link` through the home's launcher (editorWindow.ts). */
 const CONNECT_MS = 60_000
 /** For a window to take a state it was told. */
 const TOOK_MS = 10_000
-/** For a Claude Code in tmux to run its SessionStart hook. */
-const HOOK_MS = 30_000
-/** The variables a tmux pane needs to run the fake engine against this daemon, as ownTmux.ts passes them. */
-const PANE_ENV = ['HOME', 'ZDOTDIR', 'PATH', 'CODEX_HOME', 'CLAUDE_PATH', 'CODEX_PATH']
 
 /** A window as its extension tells it: its editor, its terminals by session, the active one, and whether it is focused. */
 interface Look { app: Editor; terminals: SessionKey[]; active: SessionKey | null; focused: boolean }
@@ -187,20 +183,16 @@ async function endCursor(cursor: CursorOutside): Promise<void> {
 }
 
 /**
- * V12's Claude Code: in a tmux session of the person's on the daemon's private server, made as ownTmux.ts InOwnTmux makes
- * one but going on in the session's own conversation (`--resume <id>`), its client attached from a terminal of the editor.
- * That terminal's shell, as the window reports it, is the client's.
+ * V12's Claude Code: in a tmux session of the person's on the daemon's private server (ownTmux.ts InOwnTmux), going on in
+ * the session's own conversation, its client attached from a terminal of the editor. That terminal's shell, as the window
+ * reports it, is the client's.
  */
-async function inTmux(world: TierBWorld, state: State, s: SessionDef, cwd: string): Promise<number> {
+async function inTmux(world: TierBWorld, state: State, s: SessionDef, folder: string): Promise<number> {
   const { d } = world
   const name = `eval-${s.key}`
-  const from = d.hookLog().length
-  const env = { ...Object.fromEntries(PANE_ENV.map((variable) => [variable, d.env[variable]])), ...hintsOf(world, s), FAKE_CLAUDE_SESSION_TITLE: s.title }
-  await d.tmux.run('new-session', '-d', '-s', name, '-c', cwd,
-    ...Object.entries(env).flatMap(([variable, value]) => ['-e', `${variable}=${value}`]), d.env.CLAUDE_PATH!, '--resume', s.id)
   const killed = (): Promise<void> => d.tmux.run('kill-session', '-t', name).then(() => {}, () => { /* already gone */ })
   state.tmux.set(s.key, killed)
-  await until(`${s.key} to run its SessionStart hook in tmux`, () => d.hookLog().slice(from).includes(`SessionStart(resume) session=${s.id} ran`), HOOK_MS, 100)
+  await InOwnTmux.start(d, name, folder, { resume: s.id, env: { ...hintsOf(world, s), FAKE_CLAUDE_SESSION_TITLE: s.title } })
   const client = await tabClient(d, name, s.app as Editor)
   state.tmux.set(s.key, async () => {
     await client.close()
@@ -217,7 +209,7 @@ async function startSession(world: TierBWorld, key: SessionKey): Promise<void> {
   // A multi-root workspace's other folders are there too, as tier A makes them: Cursor's folder row opens only one that is.
   for (const folder of s.folders ?? []) world.folder(folder)
   let shell: number | undefined
-  if (s.tmux) shell = await inTmux(world, state, s, cwd)
+  if (s.tmux) shell = await inTmux(world, state, s, basename(cwd))
   else {
     switch (engineOf(s)) {
       case 'claude': shell = (await startClaude(world, appOf(world, EDITOR), key)).outside.shellPid; break
