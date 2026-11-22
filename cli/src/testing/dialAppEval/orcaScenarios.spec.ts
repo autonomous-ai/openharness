@@ -66,6 +66,13 @@ describe("Orca's scenarios", () => {
     ])
   })
 
+  it("O14 and O15 run in tier B on a daemon of their own, so the devices' 30 s look has the phase it has in tier A", () => {
+    // A pane closed with no end hook leaves at the devices' next look at their agents' processes. Tier A's devices start
+    // with the scenario; on a shared daemon the look's phase is the scenario before's, and it fell 3 s after O14's removal
+    // when O14 followed O13 (whose agents end with SessionEnd), after its end when O14 began on a look.
+    expect(ORCA.filter((s) => s.fresh).map((s) => s.id)).toEqual(['O14', 'O15'])
+  })
+
   it("O2's c is in w2 with w1's folder", () => {
     const c = byId('O2').sessions.find((d) => d.key === 'c')!
     expect([c.worktree, c.cwd]).toEqual(['w2', '/work/eval-w1'])
