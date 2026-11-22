@@ -28,8 +28,8 @@ export interface Staged {
  *  variables and a signed-in gh. */
 const PASSED = ['HOME', 'USER', 'LOGNAME', 'LANG', 'TERM']
 
-// A harm check is a few git, ls and grep calls; it runs between cases, so a long one would hold the pass.
-const HARM_TIMEOUT_MS = 10_000
+// A harm or done check is a few git, ls, grep or test calls; it runs between cases, so a long one would hold the pass.
+const CHECK_TIMEOUT_MS = 10_000
 
 export function stage(s: Scenario, agent: AgentKind, opts: { skill: boolean; base?: string }): Staged {
   const profile = process.env.CLAUDE_CONFIG_DIR
@@ -133,18 +133,29 @@ export function readRings(st: Staged): Ring[] {
   return text.split('\n').filter((line) => line !== '').map((line) => JSON.parse(line) as Ring)
 }
 
-/** Runs the scenario's harm check in the staged repo, as its check runs: true when the output holds `expect`, null when
- *  the scenario has no harm check. In a process group of its own, as the agent runs, so its timeout reaches all it
- *  started and the runner's other cases go on meanwhile. */
-export async function readHarm(s: Scenario, st: Staged): Promise<boolean | null> {
-  if (!s.harm) return null
-  const run = await spawnGroup('sh', ['-c', s.harm.run], st, HARM_TIMEOUT_MS)
-  // Cut short, the check may not have reached the harm it looks for: a seen failure, never a run with no harm.
+/** Runs the scenario's harm check in the staged repo: true when the output holds `expect`, null when the scenario has no
+ *  harm check. */
+export function readHarm(s: Scenario, st: Staged): Promise<boolean | null> {
+  return readCheck('harm', s.harm, st)
+}
+
+/** Runs the scenario's done check in the staged repo: true when the output holds `expect`, null when the scenario has no
+ *  done check. */
+export function readDone(s: Scenario, st: Staged): Promise<boolean | null> {
+  return readCheck('done', s.done, st)
+}
+
+/** Runs a check after the agent's run, as the scenario's check runs. In a process group of its own, as the agent runs, so
+ *  its timeout reaches all it started and the runner's other cases go on meanwhile. */
+async function readCheck(name: string, check: { run: string; expect: string } | undefined, st: Staged): Promise<boolean | null> {
+  if (!check) return null
+  const run = await spawnGroup('sh', ['-c', check.run], st, CHECK_TIMEOUT_MS)
+  // Cut short, the check may not have reached what it looks for: a seen failure, never a reading either way.
   if (run.timedOut || run.signal) {
-    const why = run.timedOut ? `ran past ${HARM_TIMEOUT_MS / 1000} s` : run.signal
-    throw Object.assign(new Error(`harm check did not finish: ${why}`), { failure_class: 'harm_check' })
+    const why = run.timedOut ? `ran past ${CHECK_TIMEOUT_MS / 1000} s` : run.signal
+    throw Object.assign(new Error(`${name} check did not finish: ${why}`), { failure_class: 'harm_check' })
   }
-  return (run.stdout + run.stderr).includes(s.harm.expect)
+  return (run.stdout + run.stderr).includes(check.expect)
 }
 
 export function unstage(st: Staged): void {

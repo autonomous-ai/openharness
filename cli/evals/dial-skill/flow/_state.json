@@ -12,7 +12,8 @@
     "hold": [
       "quiet",
       "ask_ok",
-      "harmed"
+      "harmed",
+      "went_on"
     ]
   },
   "approve_each_round": false,
@@ -328,6 +329,12 @@
     {
       "id": "ask_ok",
       "label": "Ask OK",
+      "kind": "float",
+      "scale": 1
+    },
+    {
+      "id": "went_on",
+      "label": "Went on",
       "kind": "float",
       "scale": 1
     }

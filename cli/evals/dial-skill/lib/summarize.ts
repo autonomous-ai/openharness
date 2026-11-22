@@ -8,6 +8,7 @@ export interface VariantStats {
   splits: Record<string, SplitStats>
   recall: number; specificity: number; precision: number; line_ok: number; ask_ok: number
   harmed: number; harm_rate: number
+  went_on: number
   latency_s: number; tool_calls: number; rings: number; tokens: number
   errors: Record<string, number>; truncated: number; invalid: number
   spend_usd: number | null
@@ -171,6 +172,8 @@ export function summarize(flow: string): Summary {
       ask_ok: rate(scored, 'ask_ok'),
       harmed,
       harm_rate: harmed / checked.length,
+      // Over the need runs whose scenario has a done check, the only rows the grader gives it.
+      went_on: rate(scored, 'went_on'),
       latency_s: mean(scored.map(r => r.latency_s ?? NaN)),
       tool_calls: mean(scored.map(r => r.tool_calls ?? NaN)),
       rings: mean(scored.map(r => r.rings ?? NaN)),
@@ -249,26 +252,26 @@ export function statusTable(s: Summary): string {
   const names = Object.keys(s.variants)
   const withTest = names.some(v => s.variants[v].splits.test)
   const splits = withTest ? SPLITS : SPLITS.filter(sp => sp !== 'test')
-  const out = header(['round', 'change', ...splits, 'recall', 'specificity', 'line_ok', 'ask_ok', 'harmed', 's/run',
+  const out = header(['round', 'change', ...splits, 'recall', 'specificity', 'line_ok', 'ask_ok', 'harmed', 'went_on', 's/run',
     'tool calls', 'rings', 'tokens', '$/pass', 'spend'])
   let spend: number | null = 0
   for (const v of names) {
     const x = s.variants[v]
     spend = spend === null || x.spend_usd === null ? null : spend + x.spend_usd
     out.push(line([v === 'baseline' ? 0 : Number(v.slice(1)), x.change, ...splits.map(sp => fmtSplit(x.splits[sp])),
-      pct(x.recall), pct(x.specificity), pct(x.line_ok), pct(x.ask_ok), fmtHarm(x), fmt(x.latency_s, 1),
+      pct(x.recall), pct(x.specificity), pct(x.line_ok), pct(x.ask_ok), fmtHarm(x), pct(x.went_on), fmt(x.latency_s, 1),
       fmt(x.tool_calls, 1), fmt(x.rings), fmt(x.tokens, 0), usd(x.spend_usd), usd(spend)]))
   }
   return out.join('\n')
 }
 
 export function aggregateTable(s: Summary): string {
-  const out = header(['variant', 'recall', 'specificity', 'precision', 'line_ok', 'ask_ok', 'harmed', 'truncated', 'invalid',
+  const out = header(['variant', 'recall', 'specificity', 'precision', 'line_ok', 'ask_ok', 'harmed', 'went_on', 'truncated', 'invalid',
     'errors'])
   for (const [v, x] of Object.entries(s.variants)) {
     const errors = Object.entries(x.errors).map(([cls, n]) => `${cls} ${n}`).join(', ')
     out.push(line([v, pct(x.recall), pct(x.specificity), pct(x.precision), pct(x.line_ok), pct(x.ask_ok), fmtHarm(x),
-      x.truncated, x.invalid, errors]))
+      pct(x.went_on), x.truncated, x.invalid, errors]))
   }
   return out.join('\n')
 }
