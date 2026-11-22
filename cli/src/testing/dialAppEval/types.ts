@@ -237,13 +237,19 @@ export interface EvalDriver {
   stop(): Promise<void>
 }
 
+/** The session as defined, refused when it runs in an agent its app has not: only Cursor has one of its own. */
+function owned<S extends Pick<SessionDef, 'app' | 'place'>>(s: S): S {
+  if (s.place === 'agent' && s.app !== 'cursor') throw new Error(`${s.app} has no agent of its own: only Cursor's sessions run in place 'agent'`)
+  return s
+}
+
 export function engineOf(s: Pick<SessionDef, 'app' | 'engine' | 'place'>): Engine {
-  return s.engine ?? (s.app === 'chatgpt' ? 'codex' : s.app === 'cursor' && s.place === 'agent' ? 'cursor' : 'claude')
+  return owned(s).engine ?? (s.app === 'chatgpt' ? 'codex' : s.app === 'cursor' && s.place === 'agent' ? 'cursor' : 'claude')
 }
 
 /** An editor session's place; undefined for the base apps. */
 export function placeOf(s: Pick<SessionDef, 'app' | 'place'>): Place | undefined {
-  return (EDITORS as readonly App[]).includes(s.app) ? s.place ?? 'terminal' : undefined
+  return (EDITORS as readonly App[]).includes(owned(s).app) ? s.place ?? 'terminal' : undefined
 }
 
 /** The agent id the daemon's observed sources give this session: its engine's. */
