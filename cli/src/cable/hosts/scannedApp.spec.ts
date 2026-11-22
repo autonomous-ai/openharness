@@ -307,6 +307,8 @@ describe('iTerm2\'s server', () => {
   ])('a plain tab under iTermServer is in iTerm2, in each form, with iTerm2 or launchd as its parent: %s', async (_, server) => {
     const under = atHome(tab(server, 400), ITERM_BUNDLE)
     expect(await scannedApps([500], under)).toEqual(new Map([[500, 'iterm']]))
+    // The row answers: iTerm2's own bundle past it is not read.
+    expect(under.bundleId).not.toHaveBeenCalled()
     const adopted = atHome(tab(server, 1), ITERM_BUNDLE)
     expect(await scannedApps([500], adopted)).toEqual(new Map([[500, 'iterm']]))
     expect(adopted.bundleId).not.toHaveBeenCalled()
