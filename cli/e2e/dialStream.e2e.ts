@@ -16,7 +16,7 @@
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { request, type ClientRequest } from 'node:http'
 import { join, sep } from 'node:path'
 import { promisify } from 'node:util'
@@ -27,6 +27,7 @@ import { Desk } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { FakeOrca } from './harness/fakeOrca.js'
 import { InOrca } from './harness/inOrca.js'
+import { startPluginLoop, type PluginLoop } from './harness/pluginLoop.js'
 import type { DialState } from '../../plugins/harness-device-orca/src/protocol.ts'
 
 const run = promisify(execFile)
@@ -48,18 +49,6 @@ const TITLE_MARK = '5c2e9b'
 const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : ['--import', 'tsx', 'src/cli.ts']
 
 interface Link { daemon: boolean; devicesSocket?: string; devicesReady: boolean }
-
-/** The plugin's loop, running. */
-interface Loop {
-  /** Each state it told, in order. */
-  states: DialState[]
-  /** Its log lines. */
-  logs: string[]
-  /** Hands it the terminals of the worktree on Orca's screen, as Orca does, or null for none. */
-  front(terminals: string[] | null): void
-  /** Ends its stdin, which stops it; its exit code, once it exits within 10 s. */
-  stop(): Promise<number | null>
-}
 
 interface Stream {
   status: number | undefined
@@ -176,49 +165,10 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
   const moved = (dial: FakeDial, agent: InOrca, open: Stream, count: number): Promise<string> =>
     dial.turnUntil(agent.id, `line ${count}`, () => (open.lines.length >= count ? open.lines[count - 1] : undefined))
 
-  /** A word the shell takes as it is. */
-  const quoted = (word: string): string => `'${word.replaceAll("'", `'\\''`)}'`
-
-  /**
-   * The plugin's loop, started as Orca would start it for someone whose launcher is `~/.local/bin/harness`: the home is
-   * the throwaway one, and the launcher there starts this checkout's CLI under the daemon's environment and nothing else.
-   * `/usr/bin:/bin` holds no `harness`: with no shim the loop would say `noHarness`, never find this Mac's launcher.
-   */
-  const loop = (d: IsolatedDaemon): Loop => {
+  /** The plugin's loop on [d] (harness/pluginLoop.ts), once [d]'s environment is its own. */
+  const loop = (d: IsolatedDaemon): PluginLoop => {
     isolated(d)
-    const bin = join(d.env.HOME!, '.local', 'bin')
-    const shim = join(bin, 'harness')
-    expect(shim.startsWith(d.root + sep)).toBe(true)
-    const env = Object.entries(d.env).flatMap(([name, value]) => (value === undefined ? [] : [quoted(`${name}=${value}`)]))
-    mkdirSync(bin, { recursive: true })
-    writeFileSync(shim, `#!/bin/sh\ncd ${quoted(CLI_ROOT)} && exec /usr/bin/env -i ${env.join(' ')} ${[process.execPath, ...CLI_ENTRY].map(quoted).join(' ')} "$@"\n`, { mode: 0o700 })
-    const child = spawn(process.execPath, ['--import', 'tsx', 'e2e/harness/pluginDial.ts'], {
-      cwd: CLI_ROOT, env: { HOME: d.env.HOME, PATH: '/usr/bin:/bin' }, stdio: ['pipe', 'pipe', 'pipe'],
-    })
-    children.push(child)
-    const states: DialState[] = []
-    const logs: string[] = []
-    const lines = (from: NodeJS.ReadableStream, take: (line: string) => void): void => {
-      let rest = ''
-      from.setEncoding('utf8')
-      from.on('data', (chunk: string) => {
-        const parts = (rest + chunk).split('\n')
-        rest = parts.pop()!
-        for (const part of parts) take(part)
-      })
-    }
-    lines(child.stdout, (line) => states.push(JSON.parse(line) as DialState))
-    lines(child.stderr, (line) => logs.push(line))
-    let exited: { code: number | null } | undefined
-    child.once('close', (code) => { exited = { code } })
-    return {
-      states, logs,
-      front: (terminals) => { child.stdin.write(`${JSON.stringify(terminals)}\n`) },
-      stop: async () => {
-        child.stdin.end()
-        return (await until('the loop to exit', () => exited, 10_000, 50)).code
-      },
-    }
+    return startPluginLoop(d, children)
   }
 
   /** The daemon's dial stream lines, each from its `[devices]` on. */
