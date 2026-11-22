@@ -8946,7 +8946,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
         const { core } = inHerdr({ orca: { ...onMac, platform: 'linux' }, hooked: hook('session-start') })
         shows(ID)
         return core
-      }, 'cannot scroll'],
+      }, 'no pane'],
     ])('with %s the stroke goes nowhere, herdr-app is not asked, and the stroke says why once', async (_, situation, reason) => {
       const core = await situation()
       stroke([8], 300)

@@ -988,19 +988,26 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   interface ScrollTarget { adapter: HostAdapter; pane: Pane }
   /** What a stroke did while its route was asked, in a fixed size. */
   interface Held { down: boolean; dy: number; velocity: number; up?: number }
+  /** Why a stroke no pane and no window takes was skipped, in fixed words: the line that says so names no agent. */
+  type Skipped = 'no agent' | 'no pane' | 'cannot scroll' | 'stopping' | 'not on screen'
+  /** A stroke dropped said nothing, so a person's "the dial did not scroll" left no trace (eval V13): once per stroke, at
+   *  a hand's pace. */
+  const skipped = (reason: Skipped): void => { log(`[device] scroll · skipped · ${reason}`) }
   /** Where the dial's scroll goes: the shown agent's pane in the first adapter that can scroll it now
    *  (docs/plans/2026-11-17-dial-herdr-scroll-design.md, §4). A hooked agent's panes first: its copy wins the registry's
-   *  dedupe, so the dial holds its id. Then the terminal of one the hc source alone lists, whose row's id the dial holds. */
-  const scrollTarget = (): ScrollTarget | undefined => {
+   *  dedupe, so the dial holds its id. Then the terminal of one the hc source alone lists, whose row's id the dial holds.
+   *  With none, why. */
+  const scrollTarget = (): ScrollTarget | Skipped => {
     const agentId = cableHost.shownAgentId()
-    if (agentId === undefined) return undefined
+    if (agentId === undefined) return 'no agent'
     const targets = adapters.flatMap((adapter): ScrollTarget[] => {
       const id = adapter.scroll && observed?.paneOf(agentId, adapter.id)
       return id ? [{ adapter, pane: { adapter: adapter.id, id } }] : []
     })
     const address = hcSource?.paneOf(agentId)
     if (address !== undefined) targets.push({ adapter: herdrAppNoted, pane: hcPane(address) })
-    return targets.find(({ adapter, pane }) => adapter.canScroll?.(pane))
+    if (targets.length === 0) return 'no pane'
+    return targets.find(({ adapter, pane }) => adapter.canScroll?.(pane)) ?? 'cannot scroll'
   }
   /** A stroke that goes to its app's pane, line by line. `page`: its guard said the program there takes its own page
    *  keys, so its lines carry them too. */
@@ -1050,7 +1057,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  awaits its listener), is dropped, so nothing of that stroke is sent anywhere. A stroke already decided keeps its
    *  route through the stop: a window that heard its down hears its up. */
   const decided = (asked: { deciding: ScrollTarget; held: Held; otherwise: OffPane }, to: 'page' | 'lines' | 'offScreen'): void => {
-    if (stopped || stroke !== asked) return
+    if (stroke !== asked) return
+    if (stopped) {
+      skipped('stopping')
+      return
+    }
     const { deciding: { adapter, pane }, held } = asked
     if (to !== 'offScreen') {
       // The travel held meanwhile goes as lines at once; what follows goes line by line.
@@ -1059,10 +1070,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       toPane(route, 'move', held.dy)
       return
     }
+    stroke = held.up === undefined ? asked.otherwise : undefined
+    if (asked.otherwise === 'nowhere') {
+      skipped('not on screen')
+      return
+    }
     // A hand's pace, and no address: once per stroke whose pane was not on screen.
     log(`[device] scroll · ${adapter.id} · not on screen`)
-    stroke = held.up === undefined ? asked.otherwise : undefined
-    if (asked.otherwise === 'nowhere') return
     if (held.down) toWindows('down', 0, 0)
     if (held.dy !== 0) toWindows('move', held.dy, held.velocity)
     if (held.up !== undefined) toWindows('up', 0, held.up)
@@ -1078,13 +1092,17 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         toPane({ ...route.deciding, lines: createScrollLines(), page: false }, 'move', route.held.dy)
       }
       // Once the devices began to stop, no app is asked or run: a stroke then takes no pane.
-      const target = stopped ? undefined : scrollTarget()
-      const to = target && routeOf(target)
-      if (to) {
-        const asked = { deciding: target!, held: { down: false, dy: 0, velocity: 0 }, otherwise: offPane() }
+      const target = stopped ? 'stopping' : scrollTarget()
+      const to = typeof target === 'object' ? routeOf(target) : undefined
+      if (typeof target !== 'object') {
+        route = stroke = offPane()
+        // The frame that chose the route: the stroke's later frames say nothing more.
+        if (route === 'nowhere') skipped(target)
+      } else if (to) {
+        const asked = { deciding: target, held: { down: false, dy: 0, velocity: 0 }, otherwise: offPane() }
         route = stroke = asked
         answer = to.then((answered) => decided(asked, answered))
-      } else route = stroke = target ? { ...target, lines: createScrollLines(), page: false } : offPane()
+      } else route = stroke = { ...target, lines: createScrollLines(), page: false }
     }
     if (typeof route === 'object' && 'held' in route) {
       route.held.dy += dy

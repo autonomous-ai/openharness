@@ -122,6 +122,18 @@ export function inCmux(hints: Readonly<Record<string, string>>): boolean {
     && !NOT_CMUX.some((own) => hints[own])
 }
 
+/** The hints of the app an agent's own terminal is in. An editor started with `code .` or `cursor .` from another app
+ *  inherits that app's bundle id, while its own terminals say TERM_PROGRAM=vscode: the bundle id named Terminal, and
+ *  its agent sat on Terminal's page, a tap opening Terminal (eval V11). A bundle id beside that word that is no
+ *  editor's is dropped, and the editor is learnt as TERM_PROGRAM alone has it learnt (observed.ts walked). */
+export function ownHints(hints: Record<string, string>): Record<string, string> {
+  const bundle = hints.__CFBundleIdentifier
+  if (hints.TERM_PROGRAM !== 'vscode' || bundle === undefined || bundle === APP_BUNDLES.vscode
+    || bundle === APP_BUNDLES.cursor) return hints
+  const { __CFBundleIdentifier: _inherited, ...own } = hints
+  return own
+}
+
 /** The outermost app an agent runs in. The bundle id and TERM_PROGRAM name it, unlike a multiplexer's own variables,
  *  which name the nearest host; with neither set, the nearest host is the only one known. */
 export function detectApp(hints: Record<string, string>): string {

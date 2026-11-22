@@ -10,7 +10,7 @@ import { errorKind } from '../../lib/log.js'
 import { roundDrawable } from '../roundGlyphs.js'
 import type { HostAdapter, Outer, Pane, Place } from './adapter.js'
 import { CODEX_THREAD, type CodexQueue, type CodexQueueFailure, type CodexRan } from './codexQueue.js'
-import { agentPlaceName, APP_BUNDLES, detectApp, detectHost, UNKNOWN_APP } from './hostDetect.js'
+import { agentPlaceName, APP_BUNDLES, detectApp, detectHost, ownHints, UNKNOWN_APP } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
 import { answerEngine, type AnswerEngine } from './lastAnswer.js'
 import { bundleOf, type OpenTarget } from './open.js'
@@ -718,7 +718,8 @@ export class ObservedSource implements HostSource {
         return
       }
       const had = entry.agent.app
-      entry.agent.app = app ?? detectApp(entry.hints)
+      // Placed again for its app's bundle too: the editor its parents named is the one a tap opens.
+      this.placeApp(entry, entry.hints, pid)
       // Nested, its caller's tty is the multiplexer's pane's, which no tab holds: never read (askOuter).
       if (entry.agent.app === had || entry.outerAsk) this.locate(entry)
       else {
@@ -809,7 +810,10 @@ export class ObservedSource implements HostSource {
   private placeApp(entry: Entry, hints: Readonly<Record<string, string>>, pid: number): void {
     const named = detectApp(hints)
     entry.agent.app = entry.outer?.app ?? (walked(hints) && this.deps.apps ? this.learnApp(entry, pid, named) : named)
-    entry.bundle = entry.outer ? APP_BUNDLES[entry.outer.app] : bundleOf(entry.agent.host, hints)
+    // VS Code named by TERM_PROGRAM alone may be Cursor, which says the same word: the app its parents named has the
+    // bundle, else a tap on Cursor started from Terminal (`cursor .`) opened VS Code.
+    const byApp = named === 'vscode' && !hints.__CFBundleIdentifier
+    entry.bundle = entry.outer ? APP_BUNDLES[entry.outer.app] : bundleOf(byApp ? entry.agent.app : entry.agent.host, hints)
   }
 
   private emit(): void {
@@ -874,6 +878,8 @@ export class ObservedSource implements HostSource {
       this.asked(e)
       return
     }
+    // Once, here: every reader after it, the place and the tap, sees the editor's own hints (eval V11).
+    e = { ...e, hostHints: ownHints(e.hostHints) }
     const known = this.entries.get(observedAgentId(e.engine, e.sessionId))
     // The end of a session never listed (one of the 50 dropped when full, or ended before the devices started) lists none.
     if (e.event === 'session-end' && !known) return

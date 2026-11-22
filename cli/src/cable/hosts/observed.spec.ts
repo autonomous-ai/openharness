@@ -3104,7 +3104,7 @@ describe('ObservedSource and an editor started from Terminal', () => {
   function editors(app: string) {
     const run = vi.fn(async (_file: string, _args: string[], _timeoutMs: number) => ({ code: 0, stdout: '' }))
     const deps: OrcaDeps = { run, onPath: (name) => `/fake/bin/${name}`, exists: () => false, platform: 'darwin' }
-    const terminals = { terminalOf: () => undefined, show: () => false, scroll: () => false, pageKeys: () => false,
+    const terminals = { terminalOf: () => undefined, show: () => false, scroll: () => false, pageKeys: () => false as const,
       canType: () => false, type: async () => 'failed' as const }
     const adapters = (['vscode', 'cursor'] as const).map((editor) => createVscodeAdapter(editor, { ...deps, inFront: () => true, terminals }))
     const { actions } = fakeActions()
@@ -3122,8 +3122,9 @@ describe('ObservedSource and an editor started from Terminal', () => {
     const agent = s.src.list()[0]
     expect([agent.host, agent.app]).toEqual(['vscode', app])
     expect(s.src.paneOf(agent.id, app)).toBe('term:100')
+    // No window reported its terminal: the tap is the editor's bundle alone, Cursor's for an agent in Cursor.
     expect(await s.src.focus(agent)).toBe(true)
-    expect(s.actions.open.mock.calls).toEqual([[agent.id, { bundle, pane: { adapter: app, id: 'term:100' } }]])
+    expect(s.actions.open.mock.calls).toEqual([[agent.id, { bundle }]])
   })
 })
 
