@@ -181,12 +181,14 @@ not the daemon's), so its words are typed.
   on (Ring above) → it is not on the Orca ring (decision 2); the two are, in order. (D1)
 - **O12.** Orca quits (its agents end, the watch ends, the plugin stream closes) and relaunches: Orca comes back in
   front, its agents come back with the same session ids in new terminals (new handles), and the plugin re-sends its
-  front → the ring comes back right with no duplicate rows, and a focus line after the relaunch is followed. (D7, D1,
-  D2)
+  front → the ring comes back right with no duplicate rows, and stays right past the devices' next 30 s observed tick
+  after the relaunch; a focus line after that tick is followed. The wait past the tick makes the check the same on
+  every run, whatever the tick's phase. (D7, D1, D2)
 - **O13.** The plugin is missing or disabled (no `dial` stream ever opens) → every Orca agent is listed in tab order,
   and a tap still switches the pane and brings Orca forward. (D7, D1, D3)
-- **O14.** A worktree is added with an agent in it, then another worktree is removed with its agent → the new agent
-  joins in tab order and the removed one leaves, each graded on `ringChange`. (D7, D1)
+- **O14.** A worktree is added with an agent in it, then another worktree is removed with its agent (its terminals
+  close and the agent's process ends with no end hook, as O15's close) → the new agent joins in tab order and the
+  removed one leaves, each graded on `ringChange`. Both tiers model the removal with the same events. (D7, D1)
 - **O15.** The person splits a pane and starts an agent in the new half → it is listed right after its sibling. Then
   they close a pane whose agent is running (its process ends with no end hook) → it leaves, graded on `ringChange`
   (decision 3). (D7, D1)
@@ -226,7 +228,8 @@ A bug reported from now on in Orca becomes a scenario in this catalog.
 
 - The bounds themselves (64 worktrees, 256 handles, 50 front terminals, 20,000 characters): a scenario past a bound would
   push a bound out, which the tech limits forbid. O16 stays inside them.
-- Orca account homes (`orca account list`): answered empty.
+- Orca account homes (`orca account list`): answered with the account homes the scenario's Codex agents run in, as a
+  real Orca lists them, and nothing else; the reading of those homes is not graded on its own.
 - Tab drags with no agent change (no signal reaches the daemon, as the editor spec's decision 2).
 
 ## Contract additions
@@ -241,7 +244,9 @@ On top of the editor spec's contract:
 - **Steps:**
   - `orca.layout`: Orca's worktrees, tabs and splits, with each pane's handle and title, as `terminal list` answers;
   - `orca.focus`: a watch-focus line for a session's pane;
-  - `orca.front`: the plugin's `orcaFront` for a worktree (its terminals);
+  - `orca.front`: the worktree on screen; the plugin's `orcaFront` carries its open terminals. As Orca's
+    `workspace.changed` does (`docs/plans/2026-11-18-dial-orca-tab-scope-design.md`), the world sends it again each
+    time a terminal of the shown worktree opens, closes or is renamed, in both tiers;
   - `orca.plugin`: the plugin's `dial` stream opens or closes;
   - `quit` and `relaunch` with `app: 'orca'`: its agents end, the watch and the plugin stream close, then all come back.
   A typed prompt is the base spec's `turn-start` hook from the person.
