@@ -1,15 +1,21 @@
 // Tier A's steps on the windows, as the devices' listener hears them: the app in front and the ChatGPT app's window
-// title from `harness hardware watch`, and the session the Claude app shows from the harness-device mod.
+// title from `harness hardware watch`, and the session the Claude app shows from the harness-device mod. The editors'
+// and Orca's fakes reach the listener the same way (handlerOf, tell).
 import { frontAppId } from '../../../../cable/hosts/frontApp.js'
 import { FRONT_NAMES } from '../../types.js'
-import type { ListenerHandler } from '../../../../services/devicesListener.js'
+import type { ListenerHandler, ListenerStreamHandler } from '../../../../services/devicesListener.js'
 import type { StepHandler, TierAWorld } from '../world.js'
 
+/** The devices' own handler of a message type, as their listener hands it: none opened fails the step. */
+export function handlerOf<T extends ListenerHandler | ListenerStreamHandler>(world: TierAWorld, type: string): T {
+  const handler = world.listener[type]
+  if (!handler) throw new Error(`the devices opened no listener for ${type}`)
+  return handler as T
+}
+
 /** One message to the listener, as its sender writes it: a handler that answers anything refused it. */
-async function tell(world: TierAWorld, message: { type: string } & Record<string, unknown>): Promise<void> {
-  const handler = world.listener[message.type] as ListenerHandler | undefined
-  if (!handler) throw new Error(`the devices opened no listener for ${message.type}`)
-  const answer: unknown = await handler.handle(message, new AbortController().signal)
+export async function tell(world: TierAWorld, message: { type: string } & Record<string, unknown>): Promise<void> {
+  const answer: unknown = await handlerOf<ListenerHandler>(world, message.type).handle(message, new AbortController().signal)
   if (answer !== undefined) throw new Error(`the devices' listener refused a ${message.type}: ${String(answer)}`)
 }
 

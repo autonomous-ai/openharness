@@ -1,6 +1,7 @@
 // Tier A's step of speaking to the dial, and the one delivery path the world does not record itself: words the devices
 // type into a terminal through their injected `run`. The mod's inbox (sessions.ts), the core's turns.send and the Codex
 // queue's `codex` run (world.ts) record theirs, each with its target, so the gate sees a send to the wrong session.
+import { flagOf } from '../argv.js'
 import type { StepHandler, TierAWorld } from '../world.js'
 import { keyOfOrcaHandle } from './sessions.js'
 
@@ -14,12 +15,11 @@ const ENTER = new Set(['\\r', '\r'])
 function typedWords(argv: readonly string[]): { text: string; handle?: string } | undefined {
   if (argv[1] === 'terminal' && argv[2] === 'send') {
     const text = argv.find((arg) => arg.startsWith('--text='))?.slice('--text='.length)
-    const at = argv.indexOf('--terminal')
-    return text === undefined ? undefined : { text, ...(at < 0 ? {} : { handle: argv[at + 1] }) }
+    const handle = flagOf(argv, '--terminal')
+    return text === undefined ? undefined : { text, ...(handle === undefined ? {} : { handle }) }
   }
   if (!argv.includes('send-text') && !argv.includes('write-chars')) return undefined
-  const at = argv.indexOf('--')
-  const words = at < 0 ? undefined : argv[at + 1]
+  const words = flagOf(argv, '--')
   return words === undefined || ENTER.has(words) ? undefined : { text: words }
 }
 

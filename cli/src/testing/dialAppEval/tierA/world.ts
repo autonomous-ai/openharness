@@ -31,6 +31,7 @@ import { fakeCore } from '../../fakeCore.js'
 import { RECORDED_LINUX_APPS } from '../../recordedLinuxApps.js'
 import { agentIdOf, type App, type Delivery, type LinkedApp, type Platform, type Scenario, type Seen, type SessionDef, type SessionKey,
   type StepKind, type StepOf } from '../types.js'
+import { programOf } from './argv.js'
 import { quiet } from './clock.js'
 import { LoopbackDial } from './loopbackDial.js'
 import { machine, type MachineModel } from './machine.js'
@@ -121,8 +122,6 @@ function emptied(folder: string): string {
   return folder
 }
 
-/** A command's program, as its path or name ends. */
-const programOf = (argv: readonly string[]): string => (argv[0] ?? '').split(/[\\/]/).at(-1)!
 /** Whether the world answers a command (ANSWERED). */
 const answered = (argv: readonly string[]): boolean => ANSWERED.has(programOf(argv))
   || (argv.length === 2 && argv[0] === CURSOR_BIN && isAbsolute(argv[1]!))

@@ -13,12 +13,13 @@
  */
 import type { OrcaChild } from '../../../../cable/hosts/orca.js'
 import type { OrcaHomes } from '../../../../devices/orcaHomes.js'
-import { REFUSED, type ListenerHandler, type ListenerStream, type ListenerStreamHandler, type StreamEnd }
-  from '../../../../services/devicesListener.js'
+import { REFUSED, type ListenerStream, type ListenerStreamHandler, type StreamEnd } from '../../../../services/devicesListener.js'
 import { orcaLayout, orcaListing } from '../../orcaListing.js'
 import { engineOf, type StepOf } from '../../types.js'
+import { flagOf, programOf } from '../argv.js'
 import type { StepHandler, TierAWorld } from '../world.js'
 import { codexHomeOf, dropSession, orcaHandleOf } from './sessions.js'
+import { handlerOf, tell } from './window.js'
 
 /** Orca's CLI by the name each platform's runs it as (devices/orcaHomes.ts orcaBinary): its launcher on macOS, the
  *  .deb's and the AppImage's `orca-ide` on Linux, `orca.exe` on Windows. */
@@ -68,17 +69,11 @@ function modelOf(world: TierAWorld): Model {
 }
 
 /** Orca tells the pane in focus: on every running watch, and kept for the next. */
-function tell(world: TierAWorld, handle: string): void {
+function tellFocus(world: TierAWorld, handle: string): void {
   const model = modelOf(world)
   const line = `${JSON.stringify({ handle })}\n`
   model.last = line
   for (const watch of model.watches) watch.print(line)
-}
-
-const programOf = (argv: readonly string[]): string => (argv[0] ?? '').split(/[\\/]/).at(-1)!
-const after = (argv: readonly string[], flag: string): string | undefined => {
-  const at = argv.indexOf(flag)
-  return at < 0 ? undefined : argv[at + 1]
 }
 
 /** The world's rules for Orca's commands: each is answered as Orca 1.4.256 does, from the scenario's model of it. A
@@ -97,8 +92,8 @@ export function answerOrca(world: TierAWorld): void {
         return { code: 0, stdout: JSON.stringify(orcaListing(worktrees, layout?.renamed ?? {})) }
       }
       case 'terminal switch': {
-        const handle = after(argv, '--terminal')
-        if (handle !== undefined) setTimeout(() => tell(world, handle), ECHO_MS)
+        const handle = flagOf(argv, '--terminal')
+        if (handle !== undefined) setTimeout(() => tellFocus(world, handle), ECHO_MS)
         return { code: 0 }
       }
       case 'worktree activate':
@@ -135,12 +130,6 @@ export function watchChild(world: TierAWorld): OrcaChild {
   return { onData: (listener) => { listeners.push(listener) }, exited, kill: watch.end }
 }
 
-function handlerOf<T extends ListenerHandler | ListenerStreamHandler>(world: TierAWorld, type: string): T {
-  const handler = world.listener[type]
-  if (!handler) throw new Error(`the devices opened no listener for ${type}`)
-  return handler as T
-}
-
 /** The plugin opens its stream as it does on Orca's start: a standby one, which never takes the stream from another
  *  Orca. The listener tells a stream it can take a line once it has opened. */
 function openPlugin(world: TierAWorld): void {
@@ -175,8 +164,7 @@ function terminalsOf(world: TierAWorld, worktree: string): string[] | undefined 
 
 /** The plugin tells the devices the worktree on Orca's screen: its open panes' handles. */
 async function tellFront(world: TierAWorld, worktree: string, terminals: string[]): Promise<void> {
-  const answer: unknown = await handlerOf<ListenerHandler>(world, 'orcaFront').handle({ type: 'orcaFront', terminals }, new AbortController().signal)
-  if (answer !== undefined) throw new Error(`the devices' listener refused orcaFront for ${worktree}: ${String(answer)}`)
+  await tell(world, { type: 'orcaFront', terminals })
   modelOf(world).front = { worktree, told: JSON.stringify(terminals) }
 }
 
@@ -220,7 +208,7 @@ export const orcaModelSteps: { [K in 'orca.layout' | 'orca.focus' | 'orca.front'
   'orca.focus': async (world, step) => {
     const handle = orcaHandleOf(world, step.session)
     if (handle === undefined) throw new Error(`scenario ${world.scenario.id}: orca.focus names ${step.session}, whose pane is not open`)
-    tell(world, handle)
+    tellFocus(world, handle)
   },
   // The plugin tells the worktree on Orca's screen, which must be one Orca lays out.
   'orca.front': async (world, step) => {
