@@ -613,7 +613,7 @@ function stateParts(check: CheckOf<'state'>, world: World, w: Window | undefined
   const session = world.session(check.session)
   const id = agentIdOf(session)
   const page = PAGE[session.app]
-  const rings = world.rings().filter((r) => r.page === page)
+  const rings = world.rings()
   // Every session's changes, not only this one's: the evidence lists those in the window, so a probe on a session that
   // never changes still says what the driver saw.
   const all: Array<{ at: number; agentId: string; state: string }> = []
@@ -626,12 +626,13 @@ function stateParts(check: CheckOf<'state'>, world: World, w: Window | undefined
     if (next !== undefined) all.push({ at, agentId: message.agentId, state: next })
   }
   const changes = all.filter((c) => c.agentId === id)
-  // Shown: at some moment in the window the row is in its page's last whole list and in that state.
+  // Shown: at some moment in the window the row is in that state and in the last whole list, which is its page's: the
+  // dial holds no other, as the ring check reads it.
   const moments = w ? [w.from, ...changes.map((c) => c.at), ...rings.map((r) => r.at)].filter((at) => within(at, w)).sort((x, y) => x - y) : []
   const shownAt = moments.find((at) => {
     const now = changes.filter((c) => c.at <= at).at(-1)?.state ?? 'idle'
     const ring = rings.filter((r) => r.at <= at).at(-1)
-    return now === check.state && ring !== undefined && ring.rows.some((r) => r.id === id)
+    return now === check.state && ring?.page === page && ring.rows.some((r) => r.id === id)
   })
   const seenChanges = w ? all.filter((c) => within(c.at, w)) : []
   const evidence = bounded(seenChanges.map((c) => `${world.keyOf(c.agentId)} ${c.state} at ${c.at}`))
