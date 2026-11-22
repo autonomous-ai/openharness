@@ -314,8 +314,9 @@ export function orcaTerminalHandle(key: SessionKey): string {
   return `term_00000000-0000-4000-8d00-${bytes.padStart(12, '0')}`
 }
 
-/** The handle of the terminal Orca lays the session out in at its nth launch (0: its first). A relaunched Orca gives
- *  each pane a new terminal, so a check that reads an old handle grades a pane that is gone. */
+/** The handle of the terminal Orca lays the session out in at Orca's nth launch (0: its first), one count per world in
+ *  both tiers and the checks. A relaunched Orca gives each pane a new terminal, a session first started after it too,
+ *  so a check that reads an old handle grades a pane that is gone. */
 export function orcaPaneHandle(s: Pick<SessionDef, 'key' | 'handle'>, launch: number): string {
   const first = s.handle === undefined || s.handle === 'none' ? orcaTerminalHandle(s.key) : s.handle
   if (launch === 0) return first

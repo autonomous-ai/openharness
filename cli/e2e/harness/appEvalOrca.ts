@@ -195,8 +195,9 @@ interface State {
   front?: { worktree: string; told: string }
   /** What Orca's quit ended, for its relaunch: its agents, and whether the plugin ran. */
   quit?: { sessions: SessionKey[]; plugin: boolean }
-  /** Each session's launch, 0 its first: Orca's nth relaunch lays its pane out on its nth handle (orcaPaneHandle). */
-  launches: Map<SessionKey, number>
+  /** Orca's launch, 0 its first: its nth relaunch lays every pane out on its nth handle (orcaPaneHandle), the agents it
+   *  ran at its quit and those started after alike. */
+  launch: number
 }
 const states = new WeakMap<TierBWorld, State>()
 
@@ -210,7 +211,7 @@ const states = new WeakMap<TierBWorld, State>()
 function orcaOf(world: TierBWorld): State {
   const known = states.get(world)
   if (known) return known
-  const state: State = { live: new Map(), launches: new Map() }
+  const state: State = { live: new Map(), launch: 0 }
   states.set(world, state)
   // Only Orca's lifetime: what it does is in this file.
   const child = spawn(process.execPath, ['-e', 'process.stdin.resume()'], { cwd: world.d.root, env: world.d.env, stdio: ['pipe', 'ignore', 'ignore'] })
@@ -244,9 +245,9 @@ async function endAll(world: TierBWorld, state: State): Promise<void> {
   world.orca.endWatch()
 }
 
-/** The handle of the session's pane while its agent runs, at its current launch. */
+/** The handle of the session's pane while its agent runs, at Orca's launch. */
 function handleOf(world: TierBWorld, state: State, key: SessionKey): string | undefined {
-  return state.live.has(key) ? orcaPaneHandle(world.session(key), state.launches.get(key) ?? 0) : undefined
+  return state.live.has(key) ? orcaPaneHandle(world.session(key), state.launch) : undefined
 }
 
 /** The handles of a worktree's open panes, in Orca's order. */
@@ -322,7 +323,7 @@ export function orcaHints(s: SessionDef, launch: number, platform: NodeJS.Platfo
 async function startAgent(world: TierBWorld, state: State, key: SessionKey): Promise<void> {
   if (state.live.has(key)) throw new Error(`scenario ${world.scenario.id}: ${key} is running already`)
   const s = world.session(key)
-  const launch = state.launches.get(key) ?? 0
+  const { launch } = state
   const tmux = s.tmux ? await personsTmux(world, s) : undefined
   let agent: OrcaAgent
   try {
@@ -420,10 +421,8 @@ export const orcaSteps: AppSteps = {
     const state = orcaOf(world)
     const quit = state.quit
     state.quit = undefined
-    for (const key of quit?.sessions ?? []) {
-      state.launches.set(key, (state.launches.get(key) ?? 0) + 1)
-      await startAgent(world, state, key)
-    }
+    state.launch++
+    for (const key of quit?.sessions ?? []) await startAgent(world, state, key)
     if (quit?.plugin) await startPlugin(world, state)
   },
   'orca.layout': async (world, step) => {

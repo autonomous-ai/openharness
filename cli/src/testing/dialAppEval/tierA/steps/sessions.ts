@@ -65,8 +65,9 @@ interface State {
   live: Map<SessionKey, Live>
   /** The sessions each app's quit ended, for its relaunch. */
   quit: Map<App, SessionKey[]>
-  /** Each relaunched Orca session's launch: Orca's nth relaunch lays its pane out on its nth handle (orcaPaneHandle). */
-  launches: Map<SessionKey, number>
+  /** Orca's launch, 0 its first: its nth relaunch lays every pane out on its nth handle (orcaPaneHandle), the sessions
+   *  it ran at its quit and those started after alike. */
+  orcaLaunch: number
   /** Each editor's process while it runs: one per launch. */
   editors: Map<App, number>
   /** Terminal.app's process, once an editor started from it runs. */
@@ -84,7 +85,7 @@ const states = new WeakMap<TierAWorld, State>()
 
 function stateOf(world: TierAWorld): State {
   let state = states.get(world)
-  if (!state) states.set(world, state = { live: new Map(), quit: new Map(), launches: new Map(), editors: new Map(), ttys: 0, polls: 0, started: 0 })
+  if (!state) states.set(world, state = { live: new Map(), quit: new Map(), orcaLaunch: 0, editors: new Map(), ttys: 0, polls: 0, started: 0 })
   return state
 }
 
@@ -117,7 +118,7 @@ const fromTerminal = (world: TierAWorld): boolean => world.scenario.world?.launc
 function hintsOf(world: TierAWorld, s: SessionDef): Record<string, string> {
   const { platform } = world
   if (s.app === 'orca') {
-    const handle = hookHandle(s, launchOf(world, s.key))
+    const handle = hookHandle(s, stateOf(world).orcaLaunch)
     return {
       ORCA_AGENT_SESSION_ID: `eval-orca-${s.key}`,
       ...(handle === undefined ? {} : { ORCA_TERMINAL_HANDLE: handle }),
@@ -304,15 +305,10 @@ export function keyOfShell(world: TierAWorld, pid: number): SessionKey | undefin
   return undefined
 }
 
-/** The session's launch of Orca, 0 its first: Orca gives a relaunched session's pane a new terminal (orcaPaneHandle). */
-export function launchOf(world: TierAWorld, key: SessionKey): number {
-  return stateOf(world).launches.get(key) ?? 0
-}
-
-/** The handle of the session's Orca pane while it is open: from its start to its end. */
+/** The handle of the session's Orca pane while it is open: from its start to its end, at Orca's launch. */
 export function orcaHandleOf(world: TierAWorld, key: SessionKey): string | undefined {
   const s = world.session(key)
-  return s.app === 'orca' && running(world, key) ? orcaPaneHandle(s, launchOf(world, key)) : undefined
+  return s.app === 'orca' && running(world, key) ? orcaPaneHandle(s, stateOf(world).orcaLaunch) : undefined
 }
 
 /** The live session whose open Orca pane has this handle and is its own terminal: a held one's is the terminal another
@@ -450,9 +446,7 @@ export const sessionsSteps: { hook: StepHandler<'hook'>; quit: StepHandler<'quit
     const state = stateOf(world)
     const ended = state.quit.get(step.app) ?? []
     state.quit.delete(step.app)
-    for (const key of ended) {
-      if (world.session(key).app === 'orca') state.launches.set(key, launchOf(world, key) + 1)
-      await startSession(world, key)
-    }
+    if (step.app === 'orca') state.orcaLaunch++
+    for (const key of ended) await startSession(world, key)
   },
 }
