@@ -203,6 +203,10 @@ them.
 - **OH1.** Voice on the focused Codex agent while another Orca agent is working → only the focused one gets the words.
   (D5, gate)
 - **OH2.** Voice 200 ms after a focus line moved the dial → the text reaches the newly focused agent's pane. (D5, gate)
+  macOS only for now (PM, 2026-11-22): on Linux and Windows the dial never follows (decision 3's `frontAppId` gap), so
+  the words reach the agent the dial still shows, a wrong-session send. Those two platforms are listed as a coverage gap
+  beside the score, named for that cause, until the item "Orca in front on Linux and Windows (`frontAppId`)" merges;
+  then OH2 runs on all three.
 - **OH3.** A tap on an agent in a held pane → its pane is switched and Orca brought forward. (D3)
 - **OH4.** Two Claude Code agents in the same worktree, one with no handle in its hook (elimination) → each is its own
   row, in tab order. (D1)
