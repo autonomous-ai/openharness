@@ -4,7 +4,8 @@
 import type { ApiTerminal, Disposable, VscodeApi } from './vscodeApi'
 import { windowState, type WindowFacade } from './window'
 
-// The only text the extension ever writes to a terminal: the PageUp and PageDown keys, as an xterm sends them.
+// The text the extension writes to a terminal: the PageUp and PageDown keys, as an xterm sends them, and the devices'
+// words and Enter (type, enter).
 const PAGE_UP = '\x1b[5~'
 const PAGE_DOWN = '\x1b[6~'
 
@@ -80,6 +81,21 @@ export function windowFacade(api: VscodeApi): WindowFacade & Disposable {
       if (!terminal) return false
       // No newline: Enter would answer whatever the agent is showing.
       terminal.sendText(up ? PAGE_UP : PAGE_DOWN, false)
+      return true
+    },
+    type(pid, words) {
+      const terminal = terminalOf(pid)
+      if (!terminal) return false
+      // Keys with no newline, so only enter() submits. sendText wraps nothing in a bracketed paste: on Windows a pseudo
+      // console turns a paste into key presses, and a bracket's ESC would reach the agent as a key (the spec).
+      terminal.sendText(words, false)
+      return true
+    },
+    enter(pid) {
+      const terminal = terminalOf(pid)
+      if (!terminal) return false
+      // A lone CR is the key Enter sends; nothing else rides with it, so this line submits and does nothing more.
+      terminal.sendText('\r', false)
       return true
     },
     dispose() {

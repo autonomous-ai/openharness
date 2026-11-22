@@ -171,6 +171,16 @@ function world(answers: (Ran | Promise<Ran>)[], win = fakeWindow(), over: Partia
       called()
       return sent
     },
+    type(pid, words) {
+      const sent = win.window.type(pid, words)
+      called()
+      return sent
+    },
+    enter(pid) {
+      const sent = win.window.enter(pid)
+      called()
+      return sent
+    },
   }
   const loop = startLoop(inputs, window, {
     changed(state) {
