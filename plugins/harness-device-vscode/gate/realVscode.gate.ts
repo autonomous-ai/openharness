@@ -303,6 +303,8 @@ describe('the extension in a real, throwaway VS Code', () => {
       // No agent is listed, so no process table is read.
       processes: () => Promise.resolve([]),
       changed: () => {},
+      // No dial is turned here, so the focused terminal goes nowhere.
+      focused: () => {},
       platform: process.platform,
       now: () => performance.now(),
       after: (ms, run) => {
