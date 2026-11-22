@@ -376,8 +376,19 @@ async function openRig(guard: string): Promise<Rig> {
   }
 }
 
-/** One scenario's world: what the dial received and showed, from its start to its stop. */
-class World implements TierBWorld {
+/**
+ * Where in [messages] the push that left the dial's last whole list starts: its `apps` frame, when one went just before
+ * its `agents.begin`. Undefined before a whole list.
+ */
+function lastPush(messages: readonly DialMessage[]): number | undefined {
+  const end = messages.findLastIndex((m) => m.t === 'agents.end')
+  const begin = messages.findLastIndex((m, i) => i < end && m.t === 'agents.begin')
+  if (begin < 0) return undefined
+  return messages[begin - 1]?.t === 'apps' ? begin - 1 : begin
+}
+
+/** One scenario's world: what the dial received and showed, from the point its start found the desk empty to its stop. */
+export class World implements TierBWorld {
   readonly children: ChildProcess[] = []
   readonly steps: Seen['steps'] = []
   readonly gaps: string[] = []
@@ -537,6 +548,19 @@ class World implements TierBWorld {
     for (const done of this.waiting.splice(0)) done()
   }
 
+  /**
+   * What the dial was sent before the first [cut] of its messages, where the start found the desk empty, forgotten but
+   * the push that emptied its list, and every face but the one it shows now: the catalog's ids are shared, so an earlier
+   * scenario's list on a dial that still held it would pass or fail this one's checks. The world's first dial, so its
+   * frames are its messages, one for one.
+   */
+  forgetBefore(cut: number): void {
+    this.read()
+    this.frames.splice(0, lastPush(this.dial.messages.slice(0, cut)) ?? cut)
+    this.faces.length = 0
+    this.face(Date.now())
+  }
+
   seen(): Seen {
     const from0 = <T extends { at: number }>(rows: readonly T[]): T[] => rows.map((row) => ({ ...row, at: row.at - this.origin }))
     return { frames: from0(this.frames), faces: from0(this.faces), commands: from0(this.commands),
@@ -643,8 +667,10 @@ export class TierBDriver implements EvalDriver {
     const front = scenario.world?.front ?? scenario.app
     await GENERIC.front(world, { kind: 'front', app: front })
     await world.plug()
-    // Every page empty before the scenario goes on: nothing of the scenarios before it is listed.
-    await until(`${scenario.id}: the dial welcomed, and no app's page with a row`, () => deskEmpty(world.dial.messages), START_WITHIN_MS, 50)
+    // Every page empty before the scenario goes on: nothing of the scenarios before it is listed, nor seen.
+    const cut = await until(`${scenario.id}: the dial welcomed, and no app's page with a row`,
+      () => deskEmpty(world.dial.messages) && world.dial.messages.length, START_WITHIN_MS, 50)
+    world.forgetBefore(cut)
     // The person picks the app's page. While no session of it is listed the devices keep the ring they show, and the
     // app in front decides it once one is.
     world.pick(PAGE[front === 'other' ? scenario.app : front])
