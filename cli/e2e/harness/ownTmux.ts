@@ -47,8 +47,8 @@ export class InOwnTmux {
     const pane = await d.tmux.run(...made, '-P', '-F', '#{pane_id}', '-c', cwd,
       ...Object.entries(variables).flatMap(([name, value]) => ['-e', `${name}=${value}`]),
       d.env.CLAUDE_PATH!, ...(resume === undefined ? [] : ['--resume', resume]))
-    // Its conversation, as its SessionStart hook named it: the only engine starting now.
-    const started = new RegExp(`claude pid=(\\d+) SessionStart\\(${resume === undefined ? 'startup' : 'resume'}\\) session=(\\S+) ran`)
+    // Its conversation, as its SessionStart hook named it: the only engine starting now, or, going on in one, that one's.
+    const started = new RegExp(`claude pid=(\\d+) SessionStart\\(${resume === undefined ? 'startup' : 'resume'}\\) session=(${resume ?? '\\S+'}) ran`)
     const [, pid, sessionId] = await until(`${folder} to run its SessionStart hook`, () => started.exec(d.hookLog().slice(from)), 30_000, 100)
     return new InOwnTmux(d, pane, sessionId, Number(pid))
   }

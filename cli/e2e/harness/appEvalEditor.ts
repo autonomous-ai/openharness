@@ -40,6 +40,8 @@ import { InOwnTmux, tabClient } from './ownTmux.js'
 const CONNECT_MS = 60_000
 /** For a window to take a state it was told. */
 const TOOK_MS = 10_000
+/** For tmux to kill a session, as isolatedTmux.ts waits for each of its commands: a server that hangs blocks no stop. */
+const KILL_MS = 5_000
 
 /** A window as its extension tells it: its editor, its terminals by session, the active one, and whether it is focused. */
 interface Look { app: Editor; terminals: SessionKey[]; active: SessionKey | null; focused: boolean }
@@ -208,7 +210,9 @@ async function inTmux(world: TierBWorld, state: State, s: SessionDef, folder: st
   const { d } = world
   const name = `eval-${s.key}`
   // At once, so the driver's last resort can end it as it kills the editor; one already gone fails nothing.
-  const killed = (): void => { spawnSync('tmux', ['-S', d.tmux.socket, '-f', '/dev/null', 'kill-session', '-t', name], { env: d.tmux.env }) }
+  const killed = (): void => {
+    spawnSync('tmux', ['-S', d.tmux.socket, '-f', '/dev/null', 'kill-session', '-t', name], { env: d.tmux.env, timeout: KILL_MS })
+  }
   state.tmux.set(s.key, { end: async () => killed(), kill: killed })
   const own = await InOwnTmux.start(d, name, folder, { resume: s.id, env: { ...guardEnv(d), ...editorHints(world, s), FAKE_CLAUDE_SESSION_TITLE: s.title } })
   // As in every process of the daemon: its hooks are its children.
