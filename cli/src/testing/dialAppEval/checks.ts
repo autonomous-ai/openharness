@@ -174,8 +174,10 @@ function apartPart(apart: SessionKey[], page: string, world: World, w: Window | 
   const elsewhere = counts.filter((a) => a.id !== page).reduce((sum, a) => sum + a.count, 0)
   const evidence = frame ? [`apps at ${frame.at}: ${counts.map((a) => `${a.id} ${a.count}`).join(', ')}`.trimEnd()] : []
   // An editor's row counted apart is the point of its check: with no apps frame nothing was counted, so it cannot pass.
-  // The base apps keep their grading, so their results do not move.
-  if (!frame && (EDITORS as readonly string[]).includes(page)) return { part: 'apart', score: 0, timed: false, evidence: ['no apps frame'] }
+  // The base apps keep their grading, so their results do not move. It says so only to a driver that saw frames.
+  if (!frame && (EDITORS as readonly string[]).includes(page)) {
+    return { part: 'apart', score: 0, timed: false, evidence: world.seen.frames.length > 0 ? ['no apps frame'] : [] }
+  }
   return { part: 'apart', score: elsewhere === apart.length ? 1 : 0, timed: false, evidence }
 }
 
@@ -381,11 +383,11 @@ function openParts(check: CheckOf<'open'>, world: World, w: Window | undefined, 
     return { part: 'latency', score: graded(latency, THRESHOLDS.open), timed: true, ms: latency, evidence }
   }
   // An editor row the dial was never sent cannot be opened from it: another tap bringing the editor forward must not
-  // pass a probe naming a session never written.
+  // pass a probe naming a session never written. Only a window in which the driver heard something says so.
   const id = agentIdOf(session)
   const listed = w !== undefined && world.seen.frames.some((f) => f.at < w.to && f.message.t === 'agent' && f.message.id === id)
   if (place !== undefined && !listed) {
-    const never = bounded([`${session.key} never listed`, ...evidence])
+    const never = bounded([...(heard ? [`${session.key} never listed`] : []), ...evidence])
     return editorParts().map((p) => ({ ...p, score: 0, ...(p.timed ? { ms: null } : {}), evidence: never }))
   }
   return editorParts()
