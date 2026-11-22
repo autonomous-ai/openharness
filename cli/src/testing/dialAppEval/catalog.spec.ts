@@ -61,20 +61,17 @@ describe('the catalog', () => {
     for (const id of ['OH1', 'OH2']) expect(byId(id).checks.flatMap((c) => (c.kind === 'voice' ? [c.path] : [])), id).toEqual(['typed'])
   })
 
-  it('OH2 runs on macOS only: on Linux and Windows nothing is driven and its run lists the gap, named for its cause', async () => {
-    // PM, 2026-11-22: there frontAppId tells no Orca front, so the dial never follows and the words would reach a.
+  it('OH2 is driven on macOS, Linux and Windows alike, with no gap of its own', async () => {
+    // PM, 2026-11-22: #4548 taught frontAppId Orca's Linux and Windows names, which OH2 waited for.
     const calls: string[] = []
     const note = (name: string) => async () => { calls.push(name) }
     const driver: EvalDriver = { tier: 'a', start: note('start'), step: note('step'), settle: note('settle'), stop: note('stop'),
       seen: () => ({ frames: [], faces: [], commands: [], deliveries: [], steps: [] }), gaps: () => [] }
-    const reason = 'not run until "Orca in front on Linux and Windows (frontAppId)" merges: the dial never follows Orca\'s focus there'
-    for (const platform of ['linux', 'win32'] as const) {
-      expect(await runScenario(driver, byId('OH2'), platform)).toEqual({ scenario: 'OH2', platform, results: [], probes: [], wrongSends: [],
-        gaps: [{ tier: 'a', platform, scenario: 'OH2', app: 'orca', heldOut: true, reason }] })
+    for (const platform of ['darwin', 'linux', 'win32'] as const) {
+      calls.length = 0
+      const run = await runScenario(driver, byId('OH2'), platform)
+      expect([run.gaps, calls[0], calls.at(-1)], platform).toEqual([[], 'start', 'stop'])
     }
-    expect(calls).toEqual([])
-    expect(byId('OH2').platforms).toEqual(['darwin', 'win32', 'linux'])
-    expect(byId('OH2').gaps).toEqual({ linux: reason, win32: reason })
   })
 
   it('OH4\'s b names no handle in its hooks, a beside it in the same worktree does', () => {
