@@ -22,6 +22,7 @@ import type { OpencodeClient } from '../../../cable/hosts/opencodeClient.js'
 import type { OrcaChild, OrcaReadDeps } from '../../../cable/hosts/orca.js'
 import { env } from '../../../config/env.js'
 import { emptyPorts, type CoreApi, type CorePorts } from '../../../core/api.js'
+import { createOrcaHomesCache, readOrcaHomes } from '../../../devices/orcaHomes.js'
 import { VSCODE_EXTENSION_ID, type VscodeEditor, type VscodeExtensionDeps } from '../../../devices/vscodeExtension.js'
 import type { DevicesDeps, startDevices } from '../../../services/devices.js'
 import type { ListenerHandler, ListenerStreamHandler } from '../../../services/devicesListener.js'
@@ -35,7 +36,8 @@ import { programOf } from './argv.js'
 import { quiet } from './clock.js'
 import { LoopbackDial } from './loopbackDial.js'
 import { machine, type MachineModel } from './machine.js'
-import { ORCA_PROGRAMS, orcaAccountHomes, watchChild } from './steps/orca.js'
+import { answerOrca, ORCA_PROGRAMS, orcaAccountHomes, watchChild } from './steps/orca.js'
+import { recordTyping } from './steps/voice.js'
 import { createStoreWatch, onHost } from './storeWatch.js'
 
 export interface TierAWorld {
@@ -85,7 +87,7 @@ const APPS: Readonly<Record<LinkedApp, { bundle: string; scheme: string; desktop
 /**
  * The commands found on each platform's PATH here, made up, recorded and never run: Linux's two a link needs, and Orca's
  * CLI where its .deb puts it on PATH (devices/orcaHomes.ts orcaBinary; the plan's Decision 6). On macOS Orca's is the
- * app's own (ORCA_APP_BIN), and on Windows the per-user install's (ORCA_EXE), whose folder Orca's installer does not put
+ * app's own (orcaAppBin), and on Windows the per-user install's (ORCA_EXE), whose folder Orca's installer does not put
  * on PATH. Nothing else of any platform's is installed.
  */
 const ON_PATH: Readonly<Record<Platform, Readonly<Record<string, string>>>> = {
@@ -93,8 +95,12 @@ const ON_PATH: Readonly<Record<Platform, Readonly<Record<string, string>>>> = {
   linux: { 'xdg-mime': '/usr/bin/xdg-mime', 'xdg-open': '/usr/bin/xdg-open', 'orca-ide': '/opt/eval/orca/resources/bin/orca-ide' },
   win32: {},
 }
-/** The Orca app's CLI in the world's own folder, which HARNESS_ORCA_APP_BIN names: never this machine's Orca. */
-const ORCA_APP_BIN = join('Orca.app', 'Contents', 'Resources', 'bin', 'orca')
+/**
+ * The Orca app's CLI, which HARNESS_ORCA_APP_BIN names: a made-up path in the spec's temp folder that nothing makes, so
+ * never this machine's Orca. Every world of a run names the same one: the devices read Orca's homes as they start, in
+ * any scenario, and a scenario run twice runs the same commands.
+ */
+const orcaAppBin = (): string => join(tmpdir(), 'dial-eval-orca', 'Orca.app', 'Contents', 'Resources', 'bin', 'orca')
 /** Windows' per-user programs' folder in the world's own, which LOCALAPPDATA names there: where the profile has it, so
  *  the Claude app's store is where it is with none set. */
 const LOCAL_APP_DATA = join('AppData', 'Local')
@@ -222,8 +228,8 @@ export class World implements TierAWorld {
     vi.stubEnv('LOCALAPPDATA', platform === 'win32' ? join(root, LOCAL_APP_DATA) : '')
     // The welcome's voice language follows LANG (cableHost.ts voiceLang): the same on every host.
     vi.stubEnv('LANG', 'en_US.UTF-8')
-    // The Orca app the devices find on macOS is the world's own made-up one, whatever this machine has.
-    vi.stubEnv('HARNESS_ORCA_APP_BIN', join(root, ORCA_APP_BIN))
+    // The Orca app the devices find on macOS is the eval's made-up one, whatever this machine has.
+    vi.stubEnv('HARNESS_ORCA_APP_BIN', orcaAppBin())
     // The fixture is at the platform's own first root, as this host names it (a Windows one's folders are this host's of
     // the same names): the readers read it there, and the store's watch on that root hears its writes as the app's.
     this.claudeStore = claudeAppFixture(onHost(claudeStoreRoots(platform, process.env, root)[0]!.root))
@@ -236,6 +242,9 @@ export class World implements TierAWorld {
     for (const s of scenario.sessions) for (const folder of [s.cwd, ...s.folders ?? []]) machine.folders.add(folder)
     this.folders = { claudeProjects: emptied(env.CLAUDE_PROJECTS_DIR), codexSessions: emptied(join(env.CODEX_HOME, 'sessions')),
       cursorProjects: emptied(join(env.CURSOR_HOME, 'projects')), codexHomes: join(root, 'codex-homes') }
+    // Orca's accounts' homes are there before any of their agents runs, as an account's is: the devices' read of them
+    // keeps only folders there (devices/orcaHomes.ts).
+    for (const home of orcaAccountHomes(this).codex) mkdirSync(home, { recursive: true })
     this.dial = new LoopbackDial(() => Date.now())
     const dataDir = join(root, 'data')
     mkdirSync(dataDir)
@@ -415,10 +424,14 @@ export class World implements TierAWorld {
       const found = apps.find(([app, { scheme }]) => argv[3] === `x-scheme-handler/${scheme}` && (app !== 'chatgpt' || installed))
       return { code: 0, stdout: found ? `${found[1].desktopFile}\n` : '' }
     })
-    // Orca's CLI is found and answered from the model (the plan's Decision 6), and the devices build their own reads of it
-    // on these. A lookup's accept is never asked: it reads the real disk. Of Orca's files only its CLI is there, where
-    // the platform's installer puts it.
-    const orcaInstall = { darwin: join(root, ORCA_APP_BIN), linux: ON_PATH.linux['orca-ide']!, win32: ORCA_EXE(join(root, LOCAL_APP_DATA)) }[platform]
+    // Words typed into a terminal are seen, and Orca's CLI is answered from the model, from before the devices start: they
+    // read Orca's homes at once. Typing is seen first, as Orca's rule answers its sends.
+    recordTyping(this)
+    answerOrca(this)
+    // Orca's CLI is found from the model too (the plan's Decision 6), and the devices build their own reads of it on
+    // these. A lookup's accept is never asked: it reads the real disk. Of Orca's files only its CLI is there, where the
+    // platform's installer puts it.
+    const orcaInstall = { darwin: orcaAppBin(), linux: ON_PATH.linux['orca-ide']!, win32: ORCA_EXE(join(root, LOCAL_APP_DATA)) }[platform]
     const orca: OrcaReadDeps = {
       run: async (file, args) => this.ran([file, ...args]),
       onPath: (name) => (Object.hasOwn(ON_PATH[platform], name) ? ON_PATH[platform][name]! : null),
@@ -428,6 +441,16 @@ export class World implements TierAWorld {
       spawn: (file, args) => (this.ran([file, ...args]).code === 0 ? watchChild(this) : EXITED),
       mtime: (path) => ({ realPath: path, mtimeMs: ORCA_MTIME_MS }),
     }
+    const log = (line: string): void => { this.logs.push({ at: Date.now(), line }) }
+    // Orca's accounts' homes, read as the devices read them on this computer (services/devices.ts orcaHomesCache): with
+    // `account list` on these deps and LOCALAPPDATA, which orcaHomesDeps carries and the Orca deps do not.
+    const localAppData = process.env.LOCALAPPDATA
+    const orcaHomes = createOrcaHomesCache({
+      read: () => readOrcaHomes({ ...orca, localAppData, uid: process.getuid?.() ?? -1,
+        run: async (file, args) => ({ ...this.ran([file, ...args]), timedOut: false }) }),
+      now: () => performance.now(),
+      log,
+    })
     return {
       logsDir: join(root, 'logs'),
       petsDir: join(root, 'pets'),
@@ -461,7 +484,7 @@ export class World implements TierAWorld {
       transcribe: async () => this.speech ?? '',
       bundleId: async (app) => machine.bundleIds.get(app),
       storePackageFolder: async () => (installed && platform === 'win32' ? join(root, 'OpenAI.Codex') : null),
-      log: (line) => { this.logs.push({ at: Date.now(), line }) },
+      log,
       onExit: () => {},
       listen: async (handlers) => {
         this.listener = handlers
@@ -469,8 +492,7 @@ export class World implements TierAWorld {
       },
       tty: async (pid) => machine.processes.get(pid)?.tty,
       claude: async () => null,
-      // Orca's accounts' homes, as its `account list` names them (steps/orca.ts).
-      orcaHomes: { get: () => orcaAccountHomes(this), answered: () => true, refresh: async () => false },
+      orcaHomes,
       vscodeExtension: noEditor('vscode', platform, root),
       cursorExtension: cursorInstalled(platform, root, (reason) => this.gap(reason)),
       orcaPlugin: { orca: () => null, run: async () => ({ code: null, stdout: '', timedOut: false }), files: () => null, folder: join(root, 'orca-plugin') },

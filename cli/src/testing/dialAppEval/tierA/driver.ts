@@ -26,9 +26,9 @@ import { claudeStoreSteps } from './steps/claudeStore.js'
 import { codexStoreSteps } from './steps/codexStore.js'
 import { dialSteps } from './steps/dial.js'
 import { closeWindows, editorSteps, reopenWindows } from './steps/editor.js'
-import { answerOrca, closeOrca, orcaModelSteps, reopenOrca } from './steps/orca.js'
+import { closeOrca, orcaModelSteps, reopenOrca } from './steps/orca.js'
 import { sessionsSteps } from './steps/sessions.js'
-import { recordTyping, voiceSteps } from './steps/voice.js'
+import { voiceSteps } from './steps/voice.js'
 import { windowSteps } from './steps/window.js'
 import { World, type StepHandler, type TierAWorld } from './world.js'
 
@@ -68,11 +68,9 @@ export class TierADriver implements EvalDriver {
     this.steps = []
     this.next = 0
     const world = this.world = new World(scenario, platform, this.deps.startDevices)
-    // Before the dial is up: a link the devices run from then on reaches the apps, words typed are seen, and Orca's CLI
-    // answers from the scenario's model of it.
+    // Before the dial is up: a link the devices run from then on reaches the apps. The world sees words typed and answers
+    // Orca's CLI from its start (world.ts).
     installFakeApps(world)
-    recordTyping(world)
-    answerOrca(world)
     await world.quiet()
     const front = scenario.world?.front ?? scenario.app
     await windowSteps.front(world, { kind: 'front', app: front })

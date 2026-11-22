@@ -6,15 +6,16 @@ import { join, win32 } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createOrcaAdapter, createOrcaReads } from '../../../../cable/hosts/orca.js'
 import type { CorePorts } from '../../../../core/api.js'
-import { orcaBinary, readOrcaHomes } from '../../../../devices/orcaHomes.js'
+import { orcaBinary } from '../../../../devices/orcaHomes.js'
 import type { DevicesDeps, startDevices } from '../../../../services/devices.js'
 import { dialStream, orcaFrontHandler, type ListenerStream, type ListenerStreamHandler } from '../../../../services/devicesListener.js'
 import { orcaGhost, orcaSession, scenario } from '../../catalog.js'
 import { orcaTerminalHandle, orcaWorktreeId, type Platform, type Scenario, type SessionKey } from '../../types.js'
+import { programOf } from '../argv.js'
 import { installClock } from '../clock.js'
 import { machine } from '../machine.js'
 import { World } from '../world.js'
-import { answerOrca, closeOrca, orcaModelSteps, reopenOrca } from './orca.js'
+import { closeOrca, orcaModelSteps, reopenOrca } from './orca.js'
 import { sessionsSteps } from './sessions.js'
 
 // No process starts: the real reads of Orca run here, and one past the model would run this machine's `orca`.
@@ -41,8 +42,8 @@ afterEach(() => {
   expect(reached.splice(0)).toEqual([])
 })
 
-/** A world on that platform with Orca's answers, as the driver gives it, and the deps it handed the devices, whose
- *  port takes the hooks. */
+/** A world on that platform, which answers Orca's CLI from its start, and the deps it handed the devices, whose port
+ *  takes the hooks. */
 function worldOn(platform: Platform, of: Scenario): { world: World; deps: DevicesDeps } {
   machine.reset()
   let handed: DevicesDeps | undefined
@@ -53,7 +54,6 @@ function worldOn(platform: Platform, of: Scenario): { world: World; deps: Device
   }) as unknown as typeof startDevices
   const world = new World(of, platform, start)
   worlds.push(world)
-  answerOrca(world)
   return { world, deps: handed! }
 }
 
@@ -143,16 +143,29 @@ describe("tier A's Orca", () => {
     ])
   })
 
-  it("account list names each Codex agent's own home, an Orca account's, and nothing else, as the devices' Orca homes do", async () => {
+  it("the devices' read of Orca's homes as they start runs `account list`, which names each Codex agent's own home, an "
+    + "Orca account's, there from the start, and nothing else, on every platform", async () => {
     // b is the layout's one Codex with a home of its own; f's is the daemon's, no Orca account's.
-    const { world, deps } = worldOn('darwin', layout({ sessions: [...layout().sessions, orcaSession('f', { engine: 'codex', codexHome: undefined, tab: 3 })] }))
-    // Started, so its home is there, as an account's is.
-    await started(world, ['b', 'f'])
-    const home = join(world.folders.codexHomes, 'b')
-    const read = await readOrcaHomes({ ...deps.orca!, uid: process.getuid?.() ?? -1,
-      run: async (file, args) => ({ ...await deps.orca!.run(file, args, 1_000), timedOut: false }) })
-    expect(read).toEqual({ homes: { claude: [], codex: [home] } })
-    expect([deps.orcaHomes!.get(), deps.orcaHomes!.answered()]).toEqual([read.homes, true])
+    const of = layout({ sessions: [...layout().sessions, orcaSession('f', { engine: 'codex', codexHome: undefined, tab: 3 })] })
+    const programs: Readonly<Record<Platform, string>> = { darwin: 'orca', linux: 'orca-ide', win32: 'orca.exe' }
+    for (const platform of PLATFORMS) {
+      machine.reset()
+      let handed: DevicesDeps | undefined
+      let read: Promise<boolean> | undefined
+      // The devices read the homes at once as they start (services/devices.ts).
+      const world = new World(of, platform, ((_core: unknown, _ports: unknown, deps: DevicesDeps) => {
+        handed = deps
+        read = deps.orcaHomes!.refresh()
+        return {}
+      }) as unknown as typeof startDevices)
+      worlds.push(world)
+      expect(await read, platform).toBe(true)
+      expect([handed!.orcaHomes!.get(), handed!.orcaHomes!.answered()], platform)
+        .toEqual([{ claude: [], codex: [join(world.folders.codexHomes, 'b')] }, true])
+      expect(world.seen([]).commands.map(({ argv, ok }) => [programOf(argv), argv.slice(1).join(' '), ok]), platform)
+        .toEqual([[programs[platform], 'account list --json', true]])
+      vi.unstubAllEnvs()
+    }
   })
 
   it("the CLI is where each platform's installer puts it, its accept never called: the app's on macOS, orca-ide on Linux's "
