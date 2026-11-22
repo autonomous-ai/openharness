@@ -6,11 +6,12 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { REFUSED, type ListenerStream } from '../../../../services/devicesListener.js'
 import { editorSession } from '../../catalog.js'
+import type { ObservedEvent } from '../../../../core/observedHook.js'
 import type { Delivery, Scenario, Seen, SessionKey, StepOf } from '../../types.js'
 import { machine } from '../machine.js'
 import type { TierAWorld } from '../world.js'
-import { editorSteps } from './editor.js'
-import { sessionsSteps, shellOf } from './sessions.js'
+import { closeWindows, editorSteps, reopenWindows } from './editor.js'
+import { agentPid, sessionsSteps, shellOf } from './sessions.js'
 
 const roots: string[] = []
 afterEach(() => {
@@ -35,10 +36,12 @@ function fakeWorld(of: Scenario = vscode) {
   const refuse = { open: false, state: false }
   const deliveries: Array<Omit<Delivery, 'at'>> = []
   const streams: NonNullable<Seen['streams']> = []
+  const observed: ObservedEvent[] = []
   const world = {
     scenario: of, platform: 'darwin', machine, streams,
     // The hooks are told nothing back, and the mod's poll is never answered.
-    ports: { devices: { observed: () => true, inboxPoll: () => new Promise(() => {}), inboxGone: () => {} } },
+    ports: { devices: { observed: (event: ObservedEvent) => { observed.push(event); return true }, inboxPoll: () => new Promise(() => {}),
+      inboxGone: () => {} } },
     folders: { claudeProjects: join(root, 'projects'), codexSessions: join(root, 'codex', 'sessions'),
       cursorProjects: join(root, 'cursor', 'projects'), codexHomes: join(root, 'codex-homes') },
     listener: {
@@ -58,10 +61,16 @@ function fakeWorld(of: Scenario = vscode) {
     for (const session of keys) await sessionsSteps.hook(world, { kind: 'hook', session, event: 'start' })
   }
   const window = (step: Omit<StepOf<'editor.window'>, 'kind'>) => editorSteps['editor.window'](world, { kind: 'editor.window', ...step })
+  const focus = (session: SessionKey) => editorSteps['editor.focus'](world, { kind: 'editor.focus', session })
+  const closeTerminal = (session: SessionKey) => editorSteps['editor.closeTerminal'](world, { kind: 'editor.closeTerminal', session })
+  const reload = (id: string) => editorSteps['editor.reload'](world, { kind: 'editor.reload', window: id })
+  const close = (id: string) => editorSteps['editor.close'](world, { kind: 'editor.close', window: id })
   const shell = (key: SessionKey) => shellOf(world, key)!
   /** The record without its times: the windows and lines alone. */
   const lines = () => streams.map(({ window: id, line }) => ({ window: id, line }))
-  return { world, opened, states, refuse, deliveries, start, window, shell, lines }
+  /** Why each stream opened so far ended, or none while it is open. */
+  const ends = () => opened.map(({ stream }) => (stream.ended.aborted ? stream.ended.reason as unknown : undefined))
+  return { world, opened, states, refuse, deliveries, observed, start, window, focus, closeTerminal, reload, close, shell, lines, ends }
 }
 
 describe("tier A's fake extension", () => {
@@ -139,5 +148,75 @@ describe("tier A's fake extension", () => {
     await expect(w.window({ window: 'w1', active: 'a', focused: true })).rejects.toThrow(/refused/)
     w.refuse.open = true
     await expect(w.window({ window: 'w1', active: 'a', focused: true })).rejects.toThrow(/refused/)
+  })
+
+  it('focus reports the terminal active and the window focused', async () => {
+    const w = fakeWorld()
+    await w.start('a', 'b', 'c')
+    await w.window({ window: 'w1', active: 'a', focused: false })
+    await w.window({ window: 'w2', active: 'c', focused: true })
+    await w.focus('b')
+    expect(w.states.at(-1)).toEqual(
+      { type: 'vscode-state', window: 'eval-w1-1', terminals: [w.shell('a'), w.shell('b')], active: w.shell('b'), focused: true })
+    expect(w.lines().at(-1)).toEqual(
+      { window: 'eval-w1-1', line: { type: 'vscode-state', terminals: ['a', 'b'], active: 'b', focused: true } })
+  })
+
+  it("a terminal's close drops its shell from the state, ends its agent's and its shell's processes, and sends its end hook", async () => {
+    const w = fakeWorld()
+    await w.start('a', 'b')
+    await w.window({ window: 'w1', active: 'b', focused: true })
+    const [a, b, agent] = [w.shell('a'), w.shell('b'), agentPid(w.world, 'b')!]
+    await w.closeTerminal('b')
+    expect(w.states.at(-1)).toEqual({ type: 'vscode-state', window: 'eval-w1-1', terminals: [a], active: null, focused: true })
+    expect(w.lines().at(-1)).toEqual({ window: 'eval-w1-1', line: { type: 'vscode-state', terminals: ['a'], active: null, focused: true } })
+    expect([machine.processes.has(agent), machine.processes.has(b), machine.processes.has(a)]).toEqual([false, false, true])
+    expect(w.observed.at(-1)).toMatchObject({ event: 'session-end', sessionId: vscode.sessions[1]!.id, callerPid: agent })
+  })
+
+  it('a reload ends the stream gone, then eval-w1-2 reports the same shells', async () => {
+    const w = fakeWorld()
+    await w.start('a', 'b')
+    await w.window({ window: 'w1', active: 'b', focused: true })
+    await w.reload('w1')
+    expect(w.ends()).toEqual(['gone', undefined])
+    expect(w.opened.map((o) => o.message)).toEqual([{ type: 'vscode', window: 'eval-w1-1' }, { type: 'vscode', window: 'eval-w1-2' }])
+    expect(w.states.at(-1)).toEqual(
+      { type: 'vscode-state', window: 'eval-w1-2', terminals: [w.shell('a'), w.shell('b')], active: w.shell('b'), focused: true })
+    expect(w.lines().slice(2)).toEqual([
+      { window: 'eval-w1-1', line: { ended: 'gone' } },
+      { window: 'eval-w1-2', line: { type: 'vscode', window: 'eval-w1-2' } },
+      { window: 'eval-w1-2', line: { type: 'vscode-state', terminals: ['a', 'b'], active: 'b', focused: true } },
+    ])
+  })
+
+  it('a close ends the stream gone', async () => {
+    const w = fakeWorld()
+    await w.start('a', 'c')
+    await w.window({ window: 'w1', active: 'a', focused: true })
+    await w.window({ window: 'w2', active: 'c', focused: false })
+    await w.close('w1')
+    expect(w.ends()).toEqual(['gone', undefined])
+    expect(w.lines().at(-1)).toEqual({ window: 'eval-w1-1', line: { ended: 'gone' } })
+  })
+
+  it("the editor's quit ends its streams, and its relaunch opens new ones on the sessions' new shells", async () => {
+    const w = fakeWorld()
+    await w.start('a', 'b', 'c')
+    await w.window({ window: 'w1', active: 'b', focused: true })
+    await w.window({ window: 'w2', active: 'c', focused: false })
+    const before = [w.shell('a'), w.shell('b'), w.shell('c')]
+    await sessionsSteps.quit(w.world, { kind: 'quit', app: 'vscode' })
+    closeWindows(w.world, 'vscode')
+    expect(w.ends()).toEqual(['gone', 'gone'])
+    await sessionsSteps.relaunch(w.world, { kind: 'relaunch', app: 'vscode' })
+    await reopenWindows(w.world, 'vscode')
+    const after = [w.shell('a'), w.shell('b'), w.shell('c')]
+    for (const pid of after) expect(before).not.toContain(pid)
+    expect(w.ends()).toEqual(['gone', 'gone', undefined, undefined])
+    expect(w.states.slice(2)).toEqual([
+      { type: 'vscode-state', window: 'eval-w1-2', terminals: [after[0], after[1]], active: after[1], focused: true },
+      { type: 'vscode-state', window: 'eval-w2-2', terminals: [after[2]], active: after[2], focused: false },
+    ])
   })
 })

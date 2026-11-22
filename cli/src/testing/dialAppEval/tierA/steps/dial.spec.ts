@@ -1,5 +1,5 @@
-// Tier A's dial steps (dial.ts): a tap and a swipe reach the daemon as the firmware's frames, and the cable pulled and
-// plugged in again is what the devices' fleet sees of a real one.
+// Tier A's dial steps (dial.ts): a tap, a swipe and a stroke reach the daemon as the firmware's frames, and the cable
+// pulled and plugged in again is what the devices' fleet sees of a real one.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CableDecoder, CableType } from '../../../../cable/cableFrame.js'
 import { claudeSessions } from '../../catalog.js'
@@ -58,5 +58,20 @@ describe("tier A's dial steps", () => {
     await dialSteps.replug(world, { kind: 'replug' })
     expect(await dial.cable.discover!()).toHaveLength(1)
     expect((await opened(dial)).port.isOpen).toBe(true)
+  })
+
+  it('a stroke sends scroll down, three moves of 8 and up', async () => {
+    const dial = new LoopbackDial(() => Date.now())
+    const world = worldOf(dial)
+    await dialSteps.replug(world, { kind: 'replug' })
+    const { heard } = await opened(dial)
+    await dialSteps.stroke(world, { kind: 'stroke' })
+    expect(heard).toEqual([
+      { t: 'scroll', phase: 'down', dy: 0, v: 0 },
+      { t: 'scroll', phase: 'move', dy: 8, v: 0 },
+      { t: 'scroll', phase: 'move', dy: 8, v: 0 },
+      { t: 'scroll', phase: 'move', dy: 8, v: 0 },
+      { t: 'scroll', phase: 'up', dy: 0, v: 0 },
+    ])
   })
 })

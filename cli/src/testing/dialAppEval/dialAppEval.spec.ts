@@ -17,7 +17,7 @@ import { loadBaseline, SKIP_RATCHET_ENV, tierAVerdict } from './grade.js'
 import { describeAttempt } from './netGuard.js'
 import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from './runner.js'
 import { TierADriver } from './tierA/driver.js'
-import type { Platform } from './types.js'
+import type { Platform, Step } from './types.js'
 
 // First of all, so no import below opens a connection unguarded.
 const guard = await vi.hoisted(async () => (await import('./netGuard.js')).guardThisProcess())
@@ -239,6 +239,54 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     const { logs = [], steps } = driver.seen()
     const windows = steps.filter((s) => s.kind === 'editor.window').map((s) => s.at)
     expect(logs.filter((l) => l.line.startsWith('[devices] vscode stream · open')).map((l) => l.at)).toEqual(windows)
+  })
+
+  /** Two terminals in one VS Code window, a the active one: what a stroke and a quit are tried on. */
+  const twoTerminals = (id: string, title: string, more: Step[]) => scenario({
+    id, app: 'vscode', title, dims: ['D3'], tiers: ['a'],
+    sessions: [editorSession('a', 'vscode'), editorSession('b', 'vscode'), editorGhost('vscode')],
+    steps: [
+      ...started(['a', 'b']),
+      { kind: 'editor.window', window: 'w1', active: 'a', focused: true },
+      ...listed('vscode', ['a', 'b']),
+      ...more,
+    ],
+    checks: [], probes: [],
+  })
+
+  it("a stroke on a, in front in VS Code, writes a scroll line for a's shell on its window's stream, while it is the active terminal", async () => {
+    const stroked = twoTerminals('S1', 'Eval a stroke on the active terminal', [
+      { kind: 'swipe', session: 'a' },
+      { kind: 'wait', ms: 2_000 },
+      { label: 'stroke', kind: 'stroke' },
+    ])
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, stroked, 'darwin')
+    expect(run.error).toBeUndefined()
+    const { streams = [], steps } = driver.seen()
+    const at = steps.find((s) => s.label === 'stroke')!.at
+    const scrolls = streams.filter((l) => l.line.scroll !== undefined)
+    expect(scrolls.length).toBeGreaterThan(0)
+    expect(scrolls.every((l) => l.at >= at && l.window === 'eval-w1-1' && l.line.pid === 'a' && l.line.page === undefined)).toBe(true)
+    // Three moves of 8 are 60 px: three lines of 16 toward older ones (scrollLines.ts).
+    expect(scrolls.reduce((sum, l) => sum + (l.line.scroll as number), 0)).toBe(-3)
+    const states = streams.filter((l) => l.line.type === 'vscode-state' && l.at <= scrolls[0]!.at)
+    expect(states.at(-1)!.line).toMatchObject({ active: 'a', focused: true })
+  })
+
+  it("VS Code's quit ends its window's stream gone, and its relaunch opens eval-w1-2 on the sessions' new shells", async () => {
+    const quit = twoTerminals('S2', 'Eval a quit and a relaunch', [{ kind: 'quit', app: 'vscode' }, { kind: 'relaunch', app: 'vscode' }])
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, quit, 'darwin')
+    expect(run.error).toBeUndefined()
+    const lines = (driver.seen().streams ?? []).map(({ window, line }) => ({ window, line }))
+    expect(lines).toEqual([
+      { window: 'eval-w1-1', line: { type: 'vscode', window: 'eval-w1-1' } },
+      { window: 'eval-w1-1', line: { type: 'vscode-state', terminals: ['a', 'b'], active: 'a', focused: true } },
+      { window: 'eval-w1-1', line: { ended: 'gone' } },
+      { window: 'eval-w1-2', line: { type: 'vscode', window: 'eval-w1-2' } },
+      { window: 'eval-w1-2', line: { type: 'vscode-state', terminals: ['a', 'b'], active: 'a', focused: true } },
+    ])
   })
 
   // The baseline is written on a Mac and checked on Linux: a result naming this host's folders would differ there.
