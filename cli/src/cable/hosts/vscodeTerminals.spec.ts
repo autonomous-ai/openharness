@@ -1255,9 +1255,14 @@ describe('the dial\'s words typed into a terminal', () => {
     for (const lines of others) expect(lines).toEqual([])
   })
 
-  it('a prompt check that throws sends no Enter, is failed, and leaves the terminal free', async () => {
+  it('a prompt check that throws after the settle sends no Enter, is failed, and leaves the terminal free', async () => {
     const h = await typing()
-    const sent = h.terminals.type(900, WORDS, () => { throw new Error('no state') })
+    let asked = 0
+    // At its prompt as the words go; the throw is the ask before the Enter.
+    const sent = h.terminals.type(900, WORDS, () => {
+      if (asked++) throw new Error('no state')
+      return true
+    })
     await h.groups(FRONT)
     h.one.drain()
     settle(h).run()

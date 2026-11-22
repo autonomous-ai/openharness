@@ -33,9 +33,9 @@
  * A window whose state says `"types":true` takes the dial's words for its terminals
  * (docs/plans/2026-11-22-dial-vscode-cursor-voice-design.md). An older extension says nothing of it and ends its stream
  * on a line of 1 KiB, which a words line can pass: the devices write words only where a window says it types. A send
- * reaches exactly that agent or submits nothing: its words line goes only while the agent is in front of its terminal,
- * and its Enter line only once the same terminal, the same guard and the caller's prompt check hold again after the
- * settle. Any of them failing after the words leaves them in that agent's own input, submitted nowhere.
+ * reaches exactly that agent or submits nothing: its words line goes only while the agent is in front of its terminal
+ * and the caller says it is at its prompt, and its Enter line only once the same terminal, the same guard and the
+ * caller's prompt check hold again after the settle. Any of them failing after the words leaves them in that agent's own input, submitted nowhere.
  */
 import { isAbsolute } from 'node:path'
 import { REFUSED, type ListenerHandler, type ListenerStream, type ListenerStreamHandler } from '../../services/devicesListener.js'
@@ -139,7 +139,7 @@ export interface VscodeTerminals {
   /** Types the dial's words into the terminal of the agent with that pid, then, after a settle, presses Enter there.
    *  Never rejects. `background` before any word when the agent is not in front of its terminal; `typed` once the Enter
    *  line went; else `failed`, and after the words nothing submits them. `atPrompt` is the caller's check that the agent
-   *  is still at its prompt, asked last before the Enter. */
+   *  is still at its prompt, asked once the guard has read, before the words, and last before the Enter. */
   type(agentPid: number, words: string, atPrompt: () => boolean): Promise<VscodeTyped>
 }
 
@@ -544,7 +544,9 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
       try {
         const refused = await typeGuard(agentPid, shell, chain)
         if (refused) return refused
-        if (!same() || !window.stream.write(line)) return 'failed'
+        // Asked again after the guard's read: a turn that started or a prompt that opened meanwhile would take the words
+        // as its answer, and Codex's approval reads a typed `y` as a yes.
+        if (!same() || !atPrompt() || !window.stream.write(line)) return 'failed'
         // Codex's paste-burst detector turns an Enter within 120 ms of a burst of keys into a newline (codex-rs
         // paste_burst.rs), and Claude Code needs time to take a long input before an Enter submits it.
         const settle = Math.min(INJECT_PASTE_DELAY_MAX_MS, INJECT_PASTE_DELAY_BASE_MS + Math.floor(words.length / 60))

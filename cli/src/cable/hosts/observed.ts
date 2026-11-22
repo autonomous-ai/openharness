@@ -438,8 +438,8 @@ export class ObservedSource implements HostSource {
     // A working turn may show a prompt not yet heard of: Codex's approval overlay, which takes `y` or Enter, has no hook, and
     // Claude Code's comes a few hundred ms after its prompt opens.
     if (e.agent.state === 'working' || !this.idleKnown(e)) return busy()
-    // The same checks, asked again by an adapter that waits between its words and their Enter: a turn that started, a
-    // prompt that opened or a pane that moved meanwhile gets no Enter.
+    // The same checks, asked again by an adapter that waits before its words or their Enter: a turn that started, a
+    // prompt that opened or a pane that moved meanwhile gets nothing more.
     const atPrompt = (): boolean => there() && e.agent.state !== 'needs-you' && e.agent.state !== 'working' && this.idleKnown(e)
     // Recorded first: `orca terminal send` returns once the prompt is submitted, and its turn's hook can be heard before.
     const record = this.dialPrompt(e)
