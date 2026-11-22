@@ -15,6 +15,10 @@ const driver = await import('../../e2e/harness/appEvalDriver.js' as string) as {
   linksFail(path: string, apps: readonly App[]): void
   openRuns(runs: string, platform: Platform): Array<{ argv: string[]; ok: boolean }>
   tierBGaps(scenario: Scenario, platform: Platform): string[]
+  writeRecordingCli(path: string, runs: string): void
+  cliRuns(runs: string): Array<{ argv: string[]; ok: boolean }>
+  deviceLines(log: string, from: number): { lines: string[]; next: number }
+  workPaths(argv: readonly string[], projects: readonly string[]): string[]
 }
 
 const claude = await import('../../e2e/harness/appEvalClaude.js' as string) as {
@@ -68,6 +72,46 @@ describe("tier B's recording open", () => {
   })
 })
 
+describe("tier B's recording Cursor CLI", () => {
+  it('notes each run as cursor and its arguments, and exits 0', () => {
+    dir = mkdtempSync(join(tmpdir(), 'tier-b-cursor-'))
+    const path = join(dir, 'cursor', 'cursor')
+    const runs = join(dir, 'cursor-runs.log')
+    expect(driver.cliRuns(runs)).toEqual([])
+    driver.writeRecordingCli(path, runs)
+    expect(spawnSync(path, ['/work/eval-alpha']).status).toBe(0)
+    expect(spawnSync(path, ['--list-extensions']).status).toBe(0)
+    expect(driver.cliRuns(runs)).toEqual([
+      { argv: ['cursor', '/work/eval-alpha'], ok: true }, { argv: ['cursor', '--list-extensions'], ok: true },
+    ])
+  })
+})
+
+describe("tier B's devices' log lines", () => {
+  it("deviceLines gives the devices' lines after an offset, from their tag on", () => {
+    const before = '12:00:00 [device] voice · codex\n'
+    const log = `${before}12:00:01 [cli] ready\n12:00:02 [device] scroll · skipped · not on screen\n12:00:03 [device] tap · mo`
+    const read = driver.deviceLines(log, before.length)
+    expect(read.lines).toEqual(['[device] scroll · skipped · not on screen'])
+    // A line not yet ended is read once it is.
+    expect(read.next).toBe(log.lastIndexOf('\n') + 1)
+    expect(driver.deviceLines(`${log}ved\n`, read.next)).toEqual({ lines: ['[device] tap · moved'], next: log.length + 4 })
+    expect(driver.deviceLines(log, log.length)).toEqual({ lines: [], next: log.length })
+  })
+})
+
+describe("tier B's commands", () => {
+  it("a command's folder under the daemon's projects is recorded as the catalog's /work/ one", () => {
+    const projects = ['/tmp/htmux-eval/projects', '/private/tmp/htmux-eval/projects']
+    expect(driver.workPaths(['open', '-b', 'com.todesktop.230313mzl4w4u92', '/private/tmp/htmux-eval/projects/eval-alpha'], projects))
+      .toEqual(['open', '-b', 'com.todesktop.230313mzl4w4u92', '/work/eval-alpha'])
+    expect(driver.workPaths(['cursor', '/tmp/htmux-eval/projects/eval-beta/src'], projects)).toEqual(['cursor', '/work/eval-beta/src'])
+    // Only a folder inside the projects: one beside them, or the link of an app, is kept as it is.
+    expect(driver.workPaths(['cursor', '/tmp/htmux-eval/projects-other/eval-alpha', 'cursor://file/x'], projects))
+      .toEqual(['cursor', '/tmp/htmux-eval/projects-other/eval-alpha', 'cursor://file/x'])
+  })
+})
+
 const byId = (id: string): Scenario => MAIN.find((s) => s.id === id)!
 
 describe("tier B's gaps", () => {
@@ -83,6 +127,21 @@ describe("tier B's gaps", () => {
     const question = { ...c7, steps: c7.steps.map((step) => step.kind === 'hook' && step.event === 'needs-input' ? { ...step, asks: 'question' as const } : step) }
     expect(() => driver.tierBGaps(question, 'darwin')).toThrow('question')
     expect(driver.tierBGaps(c7, 'darwin')).toEqual([])
+  })
+
+  it("leaves out on Linux an open check on an editor's terminal row, and not on a panel or Cursor's agent, nor on macOS", () => {
+    const tapped = (app: App, place?: 'terminal' | 'panel' | 'agent'): Scenario => ({
+      id: 'EVAL', app, title: 'Eval tap', dims: ['D2'], platforms: ['darwin', 'linux'], tiers: ['b'], heldOut: false,
+      sessions: [{ key: 'a', app, id: '00000000-0000-4000-a000-00000000e001', title: 'Eval alpha', cwd: '/work/eval-alpha', ageMs: 0,
+        ...(place ? { place } : {}) }],
+      steps: [{ kind: 'tap', session: 'a' }], checks: [{ id: 'EVAL.open', dim: 'D2', kind: 'open', session: 'a', link: false }], probes: [],
+    })
+    expect(driver.tierBGaps(tapped('vscode'), 'linux')).toEqual([expect.stringContaining("Linux's raise")])
+    expect(driver.tierBGaps(tapped('cursor', 'terminal'), 'linux')).toEqual([expect.stringContaining("Linux's raise")])
+    expect(driver.tierBGaps(tapped('vscode', 'panel'), 'linux')).toEqual([])
+    expect(driver.tierBGaps(tapped('cursor', 'agent'), 'linux')).toEqual([])
+    expect(driver.tierBGaps(tapped('vscode'), 'darwin')).toEqual([])
+    expect(driver.tierBGaps(tapped('claude'), 'linux')).toEqual([])
   })
 })
 
