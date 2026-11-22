@@ -37,8 +37,9 @@ const TMUX_PANE_FACT = /^([1-9][0-9]{0,9})\|(.*)\|([^|]*)$/
 const TMUX_PANES = `#{pane_id}|#{pane_tty}|${TMUX_PANE_FACTS}`
 /** One line of TMUX_PANES, cut at its first two bars; one whose id is out of form is no pane. */
 const TMUX_PANE_LINE = /^(%[0-9]{1,9})\|([^|]*)\|(.*)$/
-/** The lines of one pane listing read, the rest passed over: Harness's own panes share the person's server, and each
- *  is a line. A pane of the person's past the bound is not found, and the agent stays where the scan put it. */
+/** The lines of one pane listing parsed, the rest passed over: tmux's whole output is still buffered, up to execFile's
+ *  limit. Harness's own panes share the person's server, and each is a line. A pane of the person's past the bound is
+ *  not found, and the agent stays where the scan put it. */
 export const PANES_A_LISTING = 1024
 /** Each client: when it was used last, its process, its name, the tag of the pane it shows, its session. The daemon's
  *  own names for the tag and the session prefix, which the hook mirrors. The session's name is last: it may hold a bar. */
