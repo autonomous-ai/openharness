@@ -218,7 +218,7 @@ it('--update-baseline writes the baseline, keeping the tier not run', async () =
   const h = harness({ a: results('a', 1) })
   expect(await main(['--tier', 'a', '--update-baseline'], h.deps)).toBe(0)
   expect(readBaseline()).toEqual({ schema: 1, checks: { 'a/darwin/C1/ring.recall': 1, 'b/darwin/C1/ring.recall': 0.5 },
-    apps: { a: { claude: 100, chatgpt: null }, 'b/darwin': { claude: 50, chatgpt: null } } })
+    apps: { a: { claude: 100, chatgpt: null, vscode: null, cursor: null }, 'b/darwin': { claude: 50, chatgpt: null } } })
   expect(h.log()).toContain('baseline written')
 })
 

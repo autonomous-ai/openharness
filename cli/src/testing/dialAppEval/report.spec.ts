@@ -12,7 +12,9 @@ const none: Record<Dimension, number | null> = {
 /** Dimension scores 0-100, as the grader gives them. */
 const scores = (score: number | null, dims: Partial<Record<Dimension, number>> = {}, leftOut = 0): AppScores =>
   ({ score, dims: { ...none, ...dims }, leftOut })
-const both = (claude: AppScores, chatgpt: AppScores): Record<App, AppScores> => ({ claude, chatgpt })
+/** The editors score nothing unless a case says. */
+const apps = (claude: AppScores, chatgpt: AppScores, vscode = scores(null), cursor = scores(null)): Record<App, AppScores> =>
+  ({ claude, chatgpt, vscode, cursor })
 
 const failing = (evidence: string[]): CheckResult & { pointsLost: number } => ({
   tier: 'a', platform: 'darwin', scenario: 'C1', check: 'ring.recall', app: 'claude', dim: 'D1', heldOut: false,
@@ -22,15 +24,16 @@ const failing = (evidence: string[]): CheckResult & { pointsLost: number } => ({
 function report(over: Partial<Report> = {}): Report {
   return {
     schema: 1,
-    apps: both(scores(80, { D1: 50, D5: 100 }, 2), scores(90, { D1: 100 }, 0)),
-    heldOut: both(scores(70, { D2: 70 }), scores(null)),
-    byTier: { a: both(scores(80, {}, 2), scores(90)), b: both(scores(null), scores(null)) },
-    byPlatform: { 'a/darwin': both(scores(81, {}, 1), scores(91)) },
+    apps: apps(scores(80, { D1: 50, D5: 100 }, 2), scores(90, { D1: 100 }, 0)),
+    heldOut: apps(scores(70, { D2: 70 }), scores(null)),
+    byTier: { a: apps(scores(80, {}, 2), scores(90)), b: apps(scores(null), scores(null)) },
+    byPlatform: { 'a/darwin': apps(scores(81, {}, 1), scores(91)) },
     gate: { passed: true, wrongSends: [] },
     failing: [],
     groups: [{ app: 'claude', dim: 'D1', scenario: 'C1', pointsLost: 18.75, checks: ['ring.recall'] }],
     gaps: [],
-    delta: { apps: { a: { claude: { before: 75, after: 80 }, chatgpt: { before: null, after: 90 } } }, checks: [], heldOutChanged: 2 },
+    delta: { apps: { a: { claude: { before: 75, after: 80 }, chatgpt: { before: null, after: 90 },
+      vscode: { before: null, after: null }, cursor: { before: null, after: null } } }, checks: [], heldOutChanged: 2 },
     ...over,
   }
 }
@@ -72,7 +75,7 @@ it('a tier that did not run has no row', () => {
 })
 
 it('held-out is its own table, each score with its runs left out beside it', () => {
-  const r = report({ heldOut: both(scores(70, { D2: 70 }, 3), scores(null)) })
+  const r = report({ heldOut: apps(scores(70, { D2: 70 }, 3), scores(null)) })
   const md = markdown(r)
   const heldOut = md.slice(md.indexOf('## Held out'))
   expect(md.indexOf('## Held out')).toBeGreaterThan(md.indexOf('## Scores'))
@@ -80,6 +83,36 @@ it('held-out is its own table, each score with its runs left out beside it', () 
   expect(md.slice(md.indexOf('## Scores'), md.indexOf('## Held out'))).not.toMatch(/\b70\b/)
   const text = summary(r)
   expect(text.slice(text.indexOf('Held out'))).toMatch(/the Claude app[^\n]*70 left out: 3/)
+})
+
+it('the score and held-out tables have a row for VS Code and one for Cursor', () => {
+  const r = report({
+    apps: apps(scores(80), scores(90), scores(60, { D1: 60 }), scores(40, { D5: 40 }, 1)),
+    heldOut: apps(scores(null), scores(null), scores(30, { D2: 30 }), scores(null)),
+  })
+  const md = markdown(r)
+  const main = md.slice(md.indexOf('## Scores'), md.indexOf('## Held out'))
+  expect(main).toMatch(/\| VS Code \| 60 \| — \|[^\n]*\| 60 \| left out: 0 \|/)
+  expect(main).toMatch(/\| Cursor \| — \| — \| — \| — \| 40 \|[^\n]*\| 40 \| left out: 1 \|/)
+  const heldOut = md.slice(md.indexOf('## Held out'), md.indexOf('## By tier'))
+  expect(heldOut).toMatch(/\| VS Code \| — \| 30 \|[^\n]*\| 30 \| left out: 0 \|/)
+  expect(heldOut).toMatch(/\| Cursor \|[^\n]*\| — \| left out: 0 \|/)
+  const text = summary(r)
+  expect(text.slice(0, text.indexOf('Held out'))).toMatch(/^VS Code[^\n]*60 left out: 0$/m)
+  expect(text.slice(0, text.indexOf('Held out'))).toMatch(/^Cursor[^\n]*40 left out: 1$/m)
+  expect(text.slice(text.indexOf('Held out'))).toMatch(/^VS Code[^\n]*30 left out: 0$/m)
+  expect(text.slice(text.indexOf('Held out'))).toMatch(/^Cursor[^\n]*— left out: 0$/m)
+})
+
+it('Not covered: tier B on Windows is printed under the score table', () => {
+  const text = summary(report())
+  const lines = text.split('\n')
+  const cursor = lines.findIndex((line) => line.startsWith('Cursor'))
+  expect(lines.indexOf('Not covered: tier B on Windows')).toBeGreaterThan(cursor)
+  expect(lines.indexOf('Not covered: tier B on Windows')).toBeLessThan(lines.indexOf('Held out'))
+  const md = markdown(report())
+  const main = md.slice(md.indexOf('## Scores'), md.indexOf('## Held out'))
+  expect(main).toMatch(/\| Cursor \|[^\n]*\|\n\nNot covered: tier B on Windows\n/)
 })
 
 it('the delta counts the held-out checks that changed, never naming them', () => {
