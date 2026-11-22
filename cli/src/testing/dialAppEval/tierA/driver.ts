@@ -14,25 +14,33 @@
 import { vi } from 'vitest'
 import type { startDevices } from '../../../services/devices.js'
 import { CAROUSEL_REFRESH_MS } from '../../dialCarousel.js'
-import { PAGE, type EvalDriver, type Platform, type Scenario, type Seen, type Step, type StepKind } from '../types.js'
+import { EDITORS, PAGE, type App, type Editor, type EvalDriver, type Platform, type Scenario, type Seen, type Step,
+  type StepKind } from '../types.js'
 import { installClock, settle } from './clock.js'
 import { installFakeApps } from './fakeApps.js'
 import { machine } from './machine.js'
 import { claudeStoreSteps } from './steps/claudeStore.js'
 import { codexStoreSteps } from './steps/codexStore.js'
 import { dialSteps } from './steps/dial.js'
-import { editorSteps } from './steps/editor.js'
+import { closeWindows, editorSteps, reopenWindows } from './steps/editor.js'
 import { sessionsSteps } from './steps/sessions.js'
 import { recordTyping, voiceSteps } from './steps/voice.js'
 import { windowSteps } from './steps/window.js'
 import { World, type StepHandler, type TierAWorld } from './world.js'
 
 type Run = Exclude<Step, { kind: 'wait' }>
-/** The stroke, built by Task 4 of docs/plans/2026-11-22-dial-eval-vscode-cursor-plan.md: no scenario takes one before. */
-const notBuilt = (kind: StepKind) => async (): Promise<void> => { throw new Error(`tier A: the ${kind} step is not built yet`) }
+const isEditor = (app: App): app is Editor => (EDITORS as readonly App[]).includes(app)
 const STEPS: { [K in Exclude<StepKind, 'wait'>]: StepHandler<K> } = {
   ...claudeStoreSteps, ...codexStoreSteps, ...sessionsSteps, ...windowSteps, ...dialSteps, ...voiceSteps, ...editorSteps,
-  stroke: notBuilt('stroke'),
+  // An editor's windows go with it, and come back on its relaunch reporting its sessions' new shells.
+  quit: async (world, step) => {
+    await sessionsSteps.quit(world, step)
+    if (isEditor(step.app)) closeWindows(world, step.app)
+  },
+  relaunch: async (world, step) => {
+    await sessionsSteps.relaunch(world, step)
+    if (isEditor(step.app)) await reopenWindows(world, step.app)
+  },
 }
 /** Virtual time for the dial to be found and welcomed: the fleet looks every 2 s, the dial greets every 2 s. */
 const START_WITHIN_MS = 30_000
