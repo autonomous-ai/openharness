@@ -34,6 +34,12 @@ describe('parseNotice', () => {
     expect(parseNotice(['Q', '--suggest'])).toEqual({ question: 'Q', json: false })
     expect(parseNotice(['--waiting', '--proceeding', '-x', 'Q'])).toEqual({ question: '-x Q', state: 'waiting', json: false })
   })
+
+  it('--help or -h as the whole question is no question; elsewhere it is text', () => {
+    expect(parseNotice(['--help'])).toEqual({ question: '', json: false })
+    expect(parseNotice(['-h', '--json'])).toEqual({ question: '', json: true })
+    expect(parseNotice(['Does', '--help', 'work?'])).toEqual({ question: 'Does --help work?', json: false })
+  })
 })
 
 describe('composeNotice', () => {

@@ -82,9 +82,13 @@ describe('harness device notify', () => {
   })
 
   it('no text is the usage, and nothing is sent', async () => {
-    for (const words of [[], ['--json'], [' \n '], ['--suggest', 'x', '--waiting'], ['--proceeding']]) {
+    for (const words of [[], ['--json'], [' \n '], ['--suggest', 'x', '--waiting'], ['--proceeding'], ['--help'], ['-h']]) {
       expect(await notify(words), JSON.stringify(words)).toEqual({ code: 1, out: [], err: [NOTICE_USAGE], sent: [] })
     }
+  })
+
+  it('--help elsewhere in the question is text, and it rings', async () => {
+    expect(await notify(['Does', '--help', 'work?'])).toMatchObject({ code: 0, out: ['shown'], sent: [{ text: 'Does --help work?' }] })
   })
 
   it('the usage names the flags', () => {
