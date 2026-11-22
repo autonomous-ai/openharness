@@ -16,6 +16,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { ORCA_PROGRAMS } from '../src/testing/dialAppEval/argv.js'
 import { scenariosFor } from '../src/testing/dialAppEval/catalog.js'
 import { loadBaseline, SKIP_RATCHET_ENV, tierBVerdict } from '../src/testing/dialAppEval/grade.js'
 import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from '../src/testing/dialAppEval/runner.js'
@@ -46,7 +47,7 @@ const NO_TTY = ['??', '?']
 
 /** Whether a command is Orca's CLI, by either of the fake's names, running `<group> <verb>`. */
 const ranOrca = (argv: readonly string[], group: string, verb: string): boolean =>
-  ['orca', 'orca-ide'].includes(argv[0] ?? '') && argv[1] === group && argv[2] === verb
+  ORCA_PROGRAMS.includes(argv[0] ?? '') && argv[1] === group && argv[2] === verb
 
 describe.skipIf(WIN32)('the dial eval, tier B: Orca', () => {
   let driver: TierBDriver

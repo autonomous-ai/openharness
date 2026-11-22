@@ -28,6 +28,7 @@ import { chatGptPlaces, claudeStoreRoots } from '../../src/cable/hosts/appPlaces
 import { orcaBinary } from '../../src/devices/orcaHomes.js'
 import { resolveBinaryOnPath } from '../../src/lib/binaryOnPath.js'
 import { claudeAppFixture } from '../../src/testing/claudeAppFixture.js'
+import { flagOf } from '../../src/testing/dialAppEval/argv.js'
 import { describeAttempt, guardThisProcess, NET_GUARD_FILE_ENV, netGuardEnv, readNetGuard, type NetAttempt } from '../../src/testing/dialAppEval/netGuard.js'
 import { orcaListing } from '../../src/testing/dialAppEval/orcaListing.js'
 import { agentIdOf, engineOf, FRONT_NAMES, PAGE, placeOf, type App, type Delivery, type EvalDriver, type LinkedApp, type Platform,
@@ -256,15 +257,14 @@ export function orcaCommands(runs: readonly OrcaRun[], projects: readonly string
 }
 /**
  * Each `terminal send` Orca took (cable/hosts/orca.ts) as a `typed` delivery at its time, to the session whose own pane
- * the handle it names was then ([ownerOf]); to none for any other handle, a closed, held or tmux pane's among them, which the
- * gate counts as a wrong send. One Orca refused typed nothing.
+ * the handle it names was then ([ownerOf]); to none for any other handle, a closed, held or tmux pane's among them,
+ * which the gate counts as a wrong send. One Orca refused typed nothing.
  */
 export function orcaDeliveries(runs: readonly OrcaRun[], ownerOf: (handle: string, at: number) => SessionKey | undefined): Delivery[] {
   return runs.flatMap(({ argv, ok, at }): Delivery[] => {
     const text = argv.find((arg) => arg.startsWith('--text='))?.slice('--text='.length)
     if (!ok || argv[1] !== 'terminal' || argv[2] !== 'send' || text === undefined) return []
-    const flag = argv.indexOf('--terminal')
-    const handle = flag < 0 ? undefined : argv[flag + 1]
+    const handle = flagOf(argv, '--terminal')
     return [{ at, path: 'typed', target: (handle === undefined ? undefined : ownerOf(handle, at)) ?? null, text }]
   })
 }
