@@ -986,13 +986,26 @@ class GitPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, re.escape(planner.LINUX_E2E_ORCA_FILES[0])):
             self.plan()
 
+    def test_every_path_the_app_eval_covers_is_in_the_checkout(self):
+        # A path renamed or deleted would leave its successor uncovered, the list still passing.
+        root = REPOSITORY
+        full_checkout(self, "cli/src/cable/hosts", "cli/e2e/harness", "plugins/harness-device-vscode/src")
+        for entry in planner.LINUX_E2E_APP_EVAL_PATHS:
+            with self.subTest(entry=entry):
+                if "*" in entry:
+                    self.assertTrue(list(root.glob(entry)))
+                else:
+                    self.assertTrue((root / entry).is_dir() if entry.endswith("/") else (root / entry).is_file())
+
     def test_a_change_the_app_eval_covers_runs_its_e2e_files(self):
         hosts, catalog, carousel, driver = ("cli/src/cable/hosts/scannedApp.ts", "cli/src/testing/dialAppEval/catalog.ts",
                                             "cli/src/testing/dialCarousel.ts", "cli/e2e/harness/appEvalDriver.ts")
         notes = "cli/e2e/harness/appEvalNotes.md"
-        # What the editors' files cover outside the hosts' folder: the devices process, the hook, the extension and its
-        # setup, Cursor's engine and discovery, and the harness's editor windows and outside agents.
-        editors = ("cli/src/services/devices.ts", "cli/hook/notify.mjs", "plugins/harness-device-vscode/src/extension.ts",
+        # What the editors' files cover outside the hosts' folder: the devices process and the `vscode` stream its
+        # listener serves the windows, the hook, the extension and its setup, Cursor's engine and discovery, and the
+        # harness's editor windows and outside agents.
+        editors = ("cli/src/services/devices.ts", "cli/src/services/devicesListener.ts", "cli/src/devices/listenerPath.ts",
+                   "cli/hook/notify.mjs", "plugins/harness-device-vscode/src/extension.ts",
                    "cli/src/devices/vscodeExtension.ts", "cli/src/cable/vscodeExtensionSetup.ts",
                    "cli/src/engines/cursor/adapter.ts", "cli/src/core/engines/cursorDiscovery.ts")
         harness = tuple(f"cli/e2e/harness/{name}.ts" for name in ("vscodeWindow", "outsideAgent", "codexOutside",
