@@ -1,6 +1,7 @@
 // Tier A's steps on the windows, as the devices' listener hears them: the app in front and the ChatGPT app's window
 // title from `harness hardware watch`, and the session the Claude app shows from the harness-device mod.
-import { PAGE } from '../../types.js'
+import { frontAppId } from '../../../../cable/hosts/frontApp.js'
+import { FRONT_NAMES } from '../../types.js'
 import type { ListenerHandler } from '../../../../services/devicesListener.js'
 import type { StepHandler, TierAWorld } from '../world.js'
 
@@ -15,8 +16,9 @@ async function tell(world: TierAWorld, message: { type: string } & Record<string
 export const windowSteps: { front: StepHandler<'front'>; thread: StepHandler<'thread'>; attach: StepHandler<'attach'> } = {
   front: (world, step) => {
     world.front = step.app
-    // The watch's app id is the app's page; any other app in front is none the dial follows.
-    return tell(world, { type: 'front', app: step.app === 'other' ? 'none' : PAGE[step.app] })
+    // The watch sends what the product makes of the OS's own name, so a platform where it cannot tell an app is graded
+    // as the person sees it.
+    return tell(world, { type: 'front', app: frontAppId(FRONT_NAMES[world.platform][step.app]) })
   },
   thread: (world, step) => tell(world, { type: 'thread', title: step.title }),
   // The mod names the Claude Code session the app attached: its cliSessionId.
