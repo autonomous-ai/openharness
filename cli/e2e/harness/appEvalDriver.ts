@@ -135,6 +135,17 @@ const CHATGPT_INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 `
 
 export const inside = (root: string, path: string | undefined): boolean => !!path && isAbsolute(path) && !relative(root, path).startsWith('..')
+/**
+ * Throws unless the network guard's [file] says it was loaded into each of [pids], [name]'s processes, each one Node
+ * names [process] (netGuard.cjs processName). The pids are of processes running now: a line of a pid since reused proves
+ * nothing of them.
+ */
+export function guardLoaded(file: string, name: string, pids: readonly number[], process = name): void {
+  const { loaded } = readNetGuard(file)
+  if (pids.length === 0 || !pids.every((pid) => loaded.some((l) => l.process === process && l.pid === pid))) {
+    throw new Error(`the network guard is not in the ${name} process`)
+  }
+}
 /** The file beside the recording open that has the links of an app fail while it is there. */
 const failsFile = (open: string, app: App): string => join(dirname(open), `${SCHEME[app]}.fails`)
 
@@ -634,13 +645,9 @@ export class TierBDriver implements EvalDriver {
     // app in front decides it once one is.
     world.pick(PAGE[front === 'other' ? scenario.app : front])
     // The processes running now, by pid: a line of one the master has since started again proves nothing of this one.
-    const { loaded } = readNetGuard(rig.guard)
-    const running = { core: [rig.d.corePid()], devices: devicesPids(rig.d) }
-    for (const [name, pids] of Object.entries(running)) {
-      if (pids.length === 0 || !pids.every((pid) => loaded.some((l) => l.process === name && l.pid === pid))) {
-        throw new Error(`the network guard is not in the ${name} process`)
-      }
-    }
+    const core = rig.d.corePid()
+    const running = { core: core === null ? [] : [core], devices: devicesPids(rig.d) }
+    for (const [name, pids] of Object.entries(running)) guardLoaded(rig.guard, name, pids)
     const cost = await beginCost(rig.d)
     world.origin = Date.now()
     this.costEnd = cost.end

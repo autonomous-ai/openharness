@@ -22,11 +22,12 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { copyFileSync, mkdtempSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { APP_BUNDLES } from '../../src/cable/hosts/hostDetect.js'
+import { NET_GUARD_FILE_ENV } from '../../src/testing/dialAppEval/netGuard.js'
 import { EDITORS, engineOf, placeOf, type App, type Editor, type SessionDef, type SessionKey } from '../../src/testing/dialAppEval/types.js'
 import type { WindowState } from '../../../plugins/harness-device-vscode/src/window.ts'
 import { hear } from './appEvalChatgpt.js'
 import { appOf, claudeSteps, start as startClaude, type ClaudeHost } from './appEvalClaude.js'
-import { speak, type AppSteps, type TierBWorld } from './appEvalDriver.js'
+import { guardLoaded, speak, type AppSteps, type TierBWorld } from './appEvalDriver.js'
 import { CodexOutside } from './codexOutside.js'
 import { CursorOutside } from './cursorOutside.js'
 import { until } from './daemon.js'
@@ -202,7 +203,9 @@ async function inTmux(world: TierBWorld, state: State, s: SessionDef, folder: st
   // At once, so the driver's last resort can end it as it kills the editor; one already gone fails nothing.
   const killed = (): void => { spawnSync('tmux', ['-S', d.tmux.socket, '-f', '/dev/null', 'kill-session', '-t', name], { env: d.tmux.env }) }
   state.tmux.set(s.key, { end: async () => killed(), kill: killed })
-  await InOwnTmux.start(d, name, folder, { resume: s.id, env: { ...hintsOf(world, s), FAKE_CLAUDE_SESSION_TITLE: s.title } })
+  const own = await InOwnTmux.start(d, name, folder, { resume: s.id, env: { ...hintsOf(world, s), FAKE_CLAUDE_SESSION_TITLE: s.title } })
+  // As in every process of the daemon: its hooks are its children.
+  guardLoaded(d.env[NET_GUARD_FILE_ENV]!, `${name} pane's Claude Code`, [own.pid], 'node')
   const client = await tabClient(d, name, s.app as Editor)
   state.tmux.set(s.key, {
     end: async () => {
@@ -278,6 +281,8 @@ async function openWindow(world: TierBWorld, key: string, look: Look): Promise<v
   state.windows.set(key, { ...look, id, loop })
   loop.set(told)
   await until(`${id} connected`, () => loop.states.at(-1) === 'connected', CONNECT_MS, 50)
+  // As in every process of the daemon: the loop asks the CLI's `link`, and reads its window's streams.
+  guardLoaded(world.d.env[NET_GUARD_FILE_ENV]!, `${id} window`, [loop.pid], 'node')
 }
 
 /** The window's stream ends: its loop stops, as when VS Code closes the window or reloads it. */

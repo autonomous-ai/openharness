@@ -19,7 +19,8 @@ export interface OwnTmuxOptions { resume?: string; env?: Readonly<Record<string,
 /** Claude Code (the fake engine) in a tmux session the test opened on the daemon's private server, as a person opens
  *  one by hand: not a session Harness made, so its hooks tell the devices and register nothing. */
 export class InOwnTmux {
-  private constructor(private readonly d: IsolatedDaemon, readonly pane: string, readonly sessionId: string) {}
+  /** [pid]: its engine's process. */
+  private constructor(private readonly d: IsolatedDaemon, readonly pane: string, readonly sessionId: string, readonly pid: number) {}
 
   /** The dial's id for it. */
   get id(): string { return observedAgentId('claude', this.sessionId) }
@@ -47,9 +48,9 @@ export class InOwnTmux {
       ...Object.entries(variables).flatMap(([name, value]) => ['-e', `${name}=${value}`]),
       d.env.CLAUDE_PATH!, ...(resume === undefined ? [] : ['--resume', resume]))
     // Its conversation, as its SessionStart hook named it: the only engine starting now.
-    const started = new RegExp(`claude pid=\\d+ SessionStart\\(${resume === undefined ? 'startup' : 'resume'}\\) session=(\\S+) ran`)
-    const [, sessionId] = await until(`${folder} to run its SessionStart hook`, () => started.exec(d.hookLog().slice(from)), 30_000, 100)
-    return new InOwnTmux(d, pane, sessionId)
+    const started = new RegExp(`claude pid=(\\d+) SessionStart\\(${resume === undefined ? 'startup' : 'resume'}\\) session=(\\S+) ran`)
+    const [, pid, sessionId] = await until(`${folder} to run its SessionStart hook`, () => started.exec(d.hookLog().slice(from)), 30_000, 100)
+    return new InOwnTmux(d, pane, sessionId!, Number(pid))
   }
 
   /** Typed at its prompt, then Enter, as e2e/hookclient.e2e.ts types. */

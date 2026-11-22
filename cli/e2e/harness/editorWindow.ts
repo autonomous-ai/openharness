@@ -23,6 +23,8 @@ export interface Printed {
 
 /** The extension's loop over a fake window, running. */
 export interface EditorWindow {
+  /** Its process's. */
+  pid: number
   /** Each state it told, in order. */
   states: string[]
   /** Each shell's pid it was asked to show, in order. */
@@ -108,7 +110,7 @@ export function startEditorWindow(d: IsolatedDaemon, children: ChildProcess[]): 
   child.once('close', (code) => { exited = { code } })
   onTestFailed(() => { console.log(`---- the window's states\n${states.join('\n')}\n---- its shows\n${shows.join('\n')}\n---- its raises, after so many shows\n${raised.join(' ')}\n---- its scrolls\n${scrolls.join(' ')}\n---- its page keys\n${keys.map(({ key, pid }) => `${key} ${pid}`).join(' ')}\n---- its log\n${logs.join('\n')}`) })
   return {
-    states, shows, raised, scrolls, keys, took, logs,
+    pid: child.pid!, states, shows, raised, scrolls, keys, took, logs,
     onLine: (listener) => { listeners.push(listener) },
     set: (state) => { child.stdin.write(`${JSON.stringify(state)}\n`) },
     stop: async () => {
