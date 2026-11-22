@@ -195,23 +195,8 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     expect(second).toEqual(first)
   })
 
-  /** VS Code's V5 (docs/plans/2026-11-22-dial-eval-vscode-cursor-plan.md, Task 7): a in w1, b in w2, b's window focused. */
-  const v5 = scenario({
-    id: 'V5', app: 'vscode', title: 'Eval a tap on a terminal in the second window', dims: ['D3', 'D7'], tiers: ['a'],
-    sessions: [editorSession('a', 'vscode'), editorSession('b', 'vscode', { window: 'w2' }), editorGhost('vscode')],
-    steps: [
-      ...started(['b', 'a']),
-      { kind: 'editor.window', window: 'w1', active: 'a', focused: false },
-      { kind: 'editor.window', window: 'w2', active: 'b', focused: true },
-      ...listed('vscode', ['a', 'b']),
-      { label: 'tap', kind: 'tap', session: 'b' },
-    ],
-    checks: [
-      { id: 'open', kind: 'open', dim: 'D3', session: 'b', link: false, after: 'tap' },
-      { id: 'openKept', kind: 'open', dim: 'D7', session: 'b', link: false, after: 'tap' },
-    ],
-    probes: [{ id: 'open', kind: 'open', dim: 'D3', session: 'z', link: false, after: 'tap' }],
-  })
+  /** VS Code's V5: a in w1, b in w2, b's window focused. */
+  const v5 = MAIN.find((s) => s.id === 'V5')!
 
   it("V5 on darwin: a tap on b, in the second window, writes show with raise for b's shell on that window's stream alone, and runs open -b com.microsoft.VSCode", async () => {
     const driver = new TierADriver({ startDevices })
@@ -294,17 +279,12 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     ])
   })
 
-  /** Cursor's own agent a, in its folder: what a tap on its folder row runs. */
-  const cursorAgent = scenario({
-    id: 'U6', app: 'cursor', title: "Eval a tap on Cursor's own agent", dims: ['D3'], tiers: ['a'],
-    sessions: [editorSession('a', 'cursor', { place: 'agent' }), editorGhost('cursor')],
-    steps: [...started(['a']), ...listed('cursor', ['a']), { label: 'tap', kind: 'tap', session: 'a' }],
-    checks: [], probes: [],
-  })
+  /** Cursor's U6: its own agent c, in its folder: what a tap on its folder row runs. */
+  const cursorAgent = MAIN.find((s) => s.id === 'U6')!
   const folderCommands: Readonly<Record<Platform, string[]>> = {
-    darwin: ['/usr/bin/open', '-b', 'com.todesktop.230313mzl4w4u92', '/work/eval-a'],
-    linux: ['/opt/eval/bin/cursor', '/work/eval-a'],
-    win32: ['harness-pty', 'cursor-folder', '/work/eval-a'],
+    darwin: ['/usr/bin/open', '-b', 'com.todesktop.230313mzl4w4u92', '/work/eval-c'],
+    linux: ['/opt/eval/bin/cursor', '/work/eval-c'],
+    win32: ['harness-pty', 'cursor-folder', '/work/eval-c'],
   }
 
   it.for(PLATFORMS)("a tap on Cursor's own agent opens Cursor's window for its folder on %s: open -b com.todesktop.230313mzl4w4u92 on darwin, Cursor's CLI on linux, harness-pty cursor-folder on win32", async (platform) => {
