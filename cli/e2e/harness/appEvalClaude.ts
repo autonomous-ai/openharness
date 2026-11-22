@@ -233,7 +233,7 @@ async function end(world: TierBWorld, app: FakeApp, key: SessionKey, live: Live)
   const { outside } = live
   // A dialog waiting on the person is declined, as with Esc; an open turn answers as it would.
   if (live.asking) outside.type('\x1b')
-  else if (live.open) writeWhole(fileOf(world, live.open, 'release'), '')
+  if (live.open) writeWhole(fileOf(world, live.open, 'release'), '')
   outside.type('!exit')
   try {
     await until(`${key}'s SessionEnd hook`, () => outside.ran(world.d, 'SessionEnd'), END_MS, 50)
@@ -365,7 +365,12 @@ export const claudeSteps = {
         live.asking = true
         break
       case 'turn-stop': {
-        if (!live.open || live.asking) throw new Error(`scenario ${world.scenario.id}: ${step.session} has no turn to stop`)
+        if (!live.open) throw new Error(`scenario ${world.scenario.id}: ${step.session} has no turn to stop`)
+        // A dialog waiting on the person is allowed first, Enter on its first row: the turn then ends on its answer.
+        if (live.asking) {
+          outside.type('')
+          live.asking = undefined
+        }
         const stops = ++live.stops
         writeWhole(fileOf(world, live.open, 'release'), step.lastAnswer ?? '')
         live.open = undefined
