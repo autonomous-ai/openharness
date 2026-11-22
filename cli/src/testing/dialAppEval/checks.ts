@@ -408,7 +408,7 @@ function openParts(check: CheckOf<'open'>, world: World, w: Window | undefined, 
   // names: X5's tap must bring its app up another way.
   const refused = world.scenario.world?.linkFails ?? []
   const brings = (c: Seen['commands'][number]): boolean => c.ok
-    && !c.argv.some((arg) => refused.some((app) => app !== 'orca' && arg.startsWith(SCHEMES[app])))
+    && !c.argv.some((arg) => refused.some((app) => arg.startsWith(SCHEMES[app])))
     && fronts(c.argv, platform, session.app, link)
   const front = commands.find(brings)
   const folds = (c: Seen['commands'][number]): boolean => folder !== undefined && c.ok && opensFolder(c.argv, platform, folder)

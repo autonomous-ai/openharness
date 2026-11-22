@@ -187,7 +187,7 @@ export interface Scenario {
   gaps?: Partial<Record<Platform, string>>
   sessions: SessionDef[]
   /** front defaults to `app`. accessibility false: Harness Device is not granted it, so no window title is read. */
-  world?: { front?: App | 'other'; chatgptInstalled?: false; linkFails?: App[]; accessibility?: false
+  world?: { front?: App | 'other'; chatgptInstalled?: false; linkFails?: LinkedApp[]; accessibility?: false
     /** The editor was started from Terminal (`code .`, `cursor .`). */
     launchedFrom?: 'terminal-app'
     /** The Harness extension is not installed, so no window opens a stream (V13). */
