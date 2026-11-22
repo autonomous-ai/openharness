@@ -17,8 +17,9 @@ import type { Editor, SessionKey } from '../../types.js'
 import type { StepHandler, TierAWorld } from '../world.js'
 import { agentPid, keyOfShell, sessionsSteps, shellOf } from './sessions.js'
 
-/** The fields of a line the devices write that name a shell by its pid (cable/hosts/vscodeTerminals.ts). */
-const SHELL_FIELDS: readonly string[] = ['show', 'pid']
+/** The fields of a line the devices write that name a shell by its pid (cable/hosts/vscodeTerminals.ts): an Enter line
+ *  `{"enter":<shell>}` names its shell alone. */
+const SHELL_FIELDS: readonly string[] = ['show', 'pid', 'enter']
 
 /** Every string in a value, at any depth: words in a list or a nested object are typed as much as a field's. */
 const stringsIn = (value: unknown): string[] => (typeof value === 'string' ? [value]
@@ -99,7 +100,10 @@ async function report(world: TierAWorld, window: OpenWindow): Promise<void> {
   open.set(slot, window)
   world.streams.push({ at: Date.now(), window: id, line: { type: 'vscode-state', terminals, active, focused } })
   const answer: unknown = await handlerOf<ListenerHandler>(world, 'vscode-state').handle(
-    { type: 'vscode-state', window: id, terminals: shells, active: active === null ? null : shellNamed(world, key, active), focused },
+    // The extension's loop says its window types (plugins/harness-device-vscode/src/loop.ts); the recorded line above
+    // leaves it out, as tier B's does, so the two tiers' records stay alike.
+    { type: 'vscode-state', window: id, terminals: shells, active: active === null ? null : shellNamed(world, key, active), focused,
+      types: true },
     new AbortController().signal)
   if (answer !== undefined) throw new Error(`the devices' listener refused ${id}'s state: ${String(answer)}`)
 }

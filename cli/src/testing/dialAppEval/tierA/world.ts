@@ -454,7 +454,10 @@ export class World implements TierAWorld {
       orcaPlugin: { orca: () => null, run: async () => ({ code: null, stdout: '', timedOut: false }), files: () => null, folder: join(root, 'orca-plugin') },
       processParents: async () => [...machine.processes.values()].map(({ pid, ppid }) => ({ pid, ppid })),
       claudeFullscreen: async () => false,
-      processGroups: async () => undefined,
+      // Each terminal agent leads its own job, which its shell's terminal has in front, as the machine this models starts
+      // them (docs/plans/2026-11-22-dial-vscode-cursor-voice-design.md, Eval).
+      processGroups: async (agent, shell) => (machine.processes.has(agent) && machine.processes.has(shell)
+        ? { pgid: agent, tpgid: agent } : undefined),
       // Linux's and Windows' ways to bring a window forward, as the commands the checks read (checks.ts fronts).
       raise: platform === 'linux' ? this.linuxRaise() : undefined,
       windowsRaise: platform === 'win32' ? {
