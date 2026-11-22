@@ -291,7 +291,10 @@ async function endWindow(world: TierBWorld, key: string): Promise<Open> {
   const open = state.windows.get(key)
   if (!open) throw new Error(`scenario ${world.scenario.id}: no window ${key} is open`)
   state.windows.delete(key)
-  await open.loop.stop()
+  // The loop ends by itself once its stdin does, with code 0: any other end left a stream, watcher or timer of it behind
+  // (vscodeWindow.ts).
+  const code = await open.loop.stop()
+  if (code !== 0) world.fail(new Error(`${open.id}'s loop exited ${code}`))
   world.stream(open.id, { ended: 'gone' })
   return open
 }
