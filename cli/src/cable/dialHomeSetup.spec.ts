@@ -1231,6 +1231,25 @@ describe('Claude Code while Harness runs a Claude agent of its own (docs/plans/2
     expect(readSetup(later.dataDir).homes.claude).toEqual([])
   })
 
+  it('the person\'s plugin off is one read: settings half written right after it still keep the skill out', () => {
+    // Claude Code writing its settings again during the pass: a second read would find them saying nothing.
+    const r = rig()
+    pluginOff(r.claudeHome)
+    r.agents.now = 'listed'
+    const settings = join(r.claudeHome, 'settings.json')
+    const module = fs as unknown as Record<string, (...args: unknown[]) => unknown>
+    const open = module.openSync
+    let opens = 0
+    vi.spyOn(module, 'openSync').mockImplementation((...args) => {
+      if (args[0] === settings && ++opens === 2) writeFileSync(settings, '{"enabledPlugins":{')
+      return open(...args)
+    })
+
+    r.writer.started()
+
+    expect(existsSync(join(r.claudeHome, 'skills'))).toBe(false)
+  })
+
   it('claude: false wins over a Harness Claude agent', () => {
     const r = rig({ removed: () => ({ claude: true }) })
     r.agents.now = 'listed'

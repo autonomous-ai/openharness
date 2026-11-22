@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parse } from 'yaml'
-import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION, claudePluginState, ownDirectory, ownWindowsPath, refreshSkill, removeSkill, skillWanted, skillsFolderOf, writeSkill } from './dialSkill.js'
+import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION, claudePluginState, ownDirectory, ownWindowsPath, readClaudePlugin, refreshSkill, removeSkill, skillWanted, skillsFolderOf, writeSkill } from './dialSkill.js'
 
 const MARKER = '# Written by Harness. Remove it with harness device claude disable or harness device codex disable.'
 /** The line 0.6.58 wrote: files in people's homes still hold it. */
@@ -525,6 +525,19 @@ When the task stops on a step only the person can take, ring their dial before y
       ['a FIFO', join(dir, 'fifo.json')],
     ]
     for (const [what, path] of unknown) expect(claudePluginState(path), what).toBe('unknown')
+  })
+
+  it('readClaudePlugin: the person\'s off told from an entry gone, in one read', () => {
+    const dir = folder()
+    const at = (name: string, text: string): string => {
+      writeFileSync(join(dir, name), text)
+      return join(dir, name)
+    }
+    expect(readClaudePlugin(at('on.json', '{"enabledPlugins":{"harness-device@openharness":true}}'))).toBe('on')
+    expect(readClaudePlugin(at('false.json', '{"enabledPlugins":{"harness-device@openharness":false}}'))).toBe('turned-off')
+    expect(readClaudePlugin(at('absent.json', '{"enabledPlugins":{"other@x":false}}'))).toBe('off')
+    expect(readClaudePlugin(at('string.json', '{"enabledPlugins":{"harness-device@openharness":"false"}}'))).toBe('off')
+    expect(readClaudePlugin(at('bad.json', '{"enabledPlugins":{"harness-device@openharness":fa'))).toBe('unknown')
   })
 
   it('it loads only node modules', () => {
