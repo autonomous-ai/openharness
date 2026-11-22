@@ -3095,6 +3095,38 @@ describe('ObservedSource and the app a hook\'s caller runs in', () => {
   })
 })
 
+// `code .` (or `cursor .`) from Terminal: the editor inherits Terminal's bundle id, while its terminals say
+// TERM_PROGRAM=vscode. The bundle id won, and the agent sat on Terminal's page, a tap opening Terminal (V11).
+describe('ObservedSource and an editor started from Terminal', () => {
+  const FROM_TERMINAL = { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: 'com.apple.Terminal' }
+
+  /** The real VS Code and Cursor adapters on macOS, the caller's parents naming [app]. */
+  function editors(app: string) {
+    const run = vi.fn(async (_file: string, _args: string[], _timeoutMs: number) => ({ code: 0, stdout: '' }))
+    const deps: OrcaDeps = { run, onPath: (name) => `/fake/bin/${name}`, exists: () => false, platform: 'darwin' }
+    const terminals = { terminalOf: () => undefined, show: () => false, scroll: () => false, pageKeys: () => false,
+      canType: () => false, type: async () => 'failed' as const }
+    const adapters = (['vscode', 'cursor'] as const).map((editor) => createVscodeAdapter(editor, { ...deps, inFront: () => true, terminals }))
+    const { actions } = fakeActions()
+    const s = setup({ actions: { ...actions, adapters }, apps: async (pids) => new Map(pids.map((pid) => [pid, app])) })
+    return { ...s, actions }
+  }
+
+  it.each([
+    ['VS Code', 'vscode', 'com.microsoft.VSCode'],
+    ['Cursor', 'cursor', 'com.todesktop.230313mzl4w4u92'],
+  ])('an agent in a terminal of %s started from Terminal is in that editor, at its terminal, and a tap opens that editor', async (_, app, bundle) => {
+    const s = editors(app)
+    s.src.ingest(s.ev('session-start', { hostHints: FROM_TERMINAL }))
+    await flushed()
+    const agent = s.src.list()[0]
+    expect([agent.host, agent.app]).toEqual(['vscode', app])
+    expect(s.src.paneOf(agent.id, app)).toBe('term:100')
+    expect(await s.src.focus(agent)).toBe(true)
+    expect(s.actions.open.mock.calls).toEqual([[agent.id, { bundle, pane: { adapter: app, id: 'term:100' } }]])
+  })
+})
+
 // A terminal or an editor started from another host's pane keeps that pane's variables, so only the process that made
 // the caller's pseudo-terminal says whose pane it is (scannedApp.ts readPtyOwner): words typed into a pane that only holds
 // the agent run at whatever that pane shows.

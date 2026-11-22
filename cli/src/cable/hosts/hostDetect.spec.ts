@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { APP_BUNDLES, APP_IDS, appDisplayName, detectApp, detectHost, hostDisplayName, inCmux, inHerdr, UNKNOWN_APP } from './hostDetect.js'
+import { APP_BUNDLES, APP_IDS, appDisplayName, detectApp, detectHost, hostDisplayName, inCmux, inHerdr, ownHints, UNKNOWN_APP } from './hostDetect.js'
 
 describe('detectHost', () => {
   it.each([
@@ -303,5 +303,29 @@ describe('inCmux', () => {
     const hints = { TERM_PROGRAM: 'ghostty', __CFBundleIdentifier: 'com.cmuxterm.app' }
     expect(detectHost(hints)).toBe('ghostty')
     expect(detectApp(hints)).toBe('cmux')
+  })
+})
+
+// `code .` from Terminal: the editor inherits Terminal's bundle id, while its own terminals say TERM_PROGRAM=vscode (V11).
+describe('ownHints', () => {
+  it('drops a bundle id an editor inherited from the app it was started from', () => {
+    const hints = ownHints({ TERM_PROGRAM: 'vscode', __CFBundleIdentifier: APP_BUNDLES['terminal-app'] })
+    expect(hints).toEqual({ TERM_PROGRAM: 'vscode' })
+    expect(detectApp(hints)).toBe('vscode')
+    expect(detectHost(hints)).toBe('vscode')
+  })
+
+  it('keeps an editor\'s own bundle id: Cursor stays Cursor, VS Code stays VS Code', () => {
+    const cursor = { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: APP_BUNDLES.cursor }
+    const vscode = { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: APP_BUNDLES.vscode }
+    expect(ownHints(cursor)).toEqual(cursor)
+    expect(ownHints(vscode)).toEqual(vscode)
+    expect([detectApp(ownHints(cursor)), detectHost(ownHints(cursor))]).toEqual(['cursor', 'cursor'])
+    expect([detectApp(ownHints(vscode)), detectHost(ownHints(vscode))]).toEqual(['vscode', 'vscode'])
+  })
+
+  it('keeps the bundle id of any other terminal', () => {
+    const iterm = { TERM_PROGRAM: 'iTerm.app', __CFBundleIdentifier: APP_BUNDLES['terminal-app'] }
+    expect(ownHints(iterm)).toEqual(iterm)
   })
 })
