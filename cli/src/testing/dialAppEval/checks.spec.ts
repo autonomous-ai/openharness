@@ -403,6 +403,9 @@ describe('state', () => {
     expect(scores(run(state('working'), s, seen(s, [50, 500], { frames: ring })))).toEqual({ shown: 0, latency: 0 })
     const off = seen(s, [50, 500], { frames: [...list(100, 'claude', [B]), frame(800, { t: 'turn.started', agentId: id(A), text: '' })] })
     expect(scores(run(state('working'), s, off)).shown).toBe(0)
+    // The dial moved off the row's page before the turn: its page's older list is not what it shows.
+    const moved = seen(s, [50, 500], { frames: [...ring, ...list(600, '', []), frame(800, { t: 'turn.started', agentId: id(A), text: '' })] })
+    expect(scores(run(state('working'), s, moved)).shown).toBe(0)
   })
 
   it('done has its own latency: 2500 ms full, 5000 half; idle has no latency', () => {
