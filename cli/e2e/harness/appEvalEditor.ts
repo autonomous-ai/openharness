@@ -67,9 +67,10 @@ const states = new WeakMap<TierBWorld, State>()
 
 /**
  * The records of one stream of a window, from what its loop printed, in tier A's shapes (the plan's Decision 1): its open
- * once connected, each state the window took, each show with the raise printed right after it folded in, and each line
- * scrolled, for the terminal active as it ran, the only one the loop scrolls. Each shell is named by [keyOf], `other` for
- * one no session has.
+ * once connected, each state the window took, each show with the raise printed right after it folded in, each line
+ * scrolled, for the terminal active as it ran, the only one the loop scrolls, and each page key, which moves a fullscreen
+ * Claude Code's view as a scroll, for the shell it was pressed in. Each shell is named by [keyOf], `other` for one no
+ * session has.
  */
 export function windowRecords(window: string, keyOf: (pid: number) => SessionKey | undefined,
   record: (line: Record<string, unknown>, at: number) => void): (printed: Printed, at: number) => void {
@@ -87,6 +88,7 @@ export function windowRecords(window: string, keyOf: (pid: number) => SessionKey
       record({ type: 'vscode-state', terminals: printed.took.terminals.map(named), active: named(active), focused: printed.took.focused }, at)
     } else if (printed.show !== undefined) record(shown = { show: named(printed.show) }, at)
     else if (printed.scroll !== undefined) record({ scroll: printed.scroll, pid: named(active) }, at)
+    else if (printed.key !== undefined) record({ scroll: printed.key, pid: named(printed.pid ?? null) }, at)
   }
 }
 
