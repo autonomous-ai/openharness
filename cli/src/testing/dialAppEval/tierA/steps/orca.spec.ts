@@ -2,7 +2,7 @@
 // reads and actions of it (cable/hosts/orca.ts), where the devices find it, and what a focus watch prints. Every folder is
 // a temp one, on virtual time; nothing runs.
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, win32 } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createOrcaAdapter, createOrcaReads } from '../../../../cable/hosts/orca.js'
 import type { CorePorts } from '../../../../core/api.js'
@@ -143,24 +143,31 @@ describe("tier A's Orca", () => {
     expect([deps.orcaHomes!.get(), deps.orcaHomes!.answered()]).toEqual([read.homes, true])
   })
 
-  it('the CLI is found at the model\'s path on each platform, its accept never called, and exists true for HARNESS_ORCA_APP_BIN alone', () => {
-    const onPath: Readonly<Record<Platform, string | undefined>> = {
-      darwin: undefined,
-      linux: '/opt/eval/orca/resources/bin/orca-ide',
-      win32: 'C:\\Users\\eval\\AppData\\Local\\Programs\\orca\\resources\\bin\\orca.exe',
-    }
+  it("the CLI is where each platform's installer puts it, its accept never called: the app's on macOS, orca-ide on Linux's "
+    + "PATH, and on Windows under LOCALAPPDATA, which the devices' Orca deps do not carry", () => {
+    const linux = '/opt/eval/orca/resources/bin/orca-ide'
     for (const platform of PLATFORMS) {
       const { deps } = worldOn(platform, layout())
       const app = process.env.HARNESS_ORCA_APP_BIN!
       // The world's own made-up app, inside its temp folder: never this machine's Orca.
       expect(app.startsWith(tmpdir())).toBe(true)
       expect(app.endsWith(join('Orca.app', 'Contents', 'Resources', 'bin', 'orca'))).toBe(true)
-      expect(orcaBinary(deps.orca!), platform).toBe(onPath[platform] ?? app)
+      // Windows' per-user folder is the world's own too, and no other platform has one.
+      const local = process.env.LOCALAPPDATA!
+      expect(local.startsWith(tmpdir()), platform).toBe(platform === 'win32')
+      const exe = win32.join(local, 'Programs', 'orca', 'resources', 'bin', 'orca.exe')
+      const installed = { darwin: app, linux, win32: exe }[platform]
+      // Only Orca's install is there.
+      expect([app, linux, exe, '/Applications/Orca.app/Contents/Resources/bin/orca'].filter((path) => deps.orca!.exists(path)), platform)
+        .toEqual([installed])
+      // Orca's installer puts nothing on Windows' PATH: the devices' reads find no CLI there. Its homes' read, which
+      // carries LOCALAPPDATA (devices/orcaHomes.ts orcaHomesDeps), finds the install's.
+      expect(orcaBinary(deps.orca!), platform).toBe(platform === 'win32' ? null : installed)
+      expect(orcaBinary({ ...deps.orca!, localAppData: local }), platform).toBe(installed)
       // The accept reads the real disk: the model's PATH never asks it.
       const accept = vi.fn(() => true)
       for (const name of ['orca', 'orca-ide']) deps.orca!.onPath(name, accept)
       expect(accept).not.toHaveBeenCalled()
-      expect([deps.orca!.exists(app), deps.orca!.exists('/Applications/Orca.app/Contents/Resources/bin/orca')]).toEqual([true, false])
       vi.unstubAllEnvs()
     }
   })
