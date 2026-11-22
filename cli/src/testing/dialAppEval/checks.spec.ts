@@ -82,14 +82,31 @@ describe('ring', () => {
     expect(results.every((r) => r.evidence.length > 0)).toBe(true)
   })
 
-  it('reads the ring the dial holds as the window ends: its page\'s last whole list before `at`', () => {
+  it('reads the ring the dial holds as the window ends: the last whole list before `at`, whatever its page', () => {
     const s = scenario([write, { kind: 'wait', ms: 1000, label: 'end' }])
     const check: Check = { ...ring, at: 'end' }
-    const frames = [...list(300, 'claude', [A, B, C]), ...list(400, 'codex', [T]), ...list(2000, 'claude', [A])]
+    const frames = [...list(300, 'claude', [A, B, C]), ...list(2000, 'claude', [A])]
     expect(scores(run(check, s, seen(s, [100, 1500], { frames })))).toMatchObject({ recall: 1, precision: 1 })
-    const late = run(check, s, seen(s, [100, 1500], { frames: [...list(400, 'codex', [T]), ...list(2000, 'claude', [A, B, C])] }))
-    expect(scores(late).recall).toBe(0)
-    expect(late[0]!.evidence).toEqual(['no whole list held on claude; 2 whole lists seen'])
+    // The dial moved to another page: claude's ring is not what it holds.
+    const moved = run(check, s, seen(s, [100, 1500], { frames: [...list(300, 'claude', [A, B, C]), ...list(400, 'codex', [T])] }))
+    expect(scores(moved)).toEqual({ recall: 0, precision: 0, order: 0, names: 0, cap: 0, archived: 0 })
+    expect(moved[0]!.evidence).toEqual(['list at 400 on codex, not claude: 1 rows t'])
+  })
+
+  it('a page\'s list followed by an empty list with no page fails: the dial shows nothing', () => {
+    const s = scenario([write])
+    const results = run(ring, s, seen(s, [100], { frames: [...list(200, 'claude', [A, B, C]), ...list(300, '', [])] }))
+    expect(scores(results)).toEqual({ recall: 0, precision: 0, order: 0, names: 0, cap: 0, archived: 0 })
+    expect(results[0]!.evidence).toEqual(['list at 300 on none, not claude: 0 rows'])
+  })
+
+  it('a later list of the same page is the one graded', () => {
+    const s = scenario([write])
+    const fixed = run(ring, s, seen(s, [100], { frames: [...list(200, 'claude', [A]), ...list(300, 'claude', [A, B, C])] }))
+    expect(scores(fixed)).toEqual({ recall: 1, precision: 1, order: 1, names: 1, cap: 1, archived: 1 })
+    const shrunk = run(ring, s, seen(s, [100], { frames: [...list(200, 'claude', [A, B, C]), ...list(300, 'claude', [A])] }))
+    expect(scores(shrunk)).toMatchObject({ recall: 1 / 3, precision: 1 })
+    expect(shrunk[0]!.evidence).toEqual(['list at 300 on claude: 1 rows a'])
   })
 
   it('a list from before `after` is the ring still held: right, it passes every untimed part, and only change needs a list in the window', () => {
@@ -181,6 +198,9 @@ describe('ring', () => {
     expect(apart(list(200, 'codex', [T])).score).toBe(0)
     // The apps frame the dial holds as the window ends, even one from before `after`.
     expect(run(check, s, seen(s, [300], { frames: counted(1) })).find((r) => r.check === 'r.apart')!.score).toBe(1)
+    // The last apps frame, whatever its page: one showing no page counts nothing of the ring's.
+    const left = apart([...counted(1), frame(300, { t: 'apps', shown: '', apps: [] })])
+    expect(left).toMatchObject({ score: 0, evidence: ['apps at 300 on none, not codex'] })
     // A ring check that names no sessions apart has no such part.
     expect(run({ ...ring }, scenario([write]), seen(scenario([write]), [100], { frames: list(200, 'claude', [A, B, C]) }))
       .some((r) => r.check === 'r.apart')).toBe(false)
@@ -575,7 +595,7 @@ it('evidence is empty when nothing was seen', () => {
   }
 })
 
-it('a condition holds once the last whole list on its page since the start is the one expected, in order', () => {
+it('a condition holds once the last whole list since the start is its page\'s, the one expected, in order', () => {
   const s = scenario([write])
   const until: Until = { kind: 'ring', page: 'claude', expect: ['a', 'b'] }
   // From the scenario's start, whatever step has run.
@@ -585,6 +605,9 @@ it('a condition holds once the last whole list on its page since the start is th
   expect(condition(until, s, seen(s, [], { frames: [...list(200, 'claude', [A, B]), ...list(300, 'claude', [A])] })))
     .toEqual({ holds: false, evidence: ['list at 300 on claude: 1 rows a'] })
   expect(condition(until, s, seen(s, []))).toEqual({ holds: false, evidence: [] })
+  // The dial moved off the page: the wait goes on.
+  expect(condition(until, s, seen(s, [], { frames: [...list(200, 'claude', [A, B]), ...list(300, '', [])] })))
+    .toEqual({ holds: false, evidence: ['list at 300 on none, not claude: 0 rows'] })
 })
 
 describe('editors', () => {
