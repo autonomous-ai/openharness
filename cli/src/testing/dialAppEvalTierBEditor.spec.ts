@@ -1,6 +1,8 @@
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { describe, expect, it } from 'vitest'
+import { basename, join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
 import { APP_BUNDLES } from '../cable/hosts/hostDetect.js'
 import { MAIN } from './dialAppEval/catalog.js'
 import type { Platform, Scenario, SessionDef } from './dialAppEval/types.js'
@@ -12,9 +14,14 @@ const editor = await import('../../e2e/harness/appEvalEditor.js' as string) as {
     record: (line: Record<string, unknown>, at: number) => void): (printed: Record<string, unknown>, at: number) => void
   hintsOf(world: { platform: Platform; scenario: Scenario }, s: SessionDef): Record<string, string>
 }
+/** The parts of a daemon a Cursor agent's start reads. */
+interface CursorDaemon { root: string; projectsDir: string; env: NodeJS.ProcessEnv }
+interface CursorAgent { readonly pid: number; readonly transcriptPath: string; close(): Promise<void> }
 const cursor = await import('../../e2e/harness/cursorOutside.js' as string) as {
   hookRun(codexLine: string, env: NodeJS.ProcessEnv, hints: Record<string, string>, event: string,
     session: { sessionId: string; roots: string[]; transcriptPath: string }): { command: string; env: NodeJS.ProcessEnv; input: string }
+  CursorOutside: { start(d: CursorDaemon, folder: string, children: unknown[],
+    options: { sessionId: string; roots: string[]; terminal: boolean; hints: Record<string, string> }): Promise<CursorAgent> }
 }
 
 type HookRun = (command: string, env: NodeJS.ProcessEnv, input: string) => Promise<{ code: number | null; stderr: string }>
@@ -123,5 +130,28 @@ describe("tier B's Cursor agents", () => {
     const roots = ['/eval/projects/eval-c1', '/eval/projects/eval-c2']
     const run = cursor.hookRun(codexLine, {}, {}, 'start', { sessionId: 'eval', roots, transcriptPath: '/eval/c.jsonl' })
     expect((JSON.parse(run.input) as Record<string, unknown>).workspace_roots).toEqual(roots)
+  })
+})
+
+describe("tier B's Cursor agents' processes", () => {
+  let root = ''
+  afterEach(() => { rmSync(root, { recursive: true, force: true }) })
+  /** A daemon's root, its projects and its home, in a throwaway folder. */
+  const daemon = (): CursorDaemon => {
+    root = mkdtempSync(join(tmpdir(), 'tier-b-cursor-'))
+    return { root, projectsDir: join(root, 'projects'), env: { HOME: join(root, 'home'), PATH: process.env.PATH } }
+  }
+  const ps = (field: string, pid: number): string => execFileSync('ps', ['-o', `${field}=`, '-p', String(pid)], { encoding: 'utf8' }).trim()
+  const start = (d: CursorDaemon, terminal: boolean): Promise<CursorAgent> =>
+    cursor.CursorOutside.start(d, 'eval-c', [], { sessionId: 'eval-c', roots: [join(d.projectsDir, 'eval-c')], terminal, hints: {} })
+
+  it("Cursor's own agent is a process of the fake Cursor's, with no terminal", async () => {
+    const agent = await start(daemon(), false)
+    try {
+      expect(ps('tty', agent.pid)).toMatch(/^\?+$/)
+      expect(basename(ps('comm', Number(ps('ppid', agent.pid))))).toBe('cursor')
+    } finally {
+      await agent.close()
+    }
   })
 })
