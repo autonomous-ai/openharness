@@ -36,7 +36,10 @@ const INSERT = `INSERT OR REPLACE INTO threads (id, rollout_path, created_at, up
   sandbox_policy, approval_mode, archived, first_user_message, updated_at_ms, preview, recency_at_ms, name)
   VALUES (?, ?, 0, 0, ?, 'openai', ?, ?, 'workspace-write', 'on-request', ?, ?, ?, ?, ?, ?)`
 
-const COLUMNS = { archived: 'archived', recencyAtMs: 'recency_at_ms', updatedAtMs: 'updated_at_ms' } as const
+/** How long a write waits for a reader's lock: a read of the store takes milliseconds. */
+const BUSY_TIMEOUT_MS = 5_000
+
+const COLUMNS ={ archived: 'archived', recencyAtMs: 'recency_at_ms', updatedAtMs: 'updated_at_ms' } as const
 
 export interface CodexAppFixture {
   readonly home: string
@@ -63,7 +66,11 @@ export function codexAppFixture(home: string): CodexAppFixture {
     const Database = builtinSqlite()
     if (!Database) throw new Error('this Node has no node:sqlite to make the fixture with')
     mkdirSync(home, { recursive: true })
-    return new Database(store, { readOnly: false })
+    const db = new Database(store, { readOnly: false })
+    // A reader's lock waited out, as the app's own writer waits: the daemon's watch reads the store the moment this open
+    // makes it, and that read can hold its lock as the first write comes.
+    db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`)
+    return db
   }
   const withStore = (work: (db: DatabaseLike) => void): void => {
     const db = open()
