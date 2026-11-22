@@ -201,30 +201,38 @@ interface State {
 const states = new WeakMap<TierBWorld, State>()
 
 /**
- * Orca, running: made at its first step, its own process with it. As the world stops it quits: each agent ends, as
- * Orca's quit ends them (Claude Code's SessionEnd, then its stand-in), then its watches, in a step of its own before the
- * driver ends its children (TierBWorld.onStop), as 32 agents' ends take longer than a child's end may. Its process
- * ended, what is left goes at once: each mod's poll, tmux session and watch; its agents' stand-ins go with the driver's
- * other children.
+ * Orca, running: made at its first step, its own process with it, which, ended, quits Orca first, as the Claude app's
+ * process ends its sessions: each agent ends, as Orca's quit ends them (Claude Code's SessionEnd, then its stand-in),
+ * then its watches; the driver's end of its children waits for that. SIGKILL, the driver's last resort when that takes
+ * too long, ends what is left at once, as a crash does: each mod's poll, tmux session and watch, its agents' stand-ins
+ * with the driver's other children; an agent's end it cut short fails nothing.
  */
 function orcaOf(world: TierBWorld): State {
   const known = states.get(world)
   if (known) return known
   const state: State = { live: new Map(), launches: new Map() }
   states.set(world, state)
-  world.onStop("Orca's agents", () => endAll(world, state))
   // Only Orca's lifetime: what it does is in this file.
   const child = spawn(process.execPath, ['-e', 'process.stdin.resume()'], { cwd: world.d.root, env: world.d.env, stdio: ['pipe', 'ignore', 'ignore'] })
   world.children.push(child)
   const kill = child.kill.bind(child)
+  let ending: Promise<void> | undefined
+  let killed = false
   child.kill = (signal?: NodeJS.Signals | number) => {
-    for (const live of state.live.values()) {
-      live.mod?.abort()
-      if (live.tmux) killTmux(world, live.tmux)
+    if (signal === 'SIGKILL') {
+      killed = true
+      for (const live of state.live.values()) {
+        live.mod?.abort()
+        if (live.tmux) killTmux(world, live.tmux)
+      }
+      state.live.clear()
+      world.orca.endWatch()
+      return kill('SIGKILL')
     }
-    state.live.clear()
-    world.orca.endWatch()
-    return kill(signal)
+    // Its own end is that SIGKILL too, so its watches go whatever its agents' ends did.
+    ending ??= endAll(world, state).catch((error: unknown) => { if (!killed) world.fail(error) })
+      .finally(() => { child.kill('SIGKILL') })
+    return true
   }
   return state
 }
