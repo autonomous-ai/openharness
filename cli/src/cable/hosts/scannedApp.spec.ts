@@ -242,10 +242,13 @@ describe('scannedApps on macOS', () => {
       pid, ppid, executable, get args(): string { throw new Error('a command line was read') },
     })
     const d = deps([])
-    d.processes.mockResolvedValue([row(100, 90, `${MARK} deploy to prod with this key`), row(90, 1, GHOSTTY), row(200, 1, `${MARK}`)])
+    d.processes.mockResolvedValue([
+      row(100, 90, `${MARK} deploy to prod with this key`), row(90, 1, GHOSTTY), row(200, 1, `${MARK}`),
+      row(300, 290, `${MARK} and more`), row(290, 1, 'iTermServer-3.5.4'), row(400, 1, `iTermServer-3.5.4 ${MARK}`),
+    ])
     d.bundleId.mockResolvedValue('com.mitchellh.ghostty')
-    const answer = await scannedApps([100, 200], d)
-    expect(JSON.stringify([...answer])).toBe('[[100,"ghostty"]]')
+    const answer = await scannedApps([100, 200, 300, 400], d)
+    expect(JSON.stringify([...answer])).toBe('[[100,"ghostty"],[300,"iterm"]]')
   })
 })
 
@@ -280,6 +283,73 @@ describe('scannedApps elsewhere', () => {
     expect(await scannedApps([10], d)).toEqual(new Map())
     expect(d.processes).not.toHaveBeenCalled()
     expect(d.bundleId).not.toHaveBeenCalled()
+  })
+})
+
+// iTerm2 forks every shell from a copy of its server outside its bundle, which outlives iTerm2 when it relaunches
+// (docs/plans/2026-11-22-dial-iterm2-tmux-herdr-design.md, Gap 2).
+describe('iTerm2\'s server', () => {
+  const ITERM2 = '/Applications/iTerm.app/Contents/MacOS/iTerm2'
+  const ITERM_BUNDLE = { '/Applications/iTerm.app': 'com.googlecode.iterm2' }
+  const atHome = (rows: Array<[number, number, string]>, bundles: Record<string, string> = {}, platform: NodeJS.Platform = 'darwin') =>
+    ({ ...deps(rows, bundles, platform), home: HOME })
+  /** A plain tab's session under [server], whose parent is [parent]. */
+  const tab = (server: string, parent: number): Array<[number, number, string]> => [
+    [500, 499, 'claude'], [499, 498, '-zsh'], [498, 497, 'login'], [497, parent, server], [400, 1, ITERM2],
+  ]
+
+  it.each([
+    ['the Application Support copy', `${HOME}/Library/Application Support/iTerm2/iTermServer-3.5.4`],
+    ['the .iterm2 copy', `${HOME}/.iterm2/iTermServer-3.6.6`],
+    ['the bare name', 'iTermServer-3.5.4'],
+    ['a nightly', `${HOME}/Library/Application Support/iTerm2/iTermServer-3.6.0-nightly-20261120`],
+    ['the longest version', `iTermServer-3${'1'.repeat(31)}`],
+  ])('a plain tab under iTermServer is in iTerm2, in each form, with iTerm2 or launchd as its parent: %s', async (_, server) => {
+    const under = atHome(tab(server, 400), ITERM_BUNDLE)
+    expect(await scannedApps([500], under)).toEqual(new Map([[500, 'iterm']]))
+    const adopted = atHome(tab(server, 1), ITERM_BUNDLE)
+    expect(await scannedApps([500], adopted)).toEqual(new Map([[500, 'iterm']]))
+    expect(adopted.bundleId).not.toHaveBeenCalled()
+  })
+
+  it('a tmux client and a herdr client in an iTerm2 tab name iTerm2 under a server launchd adopted', async () => {
+    const server = `${HOME}/Library/Application Support/iTerm2/iTermServer-3.5.4`
+    const d = atHome([
+      [600, 599, 'tmux'], [599, 598, '-zsh'], [598, 597, 'login'], [597, 1, server],
+      [700, 699, '/opt/homebrew/bin/herdr'], [699, 698, '-zsh'], [698, 697, 'login'], [697, 1, server],
+    ])
+    expect(await scannedApps([600, 700], d)).toEqual(new Map([[600, 'iterm'], [700, 'iterm']]))
+    expect(d.bundleId).not.toHaveBeenCalled()
+  })
+
+  it('near misses name nothing', async () => {
+    const names = [
+      'iTermServer', 'iTermServer-', 'iTermServer-x1', `iTermServer-3${'1'.repeat(32)}`, 'iTermServer-3.5.4 ',
+      '/tmp/iTermServer-3.5.4', '/Users/other/Library/Application Support/iTerm2/iTermServer-3.5.4',
+      `${HOME}/.iterm2/sub/iTermServer-3.5.4`, `${HOME}/Library/Application Support/iTerm2/../iTermServer-3.5.4`,
+    ]
+    const d = atHome(names.map((name, i) => [6000 + i, 1, name] as [number, number, string]))
+    expect(await scannedApps(names.map((_, i) => 6000 + i), d)).toEqual(new Map())
+    const linux = atHome([[10, 9, 'claude'], [9, 1, 'iTermServer-3.5.4']], {}, 'linux')
+    expect(await scannedApps([10], linux)).toEqual(new Map())
+  })
+
+  it('a nearer .app still wins', async () => {
+    const d = atHome([
+      [500, 499, 'claude'], [499, 498, '-zsh'], [498, 497, GHOSTTY], [497, 496, '-zsh'], [496, 495, 'login'],
+      [495, 1, 'iTermServer-3.5.4'],
+    ], { '/Applications/Ghostty.app': 'com.mitchellh.ghostty' })
+    expect(await scannedApps([500], d)).toEqual(new Map([[500, 'ghostty']]))
+  })
+
+  it('the row takes none of the 16 bundles a pass', async () => {
+    const pids = Array.from({ length: 16 }, (_, i) => 9000 + i)
+    const d = atHome([
+      ...pids.flatMap((pid, i) => [[pid, pid + 100, 'claude'], [pid + 100, 1, `/Applications/App ${i}.app/Contents/MacOS/app`]] as Array<[number, number, string]>),
+      [9500, 9499, 'claude'], [9499, 1, 'iTermServer-3.5.4'],
+    ], Object.fromEntries(pids.map((_, i) => [`/Applications/App ${i}.app`, 'com.mitchellh.ghostty'])))
+    expect(await scannedApps([...pids, 9500], d)).toEqual(new Map([...pids.map((pid) => [pid, 'ghostty'] as const), [9500, 'iterm']]))
+    expect(d.bundleId).toHaveBeenCalledTimes(16)
   })
 })
 
