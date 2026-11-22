@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { HELD_OUT, MAIN, titleOf } from './catalog.js'
-import { STEP_KINDS, THRESHOLDS, type Check, type CheckKind, type Scenario, type SessionKey, type Step, type StepKind } from './types.js'
+import { runScenario } from './runner.js'
+import { hookHandle, orcaTerminalHandle, STEP_KINDS, THRESHOLDS, type Check, type CheckKind, type EvalDriver, type Scenario, type SessionKey, type Step,
+  type StepKind } from './types.js'
 
 const ALL = [...MAIN, ...HELD_OUT]
 const byId = (id: string): Scenario => ALL.find((s) => s.id === id)!
@@ -36,17 +38,46 @@ describe('the catalog', () => {
     expect(MAIN.every((s) => !s.heldOut)).toBe(true)
   })
 
-  it('the held out are CH1-CH3, XH1-XH3, VH1-VH4 and UH1-UH3: 13 of 82, VS Code 4 of 19, Cursor 3 of 17', () => {
-    expect(HELD_OUT.map((s) => s.id)).toEqual(['CH1', 'CH2', 'CH3', 'XH1', 'XH2', 'XH3', 'VH1', 'VH2', 'VH3', 'VH4', 'UH1', 'UH2', 'UH3'])
+  it('the held out are CH1-CH3, XH1-XH3, VH1-VH4, UH1-UH3 and OH1-OH4: 17 of 86, VS Code 4 of 19, Cursor 3 of 17, Orca 4 of 21', () => {
+    expect(HELD_OUT.map((s) => s.id)).toEqual(['CH1', 'CH2', 'CH3', 'XH1', 'XH2', 'XH3', 'VH1', 'VH2', 'VH3', 'VH4', 'UH1', 'UH2', 'UH3',
+      'OH1', 'OH2', 'OH3', 'OH4'])
     expect(HELD_OUT.every((s) => s.heldOut)).toBe(true)
-    expect(ALL).toHaveLength(82)
+    expect(ALL).toHaveLength(86)
     const of = (app: string) => [HELD_OUT.filter((s) => s.app === app).length, ALL.filter((s) => s.app === app).length]
-    expect([of('vscode'), of('cursor')]).toEqual([[4, 19], [3, 17]])
+    expect([of('vscode'), of('cursor'), of('orca')]).toEqual([[4, 19], [3, 17], [4, 21]])
   })
 
   it('VH1 and UH3 are D5 alone, UH1 macOS only', () => {
     for (const id of ['VH1', 'UH3']) expect(byId(id).dims.filter((d) => d !== 'D8'), id).toEqual(['D5'])
     expect(byId('UH1').platforms).toEqual(['darwin'])
+  })
+
+  it('OH1 and OH2 are D5 alone, on Codex agents: OH1\'s focused a beside a Claude Code, OH2\'s two', () => {
+    // The plan's Decision 17: Codex's words are typed into its pane, so a send to the wrong pane is what they can catch.
+    for (const id of ['OH1', 'OH2']) expect(byId(id).dims.filter((d) => d !== 'D8'), id).toEqual(['D5'])
+    const engines = (id: string) => byId(id).sessions.filter((d) => !d.ghost).map((d) => [d.key, d.engine ?? 'claude'])
+    expect([engines('OH1'), engines('OH2')]).toEqual([[['a', 'codex'], ['b', 'claude']], [['a', 'codex'], ['b', 'codex']]])
+  })
+
+  it('OH2 runs on macOS only: on Linux and Windows nothing is driven and its run lists the gap, named for its cause', async () => {
+    // PM, 2026-11-22: there frontAppId tells no Orca front, so the dial never follows and the words would reach a.
+    const calls: string[] = []
+    const note = (name: string) => async () => { calls.push(name) }
+    const driver: EvalDriver = { tier: 'a', start: note('start'), step: note('step'), settle: note('settle'), stop: note('stop'),
+      seen: () => ({ frames: [], faces: [], commands: [], deliveries: [], steps: [] }), gaps: () => [] }
+    const reason = 'not run until "Orca in front on Linux and Windows (frontAppId)" merges: the dial never follows Orca\'s focus there'
+    for (const platform of ['linux', 'win32'] as const) {
+      expect(await runScenario(driver, byId('OH2'), platform)).toEqual({ scenario: 'OH2', platform, results: [], probes: [], wrongSends: [],
+        gaps: [{ tier: 'a', platform, scenario: 'OH2', app: 'orca', heldOut: true, reason }] })
+    }
+    expect(calls).toEqual([])
+    expect(byId('OH2').platforms).toEqual(['darwin', 'win32', 'linux'])
+    expect(byId('OH2').gaps).toEqual({ linux: reason, win32: reason })
+  })
+
+  it('OH4\'s b names no handle in its hooks, a beside it in the same worktree does', () => {
+    const agents = byId('OH4').sessions.filter((d) => !d.ghost)
+    expect(agents.map((d) => [d.key, d.worktree, hookHandle(d, 0)])).toEqual([['a', 'w1', orcaTerminalHandle('a')], ['b', 'w1', undefined]])
   })
 
   it('VH2\'s two windows both list a, the focused w2 last; UH2\'s agent has two folders, neither its cwd: a tap that opens the cwd fails', () => {
@@ -304,7 +335,8 @@ describe('the catalog', () => {
     // between quit and relaunch, and V15's rest and its time unplugged; U8's turn, U12's pause after the close and U13's
     // gap between quit and relaunch; O4's rests after the focus and the tap, O7's after the tap and the swipe, O8's two
     // turns and the pause between them, O10's rest on b, O12's time quit and its rest after the focus, O16's agents a
-    // second apart, and O17's rest and its time unplugged; VH1's rest on a and UH3's voice 200 ms after the prompt.
+    // second apart, and O17's rest and its time unplugged; VH1's rest on a, UH3's voice 200 ms after the prompt, OH1's rest
+    // on a and OH2's voice 200 ms after the focus.
     const starts = (id: string, n: number): string[] => Array<string>(n - 1).fill(`${id} 1000`)
     expect(waits('own')).toEqual(['C6 5000', 'C9 1000', 'C9 3500', 'C10 2000', 'C11 1000', 'C11 3000', 'X3 5000', 'X8 2000',
       'X11 300', 'X11 300', ...starts('V1', 4), ...starts('V2', 20), ...starts('V3', 2), ...starts('V4', 2), ...starts('V5', 2),
@@ -314,7 +346,8 @@ describe('the catalog', () => {
       'U13 45000', ...starts('U14', 2),
       'O4 2000', 'O4 3000', 'O7 4000', 'O7 2000', 'O8 2000', 'O8 2000', 'O8 6000', 'O8 2000', 'O10 1000', 'O12 2000', 'O12 2000',
       ...starts('O16', 40), 'O17 1000', 'O17 3000', 'CH3 1000', 'XH3 200',
-      ...starts('VH1', 2), 'VH1 1000', ...starts('VH3', 3), ...starts('UH3', 2), 'UH3 200'])
+      ...starts('VH1', 2), 'VH1 1000', ...starts('VH3', 3), ...starts('UH3', 2), 'UH3 200',
+      'OH1 1000', 'OH2 200'])
     expect(new Set(waits('condition').map((w) => w.split(' ')[1]))).toEqual(new Set(['10000']))
     // The person reading the face once the list is there.
     expect(new Set(waits('reading').map((w) => w.split(' ')[1]))).toEqual(new Set(['1000']))
@@ -324,10 +357,10 @@ describe('the catalog', () => {
   it('an input on the dial or the app comes at least 1 s after its listing, and any step at least 1 s after an input', () => {
     // Faster, it lands in the same instant the list arrives, inside the devices' echo window after a push, or inside a
     // swipe's rest, whose open makes the devices drop the next title as its echo: no person does either. X11's switches
-    // 300 ms apart and XH3's voice 200 ms after the follow are those scenarios' point: only the input right after one of
-    // their own short waits is let through.
+    // 300 ms apart, XH3's voice 200 ms after the follow and OH2's 200 ms after the focus are those scenarios' point: only
+    // the input right after one of their own short waits is let through.
     const inputs = new Set<Step['kind']>(['tap', 'swipe', 'voice', 'attach', 'thread', 'stroke', 'editor.focus', 'orca.focus'])
-    const quick = new Set(['X11', 'XH3'])
+    const quick = new Set(['X11', 'XH3', 'OH2'])
     for (const s of ALL) {
       // Since the last listing, or the last input once there is one. A condition wait may end at once: it counts 0.
       let since: number | null = null
