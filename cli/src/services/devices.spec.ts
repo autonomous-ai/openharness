@@ -7595,7 +7595,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     port.observed(hook('turn-start'))
     expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
     expect(calls('question')).toEqual([[ID, expect.stringMatching(/^shown:[0-9a-f-]{36}$/), card('Orca')]])
-    expect(logs).toContain('[device] notify · claude · shown')
+    expect(logs).toContain('[device] notify · claude · shown · plain')
   })
 
   it('a Harness agent\'s notice is tied to the agent, by the session the core bound to it', () => {
@@ -7931,7 +7931,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     ;(seen.cable as unknown as { connected: boolean }).connected = false
     expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'no dial' })
     expect(calls('question')).toEqual([])
-    expect(logs).toContain('[device] notify · claude · no dial')
+    expect(logs).toContain('[device] notify · claude · no dial · plain')
   })
 
   it('the limits hold across callers of one agent', () => {
@@ -7941,7 +7941,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     expect(listener.notice({ text: 'Sign in to the registry', engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'limited' })
     expect(calls('question')).toHaveLength(1)
     expect(calls('questionClose')).toEqual([])
-    expect(logs).toContain('[device] notify · claude · limited')
+    expect(logs).toContain('[device] notify · claude · limited · plain')
   })
 
   it('a notices part that throws answers no dial, and costs the dial nothing', () => {
@@ -7961,16 +7961,24 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     ;(seen.cable as unknown as { connected: boolean }).connected = false
     listener.notice({ text: LINE, engine: 'codex', sessionId: 'sess-2', folder: 'secret-folder' })
     expect(logs.filter((line) => line.startsWith('[device] notify') && !line.includes(' · day '))).toEqual([
-      '[device] notify · claude · shown', '[device] notify · claude · limited', '[device] notify · codex · no dial',
+      '[device] notify · claude · shown · plain', '[device] notify · claude · limited · plain', '[device] notify · codex · no dial · plain',
     ])
     expect(logs.filter((line) => ['VPN', 'sess-1', 'sess-2', 'secret-folder'].some((secret) => line.includes(secret)))).toEqual([])
+  })
+
+  it('a notice is counted with its kind, and no log line holds its suggestion', () => {
+    const { port, listener } = devices()
+    port.observed(hook('turn-start'))
+    expect(listener.notice({ text: 'Proceeding · Which DB? · Doing: Postgres', engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+    expect(logs).toContain('[device] notify · claude · shown · proceeding')
+    expect(logs.filter((line) => line.includes('Postgres'))).toEqual([])
   })
 
   it('a notice is counted in the day\'s tally, by engine', () => {
     const { listener } = devices()
     ;(seen.cable as unknown as { connected: boolean }).connected = false
     expect(listener.notice({ text: LINE })).toEqual({ result: 'no dial' })
-    expect(logs).toContain('[device] notify · agent · no dial')
+    expect(logs).toContain('[device] notify · agent · no dial · plain')
     expect(logs).toContainEqual(expect.stringMatching(/^\[device\] notify · day \d{4}-\d\d-\d\d · claude shown 0 no dial 0 limited 0 · codex shown 0 no dial 0 limited 0 · agent shown 0 no dial 1 limited 0$/))
   })
 
