@@ -51,6 +51,8 @@ const none = ['[device] herdr client · none']
 /** The lookup's line when a step could not be read, naming that step. */
 const notRead = (why: 'processes' | 'sockets' | 'ttys' | 'app') => [`[device] herdr client · not read · ${why}`]
 
+/** Past every step an ask that runs takes before its first run. */
+const ranBy = () => new Promise<void>((resolve) => { setImmediate(resolve) })
 /** A recording runner that runs nothing, so no spec reads a process of this machine's: each call answers the next of
  *  [codes], then exit 0, lsof, any ps and ss print what [said] gives them, a tty's access time and a process's sockets are
  *  [said]'s, ss and ps are on the PATH, and a process's terminal is the one the table gives it. */
@@ -462,26 +464,36 @@ describe('the outer place of an agent in the person\'s herdr', () => {
     expect([await first, await again]).toEqual([IN_TERMINAL, IN_TERMINAL])
     expect(lsofs()).toEqual([asked, asked])
     // The answer holds for that caller alone.
+    clock.t = at + 3
     const caller = outer(PANE, 90)
     await vi.waitFor(() => expect(lsofs().length).toBe(3))
     held[2]()
     expect(await caller).toEqual(IN_TERMINAL)
-    // Asked again within 5 s of its start: the last answer, with nothing run.
+    // Asked again within 5 s of its settle: the last answer, with nothing run.
     const count = calls.length
-    clock.t = at + 4_999
-    expect(await outer(PANE, 100)).toEqual(IN_TERMINAL)
-    expect(calls.length).toBe(count)
-    // At 5 s it runs again, while w1:p3's answer, asked later, still holds.
     clock.t = at + 5_000
+    const kept = outer(PANE, 100)
+    await ranBy()
+    expect(calls.length).toBe(count)
+    expect(await kept).toEqual(IN_TERMINAL)
+    // At 5 s from its settle it runs again, while the caller's answer, settled later, still holds.
+    clock.t = at + 5_001
     const later = outer(PANE, 100)
-    expect(await outer({ HERDR_PANE_ID: 'w1:p3' }, 100)).toEqual(IN_TERMINAL)
+    expect(await outer(PANE, 90)).toEqual(IN_TERMINAL)
     await vi.waitFor(() => expect(calls.slice(count)).toEqual([asked]))
     // Still in flight past its 5 s: one lookup, shared.
-    clock.t = at + 10_001
+    clock.t = at + 10_002
     const stuck = outer(PANE, 100)
     expect(calls.slice(count)).toEqual([asked])
     held[3]()
     expect([await later, await stuck]).toEqual([IN_TERMINAL, IN_TERMINAL])
+    // A lookup that ran 5 s holds 5 s from its settle, not its start: an lsof that hangs costs one timeout.
+    const settled = calls.length
+    clock.t = at + 15_001
+    const after = outer(PANE, 100)
+    await ranBy()
+    expect(calls.length).toBe(settled)
+    expect(await after).toEqual(IN_TERMINAL)
   })
 
   it('its lines name no pane, pid, tty, path, bundle or app', async () => {
@@ -721,20 +733,56 @@ describe('the place of an agent the scan found in the person\'s herdr', () => {
     expect(await other).toEqual({})
     held[0]()
     expect([await first, await again]).toEqual([IN_TERMINAL, IN_TERMINAL])
-    // Asked again within 5 s of its start, for any agent of that server: the last answer, with nothing run.
+    // Asked again within 5 s of its settle, for any agent of that server: the last answer, with nothing run.
     const count = calls.length
-    clock.t = at + 4_999
-    expect(await nested({ pid: 300, maker: 80, rows })).toEqual(IN_TERMINAL)
-    expect(calls.length).toBe(count)
-    // At 5 s it runs again; still in flight past its 5 s, one lookup, shared.
     clock.t = at + 5_000
+    const kept = nested({ pid: 300, maker: 80, rows })
+    await ranBy()
+    expect(calls.length).toBe(count)
+    expect(await kept).toEqual(IN_TERMINAL)
+    // At 5 s from its settle it runs again; still in flight past its 5 s, one lookup, shared.
+    clock.t = at + 5_001
     const later = nested({ pid: 100, maker: 80, rows })
     await vi.waitFor(() => expect(calls.slice(count)).toEqual([asked]))
-    clock.t = at + 10_001
+    clock.t = at + 10_002
     const stuck = nested({ pid: 200, maker: 80, rows })
     expect(calls.slice(count)).toEqual([asked])
     held[2]()
     expect([await later, await stuck]).toEqual([IN_TERMINAL, IN_TERMINAL])
+  })
+
+  // The scan asks for its sessions one at a time: an answer kept from the lsof's start would be gone after an lsof that
+  // hung to its timeout, and every agent of that server asked after it would wait out one more.
+  it('an lsof that ran 10 s holds 5 s from its settle: the asks after it run none', async () => {
+    const held: Array<() => void> = []
+    const { calls, clock, nested } = lookup({
+      run: async (file, args, timeoutMs) => {
+        calls.push({ file, args, timeoutMs })
+        // The first lsof hangs; a second answers at once, so an ask that runs one fails rather than waits.
+        if (file === LSOF && !held.length) await new Promise<void>((settle) => held.push(settle))
+        return { code: 0, stdout: file === LSOF ? ONE.lsof! : ONE.ps! }
+      },
+    })
+    const rows = [...TABLE, { pid: 200, ppid: 90, tty: 'ttys010', executable: 'claude' }]
+    const lsofs = () => calls.filter((call) => call.file === LSOF)
+    const at = clock.t
+    const first = nested({ pid: 100, maker: 80, rows })
+    await vi.waitFor(() => expect(lsofs()).toHaveLength(1))
+    clock.t = at + 10_000
+    held[0]()
+    expect(await first).toEqual(IN_TERMINAL)
+    const count = calls.length
+    const next = nested({ pid: 200, maker: 80, rows })
+    await ranBy()
+    expect(calls.length).toBe(count)
+    expect(await next).toEqual(IN_TERMINAL)
+    clock.t = at + 14_999
+    expect(await nested({ pid: 300, maker: 80, rows })).toEqual(IN_TERMINAL)
+    expect(lsofs()).toHaveLength(1)
+    // 5 s from its settle, the next ask runs again.
+    clock.t = at + 15_000
+    expect(await nested({ pid: 100, maker: 80, rows })).toEqual(IN_TERMINAL)
+    expect(lsofs()).toHaveLength(2)
   })
 
   it('each step not read says its word and answers {}, never a rejection', async () => {

@@ -381,6 +381,8 @@ const none = ['[device] tmux client · none']
 /** The lookup's line when a step could not be read, naming that step. */
 const notRead = (why: 'tmux' | 'pane' | 'processes' | 'clients' | 'app') => [`[device] tmux client · not read · ${why}`]
 
+/** Past every step an ask that runs takes before its first run: tmux is found, then run. */
+const ranBy = () => new Promise<void>((resolve) => { setImmediate(resolve) })
 /** A recording runner as `recorder`, for the lookup: it runs nothing, each call answers the next of [codes], then exit 0,
  *  and a process's terminal is the one the table gives it. */
 function lookup(
@@ -562,26 +564,36 @@ describe('the outer place of an agent in the person\'s tmux', () => {
     expect([await first, await again]).toEqual([answer, answer])
     expect(calls.filter((call) => call.args[0] === 'display-message')).toEqual([asked, askedOf('%4')])
     // The answer holds for that caller alone: a pane of the same id may be another server's.
+    clock.t = at + 3
     const caller = outer(NESTED, 90)
     await vi.waitFor(() => expect(calls.at(-1)).toEqual(asked))
     held[2]()
     expect(await caller).toEqual(answer)
-    // Asked again within 5 s of its start: the last answer, with nothing run.
+    // Asked again within 5 s of its settle: the last answer, with nothing run.
     const count = calls.length
-    clock.t = at + 4_999
-    expect(await outer(NESTED, 100)).toEqual(answer)
-    expect(calls.length).toBe(count)
-    // At 5 s it runs again, while %4's answer, asked later, still holds.
     clock.t = at + 5_000
+    const kept = outer(NESTED, 100)
+    await ranBy()
+    expect(calls.length).toBe(count)
+    expect(await kept).toEqual(answer)
+    // At 5 s from its settle it runs again, while the caller's answer, settled later, still holds.
+    clock.t = at + 5_001
     const later = outer(NESTED, 100)
-    expect(await outer({ TMUX_PANE: '%4' }, 100)).toEqual(answer)
+    expect(await outer(NESTED, 90)).toEqual(answer)
     await vi.waitFor(() => expect(calls.slice(count)).toEqual([asked]))
     // Still in flight past its 5 s: one lookup, shared.
-    clock.t = at + 10_001
+    clock.t = at + 10_002
     const stuck = outer(NESTED, 100)
     expect(calls.slice(count)).toEqual([asked])
     held[3]()
     expect([await later, await stuck]).toEqual([answer, answer])
+    // A lookup that ran 5 s holds 5 s from its settle, not its start: a tmux that hangs costs one timeout.
+    const settled = calls.length
+    clock.t = at + 15_001
+    const after = outer(NESTED, 100)
+    await ranBy()
+    expect(calls.length).toBe(settled)
+    expect(await after).toEqual(answer)
   })
 
   it('its lines name no pane, pid, tty, session, bundle or app', async () => {
@@ -775,6 +787,37 @@ describe('the place of an agent the scan found in the person\'s tmux', () => {
     held[1]()
     expect([await later, await stuck]).toEqual([PLACED, PLACED])
     expect(calls.slice(4)).toEqual([panesListed, clientsAsked])
+  })
+
+  // The scan asks for its sessions one at a time: an answer kept from the listing's start would be gone after a listing
+  // that hung to its timeout, and every ask after it would wait out one more.
+  it('a listing that ran 10 s holds 5 s from its settle: the asks after it run none', async () => {
+    const rows = [...AGENT.rows, { pid: 200, ppid: 190, tty: 'ttys011', executable: 'claude' }, { pid: 190, ppid: 80, tty: 'ttys011', executable: 'zsh' }]
+    const first = { ...AGENT, rows }
+    const held: Array<() => void> = []
+    const { calls, clock, nested } = nestedLookup({
+      run: async (file, args, timeoutMs) => {
+        calls.push({ file, args, timeoutMs })
+        // The first listing hangs; a second answers at once, so an ask that runs one fails rather than waits.
+        if (args[0] === 'list-panes' && !held.length) await new Promise<void>((settle) => held.push(settle))
+        return { code: 0, stdout: args[0] === 'list-panes' ? PANES + paneLine('%4', '/dev/ttys011', says(190, 'play')) : ONE.clients }
+      },
+    })
+    const listings = () => calls.filter((call) => call.args[0] === 'list-panes')
+    const at = clock.t
+    const a = nested(first)
+    await vi.waitFor(() => expect(listings()).toEqual([panesListed]))
+    clock.t = at + 10_000
+    held[0]()
+    expect(await a).toStrictEqual(PLACED)
+    expect((await nested({ pid: 200, tty: 'ttys011', rows }))?.pane).toEqual({ adapter: 'tmux', id: '%4:200:terminal-app' })
+    clock.t = at + 14_999
+    expect((await nested({ ...first, pid: 90 }))?.pane).toEqual({ adapter: 'tmux', id: '%3:90:terminal-app' })
+    expect(listings()).toEqual([panesListed])
+    // 5 s from its settle, the next ask lists again.
+    clock.t = at + 15_000
+    expect(await nested(first)).toStrictEqual(PLACED)
+    expect(listings()).toEqual([panesListed, panesListed])
   })
 
   it('its lines name no pane, pid, tty, session or app', async () => {
