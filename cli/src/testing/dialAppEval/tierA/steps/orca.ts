@@ -86,8 +86,11 @@ const after = (argv: readonly string[], flag: string): string | undefined => {
 export function answerOrca(world: TierAWorld): void {
   world.answer((argv) => {
     if (!ORCA_PROGRAMS.includes(programOf(argv))) return undefined
+    const watches = world.scenario.world?.orca?.watchFocus !== false
     switch (`${argv[1]} ${argv[2]}`) {
-      case 'terminal --help': return { code: 0, stdout: help(world.scenario.world?.orca?.watchFocus !== false) }
+      case 'terminal --help': return { code: 0, stdout: help(watches) }
+      // An Orca with no watch-focus exits 1 on it, as on any command it does not know.
+      case 'terminal watch-focus': return { code: watches ? 0 : 1 }
       case 'terminal list': {
         const { layout } = modelOf(world)
         const worktrees = orcaLayout(world.scenario, layout, (key) => orcaHandleOf(world, key))

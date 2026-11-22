@@ -19,7 +19,7 @@ import type { HcClient } from '../../../cable/hosts/hcClient.js'
 import type { HerdrClient } from '../../../cable/hosts/herdrClient.js'
 import { createLinuxRaise, type LinuxRaise } from '../../../cable/hosts/linuxRaise.js'
 import type { OpencodeClient } from '../../../cable/hosts/opencodeClient.js'
-import type { OrcaReadDeps } from '../../../cable/hosts/orca.js'
+import type { OrcaChild, OrcaReadDeps } from '../../../cable/hosts/orca.js'
 import { env } from '../../../config/env.js'
 import { emptyPorts, type CoreApi, type CorePorts } from '../../../core/api.js'
 import { VSCODE_EXTENSION_ID, type VscodeEditor, type VscodeExtensionDeps } from '../../../devices/vscodeExtension.js'
@@ -99,6 +99,8 @@ const ORCA_APP_BIN = join('Orca.app', 'Contents', 'Resources', 'bin', 'orca')
 const LOCAL_APP_DATA = join('AppData', 'Local')
 /** Orca's CLI in its per-user install on Windows, under LOCALAPPDATA. */
 const ORCA_EXE = (localAppData: string): string => win32.join(localAppData, 'Programs', 'orca', 'resources', 'bin', 'orca.exe')
+/** A child of Orca's CLI whose command failed: gone before it printed anything. */
+const EXITED: OrcaChild = { onData: () => {}, exited: Promise.resolve(), kill: () => {} }
 /** Every file of Orca's has its release's time: its `terminal --help` is read once, as in a real run. */
 const ORCA_MTIME_MS = 1_763_337_600_000
 /** Made-up places, recorded and never run. */
@@ -423,11 +425,8 @@ export class World implements TierAWorld {
       onPath: (name) => (Object.hasOwn(ON_PATH[platform], name) ? ON_PATH[platform][name]! : null),
       exists: (path) => path === orcaInstall,
       platform,
-      // Its focus watch, whose start is a command Orca ran.
-      spawn: (file, args) => {
-        this.ran([file, ...args])
-        return watchChild(this)
-      },
+      // Its focus watch, whose start is a command Orca ran: one that failed has already exited.
+      spawn: (file, args) => (this.ran([file, ...args]).code === 0 ? watchChild(this) : EXITED),
       mtime: (path) => ({ realPath: path, mtimeMs: ORCA_MTIME_MS }),
     }
     return {
