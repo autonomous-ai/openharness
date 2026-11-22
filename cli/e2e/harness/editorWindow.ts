@@ -62,18 +62,19 @@ const quoted = (word: string): string => `'${word.replaceAll("'", `'\\''`)}'`
  * The extension's loop, started as VS Code would start it for someone whose launcher is `~/.local/bin/harness`: the
  * home is the throwaway one, and the launcher there starts this checkout's CLI under the daemon's environment and
  * nothing else. `/usr/bin:/bin` holds no `harness`: with no launcher the loop would say `noHarness`, never find this
- * computer's. Its process goes in [children], for the test to end.
+ * computer's. [env] is the test's own besides (the dial eval's network guard). Its process goes in [children], for the
+ * test to end.
  */
-export function startEditorWindow(d: IsolatedDaemon, children: ChildProcess[]): EditorWindow {
+export function startEditorWindow(d: IsolatedDaemon, children: ChildProcess[], env: Readonly<Record<string, string>> = {}): EditorWindow {
   isolated(d)
   const bin = join(d.env.HOME!, '.local', 'bin')
   const shim = join(bin, 'harness')
   expect(shim.startsWith(d.root + sep)).toBe(true)
-  const env = Object.entries(d.env).flatMap(([name, value]) => (value === undefined ? [] : [quoted(`${name}=${value}`)]))
+  const daemonEnv = Object.entries(d.env).flatMap(([name, value]) => (value === undefined ? [] : [quoted(`${name}=${value}`)]))
   mkdirSync(bin, { recursive: true })
-  writeFileSync(shim, `#!/bin/sh\ncd ${quoted(CLI_ROOT)} && exec /usr/bin/env -i ${env.join(' ')} ${[process.execPath, ...CLI_ENTRY].map(quoted).join(' ')} "$@"\n`, { mode: 0o700 })
+  writeFileSync(shim, `#!/bin/sh\ncd ${quoted(CLI_ROOT)} && exec /usr/bin/env -i ${daemonEnv.join(' ')} ${[process.execPath, ...CLI_ENTRY].map(quoted).join(' ')} "$@"\n`, { mode: 0o700 })
   const child = spawn(process.execPath, ['--import', 'tsx', 'e2e/harness/vscodeWindow.ts'], {
-    cwd: CLI_ROOT, env: { HOME: d.env.HOME, PATH: '/usr/bin:/bin' }, stdio: ['pipe', 'pipe', 'pipe'],
+    cwd: CLI_ROOT, env: { HOME: d.env.HOME, PATH: '/usr/bin:/bin', ...env }, stdio: ['pipe', 'pipe', 'pipe'],
   })
   children.push(child)
   const states: string[] = []

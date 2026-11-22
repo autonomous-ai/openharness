@@ -25,7 +25,7 @@ import { dirname, isAbsolute, join, relative } from 'node:path'
 import { chatGptPlaces, claudeStoreRoots } from '../../src/cable/hosts/appPlaces.js'
 import { resolveBinaryOnPath } from '../../src/lib/binaryOnPath.js'
 import { claudeAppFixture } from '../../src/testing/claudeAppFixture.js'
-import { describeAttempt, guardThisProcess, netGuardEnv, readNetGuard, type NetAttempt } from '../../src/testing/dialAppEval/netGuard.js'
+import { describeAttempt, guardThisProcess, NET_GUARD_FILE_ENV, netGuardEnv, readNetGuard, type NetAttempt } from '../../src/testing/dialAppEval/netGuard.js'
 import { agentIdOf, PAGE, placeOf, type App, type Delivery, type EvalDriver, type Platform, type Scenario, type Seen,
   type SessionDef, type SessionKey, type Step, type StepKind, type StepOf } from '../../src/testing/dialAppEval/types.js'
 import { CAROUSEL_REFRESH_MS, DialCarousel, type DialMessage } from '../../src/testing/dialCarousel.js'
@@ -135,6 +135,10 @@ const CHATGPT_INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 `
 
 export const inside = (root: string, path: string | undefined): boolean => !!path && isAbsolute(path) && !relative(root, path).startsWith('..')
+/** The network guard's preload and file, from the daemon's environment: for a process started with one of its own. */
+export function guardEnv(d: IsolatedDaemon): Record<string, string> {
+  return { NODE_OPTIONS: d.env.NODE_OPTIONS!, [NET_GUARD_FILE_ENV]: d.env[NET_GUARD_FILE_ENV]! }
+}
 /**
  * Throws unless the network guard's [file] says it was loaded into each of [pids], [name]'s processes, each one Node
  * names [process] (netGuard.cjs processName). The pids are of processes running now: a line of a pid since reused proves

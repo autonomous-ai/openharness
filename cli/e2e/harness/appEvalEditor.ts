@@ -27,7 +27,7 @@ import { EDITORS, engineOf, placeOf, type App, type Editor, type SessionDef, typ
 import type { WindowState } from '../../../plugins/harness-device-vscode/src/window.ts'
 import { hear } from './appEvalChatgpt.js'
 import { appOf, claudeSteps, start as startClaude, type ClaudeHost } from './appEvalClaude.js'
-import { guardLoaded, speak, type AppSteps, type TierBWorld } from './appEvalDriver.js'
+import { guardEnv, guardLoaded, speak, type AppSteps, type TierBWorld } from './appEvalDriver.js'
 import { CodexOutside } from './codexOutside.js'
 import { CursorOutside } from './cursorOutside.js'
 import { until } from './daemon.js'
@@ -203,7 +203,7 @@ async function inTmux(world: TierBWorld, state: State, s: SessionDef, folder: st
   // At once, so the driver's last resort can end it as it kills the editor; one already gone fails nothing.
   const killed = (): void => { spawnSync('tmux', ['-S', d.tmux.socket, '-f', '/dev/null', 'kill-session', '-t', name], { env: d.tmux.env }) }
   state.tmux.set(s.key, { end: async () => killed(), kill: killed })
-  const own = await InOwnTmux.start(d, name, folder, { resume: s.id, env: { ...hintsOf(world, s), FAKE_CLAUDE_SESSION_TITLE: s.title } })
+  const own = await InOwnTmux.start(d, name, folder, { resume: s.id, env: { ...guardEnv(d), ...hintsOf(world, s), FAKE_CLAUDE_SESSION_TITLE: s.title } })
   // As in every process of the daemon: its hooks are its children.
   guardLoaded(d.env[NET_GUARD_FILE_ENV]!, `${name} pane's Claude Code`, [own.pid], 'node')
   const client = await tabClient(d, name, s.app as Editor)
@@ -275,7 +275,7 @@ async function openWindow(world: TierBWorld, key: string, look: Look): Promise<v
   const n = (state.opens.get(key) ?? 0) + 1
   state.opens.set(key, n)
   const id = `eval-${key}-${n}`
-  const loop = startEditorWindow(world.d, world.children)
+  const loop = startEditorWindow(world.d, world.children, guardEnv(world.d))
   loop.onLine(windowRecords(id, (pid) => keyOfShell(state, pid), (line, at) => world.stream(id, line, at)))
   state.windows.delete(key)
   state.windows.set(key, { ...look, id, loop })
