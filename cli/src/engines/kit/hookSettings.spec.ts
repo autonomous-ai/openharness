@@ -540,6 +540,35 @@ it('a deny or an ask that names the program by another path keeps its allow out'
   }
 })
 
+// Claude Code runs `harness device notify` on Harness's allow when the person's deny names it another way, so a deny
+// added after the allow was written wins at the next write as one there before it (the Windows check of #4545).
+it.each([
+  ['macOS and Linux', undefined, POSIX, [{ deny: ['Bash(harness device notify:*)'] }, { ask: [`Bash(${POSIX} device notify --json:*)`] },
+    { deny: ['Bash(~/.local/bin/harness device notify:*)'] }]],
+  ['Windows', 'win32', WIN, [{ deny: ['Bash(harness.exe device notify:*)'] }, { deny: ['Bash(harness device notify:*)'] },
+    { ask: ['Bash(C:/Users/u/.harness/bin/harness.exe device notify:*)'] }]],
+] as const)('on %s, a deny or an ask added after Harness\'s allow takes its rules out at the next write, and leaves the rest', async (_, platform, launcher, added) => {
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  // The person's own allow for the same command is theirs: only the exact rules Harness writes go.
+  const own = ['Bash(npm test:*)', 'Bash(harness device notify --json:*)']
+  for (const permissions of added) {
+    const home = mkdtempSync(join(root, 'claude-')), file = join(home, claude.settings.fileName)
+    writeFileSync(file, JSON.stringify({ permissions: { allow: own } }))
+    expect(await installHookSettings('claude', claude.settings, 19473, home, {}, platform)).toBe(true)
+    const settings = JSON.parse(readFileSync(file, 'utf8'))
+    Object.assign(settings.permissions, permissions)
+    writeFileSync(file, JSON.stringify(settings, null, 2) + '\n')
+    expect(await installHookSettings('claude', claude.settings, 19473, home, {}, platform)).toBe(true)
+    const written = readFileSync(file, 'utf8')
+    expect(JSON.parse(written).permissions).toEqual({ allow: [...own, ...claudeRules({ commands: true }, launcher)], ...permissions })
+    disk.watch = file
+    expect(await installHookSettings('claude', claude.settings, 19473, home, {}, platform)).toBe(true)
+    expect(disk.changes).toEqual([])
+    expect(readFileSync(file, 'utf8')).toBe(written)
+    disk.watch = ''
+  }
+})
+
 it('harnessRules fills {launcher} for the platform it is given', () => {
   const rules = ['Bash({launcher} --help)']
   expect(harnessRules(rules, 'win32')).toEqual([[`Bash(${WIN} --help)`]])
