@@ -212,7 +212,7 @@
     "a/darwin/V14/ring.recall": 1,
     "a/darwin/V14/ringKept": 1,
     "a/darwin/V14/wait.6": 1,
-    "a/darwin/V15/focusKept": 0,
+    "a/darwin/V15/focusKept": 1,
     "a/darwin/V15/open.front": 1,
     "a/darwin/V15/open.latency": 1,
     "a/darwin/V15/open.show": 1,
@@ -529,7 +529,7 @@
     "a/linux/V14/ring.recall": 1,
     "a/linux/V14/ringKept": 1,
     "a/linux/V14/wait.6": 1,
-    "a/linux/V15/focusKept": 0,
+    "a/linux/V15/focusKept": 1,
     "a/linux/V15/open.front": 1,
     "a/linux/V15/open.latency": 1,
     "a/linux/V15/open.show": 1,
@@ -842,7 +842,7 @@
     "a/win32/V14/ring.recall": 1,
     "a/win32/V14/ringKept": 1,
     "a/win32/V14/wait.6": 1,
-    "a/win32/V15/focusKept": 0,
+    "a/win32/V15/focusKept": 1,
     "a/win32/V15/open.front": 1,
     "a/win32/V15/open.latency": 1,
     "a/win32/V15/open.show": 1,
@@ -1470,7 +1470,7 @@
     "a": {
       "claude": 100,
       "chatgpt": 100,
-      "vscode": 70.72259052362364,
+      "vscode": 71.98574841836047,
       "cursor": 69.29824561403508
     },
     "b/darwin": {
