@@ -53,7 +53,7 @@ const MAX_SWITCHED = 16
 const TMUX_CLIENT_PLACES = '#{client_activity}|#{client_pid}|#{client_tty}'
 /** One line of TMUX_CLIENT_PLACES; one with no whole activity or no pid in form is no client. */
 const TMUX_CLIENT_PLACE = /^([0-9]+)\|([1-9][0-9]{0,9})\|(.*)$/
-/** How long a pane's answer holds, from its lookup's start: Command Code's turn-start comes at every tool call, and a
+/** How long a pane's answer holds, from when its lookup settled: Command Code's turn-start comes at every tool call, and a
  *  lookup is a `ps` and up to BUNDLES_A_PASS `plutil` runs. The herdr and Zellij lookups hold their answers as long
  *  (herdrOuter.ts, zellij.ts). */
 export const OUTER_EVERY_MS = 5_000
@@ -224,18 +224,19 @@ interface ClientPlace { app?: string; tty?: string; pid?: number }
 type NotRead = 'tmux' | 'pane' | 'processes' | 'clients' | 'app'
 
 /**
- * Answers by key, each held OUTER_EVERY_MS from its start. One in flight is shared past its 5 s, so a tmux that hangs to
- * its timeout runs no second one. Only keys asked in the last 5 s, or still in flight, are kept. [ask] never rejects.
+ * Answers by key, each held OUTER_EVERY_MS from when it settled: the scan asks one session at a time, so an answer kept
+ * from its start would be gone after a run that hung to its timeout, and each ask after it would wait out one more. One
+ * in flight is shared. Only keys settled in the last 5 s, or still in flight, are kept. [ask] never rejects.
  */
 export function heldAnswers<T>(now: () => number): (key: string, ask: () => Promise<T>) => Promise<T> {
-  const asked = new Map<string, { at: number; answer: Promise<T>; settled: boolean }>()
+  const asked = new Map<string, { answer: Promise<T>; settledAt?: number }>()
   return (key, ask) => {
     const at = now()
-    for (const [held, last] of asked) if (last.settled && at - last.at >= OUTER_EVERY_MS) asked.delete(held)
+    for (const [held, last] of asked) if (last.settledAt !== undefined && at - last.settledAt >= OUTER_EVERY_MS) asked.delete(held)
     const last = asked.get(key)
     if (last) return last.answer
-    const entry = { at, answer: ask(), settled: false }
-    void entry.answer.then(() => { entry.settled = true })
+    const entry: { answer: Promise<T>; settledAt?: number } = { answer: ask() }
+    void entry.answer.then(() => { entry.settledAt = now() })
     asked.set(key, entry)
     return entry.answer
   }

@@ -228,7 +228,8 @@ async function clientsOf(deps: ClientDeps, form: RegExp, server: number, rows: r
   return tty && form.test(tty) ? { app, tty, pid: client } : { app, pid: client }
 }
 
-/** tmux's heldAnswers, each answer said by its line: an lsof or ss that hangs to its timeout runs no second one. */
+/** tmux's heldAnswers, each answer said by its line: an lsof or ss that hangs to its timeout costs one timeout, not one
+ *  an ask. */
 function saidAnswers(deps: ClientDeps): (key: string, place: () => Promise<ClientPlace | NotRead>) => Promise<ClientPlace> {
   const held = heldAnswers<ClientPlace>(deps.now)
 

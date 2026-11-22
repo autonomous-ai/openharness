@@ -522,7 +522,7 @@ describe('the outer place of an agent in a Zellij pane', () => {
     await vi.waitFor(() => expect(calls).toHaveLength(2))
     held[1]()
     expect(await caller).toEqual(answer)
-    // Asked again within 5 s of its start: the last answer, with nothing run.
+    // Asked again within 5 s of its settle: the last answer, with nothing run.
     clock.t = at + 4_999
     expect(await outer(hints, 100)).toEqual(answer)
     expect(calls).toHaveLength(2)
