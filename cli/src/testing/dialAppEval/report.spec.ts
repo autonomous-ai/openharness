@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { grade } from './grade.js'
 import { markdown, summary, writeReport } from './report.js'
-import type { App, AppScores, CheckResult, Dimension, Report } from './types.js'
+import type { App, AppScores, CheckResult, CoverageGap, Dimension, Platform, Report, Tier } from './types.js'
 
 const none: Record<Dimension, number | null> = {
   D1: null, D2: null, D3: null, D4: null, D5: null, D6: null, D7: null, D8: null,
@@ -84,6 +84,24 @@ it('held-out is its own table, each score with its runs left out beside it', () 
   expect(md.slice(md.indexOf('## Scores'), md.indexOf('## Held out'))).not.toMatch(/\b70\b/)
   const text = summary(r)
   expect(text.slice(text.indexOf('Held out'))).toMatch(/the Claude app[^\n]*70 left out: 3/)
+})
+
+it('under the held-out table, each held-out gap\'s reason with its tiers, platforms and runs, naming no scenario', () => {
+  const gap = (tier: Tier, platform: Platform, scenario: string, reason: string): CoverageGap =>
+    ({ tier, platform, scenario, app: 'orca', heldOut: true, reason })
+  const graded = grade({ schema: 1, results: [], wrongSends: [], gaps: [gap('b', 'win32', 'OH2', 'Eval front'),
+    gap('a', 'linux', 'OH2', 'Eval front'), gap('a', 'win32', 'OH2', 'Eval front'), gap('a', 'darwin', 'OH9', 'Eval other'),
+    gap('a', 'linux', 'OH9', `platform read in ${homedir()}/x.ts`)] }, null)
+  const lines = ['- 3 runs left out, tier a, b on linux, win32: Eval front', '- 1 run left out, tier a on darwin: Eval other',
+    '- 1 run left out, tier a on linux: platform read in <path>']
+  const md = markdown(graded)
+  expect(md.slice(md.indexOf('## Held out'), md.indexOf('## By tier'))).toMatch(new RegExp(`\\| Orca \\|[^\\n]*\\|\\n\\n${lines.join('\\n')}\\n\\n$`))
+  const rows = summary(graded).split('\n')
+  const at = rows.indexOf(lines[0]!)
+  expect(at).toBeGreaterThan(rows.indexOf('Held out'))
+  expect(rows[at - 1]).toMatch(/^Orca/)
+  expect(rows.slice(at, at + 4)).toEqual([...lines, ''])
+  for (const text of [md, summary(graded)]) expect(text).not.toMatch(/OH2|OH9|Coverage gaps/)
 })
 
 it('the score and held-out tables have a row for VS Code and one for Cursor', () => {
