@@ -118,10 +118,14 @@ const CLAUDE_APP: ClaudeHost = (world, s) => {
   }
 }
 
-/** The app, running: started at the first step on it, its sessions started as [host] says. */
+/** The app, running: started at the first step on it, its sessions started as [host] says. One a world: another host's
+ *  sessions would start with this one's hints. */
 export function appOf(world: TierBWorld, host: ClaudeHost = CLAUDE_APP): FakeApp {
   const state = stateOf(world)
-  if (state.app) return state.app
+  if (state.app) {
+    if (state.app.host !== host) throw new Error("the fake Claude app runs another host's sessions")
+    return state.app
+  }
   // Only the app's lifetime: what it does is in this file.
   const child = spawn(process.execPath, ['-e', 'process.stdin.resume()'], { cwd: world.d.root, env: world.d.env, stdio: ['pipe', 'ignore', 'ignore'] })
   world.children.push(child)
