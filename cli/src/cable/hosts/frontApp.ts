@@ -27,16 +27,22 @@ const EXE_APPS: Readonly<Record<string, string>> = {
   harness: 'harness',
 }
 
-// The Claude app's Linux process (cli/src/testing/recordedLinuxApps.ts, comm), lower-cased: never with `.exe`, since
-// the name is Linux's alone.
+// The apps' Linux processes, lower-cased: never with `.exe`, since each name is Linux's alone.
 const LINUX_APPS: Readonly<Record<string, string>> = {
+  // The Claude app (cli/src/testing/recordedLinuxApps.ts, comm).
   'claude-desktop': 'claude',
+  // Orca's main process, the .deb's /opt/Orca/orca-ide and the AppImage's alike (cli/src/testing/recordedOrca.ts,
+  // `executableName: 'orca-ide'`). A bare `orca` is GNOME's screen reader, so it has no row.
+  'orca-ide': 'orca',
 }
 
-// The Claude app's Windows process, the owner of its window (docs/plans/2026-11-19-dial-windows-vm-notes.md, Task 37
-// §1), lower-cased: only with `.exe`, since a bare `claude` is no app's window name elsewhere.
+// The apps' Windows processes, each the owner of its app's window (docs/plans/2026-11-19-dial-windows-vm-notes.md),
+// lower-cased: only with `.exe`, since the bare name is no app's, or another program's, elsewhere.
 const WINDOWS_APPS: Readonly<Record<string, string>> = {
+  // The Claude app (Task 37 §1): a bare `claude` is no app's window name elsewhere.
   'claude.exe': 'claude',
+  // Orca ("### 1. Window owners"): a bare `orca` on Linux is GNOME's screen reader.
+  'orca.exe': 'orca',
 }
 
 /** The app id of the app in front, or FRONT_NONE. A bundle id matches whole, as detectApp reads it. */
