@@ -130,6 +130,20 @@ describe.skipIf(process.platform === 'win32')("the harness's fake Orca", () => {
     expect(w.lines).toEqual([focusLine(H2)])
   })
 
+  it("a switch's echo still to come at endWatch is never told, as Orca's quit takes the pane with it", async () => {
+    const { fake, bin, launcher, run } = installed(true)
+    expect(run('orca', 'terminal', 'switch', '--terminal', H1, '--json').status).toBe(0)
+    fake.endWatch()
+    const w = watch(launcher)
+    await vi.waitFor(() => expect(fake.watching()).toBe(true), { timeout: 10_000, interval: 20 })
+    // No process of that switch's run is left, its echo's among them: told by now, or dropped.
+    await vi.waitFor(() => expect(spawnSync('pgrep', ['-f', `${join(bin, 'orca')} terminal switch`]).status).toBe(1),
+      { timeout: 10_000, interval: 20 })
+    fake.focus(H2)
+    await vi.waitFor(() => expect(w.lines).toContain(focusLine(H2)), { timeout: 10_000, interval: 20 })
+    expect(w.lines).toEqual([focusLine(H2)])
+  })
+
   it('endWatch ends a running watch-focus', async () => {
     const { fake, launcher } = installed(true)
     const w = watch(launcher)
