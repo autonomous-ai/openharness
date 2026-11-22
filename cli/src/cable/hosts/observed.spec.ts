@@ -1645,6 +1645,40 @@ describe('ObservedSource actions', () => {
     expect(counted(actions.count)).toEqual(['busy', 'busy', 'waiting', 'orca', 'orca', 'busy', 'orca'])
   })
 
+  // U11: cursor-agent in an editor's terminal is typed into before its first turn ends (the spec's "cursor-agent's idle").
+  it('cursor-agent is at its prompt from its session-start until a turn starts', async () => {
+    vi.useFakeTimers()
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    const busy = { ok: false, reason: 'proj is busy. Say it when it is done.' }
+    const after = async (event: ObservedHookEvent['event'], text: string) => {
+      src.ingest(ev(event, { engine: 'cursor', ...withHandle }))
+      if (event === 'turn-stop') await graced()
+      return src.send(src.list()[0], text)
+    }
+    expect(await after('session-start', 'one')).toEqual({ ok: true })
+    expect(await after('turn-start', 'two')).toEqual(busy)
+    expect(await after('turn-stop', 'three')).toEqual({ ok: true })
+    expect(await after('session-start', 'four')).toEqual({ ok: true })
+    expect(await after('turn-start', 'five')).toEqual(busy)
+    expect(actions.orcaSend.mock.calls).toEqual([[HANDLE, 'one'], [HANDLE, 'three'], [HANDLE, 'four']])
+  })
+
+  it('a cursor session the scan found is busy until a hook: the scan says nothing of its prompt', async () => {
+    const type = vi.fn(async (_pane: Pane, _text: string, _engine: string): Promise<TypeResult> => true)
+    const { src, open, owners, externals, ev } = setup({ actions: { ...fakeActions().actions, adapters: [{ ...byFolder, type }] } })
+    open.set('s1', 'terminal')
+    owners.set('s1', { pid: 100, engine: 'cursor' })
+    externals.set('s1', { cwd: '/work/proj', transcriptPath: null })
+    await src.scanOpen()
+    expect(src.list()[0].state).toBe('idle')
+    expect(await src.send(src.list()[0], 'yes do it')).toEqual({ ok: false, reason: 'proj is busy. Say it when it is done.' })
+    expect(type).not.toHaveBeenCalled()
+    src.ingest(ev('session-start', { engine: 'cursor' }))
+    expect(await src.send(src.list()[0], 'next')).toEqual({ ok: true })
+    expect(type.mock.calls.map(([pane, text]) => [pane, text])).toEqual([[{ adapter: 'by-folder', id: '/work/proj' }, 'next']])
+  })
+
   // The scan lists another engine's agent idle though its turn may run: its first hook with a handle is no turn's end.
   it('another engine the scan found is busy until a hook said its turn ended', async () => {
     vi.useFakeTimers()
