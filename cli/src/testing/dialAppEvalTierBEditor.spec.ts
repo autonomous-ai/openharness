@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { appendFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -152,6 +152,20 @@ describe("tier B's Cursor agents' processes", () => {
       expect(basename(ps('comm', Number(ps('ppid', agent.pid))))).toBe('cursor')
     } finally {
       await agent.close()
+    }
+  })
+
+  it('a Cursor agent started again in its session goes on in the same transcript, as one Cursor relaunched does', async () => {
+    const d = daemon()
+    const turn = `${JSON.stringify({ role: 'user', message: { content: [{ type: 'text', text: 'Eval prompt.' }] } })}\n`
+    const first = await start(d, true)
+    appendFileSync(first.transcriptPath, turn)
+    await first.close()
+    const again = await start(d, true)
+    try {
+      expect(readFileSync(again.transcriptPath, 'utf8')).toBe(turn)
+    } finally {
+      await again.close()
     }
   })
 })

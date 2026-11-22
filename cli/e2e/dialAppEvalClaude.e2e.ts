@@ -149,14 +149,18 @@ describe.skipIf(WIN32)('the dial eval, tier B: the Claude app', () => {
     const answers = (folder: string): string[] => readdirSync(folder, { recursive: true }).map(String).filter((name) => name.endsWith('.jsonl'))
     const rollouts = join(d.env.CODEX_HOME!, 'sessions')
     expect(answers(d.env.CLAUDE_PROJECTS_DIR!)).not.toEqual([])
-    // A Codex session's rollout, as the ChatGPT app's steps leave one.
+    // A Codex session's rollout, as the ChatGPT app's steps leave one, and a Cursor agent's transcript, as the editors' do.
     mkdirSync(join(rollouts, '2026'), { recursive: true })
     writeFileSync(join(rollouts, '2026', 'rollout-2026-11-15T00-00-00-eval.jsonl'), '{}\n')
+    const cursor = join(d.env.HOME!, '.cursor', 'projects')
+    mkdirSync(join(cursor, 'eval', 'agent-transcripts', 'eval'), { recursive: true })
+    writeFileSync(join(cursor, 'eval', 'agent-transcripts', 'eval', 'eval.jsonl'), '{}\n')
     await driver.start(SCENARIOS.find((s) => s.id === 'C1')!, HOST)
     try {
       expect(driver.lastWorld().d).toBe(d)
       expect(answers(d.env.CLAUDE_PROJECTS_DIR!)).toEqual([])
       expect(answers(rollouts)).toEqual([])
+      expect(answers(cursor)).toEqual([])
     } finally {
       await driver.stop()
     }
