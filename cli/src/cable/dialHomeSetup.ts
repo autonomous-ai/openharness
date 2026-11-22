@@ -4,12 +4,16 @@
 // scan finds a session in. Each skills folder it writes is in dial-setup.json, its own record, so a `disable` finds it,
 // and a moment that reads the engine removed takes them out again itself, which catches up on a `disable` a write
 // raced. A recorded folder is written once: after that only Harness's own file is brought current, and one the person
-// removed stays so.
+// removed stays so. Claude Code's homes are written while its plugin reads on, or while Harness runs a Claude agent of
+// its own (docs/plans/2026-11-22-needs-you-notify-design.md).
 import { realpathSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { claudePluginState, ownDirectory, refreshSkill, removeSkill, skillsFolderOf, writeSkill } from '../devices/dialSkill.js'
+import { claudePluginState, claudePluginTurnedOff, ownDirectory, refreshSkill, removeSkill, skillsFolderOf, writeSkill } from '../devices/dialSkill.js'
 import { DIAL_SKILL_FILE, MAX_HOMES, listable, readSetup, readWritten, writeSetup, type DialEngine, type DialRemoved, type DialSetupRecord, type Read, type SetupCount } from '../devices/dialSkillFiles.js'
 import { rolloutHome, takesOwner, type RolloutOwner } from './codexRolloutHome.js'
+
+/** Whether the core lists a Claude Code agent of Harness's on this computer: one listed, none, or not known yet. */
+export type ClaudeAgents = 'listed' | 'none' | 'unknown'
 
 export interface DialHomeSetupDeps {
   dataDir: string
@@ -22,6 +26,9 @@ export interface DialHomeSetupDeps {
   adopted(): { claude: string[]; codex: string[] }
   /** dial-skill.json's removals, read anew at each call. */
   removed(): Read<DialRemoved>
+  /** Whether the core lists a Claude Code agent of Harness's on this computer; 'unknown' before the devices' first view
+   *  of the core's agents. */
+  claudeAgents(): ClaudeAgents
   /** A monotonic clock in ms. */
   now(): number
   /** One event in the day's tally; [reason] a fixed word, never a path. */
@@ -68,7 +75,8 @@ export interface DialHomeSetup {
 
 type Counts = Record<DialEngine, { wrote: number; removed: number; failed: number }>
 /** What became of one home: written, found holding a skill, or left as the person made it (`done`); given none for a
- *  reason the next try would meet again (`refused`); or the engine read removed and was handled as off (`off`). */
+ *  reason the next try would meet again (`refused`); or the engine read removed and was handled as off, or read not
+ *  known yet and left as it is (`off`). */
 type Outcome = 'done' | 'refused' | 'off'
 
 const ENGINES: readonly DialEngine[] = ['claude', 'codex']
@@ -116,6 +124,13 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
   /** Claude Code's plugin as last read: settings that say nothing (half written, edited by hand) change nothing, so a
    *  moment's bad file does not take the skill out. Off until a read says on. */
   let pluginOn = false
+  /** Whether the person turned the plugin off, latched with it: their no wins over a Harness Claude agent. */
+  let turnedOff = false
+  /** The core's Claude agents as last known. A Harness Claude agent brings Claude Code's skill without waiting for the
+   *  plugin, whose install runs `claude` and reaches GitHub, and can hang on either. Not known before the devices' first
+   *  view of the core's agents: read as none then, a devices start with the plugin off would strip the skill a Harness
+   *  agent brought. So not known turns nothing on and nothing off, and a read that does not know keeps what was known. */
+  let agents: ClaudeAgents = 'unknown'
 
   /** Read only inside a pass. */
   const removedNow = (): DialRemoved => {
@@ -124,14 +139,27 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
     return removed
   }
 
-  /** Read only once a dial is recorded: a pass never runs before. */
-  const on = (engine: DialEngine): boolean => {
+  /** Read once a pass and kept with the stamp, so one pass never flips halfway: the first Claude agent made in the app,
+   *  or the last one gone, is a new stamp, and the next scan runs the start pass again. */
+  const readAgents = (): void => {
+    const now = deps.claudeAgents()
+    if (now !== 'unknown') agents = now
+  }
+
+  /** Read only once a dial is recorded: a pass never runs before. 'held': Claude Code's answer is not known yet, and its
+   *  homes are left exactly as they are, nothing written and nothing removed. */
+  const on = (engine: DialEngine): boolean | 'held' => {
     if (removedNow()[engine] === true) return false
     removalCounted.delete(engine)
     if (engine === 'codex') return true
     const state = claudePluginState(settingsFile)
-    if (state !== 'unknown') pluginOn = state === 'on'
-    return pluginOn
+    if (state !== 'unknown') {
+      pluginOn = state === 'on'
+      turnedOff = state === 'off' && claudePluginTurnedOff(settingsFile)
+    }
+    if (turnedOff) return false
+    if (pluginOn || agents === 'listed') return true
+    return agents === 'none' ? false : 'held'
   }
 
   /** A file's inode, size and time, so a rewrite is a new stamp whatever it holds. */
@@ -144,9 +172,10 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
     }
   }
 
-  /** dial-skill.json and Claude Code's settings as of now: a removal then enable between two scans, or the plugin
-   *  uninstalled through /plugin, is a new stamp. */
-  const stampNow = (): string => `${stampOf(removedFile)} ${stampOf(settingsFile)}`
+  /** dial-skill.json and Claude Code's settings as of now, and the core's Claude agents as last read: a removal then
+   *  enable between two scans, the plugin uninstalled through /plugin, or the last Harness Claude agent gone, is a new
+   *  stamp. */
+  const stampNow = (): string => `${stampOf(removedFile)} ${stampOf(settingsFile)} ${agents}`
 
   const sayOnce = (key: string, line: string): void => {
     if (said.has(key) || said.size >= MAX_SAID) return
@@ -218,8 +247,8 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
    *  them, and a plugin uninstalled through /plugin runs no disable). After a disable only a recorded folder whose
    *  removal failed stays recorded, so a later disable still finds it. With the plugin off only what Harness took out
    *  leaves the record: a skill the person had deleted stays deleted once the plugin is back. A folder the other engine
-   *  holds its skill in while on (~/.codex/skills linked to ~/.claude/skills) keeps it, and a disable only takes it
-   *  from this engine's record. */
+   *  holds its skill in while on or not known yet (~/.codex/skills linked to ~/.claude/skills) keeps it, and a disable
+   *  only takes it from this engine's record. */
   const turnOff = (engine: DialEngine, counts: Counts): void => {
     onAtPass.delete(engine)
     handled[engine].clear()
@@ -228,7 +257,7 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
       removalCounted.add(engine)
       deps.count(engine, 'left removed')
     }
-    const shared = on(OTHER[engine]) ? foldersOf(OTHER[engine]) : new Set()
+    const shared = on(OTHER[engine]) !== false ? foldersOf(OTHER[engine]) : new Set()
     const results = new Map<string, string>()
     for (const skills of foldersOf(engine)) {
       if (skills === null || shared.has(skills)) continue
@@ -244,9 +273,10 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
   }
 
   /** After a write: a disable between the read that let it in and the write removed from the folders as they stood,
-   *  so what was written is taken out here instead. false: the engine read removed, and was handled as off. */
+   *  so what was written is taken out here instead; read not known yet, it is kept. false: the engine read removed, and
+   *  was handled as off. */
   const stillOn = (engine: DialEngine, counts: Counts): boolean => {
-    if (on(engine)) return true
+    if (on(engine) !== false) return true
     turnOff(engine, counts)
     return false
   }
@@ -261,11 +291,11 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
 
   /** One existing home. */
   const writeHome = (engine: DialEngine, home: string, counts: Counts): Outcome => {
-    // Read before anything is made in the home: while off a home is not handled, and nothing goes into it.
-    if (!on(engine)) {
-      turnOff(engine, counts)
-      return 'off'
-    }
+    // Read before anything is made in the home: while off a home is not handled, and nothing goes into it; while not
+    // known yet nothing is taken out either.
+    const now = on(engine)
+    if (now === false) turnOff(engine, counts)
+    if (now !== true) return 'off'
     const listed = record.homes[engine]
     const found = skillsFolderOf(home, false, deps.uid)
     // Homes linked to one skills folder (an Orca profile's) are one write, recorded once. Recorded, it is only brought
@@ -334,10 +364,12 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
     onAtPass.clear()
     const adopted = deps.adopted()
     for (const engine of ENGINES) {
-      if (!engineOn[engine]) {
+      if (engineOn[engine] === false) {
         turnOff(engine, counts)
         continue
       }
+      // Not known yet: left as it is, and out of the scans' look until a stamp changes.
+      if (engineOn[engine] === 'held') continue
       onAtPass.add(engine)
       // A recorded folder is brought current, never written anew; one that cannot be looked at now stays, unwritten.
       let wrote = false
@@ -410,8 +442,9 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
 
   return {
     started() {
-      if (!readRecord()) return
-      if (record.dial) run(startPass)
+      if (!readRecord() || !record.dial) return
+      readAgents()
+      run(startPass)
     },
 
     attached() {
@@ -425,11 +458,14 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
         }
         record = next
       }
+      readAgents()
       run(startPass)
     },
 
     scanned(owners) {
       if (!record.dial) return
+      // The scan's one read, which the start pass a changed stamp runs takes as its own.
+      readAgents()
       run((counts) => {
         // A removal or enable since, or the plugin turned on or off: every home is written again, or taken out, without
         // a restart.
