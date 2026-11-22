@@ -223,6 +223,16 @@ Details:
   left out on Windows, never that line alone. Without it any `harness.bat` in any folder meets the `harness` rule:
   Codex lowercases a program's name and takes off `.exe`, `.cmd`, `.bat` or `.com` (`resolve_host_executables`). And
   a line Codex cannot parse makes it drop the person's own rules too.
+- The Windows check of #4545 (Win11 ARM64, Codex 0.170.0): Codex's `execpolicy` matches the launcher's full path
+  `C:\Users\<u>\.harness\bin\harness.exe` to the `harness` rules only with `--resolve-host-executables`, and an
+  upper-case `HARNESS.EXE` matches none. Agents type bare `harness`, which is allowed; a command by either other
+  spelling may ask.
+- A person's deny or ask keeps a group of Harness's rules out of Claude Code's `permissions.allow` in any spelling
+  (`touches`), and one added after Harness wrote the group wins the same way: the next write (daemon start or launch)
+  takes the group's own rules out, on every platform. Only the exact rules Harness writes go; the person's own allows
+  stay, and an unchanged list is not rewritten. Codex's rules file needs no such step: Harness writes it whole from its
+  declared rules and never reads the person's, and Codex itself ranks their forbidden and prompt rules above allow,
+  the same whether they were written before or after.
 - This is the core's process, kept to the smallest change: no file is added (`architecture.coreFiles.txt` unchanged;
   `config/harnessHome.ts` is already a core file), no new rule; only the platform gate, the launcher's spelling and
   `harnessRules`' platform argument change. Why every session needs it: a Windows agent that runs
