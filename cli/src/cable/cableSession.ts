@@ -1575,6 +1575,11 @@ export class CableSession {
           this.greetedMac = mac
           this.everGreeted = true
           this.greetedFw = fw
+          // A dial greeting anew has redrawn from nothing, so no echo of a focus commanded before it is coming. A window
+          // opened for its old firmware would outlive an update in place (0.0.58 to 0.0.94 on the same port) and drop the
+          // first turns on the new one; the push below opens one again only for a dial that echoes.
+          this.expectedAppFocusEcho = ''
+          this.expectedAppFocusEchoUntil = 0
           this.log(`cable: dial ${mac} ${returning ? 'back ' : ''}on fw ${fw} proto ${msg.proto}${hw ? ` hw ${hw}` : ''}${board ? ` board ${board}` : ''}${this.capabilitiesNamed()}`)
           this.dialLog.greeted()
           this.report({ fw })
