@@ -55,7 +55,8 @@ describe("VS Code's scenarios", () => {
     const down = (from: number, to: number) => Array.from({ length: from - to + 1 }, (_, i) => s(from - i))
     expect(v2.steps.filter((step) => step.kind === 'hook').map((step) => 'session' in step && step.session)).toEqual(down(20, 1))
     const afterClose = [...down(16, 6), ...down(4, 1), 's17']
-    // The leave takes the 30 s tick after the 10 s end delay: the run waits for it, or it ends before s17 is in.
+    // The leave comes seconds after s05's end hook (services/devices.ts dropEnded): the run waits for it, or it ends before
+    // s17 is in.
     const close = v2.steps.findIndex((step) => step.label === 'close')
     expect(v2.steps.slice(close)).toEqual([{ label: 'close', kind: 'editor.closeTerminal', session: 's05' },
       ...listed('vscode', afterClose)])

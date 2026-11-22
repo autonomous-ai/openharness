@@ -13,7 +13,8 @@ export function vscodeScenarios(): Scenario[] {
   const s20 = keys('s', 1, 20, 2)
   // Started s20 first and s01 last: the ring fills with s20 to s05, then each later start takes the place of the one
   // longest at rest, so it holds s16 down to s01. s05's terminal closing lets the newest left out, s17, in at the end,
-  // once the 30 s tick after its 10 s end delay removes s05: the run waits for that ring, or ends before it.
+  // once the devices drop s05, seconds after its end hook (services/devices.ts dropEnded): the run waits for that ring, or
+  // ends before it.
   const v2Listed = keys('s', 1, 16, 2).reverse()
   const v2AfterClose = [...keys('s', 6, 16, 2).reverse(), ...keys('s', 1, 4, 2).reverse(), 's17']
   const v2Kept: Extract<Check, { kind: 'ring' }> = { id: 'ringKept', kind: 'ring', dim: 'D7', page: 'vscode', after: 'close',
