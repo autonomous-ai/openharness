@@ -44,7 +44,7 @@ describe('flow/_state.json', () => {
     expect(all).toHaveLength(loadScenarios().length)
   })
 
-  it('splits need and no-need cases 6/3, 5/3, 4/4', () => {
+  it('splits need and no-need cases 7/3, 6/3, 5/4', () => {
     const need = new Map(loadScenarios().map((s) => [caseId(s.id, 'claude'), s.need]))
     const counts = Object.fromEntries(
       Object.entries(splits).map(([name, ids]) => [
@@ -52,7 +52,7 @@ describe('flow/_state.json', () => {
         [ids.filter((id) => need.get(id) === 'need').length, ids.filter((id) => need.get(id) === 'no-need').length],
       ]),
     )
-    expect(counts).toEqual({ train: [6, 3], val: [5, 3], test: [4, 4] })
+    expect(counts).toEqual({ train: [7, 3], val: [6, 3], test: [5, 4] })
   })
 
   it('headlines score and declares no binary metric', () => {
