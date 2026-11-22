@@ -9,6 +9,8 @@
  *   wrote and leaves a person's own, and `enable` brings it back with no restart;
  * - Claude Code's `disable` stays through an attach, and its `enable` brings the plugin and the skill back;
  * - the plugin uninstalled with Claude Code's own `claude plugin` is never installed again, and its skill goes;
+ * - with the plugin not on, a Claude agent Harness runs brings Claude Code's skill
+ *   (docs/plans/2026-11-22-needs-you-notify-design.md);
  * - with a real Codex binary (E2E_REAL_CODEX), the app-server that holds its rollout gives its home.
  *
  * The daemon's open scan sees only files under the test's root (harness/daemon.ts `create`): it reads every `codex` on
@@ -22,6 +24,7 @@ import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { DIAL_PLUGIN_ID, DIAL_SKILL } from '../src/devices/dialSkill.js'
 import { copyNode } from '../src/testing/placeNode.js'
 import { VERSION } from '../src/version.js'
+import { LocalClient } from './harness/client.js'
 import { IsolatedDaemon, SOURCES_CLI, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import type { FakeDial } from './harness/fakeDial.js'
@@ -101,9 +104,10 @@ describe('the dial set up from its first attach', () => {
     desk = undefined
   })
 
-  /** A daemon with a fake dial's port, started. */
-  const fresh = async (): Promise<{ d: IsolatedDaemon; desk: Desk }> => {
-    const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false' }, claudeVersion: '2.1.287' })
+  /** A daemon with a fake dial's port, started, whose fake Claude Code is [claudeVersion]: by default recent enough for
+   *  its plugin. */
+  const fresh = async (claudeVersion = '2.1.287'): Promise<{ d: IsolatedDaemon; desk: Desk }> => {
+    const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false' }, claudeVersion })
     daemon = d
     const file = join(d.root, 'dials.json')
     d.env.HARNESSD_TEST_DIAL_PORT = file
@@ -275,6 +279,29 @@ describe('the dial set up from its first attach', () => {
     await until('Claude Code\'s skill gone', () => !existsSync(skillOf(claudeHome)), 45_000, 100)
     expect(pluginCalls(d).filter((call) => call === INSTALL)).toEqual([INSTALL])
     noPathLogged(d)
+  })
+
+  it('with the plugin not on, a Harness Claude agent brings Claude Code\'s skill', async () => {
+    // Below MIN_CLAUDE (devices/claudePlugin.ts): the plugin's pass refuses this Claude Code, so its settings never read on.
+    const { d, desk } = await fresh('2.1.200')
+    const claudeHome = dirname(d.env.CLAUDE_PROJECTS_DIR!)
+    const client = await LocalClient.connect(d)
+    try {
+      // As the desktop creates one.
+      const cwd = join(d.projectsDir, 'in-harness')
+      mkdirSync(cwd, { recursive: true })
+      const created = await client.request('agent_create', { engine: 'claude', cwd, bypassPermission: true }, 90_000)
+      expect(created.error, JSON.stringify(created)).toBeUndefined()
+
+      await plugged(desk)
+      // The attach's pass, or the first scan a minute later when the devices' view of the agents landed after it.
+      await until('Claude Code\'s skill', () => read(skillOf(claudeHome)) === DIAL_SKILL, 90_000, 100)
+      expect(pluginCalls(d)).not.toContain(INSTALL)
+      expect(pluginOn(claudeHome)).toBe(false)
+      noPathLogged(d)
+    } finally {
+      client.close()
+    }
   })
 
   it.runIf(!!process.env.E2E_REAL_CODEX)('a real Codex app-server\'s rollout gives its home', async () => {

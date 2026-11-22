@@ -597,7 +597,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; storePackageFolder?: DevicesDeps['storePackageFolder']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null; transcribe?: DevicesDeps['transcribe']; watchStore?: DevicesDeps['watchStore'] } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; agentsRead?: DevicesDeps['agentsRead']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; storePackageFolder?: DevicesDeps['storePackageFolder']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null; transcribe?: DevicesDeps['transcribe']; watchStore?: DevicesDeps['watchStore'] } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const apps = over.orca ?? orca
   // None, and no read under way, unless the spec gives its own; null leaves the devices to read this computer's.
@@ -614,6 +614,7 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     readUsage: over.readUsage,
     now: over.now,
     refresh: over.refresh,
+    agentsRead: over.agentsRead,
     orca: apps,
     orcaReads: over.orcaReads ?? inertOrcaReads,
     codex: over.codex ?? codex,
@@ -11372,6 +11373,57 @@ describe('the dial setup, from the devices\' own process (cable/dialSetup.ts)', 
     seen.host.watching!(true)
     expect(held(env.CODEX_HOME)).toBeUndefined()
     await vi.waitFor(() => expect(readers.apps.mock.calls.map(([pids]) => pids)).toEqual([[77]]))
+  })
+
+  describe('Claude Code\'s skill while Harness runs a Claude agent, with its plugin never on', () => {
+    beforeEach(() => mkdirSync(claudeHome()))
+    /** A core that lists one agent of Harness's, of [engine]. */
+    const listing = (engine: string) =>
+      fakeCore({ dataDir, agents: { advertised: vi.fn(() => [{ agentId: 'h1', registeredAt: 1, engine }] as RegisteredSession[]) } })
+    /** A dial's first attach, and the plugin's pass after it: the fake's install turns nothing on. */
+    const attach = async (claude: ReturnType<typeof fakeClaude>) => {
+      seen.host.watching!(true)
+      await vi.waitFor(() => expect(claude.calls).toContain('plugin install harness-device@openharness --scope user'))
+      await new Promise((resolve) => setImmediate(resolve))
+    }
+
+    it('before the devices\' first view of the core\'s agents Claude Code gets none, and Codex is set up as ever', async () => {
+      const claude = fakeClaude()
+      start({ core: listing('claude'), faults: ['fleet'], listen: fakeListener().listen, claude: claude.found, agentsRead: () => false })
+
+      await attach(claude)
+
+      expect(held(claudeHome())).toBeUndefined()
+      expect(held(env.CODEX_HOME)).toBe(DIAL_SKILL)
+    })
+
+    it('once the view landed, a Claude agent of Harness\'s brings Claude Code\'s skill', async () => {
+      const claude = fakeClaude()
+      start({ core: listing('claude'), faults: ['fleet'], listen: fakeListener().listen, claude: claude.found, agentsRead: () => true })
+
+      await attach(claude)
+
+      expect(held(claudeHome())).toBe(DIAL_SKILL)
+    })
+
+    it('inside the core\'s process, whose agents are its own, a Claude agent brings it too', async () => {
+      const claude = fakeClaude()
+      start({ core: listing('claude'), faults: ['fleet'], listen: fakeListener().listen, claude: claude.found })
+
+      await attach(claude)
+
+      expect(held(claudeHome())).toBe(DIAL_SKILL)
+    })
+
+    it.each(['codex', 'fo'])('an agent of %s brings Claude Code none', async (engine) => {
+      const claude = fakeClaude()
+      start({ core: listing(engine), faults: ['fleet'], listen: fakeListener().listen, claude: claude.found, agentsRead: () => true })
+
+      await attach(claude)
+
+      expect(held(claudeHome())).toBeUndefined()
+      expect(held(env.CODEX_HOME)).toBe(DIAL_SKILL)
+    })
   })
 })
 

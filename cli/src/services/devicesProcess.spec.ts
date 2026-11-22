@@ -224,6 +224,24 @@ describe('the core\'s view, read in line by the dial', () => {
     await f.deps().refresh!()
     expect(api.machine.computerId()).toBe('computer-9')
   })
+
+  it('say the agents are read only once a view of them landed', async () => {
+    // Before one, the empty list is a stand-in: read as the core's, it would take out the skill a Claude agent brought.
+    const f = setup()
+    expect(f.deps().agentsRead!()).toBe(false)
+    f.answer('view', { error: 'QUERY_FAILED' })
+    f.connect()
+    await f.deps().refresh!()
+    expect(f.deps().agentsRead!()).toBe(false)
+
+    f.answer('view', { agents: [] })
+    await f.deps().refresh!()
+    expect(f.deps().agentsRead!()).toBe(true)
+
+    f.answer('view', new Error('the core went away'))
+    await f.deps().refresh!()
+    expect(f.deps().agentsRead!()).toBe(true)
+  })
 })
 
 describe('the core\'s doors, across the link', () => {
