@@ -217,11 +217,22 @@ function emptied(dir: string): void {
     if (!entry.isDirectory()) rmSync(join(entry.parentPath, entry.name), { force: true })
   }
 }
+/** Whether the session's window was closed, and not opened again, before the step labeled [after] (the scenario's end
+ *  without one). */
+function windowClosed(scenario: Scenario, s: SessionDef, after: string | undefined): boolean {
+  const end = after === undefined ? scenario.steps.length : scenario.steps.findIndex((step) => step.label === after)
+  const last = scenario.steps.slice(0, end).findLast((step) =>
+    (step.kind === 'editor.window' || step.kind === 'editor.reload' || step.kind === 'editor.close') && step.window === s.window)
+  return last?.kind === 'editor.close'
+}
+
 /**
  * What tier B leaves out of [scenario] on [platform]; it throws for a world tier B does not build, so no scenario passes
  * or fails on one it only seems to run. On Linux a tap whose link failed brings its app by the raise (cable/hosts/open.ts,
  * linuxRaise.ts), which no fake records, so an open check of an app whose links fail is left out there: it would fail
- * on a raise that ran. So is one of an editor's terminal row there, whose tap brings its editor by the same raise.
+ * on a raise that ran. So is one of an editor's terminal row there, whose tap brings its editor by the same raise, but
+ * for a Cursor terminal row whose window closed before the tap: that tap opens its folder by Cursor's CLI, which the
+ * recording one stands for (U12).
  */
 export function tierBGaps(scenario: Scenario, platform: Platform): string[] {
   // Every daemon has the ChatGPT app installed before its first dial (openRig).
@@ -230,11 +241,13 @@ export function tierBGaps(scenario: Scenario, platform: Platform): string[] {
   if (scenario.steps.some((s) => s.kind === 'hook' && s.asks === 'question')) throw new Error(`${scenario.id}: tier B's Claude Code asks no question`)
   const failing = scenario.world?.linkFails ?? []
   const opened = platform === 'linux'
-    ? scenario.checks.flatMap((c) => c.kind === 'open' ? [scenario.sessions.find((s) => s.key === c.session)!] : [])
+    ? scenario.checks.flatMap((c) => c.kind === 'open' ? [{ s: scenario.sessions.find((s) => s.key === c.session)!, after: c.after }] : [])
     : []
+  const raised = ({ s, after }: (typeof opened)[number]): boolean =>
+    placeOf(s) === 'terminal' && !(s.app === 'cursor' && windowClosed(scenario, s, after))
   return [
-    ...opened.some((s) => failing.includes(s.app)) ? ["a failed link's app comes by Linux's raise, which tier B does not record"] : [],
-    ...opened.some((s) => placeOf(s) === 'terminal') ? ["an editor terminal's tap brings its editor by Linux's raise, which tier B does not record"] : [],
+    ...opened.some(({ s }) => failing.includes(s.app)) ? ["a failed link's app comes by Linux's raise, which tier B does not record"] : [],
+    ...opened.some(raised) ? ["an editor terminal's tap brings its editor by Linux's raise, which tier B does not record"] : [],
   ]
 }
 
