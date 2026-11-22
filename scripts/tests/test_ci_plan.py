@@ -1019,9 +1019,9 @@ class GitPlanTests(unittest.TestCase):
                    "cli/src/engines/cursor/adapter.ts", "cli/src/core/engines/cursorDiscovery.ts")
         # What the Orca file runs on outside them: the Orca plugin, and the harness's loop that runs it and its stream.
         orca = ("plugins/harness-device-orca/src/dial.ts", "plugins/harness-device-orca/orca-plugin.json")
+        # The plugin's loop and its stream run the Orca e2e files too: the Orca stand-in's test has them.
         harness = tuple(f"cli/e2e/harness/{name}.ts" for name in ("vscodeWindow", "outsideAgent", "codexOutside",
-                                                                   "cursorOutside", "editorWindow", "pluginDial",
-                                                                   "pluginLoop"))
+                                                                   "cursorOutside", "editorWindow"))
         canary = planner.LINUX_E2E_CANARY.removeprefix("cli/")
         evals = sorted(path.removeprefix("cli/") for path in APP_EVAL_FILES)
         for path in (planner.LINUX_E2E_CANARY, *APP_EVAL_FILES, hosts, catalog, carousel, driver, notes, *editors,

@@ -176,10 +176,11 @@ LINUX_E2E_CANARY_PATHS = (".github/actions/cli-e2e-setup/", "cli/e2e/harness/", 
 # PR CI suite runs macOS.
 LINUX_E2E_ORCA_FILES = ("cli/e2e/dialOrcaFocus.e2e.ts", "cli/e2e/dialOrcaFullRing.e2e.ts", "cli/e2e/dialStream.e2e.ts",
                         "cli/e2e/dialPaneFollow.e2e.ts", "cli/e2e/dialClaudeAppFollow.e2e.ts")
-# What they cover and no other linux-e2e file does: the stand-in, InOrca, the fake orca CLI and Orca's adapter. A change
-# to one runs them beside the PR's own files; its deletion too, as a canary path's does.
+# What they cover and no other linux-e2e file does: the stand-in, InOrca, the fake orca CLI, Orca's adapter, and the
+# harness's loop that runs Orca's plugin and its dial stream (dialStream.e2e.ts drives them). A change to one runs them
+# beside the PR's own files; its deletion too, as a canary path's does.
 LINUX_E2E_ORCA_PATHS = ("cli/e2e/harness/orcaHost.ts", "cli/e2e/harness/inOrca.ts", "cli/e2e/harness/fakeOrca.ts",
-                        "cli/src/cable/hosts/orca.ts")
+                        "cli/src/cable/hosts/orca.ts", "cli/e2e/harness/pluginLoop.ts", "cli/e2e/harness/pluginDial.ts")
 # The dial app eval's tier B files (docs/plans/2026-11-21-dial-app-eval-design.md,
 # docs/plans/2026-11-22-dial-eval-vscode-cursor-design.md for VS Code's and Cursor's and
 # docs/plans/2026-11-22-dial-eval-orca-design.md for Orca's), and what they cover: the hosts' adapters, the eval's
