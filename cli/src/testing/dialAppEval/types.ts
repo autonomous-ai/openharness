@@ -1,8 +1,9 @@
 // The dial eval's contract: the catalog, the drivers, the runner, the grader and the report all speak these types
-// (docs/plans/2026-11-21-dial-app-eval-design.md).
+// (docs/plans/2026-11-21-dial-app-eval-design.md, docs/plans/2026-11-22-dial-eval-vscode-cursor-design.md).
 import { observedAgentId } from '../../cable/hosts/observed.js'
 
-export type App = 'claude' | 'chatgpt'
+export type App = 'claude' | 'chatgpt' | 'vscode' | 'cursor'
+export type Editor = Extract<App, 'vscode' | 'cursor'>
 export type Dimension = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7' | 'D8'
 export type Platform = 'darwin' | 'win32' | 'linux'
 /** `a`: replay in process; `b`: scripted end to end on the real daemon, fake apps. */
@@ -11,8 +12,17 @@ export type SessionKey = string
 export type Label = string
 
 export const DIMENSIONS: readonly Dimension[] = ['D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D8']
+/** The apps scored, in the order the grader and the report list them. */
+export const APPS: readonly App[] = ['claude', 'chatgpt', 'vscode', 'cursor']
+export const EDITORS: readonly Editor[] = ['vscode', 'cursor']
 /** The wire's name for an app's page, which is its app id on the host too (hostDetect.ts): the ChatGPT app's threads are Codex's. */
-export const PAGE: Readonly<Record<App, string>> = { claude: 'claude', chatgpt: 'codex' }
+export const PAGE: Readonly<Record<App, string>> = { claude: 'claude', chatgpt: 'codex', vscode: 'vscode', cursor: 'cursor' }
+/** The agent a session runs, which names its observed source. */
+export type Engine = 'claude' | 'codex' | 'cursor'
+/** Where an editor session runs: a terminal of its window, the Claude Code panel, or Cursor's own agent. */
+export type Place = 'terminal' | 'panel' | 'agent'
+/** What the devices log when a stroke scrolls nothing, followed by why. */
+export const SKIPPED_SCROLL = '[device] scroll · skipped · '
 
 /** Each dimension's weight in an app's score: voice send counts most, since a wrong-session send is the worst failure. */
 export const WEIGHTS: Readonly<Record<Dimension, number>> = {
@@ -55,10 +65,23 @@ export interface SessionDef {
   cli?: true
   /** Never written or started: only probes name it. */
   ghost?: true
+  /** The editors only: `terminal` when unset. */
+  place?: Place
+  /** `claude` when unset, but the ChatGPT app's threads are Codex's and Cursor's `agent` is Cursor's own. */
+  engine?: Engine
+  /** The editor window that holds its terminal. */
+  window?: string
+  /** A Codex whose `CODEX_HOME` is a folder of its own. */
+  codexHome?: 'own'
+  /** Cursor's agent's workspace folders, under /work/eval-. */
+  folders?: string[]
+  /** Claude Code run in the person's tmux, whose client runs in its terminal (V12). */
+  tmux?: true
 }
 
 export const STEP_KINDS = ['claude.write', 'codex.write', 'hook', 'front', 'thread', 'attach', 'tap', 'swipe',
-  'voice', 'quit', 'relaunch', 'unplug', 'replug', 'wait'] as const
+  'voice', 'quit', 'relaunch', 'unplug', 'replug', 'wait',
+  'editor.window', 'editor.focus', 'editor.closeTerminal', 'editor.reload', 'editor.close', 'stroke'] as const
 export type StepKind = (typeof STEP_KINDS)[number]
 // One member per kind, so StepOf<K> narrows.
 export type Step = { label?: Label } & (
@@ -77,6 +100,15 @@ export type Step = { label?: Label } & (
   | { kind: 'relaunch'; app: App }
   | { kind: 'unplug' }
   | { kind: 'replug' }
+  /** A window opens its stream and reports its shells: by default the live terminal sessions whose `window` is it. */
+  | { kind: 'editor.window'; window: string; active: SessionKey | null; focused: boolean; terminals?: SessionKey[] }
+  /** A terminal becomes its window's active one, and the window is focused. */
+  | { kind: 'editor.focus'; session: SessionKey }
+  | { kind: 'editor.closeTerminal'; session: SessionKey }
+  | { kind: 'editor.reload'; window: string }
+  | { kind: 'editor.close'; window: string }
+  /** The person strokes the dial on the face's row. */
+  | { kind: 'stroke' }
   /**
    * With `until`, the wait ends once it holds and `ms` is only its limit: one that reaches it is a failing result.
    * Without, `ms` is the person's own timing.
@@ -87,7 +119,7 @@ export type Step = { label?: Label } & (
 export type Until = { kind: 'ring'; page: App; expect: SessionKey[] }
 export type StepOf<K extends StepKind> = Extract<Step, { kind: K }>
 
-export const CHECK_KINDS = ['ring', 'focus', 'still', 'open', 'state', 'voice', 'recap', 'cost'] as const
+export const CHECK_KINDS = ['ring', 'focus', 'still', 'open', 'state', 'voice', 'recap', 'cost', 'scroll', 'logged'] as const
 export type CheckKind = (typeof CHECK_KINDS)[number]
 export type Check = { id: string; dim: Dimension; after?: Label; at?: Label } & (
   /**
@@ -102,13 +134,21 @@ export type Check = { id: string; dim: Dimension; after?: Label; at?: Label } & 
   | { kind: 'voice'; session: SessionKey; text: string }
   | { kind: 'recap'; session: SessionKey; text: string }
   | { kind: 'cost' }
+  /** The window that holds the session's shell ran scroll lines for that shell while it was active. */
+  | { kind: 'scroll'; session: SessionKey }
+  /** The devices logged SKIPPED_SCROLL and a reason: pass/fail. */
+  | { kind: 'logged' }
 )
 
 export interface Scenario {
   id: string; app: App; title: string; dims: Dimension[]; platforms: Platform[]; tiers: Tier[]; heldOut: boolean
   sessions: SessionDef[]
   /** front defaults to `app`. accessibility false: Harness Device is not granted it, so no window title is read. */
-  world?: { front?: App | 'other'; chatgptInstalled?: false; linkFails?: App[]; accessibility?: false }
+  world?: { front?: App | 'other'; chatgptInstalled?: false; linkFails?: App[]; accessibility?: false
+    /** The editor was started from Terminal (`code .`, `cursor .`). */
+    launchedFrom?: 'terminal-app'
+    /** The Harness extension is not installed, so no window opens a stream (V13). */
+    extension?: false }
   steps: Step[]; checks: Check[]
   /** Checks that name a ghost session, so they must fail: they prove a check can fail with its evidence. Never scored. */
   probes: Check[]
@@ -127,6 +167,10 @@ export interface Seen {
   deliveries: Delivery[]
   steps: Array<{ at: number; index: number; kind: StepKind; label?: Label }>
   cost?: { cpuPercent: number; loopP99Ms: number; leftovers: number }
+  /** Each message on an editor window's stream, both ways. */
+  streams?: Array<{ at: number; window: string; line: Record<string, unknown> }>
+  /** Each devices log line; absent: the driver saw none. */
+  logs?: Array<{ at: number; line: string }>
 }
 export interface CheckResult {
   tier: Tier; platform: Platform; scenario: string
@@ -151,7 +195,9 @@ export interface RunResults { schema: 1; results: CheckResult[]; wrongSends: Wro
  * checks: keyed by resultKey. apps: each subset's app scores, keyed `a` (tier A, every platform at once, as it runs them
  * all by injection) or `b/<platform>`, so a run is compared only with the subsets it drove.
  */
-export interface Baseline { schema: 1; checks: Record<string, number>; apps: Record<string, Record<App, number | null>> }
+export interface Baseline { schema: 1; checks: Record<string, number>
+  /** One written before an app joined the eval has no entry of it. */
+  apps: Record<string, Partial<Record<App, number | null>>> }
 export interface AppScores {
   score: number | null; dims: Record<Dimension, number | null>
   /** That app's tier × platform × scenario runs left out for a gap. */
@@ -191,9 +237,18 @@ export interface EvalDriver {
   stop(): Promise<void>
 }
 
-/** The agent id the daemon's observed sources give this session: the ChatGPT app's threads are Codex's. */
-export function agentIdOf(session: Pick<SessionDef, 'app' | 'id'>): string {
-  return observedAgentId(session.app === 'claude' ? 'claude' : 'codex', session.id)
+export function engineOf(s: Pick<SessionDef, 'app' | 'engine' | 'place'>): Engine {
+  return s.engine ?? (s.app === 'chatgpt' ? 'codex' : s.app === 'cursor' && s.place === 'agent' ? 'cursor' : 'claude')
+}
+
+/** An editor session's place; undefined for the base apps. */
+export function placeOf(s: Pick<SessionDef, 'app' | 'place'>): Place | undefined {
+  return (EDITORS as readonly App[]).includes(s.app) ? s.place ?? 'terminal' : undefined
+}
+
+/** The agent id the daemon's observed sources give this session: its engine's. */
+export function agentIdOf(s: Pick<SessionDef, 'app' | 'id' | 'engine' | 'place'>): string {
+  return observedAgentId(engineOf(s), s.id)
 }
 
 /** A result's key in the baseline: tier/platform/scenario/check. */

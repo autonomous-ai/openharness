@@ -27,6 +27,7 @@ import type { ListenerHandler, ListenerStreamHandler } from '../../../services/d
 import { claudeAppFixture } from '../../claudeAppFixture.js'
 import { codexAppFixture } from '../../codexAppFixture.js'
 import { fakeCore } from '../../fakeCore.js'
+import { RECORDED_LINUX_APPS } from '../../recordedLinuxApps.js'
 import { agentIdOf, type App, type Delivery, type Platform, type Scenario, type Seen, type SessionDef, type SessionKey,
   type StepKind, type StepOf } from '../types.js'
 import { quiet } from './clock.js'
@@ -68,6 +69,8 @@ type Answer = { code: number; stdout?: string }
 const APPS: Readonly<Record<App, { bundle: string; scheme: string; desktopFile: string }>> = {
   claude: { bundle: 'com.anthropic.claudefordesktop', scheme: 'claude', desktopFile: 'com.anthropic.Claude.desktop' },
   chatgpt: { bundle: 'com.openai.codex', scheme: 'codex', desktopFile: 'chatgpt.desktop' },
+  vscode: { bundle: 'com.microsoft.VSCode', scheme: 'vscode', desktopFile: RECORDED_LINUX_APPS.vscode.schemeDesktopFile },
+  cursor: { bundle: 'com.todesktop.230313mzl4w4u92', scheme: 'cursor', desktopFile: RECORDED_LINUX_APPS.cursor.schemeDesktopFile },
 }
 /** The commands found on a Linux PATH here: the two a link needs. Nothing else of any platform's is installed. */
 const LINUX_TOOLS: ReadonlySet<string> = new Set(['xdg-mime', 'xdg-open'])
@@ -350,10 +353,11 @@ export class World implements TierAWorld {
     // A link of an app the scenario says fails them is refused.
     this.answer((argv) => (apps.some(([app, { scheme }]) => failing.has(app) && argv.some((arg) => arg.startsWith(`${scheme}://`)))
       ? { code: 1 } : undefined))
-    // On Linux each installed app's desktop file takes its scheme's links (cable/hosts/appLink.ts readApp).
+    // On Linux each installed app's desktop file takes its scheme's links (cable/hosts/appLink.ts readApp): only the
+    // ChatGPT app is ever missing (world.chatgptInstalled).
     this.answer((argv) => {
       if (!argv[0]?.endsWith('xdg-mime') || argv[1] !== 'query' || argv[2] !== 'default') return undefined
-      const found = apps.find(([app, { scheme }]) => argv[3] === `x-scheme-handler/${scheme}` && (app === 'claude' || installed))
+      const found = apps.find(([app, { scheme }]) => argv[3] === `x-scheme-handler/${scheme}` && (app !== 'chatgpt' || installed))
       return { code: 0, stdout: found ? `${found[1].desktopFile}\n` : '' }
     })
     const orca: OrcaReadDeps = {

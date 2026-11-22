@@ -11,7 +11,8 @@ function stepKeys(step: Step): SessionKey[] {
   switch (step.kind) {
     case 'claude.write': return step.sessions
     case 'codex.write': return [...step.sessions, ...step.archived ?? [], ...Object.keys(step.names ?? {}), ...Object.keys(step.ages ?? {})]
-    case 'hook': case 'attach': case 'tap': case 'swipe': return [step.session]
+    case 'hook': case 'attach': case 'tap': case 'swipe': case 'editor.focus': case 'editor.closeTerminal': return [step.session]
+    case 'editor.window': return [...step.terminals ?? [], ...step.active === null ? [] : [step.active]]
     case 'voice': return [step.target]
     default: return []
   }
@@ -20,7 +21,7 @@ function stepKeys(step: Step): SessionKey[] {
 function checkKeys(check: Check): SessionKey[] {
   switch (check.kind) {
     case 'ring': return [...check.expect, ...check.apart ?? []]
-    case 'focus': case 'open': case 'state': case 'voice': case 'recap': return [check.session]
+    case 'focus': case 'open': case 'state': case 'voice': case 'recap': case 'scroll': return [check.session]
     default: return []
   }
 }
@@ -219,9 +220,13 @@ describe('the catalog', () => {
       tap: ['open', 'focus'], swipe: ['open', 'focus'],
       front: ['focus', 'open'], thread: ['focus', 'open'], attach: ['focus', 'open'],
       voice: ['voice'],
+      'editor.window': ['ring', 'open', 'scroll'], 'editor.focus': ['focus'], 'editor.closeTerminal': ['ring'],
+      'editor.reload': ['ring', 'open'], 'editor.close': ['open', 'scroll'], stroke: ['scroll'],
     }
     for (const s of ALL) expect(s.probes.length, s.id).toBeGreaterThan(0)
-    for (const kind of STEP_KINDS.filter((k) => k !== 'wait')) {
+    // The editors' step kinds come before their scenarios (docs/plans/2026-11-22-dial-eval-vscode-cursor-plan.md,
+    // Decision 17): a kind no scenario uses yet is left out until Task 17 holds every kind again.
+    for (const kind of STEP_KINDS.filter((k) => k !== 'wait').filter((k) => ALL.some((s) => s.steps.some((step) => step.kind === k)))) {
       const seenBy = ALL.filter((s) => s.steps.some((step) => step.kind === kind) && s.probes.some((p) => sees[kind].includes(p.kind)))
       expect(seenBy.length, kind).toBeGreaterThan(0)
     }

@@ -241,7 +241,7 @@ function stillParts(check: CheckOf<'still'>, world: World, w: Window | undefined
 }
 
 /** Each app's link scheme: the ChatGPT app's threads are Codex's. */
-const SCHEMES: Readonly<Record<App, string>> = { claude: 'claude://', chatgpt: 'codex://' }
+const SCHEMES: Readonly<Record<App, string>> = { claude: 'claude://', chatgpt: 'codex://', vscode: 'vscode://', cursor: 'cursor://' }
 
 /** The session's own link: the Claude app opens its store's `local_` id, the ChatGPT app the Codex thread. */
 function linkOf(session: SessionDef): string | undefined {
@@ -419,6 +419,8 @@ function partsOf(check: Check, scenario: Scenario, seen: Seen, platform: Platfor
     case 'voice': return voiceParts(check, world, w)
     case 'recap': return recapParts(check, world, w)
     case 'cost': return costParts(seen)
+    // Built by Task 6 of docs/plans/2026-11-22-dial-eval-vscode-cursor-plan.md; no scenario asks for them before.
+    case 'scroll': case 'logged': throw new Error(`the ${check.kind} check is not built yet`)
   }
 }
 

@@ -3,18 +3,20 @@
 import { mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DIMENSIONS, type App, type AppScores, type Report } from './types.js'
+import { APPS, DIMENSIONS, type App, type AppScores, type Report } from './types.js'
 
 /** Reported beside each app's score; a score below it never fails CI. */
 const TARGET = 95
-const APPS: readonly App[] = ['claude', 'chatgpt']
-const APP_NAMES: Record<App, string> = { claude: 'the Claude app', chatgpt: 'the ChatGPT app' }
+const APP_NAMES: Record<App, string> = { claude: 'the Claude app', chatgpt: 'the ChatGPT app', vscode: 'VS Code', cursor: 'Cursor' }
+/** What no run of the eval drives, printed under the score table so a score is not read as covering it. */
+const NOT_COVERED = 'Not covered: tier B on Windows'
 
 /** The terminal table: scores, the gate and where points were lost. */
 export function summary(report: Report): string {
   const r = clean(report)
   const lines = [`Dial eval (target ${TARGET})`, columns(['', ...DIMENSIONS, 'score', ''])]
   for (const app of APPS) lines.push(columns(scoreRow(app, r.apps[app])))
+  lines.push(NOT_COVERED)
   lines.push('', 'Held out', columns(['', ...DIMENSIONS, 'score', '']))
   for (const app of APPS) lines.push(columns(scoreRow(app, r.heldOut[app])))
   lines.push('', ...subsetRows(r).map(([run, app, score, leftOut]) =>
@@ -32,6 +34,7 @@ export function markdown(report: Report): string {
     '# Dial eval', '',
     '## Scores', '', `Target: ${TARGET}`, '',
     ...table(['App', ...DIMENSIONS, 'Score', 'Left out'], APPS.map((app) => scoreRow(app, r.apps[app]))), '',
+    NOT_COVERED, '',
     '## Held out', '',
     ...table(['App', ...DIMENSIONS, 'Score', 'Left out'], APPS.map((app) => scoreRow(app, r.heldOut[app]))), '',
     '## By tier and platform', '',

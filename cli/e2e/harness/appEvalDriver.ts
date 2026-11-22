@@ -39,12 +39,13 @@ const FILTER = { appFilter: 'v1' }
 const SERIAL = 'EVAL-B'
 const MAC = 'e2:e0:00:00:0e:b1'
 /** The scheme of each app's links (cable/hosts/claudeApp.ts, codexApp.ts): the ChatGPT app's threads are Codex's. */
-const SCHEME: Readonly<Record<App, string>> = { claude: 'claude', chatgpt: 'codex' }
+const SCHEME: Readonly<Record<App, string>> = { claude: 'claude', chatgpt: 'codex', vscode: 'vscode', cursor: 'cursor' }
 /** The app in front as Harness Device names it: a bundle id on macOS, the window's process on Linux; `other` is an app
  *  the dial follows none of. */
 const FRONT: Readonly<Record<'darwin' | 'linux', Record<App | 'other', string>>> = {
-  darwin: { claude: 'com.anthropic.claudefordesktop', chatgpt: 'com.openai.codex', other: 'com.apple.Safari' },
-  linux: { claude: 'claude-desktop', chatgpt: 'ChatGPT', other: 'firefox' },
+  darwin: { claude: 'com.anthropic.claudefordesktop', chatgpt: 'com.openai.codex', vscode: 'com.microsoft.VSCode',
+    cursor: 'com.todesktop.230313mzl4w4u92', other: 'com.apple.Safari' },
+  linux: { claude: 'claude-desktop', chatgpt: 'ChatGPT', vscode: 'code', cursor: 'cursor', other: 'firefox' },
 }
 /** The machine each daemon signs in as, to hear its dial's words: the daemon asks its backend for each transcript. */
 const ME: FakeMachine = { machineId: 'e7'.repeat(16), computerId: 'e2e-dial-eval-computer', name: 'Fixture', token: 'e2e-dial-eval-token' }

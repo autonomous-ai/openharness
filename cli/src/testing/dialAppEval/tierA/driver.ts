@@ -26,8 +26,14 @@ import { windowSteps } from './steps/window.js'
 import { World, type StepHandler, type TierAWorld } from './world.js'
 
 type Run = Exclude<Step, { kind: 'wait' }>
+/** The editors' steps, built by Tasks 3 and 4 of docs/plans/2026-11-22-dial-eval-vscode-cursor-plan.md: no scenario
+ *  takes one before. */
+const notBuilt = (kind: StepKind) => async (): Promise<void> => { throw new Error(`tier A: the ${kind} step is not built yet`) }
 const STEPS: { [K in Exclude<StepKind, 'wait'>]: StepHandler<K> } = {
   ...claudeStoreSteps, ...codexStoreSteps, ...sessionsSteps, ...windowSteps, ...dialSteps, ...voiceSteps,
+  'editor.window': notBuilt('editor.window'), 'editor.focus': notBuilt('editor.focus'),
+  'editor.closeTerminal': notBuilt('editor.closeTerminal'), 'editor.reload': notBuilt('editor.reload'),
+  'editor.close': notBuilt('editor.close'), stroke: notBuilt('stroke'),
 }
 /** Virtual time for the dial to be found and welcomed: the fleet looks every 2 s, the dial greets every 2 s. */
 const START_WITHIN_MS = 30_000
