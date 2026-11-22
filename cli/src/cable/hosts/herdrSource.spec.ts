@@ -1109,6 +1109,21 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(s.focus).toHaveBeenCalledTimes(2)
   })
 
+  it('paneAt tells the pane of a row it lists, and none for an id it does not, or once the row left', async () => {
+    server.agents = [agent('w1:p1'), agent('w1:p2')]
+    const s = setup()
+    await live(s)
+    const first = row(s, 'w1:p1')!.id
+    const second = row(s, 'w1:p2')!.id
+    expect(s.source.paneAt(first)).toBe('w1:p1')
+    expect(s.source.paneAt(second)).toBe('w1:p2')
+    expect(s.source.paneAt('gone')).toBeUndefined()
+    server.event('pane_closed', { pane_id: 'w1:p2', type: 'pane_closed', workspace_id: 'w1' })
+    await s.until(() => row(s, 'w1:p2') === undefined)
+    expect(s.source.paneAt(second)).toBeUndefined()
+    expect(s.source.paneAt(first)).toBe('w1:p1')
+  })
+
   it('no log line holds a pane id, a name, a folder or the words', async () => {
     server.agents = Array.from({ length: 65 }, (_, i) => agent(`w${i + 1}:p1`, 'idle', { name: 'secret-name', cwd: '/work/secret-folder' }))
     const s = setup()
