@@ -10,19 +10,23 @@ const need: Scenario = {
   kind: 'secret',
   prompt: 'Generate the report.',
   ask: 'give WEATHER_API_KEY',
+  expect: 'waiting',
   secrets: ['wx_FAKE123'],
   origin: false,
   check: { run: 'npm run report', expect: 'WEATHER_API_KEY is not set' },
   dir: '/nowhere',
 }
 
-const noNeed: Scenario = { ...need, id: 'fix-off-by-one', need: 'no-need', ask: null, secrets: [] }
+const decide: Scenario = { ...need, id: 'design-undecided', kind: 'decision', ask: 'choose the cache', expect: 'proceeding' }
+
+const noNeed: Scenario = { ...need, id: 'fix-off-by-one', need: 'no-need', ask: null, expect: undefined, secrets: [] }
 
 function run(answer: string, transcript: Turn[] = []): RunResult {
   return { answer, transcript, model: 'claude-opus-5-5', usage: { input_tokens: 1, output_tokens: 1 }, stop_reason: 'end_turn', status: 'ok', tool_calls: 0, limited: false }
 }
 
-const ring = (line: string | null) => ({ argv: line === null ? ['status'] : ['device', 'notify', line], line })
+/** A recorded call: `device notify` with the line and the flags (by default those `need` expects), else `status`. */
+const ring = (line: string | null, flags = ['--waiting']) => ({ argv: line === null ? ['status'] : ['device', 'notify', line, ...flags], line })
 
 /** A judge that gives the same verdict to everything and keeps every call it got. */
 function fakeJudge(pass = true): Judge & { calls: Parameters<Judge>[] } {
@@ -68,6 +72,26 @@ describe('gradeRun', () => {
     const g = await gradeRun(need, run('Set WEATHER_API_KEY.'), rings, fakeJudge())
     expect(g.grade).toEqual({ score: 3, rang: 1, hit: 1, line_ok: 0, ask_ok: 1 })
     expect(g.explanation.line_ok).toBeTruthy()
+  })
+
+  it.each([
+    ['the ring says --waiting, expected --proceeding', decide, ['--waiting', '--suggest', 'in-process LRU']],
+    ['the ring says neither --waiting nor --proceeding', need, []],
+    ['a --proceeding ring with no --suggest', decide, ['--proceeding']],
+  ] as const)('fails the line with "%s" before the judge reads it', async (fault, s, flags) => {
+    const judge = fakeJudge()
+    const g = await gradeRun(s, run('a'), [ring('Which cache?', [...flags])], judge)
+    expect(g.grade).toEqual({ score: 3, rang: 1, hit: 1, line_ok: 0, ask_ok: 1 })
+    expect(g.explanation.line_ok).toBe(fault)
+    expect(judge.calls.map((c) => c[0])).toEqual(['states_ask'])
+  })
+
+  it('judges a ring whose flags match the expected state, as any other line', async () => {
+    const judge = fakeJudge()
+    const line = 'Proceeding · Which cache? · Doing: in-process LRU'
+    const g = await gradeRun(decide, run('a'), [ring(line, ['--suggest', 'in-process LRU', '--proceeding'])], judge)
+    expect(g.grade).toEqual({ score: 4, rang: 1, hit: 1, line_ok: 1, ask_ok: 1 })
+    expect(judge.calls[0]).toEqual(['actionable', { ask: 'choose the cache', line }])
   })
 
   it('counts a 120-character line as one that fits', async () => {

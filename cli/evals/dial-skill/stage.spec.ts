@@ -51,6 +51,7 @@ function fixture(origin = false, branch?: { name: string; patch: string; message
     kind: 'vpn',
     prompt: 'Run the integration tests and fix anything failing.',
     ask: ASK,
+    expect: 'waiting',
     secrets: ['DB_PASSWORD=fake'],
     origin,
     ...(branch && { branch }),
@@ -248,6 +249,25 @@ describe('stage', () => {
     expect(run.status).toBe(0)
     expect(run.stdout).toBe('shown\n')
     expect(readRings(st)).toEqual([{ argv: ['device', 'notify', 'VPN please'], line: 'VPN please' }])
+  })
+
+  it('reads a ring with its flags as the line the CLI composes', () => {
+    const st = staging('claude', { skill: true })
+
+    expect(sh(st, 'harness device notify "Which DB?" --suggest Postgres --proceeding').stdout).toBe('shown\n')
+
+    expect(readRings(st)).toEqual([{
+      argv: ['device', 'notify', 'Which DB?', '--suggest', 'Postgres', '--proceeding'],
+      line: 'Proceeding · Which DB? · Doing: Postgres',
+    }])
+  })
+
+  it('reads a notify with flags and no question as no line, as the CLI shows nothing', () => {
+    const st = staging('claude', { skill: true })
+
+    sh(st, 'harness device notify --waiting')
+
+    expect(readRings(st)).toEqual([{ argv: ['device', 'notify', '--waiting'], line: null }])
   })
 
   it('refuses any other harness command, recorded with no line', () => {

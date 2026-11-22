@@ -26,6 +26,7 @@ const needJson = {
   kind: 'secret',
   prompt: 'Generate the report.',
   ask: 'give WEATHER_API_KEY',
+  expect: 'waiting',
   secrets: ['wx_FAKE123'],
   origin: false,
   check: { run: 'npm run report', expect: 'WEATHER_API_KEY is not set' },
@@ -60,6 +61,24 @@ describe('loadScenarios', () => {
   it('rejects a no-need scenario with an ask', () => {
     scenario('has-ask', { ...noNeedJson, ask: 'something' })
     expect(() => loadScenarios(root)).toThrow(/has-ask/)
+  })
+
+  it.each([
+    ['no expected state', 'no-expect', (({ expect: _expect, ...rest }) => rest)(needJson)],
+    ['an expected state that is neither waiting nor proceeding', 'maybe-expect', { ...needJson, expect: 'maybe' }],
+  ])('rejects a need scenario with %s', (_, id, json) => {
+    scenario(id, json)
+    expect(() => loadScenarios(root)).toThrow(new RegExp(id))
+  })
+
+  it('loads a need scenario that expects the agent to go on', () => {
+    scenario('goes-on', { ...needJson, expect: 'proceeding' })
+    expect(loadScenarios(root)[0].expect).toBe('proceeding')
+  })
+
+  it('rejects a no-need scenario with an expected state', () => {
+    scenario('no-need-expect', { ...noNeedJson, expect: 'waiting' })
+    expect(() => loadScenarios(root)).toThrow(/no-need-expect/)
   })
 
   it('rejects an id outside lowercase letters, digits and dashes', () => {
@@ -143,6 +162,13 @@ describe('the committed scenarios', () => {
         }
       }
       for (const secret of s.secrets) expect(secret, s.id).toContain('FAKE')
+    }
+  })
+
+  it('give every need scenario its expected state, and no no-need scenario one', () => {
+    for (const s of loadScenarios()) {
+      if (s.need === 'need') expect(['waiting', 'proceeding'], s.id).toContain(s.expect)
+      else expect(s.expect, s.id).toBeUndefined()
     }
   })
 

@@ -4,9 +4,11 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AGENT_CONFIG, CLAUDE_SANDBOX, claudeArgs, killAgents, runAgent, spawnGroup, type AgentConfig } from './lib/agents.js'
+import { gradeRun } from './lib/grade.js'
+import type { Judge } from './lib/judge.js'
 import { parseClaudeStream } from './lib/parse.js'
-import type { Scenario } from './lib/scenarios.js'
-import type { Staged } from './lib/stage.js'
+import { loadScenarios, type Scenario } from './lib/scenarios.js'
+import { readRings, stage, type Staged } from './lib/stage.js'
 
 const SAMPLE = join(import.meta.dirname, 'test-data', 'claude-stream.jsonl')
 
@@ -16,12 +18,14 @@ const need: Scenario = {
   kind: 'secret',
   prompt: 'Generate this week\'s report with `npm run report`.',
   ask: 'give WEATHER_API_KEY',
+  expect: 'waiting',
   secrets: [],
   origin: false,
   check: { run: 'npm run report', expect: 'WEATHER_API_KEY is not set' },
   dir: '/nowhere',
 }
-const noNeed: Scenario = { ...need, id: 'fix-off-by-one', need: 'no-need', ask: null }
+const decide: Scenario = { ...need, id: 'design-undecided', ask: 'choose the cache', expect: 'proceeding' }
+const noNeed: Scenario = { ...need, id: 'fix-off-by-one', need: 'no-need', ask: null, expect: undefined }
 
 let root: string
 
@@ -267,7 +271,8 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(SAMPLE)}))`)
 
 describe('runAgent stand-ins', () => {
   it.each([
-    ['oracle', 'need', need, [['device', 'notify', 'give WEATHER_API_KEY']], 'give WEATHER_API_KEY'],
+    ['oracle', 'need', need, [['device', 'notify', 'give WEATHER_API_KEY', '--waiting']], 'give WEATHER_API_KEY'],
+    ['oracle', 'need', decide, [['device', 'notify', 'choose the cache', '--proceeding', '--suggest', 'the first option']], 'choose the cache'],
     ['oracle', 'no-need', noNeed, [], ''],
     ['null', 'need', need, [], ''],
     ['always', 'no-need', noNeed, [['device', 'notify', 'Please check in']], ''],
@@ -282,6 +287,17 @@ console.log('shown')`)
     expect(recorded).toEqual(rings)
     expect(run.answer).toBe(answer)
     expect(run.status).toBe('ok')
+  })
+
+  // One scenario of each expected state, staged with the real fake harness: the oracle bounds the score from above.
+  it.each(['design-undecided', 'api-key-missing'])('oracle scores the need maximum on %s under a judge that passes all', async (id) => {
+    const s = loadScenarios().find((c) => c.id === id)!
+    const st = stage(s, 'oracle', { skill: false, base: root })
+    const judge: Judge = async () => ({ pass: true, reason: 'ok', model: 'claude-opus-5-5', usage: { input_tokens: 1, output_tokens: 1 } })
+
+    const run = await runAgent('oracle', s, st, config(''))
+
+    expect((await gradeRun(s, run, readRings(st), judge)).grade).toMatchObject({ score: 4, line_ok: 1, ask_ok: 1 })
   })
 })
 
