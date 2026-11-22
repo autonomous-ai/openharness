@@ -1151,19 +1151,22 @@ describe('Orca', () => {
     const OX = orca('ox', 54, { tab: 1, split: 1, engine: 'codex' })
     const OF = orca('of', 55, { worktree: 'w3', engine: 'codex' })
     const named = [OA, OC, OD, OW, OX, OF]
-    const t = scenario([{ kind: 'orca.layout', worktrees: ['w1', 'w2'], renamed: { od: 'Eval   tab renamed ' }, label: 'w' },
+    // Each pane is open: its session started.
+    const t = scenario([...named.map((x): Step => ({ kind: 'hook', session: x.key, event: 'start' })),
+      { kind: 'orca.layout', worktrees: ['w1', 'w2'], renamed: { od: 'Eval   tab renamed ' }, label: 'w' },
       { kind: 'orca.layout', worktrees: ['w1', 'w2'], label: 'later' }], named)
+    const times = [...named.map(() => 50), 100, 2000]
     const ring = (at?: string): Check => ({ id: 'r', kind: 'ring', dim: 'D1', page: 'orca', expect: named.map((x) => x.key), after: 'w',
       ...(at === undefined ? {} : { at }) })
     const right: Row[] = [OA, [id(OC), 'Eval tab renamed'], [id(OD), 'Eval tab renamed'], OW, [id(OX), OW.title], [id(OF), 'eval-w3']]
     // The rename of a tab names every pane in it, Claude Code's too; a Codex pane is named by its tab's lowest split; a
     // session in no worktree Orca lists by its folder.
-    expect(scores(run(ring('later'), t, seen(t, [100, 2000], { frames: list(200, 'orca', right) }))).names).toBe(1)
-    expect(scores(run(ring('later'), t, seen(t, [100, 2000], { frames: list(200, 'orca', named) }))).names).toBe(2 / 6)
+    expect(scores(run(ring('later'), t, seen(t, times, { frames: list(200, 'orca', right) }))).names).toBe(1)
+    expect(scores(run(ring('later'), t, seen(t, times, { frames: list(200, 'orca', named) }))).names).toBe(2 / 6)
     // Once the rename is gone the tab is titled by its lowest split again: Claude Code's by its own title.
     const after: Row[] = [OA, OC, OD, OW, [id(OX), OW.title], [id(OF), 'eval-w3']]
-    expect(scores(run(ring(), t, seen(t, [100, 2000], { frames: list(2100, 'orca', after) }))).names).toBe(1)
-    expect(condition({ kind: 'ring', page: 'orca', expect: named.map((x) => x.key) }, t, seen(t, [100, 2000], { frames: list(2100, 'orca', after) })).holds)
+    expect(scores(run(ring(), t, seen(t, times, { frames: list(2100, 'orca', after) }))).names).toBe(1)
+    expect(condition({ kind: 'ring', page: 'orca', expect: named.map((x) => x.key) }, t, seen(t, times, { frames: list(2100, 'orca', after) })).holds)
       .toBe(true)
   })
 

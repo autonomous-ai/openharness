@@ -212,19 +212,28 @@ function titleOf(world: World, key: SessionKey, to: number): string {
 /**
  * An Orca row's name at `to` (docs/plans/2026-11-22-dial-eval-orca-plan.md, Decision 13): its tab's rename in the latest
  * layout, else Claude Code's own title, else its tab's title, else its folder's, as Orca lists no worktree but the
- * layout's. Its tab is the panes still open there: a pane closes at `orca.close` and at its session's end.
+ * layout's. Its tab is the panes open there, as both tiers lay them out (orcaListing.ts orcaLayout): a pane opens at its
+ * session's start and closes at `orca.close`, its end and Orca's quit; Orca's relaunch opens again those its quit closed.
  */
 function orcaTitle(world: World, session: SessionDef, to: number): string {
   let layout: StepOf<'orca.layout'> | undefined
-  const gone = new Set<SessionKey>()
+  const open = new Set<SessionKey>()
+  let quit: SessionKey[] = []
   for (const step of world.stepsBefore(to)) {
     if (step.kind === 'orca.layout') layout = step
-    else if (step.kind === 'orca.close' || (step.kind === 'hook' && step.event === 'end')) gone.add(step.session)
-    else if (step.kind === 'hook' && step.event === 'start') gone.delete(step.session)
+    else if (step.kind === 'hook' && step.event === 'start') open.add(step.session)
+    else if (step.kind === 'orca.close' || (step.kind === 'hook' && step.event === 'end')) open.delete(step.session)
+    else if (step.kind === 'quit' && step.app === 'orca') {
+      quit = [...open]
+      open.clear()
+    } else if (step.kind === 'relaunch' && step.app === 'orca') {
+      for (const key of quit) open.add(key)
+      quit = []
+    }
   }
   const laid = session.worktree !== undefined && layout?.worktrees.includes(session.worktree) === true
-  const tab = laid ? world.scenario.sessions.filter((s) => s.app === 'orca' && !s.ghost && s.worktree === session.worktree
-    && (s.tab ?? 0) === (session.tab ?? 0) && (s === session || !gone.has(s.key))).map((s) => ({ key: s.key, title: s.title, split: s.split ?? 0 })) : []
+  const tab = laid ? world.scenario.sessions.filter((s) => s.app === 'orca' && s.worktree === session.worktree
+    && (s.tab ?? 0) === (session.tab ?? 0) && (s === session || open.has(s.key))).map((s) => ({ key: s.key, title: s.title, split: s.split ?? 0 })) : []
   const renamed = layout?.renamed ?? {}
   if (tab.some((p) => Object.hasOwn(renamed, p.key))) return tabTitle(tab, renamed)
   if (engineOf(session) === 'claude') return session.title
