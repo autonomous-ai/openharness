@@ -1296,6 +1296,19 @@ describe('Claude Code while Harness runs a Claude agent of its own (docs/plans/2
     expect(sorted(readSetup(r.dataDir).homes.claude)).toEqual(sorted([skills, skillsOf(adopted)]))
   })
 
+  it('a scan that still finds Claude Code held says so once; the start pass does not', () => {
+    const r = rig()
+    r.agents.now = 'unknown'
+    r.writer.started()
+    r.writer.attached()
+    expect(r.lines).toEqual([counts([0, 0], [1, 0])])
+
+    r.writer.scanned([])
+    r.writer.scanned([])
+
+    expect(r.lines).toEqual([counts([0, 0], [1, 0]), 'dial skill: claude held (agents not known)'])
+  })
+
   it('an unknown read after a known one keeps the known answer', () => {
     const r = rig()
     rmSync(r.claudeHome, { recursive: true })
