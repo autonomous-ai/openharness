@@ -4870,6 +4870,27 @@ describe('ObservedSource and a nested session the scan found', () => {
     ])
   })
 
+  it('a lookup that rejects or throws counts as no place: the look\'s next is still asked, and its line is said', async () => {
+    const t = scan(new Map([[100, IN_TMUX], [200, IN_HERDR], [300, IN_TMUX]]))
+    t.nested.mockRejectedValueOnce(new Error('osascript under /Users/someone'))
+    t.nested.mockImplementationOnce(() => { throw new TypeError('no pane') })
+    t.found('a', 100)
+    t.found('b', 200)
+    t.found('c', 300)
+    const look = t.src.scanOpen()
+    await t.answer(0, ITERM)
+    await look
+    expect(t.nested).toHaveBeenCalledTimes(3)
+    expect(t.src.list().map((a) => [a.sessionId, a.app, a.appPending])).toEqual([
+      ['a', 'terminal', true], ['b', 'terminal', true], ['c', 'iterm', undefined],
+    ])
+    expect(t.logs).toEqual([
+      '[observed] scan · lookup not read · Error',
+      '[observed] scan · lookup not read · TypeError',
+      '[observed] scan · 3 found · 0 app known · 0 named · 0 answered · 0 ms · 1 nested placed',
+    ])
+  })
+
   it('a session paired with a Herdr terminal is not asked', async () => {
     const t = scan(new Map([[100, IN_TMUX], [200, IN_HERDR]]), { herdrTerminal: (pid) => (pid === 200 ? 't7' : undefined) })
     t.found('a', 100)
