@@ -2,7 +2,7 @@
   "need": "need",
   "kind": "decision",
   "prompt": "Add CSV export (see ISSUE-12.md).",
-  "ask": "Choose the CSV delimiter (comma or semicolon) and whether to write a header row.",
+  "ask": "Choose the CSV delimiter, comma or semicolon (header row: a second, smaller one).",
   "expect": "proceeding",
   "secrets": [],
   "origin": false,
