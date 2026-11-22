@@ -232,6 +232,33 @@ describe("tier A's Orca", () => {
     expect(door.fronts).toEqual([[orcaTerminalHandle('a'), orcaTerminalHandle('c'), orcaTerminalHandle('b')], [orcaTerminalHandle('d')]])
   })
 
+  it("the worktree on screen is told again as a pane of it opens or closes, before the agent's start hook; another worktree's pane, a rename and a stream opened again tell nothing", async () => {
+    const { world, deps } = worldOn('darwin', layout())
+    const door = await pluginDoor(deps)
+    // What the plugin had told as each start hook came.
+    const atStart: Array<readonly string[] | null | undefined> = []
+    const port = world.ports.devices!
+    world.ports.devices = { ...port, observed: (event) => {
+      if (event.event === 'session-start') atStart.push(door.fronts.at(-1))
+      return port.observed(event)
+    } }
+    await orcaModelSteps['orca.layout'](world, { kind: 'orca.layout', worktrees: ['w1', 'w2'] })
+    await plugin(world, true)
+    // Told before its agents start: none of its terminals is open yet.
+    await front(world, 'w1')
+    await started(world, ['a', 'd', 'c'])
+    await orcaModelSteps['orca.layout'](world, { kind: 'orca.layout', worktrees: ['w1', 'w2'], renamed: { a: 'Eval Renamed' } })
+    await orcaModelSteps['orca.close'](world, { kind: 'orca.close', session: 'c' })
+    await sessionsSteps.hook(world, { kind: 'hook', session: 'a', event: 'end' })
+    // The plugin's next stream, as after Orca's relaunch, knows no worktree until the next front.
+    await plugin(world, false)
+    await plugin(world, true)
+    await started(world, ['e'])
+    const [a, c] = [orcaTerminalHandle('a'), orcaTerminalHandle('c')]
+    expect(door.fronts).toEqual([[], [a], [a, c], [a], []])
+    expect(atStart).toEqual([[a], [a], [a, c], []])
+  })
+
   it('a front with no stream open throws', async () => {
     const { world, deps } = worldOn('darwin', layout())
     const door = await pluginDoor(deps)
