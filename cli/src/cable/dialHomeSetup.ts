@@ -8,7 +8,7 @@
 // its own (docs/plans/2026-11-22-needs-you-notify-design.md).
 import { realpathSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { claudePluginState, claudePluginTurnedOff, ownDirectory, refreshSkill, removeSkill, skillsFolderOf, writeSkill } from '../devices/dialSkill.js'
+import { ownDirectory, readClaudePlugin, refreshSkill, removeSkill, skillsFolderOf, writeSkill } from '../devices/dialSkill.js'
 import { DIAL_SKILL_FILE, MAX_HOMES, listable, readSetup, readWritten, writeSetup, type DialEngine, type DialRemoved, type DialSetupRecord, type Read, type SetupCount } from '../devices/dialSkillFiles.js'
 import { rolloutHome, takesOwner, type RolloutOwner } from './codexRolloutHome.js'
 
@@ -167,10 +167,10 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
     if (removedNow()[engine] === true) return false
     removalCounted.delete(engine)
     if (engine === 'codex') return true
-    const state = claudePluginState(settingsFile)
+    const state = readClaudePlugin(settingsFile)
     if (state !== 'unknown') {
       pluginOn = state === 'on'
-      turnedOff = state === 'off' && claudePluginTurnedOff(settingsFile)
+      turnedOff = state === 'turned-off'
     }
     if (turnedOff) return false
     if (pluginOn || agents === 'listed') return true

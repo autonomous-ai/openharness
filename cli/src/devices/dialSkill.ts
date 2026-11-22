@@ -207,18 +207,26 @@ function removeEmpty(folder: string): void {
 }
 
 /**
- * Claude Code's own record of the plugin, in its user settings: 'on' while its entry is true, 'off' once disabled or
- * uninstalled (the entry false or gone), 'unknown' when the file says nothing.
+ * Claude Code's own record of the plugin, in its user settings, from one read: 'on' while its entry is true,
+ * 'turned-off' once the person turned it off (the entry false, as `claude plugin disable` and /plugin leave it), 'off'
+ * while it has no entry (never set there, or uninstalled) or another value, 'unknown' when the file says nothing. One
+ * read, so a file written again between two reads never mixes their answers.
  */
-export function claudePluginState(settingsPath: string): 'on' | 'off' | 'unknown' {
+export function readClaudePlugin(settingsPath: string): 'on' | 'off' | 'turned-off' | 'unknown' {
   const entry = pluginEntry(settingsPath)
-  return entry === UNKNOWN ? 'unknown' : entry === true ? 'on' : 'off'
+  return entry === UNKNOWN ? 'unknown' : entry === true ? 'on' : entry === false ? 'turned-off' : 'off'
 }
 
-/** Whether the person turned the plugin off in these settings: its entry false, as `claude plugin disable` and /plugin
- *  leave it. An entry gone says no such thing: never set there, or uninstalled. */
+/** As readClaudePlugin, turned off or gone alike 'off': disabled or uninstalled. */
+export function claudePluginState(settingsPath: string): 'on' | 'off' | 'unknown' {
+  const state = readClaudePlugin(settingsPath)
+  return state === 'turned-off' ? 'off' : state
+}
+
+/** Whether the person turned the plugin off in these settings. An entry gone says no such thing: never set there, or
+ *  uninstalled. */
 export function claudePluginTurnedOff(settingsPath: string): boolean {
-  return pluginEntry(settingsPath) === false
+  return readClaudePlugin(settingsPath) === 'turned-off'
 }
 
 const UNKNOWN = Symbol('unknown')
