@@ -31,12 +31,18 @@ const EXE_APPS: Readonly<Record<string, string>> = {
 // the name is Linux's alone.
 const LINUX_APPS: Readonly<Record<string, string>> = {
   'claude-desktop': 'claude',
+  // Orca's main process, the .deb's /opt/Orca/orca-ide and the AppImage's alike (cli/src/testing/recordedOrca.ts,
+  // `executableName: 'orca-ide'`). A bare `orca` is GNOME's screen reader, so it has no row.
+  'orca-ide': 'orca',
 }
 
 // The Claude app's Windows process, the owner of its window (docs/plans/2026-11-19-dial-windows-vm-notes.md, Task 37
 // §1), lower-cased: only with `.exe`, since a bare `claude` is no app's window name elsewhere.
 const WINDOWS_APPS: Readonly<Record<string, string>> = {
   'claude.exe': 'claude',
+  // Orca's window owner (the same notes, "### 1. Window owners"): only with `.exe`, since a bare `orca` on Linux is
+  // GNOME's screen reader.
+  'orca.exe': 'orca',
 }
 
 /** The app id of the app in front, or FRONT_NONE. A bundle id matches whole, as detectApp reads it. */
