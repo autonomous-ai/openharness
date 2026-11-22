@@ -408,6 +408,15 @@ describe('state', () => {
     expect(scores(run(state('working'), s, moved)).shown).toBe(0)
   })
 
+  it('an unplugged dial holds no list it had before: the row is shown only on a list since the unplug', () => {
+    const t = scenario([write, { kind: 'unplug' }, { kind: 'hook', session: 'a', event: 'turn-start', label: 'go' }])
+    const turn = frame(800, { t: 'turn.started', agentId: id(A), text: '' })
+    expect(scores(run(state('working'), t, seen(t, [50, 300, 500], { frames: [...ring, turn] }))).shown).toBe(0)
+    const back = run(state('working'), t, seen(t, [50, 300, 500], { frames: [...ring, turn, ...list(900, 'claude', [A, B, C])] }))
+    expect(scores(back)).toEqual({ shown: 1, latency: 1 })
+    expect(ms(back, 'latency')).toBe(400)
+  })
+
   it('done has its own latency: 2500 ms full, 5000 half; idle has no latency', () => {
     const done = (at: number): Record<string, number> =>
       scores(run(state('done'), s, seen(s, [50, 500], { frames: [...ring, frame(at, { t: 'summary', agentId: id(A), recap: '', text: '' })] })))
