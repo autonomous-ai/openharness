@@ -6,8 +6,9 @@
  *
  * Isolation: each daemon's open (HARNESS_OPEN_BIN, which only records: `writeRecordingOpen`), its home, its apps' folder,
  * both apps' stores, the editors' CLIs (HARNESS_VSCODE_BIN, HARNESS_CURSOR_BIN; on Linux Cursor's only records:
- * `writeRecordingCli`) and, on Linux, the raise's programs (`writeRaiseFakes`) are checked to be inside its root before it
- * starts, and it is signed in to the fake backend alone.
+ * `writeRecordingCli`), Orca's CLI (the fake, as `orca` and `orca-ide`: `orcaCliInside`) and, on Linux, the raise's
+ * programs (`writeRaiseFakes`) are checked to be inside its root before it starts, and it is signed in to the fake backend
+ * alone.
  * The network guard (src/testing/dialAppEval/netGuard.ts) is in this process and preloaded into every process of the
  * daemon and every child started here: a start whose running core or devices process did not load it fails, and the
  * driver's close fails on any attempt not yet handed on, those its last daemon made as it closed among them.
@@ -23,6 +24,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative } from 'node:path'
 import { chatGptPlaces, claudeStoreRoots } from '../../src/cable/hosts/appPlaces.js'
+import { orcaBinary } from '../../src/devices/orcaHomes.js'
 import { resolveBinaryOnPath } from '../../src/lib/binaryOnPath.js'
 import { claudeAppFixture } from '../../src/testing/claudeAppFixture.js'
 import { describeAttempt, guardThisProcess, NET_GUARD_FILE_ENV, netGuardEnv, readNetGuard, type NetAttempt } from '../../src/testing/dialAppEval/netGuard.js'
@@ -37,6 +39,7 @@ import { IsolatedDaemon, SOURCES_CLI, until } from './daemon.js'
 import { Desk, devicesPids } from './desk.js'
 import { FakeBackend, type FakeMachine } from './fakeBackend.js'
 import type { FakeDial } from './fakeDial.js'
+import { FakeOrca } from './fakeOrca.js'
 import { writeSchemeApps } from './schemeApps.js'
 
 /** What the round dial's firmware says in its greeting: it holds one app's ring (docs/specs/2026-11-14-dial-app-filter.md). */
@@ -102,6 +105,8 @@ type Run = Exclude<Step, { kind: 'wait' }>
 /** A daemon, its desk and its backend, kept across the scenarios that do not ask for a fresh one. */
 interface Rig {
   d: IsolatedDaemon; desk: Desk; backend: FakeBackend
+  /** Orca's CLI, as `orca` and `orca-ide`: the fake, with watch-focus. */
+  orca: FakeOrca
   /** Where its recording open notes its runs, and its recording Cursor CLI its own (Linux's alone: none on macOS). */
   runs: string
   cursorRuns: string
@@ -192,6 +197,37 @@ export function writeRaiseFakes(bin: string): void {
 /** Those a daemon under [env] finds outside [root], or not at all. */
 export function raiseToolsOutside(root: string, env: NodeJS.ProcessEnv): string[] {
   return RAISE_TOOLS.filter((tool) => !inside(root, resolveBinaryOnPath(tool, env) ?? undefined))
+}
+
+/** The names a daemon runs Orca's CLI by: Linux looks for `orca-ide` before `orca` (devices/orcaHomes.ts orcaBinary). */
+const ORCA_NAMES = ['orca-ide', 'orca'] as const
+/**
+ * The Orca CLI a daemon under [env] would run, resolved as orcaBinary resolves it on [platform] over its PATH and
+ * HARNESS_ORCA_APP_BIN, and each of `orca-ide` and `orca` its PATH gives first: it throws unless every one's real path is
+ * inside [root]. Every session here runs inside the real Orca, whose `orca` is on the worker's PATH, and a daemon's PATH
+ * ends in the computer's folders, where Orca's .deb puts an `orca-ide`; a link in the root runs the file it names.
+ */
+export function orcaCliInside(env: NodeJS.ProcessEnv, root: string, platform: NodeJS.Platform): string {
+  // orcaBinary reads the app's path from this process's environment, as the devices read theirs: the daemon's for the
+  // call, this worker's again before anything else runs.
+  const own = process.env.HARNESS_ORCA_APP_BIN
+  const app = (path: string | undefined): void => {
+    if (path === undefined) delete process.env.HARNESS_ORCA_APP_BIN
+    else process.env.HARNESS_ORCA_APP_BIN = path
+  }
+  app(env.HARNESS_ORCA_APP_BIN)
+  let cli: string | null
+  try {
+    cli = orcaBinary({ onPath: (name, accept) => resolveBinaryOnPath(name, env, accept), exists: existsSync, platform, localAppData: env.LOCALAPPDATA })
+  } finally {
+    app(own)
+  }
+  const real = realpathSync(root)
+  const first = ORCA_NAMES.flatMap((name) => resolveBinaryOnPath(name, env) ?? [])
+  if (cli === null || ![cli, ...first].every((path) => inside(real, realpathSync(path)))) {
+    throw new Error("the daemon's Orca CLI is not inside its root")
+  }
+  return cli
 }
 
 /** Each run noted in [runs] as `<exit> <arguments>`, in order, as the command [program] with them. */
@@ -350,6 +386,10 @@ async function openRig(guard: string): Promise<Rig> {
     mkdirSync(dirname(chatgpt), { recursive: true })
     writeFileSync(chatgpt, process.platform === 'linux' ? '' : CHATGPT_INFO_PLIST)
     writeAppCodex(d)
+    // Orca's CLI the fake under both its names, with watch-focus as a current Orca, and the one the daemon would run
+    // inside its root: every session here runs inside the real Orca.
+    const orca = FakeOrca.install(d, { watchFocus: true })
+    orcaCliInside(d.env, d.root, process.platform)
     const dials = join(d.root, 'dials.json')
     d.env.HARNESSD_TEST_DIAL_PORT = dials
     writeFileSync(dials, '[]')
@@ -361,7 +401,7 @@ async function openRig(guard: string): Promise<Rig> {
     await d.start()
     // An engine started by hand reads its hooks once, as it starts: they are in before any scenario starts one.
     await d.hooksInstalled(['claude', 'codex'])
-    return { d, desk: new Desk(dials), backend, runs, cursorRuns, projects, guard, given: 0, polled: new Map() }
+    return { d, desk: new Desk(dials), backend, orca, runs, cursorRuns, projects, guard, given: 0, polled: new Map() }
   } catch (error) {
     await d?.close().catch(() => {})
     await backend.close()
