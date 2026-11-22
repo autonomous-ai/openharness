@@ -996,10 +996,10 @@ describe('Orca', () => {
       const s = input('tap')
       const other = run(open, s, listed(s, [500], { commands: [switchTo(700, handle(OB)), cmd(800, RAISE.darwin)] }))
       expect(scores(other)).toMatchObject({ switch: 0, raise: 0, latency: 0 })
-      expect(other[0]!.evidence).toEqual(['tap on oa at 500', 'command at 700: switch ob', 'command at 800: front'])
+      expect(other[0]!.evidence).toEqual(['tap on oa at 500', 'command at 700: switch ob', 'command at 800: front', 'no switch'])
       // A handle no session owns, and a switch that failed.
       expect(run(open, s, listed(s, [500], { commands: [switchTo(700, 'term_00000000-0000-4000-8d00-0000000000ff')] }))[0]!.evidence)
-        .toEqual(['tap on oa at 500', 'command at 700: switch other'])
+        .toEqual(['tap on oa at 500', 'command at 700: switch other', 'no switch'])
       const failed = run(open, s, listed(s, [500], { commands: [switchTo(700, handle(OA), false), cmd(800, RAISE.darwin)] }))
       expect(scores(failed)).toMatchObject({ switch: 0, raise: 0 })
       expect(failed[0]!.evidence).toContain('command at 700: switch oa failed')
@@ -1041,10 +1041,10 @@ describe('Orca', () => {
       const switched = (h: string): Record<string, number> =>
         scores(run(open, s, listed(s, [100, 500], { commands: [switchTo(700, h), cmd(800, RAISE.darwin)] })))
       expect(switched(handle(OA, 1))).toEqual({ worktree: 1, switch: 1, raise: 1, latency: 1 })
-      expect(switched(handle(OA, 0))).toEqual({ worktree: 1, switch: 0, raise: 0, latency: 0 })
+      expect(switched(handle(OA, 0))).toEqual({ worktree: 0, switch: 0, raise: 0, latency: 0 })
       // The old handle is no session's now.
       expect(run(open, s, listed(s, [100, 500], { commands: [switchTo(700, handle(OA, 0))] }))[0]!.evidence)
-        .toEqual(['tap on oa at 500', 'command at 700: switch other'])
+        .toEqual(['tap on oa at 500', 'command at 700: switch other', 'no switch'])
       // A relaunch of another app moves no Orca handle.
       const other = scenario([{ kind: 'relaunch', app: 'claude' }, { kind: 'tap', session: 'oa', label: 'go' }], sessions)
       expect(scores(run(open, other, listed(other, [100, 500], { commands: [switchTo(700, handle(OA)), cmd(800, RAISE.darwin)] }))).switch).toBe(1)
