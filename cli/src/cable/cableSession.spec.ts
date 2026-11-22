@@ -14,7 +14,7 @@ import { describe, expect, it, vi, type Mock } from 'vitest'
 import { CABLE_MAX_FRAME, CABLE_MAX_PAYLOAD, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DaemonCableHost } from './cableHost.js'
 import type { MachineFleet } from './machineFleet.js'
-import { CableSession, fitDrawer, SHOWN_ONLY_PREFIX, SWIPE_REST_MS, type CableAgent, type CableHost, type CableMachine, type CablePort, type CableSwarm, type DialAgent, type DialStatus, type SendOutcome } from './cableSession.js'
+import { CableSession, echoesCodeMoves, fitDrawer, SHOWN_ONLY_PREFIX, SWIPE_REST_MS, type CableAgent, type CableHost, type CableMachine, type CablePort, type CableSwarm, type DialAgent, type DialStatus, type SendOutcome } from './cableSession.js'
 import { DialLog } from './dialLog.js'
 import { noticeSummary } from './dialText.js'
 import { NO_ACCESS, NO_ACCESS_YET, PortAccessError } from './portAccess.js'
@@ -115,6 +115,10 @@ const AGENTS: CableAgent[] = [
   { id: 'a1', name: 'Fix login screen', engine: 'claude' },
   { id: 'a2', name: 'Device firmware voice', engine: 'codex' },
 ]
+
+/** The last round firmware that reports a move code made (0.0.59 is the first that does not): the old dial the 750 ms
+ *  echo guard is kept for. */
+const ECHOING = { fw: '0.0.58' }
 
 function makeHost(over: Partial<CableHost> = {}) {
   const host: CableHost = {
@@ -1550,7 +1554,7 @@ describe('cable session', () => {
     // repeats itself after every push.
     let agents: CableAgent[] = [{ id: 'a1', name: 'one' }, { id: 'a2', name: 'two' }]
     const { session, port } = await connect(makeHost({ listAgents: async () => agents }))
-    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', ...ECHOING })
     await settle()
 
     await session.followApp('', 'a2')          // the window is on a2
@@ -1611,7 +1615,7 @@ describe('cable session', () => {
       selectMachine: vi.fn(async () => { await gate; return { ok: true as const } }),
     })
     const { session, port } = await connect(host)
-    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', ...ECHOING })
     await settle()
 
     const following = session.followApp('remote-machine', 'r1')
@@ -1670,7 +1674,7 @@ describe('cable session', () => {
       }),
     })
     const { session, port } = await connect(host)
-    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', ...ECHOING })
     await settle()
 
     const following = session.followApp('remote-machine', 'r1')
@@ -1738,7 +1742,7 @@ describe('cable session', () => {
       }),
     })
     const { session, port } = await connect(host)
-    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', ...ECHOING })
     await settle()
 
     const following = session.followApp('mac-local', 'a2')
@@ -5502,9 +5506,9 @@ describe('a machine list lands a dial that holds no agent (docs/plans/2026-11-18
     port.say({ ...HELLO, ...hello })
     await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
   }
-  async function landed(snapshot: () => Snapshot, over: Partial<CableHost> = {}) {
+  async function landed(snapshot: () => Snapshot, over: Partial<CableHost> = {}, hello: Record<string, unknown> = {}) {
     const c = await connect(makeHost({ dialShows: vi.fn(), listAgentSnapshot: async () => snapshot(), ...over }))
-    await greet(c.port)
+    await greet(c.port, hello)
     return c
   }
   /** A session that opens a new loopback each time its port is reopened, as a dial unplugged and plugged in again. */
@@ -5742,7 +5746,7 @@ describe('a machine list lands a dial that holds no agent (docs/plans/2026-11-18
   it('in the 750 ms after the landing a swipe is dropped, and the first swipe after them moves the dial', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'performance'] })
     try {
-      const { session, port, host } = await landed(() => machine(RING))
+      const { session, port, host } = await landed(() => machine(RING), {}, ECHOING)
       const shown = () => (host.dialShows as Mock).mock.calls.at(-1)?.[2]
       try {
         expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'o1' }])
@@ -5757,7 +5761,7 @@ describe('a machine list lands a dial that holds no agent (docs/plans/2026-11-18
         expect(shown()).toBe('h1')
       } finally { await session.stop() }
       // A focus on the landed agent within the 750 ms is taken as the landing's echo: no hand moved the dial.
-      const echoed = await landed(() => machine(RING), { turned: vi.fn() })
+      const echoed = await landed(() => machine(RING), { turned: vi.fn() }, ECHOING)
       try {
         echoed.port.say({ t: 'focus', agentId: 'o1' })
         await settle()
@@ -5765,6 +5769,84 @@ describe('a machine list lands a dial that holds no agent (docs/plans/2026-11-18
         expect(echoed.host.turned).not.toHaveBeenCalled()
       } finally { await echoed.session.stop() }
     } finally { vi.useRealTimers() }
+  })
+
+  const said = (host: CableHost) => (host.log as Mock).mock.calls.map(([line]) => line as string)
+  // The Linux sequence: the first ring goes out as `sf`, xdg-mime's answer turns it `svf` a tick later, and each push
+  // re-asserts the record. A turn 400 ms after the second push was dropped while the session waited for an echo.
+  const SAME_RING = (caps: string) => [row('a1', 'ghostty', caps), row('b1', 'ghostty', caps)]
+  it.each([
+    ['current firmware', { fw: '0.0.94' }],
+    ['a greeting with no fw', {}],
+    ['a Harness Pro on an old-looking fw', { board: 'pro', fw: '0.0.1' }],
+  ])('a turn 400 ms after the same ring re-pushed with new caps is taken: %s', async (_, hello) => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    let caps = 'sf'
+    const { session, port, host } = await landed(() => machine(SAME_RING(caps)), { turned: vi.fn(), log: vi.fn() }, hello)
+    try {
+      vi.advanceTimersByTime(1_100)
+      caps = 'svf'
+      await session.syncAgents()
+      expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'a1' }, { t: 'focus', agentId: 'a1' }])
+      vi.advanceTimersByTime(400)
+      port.say({ t: 'focus', agentId: 'b1' })
+      await settle()
+      expect(host.focus).toHaveBeenCalledWith('b1')
+      expect(host.turned).toHaveBeenCalledTimes(1)
+      expect(said(host).filter((l) => l.includes('dropped dial focus'))).toEqual([])
+      port.sent.length = 0
+      vi.advanceTimersByTime(1_100)
+      caps = 's'
+      await session.syncAgents()
+      expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'b1' }])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('on firmware older than 0.0.59 the same turn is still dropped as an echo', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    let caps = 'sf'
+    const { session, port, host } = await landed(() => machine(SAME_RING(caps)), { turned: vi.fn(), log: vi.fn() }, ECHOING)
+    try {
+      vi.advanceTimersByTime(1_100)
+      caps = 'svf'
+      await session.syncAgents()
+      expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'a1' }, { t: 'focus', agentId: 'a1' }])
+      vi.advanceTimersByTime(400)
+      port.say({ t: 'focus', agentId: 'b1' })
+      await settle()
+      expect(host.focus).not.toHaveBeenCalled()
+      expect(host.turned).not.toHaveBeenCalled()
+      expect(said(host)).toContain('cable: dropped dial focus b1 — waiting for a1')
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  // A dial updated in place greets again on the same port: the rule reads the latest greeting, not the first.
+  it('a dial that greets again on 0.0.94 after 0.0.58 has its turns taken from then on', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const { session, port, host } = await landed(() => machine(SAME_RING('svf')), { log: vi.fn() }, ECHOING)
+    try {
+      vi.advanceTimersByTime(1_100)
+      port.sent.length = 0
+      const before = said(host).length
+      await greet(port, { fw: '0.0.94' })
+      expect(focuses(port)).toContainEqual({ t: 'focus', agentId: 'a1' })
+      vi.advanceTimersByTime(400)
+      port.say({ t: 'focus', agentId: 'b1' })
+      await settle()
+      expect(host.focus).toHaveBeenCalledWith('b1')
+      expect(said(host).slice(before).filter((l) => l.includes('dropped dial focus'))).toEqual([])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+})
+
+describe('which dial echoes a move code made', () => {
+  it.each([
+    ['0.0.58', undefined, true], ['0.0.1', undefined, true], ['0.0.58-dev', undefined, true],
+    ['0.0.59', undefined, false], ['0.0.94', undefined, false], ['0.1.0-dev', undefined, false], ['1.0.0', undefined, false],
+    ['?', undefined, false], [null, undefined, false],
+    ['0.0.1', 'pro', false], ['0.0.99-pod', 'pro', false], ['0.1.16', 'pro', false],
+  ] as const)('fw %s, board %s: %s', (fw, board, echoes) => {
+    expect(echoesCodeMoves(fw, board)).toBe(echoes)
   })
 })
 
@@ -6932,7 +7014,7 @@ describe('the app filter', () => {
     const swipeEnded = vi.fn()
     const dialShows = vi.fn<NonNullable<CableHost['dialShows']>>()
     const { host, state } = appHost({ swipeSwitches: () => true, swipeEnded, dialShows })
-    const { session, port } = await greeted(host)
+    const { session, port } = await greeted(host, true, ECHOING)
     // Faked after the greeting, as `resting` does: vi.waitFor is not used while a rest is pending.
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
     try {
@@ -7226,9 +7308,9 @@ describe('what the dial cannot do for an agent', () => {
   const caps = (over: Partial<CableHost> = {}) => makeHost({
     capsOf: (id) => CAPS[id], hostOf: (id) => HOSTS[id], markSeen: vi.fn(), ...over,
   })
-  async function greeted(host: CableHost) {
+  async function greeted(host: CableHost, hello: Record<string, unknown> = {}) {
     const c = await connect(host)
-    c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', ...hello })
     await vi.waitFor(() => expect(c.port.types()).toContain('agents.end'))
     return c
   }
@@ -7676,10 +7758,10 @@ describe('what the dial cannot do for an agent', () => {
 
   /** a1 and a3 have a pane a rest shows; a2 has none. The clock is faked after the greeting, so it holds only what a turn
    *  starts, and vi.waitFor (which moves a fake clock) is not used while a rest is pending. */
-  async function resting(over: Partial<CableHost> = {}) {
+  async function resting(over: Partial<CableHost> = {}, hello: Record<string, unknown> = {}) {
     const swipeSwitches = vi.fn((id: string) => id === 'a1' || id === 'a3')
     const swipeEnded = vi.fn()
-    const c = await greeted(caps({ swipeSwitches, swipeEnded, ...over }))
+    const c = await greeted(caps({ swipeSwitches, swipeEnded, ...over }), hello)
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
     return { ...c, swipeSwitches, swipeEnded }
   }
@@ -7752,7 +7834,7 @@ describe('what the dial cannot do for an agent', () => {
   // in the 400 ms before a rest, or from an agent no rest shows.
   it("a hand's turn tells the host at once, whatever the agent; a follow's echo does not", async () => {
     const turned = vi.fn()
-    const { session, port, swipeEnded } = await resting({ turned })
+    const { session, port, swipeEnded } = await resting({ turned }, ECHOING)
     try {
       port.say({ t: 'focus', agentId: 'a1' })
       expect(turned).toHaveBeenCalledTimes(1)
@@ -7797,7 +7879,7 @@ describe('what the dial cannot do for an agent', () => {
   })
 
   it('a focus the echo guard drops starts nothing', async () => {
-    const { session, port, swipeSwitches } = await resting()
+    const { session, port, swipeSwitches } = await resting({}, ECHOING)
     try {
       await session.followApp('', 'a1')
       port.say({ t: 'focus', agentId: 'a1' })
@@ -7810,7 +7892,7 @@ describe('what the dial cannot do for an agent', () => {
   })
 
   it('the dial moved by the app before 400 ms: superseded', async () => {
-    const { session, port, swipeEnded } = await resting()
+    const { session, port, swipeEnded } = await resting({}, ECHOING)
     try {
       port.say({ t: 'focus', agentId: 'a1' })
       await vi.advanceTimersByTimeAsync(100)
@@ -7981,10 +8063,10 @@ describe("a resting Claude app row's words (docs/plans/2026-11-21-dial-claude-ap
 
 describe('a prompt in the app in front', () => {
   const focuses = (port: LoopbackPort) => port.sent.filter((m) => m.t === 'focus')
-  async function greeted(over: Partial<CableHost> = {}) {
+  async function greeted(over: Partial<CableHost> = {}, hello: Record<string, unknown> = {}) {
     const localFollowed = vi.fn()
     const c = await connect(makeHost({ localFollowed, ...over }))
-    c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', ...hello })
     await vi.waitFor(() => expect(c.port.types()).toContain('agents.end'))
     c.port.sent.length = 0
     return { ...c, localFollowed }
@@ -8013,7 +8095,7 @@ describe('a prompt in the app in front', () => {
   it("the move's echo starts no Orca switch", async () => {
     const swipeSwitches = vi.fn(() => true)
     const markSeen = vi.fn()
-    const { session, port, host } = await greeted({ swipeSwitches, swipeEnded: vi.fn(), markSeen })
+    const { session, port, host } = await greeted({ swipeSwitches, swipeEnded: vi.fn(), markSeen }, ECHOING)
     try {
       await session.followLocal('a2', 'prompt')
       port.say({ t: 'focus', agentId: 'a2' })   // the dial's echo of the move
