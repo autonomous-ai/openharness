@@ -51,16 +51,17 @@ const CODEX_ENGINE = / --engine codex$/
 /**
  * What one of its hooks runs: Cursor's hook line, which is the daemon's Codex line with `--engine cursor` (both are
  * hookArgv's, the same notify.mjs and homes; the daemon installs no Cursor hooks here), under [env] and the session's
- * [hints], with Cursor's input for [event] on its stdin: its conversation, its workspace's folder, its transcript.
+ * [hints], with Cursor's input for [event] on its stdin: its conversation, its workspace's folders in order, its
+ * transcript.
  */
 export function hookRun(codexLine: string, env: NodeJS.ProcessEnv, hints: Record<string, string>, event: CursorEvent,
-  session: { sessionId: string; cwd: string; transcriptPath: string }): { command: string; env: NodeJS.ProcessEnv; input: string } {
+  session: { sessionId: string; roots: readonly string[]; transcriptPath: string }): { command: string; env: NodeJS.ProcessEnv; input: string } {
   if (!CODEX_ENGINE.test(codexLine)) throw new Error("a line that is not the daemon's Codex's hook line: it ends in no --engine codex")
   return {
     command: codexLine.replace(CODEX_ENGINE, ' --engine cursor'),
     env: { ...env, ...hints },
     input: JSON.stringify({
-      hook_event_name: EVENTS[event], conversation_id: session.sessionId, workspace_roots: [session.cwd],
+      hook_event_name: EVENTS[event], conversation_id: session.sessionId, workspace_roots: session.roots,
       transcript_path: session.transcriptPath,
       ...(event === 'turn-start' ? { prompt: PROMPT } : {}), ...(event === 'turn-stop' ? { status: 'completed' } : {}),
     }),
@@ -72,16 +73,18 @@ const said = (role: 'user' | 'assistant', text: string): string => `${JSON.strin
 
 export class CursorOutside {
   private constructor(private readonly d: IsolatedDaemon, private readonly tab: Tab, private readonly cwd: string,
-    private readonly sessionId: string, private readonly hints: Record<string, string>, readonly transcriptPath: string,
-    private readonly answers: Interface, private readonly requests: Writable) {}
+    private readonly sessionId: string, private readonly roots: readonly string[], private readonly hints: Record<string, string>,
+    readonly transcriptPath: string, private readonly answers: Interface, private readonly requests: Writable) {}
 
   /**
    * In its folder under the daemon's projects, under a fake Cursor: with `terminal`, cursor-agent as the job of a shell
    * in a tab of it ([shellPid] is the shell the window reports), else Cursor's own agent under it with no terminal. Its
-   * process goes in [children] too, the driver's last resort when its tab was not closed.
+   * hooks name [roots], its workspace's folders. Its process goes in [children] too, the driver's last resort when its
+   * tab was not closed.
    */
   static async start(d: IsolatedDaemon, folder: string, children: ChildProcess[],
-    { sessionId, terminal, hints }: { sessionId: string; terminal: boolean; hints: Record<string, string> }): Promise<CursorOutside> {
+    { sessionId, roots, terminal, hints }: { sessionId: string; roots: readonly string[]; terminal: boolean; hints: Record<string, string> }):
+    Promise<CursorOutside> {
     const cwd = join(d.projectsDir, folder)
     mkdirSync(cwd, { recursive: true })
     const workspace = cwd.replace(/[^A-Za-z0-9]/g, '-').replace(/^-+/, '')
@@ -101,7 +104,7 @@ export class CursorOutside {
         { app: 'cursor', shell: terminal })
       children.push(tab.process)
       const connected = await until(`the Cursor agent in ${folder} on its socket`, () => socket, CONNECT_MS, 50)
-      return new CursorOutside(d, tab, cwd, sessionId, hints, transcriptPath, createInterface({ input: connected }), connected)
+      return new CursorOutside(d, tab, cwd, sessionId, roots, hints, transcriptPath, createInterface({ input: connected }), connected)
     } catch (error) {
       if (tab) await closeTab(tab, folder)
       throw error
@@ -127,7 +130,7 @@ export class CursorOutside {
         return undefined
       }
     }, LINE_MS, 100)
-    const run = hookRun(codexLine, this.d.env, this.hints, event, { sessionId: this.sessionId, cwd: this.cwd, transcriptPath: this.transcriptPath })
+    const run = hookRun(codexLine, this.d.env, this.hints, event, { sessionId: this.sessionId, roots: this.roots, transcriptPath: this.transcriptPath })
     const { code, stderr } = await this.ask(run)
     expect(code, stderr).toBe(0)
   }

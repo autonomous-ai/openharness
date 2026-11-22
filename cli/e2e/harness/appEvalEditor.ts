@@ -165,10 +165,11 @@ async function startCodex(world: TierBWorld, state: State, s: SessionDef, folder
 }
 
 /** The session's Cursor agent under its editor, cursor-agent in a terminal and Cursor's own in none, its start hook run:
- *  its shell, for a terminal. */
+ *  its shell, for a terminal. Its workspace is the session's folders, or its own folder alone. */
 async function startCursor(world: TierBWorld, state: State, s: SessionDef, folder: string): Promise<number | undefined> {
+  const roots = (s.folders ?? [s.cwd]).map((one) => world.folder(one))
   const cursor = await CursorOutside.start(world.d, folder, world.children,
-    { sessionId: s.id, terminal: placeOf(s) === 'terminal', hints: hintsOf(world, s) })
+    { sessionId: s.id, roots, terminal: placeOf(s) === 'terminal', hints: hintsOf(world, s) })
   state.cursor.set(s.key, cursor)
   await cursor.hook('start')
   return cursor.shellPid
