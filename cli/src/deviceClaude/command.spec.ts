@@ -1090,7 +1090,7 @@ describe('harness device notify', () => {
   })
 
   it('the usage names notify', () => {
-    expect(DEVICE_USAGE).toContain('harness device notify "<one line>" [--json]')
+    expect(DEVICE_USAGE).toContain('harness device notify "<question>" [--suggest "<recommendation>"] [--waiting|--proceeding] [--json]')
   })
 })
 
