@@ -53,6 +53,12 @@ export function thread(key: SessionKey, ageMs: number, more: Partial<SessionDef>
 export function editorSession(key: SessionKey, app: Editor, more: Partial<SessionDef> = {}): SessionDef {
   return { key, app, id: uuid(key, 'b'), title: titleOf(key), cwd: `/work/eval-${key}`, ageMs: 0, place: 'terminal', window: 'w1', ...more }
 }
+export const vscode = (key: SessionKey, more: Partial<SessionDef> = {}): SessionDef => editorSession(key, 'vscode', more)
+export const cursor = (key: SessionKey, more: Partial<SessionDef> = {}): SessionDef => editorSession(key, 'cursor', more)
+/** A Claude Code panel session in the editor: no window holds a terminal of it. */
+export const panel = (key: SessionKey, app: Editor): SessionDef => editorSession(key, app, { place: 'panel', window: undefined })
+/** A probe of a ring check: the same ring with the ghost in it. */
+export const withGhost = (check: Extract<Check, { kind: 'ring' }>): Check => ({ ...check, expect: [...check.expect, 'z'] })
 /** Newest first, a minute apart, as the catalog's rows are unless they say otherwise. */
 export const claudeSessions = (keys: SessionKey[]): SessionDef[] => keys.map((key, i) => claudeSession(key, (i + 1) * MIN))
 export const threads = (keys: SessionKey[]): SessionDef[] => keys.map((key, i) => thread(key, (i + 1) * MIN))

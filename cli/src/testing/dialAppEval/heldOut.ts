@@ -3,12 +3,9 @@
 //
 // Scored and reported apart, never in the headline score. A function, not a list: the catalog imports it and it uses
 // the catalog's builders, so it is called once the catalog has them.
-import { chatgptGhost, claudeGhost, claudeSession, claudeSessions, editorGhost, editorSession, keys, listed, S, scenario, started, threads,
-  titleOf } from './catalog.js'
-import type { Scenario, SessionDef, SessionKey } from './types.js'
-
-const vscode = (key: SessionKey, more: Partial<SessionDef> = {}): SessionDef => editorSession(key, 'vscode', more)
-const cursor = (key: SessionKey, more: Partial<SessionDef> = {}): SessionDef => editorSession(key, 'cursor', more)
+import { chatgptGhost, claudeGhost, claudeSession, claudeSessions, cursor, editorGhost, keys, listed, panel, S, scenario, started, threads,
+  titleOf, vscode } from './catalog.js'
+import type { Scenario } from './types.js'
 
 export function heldOut(): Scenario[] {
   const s16 = keys('s', 1, 16, 2)
@@ -142,7 +139,7 @@ export function heldOut(): Scenario[] {
     }, true),
     scenario({
       id: 'VH4', app: 'vscode', title: 'Voice on a panel session at rest: the exact words reach it, once',
-      dims: ['D5'], sessions: [vscode('d', { place: 'panel', window: undefined }), editorGhost('vscode')],
+      dims: ['D5'], sessions: [panel('d', 'vscode'), editorGhost('vscode')],
       steps: [
         ...started(['d']),
         ...listed('vscode', ['d']),

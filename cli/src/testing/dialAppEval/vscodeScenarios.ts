@@ -5,13 +5,8 @@
  * The dial's ring keeps each agent where it entered and puts a new one at the end (cable/hosts/select.ts DialRing): every
  * ring here lists its sessions in the order they started.
  */
-import { EDITOR_AWAY_MS, editorGhost, editorSession, keys, listed, S, scenario, started } from './catalog.js'
-import type { Check, Scenario, SessionDef, SessionKey } from './types.js'
-
-const vscode = (key: SessionKey, more: Partial<SessionDef> = {}): SessionDef => editorSession(key, 'vscode', more)
-const panel = (key: SessionKey): SessionDef => vscode(key, { place: 'panel', window: undefined })
-/** A probe of a ring check: the same ring with the ghost in it. */
-const withGhost = (check: Extract<Check, { kind: 'ring' }>): Check => ({ ...check, expect: [...check.expect, 'z'] })
+import { EDITOR_AWAY_MS, editorGhost, keys, listed, panel, S, scenario, started, vscode, withGhost } from './catalog.js'
+import type { Check, Scenario } from './types.js'
 
 export function vscodeScenarios(): Scenario[] {
   const ghost = editorGhost('vscode')
@@ -31,7 +26,7 @@ export function vscodeScenarios(): Scenario[] {
       id: 'V1', app: 'vscode', title: 'Three terminals and a panel session in one window: the VS Code page has those four, by their names',
       dims: ['D1'],
       // c runs in a split of b's terminal group: to the extension, another terminal of the window.
-      sessions: [vscode('a'), vscode('b', { engine: 'codex' }), vscode('c'), panel('d'), ghost],
+      sessions: [vscode('a'), vscode('b', { engine: 'codex' }), vscode('c'), panel('d', 'vscode'), ghost],
       steps: [
         ...started(['a', 'b', 'c', 'd']),
         { kind: 'editor.window', window: 'w1', terminals: ['a', 'b', 'c'], active: 'a', focused: true },
@@ -68,7 +63,7 @@ export function vscodeScenarios(): Scenario[] {
     }),
     scenario({
       id: 'V4', app: 'vscode', title: 'A prompt typed in the panel session with VS Code in front: the dial follows within 1 s',
-      dims: ['D2'], sessions: [vscode('a'), panel('d'), ghost],
+      dims: ['D2'], sessions: [vscode('a'), panel('d', 'vscode'), ghost],
       steps: [
         ...started(['a', 'd']),
         { kind: 'editor.window', window: 'w1', terminals: ['a'], active: 'a', focused: true },
@@ -96,7 +91,7 @@ export function vscodeScenarios(): Scenario[] {
     }),
     scenario({
       id: 'V6', app: 'vscode', title: 'A tap on a panel session at rest opens it by its vscode:// link',
-      dims: ['D3'], sessions: [panel('d'), ghost],
+      dims: ['D3'], sessions: [panel('d', 'vscode'), ghost],
       steps: [
         ...started(['d']),
         ...listed('vscode', ['d']),
@@ -231,7 +226,7 @@ export function vscodeScenarios(): Scenario[] {
     }),
     scenario({
       id: 'V14', app: 'vscode', title: 'VS Code quit and relaunched: the ring comes back right, no duplicate rows',
-      dims: ['D7', 'D1'], sessions: [vscode('a'), vscode('b'), panel('d'), ghost],
+      dims: ['D7', 'D1'], sessions: [vscode('a'), vscode('b'), panel('d', 'vscode'), ghost],
       steps: [
         ...started(['a', 'b', 'd']),
         { kind: 'editor.window', window: 'w1', terminals: ['a', 'b'], active: 'a', focused: true },

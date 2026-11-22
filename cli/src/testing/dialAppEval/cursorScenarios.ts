@@ -5,18 +5,14 @@
  * The dial's ring keeps each agent where it entered and puts a new one at the end (cable/hosts/select.ts DialRing): every
  * ring here lists its sessions in the order they started.
  */
-import { EDITOR_AWAY_MS, editorGhost, editorSession, listed, S, scenario, started } from './catalog.js'
+import { cursor, EDITOR_AWAY_MS, editorGhost, listed, panel, S, scenario, started, vscode, withGhost } from './catalog.js'
 import type { Check, Scenario, SessionDef, SessionKey } from './types.js'
 
-const cursor = (key: SessionKey, more: Partial<SessionDef> = {}): SessionDef => editorSession(key, 'cursor', more)
 /** cursor-agent in a terminal: Cursor's engine, with TERM_PROGRAM set. */
 const cursorAgent = (key: SessionKey): SessionDef => cursor(key, { engine: 'cursor' })
 /** Cursor's own agent, on its folder. */
 const agent = (key: SessionKey, more: Partial<SessionDef> = {}): SessionDef =>
   cursor(key, { place: 'agent', window: undefined, folders: [`/work/eval-${key}`], ...more })
-const panel = (key: SessionKey): SessionDef => cursor(key, { place: 'panel', window: undefined })
-/** A probe of a ring check: the same ring with the ghost in it. */
-const withGhost = (check: Extract<Check, { kind: 'ring' }>): Check => ({ ...check, expect: [...check.expect, 'z'] })
 
 export function cursorScenarios(): Scenario[] {
   const ghost = editorGhost('cursor')
@@ -30,7 +26,7 @@ export function cursorScenarios(): Scenario[] {
       id: 'U1', app: 'cursor', title: "Four agents in Cursor: its page has those four, by their names, and none is on VS Code's",
       dims: ['D1'],
       // a and b say TERM_PROGRAM=vscode, as every Cursor terminal does: Cursor's bundle id decides.
-      sessions: [cursor('a'), cursorAgent('b'), agent('c'), panel('d'), ghost],
+      sessions: [cursor('a'), cursorAgent('b'), agent('c'), panel('d', 'cursor'), ghost],
       steps: [
         ...started(['a', 'b', 'c', 'd']),
         { kind: 'editor.window', window: 'w1', terminals: ['a', 'b'], active: 'a', focused: true },
@@ -40,7 +36,7 @@ export function cursorScenarios(): Scenario[] {
     }),
     scenario({
       id: 'U2', app: 'cursor', title: "VS Code and Cursor both run a Claude Code: each row is on its own app's page",
-      dims: ['D1'], sessions: [editorSession('a', 'vscode'), cursor('b', { window: 'w2' }), ghost],
+      dims: ['D1'], sessions: [vscode('a'), cursor('b', { window: 'w2' }), ghost],
       steps: [
         ...started(['a', 'b']),
         { kind: 'editor.window', window: 'w1', active: 'a', focused: false },
@@ -99,7 +95,7 @@ export function cursorScenarios(): Scenario[] {
     }),
     scenario({
       id: 'U7', app: 'cursor', title: 'A tap on a panel session at rest opens it by its cursor:// link',
-      dims: ['D3'], sessions: [panel('d'), ghost],
+      dims: ['D3'], sessions: [panel('d', 'cursor'), ghost],
       steps: [
         ...started(['d']),
         ...listed('cursor', ['d']),
@@ -182,7 +178,7 @@ export function cursorScenarios(): Scenario[] {
     }),
     scenario({
       id: 'U13', app: 'cursor', title: 'Cursor quit and relaunched: the ring comes back right, no duplicate rows',
-      dims: ['D7', 'D1'], sessions: [cursor('a'), agent('c'), panel('d'), ghost],
+      dims: ['D7', 'D1'], sessions: [cursor('a'), agent('c'), panel('d', 'cursor'), ghost],
       steps: [
         ...started(['a', 'c', 'd']),
         { kind: 'editor.window', window: 'w1', terminals: ['a'], active: 'a', focused: true },

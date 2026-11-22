@@ -44,8 +44,8 @@ describe("VS Code's scenarios", () => {
     for (const s of VSCODE.filter((s) => s.id !== 'V2')) {
       const order: SessionKey[] = s.steps.flatMap((step) => (step.kind === 'hook' && step.event === 'start' ? [step.session] : []))
       const rings = [...s.steps.flatMap((step) => (step.kind === 'wait' && step.until ? [step.until.expect] : [])),
-        ...s.checks.flatMap((c) => (c.kind === 'ring' ? [c.expect] : []))]
-      for (const ring of rings) expect(ring, s.id).toEqual(order.filter((key) => ring.includes(key)))
+        ...s.checks.flatMap((c) => (c.kind === 'ring' ? [c.expect] : [])), ...s.probes.flatMap((c) => (c.kind === 'ring' ? [c.expect] : []))]
+      for (const ring of rings) expect(ring.filter((key) => key !== 'z'), s.id).toEqual(order.filter((key) => ring.includes(key)))
     }
   })
 
