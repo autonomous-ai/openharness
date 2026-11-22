@@ -67,6 +67,8 @@ Default: **All**, so nobody's dial changes until they choose (my call).
 
 ### The command: `harness device notify "<text>" [--json]`
 
+The decision form (`--suggest`, `--waiting`, `--proceeding`): [Needs you](2026-11-22-needs-you-notify-design.md).
+
 - Run by the agent, from its own session. The daemon on this computer finds which agent it is from the caller, as the
   device path already does for outside sessions (Claude Code's session id from the plugin's hook environment, Codex's
   thread id `CODEX_THREAD_ID`); when it cannot tell, the notice still goes, under the session's folder name or "An agent".

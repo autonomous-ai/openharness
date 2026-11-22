@@ -132,6 +132,10 @@ Done when, on a Mac with a dial and the Harness Device menu-bar app:
     bound. One reader, `claudePluginState` in `devices/dialSkill.ts`, answers `on`, `off` (the entry false or gone) or
     `unknown` (the file missing, not a regular file, too big, not JSON or not an object). The skill needs `on`; the
     plugin's hook and mod (`claudePluginOn`, `deviceClaude/`) keep acting unless `off`.
+  - Claude is also On while the core lists a Claude agent of Harness's on this computer, with the plugin not reading
+    on ([Needs you](2026-11-22-needs-you-notify-design.md), "Claude in the Harness app gets the skill"). The person's
+    own off wins: `claude: false` in the file, or the plugin's entry `false`. Before the devices' first view of the
+    core's agents the answer is not known yet: it turns nothing on and nothing off, as the plugin's `unknown` does.
   - This way people who turned the plugin on before this change get the skill at the devices service's next start.
     A plugin uninstalled through `/plugin` turns the skills off at the service's next scan too (Turn on again, below).
   - Codex: the file says `codex: true`. With no answer, Off.
