@@ -1,11 +1,11 @@
 // An agent's notice to the dial: the one line it may show, and the limits on how often it may ring. Shared by the
-// `harness device notify` command, which cleans the line before sending, and the devices process, which cleans it
-// again (the line is data from outside) and counts it. The command's words are parsed here, with no imports, so the dial
-// skill eval reads an agent's flags exactly as the command does.
+// `harness device notify` command, which composes and fits the line before sending, and the devices process, which
+// cleans it again (the line is data from outside) and counts it. The command's words are parsed here, with no imports,
+// so the dial skill eval reads an agent's flags exactly as the command does.
 
 export const NOTICE_MAX_CHARS = 120
 /** The bytes of a line the dial keeps whole: its drawer row cuts at 239, and a question of 256 or more reads "This
- *  question needs the desktop" (firmware ui_habitat.c). 120 letters can be 360 bytes. */
+ *  question needs the desktop" (firmware ui_habitat.c). 120 letters can be 480 bytes. */
 export const NOTICE_LINE_MAX_BYTES = 239
 export const NOTICE_SUGGEST_MAX = 40
 export const NOTICE_FOLDER_MAX = 64
@@ -75,8 +75,8 @@ export function parseNotice(words: readonly string[]): NoticeWords {
   return { question: text === '--help' || text === '-h' ? '' : text, suggest, state, json }
 }
 
-// The CLI fits the whole line, so the devices' byte cut never takes the suggestion off its end. The listener refuses a
-// line that noticeLine would change (devicesListener.ts), so a cut never leaves a space before its `…`.
+// The CLI fits the whole line, so the devices' byte cut never takes the suggestion off its end. A cut leaves no space
+// before its `…`, so the dial never shows `word …`.
 function fitQuestion(q: string[], room: number, bytes: number): string {
   if (q.length <= room && Buffer.byteLength(q.join('')) <= bytes) return q.join('')
   let k = 0

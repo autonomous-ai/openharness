@@ -204,6 +204,8 @@ describe('harness device notify', () => {
     const ended = client.turn(harness.id, 'Use Redis')
     await dial.next((m) => m.t === 'question.close' && m.agentId === harness.id && m.id === question.id, 45_000, 'the card closed', prompted)
     await ended
+    await until('the notice in the daemon\'s log', () => d.log().includes('[device] notify · claude · shown'), 30_000, 50)
+    expect(d.log().split('\n').filter((line) => line.includes(ASK[0]) || line.includes(ASK[2]))).toEqual([])
     client.close()
   })
 
@@ -228,6 +230,8 @@ describe('harness device notify', () => {
     const prompted = dial.messages.length
     engine.type('Use Redis')
     await dial.next((m) => m.t === 'question.close' && m.agentId === engine.id && m.id === question.id, 45_000, 'the card closed', prompted)
+    await until('the notice in the daemon\'s log', () => d.log().includes('[device] notify · claude · shown'), 30_000, 50)
+    expect(d.log().split('\n').filter((line) => line.includes(ASK[0]) || line.includes(ASK[2]))).toEqual([])
   })
 
   // A guard for the skill's rule: a turn that only finished asks nothing, so the dial gets no question for it.

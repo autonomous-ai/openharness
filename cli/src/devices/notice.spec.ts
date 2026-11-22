@@ -1,6 +1,7 @@
 /**
  * `harness device notify`: an agent's question, its suggestion and its state composed into one line, tied to its caller
- * by the command's own environment, and the devices' answer printed (docs/plans/2026-11-22-needs-you-notify-design.md). The devices are a spy: the listener's side is in services/devices.spec.ts.
+ * by the command's own environment, and the devices' answer printed (docs/plans/2026-11-22-needs-you-notify-design.md).
+ * The devices are a spy: the listener's side is in services/devices.spec.ts.
  */
 import { describe, expect, it, vi } from 'vitest'
 import { NOTICE_USAGE, noticeCaller, runNotice, type NoticeDeps } from './notice.js'
