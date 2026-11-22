@@ -250,6 +250,9 @@ export function orcaScenarios(): Scenario[] {
     scenario({
       id: 'O14', app: 'orca', title: 'A worktree added with an agent and another removed with its own: the ring follows both',
       dims: ['D7', 'D1'], sessions: [pane('a', 'w1', 0), pane('b', 'w2', 0), pane('c', 'w3', 0), orcaGhost],
+      // The removed agent leaves at the devices' 30 s look at their agents' processes: on a daemon of its own that look
+      // has the phase tier A's has, not the one the scenario before left.
+      fresh: true,
       steps: [
         ...orcaOpening(['w1', 'w2']),
         ...orcaStarted(['b', 'a']),
@@ -271,6 +274,8 @@ export function orcaScenarios(): Scenario[] {
     scenario({
       id: 'O15', app: 'orca', title: 'An agent started in a new split is listed after its sibling; a pane closed while working leaves',
       dims: ['D7', 'D1'], sessions: [pane('a', 'w1', 0), pane('b', 'w1', 1), pane('c', 'w1', 0, 1), orcaGhost],
+      // As O14's removal, its closed pane's agent leaves at the devices' 30 s look.
+      fresh: true,
       steps: [
         ...orcaOpening(['w1']),
         ...orcaStarted(['b', 'a']),
