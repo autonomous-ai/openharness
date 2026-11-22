@@ -3729,6 +3729,32 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
         expect(focused()).toEqual([focus('w1:p2')])
       })
 
+      // herdr's list can land before the scan's lookup names the app: the scan's change places it again, with that app.
+      it('herdr\'s list read before the lookup names the app: a rest still selects its tab, then focuses its herdr pane', async () => {
+        let answer!: () => void
+        const held = new Promise<void>((done) => { answer = done })
+        readers.processes.mockResolvedValue([...inHerdr, ...clientInIterm('herdr', 1)])
+        found('sess-1', 4242)
+        const herdr = herdrRows([['w1:p2', 'sess-1']])
+        const listener = fakeListener()
+        const { port } = startHere({ listen: listener.listen, herdr: herdr.client, orca: onMac(async (file, args, timeoutMs) => {
+          if (file === '/usr/sbin/lsof') await held
+          return herdrRun(file, args, timeoutMs)
+        }) })
+        attach(port)
+        await herdr.live()
+        expect(scanLine()).toEqual([])
+        answer()
+        await vi.waitFor(() => expect(scanLine()).toEqual([expect.stringMatching(/ · 1 nested placed$/)]))
+        await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+        const stream = listener.tabs()
+        expect(listener.front('iterm')).toBeUndefined()
+        host().swipeEnded(ID, 'rest')
+        await swiped('ok')
+        expect(stream.lines).toStrictEqual([{ app: 'iterm', tty: '/dev/ttys004' }])
+        expect(orcaRuns.at(-1)).toEqual(focus('w1:p2'))
+      })
+
       // The spec leaves Windows as it was: no `ps`, so the scan learns no app and places no herdr pane.
       it('Windows: a tap on a scan-found agent whose herdr row has its session runs no herdr focus', async () => {
         found('sess-1', 4242)
