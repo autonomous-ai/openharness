@@ -103,8 +103,10 @@ export function createVscodeAdapter(
       // The extension says the same word in either editor, so each editor's own bundle id is what its adapter takes:
       // an app known by TERM_PROGRAM alone may be another fork. The link names Claude Code's sessions alone: an engine
       // Claude Code's tools ran from the tab (`codex exec`) inherits the word and the bundle id, and a Codex thread id
-      // is a UUID too. Linux has no bundle id: there the editor is the app the process scan named.
-      const inEditor = bundle === editorBundle || (deps.platform === 'linux' && bundle === undefined && place.app === editor)
+      // is a UUID too. Linux has no bundle id, and on macOS one an editor started from another app inherited is dropped
+      // (hostDetect.ts ownHints): there the editor is the app the caller's parents named.
+      const inEditor = bundle === editorBundle
+        || ((mac || deps.platform === 'linux') && bundle === undefined && place.app === editor)
       if (place.engine === 'claude' && entrypoint === 'claude-vscode' && inEditor && session
         && VSCODE_SESSION.test(session)) return { adapter: editor, id: session }
       // The tab's word, inherited by what its tools run, is never a terminal's: the tab has no shell a window reports.

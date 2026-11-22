@@ -130,8 +130,6 @@ describe('a tap on a session in the VS Code extension\'s tab (docs/specs/2026-11
     const cases: Array<[Record<string, string>, string, string]> = [
       [{ __CFBundleIdentifier: VSCODE, CLAUDE_CODE_ENTRYPOINT: 'cli' }, UUID, VSCODE],
       [{ __CFBundleIdentifier: VSCODE }, UUID, VSCODE],
-      // The app is VS Code by TERM_PROGRAM alone: inferred, so no link.
-      [{ TERM_PROGRAM: 'vscode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' }, UUID, VSCODE],
       // Cursor runs the same extension, which says the same word: its link is not VS Code's.
       [{ __CFBundleIdentifier: CURSOR, CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' }, UUID, CURSOR],
       [TAB, 'sess-1', VSCODE], [TAB, UUID.toUpperCase(), VSCODE], [TAB, `${UUID}&x=y`, VSCODE], [TAB, `${UUID}/..`, VSCODE],

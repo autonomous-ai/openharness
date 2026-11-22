@@ -10,7 +10,7 @@ import { errorKind } from '../../lib/log.js'
 import { roundDrawable } from '../roundGlyphs.js'
 import type { HostAdapter, Outer, Pane, Place } from './adapter.js'
 import { CODEX_THREAD, type CodexQueue, type CodexQueueFailure, type CodexRan } from './codexQueue.js'
-import { agentPlaceName, APP_BUNDLES, detectApp, detectHost, ownHints, UNKNOWN_APP } from './hostDetect.js'
+import { agentPlaceName, APP_BUNDLES, detectApp, detectHost, EXTENSION_TAB, ownHints, UNKNOWN_APP } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
 import { answerEngine, type AnswerEngine } from './lastAnswer.js'
 import { bundleOf, type OpenTarget } from './open.js'
@@ -815,8 +815,9 @@ export class ObservedSource implements HostSource {
     const walk = walked(hints)
     entry.agent.app = entry.outer?.app ?? (walk && this.deps.apps ? this.learnApp(entry, pid, named) : named)
     // An app named by a word another app says too (walked: VS Code's TERM_PROGRAM, which Cursor says) has the bundle of
-    // the app its parents named, else a tap on Cursor started from Terminal (`cursor .`) opened VS Code.
-    const byApp = walk && named !== UNKNOWN_APP
+    // the app its parents named, else a tap on Cursor started from Terminal (`cursor .`) opened VS Code. So has the
+    // extension's tab, whose word names no app: a walk that names none leaves it none, never a guessed editor's.
+    const byApp = walk && (named !== UNKNOWN_APP || hints.CLAUDE_CODE_ENTRYPOINT === EXTENSION_TAB)
     entry.bundle = entry.outer ? APP_BUNDLES[entry.outer.app] : bundleOf(byApp ? entry.agent.app : entry.agent.host, hints)
   }
 
