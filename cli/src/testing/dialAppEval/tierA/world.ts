@@ -83,16 +83,22 @@ const APPS: Readonly<Record<LinkedApp, { bundle: string; scheme: string; desktop
 }
 /**
  * The commands found on each platform's PATH here, made up, recorded and never run: Linux's two a link needs, and Orca's
- * CLI where its installer puts it on PATH (devices/orcaHomes.ts orcaBinary; the plan's Decision 6). On macOS Orca's is
- * the app's own (ORCA_APP_BIN). Nothing else of any platform's is installed.
+ * CLI where its .deb puts it on PATH (devices/orcaHomes.ts orcaBinary; the plan's Decision 6). On macOS Orca's is the
+ * app's own (ORCA_APP_BIN), and on Windows the per-user install's (ORCA_EXE), whose folder Orca's installer does not put
+ * on PATH. Nothing else of any platform's is installed.
  */
 const ON_PATH: Readonly<Record<Platform, Readonly<Record<string, string>>>> = {
   darwin: {},
   linux: { 'xdg-mime': '/usr/bin/xdg-mime', 'xdg-open': '/usr/bin/xdg-open', 'orca-ide': '/opt/eval/orca/resources/bin/orca-ide' },
-  win32: { orca: 'C:\\Users\\eval\\AppData\\Local\\Programs\\orca\\resources\\bin\\orca.exe' },
+  win32: {},
 }
 /** The Orca app's CLI in the world's own folder, which HARNESS_ORCA_APP_BIN names: never this machine's Orca. */
 const ORCA_APP_BIN = join('Orca.app', 'Contents', 'Resources', 'bin', 'orca')
+/** Windows' per-user programs' folder in the world's own, which LOCALAPPDATA names there: where the profile has it, so
+ *  the Claude app's store is where it is with none set. */
+const LOCAL_APP_DATA = join('AppData', 'Local')
+/** Orca's CLI in its per-user install on Windows, under LOCALAPPDATA. */
+const ORCA_EXE = (localAppData: string): string => win32.join(localAppData, 'Programs', 'orca', 'resources', 'bin', 'orca.exe')
 /** Every file of Orca's has its release's time: its `terminal --help` is read once, as in a real run. */
 const ORCA_MTIME_MS = 1_763_337_600_000
 /** Made-up places, recorded and never run. */
@@ -210,7 +216,9 @@ export class World implements TierAWorld {
     // Windows), and an empty folder variable counts as unset (cable/hosts/appPlaces.ts). The end-to-end tests' `open` is
     // not this world's.
     for (const name of ['HOME', 'USERPROFILE']) vi.stubEnv(name, root)
-    for (const name of ['LOCALAPPDATA', 'APPDATA', 'XDG_CONFIG_HOME', 'HARNESS_APPLICATIONS_DIR', 'HARNESS_OPEN_BIN']) vi.stubEnv(name, '')
+    for (const name of ['APPDATA', 'XDG_CONFIG_HOME', 'HARNESS_APPLICATIONS_DIR', 'HARNESS_OPEN_BIN']) vi.stubEnv(name, '')
+    // Windows' LOCALAPPDATA is the world's, where Orca installs for one account; no other platform has one.
+    vi.stubEnv('LOCALAPPDATA', platform === 'win32' ? join(root, LOCAL_APP_DATA) : '')
     // The welcome's voice language follows LANG (cableHost.ts voiceLang): the same on every host.
     vi.stubEnv('LANG', 'en_US.UTF-8')
     // The Orca app the devices find on macOS is the world's own made-up one, whatever this machine has.
@@ -407,11 +415,13 @@ export class World implements TierAWorld {
       return { code: 0, stdout: found ? `${found[1].desktopFile}\n` : '' }
     })
     // Orca's CLI is found and answered from the model (the plan's Decision 6), and the devices build their own reads of it
-    // on these. A lookup's accept is never asked: it reads the real disk.
+    // on these. A lookup's accept is never asked: it reads the real disk. Of Orca's files only its CLI is there, where
+    // the platform's installer puts it.
+    const orcaInstall = { darwin: join(root, ORCA_APP_BIN), linux: ON_PATH.linux['orca-ide']!, win32: ORCA_EXE(join(root, LOCAL_APP_DATA)) }[platform]
     const orca: OrcaReadDeps = {
       run: async (file, args) => this.ran([file, ...args]),
       onPath: (name) => (Object.hasOwn(ON_PATH[platform], name) ? ON_PATH[platform][name]! : null),
-      exists: (path) => path === join(root, ORCA_APP_BIN),
+      exists: (path) => path === orcaInstall,
       platform,
       // Its focus watch, whose start is a command Orca ran.
       spawn: (file, args) => {
