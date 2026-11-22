@@ -1,13 +1,14 @@
 // The dial eval's check evaluators: pure functions from what a driver saw to scores (docs/plans/2026-11-21-dial-app-eval-plan.md,
-// Task 5). Evidence names session keys and times only, never a title, a folder or spoken text, and lists only what was
-// observed: a driver that observes nothing leaves it empty, so its probes fail.
+// Task 5). Evidence names session keys, editor window ids and times only, never a title, a folder or spoken text, and
+// lists only what was observed: a driver that observes nothing leaves it empty, so its probes fail.
+import { posix } from 'node:path'
 import { windowClasses } from '../../cable/hosts/frontApp.js'
 import { APP_BUNDLES } from '../../cable/hosts/hostDetect.js'
 import { observedTitle } from '../../cable/hosts/observedTitle.js'
 import { WINDOWS_APPS } from '../../cable/hosts/windowsRaise.js'
 import { CAROUSEL_TILES } from '../dialCarousel.js'
-import { agentIdOf, PAGE, THRESHOLDS, type App, type Check, type CheckResult, type Platform, type Scenario, type Seen,
-  type SessionDef, type SessionKey, type Tier, type Until, type WrongSend } from './types.js'
+import { agentIdOf, engineOf, PAGE, placeOf, SKIPPED_SCROLL, THRESHOLDS, type App, type Check, type CheckResult, type Platform,
+  type Scenario, type Seen, type SessionDef, type SessionKey, type Tier, type Until, type WrongSend } from './types.js'
 
 /** A failing check's evidence stays readable in the report, however long the scenario ran. */
 const MAX_EVIDENCE = 20
@@ -47,6 +48,11 @@ class World {
   /** A row's session key; an id the scenario does not know is never printed, as it may be the machine's. */
   keyOf(agentId: string | null): string {
     return agentId === null ? 'none' : this.keys.get(agentId) ?? 'other'
+  }
+
+  /** A shell's key as a stream line names it; anything else is never printed, as it may be a pid. */
+  known(key: unknown): string {
+    return typeof key === 'string' && this.scenario.sessions.some((s) => s.key === key) ? key : 'other'
   }
 
   stepAt(label: string): number | undefined {
@@ -170,9 +176,13 @@ function apartPart(apart: SessionKey[], page: string, world: World, w: Window | 
   return { part: 'apart', score: elsewhere === apart.length ? 1 : 0, timed: false, evidence }
 }
 
-/** The title a row should carry at `to`: the latest `codex.write` that renamed it before then, else the fixture's. */
+/**
+ * The title a row should carry at `to`: the latest `codex.write` that renamed it before then, else the fixture's. The
+ * hooks of Codex and Cursor's agents in an editor carry no title, so their rows are named by their folder.
+ */
 function titleOf(world: World, key: SessionKey, to: number): string {
-  let title = world.session(key).title
+  const session = world.session(key)
+  let title = placeOf(session) !== undefined && engineOf(session) !== 'claude' ? posix.basename(session.cwd) : session.title
   for (const step of world.stepsBefore(to)) {
     if (step.kind === 'codex.write' && step.names && Object.hasOwn(step.names, key)) title = step.names[key]!
   }
@@ -243,11 +253,20 @@ function stillParts(check: CheckOf<'still'>, world: World, w: Window | undefined
 /** Each app's link scheme: the ChatGPT app's threads are Codex's. */
 const SCHEMES: Readonly<Record<App, string>> = { claude: 'claude://', chatgpt: 'codex://', vscode: 'vscode://', cursor: 'cursor://' }
 
-/** The session's own link: the Claude app opens its store's `local_` id, the ChatGPT app the Codex thread. */
+/**
+ * The session's own link: the Claude app opens its store's `local_` id, the ChatGPT app the Codex thread, an editor's
+ * Claude Code panel its session; an editor's other rows have none.
+ */
 function linkOf(session: SessionDef): string | undefined {
+  const place = placeOf(session)
+  if (place === 'panel') return `${SCHEMES[session.app]}anthropic.claude-code/open?session=${session.id}`
+  if (place !== undefined) return undefined
   if (session.app === 'chatgpt') return `${SCHEMES.chatgpt}threads/${session.id}`
   return session.localId && `${SCHEMES.claude}code/continue?session=${session.localId}`
 }
+
+/** A command's program, without its folder or `.exe`. */
+const programOf = (argv: string[]): string => (argv[0] ?? '').split(/[\\/]/).at(-1)!.replace(/\.exe$/, '')
 
 /**
  * Whether a command brings the session's app to the front (the eval sees commands, not windows), in the form the
@@ -260,7 +279,7 @@ function linkOf(session: SessionDef): string | undefined {
  *   A's record of windowsRaise.app) or by `--exe <its program>` (the helper's own form, windowsRaise.ts), any case.
  */
 function fronts(argv: string[], platform: Platform, app: App, link: string | undefined): boolean {
-  const exe = (argv[0] ?? '').split(/[\\/]/).at(-1)!.replace(/\.exe$/, '')
+  const exe = programOf(argv)
   const id = PAGE[app]
   const bundle = APP_BUNDLES[id]!
   switch (platform) {
@@ -275,9 +294,61 @@ function fronts(argv: string[], platform: Platform, app: App, link: string | und
   }
 }
 
+/**
+ * Whether a command opens Cursor's window on the folder, as cursorFolder.ts runs it: macOS's `open -b <Cursor> <folder>`,
+ * Linux's Cursor CLI on it, Windows' `harness-pty cursor-folder <folder>` (tier A's record of windowsRaise.cursorFolder).
+ */
+function opensFolder(argv: string[], platform: Platform, folder: string): boolean {
+  const exe = programOf(argv)
+  switch (platform) {
+    case 'darwin': return argv.some((a, i) => a === '-b' && argv[i + 1] === APP_BUNDLES.cursor) && argv.at(-1) === folder
+    case 'linux': return exe === 'cursor' && argv.length > 1 && argv.at(-1) === folder
+    case 'win32': return exe === 'harness-pty' && argv[1] === 'cursor-folder' && argv[2] === folder
+  }
+}
+
+type StreamLine = NonNullable<Seen['streams']>[number]
+/** An editor window's stream as it stands: whether it ended, and its last state (its index in the lines). */
+interface Stream { ended: boolean; state?: { index: number; terminals: unknown[]; active: unknown } }
+
+function apply(streams: Map<string, Stream>, { window, line }: StreamLine, index: number): void {
+  const stream = streams.get(window) ?? { ended: false }
+  streams.set(window, stream)
+  if ('ended' in line) stream.ended = true
+  else if (line.type === 'vscode-state') {
+    stream.state = { index, terminals: Array.isArray(line.terminals) ? line.terminals : [], active: line.active }
+  }
+}
+
+/**
+ * The stream holding a shell: among those not ended, the one whose last state lists it, the latest state winning, as a
+ * terminal moved to another window, or a reload's new stream, is listed there last.
+ */
+function holder(streams: ReadonlyMap<string, Stream>, key: SessionKey): string | undefined {
+  let found: { window: string; index: number } | undefined
+  for (const [window, s] of streams) {
+    if (!s.ended && s.state?.terminals.includes(key) && (!found || s.state.index > found.index)) found = { window, index: s.state.index }
+  }
+  return found?.window
+}
+
+/**
+ * An editor row is graded by its kind (docs/plans/2026-11-22-dial-eval-vscode-cursor-plan.md, Decision 6): a terminal
+ * whose shell a stream holds as the window opens on its `show` with `raise` there, and its app brought forward; one with
+ * none on VS Code's front or Cursor's folder, its last resort; Cursor's agent on its folder; a panel, as the base apps,
+ * on its link and front.
+ */
 function openParts(check: CheckOf<'open'>, world: World, w: Window | undefined, platform: Platform): Part[] {
   const session = world.session(check.session)
+  const place = placeOf(session)
   const link = linkOf(session)
+  const folder = session.app === 'cursor' ? session.folders?.[0] ?? session.cwd : undefined
+  const streams = world.seen.streams ?? []
+  const opening = new Map<string, Stream>()
+  if (w) streams.forEach((l, i) => l.at <= w.from && apply(opening, l, i))
+  const holding = place === 'terminal' ? holder(opening, session.key) : undefined
+  const shows = w ? streams.filter((l) => l.line.show !== undefined && within(l.at, w)) : []
+  const shown = shows.find((l) => l.window === holding && l.line.show === session.key && l.line.raise === true)
   const commands = w ? world.seen.commands.filter((c) => within(c.at, w)) : []
   const linked = commands.filter((c) => link !== undefined && c.argv.includes(link))
   // A command that failed, or that hands an app a link it refuses (world.linkFails), brought nothing up, whatever it
@@ -286,23 +357,81 @@ function openParts(check: CheckOf<'open'>, world: World, w: Window | undefined, 
   const brings = (c: Seen['commands'][number]): boolean => c.ok
     && !c.argv.some((arg) => refused.some((app) => arg.startsWith(SCHEMES[app]))) && fronts(c.argv, platform, session.app, link)
   const front = commands.find(brings)
+  const folds = (c: Seen['commands'][number]): boolean => folder !== undefined && c.ok && opensFolder(c.argv, platform, folder)
+  const folded = commands.find(folds)
   // The dial's inputs first, so an input that opened nothing fails with what the driver saw. Commands carry paths: the
   // evidence says only what each one was. The inputs are the scenario's own steps, which every driver records: only a
-  // window in which the driver saw a command or a frame names them, so a recorder that sees nothing catches no probe.
-  const heard = commands.length > 0 || (w !== undefined && world.seen.frames.some((f) => within(f.at, w)))
+  // window in which the driver saw a command, a frame or a stream line names them, so a recorder that sees nothing
+  // catches no probe.
+  const heard = commands.length > 0 || (w !== undefined
+    && (world.seen.frames.some((f) => within(f.at, w)) || streams.some((l) => within(l.at, w))))
   const inputs = w && heard ? world.seen.steps.filter((s) => within(s.at, w)).flatMap((s) => {
     const step = world.scenario.steps[s.index]!
     return step.kind === 'tap' || step.kind === 'swipe' ? [`${step.kind} on ${step.session} at ${s.at}`] : []
   }) : []
-  const evidence = bounded([...inputs, ...commands.map((c) =>
-    `command at ${c.at}: ${[linked.includes(c) && 'link', brings(c) && 'front', !c.ok && 'failed'].filter(Boolean).join(' ') || 'other'}`),
+  const evidence = bounded([...inputs, ...commands.map((c) => `command at ${c.at}: ${
+    [linked.includes(c) && 'link', brings(c) && 'front', folds(c) && 'folder', !c.ok && 'failed'].filter(Boolean).join(' ') || 'other'}`),
+  ...shows.map((l) => `show at ${l.at} on ${l.window}: ${world.known(l.line.show)}${l.line.raise === true ? ' raise' : ''}`),
   ...(inputs.length > 0 && commands.length === 0 ? ['no command'] : [])])
-  const latency = front && w ? front.at - w.from : null
+  const timing = (at: number | undefined): Part => {
+    const latency = at !== undefined && w ? at - w.from : null
+    return { part: 'latency', score: graded(latency, THRESHOLDS.open), timed: true, ms: latency, evidence }
+  }
+  if (place === 'agent' || (place === 'terminal' && holding === undefined && session.app === 'cursor')) {
+    return [{ part: 'folder', score: folded ? 1 : 0, timed: false, evidence }, timing(folded?.at)]
+  }
+  const fronted = { part: 'front', score: front ? 1 : 0, timed: false, evidence }
+  if (holding !== undefined) {
+    // The show reached the window holding the shell alone: a show on another window brings up the wrong terminal.
+    const alone = shown !== undefined && shows.every((l) => l.window === holding)
+    return [{ part: 'show', score: alone ? 1 : 0, timed: false, evidence }, fronted,
+      timing(shown && front ? Math.max(shown.at, front.at) : undefined)]
+  }
   return [
     ...(check.link ? [{ part: 'link', score: linked.length > 0 ? 1 : 0, timed: false, evidence }] : []),
-    { part: 'front', score: front ? 1 : 0, timed: false, evidence },
-    { part: 'latency', score: graded(latency, THRESHOLDS.open), timed: true, ms: latency, evidence },
+    fronted,
+    timing(front?.at),
   ]
+}
+
+/**
+ * A stroke reached the session's terminal: the stream holding its shell ran a scroll line for it, as the extension runs
+ * one only while its state has that shell active (loop.ts), and no line ran for another shell.
+ */
+function scrollParts(check: CheckOf<'scroll'>, world: World, w: Window | undefined): Part[] {
+  const streams = new Map<string, Stream>()
+  const lines: Array<{ at: number; window: string; pid: unknown; ran: boolean; held: boolean }> = []
+  ;(world.seen.streams ?? []).forEach((l, i) => {
+    if (w && within(l.at, w) && l.line.scroll !== undefined) {
+      const stream = streams.get(l.window)
+      const ran = stream !== undefined && !stream.ended && stream.state?.active === l.line.pid
+      lines.push({ at: l.at, window: l.window, pid: l.line.pid, ran, held: holder(streams, check.session) === l.window })
+    }
+    apply(streams, l, i)
+  })
+  const mine = lines.some((l) => l.pid === check.session && l.ran && l.held)
+  const other = lines.some((l) => l.pid !== check.session && l.ran)
+  const evidence = bounded(lines.map((l) => `scroll at ${l.at} on ${l.window} for ${world.known(l.pid)}: ${l.ran ? 'ran' : 'dropped'}`))
+  return [{ part: 'ran', score: mine && !other ? 1 : 0, timed: false, evidence }]
+}
+
+const SCROLL_TAG = '[device] scroll'
+/** An absolute path, POSIX or Windows, as a word of its own. */
+const ABSOLUTE_PATH = /(?<=^|[\s"'(=])(?:[A-Za-z]:)?[\\/][^\s"')]*/g
+
+/** A log line from its tag on, each path and each run of digits (a pid, a port) made bare. */
+const bareLog = (line: string): string =>
+  line.slice(line.indexOf(SCROLL_TAG)).replace(ABSOLUTE_PATH, '<path>').replace(/\d{2,}/g, '<n>')
+
+/** The devices said why a stroke scrolled nothing: SKIPPED_SCROLL and a reason after it. */
+function loggedParts(world: World, w: Window | undefined): Part[] {
+  const lines = w ? (world.seen.logs ?? []).filter((l) => within(l.at, w) && l.line.includes(SCROLL_TAG)) : []
+  const skipped = lines.filter((l) => {
+    const at = l.line.indexOf(SKIPPED_SCROLL)
+    return at >= 0 && l.line.slice(at + SKIPPED_SCROLL.length).trim() !== ''
+  })
+  const evidence = bounded((skipped.length > 0 ? skipped : lines).map((l) => `log at ${l.at}: ${bareLog(l.line)}`))
+  return [{ part: 'logged', score: skipped.length > 0 ? 1 : 0, timed: false, evidence }]
 }
 
 /**
@@ -419,8 +548,8 @@ function partsOf(check: Check, scenario: Scenario, seen: Seen, platform: Platfor
     case 'voice': return voiceParts(check, world, w)
     case 'recap': return recapParts(check, world, w)
     case 'cost': return costParts(seen)
-    // Built by Task 6 of docs/plans/2026-11-22-dial-eval-vscode-cursor-plan.md; no scenario asks for them before.
-    case 'scroll': case 'logged': throw new Error(`the ${check.kind} check is not built yet`)
+    case 'scroll': return scrollParts(check, world, w)
+    case 'logged': return loggedParts(world, w)
   }
 }
 

@@ -690,7 +690,7 @@ describe('editors', () => {
       // Cursor brought forward on no folder is not its folder's window.
       expect(scores(folder('darwin', ['/usr/bin/open', '-b', 'com.todesktop.230313mzl4w4u92']))).toEqual({ folder: 0, latency: 0 })
       expect(scores(folder('linux', ['/eval/bin/cursor', '/work/eval-va']))).toEqual({ folder: 0, latency: 0 })
-      expect(scores(folder('darwin', ['/usr/bin/open', '-b', 'com.todesktop.230313mzl4w4u92', '/work/eval-ct'], 3600))).toEqual({ folder: 1, latency: 0.5 })
+      expect(scores(folder('darwin', ['/usr/bin/open', '-b', 'com.todesktop.230313mzl4w4u92', '/work/eval-ct'], 3500))).toEqual({ folder: 1, latency: 0.5 })
     })
 
     it('a panel row on its link; Cursor\'s agent on its folder command, folders[0] first', () => {
