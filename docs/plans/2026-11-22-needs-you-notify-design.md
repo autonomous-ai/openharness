@@ -193,10 +193,13 @@ Details:
   core's agents). Not known yet is latched as the plugin's `unknown` is: it turns nothing on and nothing off, so a
   devices start with the plugin off does not strip the skill before the view arrives.
 - It is read once per pass and kept with the stamp, so one pass never flips halfway. A change (the first Claude agent
-  made in the app, the last one gone) is a new stamp: the next scan (60 s at most while a dial is attached) runs the
-  start pass again.
+  made in the app, the last one gone) is a new stamp, and the next scan runs the start pass again.
+- A listed agent is taken at once. None is taken only once it has held 60 s on a monotonic clock: a core still
+  restoring its agents lists none, and a start runs two passes milliseconds apart, so an empty list alone strips
+  nothing.
 - When the last one goes and the plugin does not read on, Claude is Off and the service removes our skill, as for a
-  plugin uninstalled through `/plugin`.
+  plugin uninstalled through `/plugin`: the first pass that reads none after none has held 60 s removes it. Scans run
+  every 60 s while a dial is attached, so that is 1-3 minutes after the last Harness Claude agent goes.
 - The menu-bar app's Claude Code row still shows the plugin's state; it is unchanged.
 - Through `~/.claude/skills` the skill also reaches Claude Code outside Harness on that computer (Orca profiles link
   it). That is the same dial for the same person, so it stays.

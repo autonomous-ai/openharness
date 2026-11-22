@@ -76,7 +76,7 @@ A spec is the file with `.spec.ts` in place of `.ts` (`DNS`, `NCS`, …).
   nothing on and nothing off. In such a pass Claude's homes are left exactly as they are: nothing is written and
   nothing is removed. Where Codex shares a skills folder with Claude, a not-known Claude counts as on, so the folder
   keeps the skill. The answer is read once per pass and is part of the stamp. The menu-bar row and
-  `harness device claude status` (`skillWanted`) are unchanged.
+  `harness device claude status` (the plugin's entry and the removal) are unchanged.
 - **The allowance** on `win32`: the same rules as on macOS and Linux, with no Messages block or script.
   `{launcher}` is `win32.join(harnessPath('bin', homedir(), 'win32'), 'harness.exe')` on `win32` and
   `join(env.HARNESS_BIN_DIR, 'harness')` elsewhere. `{node}` and `{cli}` are unchanged.

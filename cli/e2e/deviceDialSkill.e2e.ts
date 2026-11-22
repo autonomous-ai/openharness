@@ -276,10 +276,12 @@ describe('the dial set up from its first attach', () => {
       { env: { ...d.env, CLAUDE_CONFIG_DIR: claudeHome }, stdio: 'ignore' })
     await desk.unplug('E2E-A')
     await plugged(desk)
-    await until('Claude Code\'s skill gone', () => !existsSync(skillOf(claudeHome)), 45_000, 100)
+    // The first pass that reads none once none has held a scan's minute (dialHomeSetup.ts NONE_HELD_MS), on a monotonic
+    // clock no test moves: with scans a minute apart, 1-3 minutes after the attach.
+    await until('Claude Code\'s skill gone', () => !existsSync(skillOf(claudeHome)), 150_000, 100)
     expect(pluginCalls(d).filter((call) => call === INSTALL)).toEqual([INSTALL])
     noPathLogged(d)
-  })
+  }, 300_000)
 
   it('with the plugin not on, a Harness Claude agent brings Claude Code\'s skill', async () => {
     // Below MIN_CLAUDE (devices/claudePlugin.ts): the plugin's pass refuses this Claude Code, so its settings never read on.
