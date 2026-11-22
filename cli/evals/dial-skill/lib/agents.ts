@@ -83,8 +83,10 @@ export async function runAgent(agent: AgentKind, s: Scenario, st: Staged, cfg: A
     : null
   // The staged fake by its own path, never a `harness` found on PATH, which could be the real one.
   if (words !== null) await promisify(execFile)(join(st.root, 'bin', 'harness'), ['device', 'notify', ...words], { cwd: st.repo, env: st.env })
+  // What states_ask passes: the ask, the recommendation, and whether it went on or waited.
+  const went = s.expect === 'proceeding' ? 'I went on with it.' : 'I am waiting for you.'
   return {
-    answer: agent === 'oracle' ? s.ask ?? '' : '',
+    answer: agent === 'oracle' && s.ask !== null ? `${s.ask} I recommend the first option. ${went}` : '',
     transcript: [],
     model: null,
     usage: { input_tokens: 0, output_tokens: 0 },

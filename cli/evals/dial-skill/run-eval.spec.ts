@@ -14,10 +14,12 @@ const RUNNER = join(import.meta.dirname, 'run-eval.mjs')
 const SCENARIOS = new Map(loadScenarios().map((s) => [s.id, s]))
 
 /** The fake `claude`'s judge: passes when the line or answer is the expected ask, once the state and suggestion the CLI
- *  composes around a line are taken off, and echoes it in the reason. */
+ *  composes around a line, and the recommendation and state the oracle's answer adds, are taken off; it echoes the line
+ *  or answer in the reason. */
 const JUDGE = String.raw`const prompt = process.argv[process.argv.indexOf('-p') + 1]
 const [ask, given] = [...prompt.matchAll(/^(\x60{3,})\n([\s\S]*?)\n\1$/gm)].map((m) => m[2])
 const asked = given.replace(/^(Waiting|Proceeding) · /, '').replace(/ · (Suggest|Doing): .*$/, '')
+  .replace(/ I recommend the first option\. (I went on with it|I am waiting for you)\.$/, '')
 console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: '',
   structured_output: { pass: asked === ask, reason: 'judged ' + given },
   usage: { input_tokens: 2, output_tokens: 1 }, modelUsage: { 'claude-opus-5-5': {} } }))`
