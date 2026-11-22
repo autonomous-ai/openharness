@@ -12237,7 +12237,8 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
     await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
     expect(calls('summary')).toEqual([[agent(1), 'Shipped.', 'Shipped.', 'alert', 'Shipped.', false]])
     expect(logs.filter((line) => /secret/i.test(line))).toEqual([])
-    expect(logs).toContain('[cable] notify · alert · rule:turn · turn · 0ms')
+    // The decider's ms is wall-clock time (Date is not faked here): under load the line can read 1ms.
+    expect(logs).toContainEqual(expect.stringMatching(/^\[cable\] notify · alert · rule:turn · turn · \d+ms$/))
   })
 
   it('no line holds a handle or an agent', async () => {
