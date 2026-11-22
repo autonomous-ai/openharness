@@ -5022,6 +5022,17 @@ describe('ObservedSource and a nested session the scan found', () => {
       expect(t.tty).not.toHaveBeenCalled()
     })
 
+    it('a nested first hook from another process drops the scan\'s tab and client at once', async () => {
+      const t = await placed()
+      // Resumed in another tmux pane, its old SessionEnd missed: the scan's place was the old process's.
+      t.src.ingest(t.ev('session-start', { sessionId: 'a', ...inTmux('%5'), callerPid: 101 }))
+      expect(t.outer.mock.calls).toEqual([[inTmux('%5').hostHints, 101]])
+      expect(t.a().app).toBe('tmux')
+      expect(t.src.paneOf(t.id, 'tabs')).toBeUndefined()
+      expect(t.src.byTab('iterm', '/dev/ttys004')).toBeUndefined()
+      expect(t.src.windowOf(t.id)).toEqual({ pid: 101, app: 'tmux' })
+    })
+
     it('a first hook that is not nested drops the scan\'s place at once', async () => {
       const t = await placed()
       expect(await t.src.focus(t.a())).toBe(true)
