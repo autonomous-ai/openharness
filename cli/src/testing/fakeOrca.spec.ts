@@ -11,6 +11,7 @@ interface FakeOrca {
   listing(json: object): void
   watchFocus(on: boolean): void
   endWatch(): void
+  watching(): boolean
   focus(handle: string | null): void
   refuse(): void
 }
@@ -116,6 +117,18 @@ describe.skipIf(process.platform === 'win32')("the harness's fake Orca", () => {
     expect(statSync(launcher).mtimeMs).toBeGreaterThan(before)
     // Still Orca's launcher under both names, as an Orca update leaves it.
     for (const name of ['orca', 'orca-ide']) expect(realpathSync(join(bin, name))).toBe(realpathSync(launcher))
+  })
+
+  it("a watch after endWatch prints no focus told before it, as Orca's after its quit: that terminal went with it", async () => {
+    const { fake, launcher } = installed(true)
+    fake.focus(H1)
+    fake.endWatch()
+    const w = watch(launcher)
+    // Running, so it has printed what it starts with before the next line is told.
+    await vi.waitFor(() => expect(fake.watching()).toBe(true), { timeout: 10_000, interval: 20 })
+    fake.focus(H2)
+    await vi.waitFor(() => expect(w.lines).toContain(focusLine(H2)), { timeout: 10_000, interval: 20 })
+    expect(w.lines).toEqual([focusLine(H2)])
   })
 
   it('endWatch ends a running watch-focus', async () => {
