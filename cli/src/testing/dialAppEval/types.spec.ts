@@ -22,6 +22,12 @@ it('an editor session runs in a terminal unless it says otherwise; the base apps
   expect(engineOf({ app: 'cursor', place: 'agent', engine: 'claude' })).toBe('claude')
 })
 
+it("VS Code has no agent of its own: a session in place 'agent' that is not Cursor's is refused", () => {
+  expect(() => placeOf({ app: 'vscode', place: 'agent' })).toThrow("vscode has no agent of its own: only Cursor's sessions run in place 'agent'")
+  expect(() => engineOf({ app: 'vscode', place: 'agent' })).toThrow("vscode has no agent of its own")
+  expect(() => agentIdOf({ app: 'vscode', id, place: 'agent', engine: 'claude' })).toThrow("vscode has no agent of its own")
+})
+
 it('PAGE names the editors\' pages by the wire\'s app ids', () => {
   expect(PAGE).toEqual({ claude: 'claude', chatgpt: 'codex', vscode: 'vscode', cursor: 'cursor' })
 })
