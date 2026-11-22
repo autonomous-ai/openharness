@@ -114,6 +114,18 @@ describe("tier A's Orca", () => {
     expect(await createOrcaReads(worldOn('darwin', older).deps.orca!).orcaWatchesFocus()).toBe(false)
   })
 
+  it('an Orca with no watch-focus fails the command: its watch ends at once and hears no focus', async () => {
+    const { world, deps } = worldOn('darwin', layout({ world: { orca: { watchFocus: false } } }))
+    await started(world, ['a'])
+    const heard: Array<string | null> = []
+    let ended = false
+    void createOrcaReads(deps.orca!).watchOrcaFocus((handle) => { heard.push(handle) }).ended.then(() => { ended = true })
+    await orcaModelSteps['orca.focus'](world, { kind: 'orca.focus', session: 'a' })
+    await landed()
+    expect([ended, heard]).toEqual([true, []])
+    expect(world.seen([]).commands.map(({ argv, ok }) => [argv.slice(1).join(' '), ok])).toEqual([['terminal watch-focus --json', false]])
+  })
+
   it('worktree activate, terminal switch and send answer 0 and are recorded', async () => {
     const { world, deps } = worldOn('linux', layout())
     await started(world, ['a'])
