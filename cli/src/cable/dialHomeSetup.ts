@@ -117,6 +117,9 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
   /** Engines on at the last pass: a scan looks at their default home, and Codex's at its sessions' homes, without
    *  reading whether they still are, which only a changed stamp can change. */
   const onAtPass = new Set<DialEngine>()
+  /** Whether the last start pass read Claude Code held: a scan that still finds it so says it once a run, as a start
+   *  before the core's agents are read is no news. */
+  let claudeHeld = false
   /** Recorded folders counted left removed in this run, by engine. */
   const leftCounted = new Set<string>()
   /** Engines whose removal was counted, until one is read not removed: dial-skill.json written again for another
@@ -372,6 +375,7 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
     // Taken before on is read, so a disable after it is a changed file at the next scan.
     stamp = stampNow()
     const engineOn = { claude: on('claude'), codex: on('codex') }
+    claudeHeld = engineOn.claude === 'held'
     // A replug, or Claude Code saving another setting, does not try a refused home again before its hour; a removal, an
     // enable or the plugin turned on or off does.
     const onNow = `${engineOn.claude} ${engineOn.codex}`
@@ -487,6 +491,7 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
         // A removal or enable since, or the plugin turned on or off: every home is written again, or taken out, without
         // a restart.
         if (stampNow() !== stamp) startPass(counts)
+        if (claudeHeld) sayOnce('held', 'dial skill: claude held (agents not known)')
         // An engine installed since the pass: its default home is written once it is there.
         for (const engine of ENGINES) {
           const home = defaultHome[engine]

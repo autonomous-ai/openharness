@@ -85,7 +85,8 @@ function fileCalls(): [string, unknown][] {
 /** A setup over throwaway homes, on a computer a dial attached on once unless [dial] is false or the test gives its own
  *  data dir, whose record it writes itself. `removed` reads the real dial-skill.json unless the test gives its own;
  *  every call to it is counted. The day's tally is `counted`, and `clock.at` the monotonic clock. The core's Claude
- *  agents are `agents.now`, none unless the test says so, each read counted in `agents.reads`. */
+ *  agents are `agents.now`, none unless the test says so, each read counted in `agents.reads`: a none from the start
+ *  holds Claude Code with its plugin not on until it has held a minute, and a scan says so once. */
 function rig(over: Partial<DialHomeSetupDeps> = {}, dial = true) {
   const dataDir = over.dataDir ?? folder()
   if (!over.dataDir && dial) dialOnce(dataDir)
@@ -265,7 +266,7 @@ describe('the devices set the dial skill up', () => {
     expect(hasSkill(inTerminal)).toBe(true)
     expect(hasSkill(server)).toBe(true)
     expect(sorted(readSetup(r.dataDir).homes.codex)).toEqual(sorted([r.codexHome, inTerminal, server].map(skillsOf)))
-    expect(r.lines).toEqual([counts([0, 0], [2, 0])])
+    expect(r.lines).toEqual(['dial skill: claude held (agents not known)', counts([0, 0], [2, 0])])
   })
 
   it('a profile linked to another home\'s skills is one write', () => {
@@ -279,7 +280,7 @@ describe('the devices set the dial skill up', () => {
 
     expect(hasSkill(profile)).toBe(true)
     expect(readSetup(r.dataDir).homes.codex).toEqual([shared])
-    expect(r.lines).toEqual([counts([0, 0], [1, 0])])
+    expect(r.lines).toEqual([counts([0, 0], [1, 0]), 'dial skill: claude held (agents not known)'])
   })
 
   it('an Orca Codex home gets the skill, and a second start pass writes nothing twice', () => {
@@ -707,7 +708,7 @@ describe('the devices set the dial skill up', () => {
     r.writer.scanned(owners)
     r.writer.scanned(owners)
 
-    expect(r.lines).toEqual(['dial skill: path refused (shape)', 'dial skill: path refused (owner)', 'dial skill: path refused (missing)'])
+    expect(r.lines).toEqual(['dial skill: claude held (agents not known)', 'dial skill: path refused (shape)', 'dial skill: path refused (owner)', 'dial skill: path refused (missing)'])
     expect(r.lines.join('\n')).not.toContain('/')
     expect(existsSync(join(someone, 'skills'))).toBe(false)
     expect(existsSync(gone)).toBe(false)
@@ -920,7 +921,7 @@ describe('what the person removed stays removed, and Harness\'s own is kept curr
     expect(existsSync(skillFile(home))).toBe(false)
     expect(readSetup(r.dataDir).homes.codex).toEqual(listed)
     expect(r.counted).toEqual([['codex', 'left removed']])
-    expect(r.lines).toEqual([])
+    expect(r.lines).toEqual(['dial skill: claude held (agents not known)'])
   })
 
   it('a Claude Code skill the person deleted stays deleted through the plugin turned off and on again', () => {
