@@ -13,21 +13,21 @@ describe("Orca's scenarios", () => {
     expect(HELD_OUT.filter((s) => s.id.startsWith('O') && !s.id.startsWith('OH'))).toEqual([])
   })
 
-  it('every O scenario runs on every platform in both tiers', () => {
+  it('every O scenario runs on every platform in both tiers, but O16 in tier A alone, for its time in tier B', () => {
     for (const s of ORCA) {
       expect(s.platforms, s.id).toEqual(['darwin', 'win32', 'linux'])
-      expect(s.tiers, s.id).toEqual(['a', 'b'])
+      expect(s.tiers, s.id).toEqual(s.id === 'O16' ? ['a'] : ['a', 'b'])
     }
   })
 
-  it("each O scenario's checks cover exactly the spec's dims", () => {
+  it("each O scenario's checks cover exactly the spec's dims, and D8 in tier B", () => {
     const dims: Record<string, Dimension[]> = {
       O1: ['D1'], O2: ['D1', 'D7'], O3: ['D1', 'D7'], O4: ['D2'], O5: ['D2'], O6: ['D2', 'D1'], O7: ['D3'], O8: ['D4', 'D6'],
       O9: ['D5'], O10: ['D5'], O11: ['D1'], O12: ['D7', 'D1', 'D2'], O13: ['D7', 'D1', 'D3'], O14: ['D7', 'D1'],
       O15: ['D7', 'D1'], O16: ['D1', 'D7'], O17: ['D7', 'D3'],
     }
     for (const s of ORCA) {
-      const want = [...dims[s.id]!, 'D8']
+      const want = [...dims[s.id]!, ...s.tiers.includes('b') ? ['D8'] : []]
       expect([...s.dims].sort(), s.id).toEqual([...want].sort())
       expect([...new Set(s.checks.map((c) => c.dim))].sort(), s.id).toEqual([...want].sort())
     }

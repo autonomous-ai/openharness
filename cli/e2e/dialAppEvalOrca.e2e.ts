@@ -3,7 +3,10 @@
  * ("Never the real Orca"), before any scenario runs: every session here runs inside the real Orca, whose `orca` is on
  * this worker's PATH and whose names are in its environment. So the daemon's Orca CLI is the fake inside its root, every
  * Orca agent runs on a terminal-host stand-in of its own (harness/orcaHost.ts), and what is started for one has none of
- * this worker's Orca, tmux or terminal values.
+ * this worker's Orca, tmux or terminal values. Then each main scenario of the catalog for Orca that runs in tier B, on
+ * the real daemon and devices process, through the tier B driver (harness/appEvalDriver.ts) and Orca's steps
+ * (harness/appEvalOrca.ts): Claude Code and Codex in Orca's panes, the fake Orca's layout and focus, and Orca's plugin's
+ * own loop.
  *
  * macOS and Linux; the stand-in's cases where cc is installed. The real Orca, its CLI, its state and this worker's
  * terminal are never touched, and the network guard runs in this process and in every process of each daemon.
@@ -13,14 +16,18 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { scenariosFor } from '../src/testing/dialAppEval/catalog.js'
+import { loadBaseline, SKIP_RATCHET_ENV, tierBVerdict } from '../src/testing/dialAppEval/grade.js'
+import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from '../src/testing/dialAppEval/runner.js'
 import { HELD_MAKER, orcaTerminalHandle, type Platform, type Scenario, type SessionDef } from '../src/testing/dialAppEval/types.js'
-import { TierBDriver } from './harness/appEvalDriver.js'
+import { inside, orcaCliInside, TierBDriver } from './harness/appEvalDriver.js'
 import { OrcaAgent, orcaEnv, startedWith } from './harness/appEvalOrca.js'
 import { IsolatedDaemon } from './harness/daemon.js'
 import { ORCA_HOST_NAME, orcaHostCc } from './harness/orcaHost.js'
 
 const WIN32 = process.platform === 'win32'
 const HOST = process.platform as Platform
+const SCENARIOS = WIN32 ? [] : scenariosFor('b', HOST).filter((s) => s.app === 'orca' && !s.heldOut)
 
 /** An Orca session of the safety cases, made up as the catalog's are. */
 const session = (key: string, more: Partial<SessionDef> = {}): SessionDef => ({
@@ -60,11 +67,33 @@ const running = (pid: number): boolean => {
   }
 }
 
+/** Whether a command is Orca's CLI, by either of the fake's names, running `<group> <verb>`. */
+const ranOrca = (argv: readonly string[], group: string, verb: string): boolean =>
+  ['orca', 'orca-ide'].includes(argv[0] ?? '') && argv[1] === group && argv[2] === verb
+
 describe.skipIf(WIN32)('the dial eval, tier B: Orca', () => {
   let driver: TierBDriver
+  const runs: ScenarioRun[] = []
   beforeAll(() => { driver = new TierBDriver({}) })
-  // It throws naming each attempt off this machine not asserted on yet, the last daemon's as it closed among them.
-  afterAll(async () => { await driver?.close() })
+  /** What a scenario's run proves beside its checks, read from its world as it stopped. */
+  const ALSO: Partial<Record<string, () => void>> = {
+    // The devices read Orca's layout from the fake, and the CLI they would run is still the one inside the root.
+    O1: () => {
+      const { d } = driver.lastWorld()
+      expect(driver.seen().commands.filter((c) => ranOrca(c.argv, 'terminal', 'list'))).not.toEqual([])
+      expect(() => orcaCliInside(d.env, d.root, process.platform)).not.toThrow()
+    },
+    // With no plugin in Orca, no loop of it ran and the devices opened no dial stream.
+    O13: () => {
+      expect(driver.lastWorld().children.filter((child) => child.spawnargs.some((arg) => arg.endsWith('pluginDial.ts')))).toEqual([])
+      expect((driver.seen().logs ?? []).filter(({ line }) => line === '[devices] dial stream · open')).toEqual([])
+    },
+  }
+  afterAll(async () => {
+    if (process.env.DIAL_EVAL_OUT) writeResults(process.env.DIAL_EVAL_OUT, 'orca', collect(runs))
+    // It throws naming each attempt off this machine not asserted on yet, the last daemon's as it closed among them.
+    await driver?.close()
+  })
 
   // First, before any daemon: each start below fails before its own.
   it("a start with orca or orca-ide resolved outside the daemon's root throws before the daemon starts", async () => {
@@ -145,5 +174,29 @@ describe.skipIf(WIN32)('the dial eval, tier B: Orca', () => {
       await driver.stop()
     }
     expect(driver.networkReached()).toEqual([])
+  })
+
+  it.for(SCENARIOS)('$id: $title', async (scenario) => {
+    const began = Date.now()
+    const run = await runScenario(driver, scenario, HOST)
+    // Kept before any assertion, so a scenario that fails one is still in the results and the baseline's verdict.
+    runs.push(run)
+    expect(run.error).toBeUndefined()
+    console.log(`[dial eval] ${scenario.id}: ${Date.now() - began} ms`)
+    const { d } = driver.lastWorld()
+    for (const path of [d.env.HOME, d.env.HARNESS_OPEN_BIN]) expect(inside(d.root, path), path).toBe(true)
+    expect(() => orcaCliInside(d.env, d.root, process.platform)).not.toThrow()
+    ALSO[scenario.id]?.()
+    expect(driver.networkReached()).toEqual([])
+    expect(run.wrongSends).toEqual([])
+    expect(uncaughtProbes(run)).toEqual([])
+  })
+
+  // The eval command judges the ratchet itself, over every file's results (run.ts).
+  it.skipIf(process.env[SKIP_RATCHET_ENV] === '1')("matches this platform's baseline", () => {
+    const baseline = loadBaseline()
+    expect(baseline).not.toBeNull()
+    const verdict = tierBVerdict(collect(runs), baseline!, HOST)
+    expect(verdict.ok, verdict.message).toBe(true)
   })
 })

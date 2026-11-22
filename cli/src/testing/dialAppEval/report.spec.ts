@@ -120,14 +120,14 @@ it('the score and held-out tables have a row for Orca, after Cursor', () => {
   expect(text.slice(text.indexOf('Held out'))).toMatch(/^Cursor[^\n]*\nOrca[^\n]*25 left out: 0$/m)
 })
 
-it("the Not covered line names Orca's tap raise in tier B on Linux", () => {
-  const line = 'Not covered: tier B on Windows; in tier B on Linux, the raise of a tap on an Orca row'
+it("the Not covered line names Orca's tap raise in tier B on Linux, and O16 in tier B", () => {
+  const line = 'Not covered: tier B on Windows; in tier B on Linux, the raise of a tap on an Orca row; O16 in tier B, for its time'
   const lines = summary(report()).split('\n')
   expect(lines.indexOf(line)).toBe(lines.findIndex((l) => l.startsWith('Orca')) + 1)
   expect(lines.indexOf(line)).toBeLessThan(lines.indexOf('Held out'))
   const md = markdown(report())
   const main = md.slice(md.indexOf('## Scores'), md.indexOf('## Held out'))
-  expect(main).toMatch(/\| Orca \|[^\n]*\|\n\nNot covered: tier B on Windows; in tier B on Linux, the raise of a tap on an Orca row\n/)
+  expect(main).toMatch(/\| Orca \|[^\n]*\|\n\nNot covered: tier B on Windows; in tier B on Linux, the raise of a tap on an Orca row; O16 in tier B, for its time\n/)
 })
 
 it('the delta counts the held-out checks that changed, never naming them', () => {

@@ -5,7 +5,7 @@ import { join, relative } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { daemonEnvironment } from './daemonEnvironment.js'
 import { NET_GUARD_FILE_ENV, netGuardEnv, readNetGuard } from './dialAppEval/netGuard.js'
-import type { SessionDef } from './dialAppEval/types.js'
+import type { Delivery, Seen, SessionDef, SessionKey } from './dialAppEval/types.js'
 
 // The dial eval's tier B Orca harness, the parts that need no daemon (docs/plans/2026-11-22-dial-eval-orca-design.md,
 // "Never the real Orca"). It is outside tsconfig's rootDir (src), so it is loaded untyped, as dialAppEvalTierB.spec.ts
@@ -22,6 +22,12 @@ const plugin = await import('../../e2e/harness/pluginLoop.js' as string) as {
 }
 const { until } = await import('../../e2e/harness/daemon.js' as string) as {
   until<T>(what: string, probe: () => T | null | undefined | false, ms: number, every: number): Promise<T>
+}
+/** A run the fake Orca noted (harness/fakeOrca.ts log): the name it was run by and its arguments, its exit, its time. */
+type OrcaRun = { argv: string[]; ok: boolean; at: number }
+const driver = await import('../../e2e/harness/appEvalDriver.js' as string) as {
+  orcaDeliveries(runs: readonly OrcaRun[], ownerOf: (handle: string, at: number) => SessionKey | undefined): Delivery[]
+  orcaCommands(runs: readonly OrcaRun[], projects: readonly string[]): Seen['commands']
 }
 
 /** This worker's own names, as a run inside Orca, in a tmux pane of its terminal, has them: made up, and none may reach
@@ -70,6 +76,49 @@ describe("tier B's Orca agents' environment", () => {
       expect(where(env)).toEqual({ ...where(d.env), ...inOrca.IN_ORCA, ORCA_AGENT_SESSION_ID: `eval-orca-${s.key}`, ...hints })
       expect(notDaemons(env, d.env)).toEqual([])
     }
+  })
+})
+
+describe("tier B's fake Orca's runs", () => {
+  const A = 'term_00000000-0000-4000-8d00-000000000061'
+  const B = 'term_00000000-0000-4000-8d00-000000000062'
+  /** `orca terminal send` as the devices run it (cable/hosts/orca.ts), by the name the fake was run by. */
+  const send = (name: string, handle: string, text: string, at: number, ok = true): OrcaRun =>
+    ({ argv: [name, 'terminal', 'send', '--terminal', handle, `--text=${text}`, '--enter', '--wait-submit', '5', '--json'], ok, at })
+
+  it("the fake's send runs are typed deliveries to the session whose handle they name, at their times, and to none for another handle", () => {
+    // a's pane is A until 3000, when it closes; B is no session's own pane.
+    const ownerOf = (handle: string, at: number): SessionKey | undefined => (handle === A && at < 3_000 ? 'a' : undefined)
+    const runs: OrcaRun[] = [
+      { argv: ['orca', 'terminal', 'list', '--json', '--include-visual-layouts'], ok: true, at: 900 },
+      send('orca', A, 'Eval words for alpha.', 1_000),
+      { argv: ['orca', 'terminal', 'switch', '--terminal', A, '--json'], ok: true, at: 1_500 },
+      send('orca-ide', B, 'Eval words for bravo.', 2_000),
+      // Orca refused it: no words were typed.
+      send('orca', A, 'Eval refused.', 2_500, false),
+      send('orca', A, 'Eval words after the close.', 3_500),
+    ]
+    expect(driver.orcaDeliveries(runs, ownerOf)).toEqual([
+      { at: 1_000, path: 'typed', target: 'a', text: 'Eval words for alpha.' },
+      { at: 2_000, path: 'typed', target: null, text: 'Eval words for bravo.' },
+      { at: 3_500, path: 'typed', target: null, text: 'Eval words after the close.' },
+    ])
+  })
+
+  it('its runs become commands as the daemon ran them, a projects folder written as /work/', () => {
+    const projects = ['/tmp/eval-root/projects', '/private/tmp/eval-root/projects']
+    const runs: OrcaRun[] = [
+      { argv: ['orca-ide', 'terminal', '--help'], ok: true, at: 100 },
+      { argv: ['orca', 'worktree', 'activate', '--worktree', 'id:eval-repo::/work/eval-w2', '--json'], ok: true, at: 200 },
+      { argv: ['orca', 'terminal', 'switch', '--terminal', A, '--json'], ok: false, at: 300 },
+      { argv: ['orca', 'terminal', 'create', '--cwd', '/private/tmp/eval-root/projects/eval-w1'], ok: true, at: 400 },
+    ]
+    expect(driver.orcaCommands(runs, projects)).toEqual([
+      { at: 100, argv: ['orca-ide', 'terminal', '--help'], ok: true },
+      { at: 200, argv: ['orca', 'worktree', 'activate', '--worktree', 'id:eval-repo::/work/eval-w2', '--json'], ok: true },
+      { at: 300, argv: ['orca', 'terminal', 'switch', '--terminal', A, '--json'], ok: false },
+      { at: 400, argv: ['orca', 'terminal', 'create', '--cwd', '/work/eval-w1'], ok: true },
+    ])
   })
 })
 
