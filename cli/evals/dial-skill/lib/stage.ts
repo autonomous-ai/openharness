@@ -226,8 +226,8 @@ function insideGit(dir: string, env: NodeJS.ProcessEnv): boolean {
 const NOTICE_USAGE = 'harness device notify "<question>" [--suggest "<recommendation>"] [--waiting|--proceeding] [--json]  for an agent: ring the dial when it needs the person to decide or act'
 
 /** Never the real dial: it records the call and answers as a dial that showed the line. A notify with no question
- *  answers as the CLI does: parseNotice's words left after the flags, cleaned as composeNotice cleans them (the fake runs
- *  under plain node, which cannot load dialNotice.ts). */
+ *  answers as the CLI does: parseNotice's words left after the flags, none when they are only `--help` or `-h`, cleaned
+ *  as composeNotice cleans them (the fake runs under plain node, which cannot load dialNotice.ts). */
 function fakeHarness(recFile: string): string {
   return `#!${process.execPath}
 const { appendFileSync } = require('node:fs')
@@ -239,7 +239,8 @@ for (let i = 2; i < argv.length; i++) {
   if (argv[i] === '--suggest') i++
   else if (!['--waiting', '--proceeding', '--json'].includes(argv[i])) question.push(argv[i])
 }
-if (notify && question.join(' ').replace(/[\\p{Cc}\\s]+/gu, ' ').trim() === '') {
+const text = question.join(' ')
+if (notify && (text === '--help' || text === '-h' || text.replace(/[\\p{Cc}\\s]+/gu, ' ').trim() === '')) {
   console.error(${JSON.stringify(NOTICE_USAGE)})
   process.exitCode = 1
 } else if (notify) {
