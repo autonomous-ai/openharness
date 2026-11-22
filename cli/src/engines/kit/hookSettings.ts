@@ -141,12 +141,13 @@ async function installMessagesBlock(engine: HookEngine, settings: HookSettings, 
 /**
  * The declared rules as this computer has them (facets/hooks.ts HarnessAllowance): its paths in place of `{launcher}`
  * (as [platform] spells it: `harness.exe` in Harness's `bin` folder on Windows, where install.ps1 puts it, else the
- * `harness` in HARNESS_BIN_DIR), `{node}` and `{cli}`, every verb as one Starlark list in place of `{verbs}`, a rule
- * that names `{verb}` or `{tool}` once for each agent verb (`{tool}` only for a verb with an MCP tool), and a rule that
- * names `{command}` or `{words}` once for each of HARNESS_AGENT_COMMANDS. In groups that are added together or not at
- * all: the rules naming no verb or command, then each verb's rules of one kind (`Bash(…)`, `mcp__…`), its spellings of
- * the same command, then each command's the same way, so a deny for it keeps out its own rules alone; a kind with no
- * rule for a verb is no group.
+ * `harness` in HARNESS_BIN_DIR), `{node}` and `{cli}` (on Windows `{cli}` names a file install.ps1 never writes, as
+ * it keeps the bundle in `cli\<version>\cli.js`: Codex's `{node} {cli}` rule matches no command there), every verb as
+ * one Starlark list in place of `{verbs}`, a rule that names `{verb}` or `{tool}` once for each agent verb (`{tool}`
+ * only for a verb with an MCP tool), and a rule that names `{command}` or `{words}` once for each of
+ * HARNESS_AGENT_COMMANDS. In groups that are added together or not at all: the rules naming no verb or command, then
+ * each verb's rules of one kind (`Bash(…)`, `mcp__…`), its spellings of the same command, then each command's the same
+ * way, so a deny for it keeps out its own rules alone; a kind with no rule for a verb is no group.
  */
 export function harnessRules(rules: readonly string[], platform: NodeJS.Platform = hostPlatform(),
   quote: (path: string) => string = (path) => path): string[][] {
