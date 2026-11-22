@@ -1,8 +1,8 @@
-import { execFileSync, spawn } from 'node:child_process'
+import { type ChildProcess, execFileSync, spawn } from 'node:child_process'
 import { appendFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { APP_BUNDLES } from '../cable/hosts/hostDetect.js'
 import { MAIN } from './dialAppEval/catalog.js'
 import type { Platform, Scenario, SessionDef } from './dialAppEval/types.js'
@@ -16,12 +16,17 @@ const editor = await import('../../e2e/harness/appEvalEditor.js' as string) as {
 }
 /** The parts of a daemon a Cursor agent's start reads. */
 interface CursorDaemon { root: string; projectsDir: string; env: NodeJS.ProcessEnv }
-interface CursorAgent { readonly pid: number; readonly transcriptPath: string; close(): Promise<void> }
+interface CursorAgent { readonly pid: number; readonly shellPid?: number; readonly transcriptPath: string; close(): Promise<void>; killTab(): void }
 const cursor = await import('../../e2e/harness/cursorOutside.js' as string) as {
   hookRun(codexLine: string, env: NodeJS.ProcessEnv, hints: Record<string, string>, event: string,
     session: { sessionId: string; roots: string[]; transcriptPath: string }): { command: string; env: NodeJS.ProcessEnv; input: string }
-  CursorOutside: { start(d: CursorDaemon, folder: string, children: unknown[],
+  CursorOutside: { start(d: CursorDaemon, folder: string, children: ChildProcess[],
     options: { sessionId: string; roots: string[]; terminal: boolean; hints: Record<string, string> }): Promise<CursorAgent> }
+}
+interface CodexAgent { readonly pid?: number; readonly shellPid?: number; end(): Promise<void>; killTab(): void }
+const codex = await import('../../e2e/harness/codexOutside.js' as string) as {
+  CodexOutside: { inTab(d: CursorDaemon, folder: string, children: ChildProcess[], hints: Record<string, string>,
+    tab: Record<string, unknown>): Promise<CodexAgent> }
 }
 
 type HookRun = (command: string, env: NodeJS.ProcessEnv, input: string) => Promise<{ code: number | null; stderr: string }>
@@ -139,7 +144,16 @@ describe("tier B's Cursor agents' processes", () => {
   /** A daemon's root, its projects and its home, in a throwaway folder. */
   const daemon = (): CursorDaemon => {
     root = mkdtempSync(join(tmpdir(), 'tier-b-cursor-'))
-    return { root, projectsDir: join(root, 'projects'), env: { HOME: join(root, 'home'), PATH: process.env.PATH } }
+    return { root, projectsDir: join(root, 'projects'), env: { HOME: join(root, 'home'), CODEX_HOME: join(root, 'codex'), PATH: process.env.PATH } }
+  }
+  const gone = (pid: number): boolean => {
+    try { process.kill(pid, 0) } catch { return true }
+    return false
+  }
+  /** The tab's processes all gone, its command and shell first: the tab itself was killed, not left to see them go. */
+  const allGone = async (pids: number[], children: ChildProcess[]): Promise<void> => {
+    expect(children.every((child) => child.killed || child.exitCode !== null || child.signalCode !== null)).toBe(true)
+    await vi.waitFor(() => { expect(pids.filter((pid) => !gone(pid))).toEqual([]) }, { timeout: 10_000, interval: 20 })
   }
   const ps = (field: string, pid: number): string => execFileSync('ps', ['-o', `${field}=`, '-p', String(pid)], { encoding: 'utf8' }).trim()
   const start = (d: CursorDaemon, terminal: boolean): Promise<CursorAgent> =>
@@ -166,6 +180,31 @@ describe("tier B's Cursor agents' processes", () => {
       expect(readFileSync(again.transcriptPath, 'utf8')).toBe(turn)
     } finally {
       await again.close()
+    }
+  })
+
+  it("a Codex in an editor's terminal is the driver's to end too, and killed with its tab, its shell and its command at once", async () => {
+    const d = daemon()
+    const children: ChildProcess[] = []
+    const agent = await codex.CodexOutside.inTab(d, 'eval-b', children, {}, {})
+    try {
+      expect(children).toHaveLength(1)
+      agent.killTab()
+      await allGone([agent.pid!, agent.shellPid!], children)
+    } finally {
+      await agent.end()
+    }
+  })
+
+  it("a Cursor agent killed with its tab: its shell and its command go at once", async () => {
+    const children: ChildProcess[] = []
+    const d = daemon()
+    const agent = await cursor.CursorOutside.start(d, 'eval-a', children, { sessionId: 'eval-a', roots: [join(d.projectsDir, 'eval-a')], terminal: true, hints: {} })
+    try {
+      agent.killTab()
+      await allGone([agent.pid, agent.shellPid!], children)
+    } finally {
+      await agent.close()
     }
   })
 })

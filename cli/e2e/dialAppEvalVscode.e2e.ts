@@ -11,11 +11,12 @@
  * touched. The network guard runs in this process and in every process of each daemon: a connection to anything but this
  * machine fails the scenario, by host and port.
  */
+import { once } from 'node:events'
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { scenariosFor } from '../src/testing/dialAppEval/catalog.js'
+import { editorSession, scenariosFor } from '../src/testing/dialAppEval/catalog.js'
 import { loadBaseline, SKIP_RATCHET_ENV, tierBVerdict } from '../src/testing/dialAppEval/grade.js'
 import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from '../src/testing/dialAppEval/runner.js'
 import type { Platform, Scenario } from '../src/testing/dialAppEval/types.js'
@@ -99,6 +100,29 @@ describe.skipIf(WIN32)('the dial eval, tier B: VS Code', () => {
     expect(driver.networkReached()).toEqual([])
     expect(run.wrongSends).toEqual([])
     expect(uncaughtProbes(run)).toEqual([])
+  })
+
+  // After the scenarios: the agents it kills leave rows the next scenario on its daemon would wait out.
+  it("the fake editors and their Claude Code killed with SIGKILL go at once, and every agent's tab and tmux session with them", async () => {
+    // Each kind of agent an editor runs: Claude Code, Codex and Claude Code in tmux in VS Code's terminals, cursor-agent in
+    // Cursor's, and Cursor's own agent.
+    const sessions = [editorSession('a', 'vscode'), editorSession('b', 'vscode', { engine: 'codex' }), editorSession('c', 'vscode', { tmux: true }),
+      editorSession('d', 'cursor', { engine: 'cursor' }), editorSession('e', 'cursor', { place: 'agent', window: undefined, folders: ['/work/eval-e'] })]
+    const scenario: Scenario = { id: 'KILLED', app: 'vscode', title: 'The editors killed', dims: ['D8'], platforms: [HOST], tiers: ['b'],
+      heldOut: false, fresh: true, sessions, steps: sessions.map((s) => ({ kind: 'hook', session: s.key, event: 'start' })), checks: [], probes: [] }
+    await driver.start(scenario, HOST)
+    try {
+      for (const step of scenario.steps) await driver.step(step as Exclude<typeof step, { kind: 'wait' }>)
+      // The editor's own process and the one its Claude Code runs under, as the driver kills them when their end is slow.
+      for (const lifetime of driver.lastWorld().children.filter((child) => child.spawnargs.includes('process.stdin.resume()'))) {
+        const exited = once(lifetime, 'exit')
+        lifetime.kill('SIGKILL')
+        await exited
+      }
+    } finally {
+      await driver.stop()
+    }
+    expect(driver.seen().cost?.leftovers).toBe(0)
   })
 
   // The eval command judges the ratchet itself, over every file's results (run.ts).
