@@ -7,7 +7,7 @@ import { APP_BUNDLES } from '../../cable/hosts/hostDetect.js'
 import { observedTitle } from '../../cable/hosts/observedTitle.js'
 import { WINDOWS_APPS } from '../../cable/hosts/windowsRaise.js'
 import { CAROUSEL_TILES } from '../dialCarousel.js'
-import { agentIdOf, engineOf, PAGE, placeOf, SKIPPED_SCROLL, THRESHOLDS, type App, type Check, type CheckResult, type Platform,
+import { agentIdOf, EDITORS, engineOf, PAGE, placeOf, SKIPPED_SCROLL, THRESHOLDS, type App, type Check, type CheckResult, type Platform,
   type Scenario, type Seen, type SessionDef, type SessionKey, type Tier, type Until, type WrongSend } from './types.js'
 
 /** A failing check's evidence stays readable in the report, however long the scenario ran. */
@@ -162,8 +162,10 @@ function ringParts(check: CheckOf<'ring'>, world: World, w: Window | undefined):
 
 /**
  * The last `apps` frame on the ring's page the dial holds as the window ends: its other pages count exactly the sessions
- * apart, no fewer (one merged into the ring) and no more (one shown twice). Counts name no session, so a check apart
- * from no other is exact.
+ * apart, no fewer (one merged into the ring) and no more (one shown twice). An editor's session apart is counted on its
+ * own app's page, as U2's VS Code row is while Cursor's page is shown: one filed under Terminal is not where the person
+ * looks for it. A base app's may be on any, as X10's Codex CLI is on its terminal's. Counts name no session, so a check
+ * apart from no other is exact.
  */
 function apartPart(apart: SessionKey[], page: string, world: World, w: Window | undefined): Part {
   const frame = w
@@ -173,8 +175,14 @@ function apartPart(apart: SessionKey[], page: string, world: World, w: Window | 
   if (!frame) return { part: 'apart', score: 0, timed: false, evidence: world.seen.frames.length > 0 ? ['no apps frame'] : [] }
   const apps = Array.isArray(frame.message.apps) ? frame.message.apps as Array<{ id?: unknown; count?: unknown }> : []
   const counts = apps.map((a) => ({ id: String(a.id), count: typeof a.count === 'number' ? a.count : 0 }))
-  const elsewhere = counts.filter((a) => a.id !== page).reduce((sum, a) => sum + a.count, 0)
-  return { part: 'apart', score: elsewhere === apart.length ? 1 : 0, timed: false,
+  // The ring's own page counts its rows: no session apart is counted there.
+  const countedOn = (id: string): number => counts.filter((a) => a.id === id && id !== page).reduce((sum, a) => sum + a.count, 0)
+  const ownPage = (key: SessionKey): string => PAGE[world.session(key).app]
+  const exact = (EDITORS as readonly string[]).includes(page)
+    ? [...new Set([...counts.map((a) => a.id), ...apart.map(ownPage)])]
+      .every((id) => countedOn(id) === apart.filter((key) => ownPage(key) === id).length)
+    : counts.filter((a) => a.id !== page).reduce((sum, a) => sum + a.count, 0) === apart.length
+  return { part: 'apart', score: exact ? 1 : 0, timed: false,
     evidence: [`apps at ${frame.at}: ${counts.map((a) => `${a.id} ${a.count}`).join(', ')}`.trimEnd()] }
 }
 
