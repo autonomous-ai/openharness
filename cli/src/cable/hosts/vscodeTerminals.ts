@@ -7,8 +7,9 @@
  * the VS Code adapter's or Cursor's by its hook's bundle id (vscode.ts, docs/plans/2026-11-18-dial-cursor-design.md §1).
  *
  * A focused window whose active terminal changes, or that comes into focus on one, tells the devices the listed agent
- * running there, the nearest its shell when several, or none, and when that state came, so the dial can follow the
- * person (devices.ts). A window's first state on its stream follows nothing: a reload or a reopen must not pull the dial.
+ * running there, the nearest its shell when several, or none, when that state came and whether the window came into
+ * focus on the terminal it had, so the dial can follow the person (devices.ts). A window's first state on its stream
+ * follows nothing: a reload or a reopen must not pull the dial.
  *
  * The match is the process tree: an agent runs under the shell VS Code started for its terminal, or is that terminal's
  * own process, so the window that lists a pid of its chain holds it. A process's name is outside text (a process can
@@ -128,8 +129,9 @@ export interface VscodeTerminalsDeps {
   /** Which agents have a terminal changed. */
   changed(): void
   /** A person focused that terminal at `at` (now's clock): the pid of the listed agent running there, none when no
-   *  listed agent does. Each replaces the one before it, none too. */
-  focused(agentPid: number | undefined, terminal: VscodeTerminal, at: number): void
+   *  listed agent does. Each replaces the one before it, none too. `regained`: its window came into focus on the
+   *  terminal it had, as it does when the dial's own tap brings the editor forward. */
+  focused(agentPid: number | undefined, terminal: VscodeTerminal, at: number, regained: boolean): void
   /** Monotonic milliseconds. */
   now(): number
   after(ms: number, run: () => void): () => void
@@ -189,7 +191,7 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
   let again = false
   /** The latest focus not yet told, the window whose state made it and when that came: it waits while a chain that may
    *  be its agent's is read. */
-  let focus: { terminal: VscodeTerminal; window: Window; at: number } | undefined
+  let focus: { terminal: VscodeTerminal; window: Window; at: number; regained: boolean } | undefined
   /** Each listed agent's terminal, as the devices were last told. */
   let told = new Map<number, string>()
   /** Each agent's guard still reading, by its pid: an ask meanwhile joins it rather than reading again. */
@@ -279,7 +281,7 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
   /** Tells the devices the agent in the focused terminal once no chain that could be its is still read. */
   const place = (): void => {
     if (!focus || (reading && [...listed].some((pid) => !chains.has(pid)))) return
-    const { terminal, window, at } = focus
+    const { terminal, window, at, regained } = focus
     focus = undefined
     // A read takes up to ps's 3 s: a state since that left that terminal or the window's focus, or a newer stream of its
     // id, is where the person is now, and this focus is over.
@@ -290,7 +292,7 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
       const depth = chains.get(pid)?.indexOf(terminal.shell) ?? -1
       if (its?.window === terminal.window && its.shell === terminal.shell && (!nearest || depth < nearest.depth)) nearest = { pid, depth }
     }
-    deps.focused(nearest?.pid, terminal, at)
+    deps.focused(nearest?.pid, terminal, at, regained)
   }
 
   /** The agent's guard still reading, or a new one. The settings first, and `ps` only when they say fullscreen: most
@@ -369,6 +371,8 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
           const window = windows.get(id)!
           const moved = window.shells !== undefined && focused && active !== null
             && (active !== window.active || !window.focused)
+          // Of a move: the window came into focus on the terminal it had, as the dial's own tap brings it forward.
+          const regained = active === window.active
           window.shells = new Set(terminals)
           window.active = active as number | null
           window.focused = focused
@@ -379,7 +383,7 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
           tell()
           ask()
           if (!moved) return
-          focus = { terminal: { window: id, shell: active as number }, window, at: deps.now() }
+          focus = { terminal: { window: id, shell: active as number }, window, at: deps.now(), regained }
           place()
         },
       },
