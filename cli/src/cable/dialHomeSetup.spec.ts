@@ -365,10 +365,13 @@ describe('the devices set the dial skill up', () => {
     writeRemoved(r.dataDir, 'claude', false, [skillsOf(recorded)])
 
     r.writer.started()
+    // Off once the core's none has held a minute: at the start it is not known yet.
+    r.clock.at = 60_000
+    r.writer.scanned([])
 
     expect(existsSync(join(r.claudeHome, 'skills', 'dial'))).toBe(false)
     expect(existsSync(join(recorded, 'skills', 'dial'))).toBe(false)
-    expect(r.lines).toEqual([counts([0, 2], [1, 0])])
+    expect(r.lines).toEqual([counts([0, 0], [1, 0]), counts([0, 2], [0, 0])])
   })
 
   it('the plugin uninstalled through /plugin takes the skill at the next scan', () => {
@@ -377,8 +380,10 @@ describe('the devices set the dial skill up', () => {
     r.writer.started()
     expect(hasSkill(r.claudeHome)).toBe(true)
 
-    // Claude Code writes its settings again, without the entry; dial-skill.json is untouched.
+    // Claude Code writes its settings again, without the entry, a minute on, once the core's none has held;
+    // dial-skill.json is untouched.
     writeFileSync(join(r.claudeHome, 'settings.json'), JSON.stringify({ enabledPlugins: {} }))
+    r.clock.at = 60_000
     r.writer.scanned([])
 
     expect(existsSync(skillFile(r.claudeHome))).toBe(false)
@@ -891,6 +896,14 @@ describe('the devices set the dial skill up', () => {
 })
 
 describe('what the person removed stays removed, and Harness\'s own is kept current', () => {
+  /** A rig whose Claude Code answer is its plugin's, on: it stays as the clock runs, where the core's none coming to hold
+   *  a minute on would turn Claude Code off, and an engine turned off tries every refused home again. */
+  const steady = (): ReturnType<typeof rig> => {
+    const r = rig()
+    pluginOn(r.claudeHome)
+    return r
+  }
+
   it('a recorded home whose skill was deleted is not written again: at a start, an attach and a scan', () => {
     const r = rig()
     const home = folder()
@@ -1017,7 +1030,7 @@ describe('what the person removed stays removed, and Harness\'s own is kept curr
   })
 
   it('a home that could not be written is tried again no sooner than an hour later', () => {
-    const r = rig()
+    const r = steady()
     // A dial folder that takes no file.
     const dial = join(skillsAt(r.codexHome), 'dial')
     mkdirSync(dial)
@@ -1038,7 +1051,7 @@ describe('what the person removed stays removed, and Harness\'s own is kept curr
   })
 
   it('each refused home waits out its own hour', () => {
-    const r = rig()
+    const r = steady()
     // No skills folder to be had: a file in its place.
     const [a, b] = [folder(), folder()]
     for (const home of [a, b]) writeFileSync(join(home, 'skills'), 'mine')
@@ -1061,21 +1074,21 @@ describe('what the person removed stays removed, and Harness\'s own is kept curr
   })
 
   it('Claude Code saving another setting tries no refused home again', () => {
-    const r = rig()
+    const r = steady()
     const noFolder = folder()
     writeFileSync(join(noFolder, 'skills'), 'mine')
     r.writer.started()
     r.writer.scanned([ownerIn(noFolder)])
 
     r.clock.at = 60_000
-    writeFileSync(join(r.claudeHome, 'settings.json'), JSON.stringify({ theme: 'dark' }))
+    writeFileSync(join(r.claudeHome, 'settings.json'), JSON.stringify({ theme: 'dark', enabledPlugins: { [DIAL_PLUGIN_ID]: true } }))
     r.writer.scanned([ownerIn(noFolder)])
 
     expect(r.counted.filter(([, kind]) => kind === 'failed')).toEqual([['codex', 'failed', 'write']])
   })
 
   it('a home that could not be written waits out its hour through an attach', () => {
-    const r = rig()
+    const r = steady()
     // A dial folder that takes no file.
     const dial = join(skillsAt(r.codexHome), 'dial')
     mkdirSync(dial)
@@ -1094,7 +1107,7 @@ describe('what the person removed stays removed, and Harness\'s own is kept curr
   })
 
   it('a recorded folder whose skill cannot be brought current is tried once, and waits out its hour through an attach', () => {
-    const r = rig()
+    const r = steady()
     // The default home's, so the pass's look at the record and at the home both meet it.
     const skills = skillsAt(r.codexHome)
     oldSkillIn(skills)

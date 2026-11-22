@@ -86,6 +86,10 @@ const OTHER: Record<DialEngine, DialEngine> = { claude: 'codex', codex: 'claude'
 const MAX_SAID = 2 * MAX_HOMES
 /** A home that could not be written waits this long before a scan tries it again. */
 const RETRY_MS = 3_600_000
+/** How long the core must list no Claude agent before that none is acted on: the open scan's interval
+ *  (services/devices.ts OPEN_SCAN_MS), so at least one scan apart. A core that starts or restarts lists none of its
+ *  agents until it has restored them, and a moment runs two passes within milliseconds. */
+const NONE_HELD_MS = 60_000
 
 /** dial-skill.json is there but could not be read: what was removed is not known, so the pass stops, writing nothing
  *  more. */
@@ -129,8 +133,11 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
   /** The core's Claude agents as last known. A Harness Claude agent brings Claude Code's skill without waiting for the
    *  plugin, whose install runs `claude` and reaches GitHub, and can hang on either. Not known before the devices' first
    *  view of the core's agents: read as none then, a devices start with the plugin off would strip the skill a Harness
-   *  agent brought. So not known turns nothing on and nothing off, and a read that does not know keeps what was known. */
+   *  agent brought. So not known turns nothing on and nothing off, and a read that does not know keeps what was known.
+   *  A none is taken only once it has held NONE_HELD_MS: until then the answer before it stands. */
   let agents: ClaudeAgents = 'unknown'
+  /** When a read first said none since the last that listed one; undefined while the core lists one. */
+  let noneSince: number | undefined
 
   /** Read only inside a pass. */
   const removedNow = (): DialRemoved => {
@@ -142,8 +149,16 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
   /** Read once a pass and kept with the stamp, so one pass never flips halfway: the first Claude agent made in the app,
    *  or the last one gone, is a new stamp, and the next scan runs the start pass again. */
   const readAgents = (): void => {
-    const now = deps.claudeAgents()
-    if (now !== 'unknown') agents = now
+    const read = deps.claudeAgents()
+    if (read === 'unknown') return
+    if (read === 'listed') {
+      noneSince = undefined
+      agents = 'listed'
+      return
+    }
+    const now = deps.now()
+    noneSince ??= now
+    if (now - noneSince >= NONE_HELD_MS) agents = 'none'
   }
 
   /** Read only once a dial is recorded: a pass never runs before. 'held': Claude Code's answer is not known yet, and its

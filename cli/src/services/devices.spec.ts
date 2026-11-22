@@ -11290,7 +11290,10 @@ describe('the dial setup, from the devices\' own process (cable/dialSetup.ts)', 
     const orca = join(homes, 'orca-codex')
     mkdirSync(orca)
     const read = fakeOrcaHomes()
-    start({ faults: ['fleet'], listen: fakeListener().listen, orcaHomes: read })
+    // A Claude agent of Harness's listed throughout: a none would come to hold at the minute's scan, a new stamp of its
+    // own.
+    const core = fakeCore({ dataDir, agents: { advertised: vi.fn(() => [{ agentId: 'h1', registeredAt: 1, engine: 'claude' }] as RegisteredSession[]) } })
+    start({ core, faults: ['fleet'], listen: fakeListener().listen, orcaHomes: read })
     await read.landed()
     // Each scan reads Orca's homes first, so this fake's reads count these devices' scans: a scan of devices an earlier
     // spec left attached is not one.

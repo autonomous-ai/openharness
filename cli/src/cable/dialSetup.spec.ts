@@ -152,6 +152,8 @@ describe('createDialSetup', () => {
     expect(hasSkill(r.claudeHome)).toBe(true)
 
     writeFileSync(join(r.claudeHome, 'settings.json'), JSON.stringify({ enabledPlugins: {} }))
+    // A minute on, once the core's none has held: before, Claude Code's answer is not known yet.
+    r.clock.at = 60_000
     await r.setup.scanned([])
     await r.setup.attached()
     await r.setup.started()
