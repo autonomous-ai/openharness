@@ -7,7 +7,7 @@ import { APP_BUNDLES } from '../../cable/hosts/hostDetect.js'
 import { observedTitle } from '../../cable/hosts/observedTitle.js'
 import { WINDOWS_APPS } from '../../cable/hosts/windowsRaise.js'
 import { CAROUSEL_TILES } from '../dialCarousel.js'
-import { agentIdOf, EDITORS, engineOf, PAGE, placeOf, SKIPPED_SCROLL, THRESHOLDS, type App, type Check, type CheckResult, type Platform,
+import { agentIdOf, engineOf, PAGE, placeOf, SKIPPED_SCROLL, THRESHOLDS, type App, type Check, type CheckResult, type Platform,
   type Scenario, type Seen, type SessionDef, type SessionKey, type Tier, type Until, type WrongSend } from './types.js'
 
 /** A failing check's evidence stays readable in the report, however long the scenario ran. */
@@ -169,16 +169,13 @@ function apartPart(apart: SessionKey[], page: string, world: World, w: Window | 
   const frame = w
     ? world.seen.frames.filter((f) => f.message.t === 'apps' && f.message.shown === page && world.held(f.at, w.to)).at(-1)
     : undefined
-  const apps = Array.isArray(frame?.message.apps) ? frame.message.apps as Array<{ id?: unknown; count?: unknown }> : []
+  // With no apps frame nothing was counted, so it cannot pass. It says so only to a driver that saw frames.
+  if (!frame) return { part: 'apart', score: 0, timed: false, evidence: world.seen.frames.length > 0 ? ['no apps frame'] : [] }
+  const apps = Array.isArray(frame.message.apps) ? frame.message.apps as Array<{ id?: unknown; count?: unknown }> : []
   const counts = apps.map((a) => ({ id: String(a.id), count: typeof a.count === 'number' ? a.count : 0 }))
   const elsewhere = counts.filter((a) => a.id !== page).reduce((sum, a) => sum + a.count, 0)
-  const evidence = frame ? [`apps at ${frame.at}: ${counts.map((a) => `${a.id} ${a.count}`).join(', ')}`.trimEnd()] : []
-  // An editor's row counted apart is the point of its check: with no apps frame nothing was counted, so it cannot pass.
-  // The base apps keep their grading, so their results do not move. It says so only to a driver that saw frames.
-  if (!frame && (EDITORS as readonly string[]).includes(page)) {
-    return { part: 'apart', score: 0, timed: false, evidence: world.seen.frames.length > 0 ? ['no apps frame'] : [] }
-  }
-  return { part: 'apart', score: elsewhere === apart.length ? 1 : 0, timed: false, evidence }
+  return { part: 'apart', score: elsewhere === apart.length ? 1 : 0, timed: false,
+    evidence: [`apps at ${frame.at}: ${counts.map((a) => `${a.id} ${a.count}`).join(', ')}`.trimEnd()] }
 }
 
 /**
