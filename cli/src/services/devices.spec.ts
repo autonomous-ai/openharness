@@ -4959,10 +4959,15 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   })
 
   it('with no dial linked a focus follows nothing and counts nothing', async () => {
-    const { settle, focus } = await twoTerminals()
+    const { front, settle, focus } = await twoTerminals()
     await settle('vscode')
     ;(seen.cable as unknown as { connected: boolean }).connected = false
     focus(SHELL_B)
+    // Nor one that waited for a settle another app made.
+    await settle('ghostty')
+    front('vscode')
+    focus(SHELL)
+    await settle('ghostty')
     expect(editorFollows()).toEqual([])
     expect(editorLines()).toEqual([])
   })
