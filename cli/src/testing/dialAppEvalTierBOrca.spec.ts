@@ -185,6 +185,41 @@ describe.skipIf(process.platform === 'win32')("tier B's Orca agent in the person
   })
 })
 
+describe.skipIf(!orcaHostCc)("tier B's Orca agent in the person's tmux, started", () => {
+  it("opens no pane of its own: its Orca pane runs tmux's client, so words typed to that handle reach no session, as in tier A", async () => {
+    dir = mkdtempSync(join(tmpdir(), 'tier-b-orca-tmux-pane-'))
+    const root = realpathSync(dir)
+    const home = join(root, 'home')
+    const codexHome = join(root, 'codex')
+    mkdirSync(home)
+    mkdirSync(codexHome)
+    mkdirSync(join(root, 'bin'))
+    // Codex's start hook as the daemon installs it, doing nothing here; the tmux on the daemon's tmux PATH does nothing.
+    writeFileSync(join(codexHome, 'hooks.json'), JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'true # notify.mjs' }] }] } }))
+    writeFileSync(join(root, 'bin', 'tmux'), '#!/bin/sh\n', { mode: 0o755 })
+    const socket = join(root, 'tmux', 'default')
+    const tmuxEnv = { PATH: `${join(root, 'bin')}:/usr/bin:/bin` }
+    const sessions = [session('a', { engine: 'codex' }), session('t', { engine: 'codex', tab: 1, tmux: true })]
+    const opened: Array<[SessionKey, string | null]> = []
+    const children: ChildProcess[] = []
+    const world = {
+      d: { root, projectsDir: join(root, 'projects'), env: daemonEnvironment(process.env, { HOME: home, PATH: '/usr/bin:/bin', CODEX_HOME: codexHome }),
+        tmux: { socket, env: tmuxEnv, run: async (verb: string) => (verb === 'new-session' ? '%7' : `${socket},4242,$3`) } },
+      children, platform: process.platform, orca: { listing: () => {}, endWatch: () => {} },
+      scenario: { id: 'T', app: 'orca', sessions, steps: [], checks: [], probes: [] },
+      session: (key: SessionKey) => sessions.find((s) => s.key === key)!,
+      orcaPane: (key: SessionKey, handle: string | null) => { opened.push([key, handle]) },
+      folder: () => root,
+    }
+    try {
+      for (const key of ['a', 't']) await orca.orcaSteps.hook(world, { kind: 'hook', session: key, event: 'start' })
+      expect(opened).toEqual([['a', orcaPaneHandle(sessions[0]!, 0)]])
+    } finally {
+      for (const child of children) child.kill('SIGKILL')
+    }
+  })
+})
+
 describe("tier B's Orca accounts", () => {
   it("the daemon's Orca lists a home for each Orca Codex agent with one of its own, inside the daemon's root, and nothing else", () => {
     const sessions: SessionDef[] = [
