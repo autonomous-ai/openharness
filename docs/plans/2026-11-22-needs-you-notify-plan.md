@@ -632,9 +632,11 @@ server, fake Claude Code, Codex and dial, no account, and no backend. Never Dieg
      print what it says.
    - Pass: no permission or approval question in any of the four, each prints `no dial` (no dial attached), and Codex
      reports no error loading `rules/harness.rules`.
-   - If Codex refuses the `host_executable` line, the fix is to leave that line out on `win32` (Task 6's files). If an
-     outside agent asks and it is this allowance block, fix it in Task 6's files. Otherwise name the gap and the
-     reason in the PR.
+   - If Codex refuses the `host_executable` line, the fix is to leave all of Harness's Codex rules out on `win32`,
+     never that line alone (Task 6's files). Without it any `harness.bat` in any folder meets the `harness` rule
+     (Codex lowercases a program's name and takes off `.exe`, `.cmd`, `.bat` or `.com`, `resolve_host_executables`),
+     and a line Codex cannot parse makes it drop the person's own rules too. If an outside agent asks and it is this
+     allowance block, fix it in Task 6's files. Otherwise name the gap and the reason in the PR.
    - **Held for the user:** a turn needs a model. The VM's test key file was deleted on 2026-11-20 (VM notes, "The key"),
      and putting a key back is Diego's. Until he does, this gate waits for him.
 5. **The real Mac with the Harness app and a dial (Done when 1-3): needs the user.** Diego's or the boss's own app,

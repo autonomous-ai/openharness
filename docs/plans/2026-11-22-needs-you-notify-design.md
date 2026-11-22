@@ -215,7 +215,10 @@ Details:
   relies on: it types `harness`. The launcher-path rules are best effort on Windows, as nothing in the repo records how
   Claude Code's permission rules match there or whether Codex accepts `host_executable` with `harness.exe`. A Windows
   check that Codex still loads `rules/harness.rules` and that neither engine asks before the command is a gate before
-  merge (Verification). If Codex refuses the `host_executable` line there, that line is left out on Windows.
+  merge (Verification). If a Codex ever refuses the `host_executable` line there, all of Harness's Codex rules are
+  left out on Windows, never that line alone. Without it any `harness.bat` in any folder meets the `harness` rule:
+  Codex lowercases a program's name and takes off `.exe`, `.cmd`, `.bat` or `.com` (`resolve_host_executables`). And
+  a line Codex cannot parse makes it drop the person's own rules too.
 - This is the core's process, kept to the smallest change: no file is added (`architecture.coreFiles.txt` unchanged;
   `config/harnessHome.ts` is already a core file), no new rule; only the platform gate, the launcher's spelling and
   `harnessRules`' platform argument change. Why every session needs it: a Windows agent that runs
