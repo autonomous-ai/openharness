@@ -32,12 +32,17 @@
  *
  * A window whose state says `"types":true` takes the dial's words for its terminals
  * (docs/plans/2026-11-22-dial-vscode-cursor-voice-design.md). An older extension says nothing of it and ends its stream
- * on a line of 1 KiB, which a words line can pass: the devices write words only where a window says it types.
+ * on a line of 1 KiB, which a words line can pass: the devices write words only where a window says it types. A send
+ * reaches exactly that agent or submits nothing: its words line goes only while the agent is in front of its terminal,
+ * and its Enter line only once the same terminal, the same guard and the caller's prompt check hold again after the
+ * settle. Any of them failing after the words leaves them in that agent's own input, submitted nowhere.
  */
 import { isAbsolute } from 'node:path'
 import { REFUSED, type ListenerHandler, type ListenerStream, type ListenerStreamHandler } from '../../services/devicesListener.js'
 import { processRows, type ProcessRow } from '../../lib/processTable.js'
+import { INJECT_PASTE_DELAY_BASE_MS, INJECT_PASTE_DELAY_MAX_MS } from '../../lib/submitTiming.js'
 import type { PageAgent } from './adapter.js'
+import { CONTROL, MAX_TEXT } from './orca.js'
 import { execText, parentChain, PS_TIMEOUT_MS, type Exec, type ProcessName } from './scannedApp.js'
 
 export const VSCODE_WINDOWS = 8
@@ -58,8 +63,17 @@ export const CHAIN_RETRY_MS = 5_000
 export const VSCODE_GUARD_MS = 500
 /** The read prints two rows of three numbers of at most 10 digits and a sign, with ps's padding. */
 export const GROUPS_MAX_BYTES = 128
+/** The longest line a window that types takes, its newline included: the extension's LINE_BYTES. MAX_TEXT characters
+ *  of three bytes each make about 60 KB. */
+export const VSCODE_LINE_MAX_BYTES = 65_536
+
+/** How a send of the dial's words ended: typed and submitted; refused before the words, its agent not in front of its
+ *  terminal; or failed, with nothing submitted. */
+export type VscodeTyped = 'typed' | 'background' | 'failed'
 
 const WINDOW_ID = /^[A-Za-z0-9-]{8,36}$/
+/** A lone surrogate: UTF-8 has no form for it, so it is typed as the replacement character. */
+const LONE_SURROGATE = /\p{Cs}/gu
 const PID_MAX = 2 ** 31 - 1
 const MINUTE_MS = 60_000
 /** A tty's foreground group is -1 on Linux for a process with no terminal. */
@@ -122,6 +136,11 @@ export interface VscodeTerminals {
   pageKeys(agentPid: number, agent: PageAgent): false | Promise<boolean>
   /** Whether the agent with that pid has a terminal now, in a window whose latest state said `"types":true`. */
   canType(agentPid: number): boolean
+  /** Types the dial's words into the terminal of the agent with that pid, then, after a settle, presses Enter there.
+   *  Never rejects. `background` before any word when the agent is not in front of its terminal; `typed` once the Enter
+   *  line went; else `failed`, and after the words nothing submits them. `atPrompt` is the caller's check that the agent
+   *  is still at its prompt, asked last before the Enter. */
+  type(agentPid: number, words: string, atPrompt: () => boolean): Promise<VscodeTyped>
 }
 
 export interface VscodeTerminalsDeps {
@@ -165,6 +184,9 @@ interface Window {
 
 interface Run { shell: number; lines: number; page: boolean }
 
+/** An agent's pid and its parents' pids, nearest first, and the agent's start marker in the read they came from. */
+interface Chain { pids: readonly number[]; startMarker?: string }
+
 /** A guard's read: a page stroke, or the reason it refused. */
 type Verdict = 'pages' | 'renderer' | 'background' | 'ps'
 
@@ -194,8 +216,8 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
   /** Each listed shell's window: of two that list it, the one whose state came last. */
   const holders = new Map<number, string>()
   const listed = new Set<number>()
-  /** Each listed agent's pid and its parents' pids, nearest first, once read. */
-  const chains = new Map<number, readonly number[]>()
+  /** Each listed agent's chain, once read. */
+  const chains = new Map<number, Chain>()
   /** When each agent's last failed read began. */
   const failedAt = new Map<number, number>()
   let reading = false
@@ -207,6 +229,8 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
   let told = new Map<number, string>()
   /** Each agent's guard still reading, by its pid: an ask meanwhile joins it rather than reading again. */
   const guards = new Map<number, Promise<Verdict>>()
+  /** Each shell a send of the dial's words is under way in: two dials' words at once would mix in one prompt. */
+  const sending = new Set<number>()
   let counted = { ...NONE_COUNTED }
   let minute = false
 
@@ -227,7 +251,7 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
   }
 
   const terminalOf = (agentPid: number): VscodeTerminal | undefined => {
-    for (const pid of chains.get(agentPid) ?? []) {
+    for (const pid of chains.get(agentPid)?.pids ?? []) {
       const window = holders.get(pid)
       if (window !== undefined) return { window, shell: pid }
     }
@@ -279,7 +303,7 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
     // Only the agents it was asked for: one listed during the read may have started after its table was taken.
     for (const pid of asked) {
       if (!listed.has(pid)) continue
-      if (table?.has(pid)) chains.set(pid, parentChain(pid, table).map((row) => row.pid))
+      if (table?.has(pid)) chains.set(pid, { pids: parentChain(pid, table).map((row) => row.pid), startMarker: table.get(pid)!.startMarker })
       else failedAt.set(pid, start)
     }
     tell()
@@ -301,10 +325,36 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
     let nearest: { pid: number; depth: number } | undefined
     for (const pid of listed) {
       const its = terminalOf(pid)
-      const depth = chains.get(pid)?.indexOf(terminal.shell) ?? -1
+      const depth = chains.get(pid)?.pids.indexOf(terminal.shell) ?? -1
       if (its?.window === terminal.window && its.shell === terminal.shell && (!nearest || depth < nearest.depth)) nearest = { pid, depth }
     }
     deps.focused(nearest?.pid, terminal, at, regained)
+  }
+
+  /** Whether the agent's group is its VS Code terminal's foreground group, of one read: none when that could not be read
+   *  or the terminal has no foreground group. The page keys' guard and the typed words' share it. Never rejects. */
+  const inFront = async (pid: number, shell: number): Promise<boolean | undefined> => {
+    // A read that rejects, or throws as it is asked, is no answer.
+    const groups = await (async () => deps.foreground(pid, shell))().catch(() => undefined)
+    // No terminal: macOS prints a foreground group of 0, Linux -1.
+    if (!groups || groups.tpgid <= 0) return undefined
+    return groups.pgid === groups.tpgid
+  }
+
+  /** Whether the dial's words, or their Enter, may go to the agent's terminal now: none when they may, else why not.
+   *  Never rejects. */
+  const typeGuard = async (agentPid: number, shell: number, chain: Chain): Promise<'background' | 'failed' | undefined> => {
+    if (deps.platform !== 'win32') {
+      // A suspended (Ctrl+Z) or backgrounded agent leaves the shell in front, where the words would run as a command.
+      const front = await inFront(agentPid, shell)
+      return front === undefined ? 'failed' : front ? undefined : 'background'
+    }
+    // Windows has no process groups and no job control. A dead agent's pid may be a new shell's: the table read again
+    // must still give it the start its chain was read with, and a chain that reaches the shell.
+    const table = await (async () => deps.processes())().then((rows) => new Map(rows.map((row) => [row.pid, row])), () => undefined)
+    const row = table?.get(agentPid)
+    return table && row && row.startMarker === chain.startMarker && parentChain(agentPid, table).some(({ pid }) => pid === shell)
+      ? undefined : 'failed'
   }
 
   /** The agent's guard still reading, or a new one. The settings first, and `ps` only when they say fullscreen: most
@@ -319,10 +369,8 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
       // Its terminal now: a window that went meanwhile leaves no shell whose foreground could be read.
       const terminal = terminalOf(pid)
       if (!terminal) return 'ps'
-      const groups = await (async () => deps.foreground(pid, terminal.shell))().catch(() => undefined)
-      // No terminal: macOS prints a foreground group of 0, Linux -1.
-      if (!groups || groups.tpgid <= 0) return 'ps'
-      return groups.pgid === groups.tpgid ? 'pages' : 'background'
+      const front = await inFront(pid, terminal.shell)
+      return front === undefined ? 'ps' : front ? 'pages' : 'background'
     })()
     guards.set(pid, verdict)
     void verdict.then(() => guards.delete(pid))
@@ -474,6 +522,41 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
           answer(reason)
         })
       })
+    },
+    type: async (agentPid, text, atPrompt) => {
+      // A newline would submit part of the words and an escape would steer the screen: only the Enter line submits.
+      const words = text.replace(CONTROL, ' ').replace(LONE_SURROGATE, '\ufffd')
+      if (!words || words.length > MAX_TEXT) return 'failed'
+      const chain = chains.get(agentPid)
+      const terminal = terminalOf(agentPid)
+      const window = terminal && windows.get(terminal.window)
+      if (!chain || !terminal || !window?.types || sending.has(terminal.shell)) return 'failed'
+      const { window: id, shell } = terminal
+      const line = { type: words, pid: shell }
+      if (Buffer.byteLength(JSON.stringify(line)) + 1 > VSCODE_LINE_MAX_BYTES) return 'failed'
+      // The very window object, still typing, and the same chain still matched to that shell in it: a window reloaded
+      // under its id is another stream, and an agent read anew on its pid another process.
+      const same = (): boolean => {
+        const now = terminalOf(agentPid)
+        return windows.get(id) === window && window.types && chains.get(agentPid) === chain && now?.window === id && now.shell === shell
+      }
+      sending.add(shell)
+      try {
+        const refused = await typeGuard(agentPid, shell, chain)
+        if (refused) return refused
+        if (!same() || !window.stream.write(line)) return 'failed'
+        // Codex's paste-burst detector turns an Enter within 120 ms of a burst of keys into a newline (codex-rs
+        // paste_burst.rs), and Claude Code needs time to take a long input before an Enter submits it.
+        const settle = Math.min(INJECT_PASTE_DELAY_MAX_MS, INJECT_PASTE_DELAY_BASE_MS + Math.floor(words.length / 60))
+        await new Promise<void>((settled) => { deps.after(settle, settled) })
+        // An Enter that waited behind a line still draining would go after the checks it passed: it does not wait.
+        return !(await typeGuard(agentPid, shell, chain)) && same() && atPrompt() && window.stream.write({ enter: shell }) ? 'typed' : 'failed'
+      } catch {
+        // A caller's check or a stream that throws submits nothing: the send never rejects.
+        return 'failed'
+      } finally {
+        sending.delete(shell)
+      }
     },
   }
 }
