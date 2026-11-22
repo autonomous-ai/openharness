@@ -60,12 +60,14 @@ function recorder(over: Partial<Over> = {}, codes: Array<number | null> = [], mo
     ...over,
   }
   const claude = createClaudeAppAdapter({ ...deps, inFront: () => true })
+  // The Codex app's own forward takes the raise, as the devices service hands it (services/devices.ts).
+  const linuxRaise = deps.raise
   const adapters: HostAdapter[] = [
     createHerdrAdapter({ ...deps, client: herdrClient, front: () => undefined }),
     createWeztermAdapter(deps),
     { ...createOrcaAdapter(deps), focus: (pane) => { switched.push(pane.id); return deps.orcaSwitch(pane.id) } },
     claude,
-    createCodexAppAdapter({ ...deps, inFront: () => true }),
+    createCodexAppAdapter({ ...deps, inFront: () => true, raise: linuxRaise && ((window) => linuxRaise.raise(window)) }),
     createTabsAdapter({ isOpen: () => false, select: () => false }),
     ...more,
   ]
@@ -448,6 +450,37 @@ describe('a tap on a Codex app session', () => {
     }
     expect(calls).toEqual([lookup('codex')])
     expect(logs).toEqual([])
+  })
+
+  // The dial eval's X5 (cli/src/testing/dialAppEval): no hook, so the source knows no process or app of the thread.
+  it('on Linux a thread only the scan found, whose link failed, raises the app by its class', async () => {
+    const ran: Call[] = []
+    const raised: RaiseTarget[] = []
+    // The raise itself, over a sway it found and the apps' own classes: only its backend is made up.
+    const raise = createLinuxRaise({
+      find: async () => ({ kind: 'sway', socket: '/run/user/1000/sway-ipc.1000.7.sock' }),
+      backend: () => ({ raise: async (target) => { raised.push(target); return true } }),
+      processes: async () => [],
+      classes: windowClasses,
+      log: () => {},
+    })
+    await vi.waitFor(() => expect(raise.ready({ agent: true })).toBe(true))
+    const { logs, opener } = recorder({
+      platform: 'linux',
+      raise,
+      windowOf: () => undefined,
+      // The ChatGPT app registered codex://, and xdg-open fails.
+      run: async (file, args, timeoutMs) => {
+        ran.push({ file, args, timeoutMs })
+        return file.endsWith('/xdg-mime') ? { code: 0, stdout: 'chatgpt.desktop\n' } : { code: 1, stdout: '' }
+      },
+    })
+    expect(opener.can('a1', scanned)).toBe(true)
+    expect(await opener.open('a1', scanned)).toBe(true)
+    expect(ran).toEqual([lookup('codex'), run('/fake/bin/xdg-open', `codex://threads/${THREAD}`)])
+    expect(raised).toEqual([{ pids: [], classes: ['ChatGPT', 'chatgpt'] }])
+    expect(logs).toEqual([FALLBACK])
+    for (const line of logs) expect(line).not.toContain(THREAD)
   })
 })
 

@@ -10194,6 +10194,28 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
     expect(logs.filter((line) => line.includes(THREAD))).toEqual([])
   })
 
+  // The dial eval's X5 (cli/src/testing/dialAppEval): a thread the reader alone lists has no process to raise.
+  it('on Linux a tap whose link fails raises the app by its class, said in one line with no id', async () => {
+    linuxApps('file')
+    const linux = fakeRaise()
+    const onLinux = {
+      ...orca, onPath: (name: string) => `/usr/bin/${name}`,
+      // The app registered codex://, and xdg-open fails.
+      run: async (file: string, args: string[], timeoutMs: number) => {
+        orcaRuns.push([file, args, timeoutMs])
+        return file === '/usr/bin/xdg-mime' ? { code: 0, stdout: 'chatgpt.desktop\n' } : { code: 1, stdout: '' }
+      },
+    }
+    const { live } = withThreads({ orca: onLinux, raise: linux.raise })
+    await live()
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns).toEqual([['/usr/bin/xdg-mime', ['query', 'default', 'x-scheme-handler/codex'], 10_000],
+      ['/usr/bin/xdg-open', [`codex://threads/${THREAD}`], 10_000]])
+    expect(linux.raised).toEqual([{ app: 'codex' }])
+    expect(logs.filter((line) => line.startsWith('[device] open'))).toEqual(['[device] open · codex · fallback'])
+    expect(logs.filter((line) => line.includes(THREAD))).toEqual([])
+  })
+
   it('a rest with the ChatGPT app in front shows the thread by its link; with another app in front it has no pane', async () => {
     const { front, live } = withThreads()
     await live()

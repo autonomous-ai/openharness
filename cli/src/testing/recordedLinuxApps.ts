@@ -46,6 +46,11 @@ export interface RecordedLinuxApp {
   readonly commFrom: 'process' | 'exec name'
 }
 
+export interface RecordedChatgptApp extends RecordedLinuxApp {
+  /** The window's class spellings, read from the app's own code where its `.desktop` file names none. */
+  readonly windowClasses: { readonly version: string; readonly sha256: string; readonly x11: string; readonly wayland: string }
+}
+
 export interface RecordedCursorApp extends RecordedLinuxApp {
   /** An executable `bin/cursor` in the folder of the `Exec=` binary. */
   readonly cliBesideExec: string | null
@@ -118,10 +123,20 @@ export const RECORDED_LINUX_APPS = {
     // the Exec= name.
     comm: 'ChatGPT',
     commFrom: 'process',
+    // Read 2026-11-22 from a later package at the same source, never installed or run: `usr/lib/chatgpt/resources/
+    // app.asar`'s package.json says `"desktopName": "chatgpt.desktop"`, which Electron makes the Wayland app id, and
+    // its production build calls `app.setName("ChatGPT")` at startup (`.vite/build/early-bootstrap*.js`), which
+    // Electron makes X11's WM_CLASS `chatgpt.ChatGPT`, the class being the name.
+    windowClasses: {
+      version: '26.1117.41037',
+      sha256: '830e251b6ca4ad45fe6904127a790e8f00f7c26ed4c8039473f7323c7c4e2692',
+      x11: 'ChatGPT',
+      wayland: 'chatgpt',
+    },
   },
 } as const satisfies {
   vscode: RecordedLinuxApp | null
   cursor: RecordedCursorApp | null
   claude: RecordedLinuxApp | null
-  chatgpt: RecordedLinuxApp | null
+  chatgpt: RecordedChatgptApp | null
 }
