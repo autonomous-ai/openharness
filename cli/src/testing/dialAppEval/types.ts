@@ -259,8 +259,11 @@ export interface Report {
   gate: { passed: boolean; wrongSends: WrongSend[] }
   /** groups ranked, most points lost first. */
   failing: Array<CheckResult & { pointsLost: number }>; groups: Group[]
-  /** The main set's: a held-out gap counts only in its table's left out. */
+  /** The main set's: a held-out gap counts in its table's left out, and only its reason is given, in heldOutGaps. */
   gaps: CoverageGap[]
+  /** Each held-out gap's reason, with the tiers and platforms it left out and how many runs, by reason: no scenario is
+   *  named, so whoever fixes the main set learns none of them. */
+  heldOutGaps: Array<{ reason: string; tiers: Tier[]; platforms: Platform[]; runs: number }>
   /** Each tier the eval command did not run, and why. */
   skipped?: Array<{ tier: Tier; reason: string }>
   /**

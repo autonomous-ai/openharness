@@ -32,6 +32,7 @@ function report(over: Partial<Report> = {}): Report {
     failing: [],
     groups: [{ app: 'claude', dim: 'D1', scenario: 'C1', pointsLost: 18.75, checks: ['ring.recall'] }],
     gaps: [],
+    heldOutGaps: [],
     delta: { apps: { a: { claude: { before: 75, after: 80 }, chatgpt: { before: null, after: 90 },
       vscode: { before: null, after: null }, cursor: { before: null, after: null }, orca: { before: null, after: null } } },
       checks: [], heldOutChanged: 2 },
