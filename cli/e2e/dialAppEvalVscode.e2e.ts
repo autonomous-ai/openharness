@@ -32,23 +32,37 @@ describe.skipIf(WIN32)('the dial eval, tier B: VS Code', () => {
   let driver: TierBDriver
   const runs: ScenarioRun[] = []
   beforeAll(() => { driver = new TierBDriver({ vscode: vscodeSteps }) })
+  /** What a scenario's run proves beside its checks, read from its world as it stopped. */
+  const ALSO: Partial<Record<string, (scenario: Scenario) => void>> = {
+    // A window's lines name shells by their sessions' keys, never a pid.
+    V5: (v5) => {
+      const { streams = [] } = driver.seen()
+      expect(new Set(streams.map((s) => s.window))).toEqual(new Set(['eval-w1-1', 'eval-w2-1']))
+      const shells = streams.flatMap(({ line }) => [line.show, line.pid, line.active, ...Array.isArray(line.terminals) ? line.terminals : []])
+        .filter((shell) => shell !== undefined && shell !== null)
+      expect(shells).not.toEqual([])
+      const keys = [...v5.sessions.map((s) => s.key), 'other']
+      expect(shells.filter((shell) => typeof shell !== 'string' || !keys.includes(shell))).toEqual([])
+    },
+    // A Codex with its own home writes its rollout outside the daemon's CODEX_HOME.
+    V9: (v9) => {
+      const { d } = driver.lastWorld()
+      const { id } = v9.sessions.find((s) => s.key === 'b')!
+      const rollouts = readdirSync(d.root, { recursive: true }).map(String).filter((name) => name.endsWith(`-${id}.jsonl`))
+        .map((name) => join(d.root, name))
+      expect(rollouts).not.toEqual([])
+      expect(rollouts.filter((path) => inside(d.env.CODEX_HOME!, path))).toEqual([])
+    },
+  }
   afterAll(async () => {
     if (process.env.DIAL_EVAL_OUT) writeResults(process.env.DIAL_EVAL_OUT, 'vscode', collect(runs))
     // It throws naming each attempt off this machine not asserted on yet, the last daemon's as it closed among them.
     await driver?.close()
   })
 
-  it("the daemon's home, its open, VS Code's and Cursor's CLIs are inside its root, and a start with either CLI outside it throws before the daemon starts", async () => {
+  // First, before any daemon: each start below fails before its own.
+  it("a start with VS Code's or Cursor's CLI outside the daemon's root throws before the daemon starts", async () => {
     const v6 = named('V6')
-    await driver.start(v6, HOST)
-    try {
-      const { d } = driver.lastWorld()
-      for (const path of [d.env.HOME, d.env.HARNESS_OPEN_BIN, d.env.HARNESS_VSCODE_BIN, d.env.HARNESS_CURSOR_BIN]) {
-        expect(inside(d.root, path), path).toBe(true)
-      }
-    } finally {
-      await driver.stop()
-    }
     const outside = mkdtempSync(join(tmpdir(), 'dial-eval-cli-'))
     const create = IsolatedDaemon.create.bind(IsolatedDaemon)
     const started = vi.spyOn(IsolatedDaemon.prototype, 'start')
@@ -70,31 +84,6 @@ describe.skipIf(WIN32)('the dial eval, tier B: VS Code', () => {
     }
   })
 
-  it("a window's lines name shells by their sessions' keys, never a pid", async () => {
-    const v5 = named('V5')
-    const run = await runScenario(driver, v5, HOST)
-    expect(run.error).toBeUndefined()
-    const { streams = [] } = driver.seen()
-    expect(new Set(streams.map((s) => s.window))).toEqual(new Set(['eval-w1-1', 'eval-w2-1']))
-    const shells = streams.flatMap(({ line }) => [line.show, line.pid, line.active, ...Array.isArray(line.terminals) ? line.terminals : []])
-      .filter((shell) => shell !== undefined && shell !== null)
-    expect(shells).not.toEqual([])
-    const keys = [...v5.sessions.map((s) => s.key), 'other']
-    expect(shells.filter((shell) => typeof shell !== 'string' || !keys.includes(shell))).toEqual([])
-  })
-
-  it("a Codex with its own home writes its rollout outside the daemon's CODEX_HOME", async () => {
-    const v9 = named('V9')
-    const run = await runScenario(driver, v9, HOST)
-    expect(run.error).toBeUndefined()
-    const { d } = driver.lastWorld()
-    const { id } = v9.sessions.find((s) => s.key === 'b')!
-    const rollouts = readdirSync(d.root, { recursive: true }).map(String).filter((name) => name.endsWith(`-${id}.jsonl`))
-      .map((name) => join(d.root, name))
-    expect(rollouts).not.toEqual([])
-    expect(rollouts.filter((path) => inside(d.env.CODEX_HOME!, path))).toEqual([])
-  })
-
   it.for(SCENARIOS)('$id: $title', async (scenario) => {
     const began = Date.now()
     const run = await runScenario(driver, scenario, HOST)
@@ -102,6 +91,11 @@ describe.skipIf(WIN32)('the dial eval, tier B: VS Code', () => {
     runs.push(run)
     expect(run.error).toBeUndefined()
     console.log(`[dial eval] ${scenario.id}: ${Date.now() - began} ms`)
+    const { d } = driver.lastWorld()
+    for (const path of [d.env.HOME, d.env.HARNESS_OPEN_BIN, d.env.HARNESS_VSCODE_BIN, d.env.HARNESS_CURSOR_BIN]) {
+      expect(inside(d.root, path), path).toBe(true)
+    }
+    ALSO[scenario.id]?.(scenario)
     expect(driver.networkReached()).toEqual([])
     expect(run.wrongSends).toEqual([])
     expect(uncaughtProbes(run)).toEqual([])

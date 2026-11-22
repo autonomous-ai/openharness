@@ -54,7 +54,8 @@ const FRONT: Readonly<Record<'darwin' | 'linux', Record<App | 'other', string>>>
 const ME: FakeMachine = { machineId: 'e7'.repeat(16), computerId: 'e2e-dial-eval-computer', name: 'Fixture', token: 'e2e-dial-eval-token' }
 /** A fifth of a second of what the microphone heard: the fake backend answers its `speech` whatever the audio. */
 const VOICE_PCM = Buffer.alloc(3_200, 1)
-/** For the dial to be found, welcomed and shown its list: the fleet looks every 2 s, the dial greets every 2 s. */
+/** For the dial to be found, welcomed and shown its list: the fleet looks every 2 s, the dial greets every 2 s; and for
+ *  the devices to drop the last scenario's rows, at their 30 s look at the latest (deskEmpty). */
 const START_WITHIN_MS = 45_000
 const CHILD_END_MS = 5_000
 /** The end of the watch's stderr a failure says. */
@@ -245,6 +246,17 @@ function lastList(messages: readonly DialMessage[]): DialMessage[] | undefined {
     else if (m.t === 'agents.end' && rows) { last = rows; rows = undefined }
   }
   return last
+}
+/**
+ * Whether the dial was welcomed and holds nothing of an earlier scenario: the last list it was sent is empty, and the
+ * last word of the apps names none with a row. The list is the shown page's alone, and the catalog's ids are shared: an
+ * ended session's row stays on its page until the devices drop it (10 s after its end, or at their 30 s look for one
+ * that said none), and the page picked next would show it.
+ */
+export function deskEmpty(messages: readonly DialMessage[]): boolean {
+  const apps = messages.findLast((m) => m.t === 'apps')?.apps
+  return messages.some((m) => m.t === 'welcome') && lastList(messages)?.length === 0
+    && Array.isArray(apps) && !apps.some((a: { count?: unknown }) => typeof a.count === 'number' && a.count > 0)
 }
 async function end(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return
@@ -581,11 +593,8 @@ export class TierBDriver implements EvalDriver {
     const front = scenario.world?.front ?? scenario.app
     await GENERIC.front(world, { kind: 'front', app: front })
     await world.plug()
-    // The ring empty before the scenario goes on: nothing of the scenario before it is listed.
-    await until(`${scenario.id}: the dial welcomed and shown an empty list`, () => {
-      const { messages } = world.dial
-      return messages.some((m) => m.t === 'welcome') && lastList(messages)?.length === 0
-    }, START_WITHIN_MS, 50)
+    // Every page empty before the scenario goes on: nothing of the scenarios before it is listed.
+    await until(`${scenario.id}: the dial welcomed, and no app's page with a row`, () => deskEmpty(world.dial.messages), START_WITHIN_MS, 50)
     // The person picks the app's page. While no session of it is listed the devices keep the ring they show, and the
     // app in front decides it once one is.
     world.pick(PAGE[front === 'other' ? scenario.app : front])
