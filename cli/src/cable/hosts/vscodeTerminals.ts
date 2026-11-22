@@ -6,6 +6,10 @@
  * Cursor's windows, which run the same extension, hold the same streams: one pool serves both editors, and an agent is
  * the VS Code adapter's or Cursor's by its hook's bundle id (vscode.ts, docs/plans/2026-11-18-dial-cursor-design.md §1).
  *
+ * A focused window whose active terminal changes, or that comes into focus on one, tells the devices the listed agent
+ * running there, the nearest its shell when several, so the dial can follow the person (devices.ts). A window's first
+ * state on its stream follows nothing: a reload or a reopen must not pull the dial.
+ *
  * The match is the process tree: an agent runs under the shell VS Code started for its terminal, or is that terminal's
  * own process, so the window that lists a pid of its chain holds it. A process's name is outside text (a process can
  * write a prompt there) and its environment holds secrets (cli/AGENTS.md rule 4), so neither is kept: of the one
@@ -123,6 +127,8 @@ export interface VscodeTerminalsDeps {
   foreground(agent: number, shell: number): Promise<ProcessGroups | undefined>
   /** Which agents have a terminal changed. */
   changed(): void
+  /** A person focused the terminal the listed agent with that pid runs in. */
+  focused(agentPid: number, terminal: VscodeTerminal): void
   /** Monotonic milliseconds. */
   now(): number
   after(ms: number, run: () => void): () => void
@@ -133,6 +139,9 @@ interface Window {
   stream: ListenerStream
   /** Its latest state's shells; none until its first state. */
   shells?: ReadonlySet<number>
+  /** Its latest state's active shell and whether the window was focused. */
+  active?: number | null
+  focused?: boolean
   /** A show its stream has not taken yet: the latest wins. */
   show?: { shell: number; raise: boolean }
   /** Lines its stream has not taken yet, all for one shell: at most one page run and one plain run, in the order they
@@ -177,6 +186,8 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
   const failedAt = new Map<number, number>()
   let reading = false
   let again = false
+  /** The latest focus not yet told: it waits while a chain that may be its agent's is read. */
+  let focus: VscodeTerminal | undefined
   /** Each listed agent's terminal, as the devices were last told. */
   let told = new Map<number, string>()
   /** Each agent's guard still reading, by its pid: an ask meanwhile joins it rather than reading again. */
@@ -256,9 +267,25 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
       else failedAt.set(pid, start)
     }
     tell()
-    if (!again) return
-    again = false
-    ask()
+    if (again) {
+      again = false
+      ask()
+    }
+    place()
+  }
+
+  /** Tells the devices the agent in the focused terminal once no chain that could be its is still read. */
+  const place = (): void => {
+    if (!focus || (reading && [...listed].some((pid) => !chains.has(pid)))) return
+    const { window, shell } = focus
+    focus = undefined
+    let nearest: { pid: number; depth: number } | undefined
+    for (const pid of listed) {
+      const at = terminalOf(pid)
+      const depth = chains.get(pid)?.indexOf(shell) ?? -1
+      if (at?.window === window && at.shell === shell && (!nearest || depth < nearest.depth)) nearest = { pid, depth }
+    }
+    if (nearest) deps.focused(nearest.pid, { window, shell })
   }
 
   /** The agent's guard still reading, or a new one. The settings first, and `ps` only when they say fullscreen: most
@@ -335,13 +362,20 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
             return REFUSED
           }
           const window = windows.get(id)!
+          const moved = window.shells !== undefined && focused && active !== null
+            && (active !== window.active || !window.focused)
           window.shells = new Set(terminals)
+          window.active = active as number | null
+          window.focused = focused
           // Moved last: of two windows that list one shell, this one now holds it.
           windows.delete(id)
           windows.set(id, window)
           reindex()
           tell()
           ask()
+          if (!moved) return
+          focus = { window: id, shell: active as number }
+          place()
         },
       },
     },

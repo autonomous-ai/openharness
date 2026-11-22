@@ -72,7 +72,7 @@ import { createTmuxAdapter, createTmuxNested, createTmuxOuter } from '../cable/h
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
 import { createVscodeAdapter, termPid } from '../cable/hosts/vscode.js'
-import { readForeground, readProcessParents, vscodeStreams, type VscodeTerminalsDeps } from '../cable/hosts/vscodeTerminals.js'
+import { readForeground, readProcessParents, vscodeStreams, type VscodeTerminal, type VscodeTerminalsDeps } from '../cable/hosts/vscodeTerminals.js'
 import { createWeztermAdapter, createWeztermTabAdapter } from '../cable/hosts/wezterm.js'
 import { createZellijAdapter, createZellijOuter, zellijFinder } from '../cable/hosts/zellij.js'
 import { createEngineTally } from '../cable/engineTally.js'
@@ -238,6 +238,7 @@ const FOLLOWED: Record<FollowCause | 'settle', Record<'moved' | 'no-tile', strin
   tab: { moved: '[device] tab · moved', 'no-tile': '[device] tab · skipped · no tile' },
   focus: { moved: '[device] focus · moved', 'no-tile': '[device] focus · skipped · no tile' },
   thread: { moved: '[device] thread · moved', 'no-tile': '[device] thread · skipped · no tile' },
+  vscode: { moved: '[device] vscode · moved', 'no-tile': '[device] vscode · skipped · no tile' },
 }
 /** A tab app reports back each tab the dial selects, and Orca each pane it switches to: a report within this long of the
  *  dial's move there is that move's echo. Every move of that long is kept, as a fast swipe's late report for a place it
@@ -506,6 +507,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     fullscreen: deps.claudeFullscreen ?? ((cwd, transcriptPath) => readFullscreen(cwd, transcriptPath, renderer)),
     foreground: deps.processGroups ?? readForeground,
     changed: () => part.call('dial', () => cable.syncAgents()),
+    focused: (pid, terminal) => part.call('dial', () => editorFocused(pid, terminal)),
     now: monotonic,
     after: timerIn('vscode'),
     log,
@@ -572,6 +574,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     show: (pane, agentId) => { codexSwitches.note(pane.id); return codexApp.show(pane, agentId) },
     focus: (pane) => { codexSwitches.note(pane.id); return codexApp.focus(pane) } })
   const codexPane = (threadId: string): Pane => ({ adapter: codexApp.id, id: threadId })
+  /** The VS Code and Cursor terminals the dial showed lately, by window and shell. */
+  const vscodeShows = dialMovesTo()
+  /** VS Code's and Cursor's windows as the dial's verbs reach them: a rest's or a tap's show focuses that terminal, and
+   *  its window's report of it is the dial's own echo. */
+  const vscodeNoted: typeof vscode = { ...vscode, show: (terminal, tap) => {
+    vscodeShows.note(`${terminal.window} ${terminal.shell}`)
+    return vscode.show(terminal, tap)
+  } }
   /** Each Orca terminal's worktree, by handle, from the latest layout read that landed (below): a rest's or a tap's
    *  switch activates it first. */
   let orcaWorktrees: ReadonlyMap<string, string> = new Map()
@@ -597,9 +607,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       show: (pane: Pane, agentId: string) => { orcaSwitches.note(orcaHandle(pane.id)); return orca.show(pane, agentId) },
       focus: (pane: Pane) => { orcaSwitches.note(orcaHandle(pane.id)); return orca.focus(pane) } },
   ].map(noting), claudeNoted, codexNoted, ...[
-    // No echo to guard: VS Code sends no attach for the follow to take as a person's.
-    createVscodeAdapter('vscode', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'vscode', terminals: vscode, raise: raise && ((window) => raise.raise(window)), windows }),
-    createVscodeAdapter('cursor', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'cursor', terminals: vscode, raise: raise && ((window) => raise.raise(window)), windows }),
+    createVscodeAdapter('vscode', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'vscode', terminals: vscodeNoted, raise: raise && ((window) => raise.raise(window)), windows }),
+    createVscodeAdapter('cursor', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'cursor', terminals: vscodeNoted, raise: raise && ((window) => raise.raise(window)), windows }),
     // After Cursor's terminals and tabs: whatever agent in Cursor they do not reach opens its folder's window.
     createCursorFolderAdapter({ run: apps.run, platform: apps.platform, bin: openBin, isFolder, cli: () => cursorFolderCli(cursorExtension), windows }),
     // The WezTerm pane and the kitty window holding a multiplexer's client, as the tabs adapter's tab of Terminal,
@@ -1209,6 +1218,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (app === 'orca' && orcaSetup) part.call('orcaPlugin', () => orcaSetup.pass())
       part.call('dial', () => tabSettled(app))
       part.call('dial', () => threadSettled(app))
+      part.call('dial', () => editorSettled(app))
     },
     appPicked: () => log('[device] app filter: picker'),
     // A pick that leaves the dial's ring as it was says why in fixed words (PM, 2026-11-20): the answer only, never the app.
@@ -2216,6 +2226,39 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (tabReport.app === app) return followTab(tabReport)
     tabReport = undefined
     if (cable.isConnected) log('[device] tab · skipped · not in front')
+  }
+  /**
+   * A terminal focused in VS Code or Cursor turns the dials to its agent as a selected tab does, once that editor has
+   * settled in front (docs/plans/2026-11-17-dial-vscode-extension-design.md, "PR B, decided now" 3). Each line is an
+   * outcome, never the editor, the window, the shell or the agent.
+   */
+  /** A focus report: the agent, its editor and terminal, when it came and how many moves the dial had made by then. */
+  type EditorReport = { agentId: string; app: string; terminal: string; at: number; moves: number }
+  let editorReport: EditorReport | undefined
+  /** Uses up the report: with no dial linked nothing is followed or counted, as with a prompt. */
+  const followEditor = (report: EditorReport): Promise<void> | undefined => {
+    editorReport = undefined
+    if (!cable.isConnected) return
+    // The dial moved since, or showed that terminal itself: by when the report came, as a tab's.
+    if (report.moves !== dialMoves || vscodeShows.echo(report.terminal, report.at)) { log('[device] vscode · skipped · echo'); return }
+    return cable.followLocal(report.agentId, 'vscode')
+  }
+  const editorFocused = (pid: number, { window, shell }: VscodeTerminal): Promise<void> | undefined => {
+    if (!observed) return
+    for (const { id } of observed.list()) {
+      const app = (['vscode', 'cursor'] as const).find((editor) => observed.paneOf(id, editor) === `term:${pid}`)
+      if (!app) continue
+      const report = { agentId: id, app, terminal: `${window} ${shell}`, at: monotonic(), moves: dialMoves }
+      if (cableHost.settledApp() === app) return followEditor(report)
+      editorReport = report
+      return
+    }
+  }
+  const editorSettled = (app: string): Promise<void> | undefined => {
+    if (!editorReport) return
+    if (editorReport.app === app) return followEditor(editorReport)
+    editorReport = undefined
+    if (cable.isConnected) log('[device] vscode · skipped · not in front')
   }
   /**
    * A thread opened in the ChatGPT app turns the dials to it as a selected tab does, once the app has settled in front
