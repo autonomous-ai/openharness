@@ -314,8 +314,8 @@ export class CableFleet {
   /**
    * The fleet has ended a dial's session: unplugged, its USB passed to another account, dropped for its faults, or a
    * silent Pro taken for a reset. Its next session is a new one, which would land the dial on the ring's first agent
-   * (dial eval C11: swiped to b, replugged, on a), so the agent it was on is kept for that session, as a port reopened
-   * under one session keeps it. A board written off as not a dial has no place to keep.
+   * (a dial swiped to b and replugged came back on a), so the agent it was on is kept for that session, as a port
+   * reopened under one session keeps it. A board written off as not a dial has no place to keep.
    */
   private keepFocus(id: string, session: Surface): void {
     const agentId = session.focusRecorded()

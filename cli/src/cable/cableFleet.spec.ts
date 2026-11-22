@@ -1100,7 +1100,7 @@ describe('a Harness Pro that is silent from the moment its port opens', () => {
     try {
       s.fleet.start()
       await vi.waitFor(() => expect(Quiet.made).toHaveLength(1))
-      // As a session holds it once it was handed the place of the Pro's last attachment, before a replug.
+      // A silent session holds a place only when it was handed one: where its dial was in an earlier session.
       Quiet.made[0].place = 'b'
       Quiet.made[0].silent()
       await vi.waitFor(async () => { await s.scan(); expect(Quiet.made).toHaveLength(2) })
