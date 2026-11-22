@@ -66,6 +66,10 @@ describe('the catalog', () => {
     expect(vh3.checks.filter((c) => c.kind !== 'cost')).toEqual([{ id: 'focus', kind: 'focus', dim: 'D2', session: 'b', after: 'focus' }])
   })
 
+  it('no VS Code session is an agent of the editor\'s own: VS Code has none, only Cursor does', () => {
+    for (const s of ALL) for (const d of s.sessions) if (d.app === 'vscode') expect(d.place, `${s.id} ${d.key}`).not.toBe('agent')
+  })
+
   it('each scenario\'s checks cover exactly its dims', () => {
     for (const s of ALL) {
       expect(new Set(s.dims).size, s.id).toBe(s.dims.length)
