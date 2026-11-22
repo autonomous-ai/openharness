@@ -53,6 +53,19 @@ describe("Orca's scenarios", () => {
     }
   })
 
+  it("O12 grades its ring and its focus line past the devices' next 30 s look after the relaunch, whatever its phase", () => {
+    const o12 = byId('O12')
+    const at = (label: string): number => o12.steps.findIndex((step) => step.label === label)
+    // The person's own time from the relaunch to the focus line: a 30 s look at the agents' processes
+    // (services/devices.ts OBSERVED_TICK_MS) falls in it on every run, with 5 s for its push to reach the face.
+    const own = o12.steps.slice(at('relaunch'), at('focus'))
+      .reduce((sum, step) => sum + (step.kind === 'wait' && step.until === undefined ? step.ms : 0), 0)
+    expect(own).toBeGreaterThanOrEqual(35_000)
+    expect(o12.checks.filter((c) => c.kind === 'ring').map((c) => [c.id, c.after, c.at])).toEqual([
+      ['ringKept', 'relaunch', undefined], ['ring', 'relaunch', 'focus'],
+    ])
+  })
+
   it("O2's c is in w2 with w1's folder", () => {
     const c = byId('O2').sessions.find((d) => d.key === 'c')!
     expect([c.worktree, c.cwd]).toEqual(['w2', '/work/eval-w1'])
