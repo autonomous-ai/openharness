@@ -992,6 +992,24 @@ describe('Orca', () => {
         cmd(800, RAISE.darwin)] }))).worktree).toBe(1)
     })
 
+    it("an activate of its worktree is needed whenever the last layout before the input lists it; none passes only when none does", () => {
+      const worktree = (steps: Step[], commands: Seen['commands']): number | undefined => {
+        const s = scenario([...steps, { kind: 'tap', session: 'oa', label: 'go' }], sessions)
+        const times = [...steps.map((_, i) => 100 * (i + 1)), 500]
+        return scores(run(open, s, listed(s, times, { commands: [...commands, switchTo(700, handle(OA)), cmd(800, RAISE.darwin)] }))).worktree
+      }
+      const laid = (worktrees: string[]): Step => ({ kind: 'orca.layout', worktrees })
+      expect(worktree([laid(['w1', 'w2'])], [])).toBe(0)
+      expect(worktree([laid(['w1', 'w2'])], [activate(600, 'w1')])).toBe(1)
+      expect(worktree([laid(['w1', 'w2'])], [activate(600, 'w2')])).toBe(0)
+      // The latest layout before the input no longer lists w1: Orca has no worktree of it to open.
+      expect(worktree([laid(['w1', 'w2']), laid(['w2'])], [])).toBe(1)
+      expect(worktree([laid(['w2']), laid(['w1', 'w2'])], [])).toBe(0)
+      // A layout after the input is not the one the input was made on.
+      const s = scenario([{ kind: 'tap', session: 'oa', label: 'go' }, laid(['w1'])], sessions)
+      expect(scores(run(open, s, listed(s, [500, 650], { commands: [switchTo(700, handle(OA)), cmd(800, RAISE.darwin)] }))).worktree).toBe(1)
+    })
+
     it('a switch of another handle fails switch, and a raise before the switch fails raise', () => {
       const s = input('tap')
       const other = run(open, s, listed(s, [500], { commands: [switchTo(700, handle(OB)), cmd(800, RAISE.darwin)] }))
