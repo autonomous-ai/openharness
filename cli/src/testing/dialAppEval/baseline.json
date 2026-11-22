@@ -15,7 +15,7 @@
     "a/darwin/C10/ring.recall": 1,
     "a/darwin/C10/ringKept": 1,
     "a/darwin/C10/wait.3": 1,
-    "a/darwin/C11/focusKept": 0,
+    "a/darwin/C11/focusKept": 1,
     "a/darwin/C11/ringKept": 1,
     "a/darwin/C11/wait.1": 1,
     "a/darwin/C12/voice.exact": 1,
@@ -321,7 +321,7 @@
     "a/win32/C10/ring.recall": 1,
     "a/win32/C10/ringKept": 1,
     "a/win32/C10/wait.3": 1,
-    "a/win32/C11/focusKept": 0,
+    "a/win32/C11/focusKept": 1,
     "a/win32/C11/ringKept": 1,
     "a/win32/C11/wait.1": 1,
     "a/win32/C12/voice.exact": 1,
@@ -481,7 +481,7 @@
     "b/darwin/C11/cost.cpu": 1,
     "b/darwin/C11/cost.leftovers": 1,
     "b/darwin/C11/cost.loopP99": 1,
-    "b/darwin/C11/focusKept": 0,
+    "b/darwin/C11/focusKept": 1,
     "b/darwin/C11/ringKept": 1,
     "b/darwin/C11/wait.1": 1,
     "b/darwin/C12/cost.cpu": 1,
@@ -664,11 +664,11 @@
   },
   "apps": {
     "a": {
-      "claude": 98.24561403508773,
+      "claude": 99.41520467836258,
       "chatgpt": 97.89473684210526
     },
     "b/darwin": {
-      "claude": 98,
+      "claude": 100,
       "chatgpt": 100
     }
   }
