@@ -21,6 +21,7 @@ import { existsSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
+import { cursorDataDir } from '../engines/cursor/contract.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, type CoreApi, type CorePorts, type DeviceHookPort, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
 import { CableFleet, testDialDiscovery, type CableFleetOptions } from '../cable/cableFleet.js'
 import { isLocalOnly } from '../lib/cardUpdate.js'
@@ -309,11 +310,15 @@ function observedSource(
     openSessions: new OpenSessions({ providers, log }),
     sessionRows: new SessionRows({ providers, excluded: [dataDir], log }),
     excluded: [dataDir],
-    // Asked for Claude Code's and Codex's alone (observed.ts), and read only inside their own folders: a hook can name any path.
-    lastAnswer: (engine, path) => readLastAnswer(engine as 'claude' | 'codex', path, {
-      roots: engine === 'claude' ? places.claude.roots() : places.codex.roots().map((home) => join(home, 'sessions')),
-      maxBytes: LAST_ANSWER_MAX_BYTES, deadlineMs: LAST_ANSWER_DEADLINE_MS,
-    }),
+    // Asked for Claude Code's, Codex's and Cursor's alone (observed.ts), and read only inside their own folders: a hook can
+    // name any path. Another engine's has no folder here, so it is never read.
+    lastAnswer: async (engine, path) => {
+      if (engine !== 'claude' && engine !== 'codex' && engine !== 'cursor') return undefined
+      const roots = engine === 'claude' ? places.claude.roots()
+        : engine === 'codex' ? places.codex.roots().map((home) => join(home, 'sessions'))
+          : [join(cursorDataDir(), 'projects')]
+      return readLastAnswer(engine, path, { roots, maxBytes: LAST_ANSWER_MAX_BYTES, deadlineMs: LAST_ANSWER_DEADLINE_MS })
+    },
     fileStamp,
     log,
     actions,
