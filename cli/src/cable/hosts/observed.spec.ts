@@ -4956,6 +4956,17 @@ describe('ObservedSource and a nested session the scan found', () => {
     for (const word of ['iterm', 'tmux', 'herdr', '4300', '100', '200', '80', 'ttys']) expect(t.logs.join('\n')).not.toContain(word)
   })
 
+  it('the line\'s ms counts its nested lookups after its reads', async () => {
+    const t = scan(new Map([[100, IN_TMUX]]), { apps: async () => { t.clock.t += 7; return new Map() } })
+    t.found('a', 100)
+    const look = t.src.scanOpen()
+    await vi.waitFor(() => expect(t.nested).toHaveBeenCalledTimes(1))
+    t.clock.t += 30
+    await t.answer(0, ITERM)
+    await look
+    expect(t.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 0 answered · 37 ms · 1 nested placed'])
+  })
+
   describe('its placed tmux pane, and its first hook', () => {
     /** The pane tmux's lookup by process names for `a`: tmux's pane id, the agent's process and its client's app. */
     const PANE = { adapter: 'tmux', id: '%3:100:iterm' }
