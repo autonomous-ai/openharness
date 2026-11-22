@@ -39,7 +39,8 @@ export function noticeCaller(env: NodeJS.ProcessEnv, cwd: string): Pick<NoticeAs
   return caller
 }
 
-/** [words]: what follows `notify`. 0 with `shown`, `no dial` or `limited` on stdout; 1 with the usage when there is no text. */
+/** [words]: what follows `notify`. 0 with `shown`, `no dial` or `limited` on stdout; 1 with the usage when there is no
+ *  question: none, flags alone, or only `--help` or `-h`. */
 export async function runNotice(words: string[], deps: NoticeDeps): Promise<number> {
   const { question, suggest, state, json } = parseNotice(words)
   const text = composeNotice(question, suggest, state)

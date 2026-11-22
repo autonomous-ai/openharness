@@ -56,7 +56,8 @@ export interface NoticeWords { question: string; suggest?: string; state?: Notic
 
 /** [words]: what follows `harness device notify`. `--suggest` takes the next word whatever it is, so an agent's slip
  *  (`--suggest --proceeding`) is still a ring; the last one decides. `--waiting` wins over `--proceeding`, the safer
- *  word. Every other word, `-x` and `--suggest=x` too, is the question, joined by one space and not yet cleaned. */
+ *  word. Every other word, `-x` and `--suggest=x` too, is the question, joined by one space and not yet cleaned; a
+ *  question that is only `--help` or `-h` is none, so asking for the usage never rings the dial. */
 export function parseNotice(words: readonly string[]): NoticeWords {
   const question: string[] = []
   let suggest: string | undefined
@@ -70,7 +71,8 @@ export function parseNotice(words: readonly string[]): NoticeWords {
     else if (word === '--json') json = true
     else question.push(word)
   }
-  return { question: question.join(' '), suggest, state, json }
+  const text = question.join(' ')
+  return { question: text === '--help' || text === '-h' ? '' : text, suggest, state, json }
 }
 
 // The CLI fits the whole line, so the devices' byte cut never takes the suggestion off its end. The listener refuses a
