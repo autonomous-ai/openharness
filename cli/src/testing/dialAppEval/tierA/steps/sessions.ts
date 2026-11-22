@@ -20,6 +20,7 @@ import { RECORDED_ORCA } from '../../../recordedOrca.js'
 import { engineOf, HELD_MAKER, hookHandle, orcaPaneHandle, placeOf, type App, type Editor, type Engine, type Platform, type SessionDef,
   type SessionKey } from '../../types.js'
 import type { StepHandler, TierAWorld } from '../world.js'
+import { panesChanged } from './orca.js'
 
 /** The first process's pid; each start takes the next, so a relaunched session's process is a new one. */
 const FIRST_PID = 41_000
@@ -344,32 +345,36 @@ export async function startSession(world: TierAWorld, key: SessionKey): Promise<
   const live: Live = { pid, ...(shell === undefined ? {} : { shell }), transcriptPath,
     ...(engine === 'claude' ? { mod: { ended: false } } : {}) }
   state.live.set(key, live)
+  // Orca made the pane's terminal before its agent started in it: the plugin hears of the pane first.
+  if (s.app === 'orca') await panesChanged(world)
   tell(world, key, live, 'session-start')
   if (live.mod) holdMod(world, key, s.id, live.mod)
 }
 
 /** Its end hook, and the mod's poll closed as its client goes; the process runs on until it is ended. */
-function endSession(world: TierAWorld, key: SessionKey, live: Live): void {
+async function endSession(world: TierAWorld, key: SessionKey, live: Live): Promise<void> {
   tell(world, key, live, 'session-end')
-  closeSession(world, key, live)
+  await closeSession(world, key, live)
 }
 
-/** The session is no longer open, and the mod's poll goes with its client. */
-function closeSession(world: TierAWorld, key: SessionKey, live: Live): void {
+/** The session is no longer open, and the mod's poll goes with its client; an Orca session's pane closes with it. */
+async function closeSession(world: TierAWorld, key: SessionKey, live: Live): Promise<void> {
   world.machine.owners.delete(world.session(key).id)
   stateOf(world).live.delete(key)
-  if (!live.mod) return
-  live.mod.ended = true
-  if (live.mod.pollId !== undefined) devices(world).inboxGone(live.mod.pollId)
+  if (live.mod) {
+    live.mod.ended = true
+    if (live.mod.pollId !== undefined) devices(world).inboxGone(live.mod.pollId)
+  }
+  if (world.session(key).app === 'orca') await panesChanged(world)
 }
 
 /** Its pane closed under it (orca.close, the plan's Decision 8): the agent and its shell end with no hook, as a process
  *  killed with its terminal runs none. */
-export function dropSession(world: TierAWorld, key: SessionKey): void {
+export async function dropSession(world: TierAWorld, key: SessionKey): Promise<void> {
   const live = stateOf(world).live.get(key)
   if (!live) throw new Error(`scenario ${world.scenario.id}: ${key}'s pane closes, but ${key} is not running`)
-  closeSession(world, key, live)
   endProcesses(world, live)
+  await closeSession(world, key, live)
 }
 
 /** The agent's process and its terminal's shell end. */
@@ -406,7 +411,7 @@ export const sessionsSteps: { hook: StepHandler<'hook'>; quit: StepHandler<'quit
         tell(world, step.session, live, 'turn-stop')
         break
       case 'end':
-        endSession(world, step.session, live)
+        await endSession(world, step.session, live)
         break
     }
   },
@@ -415,7 +420,7 @@ export const sessionsSteps: { hook: StepHandler<'hook'>; quit: StepHandler<'quit
     const state = stateOf(world)
     const ended = [...state.live].filter(([key]) => world.session(key).app === step.app)
     for (const [key, live] of ended) {
-      endSession(world, key, live)
+      await endSession(world, key, live)
       endProcesses(world, live)
     }
     const editor = state.editors.get(step.app)

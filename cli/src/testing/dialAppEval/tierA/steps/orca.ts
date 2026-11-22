@@ -7,8 +7,9 @@
  *
  * The plugin (the plan's Decision 9) opens the devices' own `dial` stream handler, as the listener hands it, and tells
  * the worktree on screen on their `orcaFront` handler; calling the handlers directly skips the listener's own limits,
- * which have their own specs. Its stream takes every line and records none: the lines hold names. Orca's quit ends each
- * watch and the stream; its relaunch opens the stream again where it was open.
+ * which have their own specs. It tells that worktree again each time one of its panes opens or closes, as Orca's
+ * `workspace.changed` fires for them (panesChanged). Its stream takes every line and records none: the lines hold names.
+ * Orca's quit ends each watch and the stream; its relaunch opens the stream again where it was open.
  */
 import type { OrcaChild } from '../../../../cable/hosts/orca.js'
 import { REFUSED, type ListenerHandler, type ListenerStream, type ListenerStreamHandler, type StreamEnd }
@@ -37,6 +38,8 @@ interface Model {
   last?: string
   /** The plugin's open stream's end, while it is open. */
   plugin?: AbortController
+  /** The worktree the plugin told on its open stream, and the terminals it told of it last. */
+  front?: { worktree: string; told: string }
   /** Whether the plugin's stream was open as Orca quit, for its relaunch. */
   reopen?: boolean
 }
@@ -141,6 +144,35 @@ function endPlugin(world: TierAWorld): void {
   const reason: StreamEnd = 'gone'
   model.plugin.abort(reason)
   model.plugin = undefined
+  // The devices drop the worktree with the stream, and the plugin's next one knows none until Orca tells it again.
+  model.front = undefined
+}
+
+/** The handles of a worktree's open panes, in Orca's order. */
+function terminalsOf(world: TierAWorld, worktree: string): string[] {
+  const shown = orcaLayout(world.scenario, modelOf(world).layout, (key) => orcaHandleOf(world, key)).find((w) => w.key === worktree)
+  if (!shown) throw new Error(`scenario ${world.scenario.id}: orca.front names ${worktree}, which Orca has not laid out`)
+  return shown.panes.map((pane) => pane.handle)
+}
+
+/** The plugin tells the devices the worktree on Orca's screen: its open panes' handles. */
+async function tellFront(world: TierAWorld, worktree: string, terminals: string[]): Promise<void> {
+  const answer: unknown = await handlerOf<ListenerHandler>(world, 'orcaFront').handle({ type: 'orcaFront', terminals }, new AbortController().signal)
+  if (answer !== undefined) throw new Error(`the devices' listener refused orcaFront for ${worktree}: ${String(answer)}`)
+  modelOf(world).front = { worktree, told: JSON.stringify(terminals) }
+}
+
+/**
+ * A pane of Orca's opened, closed or was renamed: Orca's `workspace.changed`, on which the plugin tells the worktree on
+ * screen again (docs/plans/2026-11-18-dial-orca-tab-scope-design.md), so a front told before its agents started lists
+ * them once they do. Terminals it told already it does not send again (plugins/harness-device-orca/src/dial.ts push), as
+ * after a rename. Nothing while its stream is closed or no worktree was told on it.
+ */
+export async function panesChanged(world: TierAWorld): Promise<void> {
+  const front = models.get(world)?.front
+  if (!front) return
+  const terminals = terminalsOf(world, front.worktree)
+  if (JSON.stringify(terminals) !== front.told) await tellFront(world, front.worktree, terminals)
 }
 
 /** Orca quit: each watch ends with it, and so does the plugin's stream, kept for its relaunch. */
@@ -159,26 +191,23 @@ export async function reopenOrca(world: TierAWorld): Promise<void> {
 }
 
 export const orcaModelSteps: { [K in 'orca.layout' | 'orca.focus' | 'orca.front' | 'orca.plugin' | 'orca.close']: StepHandler<K> } = {
-  'orca.layout': async (world, step) => { modelOf(world).layout = step },
+  'orca.layout': async (world, step) => {
+    modelOf(world).layout = step
+    await panesChanged(world)
+  },
   // A watch-focus line for the session's pane: the person focused it in Orca.
   'orca.focus': async (world, step) => {
     const handle = orcaHandleOf(world, step.session)
     if (handle === undefined) throw new Error(`scenario ${world.scenario.id}: orca.focus names ${step.session}, whose pane is not open`)
     tell(world, handle)
   },
-  // The plugin tells the worktree on Orca's screen: its open panes' handles, in Orca's order.
-  'orca.front': async (world, step) => {
-    const worktree = orcaLayout(world.scenario, modelOf(world).layout, (key) => orcaHandleOf(world, key)).find((w) => w.key === step.worktree)
-    if (!worktree) throw new Error(`scenario ${world.scenario.id}: orca.front names ${step.worktree}, which Orca has not laid out`)
-    const message = { type: 'orcaFront', terminals: worktree.panes.map((pane) => pane.handle) }
-    const answer: unknown = await handlerOf<ListenerHandler>(world, 'orcaFront').handle(message, new AbortController().signal)
-    if (answer !== undefined) throw new Error(`the devices' listener refused orcaFront for ${step.worktree}: ${String(answer)}`)
-  },
+  // The plugin tells the worktree on Orca's screen.
+  'orca.front': async (world, step) => tellFront(world, step.worktree, terminalsOf(world, step.worktree)),
   // With no plugin in Orca no stream ever opens, as with no extension in an editor.
   'orca.plugin': async (world, step) => {
     if (world.scenario.world?.orca?.plugin === false) return
     if (step.open) openPlugin(world)
     else endPlugin(world)
   },
-  'orca.close': async (world, step) => { dropSession(world, step.session) },
+  'orca.close': async (world, step) => dropSession(world, step.session),
 }

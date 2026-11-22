@@ -6,8 +6,10 @@
  *
  * Orca's steps (`orcaSteps`): the fake Orca (fakeOrca.ts) prints the layout the scenario's steps make (orcaListing.ts,
  * as tier A prints it) with the panes open now, and its focus; the plugin is its own loop on the throwaway home
- * (pluginLoop.ts). Words reach these agents by the Claude mod's inbox (appEvalClaude.ts holdMod), by `orca terminal send`
- * (the driver reads the fake's runs) and, should the devices take that path, by the Codex queue (appEvalChatgpt.ts hear).
+ * (pluginLoop.ts), handed the worktree on screen at each orca.front and again as its panes open and close, as Orca's
+ * `workspace.changed` hands it (relist). Words reach these agents by the Claude mod's inbox (appEvalClaude.ts holdMod),
+ * by `orca terminal send` (the driver reads the fake's runs) and, should the devices take that path, by the Codex queue
+ * (appEvalChatgpt.ts hear).
  *
  * Every session here runs inside the real Orca, so this worker's environment holds Orca's, tmux's and its terminal's
  * names, and the maker walk from this worker reaches the real Orca: nothing runs for an agent but on its stand-in, under
@@ -171,6 +173,8 @@ interface State {
   layout?: StepOf<'orca.layout'>
   /** The plugin's loop while it runs. */
   plugin?: PluginLoop
+  /** The worktree the running loop was handed, and the terminals it was handed of it last. */
+  front?: { worktree: string; told: string }
   /** What Orca's quit ended, for its relaunch: its agents, and whether the plugin ran. */
   quit?: { sessions: SessionKey[]; plugin: boolean }
   /** Each session's launch, 0 its first: Orca's nth relaunch lays its pane out on its nth handle (orcaPaneHandle). */
@@ -222,11 +226,32 @@ function handleOf(world: TierBWorld, state: State, key: SessionKey): string | un
   return state.live.has(key) ? orcaPaneHandle(world.session(key), state.launches.get(key) ?? 0) : undefined
 }
 
-/** What `terminal list` prints from now on: the latest layout's worktrees, with the panes open now, in the daemon's
- *  folders (orcaListing.ts, as tier A prints it). */
+/** The handles of a worktree's open panes, in Orca's order. */
+function terminalsOf(world: TierBWorld, state: State, worktree: string): string[] {
+  const shown = orcaLayout(world.scenario, state.layout, (key) => handleOf(world, state, key)).find((w) => w.key === worktree)
+  if (!shown) throw new Error(`scenario ${world.scenario.id}: orca.front names ${worktree}, which Orca has not laid out`)
+  return shown.panes.map((pane) => pane.handle)
+}
+
+/** The plugin's loop is handed the worktree on Orca's screen: its open panes' handles. */
+function handFront(state: State, plugin: PluginLoop, worktree: string, terminals: string[]): void {
+  state.front = { worktree, told: JSON.stringify(terminals) }
+  plugin.front(terminals)
+}
+
+/**
+ * What `terminal list` prints from now on: the latest layout's worktrees, with the panes open now, in the daemon's
+ * folders (orcaListing.ts, as tier A prints it). A pane opened, closed or renamed is Orca's `workspace.changed`, which
+ * hands the loop the worktree on screen again (docs/plans/2026-11-18-dial-orca-tab-scope-design.md), as tier A's plugin
+ * tells it (tierA/steps/orca.ts panesChanged): only terminals it was not handed last, as a rename's are.
+ */
 function relist(world: TierBWorld, state: State): void {
   const worktrees = orcaLayout(world.scenario, state.layout, (key) => handleOf(world, state, key), (path) => world.folder(path))
   world.orca.listing(orcaListing(worktrees, state.layout?.renamed ?? {}))
+  const { plugin, front } = state
+  if (!plugin || !front) return
+  const terminals = terminalsOf(world, state, front.worktree)
+  if (JSON.stringify(terminals) !== front.told) handFront(state, plugin, front.worktree, terminals)
 }
 
 /** A Codex home of the session's own, an Orca account's, in the root and not the daemon's CODEX_HOME, with Harness's hooks
@@ -321,6 +346,8 @@ async function stopPlugin(world: TierBWorld, state: State): Promise<void> {
   const plugin = state.plugin
   if (!plugin) throw new Error(`scenario ${world.scenario.id}: the plugin's loop is not running`)
   state.plugin = undefined
+  // Its next loop is handed no worktree until the next orca.front.
+  state.front = undefined
   // It ends by itself once its stdin does, with code 0: any other end left a stream, send, watcher or timer behind.
   const code = await plugin.stop()
   if (code !== 0) world.fail(new Error(`the plugin's loop exited ${code}`))
@@ -379,13 +406,11 @@ export const orcaSteps: AppSteps = {
     if (handle === undefined) throw new Error(`scenario ${world.scenario.id}: orca.focus names ${step.session}, whose pane is not open`)
     world.orca.focus(handle)
   },
-  // The plugin tells the worktree on Orca's screen: its open panes' handles, in Orca's order.
+  // The plugin tells the worktree on Orca's screen.
   'orca.front': async (world, step) => {
     const state = orcaOf(world)
     if (!state.plugin) throw new Error(`scenario ${world.scenario.id}: orca.front with no plugin's loop running`)
-    const worktree = orcaLayout(world.scenario, state.layout, (key) => handleOf(world, state, key)).find((w) => w.key === step.worktree)
-    if (!worktree) throw new Error(`scenario ${world.scenario.id}: orca.front names ${step.worktree}, which Orca has not laid out`)
-    state.plugin.front(worktree.panes.map((pane) => pane.handle))
+    handFront(state, state.plugin, step.worktree, terminalsOf(world, state, step.worktree))
   },
   // With no plugin in Orca no loop of it ever runs, as with no extension in an editor.
   'orca.plugin': async (world, step) => {
