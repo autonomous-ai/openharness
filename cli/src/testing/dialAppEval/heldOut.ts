@@ -127,13 +127,14 @@ export function heldOut(): Scenario[] {
       probes: [{ id: 'open', kind: 'open', dim: 'D3', session: 'z', link: false, after: 'tap' }],
     }, true),
     scenario({
-      id: 'VH3', app: 'vscode', title: 'The second pane of a split terminal focused: the dial follows to its agent',
-      dims: ['D2'], sessions: [vscode('a'), vscode('b'), editorGhost('vscode')],
-      // b runs in a split of a's terminal group: to the extension, another terminal of the window.
+      id: 'VH3', app: 'vscode', title: 'The second pane of a split terminal in a window behind focused: the dial follows to its agent',
+      dims: ['D2'], sessions: [vscode('a'), vscode('c', { window: 'w2' }), vscode('b', { window: 'w2' }), editorGhost('vscode')],
+      // b runs in a split of c's terminal group in a second window, behind the first: its focus brings that window up.
       steps: [
-        ...started(['a', 'b']),
-        { kind: 'editor.window', window: 'w1', terminals: ['a', 'b'], active: 'a', focused: true },
-        ...listed('vscode', ['a', 'b']),
+        ...started(['a', 'c', 'b']),
+        { kind: 'editor.window', window: 'w1', terminals: ['a'], active: 'a', focused: true },
+        { kind: 'editor.window', window: 'w2', terminals: ['c', 'b'], active: 'c', focused: false },
+        ...listed('vscode', ['a', 'c', 'b']),
         { label: 'focus', kind: 'editor.focus', session: 'b' },
       ],
       checks: [{ id: 'focus', kind: 'focus', dim: 'D2', session: 'b', after: 'focus' }],
