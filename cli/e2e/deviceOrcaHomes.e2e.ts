@@ -14,10 +14,12 @@
  * would otherwise see a Codex the developer runs and write into their real home.
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { DIAL_PLUGIN_ID, DIAL_SKILL } from '../src/devices/dialSkill.js'
+import { orcaBinary } from '../src/devices/orcaHomes.js'
+import { resolveBinaryOnPath } from '../src/lib/binaryOnPath.js'
 import { IsolatedDaemon, SOURCES_CLI, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
@@ -202,6 +204,18 @@ describe('Orca\'s account homes on the dial', () => {
     const log = d.log()
     expect(log).toContain('[observed] orca homes · not read · failed')
     expect(log).toMatch(FOUND_ONE)
+  })
+
+  // Orca's Linux .deb links /usr/bin/orca-ide, which a daemon on Linux takes before any `orca`, and /usr/bin is on the
+  // daemon's PATH: the harness's refusing stub must answer to that name too.
+  it('on Linux the daemon\'s PATH answers `orca-ide` with the harness\'s stub, never the computer\'s Orca', async () => {
+    const d = await IsolatedDaemon.create()
+    daemon = d
+    const found = orcaBinary({ platform: 'linux', onPath: (name, accept) => resolveBinaryOnPath(name, d.env, accept), exists: existsSync })
+    expect(found).not.toBeNull()
+    expect(realpathSync(found!)).toBe(realpathSync(d.env.HARNESS_ORCA_APP_BIN!))
+    expect(dirname(found!)).toBe(dirname(d.env.CLAUDE_PATH!))
+    expect(basename(found!)).toBe('orca-ide')
   })
 
   // Every session here may run inside the real Orca: with no launcher on its PATH, a daemon on a Mac runs the Orca app's
