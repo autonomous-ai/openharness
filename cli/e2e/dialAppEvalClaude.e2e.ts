@@ -192,6 +192,16 @@ describe.skipIf(WIN32)('the dial eval, tier B: the Claude app', () => {
     expect(driver.lastWorld().d.log().split('\n').filter((line) => line.includes('[device] attach ·'))).not.toEqual([])
   })
 
+  it("a permission asked right before its turn stops is drawn first, so the stop's Enter answers it", async () => {
+    const c7 = SCENARIOS.find((s) => s.id === 'C7')!
+    const steps = [...c7.steps, { kind: 'hook' as const, session: 'a', event: 'turn-stop' as const }]
+    const run = await runScenario(driver, { ...c7, steps, fresh: true }, HOST)
+    expect(run.error).toBeUndefined()
+    // Its own daemon, so its hook log is this scenario's alone.
+    const { id } = c7.sessions.find((s) => s.key === 'a')!
+    expect(driver.lastWorld().d.hookLog()).toMatch(new RegExp(`PermissionRequest session=${id} ran`))
+  })
+
   it('the dial unplugged shows nothing, and its glass starts afresh when plugged in again', async () => {
     await runScenario(driver, SCENARIOS.find((s) => s.id === 'C11')!, HOST)
     const { steps, faces } = driver.seen()
