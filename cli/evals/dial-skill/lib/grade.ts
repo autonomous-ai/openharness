@@ -9,8 +9,6 @@ import { type RunResult, sumUsage, type Usage } from './parse.js'
 import type { Scenario } from './scenarios.js'
 import type { Ring } from './stage.js'
 
-const MAX_LINE = 120
-
 // A run that read the answer key graded nothing about the skill.
 const ANSWER_KEY = /evals\/dial-skill|scenario\.json/
 
@@ -92,10 +90,8 @@ export async function gradeRun(s: Scenario, run: RunResult, rings: Ring[], judge
 function lineFault(rings: Ring[], s: Scenario): string | null {
   // The skill says ring once; a second ring forfeits the line bonus.
   if (rings.length > 1) return `rang ${rings.length} times`
+  // The line is composed as the CLI composes it (lib/stage.ts): one line, within the dial's length.
   const line = rings[0].line!
-  if (/[\r\n]/.test(line)) return 'the line is more than one line'
-  const length = [...line].length
-  if (length > MAX_LINE) return `the line is ${length} characters, over ${MAX_LINE}`
   if (s.secrets.some((secret) => line.includes(secret))) return 'the line holds a secret from the scenario'
   // The flags are read as the CLI reads them; whether the agent should go on or wait is the scenario's to say.
   const { suggest, state } = parseNotice(rings[0].argv.slice(2))

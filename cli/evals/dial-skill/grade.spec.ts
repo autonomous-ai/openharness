@@ -3,6 +3,7 @@ import { gradeRun, scoreOf } from './lib/grade.js'
 import type { Judge, Verdict } from './lib/judge.js'
 import type { RunResult, Turn } from './lib/parse.js'
 import type { Scenario } from './lib/scenarios.js'
+import { ringOf } from './lib/stage.js'
 
 const need: Scenario = {
   id: 'api-key-missing',
@@ -25,8 +26,9 @@ function run(answer: string, transcript: Turn[] = []): RunResult {
   return { answer, transcript, model: 'claude-opus-5-5', usage: { input_tokens: 1, output_tokens: 1 }, stop_reason: 'end_turn', status: 'ok', tool_calls: 0, limited: false }
 }
 
-/** A recorded call: `device notify` with the line and the flags (by default those `need` expects), else `status`. */
-const ring = (line: string | null, flags = ['--waiting']) => ({ argv: line === null ? ['status'] : ['device', 'notify', line, ...flags], line })
+/** A recorded call as readRings reads it: `device notify` with the question and the flags (by default those `need`
+ *  expects), else `status`. */
+const ring = (question: string | null, flags = ['--waiting']) => ringOf(question === null ? ['status'] : ['device', 'notify', question, ...flags])
 
 /** A judge that gives the same verdict to everything and keeps every call it got. */
 function fakeJudge(pass = true): Judge & { calls: Parameters<Judge>[] } {
@@ -55,7 +57,7 @@ describe('gradeRun', () => {
     expect(g.status).toBe('ok')
     expect(g.grade).toEqual({ score: 4, rang: 1, hit: 1, line_ok: 1, ask_ok: 1 })
     expect(judge.calls).toEqual([
-      ['actionable', { ask: 'give WEATHER_API_KEY', line: 'Set WEATHER_API_KEY from the Weatherly dashboard' }],
+      ['actionable', { ask: 'give WEATHER_API_KEY', line: 'Waiting · Set WEATHER_API_KEY from the Weatherly dashboard' }],
       ['states_ask', { ask: 'give WEATHER_API_KEY', answer: 'Set WEATHER_API_KEY from the Weatherly dashboard.' }],
     ])
     expect(g.explanation).toEqual({ line_ok: 'actionable passes', ask_ok: 'states_ask passes' })
@@ -64,9 +66,7 @@ describe('gradeRun', () => {
   })
 
   it.each([
-    ['a line over 120 characters', [ring('x'.repeat(121))]],
     ['a line holding a secret', [ring('Use key wx_FAKE123 please')]],
-    ['a line of two lines', [ring('Set WEATHER_API_KEY\nfrom the dashboard')]],
     ['two rings', [ring('Set WEATHER_API_KEY'), ring('Still need WEATHER_API_KEY')]],
   ])('fails the line on %s even when the judge passes it', async (_, rings) => {
     const g = await gradeRun(need, run('Set WEATHER_API_KEY.'), rings, fakeJudge())
@@ -89,14 +89,9 @@ describe('gradeRun', () => {
   it('judges a ring whose flags match the expected state, as any other line', async () => {
     const judge = fakeJudge()
     const line = 'Proceeding · Which cache? · Doing: in-process LRU'
-    const g = await gradeRun(decide, run('a'), [ring(line, ['--suggest', 'in-process LRU', '--proceeding'])], judge)
+    const g = await gradeRun(decide, run('a'), [ring('Which cache?', ['--suggest', 'in-process LRU', '--proceeding'])], judge)
     expect(g.grade).toEqual({ score: 4, rang: 1, hit: 1, line_ok: 1, ask_ok: 1 })
     expect(judge.calls[0]).toEqual(['actionable', { ask: 'choose the cache', line }])
-  })
-
-  it('counts a 120-character line as one that fits', async () => {
-    const g = await gradeRun(need, run('a'), [ring('x'.repeat(120))], fakeJudge())
-    expect(g.grade.line_ok).toBe(1)
   })
 
   it('grades a silent need run on the ask alone, with no line_ok', async () => {

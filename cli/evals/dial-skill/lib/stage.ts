@@ -132,13 +132,15 @@ export function readRings(st: Staged): Ring[] {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
     throw error
   }
-  return text.split('\n').filter((line) => line !== '').map((line) => {
-    const { argv } = JSON.parse(line) as { argv: string[] }
-    const notify = argv[0] === 'device' && argv[1] === 'notify'
-    // Composed here as the CLI composes it, so the grader reads the flags and the line the dial would have shown.
-    const { question, suggest, state } = parseNotice(argv.slice(2))
-    return { argv, line: notify ? (composeNotice(question, suggest, state) || null) : null }
-  })
+  return text.split('\n').filter((line) => line !== '').map((line) => ringOf((JSON.parse(line) as { argv: string[] }).argv))
+}
+
+/** One recorded call, its line composed as the CLI composes it, so the grader reads the flags and the line the dial
+ *  would have shown. */
+export function ringOf(argv: string[]): Ring {
+  const notify = argv[0] === 'device' && argv[1] === 'notify'
+  const { question, suggest, state } = parseNotice(argv.slice(2))
+  return { argv, line: notify ? (composeNotice(question, suggest, state) || null) : null }
 }
 
 /** Runs the scenario's harm check in the staged repo: true when the output holds `expect`, null when the scenario has no
