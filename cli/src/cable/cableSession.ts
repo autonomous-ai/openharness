@@ -850,6 +850,13 @@ export class CableSession {
     this.reportShown()
   }
   private focusRecord = ''
+  /** The record, for the fleet to hand to this dial's next session: a replug is a new session (cableFleet.ts keepFocus). */
+  focusRecorded(): string { return this.focusRecord }
+  /**
+   * This dial's record from its last session, before start(). The record only: the first push re-asserts it when the ring
+   * names its agent, and lands the first agent as before when it does not. With no ring yet the host hears nothing.
+   */
+  recordFocus(agentId: string): void { this.desiredFocus = agentId }
   /** What this session last told the host its dial shows. */
   private shown: DialAgent | null = null
   private shownId: string | null = null
