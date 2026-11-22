@@ -87,8 +87,9 @@ const CODEX_BIN = '/opt/eval/bin/codex'
 const APP_CODEX_BIN = '/opt/eval/ChatGPT.app/codex'
 const CURSOR_BIN = '/opt/eval/bin/cursor'
 /** The programs whose commands the world answers as the scenario says, by name: macOS's and Linux's openers, the scheme
- *  lookup, the Windows helper, the Linux raise and Cursor's CLI. A command of any other is one tier A does not model. */
-const ANSWERED: ReadonlySet<string> = new Set(['open', 'xdg-open', 'xdg-mime', 'harness-pty', 'raise', 'cursor'])
+ *  lookup, the Windows helper and the Linux raise. Cursor's CLI is answered only as Linux's folder row runs it, on one
+ *  folder (cable/hosts/cursorFolder.ts). A command of any other is one tier A does not model. */
+const ANSWERED: ReadonlySet<string> = new Set(['open', 'xdg-open', 'xdg-mime', 'harness-pty', 'raise'])
 
 /** Harness's own engine homes are the suite's throwaway ones (vitest.setup.ts): never a folder outside this run's. */
 function emptied(folder: string): string {
@@ -101,6 +102,9 @@ function emptied(folder: string): string {
 
 /** A command's program, as its path or name ends. */
 const programOf = (argv: readonly string[]): string => (argv[0] ?? '').split(/[\\/]/).at(-1)!
+/** Whether the world answers a command (ANSWERED). */
+const answered = (argv: readonly string[]): boolean => ANSWERED.has(programOf(argv))
+  || (argv.length === 2 && argv[0] === CURSOR_BIN && isAbsolute(argv[1]!))
 
 /** Codex's queue's send (cable/hosts/codexQueue.ts): the thread and the words, the thread none unless it reads both. */
 function queued(args: readonly string[]): { thread: string | undefined; text: string } {
@@ -320,7 +324,7 @@ export class World implements TierAWorld {
    * A command the devices ran: answered by the world's rules, and recorded at its virtual time with whether it ran to a
    * good end. One of a program the world does not answer (`modelled`) is a gap: its answer would be made up.
    */
-  private ran(argv: string[], modelled = ANSWERED.has(programOf(argv))): Required<Answer> {
+  private ran(argv: string[], modelled = answered(argv)): Required<Answer> {
     if (!modelled) this.gap(`a command tier A does not answer: ${programOf(argv)}`)
     let answer: Answer = { code: 0 }
     for (const rule of this.rules) {
