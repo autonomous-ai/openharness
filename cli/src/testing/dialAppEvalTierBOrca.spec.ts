@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { daemonEnvironment } from './daemonEnvironment.js'
+import { NET_GUARD_FILE_ENV, netGuardEnv, readNetGuard } from './dialAppEval/netGuard.js'
 import type { SessionDef } from './dialAppEval/types.js'
 
 // The dial eval's tier B Orca harness, the parts that need no daemon (docs/plans/2026-11-22-dial-eval-orca-design.md,
@@ -12,6 +13,7 @@ import type { SessionDef } from './dialAppEval/types.js'
 const orca = await import('../../e2e/harness/appEvalOrca.js' as string) as {
   orcaEnv(d: { env: NodeJS.ProcessEnv }, s: SessionDef, hints: Record<string, string>): NodeJS.ProcessEnv
   startedWith(pid: number): string[]
+  startOrcaPlugin(d: { root: string; env: NodeJS.ProcessEnv }, children: ChildProcess[]): { stop(): Promise<number | null> }
 }
 const inOrca = await import('../../e2e/harness/inOrca.js' as string) as { IN_ORCA: Record<string, string> }
 const plugin = await import('../../e2e/harness/pluginLoop.js' as string) as {
@@ -99,6 +101,37 @@ describe.skipIf(process.platform === 'win32')("tier B's Orca plugin", () => {
       expect(where(cli)).toEqual(where(d.env))
       // macOS's CoreFoundation sets this one in every Node it loads in, from the account's settings, under `env -i` too.
       expect(notDaemons(cli, d.env).filter((name) => name !== '__CF_USER_TEXT_ENCODING')).toEqual([])
+    } finally {
+      await loop.stop()
+      for (const child of children) child.kill('SIGKILL')
+    }
+  })
+
+  it("the plugin the eval starts runs under the daemon's network guard, its environment its home, /usr/bin:/bin and the guard alone", async () => {
+    for (const [name, value] of Object.entries(RUNNER)) vi.stubEnv(name, value)
+    dir = mkdtempSync(join(tmpdir(), 'tier-b-plugin-'))
+    const root = realpathSync(dir)
+    const said = join(root, 'cli-env.json')
+    const preload = join(root, 'cli-env.cjs')
+    // The CLI notes that it ran and ends, before it does anything; the plugin's own Node, with no EVAL_CLI_ENV, goes on.
+    writeFileSync(preload, "if (process.env.EVAL_CLI_ENV) { require('node:fs').writeFileSync(process.env.EVAL_CLI_ENV, '{}'); process.exit(0) }\n")
+    const home = join(root, 'home')
+    mkdirSync(home)
+    const guard = join(root, 'net-guard.jsonl')
+    // The daemon's environment as the eval makes it (harness/appEvalDriver.ts openRig): the guard ahead of its preloads.
+    const d = { root, env: daemonEnvironment(process.env, { HOME: home, PATH: '/usr/bin:/bin', EVAL_CLI_ENV: said, ...netGuardEnv(guard, `--require ${preload}`) }) }
+    const children: ChildProcess[] = []
+    const loop = orca.startOrcaPlugin(d, children)
+    try {
+      await until('the plugin to run the CLI through its shim', () => existsSync(said), 30_000, 50)
+      const pid = children[0]!.pid!
+      expect(readNetGuard(guard).loaded).toContainEqual({ pid, process: 'node' })
+      // Its names first: a leak's values are secrets.
+      const started = orca.startedWith(pid)
+      expect(started.map((entry) => entry.slice(0, entry.indexOf('='))).sort()).toEqual(['HOME', NET_GUARD_FILE_ENV, 'NODE_OPTIONS', 'PATH'].sort())
+      expect(started).toEqual(expect.arrayContaining([`HOME=${home}`, `${NET_GUARD_FILE_ENV}=${guard}`, 'PATH=/usr/bin:/bin']))
+      // macOS's ps splits a value at its spaces: the guard's preload is its first word.
+      expect(started.find((entry) => entry.startsWith('NODE_OPTIONS='))?.split(' ')[0]).toBe(`NODE_OPTIONS=${netGuardEnv(guard).NODE_OPTIONS}`)
     } finally {
       await loop.stop()
       for (const child of children) child.kill('SIGKILL')
