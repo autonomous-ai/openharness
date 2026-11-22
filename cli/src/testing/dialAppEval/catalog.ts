@@ -3,6 +3,7 @@
  * Every session is made up: titles start with "Eval ", folders with /work/eval-, ids are fixed UUIDs.
  */
 import { heldOut } from './heldOut.js'
+import { vscodeScenarios } from './vscodeScenarios.js'
 import type { App, Check, Editor, Platform, Scenario, SessionDef, SessionKey, Step, Tier } from './types.js'
 
 const EVERY_PLATFORM: Platform[] = ['darwin', 'win32', 'linux']
@@ -413,6 +414,7 @@ export const MAIN: Scenario[] = [
     ],
     probes: [{ id: 'focus', kind: 'focus', dim: 'D2', session: 'z', after: 'last' }],
   }),
+  ...vscodeScenarios(),
 ]
 
 export const HELD_OUT: Scenario[] = heldOut()
