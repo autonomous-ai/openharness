@@ -59,6 +59,8 @@ interface State {
   opens: Map<string, number>
   /** What each editor's quit ended, for its relaunch. */
   quit: Map<App, { sessions: SessionKey[]; windows: Array<[string, Look]> }>
+  /** Each Codex home of a session's own (ownHome), by its session. */
+  homes: Map<SessionKey, string>
 }
 const states = new WeakMap<TierBWorld, State>()
 
@@ -121,7 +123,7 @@ function editorOf(world: TierBWorld): State {
   const known = states.get(world)
   if (known) return known
   const state: State = { shells: new Map(), running: [], codex: new Map(), cursor: new Map(), tmux: new Map(), windows: new Map(),
-    opens: new Map(), quit: new Map() }
+    opens: new Map(), quit: new Map(), homes: new Map() }
   states.set(world, state)
   // Only the editor's lifetime: what it does is in this file.
   const child = spawn(process.execPath, ['-e', 'process.stdin.resume()'], { cwd: world.d.root, env: world.d.env, stdio: ['pipe', 'ignore', 'ignore'] })
@@ -153,12 +155,15 @@ const keyOfShell = (state: State, pid: number): SessionKey | undefined => [...st
 
 /**
  * A Codex home of the session's own, in the root and not the daemon's CODEX_HOME, with Harness's hooks in it as the daemon
- * installs them in a moved home it knows of: its hooks reach the devices as tier A's do. A new one each start, so no
- * rollout of an earlier scenario is in it.
+ * installs them in a moved home it knows of: its hooks reach the devices as tier A's do. One a session in a world, made
+ * at its first start: a relaunched Codex goes on in its home, and no rollout of an earlier scenario is in it.
  */
-function ownHome(world: TierBWorld): string {
+function ownHome(world: TierBWorld, state: State, key: SessionKey): string {
+  const known = state.homes.get(key)
+  if (known) return known
   const home = mkdtempSync(join(world.d.root, 'codex-home-'))
   copyFileSync(join(world.d.env.CODEX_HOME!, 'hooks.json'), join(home, 'hooks.json'))
+  state.homes.set(key, home)
   return home
 }
 
@@ -166,7 +171,7 @@ function ownHome(world: TierBWorld): string {
 async function startCodex(world: TierBWorld, state: State, s: SessionDef, folder: string): Promise<number | undefined> {
   const codex = await CodexOutside.inTab(world.d, folder, world.children, editorHints(world, s),
     { app: s.app as Editor, launchedFrom: world.scenario.world?.launchedFrom },
-    { sessionId: s.id, ...(s.codexHome === 'own' ? { home: ownHome(world) } : {}) })
+    { sessionId: s.id, ...(s.codexHome === 'own' ? { home: ownHome(world, state, s.key) } : {}) })
   state.codex.set(s.key, codex)
   await codex.hook('SessionStart', { source: 'startup' })
   return codex.shellPid
