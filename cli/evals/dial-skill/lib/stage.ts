@@ -197,14 +197,27 @@ function insideGit(dir: string, env: NodeJS.ProcessEnv): boolean {
   }
 }
 
-/** Never the real dial: it records the call and answers as a dial that showed the line. */
+// src/devices/notice.ts's NOTICE_USAGE, word for word: importing it would load the CLI's config into the runner.
+const NOTICE_USAGE = 'harness device notify "<question>" [--suggest "<recommendation>"] [--waiting|--proceeding] [--json]  for an agent: ring the dial when it needs the person to decide or act'
+
+/** Never the real dial: it records the call and answers as a dial that showed the line. A notify with no question
+ *  answers as the CLI does: parseNotice's words left after the flags, cleaned as composeNotice cleans them (the fake runs
+ *  under plain node, which cannot load dialNotice.ts). */
 function fakeHarness(recFile: string): string {
   return `#!${process.execPath}
 const { appendFileSync } = require('node:fs')
 const argv = process.argv.slice(2)
 const notify = argv[0] === 'device' && argv[1] === 'notify'
 appendFileSync(${JSON.stringify(recFile)}, JSON.stringify({ argv }) + '\\n')
-if (notify) {
+const question = []
+for (let i = 2; i < argv.length; i++) {
+  if (argv[i] === '--suggest') i++
+  else if (!['--waiting', '--proceeding', '--json'].includes(argv[i])) question.push(argv[i])
+}
+if (notify && question.join(' ').replace(/[\\p{Cc}\\s]+/gu, ' ').trim() === '') {
+  console.error(${JSON.stringify(NOTICE_USAGE)})
+  process.exitCode = 1
+} else if (notify) {
   console.log('shown')
 } else {
   console.error('harness: not available here')
