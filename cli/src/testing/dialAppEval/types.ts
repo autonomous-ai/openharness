@@ -22,6 +22,10 @@ export const EDITORS: readonly Editor[] = ['vscode', 'cursor']
 export const PAGE: Readonly<Record<App, string>> = { claude: 'claude', chatgpt: 'codex', vscode: 'vscode', cursor: 'cursor', orca: 'orca' }
 /** The maker of a held Orca pane's terminal, in both tiers: a program that is not Orca's terminal host. */
 export const HELD_MAKER = 'eval-terminal'
+/** How long after a switch Orca tells the focus it moved, in both tiers: inside the devices' 2 s echo window
+ *  (services/devices.ts TAB_ECHO_MS), and after a turn of the dial a second past the switch, which its echo could
+ *  bounce (O4). */
+export const ORCA_ECHO_MS = 1_500
 /**
  * The app in front as each OS names it, as Harness Device tells it: a bundle id on macOS, the window's process on Linux,
  * its program on Windows; `other` is an app the dial follows none of. Orca's are its own names on each (its bundle id,

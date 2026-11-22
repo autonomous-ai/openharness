@@ -1,13 +1,14 @@
 /**
  * The `orca` an end-to-end daemon finds first on its PATH, and on Linux its `orca-ide`, the same file, in place of the
  * stub that exits 1 (harness/daemon.ts): it notes every run, prints a layout and a focus watch a test tells it, echoes
- * on that watch each switch it takes, as Orca does, answers `terminal --help` as Orca 1.4.256 does, or as an Orca with
- * `watch-focus`, takes every `worktree activate`, and lists the accounts a test tells it. The real Orca never runs:
- * every session here runs inside it.
+ * on that watch each switch it takes a moment later, as Orca does, answers `terminal --help` as Orca 1.4.256 does, or
+ * as an Orca with `watch-focus`, takes every `worktree activate`, and lists the accounts a test tells it. The real Orca
+ * never runs: every session here runs inside it.
  */
 import { spawnSync } from 'node:child_process'
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { ORCA_ECHO_MS } from '../../src/testing/dialAppEval/types.js'
 import type { IsolatedDaemon } from './daemon.js'
 
 /** A tab's panes, first to last: one handle is a leaf, more are pane splits (`first`, then `second`). With no title of
@@ -44,7 +45,8 @@ const HELP_WATCH = HELP.replace(
 // character, cable/hosts/orca.ts). Renamed into place, so it is read whole; its time is its mtime.
 // `exec tail` makes the daemon's child the `tail` itself, so its SIGTERM ends it; `-n 1` prints the last line told before
 // the watch started, as Orca prints the focus of that moment first. A switch Orca takes moves its focus: one that exits 0
-// is told on every watch at once.
+// is told on every watch ORCA_ECHO_MS later, as tier A's Orca tells it, by a job of its own that holds none of the
+// run's output, so the switch itself returns at once.
 const script = (dir: string, watchFocus: boolean): string => `#!/bin/sh
 note() {
   file=$(mktemp '${dir}/log/.XXXXXX')
@@ -64,7 +66,7 @@ ${watchFocus ? `  'terminal watch-focus') note 0 "\${0##*/}" "$@"; exec tail -n 
     if [ "$code $2" = '0 switch' ]; then
       handle= prev=
       for arg in "$@"; do [ "$prev" = --terminal ] && handle=$arg; prev=$arg; done
-      printf '{"handle":"%s"}\\n' "$handle" >> '${dir}/focus'
+      ( sleep ${ORCA_ECHO_MS / 1000}; printf '{"handle":"%s"}\\n' "$handle" >> '${dir}/focus' ) </dev/null >/dev/null 2>&1 &
     fi ;;
 esac
 note "$code" "\${0##*/}" "$@"

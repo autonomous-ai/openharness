@@ -16,13 +16,11 @@ import type { OrcaHomes } from '../../../../devices/orcaHomes.js'
 import { REFUSED, type ListenerStream, type ListenerStreamHandler, type StreamEnd } from '../../../../services/devicesListener.js'
 import { flagOf, ORCA_PROGRAMS, programOf } from '../../argv.js'
 import { orcaLayout, orcaListing } from '../../orcaListing.js'
-import { engineOf, type StepOf } from '../../types.js'
+import { engineOf, ORCA_ECHO_MS, type StepOf } from '../../types.js'
 import type { StepHandler, TierAWorld } from '../world.js'
 import { codexHomeOf, dropSession, orcaHandleOf } from './sessions.js'
 import { handlerOf, tell } from './window.js'
 
-/** How long Orca takes to tell the focus of a pane a switch showed (the plan's Decision 7). */
-const ECHO_MS = 100
 /** `orca terminal --help`'s Commands list, the part the devices read (cable/hosts/orca.ts listsWatchFocus). */
 const help = (watches: boolean): string => ['Commands:', '  list', '  switch', '  send', ...(watches ? ['  watch-focus'] : []), ''].join('\n')
 
@@ -74,7 +72,7 @@ function tellFocus(world: TierAWorld, handle: string): void {
 }
 
 /** The world's rules for Orca's commands: each is answered as Orca 1.4.256 does, from the scenario's model of it. A
- *  switch Orca made is echoed on each running watch a moment later, as Orca tells the focus it moved. */
+ *  switch Orca made is echoed on each running watch ORCA_ECHO_MS later, as Orca tells the focus it moved. */
 export function answerOrca(world: TierAWorld): void {
   world.answer((argv) => {
     if (!ORCA_PROGRAMS.includes(programOf(argv))) return undefined
@@ -90,7 +88,7 @@ export function answerOrca(world: TierAWorld): void {
       }
       case 'terminal switch': {
         const handle = flagOf(argv, '--terminal')
-        if (handle !== undefined) setTimeout(() => tellFocus(world, handle), ECHO_MS)
+        if (handle !== undefined) setTimeout(() => tellFocus(world, handle), ORCA_ECHO_MS)
         return { code: 0 }
       }
       case 'worktree activate':

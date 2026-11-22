@@ -90,11 +90,15 @@ export function orcaScenarios(): Scenario[] {
         { label: 'focus', kind: 'orca.focus', session: 'b' },
         { kind: 'wait', ms: 2 * S },
         { label: 'tap', kind: 'tap', session: 'a' },
+        // The person turns to b before Orca tells the tap's focus (ORCA_ECHO_MS): that echo, of a, must not pull the
+        // dial back.
+        { kind: 'wait', ms: 1 * S },
+        { label: 'swipe', kind: 'swipe', session: 'b' },
         { kind: 'wait', ms: 3 * S },
       ],
       checks: [
         { id: 'focus', kind: 'focus', dim: 'D2', session: 'b', after: 'focus', at: 'tap' },
-        { id: 'echo', kind: 'focus', dim: 'D2', session: 'a', after: 'tap', noBounce: true },
+        { id: 'echo', kind: 'focus', dim: 'D2', session: 'b', after: 'swipe', noBounce: true },
       ],
       probes: [{ id: 'focus', kind: 'focus', dim: 'D2', session: 'z', after: 'focus' }],
     }),
