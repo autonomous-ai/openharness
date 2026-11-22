@@ -1122,6 +1122,8 @@ describe('Claude Code while Harness runs a Claude agent of its own (docs/plans/2
   /** The plugin uninstalled through /plugin: its entry gone, which says nothing of the person's wish. */
   const pluginGone = (claudeHome: string): void =>
     writeFileSync(join(claudeHome, 'settings.json'), JSON.stringify({ enabledPlugins: {} }))
+  /** The open scan's interval (services/devices.ts OPEN_SCAN_MS): how long a none must hold before it is acted on. */
+  const SCAN_MS = 60_000
 
   it('Claude Code on with its plugin not on while Harness lists a Claude agent of its own', () => {
     const r = rig()
@@ -1133,15 +1135,67 @@ describe('Claude Code while Harness runs a Claude agent of its own (docs/plans/2
     expect(readSetup(r.dataDir).homes.claude).toEqual([skillsOf(r.claudeHome)])
   })
 
-  it('the last Harness Claude agent gone with the plugin not on takes our skill at the next scan', () => {
+  it('the last Harness Claude agent gone with the plugin not on takes our skill once none has held a scan\'s minute', () => {
+    // A core restarting lists none of its agents until it has restored them: acted on at once, that none would take
+    // the skill out of every Claude Code home.
     const r = rig()
     r.agents.now = 'listed'
     r.writer.started()
     expect(hasSkill(r.claudeHome)).toBe(true)
 
+    // Two passes back to back, as a moment runs them, and a scan within the minute keep it.
     r.agents.now = 'none'
     r.writer.scanned([])
+    r.writer.scanned([])
+    r.clock.at += SCAN_MS - 1
+    r.writer.scanned([])
+    expect(hasSkill(r.claudeHome)).toBe(true)
+    expect(readSetup(r.dataDir).homes.claude).toEqual([skillsOf(r.claudeHome)])
 
+    r.clock.at += 1
+    r.writer.scanned([])
+    expect(existsSync(skillFile(r.claudeHome))).toBe(false)
+    expect(readSetup(r.dataDir).homes.claude).toEqual([])
+  })
+
+  it('a Claude agent listed again within the minute starts the wait over', () => {
+    const r = rig()
+    r.agents.now = 'listed'
+    r.writer.started()
+    r.agents.now = 'none'
+    r.writer.scanned([])
+    r.clock.at += SCAN_MS / 2
+    r.agents.now = 'listed'
+    r.writer.scanned([])
+
+    r.clock.at += SCAN_MS / 2
+    r.agents.now = 'none'
+    r.writer.scanned([])
+    expect(hasSkill(r.claudeHome)).toBe(true)
+
+    r.clock.at += SCAN_MS
+    r.writer.scanned([])
+    expect(existsSync(skillFile(r.claudeHome))).toBe(false)
+  })
+
+  it('none right after not known leaves everything as it is until it has held a scan\'s minute', () => {
+    // A devices start beside a core restoring its agents, with the plugin not on: its first view lists none of them yet.
+    const r = rig()
+    const skills = skillsAt(r.claudeHome)
+    oldSkillIn(skills)
+    dialOnce(r.dataDir, { claude: [skills], codex: [] })
+    r.agents.now = 'unknown'
+    r.writer.started()
+
+    r.agents.now = 'none'
+    r.writer.scanned([])
+    r.writer.scanned([])
+
+    expect(existsSync(skillFile(r.claudeHome)) && readFileSync(skillFile(r.claudeHome), 'utf8')).toBe(OLD_SKILL)
+    expect(readSetup(r.dataDir).homes.claude).toEqual([skills])
+
+    r.clock.at += SCAN_MS
+    r.writer.scanned([])
     expect(existsSync(skillFile(r.claudeHome))).toBe(false)
     expect(readSetup(r.dataDir).homes.claude).toEqual([])
   })
