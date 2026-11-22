@@ -278,22 +278,28 @@ function killTmux(world: TierBWorld, name: string): void {
   spawnSync('tmux', ['-S', world.d.tmux.socket, '-f', '/dev/null', 'kill-session', '-t', name], { env: world.d.tmux.env, timeout: KILL_MS })
 }
 
+/** The hints Orca hands the session's hooks at that launch (the plan's Decision 4): its pane's handle unless they name
+ *  none (OH4's elimination), macOS's bundle id, and its tmux session's own. */
+export function orcaHints(s: SessionDef, launch: number, platform: NodeJS.Platform, tmux: Record<string, string> = {}): Record<string, string> {
+  const handle = hookHandle(s, launch)
+  return {
+    ...(handle === undefined ? {} : { ORCA_TERMINAL_HANDLE: handle }),
+    ...(platform === 'darwin' ? { __CFBundleIdentifier: APP_BUNDLES.orca } : {}),
+    ...tmux,
+  }
+}
+
 /**
  * The session's agent starts in its pane: the pane opens on its handle at this launch (in Orca's list first, as Orca makes
- * the terminal its agent starts in), then its start hook, then for Claude Code the mod's poll. Its hooks' hints are Orca's
- * (the plan's Decision 4): its pane's handle unless they name none, macOS's bundle id, and a tmux session's own.
+ * the terminal its agent starts in), then its start hook, then for Claude Code the mod's poll, its hooks' hints Orca's
+ * (orcaHints).
  */
 async function startAgent(world: TierBWorld, state: State, key: SessionKey): Promise<void> {
   if (state.live.has(key)) throw new Error(`scenario ${world.scenario.id}: ${key} is running already`)
   const s = world.session(key)
   const launch = state.launches.get(key) ?? 0
-  const handle = hookHandle(s, launch)
   const tmux = s.tmux ? await personsTmux(world, s) : undefined
-  const hints = {
-    ...(handle === undefined ? {} : { ORCA_TERMINAL_HANDLE: handle }),
-    ...(world.platform === 'darwin' ? { __CFBundleIdentifier: APP_BUNDLES.orca } : {}),
-    ...tmux?.hints,
-  }
+  const hints = orcaHints(s, launch, world.platform, tmux?.hints)
   const home = engineOf(s) === 'codex' && s.codexHome === 'own' ? ownHome(world, key) : undefined
   const agent = await OrcaAgent.start(world.d, world.children, s, hints, home)
   const live: Live = { agent, ...(tmux ? { tmux: tmux.name } : {}) }

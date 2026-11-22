@@ -5,14 +5,16 @@
  * and reported apart, never in the headline score.
  *
  * The editors' held-out scenarios (docs/plans/2026-11-22-dial-eval-vscode-cursor-design.md, "Held-out set") run on the
- * editors' steps (harness/appEvalEditor.ts), as their main ones do.
+ * editors' steps (harness/appEvalEditor.ts), as their main ones do, and Orca's
+ * (docs/plans/2026-11-22-dial-eval-orca-design.md, "Held-out set") on Orca's (harness/appEvalOrca.ts), OH2 on macOS
+ * alone (its gap names why).
  *
- * macOS and Linux. Every daemon has a throwaway home; its open, its home, the apps' stores and VS Code's and Cursor's
- * CLIs are checked inside its root before it starts, the harness's recording `open` (HARNESS_OPEN_BIN) and the fake
- * backend only. The real Claude and ChatGPT apps, VS Code, Cursor, cursor-agent, their stores and CLIs, `/usr/bin/open`,
- * `~/.claude`, `~/.codex`, `~/.vscode`, `~/.cursor` and this computer's daemon are never touched. The network guard runs
- * in this process and in every process of each daemon: a connection to anything but this machine fails the scenario, by
- * host and port.
+ * macOS and Linux. Every daemon has a throwaway home; its open, its home, the apps' stores and VS Code's, Cursor's and
+ * Orca's CLIs are checked inside its root before it starts, the harness's recording `open` (HARNESS_OPEN_BIN) and the
+ * fake backend only. The real Claude and ChatGPT apps, VS Code, Cursor, cursor-agent, Orca, their stores and CLIs,
+ * `/usr/bin/open`, `~/.claude`, `~/.codex`, `~/.vscode`, `~/.cursor` and this computer's daemon are never touched. The
+ * network guard runs in this process and in every process of each daemon: a connection to anything but this machine
+ * fails the scenario, by host and port.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { scenariosFor } from '../src/testing/dialAppEval/catalog.js'
@@ -23,6 +25,7 @@ import { chatgptSteps } from './harness/appEvalChatgpt.js'
 import { claudeSteps } from './harness/appEvalClaude.js'
 import { inside, orcaCliInside, TierBDriver } from './harness/appEvalDriver.js'
 import { cursorSteps, vscodeSteps } from './harness/appEvalEditor.js'
+import { orcaSteps } from './harness/appEvalOrca.js'
 
 const WIN32 = process.platform === 'win32'
 const HOST = process.platform as Platform
@@ -31,7 +34,7 @@ const SCENARIOS = WIN32 ? [] : scenariosFor('b', HOST).filter((s) => s.heldOut)
 describe.skipIf(WIN32)('the dial eval, tier B: the held-out set', () => {
   let driver: TierBDriver
   const runs: ScenarioRun[] = []
-  beforeAll(() => { driver = new TierBDriver({ claude: claudeSteps, chatgpt: chatgptSteps, vscode: vscodeSteps, cursor: cursorSteps }) })
+  beforeAll(() => { driver = new TierBDriver({ claude: claudeSteps, chatgpt: chatgptSteps, vscode: vscodeSteps, cursor: cursorSteps, orca: orcaSteps }) })
   afterAll(async () => {
     if (process.env.DIAL_EVAL_OUT) writeResults(process.env.DIAL_EVAL_OUT, 'heldOut', collect(runs))
     // It throws naming each attempt off this machine not asserted on yet, the last daemon's as it closed among them.
