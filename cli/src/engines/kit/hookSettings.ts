@@ -91,7 +91,9 @@ async function installMessagesBlock(engine: HookEngine, settings: HookSettings, 
   const inboxCommand = messagesCommand(root)
   const { inbox, allow } = settings
   let blockChanged = inbox !== undefined
-  try {
+  // The settings file only for what goes in it: on Windows Codex has no Messages block and its allowance is a file of
+  // its own, so its hooks.json and review records stay as the hooks' own write left them.
+  if (inbox || (allow && 'list' in allow)) try {
     verifyRequired()
     const observed = inspectHookFile(file)
     const current = (observed.content === null ? {} : JSON.parse(observed.content)) as Settings
