@@ -11,7 +11,7 @@
  */
 import { isAbsolute } from 'node:path'
 import type { HostAdapter, Pane } from './adapter.js'
-import { APP_BUNDLES, HARNESS_BUNDLE, inCmux, inHerdr } from './hostDetect.js'
+import { APP_BUNDLES, BUNDLE_APPS, HARNESS_BUNDLE, inCmux, inHerdr } from './hostDetect.js'
 import type { LinuxRaise } from './linuxRaise.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 import type { WindowsRaise } from './windowsRaise.js'
@@ -103,8 +103,8 @@ export function createOpenActions(deps: OpenDeps): {
   const windowFor = (agentId: string, target: OpenTarget): { pid?: number; app?: string } | undefined => {
     const window = deps.windowOf?.(agentId)
     if (window) return window
-    const app = Object.keys(APP_BUNDLES).find((id) => APP_BUNDLES[id] === target.bundle)
-    return app ? { app } : undefined
+    const bundle = target.bundle
+    return bundle !== undefined && Object.hasOwn(BUNDLE_APPS, bundle) ? { app: BUNDLE_APPS[bundle] } : undefined
   }
   // On Linux the agent's window, by its process or its app's class: the app the raise is handed (raiseWindow), as GNOME
   // raises by class alone.

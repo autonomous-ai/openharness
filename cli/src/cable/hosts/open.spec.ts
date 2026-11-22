@@ -524,7 +524,8 @@ describe('a tap on Linux on an app\'s row with no process', () => {
     }
     expect(ran).toEqual([lookup(row.scheme)])
     expect(targets).toEqual([{ pids: [], classes: row.classes }, { pids: [], classes: row.classes }])
-    for (const line of logs) expect(line).not.toContain(row.id)
+    // Only the first tap reached the link, so only it says the fallback.
+    expect(logs).toEqual([`[device] open · ${row.app} · fallback`])
   })
 })
 
