@@ -262,9 +262,10 @@ describe('stage', () => {
     }])
   })
 
-  it('answers a notify with flags and no question as the CLI does, with its usage and exit 1, and reads it as no line', () => {
+  it('answers a notify with flags and no question, or only --help or -h, as the CLI does, with its usage and exit 1, and reads it as no line', () => {
     const st = staging('claude', { skill: true })
-    const asks = [['--waiting'], ['--suggest', 'Postgres', '--proceeding', '--json'], [' \n ', '--suggest']]
+    const asks = [['--waiting'], ['--suggest', 'Postgres', '--proceeding', '--json'], [' \n ', '--suggest'], ['--help'],
+      ['-h', '--json']]
     // The CLI's own usage, word for word: the eval cannot import it, as src/devices/notice.ts reaches the CLI's config.
     const usage = readFileSync(join(OPENHARNESS, 'cli', 'src', 'devices', 'notice.ts'), 'utf8').match(/^export const NOTICE_USAGE = '(.+)'$/m)?.[1]
     expect(usage).toBeTruthy()
