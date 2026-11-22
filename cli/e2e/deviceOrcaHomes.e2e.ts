@@ -242,7 +242,7 @@ describe('Orca\'s account homes on the dial', () => {
     if (process.platform === 'darwin') {
       const skill = join(home, 'skills', 'dial', 'SKILL.md')
       await until('the skill in the Orca Codex home', () => existsSync(skill), 45_000, 100)
-      expect(orca!.asked()).toContain('account list --json')
+      expect(orca!.log().map((run) => run.argv.slice(1).join(' '))).toContain('account list --json')
     } else {
       await until('Orca not found', () => d.log().includes('[observed] orca homes · not read · no orca'), 45_000, 100)
     }

@@ -66,7 +66,10 @@ describe('the dial and the apps follow each other', () => {
     await d.start()
     const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a', capabilities)
     await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
-    return { d, dial, runs: () => orca.runs(), refuse: () => orca.refuse() }
+    // Its `terminal switch` and `terminal send` runs, each its arguments and time.
+    const runs = () => orca.log().filter(({ argv }) => argv[1] === 'terminal' && ['switch', 'send'].includes(argv[2]!))
+      .map(({ argv, at }) => ({ args: argv.slice(1).join(' '), at }))
+    return { d, dial, runs, refuse: () => orca.refuse() }
   }
 
   /** A session in an Orca terminal of its own, with Orca's bundle id as an app's terminal inherits it. */

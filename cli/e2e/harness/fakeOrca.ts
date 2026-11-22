@@ -10,7 +10,6 @@ import { appendFileSync, mkdirSync, readdirSync, readFileSync, realpathSync, ren
 import { dirname, join } from 'node:path'
 import type { IsolatedDaemon } from './daemon.js'
 
-export interface OrcaRun { args: string; at: number }
 /** A tab's panes, first to last: one handle is a leaf, more are pane splits (`first`, then `second`). With no title of
  *  its own a tab is titled `made up`. */
 export type FakeTab = string[] | { title: string; panes: string[] }
@@ -47,7 +46,6 @@ const HELP_WATCH = HELP.replace(
 // the watch started, as Orca prints the focus of that moment first. A switch Orca takes moves its focus: one that exits 0
 // is told on every watch at once.
 const script = (dir: string, watchFocus: boolean): string => `#!/bin/sh
-printf '%s\\n' "$*" >> '${dir}/asked'
 note() {
   file=$(mktemp '${dir}/log/.XXXXXX')
   printf '%s\\n' "$@" > "$file"
@@ -62,7 +60,6 @@ ${watchFocus ? HELP_WATCH : HELP}HELP
 ${watchFocus ? `  'terminal watch-focus') note 0 "\${0##*/}" "$@"; exec tail -n 1 -f '${dir}/focus' ;;\n` : ''}  'worktree activate') code=0 ;;
   'account list') cat '${dir}/accounts.json' 2>/dev/null && code=0 ;;
   'terminal switch'|'terminal send')
-    printf '%s' "$*" > "$(mktemp '${dir}/runs/run.XXXXXX')"
     code=$(cat '${dir}/exit' 2>/dev/null); code=\${code:-0}
     if [ "$code $2" = '0 switch' ]; then
       handle= prev=
@@ -89,8 +86,7 @@ export class FakeOrca {
     // The daemon's own `bin` (beside its fake engines): a daemon `beside` another shares that one's root, not its bin.
     const bin = dirname(d.env.CLAUDE_PATH!)
     const dir = join(dirname(bin), 'orca')
-    mkdirSync(join(dir, 'runs'), { recursive: true })
-    mkdirSync(join(dir, 'log'))
+    mkdirSync(join(dir, 'log'), { recursive: true })
     writeFileSync(join(dir, 'focus'), '')
     // Bin's link names the launcher in Orca's install the harness made, which is the Orca app's own too
     // (harness/daemon.ts): an `orca` anywhere else is not Orca's, and the daemon would run the app's, the stub.
@@ -121,22 +117,6 @@ export class FakeOrca {
       const [exit, ...argv] = readFileSync(path, 'utf8').split('\n').slice(0, -1)
       return { argv, ok: exit === '0', at: statSync(path).mtimeMs }
     }).sort((a, b) => a.at - b.at)
-  }
-
-  /** The `terminal switch` and `terminal send` runs. */
-  runs(): OrcaRun[] {
-    const runs = join(this.dir, 'runs')
-    return readdirSync(runs).map((name) => {
-      const path = join(runs, name)
-      return { args: readFileSync(path, 'utf8'), at: statSync(path).mtimeMs }
-    })
-  }
-
-  /** Every run's arguments, the reads' too, in the order they started. */
-  asked(): string[] {
-    let text: string
-    try { text = readFileSync(join(this.dir, 'asked'), 'utf8') } catch { return [] }
-    return text.split('\n').slice(0, -1)
   }
 
   /** `terminal switch` and `terminal send` exit 1 from now on. */
