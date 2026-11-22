@@ -81,10 +81,21 @@ describe("tier B's recording Cursor CLI", () => {
     expect(driver.cliRuns(runs)).toEqual([])
     driver.writeRecordingCli(path, runs)
     expect(spawnSync(path, ['/work/eval-alpha']).status).toBe(0)
-    expect(spawnSync(path, ['--list-extensions']).status).toBe(0)
+    expect(spawnSync(path, ['/work/eval-beta']).status).toBe(0)
     expect(driver.cliRuns(runs)).toEqual([
-      { argv: ['cursor', '/work/eval-alpha'], ok: true }, { argv: ['cursor', '--list-extensions'], ok: true },
+      { argv: ['cursor', '/work/eval-alpha'], ok: true }, { argv: ['cursor', '/work/eval-beta'], ok: true },
     ])
+  })
+
+  it("leaves out the extension setup's runs: they open no folder", () => {
+    dir = mkdtempSync(join(tmpdir(), 'tier-b-cursor-'))
+    const path = join(dir, 'cursor', 'cursor')
+    const runs = join(dir, 'cursor-runs.log')
+    driver.writeRecordingCli(path, runs)
+    expect(spawnSync(path, ['--install-extension', '/tmp/harness-device.vsix', '--force']).status).toBe(0)
+    expect(spawnSync(path, ['/work/eval-alpha']).status).toBe(0)
+    expect(spawnSync(path, ['--uninstall-extension', 'autonomous.harness-device']).status).toBe(0)
+    expect(driver.cliRuns(runs)).toEqual([{ argv: ['cursor', '/work/eval-alpha'], ok: true }])
   })
 })
 
