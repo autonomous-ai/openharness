@@ -240,7 +240,8 @@ DEPENDS = {
                 "provider/reference-provider/", "tests/fixtures/"),
     "cli": ("backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts", "desktop/",
             "cli/e2e/harness/", "devices/harness-device/firmware/main/ui/habitat/focus_faces.c",
-            "devices/harness-device/firmware/test/vectors/", "docs/contracts/", "mobile/", "pty/", "store/", "tui/"),
+            "devices/harness-device/firmware/test/vectors/", "devices/harness-device/firmware/version.txt",
+            "docs/contracts/", "mobile/", "pty/", "store/", "tui/"),
     "companions": ("cli/", "docs/research/2026-09-30-memory-batch-extraction-cases.json",
                    "docs/research/2026-09-30-memory-extraction-cases.json"),
     # Its generators write (and its checks may compare) these outputs.
@@ -310,12 +311,14 @@ PR_READS = {
     # cli/scripts/connector-assets.mjs, which a spec imports, names the connector icons' desktop and phone copies it writes.
     # store/: the dsh specs read its agents, viewers and starter (the scan skips it: a path outside every component).
     # focus_faces.c: roundGlyphs.spec.ts holds the daemon's copy of the dial's glyph table to the firmware's.
+    # version.txt: the e2e fake dial greets with the round firmware's version (fakeDial.spec.ts).
     "cli": ("backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts",
             "cli/e2e/harness/", "desktop/assets/connector-icons/",
             "desktop/lib/connectors/connector_icons.dart", "desktop/lib/measurement/product_health_contract.dart",
             "desktop/test/viewer/deviceAck.vectors.json", "desktop/test/viewer/deviceHistory.vectors.json",
             "devices/harness-device/firmware/main/ui/habitat/focus_faces.c",
-            "devices/harness-device/firmware/test/vectors/", "docs/contracts/", "mobile/assets/connector-icons/",
+            "devices/harness-device/firmware/test/vectors/", "devices/harness-device/firmware/version.txt",
+            "docs/contracts/", "mobile/assets/connector-icons/",
             "mobile/lib/phone/connector_icons.dart", "mobile/test/viewer/deviceAck.vectors.json",
             "mobile/test/viewer/deviceHistory.vectors.json",
             "pty/", "store/", "tui/"),
