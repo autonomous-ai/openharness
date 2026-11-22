@@ -49,7 +49,7 @@ function fakeStream() {
 /** The windows, with a `ps` that answers only when the test says, from a table the test sets; settings that draw every
  *  folder fullscreen unless the test says otherwise; a foreground read that answers only when the test says; a clock the
  *  test moves; each timer kept, and whether it was cancelled, to be run by hand; and every line logged. */
-function harness(table: ReadonlyArray<readonly [number, number]> = TREE) {
+function harness(table: ReadonlyArray<readonly [number, number]> = TREE, platform: NodeJS.Platform = 'darwin') {
   let at = 0
   const reads: Array<{ resolve(rows: Array<{ pid: number; ppid: number; startMarker?: string }>): void; reject(error: Error): void }> = []
   const groupReads: Array<{ resolve(groups: ProcessGroups | undefined): void; reject(error: Error): void }> = []
@@ -66,6 +66,7 @@ function harness(table: ReadonlyArray<readonly [number, number]> = TREE) {
     focused,
     fullscreen,
     foreground,
+    platform,
     now: () => at,
     after: (ms, run) => {
       const timer = { ms, run, cancelled: false }
@@ -163,6 +164,8 @@ describe('VS Code\'s windows', () => {
       type: 'vscode-state', window: 'a'.repeat(36), terminals: Array.from({ length: 32 }, (_, i) => 2 ** 31 - 1 - i), active: 2 ** 31 - 1, focused: false,
     }
     expect(Buffer.byteLength(JSON.stringify(largest))).toBe(473)
+    // A window that says it types adds 13 bytes.
+    expect(Buffer.byteLength(JSON.stringify({ ...largest, types: true }))).toBe(486)
   })
 
   it.each<[string, Record<string, unknown>]>([
@@ -922,6 +925,60 @@ describe('VS Code\'s windows', () => {
       // The one ps read is the table that placed the agents.
       '[devices] vscode · in the last minute: 0 shows, 0 taps, 0 refused states, 1 ps reads, 0 failed, 0 scroll lines, 0 dropped, 1 page strokes, guard refused: 1 renderer, 1 asking, 1 background, 2 ps, 1 slow',
     ])
+  })
+})
+
+describe('a window that types', () => {
+  it('canType is true only for an agent whose terminal a window holds and whose latest state said "types":true', async () => {
+    const h = harness()
+    h.open(W1)
+    h.terminals.agents([900])
+    h.state(W1, [700])
+    await h.answer()
+    expect(h.terminals.terminalOf(900)).toStrictEqual({ window: W1, shell: 700 })
+    expect(h.terminals.canType(900)).toBe(false)
+    for (const types of [false, 'yes', 1]) {
+      h.state(W1, [700], { types })
+      expect(h.terminals.canType(900), String(types)).toBe(false)
+    }
+    h.state(W1, [700], { types: true })
+    expect(h.terminals.canType(900)).toBe(true)
+    // A later window listing the shell holds it, and it says nothing of typing.
+    h.open(W2)
+    h.state(W2, [700])
+    expect(h.terminals.canType(900)).toBe(false)
+    // An agent in no window.
+    expect(h.terminals.canType(910)).toBe(false)
+  })
+
+  it('a window\'s types changing tells changed once, as a change of its terminals', async () => {
+    const h = harness()
+    h.open(W1)
+    h.terminals.agents([900])
+    h.state(W1, [700])
+    await h.answer()
+    expect(h.changed).toHaveBeenCalledTimes(1)
+    h.state(W1, [700], { types: true })
+    expect(h.changed).toHaveBeenCalledTimes(2)
+    h.state(W1, [700], { types: true })
+    expect(h.changed).toHaveBeenCalledTimes(2)
+  })
+
+  // An older extension ends its stream on a line of 1 KiB, so a new stream under a reused id may be one that cannot type.
+  it('a reused window id\'s new stream starts not typing', async () => {
+    const h = harness()
+    const older = h.open(W1)
+    h.terminals.agents([900])
+    h.state(W1, [700], { types: true })
+    await h.answer()
+    expect(h.terminals.canType(900)).toBe(true)
+    h.open(W1)
+    older.end('replaced')
+    expect(h.terminals.canType(900)).toBe(false)
+    h.state(W1, [700])
+    expect(h.terminals.canType(900)).toBe(false)
+    h.state(W1, [700], { types: true })
+    expect(h.terminals.canType(900)).toBe(true)
   })
 })
 
