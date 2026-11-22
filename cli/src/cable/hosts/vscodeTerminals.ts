@@ -29,6 +29,10 @@
  * The foreground is the shell's tpgid, never the agent's own: under screen, script, asciinema or sudo's use_pty the
  * agent leads a pseudo-terminal of its own and is always in front there, while the VS Code terminal shows that program.
  * Never a name, an environment or arguments. Windows has no `ps` and no process groups: no stroke there carries keys.
+ *
+ * A window whose state says `"types":true` takes the dial's words for its terminals
+ * (docs/plans/2026-11-22-dial-vscode-cursor-voice-design.md). An older extension says nothing of it and ends its stream
+ * on a line of 1 KiB, which a words line can pass: the devices write words only where a window says it types.
  */
 import { isAbsolute } from 'node:path'
 import { REFUSED, type ListenerHandler, type ListenerStream, type ListenerStreamHandler } from '../../services/devicesListener.js'
@@ -42,7 +46,7 @@ export const VSCODE_TERMINALS = 32
 export const VSCODE_OPEN_MAX_BYTES = 96
 /** One a second on a connection: the extension opens it again after it ends, backing off, and a loop cannot churn it. */
 export const VSCODE_OPEN_PER_SECOND = 1
-/** 32 terminals of the largest pid make a state of 473 bytes. */
+/** 32 terminals of the largest pid make a state of 473 bytes, 486 with `"types":true`. */
 export const VSCODE_STATE_MAX_BYTES = 1024
 /** The extension sends at most 4 a second; twice that leaves room for a window's reload. */
 export const VSCODE_STATE_PER_SECOND = 8
@@ -116,6 +120,8 @@ export interface VscodeTerminals {
    *  when its settings say fullscreen and its process group is its VS Code terminal's foreground group. Every answer is
    *  counted in the minute's line. */
   pageKeys(agentPid: number, agent: PageAgent): false | Promise<boolean>
+  /** Whether the agent with that pid has a terminal now, in a window whose latest state said `"types":true`. */
+  canType(agentPid: number): boolean
 }
 
 export interface VscodeTerminalsDeps {
@@ -133,6 +139,8 @@ export interface VscodeTerminalsDeps {
    *  one before it, none too. `regained`: its window came into focus on the
    *  terminal it had, as it does when the dial's own tap brings the editor forward. */
   focused(agentPid: number | undefined, terminal: VscodeTerminal, at: number, regained: boolean): void
+  /** The OS the devices run on (devices.ts passes the apps' own), never read from `process`. */
+  platform: NodeJS.Platform
   /** Monotonic milliseconds. */
   now(): number
   after(ms: number, run: () => void): () => void
@@ -146,6 +154,8 @@ interface Window {
   /** Its latest state's active shell and whether the window was focused. */
   active?: number | null
   focused?: boolean
+  /** Whether its latest state said `"types":true`: false until its first state. */
+  types: boolean
   /** A show its stream has not taken yet: the latest wins. */
   show?: { shell: number; raise: boolean }
   /** Lines its stream has not taken yet, all for one shell: at most one page run and one plain run, in the order they
@@ -229,7 +239,8 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
     const answers = new Map<number, string>()
     for (const pid of listed) {
       const terminal = terminalOf(pid)
-      if (terminal) answers.set(pid, `${terminal.window} ${terminal.shell}`)
+      // A window's typing changing changes what the dial may do with its terminals, as a terminal moving does.
+      if (terminal) answers.set(pid, `${terminal.window} ${terminal.shell}${windows.get(terminal.window)!.types ? ' types' : ''}`)
     }
     const same = answers.size === told.size && [...answers].every(([pid, at]) => told.get(pid) === at)
     told = answers
@@ -343,7 +354,7 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
         open: (message, stream) => {
           const id = message.window as string
           // A reused id's newer stream starts with no state: its extension sends one as it opens.
-          const window: Window = { stream, scroll: [] }
+          const window: Window = { stream, types: false, scroll: [] }
           windows.set(id, window)
           reindex()
           deps.log(`[devices] vscode stream · open · windows ${windows.size}`)
@@ -363,7 +374,7 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
       'vscode-state': {
         maxBytes: VSCODE_STATE_MAX_BYTES,
         perSecond: VSCODE_STATE_PER_SECOND,
-        handle: ({ window: id, terminals, active, focused }) => {
+        handle: ({ window: id, terminals, active, focused, types }) => {
           if (!isWindowId(id) || !windows.has(id) || !isShells(terminals) || (active !== null && !terminals.includes(active as number))
             || typeof focused !== 'boolean') {
             count('refused')
@@ -377,6 +388,8 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
           window.shells = new Set(terminals)
           window.active = active as number | null
           window.focused = focused
+          // Anything but true is a window that does not type: no state is refused for it.
+          window.types = types === true
           // Moved last: of two windows that list one shell, this one now holds it.
           windows.delete(id)
           windows.set(id, window)
@@ -407,6 +420,10 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
       if (added) ask()
     },
     terminalOf,
+    canType: (agentPid) => {
+      const terminal = terminalOf(agentPid)
+      return terminal !== undefined && windows.get(terminal.window)!.types
+    },
     show: (terminal, tap) => {
       const window = windows.get(terminal.window)
       if (!window) return false

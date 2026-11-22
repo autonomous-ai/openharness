@@ -302,6 +302,7 @@ describe('the extension in a real, throwaway VS Code', () => {
       // No agent is listed, so no process table is read.
       processes: () => Promise.resolve([]),
       changed: () => {},
+      platform: process.platform,
       now: () => performance.now(),
       after: (ms, run) => {
         const timer = setTimeout(run, ms).unref()
