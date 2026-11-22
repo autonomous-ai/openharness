@@ -12,6 +12,7 @@ import type { HostAdapter, Outer, Pane, Place } from './adapter.js'
 import { CODEX_THREAD, type CodexQueue, type CodexQueueFailure, type CodexRan } from './codexQueue.js'
 import { agentPlaceName, APP_BUNDLES, detectApp, detectHost, UNKNOWN_APP } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
+import { answerEngine, type AnswerEngine } from './lastAnswer.js'
 import { bundleOf, type OpenTarget } from './open.js'
 import { MAX_TEXT } from './orca.js'
 import type { Nested, NestedLookup, NestedPlace, OuterLookup } from './outer.js'
@@ -96,7 +97,8 @@ export interface ObservedDeps {
   alive(pid: number): boolean
   openSessions: Pick<OpenSessions, 'owners' | 'busy'>
   sessionRows: Pick<SessionRows, 'find'>
-  lastAnswer(engine: string, path: string): Promise<string | undefined>
+  /** The last answer in a transcript (lastAnswer.ts), asked only for the engines answerEngine names. */
+  lastAnswer(engine: AnswerEngine, path: string): Promise<string | undefined>
   /** A transcript's last change (externals/support.ts fileStamp): one that grew while its agent waited was answered. */
   fileStamp: typeof fileStamp
   /** Folders whose sessions are Harness's own (its data folder), as the external sessions are given them: never observed. */
@@ -474,10 +476,11 @@ export class ObservedSource implements HostSource {
 
   /**
    * Claude Code's and Codex's idle is their turn state, as the scan and checkWorking read it. Nothing reads another
-   * engine's turn: it reads idle only as it was listed, before any hook told of a turn, so it is at its prompt only once a
-   * hook said its turn ended, done or errored. cursor-agent is also at its prompt from a heard session-start until a turn
-   * starts (docs/plans/2026-11-22-dial-vscode-cursor-voice-design.md, "cursor-agent's idle"): its turn under way stays
-   * busy, as its approval prompt sends no hook and a typed Enter would answer it. Unverified: that cursor-agent sends
+   * engine's turn for its state (the scan reads Cursor's for its answer alone): it reads idle only as it was listed,
+   * before any hook told of a turn, so it is at its prompt only once a hook said its turn ended, done or errored.
+   * cursor-agent is also at its prompt from a heard session-start until a turn starts
+   * (docs/plans/2026-11-22-dial-vscode-cursor-voice-design.md, "cursor-agent's idle"): its turn under way stays busy, as
+   * its approval prompt sends no hook and a typed Enter would answer it. Unverified: that cursor-agent sends
    * `sessionStart` as its screen opens rather than at its first submit; either way the turn-start after that submit
    * clears it.
    */
@@ -1108,10 +1111,11 @@ export class ObservedSource implements HostSource {
   }
 
   private async readAnswer(entry: Entry): Promise<void> {
-    if ((entry.agent.engine !== 'claude' && entry.agent.engine !== 'codex') || !entry.transcriptPath) return
+    const { engine } = entry.agent
+    if (!answerEngine(engine) || !entry.transcriptPath) return
     let text: string | undefined
     try {
-      text = await this.deps.lastAnswer(entry.agent.engine, entry.transcriptPath)
+      text = await this.deps.lastAnswer(engine, entry.transcriptPath)
     } catch (error) {
       // Its kind only, never its text: that can hold the transcript's path, and so the account's name.
       this.deps.log(`[observed] last answer · not read · ${errorKind(error)}`)
@@ -1159,7 +1163,7 @@ export class ObservedSource implements HostSource {
     const nests = table ? await this.nestsOf(pids, table) : new Map<number, Nested>()
     const records = await this.recordsOf(listing, owners)
     const busy = await this.busyOf(listing, owners)
-    const answers = await this.answersOf(listing, rows, busy)
+    const answers = await this.answersOf(listing, rows, busy, owners)
     let listed = 0
     let known = 0
     let named = 0
@@ -1324,19 +1328,23 @@ export class ObservedSource implements HostSource {
     return busy
   }
 
-  /** The last answer of each idle Claude Code or Codex session, by session id, with the Stop hook's reader, one at a time.
-   *  Harness's own session is not read: it is never listed. A read that fails gives none and logs nothing: its error can
-   *  hold a path. */
+  /** The last answer of each idle Claude Code, Codex or Cursor session, by session id, with the Stop hook's reader, one at
+   *  a time. Harness's own session is not read: it is never listed. A read that fails gives none and logs nothing: its
+   *  error can hold a path. */
   private async answersOf(
     listing: readonly [string, ExternalEngine][],
     rows: ReadonlyMap<string, { cwd?: string; transcriptPath?: string | null }>,
     busy: ReadonlySet<string>,
+    owners: ReadonlyMap<string, SessionOwner>,
   ): Promise<ReadonlyMap<string, string>> {
     const answers = new Map<string, string>()
     for (const [sessionId, engine] of listing) {
       const { cwd, transcriptPath } = rows.get(sessionId)!
-      if ((engine !== 'claude' && engine !== 'codex') || busy.has(sessionId) || !transcriptPath) continue
+      if (!answerEngine(engine) || busy.has(sessionId) || !transcriptPath) continue
       if (cwd && this.deps.excluded.some((dir) => within(dir, cwd))) continue
+      // Cursor's turn is read for its answer alone: one under way holds that turn's words so far, no answer, and its state
+      // stays as listed (idleKnown). One that cannot be told counts as under way, as busyOf counts it.
+      if (engine === 'cursor' && await this.deps.openSessions.busy(owners.get(sessionId)!).catch(() => true)) continue
       const answer = await this.deps.lastAnswer(engine, transcriptPath).catch(() => undefined)
       if (answer) answers.set(sessionId, answer)
     }

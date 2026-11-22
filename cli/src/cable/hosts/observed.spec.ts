@@ -209,10 +209,19 @@ describe('ObservedSource states', () => {
     expect(logs).toEqual(['[observed] last answer · not read · Error'])
   })
 
+  it('turn-stop for cursor sets lastAnswer and unseenDone', async () => {
+    const lastAnswer = vi.fn(async (_engine: string, _path: string): Promise<string | undefined> => 'Renamed it.')
+    const { src, ev } = setup({ lastAnswer })
+    src.ingest(ev('turn-stop', { engine: 'cursor', transcriptPath: '/t/s.jsonl' }))
+    await graced()
+    expect(lastAnswer.mock.calls).toEqual([['cursor', '/t/s.jsonl']])
+    expect(src.list()[0]).toMatchObject({ state: 'done', unseenDone: true, lastAnswer: 'Renamed it.' })
+  })
+
   it('does not read a transcript for other engines', async () => {
     const lastAnswer = vi.fn(async () => 'x')
     const { src, ev } = setup({ lastAnswer })
-    src.ingest(ev('turn-stop', { engine: 'cursor', transcriptPath: '/t/s.jsonl' }))
+    src.ingest(ev('turn-stop', { engine: 'grok', transcriptPath: '/t/s.jsonl' }))
     await graced()
     expect(lastAnswer).not.toHaveBeenCalled()
     expect(src.list()[0].state).toBe('done')
@@ -1227,6 +1236,28 @@ describe('ObservedSource and the last answer the scan reads', () => {
     await s.src.scanOpen()
     await s.src.scanOpen()
     expect(lastAnswer).toHaveBeenCalledTimes(1)
+  })
+
+  it('a Cursor session the scan lists reads its last answer', async () => {
+    const lastAnswer = vi.fn(async (_engine: string, _path: string): Promise<string | undefined> => 'Renamed it.')
+    const s = setup({ lastAnswer })
+    found(s, 'u', 14, 'cursor')
+    await s.src.scanOpen()
+    expect(lastAnswer.mock.calls).toEqual([['cursor', '/t/u.jsonl']])
+    expect(s.src.list()[0]).toMatchObject({ engine: 'cursor', state: 'idle', lastAnswer: 'Renamed it.' })
+  })
+
+  // Its transcript in a turn holds that turn's words so far, which are no answer: the dial would show them as its recap.
+  it('a Cursor session found in a turn, or whose turn cannot be told, is not read and stays listed idle', async () => {
+    const lastAnswer = vi.fn(async (): Promise<string | undefined> => 'Let me look at the config first.')
+    const s = setup({ lastAnswer })
+    found(s, 'u', 14, 'cursor')
+    found(s, 'v', 15, 'cursor')
+    s.working.set('u', true)
+    s.working.set('v', null)
+    await s.src.scanOpen()
+    expect(lastAnswer).not.toHaveBeenCalled()
+    expect(s.src.list().map((a) => [a.sessionId, a.state, a.lastAnswer])).toEqual([['u', 'idle', undefined], ['v', 'idle', undefined]])
   })
 
   it('one found in a turn is not read and reads working', async () => {

@@ -21,6 +21,11 @@ const claudeLines = (answer: string) => [
   JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: answer }] } }),
 ].join('\n') + '\n'
 
+const cursorLines = (answer: string) => [
+  JSON.stringify({ role: 'user', message: { content: [{ type: 'text', text: 'hi there' }] } }),
+  JSON.stringify({ role: 'assistant', message: { content: [{ type: 'text', text: answer }] } }),
+].join('\n') + '\n'
+
 const opts = (extra: object = {}) => ({ roots: [root], maxBytes: 262144, deadlineMs: 1000, ...extra })
 
 describe('readLastAnswer', () => {
@@ -37,6 +42,19 @@ describe('readLastAnswer', () => {
       JSON.stringify({ type: 'event_msg', payload: { type: 'agent_message', phase: 'final_answer', message: 'Shipped.' } }),
     ].join('\n') + '\n')
     expect(await readLastAnswer('codex', f, opts())).toBe('Shipped.')
+  })
+
+  it('reads the last cursor answer inside a root', async () => {
+    const f = join(root, 'p', 'agent-transcripts', 'id', 'id.jsonl')
+    mkdirSync(join(root, 'p', 'agent-transcripts', 'id'), { recursive: true })
+    writeFileSync(f, cursorLines('Renamed it.'))
+    expect(await readLastAnswer('cursor', f, opts())).toBe('Renamed it.')
+  })
+
+  it('refuses a cursor transcript outside the roots', async () => {
+    const f = join(outside, 'id.jsonl')
+    writeFileSync(f, cursorLines('secret'))
+    expect(await readLastAnswer('cursor', f, opts())).toBeUndefined()
   })
 
   it('refuses a transcript path that resolves outside the engine roots', async () => {

@@ -23,6 +23,7 @@ import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
 import { MAX_TEXT, type OrcaChild, type OrcaReads, type OrcaTabs, type OrcaTerminal } from '../cable/hosts/orca.js'
 import { AppRings } from '../cable/hosts/select.js'
 import { env } from '../config/env.js'
+import { cursorDataDir } from '../engines/cursor/contract.js'
 import { routeVoiceTask } from '../lib/voiceRouter.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, ServiceUnavailableError, type CoreApi, type CorePorts, type DevicesPort } from '../core/api.js'
 import type { ObservedAsked, ObservedHookEvent } from '../core/observedHook.js'
@@ -2183,6 +2184,14 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     expect(calls('summary')[1]).toEqual([observedAgentId('codex', 'cx-1'), 'Renamed the flag.', 'Renamed the flag.', 'alert', 'Renamed the flag.', false])
     expect(readers.answer).toHaveBeenLastCalledWith('codex', '/t/rollout.jsonl',
       expect.objectContaining({ roots: codexHomeRoots(env.CODEX_HOME).map((home) => join(home, 'sessions')) }))
+
+    // Cursor's under its data folder's projects.
+    readers.answer.mockResolvedValue('Moved the test.')
+    port.observed(hook('turn-stop', { engine: 'cursor', sessionId: 'cu-1', transcriptPath: '/t/cu-1.jsonl' }))
+    await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+    expect(calls('summary')).toHaveLength(3)
+    expect(readers.answer).toHaveBeenLastCalledWith('cursor', '/t/cu-1.jsonl',
+      { roots: [join(cursorDataDir(), 'projects')], maxBytes: 262_144, deadlineMs: 1000 })
   })
 
   it('observed needs-input reaches the dial as turn.activity Waiting for you · Orca', async () => {

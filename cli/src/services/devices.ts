@@ -21,6 +21,7 @@ import { existsSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
+import { cursorDataDir } from '../engines/cursor/contract.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, type CoreApi, type CorePorts, type DeviceHookPort, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
 import { CableFleet, testDialDiscovery, type CableFleetOptions } from '../cable/cableFleet.js'
 import { isLocalOnly } from '../lib/cardUpdate.js'
@@ -53,7 +54,7 @@ import { createHerdrNested, createHerdrOuter, procSockets, ttyAtime } from '../c
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import { createKittyAdapter, createKittyTabAdapter, kittyFinder } from '../cable/hosts/kitty.js'
 import { Inbox } from '../cable/hosts/inbox.js'
-import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
+import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer, type AnswerEngine } from '../cable/hosts/lastAnswer.js'
 import { systemLinuxRaise, type LinuxRaise } from '../cable/hosts/linuxRaise.js'
 import { createWindowsRaise, harnessDesktopLauncher, type WindowsRaise } from '../cable/hosts/windowsRaise.js'
 import { askedLine, countWord, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions, type ObservedDeps, type PromptSource } from '../cable/hosts/observed.js'
@@ -302,6 +303,12 @@ function observedSource(
     orca: () => orcaHomes.get(),
   })
   const providers = externalProviders(undefined, places)
+  // Each engine's own folders, which its transcripts are read in.
+  const answerRoots: Record<AnswerEngine, () => string[]> = {
+    claude: () => places.claude.roots(),
+    codex: () => places.codex.roots().map((home) => join(home, 'sessions')),
+    cursor: () => [join(cursorDataDir(), 'projects')],
+  }
   return new ObservedSource({
     now: Date.now,
     processes: listProcesses,
@@ -309,10 +316,10 @@ function observedSource(
     openSessions: new OpenSessions({ providers, log }),
     sessionRows: new SessionRows({ providers, excluded: [dataDir], log }),
     excluded: [dataDir],
-    // Asked for Claude Code's and Codex's alone (observed.ts), and read only inside their own folders: a hook can name any path.
-    lastAnswer: (engine, path) => readLastAnswer(engine as 'claude' | 'codex', path, {
-      roots: engine === 'claude' ? places.claude.roots() : places.codex.roots().map((home) => join(home, 'sessions')),
-      maxBytes: LAST_ANSWER_MAX_BYTES, deadlineMs: LAST_ANSWER_DEADLINE_MS,
+    // Asked for the engines lastAnswer.ts reads alone (observed.ts), and read only inside their own folders: a hook can
+    // name any path.
+    lastAnswer: (engine, path) => readLastAnswer(engine, path, {
+      roots: answerRoots[engine](), maxBytes: LAST_ANSWER_MAX_BYTES, deadlineMs: LAST_ANSWER_DEADLINE_MS,
     }),
     fileStamp,
     log,
