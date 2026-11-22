@@ -1,7 +1,8 @@
 // The loop behind the extension: it asks `harness device vscode link` where the devices listen (their socket, or on
 // Windows their pipe and its token), holds this window's `vscode` stream open there, reports the window's shells on
-// connections of their own, and shows or scrolls the terminal a line names, or presses its page keys, raising the
-// window for a tap's show. Nothing of `vscode` is loaded here: the end to end test runs this file outside VS Code.
+// connections of their own, and shows or scrolls the terminal a line names, presses its page keys, or types the dial's
+// words or Enter into it, raising the window for a tap's show. Nothing of `vscode` is loaded here: the end to end
+// test runs this file outside VS Code.
 import { posix, win32 } from 'node:path'
 import { MISSING, type LoopInputs, type Ran, type Target } from './inputs'
 import { PIPE, TOKEN } from './pipeAuth'
@@ -19,8 +20,10 @@ const LINK_TIMEOUT_MS = 5_000
 const LINK_MAX_BYTES = 4_096
 // The listener's own deadline for an open.
 const HEAD_MS = 2_000
-// A line with its newline: no more is ever held.
-const LINE_BYTES = 1_024
+// A line with its newline: no more is ever held. Room for the devices' longest words line, 20,000 characters as JSON
+// (spec). An older extension ends its stream at 1 KiB, which is why the devices write words only to a window whose
+// state says it types.
+const LINE_BYTES = 65_536
 const NEWLINE = 0x0a
 const FIRST_WAIT_MS = 1_000
 const LAST_WAIT_MS = 30_000
@@ -49,7 +52,19 @@ const PAGE_IDLE_MS = 1_000
 
 /** `watch` is the file whose entry says the devices may be ready: their socket, or on Windows their record. */
 type Link = { ready: false; watch?: string } | { ready: true; target: Target }
-type Counts = { shows: number; notFound: number; skipped: number; sent: number; notSent: number; pageKeys: number; scrollLines: number; dropped: number }
+type Counts = {
+  shows: number
+  notFound: number
+  skipped: number
+  sent: number
+  notSent: number
+  typed: number
+  entered: number
+  typeNotFound: number
+  pageKeys: number
+  scrollLines: number
+  dropped: number
+}
 /** Whole lines for the terminal of the shell `pid`, from `from` scroll lines of the stream that have done nothing yet. */
 type Scroll = { pid: number; n: number; from: number }
 /** The page keys a scroll line of `n` lines for the shell `pid` makes: none unless it is a page line. */
@@ -104,11 +119,11 @@ export function startLoop(
     counts[what] += by
     if (cancelCounts) return
     cancelCounts = inputs.after(COUNTS_MS, () => {
-      const { shows, notFound, skipped, sent, notSent, pageKeys, scrollLines, dropped } = counts
+      const { shows, notFound, skipped, sent, notSent, typed, entered, typeNotFound, pageKeys, scrollLines, dropped } = counts
       counts = noCounts()
       cancelCounts = null
       log(
-        `in the last minute: ${shows} shows, ${notFound} not found, ${skipped} lines skipped, ${sent} states sent, ${notSent} not sent, ${pageKeys} page keys, ${scrollLines} scroll lines, ${dropped} dropped`
+        `in the last minute: ${shows} shows, ${notFound} not found, ${skipped} lines skipped, ${sent} states sent, ${notSent} not sent, ${typed} typed, ${entered} entered, ${typeNotFound} type not found, ${pageKeys} page keys, ${scrollLines} scroll lines, ${dropped} dropped`
       )
     })
   }
@@ -322,8 +337,26 @@ export function startLoop(
       const n = held(value.scroll as number, SCROLL_MAX)
       // Only true makes a page line: an older or newer devices' other value scrolls as a plain line.
       scroll(pid, n, pages(pid, n, value.page === true))
+    } else if (value && typeof value.type === 'string' && value.type !== '' && Number.isInteger(value.pid)) {
+      const pid = value.pid as number
+      const words = value.type
+      keyed('typed', () => window.type(pid, words))
+    } else if (value && Number.isInteger(value.enter)) {
+      const pid = value.enter as number
+      keyed('entered', () => window.enter(pid))
     } else count('skipped')
     return true
+  }
+
+  // A terminal VS Code refuses to write to is as good as none: the stream goes on to the next line.
+  function keyed(what: 'typed' | 'entered', write: () => boolean): void {
+    let written = false
+    try {
+      written = write()
+    } catch {
+      // VS Code refused the write: counted as no terminal.
+    }
+    count(written ? what : 'typeNotFound')
   }
 
   // The window's state, once the stream's head has come and then at each change: the latest only, one post at a time,
@@ -383,7 +416,8 @@ export function startLoop(
 
   function stateBody(): string {
     const { terminals, active, focused } = window.state()
-    return JSON.stringify({ type: 'vscode-state', window: inputs.windowId, terminals, active, focused })
+    // `types` says this extension takes words and Enter lines: the devices write them to no window that does not say so.
+    return JSON.stringify({ type: 'vscode-state', window: inputs.windowId, terminals, active, focused, types: true })
   }
 
   start()
@@ -397,7 +431,7 @@ export function startLoop(
 }
 
 function noCounts(): Counts {
-  return { shows: 0, notFound: 0, skipped: 0, sent: 0, notSent: 0, pageKeys: 0, scrollLines: 0, dropped: 0 }
+  return { shows: 0, notFound: 0, skipped: 0, sent: 0, notSent: 0, typed: 0, entered: 0, typeNotFound: 0, pageKeys: 0, scrollLines: 0, dropped: 0 }
 }
 
 function held(n: number, max: number): number {
