@@ -435,19 +435,19 @@ describe('VS Code\'s windows', () => {
     expect(h.changed).toHaveBeenCalledTimes(3)
   })
 
-  // A person focusing another of a window's terminals tells the devices its agent
+  // A person focusing another of a window's terminals tells the devices its agent, and when the state came
   // (docs/plans/2026-11-17-dial-vscode-extension-design.md, "PR B, decided now" 3).
   it('a focused window\'s active terminal moving to another tells the devices that terminal\'s agent, once', async () => {
     const h = await placed()
     h.state(W1, [700, 710], { active: 700 })
     h.focused.mockClear()
     h.state(W1, [700, 710], { active: 710 })
-    expect(h.focused.mock.calls).toEqual([[910, { window: W1, shell: 710 }]])
+    expect(h.focused.mock.calls).toEqual([[910, { window: W1, shell: 710 }, 0]])
     // The same state again moved nothing.
     h.state(W1, [700, 710], { active: 710 })
     expect(h.focused).toHaveBeenCalledTimes(1)
     h.state(W1, [700, 710], { active: 700 })
-    expect(h.focused.mock.calls.at(-1)).toEqual([900, { window: W1, shell: 700 }])
+    expect(h.focused.mock.calls.at(-1)).toEqual([900, { window: W1, shell: 700 }, 0])
   })
 
   it('a window coming back into focus on its active terminal tells its agent; a window out of focus or with none active tells nothing', async () => {
@@ -459,7 +459,7 @@ describe('VS Code\'s windows', () => {
     expect(h.focused).not.toHaveBeenCalled()
     h.state(W1, [700, 710], { active: 710, focused: false })
     h.state(W1, [700, 710], { active: 710 })
-    expect(h.focused.mock.calls).toEqual([[910, { window: W1, shell: 710 }]])
+    expect(h.focused.mock.calls).toEqual([[910, { window: W1, shell: 710 }, 0]])
   })
 
   it('a window\'s first state on its stream follows nothing: a reload must not pull the dial', async () => {
@@ -473,28 +473,51 @@ describe('VS Code\'s windows', () => {
     expect(h.focused).not.toHaveBeenCalled()
   })
 
-  it('a terminal no listed agent runs in tells nothing; of two in one, the one nearest its shell', async () => {
+  // The person's latest focus replaces one the devices hold for the settle: a terminal they moved on to that no agent
+  // runs in is told too, as none.
+  it('a terminal no listed agent runs in is told as none; of two in one, the one nearest its shell', async () => {
     const h = harness([...TREE, ...SECOND, [720, 600]])
     h.open(W1)
     h.terminals.agents([800, 900])
     h.state(W1, [700, 720], { active: 720 })
     await h.answer()
     h.state(W1, [700, 720], { active: 700 })
-    expect(h.focused.mock.calls).toEqual([[800, { window: W1, shell: 700 }]])
+    expect(h.focused.mock.calls).toEqual([[800, { window: W1, shell: 700 }, 0]])
     h.state(W1, [700, 720], { active: 720 })
-    expect(h.focused).toHaveBeenCalledTimes(1)
+    expect(h.focused.mock.calls.at(-1)).toEqual([undefined, { window: W1, shell: 720 }, 0])
   })
 
-  it('a focus while a chain is read is told once that read lands, and only the latest waits', async () => {
+  it('a focus while a chain is read is told once that read lands, by when its state came, and only the latest waits', async () => {
     const h = harness([...TREE, ...SECOND])
     h.open(W1)
     h.terminals.agents([900, 910])
     h.state(W1, [700, 710], { active: 700 })
     h.state(W1, [700, 710], { active: 710 })
+    h.tick(100)
     h.state(W1, [700, 710], { active: 700 })
     expect(h.focused).not.toHaveBeenCalled()
+    // A slow read: the devices judge the dial's own moves by the state's moment, not the read's.
+    h.tick(2_900)
     await h.answer()
-    expect(h.focused.mock.calls).toEqual([[900, { window: W1, shell: 700 }]])
+    expect(h.focused.mock.calls).toEqual([[900, { window: W1, shell: 700 }, 100]])
+  })
+
+  it('a focus waiting on a read is dropped by a later state of its window that left that terminal or the focus, or by a newer stream', async () => {
+    for (const since of ['unfocused', 'reopened'] as const) {
+      const h = harness([...TREE, ...SECOND])
+      h.open(W1)
+      h.terminals.agents([900, 910])
+      h.state(W1, [700, 710], { active: 700 })
+      h.state(W1, [700, 710], { active: 710 })
+      if (since === 'unfocused') h.state(W1, [700, 710], { active: 710, focused: false })
+      else {
+        // A reload: its first state follows nothing, so the focus before it must not land on it either.
+        h.open(W1)
+        h.state(W1, [700, 710], { active: 710 })
+      }
+      await h.answer()
+      expect(h.focused).not.toHaveBeenCalled()
+    }
   })
 
   it('a show is written at once on a writable stream; while a line drains the latest waits, and replaces an earlier one', () => {

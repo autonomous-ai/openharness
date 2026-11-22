@@ -466,8 +466,9 @@ function fakeOrcaHomes(homes: OrcaHomes = { claude: [], codex: [] }) {
 }
 
 /** The process table VS Code's windows match their agents by (services/devices.ts processParents): the spec's own, empty
- *  unless a spec sets it, and each read counted, so no spec reads this machine's processes. */
-const processTable = { rows: [] as Array<{ pid: number; ppid: number }>, reads: 0 }
+ *  unless a spec sets it, and each read counted, so no spec reads this machine's processes. While `held`, a read waits
+ *  until the spec runs its `land`. */
+const processTable = { rows: [] as Array<{ pid: number; ppid: number }>, reads: 0, held: false, land: [] as Array<() => void> }
 /** Whether a session's settings draw it fullscreen (services/devices.ts claudeFullscreen): the spec's own, fullscreen
  *  unless a spec sets it, each read's folder and transcript path kept, so no spec reads this machine's settings. */
 const claudeSettings = { fullscreen: true, reads: [] as Array<[string, string | undefined]> }
@@ -579,6 +580,8 @@ beforeEach(() => {
   readers.bundleId.mockResolvedValue(undefined)
   processTable.rows = []
   processTable.reads = 0
+  processTable.held = false
+  processTable.land = []
   claudeSettings.fullscreen = true
   claudeSettings.reads = []
   processGroups.answer = { pgid: 4242, tpgid: 4242 }
@@ -647,6 +650,7 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     orcaPlugin: over.orcaPlugin === null ? undefined : over.orcaPlugin ?? fakeOrcaPlugin({ running: false }).deps,
     processParents: async () => {
       processTable.reads++
+      if (processTable.held) await new Promise<void>((resolve) => { processTable.land.push(resolve) })
       return processTable.rows
     },
     // null leaves it out: the devices read the session's settings files.
@@ -4844,6 +4848,19 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   }
   const editorFollows = () => calls('followLocal').filter(([, cause]) => cause === 'vscode')
   const editorLines = () => logs.filter((line) => line.startsWith('[device] vscode ·'))
+  /** A third agent in VS Code's terminal, its chain read now and held: a focus meanwhile waits on that read. Its `land`
+   *  answers it. */
+  const holdRead = async (port: DevicesPort) => {
+    const reads = processTable.reads
+    processTable.held = true
+    port.observed(hook('session-start', { sessionId: 'sess-3', callerPid: 4444, transcriptPath: '/t/sess-3.jsonl', hostHints: { TERM_PROGRAM: 'vscode' } }))
+    await vi.waitFor(() => expect(processTable.reads).toBe(reads + 1))
+    return async () => {
+      processTable.held = false
+      for (const land of processTable.land.splice(0)) land()
+      await vi.advanceTimersByTimeAsync(0)
+    }
+  }
 
   it('with VS Code settled in front, focusing another terminal turns the dial to its agent', async () => {
     const { settle, focus } = await twoTerminals()
@@ -4885,6 +4902,60 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     // The person's own focus after it moves the dial.
     focus(SHELL)
     expect(editorFollows()).toEqual([[ID, 'vscode']])
+  })
+
+  // As a tab's report waiting for the settle (docs/specs/2026-11-15-dial-terminal-follow.md).
+  it('a focus waiting for the settle is set aside by a move the dial made since it came', async () => {
+    const { front, settle, focus } = await twoTerminals()
+    await settle('ghostty')
+    front('vscode')
+    focus(SHELL_B)
+    turnTo(ID)
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    expect(editorFollows()).toEqual([])
+    expect(editorLines()).toEqual(['[device] vscode · skipped · echo'])
+  })
+
+  it('a focus waiting for the settle is set aside by the person\'s next focus, also one on a terminal no agent runs in', async () => {
+    const { front, settle, focus, listener } = await twoTerminals()
+    await settle('ghostty')
+    front('vscode')
+    focus(SHELL_B)
+    // A plain shell's terminal the person opened and moved to.
+    expect(listener.vscodeState(WINDOW_ID, [SHELL, SHELL_B, 4200], 4200)).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    expect(editorFollows()).toEqual([])
+    expect(editorLines()).toEqual([])
+  })
+
+  // A new agent's chain read can take up to ps's 3 s: what the dial did meanwhile is judged from the state's moment.
+  it('a focus that waited on a chain read is judged by when its state came: the dial\'s show before it is still its echo', async () => {
+    const { settle, focus, window, port } = await twoTerminals()
+    await settle('vscode')
+    expect(host().swipeSwitches(B)).toBe(true)
+    host().swipeEnded(B, 'rest')
+    await swiped('ok')
+    expect(window.lines).toEqual([{ show: SHELL_B }])
+    const land = await holdRead(port)
+    editorClock = 100
+    focus(SHELL_B)
+    editorClock = 2_500
+    await land()
+    expect(editorFollows()).toEqual([])
+    expect(editorLines()).toEqual(['[device] vscode · skipped · echo'])
+  })
+
+  it('a focus that waited on a chain read is set aside by a move the dial made after its state came', async () => {
+    const { settle, focus, port } = await twoTerminals()
+    await settle('vscode')
+    const land = await holdRead(port)
+    editorClock = 100
+    focus(SHELL_B)
+    editorClock = 200
+    turnTo(ID)
+    await land()
+    expect(editorFollows()).toEqual([])
+    expect(editorLines()).toEqual(['[device] vscode · skipped · echo'])
   })
 
   it('with no dial linked a focus follows nothing and counts nothing', async () => {
