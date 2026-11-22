@@ -62,7 +62,7 @@ import { createOpenActions } from '../cable/hosts/open.js'
 import { createOpencodeClient, opencodeClientDeps, opencodeMessageId, type OpencodeClient } from '../cable/hosts/opencodeClient.js'
 import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
 import { createOrcaAdapter, createOrcaReads, orcaDeps, orcaHandle, type OrcaFocusWatch, type OrcaReadDeps, type OrcaReads, type OrcaTerminal } from '../cable/hosts/orca.js'
-import { firstOuter } from '../cable/hosts/outer.js'
+import { firstOuter, type NestedLookup } from '../cable/hosts/outer.js'
 import { readRecord } from '../cable/hosts/record.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
 import { appRoots, learnApps, readBundleId, readMadeBy, readProcessNames, readPtyOwner, readTtyName, scanLearnsApps } from '../cable/hosts/scannedApp.js'
@@ -709,12 +709,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  scan learns no app (Windows has no `ps`): there it lists them as before. */
   const nesting = (): Pick<ObservedDeps, 'table' | 'madeBy' | 'nested'> => {
     if (!scanLearnsApps(apps.platform)) return {}
-    const tmuxNested = createTmuxNested({ ...outerDeps, tmux: tmuxAt })
-    const herdrNested = createHerdrNested({ ...outerDeps, atime: ttyAtime, tty: readTtyName, onPath: apps.onPath, sockets: procSockets })
+    // Each host with a lookup by process, and that lookup: the maker's read names only these, so each found has one.
+    const lookups: Record<string, NestedLookup> = {
+      tmux: createTmuxNested({ ...outerDeps, tmux: tmuxAt }),
+      herdr: createHerdrNested({ ...outerDeps, atime: ttyAtime, tty: readTtyName, onPath: apps.onPath, sockets: procSockets }),
+    }
     return {
       table: readProcessNames,
-      madeBy: (pids, rows) => readMadeBy(pids, rows, readTtyName, ['tmux', 'herdr']),
-      nested: (found) => found.host === 'tmux' ? tmuxNested(found) : found.host === 'herdr' ? herdrNested(found) : undefined,
+      madeBy: (pids, rows) => readMadeBy(pids, rows, readTtyName, Object.keys(lookups)),
+      nested: (found) => lookups[found.host](found),
     }
   }
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, orcaHomes, {
