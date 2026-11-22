@@ -415,31 +415,36 @@ describe('USB dial fleet', () => {
     } finally { await f.fleet.stop() }
   })
 
-  it('brings an unplugged dial back on the agent it was turned to, not the first of the ring', async () => {
-    const f = fixture()
-    f.host.listAgentSnapshot = async () => ({
-      agents: [{ id: 'a', name: 'A', engine: 'codex' }, { id: 'b', name: 'B', engine: 'codex' }], tab: '', total: 2, view: 'machine',
-    })
-    const focuses = (port: Peer) => port.sent.filter((m) => m.t === 'focus')
-    const dial = device('/dev/tim', 'AA:01')
-    f.setPorts([dial])
-    try {
-      f.fleet.start()
-      await vi.waitFor(() => expect(f.ports).toHaveLength(1))
-      await f.greet([f.ports[0]])
-      await vi.waitFor(() => expect(focuses(f.ports[0])).toEqual([{ t: 'focus', agentId: 'a' }]))
-      // The landing's echo first, so the turn after it is the person's own and not a repaint.
-      f.ports[0].say({ t: 'focus', agentId: 'a' })
-      f.ports[0].say({ t: 'focus', agentId: 'b' })
-      await vi.waitFor(() => expect(f.host.focus).toHaveBeenCalledWith('b'))
-      f.setPorts([]); await f.fleet['scan']()
-      expect(f.ports[0].isOpen).toBe(false)
-      f.setPorts([dial]); await f.fleet['scan']()
-      await vi.waitFor(() => expect(f.ports).toHaveLength(2))
-      await f.greet([f.ports[1]])
-      await vi.waitFor(() => expect(focuses(f.ports[1]).length).toBeGreaterThan(0))
-      expect(focuses(f.ports[1])).toEqual([{ t: 'focus', agentId: 'b' }])
-    } finally { await f.fleet.stop() }
+  it('brings a dial back on the agent it was turned to, not the first of the ring: unplugged, USB away and back, or dropped', async () => {
+    // Each ends the dial's session, and the fleet opens a new one for it when it is back.
+    for (const away of ['unplugged', 'usb', 'flood'] as const) {
+      const f = fixture({ dropBackoffMs: 0 })
+      f.host.listAgentSnapshot = async () => ({
+        agents: [{ id: 'a', name: 'A', engine: 'codex' }, { id: 'b', name: 'B', engine: 'codex' }], tab: '', total: 2, view: 'machine',
+      })
+      const focuses = (port: Peer) => port.sent.filter((m) => m.t === 'focus')
+      const dial = device('/dev/tim', 'AA:01')
+      f.setPorts([dial])
+      try {
+        f.fleet.start()
+        await vi.waitFor(() => expect(f.ports).toHaveLength(1))
+        await f.greet([f.ports[0]])
+        await vi.waitFor(() => expect(focuses(f.ports[0])).toEqual([{ t: 'focus', agentId: 'a' }]))
+        // The landing's echo first, so the turn after it is the person's own and not a repaint.
+        f.ports[0].say({ t: 'focus', agentId: 'a' })
+        f.ports[0].say({ t: 'focus', agentId: 'b' })
+        await vi.waitFor(() => expect(f.host.focus).toHaveBeenCalledWith('b'))
+        if (away === 'unplugged') { f.setPorts([]); await f.fleet['scan']() }
+        if (away === 'usb') { f.options.canUseUsb.mockReturnValue(false); await f.fleet['scan']() }
+        if (away === 'flood') f.ports[0].raw(Buffer.alloc(70 * 1024, 0x41))
+        await vi.waitFor(() => expect(f.ports[0].isOpen, away).toBe(false))
+        f.setPorts([dial]); f.options.canUseUsb.mockReturnValue(true); await f.fleet['scan']()
+        await vi.waitFor(() => expect(f.ports).toHaveLength(2))
+        await f.greet([f.ports[1]])
+        await vi.waitFor(() => expect(focuses(f.ports[1]).length).toBeGreaterThan(0))
+        expect(focuses(f.ports[1]), away).toEqual([{ t: 'focus', agentId: 'b' }])
+      } finally { await f.fleet.stop() }
+    }
   })
 
   it('logs an ioreg that hung, and the next scan still runs and finds the dial', async () => {
@@ -1014,10 +1019,13 @@ describe('a Harness Pro that is silent from the moment its port opens', () => {
     static made: Quiet[] = []
     isConnected = false
     wantsStats = false
+    /** The agent its dial was on, as CableSession's record. */
+    place = ''
     constructor(readonly host: CableHost) { Quiet.made.push(this) }
     start() {}
     async stop() {}
-    focusRecorded() { return '' }
+    focusRecorded() { return this.place }
+    recordFocus(agentId: string) { this.place = agentId }
     petDial() { return { supported: false, held: [], sending: null, errors: {} } }
     silent() { this.host.onForeignPort?.('/dev/pro', 'silent') }
   }
@@ -1058,6 +1066,20 @@ describe('a Harness Pro that is silent from the moment its port opens', () => {
       s.f.setPorts([{ ...s.port, session: '8' }])
       await vi.waitFor(async () => { await s.scan(); expect(Quiet.made).toHaveLength(3) })
       expect(s.rows()).toEqual([])
+    } finally { await s.fleet.stop() }
+  })
+
+  it('hands the agent its dial was on to the session that looks at it again after the reset', async () => {
+    const s = setup()
+    s.verdicts.markDial(s.port, 'pro')
+    try {
+      s.fleet.start()
+      await vi.waitFor(() => expect(Quiet.made).toHaveLength(1))
+      // As a session holds it once it was handed the place of the Pro's last attachment, before a replug.
+      Quiet.made[0].place = 'b'
+      Quiet.made[0].silent()
+      await vi.waitFor(async () => { await s.scan(); expect(Quiet.made).toHaveLength(2) })
+      expect(Quiet.made[1].place).toBe('b')
     } finally { await s.fleet.stop() }
   })
 
