@@ -3729,6 +3729,18 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
         expect(focused()).toEqual([focus('w1:p2')])
       })
 
+      // The spec leaves Windows as it was: no `ps`, so the scan learns no app and places no herdr pane.
+      it('Windows: a tap on a scan-found agent whose herdr row has its session runs no herdr focus', async () => {
+        found('sess-1', 4242)
+        const herdr = herdrRows([['w1:p2', 'sess-1']])
+        const { port } = startHere({ herdr: herdr.client, orca: { ...orca, platform: 'win32', onPath: (name: string) => `/opt/${name}/bin/${name}` } })
+        attach(port)
+        await vi.waitFor(() => expect(scanLine()).toHaveLength(1))
+        await herdr.live()
+        await host().openAgent(ID)
+        expect(focused()).toEqual([])
+      })
+
       it('the place goes with herdr\'s row', async () => {
         const { subs } = await scanned([['w1:p2', 'sess-1']])
         expect(await host().openAgent(ID)).toBeUndefined()
