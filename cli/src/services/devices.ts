@@ -49,7 +49,7 @@ import { HcSource } from '../cable/hosts/hcSource.js'
 import { createHerdrAdapter } from '../cable/hosts/herdr.js'
 import { createHerdrAppAdapter } from '../cable/hosts/herdrApp.js'
 import { createHerdrClient, herdrClientDeps, type HerdrClient } from '../cable/hosts/herdrClient.js'
-import { createHerdrOuter, procSockets, ttyAtime } from '../cable/hosts/herdrOuter.js'
+import { createHerdrNested, createHerdrOuter, procSockets, ttyAtime } from '../cable/hosts/herdrOuter.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import { createKittyAdapter, createKittyTabAdapter, kittyFinder } from '../cable/hosts/kitty.js'
 import { Inbox } from '../cable/hosts/inbox.js'
@@ -65,10 +65,10 @@ import { createOrcaAdapter, createOrcaReads, orcaDeps, orcaHandle, type OrcaFocu
 import { firstOuter } from '../cable/hosts/outer.js'
 import { readRecord } from '../cable/hosts/record.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
-import { appRoots, learnApps, readBundleId, readProcessNames, readPtyOwner, readTtyName, scanLearnsApps } from '../cable/hosts/scannedApp.js'
+import { appRoots, learnApps, readBundleId, readMadeBy, readProcessNames, readPtyOwner, readTtyName, scanLearnsApps } from '../cable/hosts/scannedApp.js'
 import { createScrollLines } from '../cable/hosts/scrollLines.js'
 import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
-import { createTmuxAdapter, createTmuxOuter } from '../cable/hosts/tmux.js'
+import { createTmuxAdapter, createTmuxNested, createTmuxOuter } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
 import { createVscodeAdapter, termPid } from '../cable/hosts/vscode.js'
@@ -292,7 +292,7 @@ function orcaHomesCache(now: () => number, log: (line: string) => void): OrcaHom
 function observedSource(
   dataDir: string, log: (line: string) => void, orcaHomes: Pick<OrcaHomesCache, 'get'>, actions: ObservedActions,
   tty: ObservedDeps['tty'], scanned: ObservedDeps['scanned'], herdrTerminal: ObservedDeps['herdrTerminal'],
-  outer: ObservedDeps['outer'], ptyOwnerOf: ObservedDeps['ptyOwner'],
+  outer: ObservedDeps['outer'], ptyOwnerOf: ObservedDeps['ptyOwner'], nesting: Pick<ObservedDeps, 'table' | 'madeBy' | 'nested'>,
 ): ObservedSource {
   // Worked out at each read: a home the person moved is adopted while the daemon runs, and Orca's follow its last read.
   const places = observedPlaces({
@@ -324,6 +324,7 @@ function observedSource(
     scanned,
     herdrTerminal,
     outer,
+    ...nesting,
   })
 }
 
@@ -703,6 +704,19 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  ids. */
   const outerDeps = { run: apps.run, processes: readProcessNames, log, now: monotonic, platform: apps.platform,
     roots: appRoots(homedir()), bundleId: readBundleId }
+  /** How the open scan places a session it found in a pane of the person's tmux or herdr, before its first hook: Diego's
+   *  idle agents in tmux inside iTerm2 sat on Other's page after the devices started again (2026-11-22). None where the
+   *  scan learns no app (Windows has no `ps`): there it lists them as before. */
+  const nesting = (): Pick<ObservedDeps, 'table' | 'madeBy' | 'nested'> => {
+    if (!scanLearnsApps(apps.platform)) return {}
+    const tmuxNested = createTmuxNested({ ...outerDeps, tmux: tmuxAt })
+    const herdrNested = createHerdrNested({ ...outerDeps, atime: ttyAtime, tty: readTtyName, onPath: apps.onPath, sockets: procSockets })
+    return {
+      table: readProcessNames,
+      madeBy: (pids, rows) => readMadeBy(pids, rows, readTtyName, ['tmux', 'herdr']),
+      nested: (found) => found.host === 'tmux' ? tmuxNested(found) : found.host === 'herdr' ? herdrNested(found) : undefined,
+    }
+  }
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, orcaHomes, {
     adapters,
     modReady: (sessionId) => inbox.ready(sessionId),
@@ -732,7 +746,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     firstOuter(createTmuxOuter({ ...outerDeps, tmux: tmuxAt, tty: readTtyName }),
       createZellijOuter({ ...outerDeps, zellij: zellijAt, tty: readTtyName }))),
   // Windows has no `ps`: there no terminal's pane is read as the agent's own, and none takes its words.
-  apps.platform === 'win32' ? undefined : async (pid) => readPtyOwner(pid, await readProcessNames(), readTtyName)) : null
+  apps.platform === 'win32' ? undefined : async (pid) => readPtyOwner(pid, await readProcessNames(), readTtyName), nesting()) : null
   // Orca is asked only for the parts that use its homes, the first time as the devices start: the start pass waits for
   // that read (at most its 5 s), so an Orca home gets the skill with the default one.
   if (skill || observed) void orcaHomes.refresh().then(() => {
