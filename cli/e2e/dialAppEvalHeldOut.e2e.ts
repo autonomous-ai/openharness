@@ -46,6 +46,8 @@ describe.skipIf(WIN32)('the dial eval, tier B: the held-out set', () => {
     const run = await runScenario(driver, scenario, HOST)
     // Kept before any assertion, so a scenario that fails one is still in the results and the baseline's verdict.
     runs.push(run)
+    // A catalog gap is not driven: no world of its own to check, and lastWorld would be an earlier scenario's.
+    if (scenario.gaps?.[HOST] !== undefined) return
     expect(run.error).toBeUndefined()
     console.log(`[dial eval] ${scenario.id}: ${Date.now() - began} ms`)
     const { d } = driver.lastWorld()
