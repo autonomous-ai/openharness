@@ -968,7 +968,9 @@ class GitPlanTests(unittest.TestCase):
 
     def test_a_change_to_the_orca_stand_in_or_adapter_runs_the_orca_e2e_files(self):
         adapter = "cli/src/cable/hosts/orca.ts"
-        stand_ins = tuple(f"cli/e2e/harness/{name}.ts" for name in ("orcaHost", "inOrca", "fakeOrca"))
+        # The plugin's loop and its dial stream are what dialStream.e2e.ts drives.
+        stand_ins = tuple(f"cli/e2e/harness/{name}.ts" for name in ("orcaHost", "inOrca", "fakeOrca", "pluginLoop",
+                                                                    "pluginDial"))
         self.assertLessEqual({"linux-e2e", "dial-hosts"}, planner.select([adapter])[0])
         canary = planner.LINUX_E2E_CANARY.removeprefix("cli/")
         orca = sorted(path.removeprefix("cli/") for path in planner.LINUX_E2E_ORCA_FILES)
