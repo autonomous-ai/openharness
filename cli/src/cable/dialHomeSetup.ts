@@ -206,8 +206,9 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
     deps.count(engine, 'left removed')
   }
 
-  /** Claude Code's setup is its plugin's, which the plugin's own pass counts: its skill only follows it, so the day's
-   *  tally counts no write of it but a failed one. */
+  /** While its plugin reads on, Claude Code's setup is the plugin's, which the plugin's own pass counts: its skill only
+   *  follows it, so the day's tally counts no write of it but a failed one. A skill a Harness Claude agent brought with
+   *  the plugin not on is a setup of its own, counted set up with `agent` (writeHome). */
   const countsWrites = (engine: DialEngine): boolean => engine === 'codex'
 
   /** One file's result, in the pass's line and the day's tally. */
@@ -362,6 +363,7 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
       return 'refused'
     }
     if (result === 'written' && countsWrites(engine)) deps.count(engine, 'set up')
+    else if (result === 'written' && !pluginOn) deps.count(engine, 'set up', 'agent')
     return stillOn(engine, counts) ? 'done' : 'off'
   }
 
