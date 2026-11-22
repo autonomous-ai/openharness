@@ -834,7 +834,7 @@ describe('editors', () => {
     expect(uncaughtProbes({ scenario: 'S1', platform: 'darwin', results: [], probes, wrongSends: [], gaps: [] })).toEqual(['open', 'apart'])
   })
 
-  it('apart on an editor page with no apps frame held scores 0, saying so; a base app\'s scores as before', () => {
+  it('apart with no apps frame held scores 0 on every page, saying so', () => {
     const s = scenario([{ kind: 'hook', session: 'va', event: 'start', label: 'w' }], sessions)
     const ring = (page: 'vscode' | 'cursor', expect: string[]): Check => ({ id: 'r', kind: 'ring', dim: 'D1', page, expect, apart: [], after: 'w' })
     // A whole ring with no apps frame before it.
@@ -846,7 +846,8 @@ describe('editors', () => {
     }
     const b = scenario([write])
     const base: Check = { id: 'r', kind: 'ring', dim: 'D1', page: 'claude', expect: ['a'], apart: [], after: 'w' }
-    expect(run(base, b, seen(b, [100], { frames: bare('claude', [A]) })).find((r) => r.check === 'r.apart')).toMatchObject({ score: 1, evidence: [] })
+    const apart = run(base, b, seen(b, [100], { frames: bare('claude', [A]) })).find((r) => r.check === 'r.apart')!
+    expect([apart.score, apart.evidence]).toEqual([0, ['no apps frame']])
   })
 
   it('a Codex or Cursor row\'s expected name is its folder\'s, a Claude Code row\'s its title', () => {
