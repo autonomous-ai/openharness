@@ -1349,7 +1349,11 @@ export class ObservedSource implements HostSource {
    *  and then each session has its tty read as before. */
   private async nestsOf(pids: readonly number[], rows: readonly ProcessName[]): Promise<ReadonlyMap<number, Nested>> {
     if (!this.deps.madeBy || !this.deps.nested) return new Map()
-    const made = await this.deps.madeBy(pids, rows).catch(() => new Map<number, Omit<Nested, 'pid' | 'rows'>>())
+    const made = await this.deps.madeBy(pids, rows).catch((error: unknown) => {
+      // Its kind, no error text: a path in it holds the account's name.
+      this.deps.log(`[observed] scan · makers not read · ${errorKind(error)}`)
+      return new Map<number, Omit<Nested, 'pid' | 'rows'>>()
+    })
     return new Map([...made].map(([pid, maker]) => [pid, { ...maker, pid, rows }]))
   }
 
