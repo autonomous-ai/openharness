@@ -176,8 +176,9 @@ describe("tier A's fake extension", () => {
     await w.start('a')
     w.refuse.state = true
     await expect(w.window({ window: 'w1', active: 'a', focused: true })).rejects.toThrow(/refused/)
+    // w1's stream opened before its state was refused: another window's open is refused.
     w.refuse.open = true
-    await expect(w.window({ window: 'w1', active: 'a', focused: true })).rejects.toThrow(/refused/)
+    await expect(w.window({ window: 'w2', active: null, focused: false, terminals: [] })).rejects.toThrow(/refused/)
   })
 
   it('focus reports the terminal active and the window focused', async () => {

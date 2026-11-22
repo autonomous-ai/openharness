@@ -24,18 +24,19 @@ const SHELL_FIELDS: readonly string[] = ['show', 'pid']
 const stringsIn = (value: unknown): string[] => (typeof value === 'string' ? [value]
   : typeof value === 'object' && value !== null ? Object.values(value).flatMap(stringsIn) : [])
 
-/** A window's open stream and what its last state said. */
+/** A window's open stream and what its last state said; `key` is the scenario's name for the window in its editor. */
 interface OpenWindow {
-  app: Editor; id: string; ended: AbortController; terminals: SessionKey[]; active: SessionKey | null; focused: boolean
+  app: Editor; key: string; id: string; ended: AbortController; terminals: SessionKey[]; active: SessionKey | null; focused: boolean
 }
 interface Windows {
-  /** How many streams each window has opened in the world: a window's nth is `eval-<window>-<n>`. */
+  /** How many streams each window name has opened in the world, in either editor, so no two streams share an id: a
+   *  window's nth is `eval-<window>-<n>`. */
   opens: Map<string, number>
-  /** In the order of their last states: of two windows that list one shell, the later holds it, as the devices take it
-   *  (vscodeTerminals.ts). */
+  /** Each editor's open windows, by slotOf, in the order of their last states: of two windows that list one shell, the
+   *  later holds it, as the devices take it (vscodeTerminals.ts). */
   open: Map<string, OpenWindow>
   /** The windows each editor's quit closed, as they were, for its relaunch. */
-  quit: Map<Editor, Array<[string, OpenWindow]>>
+  quit: Map<Editor, OpenWindow[]>
 }
 const windowsOf = new WeakMap<TierAWorld, Windows>()
 
@@ -44,6 +45,13 @@ function windows(world: TierAWorld): Windows {
   if (!state) windowsOf.set(world, state = { opens: new Map(), open: new Map(), quit: new Map() })
   return state
 }
+
+/** A window is its editor's: VS Code's w1 is not Cursor's. */
+const slotOf = (app: Editor, key: string): string => `${app} ${key}`
+
+/** The editor of the window a step names: its sessions' (the plan's Decision 5), else the scenario's app. */
+const editorOf = (world: TierAWorld, key: string): Editor =>
+  (world.scenario.sessions.find((s) => s.window === key)?.app ?? world.scenario.app) as Editor
 
 function handlerOf<T extends ListenerHandler | ListenerStreamHandler>(world: TierAWorld, type: string): T {
   const handler = world.listener[type]
@@ -82,12 +90,13 @@ function shellNamed(world: TierAWorld, window: string, key: SessionKey): number 
 }
 
 /** The window's state as its extension sends it: its window now the last to have sent one. */
-async function report(world: TierAWorld, key: string, window: OpenWindow): Promise<void> {
-  const { id, terminals, active, focused } = window
+async function report(world: TierAWorld, window: OpenWindow): Promise<void> {
+  const { key, id, terminals, active, focused } = window
   const shells = terminals.map((session) => shellNamed(world, key, session))
   const { open } = windows(world)
-  open.delete(key)
-  open.set(key, window)
+  const slot = slotOf(window.app, key)
+  open.delete(slot)
+  open.set(slot, window)
   world.streams.push({ at: Date.now(), window: id, line: { type: 'vscode-state', terminals, active, focused } })
   const answer: unknown = await handlerOf<ListenerHandler>(world, 'vscode-state').handle(
     { type: 'vscode-state', window: id, terminals: shells, active: active === null ? null : shellNamed(world, key, active), focused },
@@ -95,47 +104,49 @@ async function report(world: TierAWorld, key: string, window: OpenWindow): Promi
   if (answer !== undefined) throw new Error(`the devices' listener refused ${id}'s state: ${String(answer)}`)
 }
 
-/** The window opens a new stream, `eval-<window>-<n>`, and reports its state on it. */
-async function openWindow(world: TierAWorld, key: string, state: Omit<OpenWindow, 'id' | 'ended'>): Promise<void> {
-  const { opens } = windows(world)
+/**
+ * The window opens a new stream, `eval-<window>-<n>`, and reports its state on it. One already open is the scenario's
+ * mistake: its stream would be dropped from the record while the devices still held it, with nothing left to end it.
+ */
+async function openWindow(world: TierAWorld, state: Omit<OpenWindow, 'id' | 'ended'>): Promise<void> {
+  const { opens, open } = windows(world)
+  const { key } = state
+  if (open.has(slotOf(state.app, key))) throw new Error(`scenario ${world.scenario.id}: window ${key} is already open`)
   const n = (opens.get(key) ?? 0) + 1
   opens.set(key, n)
   const window: OpenWindow = { ...state, id: `eval-${key}-${n}`, ended: new AbortController() }
-  const open = { type: 'vscode', window: window.id }
-  world.streams.push({ at: Date.now(), window: window.id, line: open })
-  if (handlerOf<ListenerStreamHandler>(world, 'vscode').open(open, stream(world, window.id, window.ended.signal)) === REFUSED) {
+  const opened = { type: 'vscode', window: window.id }
+  world.streams.push({ at: Date.now(), window: window.id, line: opened })
+  if (handlerOf<ListenerStreamHandler>(world, 'vscode').open(opened, stream(world, window.id, window.ended.signal)) === REFUSED) {
     throw new Error(`the devices' listener refused ${window.id}'s stream`)
   }
-  await report(world, key, window)
+  await report(world, window)
 }
 
 /** The window's stream ends: its extension's client went. */
-function endWindow(world: TierAWorld, key: string): void {
-  const { open } = windows(world)
-  const window = open.get(key)
-  if (!window) return
-  open.delete(key)
+function endWindow(world: TierAWorld, window: OpenWindow): void {
+  windows(world).open.delete(slotOf(window.app, window.key))
   const reason: StreamEnd = 'gone'
   world.streams.push({ at: Date.now(), window: window.id, line: { ended: reason } })
   window.ended.abort(reason)
 }
 
-/** The open window the step names: one the scenario never opened is its mistake. */
+/** The open window the step names, in its editor: one the scenario never opened is its mistake. */
 function openNamed(world: TierAWorld, key: string): OpenWindow {
-  const window = windows(world).open.get(key)
+  const window = windows(world).open.get(slotOf(editorOf(world, key), key))
   if (!window) throw new Error(`scenario ${world.scenario.id}: no window ${key} is open`)
   return window
 }
 
 /** The window that holds the session's shell: of the open ones that list it, the one whose state came last. */
-function holding(world: TierAWorld, session: SessionKey): [string, OpenWindow] | undefined {
-  return [...windows(world).open].reverse().find(([, window]) => window.terminals.includes(session))
+function holding(world: TierAWorld, session: SessionKey): OpenWindow | undefined {
+  return [...windows(world).open.values()].reverse().find((window) => window.terminals.includes(session))
 }
 
 /** The editor quit: each of its windows' streams ends, and is kept for its relaunch. */
 export function closeWindows(world: TierAWorld, app: Editor): void {
-  const closed = [...windows(world).open].filter(([, window]) => window.app === app)
-  for (const [key] of closed) endWindow(world, key)
+  const closed = [...windows(world).open.values()].filter((window) => window.app === app)
+  for (const window of closed) endWindow(world, window)
   windows(world).quit.set(app, closed)
 }
 
@@ -144,9 +155,9 @@ export async function reopenWindows(world: TierAWorld, app: Editor): Promise<voi
   const { quit } = windows(world)
   const closed = quit.get(app) ?? []
   quit.delete(app)
-  for (const [key, { terminals, active, focused }] of closed) {
+  for (const { key, terminals, active, focused } of closed) {
     const live = terminals.filter((session) => shellOf(world, session) !== undefined)
-    await openWindow(world, key, { app, terminals: live, active: active !== null && live.includes(active) ? active : null, focused })
+    await openWindow(world, { app, key, terminals: live, active: active !== null && live.includes(active) ? active : null, focused })
   }
 }
 
@@ -156,27 +167,23 @@ export const editorSteps: { [K in 'editor.window' | 'editor.focus' | 'editor.clo
     const inWindow = world.scenario.sessions.filter((s) => s.window === step.window)
     // Its terminals are the live ones the scenario puts in it, in the scenario's order, unless the step names them.
     const terminals = step.terminals ?? inWindow.filter((s) => shellOf(world, s.key) !== undefined).map((s) => s.key)
-    // A window's app is its sessions' (the plan's Decision 5).
-    const app = (inWindow[0]?.app ?? world.scenario.app) as Editor
-    await openWindow(world, step.window, { app, terminals, active: step.active, focused: step.focused })
+    await openWindow(world, { app: editorOf(world, step.window), key: step.window, terminals, active: step.active, focused: step.focused })
   },
   'editor.focus': async (world, step) => {
     if (world.scenario.world?.extension === false) return
     const held = holding(world, step.session)
     if (!held) throw new Error(`scenario ${world.scenario.id}: no open window holds ${step.session}'s terminal`)
-    const [key, window] = held
-    await report(world, key, { ...window, active: step.session, focused: true })
+    await report(world, { ...held, active: step.session, focused: true })
   },
   'editor.closeTerminal': async (world, step) => {
     const agent = agentPid(world, step.session)
     const shell = shellOf(world, step.session)
     if (agent === undefined || shell === undefined) throw new Error(`scenario ${world.scenario.id}: ${step.session} runs in no terminal`)
     const held = holding(world, step.session)
+    // Which terminal VS Code makes active next is its own: the closed one is no longer, and none is said to be.
     if (held) {
-      const [key, window] = held
-      // Which terminal VS Code makes active next is its own: the closed one is no longer, and none is said to be.
-      await report(world, key, { ...window, terminals: window.terminals.filter((session) => session !== step.session),
-        active: window.active === step.session ? null : window.active })
+      await report(world, { ...held, terminals: held.terminals.filter((session) => session !== step.session),
+        active: held.active === step.session ? null : held.active })
     }
     await sessionsSteps.hook(world, { kind: 'hook', session: step.session, event: 'end' })
     world.machine.end(agent)
@@ -184,13 +191,13 @@ export const editorSteps: { [K in 'editor.window' | 'editor.focus' | 'editor.clo
   },
   'editor.reload': async (world, step) => {
     if (world.scenario.world?.extension === false) return
-    const { app, terminals, active, focused } = openNamed(world, step.window)
-    endWindow(world, step.window)
-    await openWindow(world, step.window, { app, terminals, active, focused })
+    const window = openNamed(world, step.window)
+    endWindow(world, window)
+    const { app, key, terminals, active, focused } = window
+    await openWindow(world, { app, key, terminals, active, focused })
   },
   'editor.close': async (world, step) => {
     if (world.scenario.world?.extension === false) return
-    openNamed(world, step.window)
-    endWindow(world, step.window)
+    endWindow(world, openNamed(world, step.window))
   },
 }
