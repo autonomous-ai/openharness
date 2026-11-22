@@ -23,7 +23,10 @@
  * `{"scroll":<lines>,"pid":<shell>}` line while the editor is in front (§4): the extension runs
  * them only while that terminal is the active one, so the adapter has no `onScreen`. A stroke whose `pageKeys` passed
  * carries `"page":true`, and the extension also presses Claude Code's page keys in that terminal
- * (docs/plans/2026-11-18-dial-vscode-claude-fullscreen-scroll-design.md).
+ * (docs/plans/2026-11-18-dial-vscode-claude-fullscreen-scroll-design.md). The dial's words go to a terminal whose window
+ * says it types: the terminals type them there, then press Enter after a settle, only while the agent is that terminal's
+ * foreground job and the source says it is still at its prompt (vscodeTerminals.ts `type`,
+ * docs/plans/2026-11-22-dial-vscode-cursor-voice-design.md). Cursor's terminals are typed into as VS Code's (U11).
  */
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { createAppLink, type AppLinkDeps } from './appLink.js'
@@ -60,7 +63,7 @@ export function termPid(paneId: string): number | undefined {
 export function createVscodeAdapter(
   editor: keyof typeof EDITORS,
   deps: AppLinkDeps & {
-    terminals: Pick<VscodeTerminals, 'terminalOf' | 'show' | 'scroll' | 'pageKeys'>
+    terminals: Pick<VscodeTerminals, 'terminalOf' | 'show' | 'scroll' | 'pageKeys' | 'canType' | 'type'>
     /** Brings a window forward on Linux; none elsewhere. */
     raise?: LinuxRaise['raise']
   },
@@ -141,6 +144,21 @@ export function createVscodeAdapter(
       const pid = termPid(pane.id)
       const terminal = pid === undefined ? undefined : deps.terminals.terminalOf(pid)
       if (terminal) deps.terminals.scroll(terminal, lines, page)
+    },
+    canType(pane) {
+      const pid = termPid(pane.id)
+      // The tab has no shell a window reports: its words go to its mod, never here.
+      return pid !== undefined && deps.terminals.canType(pid)
+    },
+    async type(pane, text, _engine, atPrompt) {
+      const pid = termPid(pane.id)
+      // The Enter waits a settle after the words: with no check that the agent is still at its prompt by then, it could
+      // answer a question or start a turn the words were never meant for.
+      if (pid === undefined || !atPrompt) return false
+      const typed = await deps.terminals.type(pid, text, atPrompt)
+      // Not in front (suspended, in the background): nothing was typed, and the person can bring it back (V9).
+      if (typed === 'background') return { refused: 'Bring it to the front of its terminal.' }
+      return typed === 'typed'
     },
   }
 }

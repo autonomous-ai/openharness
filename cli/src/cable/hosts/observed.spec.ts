@@ -1459,7 +1459,8 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
     { ...claude, show: (pane, agentId) => fake.claudeShow(agentId, pane.id) },
     createCodexAppAdapter({ ...deps, inFront: () => fake.codexInFront(), log: () => {} }),
     createVscodeAdapter('vscode', { ...deps, inFront: () => true, terminals: {
-      terminalOf: () => undefined, show: () => false, scroll: () => false, pageKeys: () => false } }),
+      terminalOf: () => undefined, show: () => false, scroll: () => false, pageKeys: () => false,
+      canType: () => false, type: async () => 'failed' as const } }),
     createTabsAdapter({ isOpen: () => fake.tabsOpen(), select: (tab, raise) => fake.tabSelect(tab.app, tab.tty, raise) === 'ok' }),
   ]
   return { actions: { ...fake, adapters }, ready, ran }

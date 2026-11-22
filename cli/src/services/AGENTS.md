@@ -237,7 +237,7 @@ master too old to run it starts it beside itself, still in its own process (`src
   opened with `standby` so it never takes the stream from another Orca, they tell Orca's Harness Device plugin
   (plugins/harness-device-orca) whether a dial is attached and which agent it shows, and its end drops what
   `orcaFront` set; on `vscode`, keyed by its window and at most 8, they tell Harness's VS Code extension
-  (plugins/harness-device-vscode) which terminal to show and scroll, and that window reports its terminals' shells in
+  (plugins/harness-device-vscode) which terminal to show, scroll and type the dial's words into, and that window reports its terminals' shells in
   a `vscode-state` message (src/cable/hosts/vscodeTerminals.ts). Cursor's windows hold the same `vscode` stream: the
   extension is the same and cannot tell the apps apart, and a terminal is found by its shell's pid, whichever app holds
   it.
