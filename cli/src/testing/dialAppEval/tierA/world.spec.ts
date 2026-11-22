@@ -148,16 +148,16 @@ describe("tier A's Linux raise", () => {
     // The desktop is found on the raise's first look, as the real one is at start.
     await world.quiet()
     const raise = deps.raise!
-    expect([raise.ready({ agent: true }), raise.ready({ agent: false, app: 'claude' }), raise.ready({ agent: false, app: 'codex' })])
+    expect([raise.ready({ agent: true }), raise.ready({ agent: false, app: 'claude' }), raise.ready({ agent: false, app: 'herdr' })])
       .toEqual([true, true, false])
     // Two at once, each recorded with its own app.
     expect(await Promise.all([raise.raise({ pid: 41_000, app: 'codex' }), raise.raise({ app: 'claude' })])).toEqual([true, true])
     expect(await raise.raise({ pid: 41_000 })).toBe(true)
-    // The ChatGPT app's window has no known class: with no process either, nothing is run.
-    expect(await raise.raise({ app: 'codex' })).toBe(false)
+    // herdr's agents have no window of their own, so it has no class: with no process either, nothing is run.
+    expect(await raise.raise({ app: 'herdr' })).toBe(false)
     expect(world.seen([]).commands.map((c) => c.argv)).toEqual([
       ['raise', '--app', 'claude', '--class', 'com.anthropic.Claude', '--class', 'com.anthropic.claude'],
-      ['raise', '--app', 'codex', '--pid', '41000', '--pid', '40000'],
+      ['raise', '--app', 'codex', '--pid', '41000', '--pid', '40000', '--class', 'ChatGPT', '--class', 'chatgpt'],
       ['raise', '--pid', '41000', '--pid', '40000'],
     ])
   })
