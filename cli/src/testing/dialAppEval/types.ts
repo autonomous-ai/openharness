@@ -187,8 +187,6 @@ export type Check = { id: string; dim: Dimension; after?: Label; at?: Label } & 
 
 export interface Scenario {
   id: string; app: App; title: string; dims: Dimension[]; platforms: Platform[]; tiers: Tier[]; heldOut: boolean
-  /** A platform it is not run on yet, and why: each run there drives nothing and lists the reason as its coverage gap. */
-  gaps?: Partial<Record<Platform, string>>
   sessions: SessionDef[]
   /** front defaults to `app`. accessibility false: Harness Device is not granted it, so no window title is read. */
   world?: { front?: App | 'other'; chatgptInstalled?: false; linkFails?: LinkedApp[]; accessibility?: false

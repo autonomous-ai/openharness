@@ -6,8 +6,7 @@
  *
  * The editors' held-out scenarios (docs/plans/2026-11-22-dial-eval-vscode-cursor-design.md, "Held-out set") run on the
  * editors' steps (harness/appEvalEditor.ts), as their main ones do, and Orca's
- * (docs/plans/2026-11-22-dial-eval-orca-design.md, "Held-out set") on Orca's (harness/appEvalOrca.ts), OH2 on macOS
- * alone (its gap names why).
+ * (docs/plans/2026-11-22-dial-eval-orca-design.md, "Held-out set") on Orca's (harness/appEvalOrca.ts).
  *
  * macOS and Linux. Every daemon has a throwaway home; its open, its home, the apps' stores and VS Code's, Cursor's and
  * Orca's CLIs are checked inside its root before it starts, the harness's recording `open` (HARNESS_OPEN_BIN) and the
@@ -46,8 +45,6 @@ describe.skipIf(WIN32)('the dial eval, tier B: the held-out set', () => {
     const run = await runScenario(driver, scenario, HOST)
     // Kept before any assertion, so a scenario that fails one is still in the results and the baseline's verdict.
     runs.push(run)
-    // A catalog gap is not driven: no world of its own to check, and lastWorld would be an earlier scenario's.
-    if (scenario.gaps?.[HOST] !== undefined) return
     expect(run.error).toBeUndefined()
     console.log(`[dial eval] ${scenario.id}: ${Date.now() - began} ms`)
     const { d } = driver.lastWorld()

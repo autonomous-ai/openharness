@@ -8,9 +8,6 @@ import { chatgptGhost, claudeGhost, claudeSession, claudeSessions, cursor, edito
   orcaStarted, panel, S, scenario, started, threads, titleOf, vscode } from './catalog.js'
 import type { Scenario } from './types.js'
 
-/** Where frontAppId tells no Orca front, the dial never follows a focus line. */
-const FRONT_GAP = 'not run until "Orca in front on Linux and Windows (frontAppId)" merges: the dial never follows Orca\'s focus there'
-
 export function heldOut(): Scenario[] {
   const s16 = keys('s', 1, 16, 2)
   return [
@@ -214,8 +211,6 @@ export function heldOut(): Scenario[] {
     scenario({
       id: 'OH2', app: 'orca', title: 'Voice 200 ms after a focus line moved the dial: the words are typed into the newly focused pane',
       dims: ['D5'], sessions: [orcaSession('a', { engine: 'codex' }), orcaSession('b', { engine: 'codex', tab: 1 }), orcaGhost],
-      // PM, 2026-11-22: run there, the words would reach a, a wrong-session send that fails the gate for a known cause.
-      gaps: { linux: FRONT_GAP, win32: FRONT_GAP },
       steps: [
         ...orcaOpening(['w1']),
         ...orcaStarted(['b', 'a']),
