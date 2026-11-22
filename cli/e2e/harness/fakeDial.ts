@@ -11,6 +11,7 @@
  * (src/cable/__fixtures__/fakeHarnessSerial.mjs, `FAKE_SERIAL_OPEN=bridge:<endpoint>`).
  */
 import { spawn } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { createServer, type Socket } from 'node:net'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -20,6 +21,24 @@ import { CAROUSEL_REFRESH_MS, DialCarousel, type DialMessage } from '../../src/t
 export type { DialMessage }
 
 const here = dirname(fileURLToPath(import.meta.url))
+
+/**
+ * The firmware version it greets with: the round firmware in this repo, so the daemon treats it as a dial of today, whose
+ * moves made by code are not reported (cableSession.ts `echoesCodeMoves`). The `-e2e` suffix is on purpose: the echo
+ * guard reads only its X.Y.Z prefix, while an update is offered only to a plain X.Y.Z (fwPush.ts `shouldOffer`), so the
+ * daemon under test never goes after the real OTA manifest.
+ */
+export const FAKE_DIAL_FW = `${roundFirmwareVersion()}-e2e`
+
+function roundFirmwareVersion(): string {
+  const file = join(here, '../../../devices/harness-device/firmware/version.txt')
+  let version: string
+  try { version = readFileSync(file, 'utf8').trim() } catch (error) {
+    throw new Error(`the fake dial cannot read the round firmware version at ${file}: ${(error as Error).message}`)
+  }
+  if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`the round firmware version at ${file} is not X.Y.Z: "${version}"`)
+  return version
+}
 
 export interface FakeDialOptions {
   /** What it calls itself in its greeting; two dials on one desk differ by it. */
@@ -134,7 +153,7 @@ export class FakeDial {
   }
 
   private hello(): DialMessage {
-    return { t: 'hello', product: 'harness', proto: 3, mac: this.mac, fw: '0.0.0-e2e', hw: 'e2e', ...this.capabilities, ...(this.settings ? { settings: this.settings } : {}) }
+    return { t: 'hello', product: 'harness', proto: 3, mac: this.mac, fw: FAKE_DIAL_FW, hw: 'e2e', ...this.capabilities, ...(this.settings ? { settings: this.settings } : {}) }
   }
 
   send(message: DialMessage): void {
@@ -171,9 +190,8 @@ export class FakeDial {
 
   /**
    * A person's turn to [agentId], again every 2 s until [probe] gives a value, polling every 50 ms; that value. The daemon
-   * drops a dial's `focus` for 750 ms after a focus of its own (a landing, a re-assert, a follow) until it hears that one
-   * echoed (cableSession.ts, `expectedAppFocusEcho`), and this dial echoes none: a turn that falls in that time is lost,
-   * so it is made again, as a person turns again.
+   * drops a dial's `focus` for the first second of a switch it drives itself (cableSession.ts, `APP_SWITCH_REPAINT_MS`):
+   * a turn that falls in that time is lost, so it is made again, as a person turns again when the window did not follow.
    */
   async turnUntil<T>(agentId: string, what: string, probe: () => T | undefined, ms = 60_000): Promise<T> {
     const deadline = Date.now() + ms
