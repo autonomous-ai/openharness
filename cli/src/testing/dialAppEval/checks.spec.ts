@@ -805,13 +805,19 @@ describe('editors', () => {
       expect(run(logged, s, seen(s, [500])).map((r) => [r.score, r.evidence])).toEqual([[0, []]])
     })
 
-    it('logged\'s evidence holds no path and no pid', () => {
-      const line = '2026-11-22T10:00:01Z [device] scroll · skipped · no stream for 41234 in /work/eval-va (C:\\Users\\eval\\x)'
-      const pass = run(logged, s, seen(s, [500], { logs: [log(600, line)] }))
-      expect(pass.map((r) => [r.score, r.evidence])).toEqual([[1, ['log at 600: [device] scroll · skipped · no stream for <n> in <path> (<path>)']]])
+    it('logged\'s evidence keeps the tag and the plain words that lead its reason, never a path, a title, a folder or a number', () => {
+      const evidence = (line: string): string[] => run(logged, s, seen(s, [500], { logs: [log(600, line)] }))[0]!.evidence
+      expect(evidence('2026-11-22T10:00:01Z [device] scroll · skipped · no stream for 41234 in /work/eval-va (C:\\Users\\eval\\x)'))
+        .toEqual(['log at 600: [device] scroll · skipped · no stream for <…>'])
+      expect(evidence('[device] scroll · skipped · no app at /Applications/Visual Studio Code.app/Contents/MacOS/Electron'))
+        .toEqual(['log at 600: [device] scroll · skipped · no app at <…>'])
+      expect(evidence('[device] scroll · skipped · no terminal for eval-a (Eval Alpha) pid 7'))
+        .toEqual(['log at 600: [device] scroll · skipped · no terminal for <…>'])
+      expect(evidence('[device] scroll · skipped · C:\\Program Files\\Microsoft VS Code\\Code.exe gone'))
+        .toEqual(['log at 600: [device] scroll · skipped · <…>'])
       // With no skipped line, the scroll lines seen, made as bare.
       const sent = run(logged, s, seen(s, [500], { logs: [log(600, 'x [device] scroll · sent · 41234 /work/eval-va')] }))
-      expect(sent.map((r) => [r.score, r.evidence])).toEqual([[0, ['log at 600: [device] scroll · sent · <n> <path>']]])
+      expect(sent.map((r) => [r.score, r.evidence])).toEqual([[0, ['log at 600: [device] scroll · sent · <…>']]])
     })
   })
 
