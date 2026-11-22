@@ -259,14 +259,6 @@ function pluginEntry(settingsPath: string): unknown {
 }
 
 /**
- * Never once `disable` removed it; Codex otherwise; Claude Code while its plugin is on, so a plugin uninstalled through
- * /plugin takes the skill away.
- */
-export function skillWanted(engine: 'claude' | 'codex', removed: boolean, claudeSettings: string): boolean {
-  return !removed && (engine === 'codex' || claudePluginState(claudeSettings) === 'on')
-}
-
-/**
  * Harness's own skill is a regular file, never a link to one, of at most 4 KiB whose front matter holds a marker line;
  * 'same' is that file holding exactly DIAL_SKILL. A `dial` that is a link or not a folder is the person's: nothing is
  * read or written through it.

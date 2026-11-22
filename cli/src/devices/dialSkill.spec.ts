@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parse } from 'yaml'
-import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION, claudePluginState, ownDirectory, ownWindowsPath, readClaudePlugin, refreshSkill, removeSkill, skillWanted, skillsFolderOf, writeSkill } from './dialSkill.js'
+import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION, claudePluginState, ownDirectory, ownWindowsPath, readClaudePlugin, refreshSkill, removeSkill, skillsFolderOf, writeSkill } from './dialSkill.js'
 
 const MARKER = '# Written by Harness. Remove it with harness device claude disable or harness device codex disable.'
 /** The line 0.6.58 wrote: files in people's homes still hold it. */
@@ -198,22 +198,6 @@ When the task stops on a step only the person can take, ring their dial before y
     const home = folder()
     expect(refreshSkill(join(home, 'skills'))).toBe('gone')
     expect(readdirSync(home)).toEqual([])
-  })
-
-  it('skillWanted: Codex unless removed; Claude Code with its plugin on and not removed', () => {
-    const dir = folder()
-    const on = join(dir, 'on.json')
-    writeFileSync(on, '{"enabledPlugins":{"harness-device@openharness":true}}')
-    const off = join(dir, 'off.json')
-    writeFileSync(off, '{"enabledPlugins":{"harness-device@openharness":false}}')
-    const missing = join(dir, 'missing.json')
-
-    expect(skillWanted('codex', false, missing)).toBe(true)
-    expect(skillWanted('codex', true, on)).toBe(false)
-    expect(skillWanted('claude', false, on)).toBe(true)
-    expect(skillWanted('claude', true, on)).toBe(false)
-    expect(skillWanted('claude', false, off)).toBe(false)
-    expect(skillWanted('claude', false, missing)).toBe(false)
   })
 
   it('leaves the person\'s file', () => {
