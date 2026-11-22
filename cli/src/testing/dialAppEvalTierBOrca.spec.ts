@@ -21,6 +21,10 @@ const orca = await import('../../e2e/harness/appEvalOrca.js' as string) as {
     }>
   }
   startedWith(pid: number): string[]
+  RUNNER: Readonly<Record<string, string>>
+  WHERE: RegExp
+  where(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv
+  madeUpSession(key: string, more?: Partial<SessionDef>): SessionDef
   orcaSteps: { hook(world: unknown, step: { kind: 'hook'; session: SessionKey; event: 'start' }): Promise<void> }
   startOrcaPlugin(d: { root: string; env: NodeJS.ProcessEnv }, children: ChildProcess[]): { stop(): Promise<number | null> }
 }
@@ -42,28 +46,13 @@ const driver = await import('../../e2e/harness/appEvalDriver.js' as string) as {
   orcaAccountHome(root: string, key: SessionKey): string
 }
 
-/** This worker's own names, as a run inside Orca, in a tmux pane of its terminal, has them: made up, and none may reach
- *  what tier B starts. */
-const RUNNER: Readonly<Record<string, string>> = {
-  ORCA_TERMINAL_HANDLE: 'term_00000000-0000-4000-8e00-0000000000e1', ORCA_AGENT_SESSION_ID: 'runner-orca-session',
-  ORCA_PAIRING_CODE: 'runner-pairing', ORCA_AGENT_SESSION_SPAWN_TOKEN: 'runner-spawn', ORCA_WORKTREE_ID: 'runner-repo::/work/runner',
-  TMUX: '/tmp/runner-tmux/default,4141,0', TMUX_PANE: '%41', TERM_PROGRAM: 'runner-terminal', __CFBundleIdentifier: 'com.example.runner',
-}
-/** The names whose values say where a process runs: Orca's, tmux's and the terminal's. */
-const WHERE = /^(ORCA_|TMUX|TERM_PROGRAM|__CFBundleIdentifier$)/
-const where = (env: NodeJS.ProcessEnv): NodeJS.ProcessEnv => Object.fromEntries(Object.entries(env).filter(([name]) => WHERE.test(name)))
+const { RUNNER, WHERE, where, madeUpSession: session } = orca
 /** The names of [env] that hold this worker's value: by name alone, as a real run's values are its secrets. */
 const workers = (env: NodeJS.ProcessEnv): string[] =>
   Object.keys(env).filter((name) => WHERE.test(name) && process.env[name] !== undefined && env[name] === process.env[name])
 /** The other names, whose value in [env] is not [daemon]'s: by name alone. */
 const notDaemons = (env: NodeJS.ProcessEnv, daemon: NodeJS.ProcessEnv): string[] =>
   [...new Set([...Object.keys(env), ...Object.keys(daemon)])].filter((name) => !WHERE.test(name) && env[name] !== daemon[name])
-
-/** An Orca session, made up as the catalog's are. */
-const session = (key: string, more: Partial<SessionDef> = {}): SessionDef => ({
-  key, app: 'orca', id: `00000000-0000-4000-8c00-${Buffer.from(key).toString('hex').padStart(12, '0')}`, title: `Eval ${key}`,
-  cwd: '/work/eval-w1', ageMs: 0, worktree: 'w1', tab: 0, ...more,
-})
 
 let dir = ''
 afterEach(() => {

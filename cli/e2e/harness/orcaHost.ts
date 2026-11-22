@@ -124,7 +124,8 @@ function build(d: IsolatedDaemon, name: string): Promise<string> {
   return host
 }
 
-const running = (pid: number): boolean => {
+/** Whether [pid] still runs. */
+export const running = (pid: number): boolean => {
   try {
     process.kill(pid, 0)
     return true

@@ -19,54 +19,30 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { scenariosFor } from '../src/testing/dialAppEval/catalog.js'
 import { loadBaseline, SKIP_RATCHET_ENV, tierBVerdict } from '../src/testing/dialAppEval/grade.js'
 import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from '../src/testing/dialAppEval/runner.js'
-import { HELD_MAKER, orcaTerminalHandle, type Platform, type Scenario, type SessionDef } from '../src/testing/dialAppEval/types.js'
+import { HELD_MAKER, type Platform, type Scenario, type SessionDef } from '../src/testing/dialAppEval/types.js'
 import { inside, orcaCliInside, TierBDriver } from './harness/appEvalDriver.js'
-import { OrcaAgent, orcaSteps, startedWith } from './harness/appEvalOrca.js'
+import { madeUpSession as session, OrcaAgent, orcaHints, orcaSteps, RUNNER, startedWith, STREAM_OPEN, where, WHERE }
+  from './harness/appEvalOrca.js'
 import { IsolatedDaemon } from './harness/daemon.js'
 import { IN_ORCA } from './harness/inOrca.js'
-import { ORCA_HOST_NAME, orcaHostCc } from './harness/orcaHost.js'
+import { ORCA_HOST_NAME, orcaHostCc, running } from './harness/orcaHost.js'
 
 const WIN32 = process.platform === 'win32'
 const HOST = process.platform as Platform
 const SCENARIOS = WIN32 ? [] : scenariosFor('b', HOST).filter((s) => s.app === 'orca' && !s.heldOut)
 
-/** An Orca session of the safety cases, made up as the catalog's are. */
-const session = (key: string, more: Partial<SessionDef> = {}): SessionDef => ({
-  key, app: 'orca', id: `00000000-0000-4000-8c00-${Buffer.from(key).toString('hex').padStart(12, '0')}`, title: `Eval ${key}`,
-  cwd: '/work/eval-w1', ageMs: 0, worktree: 'w1', tab: 0, ...more,
-})
 /** Claude Code in its own pane, Codex beside it, and Claude Code in a pane another program made. */
 const SESSIONS = [session('a'), session('b', { engine: 'codex', split: 1 }), session('h', { held: true, tab: 1 })]
 const SAFETY: Scenario = { id: 'SAFETY', app: 'orca', title: "Orca's safety cases", dims: ['D8'], platforms: [HOST], tiers: ['b'],
   heldOut: false, sessions: SESSIONS, steps: [], checks: [], probes: [] }
-/** Its hooks' hints (the plan's Decision 4): its terminal's handle, and on macOS Orca's bundle id. */
-const hints = (s: SessionDef): Record<string, string> => ({
-  ORCA_TERMINAL_HANDLE: orcaTerminalHandle(s.key), ...(HOST === 'darwin' ? { __CFBundleIdentifier: 'com.stablyai.orca' } : {}),
-})
-
-/** This worker's own names, as a run inside Orca, in a tmux pane of its terminal, has them: made up. */
-const RUNNER: Readonly<Record<string, string>> = {
-  ORCA_TERMINAL_HANDLE: 'term_00000000-0000-4000-8e00-0000000000e1', ORCA_AGENT_SESSION_ID: 'runner-orca-session',
-  ORCA_PAIRING_CODE: 'runner-pairing', ORCA_WORKTREE_ID: 'runner-repo::/work/runner', TMUX: '/tmp/runner-tmux/default,4141,0',
-  TMUX_PANE: '%41', TERM_PROGRAM: 'runner-terminal', __CFBundleIdentifier: 'com.example.runner',
-}
-/** The names whose values say where a process runs: Orca's, tmux's and the terminal's. */
-const WHERE = /^(ORCA_|TMUX|TERM_PROGRAM|__CFBundleIdentifier$)/
-const where = (env: NodeJS.ProcessEnv): NodeJS.ProcessEnv => Object.fromEntries(Object.entries(env).filter(([name]) => WHERE.test(name)))
+/** Its hooks' hints at its first launch (the plan's Decision 4): its terminal's handle, and on macOS Orca's bundle id. */
+const hints = (s: SessionDef): Record<string, string> => orcaHints(s, 0, HOST)
 
 /** [fields] of [pid], as `ps` says them. */
 const ps = (pid: number, ...fields: string[]): string =>
   execFileSync('/bin/ps', [...fields.flatMap((field) => ['-o', `${field}=`]), '-p', String(pid)], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } }).trim()
 /** Not a terminal, as `ps` says it on macOS and Linux. */
 const NO_TTY = ['??', '?']
-const running = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
-}
 
 /** Whether a command is Orca's CLI, by either of the fake's names, running `<group> <verb>`. */
 const ranOrca = (argv: readonly string[], group: string, verb: string): boolean =>
@@ -78,14 +54,14 @@ describe.skipIf(WIN32)('the dial eval, tier B: Orca', () => {
   beforeAll(() => { driver = new TierBDriver({ orca: orcaSteps }) })
   /** What a scenario's run proves beside its checks, read from its world as it stopped. */
   const ALSO: Partial<Record<string, () => void>> = {
-    // The devices read Orca's layout from the fake: each scenario checks the CLI they run resolves inside the root.
+    // The devices read Orca's layout from the fake: they ran its `terminal list`.
     O1: () => {
       expect(driver.seen().commands.filter((c) => ranOrca(c.argv, 'terminal', 'list'))).not.toEqual([])
     },
     // With no plugin in Orca, no loop of it ran and the devices opened no dial stream.
     O13: () => {
       expect(driver.lastWorld().children.filter((child) => child.spawnargs.some((arg) => arg.endsWith('pluginDial.ts')))).toEqual([])
-      expect((driver.seen().logs ?? []).filter(({ line }) => line === '[devices] dial stream · open')).toEqual([])
+      expect((driver.seen().logs ?? []).filter(({ line }) => line === STREAM_OPEN)).toEqual([])
     },
   }
   afterAll(async () => {

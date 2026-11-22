@@ -35,11 +35,28 @@ import { startPluginLoop, type PluginLoop } from './pluginLoop.js'
  *  then opens the stream. */
 const STREAM_MS = 60_000
 /** What the devices log as a `dial` stream opens (services/devicesListener.ts). */
-const STREAM_OPEN = '[devices] dial stream · open'
+export const STREAM_OPEN = '[devices] dial stream · open'
 /** For tmux to kill a session, as isolatedTmux.ts waits for each of its commands: a server that hangs blocks no stop. */
 const KILL_MS = 5_000
 /** The person's prompt, as a turn's transcript opens with it; never shown. */
 const PROMPT = 'Eval prompt.'
+
+/** This worker's own names, as a run inside Orca, in a tmux pane of its terminal, has them: made up, and none may reach
+ *  what tier B starts (the safety cases'). */
+export const RUNNER: Readonly<Record<string, string>> = {
+  ORCA_TERMINAL_HANDLE: 'term_00000000-0000-4000-8e00-0000000000e1', ORCA_AGENT_SESSION_ID: 'runner-orca-session',
+  ORCA_PAIRING_CODE: 'runner-pairing', ORCA_AGENT_SESSION_SPAWN_TOKEN: 'runner-spawn', ORCA_WORKTREE_ID: 'runner-repo::/work/runner',
+  TMUX: '/tmp/runner-tmux/default,4141,0', TMUX_PANE: '%41', TERM_PROGRAM: 'runner-terminal', __CFBundleIdentifier: 'com.example.runner',
+}
+/** The names whose values say where a process runs: Orca's, tmux's and the terminal's. */
+export const WHERE = /^(ORCA_|TMUX|TERM_PROGRAM|__CFBundleIdentifier$)/
+/** [env]'s WHERE names alone. */
+export const where = (env: NodeJS.ProcessEnv): NodeJS.ProcessEnv => Object.fromEntries(Object.entries(env).filter(([name]) => WHERE.test(name)))
+/** An Orca session of the safety cases, made up as the catalog's are. */
+export const madeUpSession = (key: string, more: Partial<SessionDef> = {}): SessionDef => ({
+  key, app: 'orca', id: `00000000-0000-4000-8c00-${Buffer.from(key).toString('hex').padStart(12, '0')}`, title: `Eval ${key}`,
+  cwd: '/work/eval-w1', ageMs: 0, worktree: 'w1', tab: 0, ...more,
+})
 
 /** Orca's names for the session's terminal, its made-up secrets beside them, with the session's own id (the plan's
  *  Decision 1), then its hints. */
