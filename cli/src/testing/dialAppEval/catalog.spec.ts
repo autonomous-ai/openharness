@@ -314,10 +314,7 @@ describe('the catalog', () => {
     // A stroke is left out: V11 and V13 alone stroke, and neither has a scroll probe that is caught. V11's row is filed
     // under Terminal (the spec's Expected to fail at baseline), so tier A sees no frame, command or stream line between
     // its stroke and the window's close, and V13 has no stream.
-    // Only the kinds some scenario takes, while Orca's are built ahead of its scenarios: the baseline task restores
-    // every kind (docs/plans/2026-11-22-dial-eval-orca-plan.md, Decision 18).
-    const used = STEP_KINDS.filter((k) => ALL.some((s) => s.steps.some((step) => step.kind === k)))
-    for (const kind of used.filter((k) => k !== 'wait' && k !== 'stroke')) {
+    for (const kind of STEP_KINDS.filter((k) => k !== 'wait' && k !== 'stroke')) {
       const seenBy = ALL.filter((s) => s.steps.some((step) => step.kind === kind) && s.probes.some((p) => sees[kind].includes(p.kind)))
       expect(seenBy.length, kind).toBeGreaterThan(0)
     }
