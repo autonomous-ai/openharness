@@ -30,7 +30,13 @@ const EDITOR_PROGRAMS: Readonly<Record<Editor, { bundle: string; programs: Reado
   cursor: { bundle: '/Applications/Cursor.app',
     programs: { darwin: '/Applications/Cursor.app/Contents/MacOS/Cursor', linux: 'cursor', win32: 'Cursor.exe' } },
 }
-/** `code .` and `cursor .` run from Terminal.app, a macOS app: the scenarios that say so run on macOS alone. */
+/**
+ * `code .` and `cursor .` run from Terminal.app, a macOS app: the scenarios that say so run on macOS alone. Their agents
+ * hook with Terminal's bundle id, so the devices file the row under Terminal and never walk its parents. Tier B's real
+ * daemon and `ps` chain do the same: V11 run on a daemon of its own (2026-11-22) holds no VS Code list either. The tier B
+ * baseline's VS Code row for V11 is V10's last list, which the dial of the daemon they share still held from before V11
+ * began (`list at -10391 on vscode: 2 rows a other`), as a has the same id in both.
+ */
 const TERMINAL_APP = '/System/Applications/Utilities/Terminal.app'
 const SHELLS: Readonly<Record<Platform, string>> = { darwin: '/bin/zsh', linux: '/bin/bash', win32: 'pwsh.exe' }
 const AGENTS: Readonly<Record<Engine, string>> = { claude: 'claude', codex: 'codex', cursor: 'cursor-agent' }
