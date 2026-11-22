@@ -16,7 +16,7 @@ const cursor = await import('../../e2e/harness/cursorOutside.js' as string) as {
 }
 
 describe("tier B's editor windows", () => {
-  it("the window's printed lines become stream records: a show with the raise after it folded in, each scrolled line for the active terminal, each state taken, shells by key", () => {
+  it("the window's printed lines become stream records: a show with the raise after it folded in, each scrolled line for the active terminal, each page key as a scroll for its shell, each state taken, shells by key", () => {
     const shells: Record<number, string> = { 41_001: 'a', 41_002: 'b' }
     const records: Array<{ at: number; line: Record<string, unknown> }> = []
     const take = editor.windowRecords('eval-w1-1', (pid) => shells[pid], (line, at) => records.push({ at, line }))
@@ -45,6 +45,8 @@ describe("tier B's editor windows", () => {
       { at: 106, line: { scroll: 'up', pid: 'a' } },
       { at: 107, line: { type: 'vscode-state', terminals: ['a', 'b'], active: 'b', focused: false } },
       { at: 108, line: { scroll: 'down', pid: 'b' } },
+      // A page key moves a fullscreen Claude Code's view as the scrolled lines move a terminal's.
+      { at: 109, line: { scroll: 'up', pid: 'b' } },
       { at: 110, line: { show: 'a' } },
       { at: 111, line: { show: 'other' } },
     ])
