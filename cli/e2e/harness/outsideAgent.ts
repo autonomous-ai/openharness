@@ -442,10 +442,11 @@ export class Outside {
     renameSync(`${record}.tmp`, record)
   }
 
-  /** Whether its hook for [event] has run since the engine started, as the engine noted it. */
-  ran(d: IsolatedDaemon, event: string, times = 1): boolean {
+  /** Whether its hook for [event] has run [times] since the engine started, or since the hook log was [from] long, as the
+   *  engine noted it. */
+  ran(d: IsolatedDaemon, event: string, times = 1, from = 0): boolean {
     const line = new RegExp(`claude pid=${this.pid} ${event}\\S* session=${this.sessionId} ran`, 'g')
-    return (d.hookLog().match(line)?.length ?? 0) >= times
+    return (d.hookLog().slice(from).match(line)?.length ?? 0) >= times
   }
 
   /**

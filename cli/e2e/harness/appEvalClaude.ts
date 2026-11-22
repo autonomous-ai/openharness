@@ -362,12 +362,17 @@ export const claudeSteps = {
         await until(`${step.session}'s UserPromptSubmit hook`, () => outside.ran(d, 'UserPromptSubmit', turns), HOOK_MS, 50)
         break
       }
-      case 'needs-input':
+      case 'needs-input': {
         // Claude Code asks within the turn; a question is drawn as a permission is, so it says the same to its hooks.
         if (!live.open) throw new Error(`scenario ${world.scenario.id}: ${step.session} asks with no turn open`)
+        const from = d.hookLog().length
         writeWhole(fileOf(world, live.open, 'permit'), 'printf eval')
         live.asking = true
+        // Its PermissionRequest hooks run beside the dialog it has drawn: a step's key before that reached no dialog, and
+        // a release written then ended the turn on no answer at all.
+        await until(`${step.session}'s PermissionRequest hook`, () => outside.ran(d, 'PermissionRequest', 1, from), HOOK_MS, 50)
         break
+      }
       case 'turn-stop': {
         if (!live.open) throw new Error(`scenario ${world.scenario.id}: ${step.session} has no turn to stop`)
         // A dialog waiting on the person is allowed first, Enter on its first row: the turn then ends on its answer.
