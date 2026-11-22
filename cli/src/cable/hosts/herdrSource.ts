@@ -193,6 +193,11 @@ export class HerdrSource implements HostSource {
     return row ? this.deps.focus(row.pane) : false
   }
 
+  /** The herdr pane of a row it lists, by the row's id: the devices place a scan-found agent at it (as cmux's). */
+  paneAt(agentId: string): string | undefined {
+    return this.find(agentId)?.pane
+  }
+
   private find(agentId: string): Row | undefined {
     return [...this.rows.values()].find(({ agent }) => agent.id === agentId)
   }
