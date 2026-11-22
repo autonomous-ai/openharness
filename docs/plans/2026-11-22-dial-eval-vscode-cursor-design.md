@@ -77,8 +77,9 @@ PM, 2026-11-22:
   - a **panel** row: Claude Code with `CLAUDE_CODE_ENTRYPOINT=claude-vscode` and the editor's bundle id, or, on Linux,
     the walked app.
   - **Cursor's agent** (engine `cursor`, no `TERM_PROGRAM`): a `cursor-folder` row.
-- **Order and names.** The ring holds 16 (`select.ts`): needs-you first, then latest activity. A row's name is the
-  pane's, then the hook or record title, then the folder's name.
+- **Order and names.** The ring holds 16 (`select.ts` `DialRing`) in the order agents entered it, a new one at the end;
+  needs-you, then latest activity, decide only who enters a full ring. A row's name is the pane's, then the hook or record
+  title, then the folder's name.
 - **Leaving.** An ended entry stays listed until the observed tick removes it, 30 s apart, after its 10 s end delay
   (`observed.ts`).
 

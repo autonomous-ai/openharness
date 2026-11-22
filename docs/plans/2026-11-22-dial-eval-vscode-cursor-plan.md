@@ -106,7 +106,7 @@ with a fake stream, and its agents' hooks per engine and platform. Tier B runs t
     by Linux's raise, which tier B does not record"), as `tierBGaps` already leaves out a failed link's raise.
 14. **Tier B's Cursor CLI** on Linux is a recording fake at `HARNESS_CURSOR_BIN`, its runs commands `cursor <args>`.
 15. **Order of live sessions:** the catalog's `started(keys)` starts them a second apart in the order given, so the
-    last is newest; a ring's expected order is that list reversed.
+    last is newest; a ring's expected order is that list as given (corrected 2026-11-22: `DialRing` keeps entry order).
 16. **Report:** under the score table, `Not covered: tier B on Windows`.
 17. **Scaffolding:** Task 1 adds the new step and check kinds with handlers that throw `… is not built yet`, and narrows
     `catalog.spec.ts`'s kind-coverage case to kinds some scenario uses. Tasks 3, 4 and 6 replace the handlers; Task 17
