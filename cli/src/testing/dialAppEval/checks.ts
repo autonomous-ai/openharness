@@ -7,7 +7,7 @@ import { APP_BUNDLES } from '../../cable/hosts/hostDetect.js'
 import { observedTitle } from '../../cable/hosts/observedTitle.js'
 import { WINDOWS_APPS } from '../../cable/hosts/windowsRaise.js'
 import { CAROUSEL_TILES } from '../dialCarousel.js'
-import { agentIdOf, engineOf, PAGE, placeOf, SKIPPED_SCROLL, THRESHOLDS, type App, type Check, type CheckResult, type Platform,
+import { agentIdOf, EDITORS, engineOf, PAGE, placeOf, SKIPPED_SCROLL, THRESHOLDS, type App, type Check, type CheckResult, type Platform,
   type Scenario, type Seen, type SessionDef, type SessionKey, type Tier, type Until, type WrongSend } from './types.js'
 
 /** A failing check's evidence stays readable in the report, however long the scenario ran. */
@@ -173,6 +173,9 @@ function apartPart(apart: SessionKey[], page: string, world: World, w: Window | 
   const counts = apps.map((a) => ({ id: String(a.id), count: typeof a.count === 'number' ? a.count : 0 }))
   const elsewhere = counts.filter((a) => a.id !== page).reduce((sum, a) => sum + a.count, 0)
   const evidence = frame ? [`apps at ${frame.at}: ${counts.map((a) => `${a.id} ${a.count}`).join(', ')}`.trimEnd()] : []
+  // An editor's row counted apart is the point of its check: with no apps frame nothing was counted, so it cannot pass.
+  // The base apps keep their grading, so their results do not move.
+  if (!frame && (EDITORS as readonly string[]).includes(page)) return { part: 'apart', score: 0, timed: false, evidence: ['no apps frame'] }
   return { part: 'apart', score: elsewhere === apart.length ? 1 : 0, timed: false, evidence }
 }
 
@@ -423,8 +426,18 @@ function scrollParts(check: CheckOf<'scroll'>, world: World, w: Window | undefin
   })
   const mine = lines.some((l) => l.pid === check.session && l.ran && l.held)
   const other = lines.some((l) => l.pid !== check.session && l.ran)
-  const evidence = bounded(lines.map((l) => `scroll at ${l.at} on ${l.window} for ${world.known(l.pid)}: ${l.ran ? 'ran' : 'dropped'}`))
-  return [{ part: 'ran', score: mine && !other ? 1 : 0, timed: false, evidence }]
+  const scrolls = lines.map((l) => `scroll at ${l.at} on ${l.window} for ${world.known(l.pid)}: ${l.ran ? 'ran' : 'dropped'}`)
+  if (mine && !other) return [{ part: 'ran', score: 1, timed: false, evidence: bounded(scrolls) }]
+  // A failure says why, as open does, so a probe on a session never written is caught. Only a window in which the driver
+  // saw a frame, a command or a stream line names the strokes, so a recorder that sees nothing catches no probe.
+  const heard = w !== undefined && (world.seen.frames.some((f) => within(f.at, w)) || world.seen.commands.some((c) => within(c.at, w))
+    || (world.seen.streams ?? []).some((l) => within(l.at, w)))
+  if (!heard) return [{ part: 'ran', score: 0, timed: false, evidence: bounded(scrolls) }]
+  const id = agentIdOf(world.session(check.session))
+  const listed = world.seen.frames.some((f) => f.at < w.to && f.message.t === 'agent' && f.message.id === id)
+  const strokes = world.seen.steps.filter((s) => s.kind === 'stroke' && within(s.at, w)).map((s) => `stroke at ${s.at}`)
+  return [{ part: 'ran', score: 0, timed: false, evidence: bounded([...(listed ? [] : [`${check.session} never listed`]), ...strokes,
+    ...scrolls, ...(mine ? [] : [`no scroll line ran for ${check.session}`])]) }]
 }
 
 const SCROLL_TAG = '[device] scroll'
