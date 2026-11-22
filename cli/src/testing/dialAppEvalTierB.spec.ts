@@ -21,6 +21,9 @@ const driver = await import('../../e2e/harness/appEvalDriver.js' as string) as {
   workPaths(argv: readonly string[], projects: readonly string[]): string[]
   deskEmpty(messages: ReadonlyArray<Record<string, unknown>>): boolean
   RAISE_TOOLS: readonly string[]
+  World: new (rig: unknown, scenario: Scenario, platform: Platform) => {
+    plug(): Promise<void>; read(): void; forgetBefore(cut: number): void; seen(): import('./dialAppEval/types.js').Seen; close(): Promise<void>
+  }
   writeRaiseFakes(bin: string): void
   raiseToolsOutside(root: string, env: NodeJS.ProcessEnv): string[]
 }
@@ -167,6 +170,39 @@ describe("tier B's start", () => {
 })
 
 const byId = (id: string): Scenario => MAIN.find((s) => s.id === id)!
+
+describe("tier B's world at its start", () => {
+  const welcome = { t: 'welcome' }
+  const list = (...ids: string[]): Array<Record<string, unknown>> => [{ t: 'agents.begin' }, ...ids.map((id) => ({ t: 'agent', id })), { t: 'agents.end' }]
+  const apps = (shown: string, ...counts: Array<[string, number]>): Record<string, unknown> =>
+    ({ t: 'apps', shown, apps: counts.map(([id, count]) => ({ id, name: id, count, waiting: 0 })) })
+
+  it("holds nothing the dial was sent before the desk was found empty but the push that emptied it, and what came after", async () => {
+    dir = mkdtempSync(join(tmpdir(), 'tier-b-world-'))
+    const dial = { messages: [] as Array<Record<string, unknown>>, arrivedAt: [] as number[] }
+    const hear = (...messages: Array<Record<string, unknown>>): void => {
+      for (const m of messages) { dial.messages.push(m); dial.arrivedAt.push(Date.now()) }
+    }
+    const rig = { d: { log: () => '' }, desk: { plug: async () => dial }, runs: join(dir, 'runs.log'), cursorRuns: join(dir, 'cursor-runs.log'), projects: [] }
+    const world = new driver.World(rig, byId('V11'), 'darwin')
+    try {
+      await world.plug()
+      // The last scenario's rows, still on the daemon as this one's dial comes, under ids every scenario shares.
+      hear(welcome, apps('vscode', ['vscode', 2]), ...list('a', 'other'))
+      world.read()
+      hear(apps('vscode'), ...list())
+      world.forgetBefore(dial.messages.length)
+      // This scenario's first list, during its start: it stays.
+      hear(apps('vscode', ['vscode', 1]), ...list('b'))
+      world.read()
+      const seen = world.seen()
+      expect(seen.frames.map((f) => f.message)).toEqual([apps('vscode'), ...list(), apps('vscode', ['vscode', 1]), ...list('b')])
+      expect(seen.faces.map((f) => f.tiles)).toEqual([[], ['b']])
+    } finally {
+      await world.close()
+    }
+  })
+})
 
 describe("tier B's gaps", () => {
   it('leaves out on Linux an open check whose link fails: the fallback there is the raise, which no fake records', () => {
