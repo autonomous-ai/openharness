@@ -284,7 +284,10 @@ graded.
   `TMUX`/`TMUX_PANE` too.
 - **OS branches:** darwin, linux and win32, with the platform given to the `orca` deps, the open and raise deps and the
   mocked `learnApps`. A branch that reads `process.platform` and cannot be chosen (`orcaHomesDeps`, the plugin's own
-  `inputs.platform`) is listed as a coverage gap for that scenario and platform, as the base spec says.
+  `inputs.platform`) is listed as a coverage gap only where such a read decides a check (PM, 2026-11-22).
+- **Orca's CLI on Windows** is where Orca's installer puts it, under `%LOCALAPPDATA%`, and not on PATH, as the
+  devices' own reader says (`devices/orcaHomes.ts`); the model gives the devices no other way to it, so a Windows check
+  that needs the CLI grades what a real per-user install gives.
 
 ## Tier B
 
@@ -318,7 +321,10 @@ The base spec's tier B holds, with these additions, in `cli/e2e/harness/appEvalO
   their tier B latency is written as measured, as the editor spec does.
 - **PR CI:** `scripts/ci-plan.py`'s `LINUX_E2E_APP_EVAL_FILES` gains `dialAppEvalOrca.e2e.ts`;
   `LINUX_E2E_APP_EVAL_PATHS` gains the Orca harness files the driver uses (`fakeOrca.ts`, `inOrca.ts`, `orcaHost.ts`,
-  `pluginDial.ts`) and `plugins/harness-device-orca/`; `scripts/tests/test_ci_plan.py` and the table row in
+  `pluginDial.ts`, `pluginLoop.ts`), the devices' Orca reads they lean on (`cli/src/devices/orcaHomes.ts`,
+  `cli/src/testing/recordedOrca.ts`) and the plugin's code (`plugins/harness-device-orca/src/`, as the VS Code entry
+  covers its extension's `src/`); `LINUX_E2E_ORCA_PATHS` gains `pluginLoop.ts` and `pluginDial.ts`, so
+  `dialStream.e2e.ts` still runs when the loop it drives changes; `scripts/tests/test_ci_plan.py` and the table row in
   `docs/validation-and-release.md` follow.
 
 ## Local gates
