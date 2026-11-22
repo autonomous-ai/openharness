@@ -5,7 +5,7 @@
  * The dial's ring keeps each agent where it entered and puts a new one at the end (cable/hosts/select.ts DialRing): every
  * ring here lists its sessions in the order they started.
  */
-import { editorGhost, editorSession, listed, S, scenario, started } from './catalog.js'
+import { EDITOR_AWAY_MS, editorGhost, editorSession, listed, S, scenario, started } from './catalog.js'
 import type { Check, Scenario, SessionDef, SessionKey } from './types.js'
 
 const cursor = (key: SessionKey, more: Partial<SessionDef> = {}): SessionDef => editorSession(key, 'cursor', more)
@@ -188,7 +188,7 @@ export function cursorScenarios(): Scenario[] {
         { kind: 'editor.window', window: 'w1', terminals: ['a'], active: 'a', focused: true },
         ...listed('cursor', ['a', 'c', 'd']),
         { label: 'quit', kind: 'quit', app: 'cursor' },
-        { kind: 'wait', ms: 2 * S },
+        { kind: 'wait', ms: EDITOR_AWAY_MS },
         { label: 'relaunch', kind: 'relaunch', app: 'cursor' },
       ],
       checks: [{ ...u13Ring, id: 'ringKept', dim: 'D7' }, u13Ring],

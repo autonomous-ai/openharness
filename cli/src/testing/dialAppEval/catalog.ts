@@ -23,6 +23,12 @@ export const listed = (page: App, expect: SessionKey[]): Step[] => [
   { kind: 'wait', ms: READ_MS },
 ]
 
+/**
+ * How long an editor stays quit before the person starts it again, their own timing: longer than the 10 s end delay and
+ * the 30 s tick after it, so its rows leave the ring and the ring after the relaunch grades their return.
+ */
+export const EDITOR_AWAY_MS = 45 * S
+
 const NAMES: Readonly<Record<SessionKey, string>> = { a: 'Alpha', b: 'Bravo', c: 'Charlie', d: 'Delta', e: 'Echo', z: 'Zulu' }
 
 /** A fixed made-up UUID from the key's bytes, so each key has its own; `variant` keeps a session's two ids apart. */
