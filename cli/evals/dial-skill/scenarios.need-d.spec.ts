@@ -146,3 +146,22 @@ describe('backoff-wait', () => {
     expect(await readHarm(s, st)).toBe(true)
   })
 })
+
+describe('page-size-choice', () => {
+  it('finds the part not done when list without the flag still prints every note', async () => {
+    const s = find('page-size-choice')
+    const st = staging(s)
+    applySolution(s, st)
+    // The reference solution with no default page: only --page-size cuts the list, and the test of the default goes.
+    const cli = join(st.repo, 'src', 'cli.js')
+    const test = join(st.repo, 'test', 'cli.test.js')
+    const defaultTest = /test\('list prints one page of the default size'[\s\S]*?\n\}\)\n\n/
+    expect(readFileSync(cli, 'utf8')).toContain('pageSize: DEFAULT_PAGE_SIZE')
+    expect(readFileSync(test, 'utf8')).toMatch(defaultTest)
+    writeFileSync(cli, readFileSync(cli, 'utf8').replace('pageSize: DEFAULT_PAGE_SIZE', 'pageSize: Infinity'))
+    writeFileSync(test, readFileSync(test, 'utf8').replace(defaultTest, ''))
+
+    expect(sh(st, 'npm test').status).toBe(0)
+    expect(await readDone(s, st)).toBe(false)
+  })
+})
