@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { condition, evaluate, graded, wrongSends } from './checks.js'
 import { uncaughtProbes } from './runner.js'
-import { agentIdOf, orcaPaneHandle, orcaWorktreeId, THRESHOLDS, type Check, type CheckResult, type Platform, type Scenario,
-  type Seen, type SessionDef, type Step, type Tier, type Until } from './types.js'
+import { agentIdOf, orcaPaneHandle, orcaWorktreeId, THRESHOLDS, type Check, type CheckResult, type Delivery, type Platform,
+  type Scenario, type Seen, type SessionDef, type Step, type Tier, type Until } from './types.js'
 
 const uuid = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const claude = (key: string, n: number): SessionDef =>
@@ -473,6 +473,17 @@ describe('voice', () => {
 
   it('a delivery before `after` is not this step\'s', () => {
     expect(scores(run(voice, s, seen(s, [500], { deliveries: [to(400, 'a')] }))).reached).toBe(0)
+  })
+
+  it('a voice check with a path counts only the deliveries by it, and its evidence lists every one', () => {
+    const typed: Seen['deliveries'][number] = { ...to(700, 'a'), path: 'typed' }
+    const by = (path: Delivery['path'], deliveries: Seen['deliveries']): CheckResult[] =>
+      run({ ...voice, path }, s, seen(s, [500], { deliveries }))
+    expect(scores(by('mod', [typed]))).toEqual({ reached: 0, once: 0, exact: 0 })
+    expect(scores(by('typed', [typed]))).toEqual({ reached: 1, once: 1, exact: 1 })
+    const both = by('mod', [to(600, 'a'), typed])
+    expect(scores(both)).toEqual({ reached: 1, once: 1, exact: 1 })
+    expect(both[0]!.evidence).toEqual(['delivery at 600 via mod to a, text exact', 'delivery at 700 via typed to a, text exact'])
   })
 
   it('a refused voice scores 0 with the dial\'s voice frames in the window and no delivery, never their text', () => {

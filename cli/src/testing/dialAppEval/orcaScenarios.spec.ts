@@ -73,6 +73,11 @@ describe("Orca's scenarios", () => {
     expect(ORCA.filter((s) => s.fresh).map((s) => s.id)).toEqual(['O14', 'O15'])
   })
 
+  it("O9's words reach its Claude Code through the mod, O10's are typed into its Codex's pane", () => {
+    const paths = (id: string) => byId(id).checks.flatMap((c) => (c.kind === 'voice' ? [c.path] : []))
+    expect([paths('O9'), paths('O10')]).toEqual([['mod'], ['typed']])
+  })
+
   it("O2's c is in w2 with w1's folder", () => {
     const c = byId('O2').sessions.find((d) => d.key === 'c')!
     expect([c.worktree, c.cwd]).toEqual(['w2', '/work/eval-w1'])

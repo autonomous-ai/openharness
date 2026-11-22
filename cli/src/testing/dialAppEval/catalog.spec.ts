@@ -57,6 +57,8 @@ describe('the catalog', () => {
     for (const id of ['OH1', 'OH2']) expect(byId(id).dims.filter((d) => d !== 'D8'), id).toEqual(['D5'])
     const engines = (id: string) => byId(id).sessions.filter((d) => !d.ghost).map((d) => [d.key, d.engine ?? 'claude'])
     expect([engines('OH1'), engines('OH2')]).toEqual([[['a', 'codex'], ['b', 'claude']], [['a', 'codex'], ['b', 'codex']]])
+    // So their words are graded as typed: one that reached the agent another way is not what they ask.
+    for (const id of ['OH1', 'OH2']) expect(byId(id).checks.flatMap((c) => (c.kind === 'voice' ? [c.path] : [])), id).toEqual(['typed'])
   })
 
   it('OH2 runs on macOS only: on Linux and Windows nothing is driven and its run lists the gap, named for its cause', async () => {
