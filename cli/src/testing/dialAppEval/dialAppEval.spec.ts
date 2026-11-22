@@ -289,6 +289,34 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     ])
   })
 
+  /** Cursor's own agent a, in its folder: what a tap on its folder row runs. */
+  const cursorAgent = scenario({
+    id: 'U6', app: 'cursor', title: "Eval a tap on Cursor's own agent", dims: ['D3'], tiers: ['a'],
+    sessions: [editorSession('a', 'cursor', { place: 'agent' }), editorGhost('cursor')],
+    steps: [...started(['a']), ...listed('cursor', ['a']), { label: 'tap', kind: 'tap', session: 'a' }],
+    checks: [], probes: [],
+  })
+  const folderCommands: Readonly<Record<Platform, string[]>> = {
+    darwin: ['/usr/bin/open', '-b', 'com.todesktop.230313mzl4w4u92', '/work/eval-a'],
+    linux: ['/opt/eval/bin/cursor', '/work/eval-a'],
+    win32: ['harness-pty', 'cursor-folder', '/work/eval-a'],
+  }
+
+  it.for(PLATFORMS)("a tap on Cursor's own agent opens Cursor's window for its folder on %s: open -b com.todesktop.230313mzl4w4u92 on darwin, Cursor's CLI on linux, harness-pty cursor-folder on win32", async (platform) => {
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, cursorAgent, platform)
+    expect(run.error).toBeUndefined()
+    const { commands, steps } = driver.seen()
+    const tap = steps.find((s) => s.label === 'tap')!
+    expect(commands.filter((c) => c.at >= tap.at).map((c) => c.argv)).toEqual([folderCommands[platform]])
+  })
+
+  it.for(PLATFORMS)("the editor extension's setup runs nothing: no gap on %s", async (platform) => {
+    const run = await runScenario(new TierADriver({ startDevices }), cursorAgent, platform)
+    expect(run.error).toBeUndefined()
+    expect(run.gaps).toEqual([])
+  })
+
   // The baseline is written on a Mac and checked on Linux: a result naming this host's folders would differ there.
   it('no result carries an absolute path', () => {
     expect(runs.length).toBeGreaterThan(0)
