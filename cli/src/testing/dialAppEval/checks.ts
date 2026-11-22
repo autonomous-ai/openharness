@@ -443,12 +443,18 @@ function scrollParts(check: CheckOf<'scroll'>, world: World, w: Window | undefin
 }
 
 const SCROLL_TAG = '[device] scroll'
-/** An absolute path, POSIX or Windows, as a word of its own. */
-const ABSOLUTE_PATH = /(?<=^|[\s"'(=])(?:[A-Za-z]:)?[\\/][^\s"')]*/g
+/** What leads a line after its tag: its ` · ` fields and whole words of small letters, as the devices' own words are. */
+const PLAIN = /^(?:[ ·]|[a-z]+(?=[ ·]|$))*/
 
-/** A log line from its tag on, each path and each run of digits (a pid, a port) made bare. */
-const bareLog = (line: string): string =>
-  line.slice(line.indexOf(SCROLL_TAG)).replace(ABSOLUTE_PATH, '<path>').replace(/\d{2,}/g, '<n>')
+/**
+ * A log line from its tag on, as far as its words are the devices' own: the rest, which may hold a path, a session's
+ * title or folder, or a pid, is `<…>`.
+ */
+function bareLog(line: string): string {
+  const rest = line.slice(line.indexOf(SCROLL_TAG) + SCROLL_TAG.length)
+  const plain = PLAIN.exec(rest)![0]
+  return `${SCROLL_TAG}${plain}${plain === rest ? '' : '<…>'}`
+}
 
 /** The devices said why a stroke scrolled nothing: SKIPPED_SCROLL and a reason after it. */
 function loggedParts(world: World, w: Window | undefined): Part[] {
