@@ -5,7 +5,7 @@ import { homedir, tmpdir, userInfo } from 'node:os'
 import { dirname, join } from 'node:path'
 import { DIAL_SKILL, skillsFolderOf, writeSkill } from '../../../src/devices/dialSkill.js'
 import { composeNotice, parseNotice } from '../../../src/lib/dialNotice.js'
-import { spawnGroup } from './agents.js'
+import { deniedReads, spawnGroup } from './agents.js'
 import type { AgentKind, Scenario } from './scenarios.js'
 
 /** One `harness` call the agent made; `line` is what the dial would show, null for anything but a `device notify` the
@@ -32,6 +32,23 @@ const PASSED = ['HOME', 'USER', 'LOGNAME', 'LANG', 'TERM']
 
 // A harm or done check is a few git, ls, grep or test calls; it runs between cases, so a long one would hold the pass.
 const CHECK_TIMEOUT_MS = 10_000
+
+/** sandbox-exec's profile for a check. A check runs what the agent left (its tests, its CLI, a file on the staged PATH)
+ *  after Claude's sandbox is gone, so it gets one of its own, as strict as CLAUDE_SANDBOX: writes only under the run,
+ *  the network only to this machine, and none of deniedReads(). sandbox-exec is macOS's, as the eval is (lsof,
+ *  DEVELOPER_DIR, Claude's sign-in in the keychain). */
+function checkSandbox(root: string): string {
+  // The sandbox matches real paths, so a folder reached through a link is denied where it is.
+  const denied = deniedReads().map((dir) => `(subpath ${JSON.stringify(existsSync(dir) ? realpathSync(dir) : dir)})`)
+  return `(version 1)
+(allow default)
+(deny file-write*)
+(allow file-write* (subpath ${JSON.stringify(root)}) (literal "/dev/null"))
+(deny file-read* ${denied.join(' ')})
+(deny network*)
+(allow network* (remote ip "localhost:*"))
+(allow network-bind network-inbound (local ip "localhost:*"))`
+}
 
 export function stage(s: Scenario, agent: AgentKind, opts: { skill: boolean; base?: string }): Staged {
   const profile = process.env.CLAUDE_CONFIG_DIR
@@ -155,11 +172,15 @@ export function readDone(s: Scenario, st: Staged): Promise<boolean | null> {
   return readCheck('done', s.done, st)
 }
 
-/** Runs a check after the agent's run, as the scenario's check runs. In a process group of its own, as the agent runs, so
- *  its timeout reaches all it started and the runner's other cases go on meanwhile. */
+/** Runs a check after the agent's run, as the scenario's check runs, confined (checkSandbox) and with a HOME of the
+ *  run's. In a process group of its own, as the agent runs, so its timeout reaches all it started and the runner's other
+ *  cases go on meanwhile. */
 async function readCheck(name: string, check: { run: string; expect: string } | undefined, st: Staged): Promise<boolean | null> {
   if (!check) return null
-  const run = await spawnGroup('sh', ['-c', check.run], st, CHECK_TIMEOUT_MS)
+  const home = join(st.root, 'home')
+  mkdirSync(home, { recursive: true })
+  const run = await spawnGroup('/usr/bin/sandbox-exec', ['-p', checkSandbox(st.root), 'sh', '-c', check.run],
+    { ...st, env: { ...st.env, HOME: home } }, CHECK_TIMEOUT_MS)
   // Cut short, the check may not have reached what it looks for: a seen failure, never a reading either way.
   if (run.timedOut || run.signal) {
     const why = run.timedOut ? `ran past ${CHECK_TIMEOUT_MS / 1000} s` : run.signal

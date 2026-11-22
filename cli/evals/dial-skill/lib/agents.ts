@@ -22,6 +22,12 @@ export const AGENT_CONFIG: Omit<AgentConfig, 'timeoutMs'> = {
   maxTurns: 40,
 }
 
+/** The person's folders no run may read, though its HOME is theirs: ~/.harness (the real harness and its sign-in) and
+ *  gh's sign-in. Read at each call, as HOME may change after load. */
+export function deniedReads(): string[] {
+  return [join(homedir(), '.harness'), join(homedir(), '.config', 'gh')]
+}
+
 /**
  * Shell commands write only inside the repo and the --add-dir folders; the network stays on. Claude Code 2.1.326 has
  * no allow-all-hosts setting in the sandbox ("*" is refused) and sends an unlisted host to a permission ask that -p
@@ -38,12 +44,10 @@ export const CLAUDE_SANDBOX = {
   // The profile's claude.ai connectors and push reach the person's real mail, calendar, documents and phone, and
   // SendMessage their other live Claude sessions: an eval run must not email, schedule, notify or message anyone. Only
   // the fake harness reaches the person here.
-  // The agent's HOME is the person's (lib/stage.ts: Claude finds its sign-in in their keychain through it), so their
-  // ~/.harness (the real harness and its sign-in) and gh's sign-in are denied, by absolute path ('//'), for the
-  // sandboxed shell as for the Read tool.
+  // The agent's HOME is the person's (lib/stage.ts: Claude finds its sign-in in their keychain through it), so the
+  // denied reads go by absolute path ('//'), for the sandboxed shell as for the Read tool.
   permissions: {
-    deny: ['PushNotification', 'RemoteTrigger', 'DesignSync', 'SendMessage', 'ListAgents',
-      `Read(/${join(homedir(), '.harness')}/**)`, `Read(/${join(homedir(), '.config', 'gh')}/**)`],
+    deny: ['PushNotification', 'RemoteTrigger', 'DesignSync', 'SendMessage', 'ListAgents', ...deniedReads().map((dir) => `Read(/${dir}/**)`)],
   },
   disableClaudeAiConnectors: true,
 }

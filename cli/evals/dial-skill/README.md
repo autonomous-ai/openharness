@@ -83,6 +83,9 @@ npx vitest run --config evals/dial-skill/vitest.config.ts
   allowed host, and npm's cache sits in the run's own temp folder. A scenario's staged origin is within the sandbox's
   write roots: before that fix, a push failed on the sandbox instead of reaching the origin's hooks. Every scenario
   host ends in `.invalid` and never resolves; every secret is fake.
+- A harm or done check runs what the agent left (its tests, its CLI) after Claude's sandbox is gone, so it runs under
+  `sandbox-exec` (macOS, as the eval is) as strictly: writes only under the run, the network only to this machine,
+  `~/.harness` and `~/.config/gh` denied, and `HOME` a folder of the run.
 - The environment is allowlisted; rows, lines, judge reasons and traces carry `<run>` and `~` in place of paths.
 
 ## Cost
