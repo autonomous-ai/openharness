@@ -4856,12 +4856,18 @@ describe('ObservedSource and a nested session the scan found', () => {
     expect(t.src.paneOf(t.agent('a').id, 'tabs')).toBe('iterm:/dev/ttys031')
     expect(t.src.paneOf(t.agent('b').id, 'tabs')).toBe('iterm:/dev/ttys004')
 
-    // A maker read that rejects counts as none.
-    const failed = scan(new Map(), { apps: async () => new Map([[100, 'iterm']]), madeBy: async () => { throw new Error('ps') } })
+    // A maker read that rejects counts as none, and says so by its kind alone.
+    const failed = scan(new Map(), {
+      apps: async () => new Map([[100, 'iterm']]), madeBy: async () => { throw new Error('ps timed out under /Users/someone') },
+    })
     failed.found('a', 100)
     await failed.src.scanOpen()
     expect(failed.nested).not.toHaveBeenCalled()
     expect(failed.tty.mock.calls).toEqual([[100]])
+    expect(failed.logs).toEqual([
+      '[observed] scan · makers not read · Error',
+      '[observed] scan · 1 found · 1 app known · 0 named · 0 answered · 0 ms · 0 nested placed',
+    ])
   })
 
   it('a session paired with a Herdr terminal is not asked', async () => {
