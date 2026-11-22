@@ -17,10 +17,12 @@ export function vscodeScenarios(): Scenario[] {
   const ghost = editorGhost('vscode')
   const s20 = keys('s', 1, 20, 2)
   // Started s20 first and s01 last: the ring fills with s20 to s05, then each later start takes the place of the one
-  // longest at rest, so it holds s16 down to s01. s05's terminal closing lets the newest left out, s17, in at the end.
+  // longest at rest, so it holds s16 down to s01. s05's terminal closing lets the newest left out, s17, in at the end,
+  // once the 30 s tick after its 10 s end delay removes s05: the run waits for that ring, or ends before it.
   const v2Listed = keys('s', 1, 16, 2).reverse()
+  const v2AfterClose = [...keys('s', 6, 16, 2).reverse(), ...keys('s', 1, 4, 2).reverse(), 's17']
   const v2Kept: Extract<Check, { kind: 'ring' }> = { id: 'ringKept', kind: 'ring', dim: 'D7', page: 'vscode', after: 'close',
-    expect: [...keys('s', 6, 16, 2).reverse(), ...keys('s', 1, 4, 2).reverse(), 's17'] }
+    expect: v2AfterClose }
   const v1Ring: Extract<Check, { kind: 'ring' }> = { id: 'ring', kind: 'ring', dim: 'D1', page: 'vscode', expect: ['a', 'b', 'c', 'd'], apart: [] }
   const v11Ring: Extract<Check, { kind: 'ring' }> = { id: 'ring', kind: 'ring', dim: 'D1', page: 'vscode', expect: ['a'], apart: [] }
   const v14Ring: Extract<Check, { kind: 'ring' }> = { id: 'ring', kind: 'ring', dim: 'D1', page: 'vscode', expect: ['a', 'b', 'd'], after: 'relaunch' }
@@ -47,6 +49,7 @@ export function vscodeScenarios(): Scenario[] {
         { kind: 'editor.window', window: 'w2', active: 's11', focused: false },
         ...listed('vscode', v2Listed),
         { label: 'close', kind: 'editor.closeTerminal', session: 's05' },
+        ...listed('vscode', v2AfterClose),
       ],
       checks: [{ ...v2Kept, id: 'ring', dim: 'D1', timed: true }, v2Kept],
       probes: [withGhost({ ...v2Kept, id: 'ring', dim: 'D1' })],
