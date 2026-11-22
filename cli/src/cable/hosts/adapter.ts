@@ -101,6 +101,9 @@ export interface HostAdapter {
   /** Whether `type` can reach the pane now (its app's socket there): asked at each look. One that cannot leaves the words
    *  to the agent's next pane whose app types. */
   canType?(pane: Pane): boolean
+  /** Its own fixed sentence for an agent at that place whose words no route of its reaches, which the dial says in place
+   *  of the generic one; none for any other. */
+  voiceRefusal?(place: Place): string | undefined
   /** Whether a stroke on the dial may scroll that pane's view now, as far as the adapter knows without asking its app:
    *  its app in front and the pane in its window. */
   canScroll?(pane: Pane): boolean

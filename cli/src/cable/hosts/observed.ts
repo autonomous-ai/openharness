@@ -8,7 +8,7 @@ import { type fileStamp, within } from '../../lib/sessionSearch/externals/suppor
 import type { ExternalEngine, RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { errorKind } from '../../lib/log.js'
 import { roundDrawable } from '../roundGlyphs.js'
-import type { HostAdapter, Outer, Pane } from './adapter.js'
+import type { HostAdapter, Outer, Pane, Place } from './adapter.js'
 import { CODEX_THREAD, type CodexQueue, type CodexQueueFailure, type CodexRan } from './codexQueue.js'
 import { agentPlaceName, APP_BUNDLES, detectApp, detectHost, UNKNOWN_APP } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
@@ -325,6 +325,20 @@ export class ObservedSource implements HostSource {
     }
   }
 
+  /** The first sentence its adapters give, in their order, for a live agent no route of theirs takes words for: the
+   *  sentence is the app's, so this source names none. */
+  voiceRefusal(agent: HostAgent): string | undefined {
+    const e = this.entries.get(agent.id)
+    const actions = this.deps.actions
+    if (!e || !actions || !this.live(e) || this.capabilities(agent).voice) return undefined
+    const place = this.placeOf(e)
+    for (const adapter of actions.adapters) {
+      const sentence = adapter.voiceRefusal?.(place)
+      if (sentence) return sentence
+    }
+    return undefined
+  }
+
   /** Only Claude Code runs the mod; another engine's session id is no poll. */
   private modReady(e: Entry, actions: ObservedActions): boolean {
     return e.agent.engine === 'claude' && actions.modReady(e.agent.sessionId!)
@@ -572,14 +586,19 @@ export class ObservedSource implements HostSource {
    *  terminal is where that terminal's hook would place it. A session the scan found has no caller until its first hook:
    *  its own process (the engine's record's, or the rollout's owner) places it. */
   private locate(entry: Entry): void {
-    const hints = entry.paired ? { HC_TERMINAL_ID: entry.paired.address } : entry.hints
-    const place = { host: entry.agent.host, app: entry.agent.app, hints, tty: entry.tty, hostSession: entry.hostSession,
-      pid: entry.caller ?? entry.pid, sessionId: entry.agent.sessionId, engine: entry.agent.engine, cwd: entry.agent.cwd,
-      outer: entry.outer, ptyOwner: entry.ptyOwner }
+    const place = this.placeOf(entry)
     entry.panes = (this.deps.actions?.adapters ?? []).flatMap((adapter) => {
       const pane = adapter.paneOf(place)
       return pane ? [{ adapter, pane }] : []
     })
+  }
+
+  /** Where it runs, as its adapters read it. */
+  private placeOf(entry: Entry): Place {
+    const hints = entry.paired ? { HC_TERMINAL_ID: entry.paired.address } : entry.hints
+    return { host: entry.agent.host, app: entry.agent.app, hints, tty: entry.tty, hostSession: entry.hostSession,
+      pid: entry.caller ?? entry.pid, sessionId: entry.agent.sessionId, engine: entry.agent.engine, cwd: entry.agent.cwd,
+      outer: entry.outer, ptyOwner: entry.ptyOwner }
   }
 
   /** The live agent in that app's tab: of two that read the same tty, the one heard from last. */

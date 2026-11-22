@@ -747,6 +747,12 @@ export class DaemonCableHost implements CableHost {
     return on && capsLetters(on.source.capabilities(on.agent))
   }
 
+  /** The sentence the agent's source gives for words no route reaches, read as its caps are. */
+  voiceRefusal(agentId: string, opts: { apps?: boolean } = {}): string | undefined {
+    const on = this.onMachine(agentId, opts)
+    return on?.source.voiceRefusal?.(on.agent)
+  }
+
   hostOf(agentId: string, opts: { apps?: boolean } = {}): string | undefined {
     return this.onMachine(agentId, opts)?.agent.host
   }
