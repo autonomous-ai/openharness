@@ -14,8 +14,9 @@ import { agentPlaceName, APP_BUNDLES, detectApp, detectHost, UNKNOWN_APP } from 
 import type { Delivery } from './inbox.js'
 import { bundleOf, type OpenTarget } from './open.js'
 import { MAX_TEXT } from './orca.js'
-import type { OuterLookup } from './outer.js'
+import type { Nested, NestedLookup, OuterLookup } from './outer.js'
 import type { SessionRecord } from './record.js'
+import type { ProcessName } from './scannedApp.js'
 import { isTabApp } from './tabs.js'
 import type { Caps, HostAgent, HostAgentState, HostSource, PaneSwitch, SendResult } from './types.js'
 
@@ -103,8 +104,18 @@ export interface ObservedDeps {
   log(line: string): void
   /** The routes for the dial's voice and tap; absent, an agent is status only. */
   actions?: ObservedActions
-  /** The app each of these processes runs in, where its parents name one (scannedApp.ts); absent, nothing is learned. */
-  apps?(pids: readonly number[]): Promise<ReadonlyMap<number, string>>
+  /** The machine's processes by name (scannedApp.ts readProcessNames), read once a look for its walk, its makers and its
+   *  nested lookups; rejects when unreadable. Absent, the walk reads its own and no maker is read. */
+  table?(): Promise<readonly ProcessName[]>
+  /** The app each of these processes runs in, where its parents name one (scannedApp.ts), walked over [rows] when given
+   *  (the look's table); absent, nothing is learned. */
+  apps?(pids: readonly number[], rows?: readonly ProcessName[]): Promise<ReadonlyMap<number, string>>
+  /** For each of these processes on a terminal a multiplexer with a lookup by process made, that host, its maker and
+   *  the process's own tty (scannedApp.ts readMadeBy), over the look's table. Absent, the scan asks no nested lookup. */
+  madeBy?(pids: readonly number[], rows: readonly ProcessName[]): Promise<ReadonlyMap<number, Omit<Nested, 'pid' | 'rows'>>>
+  /** Where the person sees a process the scan found nested, by the process alone (outer.ts NestedLookup), as devices.ts
+   *  sends each host to its multiplexer's lookup. Absent, the scan asks no nested lookup. */
+  nested?: NestedLookup
   /** What a Claude Code session's own process record gives (record.ts): the name the person gave it, and the Claude
    *  app's id of it; one that rejects gives nothing. Absent, the scan names by folder and places by its app alone. */
   record?(owner: Pick<SessionOwner, 'pid' | 'record'> & { sessionId: string }): Promise<SessionRecord>
@@ -221,7 +232,8 @@ interface Entry {
   /** The caller and hints its outer place was last asked for (ObservedDeps.outer), while it runs nested: only that ask's
    *  answer lands. */
   outerAsk?: { pid: number; hints: Readonly<Record<string, string>> }
-  /** The app and tab it is seen in, from that answer, while its caller and hints are those it was asked for. */
+  /** The app and tab it is seen in, from that answer, while its caller and hints are those it was asked for; for a
+   *  session the scan found nested, from the scan's lookup (placeNested) until its first hook. */
   outer?: Outer
   /** The client's process from an answer that named no app (a client in a terminal with no page): the raise's alone,
    *  never a page, a tab or a pane, while its caller and hints are those it was asked for. */
@@ -1090,7 +1102,10 @@ export class ObservedSource implements HostSource {
     // session listed before its answer was read would never be restored. The loop's own check then sees a session a hook
     // told of during the reads, which keeps what it said.
     const learning = this.deps.now()
-    const apps = await this.appsOf(listing.map(([sessionId]) => owners.get(sessionId)!.pid))
+    const pids = listing.map(([sessionId]) => owners.get(sessionId)!.pid)
+    const table = await this.tableOf(pids)
+    const apps = table === null ? new Map<number, string>() : await this.appsOf(pids, table)
+    const nests = table ? await this.nestsOf(pids, table) : new Map<number, Nested>()
     const records = await this.recordsOf(listing, owners)
     const busy = await this.busyOf(listing, owners)
     const answers = await this.answersOf(listing, rows, busy)
@@ -1101,6 +1116,8 @@ export class ObservedSource implements HostSource {
     let named = 0
     let answered = 0
     let paired = 0
+    // The sessions on a terminal a multiplexer made, asked where the person sees them once every session is listed.
+    const asks: [Entry, Nested][] = []
     const now = this.deps.now()
     for (const [sessionId, engine] of listing) {
       // A hook may have told of it while the reads ran: it said more.
@@ -1125,7 +1142,13 @@ export class ObservedSource implements HostSource {
       // The Claude app's id of it: with its app, it places it until its first hook (claudeApp.ts).
       if (record?.hostSession) entry.hostSession = record.hostSession
       if (this.pair(entry)) paired++
-      this.learnTty(entry, owner.pid)
+      const nest = nests.get(owner.pid)
+      // Its tty is the multiplexer pane's pty, which on macOS has a tab's form: never read, as askOuter never reads a
+      // nested caller's. Paired, it is in an hc terminal, whose pane is its own.
+      if (nest && !entry.paired) {
+        this.locate(entry)
+        asks.push([entry, nest])
+      } else this.learnTty(entry, owner.pid)
       // Once its panes are known.
       entry.agent.name = this.nameOf(entry)
       // A turn it is in when found reads working, as checkWorking reads it, which ends it once its owner reads idle: listed
@@ -1140,10 +1163,37 @@ export class ObservedSource implements HostSource {
       }
     }
     if (!listed) return
-    // Counts only: an app, a pid or a path would say whose session runs where, and a name or an answer is the person's own.
-    this.deps.log(`[observed] scan · ${listed} found · ${known} app known · ${named} named · ${answered} answered · ${ms} ms`)
-    this.logPaired(paired)
+    // Listed before any lookup is asked: each may take its own timeout, and the dial's restore reads list().
     this.emit()
+    // One at a time: a busy machine is not handed fifty lookups at once.
+    let placed = 0
+    for (const [entry, nest] of asks) if (await this.placeNested(entry, nest)) placed++
+    // Counts only: an app, a pid or a path would say whose session runs where, and a name or an answer is the person's own.
+    this.deps.log(`[observed] scan · ${listed} found · ${known} app known · ${named} named · ${answered} answered · ${ms} ms`
+      + ` · ${placed} nested placed`)
+    this.logPaired(paired)
+  }
+
+  /**
+   * Where the person sees a session the scan found on a terminal a multiplexer made, before its first hook
+   * (ObservedDeps.nested): Diego's idle nested agents in iTerm2 sat on Other's page after the devices started again,
+   * each until it was next hooked (2026-11-22). Asked, and its answer landing, only while it lives, no hook told of it
+   * and no hc terminal holds it: a hook's word is newer. An answer that names an app places it there, known, with its
+   * client's tab and process, as a hook's outer answer does; one that names none leaves what the walk gave it. Whether
+   * it was placed.
+   */
+  private async placeNested(entry: Entry, nest: Nested): Promise<boolean> {
+    const unhooked = (): boolean => this.live(entry) && entry.caller === undefined && !entry.paired
+    const place = unhooked() ? await this.deps.nested?.(nest) : undefined
+    if (!place?.app || !unhooked()) return false
+    entry.outer = { app: place.app, tty: place.tty, pid: place.pid }
+    entry.tty = place.tty
+    entry.agent.app = place.app
+    delete entry.agent.appPending
+    entry.bundle = APP_BUNDLES[place.app]
+    this.locate(entry)
+    this.emit()
+    return true
   }
 
   /** Each session the scan found that no hook has told of yet, placed again in the hc terminal it runs in: Herdr's list
@@ -1252,16 +1302,39 @@ export class ObservedSource implements HostSource {
     return records
   }
 
-  /** None when there is no reader or it failed: every session is still listed, not known yet. */
-  private async appsOf(pids: readonly number[]): Promise<ReadonlyMap<number, string>> {
+  /** The look's process table, read once for its walk, its makers and its nested lookups, as one read per session would
+   *  cost a busy machine a `ps` each: none with no reader, null when it could not be read, and then every session is
+   *  still listed, not known yet. */
+  private async tableOf(pids: readonly number[]): Promise<readonly ProcessName[] | null | undefined> {
+    if (!this.deps.table || !pids.length) return undefined
+    try {
+      return await this.deps.table()
+    } catch (error) {
+      // Its kind, no error text: a path in it holds the account's name.
+      this.deps.log(`[observed] scan · apps not read · ${errorKind(error)}`)
+      return null
+    }
+  }
+
+  /** None when there is no reader or it failed: every session is still listed, not known yet. Walked over the look's
+   *  table when there is one. */
+  private async appsOf(pids: readonly number[], rows: readonly ProcessName[] | undefined): Promise<ReadonlyMap<number, string>> {
     if (!this.deps.apps || !pids.length) return new Map()
     try {
-      return await this.deps.apps(pids)
+      return await (rows ? this.deps.apps(pids, rows) : this.deps.apps(pids))
     } catch (error) {
       // Its kind, no error text: a path in it holds the account's name.
       this.deps.log(`[observed] scan · apps not read · ${errorKind(error)}`)
       return new Map()
     }
+  }
+
+  /** What each nested lookup is asked, by pid: none with no maker reader or no lookup to ask, or when the read failed,
+   *  and then each session has its tty read as before. */
+  private async nestsOf(pids: readonly number[], rows: readonly ProcessName[]): Promise<ReadonlyMap<number, Nested>> {
+    if (!this.deps.madeBy || !this.deps.nested) return new Map()
+    const made = await this.deps.madeBy(pids, rows).catch(() => new Map<number, Omit<Nested, 'pid' | 'rows'>>())
+    return new Map([...made].map(([pid, maker]) => [pid, { ...maker, pid, rows }]))
   }
 
   /** Removals: ended sessions, dead or reused pids, and sessions with no generation silent for 12 h. Called every 30 s by the owner. */
