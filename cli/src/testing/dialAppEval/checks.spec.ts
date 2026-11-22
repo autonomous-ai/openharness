@@ -41,7 +41,7 @@ function list(at: number, page: string, rows: Row[]): Seen['frames'] {
 }
 const frame = (at: number, message: Record<string, unknown>): Seen['frames'][number] => ({ at, message })
 const face = (at: number, active: SessionDef | null): Seen['faces'][number] =>
-  ({ at, page: 'claude', tiles: [id(A), id(B), id(C)], active: active && id(active) })
+  ({ at, page: 'claude', tiles: [id(A), id(B), id(C)], active: active && id(active), refused: 0 })
 
 function run(check: Check, s: Scenario, w: Seen, tier: Tier = 'a', platform: Platform = 'darwin'): CheckResult[] {
   return evaluate(check, s, w, tier, platform)

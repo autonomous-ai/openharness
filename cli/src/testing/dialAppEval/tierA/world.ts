@@ -29,7 +29,7 @@ import { claudeAppFixture } from '../../claudeAppFixture.js'
 import { codexAppFixture } from '../../codexAppFixture.js'
 import { fakeCore } from '../../fakeCore.js'
 import { RECORDED_LINUX_APPS } from '../../recordedLinuxApps.js'
-import { agentIdOf, type App, type Delivery, type Platform, type Scenario, type Seen, type SessionDef, type SessionKey,
+import { agentIdOf, type App, type Delivery, type LinkedApp, type Platform, type Scenario, type Seen, type SessionDef, type SessionKey,
   type StepKind, type StepOf } from '../types.js'
 import { quiet } from './clock.js'
 import { LoopbackDial } from './loopbackDial.js'
@@ -73,8 +73,8 @@ export type StepHandler<K extends StepKind> = (world: TierAWorld, step: StepOf<K
 
 type Answer = { code: number; stdout?: string }
 
-/** Each app's macOS bundle id, the scheme of its links, and its Linux desktop file. */
-const APPS: Readonly<Record<App, { bundle: string; scheme: string; desktopFile: string }>> = {
+/** Each app's macOS bundle id, the scheme of its links, and its Linux desktop file: Orca's rows open by no link. */
+const APPS: Readonly<Record<LinkedApp, { bundle: string; scheme: string; desktopFile: string }>> = {
   claude: { bundle: 'com.anthropic.claudefordesktop', scheme: 'claude', desktopFile: 'com.anthropic.Claude.desktop' },
   chatgpt: { bundle: 'com.openai.codex', scheme: 'codex', desktopFile: 'chatgpt.desktop' },
   vscode: { bundle: 'com.microsoft.VSCode', scheme: 'vscode', desktopFile: RECORDED_LINUX_APPS.vscode.schemeDesktopFile },
@@ -386,7 +386,7 @@ export class World implements TierAWorld {
     const { platform, scenario } = this
     const typed = (text: string): void => this.deliver({ path: 'typed', target: null, text })
     const failing = new Set(scenario.world?.linkFails ?? [])
-    const apps = Object.entries(APPS) as Array<[App, (typeof APPS)[App]]>
+    const apps = Object.entries(APPS) as Array<[LinkedApp, (typeof APPS)[LinkedApp]]>
     // A link of an app the scenario says fails them is refused.
     this.answer((argv) => (apps.some(([app, { scheme }]) => failing.has(app) && argv.some((arg) => arg.startsWith(`${scheme}://`)))
       ? { code: 1 } : undefined))

@@ -1,9 +1,12 @@
 // The dial eval's contract: the catalog, the drivers, the runner, the grader and the report all speak these types
-// (docs/plans/2026-11-21-dial-app-eval-design.md, docs/plans/2026-11-22-dial-eval-vscode-cursor-design.md).
+// (docs/plans/2026-11-21-dial-app-eval-design.md, docs/plans/2026-11-22-dial-eval-vscode-cursor-design.md,
+// docs/plans/2026-11-22-dial-eval-orca-design.md).
 import { observedAgentId } from '../../cable/hosts/observed.js'
 
-export type App = 'claude' | 'chatgpt' | 'vscode' | 'cursor'
+export type App = 'claude' | 'chatgpt' | 'vscode' | 'cursor' | 'orca'
 export type Editor = Extract<App, 'vscode' | 'cursor'>
+/** The apps whose rows open by a link of their scheme: all but Orca. */
+export type LinkedApp = Exclude<App, 'orca'>
 export type Dimension = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7' | 'D8'
 export type Platform = 'darwin' | 'win32' | 'linux'
 /** `a`: replay in process; `b`: scripted end to end on the real daemon, fake apps. */
@@ -13,10 +16,24 @@ export type Label = string
 
 export const DIMENSIONS: readonly Dimension[] = ['D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D8']
 /** The apps scored, in the order the grader and the report list them. */
-export const APPS: readonly App[] = ['claude', 'chatgpt', 'vscode', 'cursor']
+export const APPS: readonly App[] = ['claude', 'chatgpt', 'vscode', 'cursor', 'orca']
 export const EDITORS: readonly Editor[] = ['vscode', 'cursor']
 /** The wire's name for an app's page, which is its app id on the host too (hostDetect.ts): the ChatGPT app's threads are Codex's. */
-export const PAGE: Readonly<Record<App, string>> = { claude: 'claude', chatgpt: 'codex', vscode: 'vscode', cursor: 'cursor' }
+export const PAGE: Readonly<Record<App, string>> = { claude: 'claude', chatgpt: 'codex', vscode: 'vscode', cursor: 'cursor', orca: 'orca' }
+/** The maker of a held Orca pane's terminal, in both tiers: a program that is not Orca's terminal host. */
+export const HELD_MAKER = 'eval-terminal'
+/**
+ * The app in front as each OS names it, as Harness Device tells it: a bundle id on macOS, the window's process on Linux,
+ * its program on Windows; `other` is an app the dial follows none of. Orca's are its own names on each (its bundle id,
+ * src/testing/recordedOrca.ts's executable, orca.exe), whether or not the product tells Orca by them, so a platform it
+ * cannot is graded as the person sees it.
+ */
+export const FRONT_NAMES: Readonly<Record<Platform, Readonly<Record<App | 'other', string>>>> = {
+  darwin: { claude: 'com.anthropic.claudefordesktop', chatgpt: 'com.openai.codex', vscode: 'com.microsoft.VSCode',
+    cursor: 'com.todesktop.230313mzl4w4u92', orca: 'com.stablyai.orca', other: 'com.apple.Safari' },
+  linux: { claude: 'claude-desktop', chatgpt: 'ChatGPT', vscode: 'code', cursor: 'cursor', orca: 'orca-ide', other: 'firefox' },
+  win32: { claude: 'Claude.exe', chatgpt: 'ChatGPT.exe', vscode: 'Code.exe', cursor: 'Cursor.exe', orca: 'orca.exe', other: 'firefox.exe' },
+}
 /** The agent a session runs, which names its observed source. */
 export type Engine = 'claude' | 'codex' | 'cursor'
 /** Where an editor session runs: a terminal of its window, the Claude Code panel, or Cursor's own agent. */
@@ -77,11 +94,21 @@ export interface SessionDef {
   folders?: string[]
   /** Claude Code run in the person's tmux, whose client runs in its terminal (V12). */
   tmux?: true
+  /** Orca only: the key of its Orca worktree. */
+  worktree?: string
+  /** Orca only: where its pane sits in the layout, its worktree's tab and that tab's split. */
+  tab?: number
+  split?: number
+  /** Orca only: its terminal's fixed made-up `term_<uuid>`; `none`: its hooks name none. */
+  handle?: string
+  /** Orca only: its terminal's maker is another program than Orca's terminal host (HELD_MAKER). */
+  held?: true
 }
 
 export const STEP_KINDS = ['claude.write', 'codex.write', 'hook', 'front', 'thread', 'attach', 'tap', 'swipe',
   'voice', 'quit', 'relaunch', 'unplug', 'replug', 'wait',
-  'editor.window', 'editor.focus', 'editor.closeTerminal', 'editor.reload', 'editor.close', 'stroke'] as const
+  'editor.window', 'editor.focus', 'editor.closeTerminal', 'editor.reload', 'editor.close', 'stroke',
+  'orca.layout', 'orca.focus', 'orca.front', 'orca.plugin', 'orca.close'] as const
 export type StepKind = (typeof STEP_KINDS)[number]
 // One member per kind, so StepOf<K> narrows.
 export type Step = { label?: Label } & (
@@ -109,6 +136,17 @@ export type Step = { label?: Label } & (
   | { kind: 'editor.close'; window: string }
   /** The person strokes the dial on the face's row. */
   | { kind: 'stroke' }
+  /** Orca's worktrees, in this order, as `terminal list` answers from now on; `renamed`: a tab the person renamed, by
+   *  one of its panes' sessions. */
+  | { kind: 'orca.layout'; worktrees: string[]; renamed?: Record<SessionKey, string> }
+  /** A watch-focus line for the session's pane. */
+  | { kind: 'orca.focus'; session: SessionKey }
+  /** The plugin's `orcaFront` for the worktree: its terminals. */
+  | { kind: 'orca.front'; worktree: string }
+  /** The plugin's `dial` stream opens or closes. */
+  | { kind: 'orca.plugin'; open: boolean }
+  /** The session's pane closes: its agent and shell end with no hook. */
+  | { kind: 'orca.close'; session: SessionKey }
   /**
    * With `until`, the wait ends once it holds and `ms` is only its limit: one that reaches it is a failing result.
    * Without, `ms` is the person's own timing.
@@ -119,7 +157,7 @@ export type Step = { label?: Label } & (
 export type Until = { kind: 'ring'; page: App; expect: SessionKey[] }
 export type StepOf<K extends StepKind> = Extract<Step, { kind: K }>
 
-export const CHECK_KINDS = ['ring', 'focus', 'still', 'open', 'state', 'voice', 'recap', 'cost', 'scroll', 'logged'] as const
+export const CHECK_KINDS = ['ring', 'focus', 'still', 'open', 'state', 'voice', 'recap', 'cost', 'scroll', 'logged', 'face'] as const
 export type CheckKind = (typeof CHECK_KINDS)[number]
 export type Check = { id: string; dim: Dimension; after?: Label; at?: Label } & (
   /**
@@ -138,6 +176,8 @@ export type Check = { id: string; dim: Dimension; after?: Label; at?: Label } & 
   | { kind: 'scroll'; session: SessionKey }
   /** The devices logged SKIPPED_SCROLL and a reason: pass/fail. */
   | { kind: 'logged' }
+  /** From its `after` on, the carousel refused no tile and never held tiles with none on the face: pass/fail. */
+  | { kind: 'face' }
 )
 
 export interface Scenario {
@@ -148,7 +188,10 @@ export interface Scenario {
     /** The editor was started from Terminal (`code .`, `cursor .`). */
     launchedFrom?: 'terminal-app'
     /** The Harness extension is not installed, so no window opens a stream (V13). */
-    extension?: false }
+    extension?: false
+    /** watchFocus false: Orca's CLI has no `terminal watch-focus`. plugin false: the Harness plugin is not installed in
+     *  Orca, so no `dial` stream opens (O13). */
+    orca?: { watchFocus?: false; plugin?: false } }
   steps: Step[]; checks: Check[]
   /** Checks that name a ghost session, so they must fail: they prove a check can fail with its evidence. Never scored. */
   probes: Check[]
@@ -161,7 +204,8 @@ export interface Delivery { at: number; path: 'mod' | 'turns' | 'codex' | 'typed
 /** What a driver observed. `at`: ms since the scenario's start (virtual in tier A, wall in tier B). */
 export interface Seen {
   frames: Array<{ at: number; message: Record<string, unknown> }>
-  faces: Array<{ at: number; page: string; tiles: string[]; active: string | null }>
+  /** refused: the carousel model's refused tiles so far (dialCarousel.ts). */
+  faces: Array<{ at: number; page: string; tiles: string[]; active: string | null; refused: number }>
   /** ok: the command succeeded. */
   commands: Array<{ at: number; argv: string[]; ok: boolean }>
   deliveries: Delivery[]
@@ -255,6 +299,34 @@ export function placeOf(s: Pick<SessionDef, 'app' | 'place'>): Place | undefined
 /** The agent id the daemon's observed sources give this session: its engine's. */
 export function agentIdOf(s: Pick<SessionDef, 'app' | 'id' | 'engine' | 'place'>): string {
   return observedAgentId(engineOf(s), s.id)
+}
+
+/** The handle of the terminal Orca first lays the session out in: a fixed made-up one from the key's bytes. */
+export function orcaTerminalHandle(key: SessionKey): string {
+  const bytes = Buffer.from(key).toString('hex')
+  if (bytes.length > 12) throw new Error(`session key ${key} is longer than 6 bytes`)
+  return `term_00000000-0000-4000-8d00-${bytes.padStart(12, '0')}`
+}
+
+/** The handle of the terminal Orca lays the session out in at its nth launch (0: its first). A relaunched Orca gives
+ *  each pane a new terminal, so a check that reads an old handle grades a pane that is gone. */
+export function orcaPaneHandle(s: Pick<SessionDef, 'key' | 'handle'>, launch: number): string {
+  const first = s.handle === undefined || s.handle === 'none' ? orcaTerminalHandle(s.key) : s.handle
+  if (launch === 0) return first
+  if (!Number.isInteger(launch) || launch < 0 || launch > 9 || !first.includes('-8d00-')) {
+    throw new Error(`${s.key} has no handle at launch ${launch}`)
+  }
+  return first.replace('-8d00-', `-8d0${launch}-`)
+}
+
+/** The handle its hooks name at that launch: none for `handle: 'none'`. */
+export function hookHandle(s: Pick<SessionDef, 'key' | 'handle'>, launch: number): string | undefined {
+  return s.handle === 'none' ? undefined : orcaPaneHandle(s, launch)
+}
+
+/** Orca's id of the worktree, as `terminal list` prints it, in both tiers. */
+export function orcaWorktreeId(worktree: string): string {
+  return `eval-repo::/work/eval-${worktree}`
 }
 
 /** A result's key in the baseline: tier/platform/scenario/check. */

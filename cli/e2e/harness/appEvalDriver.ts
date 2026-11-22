@@ -26,8 +26,8 @@ import { chatGptPlaces, claudeStoreRoots } from '../../src/cable/hosts/appPlaces
 import { resolveBinaryOnPath } from '../../src/lib/binaryOnPath.js'
 import { claudeAppFixture } from '../../src/testing/claudeAppFixture.js'
 import { describeAttempt, guardThisProcess, NET_GUARD_FILE_ENV, netGuardEnv, readNetGuard, type NetAttempt } from '../../src/testing/dialAppEval/netGuard.js'
-import { agentIdOf, PAGE, placeOf, type App, type Delivery, type EvalDriver, type Platform, type Scenario, type Seen,
-  type SessionDef, type SessionKey, type Step, type StepKind, type StepOf } from '../../src/testing/dialAppEval/types.js'
+import { agentIdOf, FRONT_NAMES, PAGE, placeOf, type App, type Delivery, type EvalDriver, type LinkedApp, type Platform,
+  type Scenario, type Seen, type SessionDef, type SessionKey, type Step, type StepKind, type StepOf } from '../../src/testing/dialAppEval/types.js'
 import { CAROUSEL_REFRESH_MS, DialCarousel, type DialMessage } from '../../src/testing/dialCarousel.js'
 import { writeExecutable } from '../../src/testing/executableFixture.js'
 import { RECORDED_LINUX_APPS } from '../../src/testing/recordedLinuxApps.js'
@@ -44,14 +44,7 @@ const FILTER = { appFilter: 'v1' }
 const SERIAL = 'EVAL-B'
 const MAC = 'e2:e0:00:00:0e:b1'
 /** The scheme of each app's links (cable/hosts/claudeApp.ts, codexApp.ts): the ChatGPT app's threads are Codex's. */
-const SCHEME: Readonly<Record<App, string>> = { claude: 'claude', chatgpt: 'codex', vscode: 'vscode', cursor: 'cursor' }
-/** The app in front as Harness Device names it: a bundle id on macOS, the window's process on Linux; `other` is an app
- *  the dial follows none of. */
-const FRONT: Readonly<Record<'darwin' | 'linux', Record<App | 'other', string>>> = {
-  darwin: { claude: 'com.anthropic.claudefordesktop', chatgpt: 'com.openai.codex', vscode: 'com.microsoft.VSCode',
-    cursor: 'com.todesktop.230313mzl4w4u92', other: 'com.apple.Safari' },
-  linux: { claude: 'claude-desktop', chatgpt: 'ChatGPT', vscode: 'code', cursor: 'cursor', other: 'firefox' },
-}
+const SCHEME: Readonly<Record<LinkedApp, string>> = { claude: 'claude', chatgpt: 'codex', vscode: 'vscode', cursor: 'cursor' }
 /** The machine each daemon signs in as, to hear its dial's words: the daemon asks its backend for each transcript. */
 const ME: FakeMachine = { machineId: 'e7'.repeat(16), computerId: 'e2e-dial-eval-computer', name: 'Fixture', token: 'e2e-dial-eval-token' }
 /** A fifth of a second of what the microphone heard: the fake backend answers its `speech` whatever the audio. */
@@ -151,7 +144,7 @@ export function guardLoaded(file: string, name: string, pids: readonly number[],
   }
 }
 /** The file beside the recording open that has the links of an app fail while it is there. */
-const failsFile = (open: string, app: App): string => join(dirname(open), `${SCHEME[app]}.fails`)
+const failsFile = (open: string, app: LinkedApp): string => join(dirname(open), `${SCHEME[app]}.fails`)
 
 /**
  * The open the devices run (HARNESS_OPEN_BIN), in place of the harness's own (harness/daemon.ts), which notes no exit: it
@@ -162,14 +155,14 @@ const failsFile = (open: string, app: App): string => join(dirname(open), `${SCH
  */
 export function writeRecordingOpen(path: string, runs: string): void {
   if ([path, runs].some((p) => p.includes("'"))) throw new Error('the recording open\'s folder holds a quote')
-  const fails = (Object.keys(SCHEME) as App[]).map((app) =>
+  const fails = (Object.keys(SCHEME) as LinkedApp[]).map((app) =>
     `case "$*" in *${SCHEME[app]}://*) [ -e '${failsFile(path, app)}' ] && code=1 ;; esac\n`)
   writeExecutable(path, `#!/bin/sh\ncode=0\n${fails.join('')}printf '%s %s\\n' "$code" "$*" >> '${runs}'\nexit "$code"\n`)
 }
 
 /** The apps whose links the recording open at [path] fails from now on; every other app's links open. */
 export function linksFail(path: string, apps: readonly App[]): void {
-  for (const app of Object.keys(SCHEME) as App[]) {
+  for (const app of Object.keys(SCHEME) as LinkedApp[]) {
     if (apps.includes(app)) writeFileSync(failsFile(path, app), '')
     else rmSync(failsFile(path, app), { force: true })
   }
@@ -582,14 +575,20 @@ export class World implements TierBWorld {
 
   private atWork(run: OpenRun): OpenRun { return { ...run, argv: workPaths(run.argv, this.rig.projects) } }
 
-  /** The face, recorded when it changed. */
+  /** The face, recorded when it changed (faceChange). */
   private face(at: number): void {
-    const { tiles, active } = this.carousel
-    const shown = { page: this.page, tiles: [...tiles], active: tiles[active] ?? null }
-    const last = this.faces.at(-1)
-    if (last && last.page === shown.page && last.active === shown.active && last.tiles.join('\n') === shown.tiles.join('\n')) return
-    this.faces.push({ at, ...shown })
+    const { tiles, active, refused } = this.carousel
+    const shown = { page: this.page, tiles: [...tiles], active: tiles[active] ?? null, refused }
+    if (faceChange(this.faces.at(-1), shown)) this.faces.push({ at, ...shown })
   }
+}
+
+type Face = Seen['faces'][number]
+/** Whether the face shown differs from the last one recorded: its page, tiles, the tile on it, or a refusal alone, so a
+ *  face check sees each refusal. */
+export function faceChange(last: Face | undefined, next: Omit<Face, 'at'>): boolean {
+  return !last || last.page !== next.page || last.active !== next.active || last.refused !== next.refused
+    || last.tiles.join('\n') !== next.tiles.join('\n')
 }
 
 /**
@@ -609,7 +608,7 @@ export const speak: TierBHandler<'voice'> = async (world, step) => {
 const GENERIC: { [K in GenericKind]: (world: World, step: StepOf<K>) => Promise<void> } = {
   front: async (world, step) => {
     world.front = step.app
-    world.tell({ front: FRONT[world.platform as 'darwin' | 'linux'][step.app] })
+    world.tell({ front: FRONT_NAMES[world.platform][step.app] })
   },
   thread: async (world, step) => { world.title(step.title) },
   tap: async (world, step) => { world.dial.send({ t: 'agent.open', agentId: world.agentId(step.session) }) },

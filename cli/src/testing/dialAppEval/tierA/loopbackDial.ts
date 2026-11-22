@@ -166,12 +166,13 @@ export class LoopbackDial {
     if (message.t === 'ping') queueMicrotask(() => this.send({ t: 'pong' }))
   }
 
-  /** The face, recorded when it changed. */
+  /** The face, recorded when it changed; a refusal changes it, so a face check sees each one. */
   private face(): void {
-    const { tiles, active } = this.carousel
-    const shown = { page: this.page, tiles: [...tiles], active: tiles[active] ?? null }
+    const { tiles, active, refused } = this.carousel
+    const shown = { page: this.page, tiles: [...tiles], active: tiles[active] ?? null, refused }
     const last = this.faces.at(-1)
-    if (last && last.page === shown.page && last.active === shown.active && last.tiles.join('\n') === shown.tiles.join('\n')) return
+    if (last && last.page === shown.page && last.active === shown.active && last.refused === shown.refused
+      && last.tiles.join('\n') === shown.tiles.join('\n')) return
     this.faces.push({ at: this.now(), ...shown })
   }
 }

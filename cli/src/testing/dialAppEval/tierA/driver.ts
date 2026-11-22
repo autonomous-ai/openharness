@@ -41,6 +41,15 @@ const STEPS: { [K in Exclude<StepKind, 'wait'>]: StepHandler<K> } = {
     await sessionsSteps.relaunch(world, step)
     if (isEditor(step.app)) await reopenWindows(world, step.app)
   },
+  'orca.layout': notBuilt('orca.layout'),
+  'orca.focus': notBuilt('orca.focus'),
+  'orca.front': notBuilt('orca.front'),
+  'orca.plugin': notBuilt('orca.plugin'),
+  'orca.close': notBuilt('orca.close'),
+}
+/** A step kind of the contract whose handler has not landed: no scenario takes it yet, and one that did would fail. */
+function notBuilt(kind: StepKind): () => Promise<never> {
+  return async () => { throw new Error(`tier A: the ${kind} step is not built yet`) }
 }
 /** Virtual time for the dial to be found and welcomed: the fleet looks every 2 s, the dial greets every 2 s. */
 const START_WITHIN_MS = 30_000

@@ -7,7 +7,7 @@ import { APP_BUNDLES } from '../../cable/hosts/hostDetect.js'
 import { observedTitle } from '../../cable/hosts/observedTitle.js'
 import { WINDOWS_APPS } from '../../cable/hosts/windowsRaise.js'
 import { CAROUSEL_TILES } from '../dialCarousel.js'
-import { agentIdOf, EDITORS, engineOf, PAGE, placeOf, SKIPPED_SCROLL, THRESHOLDS, type App, type Check, type CheckResult, type Platform,
+import { agentIdOf, EDITORS, engineOf, PAGE, placeOf, SKIPPED_SCROLL, THRESHOLDS, type App, type Check, type CheckResult, type LinkedApp, type Platform,
   type Scenario, type Seen, type SessionDef, type SessionKey, type Tier, type Until, type WrongSend } from './types.js'
 
 /** A failing check's evidence stays readable in the report, however long the scenario ran. */
@@ -262,14 +262,15 @@ function stillParts(check: CheckOf<'still'>, world: World, w: Window | undefined
   return [{ part: 'still', score: moved.length === 0 ? 1 : 0, timed: false, evidence }]
 }
 
-/** Each app's link scheme: the ChatGPT app's threads are Codex's. */
-const SCHEMES: Readonly<Record<App, string>> = { claude: 'claude://', chatgpt: 'codex://', vscode: 'vscode://', cursor: 'cursor://' }
+/** Each app's link scheme: the ChatGPT app's threads are Codex's. Orca's rows open by its CLI, with no link. */
+const SCHEMES: Readonly<Record<LinkedApp, string>> = { claude: 'claude://', chatgpt: 'codex://', vscode: 'vscode://', cursor: 'cursor://' }
 
 /**
  * The session's own link: the Claude app opens its store's `local_` id, the ChatGPT app the Codex thread, an editor's
- * Claude Code panel its session; an editor's other rows have none.
+ * Claude Code panel its session; an editor's other rows and Orca's have none.
  */
 function linkOf(session: SessionDef): string | undefined {
+  if (session.app === 'orca') return undefined
   const place = placeOf(session)
   if (place === 'panel') return `${SCHEMES[session.app]}anthropic.claude-code/open?session=${session.id}`
   if (place !== undefined) return undefined
@@ -367,7 +368,8 @@ function openParts(check: CheckOf<'open'>, world: World, w: Window | undefined, 
   // names: X5's tap must bring its app up another way.
   const refused = world.scenario.world?.linkFails ?? []
   const brings = (c: Seen['commands'][number]): boolean => c.ok
-    && !c.argv.some((arg) => refused.some((app) => arg.startsWith(SCHEMES[app]))) && fronts(c.argv, platform, session.app, link)
+    && !c.argv.some((arg) => refused.some((app) => app !== 'orca' && arg.startsWith(SCHEMES[app])))
+    && fronts(c.argv, platform, session.app, link)
   const front = commands.find(brings)
   const folds = (c: Seen['commands'][number]): boolean => folder !== undefined && c.ok && opensFolder(c.argv, platform, folder)
   const folded = commands.find(folds)
@@ -590,6 +592,7 @@ function partsOf(check: Check, scenario: Scenario, seen: Seen, platform: Platfor
     case 'cost': return costParts(seen)
     case 'scroll': return scrollParts(check, world, w)
     case 'logged': return loggedParts(world, w)
+    case 'face': throw new Error('the face check is not built yet')
   }
 }
 
