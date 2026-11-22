@@ -834,6 +834,21 @@ describe('editors', () => {
     expect(uncaughtProbes({ scenario: 'S1', platform: 'darwin', results: [], probes, wrongSends: [], gaps: [] })).toEqual(['open', 'apart'])
   })
 
+  it("an editor's session apart is counted on its own app's page: under Terminal, or on its ring's own page, it is not", () => {
+    const s = scenario([{ kind: 'hook', session: 'va', event: 'start', label: 'w' }], sessions)
+    const check: Check = { id: 'r', kind: 'ring', dim: 'D1', page: 'cursor', expect: ['ct'], apart: ['va'], after: 'w' }
+    const apart = (others: Array<[string, number]>): number => run(check, s, seen(s, [100], { frames: [frame(200, { t: 'apps', shown: 'cursor',
+      apps: [{ id: 'cursor', count: 1 }, ...others.map(([id, count]) => ({ id, count }))] }), ...list(200, 'cursor', [CT]).slice(1)] }))
+      .find((r) => r.check === 'r.apart')!.score
+    expect(apart([['vscode', 1]])).toBe(1)
+    expect(apart([['terminal-app', 1]])).toBe(0)
+    expect(apart([['vscode', 1], ['terminal-app', 1]])).toBe(0)
+    expect(apart([])).toBe(0)
+    // A Cursor session apart from Cursor's own page is nowhere it can be.
+    expect(scores(run({ ...check, apart: ['ct'], expect: [] }, s, seen(s, [100], { frames: [frame(200, { t: 'apps', shown: 'cursor',
+      apps: [{ id: 'cursor', count: 1 }, { id: 'vscode', count: 1 }] })] }))).apart).toBe(0)
+  })
+
   it('apart with no apps frame held scores 0 on every page, saying so', () => {
     const s = scenario([{ kind: 'hook', session: 'va', event: 'start', label: 'w' }], sessions)
     const ring = (page: 'vscode' | 'cursor', expect: string[]): Check => ({ id: 'r', kind: 'ring', dim: 'D1', page, expect, apart: [], after: 'w' })
