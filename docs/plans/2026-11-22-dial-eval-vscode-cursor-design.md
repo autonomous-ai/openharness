@@ -194,7 +194,8 @@ fixes a group never reads them.
   it. (D5, gate)
 - **VH2.** Two windows report the same shell, as when a terminal moves between windows → a tap goes to the window that
   reported it last. (D3, D7)
-- **VH3.** The person focuses the second pane of a split terminal → the dial follows to its agent. (D2)
+- **VH3.** The person focuses the second pane of a split terminal in a second window, behind the first → that window comes
+  up and the dial follows to its agent. (D2)
 - **VH4.** Voice on a panel session at rest → the exact text reaches it, once. (D5)
 - **UH1.** `cursor .` from Terminal.app, the field case's cause in the other app (macOS only) → the row is on the Cursor
   page, and a tap shows its terminal. (D1, D3)
