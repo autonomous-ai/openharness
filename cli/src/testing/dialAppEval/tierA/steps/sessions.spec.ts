@@ -597,6 +597,17 @@ describe("tier A's Orca agents", () => {
     expect(keyOfOrcaHandle(w.world, orcaTerminalHandle('a'))).toBeUndefined()
   })
 
+  it("an Orca session first started after Orca's relaunch is on that relaunch's handle, as one it ran at its quit is", async () => {
+    const w = fakeWorld('linux', orcaAgents())
+    await w.hook('a', 'start')
+    await sessionsSteps.quit(w.world, { kind: 'quit', app: 'orca' })
+    await sessionsSteps.relaunch(w.world, { kind: 'relaunch', app: 'orca' })
+    await w.hook('b', 'start')
+    const handle = orcaPaneHandle(orcaAgents().sessions[1]!, 1)
+    expect(w.told.at(-1)).toMatchObject({ event: 'session-start', hostHints: { ORCA_TERMINAL_HANDLE: handle } })
+    expect([orcaHandleOf(w.world, 'b'), keyOfOrcaHandle(w.world, handle)]).toEqual([handle, 'b'])
+  })
+
   it("the other apps' hooks, hints and processes are as before", async () => {
     /** What the Claude app's, the ChatGPT app's and VS Code's sessions tell and run as, pids aside, with an Orca agent of
      *  `orca`'s started first. */

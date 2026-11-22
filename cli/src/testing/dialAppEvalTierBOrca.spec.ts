@@ -5,7 +5,7 @@ import { join, relative } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { daemonEnvironment } from './daemonEnvironment.js'
 import { NET_GUARD_FILE_ENV, netGuardEnv, readNetGuard } from './dialAppEval/netGuard.js'
-import type { Delivery, Scenario, Seen, SessionDef, SessionKey } from './dialAppEval/types.js'
+import { orcaPaneHandle, type Delivery, type Scenario, type Seen, type SessionDef, type SessionKey } from './dialAppEval/types.js'
 
 // The dial eval's tier B Orca harness, the parts that need no daemon (docs/plans/2026-11-22-dial-eval-orca-design.md,
 // "Never the real Orca"). It is outside tsconfig's rootDir (src), so it is loaded untyped, as dialAppEvalTierB.spec.ts
@@ -25,7 +25,11 @@ const orca = await import('../../e2e/harness/appEvalOrca.js' as string) as {
   WHERE: RegExp
   where(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv
   madeUpSession(key: string, more?: Partial<SessionDef>): SessionDef
-  orcaSteps: { hook(world: unknown, step: { kind: 'hook'; session: SessionKey; event: 'start' }): Promise<void> }
+  orcaSteps: {
+    hook(world: unknown, step: { kind: 'hook'; session: SessionKey; event: 'start' }): Promise<void>
+    quit(world: unknown, step: { kind: 'quit'; app: 'orca' }): Promise<void>
+    relaunch(world: unknown, step: { kind: 'relaunch'; app: 'orca' }): Promise<void>
+  }
   startOrcaPlugin(d: { root: string; env: NodeJS.ProcessEnv }, children: ChildProcess[]): { stop(): Promise<number | null> }
 }
 const { orcaHostCc } = await import('../../e2e/harness/orcaHost.js' as string) as { orcaHostCc: string | null }
@@ -114,6 +118,39 @@ describe.skipIf(!orcaHostCc)("tier B's Orca agent whose hooks name no handle", (
       expect(Number(ppid)).toBe(agent.pid)
       expect(['??', '?']).not.toContain(tty)
       await agent.close()
+    } finally {
+      for (const child of children) child.kill('SIGKILL')
+    }
+  })
+})
+
+describe.skipIf(!orcaHostCc)("tier B's Orca relaunch", () => {
+  it("a session first started after Orca's relaunch opens its pane on that relaunch's handle, as one it ran at its quit does", async () => {
+    dir = mkdtempSync(join(tmpdir(), 'tier-b-orca-relaunch-'))
+    const root = realpathSync(dir)
+    const home = join(root, 'home')
+    const codexHome = join(root, 'codex')
+    mkdirSync(home)
+    mkdirSync(codexHome)
+    // Codex's start hook as the daemon installs it, doing nothing here: Codex runs no hook as it ends.
+    writeFileSync(join(codexHome, 'hooks.json'), JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'true # notify.mjs' }] }] } }))
+    const sessions = [session('a', { engine: 'codex' }), session('b', { engine: 'codex', tab: 1 })]
+    const opened: Array<[SessionKey, string | null]> = []
+    const children: ChildProcess[] = []
+    const world = {
+      d: { root, projectsDir: join(root, 'projects'), env: daemonEnvironment(process.env, { HOME: home, PATH: '/usr/bin:/bin', CODEX_HOME: codexHome }) },
+      children, platform: process.platform, orca: { listing: () => {}, endWatch: () => {} },
+      scenario: { id: 'T', app: 'orca', sessions, steps: [], checks: [], probes: [] },
+      session: (key: SessionKey) => sessions.find((s) => s.key === key)!,
+      orcaPane: (key: SessionKey, handle: string | null) => { opened.push([key, handle]) },
+    }
+    try {
+      await orca.orcaSteps.hook(world, { kind: 'hook', session: 'a', event: 'start' })
+      await orca.orcaSteps.quit(world, { kind: 'quit', app: 'orca' })
+      await orca.orcaSteps.relaunch(world, { kind: 'relaunch', app: 'orca' })
+      await orca.orcaSteps.hook(world, { kind: 'hook', session: 'b', event: 'start' })
+      const [a, b] = sessions as [SessionDef, SessionDef]
+      expect(opened).toEqual([['a', orcaPaneHandle(a, 0)], ['a', null], ['a', orcaPaneHandle(a, 1)], ['b', orcaPaneHandle(b, 1)]])
     } finally {
       for (const child of children) child.kill('SIGKILL')
     }
