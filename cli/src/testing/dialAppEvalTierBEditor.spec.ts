@@ -12,7 +12,7 @@ import type { Platform, Scenario, SessionDef } from './dialAppEval/types.js'
 const editor = await import('../../e2e/harness/appEvalEditor.js' as string) as {
   windowRecords(window: string, keyOf: (pid: number) => string | undefined,
     record: (line: Record<string, unknown>, at: number) => void): (printed: Record<string, unknown>, at: number) => void
-  hintsOf(world: { platform: Platform; scenario: Scenario }, s: SessionDef): Record<string, string>
+  editorHints(world: { platform: Platform; scenario: Scenario }, s: SessionDef): Record<string, string>
 }
 /** The parts of a daemon a Cursor agent's start reads. */
 interface CursorDaemon { root: string; projectsDir: string; env: NodeJS.ProcessEnv }
@@ -105,7 +105,7 @@ describe("tier B's Cursor agents", () => {
     const codexLine = "'/eval/node' '/eval/hook/notify.mjs' --port 1 --data-dir /eval/data --engine codex"
     const run = (platform: Platform, key: string, event = 'start') => {
       const s = u1.sessions.find((one) => one.key === key)!
-      return cursor.hookRun(codexLine, { HOME: '/eval/home' }, editor.hintsOf({ platform, scenario: u1 }, s), event,
+      return cursor.hookRun(codexLine, { HOME: '/eval/home' }, editor.editorHints({ platform, scenario: u1 }, s), event,
         { sessionId: s.id, roots: [`/eval/projects/eval-${key}`], transcriptPath: `/eval/${key}.jsonl` })
     }
     const [agent, cli] = [run('darwin', 'c'), run('darwin', 'b')]

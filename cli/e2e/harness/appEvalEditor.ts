@@ -99,7 +99,7 @@ const noExtension = (world: TierBWorld): boolean => world.scenario.world?.extens
  * entrypoint. In tmux, tmux names the terminal program itself, and the bundle id is what its server inherited. Cursor's own
  * agent, in no terminal, gives the bundle id alone.
  */
-export function hintsOf(world: Pick<TierBWorld, 'platform' | 'scenario'>, s: SessionDef): Record<string, string> {
+export function editorHints(world: Pick<TierBWorld, 'platform' | 'scenario'>, s: SessionDef): Record<string, string> {
   const place = placeOf(s)
   const bundle = world.platform === 'darwin' ? APP_BUNDLES[fromTerminal(world) ? 'terminal-app' : s.app] : undefined
   return {
@@ -111,8 +111,8 @@ export function hintsOf(world: Pick<TierBWorld, 'platform' | 'scenario'>, s: Ses
 
 /** An editor's Claude Code: under a fake of its editor, a terminal's as its shell's job, the editor started from Terminal
  *  when the world says so. */
-const EDITOR: ClaudeHost = (world, s) => ({
-  hints: hintsOf(world, s), app: s.app as Editor, shell: placeOf(s) === 'terminal', launchedFrom: world.scenario.world?.launchedFrom,
+const EDITOR_HOST: ClaudeHost = (world, s) => ({
+  hints: editorHints(world, s), app: s.app as Editor, shell: placeOf(s) === 'terminal', launchedFrom: world.scenario.world?.launchedFrom,
 })
 
 /** The editor, running: started at its first step, its own process with it, which, ended, ends what it runs first and only
@@ -164,7 +164,7 @@ function ownHome(world: TierBWorld): string {
 
 /** The session's Codex in a tab of its editor, its start hook run: its shell. */
 async function startCodex(world: TierBWorld, state: State, s: SessionDef, folder: string): Promise<number | undefined> {
-  const codex = await CodexOutside.inTab(world.d, folder, world.children, hintsOf(world, s),
+  const codex = await CodexOutside.inTab(world.d, folder, world.children, editorHints(world, s),
     { app: s.app as Editor, launchedFrom: world.scenario.world?.launchedFrom },
     { sessionId: s.id, ...(s.codexHome === 'own' ? { home: ownHome(world) } : {}) })
   state.codex.set(s.key, codex)
@@ -177,7 +177,7 @@ async function startCodex(world: TierBWorld, state: State, s: SessionDef, folder
 async function startCursor(world: TierBWorld, state: State, s: SessionDef, folder: string): Promise<number | undefined> {
   const roots = (s.folders ?? [s.cwd]).map((one) => world.folder(one))
   const cursor = await CursorOutside.start(world.d, folder, world.children,
-    { sessionId: s.id, roots, terminal: placeOf(s) === 'terminal', hints: hintsOf(world, s) })
+    { sessionId: s.id, roots, terminal: placeOf(s) === 'terminal', hints: editorHints(world, s) })
   state.cursor.set(s.key, cursor)
   await cursor.hook('start')
   return cursor.shellPid
@@ -203,7 +203,7 @@ async function inTmux(world: TierBWorld, state: State, s: SessionDef, folder: st
   // At once, so the driver's last resort can end it as it kills the editor; one already gone fails nothing.
   const killed = (): void => { spawnSync('tmux', ['-S', d.tmux.socket, '-f', '/dev/null', 'kill-session', '-t', name], { env: d.tmux.env }) }
   state.tmux.set(s.key, { end: async () => killed(), kill: killed })
-  const own = await InOwnTmux.start(d, name, folder, { resume: s.id, env: { ...guardEnv(d), ...hintsOf(world, s), FAKE_CLAUDE_SESSION_TITLE: s.title } })
+  const own = await InOwnTmux.start(d, name, folder, { resume: s.id, env: { ...guardEnv(d), ...editorHints(world, s), FAKE_CLAUDE_SESSION_TITLE: s.title } })
   // As in every process of the daemon: its hooks are its children.
   guardLoaded(d.env[NET_GUARD_FILE_ENV]!, `${name} pane's Claude Code`, [own.pid], 'node')
   const client = await tabClient(d, name, s.app as Editor)
@@ -231,7 +231,7 @@ async function startSession(world: TierBWorld, key: SessionKey): Promise<void> {
   if (s.tmux) shell = await inTmux(world, state, s, basename(cwd))
   else {
     switch (engineOf(s)) {
-      case 'claude': shell = (await startClaude(world, appOf(world, EDITOR), key)).outside.shellPid; break
+      case 'claude': shell = (await startClaude(world, appOf(world, EDITOR_HOST), key)).outside.shellPid; break
       case 'codex': shell = await startCodex(world, state, s, basename(cwd)); break
       case 'cursor': shell = await startCursor(world, state, s, basename(cwd)); break
     }

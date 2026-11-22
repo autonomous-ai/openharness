@@ -52,7 +52,7 @@ const STDERR_KEPT = 2_000
 export type ClaudeHost = (world: TierBWorld, s: SessionDef) => {
   hints: Record<string, string>; app?: OutsideApp; shell?: boolean; launchedFrom?: 'terminal-app'
 }
-export interface Live {
+interface Live {
   outside: Outside
   /** Ends the mod's poll. */
   mod: AbortController
