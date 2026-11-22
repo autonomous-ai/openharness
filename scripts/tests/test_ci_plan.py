@@ -471,6 +471,17 @@ class SelectionTests(unittest.TestCase):
                 self.assertNotIn(path, planner.LINUX_E2E_NEVER)
                 self.assertFalse(planner.dial_hosts_path(path))
 
+    def test_every_path_the_app_eval_covers_is_in_the_checkout(self):
+        # A path renamed or deleted would leave its successor uncovered, the list still passing.
+        root = REPOSITORY
+        full_checkout(self, "cli/src/cable/hosts", "cli/e2e/harness", "plugins/harness-device-vscode/src")
+        for entry in planner.LINUX_E2E_APP_EVAL_PATHS:
+            with self.subTest(entry=entry):
+                if "*" in entry:
+                    self.assertTrue(list(root.glob(entry)))
+                else:
+                    self.assertTrue((root / entry).is_dir() if entry.endswith("/") else (root / entry).is_file())
+
     def test_the_orca_e2e_files_are_every_linux_one_through_the_stand_in(self):
         root = REPOSITORY
         full_checkout(self, "cli/e2e/harness", "cli/src/cable/hosts")
@@ -985,17 +996,6 @@ class GitPlanTests(unittest.TestCase):
         self.commit()
         with self.assertRaisesRegex(ValueError, re.escape(planner.LINUX_E2E_ORCA_FILES[0])):
             self.plan()
-
-    def test_every_path_the_app_eval_covers_is_in_the_checkout(self):
-        # A path renamed or deleted would leave its successor uncovered, the list still passing.
-        root = REPOSITORY
-        full_checkout(self, "cli/src/cable/hosts", "cli/e2e/harness", "plugins/harness-device-vscode/src")
-        for entry in planner.LINUX_E2E_APP_EVAL_PATHS:
-            with self.subTest(entry=entry):
-                if "*" in entry:
-                    self.assertTrue(list(root.glob(entry)))
-                else:
-                    self.assertTrue((root / entry).is_dir() if entry.endswith("/") else (root / entry).is_file())
 
     def test_a_change_the_app_eval_covers_runs_its_e2e_files(self):
         hosts, catalog, carousel, driver = ("cli/src/cable/hosts/scannedApp.ts", "cli/src/testing/dialAppEval/catalog.ts",
@@ -2005,6 +2005,7 @@ class FullCheckoutTests(unittest.TestCase):
     NAMES = ("SelectionTests.test_every_desktop_file_the_phone_tests_read_selects_mobile",
              "SelectionTests.test_the_dial_host_files_are_the_ones_cli_e2e_leaves_out",
              "SelectionTests.test_the_orca_e2e_files_are_every_linux_one_through_the_stand_in",
+             "SelectionTests.test_every_path_the_app_eval_covers_is_in_the_checkout",
              "SelectionTests.test_every_declared_input_exists",
              "CrossReadTests.test_every_cross_read_in_this_repository_is_declared")
 
