@@ -14,6 +14,7 @@ import { isMessagesBlock, messagesCommand } from './messagesHook.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import * as preparations from './nativeHookFiles.js'
 import { reviewHash, reviewRecords } from './hookReview.js'
+import * as hookReview from './hookReview.js'
 import { hashOf } from '../../lib/log.js'
 import { HARNESS_AGENT_TOOLS } from '../facets/hooks.js'
 
@@ -464,6 +465,14 @@ it('on Windows, writes the Codex rules file with the Windows launcher', async ()
   expect(lines).toContain('prefix_rule(pattern=["harness", "device", "notify"], decision="allow")')
   expect(lines.filter((line) => line.includes(JSON.stringify(POSIX).slice(1, -1)))).toEqual([])
   expect(warn).not.toHaveBeenCalled()
+})
+
+// There Codex has no Agent Messages block and its allowance is a file of its own: nothing more goes in hooks.json.
+it('on Windows, records Codex\'s hooks as reviewed once, with its hooks', async () => {
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  const prepare = vi.spyOn(hookReview, 'prepareReviewed')
+  expect(await installHookSettings('codex', codex.settings, 19473, join(root, 'codex'), {}, 'win32')).toBe(true)
+  expect(prepare).toHaveBeenCalledTimes(1)
 })
 
 it('on Windows, a deny or an ask for harness device notify, or for all of harness device, keeps it out in both spellings and nothing else', async () => {
