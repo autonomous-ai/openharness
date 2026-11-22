@@ -2,8 +2,8 @@
  * Cursor's agents outside Harness, told by Cursor's own hooks, as codexOutside.ts tells Codex: cursor-agent as the
  * foreground job of a real shell in a terminal of a fake Cursor, and Cursor's own agent a process under the fake Cursor
  * with no terminal. Each runs its hooks from its own process, through a shell as Cursor runs them, so the hook's caller
- * is the agent; its tab's terminal is its stdio, so they come and go on a socket in the daemon's root. Ending it closes
- * its tab.
+ * is the agent; they come and go on a socket in the daemon's root (outsideAgent.ts hookTab), never its stdio. Ending it
+ * closes its tab.
  *
  * Its transcript is where Cursor writes one (engines/cursor/contract.ts CURSOR_TRANSCRIPT): the daemon's Cursor home,
  * its throwaway home's `.cursor`, in a folder named by its workspace, as tier A writes Cursor's.
@@ -74,7 +74,7 @@ export class CursorOutside {
     mkdirSync(dirname(transcriptPath), { recursive: true })
     // A new one: the ids are the catalog's, and an earlier scenario on this daemon wrote under the same.
     writeFileSync(transcriptPath, '')
-    const { tab, run } = await hookTab(d, cwd, { ...d.env, ...hints, TERM: 'xterm-256color' }, { app: 'cursor', shell: terminal },
+    const { tab, run } = await hookTab(d, cwd, { ...d.env, ...hints, TERM: 'xterm-256color' }, { app: 'cursor', shell: terminal, terminal },
       `the Cursor agent in ${folder}`)
     children.push(tab.process)
     return new CursorOutside(d, tab, cwd, sessionId, roots, hints, transcriptPath, run)

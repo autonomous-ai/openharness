@@ -123,26 +123,32 @@ function fakeApp(d: IsolatedDaemon, app: FakeApp): string {
 
 /** The shell a person's Terminal runs an app from (`code .`): it waits for the app, which it does not exec. */
 const LAUNCHED = '"$@"; exit $?'
+/** A command an app runs with no terminal: it says its pid, as the pseudo-terminal's helper says its child's, then
+ *  becomes the command, whose parent is the app. */
+const SAYS_PID = 'echo $$ >&2; exec "$@"'
 
 /** A command in a tab of its own (openTab), and the shell it runs in there when it has one. */
 export interface Tab { readonly process: ChildProcess; readonly pid: number; readonly shellPid?: number }
-/** The app a tab is in, whether its command runs in a shell, and the app that app was started from (openTab). */
-export interface TabOptions { app?: FakeApp; shell?: boolean; launchedFrom?: FakeApp }
+/** The app a tab is in, whether its command runs in a shell, the app that app was started from, and whether it has a
+ *  terminal (openTab). */
+export interface TabOptions { app?: FakeApp; shell?: boolean; launchedFrom?: FakeApp; terminal?: boolean }
 
 /**
  * A tab running [command] on a pseudo-terminal of its own (PTY), in [cwd] under [env] alone, under a fake [app] when one
  * is given. With `shell`, a real `/bin/sh` runs in the pseudo-terminal and the command is its foreground job (SHELL), as
  * the shell a terminal app starts for its tab. With `launchedFrom`, the app was started from a shell in a fake of that
- * app, as `code .` in Terminal starts it, so `ps` reads Terminal → shell → app → shell → command. Resolves once the tab
- * said the command's pid (and with `shell`, the shell's).
+ * app, as `code .` in Terminal starts it, so `ps` reads Terminal → shell → app → shell → command. With `terminal: false`,
+ * the command is a process of the app's own with no terminal, as Cursor runs its agent: in a session of its own, so it
+ * holds no terminal of the test's either. Resolves once the tab said the command's pid (and with `shell`, the shell's).
  */
 export async function openTab(d: IsolatedDaemon, cwd: string, env: NodeJS.ProcessEnv, command: readonly string[],
-  { app, shell = false, launchedFrom }: TabOptions = {}): Promise<Tab> {
+  { app, shell = false, launchedFrom, terminal = true }: TabOptions = {}): Promise<Tab> {
+  if (shell && !terminal) throw new Error('a shell runs in a terminal')
   const shellCommand = shell ? ['--say', '/bin/sh', '-i', '-c', SHELL, 'sh'] : []
-  const inTab = ['python3', '-c', PTY, ...shellCommand, ...command]
+  const inTab = terminal ? ['python3', '-c', PTY, ...shellCommand, ...command] : ['/bin/sh', '-c', SAYS_PID, 'sh', ...command]
   const underApp = app ? [fakeApp(d, app), '-e', UNDER_APP, ...inTab] : inTab
   const [file, ...args] = launchedFrom ? [fakeApp(d, launchedFrom), '-e', UNDER_APP, '/bin/sh', '-c', LAUNCHED, 'sh', ...underApp] : underApp
-  const tab = spawn(file, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] })
+  const tab = spawn(file, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], detached: !terminal })
   tab.stdout!.resume()
   // The tab's child's pid and, with a shell, the engine's line come from two processes, in either order.
   const { child, engine } = await new Promise<{ child: number; engine?: number }>((resolve, reject) => {
