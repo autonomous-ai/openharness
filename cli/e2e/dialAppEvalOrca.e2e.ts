@@ -21,7 +21,7 @@ import { loadBaseline, SKIP_RATCHET_ENV, tierBVerdict } from '../src/testing/dia
 import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from '../src/testing/dialAppEval/runner.js'
 import { HELD_MAKER, orcaTerminalHandle, type Platform, type Scenario, type SessionDef } from '../src/testing/dialAppEval/types.js'
 import { inside, orcaCliInside, TierBDriver } from './harness/appEvalDriver.js'
-import { OrcaAgent, orcaEnv, startedWith } from './harness/appEvalOrca.js'
+import { OrcaAgent, orcaEnv, orcaSteps, startedWith } from './harness/appEvalOrca.js'
 import { IsolatedDaemon } from './harness/daemon.js'
 import { ORCA_HOST_NAME, orcaHostCc } from './harness/orcaHost.js'
 
@@ -74,14 +74,12 @@ const ranOrca = (argv: readonly string[], group: string, verb: string): boolean 
 describe.skipIf(WIN32)('the dial eval, tier B: Orca', () => {
   let driver: TierBDriver
   const runs: ScenarioRun[] = []
-  beforeAll(() => { driver = new TierBDriver({}) })
+  beforeAll(() => { driver = new TierBDriver({ orca: orcaSteps }) })
   /** What a scenario's run proves beside its checks, read from its world as it stopped. */
   const ALSO: Partial<Record<string, () => void>> = {
-    // The devices read Orca's layout from the fake, and the CLI they would run is still the one inside the root.
+    // The devices read Orca's layout from the fake: each scenario checks the CLI they run resolves inside the root.
     O1: () => {
-      const { d } = driver.lastWorld()
       expect(driver.seen().commands.filter((c) => ranOrca(c.argv, 'terminal', 'list'))).not.toEqual([])
-      expect(() => orcaCliInside(d.env, d.root, process.platform)).not.toThrow()
     },
     // With no plugin in Orca, no loop of it ran and the devices opened no dial stream.
     O13: () => {

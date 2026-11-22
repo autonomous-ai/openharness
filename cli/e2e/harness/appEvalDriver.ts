@@ -16,8 +16,9 @@
  * What it saw: the frames the dial received, at their arrival; the faces of the firmware's carousel model, fed those
  * frames and the person's own turns (a swipe moves the glass before the daemon hears of it); the commands of the
  * recording open and of the recording Cursor CLI, with their exit, a folder in the daemon's projects written as the
- * catalog's `/work/` one; the deliveries and editor streams the app's steps record; the devices' log lines, at their
- * read; and, after `stop`, what the scenario cost (appEvalCost.ts).
+ * catalog's `/work/` one, and the fake Orca's at their own times, each `terminal send` among them a `typed` delivery to
+ * the session whose pane it named; the deliveries and editor streams the app's steps record; the devices' log lines, at
+ * their read; and, after `stop`, what the scenario cost (appEvalCost.ts).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
@@ -28,6 +29,7 @@ import { orcaBinary } from '../../src/devices/orcaHomes.js'
 import { resolveBinaryOnPath } from '../../src/lib/binaryOnPath.js'
 import { claudeAppFixture } from '../../src/testing/claudeAppFixture.js'
 import { describeAttempt, guardThisProcess, NET_GUARD_FILE_ENV, netGuardEnv, readNetGuard, type NetAttempt } from '../../src/testing/dialAppEval/netGuard.js'
+import { orcaListing } from '../../src/testing/dialAppEval/orcaListing.js'
 import { agentIdOf, FRONT_NAMES, PAGE, placeOf, type App, type Delivery, type EvalDriver, type LinkedApp, type Platform,
   type Scenario, type Seen, type SessionDef, type SessionKey, type Step, type StepKind, type StepOf } from '../../src/testing/dialAppEval/types.js'
 import { CAROUSEL_REFRESH_MS, DialCarousel, type DialMessage } from '../../src/testing/dialCarousel.js'
@@ -69,6 +71,8 @@ const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : 
 
 /** One run of the recording open: the command it stands for, and whether it exited 0. */
 export type OpenRun = Omit<Seen['commands'][number], 'at'>
+/** One run the fake Orca noted: the name it was run by and its arguments, its exit, and its time. */
+export type OrcaRun = ReturnType<FakeOrca['log']>[number]
 
 export interface TierBWorld {
   readonly d: IsolatedDaemon; readonly desk: Desk; readonly dial: FakeDial
@@ -92,6 +96,11 @@ export interface TierBWorld {
   folder(path: string): string
   /** Ended at stop. */
   readonly children: ChildProcess[]
+  /** Orca's CLI, as `orca` and `orca-ide`: the fake. */
+  readonly orca: FakeOrca
+  /** The session's own Orca pane opened on [handle] now, or closed (null): what a `terminal send` types to a handle
+   *  reaches the session whose own pane it was at the send. */
+  orcaPane(key: SessionKey, handle: string | null): void
 }
 export type TierBHandler<K extends StepKind> = (world: TierBWorld, step: StepOf<K>) => Promise<void>
 
@@ -105,8 +114,9 @@ type Run = Exclude<Step, { kind: 'wait' }>
 /** A daemon, its desk and its backend, kept across the scenarios that do not ask for a fresh one. */
 interface Rig {
   d: IsolatedDaemon; desk: Desk; backend: FakeBackend
-  /** Orca's CLI, as `orca` and `orca-ide`: the fake, with watch-focus. */
+  /** Orca's CLI, as `orca` and `orca-ide`: the fake, and whether it has watch-focus now. */
   orca: FakeOrca
+  watchFocus: boolean
   /** Where its recording open notes its runs, and its recording Cursor CLI its own (Linux's alone: none on macOS). */
   runs: string
   cursorRuns: string
@@ -228,6 +238,26 @@ export function orcaCliInside(env: NodeJS.ProcessEnv, root: string, platform: No
     throw new Error("the daemon's Orca CLI is not inside its root")
   }
   return cli
+}
+
+/** The fake Orca's runs as commands, at their own times, each argument inside one of [projects] written as the catalog's
+ *  `/work/` folder. */
+export function orcaCommands(runs: readonly OrcaRun[], projects: readonly string[]): Seen['commands'] {
+  return runs.map(({ argv, ok, at }) => ({ at, argv: workPaths(argv, projects), ok }))
+}
+/**
+ * Each `terminal send` Orca took (cable/hosts/orca.ts) as a `typed` delivery at its time, to the session whose own pane
+ * the handle it names was then ([ownerOf]); to none for any other handle, a closed or held pane's among them, which the
+ * gate counts as a wrong send. One Orca refused typed nothing.
+ */
+export function orcaDeliveries(runs: readonly OrcaRun[], ownerOf: (handle: string, at: number) => SessionKey | undefined): Delivery[] {
+  return runs.flatMap(({ argv, ok, at }): Delivery[] => {
+    const text = argv.find((arg) => arg.startsWith('--text='))?.slice('--text='.length)
+    if (!ok || argv[1] !== 'terminal' || argv[2] !== 'send' || text === undefined) return []
+    const flag = argv.indexOf('--terminal')
+    const handle = flag < 0 ? undefined : argv[flag + 1]
+    return [{ at, path: 'typed', target: (handle === undefined ? undefined : ownerOf(handle, at)) ?? null, text }]
+  })
 }
 
 /** Each run noted in [runs] as `<exit> <arguments>`, in order, as the command [program] with them. */
@@ -390,6 +420,8 @@ async function openRig(guard: string): Promise<Rig> {
     // inside its root: every session here runs inside the real Orca.
     const orca = FakeOrca.install(d, { watchFocus: true })
     orcaCliInside(d.env, d.root, process.platform)
+    // No account in Orca: its homes are not graded, and its list is answered empty, as tier A answers it.
+    orca.accounts({})
     const dials = join(d.root, 'dials.json')
     d.env.HARNESSD_TEST_DIAL_PORT = dials
     writeFileSync(dials, '[]')
@@ -401,7 +433,7 @@ async function openRig(guard: string): Promise<Rig> {
     await d.start()
     // An engine started by hand reads its hooks once, as it starts: they are in before any scenario starts one.
     await d.hooksInstalled(['claude', 'codex'])
-    return { d, desk: new Desk(dials), backend, orca, runs, cursorRuns, projects, guard, given: 0, polled: new Map() }
+    return { d, desk: new Desk(dials), backend, orca, watchFocus: true, runs, cursorRuns, projects, guard, given: 0, polled: new Map() }
   } catch (error) {
     await d?.close().catch(() => {})
     await backend.close()
@@ -437,6 +469,10 @@ export class World implements TierBWorld {
   private readonly deliveries: Delivery[] = []
   private readonly streams: NonNullable<Seen['streams']> = []
   private readonly logs: NonNullable<Seen['logs']> = []
+  /** Each Orca pane a session owned, by its handle, from its open to its close. */
+  private readonly panes: Array<{ key: SessionKey; handle: string; from: number; to: number }> = []
+  /** When it began, ms since the epoch: the fake Orca's runs since are its own. */
+  private readonly began = Date.now()
   private plugged: FakeDial | undefined
   /** How many of the plugged dial's messages, of the open's runs and of the Cursor CLI's were read; where in the daemon's
    *  log the next read starts. */
@@ -464,6 +500,7 @@ export class World implements TierBWorld {
 
   get d(): IsolatedDaemon { return this.rig.d }
   get desk(): Desk { return this.rig.desk }
+  get orca(): FakeOrca { return this.rig.orca }
   get backend(): FakeBackend { return this.rig.backend }
   get dial(): FakeDial {
     if (!this.plugged) throw new Error(`${this.scenario.id}: no dial is plugged in`)
@@ -490,6 +527,12 @@ export class World implements TierBWorld {
   }
   title(text: string): void { this.tell({ thread: text }) }
   stream(window: string, line: Record<string, unknown>, at = Date.now()): void { this.streams.push({ at, window, line }) }
+  orcaPane(key: SessionKey, handle: string | null): void {
+    const now = Date.now()
+    const open = this.panes.find((p) => p.key === key && p.to === Infinity)
+    if (open) open.to = now
+    if (handle !== null) this.panes.push({ key, handle, from: now, to: Infinity })
+  }
   folder(path: string): string {
     if (!path.startsWith('/work/')) throw new Error(`${this.scenario.id}: ${path} is not a catalog folder`)
     const made = join(this.d.projectsDir, path.slice('/work/'.length))
@@ -613,6 +656,19 @@ export class World implements TierBWorld {
     if (failed) throw failed.error
   }
 
+  /**
+   * The fake Orca's runs since this world began, as commands in time order with the others, and its sends as deliveries.
+   * Read once, as the world stops: each run carries its own time, and a read of a daemon's every run at each of the
+   * world's reads would cost this worker a share of its CPU for nothing.
+   */
+  takeOrca(): void {
+    const runs = this.rig.orca.log().filter((run) => run.at >= this.began)
+    this.commands.push(...orcaCommands(runs, this.rig.projects))
+    this.commands.sort((a, b) => a.at - b.at)
+    this.deliveries.push(...orcaDeliveries(runs, (handle, at) =>
+      this.panes.find((p) => p.handle === handle && p.from <= at && at < p.to)?.key))
+  }
+
   private atWork(run: OpenRun): OpenRun { return { ...run, argv: workPaths(run.argv, this.rig.projects) } }
 
   /** The face, recorded when it changed (faceChange). */
@@ -700,6 +756,12 @@ export class TierBDriver implements EvalDriver {
     if (this.rig && (scenario.fresh || counted)) await this.closeRig()
     if (this.rig) await this.reset(this.rig)
     const rig = this.rig ??= await openRig(join(this.own, `net-guard-${++this.daemons}.jsonl`))
+    // Rewritten only when it changes: each rewrite moves the launcher's mtime, and the devices ask `terminal --help` again.
+    const watchFocus = scenario.world?.orca?.watchFocus !== false
+    if (rig.watchFocus !== watchFocus) {
+      rig.orca.watchFocus(watchFocus)
+      rig.watchFocus = watchFocus
+    }
     const world = this.world = new World(rig, scenario, platform)
     for (const reason of gaps) world.gap(reason)
     linksFail(rig.d.env.HARNESS_OPEN_BIN!, scenario.world?.linkFails ?? [])
@@ -768,6 +830,8 @@ export class TierBDriver implements EvalDriver {
         if (world && costEnd) world.cost = await costEnd()
       }
     } finally {
+      // Whatever the close did: the gate sees each send.
+      world?.takeOrca()
       if (this.rig) this.collect(this.rig)
       if (!this.ready && this.rig) await this.closeRig()
     }
@@ -811,6 +875,11 @@ export class TierBDriver implements EvalDriver {
     emptied(rig.d.env.CLAUDE_PROJECTS_DIR!)
     emptied(join(rig.d.env.CODEX_HOME!, 'sessions'))
     emptied(join(home, '.cursor', 'projects'))
+    // Orca lays nothing out until a scenario's layout, its watches end with the last scenario, and a new one tells no
+    // focus of it: a watch prints the last line told first.
+    rig.orca.listing(orcaListing([], {}))
+    rig.orca.endWatch()
+    rig.orca.focus(null)
     rig.backend.speech = null
     await rig.desk.unplug(SERIAL)
   }

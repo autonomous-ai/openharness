@@ -193,7 +193,7 @@ export function start(world: TierBWorld, app: FakeApp, key: SessionKey): Promise
 }
 
 /** The mod's loop: one poll held at a time, the next asked as soon as one is answered. */
-async function holdMod(world: TierBWorld, key: SessionKey, sessionId: string, signal: AbortSignal): Promise<void> {
+export async function holdMod(world: TierBWorld, key: SessionKey, sessionId: string, signal: AbortSignal): Promise<void> {
   while (!signal.aborted) {
     const asked = Date.now()
     let answer: Awaited<ReturnType<typeof inboxPoll>> | undefined

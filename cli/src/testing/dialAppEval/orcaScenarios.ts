@@ -281,7 +281,8 @@ export function orcaScenarios(): Scenario[] {
     }),
     scenario({
       id: 'O16', app: 'orca', title: 'Forty worktrees, one agent each, one needing you: the ring has 16, that one among them, in tab order',
-      dims: ['D1', 'D7'], sessions: [...k40.map((key, i) => pane(key, w40[i]!, 0)), orcaGhost],
+      // Tier A alone: its forty starts a second apart cost tier B's Orca file a minute of its six (the plan's Task 14).
+      dims: ['D1', 'D7'], tiers: ['a'], sessions: [...k40.map((key, i) => pane(key, w40[i]!, 0)), orcaGhost],
       steps: [
         ...orcaOpening(w40),
         ...started(k40),
