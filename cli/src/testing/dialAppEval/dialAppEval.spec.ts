@@ -15,6 +15,7 @@ import { basename } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { claudeGhost, claudeSessions, editorGhost, editorSession, keys, listed, MAIN, orcaGhost, orcaOpening, orcaSession, orcaStarted, scenario,
   scenariosFor, started } from './catalog.js'
+import { rings } from './checks.js'
 import { loadBaseline, SKIP_RATCHET_ENV, tierAVerdict } from './grade.js'
 import { describeAttempt } from './netGuard.js'
 import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from './runner.js'
@@ -169,7 +170,7 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
   it('a voice step whose target the face never shows leaves its scenario ungraded, and says so', async () => {
     // The person turns the dial to b and the step speaks to a: the glass never showed a.
     const voice = scenario({
-      id: 'V1', app: 'claude', title: 'Eval voice to a session not on the face', dims: ['D5'], tiers: ['a'],
+      id: 'S3', app: 'claude', title: 'Eval voice to a session not on the face', dims: ['D5'], tiers: ['a'],
       sessions: [...claudeSessions(['a', 'b']), claudeGhost],
       steps: [
         { kind: 'claude.write', sessions: ['a', 'b'] },
@@ -304,39 +305,21 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     expect(run.gaps).toEqual([])
   })
 
-  /** Task 7's O1, before the catalog has it: two worktrees, five agents, Claude Code and Codex, c in a split of a's tab, d
-   *  in a tab the person renamed; the plugin's front unknown. */
-  const o1 = (): Scenario => scenario({
-    id: 'O1', app: 'orca', title: 'Eval five agents in two worktrees', dims: ['D1'], tiers: ['a'],
-    sessions: [orcaSession('a'), orcaSession('c', { split: 1 }), orcaSession('b', { engine: 'codex', tab: 1 }),
-      orcaSession('d', { worktree: 'w2' }), orcaSession('e', { engine: 'codex', worktree: 'w2', tab: 1 }), orcaGhost],
-    steps: [{ kind: 'orca.layout', worktrees: ['w1', 'w2'], renamed: { d: 'Eval Renamed' } }, ...orcaStarted(['e', 'd', 'c', 'b', 'a'])],
-    checks: [], probes: [],
-  })
-  /** The last whole list the dial was sent, each row by its session's key and its name, as checks.ts reads lists. */
+  const o1 = MAIN.find((s) => s.id === 'O1')!
+  /** The last whole list the dial was sent, each row by its session's key and its name. */
   const lastList = (seen: Seen, of: Scenario) => {
-    let rows: Array<{ key: string; name: unknown }> | undefined
-    let last: { at: number; rows: Array<{ key: string; name: unknown }> } | undefined
-    for (const { at, message } of seen.frames) {
-      if (message.t === 'agents.begin') rows = []
-      else if (message.t === 'agent' && rows) rows.push({ key: of.sessions.find((s) => agentIdOf(s) === message.id)?.key ?? 'other', name: message.name })
-      else if (message.t === 'agents.end' && rows) {
-        last = { at, rows }
-        rows = undefined
-      }
-    }
-    return last
+    const last = rings(seen).at(-1)
+    return last && { at: last.at, rows: last.rows.map((r) => ({ key: of.sessions.find((s) => agentIdOf(s) === r.id)?.key ?? 'other', name: r.name })) }
   }
   const isList = (argv: string[]): boolean => argv[1] === 'terminal' && argv[2] === 'list'
 
   it("O1 on darwin: the five are listed in Orca's tab order, by their names, after a terminal list", async () => {
-    const scenario = o1()
     const driver = new TierADriver({ startDevices })
-    const run = await runScenario(driver, scenario, 'darwin')
+    const run = await runScenario(driver, o1, 'darwin')
     expect(run.error).toBeUndefined()
     const seen = driver.seen()
     // Codex's hooks carry no title: its row is its tab's. c's own title wins over its tab's, a's; d's tab was renamed.
-    const list = lastList(seen, scenario)!
+    const list = lastList(seen, o1)!
     expect(list.rows).toEqual([{ key: 'a', name: 'Eval Alpha' }, { key: 'c', name: 'Eval Charlie' }, { key: 'b', name: 'Eval Bravo' },
       { key: 'd', name: 'Eval Renamed' }, { key: 'e', name: 'Eval Echo' }])
     const read = seen.commands.find((c) => isList(c.argv))
@@ -344,14 +327,8 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     expect(list.at).toBeGreaterThanOrEqual(read!.at)
   })
 
-  /** Task 7's O7, its tap: a and c in w1, b in w2. */
-  const tapInW2 = (): Scenario => scenario({
-    id: 'O7', app: 'orca', title: 'Eval a tap on an agent in the other worktree', dims: ['D3'], tiers: ['a'],
-    sessions: [orcaSession('a'), orcaSession('c', { tab: 1 }), orcaSession('b', { worktree: 'w2' }), orcaGhost],
-    steps: [{ kind: 'orca.layout', worktrees: ['w1', 'w2'] }, ...orcaStarted(['b', 'c', 'a']), ...listed('orca', ['a', 'c', 'b']),
-      { label: 'tap', kind: 'tap', session: 'b' }],
-    checks: [], probes: [],
-  })
+  /** O7: a and c in w1, b in w2; its tap on b, then its rest on c. */
+  const o7 = MAIN.find((s) => s.id === 'O7')!
   /** What brings Orca forward on each platform: open's bundle, the window raise, Windows' raise of Orca's bundle. */
   const raisesOrca: Readonly<Record<Platform, (argv: string[]) => boolean>> = {
     darwin: (argv) => argv.join(' ') === '/usr/bin/open -b com.stablyai.orca',
@@ -359,13 +336,14 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     win32: (argv) => argv.join(' ') === 'harness-pty raise com.stablyai.orca',
   }
 
-  it.for(PLATFORMS)("a tap on b in the other worktree runs worktree activate for its worktree, terminal switch for its handle, then the platform's raise, in that order, on %s", async (platform) => {
+  it.for(PLATFORMS)("O7's tap on b in the other worktree runs worktree activate for its worktree, terminal switch for its handle, then the platform's raise, in that order, on %s", async (platform) => {
     const driver = new TierADriver({ startDevices })
-    const run = await runScenario(driver, tapInW2(), platform)
+    const run = await runScenario(driver, o7, platform)
     expect(run.error).toBeUndefined()
     const { commands, steps } = driver.seen()
     const tap = steps.find((s) => s.label === 'tap')!
-    const after = commands.filter((c) => c.at >= tap.at).map((c) => c.argv)
+    const rest = steps.find((s) => s.label === 'rest')!
+    const after = commands.filter((c) => c.at >= tap.at && c.at < rest.at).map((c) => c.argv)
     const orca = after[0]?.[0]
     expect(after.slice(0, 2)).toEqual([[orca, 'worktree', 'activate', '--worktree', `id:${orcaWorktreeId('w2')}`, '--json'],
       [orca, 'terminal', 'switch', '--terminal', orcaTerminalHandle('b'), '--json']])
@@ -377,7 +355,7 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     const agents = keys('k', 1, 40, 2)
     const worktreeOf = (key: string): string => key.replace('k', 'w')
     const forty = scenario({
-      id: 'O16', app: 'orca', title: 'Eval forty agents in forty worktrees', dims: ['D1'], tiers: ['a'],
+      id: 'S5', app: 'orca', title: 'Eval forty agents in forty worktrees', dims: ['D1'], tiers: ['a'],
       sessions: [...agents.map((key) => orcaSession(key, { worktree: worktreeOf(key) })), orcaGhost],
       steps: [{ kind: 'orca.layout', worktrees: agents.map(worktreeOf) }, ...started(agents), { kind: 'wait', ms: 60_000 }],
       checks: [], probes: [],
@@ -399,7 +377,7 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
   it('O1 twice gives the same frames, faces, commands and deliveries at the same virtual times', async () => {
     const seen = async () => {
       const driver = new TierADriver({ startDevices })
-      await runScenario(driver, o1(), 'darwin')
+      await runScenario(driver, o1, 'darwin')
       const { frames, faces, commands, deliveries } = driver.seen()
       // Orca's CLI is in each world's own temp folder: a command is its program and its arguments.
       return { frames, faces, deliveries,
@@ -411,32 +389,26 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     expect(second).toEqual(first)
   })
 
-  /** Task 7's O4, its focus: a and b in w1, the plugin's stream open, Orca in front. */
-  const focusOnB = (): Scenario => scenario({
-    id: 'O4', app: 'orca', title: "Eval the dial follows Orca's focus", dims: ['D2'], tiers: ['a'],
-    sessions: [orcaSession('a'), orcaSession('b', { tab: 1 }), orcaGhost],
-    steps: [...orcaOpening(['w1']), ...orcaStarted(['b', 'a']), ...listed('orca', ['a', 'b']),
-      { label: 'focus', kind: 'orca.focus', session: 'b' }, { kind: 'wait', ms: 2_000 }],
-    checks: [], probes: [],
-  })
+  /** O4: a and b in w1, the plugin's stream open, Orca in front; its focus line for b, then its tap on a. */
+  const o4 = MAIN.find((s) => s.id === 'O4')!
 
-  it('a focus line for b, with Orca settled in front, turns the dial to b', async () => {
-    const of = focusOnB()
+  it("O4's focus line for b, with Orca settled in front, turns the dial to b", async () => {
     const driver = new TierADriver({ startDevices })
-    const run = await runScenario(driver, of, 'darwin')
+    const run = await runScenario(driver, o4, 'darwin')
     expect(run.error).toBeUndefined()
     const { faces, steps, commands } = driver.seen()
     const focus = steps.find((s) => s.label === 'focus')!
-    const [a, b] = of.sessions.slice(0, 2).map(agentIdOf)
+    const tap = steps.find((s) => s.label === 'tap')!
+    const [a, b] = o4.sessions.slice(0, 2).map(agentIdOf)
     expect(commands.some((c) => c.argv[2] === 'watch-focus' && c.at <= focus.at)).toBe(true)
     // a, the newest, is on the face until the focus; the face b comes at the focus's own virtual moment.
     expect(faces.filter((f) => f.at < focus.at).at(-1)?.active).toBe(a)
-    expect(faces.at(-1)?.active).toBe(b)
+    expect(faces.filter((f) => f.at < tap.at).at(-1)?.active).toBe(b)
   })
 
-  /** Task 7's O5: a and b in w1, d in w2, then the plugin says w1 is on Orca's screen. */
+  /** a and b in w1, d in w2, then the plugin says w1 is on Orca's screen. */
   const frontOnW1 = (): Scenario => scenario({
-    id: 'O5', app: 'orca', title: "Eval the ring keeps to the worktree on Orca's screen", dims: ['D1'], tiers: ['a'],
+    id: 'S4', app: 'orca', title: "Eval the ring keeps to the worktree on Orca's screen", dims: ['D1'], tiers: ['a'],
     sessions: [orcaSession('a'), orcaSession('b', { tab: 1 }), orcaSession('d', { worktree: 'w2' }), orcaGhost],
     steps: [...orcaOpening(['w1', 'w2']), ...orcaStarted(['d', 'b', 'a']), ...listed('orca', ['a', 'b', 'd']),
       { label: 'front', kind: 'orca.front', worktree: 'w1' }, ...listed('orca', ['a', 'b'])],

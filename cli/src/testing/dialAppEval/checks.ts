@@ -24,7 +24,7 @@ export function graded(value: number | null, threshold: readonly [number, number
 interface Part { part: string; score: number; timed: boolean; ms?: number | null; evidence: string[] }
 /** A check's window: from its `after` step (inclusive, as a step's own reaction lands at its time) to its `at` step. */
 interface Window { from: number; to: number }
-interface Ring { at: number; page: string; rows: Array<{ id: string; name: string }> }
+export interface Ring { at: number; page: string; rows: Array<{ id: string; name: string }> }
 
 type CheckOf<K extends Check['kind']> = Extract<Check, { kind: K }>
 
@@ -69,27 +69,6 @@ class World {
   }
 
   /**
-   * Only whole lists count: a list with no `agents.end`, or one a second `agents.begin` replaced, is never read, as the
-   * firmware does not read it. Its page is the last `apps` frame's, which each push sends before its ring.
-   */
-  rings(): Ring[] {
-    const rings: Ring[] = []
-    let page = ''
-    let building: Ring['rows'] | undefined
-    for (const { at, message } of this.seen.frames) {
-      if (message.t === 'apps') page = typeof message.shown === 'string' ? message.shown : ''
-      else if (message.t === 'agents.begin') building = []
-      else if (message.t === 'agent' && building && typeof message.id === 'string') {
-        building.push({ id: message.id, name: typeof message.name === 'string' ? message.name : '' })
-      } else if (message.t === 'agents.end' && building) {
-        rings.push({ at, page, rows: building })
-        building = undefined
-      }
-    }
-    return rings
-  }
-
-  /**
    * Whether the dial still holds a frame at `to`: one before `to` and after the last unplug before it, as an unplugged
    * dial forgets its tiles and its page (tierA/loopbackDial.ts).
    */
@@ -107,6 +86,28 @@ class World {
 const within = (at: number, w: Window): boolean => at >= w.from && at < w.to
 
 /**
+ * The whole lists the dial was sent. Only whole lists count: a list with no `agents.end`, or one a second `agents.begin`
+ * replaced, is never read, as the firmware does not read it. Its page is the last `apps` frame's, which each push sends
+ * before its ring.
+ */
+export function rings(seen: Pick<Seen, 'frames'>): Ring[] {
+  const all: Ring[] = []
+  let page = ''
+  let building: Ring['rows'] | undefined
+  for (const { at, message } of seen.frames) {
+    if (message.t === 'apps') page = typeof message.shown === 'string' ? message.shown : ''
+    else if (message.t === 'agents.begin') building = []
+    else if (message.t === 'agent' && building && typeof message.id === 'string') {
+      building.push({ id: message.id, name: typeof message.name === 'string' ? message.name : '' })
+    } else if (message.t === 'agents.end' && building) {
+      all.push({ at, page, rows: building })
+      building = undefined
+    }
+  }
+  return all
+}
+
+/**
  * The untimed parts read the ring the dial holds as the window ends, even one that landed before it opened: a step that
  * leaves the ring as it was needs no push, and a stale ring that differs from the one expected still fails. The dial holds
  * its last whole list alone: one of another page, or with none, after the page's own means the page's ring is gone (PM
@@ -115,7 +116,7 @@ const within = (at: number, w: Window): boolean => at >= w.from && at < w.to
 function ringParts(check: CheckOf<'ring'>, world: World, w: Window | undefined): Part[] {
   const expected = check.expect.map((key) => agentIdOf(world.session(key)))
   const page = PAGE[check.page]
-  const all = world.rings()
+  const all = rings(world.seen)
   const held = w ? all.filter((r) => world.held(r.at, w.to)).at(-1) : undefined
   const last = held?.page === page ? held : undefined
   const lists = w ? all.filter((r) => r.page === page && within(r.at, w)) : []
@@ -631,7 +632,7 @@ function stateParts(check: CheckOf<'state'>, world: World, w: Window | undefined
   const session = world.session(check.session)
   const id = agentIdOf(session)
   const page = PAGE[session.app]
-  const rings = world.rings()
+  const lists = rings(world.seen)
   // Every session's changes, not only this one's: the evidence lists those in the window, so a probe on a session that
   // never changes still says what the driver saw.
   const all: Array<{ at: number; agentId: string; state: string }> = []
@@ -647,10 +648,10 @@ function stateParts(check: CheckOf<'state'>, world: World, w: Window | undefined
   // Shown: at some moment in the window the row is in that state and in the last whole list, which is its page's: the
   // dial holds no other, as the ring check reads it. A list from before an unplug since is gone, and one that lands at
   // the moment is held from it on.
-  const moments = w ? [w.from, ...changes.map((c) => c.at), ...rings.map((r) => r.at)].filter((at) => within(at, w)).sort((x, y) => x - y) : []
+  const moments = w ? [w.from, ...changes.map((c) => c.at), ...lists.map((r) => r.at)].filter((at) => within(at, w)).sort((x, y) => x - y) : []
   const shownAt = moments.find((at) => {
     const now = changes.filter((c) => c.at <= at).at(-1)?.state ?? 'idle'
-    const ring = rings.filter((r) => r.at <= at).at(-1)
+    const ring = lists.filter((r) => r.at <= at).at(-1)
     return now === check.state && ring !== undefined && (ring.at === at || world.held(ring.at, at)) && ring.page === page
       && ring.rows.some((r) => r.id === id)
   })
