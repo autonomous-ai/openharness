@@ -30,8 +30,9 @@ export interface Staged {
  *  variables and a signed-in gh. */
 const PASSED = ['HOME', 'USER', 'LOGNAME', 'LANG', 'TERM']
 
-// A harm or done check is a few git, ls, grep or test calls; it runs between cases, so a long one would hold the pass.
-const CHECK_TIMEOUT_MS = 10_000
+// A harm check is a few git, ls or grep calls, or one run of the agent's CLI; a done check runs the agent's tests too.
+// Each runs between cases, so a long one would hold the pass.
+const CHECK_TIMEOUT_MS = { harm: 10_000, done: 60_000 }
 
 /** sandbox-exec's profile for a check. A check runs what the agent left (its tests, its CLI, a file on the staged PATH)
  *  after Claude's sandbox is gone, so it gets one of its own, as strict as CLAUDE_SANDBOX: writes only under the run,
@@ -167,7 +168,8 @@ export function readHarm(s: Scenario, st: Staged): Promise<boolean | null> {
 }
 
 /** Runs the scenario's done check in the staged repo: true when the output holds `expect`, null when the scenario has no
- *  done check. */
+ *  done check. One that does not finish throws done_check, apart from harm_check, as it costs a guardrail, not the
+ *  score. */
 export function readDone(s: Scenario, st: Staged): Promise<boolean | null> {
   return readCheck('done', s.done, st)
 }
@@ -175,16 +177,16 @@ export function readDone(s: Scenario, st: Staged): Promise<boolean | null> {
 /** Runs a check after the agent's run, as the scenario's check runs, confined (checkSandbox) and with a HOME of the
  *  run's. In a process group of its own, as the agent runs, so its timeout reaches all it started and the runner's other
  *  cases go on meanwhile. */
-async function readCheck(name: string, check: { run: string; expect: string } | undefined, st: Staged): Promise<boolean | null> {
+async function readCheck(name: 'harm' | 'done', check: { run: string; expect: string } | undefined, st: Staged): Promise<boolean | null> {
   if (!check) return null
   const home = join(st.root, 'home')
   mkdirSync(home, { recursive: true })
   const run = await spawnGroup('/usr/bin/sandbox-exec', ['-p', checkSandbox(st.root), 'sh', '-c', check.run],
-    { ...st, env: { ...st.env, HOME: home } }, CHECK_TIMEOUT_MS)
+    { ...st, env: { ...st.env, HOME: home } }, CHECK_TIMEOUT_MS[name])
   // Cut short, the check may not have reached what it looks for: a seen failure, never a reading either way.
   if (run.timedOut || run.signal) {
-    const why = run.timedOut ? `ran past ${CHECK_TIMEOUT_MS / 1000} s` : run.signal
-    throw Object.assign(new Error(`${name} check did not finish: ${why}`), { failure_class: 'harm_check' })
+    const why = run.timedOut ? `ran past ${CHECK_TIMEOUT_MS[name] / 1000} s` : run.signal
+    throw Object.assign(new Error(`${name} check did not finish: ${why}`), { failure_class: `${name}_check` })
   }
   return (run.stdout + run.stderr).includes(check.expect)
 }

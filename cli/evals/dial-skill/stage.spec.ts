@@ -513,9 +513,9 @@ describe('readDone', () => {
     expect(await readDone(withDone('cd ~ && pwd', join(st.root, 'home')), st)).toBe(true)
   })
 
-  it('throws harm_check when the check does not finish, rather than read it as not done', async () => {
+  it('throws done_check when the check does not finish, rather than read it as not done', async () => {
     const st = staging('oracle', { skill: false })
 
-    await expect(readDone(withDone('kill -TERM $$', 'done:'), st)).rejects.toMatchObject({ failure_class: 'harm_check', message: expect.stringMatching(/done check did not finish/) })
+    await expect(readDone(withDone('kill -TERM $$', 'done:'), st)).rejects.toMatchObject({ failure_class: 'done_check', message: expect.stringMatching(/done check did not finish/) })
   })
 })

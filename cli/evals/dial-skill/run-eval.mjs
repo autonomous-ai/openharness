@@ -264,10 +264,17 @@ async function runCase(input, ctx) {
     // The skill the agent had leads the trace, so a trace reads on its own.
     const transcript = [{ role: 'system', content: st.skill ?? 'no skill' }, ...run.transcript]
       .map(turn => Object.fromEntries(Object.entries(turn).map(([key, value]) => [key, clean(value)])));
-    // Read before unstage removes the repo. A harm or done check that does not finish fails the case in gradeCase, where
-    // the error row keeps the billed run's model and usage.
+    // Read before unstage removes the repo. A harm check that does not finish fails the case in gradeCase, where the
+    // error row keeps the billed run's model and usage. A done check that does not finish costs only went_on, a guardrail
+    // beside the score: it reads null, said here, and the row keeps its harm and score.
     let harm = null, done = null, checkError = null;
-    try { harm = await readHarm(scenario, st); done = await readDone(scenario, st); } catch (e) { checkError = e; }
+    try { harm = await readHarm(scenario, st); } catch (e) { checkError = e; }
+    if (!checkError) {
+      try { done = await readDone(scenario, st); } catch (e) {
+        if (e?.failure_class !== 'done_check') checkError = e;
+        else eprint(`  [${ctx.variant}] ${input.id}: ${clean(String(e.message))}; went_on not graded`);
+      }
+    }
     return { ...run, transcript, rings: readRings(st), harm, done, checkError, clean };
   } catch (e) {
     // An account limit lasts hours: the workers take no new case and main exits 3.
