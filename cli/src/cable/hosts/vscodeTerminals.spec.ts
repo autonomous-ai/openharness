@@ -1120,6 +1120,24 @@ describe('the dial\'s words typed into a terminal', () => {
     expect(h.one.lines).toEqual([])
   })
 
+  // A turn that started, or a prompt that opened, while the guard read (ps, or Windows' whole table, up to 3 s): words
+  // typed there would be taken as its answer, and Codex's approval takes `y` as a yes.
+  it.each<[string, NodeJS.Platform, () => boolean, (h: Typing) => Promise<void>]>([
+    ['macOS, a prompt check that answers false', 'darwin', () => false, (h) => h.groups(FRONT)],
+    ['macOS, a prompt check that throws', 'darwin', () => { throw new Error('no state') }, (h) => h.groups(FRONT)],
+    ['Windows, a prompt check that answers false', 'win32', () => false, (h) => h.answer(undefined, STARTED)],
+  ])('%s once the guard has read gets no words: failed, and the terminal is free', async (_, platform, atPrompt, guard) => {
+    const h = await typing(platform, STARTED)
+    const sent = h.terminals.type(900, WORDS, atPrompt)
+    await guard(h)
+    expect(h.one.lines).toEqual([])
+    expect(h.timers.map(({ ms }) => ms)).toEqual([60_000])
+    expect(await sent).toBe('failed')
+    void h.terminals.type(900, WORDS, () => true)
+    await guard(h)
+    expect(h.one.lines).toEqual([{ type: WORDS, pid: 700 }])
+  })
+
   it('a window opened again under its id while the guard reads gets no words, and the send is failed', async () => {
     const h = await typing()
     const sent = h.terminals.type(900, WORDS, () => true)
