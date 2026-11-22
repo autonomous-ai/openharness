@@ -9,7 +9,7 @@
  * its throwaway home's `.cursor`, in a folder named by its workspace, as tier A writes Cursor's.
  */
 import type { ChildProcess } from 'node:child_process'
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { expect } from 'vitest'
 import { inside } from './appEvalDriver.js'
@@ -72,8 +72,9 @@ export class CursorOutside {
     const transcriptPath = join(d.env.HOME!, '.cursor', 'projects', workspace, 'agent-transcripts', sessionId, `${sessionId}.jsonl`)
     if (!inside(d.root, transcriptPath)) throw new Error("Cursor's transcript is not inside the daemon's root")
     mkdirSync(dirname(transcriptPath), { recursive: true })
-    // A new one: the ids are the catalog's, and an earlier scenario on this daemon wrote under the same.
-    writeFileSync(transcriptPath, '')
+    // There from its start; one started again goes on in it, as a relaunched Cursor's agent does. An earlier scenario's
+    // under the same id is gone with the driver's reset.
+    appendFileSync(transcriptPath, '')
     const { tab, run } = await hookTab(d, cwd, { ...d.env, ...hints, TERM: 'xterm-256color' }, { app: 'cursor', shell: terminal, terminal },
       `the Cursor agent in ${folder}`)
     children.push(tab.process)

@@ -734,6 +734,7 @@ export class TierBDriver implements EvalDriver {
     // same file, and a recap could pass on an earlier scenario's answer.
     emptied(rig.d.env.CLAUDE_PROJECTS_DIR!)
     emptied(join(rig.d.env.CODEX_HOME!, 'sessions'))
+    emptied(join(home, '.cursor', 'projects'))
     rig.backend.speech = null
     await rig.desk.unplug(SERIAL)
   }
