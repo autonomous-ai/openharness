@@ -18,7 +18,7 @@ import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 import type { OuterLookup } from './outer.js'
 import { readPtyMaker, scannedApps, type ProcessName } from './scannedApp.js'
 import { clientTtyForm } from './tabs.js'
-import { OUTER_EVERY_MS, PID } from './tmux.js'
+import { heldAnswers, PID } from './tmux.js'
 
 /** The herdr processes besides the server a lookup asks of at most: the highest pids, the newest. */
 export const HERDR_CLIENTS_A_LOOKUP = 16
@@ -228,10 +228,9 @@ async function clientsOf(deps: ClientDeps, form: RegExp, server: number, rows: r
   return tty && form.test(tty) ? { app, tty, pid: client } : { app, pid: client }
 }
 
-/** One answer per key in flight, held OUTER_EVERY_MS from its start, each said by its line: a lookup in flight is
- *  shared past its 5 s, so an lsof or ss that hangs to its timeout runs no second one. */
-function heldAnswers(deps: ClientDeps): (key: string, place: () => Promise<ClientPlace | NotRead>) => Promise<ClientPlace> {
-  const asked = new Map<string, { at: number; answer: Promise<ClientPlace>; settled: boolean }>()
+/** tmux's heldAnswers, each answer said by its line: an lsof or ss that hangs to its timeout runs no second one. */
+function saidAnswers(deps: ClientDeps): (key: string, place: () => Promise<ClientPlace | NotRead>) => Promise<ClientPlace> {
+  const held = heldAnswers<ClientPlace>(deps.now)
 
   async function lookUp(place: () => Promise<ClientPlace | NotRead>): Promise<ClientPlace> {
     // Every other step answers its own word: what is left to throw is the app scan.
@@ -244,17 +243,7 @@ function heldAnswers(deps: ClientDeps): (key: string, place: () => Promise<Clien
     return said
   }
 
-  return (key, place) => {
-    const now = deps.now()
-    // Only answers asked in the last 5 s, or still in flight, are kept.
-    for (const [held, ask] of asked) if (ask.settled && now - ask.at >= OUTER_EVERY_MS) asked.delete(held)
-    const last = asked.get(key)
-    if (last) return last.answer
-    const ask = { at: now, answer: lookUp(place), settled: false }
-    void ask.answer.then(() => { ask.settled = true })
-    asked.set(key, ask)
-    return ask.answer
-  }
+  return (key, place) => held(key, () => lookUp(place))
 }
 
 /**
@@ -268,7 +257,7 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
   const form = clientTtyForm(deps.platform)
   if (!form) return () => undefined
   // By pane and caller, as tmux's.
-  const held = heldAnswers(deps)
+  const held = saidAnswers(deps)
   const skipped = new Set<string>()
 
   /** A herdr pane id the lookup cannot take is said, once an id: a lookup that answers nothing otherwise leaves the
@@ -316,7 +305,7 @@ export function createHerdrNested(deps: ClientDeps): (found: { pid: number; make
   const form = clientTtyForm(deps.platform)
   if (!form) return () => undefined
   // The answer depends on the server alone: two panes of one herdr cost one lookup.
-  const held = heldAnswers(deps)
+  const held = saidAnswers(deps)
   return ({ pid, maker, rows }) => {
     if (!PID.test(String(pid)) || !PID.test(String(maker))) return undefined
     return held(String(maker), () => clientsOf(deps, form, maker, rows))

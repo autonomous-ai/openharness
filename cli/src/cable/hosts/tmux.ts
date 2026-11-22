@@ -16,7 +16,7 @@ import type { TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { APP_IDS } from './hostDetect.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
-import type { OuterLookup } from './outer.js'
+import type { Nested, NestedPlace, OuterLookup } from './outer.js'
 import { parentChain, readPtyOwner, scannedApps, type ProcessName } from './scannedApp.js'
 import { clientTtyForm } from './tabs.js'
 
@@ -219,9 +219,6 @@ export interface TmuxOuterDeps {
 
 /** The app that holds the tmux client showing an agent's pane, that client's tty when it is in its platform's form, and its process. */
 interface ClientPlace { app?: string; tty?: string; pid?: number }
-/** A scan-found agent's place: its client's, and, with an app, the agent's pane in the form `paneParts` takes, for a
- *  rest and a tap. */
-type NestedPlace = ClientPlace & { pane?: Pane }
 /** The step of a lookup that could not be read, as its line names it: no tmux found, the pane's facts or the pane
  *  listing, the process table or a terminal of the caller's, the session's clients, the client's app. */
 type NotRead = 'tmux' | 'pane' | 'processes' | 'clients' | 'app'
@@ -230,7 +227,7 @@ type NotRead = 'tmux' | 'pane' | 'processes' | 'clients' | 'app'
  * Answers by key, each held OUTER_EVERY_MS from its start. One in flight is shared past its 5 s, so a tmux that hangs to
  * its timeout runs no second one. Only keys asked in the last 5 s, or still in flight, are kept. [ask] never rejects.
  */
-function heldAnswers<T>(now: () => number): (key: string, ask: () => Promise<T>) => Promise<T> {
+export function heldAnswers<T>(now: () => number): (key: string, ask: () => Promise<T>) => Promise<T> {
   const asked = new Map<string, { at: number; answer: Promise<T>; settled: boolean }>()
   return (key, ask) => {
     const at = now()
@@ -317,9 +314,6 @@ export function createTmuxOuter(deps: TmuxOuterDeps): OuterLookup {
   }
 }
 
-/** An agent the open scan found: its process, its own tty as the maker read gave it (`ttys010`, `pts/5`), and the
- *  look's table. */
-interface ScanFound { pid: number; tty: string; rows: readonly ProcessName[] }
 /** The server's panes, the first PANES_A_LISTING lines; the step that could not be read, when one could not. */
 type PaneListing = readonly string[] | 'tmux' | 'pane'
 
@@ -331,7 +325,7 @@ type PaneListing = readonly string[] | 'tmux' | 'pane'
  * app. Nothing at once when the platform names no client's tty, the agent is no pid or its tty is out of form; else the
  * place, `{}` when none is found. Never rejects.
  */
-export function createTmuxNested(deps: Omit<TmuxOuterDeps, 'processes' | 'tty'>): (found: ScanFound) => Promise<NestedPlace> | undefined {
+export function createTmuxNested(deps: Omit<TmuxOuterDeps, 'processes' | 'tty'>): (found: Pick<Nested, 'pid' | 'tty' | 'rows'>) => Promise<NestedPlace> | undefined {
   // The scan asks for up to fifty sessions a look: one listing serves them all, so a tmux that hangs costs the look one
   // timeout, not one an ask.
   const listings = heldAnswers<PaneListing>(deps.now)
@@ -350,7 +344,7 @@ export function createTmuxNested(deps: Omit<TmuxOuterDeps, 'processes' | 'tty'>)
 
   /** `{}` when no pane of the person's on [tty] holds the agent or one of its parents, or no client of its session is
    *  in a listed app; the step that could not be read, when one could not. */
-  async function placeOf(found: ScanFound, tty: string): Promise<NestedPlace | NotRead> {
+  async function placeOf(found: Pick<Nested, 'pid' | 'tty' | 'rows'>, tty: string): Promise<NestedPlace | NotRead> {
     const panes = await listings('', listPanes)
     if (typeof panes === 'string') return panes
     for (const line of panes) {
