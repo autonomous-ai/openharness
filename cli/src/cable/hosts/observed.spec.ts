@@ -4690,9 +4690,13 @@ describe('ObservedSource and a nested session the scan found', () => {
   const IN_HERDR = { host: 'herdr', maker: 180, tty: 'ttys020' }
   const ITERM = { app: 'iterm', tty: '/dev/ttys004', pid: 4300 }
 
-  /** A source whose look reads one table, whose makers name [made], with the real tabs adapter, a walk that names no
-   *  app, and a tty read that answers at once; its nested lookups the test answers by hand, in the order asked. */
-  function scan(made: ReadonlyMap<number, Omit<Nested, 'pid' | 'rows'>>, deps: Partial<ObservedDeps> = {}) {
+  /** A source whose look reads one table, whose makers name [made], with the real tabs, tmux and herdr adapters (tmux's
+   *  runs recorded), a walk that names no app, and a tty read that answers at once; its nested lookups the test answers
+   *  by hand, in the order asked. */
+  function scan(
+    made: ReadonlyMap<number, Omit<Nested, 'pid' | 'rows'>>, deps: Partial<ObservedDeps> = {}, fakes: Partial<Fakes> = {},
+    adapt = (adapters: readonly HostAdapter[]) => adapters,
+  ) {
     const table = vi.fn(async () => ROWS)
     const apps = vi.fn(async (_pids: readonly number[], _rows?: readonly ProcessName[]): Promise<ReadonlyMap<number, string>> => new Map())
     const madeBy = vi.fn(async (pids: readonly number[], _rows: readonly ProcessName[]) =>
@@ -4700,8 +4704,8 @@ describe('ObservedSource and a nested session the scan found', () => {
     const asks: Array<(place: NestedPlace) => void> = []
     const nested = vi.fn((_found: Nested) => new Promise<NestedPlace>((resolve) => { asks.push(resolve) }))
     const tty = vi.fn(async (_pid: number): Promise<string | undefined> => '/dev/ttys031')
-    const { actions } = fakeActions()
-    const s = setup({ actions, table, apps, madeBy, nested, tty, ...deps })
+    const { actions, ran } = fakeActions(fakes)
+    const s = setup({ actions: { ...actions, adapters: adapt(actions.adapters) }, table, apps, madeBy, nested, tty, ...deps })
     /** A session found open in a terminal, idle, its owner [pid]. */
     const found = (sessionId: string, pid: number): void => {
       s.open.set(sessionId, 'terminal')
@@ -4716,7 +4720,7 @@ describe('ObservedSource and a nested session the scan found', () => {
       await flushed()
     }
     const agent = (sessionId: string) => s.src.list().find((a) => a.sessionId === sessionId)!
-    return { ...s, actions, table, apps, madeBy, nested, tty, found, answer, agent }
+    return { ...s, actions, ran, table, apps, madeBy, nested, tty, found, answer, agent }
   }
 
   it('the devices start again with a tmux and a herdr agent idle: the scan puts each on its client\'s app with its tab, known, not on Other\'s page', async () => {
@@ -4923,6 +4927,141 @@ describe('ObservedSource and a nested session the scan found', () => {
     await look
     expect(t.logs).toEqual(['[observed] scan · 2 found · 0 app known · 0 named · 0 answered · 0 ms · 1 nested placed'])
     for (const word of ['iterm', 'tmux', 'herdr', '4300', '100', '200', '80', 'ttys']) expect(t.logs.join('\n')).not.toContain(word)
+  })
+
+  describe('its placed tmux pane, and its first hook', () => {
+    /** The pane tmux's lookup by process names for `a`: tmux's pane id, the agent's process and its client's app. */
+    const PANE = { adapter: 'tmux', id: '%3:100:iterm' }
+    const paneChecked = ['tmux', ['display-message', '-p', '-t', '%3', expect.any(String)], expect.any(Number)]
+    const selected = ['tmux', ['select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], expect.any(Number)]
+    /** A hook's hints in tmux pane [pane], a fresh record each time as each hook sends its own. */
+    const inTmux = (pane = '%3') => ({ hostHints: { TMUX_PANE: pane, TERM_PROGRAM: 'tmux' } })
+
+    /** Session `a`, idle in tmux pane %3, as the scan placed it: on iTerm2's page, at its client's tab, with its pane,
+     *  iTerm2 in front. Its hooks' own outer lookups the test answers by hand, in the order asked, as tmux's answers an
+     *  event in a tmux pane; an event in no tmux pane is not nested. */
+    async function placed(fakes: Partial<Fakes> = {}, adapt?: (adapters: readonly HostAdapter[]) => readonly HostAdapter[]) {
+      const hookAsks: Array<(place: { app?: string; tty?: string; pid?: number }) => Promise<void>> = []
+      const outer = vi.fn((hints: Readonly<Record<string, string>>, _pid: number) => (hints.TMUX_PANE
+        ? new Promise<{ app?: string; tty?: string; pid?: number }>((resolve) => {
+          hookAsks.push(async (place) => { resolve(place); await flushed() })
+        })
+        : undefined))
+      const t = scan(new Map([[100, IN_TMUX]]), { outer }, { tmuxFront: () => 'iterm', ...fakes }, adapt)
+      t.found('a', 100)
+      const look = t.src.scanOpen()
+      await t.answer(0, { ...ITERM, pane: PANE })
+      await look
+      return { ...t, outer, hookAsks, id: t.agent('a').id, a: () => t.agent('a') }
+    }
+
+    it('a rest with its app in front shows its tab, then selects its tmux pane', async () => {
+      const t = await placed()
+      expect(await t.src.showPane(t.a())).toBe('ok')
+      expect(t.actions.tabSelect.mock.calls).toEqual([['iterm', '/dev/ttys004', false]])
+      expect(t.ran.mock.calls).toEqual([paneChecked, selected])
+      expect(t.actions.tabSelect.mock.invocationCallOrder[0]).toBeLessThan(t.ran.mock.invocationCallOrder[0])
+      // A place, never its own pane: the devices' paths that read paneOf (the focus watch, the scroll) see none.
+      expect(t.src.paneOf(t.id, 'tmux')).toBeUndefined()
+      expect(t.a()).not.toHaveProperty('paneKeys')
+    })
+
+    it('a tap selects its tmux pane, then brings iTerm2 forward and raises its tab', async () => {
+      let adapters: readonly HostAdapter[] = []
+      // As the opener taps a pane that comes before its app (open.ts): the pane's own focus, then the app.
+      const open = vi.fn(async (_agentId: string, target: OpenTarget) =>
+        !target.pane || (await adapters.find((a) => a.id === target.pane!.adapter)!.focus(target.pane)) === true)
+      const t = await placed({ open }, (all) => (adapters = all))
+      expect(await t.src.focus(t.a())).toBe(true)
+      expect(open.mock.calls).toEqual([[t.id, { bundle: 'com.googlecode.iterm2', pane: PANE }]])
+      expect(t.ran.mock.calls).toEqual([paneChecked, selected])
+      expect(t.actions.tabSelect.mock.calls).toEqual([['iterm', '/dev/ttys004', true]])
+      expect(t.ran.mock.invocationCallOrder.at(-1)).toBeLessThan(t.actions.tabSelect.mock.invocationCallOrder[0])
+    })
+
+    // A place is a guess: shown wrong, it costs a look, while words typed there would run at another's prompt.
+    it('a placed pane takes no words: tmux\'s, and herdr\'s placed by its listing', async () => {
+      // tmux's adapter types nowhere: given a way to here, it would take the words if the source took a place for a pane.
+      const typed = vi.fn(async (_pane: Pane, _text: string, _engine: string): Promise<TypeResult> => true)
+      const t = await placed({}, (adapters) => adapters.map((a) => (a.id === 'tmux' ? { ...a, type: typed } : a)))
+      t.found('b', 200)
+      t.madeBy.mockResolvedValueOnce(new Map([[200, IN_HERDR]]))
+      const look = t.src.scanOpen()
+      await t.answer(1, { app: 'iterm', tty: '/dev/ttys005', pid: 4400 })
+      await look
+      const b = t.agent('b')
+      t.src.setPaneNames('herdr', new Map(), new Map([[b.id, 'w1:p2:iterm']]))
+      // Each place is where a tap goes.
+      expect(t.src.shownAt(t.id, 'tmux')).toBe('%3:100:iterm')
+      expect(t.src.shownAt(b.id, 'herdr')).toBe('w1:p2:iterm')
+      for (const agent of [t.a(), b]) {
+        expect(t.src.capabilities(agent).voice, agent.sessionId).toBe(false)
+        expect(await t.src.send(agent, 'hello'), agent.sessionId).toMatchObject({ ok: false })
+      }
+      expect(typed).not.toHaveBeenCalled()
+      expect(t.actions.herdrPrompt).not.toHaveBeenCalled()
+    })
+
+    it('the first hook after a scan\'s place keeps it on its app\'s page and tab until the hook\'s own answer lands, and that answer wins', async () => {
+      const t = await placed()
+      t.src.ingest(t.ev('session-start', { sessionId: 'a', ...inTmux() }))
+      expect(t.outer.mock.calls).toEqual([[inTmux().hostHints, 100]])
+      // While it is asked, the row stays where the scan put it: the dial does not flicker to tmux's page.
+      expect(t.a().app).toBe('iterm')
+      expect(t.src.paneOf(t.id, 'tabs')).toBe('iterm:/dev/ttys004')
+      expect(t.src.byTab('iterm', '/dev/ttys004')).toMatchObject({ id: t.id })
+      expect(t.src.windowOf(t.id)).toEqual({ pid: 4300, app: 'iterm' })
+      await t.hookAsks[0]({ app: 'terminal-app', tty: '/dev/ttys006', pid: 4500 })
+      expect(t.a().app).toBe('terminal-app')
+      expect(t.src.paneOf(t.id, 'tabs')).toBe('terminal-app:/dev/ttys006')
+      expect(t.src.paneOf(t.id, 'tmux')).toBe('%3:100:terminal-app')
+      expect(t.src.windowOf(t.id)).toEqual({ pid: 4500, app: 'terminal-app' })
+      // From here it is a hooked agent: another caller drops its place at once, as for any.
+      t.src.ingest(t.ev('needs-input', { sessionId: 'a', ...inTmux(), callerPid: 101 }))
+      expect(t.a().app).toBe('tmux')
+      expect(t.tty).not.toHaveBeenCalled()
+    })
+
+    it('a first hook that is not nested drops the scan\'s place at once', async () => {
+      const t = await placed()
+      expect(await t.src.focus(t.a())).toBe(true)
+      expect(t.actions.open.mock.calls.at(-1)).toEqual([t.id, { bundle: 'com.googlecode.iterm2', pane: PANE }])
+      // The session resumed in a plain Ghostty tab, which no multiplexer made.
+      t.src.ingest(t.ev('turn-start', { sessionId: 'a', hostHints: { TERM_PROGRAM: 'ghostty' } }))
+      expect(t.a().app).toBe('ghostty')
+      expect(t.src.byTab('iterm', '/dev/ttys004')).toBeUndefined()
+      expect(t.src.windowOf(t.id)).toEqual({ pid: 100, app: 'ghostty' })
+      await flushed()
+      expect(t.tty.mock.calls).toEqual([[100]])
+      expect(t.src.paneOf(t.id, 'tabs')).toBe('ghostty:/dev/ttys031')
+      expect(t.src.shownAt(t.id, 'tmux')).toBeUndefined()
+      expect(await t.src.focus(t.a())).toBe(true)
+      expect(t.actions.open.mock.calls.at(-1)).toEqual([t.id, { bundle: 'com.mitchellh.ghostty' }])
+    })
+
+    it('a hook\'s own answer of none drops the scan\'s place', async () => {
+      const t = await placed()
+      t.src.ingest(t.ev('session-start', { sessionId: 'a', ...inTmux() }))
+      expect(t.a().app).toBe('iterm')
+      await t.hookAsks[0]({})
+      // The person detached: on tmux's page, as the hook's hints say, with no tab.
+      expect(t.a().app).toBe('tmux')
+      expect(t.src.paneOf(t.id, 'tabs')).toBeUndefined()
+      expect(t.src.byTab('iterm', '/dev/ttys004')).toBeUndefined()
+      expect(t.src.paneOf(t.id, 'tmux')).toBe('%3:100')
+      expect(t.src.windowOf(t.id)).toEqual({ pid: 100, app: 'tmux' })
+    })
+
+    it('the first hook takes the placed pane away', async () => {
+      const t = await placed()
+      expect(t.src.shownAt(t.id, 'tmux')).toBe('%3:100:iterm')
+      t.src.ingest(t.ev('turn-start', { sessionId: 'a', ...inTmux('%4') }))
+      await t.hookAsks[0](ITERM)
+      expect(t.src.paneOf(t.id, 'tmux')).toBe('%4:100:iterm')
+      expect(t.src.shownAt(t.id, 'tmux')).toBe('%4:100:iterm')
+      expect(await t.src.focus(t.a())).toBe(true)
+      expect(t.actions.open.mock.calls.at(-1)).toEqual([t.id, { bundle: 'com.googlecode.iterm2', pane: { adapter: 'tmux', id: '%4:100:iterm' } }])
+    })
   })
 })
 
