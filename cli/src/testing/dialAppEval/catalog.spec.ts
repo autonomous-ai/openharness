@@ -117,6 +117,20 @@ describe('the catalog', () => {
     }
   })
 
+  it("an editor's quit and its relaunch are farther apart than the end delay and one tick, so the relaunch grades its rows' return", () => {
+    // An ended entry stays listed until the 30 s tick after its 10 s end delay (cable/hosts/observed.ts, services/devices.ts):
+    // a relaunch sooner finds its rows still there, and a ring check after it passes whatever the relaunch does.
+    const leave = 10 * 1_000 + 30 * 1_000
+    const quits = ALL.filter((s) => s.steps.some((step) => step.kind === 'quit' && (step.app === 'vscode' || step.app === 'cursor')))
+    expect(quits.map((s) => s.id)).toEqual(['V14', 'U13'])
+    for (const s of quits) {
+      const from = s.steps.findIndex((step) => step.kind === 'quit')
+      const to = s.steps.findIndex((step) => step.kind === 'relaunch')
+      const ms = s.steps.slice(from, to).reduce((sum, step) => sum + (step.kind === 'wait' && step.until === undefined ? step.ms : 0), 0)
+      expect(ms, s.id).toBeGreaterThan(leave)
+    }
+  })
+
   it('an open window closed by a step is longer than the open\'s half mark, so a late open still scores half', () => {
     // The window leaves out its closing step's instant: a person's wait of exactly the half mark would leave out an open
     // that lands on it.
@@ -271,9 +285,9 @@ describe('the catalog', () => {
     expect(waits('own')).toEqual(['C6 5000', 'C9 1000', 'C9 3500', 'C10 2000', 'C11 1000', 'C11 3000', 'X3 5000', 'X8 2000',
       'X11 300', 'X11 300', ...starts('V1', 4), ...starts('V2', 20), ...starts('V3', 2), ...starts('V4', 2), ...starts('V5', 2),
       'V7 2000', 'V7 2000', ...starts('V10', 2), 'V10 2000', 'V11 1000', 'V11 1000', 'V11 1000', 'V13 1000',
-      ...starts('V14', 3), 'V14 2000', ...starts('V15', 2), 'V15 1000', 'V15 3000',
+      ...starts('V14', 3), 'V14 45000', ...starts('V15', 2), 'V15 1000', 'V15 3000',
       ...starts('U1', 4), ...starts('U2', 2), ...starts('U3', 2), ...starts('U4', 2), 'U8 2000', 'U12 2000', ...starts('U13', 3),
-      'U13 2000', ...starts('U14', 2), 'CH3 1000', 'XH3 200',
+      'U13 45000', ...starts('U14', 2), 'CH3 1000', 'XH3 200',
       ...starts('VH1', 2), 'VH1 1000', ...starts('VH3', 2), ...starts('UH3', 2), 'UH3 200'])
     expect(new Set(waits('condition').map((w) => w.split(' ')[1]))).toEqual(new Set(['10000']))
     // The person reading the face once the list is there.
