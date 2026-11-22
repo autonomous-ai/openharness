@@ -27,13 +27,13 @@ function checkKeys(check: Check): SessionKey[] {
 }
 
 describe('the catalog', () => {
-  it('the ids are C1-C12, X1-X11 and the six held out, 6 of 29', () => {
+  it('the ids are C1-C12, X1-X11, V1-V15 and the six held out, 6 of 44', () => {
     const range = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => `${prefix}${i + 1}`)
-    expect(MAIN.map((s) => s.id)).toEqual([...range('C', 12), ...range('X', 11)])
+    expect(MAIN.map((s) => s.id)).toEqual([...range('C', 12), ...range('X', 11), ...range('V', 15)])
     expect(HELD_OUT.map((s) => s.id)).toEqual(['CH1', 'CH2', 'CH3', 'XH1', 'XH2', 'XH3'])
     expect(MAIN.every((s) => !s.heldOut)).toBe(true)
     expect(HELD_OUT.every((s) => s.heldOut)).toBe(true)
-    expect(ALL).toHaveLength(29)
+    expect(ALL).toHaveLength(44)
   })
 
   it('each scenario\'s checks cover exactly its dims', () => {
@@ -55,8 +55,9 @@ describe('the catalog', () => {
     expect(x10.probes).toContainEqual(expect.objectContaining({ id: 'apart', kind: 'ring', expect: ['t1'], apart: ['c1', 'z'] }))
   })
 
-  it('X3 is macOS only', () => {
-    for (const s of ALL) expect(s.platforms, s.id).toEqual(s.id === 'X3' ? ['darwin'] : ['darwin', 'win32', 'linux'])
+  it('X3 and V11 are macOS only', () => {
+    const mac = ['X3', 'V11']
+    for (const s of ALL) expect(s.platforms, s.id).toEqual(mac.includes(s.id) ? ['darwin'] : ['darwin', 'win32', 'linux'])
   })
 
   it('X3 starts with another app in front, so its front step brings the ChatGPT app up, on a world with no Accessibility', () => {
@@ -160,9 +161,10 @@ describe('the catalog', () => {
     expect(byId('C8').steps.filter((s) => s.kind === 'tap' || s.kind === 'swipe')).toEqual([])
   })
 
-  it('C3, CH1, CH2 and XH1 are tier A only, every other scenario (C10, C11, X7, C8, X9, CH3 and XH3 among them) runs in tier B', () => {
-    const onlyA = ['C3', 'CH1', 'CH2', 'XH1']
-    for (const s of ALL) expect(s.tiers, s.id).toEqual(onlyA.includes(s.id) ? ['a'] : ['a', 'b'])
+  it('C3, CH1, CH2, XH1 and V2 are tier A only, V12 tier B only, every other scenario (C10, C11, X7, C8, X9, CH3 and XH3 among them) runs in both', () => {
+    const onlyA = ['C3', 'CH1', 'CH2', 'XH1', 'V2']
+    const onlyB = ['V12']
+    for (const s of ALL) expect(s.tiers, s.id).toEqual(onlyA.includes(s.id) ? ['a'] : onlyB.includes(s.id) ? ['b'] : ['a', 'b'])
   })
 
   it('each tier B scenario carries exactly one cost check, D8, and the tier A only ones none', () => {
@@ -240,9 +242,15 @@ describe('the catalog', () => {
       return is === kind ? [`${s.id} ${step.ms}`] : []
     }))
     // C6's turn, C9's rests on a and on b, C10's gap between quit and relaunch, C11's rest and its time unplugged, X3's
-    // still window, X8's turn, X11's switches, CH3's rest on a and XH3's switch.
+    // still window, X8's turn, X11's switches, CH3's rest on a and XH3's switch. The editors' agents start a second apart
+    // (started), so each V scenario has one wait fewer than its starts; then V7's turn and its wait on the person, V10's
+    // pause after the reload, V11's rests between its tap, strokes and close, V13's rest before the stroke, V14's gap
+    // between quit and relaunch, and V15's rest and its time unplugged.
+    const starts = (id: string, n: number): string[] => Array<string>(n - 1).fill(`${id} 1000`)
     expect(waits('own')).toEqual(['C6 5000', 'C9 1000', 'C9 3500', 'C10 2000', 'C11 1000', 'C11 3000', 'X3 5000', 'X8 2000',
-      'X11 300', 'X11 300', 'CH3 1000', 'XH3 200'])
+      'X11 300', 'X11 300', ...starts('V1', 4), ...starts('V2', 20), ...starts('V3', 2), ...starts('V4', 2), ...starts('V5', 2),
+      'V7 2000', 'V7 2000', ...starts('V10', 2), 'V10 2000', 'V11 1000', 'V11 1000', 'V11 1000', 'V13 1000',
+      ...starts('V14', 3), 'V14 2000', ...starts('V15', 2), 'V15 1000', 'V15 3000', 'CH3 1000', 'XH3 200'])
     expect(new Set(waits('condition').map((w) => w.split(' ')[1]))).toEqual(new Set(['10000']))
     // The person reading the face once the list is there.
     expect(new Set(waits('reading').map((w) => w.split(' ')[1]))).toEqual(new Set(['1000']))
@@ -254,7 +262,7 @@ describe('the catalog', () => {
     // swipe's rest, whose open makes the devices drop the next title as its echo: no person does either. X11's switches
     // 300 ms apart and XH3's voice 200 ms after the follow are those scenarios' point: only the input right after one of
     // their own short waits is let through.
-    const inputs = new Set<Step['kind']>(['tap', 'swipe', 'voice', 'attach', 'thread'])
+    const inputs = new Set<Step['kind']>(['tap', 'swipe', 'voice', 'attach', 'thread', 'stroke', 'editor.focus'])
     const quick = new Set(['X11', 'XH3'])
     for (const s of ALL) {
       // Since the last listing, or the last input once there is one. A condition wait may end at once: it counts 0.
