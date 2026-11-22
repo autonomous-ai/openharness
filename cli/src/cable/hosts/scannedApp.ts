@@ -210,8 +210,14 @@ export function ptyMaker(pid: number, rows: readonly PtyProcess[]): PtyMaker | u
   if (own?.tty === undefined) return undefined
   const maker = parents.find((p) => p.tty !== own.tty)
   if (!maker) return undefined
-  const name = basename(maker.executable)
-  return Object.hasOwn(PTY_HOSTS, name) ? { pid: maker.pid, host: PTY_HOSTS[name] } : { pid: maker.pid }
+  const host = ptyHostOf(maker.executable)
+  return host ? { pid: maker.pid, host } : { pid: maker.pid }
+}
+
+/** The host PTY_HOSTS names for a process's name; none for any other. */
+function ptyHostOf(executable: string): string | undefined {
+  const name = basename(executable)
+  return Object.hasOwn(PTY_HOSTS, name) ? PTY_HOSTS[name] : undefined
 }
 
 /** ptyMaker over [rows], which hold no terminal: the caller's and its parents' are read one at a time ([tty],
@@ -235,9 +241,41 @@ export async function readPtyOwner(
   return (await readPtyMaker(pid, rows, tty))?.host
 }
 
-/** The app each of these processes runs in, read from this machine. */
-export function learnApps(pids: readonly number[], exec: Exec = execText): Promise<Map<number, string>> {
+/** A session a multiplexer made: its host as PTY_HOSTS names it, the maker's pid, and the session's own terminal
+ *  (readTtyName's `ttys004`, `pts/2`), which is the multiplexer pane's. */
+export interface MadeBy { host: string; maker: number; tty: string }
+
+/**
+ * The sessions of [pids] whose terminal one of [hosts] made, from the look's one table ([rows]). Diego's report of
+ * 2026-11-22: an agent in tmux or herdr inside iTerm2, found by the scan, sat on Other's page. A session with none of
+ * [hosts] among its parents reads no terminal: its maker cannot be one of them, and most sessions are plain tabs. One
+ * pid at a time, so a look of many sessions never runs their `ps` reads at once. A pid whose read fails (the process
+ * gone since the table) is left out; it never rejects.
+ */
+export async function readMadeBy(
+  pids: readonly number[], rows: readonly ProcessName[], tty: (pid: number) => Promise<string | undefined>, hosts: readonly string[],
+): Promise<Map<number, MadeBy>> {
+  const made = new Map<number, MadeBy>()
+  const table = new Map(rows.map((r) => [r.pid, r]))
+  for (const pid of pids) {
+    const [, ...parents] = parentChain(pid, table)
+    if (!parents.some((p) => hosts.includes(ptyHostOf(p.executable) ?? ''))) continue
+    let own: string | undefined
+    const keepOwn = async (at: number): Promise<string | undefined> => {
+      const on = await tty(at)
+      if (at === pid) own = on
+      return on
+    }
+    const maker = await readPtyMaker(pid, rows, keepOwn).catch(() => undefined)
+    if (maker?.host && own && hosts.includes(maker.host)) made.set(pid, { host: maker.host, maker: maker.pid, tty: own })
+  }
+  return made
+}
+
+/** The app each of these processes runs in, read from this machine; from [rows] when the look has read its table. */
+export function learnApps(pids: readonly number[], rows?: readonly ProcessName[], exec: Exec = execText): Promise<Map<number, string>> {
   return scannedApps(pids, {
-    platform: process.platform, roots: appRoots(homedir()), processes: () => readProcessNames(exec), bundleId: readBundleId,
+    platform: process.platform, roots: appRoots(homedir()),
+    processes: () => (rows ? Promise.resolve(rows) : readProcessNames(exec)), bundleId: readBundleId,
   })
 }
