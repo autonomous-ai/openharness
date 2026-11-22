@@ -34,8 +34,9 @@ export class InOrca {
 
   get id(): string { return observedAgentId('claude', this.sessionId) }
 
-  /** d.env names no tmux or Harness pane (testing/daemonEnvironment.ts): only IN_ORCA and [hints] say where this runs. */
-  private env(): NodeJS.ProcessEnv {
+  /** What its hooks run under. d.env names no tmux or Harness pane (testing/daemonEnvironment.ts): only IN_ORCA and
+   *  [hints] say where this runs. */
+  get env(): NodeJS.ProcessEnv {
     return { ...this.d.env, ...IN_ORCA, ...this.hints }
   }
 
@@ -43,10 +44,10 @@ export class InOrca {
     const stdin = JSON.stringify({ session_id: this.sessionId, cwd: this.cwd, ...input })
     if (this.terminal || this.hints.ORCA_TERMINAL_HANDLE !== undefined) {
       this.terminal ??= orcaTerminal(this.d, this.children)
-      return this.terminal.then((terminal) => terminal.run(file, args, this.env(), stdin, cwd))
+      return this.terminal.then((terminal) => terminal.run(file, args, this.env, stdin, cwd))
     }
     const started = Date.now()
-    const child = spawn(file, args, { cwd, env: this.env(), stdio: ['pipe', 'pipe', 'pipe'] })
+    const child = spawn(file, args, { cwd, env: this.env, stdio: ['pipe', 'pipe', 'pipe'] })
     this.children.push(child)
     let stdout = '', stderr = ''
     child.stdout!.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8') })

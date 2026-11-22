@@ -21,8 +21,9 @@ import { loadBaseline, SKIP_RATCHET_ENV, tierBVerdict } from '../src/testing/dia
 import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from '../src/testing/dialAppEval/runner.js'
 import { HELD_MAKER, orcaTerminalHandle, type Platform, type Scenario, type SessionDef } from '../src/testing/dialAppEval/types.js'
 import { inside, orcaCliInside, TierBDriver } from './harness/appEvalDriver.js'
-import { OrcaAgent, orcaEnv, orcaSteps, startedWith } from './harness/appEvalOrca.js'
+import { OrcaAgent, orcaSteps, startedWith } from './harness/appEvalOrca.js'
 import { IsolatedDaemon } from './harness/daemon.js'
+import { IN_ORCA } from './harness/inOrca.js'
 import { ORCA_HOST_NAME, orcaHostCc } from './harness/orcaHost.js'
 
 const WIN32 = process.platform === 'win32'
@@ -127,12 +128,13 @@ describe.skipIf(WIN32)('the dial eval, tier B: Orca', () => {
       const { d, children } = driver.lastWorld()
       for (const s of SESSIONS) {
         const agent = await OrcaAgent.start(d, children, s, hints(s))
+        // Run as its hooks are, under its engine's environment: Claude Code's InOrca's, Codex's CodexOutside's.
         const ran = await agent.run('/usr/bin/env', [])
         expect(ran.code, ran.stderr).toBe(0)
         const env = Object.fromEntries(ran.stdout.split('\n').filter(Boolean).map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]))
         // By name alone: a real run's values are its secrets.
         expect(Object.keys(env).filter((name) => WHERE.test(name) && env[name] === process.env[name])).toEqual([])
-        expect(where(env)).toEqual(where(orcaEnv(d, s, hints(s))))
+        expect(where(env)).toEqual({ ...where(d.env), ...IN_ORCA, ORCA_AGENT_SESSION_ID: `eval-orca-${s.key}`, ...hints(s) })
         // Its runner, every hook's caller, as it was started: under the daemon's environment, its host's.
         const runner = startedWith(agent.pid).map((entry) => entry.slice(0, entry.indexOf('='))).filter((name) => WHERE.test(name))
         expect(runner.sort()).toEqual(Object.keys(where(d.env)).sort())

@@ -81,7 +81,7 @@ export class CodexOutside {
   get shellPid(): number | undefined { return this.tab?.shellPid }
 
   /** What its hooks run under: the daemon's environment (which names no tmux or Harness pane), its home, and [hints]. */
-  private get env(): NodeJS.ProcessEnv {
+  get env(): NodeJS.ProcessEnv {
     return { ...this.d.env, CODEX_HOME: this.home, ...this.hints }
   }
 

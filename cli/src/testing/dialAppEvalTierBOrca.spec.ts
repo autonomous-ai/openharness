@@ -13,7 +13,7 @@ import type { Delivery, Scenario, Seen, SessionDef, SessionKey } from './dialApp
 /** What OrcaAgent.start reads of a daemon: its root, its environment and its projects folder. */
 type AgentDaemon = { root: string; projectsDir: string; env: NodeJS.ProcessEnv }
 const orca = await import('../../e2e/harness/appEvalOrca.js' as string) as {
-  orcaEnv(d: { env: NodeJS.ProcessEnv }, s: SessionDef, hints: Record<string, string>): NodeJS.ProcessEnv
+  orcaEngine(d: AgentDaemon, children: ChildProcess[], s: SessionDef, hints: Record<string, string>): { readonly env: NodeJS.ProcessEnv }
   orcaHints(s: SessionDef, launch: number, platform: NodeJS.Platform, tmux?: Record<string, string>): Record<string, string>
   OrcaAgent: {
     start(d: AgentDaemon, children: ChildProcess[], s: SessionDef, hints: Record<string, string>): Promise<{
@@ -72,18 +72,24 @@ afterEach(() => {
 })
 
 describe("tier B's Orca agents' environment", () => {
-  it("orcaEnv holds none of this worker's ORCA_*, TMUX*, TERM_PROGRAM or __CFBundleIdentifier values, only the daemon's and the session's own", () => {
+  it("the hooks of Claude Code and Codex in Orca get none of this worker's ORCA_*, TMUX*, TERM_PROGRAM or __CFBundleIdentifier values, only the daemon's and the session's own", () => {
     for (const [name, value] of Object.entries(RUNNER)) vi.stubEnv(name, value)
+    dir = mkdtempSync(join(tmpdir(), 'tier-b-orca-env-'))
+    const root = realpathSync(dir)
     // The daemon's, made from this worker's as the harness makes it (harness/daemon.ts), its own tmux folder among them.
-    const d = { env: daemonEnvironment(process.env, { HOME: '/tmp/eval-root/home', PATH: '/tmp/eval-root/bin:/usr/bin:/bin', TMUX_TMPDIR: '/tmp/eval-root' }) }
+    const d: AgentDaemon = { root, projectsDir: join(root, 'projects'), env: daemonEnvironment(process.env, {
+      HOME: join(root, 'home'), PATH: `${join(root, 'bin')}:/usr/bin:/bin`, TMUX_TMPDIR: root, CODEX_HOME: join(root, 'codex'),
+    }) }
     const own = { ORCA_TERMINAL_HANDLE: 'term_00000000-0000-4000-8d00-000000000061', __CFBundleIdentifier: 'com.stablyai.orca' }
     // Claude Code in the person's tmux in an Orca pane: tmux hands its own names on.
     const cases: Array<[SessionDef, Record<string, string>]> = [
       [session('a'), own],
-      [session('t', { tmux: true }), { ...own, TMUX: '/tmp/eval-root/default,4242,0', TMUX_PANE: '%3' }],
+      [session('t', { tmux: true }), { ...own, TMUX: `${root}/default,4242,0`, TMUX_PANE: '%3' }],
+      [session('c', { engine: 'codex' }), own],
     ]
     for (const [s, hints] of cases) {
-      const env = orca.orcaEnv(d, s, hints)
+      // What its every hook runs under: its engine's.
+      const env = orca.orcaEngine(d, [], s, hints).env
       expect(workers(env)).toEqual([])
       expect(where(env)).toEqual({ ...where(d.env), ...inOrca.IN_ORCA, ORCA_AGENT_SESSION_ID: `eval-orca-${s.key}`, ...hints })
       expect(notDaemons(env, d.env)).toEqual([])

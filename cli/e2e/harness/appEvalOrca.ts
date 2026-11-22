@@ -13,7 +13,7 @@
  *
  * Every session here runs inside the real Orca, so this worker's environment holds Orca's, tmux's and its terminal's
  * names, and the maker walk from this worker reaches the real Orca: nothing runs for an agent but on its stand-in, under
- * the daemon's environment, made from scratch (testing/daemonEnvironment.ts), and the session's own names (`orcaEnv`).
+ * the daemon's environment, made from scratch (testing/daemonEnvironment.ts), and the session's own names (`orcaEngine`).
  */
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { appendFileSync, copyFileSync, mkdirSync, readFileSync } from 'node:fs'
@@ -46,10 +46,20 @@ const PROMPT = 'Eval prompt.'
 const orcaNames = (s: Pick<SessionDef, 'key'>, hints: Record<string, string>): Record<string, string> =>
   ({ ...IN_ORCA, ORCA_AGENT_SESSION_ID: `eval-orca-${s.key}`, ...hints })
 
-/** Every Orca agent's process's environment: the daemon's (testing/daemonEnvironment.ts), Orca's names for the session
- *  and its hints (Decision 4); no value of this worker's. */
-export function orcaEnv(d: Pick<IsolatedDaemon, 'env'>, s: SessionDef, hints: Record<string, string>): NodeJS.ProcessEnv {
-  return { ...d.env, ...orcaNames(s, hints) }
+/**
+ * The session's engine as its hooks run, on [terminal] when given: InOrca's (Claude Code) or CodexOutside's (Codex), in
+ * the catalog's folder `/work/<name>` made under the daemon's projects. Its `env` is what every process run for the
+ * agent gets: the daemon's (testing/daemonEnvironment.ts), Orca's names for the session and its hints (Decision 4), no
+ * value of this worker's. A Codex runs in [codexHome] when given, else in the daemon's CODEX_HOME.
+ */
+export function orcaEngine(d: IsolatedDaemon, children: ChildProcess[], s: SessionDef, hints: Record<string, string>,
+  { terminal, codexHome }: { terminal?: OrcaTerminal; codexHome?: string } = {}): InOrca | CodexOutside {
+  const names = orcaNames(s, hints)
+  const folder = s.cwd.slice('/work/'.length)
+  if (engineOf(s) === 'codex') {
+    return new CodexOutside(d, folder, children, names, { sessionId: s.id, ...(terminal ? { terminal } : {}), ...(codexHome === undefined ? {} : { home: codexHome }) })
+  }
+  return new InOrca(d, folder, children, names, { sessionId: s.id, ...(terminal ? { terminal: Promise.resolve(terminal) } : {}) })
 }
 
 /** Orca's plugin's loop on [d] (harness/pluginLoop.ts), under the daemon's network guard as every process tier B starts
@@ -83,32 +93,23 @@ const LINES = {
 
 export class OrcaAgent {
   private constructor(private readonly s: SessionDef, private readonly terminal: OrcaTerminal,
-    private readonly env: NodeJS.ProcessEnv, private readonly engine: InOrca | CodexOutside, private readonly transcript: string) {}
+    private readonly engine: InOrca | CodexOutside, private readonly transcript: string) {}
 
-  /** On a stand-in of its own, its hooks InOrca's (Claude Code) or CodexOutside's (Codex) on that terminal, in the
-   *  catalog's folder `/work/<name>` made under the daemon's projects. A Codex runs in [codexHome] when given, else in the
-   *  daemon's CODEX_HOME. */
+  /** On a stand-in of its own, its hooks its engine's on that terminal (orcaEngine). */
   static async start(d: IsolatedDaemon, children: ChildProcess[], s: SessionDef, hints: Record<string, string>,
     codexHome?: string): Promise<OrcaAgent> {
+    // Before its stand-in starts: a session tier B cannot run starts nothing.
     if (!s.cwd.startsWith('/work/')) throw new Error(`${s.key}: ${s.cwd} is not a catalog folder`)
-    const engine = engineOf(s)
-    if (engine === 'cursor') throw new Error(`${s.key}: tier B runs no Cursor agent in Orca`)
+    if (engineOf(s) === 'cursor') throw new Error(`${s.key}: tier B runs no Cursor agent in Orca`)
     const terminal = await orcaTerminal(d, children, s.held ? { name: HELD_MAKER } : {})
-    // Each hook's environment is the daemon's beside these names: orcaEnv's.
-    const names = orcaNames(s, hints)
-    const folder = s.cwd.slice('/work/'.length)
-    const env = orcaEnv(d, s, hints)
-    if (engine === 'codex') {
-      const codex = new CodexOutside(d, folder, children, names, { sessionId: s.id, terminal, ...(codexHome === undefined ? {} : { home: codexHome }) })
-      return new OrcaAgent(s, terminal, env, codex, codex.transcriptPath)
-    }
-    const claude = new InOrca(d, folder, children, names, { sessionId: s.id, terminal: Promise.resolve(terminal) })
+    const engine = orcaEngine(d, children, s, hints, { terminal, codexHome })
+    if (engine instanceof CodexOutside) return new OrcaAgent(s, terminal, engine, engine.transcriptPath)
     // Where Claude Code keeps its conversation, in the daemon's projects folder, where the devices read a last answer.
-    const transcript = join(d.env.CLAUDE_PROJECTS_DIR!, claude.cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${s.id}.jsonl`)
+    const transcript = join(d.env.CLAUDE_PROJECTS_DIR!, engine.cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${s.id}.jsonl`)
     mkdirSync(dirname(transcript), { recursive: true })
     // A relaunched session goes on in the transcript it had.
     appendFileSync(transcript, '')
-    return new OrcaAgent(s, terminal, env, claude, transcript)
+    return new OrcaAgent(s, terminal, engine, transcript)
   }
 
   /** Its runner's: every hook's caller. */
@@ -155,9 +156,9 @@ export class OrcaAgent {
     }
   }
 
-  /** A command on its terminal as its hooks run: its runner the caller, under orcaEnv's environment, in its folder. */
+  /** A command on its terminal as its hooks run: its runner the caller, under its engine's environment, in its folder. */
   run(file: string, args: string[]): ReturnType<OrcaTerminal['run']> {
-    return this.terminal.run(file, args, this.env, '', this.engine.cwd)
+    return this.terminal.run(file, args, this.engine.env, '', this.engine.cwd)
   }
 
   /** Its stand-in ends: the agent goes with no hook. */
