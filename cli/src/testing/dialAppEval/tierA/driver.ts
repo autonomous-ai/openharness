@@ -26,7 +26,7 @@ import { claudeStoreSteps } from './steps/claudeStore.js'
 import { codexStoreSteps } from './steps/codexStore.js'
 import { dialSteps } from './steps/dial.js'
 import { closeWindows, editorSteps, reopenWindows } from './steps/editor.js'
-import { answerOrca, orcaModelSteps } from './steps/orca.js'
+import { answerOrca, closeOrca, orcaModelSteps, reopenOrca } from './steps/orca.js'
 import { sessionsSteps } from './steps/sessions.js'
 import { recordTyping, voiceSteps } from './steps/voice.js'
 import { windowSteps } from './steps/window.js'
@@ -37,14 +37,17 @@ const isEditor = (app: App): app is Editor => (EDITORS as readonly App[]).includ
 const STEPS: { [K in Exclude<StepKind, 'wait'>]: StepHandler<K> } = {
   ...claudeStoreSteps, ...codexStoreSteps, ...sessionsSteps, ...windowSteps, ...dialSteps, ...voiceSteps, ...editorSteps,
   ...orcaModelSteps,
-  // An editor's windows go with it, and come back on its relaunch reporting its sessions' new shells.
+  // An editor's windows go with it, and come back on its relaunch reporting its sessions' new shells. Orca's watches and
+  // the plugin's stream go with Orca, and the stream comes back on its relaunch.
   quit: async (world, step) => {
     await sessionsSteps.quit(world, step)
     if (isEditor(step.app)) closeWindows(world, step.app)
+    if (step.app === 'orca') closeOrca(world)
   },
   relaunch: async (world, step) => {
     await sessionsSteps.relaunch(world, step)
     if (isEditor(step.app)) await reopenWindows(world, step.app)
+    if (step.app === 'orca') await reopenOrca(world)
   },
 }
 /** Virtual time for the dial to be found and welcomed: the fleet looks every 2 s, the dial greets every 2 s. */

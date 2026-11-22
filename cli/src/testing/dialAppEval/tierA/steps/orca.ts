@@ -4,12 +4,19 @@
  * the real parsing, ordering and switching are graded. `terminal list` prints the latest `orca.layout`'s worktrees with
  * the panes open now (sessions.ts orcaHandleOf), as both tiers print it (orcaListing.ts). A focus watch is a child that
  * prints the last focus line Orca told, then each one after it: an `orca.focus` step's, and the echo of each switch.
+ *
+ * The plugin (the plan's Decision 9) opens the devices' own `dial` stream handler, as the listener hands it, and tells
+ * the worktree on screen on their `orcaFront` handler; calling the handlers directly skips the listener's own limits,
+ * which have their own specs. Its stream takes every line and records none: the lines hold names. Orca's quit ends each
+ * watch and the stream; its relaunch opens the stream again where it was open.
  */
 import type { OrcaChild } from '../../../../cable/hosts/orca.js'
+import { REFUSED, type ListenerHandler, type ListenerStream, type ListenerStreamHandler, type StreamEnd }
+  from '../../../../services/devicesListener.js'
 import { orcaLayout, orcaListing } from '../../orcaListing.js'
-import type { StepKind, StepOf } from '../../types.js'
+import type { StepOf } from '../../types.js'
 import type { StepHandler, TierAWorld } from '../world.js'
-import { orcaHandleOf } from './sessions.js'
+import { dropSession, orcaHandleOf } from './sessions.js'
 
 /** Orca's CLI by the name each platform's runs it as (devices/orcaHomes.ts orcaBinary): its launcher on macOS, the
  *  .deb's and the AppImage's `orca-ide` on Linux, `orca.exe` on Windows. */
@@ -21,13 +28,17 @@ const help = (watches: boolean): string => ['Commands:', '  list', '  switch', '
 /** What `account list --json` prints with no account in Orca, in Orca 1.4.256's shape. */
 const NO_ACCOUNTS = { id: 'eval', ok: true, result: { claude: { activeAccountId: null, accounts: [] }, codex: { activeAccountId: null, accounts: [] } } }
 
-interface Watch { print(line: string): void }
+interface Watch { print(line: string): void; end(): void }
 interface Model {
   /** The latest layout step: what `terminal list` lays out from now on. */
   layout?: StepOf<'orca.layout'>
   watches: Set<Watch>
   /** The last focus line Orca told, with a watch running or not: a new watch prints it first. */
   last?: string
+  /** The plugin's open stream's end, while it is open. */
+  plugin?: AbortController
+  /** Whether the plugin's stream was open as Orca quit, for its relaunch. */
+  reopen?: boolean
 }
 const models = new WeakMap<TierAWorld, Model>()
 
@@ -92,22 +103,59 @@ export function watchChild(world: TierAWorld): OrcaChild {
       if (!model.watches.has(watch)) return
       for (const listener of listeners) listener(Buffer.from(line))
     }),
-  }
-  model.watches.add(watch)
-  if (model.last !== undefined) watch.print(model.last)
-  return {
-    onData: (listener) => { listeners.push(listener) },
-    exited,
-    kill: () => {
+    end: () => {
       if (!model.watches.delete(watch)) return
       exit()
     },
   }
+  model.watches.add(watch)
+  if (model.last !== undefined) watch.print(model.last)
+  return { onData: (listener) => { listeners.push(listener) }, exited, kill: watch.end }
 }
 
-/** A step kind of the contract whose handler has not landed: no scenario takes it yet, and one that did would fail. */
-function notBuilt(kind: StepKind): () => Promise<never> {
-  return async () => { throw new Error(`tier A: the ${kind} step is not built yet`) }
+function handlerOf<T extends ListenerHandler | ListenerStreamHandler>(world: TierAWorld, type: string): T {
+  const handler = world.listener[type]
+  if (!handler) throw new Error(`the devices opened no listener for ${type}`)
+  return handler as T
+}
+
+/** The plugin opens its stream as it does on Orca's start: a standby one, which never takes the stream from another
+ *  Orca. The listener tells a stream it can take a line once it has opened. */
+function openPlugin(world: TierAWorld): void {
+  const model = modelOf(world)
+  if (model.plugin) throw new Error(`scenario ${world.scenario.id}: the plugin's stream is already open`)
+  const ended = new AbortController()
+  let writable: (() => void) | undefined
+  const stream: ListenerStream = { write: () => !ended.signal.aborted, onWritable: (run) => { writable = run }, ended: ended.signal }
+  if (handlerOf<ListenerStreamHandler>(world, 'dial').open({ type: 'dial', standby: true }, stream) === REFUSED) {
+    throw new Error("the devices' listener refused the plugin's dial stream")
+  }
+  model.plugin = ended
+  writable?.()
+}
+
+/** The plugin's stream ends `gone`: its client went. */
+function endPlugin(world: TierAWorld): void {
+  const model = modelOf(world)
+  if (!model.plugin) throw new Error(`scenario ${world.scenario.id}: the plugin's stream is not open`)
+  const reason: StreamEnd = 'gone'
+  model.plugin.abort(reason)
+  model.plugin = undefined
+}
+
+/** Orca quit: each watch ends with it, and so does the plugin's stream, kept for its relaunch. */
+export function closeOrca(world: TierAWorld): void {
+  const model = modelOf(world)
+  for (const watch of [...model.watches]) watch.end()
+  model.reopen = model.plugin !== undefined
+  if (model.reopen) endPlugin(world)
+}
+
+/** Orca relaunched: the plugin opens its stream again where it was open. */
+export async function reopenOrca(world: TierAWorld): Promise<void> {
+  const model = modelOf(world)
+  if (model.reopen) openPlugin(world)
+  model.reopen = false
 }
 
 export const orcaModelSteps: { [K in 'orca.layout' | 'orca.focus' | 'orca.front' | 'orca.plugin' | 'orca.close']: StepHandler<K> } = {
@@ -118,7 +166,19 @@ export const orcaModelSteps: { [K in 'orca.layout' | 'orca.focus' | 'orca.front'
     if (handle === undefined) throw new Error(`scenario ${world.scenario.id}: orca.focus names ${step.session}, whose pane is not open`)
     tell(world, handle)
   },
-  'orca.front': notBuilt('orca.front'),
-  'orca.plugin': notBuilt('orca.plugin'),
-  'orca.close': notBuilt('orca.close'),
+  // The plugin tells the worktree on Orca's screen: its open panes' handles, in Orca's order.
+  'orca.front': async (world, step) => {
+    const worktree = orcaLayout(world.scenario, modelOf(world).layout, (key) => orcaHandleOf(world, key)).find((w) => w.key === step.worktree)
+    if (!worktree) throw new Error(`scenario ${world.scenario.id}: orca.front names ${step.worktree}, which Orca has not laid out`)
+    const message = { type: 'orcaFront', terminals: worktree.panes.map((pane) => pane.handle) }
+    const answer: unknown = await handlerOf<ListenerHandler>(world, 'orcaFront').handle(message, new AbortController().signal)
+    if (answer !== undefined) throw new Error(`the devices' listener refused orcaFront for ${step.worktree}: ${String(answer)}`)
+  },
+  // With no plugin in Orca no stream ever opens, as with no extension in an editor.
+  'orca.plugin': async (world, step) => {
+    if (world.scenario.world?.orca?.plugin === false) return
+    if (step.open) openPlugin(world)
+    else endPlugin(world)
+  },
+  'orca.close': async (world, step) => { dropSession(world, step.session) },
 }

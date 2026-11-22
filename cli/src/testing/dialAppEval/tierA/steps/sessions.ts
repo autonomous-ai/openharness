@@ -61,6 +61,8 @@ interface State {
   live: Map<SessionKey, Live>
   /** The sessions each app's quit ended, for its relaunch. */
   quit: Map<App, SessionKey[]>
+  /** Each relaunched Orca session's launch: Orca's nth relaunch lays its pane out on its nth handle (orcaPaneHandle). */
+  launches: Map<SessionKey, number>
   /** Each editor's process while it runs: one per launch. */
   editors: Map<App, number>
   /** Terminal.app's process, once an editor started from it runs. */
@@ -78,7 +80,7 @@ const states = new WeakMap<TierAWorld, State>()
 
 function stateOf(world: TierAWorld): State {
   let state = states.get(world)
-  if (!state) states.set(world, state = { live: new Map(), quit: new Map(), editors: new Map(), ttys: 0, polls: 0, started: 0 })
+  if (!state) states.set(world, state = { live: new Map(), quit: new Map(), launches: new Map(), editors: new Map(), ttys: 0, polls: 0, started: 0 })
   return state
 }
 
@@ -291,10 +293,9 @@ export function keyOfShell(world: TierAWorld, pid: number): SessionKey | undefin
   return undefined
 }
 
-/** The session's launch of Orca, 0 its first: Orca gives a relaunched session's pane a new terminal (orcaPaneHandle).
- *  Always the first while no step relaunches Orca's panes. */
-export function launchOf(_world: TierAWorld, _key: SessionKey): number {
-  return 0
+/** The session's launch of Orca, 0 its first: Orca gives a relaunched session's pane a new terminal (orcaPaneHandle). */
+export function launchOf(world: TierAWorld, key: SessionKey): number {
+  return stateOf(world).launches.get(key) ?? 0
 }
 
 /** The handle of the session's Orca pane while it is open: from its start to its end. */
@@ -350,11 +351,31 @@ export async function startSession(world: TierAWorld, key: SessionKey): Promise<
 /** Its end hook, and the mod's poll closed as its client goes; the process runs on until it is ended. */
 function endSession(world: TierAWorld, key: SessionKey, live: Live): void {
   tell(world, key, live, 'session-end')
+  closeSession(world, key, live)
+}
+
+/** The session is no longer open, and the mod's poll goes with its client. */
+function closeSession(world: TierAWorld, key: SessionKey, live: Live): void {
   world.machine.owners.delete(world.session(key).id)
   stateOf(world).live.delete(key)
   if (!live.mod) return
   live.mod.ended = true
   if (live.mod.pollId !== undefined) devices(world).inboxGone(live.mod.pollId)
+}
+
+/** Its pane closed under it (orca.close, the plan's Decision 8): the agent and its shell end with no hook, as a process
+ *  killed with its terminal runs none. */
+export function dropSession(world: TierAWorld, key: SessionKey): void {
+  const live = stateOf(world).live.get(key)
+  if (!live) throw new Error(`scenario ${world.scenario.id}: ${key}'s pane closes, but ${key} is not running`)
+  closeSession(world, key, live)
+  endProcesses(world, live)
+}
+
+/** The agent's process and its terminal's shell end. */
+function endProcesses(world: TierAWorld, live: Live): void {
+  world.machine.end(live.pid)
+  if (live.shell !== undefined) world.machine.end(live.shell)
 }
 
 function liveOf(world: TierAWorld, key: SessionKey): Live {
@@ -395,8 +416,7 @@ export const sessionsSteps: { hook: StepHandler<'hook'>; quit: StepHandler<'quit
     const ended = [...state.live].filter(([key]) => world.session(key).app === step.app)
     for (const [key, live] of ended) {
       endSession(world, key, live)
-      world.machine.end(live.pid)
-      if (live.shell !== undefined) world.machine.end(live.shell)
+      endProcesses(world, live)
     }
     const editor = state.editors.get(step.app)
     if (editor !== undefined) world.machine.end(editor)
@@ -407,6 +427,9 @@ export const sessionsSteps: { hook: StepHandler<'hook'>; quit: StepHandler<'quit
     const state = stateOf(world)
     const ended = state.quit.get(step.app) ?? []
     state.quit.delete(step.app)
-    for (const key of ended) await startSession(world, key)
+    for (const key of ended) {
+      if (world.session(key).app === 'orca') state.launches.set(key, launchOf(world, key) + 1)
+      await startSession(world, key)
+    }
   },
 }
