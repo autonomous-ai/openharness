@@ -19,6 +19,7 @@ const driver = await import('../../e2e/harness/appEvalDriver.js' as string) as {
   cliRuns(runs: string): Array<{ argv: string[]; ok: boolean }>
   deviceLines(log: string, from: number): { lines: string[]; next: number }
   workPaths(argv: readonly string[], projects: readonly string[]): string[]
+  deskEmpty(messages: ReadonlyArray<Record<string, unknown>>): boolean
 }
 
 const claude = await import('../../e2e/harness/appEvalClaude.js' as string) as {
@@ -109,6 +110,28 @@ describe("tier B's commands", () => {
     // Only a folder inside the projects: one beside them, or the link of an app, is kept as it is.
     expect(driver.workPaths(['cursor', '/tmp/htmux-eval/projects-other/eval-alpha', 'cursor://file/x'], projects))
       .toEqual(['cursor', '/tmp/htmux-eval/projects-other/eval-alpha', 'cursor://file/x'])
+  })
+})
+
+describe("tier B's start", () => {
+  const welcome = { t: 'welcome' }
+  const list = (...ids: string[]): Array<Record<string, unknown>> => [{ t: 'agents.begin' }, ...ids.map((id) => ({ t: 'agent', id })), { t: 'agents.end' }]
+  const apps = (...counts: Array<[string, number]>): Record<string, unknown> =>
+    ({ t: 'apps', shown: '', apps: counts.map(([id, count]) => ({ id, name: id, count, waiting: 0 })) })
+
+  it('goes on once the dial was welcomed, shown an empty list, and told no app has a row', () => {
+    expect(driver.deskEmpty([welcome, apps(), ...list()])).toBe(true)
+  })
+
+  it("waits while another app's page still has a row of an earlier scenario, though the list shown is empty", () => {
+    expect(driver.deskEmpty([welcome, apps(['vscode', 2]), ...list()])).toBe(false)
+    expect(driver.deskEmpty([welcome, apps(['vscode', 2]), ...list(), apps()])).toBe(true)
+  })
+
+  it('waits for a welcome, an empty list and a word of the apps', () => {
+    expect(driver.deskEmpty([apps(), ...list()])).toBe(false)
+    expect(driver.deskEmpty([welcome, apps(), ...list('a')])).toBe(false)
+    expect(driver.deskEmpty([welcome, ...list()])).toBe(false)
   })
 })
 
