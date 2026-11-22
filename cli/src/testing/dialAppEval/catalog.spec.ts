@@ -27,13 +27,13 @@ function checkKeys(check: Check): SessionKey[] {
 }
 
 describe('the catalog', () => {
-  it('the ids are C1-C12, X1-X11, V1-V15 and the six held out, 6 of 44', () => {
+  it('the ids are C1-C12, X1-X11, V1-V15, U1-U14 and the six held out, 6 of 58', () => {
     const range = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => `${prefix}${i + 1}`)
-    expect(MAIN.map((s) => s.id)).toEqual([...range('C', 12), ...range('X', 11), ...range('V', 15)])
+    expect(MAIN.map((s) => s.id)).toEqual([...range('C', 12), ...range('X', 11), ...range('V', 15), ...range('U', 14)])
     expect(HELD_OUT.map((s) => s.id)).toEqual(['CH1', 'CH2', 'CH3', 'XH1', 'XH2', 'XH3'])
     expect(MAIN.every((s) => !s.heldOut)).toBe(true)
     expect(HELD_OUT.every((s) => s.heldOut)).toBe(true)
-    expect(ALL).toHaveLength(44)
+    expect(ALL).toHaveLength(58)
   })
 
   it('each scenario\'s checks cover exactly its dims', () => {
@@ -247,12 +247,15 @@ describe('the catalog', () => {
     // still window, X8's turn, X11's switches, CH3's rest on a and XH3's switch. The editors' agents start a second apart
     // (started), so each V scenario has one wait fewer than its starts; then V7's turn and its wait on the person, V10's
     // pause after the reload, V11's rests between its tap, strokes and close, V13's rest before the stroke, V14's gap
-    // between quit and relaunch, and V15's rest and its time unplugged.
+    // between quit and relaunch, and V15's rest and its time unplugged; U8's turn, U12's pause after the close and U13's
+    // gap between quit and relaunch.
     const starts = (id: string, n: number): string[] => Array<string>(n - 1).fill(`${id} 1000`)
     expect(waits('own')).toEqual(['C6 5000', 'C9 1000', 'C9 3500', 'C10 2000', 'C11 1000', 'C11 3000', 'X3 5000', 'X8 2000',
       'X11 300', 'X11 300', ...starts('V1', 4), ...starts('V2', 20), ...starts('V3', 2), ...starts('V4', 2), ...starts('V5', 2),
       'V7 2000', 'V7 2000', ...starts('V10', 2), 'V10 2000', 'V11 1000', 'V11 1000', 'V11 1000', 'V13 1000',
-      ...starts('V14', 3), 'V14 2000', ...starts('V15', 2), 'V15 1000', 'V15 3000', 'CH3 1000', 'XH3 200'])
+      ...starts('V14', 3), 'V14 2000', ...starts('V15', 2), 'V15 1000', 'V15 3000',
+      ...starts('U1', 4), ...starts('U2', 2), ...starts('U3', 2), ...starts('U4', 2), 'U8 2000', 'U12 2000', ...starts('U13', 3),
+      'U13 2000', ...starts('U14', 2), 'CH3 1000', 'XH3 200'])
     expect(new Set(waits('condition').map((w) => w.split(' ')[1]))).toEqual(new Set(['10000']))
     // The person reading the face once the list is there.
     expect(new Set(waits('reading').map((w) => w.split(' ')[1]))).toEqual(new Set(['1000']))
