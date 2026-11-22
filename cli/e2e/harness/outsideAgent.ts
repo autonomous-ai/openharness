@@ -69,7 +69,14 @@ const FAKE_APPS = {
   // The Claude app, whose Code sessions run Claude Code under it.
   'claude-app': { bundle: 'Claude', id: 'com.anthropic.claudefordesktop', exe: 'claude-desktop' },
 } as const
-export type FakeApp = keyof typeof FAKE_APPS
+/**
+ * iTerm2's server as it runs once iTerm2 relaunched with its sessions kept (Diego's report of 2026-11-22): its copy in
+ * iTerm2's folder of the daemon's home, with no bundle, forking every tab (cable/hosts/scannedApp.ts isItermServer).
+ * macOS only. A tab tabUnder opens under it is launchd's child, as that copy is; Outside's engine runs under it as the
+ * test's child.
+ */
+const ITERM_SERVER = ['Library', 'Application Support', 'iTerm2', 'iTermServer-3.6.6']
+export type FakeApp = keyof typeof FAKE_APPS | 'iterm-server'
 
 /**
  * What the fake app runs: the command it is given (the tab's pseudo-terminal) on its own stdio,
@@ -89,6 +96,14 @@ tab.on('exit', (code) => process.exit(code ?? 1))
  * is never one of the developer's.
  */
 function fakeApp(d: IsolatedDaemon, app: FakeApp): string {
+  if (app === 'iterm-server') {
+    if (process.platform !== 'darwin') throw new Error("iTerm2's server is faked on macOS only")
+    const path = join(d.env.HOME!, ...ITERM_SERVER)
+    if (existsSync(path)) return path
+    mkdirSync(dirname(path), { recursive: true })
+    symlinkSync(process.execPath, path)
+    return path
+  }
   const { bundle, id, exe } = FAKE_APPS[app]
   const contents = join(d.env.HOME!, 'Applications', `${bundle}.app`, 'Contents')
   const path = process.platform === 'darwin' ? join(contents, 'MacOS', exe) : join(d.root, 'apps', exe)
@@ -106,11 +121,12 @@ function fakeApp(d: IsolatedDaemon, app: FakeApp): string {
 
 /**
  * A tab of a fake [app] running [argv] on a pseudo-terminal of its own (PTY), under [env] alone: its parents are the
- * pseudo-terminal's helper, the app, the test. [pid] is the command's own process. Closed, the command is killed and the
- * tab waited for, so nothing of it outlives the test.
+ * pseudo-terminal's helper, the app, the test; under iTerm2's server, the helper, the server, launchd. [pid] is the
+ * command's own process. Closed, the command is killed and the tab waited for, so nothing of it outlives the test.
  */
 export async function tabUnder(d: IsolatedDaemon, app: FakeApp, argv: readonly string[], env: NodeJS.ProcessEnv):
   Promise<{ pid: number; close(): Promise<void> }> {
+  if (app === 'iterm-server') return tabUnderItermServer(d, argv, env)
   const tab = spawn(fakeApp(d, app), ['-e', UNDER_APP, 'python3', '-c', PTY, ...argv], { env, stdio: ['pipe', 'pipe', 'pipe'] })
   tab.stdout!.resume()
   const exited = new Promise<void>((done) => tab.once('exit', () => done()))
@@ -131,6 +147,43 @@ export async function tabUnder(d: IsolatedDaemon, app: FakeApp, argv: readonly s
       const timer = setTimeout(() => tab.kill('SIGKILL'), 5_000)
       await exited
       clearTimeout(timer)
+    },
+  }
+}
+
+/** tabUnder's tab under iTerm2's server, which a /bin/sh starts, says the pid of, and leaves at once: launchd adopts it
+ *  (ppid 1). Resolved once that /bin/sh is gone. */
+async function tabUnderItermServer(d: IsolatedDaemon, argv: readonly string[], env: NodeJS.ProcessEnv):
+  Promise<{ pid: number; close(): Promise<void> }> {
+  const tab = spawn('/bin/sh', ['-c', '"$@" & echo "server $!" >&2', 'sh', fakeApp(d, 'iterm-server'), '-e', UNDER_APP,
+    'python3', '-c', PTY, ...argv], { env, stdio: ['pipe', 'pipe', 'pipe'] })
+  tab.stdout!.resume()
+  const left = new Promise<void>((done) => tab.once('exit', () => done()))
+  // Held by the server and the helper, so closed once both are gone.
+  let closed = false
+  tab.stderr!.once('close', () => { closed = true })
+  const { pid, server } = await new Promise<{ pid: number; server: number }>((resolve, reject) => {
+    let said = ''
+    tab.stderr!.on('data', (chunk: Buffer) => {
+      said += chunk.toString('utf8')
+      const lines = said.split('\n').slice(0, -1)
+      const server = lines.find((line) => line.startsWith('server '))
+      const child = lines.find((line) => line !== server)
+      if (server && child) resolve({ pid: Number(child), server: Number(server.slice('server '.length)) })
+    })
+    tab.stderr!.once('close', () => reject(new Error(`the terminal tab exited: ${said}`)))
+  })
+  await left
+  return {
+    pid,
+    async close() {
+      try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ }
+      // launchd's child, not the test's: killed by its pid, and gone once no signal reaches it and the helper ended.
+      try { process.kill(server, 'SIGKILL') } catch { /* already gone */ }
+      await until("iTerm2's server and its tab gone", () => {
+        try { process.kill(server, 0) } catch { return closed }
+        return false
+      }, 10_000, 50)
     },
   }
 }
