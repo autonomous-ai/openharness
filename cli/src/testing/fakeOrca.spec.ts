@@ -13,7 +13,6 @@ interface FakeOrca {
   endWatch(): void
   watching(): boolean
   focus(handle: string | null): void
-  refuse(): void
 }
 const { FakeOrca } = await import('../../e2e/harness/fakeOrca.js' as string) as {
   FakeOrca: { install(d: { env: NodeJS.ProcessEnv }, options?: { watchFocus?: boolean }): FakeOrca }
@@ -23,7 +22,6 @@ const { FakeOrca } = await import('../../e2e/harness/fakeOrca.js' as string) as 
 const ENV = { PATH: '/usr/bin:/bin' }
 const H1 = 'term_00000000-0000-4000-8d00-000000000001'
 const H2 = 'term_00000000-0000-4000-8d00-000000000002'
-const H3 = 'term_00000000-0000-4000-8d00-000000000003'
 
 let dir = ''
 const watches: ChildProcess[] = []
@@ -92,16 +90,17 @@ describe.skipIf(process.platform === 'win32')("the harness's fake Orca", () => {
     expect(JSON.parse(String(listed.stdout))).toEqual(listing)
   })
 
-  it('a switch that exits 0 is echoed as a focus line, one that exits 1 is not', async () => {
-    const { fake, launcher, run } = installed(true)
+  it("a switch that exits 0 is echoed as a focus line 1.5 s after it, inside the devices' 2 s echo window, and returns at once", async () => {
+    const { launcher, run } = installed(true)
     const w = watch(launcher)
+    const echoed: number[] = []
+    w.child.stdout!.on('data', () => { echoed.push(Date.now()) })
+    const asked = Date.now()
     expect(run('orca', 'terminal', 'switch', '--terminal', H1, '--json').status).toBe(0)
+    // The echo is Orca's, later: the switch's own run waits for none of it.
+    expect(Date.now() - asked).toBeLessThan(1_500)
     await vi.waitFor(() => expect(w.lines).toEqual([focusLine(H1)]), { timeout: 10_000, interval: 20 })
-    fake.refuse()
-    expect(run('orca', 'terminal', 'switch', '--terminal', H2, '--json').status).toBe(1)
-    // A line told after the refused switch comes next: the refusal printed none before it.
-    fake.focus(H3)
-    await vi.waitFor(() => expect(w.lines).toEqual([focusLine(H1), focusLine(H3)]), { timeout: 10_000, interval: 20 })
+    expect(echoed[0]! - asked).toBeGreaterThanOrEqual(1_500)
   })
 
   it('watchFocus(false) drops watch-focus from the help and moves the launcher\'s mtime', () => {

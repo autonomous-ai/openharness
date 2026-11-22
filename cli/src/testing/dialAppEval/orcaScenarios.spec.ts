@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { HELD_OUT, MAIN } from './catalog.js'
-import type { Dimension, Scenario, SessionDef, SessionKey } from './types.js'
+import { evaluate } from './checks.js'
+import { agentIdOf, type Dimension, type Scenario, type Seen, type SessionDef, type SessionKey } from './types.js'
 
 const ORCA = MAIN.filter((s) => s.app === 'orca')
 const byId = (id: string): Scenario => ORCA.find((s) => s.id === id)!
@@ -71,6 +72,28 @@ describe("Orca's scenarios", () => {
     // with the scenario; on a shared daemon the look's phase is the scenario before's, and it fell 3 s after O14's removal
     // when O14 followed O13 (whose agents end with SessionEnd), after its end when O14 began on a look.
     expect(ORCA.filter((s) => s.fresh).map((s) => s.id)).toEqual(['O14', 'O15'])
+  })
+
+  it("O4's echo check can fail: the dial left on b after the tap on a passes, the tap's echo pulling it back to a fails", () => {
+    const o4 = byId('O4')
+    const [a, b] = agents(o4).map(agentIdOf)
+    // Each step at the scenario's own time; the person swipes to b a second after the tap, and the tap's echo, Orca's
+    // focus line for a, lands 1.5 s after it.
+    let now = 0
+    const steps = o4.steps.flatMap((step, index) => {
+      if (step.kind === 'wait') {
+        now += step.ms
+        return []
+      }
+      return [{ at: now, index, kind: step.kind, ...(step.label === undefined ? {} : { label: step.label }) }]
+    })
+    const tap = steps.find((s) => s.label === 'tap')!.at
+    const face = (at: number, active: string) => ({ at, page: 'orca', tiles: [a!, b!], active, refused: 0 })
+    const faces = [face(0, b!), face(tap, a!), face(tap + 1_000, b!)]
+    const echo = (seen: Seen['faces']) => evaluate(o4.checks.find((c) => c.id === 'echo')!, o4,
+      { frames: [], faces: seen, commands: [], deliveries: [], steps }, 'a', 'darwin').map((r) => [r.check, r.score])
+    expect(echo(faces)).toEqual([['echo.lands', 1], ['echo.latency', 1], ['echo.noBounce', 1]])
+    expect(echo([...faces, face(tap + 1_500, a!)])).toEqual([['echo.lands', 0], ['echo.latency', 1], ['echo.noBounce', 0]])
   })
 
   it("O9's words reach its Claude Code through the mod, O10's are typed into its Codex's pane", () => {

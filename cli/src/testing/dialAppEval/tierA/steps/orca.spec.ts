@@ -224,14 +224,14 @@ describe("tier A's Orca", () => {
     await expect(focus('e')).rejects.toThrow(/e, whose pane is not open/)
   })
 
-  it('a switch is echoed on each running watch 100 ms later', async () => {
+  it("a switch is echoed on each running watch 1.5 s later, inside the devices' 2 s echo window", async () => {
     const { world, deps } = worldOn('darwin', layout())
     await started(world, ['a', 'b'])
     const reads = createOrcaReads(deps.orca!)
     const heard: Array<Array<string | null>> = [[], []]
     for (const into of heard) reads.watchOrcaFocus((handle) => { into.push(handle) })
     expect(await createOrcaAdapter(deps.orca!).show({ adapter: 'orca', id: orcaTerminalHandle('b') }, 'eval-agent')).toBe('ok')
-    vi.advanceTimersByTime(99)
+    vi.advanceTimersByTime(1_499)
     await landed()
     expect(heard).toEqual([[], []])
     vi.advanceTimersByTime(1)
