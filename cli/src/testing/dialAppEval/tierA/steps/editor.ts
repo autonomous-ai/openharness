@@ -173,6 +173,11 @@ export const editorSteps: { [K in 'editor.window' | 'editor.focus' | 'editor.clo
     if (world.scenario.world?.extension === false) return
     const held = holding(world, step.session)
     if (!held) throw new Error(`scenario ${world.scenario.id}: no open window holds ${step.session}'s terminal`)
+    // One window has the focus: the one that had it says it lost it first, as the editor tells its extension and tier B's
+    // windows say (appEvalEditor.ts). Two windows focused at once would leave the devices following the wrong one (VH3).
+    for (const other of [...windows(world).open.values()]) {
+      if (other !== held && other.focused) await report(world, { ...other, focused: false })
+    }
     await report(world, { ...held, active: step.session, focused: true })
   },
   'editor.closeTerminal': async (world, step) => {
