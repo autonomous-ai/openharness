@@ -1204,6 +1204,25 @@ describe('Claude Code while Harness runs a Claude agent of its own (docs/plans/2
     expect(existsSync(skillFile(r.claudeHome))).toBe(false)
   })
 
+  it('a none read again after no pass for longer than two scans starts its wait over', () => {
+    // No dial for hours, then one attaches while a restarted core restores its agents: the none it lists then is new,
+    // not the one read before the dial went, and no read in between saw the core list none.
+    const r = rig()
+    r.agents.now = 'listed'
+    r.writer.started()
+    r.agents.now = 'none'
+    r.writer.scanned([])
+
+    r.clock.at += 2 * 3_600_000
+    r.writer.attached()
+    expect(hasSkill(r.claudeHome)).toBe(true)
+    expect(readSetup(r.dataDir).homes.claude).toEqual([skillsOf(r.claudeHome)])
+
+    r.clock.at += SCAN_MS
+    r.writer.scanned([])
+    expect(existsSync(skillFile(r.claudeHome))).toBe(false)
+  })
+
   it('none right after not known leaves everything as it is until it has held a scan\'s minute', () => {
     // A devices start beside a core restoring its agents, with the plugin not on: its first view lists none of them yet.
     const r = rig()
