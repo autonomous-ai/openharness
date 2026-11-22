@@ -97,9 +97,9 @@ export function createOpenActions(deps: OpenDeps): {
     const adapter = pane && deps.adapters.find((known) => known.id === pane.adapter)
     return adapter && adapter.tap !== 'after' && adapter.canFocus(pane) ? { adapter, pane } : undefined
   }
-  // On Linux the agent's window as the observed source knows it: a bundle names only the host's app there, none for an
-  // app learnt from the agent's parents. A row no process holds (an app's own store lists it) has no window the source
-  // knows, so its app is the one its bundle names: with none, a failed link brought nothing on Linux (the dial eval's X5).
+  // On Linux the agent's window as the observed source knows it, not its bundle: a bundle names only the host's app
+  // there, none for an app learnt from the agent's parents. A row no process holds (an app's own store lists it) has no
+  // window the source knows, so its app is the one its bundle names; without it a failed link brought nothing (X5).
   const windowFor = (agentId: string, target: OpenTarget): { pid?: number; app?: string } | undefined => {
     const window = deps.windowOf?.(agentId)
     if (window) return window
