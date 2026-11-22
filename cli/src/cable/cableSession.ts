@@ -481,8 +481,8 @@ export interface CableHost {
   /** What the dial may do with an agent of the machine list, as letters of s v f a; undefined (an older host, a
    *  window's tab, an agent it does not list) means everything, as before. */
   capsOf?(agentId: string, opts?: { apps?: boolean }): string | undefined
-  /** A sentence of the agent's own app for words no route reaches (Cursor's own agent, U10), said in place of the
-   *  generic one; undefined keeps that. */
+  /** A sentence of the agent's own app for words no route reaches, said in place of the generic one; undefined keeps
+   *  that. */
   voiceRefusal?(agentId: string, opts?: { apps?: boolean }): string | undefined
   /** The app or terminal that agent runs in (`orca`, `ghostty`, …), for the words of a refusal. */
   hostOf?(agentId: string, opts?: { apps?: boolean }): string | undefined

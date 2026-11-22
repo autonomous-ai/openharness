@@ -85,7 +85,9 @@ For U10 there is no safe route (below).
      platform given, not `process.platform`) there is no `ps`, no group and no job control: instead the process table is
      read again (`deps.processes`) and the agent's pid must still have the start marker its chain was read with and a
      chain that reaches the shell, since a dead agent's pid may be a new shell's;
-  3. the words line; a stream that does not take it now (`write` false while an earlier line drains) answers false;
+  3. the same terminal and the caller's check that the agent is still at its prompt, asked again once the guard has
+     read (a turn or a prompt may have started during that read); then the words line; a stream that does not take it
+     now (`write` false while an earlier line drains) answers false;
   4. the settle, on `deps.after`: `INJECT_PASTE_DELAY_BASE_MS + floor(length / 60)`, at most
      `INJECT_PASTE_DELAY_MAX_MS` (`lib/submitTiming.ts`, 400 and 1,500 ms), for every engine and platform: Codex's
      paste-burst detector turns an Enter within 120 ms of a key burst into a newline (`codex-rs` `paste_burst.rs`), and
