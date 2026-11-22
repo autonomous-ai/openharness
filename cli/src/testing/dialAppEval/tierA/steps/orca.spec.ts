@@ -8,12 +8,13 @@ import { createOrcaAdapter, createOrcaReads } from '../../../../cable/hosts/orca
 import type { CorePorts } from '../../../../core/api.js'
 import { orcaBinary, readOrcaHomes } from '../../../../devices/orcaHomes.js'
 import type { DevicesDeps, startDevices } from '../../../../services/devices.js'
+import { dialStream, orcaFrontHandler, type ListenerStream, type ListenerStreamHandler } from '../../../../services/devicesListener.js'
 import { orcaGhost, orcaSession, scenario } from '../../catalog.js'
 import { orcaTerminalHandle, orcaWorktreeId, type Platform, type Scenario, type SessionKey } from '../../types.js'
 import { installClock } from '../clock.js'
 import { machine } from '../machine.js'
 import { World } from '../world.js'
-import { answerOrca, orcaModelSteps } from './orca.js'
+import { answerOrca, closeOrca, orcaModelSteps, reopenOrca } from './orca.js'
 import { sessionsSteps } from './sessions.js'
 
 const PLATFORMS: readonly Platform[] = ['darwin', 'win32', 'linux']
@@ -55,6 +56,23 @@ const started = async (world: World, keys: SessionKey[]): Promise<void> => {
 }
 /** A child's stdout comes on a later turn. */
 const landed = (): Promise<void> => new Promise((resolve) => { setImmediate(resolve) })
+
+/** The devices' own dial stream and orcaFront handler on the world's listener, as the devices open them: each stream
+ *  opened, with what it was told and the stream it was handed, and each front the devices took. */
+async function pluginDoor(deps: DevicesDeps) {
+  const dial = dialStream({ log: () => {}, after: () => () => {} })
+  const opened: Array<{ message: Record<string, unknown>; lines: unknown[]; stream: ListenerStream }> = []
+  const fronts: Array<readonly string[] | null> = []
+  const handler: ListenerStreamHandler = { ...dial.handler, open: (message, stream) => {
+    const lines: unknown[] = []
+    opened.push({ message, lines, stream })
+    return dial.handler.open(message, { ...stream, write: (line) => { lines.push(line); return stream.write(line) } })
+  } }
+  await deps.listen!({ dial: handler, orcaFront: orcaFrontHandler(() => dial.isOpen(), (terminals) => { fronts.push(terminals) }) }, () => {})
+  return { dial, opened, fronts }
+}
+const plugin = (world: World, open: boolean) => orcaModelSteps['orca.plugin'](world, { kind: 'orca.plugin', open })
+const front = (world: World, worktree: string) => orcaModelSteps['orca.front'](world, { kind: 'orca.front', worktree })
 
 describe("tier A's Orca", () => {
   it("terminal list answers the layout step's worktrees, each open pane by tab then split", async () => {
@@ -183,5 +201,76 @@ describe("tier A's Orca", () => {
     const { world } = worldOn('darwin', layout())
     await started(world, ['b'])
     expect(machine.owners.get(world.session('b').id)!.transcriptPath!.startsWith(world.folders.codexHomes)).toBe(true)
+  })
+
+  it('orca.plugin opens the devices\' dial stream as the plugin does, and with plugin false opens nothing', async () => {
+    const { world, deps } = worldOn('darwin', layout())
+    const door = await pluginDoor(deps)
+    await plugin(world, true)
+    // A standby open, and the stream told it can take a line once it has opened: the devices write their state.
+    expect(door.opened.map(({ message, lines }) => ({ message, lines }))).toEqual([{ message: { type: 'dial', standby: true }, lines: [{ attached: false }] }])
+    expect(door.dial.isOpen()).toBe(true)
+    await plugin(world, false)
+    expect([door.dial.isOpen(), door.opened[0]!.stream.ended.reason]).toEqual([false, 'gone'])
+
+    const none = worldOn('darwin', layout({ world: { orca: { plugin: false } } }))
+    const nothing = await pluginDoor(none.deps)
+    await plugin(none.world, true)
+    await plugin(none.world, false)
+    expect([nothing.opened, nothing.dial.isOpen()]).toEqual([[], false])
+  })
+
+  it("orca.front sends the worktree's open handles in layout order on orcaFront", async () => {
+    const { world, deps } = worldOn('darwin', layout())
+    const door = await pluginDoor(deps)
+    await started(world, ['b', 'd', 'c', 'a'])
+    await orcaModelSteps['orca.layout'](world, { kind: 'orca.layout', worktrees: ['w2', 'w1'] })
+    await plugin(world, true)
+    await front(world, 'w1')
+    await front(world, 'w2')
+    // e never started: its pane is not open.
+    expect(door.fronts).toEqual([[orcaTerminalHandle('a'), orcaTerminalHandle('c'), orcaTerminalHandle('b')], [orcaTerminalHandle('d')]])
+  })
+
+  it('a front with no stream open throws', async () => {
+    const { world, deps } = worldOn('darwin', layout())
+    const door = await pluginDoor(deps)
+    await started(world, ['a'])
+    await orcaModelSteps['orca.layout'](world, { kind: 'orca.layout', worktrees: ['w1'] })
+    await expect(front(world, 'w1')).rejects.toThrow(/orcaFront/)
+    await plugin(world, true)
+    await plugin(world, false)
+    await expect(front(world, 'w1')).rejects.toThrow(/orcaFront/)
+    expect(door.fronts).toEqual([])
+  })
+
+  it('orca.close takes the pane out of the list', async () => {
+    const { world, deps } = worldOn('darwin', layout())
+    const reads = createOrcaReads(deps.orca!)
+    await started(world, ['a', 'c'])
+    await orcaModelSteps['orca.layout'](world, { kind: 'orca.layout', worktrees: ['w1'] })
+    await orcaModelSteps['orca.close'](world, { kind: 'orca.close', session: 'c' })
+    expect((await reads.orcaTabs())!.terminals.map((t) => t.handle)).toEqual([orcaTerminalHandle('a')])
+  })
+
+  it("Orca's quit ends each watch and the plugin's stream; its relaunch opens the stream again", async () => {
+    const { world, deps } = worldOn('darwin', layout())
+    const door = await pluginDoor(deps)
+    const reads = createOrcaReads(deps.orca!)
+    await started(world, ['a'])
+    await plugin(world, true)
+    const gone: number[] = []
+    for (const n of [1, 2]) void reads.watchOrcaFocus(() => {}).ended.then(() => { gone.push(n) })
+    closeOrca(world)
+    await landed()
+    expect(gone.sort()).toEqual([1, 2])
+    expect([door.dial.isOpen(), door.opened[0]!.stream.ended.reason]).toEqual([false, 'gone'])
+    await reopenOrca(world)
+    expect([door.dial.isOpen(), door.opened.length]).toEqual([true, 2])
+    // An Orca quit with the stream closed comes back with it closed.
+    await plugin(world, false)
+    closeOrca(world)
+    await reopenOrca(world)
+    expect([door.dial.isOpen(), door.opened.length]).toEqual([false, 2])
   })
 })

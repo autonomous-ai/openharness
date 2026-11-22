@@ -10,10 +10,10 @@ import type { InboxAnswer, InboxPoll } from '../../../../core/deviceHookCalls.js
 import type { ObservedEvent, ObservedHookEvent } from '../../../../core/observedHook.js'
 import { lastCursorTurnText } from '../../../../engines/cursor/normalizer.js'
 import { claudeSession, editorSession, orcaSession, thread } from '../../catalog.js'
-import { orcaTerminalHandle, type Delivery, type Platform, type Scenario, type SessionKey, type StepOf } from '../../types.js'
+import { orcaPaneHandle, orcaTerminalHandle, type Delivery, type Platform, type Scenario, type SessionKey, type StepOf } from '../../types.js'
 import { machine } from '../machine.js'
 import type { TierAWorld } from '../world.js'
-import { agentPid, keyOfOrcaHandle, keyOfShell, orcaHandleOf, sessionsSteps, shellOf } from './sessions.js'
+import { agentPid, dropSession, keyOfOrcaHandle, keyOfShell, orcaHandleOf, sessionsSteps, shellOf } from './sessions.js'
 
 const roots: string[] = []
 afterEach(() => {
@@ -529,6 +529,33 @@ describe("tier A's Orca agents", () => {
     expect(keyOfOrcaHandle(w.world, 'term_00000000-0000-4000-8d00-00000000ffff')).toBeUndefined()
     // Its pane closes as it ends.
     await w.hook('a', 'end')
+    expect(keyOfOrcaHandle(w.world, orcaTerminalHandle('a'))).toBeUndefined()
+  })
+
+  it("a drop ends the agent's and its shell's processes and sends no hook", async () => {
+    const w = fakeWorld('darwin', orcaAgents())
+    await w.hook('a', 'start')
+    const { agent, shell, maker } = chainOf(w.world, 'a')
+    dropSession(w.world, 'a')
+    expect([machine.processes.has(agent.pid), machine.processes.has(shell.pid), machine.processes.has(maker.pid)]).toEqual([false, false, true])
+    expect(w.told.map((e) => e.event)).toEqual(['session-start'])
+    expect(machine.owners.has(orcaAgents().sessions[0]!.id)).toBe(false)
+    // Its pane is closed, and the mod's poll goes with its client.
+    expect(orcaHandleOf(w.world, 'a')).toBeUndefined()
+    await landed()
+    expect(w.open()).toEqual([])
+  })
+
+  it('a relaunched Orca session names its next handle in its hooks and its pane', async () => {
+    const w = fakeWorld('linux', orcaAgents())
+    await w.hook('a', 'start')
+    for (const launch of [1, 2]) {
+      await sessionsSteps.quit(w.world, { kind: 'quit', app: 'orca' })
+      await sessionsSteps.relaunch(w.world, { kind: 'relaunch', app: 'orca' })
+      const handle = orcaPaneHandle(orcaAgents().sessions[0]!, launch)
+      expect(w.told.at(-1)).toMatchObject({ event: 'session-start', hostHints: { ORCA_TERMINAL_HANDLE: handle } })
+      expect([orcaHandleOf(w.world, 'a'), keyOfOrcaHandle(w.world, handle)]).toEqual([handle, 'a'])
+    }
     expect(keyOfOrcaHandle(w.world, orcaTerminalHandle('a'))).toBeUndefined()
   })
 

@@ -13,7 +13,7 @@
 import { homedir, tmpdir } from 'node:os'
 import { basename } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { claudeGhost, claudeSessions, editorGhost, editorSession, keys, listed, MAIN, orcaGhost, orcaSession, orcaStarted, scenario,
+import { claudeGhost, claudeSessions, editorGhost, editorSession, keys, listed, MAIN, orcaGhost, orcaOpening, orcaSession, orcaStarted, scenario,
   scenariosFor, started } from './catalog.js'
 import { loadBaseline, SKIP_RATCHET_ENV, tierAVerdict } from './grade.js'
 import { describeAttempt } from './netGuard.js'
@@ -409,6 +409,50 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     const second = await seen()
     expect(first.commands.some((c) => isList(c.argv))).toBe(true)
     expect(second).toEqual(first)
+  })
+
+  /** Task 7's O4, its focus: a and b in w1, the plugin's stream open, Orca in front. */
+  const focusOnB = (): Scenario => scenario({
+    id: 'O4', app: 'orca', title: "Eval the dial follows Orca's focus", dims: ['D2'], tiers: ['a'],
+    sessions: [orcaSession('a'), orcaSession('b', { tab: 1 }), orcaGhost],
+    steps: [...orcaOpening(['w1']), ...orcaStarted(['b', 'a']), ...listed('orca', ['a', 'b']),
+      { label: 'focus', kind: 'orca.focus', session: 'b' }, { kind: 'wait', ms: 2_000 }],
+    checks: [], probes: [],
+  })
+
+  it('a focus line for b, with Orca settled in front, turns the dial to b', async () => {
+    const of = focusOnB()
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, of, 'darwin')
+    expect(run.error).toBeUndefined()
+    const { faces, steps, commands } = driver.seen()
+    const focus = steps.find((s) => s.label === 'focus')!
+    const [a, b] = of.sessions.slice(0, 2).map(agentIdOf)
+    expect(commands.some((c) => c.argv[2] === 'watch-focus' && c.at <= focus.at)).toBe(true)
+    // a, the newest, is on the face until the focus; the face b comes at the focus's own virtual moment.
+    expect(faces.filter((f) => f.at < focus.at).at(-1)?.active).toBe(a)
+    expect(faces.at(-1)?.active).toBe(b)
+  })
+
+  /** Task 7's O5: a and b in w1, d in w2, then the plugin says w1 is on Orca's screen. */
+  const frontOnW1 = (): Scenario => scenario({
+    id: 'O5', app: 'orca', title: "Eval the ring keeps to the worktree on Orca's screen", dims: ['D1'], tiers: ['a'],
+    sessions: [orcaSession('a'), orcaSession('b', { tab: 1 }), orcaSession('d', { worktree: 'w2' }), orcaGhost],
+    steps: [...orcaOpening(['w1', 'w2']), ...orcaStarted(['d', 'b', 'a']), ...listed('orca', ['a', 'b', 'd']),
+      { label: 'front', kind: 'orca.front', worktree: 'w1' }, ...listed('orca', ['a', 'b'])],
+    checks: [], probes: [],
+  })
+
+  it("with the plugin's front on w1, only w1's agents are listed", async () => {
+    const of = frontOnW1()
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, of, 'darwin')
+    expect(run.error).toBeUndefined()
+    const seen = driver.seen()
+    const front = seen.steps.find((s) => s.label === 'front')!
+    const before = lastList({ ...seen, frames: seen.frames.filter((f) => f.at < front.at) }, of)!
+    expect(before.rows.map((r) => r.key)).toEqual(['a', 'b', 'd'])
+    expect(lastList(seen, of)!.rows.map((r) => r.key)).toEqual(['a', 'b'])
   })
 
   // The baseline is written on a Mac and checked on Linux: a result naming this host's folders would differ there.
