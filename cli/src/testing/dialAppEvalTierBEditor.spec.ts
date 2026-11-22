@@ -12,7 +12,7 @@ const editor = await import('../../e2e/harness/appEvalEditor.js' as string) as {
 }
 const cursor = await import('../../e2e/harness/cursorOutside.js' as string) as {
   hookRun(codexLine: string, env: NodeJS.ProcessEnv, hints: Record<string, string>, event: string,
-    session: { sessionId: string; cwd: string; transcriptPath: string }): { command: string; env: NodeJS.ProcessEnv; input: string }
+    session: { sessionId: string; roots: string[]; transcriptPath: string }): { command: string; env: NodeJS.ProcessEnv; input: string }
 }
 
 describe("tier B's editor windows", () => {
@@ -59,7 +59,7 @@ describe("tier B's Cursor agents", () => {
     const run = (platform: Platform, key: string, event = 'start') => {
       const s = u1.sessions.find((one) => one.key === key)!
       return cursor.hookRun(codexLine, { HOME: '/eval/home' }, editor.hintsOf({ platform, scenario: u1 }, s), event,
-        { sessionId: s.id, cwd: `/eval/projects/eval-${key}`, transcriptPath: `/eval/${key}.jsonl` })
+        { sessionId: s.id, roots: [`/eval/projects/eval-${key}`], transcriptPath: `/eval/${key}.jsonl` })
     }
     const [agent, cli] = [run('darwin', 'c'), run('darwin', 'b')]
     for (const one of [agent, cli]) {
@@ -79,7 +79,14 @@ describe("tier B's Cursor agents", () => {
     }
     expect(inputs[2]!.status).toBe('completed')
     // A line the daemon did not write for Codex is not Cursor's to run.
-    expect(() => cursor.hookRun('/eval/other', {}, {}, 'start', { sessionId: c.id, cwd: '/eval', transcriptPath: '/eval/c.jsonl' }))
+    expect(() => cursor.hookRun('/eval/other', {}, {}, 'start', { sessionId: c.id, roots: ['/eval'], transcriptPath: '/eval/c.jsonl' }))
       .toThrow("Codex's hook line")
+  })
+
+  it("a multi-root workspace's agent says each of its roots, in order: notify.mjs takes the first for its folder (UH2)", () => {
+    const codexLine = "'/eval/node' '/eval/hook/notify.mjs' --port 1 --data-dir /eval/data --engine codex"
+    const roots = ['/eval/projects/eval-c1', '/eval/projects/eval-c2']
+    const run = cursor.hookRun(codexLine, {}, {}, 'start', { sessionId: 'eval', roots, transcriptPath: '/eval/c.jsonl' })
+    expect((JSON.parse(run.input) as Record<string, unknown>).workspace_roots).toEqual(roots)
   })
 })
