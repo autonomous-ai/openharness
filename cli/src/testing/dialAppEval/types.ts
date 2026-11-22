@@ -169,7 +169,8 @@ export type Check = { id: string; dim: Dimension; after?: Label; at?: Label } & 
   | { kind: 'still'; ms: number }
   | { kind: 'open'; session: SessionKey; link: boolean }
   | { kind: 'state'; session: SessionKey; state: 'working' | 'needs-you' | 'done' | 'idle' }
-  | { kind: 'voice'; session: SessionKey; text: string }
+  /** path: the words must reach the session by it; a delivery by another is not counted. */
+  | { kind: 'voice'; session: SessionKey; text: string; path?: Delivery['path'] }
   | { kind: 'recap'; session: SessionKey; text: string }
   | { kind: 'cost' }
   /** The window that holds the session's shell ran scroll lines for that shell while it was active. */

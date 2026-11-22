@@ -208,7 +208,7 @@ export function heldOut(): Scenario[] {
         { kind: 'wait', ms: 1 * S },
         { label: 'voice', kind: 'voice', transcript: 'Eval words for alpha.', target: 'a' },
       ],
-      checks: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'a', text: 'Eval words for alpha.', after: 'voice' }],
+      checks: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'a', text: 'Eval words for alpha.', path: 'typed', after: 'voice' }],
       probes: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'z', text: 'Eval words for alpha.', after: 'voice' }],
     }, true),
     scenario({
@@ -224,7 +224,7 @@ export function heldOut(): Scenario[] {
         { kind: 'wait', ms: 200 },
         { label: 'voice', kind: 'voice', transcript: 'Eval words for bravo.', target: 'b' },
       ],
-      checks: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'b', text: 'Eval words for bravo.', after: 'voice' }],
+      checks: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'b', text: 'Eval words for bravo.', path: 'typed', after: 'voice' }],
       probes: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'z', text: 'Eval words for bravo.', after: 'voice' }],
     }, true),
     scenario({

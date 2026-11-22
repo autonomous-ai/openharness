@@ -180,7 +180,7 @@ export function orcaScenarios(): Scenario[] {
         ...listed('orca', ['a']),
         { label: 'voice', kind: 'voice', transcript: 'Eval words for alpha.', target: 'a' },
       ],
-      checks: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'a', text: 'Eval words for alpha.', after: 'voice' }],
+      checks: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'a', text: 'Eval words for alpha.', path: 'mod', after: 'voice' }],
       probes: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'z', text: 'Eval words for alpha.', after: 'voice' }],
     }),
     scenario({
@@ -194,7 +194,7 @@ export function orcaScenarios(): Scenario[] {
         { kind: 'wait', ms: 1 * S },
         { label: 'voice', kind: 'voice', transcript: 'Eval words for bravo.', target: 'b' },
       ],
-      checks: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'b', text: 'Eval words for bravo.', after: 'voice' }],
+      checks: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'b', text: 'Eval words for bravo.', path: 'typed', after: 'voice' }],
       probes: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'z', text: 'Eval words for bravo.', after: 'voice' }],
     }),
     scenario({
