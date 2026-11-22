@@ -177,7 +177,9 @@ export function harnessRules(rules: readonly string[], platform: NodeJS.Platform
 /**
  * Add a group of `rules` to the list at `[table, list]` (`permissions.allow`), creating what is missing and keeping
  * every other rule. A shape Harness does not know is left as it is: the person's rules are never rewritten to fit.
- * None of the group is added where one of the person's `unless` lists (`deny`, `ask`) touches any of it.
+ * None of the group is added where one of the person's `unless` lists (`deny`, `ask`) touches any of it, and the
+ * group's own rules already there are taken out: a deny added after them in another spelling would not stop the
+ * engine running the command on ours. The person's other rules for the same command stay.
  */
 function withRules(settings: Settings, [table, list]: readonly [string, string], rules: readonly string[], unless: readonly string[],
   platform: NodeJS.Platform): boolean {
@@ -187,7 +189,12 @@ function withRules(settings: Settings, [table, list]: readonly [string, string],
   const current = lists[list] ?? []
   if (!Array.isArray(current)) return false
   const theirs = unless.flatMap((name) => Array.isArray(lists[name]) ? (lists[name] as unknown[]).filter((rule): rule is string => typeof rule === 'string') : [])
-  if (rules.some((rule) => theirs.some((other) => touches(other, rule, platform)))) return false
+  if (rules.some((rule) => theirs.some((other) => touches(other, rule, platform)))) {
+    const kept = current.filter((rule) => !rules.includes(rule))
+    if (kept.length === current.length) return false
+    settings[table] = { ...at, [list]: kept }
+    return true
+  }
   const missing = rules.filter((rule) => !current.includes(rule))
   if (!missing.length) return false
   settings[table] = { ...at, [list]: [...current, ...missing] }
