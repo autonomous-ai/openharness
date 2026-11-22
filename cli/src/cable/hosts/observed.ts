@@ -144,7 +144,8 @@ export interface ObservedDeps {
 const PTY_HINTS = ['WEZTERM_PANE', 'KITTY_WINDOW_ID', 'ZELLIJ_PANE_ID', 'HERDR_PANE_ID', 'ORCA_TERMINAL_HANDLE']
 
 /** Whether a caller's app is learnt from its parents: its hints name none, or name VS Code by TERM_PROGRAM alone, which
- *  Cursor's terminal says too. Only a bundle id tells the two apart, and Linux has none. */
+ *  Cursor's terminal says too. Only a bundle id tells the two apart: Linux has none, and an editor started from another
+ *  app has none once the one it inherited is dropped (hostDetect.ts ownHints). */
 function walked(hints: Readonly<Record<string, string>>): boolean {
   const named = detectApp(hints)
   return named === UNKNOWN_APP || (named === 'vscode' && !hints.__CFBundleIdentifier)
@@ -809,10 +810,11 @@ export class ObservedSource implements HostSource {
    *  that name none, or only a word Cursor says too (walked), learn it from the caller's parents. */
   private placeApp(entry: Entry, hints: Readonly<Record<string, string>>, pid: number): void {
     const named = detectApp(hints)
-    entry.agent.app = entry.outer?.app ?? (walked(hints) && this.deps.apps ? this.learnApp(entry, pid, named) : named)
-    // VS Code named by TERM_PROGRAM alone may be Cursor, which says the same word: the app its parents named has the
-    // bundle, else a tap on Cursor started from Terminal (`cursor .`) opened VS Code.
-    const byApp = named === 'vscode' && !hints.__CFBundleIdentifier
+    const walk = walked(hints)
+    entry.agent.app = entry.outer?.app ?? (walk && this.deps.apps ? this.learnApp(entry, pid, named) : named)
+    // An app named by a word another app says too (walked: VS Code's TERM_PROGRAM, which Cursor says) has the bundle of
+    // the app its parents named, else a tap on Cursor started from Terminal (`cursor .`) opened VS Code.
+    const byApp = walk && named !== UNKNOWN_APP
     entry.bundle = entry.outer ? APP_BUNDLES[entry.outer.app] : bundleOf(byApp ? entry.agent.app : entry.agent.host, hints)
   }
 
