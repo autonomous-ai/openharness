@@ -33,9 +33,9 @@ iTermServer row as the spec writes it; numbers for a look over 50 sessions.
   iTermServer row) and dropped. tmux's listing reads `#{pane_id}`, `#{pane_tty}`, `#{pane_pid}`, `#{session_name}` and
   the owner tag alone.
 - Every command runs with no shell, at most `RUN_TIMEOUT_MS` (10 s); each lookup answer is shared in flight and held
-  `OUTER_EVERY_MS` (5 s) from its start; tmux's pane listing reads at most `PANES_A_LISTING` (1024) lines; the scan
-  lists at most `MAX_SESSIONS` (50) a look and asks their nested lookups one at a time; the iTermServer row takes none of
-  `BUNDLES_A_PASS` (16).
+  `OUTER_EVERY_MS` (5 s) from when it settled, failures too (`tmux.ts heldAnswers`, the one hold of tmux, herdr and
+  Zellij); tmux's pane listing reads at most `PANES_A_LISTING` (1024) lines; the scan lists at most `MAX_SESSIONS`
+  (50) a look and asks their nested lookups one at a time; the iTermServer row takes none of `BUNDLES_A_PASS` (16).
 - Words never go to a placed pane (tmux's `Entry.placed`, herdr's `setPaneNames` place): words before an agent's first
   hook are unchanged.
 - Log lines carry counts and fixed words only, never a pid, tty, pane id, session, path or app:
@@ -152,13 +152,16 @@ Tasks 1-6 are Gap 1, Task 7 Gap 2. Tasks 1, 2, 3, 4, 6 and 7 start at once.
     - `undefined` at once when the platform has no `clientTtyForm`, the pid is out of `PID`, or `/dev/<tty>` is out of
       that form.
     - Else one `tmux list-panes -a -F '#{pane_id}|#{pane_tty}|' + TMUX_PANE_FACTS` serves every ask for
-      `OUTER_EVERY_MS` from its start, one in flight shared: a tmux that hangs costs a look one timeout, not one an ask.
+      `OUTER_EVERY_MS` from when it settled, one in flight shared: a tmux that hangs costs a look one timeout, not one an
+      ask.
       Its first `PANES_A_LISTING` lines are read, the rest counted; any counted says `[device] tmux client · over`.
     - The line whose `pane_tty` is `/dev/<tty>`: none → `{}`; a daemon's tag or a Harness session → `{}`; its pane pid
       not in the agent's chain (`holdsPane` over `found.rows`) → `{}`.
     - From that pane id on, the hooked form's own steps over `found.rows`: extract `clientOf(id: string, rows: readonly
       ProcessName[]): Promise<ClientPlace | NotRead>` from `createTmuxOuter`'s `placeOf` (the `list-clients -t <pane>`
       read, the client used last, its app) and call it from both. No table read and no maker read: the scan did both.
+      The scan's form holds that answer by the pane's session (`#{session_name}`, unique on the one server it lists),
+      failures too: every pane of a session shares its clients, so a `list-clients` that hangs costs a look one timeout.
     - With an app, the answer adds `pane: { adapter: 'tmux', id: '<pane id>:<found.pid>:<app>' }`, the form `paneParts`,
       `checkedPane` and `canShow` take.
     - Lines as the hooked form's (`found`, `none`, `not read · tmux | pane | clients | app`), plus `over`.
@@ -240,17 +243,19 @@ Tasks 1-6 are Gap 1, Task 7 Gap 2. Tasks 1, 2, 3, 4, 6 and 7 start at once.
     'rows'>>>`.
   - `nested?: NestedLookup`.
 - Behaviour of `scanOnce`:
-  - Reads, before any session is listed: one `table()` when present (a rejection says `[observed] scan · apps not read ·
-    <kind>` and asks neither `apps` nor `madeBy`); `apps(pids, rows)`; `madeBy(pids, rows)` when `table`, `madeBy` and
-    `nested` are all there (a rejection counts as none).
+  - Reads, before any session is listed: one `table()` when present (a rejection says `[observed] scan · processes
+    not read · <kind>` and asks neither `apps` nor `madeBy`); `apps(pids, rows)`; `madeBy(pids, rows)` when `table`,
+    `madeBy` and `nested` are all there (a rejection counts as none and says `[observed] scan · makers not read ·
+    <kind>`).
   - In the listing loop, an entry `madeBy` names and `pair()` left unpaired is not given `learnTty` (its tty is the
     multiplexer pane's pty, which on macOS has a tab's form) and is kept for an ask; every other entry as today.
   - After the emit, the kept entries are asked one at a time, each only while it is live, has no caller and is not
     paired: `nested({ ...made, pid: <owner pid>, rows })`. An answer lands under the same three checks. One naming an
     app sets `outer` (`app`, `tty`, `pid`), `entry.tty`, `agent.app`, `entry.bundle = APP_BUNDLES[app]`, deletes
-    `appPending`, then `locate` and `emit`. One naming none changes nothing.
-  - The line is said once the asks have settled, then the paired line. The look stays the one `scanOpen` joins until
-    then: bounded by the lookups' own timeouts and shared listings (Tasks 2, 3).
+    `appPending`, then `locate` and `emit`. One naming none changes nothing; one that rejects or throws counts as none,
+    says `[observed] scan · lookup not read · <kind>`, and the next ask still runs.
+  - The line is said once the asks have settled, then the paired line; its `ms` counts the reads and the asks. The look
+    stays the one `scanOpen` joins until then: bounded by the lookups' own timeouts and shared listings (Tasks 2, 3).
 
 - [ ] **Step 1: Failing tests** (describe `ObservedSource and a nested session the scan found`, with the real tabs
   adapter in `actions` and `madeBy`/`nested` fakes answered by hand):
@@ -268,7 +273,8 @@ Tasks 1-6 are Gap 1, Task 7 Gap 2. Tasks 1, 2, 3, 4, 6 and 7 start at once.
   - `an answer that names no app leaves the walk's app and appPending as they were, and counts nothing` (Review Focus 2).
   - `a session madeBy leaves out asks nothing and has its tty read as before` (Review Focus 4); `a session paired with a
     Herdr terminal is not asked`.
-  - `a table that cannot be read lists every session not known, reads no maker, and says apps not read`, naming nothing.
+  - `a table that cannot be read lists every session not known, reads no maker, and says processes not read`,
+    naming nothing.
   - `with no table reader the scan asks apps with the pids alone, and no maker`.
   - `a scan asked while a look's lookups run joins that look`: one `owners()` look, one ask per entry.
   - `the line counts the placed and names nothing`: no `iterm`, pid or tty in the logs.
@@ -292,7 +298,8 @@ Tasks 1-6 are Gap 1, Task 7 Gap 2. Tasks 1, 2, 3, 4, 6 and 7 start at once.
     keys never see it. `ingest` clears it: from its first hook the agent's panes are its hook's.
   - `Entry.scanPlaced?: true`: set as an answer lands. At the first hook `askOuter` keeps `outer`, `outerPid` and
     `entry.tty` while that hook's own ask runs (the scan's place counts as an ask kept) and its answer then replaces
-    them; when the hook's lookup answers `undefined` at once (not nested), they go at once. Cleared at that hook.
+    them; when the hook's lookup answers `undefined` at once (not nested), or the hook's caller is not the process the
+    scan found (a resume in another pane), they go at once. Cleared at that hook.
 
 - [ ] **Step 1: Failing tests** (same describe as Task 4; the real tmux adapter with a recording runner, `front()`
   `'iterm'`, and the real herdr adapter with a socket):
@@ -342,7 +349,8 @@ by the row's id; none for an id it does not list (as `CmuxSource.paneAt`).
   - In `scannedApps`' macOS branch only: a process whose executable is exactly
     `<home>/Library/Application Support/iTerm2/iTermServer-<v>`, `<home>/.iterm2/iTermServer-<v>` or `iTermServer-<v>`,
     `<v>` matching `[0-9][0-9A-Za-z.-]{0,31}`, names `iterm` at its place in the nearest-first list `nearestApp` reads.
-    It reads no bundle, takes none of `BUNDLES_A_PASS`, and nothing of it is kept or said.
+    It reads no bundle, takes none of `BUNDLES_A_PASS`, and nothing of it is kept or said. A walk ends at it: no bundle
+    past it is read either.
 
 - [ ] **Step 1: Failing tests** (describe `iTerm2's server`, `HOME` `/Users/someone` passed as `home`):
   - `a plain tab under iTermServer is in iTerm2, in each form, with iTerm2 or launchd as its parent`: `it.each` over
