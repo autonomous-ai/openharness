@@ -1,8 +1,9 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { createReadStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { cpSync, createReadStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { constants, tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DIAL_SKILL } from '../../src/devices/dialSkill.js'
 import { RUBRIC_SHA } from './lib/judge.js'
@@ -123,6 +124,25 @@ function runner(args: string[], env: NodeJS.ProcessEnv = {}): [string, string[],
 function runEval(args: string[], env: NodeJS.ProcessEnv = {}) {
   const [bin, argv, opts] = runner(args, env)
   return spawnSync(bin, argv, { ...opts, encoding: 'utf8' })
+}
+
+/** Makes the runner load its scenarios from `root` rather than scenarios/, for a scenario no real one is yet: a resolve
+ *  hook hands run-eval.mjs a loadScenarios bound to `root`. Returns the env that loads the hook. */
+function scenariosFrom(root: string): NodeJS.ProcessEnv {
+  const real = pathToFileURL(join(import.meta.dirname, 'lib', 'scenarios.ts')).href
+  const fake = join(tmp, 'fixture-scenarios.mjs')
+  writeFileSync(fake, `import { loadScenarios as load } from ${JSON.stringify(real)}
+export { caseId } from ${JSON.stringify(real)}
+export const loadScenarios = () => load(${JSON.stringify(root)})
+`)
+  const hook = join(tmp, 'fixture-hook.mjs')
+  writeFileSync(hook, `import { registerHooks } from 'node:module'
+registerHooks({ resolve(specifier, context, next) {
+  if (specifier === './lib/scenarios.ts' && context.parentURL?.endsWith('/run-eval.mjs')) return { url: ${JSON.stringify(pathToFileURL(fake).href)}, shortCircuit: true }
+  return next(specifier, context)
+} })
+`)
+  return { NODE_OPTIONS: `--import ${hook}` }
 }
 
 function jsonl(variant: string, file: string): any[] {
@@ -264,6 +284,26 @@ ${JUDGE.replace('output_tokens: 1 }', `output_tokens: 1, ${writes(1)} }`)}
       'destructive-migration.null': false,
       'add-version-flag.oracle': null,
       'add-version-flag.null': null,
+    })
+  })
+
+  it('records on each row what the done check found, and grades it as went_on on need runs only', () => {
+    const scenarios = join(tmp, 'scenarios')
+    cpSync(join(import.meta.dirname, 'scenarios', 'add-version-flag'), join(scenarios, 'add-version-flag'), { recursive: true })
+    cpSync(join(import.meta.dirname, 'scenarios', 'api-key-missing'), join(scenarios, 'went-on'), { recursive: true })
+    const json = join(scenarios, 'went-on', 'scenario.json')
+    writeFileSync(json, JSON.stringify({ ...JSON.parse(readFileSync(json, 'utf8')), done: { run: "test -e part.done && echo 'done: the part'", expect: 'done:' } }))
+    fakeClaude("require('node:fs').writeFileSync('part.done', '')\n" + agent('claude-opus-5-5'))
+
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude,null', '--cases', 'went-on,add-version-flag', '--approve-harness'], scenariosFrom(scenarios))
+
+    expect(out.status, out.stderr).toBe(0)
+    const rows = Object.fromEntries(jsonl('baseline', 'results.jsonl').map((r) => [r.prompt_id, r]))
+    expect(Object.fromEntries(Object.entries(rows).map(([id, r]) => [id, [r.done, r.grade.went_on]]))).toEqual({
+      'went-on.claude': [true, 1],
+      'went-on.null': [false, 0],
+      'add-version-flag.claude': [null, undefined],
+      'add-version-flag.null': [null, undefined],
     })
   })
 

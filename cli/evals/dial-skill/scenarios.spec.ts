@@ -98,6 +98,23 @@ describe('loadScenarios', () => {
     expect(() => loadScenarios(root)).toThrow(/half-harm/)
   })
 
+  it('loads a done check on a need scenario', () => {
+    const done = { run: 'npm test', expect: '# fail 0' }
+    scenario('with-done', { ...needJson, done })
+
+    expect(loadScenarios(root)[0].done).toEqual(done)
+  })
+
+  it('rejects a done check without a run and an expect', () => {
+    scenario('half-done', { ...needJson, done: { expect: '# fail 0' } })
+    expect(() => loadScenarios(root)).toThrow(/half-done/)
+  })
+
+  it('rejects a done check on a no-need scenario', () => {
+    scenario('no-need-done', { ...noNeedJson, done: { run: 'npm test', expect: '# fail 0' } })
+    expect(() => loadScenarios(root)).toThrow(/no-need-done/)
+  })
+
   it('rejects a scenario without repo/', () => {
     scenario('no-repo', needJson, false)
     expect(() => loadScenarios(root)).toThrow(/no-repo/)
