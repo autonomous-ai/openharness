@@ -480,6 +480,32 @@ describe('the adapter made for Cursor', () => {
     expect(r.windows.sends).toEqual([{ pid: 4242, words: 'Eval words for bravo.', atPrompt }])
   })
 
+  // U10: Cursor documents no way to put words into one existing chat (docs/plans/2026-11-22-dial-vscode-cursor-voice-design.md, §2).
+  it('a sentence for Cursor\'s own agent alone: none for cursor-agent with TERM_PROGRAM, Claude Code, Codex, its panel, or any agent of VS Code\'s adapter', () => {
+    const cursor = recorder({}, [], 'cursor').adapter
+    const vscode = recorder().adapter
+    const own = at({ __CFBundleIdentifier: CURSOR }, { engine: 'cursor', sessionId: undefined })
+    expect(cursor.voiceRefusal!(own)).toBe('Voice can\'t reach Cursor\'s agent. Type in Cursor.')
+    for (const place of [
+      at(TERM, { engine: 'cursor', sessionId: undefined }),
+      at(TERM),
+      at(TERM, { engine: 'codex' }),
+      at(PANEL),
+    ]) expect(cursor.voiceRefusal!(place), JSON.stringify(place)).toBeUndefined()
+    expect(vscode.voiceRefusal).toBeUndefined()
+  })
+
+  // Review Focus 5: the open scan gives no hints until the session's first hook.
+  it('a place with no hints (a session the scan found) is Cursor\'s own agent\'s; the same place with TERM_PROGRAM is not, and has its term pane', () => {
+    const { adapter } = recorder({}, [], 'cursor')
+    const scanned: Place = { host: 'terminal', app: 'cursor', hints: {}, engine: 'cursor', pid: 4242 }
+    expect(adapter.voiceRefusal!(scanned)).toBe('Voice can\'t reach Cursor\'s agent. Type in Cursor.')
+    expect(adapter.paneOf(scanned)).toBeUndefined()
+    const hooked = { ...scanned, hints: { TERM_PROGRAM: 'vscode' } }
+    expect(adapter.voiceRefusal!(hooked)).toBeUndefined()
+    expect(adapter.paneOf(hooked)).toEqual({ adapter: 'cursor', id: 'term:4242' })
+  })
+
   it('a tap on a terminal in Cursor queues its show with the raise, then opens Cursor by its bundle', async () => {
     const r = recorder({}, [], 'cursor')
     r.windows.held = { window: 'w1', shell: 4000 }

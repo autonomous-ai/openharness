@@ -1994,7 +1994,7 @@ describe('ObservedSource actions', () => {
     const { actions } = fakeActions({ open: vi.fn(async () => false) })
     const { src, ev } = setup({ actions })
     src.ingest(ev('session-start', { sessionId: 'orca', ...withHandle }))
-    src.ingest(ev('session-start', { sessionId: 'plain' }))
+    src.ingest(ev('session-start', { sessionId: 'plain', callerPid: 102 }))
     const agent = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!
     expect(await src.focus(agent('orca'))).toBe(false)
     expect(actions.open).toHaveBeenCalledWith(agent('orca').id, { bundle: 'com.stablyai.orca', pane: { adapter: 'orca', id: HANDLE } })
@@ -2117,6 +2117,30 @@ describe('ObservedSource actions', () => {
       answer(false)
       await sent
     })
+  })
+
+  // U10: the app's own adapter says why no route reaches its agent; the source names no app.
+  it('an agent with no voice says its first adapter\'s sentence; one with voice, an ended one, or one whose adapters have none, says none', () => {
+    const silent: HostAdapter = { id: 'silent', tap: 'instead', canFocus: () => false, focus: async () => false,
+      paneOf: () => undefined }
+    const saying = (id: string): HostAdapter => ({ ...silent, id,
+      voiceRefusal: (place) => (place.hints.OWN_AGENT ? `${id} says no.` : undefined) })
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions: { ...actions, adapters: [...actions.adapters, silent, saying('first'), saying('second')] } })
+    const agent = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!
+    src.ingest(ev('session-start', { sessionId: 'mute', callerPid: 101, hostHints: { OWN_AGENT: '1' } }))
+    expect(src.voiceRefusal(agent('mute'))).toBe('first says no.')
+    src.ingest(ev('session-start', { sessionId: 'plain', callerPid: 102 }))
+    expect(src.voiceRefusal(agent('plain'))).toBeUndefined()
+    src.ingest(ev('session-start', { sessionId: 'voiced', callerPid: 103, hostHints: { ...withHandle.hostHints, OWN_AGENT: '1' } }))
+    expect(src.capabilities(agent('voiced')).voice).toBe(true)
+    expect(src.voiceRefusal(agent('voiced'))).toBeUndefined()
+    src.ingest(ev('session-end', { sessionId: 'mute', callerPid: 101, hostHints: { OWN_AGENT: '1' } }))
+    expect(src.voiceRefusal(agent('mute'))).toBeUndefined()
+
+    const none = setup({ actions: { ...actions, adapters: [silent] } })
+    none.src.ingest(none.ev('session-start', { hostHints: { OWN_AGENT: '1' } }))
+    expect(none.src.voiceRefusal(none.src.list()[0])).toBeUndefined()
   })
 })
 
