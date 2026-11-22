@@ -148,7 +148,7 @@
     "a/darwin/U7/wait.1": 1,
     "a/darwin/U8/done.latency": 1,
     "a/darwin/U8/done.shown": 1,
-    "a/darwin/U8/recap.exact": 0,
+    "a/darwin/U8/recap.exact": 1,
     "a/darwin/U8/wait.1": 1,
     "a/darwin/U8/working.latency": 1,
     "a/darwin/U8/working.shown": 1,
@@ -490,7 +490,7 @@
     "a/linux/U7/wait.1": 1,
     "a/linux/U8/done.latency": 1,
     "a/linux/U8/done.shown": 1,
-    "a/linux/U8/recap.exact": 0,
+    "a/linux/U8/recap.exact": 1,
     "a/linux/U8/wait.1": 1,
     "a/linux/U8/working.latency": 1,
     "a/linux/U8/working.shown": 1,
@@ -804,7 +804,7 @@
     "a/win32/U7/wait.1": 1,
     "a/win32/U8/done.latency": 1,
     "a/win32/U8/done.shown": 1,
-    "a/win32/U8/recap.exact": 0,
+    "a/win32/U8/recap.exact": 1,
     "a/win32/U8/wait.1": 1,
     "a/win32/U8/working.latency": 1,
     "a/win32/U8/working.shown": 1,
@@ -1173,7 +1173,7 @@
     "b/darwin/U8/cost.loopP99": 1,
     "b/darwin/U8/done.latency": 1,
     "b/darwin/U8/done.shown": 1,
-    "b/darwin/U8/recap.exact": 0,
+    "b/darwin/U8/recap.exact": 1,
     "b/darwin/U8/wait.1": 1,
     "b/darwin/U8/working.latency": 1,
     "b/darwin/U8/working.shown": 1,
@@ -1474,13 +1474,13 @@
       "claude": 100,
       "chatgpt": 100,
       "vscode": 94.38861219545028,
-      "cursor": 85.96491228070175
+      "cursor": 91.22807017543859
     },
     "b/darwin": {
       "claude": 100,
       "chatgpt": 100,
       "vscode": 89.2063492063492,
-      "cursor": 86.66666666666666
+      "cursor": 91.66666666666666
     }
   }
 }
