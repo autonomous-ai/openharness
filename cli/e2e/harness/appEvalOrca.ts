@@ -337,8 +337,9 @@ async function startAgent(world: TierBWorld, state: State, key: SessionKey): Pro
   }
   const live: Live = { agent, ...(tmux ? { tmux: tmux.name } : {}) }
   state.live.set(key, live)
-  // A held pane is a terminal another program was started in: what is typed there reaches no agent.
-  if (!s.held) world.orcaPane(key, orcaPaneHandle(s, launch))
+  // A held pane is a terminal another program was started in, and a tmux one's runs tmux's client: what is typed there
+  // reaches no agent, as tier A has it (tierA/steps/sessions.ts keyOfOrcaHandle).
+  if (!s.held && !s.tmux) world.orcaPane(key, orcaPaneHandle(s, launch))
   relist(world, state)
   await agent.hook('start')
   if (engineOf(s) === 'claude') {

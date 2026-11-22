@@ -256,7 +256,7 @@ export function orcaCommands(runs: readonly OrcaRun[], projects: readonly string
 }
 /**
  * Each `terminal send` Orca took (cable/hosts/orca.ts) as a `typed` delivery at its time, to the session whose own pane
- * the handle it names was then ([ownerOf]); to none for any other handle, a closed or held pane's among them, which the
+ * the handle it names was then ([ownerOf]); to none for any other handle, a closed, held or tmux pane's among them, which the
  * gate counts as a wrong send. One Orca refused typed nothing.
  */
 export function orcaDeliveries(runs: readonly OrcaRun[], ownerOf: (handle: string, at: number) => SessionKey | undefined): Delivery[] {
