@@ -15,7 +15,7 @@ import { basename, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { HELD_MAKER, orcaTerminalHandle, type Platform, type Scenario, type SessionDef } from '../src/testing/dialAppEval/types.js'
 import { TierBDriver } from './harness/appEvalDriver.js'
-import { OrcaAgent, orcaEnv } from './harness/appEvalOrca.js'
+import { OrcaAgent, orcaEnv, startedWith } from './harness/appEvalOrca.js'
 import { IsolatedDaemon } from './harness/daemon.js'
 import { ORCA_HOST_NAME, orcaHostCc } from './harness/orcaHost.js'
 
@@ -106,6 +106,9 @@ describe.skipIf(WIN32)('the dial eval, tier B: Orca', () => {
         // By name alone: a real run's values are its secrets.
         expect(Object.keys(env).filter((name) => WHERE.test(name) && env[name] === process.env[name])).toEqual([])
         expect(where(env)).toEqual(where(orcaEnv(d, s, hints(s))))
+        // Its runner, every hook's caller, as it was started: under the daemon's environment, its host's.
+        const runner = startedWith(agent.pid).map((entry) => entry.slice(0, entry.indexOf('='))).filter((name) => WHERE.test(name))
+        expect(runner.sort()).toEqual(Object.keys(where(d.env)).sort())
         await agent.close()
       }
     } finally {

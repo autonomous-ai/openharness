@@ -1,4 +1,4 @@
-import { type ChildProcess, execFileSync } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
@@ -11,6 +11,7 @@ import type { SessionDef } from './dialAppEval/types.js'
 // loads the harness.
 const orca = await import('../../e2e/harness/appEvalOrca.js' as string) as {
   orcaEnv(d: { env: NodeJS.ProcessEnv }, s: SessionDef, hints: Record<string, string>): NodeJS.ProcessEnv
+  startedWith(pid: number): string[]
 }
 const inOrca = await import('../../e2e/harness/inOrca.js' as string) as { IN_ORCA: Record<string, string> }
 const plugin = await import('../../e2e/harness/pluginLoop.js' as string) as {
@@ -70,13 +71,6 @@ describe("tier B's Orca agents' environment", () => {
   })
 })
 
-/** The environment [pid] was started with, as the OS keeps it: Linux's /proc, macOS's `ps -E`. */
-function startedWith(pid: number): string[] {
-  if (process.platform === 'linux') return readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0').filter(Boolean)
-  const line = execFileSync('/bin/ps', ['-E', '-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } })
-  return line.trim().split(' ').filter((word) => word.includes('='))
-}
-
 describe.skipIf(process.platform === 'win32')("tier B's Orca plugin", () => {
   it("the plugin's environment is its home and /usr/bin:/bin alone, and its harness shim is inside the root and starts the CLI under the daemon's environment alone", async () => {
     for (const [name, value] of Object.entries(RUNNER)) vi.stubEnv(name, value)
@@ -94,14 +88,17 @@ describe.skipIf(process.platform === 'win32')("tier B's Orca plugin", () => {
     try {
       // The loop asks `harness device orca link` at once: through the shim, the one launcher it can find.
       const cli = await until('the plugin to run the CLI through its shim', () => existsSync(said) && JSON.parse(readFileSync(said, 'utf8')) as NodeJS.ProcessEnv, 30_000, 50)
-      // Read once it runs: a process read before its exec has its parent's.
-      expect(startedWith(children[0]!.pid!).sort()).toEqual([`HOME=${home}`, 'PATH=/usr/bin:/bin'])
+      // Read once it runs: a process read before its exec has its parent's. Its names first: a leak's values are secrets.
+      const started = orca.startedWith(children[0]!.pid!).sort()
+      expect(started.map((entry) => entry.slice(0, entry.indexOf('=')))).toEqual(['HOME', 'PATH'])
+      expect(started).toEqual([`HOME=${home}`, 'PATH=/usr/bin:/bin'])
       expect(plugin.pluginLoopEnv(d)).toEqual({ HOME: home, PATH: '/usr/bin:/bin' })
       const shim = realpathSync(join(home, '.local', 'bin', 'harness'))
       expect(relative(root, shim).startsWith('..')).toBe(false)
       expect(workers(cli)).toEqual([])
       expect(where(cli)).toEqual(where(d.env))
-      expect(notDaemons(cli, d.env)).toEqual([])
+      // macOS's CoreFoundation sets this one in every Node it loads in, from the account's settings, under `env -i` too.
+      expect(notDaemons(cli, d.env).filter((name) => name !== '__CF_USER_TEXT_ENCODING')).toEqual([])
     } finally {
       await loop.stop()
       for (const child of children) child.kill('SIGKILL')

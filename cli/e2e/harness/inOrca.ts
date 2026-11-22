@@ -10,17 +10,24 @@ import { orcaTerminal, type OrcaTerminal } from './orcaHost.js'
 /** Orca's names for the terminal, as its hook reads them; its secrets sit beside them and must never leave the hook. */
 export const IN_ORCA = { ORCA_AGENT_SESSION_ID: 'e2e-orca-session', ORCA_PAIRING_CODE: 'pairing-e2e-4f1e', ORCA_AGENT_SESSION_SPAWN_TOKEN: 'spawn-e2e-8b2d' }
 
+/** The hooks of those the daemon installs for Claude Code (engines/claude/hookContract.ts) that a session's start, turn,
+ *  wait and end run. */
+type ClaudeEvent = 'SessionStart' | 'UserPromptSubmit' | 'Notification' | 'Stop' | 'SessionEnd'
+
 /** Claude Code in an Orca terminal, outside Harness: no tmux pane, no Harness pane, and Orca's own variables. [hints] are
  *  the session's own beside them, as its hook reads them: an Orca terminal's handle, or another app's names
  *  (`WEZTERM_PANE`, which the hook reads before Orca's). With a handle its hooks run in a terminal of Orca's host
- *  stand-in (orcaHost.ts), as the devices take an Orca pane as the agent's own only on a pty that host made. */
+ *  stand-in (orcaHost.ts), as the devices take an Orca pane as the agent's own only on a pty that host made; given a
+ *  [terminal], on that one, handle or none. */
 export class InOrca {
-  readonly sessionId = randomUUID()
+  readonly sessionId: string
   readonly cwd: string
-  /** Started at the first run; its host ends with the test's children. */
+  /** Started at the first run unless given; its host ends with the test's children. */
   private terminal?: Promise<OrcaTerminal>
   constructor(private readonly d: IsolatedDaemon, folder: string, private readonly children: ChildProcess[],
-    private readonly hints: Record<string, string> = {}) {
+    private readonly hints: Record<string, string> = {}, { sessionId, terminal }: { sessionId?: string; terminal?: Promise<OrcaTerminal> } = {}) {
+    this.sessionId = sessionId ?? randomUUID()
+    this.terminal = terminal
     this.cwd = join(d.projectsDir, folder)
     mkdirSync(this.cwd, { recursive: true })
   }
@@ -34,7 +41,7 @@ export class InOrca {
 
   private run(file: string, args: string[], input: Record<string, unknown>, cwd = this.cwd): Promise<{ stdout: string; stderr: string; code: number | null; ms: number }> {
     const stdin = JSON.stringify({ session_id: this.sessionId, cwd: this.cwd, ...input })
-    if (this.hints.ORCA_TERMINAL_HANDLE !== undefined) {
+    if (this.terminal || this.hints.ORCA_TERMINAL_HANDLE !== undefined) {
       this.terminal ??= orcaTerminal(this.d, this.children)
       return this.terminal.then((terminal) => terminal.run(file, args, this.env(), stdin, cwd))
     }
@@ -52,7 +59,7 @@ export class InOrca {
 
   /** Its own hook for [event], the command the daemon installed in Claude Code's settings, run through a shell as Claude
    *  Code runs it. */
-  async hook(event: 'SessionStart' | 'UserPromptSubmit' | 'Stop', fields: Record<string, unknown> = {}): Promise<void> {
+  async hook(event: ClaudeEvent, fields: Record<string, unknown> = {}): Promise<void> {
     const settings = join(this.d.env.HOME!, '.claude', 'settings.json')
     const command = await until(`the ${event} hook in Claude Code's settings`, () => {
       try {

@@ -13,6 +13,7 @@ import { dirname, join } from 'node:path'
 import { expect } from 'vitest'
 import { observedAgentId } from '../../src/cable/hosts/observed.js'
 import { until, type IsolatedDaemon } from './daemon.js'
+import type { OrcaTerminal } from './orcaHost.js'
 import { closeTab, HOOK_RUNNER, hookRuns, hookTab, killTab, type HookRun, type Tab, type TabOptions } from './outsideAgent.js'
 
 export interface CodexOutsideOptions {
@@ -22,6 +23,8 @@ export interface CodexOutsideOptions {
   own?: { title?: string }
   /** Its CODEX_HOME, when not the daemon's: its rollout there, and its hooks that home's hooks.json. */
   home?: string
+  /** A terminal of Orca's host stand-in it runs in (orcaHost.ts): its hooks run on it, their caller its runner. */
+  terminal?: OrcaTerminal
 }
 
 export class CodexOutside {
@@ -34,6 +37,7 @@ export class CodexOutside {
   /** Its own process's runs of its hooks, when it has one (HOOK_RUNNER). */
   private ownRun: HookRun | undefined
   private tab: Tab | undefined
+  private readonly terminal: OrcaTerminal | undefined
 
   constructor(private readonly d: IsolatedDaemon, folder: string, private readonly children: ChildProcess[],
     private readonly hints: Record<string, string>, options: CodexOutsideOptions = {}) {
@@ -41,6 +45,7 @@ export class CodexOutside {
     this.cwd = join(d.projectsDir, folder)
     mkdirSync(this.cwd, { recursive: true })
     this.home = options.home ?? d.env.CODEX_HOME!
+    this.terminal = options.terminal
     this.transcriptPath = join(this.home, 'sessions', '2026', '11', '15', `rollout-2026-11-15T00-00-00-${this.sessionId}.jsonl`)
     mkdirSync(dirname(this.transcriptPath), { recursive: true })
     // The first line a Codex rollout has, as the fake engine writes it: the daemon reads it to tell a sub-agent's.
@@ -94,7 +99,9 @@ export class CodexOutside {
     }, 30_000, 100)
     const env = this.env
     const input = JSON.stringify({ session_id: this.sessionId, cwd: this.cwd, transcript_path: this.transcriptPath, hook_event_name: event, ...fields })
-    const { code, stderr } = this.ownRun ? await this.ownRun(command, env, input) : await this.run(command, env, input)
+    const { code, stderr } = this.ownRun ? await this.ownRun(command, env, input)
+      : this.terminal ? await this.terminal.run('/bin/sh', ['-c', command], env, input, this.cwd)
+        : await this.run(command, env, input)
     expect(code, stderr).toBe(0)
   }
 
