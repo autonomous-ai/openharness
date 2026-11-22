@@ -1025,6 +1025,17 @@ describe('Orca', () => {
       }
     })
 
+    it('a tap or a rest with no switch passes no part, its worktree and its no raise neither, saying no switch', () => {
+      for (const kind of ['tap', 'swipe'] as const) {
+        const s = input(kind)
+        const none = run(open, s, listed(s, [500], { commands: [activate(600, 'w1'), cmd(700, ['/eval/other'])] }))
+        expect(scores(none)).toEqual(kind === 'tap' ? { worktree: 0, switch: 0, raise: 0, latency: 0 } : { worktree: 0, switch: 0, noRaise: 0 })
+        expect(none[0]!.evidence).toEqual([`${kind} on oa at 500`, 'command at 600: worktree', 'command at 700: other', 'no switch'])
+        // Nothing ran at all: a dead input.
+        expect(Object.values(scores(run(open, s, listed(s, [500]))))).toEqual(kind === 'tap' ? [0, 0, 0, 0] : [0, 0, 0])
+      }
+    })
+
     it('after a relaunch the switch must name the session\'s next handle', () => {
       const s = scenario([{ kind: 'relaunch', app: 'orca' }, { kind: 'tap', session: 'oa', label: 'go' }], sessions)
       const switched = (h: string): Record<string, number> =>
