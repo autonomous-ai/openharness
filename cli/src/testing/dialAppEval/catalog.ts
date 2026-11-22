@@ -2,6 +2,7 @@
  * The dial eval's scenarios (docs/plans/2026-11-21-dial-app-eval-design.md, "Scenarios"), one catalog both tiers run.
  * Every session is made up: titles start with "Eval ", folders with /work/eval-, ids are fixed UUIDs.
  */
+import { cursorScenarios } from './cursorScenarios.js'
 import { heldOut } from './heldOut.js'
 import { vscodeScenarios } from './vscodeScenarios.js'
 import type { App, Check, Editor, Platform, Scenario, SessionDef, SessionKey, Step, Tier } from './types.js'
@@ -415,6 +416,7 @@ export const MAIN: Scenario[] = [
     probes: [{ id: 'focus', kind: 'focus', dim: 'D2', session: 'z', after: 'last' }],
   }),
   ...vscodeScenarios(),
+  ...cursorScenarios(),
 ]
 
 export const HELD_OUT: Scenario[] = heldOut()
