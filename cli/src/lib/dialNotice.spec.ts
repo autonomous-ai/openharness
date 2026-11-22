@@ -61,6 +61,10 @@ describe('composeNotice', () => {
     expect(shown(composeNotice('Q', 'x'.repeat(41)))).toBe(`Q · Suggest: ${'x'.repeat(39)}…`)
   })
 
+  it('drops the space before a cut suggestion\'s ellipsis', () => {
+    expect(shown(composeNotice('Q', `${'a'.repeat(38)} bbbbbbb`, 'proceeding'))).toBe(`Proceeding · Q · Doing: ${'a'.repeat(38)}…`)
+  })
+
   it('cuts the question so the line is 120 letters', () => {
     const line = shown(composeNotice('q'.repeat(200), 'LRU', 'proceeding'))
     expect(line).toBe(`Proceeding · ${'q'.repeat(93)}… · Doing: LRU`)
