@@ -441,12 +441,15 @@ esac
     // Nor does it ever reach the real Orca app on the Mac the tests run on, which every session here may be running
     // inside: a listed Orca agent asks Orca for a list. A launcher is an `orca` whose real path is in Orca's install
     // (devices/orcaHomes.ts), so the stub sits in one, linked from bin, and it is the Orca app's own too
-    // (HARNESS_ORCA_APP_BIN), which a daemon on a Mac runs with no launcher on its PATH: never /Applications'. Refused,
-    // until a test writes its own through the link (harness/fakeOrca.ts).
+    // (HARNESS_ORCA_APP_BIN), which a daemon on a Mac runs with no launcher on its PATH: never /Applications'. Linked as
+    // `orca-ide` too: Orca's Linux .deb links /usr/bin/orca-ide, which a daemon on Linux takes before any `orca`. One file
+    // for both names, so a fake written through the link answers to both. Refused, out loud, until a test writes its own
+    // through the link (harness/fakeOrca.ts).
     const orcaLauncher = join(own, 'orca-app', 'resources', 'bin', 'orca')
     await mkdir(dirname(orcaLauncher), { recursive: true })
-    await writeFile(orcaLauncher, '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    await writeFile(orcaLauncher, '#!/bin/sh\necho "orca: the real Orca is refused in e2e" >&2\nexit 1\n', { mode: 0o755 })
     await symlink(orcaLauncher, join(dirs.bin, 'orca'))
+    await symlink(orcaLauncher, join(dirs.bin, 'orca-ide'))
     // A pick on the dial brings that app forward with `open -b` (services/devices), and dialAppFilter.e2e.ts taps and
     // picks VS Code and Ghostty: with the real open, a dial test on a Mac would bring the developer's own apps forward.
     // Out of bin: the devices run open by its path, never by name. One line of arguments per run, for `opens()`.

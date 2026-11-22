@@ -1,8 +1,8 @@
 /**
- * The `orca` an end-to-end daemon finds first on its PATH, in place of the stub that exits 1 (harness/daemon.ts): it
- * notes every run, prints a layout and a focus watch a test tells it, answers `terminal --help` as Orca 1.4.256
- * does, or as an Orca with `watch-focus`, takes every `worktree activate`, and lists the accounts a test tells it. The real
- * Orca never runs: every session here runs inside it.
+ * The `orca` an end-to-end daemon finds first on its PATH, and on Linux its `orca-ide`, the same file, in place of the
+ * stub that exits 1 (harness/daemon.ts): it notes every run, prints a layout and a focus watch a test tells it, answers
+ * `terminal --help` as Orca 1.4.256 does, or as an Orca with `watch-focus`, takes every `worktree activate`, and lists
+ * the accounts a test tells it. The real Orca never runs: every session here runs inside it.
  */
 import { spawnSync } from 'node:child_process'
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'

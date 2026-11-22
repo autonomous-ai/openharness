@@ -14,10 +14,12 @@
  * would otherwise see a Codex the developer runs and write into their real home.
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { DIAL_PLUGIN_ID, DIAL_SKILL } from '../src/devices/dialSkill.js'
+import { orcaBinary } from '../src/devices/orcaHomes.js'
+import { resolveBinaryOnPath } from '../src/lib/binaryOnPath.js'
 import { IsolatedDaemon, SOURCES_CLI, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
@@ -61,6 +63,9 @@ const pluginOn = (claudeHome: string): boolean =>
 /** Whether the plugin is installed in [claudeHome]'s `plugins`, as the fake Claude Code keeps it. */
 const pluginInstalled = (claudeHome: string): boolean =>
   JSON.parse(read(join(claudeHome, 'plugins', 'fake-plugin-state.json')) ?? '{"installed":[]}').installed.includes(DIAL_PLUGIN_ID)
+/** The Orca launcher a daemon on Linux finds on [d]'s PATH, `orca-ide` before `orca`, by the devices' own lookup. */
+const linuxOrcaOn = (d: IsolatedDaemon): string | null =>
+  orcaBinary({ platform: 'linux', onPath: (name, accept) => resolveBinaryOnPath(name, d.env, accept), exists: existsSync })
 
 /**
  * A turn, so its conversation is on disk: the scan lists only a session with one. No hook of Harness's runs in an Orca
@@ -204,9 +209,19 @@ describe('Orca\'s account homes on the dial', () => {
     expect(log).toMatch(FOUND_ONE)
   })
 
+  // Orca's Linux .deb links /usr/bin/orca-ide, which a daemon on Linux takes before any `orca`, and /usr/bin is on the
+  // daemon's PATH: the harness's refusing stub must answer to that name too.
+  it('on Linux the daemon\'s PATH answers `orca-ide` with the harness\'s stub, never the computer\'s Orca', async () => {
+    const d = await IsolatedDaemon.create()
+    daemon = d
+    const found = linuxOrcaOn(d)
+    expect(found).toBe(join(dirname(d.env.CLAUDE_PATH!), 'orca-ide'))
+    expect(realpathSync(found!)).toBe(realpathSync(d.env.HARNESS_ORCA_APP_BIN!))
+  })
+
   // Every session here may run inside the real Orca: with no launcher on its PATH, a daemon on a Mac runs the Orca app's
   // own, and the harness names its fake as that app's (harness/daemon.ts). Linux has no app to fall back on.
-  it('with no Orca launcher on its PATH the daemon asks the harness\'s Orca app, never the computer\'s', async () => {
+  it('with no Orca launcher on its PATH the daemon asks the harness\'s Orca app, never the computer\'s', async (context) => {
     let home = ''
     let orca: FakeOrca | undefined
     const { d, desk } = await fresh((d) => {
@@ -218,6 +233,10 @@ describe('Orca\'s account homes on the dial', () => {
       orca = FakeOrca.install(d)
       orca.accounts({ codex: [home] })
       rmSync(link)
+      rmSync(join(dirname(link), 'orca-ide'))
+      // With the harness's links gone, the rest of its PATH is the system's folders: on a Linux computer with Orca's
+      // .deb, /usr/bin/orca-ide is a launcher there, and the daemon would ask the computer's Orca. Not this case.
+      if (linuxOrcaOn(d) !== null) context.skip('an Orca launcher is in this computer\'s system folders')
     })
     await plugged(desk)
     if (process.platform === 'darwin') {
