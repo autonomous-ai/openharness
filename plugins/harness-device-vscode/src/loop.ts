@@ -25,6 +25,10 @@ const HEAD_MS = 2_000
 // state says it types.
 const LINE_BYTES = 65_536
 const NEWLINE = 0x0a
+// The devices type every control character of the dial's words as a space (cli/src/cable/hosts/vscodeTerminals.ts):
+// one in a words line would submit part of them before their Enter line (a newline, a CR) or steer the screen (an
+// escape), so that line is out of form.
+const CONTROL = /\p{Cc}/u
 const FIRST_WAIT_MS = 1_000
 const LAST_WAIT_MS = 30_000
 // Unplugged with the watch on: the watch asks as the socket or the record appears, so link is looked at again only in
@@ -337,7 +341,7 @@ export function startLoop(
       const n = held(value.scroll as number, SCROLL_MAX)
       // Only true makes a page line: an older or newer devices' other value scrolls as a plain line.
       scroll(pid, n, pages(pid, n, value.page === true))
-    } else if (value && typeof value.type === 'string' && value.type !== '' && Number.isInteger(value.pid)) {
+    } else if (value && typeof value.type === 'string' && value.type !== '' && !CONTROL.test(value.type) && Number.isInteger(value.pid)) {
       const pid = value.pid as number
       const words = value.type
       keyed('typed', () => window.type(pid, words))

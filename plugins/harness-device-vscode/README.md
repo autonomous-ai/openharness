@@ -24,9 +24,9 @@ when the show is a tap's. It asks `harness device vscode link` (`~/.local/bin/ha
 
 ## What it never does
 
-- It reads nothing from a terminal. It types only the dial's words, then Enter as a line of its own, into the terminal
-  the devices process names; and PageUp and PageDown, only into a terminal where Harness found Claude Code's fullscreen
-  view running at the stroke's start.
+- It reads nothing from a terminal. It types only the dial's words, with no control character, then Enter as a line of
+  its own, into the terminal the devices process names; and PageUp and PageDown, only into a terminal where Harness
+  found Claude Code's fullscreen view running at the stroke's start.
 - It starts nothing but `harness device vscode link`.
 - It shows no panel, status bar item, notification or command of its own.
 - Nothing leaves the computer: it talks only to the Harness daemon's devices process on it, and sends only its
