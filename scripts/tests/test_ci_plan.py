@@ -1017,8 +1017,9 @@ class GitPlanTests(unittest.TestCase):
                    "cli/hook/notify.mjs", "plugins/harness-device-vscode/src/extension.ts",
                    "cli/src/devices/vscodeExtension.ts", "cli/src/cable/vscodeExtensionSetup.ts",
                    "cli/src/engines/cursor/adapter.ts", "cli/src/core/engines/cursorDiscovery.ts")
-        # What the Orca file runs on outside them: the Orca plugin, and the harness's loop that runs it and its stream.
-        orca = ("plugins/harness-device-orca/src/dial.ts", "plugins/harness-device-orca/orca-plugin.json")
+        # What the Orca file runs on outside them: the Orca plugin and the devices' Orca reads it leans on.
+        orca = ("plugins/harness-device-orca/src/dial.ts", "plugins/harness-device-orca/orca-plugin.json",
+                "cli/src/devices/orcaHomes.ts", "cli/src/testing/recordedOrca.ts")
         # The plugin's loop and its stream run the Orca e2e files too: the Orca stand-in's test has them.
         harness = tuple(f"cli/e2e/harness/{name}.ts" for name in ("vscodeWindow", "outsideAgent", "codexOutside",
                                                                    "cursorOutside", "editorWindow"))
