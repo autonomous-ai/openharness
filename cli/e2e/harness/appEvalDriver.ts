@@ -5,8 +5,9 @@
  * first scenario and every one after it, reset, until a scenario asks for one of its own (`fresh`).
  *
  * Isolation: each daemon's open (HARNESS_OPEN_BIN, which only records: `writeRecordingOpen`), its home, its apps' folder,
- * both apps' stores and the editors' CLIs (HARNESS_VSCODE_BIN, HARNESS_CURSOR_BIN; on Linux Cursor's only records:
- * `writeRecordingCli`) are checked to be inside its root before it starts, and it is signed in to the fake backend alone.
+ * both apps' stores, the editors' CLIs (HARNESS_VSCODE_BIN, HARNESS_CURSOR_BIN; on Linux Cursor's only records:
+ * `writeRecordingCli`) and, on Linux, the raise's programs (`writeRaiseFakes`) are checked to be inside its root before it
+ * starts, and it is signed in to the fake backend alone.
  * The network guard (src/testing/dialAppEval/netGuard.ts) is in this process and preloaded into every process of the
  * daemon and every child started here: a start whose running core or devices process did not load it fails, and the
  * driver's close fails on any attempt not yet handed on, those its last daemon made as it closed among them.
@@ -22,6 +23,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative } from 'node:path'
 import { chatGptPlaces, claudeStoreRoots } from '../../src/cable/hosts/appPlaces.js'
+import { resolveBinaryOnPath } from '../../src/lib/binaryOnPath.js'
 import { claudeAppFixture } from '../../src/testing/claudeAppFixture.js'
 import { describeAttempt, guardThisProcess, netGuardEnv, readNetGuard, type NetAttempt } from '../../src/testing/dialAppEval/netGuard.js'
 import { agentIdOf, PAGE, placeOf, type App, type Delivery, type EvalDriver, type Platform, type Scenario, type Seen,
@@ -169,6 +171,21 @@ export function writeRecordingCli(path: string, runs: string): void {
   writeExecutable(path, `#!/bin/sh\nprintf '0 %s\\n' "$*" >> '${runs}'\nexit 0\n`)
 }
 
+/** What Linux's raise runs, each found on the PATH (cable/hosts/linuxDesktop.ts, linuxRaise.ts, linuxRaiseKwin.ts). */
+export const RAISE_TOOLS = ['wmctrl', 'swaymsg', 'hyprctl', 'gdbus', 'dbus-send'] as const
+/**
+ * Each of them in [bin], refusing as the daemon's own wmctrl does (harness/daemon.ts): a daemon on a Linux desktop finds
+ * this login's sockets in /tmp/.X11-unix and the runtime folder whatever its home, so a tap with the computer's own would
+ * raise the developer's real editor.
+ */
+export function writeRaiseFakes(bin: string): void {
+  for (const tool of RAISE_TOOLS) writeExecutable(join(bin, tool), '#!/bin/sh\nexit 1\n')
+}
+/** Those a daemon under [env] finds outside [root], or not at all. */
+export function raiseToolsOutside(root: string, env: NodeJS.ProcessEnv): string[] {
+  return RAISE_TOOLS.filter((tool) => !inside(root, resolveBinaryOnPath(tool, env) ?? undefined))
+}
+
 /** Each run noted in [runs] as `<exit> <arguments>`, in order, as the command [program] with them. */
 function noted(runs: string, program: string): OpenRun[] {
   let text = ''
@@ -312,6 +329,9 @@ async function openRig(guard: string): Promise<Rig> {
         vscode: RECORDED_LINUX_APPS.vscode.schemeDesktopFile, cursor: RECORDED_LINUX_APPS.cursor.schemeDesktopFile })
       // A tap on a Cursor folder row runs Cursor's CLI there; macOS opens the folder by Cursor's bundle, through the open.
       writeRecordingCli(places['Cursor CLI']!, cursorRuns)
+      writeRaiseFakes(d.binDir)
+      const outside = raiseToolsOutside(d.root, d.env)
+      if (outside.length > 0) throw new Error(`the daemon's ${outside.join(', ')} is not inside its root`)
     }
     // The ChatGPT app installed before any dial comes, as the devices look for it at each attach: its bundle in the home's
     // Applications on macOS, its program in the root's stand-in for /usr/lib on Linux, and its own Codex CLI.
