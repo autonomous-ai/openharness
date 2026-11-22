@@ -585,3 +585,216 @@ it('a condition holds once the last whole list on its page since the start is th
     .toEqual({ holds: false, evidence: ['list at 300 on claude: 1 rows a'] })
   expect(condition(until, s, seen(s, []))).toEqual({ holds: false, evidence: [] })
 })
+
+describe('editors', () => {
+  const editor = (key: string, n: number, app: 'vscode' | 'cursor', more: Partial<SessionDef> = {}): SessionDef =>
+    ({ key, app, id: uuid(n), title: `Eval ${key}`, cwd: `/work/eval-${key}`, ageMs: n * 1000, window: 'w1', ...more })
+  const VA = editor('va', 21, 'vscode')
+  const VB = editor('vb', 22, 'vscode')
+  const VW = editor('vw', 23, 'vscode', { window: 'w2' })
+  const VP = editor('vp', 24, 'vscode', { place: 'panel', window: undefined })
+  const VX = editor('vx', 25, 'vscode', { engine: 'codex' })
+  const CT = editor('ct', 26, 'cursor')
+  const CA = editor('ca', 27, 'cursor', { place: 'agent', window: undefined, folders: ['/work/eval-ca-root', '/work/eval-ca-two'] })
+  const EGHOST: SessionDef = { ...editor('eghost', 29, 'vscode'), ghost: true }
+  const sessions = [VA, VB, VW, VP, VX, CT, CA, EGHOST]
+  const W1 = 'eval-w1-1'
+  const W2 = 'eval-w2-1'
+  type Line = NonNullable<Seen['streams']>[number]
+  const opened = (at: number, window: string): Line => ({ at, window, line: { type: 'vscode', window } })
+  const state = (at: number, window: string, terminals: string[], active: string | null): Line =>
+    ({ at, window, line: { type: 'vscode-state', terminals, active, focused: true } })
+  const show = (at: number, window: string, key: string, raise = true): Line =>
+    ({ at, window, line: raise ? { show: key, raise: true } : { show: key } })
+  const scrolled = (at: number, window: string, pid: string): Line => ({ at, window, line: { scroll: -3, pid } })
+  const ended = (at: number, window: string): Line => ({ at, window, line: { ended: 'closed' } })
+  /** w1 lists va and vb, vb active; w2 lists vw. */
+  const windows: Line[] = [opened(10, W1), state(10, W1, ['va', 'vb'], 'vb'), opened(20, W2), state(20, W2, ['vw'], 'vw')]
+  const cmd = (at: number, argv: string[], ok = true): Seen['commands'][number] => ({ at, argv, ok })
+  const tapOn = (key: string): Scenario => scenario([{ kind: 'tap', session: key, label: 'go' }], sessions)
+  const open = (key: string, link = false): Check => ({ id: 'o', kind: 'open', dim: 'D3', session: key, link, after: 'go' })
+  const bring: Readonly<Record<Platform, string[]>> = {
+    darwin: ['/usr/bin/open', '-b', 'com.microsoft.VSCode'],
+    linux: ['raise', '41000', 'vscode'],
+    win32: ['C:\\h\\harness-pty.exe', 'raise', 'com.microsoft.VSCode'],
+  }
+
+  describe('open', () => {
+    it('open of a terminal row passes on show with raise on the stream holding its shell and the app brought forward, on each platform', () => {
+      const s = tapOn('va')
+      for (const platform of ['darwin', 'linux', 'win32'] as const) {
+        const results = run(open('va'), s, seen(s, [500], { streams: [...windows, show(600, W1, 'va')], commands: [cmd(700, bring[platform])] }), 'a', platform)
+        expect(scores(results)).toEqual({ show: 1, front: 1, latency: 1 })
+        expect(ms(results, 'latency')).toBe(200)
+        expect(results[0]!.evidence).toEqual(['tap on va at 500', 'command at 700: front', `show at 600 on ${W1}: va raise`])
+      }
+      // The later of the two: a late front or a late show.
+      const late = (showAt: number, frontAt: number): CheckResult[] =>
+        run(open('va'), s, seen(s, [500], { streams: [...windows, show(showAt, W1, 'va')], commands: [cmd(frontAt, bring.darwin)] }))
+      expect(ms(late(600, 3700), 'latency')).toBe(3200)
+      expect(scores(late(600, 3700)).latency).toBe(0)
+      expect(scores(late(3400, 700)).latency).toBe(0.5)
+      // A show with no raise is a rest's, not a tap's; no show at all fails show and latency.
+      expect(scores(run(open('va'), s, seen(s, [500], { streams: [...windows, show(600, W1, 'va', false)], commands: [cmd(700, bring.darwin)] }))))
+        .toEqual({ show: 0, front: 1, latency: 0 })
+      expect(scores(run(open('va'), s, seen(s, [500], { streams: windows, commands: [cmd(700, bring.darwin)] }))))
+        .toEqual({ show: 0, front: 1, latency: 0 })
+      // Another editor's bundle is not this one's front.
+      expect(scores(run(open('va'), s, seen(s, [500], { streams: [...windows, show(600, W1, 'va')],
+        commands: [cmd(700, ['/usr/bin/open', '-b', 'com.todesktop.230313mzl4w4u92'])] })))).toEqual({ show: 1, front: 0, latency: 0 })
+    })
+
+    it('a show on another window\'s stream fails it', () => {
+      const s = tapOn('va')
+      const other = run(open('va'), s, seen(s, [500], { streams: [...windows, show(600, W2, 'va')], commands: [cmd(700, bring.darwin)] }))
+      expect(scores(other)).toEqual({ show: 0, front: 1, latency: 0 })
+      expect(other[0]!.evidence).toContain(`show at 600 on ${W2}: va raise`)
+      // Right on its own stream, but another stream got a show too.
+      const both = run(open('va'), s, seen(s, [500], { streams: [...windows, show(600, W1, 'va'), show(650, W2, 'vw')], commands: [cmd(700, bring.darwin)] }))
+      expect(scores(both)).toMatchObject({ show: 0, front: 1 })
+    })
+
+    it('a shell two windows list is held by the one that reported it last, and an ended stream holds none', () => {
+      const s = tapOn('va')
+      const showScore = (streams: Line[]): number | undefined =>
+        scores(run(open('va'), s, seen(s, [500], { streams, commands: [cmd(700, bring.darwin)] }))).show
+      // va moved to w2: w2 reported it last.
+      const moved = [...windows, state(30, W2, ['vw', 'va'], 'vw')]
+      expect(showScore([...moved, show(600, W2, 'va')])).toBe(1)
+      expect(showScore([...moved, show(600, W1, 'va')])).toBe(0)
+      // w1's later state wins back.
+      expect(showScore([...moved, state(40, W1, ['va', 'vb'], 'vb'), show(600, W1, 'va')])).toBe(1)
+      // w2 ended: w1 still lists va.
+      expect(showScore([...moved, ended(40, W2), show(600, W1, 'va')])).toBe(1)
+      // A reload: the old stream ended, the new one holds it.
+      const reloaded = [...windows, ended(30, W1), opened(40, 'eval-w1-2'), state(40, 'eval-w1-2', ['va', 'vb'], 'vb')]
+      expect(showScore([...reloaded, show(600, W1, 'va')])).toBe(0)
+      expect(showScore([...reloaded, show(600, 'eval-w1-2', 'va')])).toBe(1)
+      // Every stream listing it ended: no stream holds it, so VS Code's row is graded on its front alone.
+      const gone = run(open('va'), s, seen(s, [500], { streams: [...windows, ended(30, W1)], commands: [cmd(700, bring.darwin)] }))
+      expect(scores(gone)).toEqual({ front: 1, latency: 1 })
+    })
+
+    it('a terminal row with no stream holding it is graded on VS Code\'s front, and on Cursor\'s folder', () => {
+      const v = tapOn('va')
+      expect(scores(run(open('va'), v, seen(v, [500], { commands: [cmd(700, bring.darwin)] })))).toEqual({ front: 1, latency: 1 })
+      expect(scores(run(open('va'), v, seen(v, [500], { commands: [cmd(3501, bring.darwin)] })))).toEqual({ front: 1, latency: 0 })
+      expect(scores(run(open('va'), v, seen(v, [500])))).toEqual({ front: 0, latency: 0 })
+      const c = tapOn('ct')
+      const folder = (platform: Platform, argv: string[], at = 700): CheckResult[] =>
+        run(open('ct'), c, seen(c, [500], { commands: [cmd(at, argv)] }), 'a', platform)
+      expect(scores(folder('darwin', ['/usr/bin/open', '-b', 'com.todesktop.230313mzl4w4u92', '/work/eval-ct']))).toEqual({ folder: 1, latency: 1 })
+      expect(scores(folder('linux', ['/eval/bin/cursor', '/work/eval-ct']))).toEqual({ folder: 1, latency: 1 })
+      expect(folder('linux', ['/eval/bin/cursor', '/work/eval-ct'])[0]!.evidence).toEqual(['tap on ct at 500', 'command at 700: folder'])
+      expect(scores(folder('win32', ['C:\\h\\harness-pty.exe', 'cursor-folder', '/work/eval-ct']))).toEqual({ folder: 1, latency: 1 })
+      // Cursor brought forward on no folder is not its folder's window.
+      expect(scores(folder('darwin', ['/usr/bin/open', '-b', 'com.todesktop.230313mzl4w4u92']))).toEqual({ folder: 0, latency: 0 })
+      expect(scores(folder('linux', ['/eval/bin/cursor', '/work/eval-va']))).toEqual({ folder: 0, latency: 0 })
+      expect(scores(folder('darwin', ['/usr/bin/open', '-b', 'com.todesktop.230313mzl4w4u92', '/work/eval-ct'], 3600))).toEqual({ folder: 1, latency: 0.5 })
+    })
+
+    it('a panel row on its link; Cursor\'s agent on its folder command, folders[0] first', () => {
+      const p = tapOn('vp')
+      const link = `vscode://anthropic.claude-code/open?session=${VP.id}`
+      expect(scores(run(open('vp', true), p, seen(p, [500], { commands: [cmd(700, ['/usr/bin/open', '-b', 'com.microsoft.VSCode', link])] }))))
+        .toEqual({ link: 1, front: 1, latency: 1 })
+      expect(scores(run(open('vp', true), p, seen(p, [500], { commands: [cmd(700, ['/usr/bin/xdg-open', link])] }), 'a', 'linux')))
+        .toEqual({ link: 1, front: 1, latency: 1 })
+      expect(scores(run(open('vp', true), p, seen(p, [500], { commands: [cmd(700, ['C:\\h\\harness-pty.exe', 'open-link', link])] }), 'a', 'win32')))
+        .toEqual({ link: 1, front: 1, latency: 1 })
+      // Another session's link.
+      const other = `vscode://anthropic.claude-code/open?session=${VA.id}`
+      expect(scores(run(open('vp', true), p, seen(p, [500], { commands: [cmd(700, ['/usr/bin/xdg-open', other])] }), 'a', 'linux')))
+        .toEqual({ link: 0, front: 0, latency: 0 })
+      const a = tapOn('ca')
+      const agent = (argv: string[], at = 700): Record<string, number> => scores(run(open('ca'), a, seen(a, [500], { commands: [cmd(at, argv)] })))
+      expect(agent(['/usr/bin/open', '-b', 'com.todesktop.230313mzl4w4u92', '/work/eval-ca-root'])).toEqual({ folder: 1, latency: 1 })
+      expect(agent(['/usr/bin/open', '-b', 'com.todesktop.230313mzl4w4u92', '/work/eval-ca'])).toEqual({ folder: 0, latency: 0 })
+      expect(agent(['/usr/bin/open', '-b', 'com.todesktop.230313mzl4w4u92', '/work/eval-ca-root'], 4600)).toEqual({ folder: 1, latency: 0 })
+      const bare: SessionDef = { ...CA, folders: undefined }
+      const b = scenario([{ kind: 'tap', session: 'ca', label: 'go' }], [bare])
+      expect(scores(run(open('ca'), b, seen(b, [500], { commands: [cmd(700, ['/usr/bin/open', '-b', 'com.todesktop.230313mzl4w4u92', '/work/eval-ca'])] }))))
+        .toEqual({ folder: 1, latency: 1 })
+    })
+  })
+
+  describe('scroll', () => {
+    const s = scenario([{ kind: 'stroke', label: 'go' }], sessions)
+    const scroll: Check = { id: 'sc', kind: 'scroll', dim: 'D3', session: 'va', after: 'go' }
+    const activeVa: Line[] = [opened(10, W1), state(10, W1, ['va', 'vb'], 'va')]
+
+    it('scroll passes on a line for its shell while active, and fails on lines the window dropped (another terminal active), on lines for another shell, and with nothing seen', () => {
+      const ran = run(scroll, s, seen(s, [500], { streams: [...activeVa, scrolled(600, W1, 'va')] }))
+      expect(ran.map((r) => [r.check, r.score, r.timed])).toEqual([['sc.ran', 1, false]])
+      expect(ran[0]!.evidence).toEqual([`scroll at 600 on ${W1} for va: ran`])
+      // vb active: the extension dropped va's line.
+      const dropped = run(scroll, s, seen(s, [500], { streams: [...windows, scrolled(600, W1, 'va')] }))
+      expect(dropped.map((r) => [r.score, r.evidence])).toEqual([[0, [`scroll at 600 on ${W1} for va: dropped`]]])
+      // Lines for another shell, alone or after va's, in its window or another.
+      expect(scores(run(scroll, s, seen(s, [500], { streams: [...windows, scrolled(600, W1, 'vb')] }))).ran).toBe(0)
+      expect(scores(run(scroll, s, seen(s, [500], { streams: [...activeVa, scrolled(600, W1, 'va'),
+        state(700, W1, ['va', 'vb'], 'vb'), scrolled(800, W1, 'vb')] }))).ran).toBe(0)
+      expect(scores(run(scroll, s, seen(s, [500], { streams: [...activeVa, scrolled(600, W1, 'va'), opened(650, W2),
+        state(650, W2, ['vw'], 'vw'), scrolled(700, W2, 'vw')] }))).ran).toBe(0)
+      // A line before the stroke is not its line.
+      expect(scores(run(scroll, s, seen(s, [500], { streams: [...activeVa, scrolled(400, W1, 'va')] }))).ran).toBe(0)
+      // A window that no longer holds va: it moved to w2, which reported it last.
+      expect(scores(run(scroll, s, seen(s, [500], { streams: [...activeVa, opened(20, W2), state(20, W2, ['va'], 'va'),
+        scrolled(600, W1, 'va')] }))).ran).toBe(0)
+      expect(run(scroll, s, seen(s, [500])).map((r) => [r.score, r.evidence])).toEqual([[0, []]])
+    })
+
+    it('a probe on a ghost editor session fails with the scroll lines observed', () => {
+      const probe: Check = { ...scroll, session: 'eghost' }
+      const results = run(probe, s, seen(s, [500], { streams: [...activeVa, scrolled(600, W1, 'va')] }))
+      expect(results.map((r) => [r.score, r.evidence])).toEqual([[0, [`scroll at 600 on ${W1} for va: ran`]]])
+    })
+  })
+
+  describe('logged', () => {
+    const s = scenario([{ kind: 'stroke', label: 'go' }], sessions)
+    const logged: Check = { id: 'lg', kind: 'logged', dim: 'D7', after: 'go' }
+    const log = (at: number, line: string): NonNullable<Seen['logs']>[number] => ({ at, line })
+
+    it('logged passes on a skipped line with a reason, fails on a bare prefix and with no line', () => {
+      const pass = run(logged, s, seen(s, [500], { logs: [log(600, '[device] scroll · skipped · no stream')] }))
+      expect(pass.map((r) => [r.check, r.score, r.timed, r.evidence])).toEqual([['lg', 1, false, ['log at 600: [device] scroll · skipped · no stream']]])
+      expect(scores(run(logged, s, seen(s, [500], { logs: [log(600, '[device] scroll · skipped · ')] }))).lg).toBe(0)
+      expect(scores(run(logged, s, seen(s, [500], { logs: [log(600, '[device] scroll · skipped ·  ')] }))).lg).toBe(0)
+      expect(scores(run(logged, s, seen(s, [500], { logs: [log(400, '[device] scroll · skipped · no stream')] }))).lg).toBe(0)
+      expect(run(logged, s, seen(s, [500], { logs: [log(600, '[device] tap · ok')] })).map((r) => [r.score, r.evidence])).toEqual([[0, []]])
+      expect(run(logged, s, seen(s, [500])).map((r) => [r.score, r.evidence])).toEqual([[0, []]])
+    })
+
+    it('logged\'s evidence holds no path and no pid', () => {
+      const line = '2026-11-22T10:00:01Z [device] scroll · skipped · no stream for 41234 in /work/eval-va (C:\\Users\\eval\\x)'
+      const pass = run(logged, s, seen(s, [500], { logs: [log(600, line)] }))
+      expect(pass.map((r) => [r.score, r.evidence])).toEqual([[1, ['log at 600: [device] scroll · skipped · no stream for <n> in <path> (<path>)']]])
+      // With no skipped line, the scroll lines seen, made as bare.
+      const sent = run(logged, s, seen(s, [500], { logs: [log(600, 'x [device] scroll · sent · 41234 /work/eval-va')] }))
+      expect(sent.map((r) => [r.score, r.evidence])).toEqual([[0, ['log at 600: [device] scroll · sent · <n> <path>']]])
+    })
+  })
+
+  it('a Codex or Cursor row\'s expected name is its folder\'s, a Claude Code row\'s its title', () => {
+    const s = scenario([{ kind: 'hook', session: 'va', event: 'start', label: 'w' }], sessions)
+    const ring = (page: 'vscode' | 'cursor', expect: string[]): Check => ({ id: 'r', kind: 'ring', dim: 'D1', page, expect, after: 'w' })
+    expect(scores(run(ring('vscode', ['va', 'vx']), s, seen(s, [100], { frames: list(200, 'vscode', [VA, [id(VX), 'eval-vx']]) }))).names).toBe(1)
+    expect(scores(run(ring('vscode', ['va', 'vx']), s, seen(s, [100], { frames: list(200, 'vscode', [VA, VX]) }))).names).toBe(0.5)
+    expect(scores(run(ring('vscode', ['va']), s, seen(s, [100], { frames: list(200, 'vscode', [[id(VA), 'eval-va']]) }))).names).toBe(0)
+    expect(scores(run(ring('cursor', ['ca']), s, seen(s, [100], { frames: list(200, 'cursor', [[id(CA), 'eval-ca']]) }))).names).toBe(1)
+    expect(scores(run(ring('cursor', ['ca']), s, seen(s, [100], { frames: list(200, 'cursor', [CA]) }))).names).toBe(0)
+  })
+})
+
+it('the base apps\' checks score as before: a Codex CLI thread is named by its title, and an open is graded on link and front', () => {
+  const X: SessionDef = { ...thread('x', 13), cli: true }
+  const s = scenario([{ kind: 'codex.write', sessions: ['t', 'x'], label: 'w' }, { kind: 'tap', session: 't', label: 'go' }], [T, X])
+  const ring: Check = { id: 'r', kind: 'ring', dim: 'D1', page: 'chatgpt', expect: ['t', 'x'], after: 'w', at: 'go' }
+  expect(scores(run(ring, s, seen(s, [100, 500], { frames: list(200, 'codex', [T, X]) })))).toEqual(
+    { recall: 1, precision: 1, order: 1, names: 1, cap: 1, archived: 1 })
+  const open: Check = { id: 'o', kind: 'open', dim: 'D3', session: 't', link: true, after: 'go' }
+  const results = run(open, s, seen(s, [100, 500], { commands: [{ at: 700, argv: ['/usr/bin/open', '-b', 'com.openai.codex', `codex://threads/${T.id}`], ok: true }] }))
+  expect(scores(results)).toEqual({ link: 1, front: 1, latency: 1 })
+  expect(results[0]!.evidence).toEqual(['tap on t at 500', 'command at 700: link front'])
+})
