@@ -186,7 +186,7 @@ LINUX_E2E_ORCA_PATHS = ("cli/e2e/harness/orcaHost.ts", "cli/e2e/harness/inOrca.t
 # docs/plans/2026-11-22-dial-eval-orca-design.md for Orca's), and what they cover: the hosts' adapters, the eval's
 # catalog and grader, the carousel model and the tier B driver; for the editors, the devices process and the listener
 # whose `vscode` stream the windows of both tiers open (and its path), the hook, the extension and its setup, Cursor's
-# engine and discovery, and the harness's editor windows and outside agents; for Orca, its plugin, the devices' Orca reads
+# engine and discovery, and the harness's editor windows and outside agents; for Orca, its plugin's code, the devices' Orca reads
 # (its homes and the recorded app), the harness's loop that runs the plugin and its dial stream, Orca's fake CLI and
 # terminal-host stand-in, and InOrca. A change to one runs them beside the PR's own files; its deletion too, as the
 # Orca paths' does.
@@ -198,7 +198,7 @@ LINUX_E2E_APP_EVAL_PATHS = ("cli/src/cable/hosts/", "cli/src/testing/dialAppEval
                             "cli/src/services/devicesListener.ts", "cli/src/devices/listenerPath.ts", "cli/hook/notify.mjs",
                             "plugins/harness-device-vscode/src/", "cli/src/devices/vscodeExtension.ts",
                             "cli/src/cable/vscodeExtensionSetup.ts", "cli/src/engines/cursor/",
-                            "cli/src/core/engines/cursorDiscovery.ts", "plugins/harness-device-orca/",
+                            "cli/src/core/engines/cursorDiscovery.ts", "plugins/harness-device-orca/src/",
                             "cli/src/devices/orcaHomes.ts", "cli/src/testing/recordedOrca.ts",
                             *(f"cli/e2e/harness/{name}.ts" for name in ("vscodeWindow", "outsideAgent", "codexOutside",
                                                                          "cursorOutside", "editorWindow", "fakeOrca",

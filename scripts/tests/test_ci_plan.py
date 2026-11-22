@@ -478,7 +478,7 @@ class SelectionTests(unittest.TestCase):
         # A path renamed or deleted would leave its successor uncovered, the list still passing.
         root = REPOSITORY
         full_checkout(self, "cli/src/cable/hosts", "cli/e2e/harness", "plugins/harness-device-vscode/src",
-                      "plugins/harness-device-orca")
+                      "plugins/harness-device-orca/src")
         for entry in planner.LINUX_E2E_APP_EVAL_PATHS:
             with self.subTest(entry=entry):
                 if "*" in entry:
@@ -647,11 +647,13 @@ class SelectionTests(unittest.TestCase):
         self.assertIsNotNone(planner.shared_input(look_alike))
 
     def test_the_orca_plugin_belongs_to_the_cli_suite(self):
-        # cli/build.mjs inlines it: a change to it changes cli.js; linux-e2e runs the dial app eval's Orca file on it.
-        for path in ("plugins/harness-device-orca/src/dial.ts", "plugins/harness-device-orca/orca-plugin.json"):
+        # cli/build.mjs inlines it: a change to it changes cli.js; linux-e2e runs the dial app eval's Orca file on its
+        # code, as on the VS Code extension's.
+        for path, e2e in (("plugins/harness-device-orca/src/dial.ts", {"windows-e2e", "linux-e2e"}),
+                          ("plugins/harness-device-orca/orca-plugin.json", {"windows-e2e"})):
             with self.subTest(path=path):
                 self.assertEqual(planner.owners(path), {"cli"})
-                self.assertEqual(planner.select([path])[0], {"cli", "cross-read-scan", "windows-e2e", "linux-e2e"})
+                self.assertEqual(planner.select([path])[0], {"cli", "cross-read-scan", *e2e})
                 self.assertTrue(planner.reads("cli", path))
                 self.assertIsNone(planner.shared_input(path))
         # A folder whose name only starts the same is not the plugin's.
@@ -1017,9 +1019,8 @@ class GitPlanTests(unittest.TestCase):
                    "cli/hook/notify.mjs", "plugins/harness-device-vscode/src/extension.ts",
                    "cli/src/devices/vscodeExtension.ts", "cli/src/cable/vscodeExtensionSetup.ts",
                    "cli/src/engines/cursor/adapter.ts", "cli/src/core/engines/cursorDiscovery.ts")
-        # What the Orca file runs on outside them: the Orca plugin and the devices' Orca reads it leans on.
-        orca = ("plugins/harness-device-orca/src/dial.ts", "plugins/harness-device-orca/orca-plugin.json",
-                "cli/src/devices/orcaHomes.ts", "cli/src/testing/recordedOrca.ts")
+        # What the Orca file runs on outside them: the Orca plugin's code and the devices' Orca reads it leans on.
+        orca = ("plugins/harness-device-orca/src/dial.ts", "cli/src/devices/orcaHomes.ts", "cli/src/testing/recordedOrca.ts")
         # The plugin's loop and its stream run the Orca e2e files too: the Orca stand-in's test has them.
         harness = tuple(f"cli/e2e/harness/{name}.ts" for name in ("vscodeWindow", "outsideAgent", "codexOutside",
                                                                    "cursorOutside", "editorWindow"))
