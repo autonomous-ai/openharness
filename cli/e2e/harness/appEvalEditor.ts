@@ -6,15 +6,17 @@
  *   app's own session code (appEvalClaude.ts) with the editor's hints, a panel session under the editor with the
  *   extension's entrypoint. A Codex is a process of its own in such a tab (codexOutside.ts inTab), one with a home of its
  *   own in a home in the root that is not the daemon's CODEX_HOME. V12's Claude Code runs in a tmux session of the
- *   person's on the daemon's private server, its client attached from a terminal of the editor (ownTmux.ts tabClient);
+ *   person's on the daemon's private server, its client attached from a terminal of the editor (ownTmux.ts tabClient).
+ *   cursor-agent is a shell's job in such a tab of a fake Cursor, and Cursor's own agent a process under the fake Cursor
+ *   (cursorOutside.ts), each telling the devices by Cursor's own hooks;
  * - each window is Harness's extension's own loop over a fake window (editorWindow.ts), reporting its shells on the real
  *   devices' socket. What the loop printed is the window's stream in tier A's shapes (the plan's Decision 1): the stream
  *   `eval-<window>-<n>`, the window's nth in the scenario, its shells named by their sessions' keys, never by a pid;
  * - words reach these agents by the Claude mod's inbox and the prompts typed into a Claude Code (appEvalClaude.ts), and
  *   by the Codex queue (appEvalChatgpt.ts hear): the extension types none.
  *
- * Every process goes in `world.children`, or is the editor's: its own process, ended at stop, first ends the Codex and
- * tmux sessions it runs (as the Claude app's ends its sessions, appEvalClaude.ts), so nothing of a scenario outlives it.
+ * Every process goes in `world.children`, or is the editor's: its own process, ended at stop, first ends the Codex, Cursor
+ * and tmux sessions it runs (as the Claude app's ends its sessions, appEvalClaude.ts), so nothing of a scenario outlives it.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { copyFileSync, mkdtempSync } from 'node:fs'
@@ -26,6 +28,7 @@ import { hear } from './appEvalChatgpt.js'
 import { appOf, claudeSteps, start as startClaude, type ClaudeHost } from './appEvalClaude.js'
 import { speak, type AppSteps, type TierBWorld } from './appEvalDriver.js'
 import { CodexOutside } from './codexOutside.js'
+import { CursorOutside } from './cursorOutside.js'
 import { until } from './daemon.js'
 import { startEditorWindow, type EditorWindow, type Printed } from './editorWindow.js'
 import { tabClient } from './ownTmux.js'
@@ -49,6 +52,7 @@ interface State {
   /** Each running session, in the order it started. */
   running: SessionKey[]
   codex: Map<SessionKey, CodexOutside>
+  cursor: Map<SessionKey, CursorOutside>
   /** How each tmux session ends, by its session. */
   tmux: Map<SessionKey, () => Promise<void>>
   /** In the order of their last states: of two windows that list one shell, the later holds it, as the devices take it
@@ -86,16 +90,17 @@ export function windowRecords(window: string, keyOf: (pid: number) => SessionKey
   }
 }
 
-const fromTerminal = (world: TierBWorld): boolean => world.scenario.world?.launchedFrom === 'terminal-app'
+const fromTerminal = (world: Pick<TierBWorld, 'scenario'>): boolean => world.scenario.world?.launchedFrom === 'terminal-app'
 const noExtension = (world: TierBWorld): boolean => world.scenario.world?.extension === false
 
 /**
  * What the hook sends from an editor's agent (hook/notify.mjs hostHints), as tier A's sessions send it
  * (tierA/steps/sessions.ts): its terminal says TERM_PROGRAM=vscode, Cursor's as VS Code's; macOS gives the editor's bundle
  * id, or Terminal's to an editor started from there; Linux gives none. The panel's Claude Code adds the extension's
- * entrypoint. In tmux, tmux names the terminal program itself, and the bundle id is what its server inherited.
+ * entrypoint. In tmux, tmux names the terminal program itself, and the bundle id is what its server inherited. Cursor's own
+ * agent, in no terminal, gives the bundle id alone.
  */
-function hintsOf(world: TierBWorld, s: SessionDef): Record<string, string> {
+export function hintsOf(world: Pick<TierBWorld, 'platform' | 'scenario'>, s: SessionDef): Record<string, string> {
   const place = placeOf(s)
   const bundle = world.platform === 'darwin' ? APP_BUNDLES[fromTerminal(world) ? 'terminal-app' : s.app] : undefined
   return {
@@ -116,7 +121,8 @@ const EDITOR: ClaudeHost = (world, s) => ({
 function editorOf(world: TierBWorld): State {
   const known = states.get(world)
   if (known) return known
-  const state: State = { shells: new Map(), running: [], codex: new Map(), tmux: new Map(), windows: new Map(), opens: new Map(), quit: new Map() }
+  const state: State = { shells: new Map(), running: [], codex: new Map(), cursor: new Map(), tmux: new Map(), windows: new Map(),
+    opens: new Map(), quit: new Map() }
   states.set(world, state)
   // Only the editor's lifetime: what it does is in this file.
   const child = spawn(process.execPath, ['-e', 'process.stdin.resume()'], { cwd: world.d.root, env: world.d.env, stdio: ['pipe', 'ignore', 'ignore'] })
@@ -126,8 +132,9 @@ function editorOf(world: TierBWorld): State {
   child.kill = (signal?: NodeJS.Signals | number) => {
     // The driver's last resort, when the end takes too long.
     if (signal === 'SIGKILL') return kill('SIGKILL')
-    // Its windows and its Claude Code are children of their own; its Codex and tmux sessions it ends itself.
-    ending ??= Promise.allSettled([...[...state.codex.values()].map((codex) => codex.end()), ...[...state.tmux.values()].map((end) => end())])
+    // Its windows and its Claude Code are children of their own; its Codex, Cursor and tmux sessions it ends itself.
+    ending ??= Promise.allSettled([...[...state.codex.values()].map((codex) => codex.end()), ...[...state.cursor.values()].map(endCursor),
+      ...[...state.tmux.values()].map((end) => end())])
       .then(() => { kill('SIGKILL') })
     return true
   }
@@ -155,6 +162,25 @@ async function startCodex(world: TierBWorld, state: State, s: SessionDef, folder
   state.codex.set(s.key, codex)
   await codex.hook('SessionStart', { source: 'startup' })
   return codex.shellPid
+}
+
+/** The session's Cursor agent under its editor, cursor-agent in a terminal and Cursor's own in none, its start hook run:
+ *  its shell, for a terminal. */
+async function startCursor(world: TierBWorld, state: State, s: SessionDef, folder: string): Promise<number | undefined> {
+  const cursor = await CursorOutside.start(world.d, folder, world.children,
+    { sessionId: s.id, terminal: placeOf(s) === 'terminal', hints: hintsOf(world, s) })
+  state.cursor.set(s.key, cursor)
+  await cursor.hook('start')
+  return cursor.shellPid
+}
+
+/** A Cursor agent leaves as Cursor ends it: its sessionEnd hook, then its process, gone whatever the hook did. */
+async function endCursor(cursor: CursorOutside): Promise<void> {
+  try {
+    await cursor.hook('end')
+  } finally {
+    await cursor.close()
+  }
 }
 
 /**
@@ -191,7 +217,7 @@ async function startSession(world: TierBWorld, key: SessionKey): Promise<void> {
     switch (engineOf(s)) {
       case 'claude': shell = (await startClaude(world, appOf(world, EDITOR), key)).outside.shellPid; break
       case 'codex': shell = await startCodex(world, state, s, basename(cwd)); break
-      case 'cursor': throw new Error(`scenario ${world.scenario.id}: the editors' steps start no Cursor agent`)
+      case 'cursor': shell = await startCursor(world, state, s, basename(cwd)); break
     }
   }
   if (shell !== undefined) state.shells.set(key, shell)
@@ -199,16 +225,19 @@ async function startSession(world: TierBWorld, key: SessionKey): Promise<void> {
 }
 
 /** The session's agent leaves: Claude Code as it does when its terminal closes it (appEvalClaude.ts), a Codex's process
- *  and tab, a tmux session and its client. */
+ *  and tab, a Cursor agent as Cursor ends it, a tmux session and its client. */
 async function endSession(world: TierBWorld, key: SessionKey): Promise<void> {
   const state = editorOf(world)
   state.running = state.running.filter((one) => one !== key)
   state.shells.delete(key)
   const codex = state.codex.get(key)
+  const cursor = state.cursor.get(key)
   const tmux = state.tmux.get(key)
   state.codex.delete(key)
+  state.cursor.delete(key)
   state.tmux.delete(key)
   if (codex) await codex.end()
+  else if (cursor) await endCursor(cursor)
   else if (tmux) await tmux()
   else await claudeSteps.hook(world, { kind: 'hook', session: key, event: 'end' })
 }
@@ -264,6 +293,9 @@ export const vscodeSteps: AppSteps = {
     const s = world.session(step.session)
     if (step.event === 'start') return startSession(world, step.session)
     if (step.event === 'end') return endSession(world, step.session)
+    const cursor = editorOf(world).cursor.get(step.session)
+    // Cursor's hooks say no wait on the person (CURSOR_HOOK_SETTINGS).
+    if (cursor && step.event !== 'needs-input') return cursor.hook(step.event, step.lastAnswer)
     if (engineOf(s) !== 'claude' || s.tmux) throw new Error(`scenario ${world.scenario.id}: tier B's ${step.session} runs no ${step.event} hook`)
     return claudeSteps.hook(world, step)
   },
@@ -328,3 +360,6 @@ export const vscodeSteps: AppSteps = {
     await endWindow(world, step.window)
   },
 }
+
+/** Cursor's scenarios run on the same steps: each session's engine and place decide its agent, and its app its editor. */
+export const cursorSteps: AppSteps = vscodeSteps
