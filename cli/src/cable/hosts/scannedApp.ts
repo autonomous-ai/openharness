@@ -145,11 +145,19 @@ export async function scannedApps(pids: readonly number[], deps: ScannedAppDeps)
     return apps
   }
   const home = deps.home ?? homedir()
-  const steps = walks.map(([pid, names]) => [pid, names.flatMap((name): Step[] => {
-    if (isItermServer(name, home)) return [{ app: 'iterm' }]
-    const bundle = bundleOf(name, deps.roots)
-    return bundle ? [{ bundle }] : []
-  })] as const)
+  // A walk ends at its first fixed row, which answers it: a bundle past that would spend a read and a slot of the pass.
+  const steps = walks.map(([pid, names]) => {
+    const of: Step[] = []
+    for (const name of names) {
+      if (isItermServer(name, home)) {
+        of.push({ app: 'iterm' })
+        break
+      }
+      const bundle = bundleOf(name, deps.roots)
+      if (bundle) of.push({ bundle })
+    }
+    return [pid, of] as const
+  })
   // Each bundle once a pass, all together, and a bounded number of them: a bundle past that is not read.
   const read = [...new Set(steps.flatMap(([, of]) => of.flatMap((step) => ('bundle' in step ? [step.bundle] : []))))].slice(0, BUNDLES_A_PASS)
   const ids = new Map(await Promise.all(read.map(async (bundle) => [bundle, await deps.bundleId(bundle).catch(() => undefined)] as const)))
