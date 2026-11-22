@@ -21,6 +21,7 @@ const orca = await import('../../e2e/harness/appEvalOrca.js' as string) as {
     }>
   }
   startedWith(pid: number): string[]
+  orcaSteps: { hook(world: unknown, step: { kind: 'hook'; session: SessionKey; event: 'start' }): Promise<void> }
   startOrcaPlugin(d: { root: string; env: NodeJS.ProcessEnv }, children: ChildProcess[]): { stop(): Promise<number | null> }
 }
 const { orcaHostCc } = await import('../../e2e/harness/orcaHost.js' as string) as { orcaHostCc: string | null }
@@ -118,6 +119,34 @@ describe.skipIf(!orcaHostCc)("tier B's Orca agent whose hooks name no handle", (
       expect(Number(ppid)).toBe(agent.pid)
       expect(['??', '?']).not.toContain(tty)
       await agent.close()
+    } finally {
+      for (const child of children) child.kill('SIGKILL')
+    }
+  })
+})
+
+describe.skipIf(process.platform === 'win32')("tier B's Orca agent in the person's tmux", () => {
+  it('an agent whose start fails leaves no tmux session behind, so a reused daemon starts it again', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'tier-b-orca-tmux-'))
+    const root = realpathSync(dir)
+    const said = join(root, 'tmux.txt')
+    const socket = join(root, 'tmux', 'default')
+    // The kill goes through the tmux on the daemon's tmux PATH: here one that notes its arguments.
+    mkdirSync(join(root, 'bin'))
+    writeFileSync(join(root, 'bin', 'tmux'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${said}'\n`, { mode: 0o755 })
+    const env = { PATH: `${join(root, 'bin')}:/usr/bin:/bin` }
+    // Outside the catalog's folders: OrcaAgent.start refuses it once its tmux session is made.
+    const s = session('t', { tmux: true, cwd: '/tmp/eval-outside' })
+    const children: ChildProcess[] = []
+    const world = {
+      d: { root, env, tmux: { socket, env, run: async (verb: string) => (verb === 'new-session' ? '%7' : `${socket},4242,$3`) } },
+      children, platform: process.platform, orca: { endWatch: () => {} },
+      scenario: { id: 'T', app: 'orca', sessions: [s], steps: [], checks: [], probes: [] },
+      session: () => s, folder: () => root,
+    }
+    try {
+      await expect(orca.orcaSteps.hook(world, { kind: 'hook', session: 't', event: 'start' })).rejects.toThrow('is not a catalog folder')
+      expect(readFileSync(said, 'utf8')).toBe(`-S ${socket} -f /dev/null kill-session -t eval-t\n`)
     } finally {
       for (const child of children) child.kill('SIGKILL')
     }
