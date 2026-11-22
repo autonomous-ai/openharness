@@ -232,6 +232,7 @@ describe('Orca\'s account homes on the dial', () => {
       orca = FakeOrca.install(d)
       orca.accounts({ codex: [home] })
       rmSync(link)
+      rmSync(join(dirname(link), 'orca-ide'))
     })
     await plugged(desk)
     if (process.platform === 'darwin') {
