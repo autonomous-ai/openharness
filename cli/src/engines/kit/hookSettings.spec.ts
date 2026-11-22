@@ -478,6 +478,43 @@ it('on Windows, a deny or an ask for harness device notify, or for all of harnes
   }
 })
 
+// Windows finds a program in any case and without its suffix, and a person names it by any path: a deny in one of
+// those spellings is still a deny for Harness's.
+it('on Windows, a deny or an ask for harness device notify in another spelling of the program keeps it out', async () => {
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  for (const permissions of [{ deny: ['Bash(harness.exe device notify:*)'] }, { ask: ['Bash(Harness device notify:*)'] },
+    { deny: ['Bash(/c/Users/u/.harness/bin/harness device notify:*)'] }, { deny: ['Bash(C:/Users/u/.harness/bin/HARNESS.EXE device notify:*)'] },
+    { ask: ['Bash(C:\\Users\\u\\.harness\\bin\\harness.cmd device notify --json:*)'] }, { deny: ['Bash("C:\\Program Files\\Harness\\harness.exe" device notify:*)'] }]) {
+    const home = mkdtempSync(join(root, 'claude-')), file = join(home, claude.settings.fileName)
+    writeFileSync(file, JSON.stringify({ permissions }))
+    expect(await installHookSettings('claude', claude.settings, 19473, home, {}, 'win32')).toBe(true)
+    expect(JSON.parse(readFileSync(file, 'utf8')).permissions.allow).toEqual(claudeRules({ commands: true }, WIN))
+  }
+})
+
+it('on Windows, a deny for every command of harness.exe adds no Bash rule', async () => {
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  const home = join(root, 'claude'), file = join(home, claude.settings.fileName)
+  mkdirSync(home)
+  writeFileSync(file, JSON.stringify({ permissions: { deny: ['Bash(harness.exe:*)'] } }))
+  expect(await installHookSettings('claude', claude.settings, 19473, home, {}, 'win32')).toBe(true)
+  const allow: string[] = JSON.parse(readFileSync(file, 'utf8')).permissions.allow
+  expect(allow).toEqual(claudeRules({ help: true, bash: AGENT_VERBS, commands: true }, WIN))
+  expect(allow.filter((rule) => rule.startsWith('Bash'))).toEqual([])
+})
+
+it('a deny or an ask that names the program by another path keeps its allow out', async () => {
+  for (const [permissions, kept] of [
+    [{ deny: ['Bash(~/.local/bin/harness device notify:*)'] }, claudeRules({ commands: true })],
+    [{ ask: ['Bash(/opt/homebrew/bin/harness close:*)'] }, claudeRules({ bash: ['close'] })],
+  ] as const) {
+    const home = mkdtempSync(join(root, 'claude-')), file = join(home, claude.settings.fileName)
+    writeFileSync(file, JSON.stringify({ permissions }))
+    expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
+    expect(JSON.parse(readFileSync(file, 'utf8')).permissions.allow).toEqual(kept)
+  }
+})
+
 it('harnessRules fills {launcher} for the platform it is given', () => {
   const rules = ['Bash({launcher} --help)']
   expect(harnessRules(rules, 'win32')).toEqual([[`Bash(${WIN} --help)`]])
