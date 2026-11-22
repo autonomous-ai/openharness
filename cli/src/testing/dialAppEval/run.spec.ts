@@ -12,7 +12,7 @@ import type { Baseline, CheckResult, Report, RunResults, Tier, WrongSend } from 
 
 const TIER_A_FILES = ['src/testing/dialAppEval/dialAppEval.spec.ts']
 const TIER_B_FILES = ['--config', 'vitest.e2e.config.ts', 'e2e/dialAppEvalClaude.e2e.ts', 'e2e/dialAppEvalChatgpt.e2e.ts',
-  'e2e/dialAppEvalVscode.e2e.ts', 'e2e/dialAppEvalCursor.e2e.ts', 'e2e/dialAppEvalHeldOut.e2e.ts']
+  'e2e/dialAppEvalVscode.e2e.ts', 'e2e/dialAppEvalCursor.e2e.ts', 'e2e/dialAppEvalOrca.e2e.ts', 'e2e/dialAppEvalHeldOut.e2e.ts']
 
 const result = (tier: Tier, score: number): CheckResult => ({
   tier, platform: 'darwin', scenario: 'C1', check: 'ring.recall', app: 'claude', dim: 'D1', heldOut: false,
@@ -41,7 +41,7 @@ const EMPTY: RunResults = { schema: 1, results: [], wrongSends: [], gaps: [] }
 
 /**
  * A fake exec: tier A's run writes `a` as the spec's file, tier B's `b` as the Claude file and an empty ChatGPT,
- * VS Code, Cursor and held-out file (when `b` is given), save the sources `unwritten` names, and each exits with its code.
+ * VS Code, Cursor, Orca and held-out file (when `b` is given), save the sources `unwritten` names, and each exits with its code.
  */
 function harness(written: { a?: RunResults; b?: RunResults },
   opts: { platform?: NodeJS.Platform; codes?: Partial<Record<Tier, number>>; unwritten?: Source[] } = {}) {
@@ -56,7 +56,7 @@ function harness(written: { a?: RunResults; b?: RunResults },
       calls.push({ cmd, args, out: env.DIAL_EVAL_OUT, env })
       const tier: Tier = args.includes('vitest.e2e.config.ts') ? 'b' : 'a'
       const file = written[tier]
-      const files: Array<[Source, RunResults]> = tier === 'a' ? [['spec', file ?? EMPTY]] : [['claude', file ?? EMPTY], ['chatgpt', EMPTY], ['vscode', EMPTY], ['cursor', EMPTY], ['heldOut', EMPTY]]
+      const files: Array<[Source, RunResults]> = tier === 'a' ? [['spec', file ?? EMPTY]] : [['claude', file ?? EMPTY], ['chatgpt', EMPTY], ['vscode', EMPTY], ['cursor', EMPTY], ['orca', EMPTY], ['heldOut', EMPTY]]
       for (const [source, results] of files) {
         if (file && env.DIAL_EVAL_OUT && !opts.unwritten?.includes(source)) writeResults(env.DIAL_EVAL_OUT, source, results)
       }
@@ -150,7 +150,7 @@ it.skipIf(process.platform === 'win32')('runs when started through a symlink, as
   expect(started.status).toBe(2)
 })
 
-it('--tier b runs the five e2e files', async () => {
+it("--tier b runs the six e2e files, Orca's before the held-out", async () => {
   const h = harness({ a: results('a', 1), b: results('b', 1) })
   expect(await main(['--tier', 'b'], h.deps)).toBe(0)
   expect(h.calls.map((c) => c.args.slice(1))).toEqual([['run', ...TIER_B_FILES]])
@@ -210,6 +210,16 @@ it('a run whose VS Code or Cursor file wrote no results writes no baseline, nami
     expect(h.log()).toContain('no baseline written')
     expect(readBaseline()).toEqual(before)
   }
+})
+
+it('a run whose Orca file wrote no results writes no baseline, naming the file', async () => {
+  const before = { schema: 1, checks: { 'b/darwin/C1/ring.recall': 0.5 }, apps: {} } as const
+  writeBaseline(before)
+  const h = harness({ b: results('b', 1) }, { unwritten: ['orca'] })
+  expect(await main(['--tier', 'b', '--update-baseline'], h.deps)).toBe(1)
+  expect(h.log()).toContain('results-b-orca.json was not written')
+  expect(h.log()).toContain('no baseline written')
+  expect(readBaseline()).toEqual(before)
 })
 
 it('--update-baseline writes the baseline, keeping the tier not run', async () => {

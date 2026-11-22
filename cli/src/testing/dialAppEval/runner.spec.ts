@@ -210,13 +210,24 @@ it('results files round-trip and merge', async () => {
 
 it("the editors' results files are named results-b-vscode.json and results-b-cursor.json and merge with the others", () => {
   dir = mkdtempSync(join(tmpdir(), 'dial-eval-results-'))
-  expect(SOURCES.b).toEqual(['claude', 'chatgpt', 'vscode', 'cursor', 'heldOut'])
+  expect(SOURCES.b).toEqual(['claude', 'chatgpt', 'vscode', 'cursor', 'orca', 'heldOut'])
   const one = (scenario: string): RunResults => ({ schema: 1, results: [{ tier: 'b', platform: 'darwin', scenario,
     check: 'ring.recall', app: 'claude', dim: 'D1', heldOut: false, score: 1, timed: false, evidence: [] }], wrongSends: [], gaps: [] })
   expect(basename(writeResults(dir, 'vscode', one('V1')))).toBe('results-b-vscode.json')
   expect(basename(writeResults(dir, 'cursor', one('U1')))).toBe('results-b-cursor.json')
   writeResults(dir, 'claude', one('C1'))
   expect(readResults(dir).results.map((r) => r.scenario)).toEqual(['C1', 'U1', 'V1'])
+})
+
+it("Orca's results file is results-b-orca.json and merges with the others", () => {
+  dir = mkdtempSync(join(tmpdir(), 'dial-eval-results-'))
+  const one = (scenario: string): RunResults => ({ schema: 1, results: [{ tier: 'b', platform: 'darwin', scenario,
+    check: 'ring.recall', app: 'claude', dim: 'D1', heldOut: false, score: 1, timed: false, evidence: [] }], wrongSends: [], gaps: [] })
+  expect(SOURCES.b).toContain('orca')
+  expect(basename(writeResults(dir, 'orca', one('O1')))).toBe('results-b-orca.json')
+  writeResults(dir, 'claude', one('C1'))
+  writeResults(dir, 'vscode', one('V1'))
+  expect(readResults(dir).results.map((r) => r.scenario)).toEqual(['C1', 'O1', 'V1'])
 })
 
 it('a step that throws still stops the driver, keeps the wrong sends seen so far and fails the run with what threw', async () => {
