@@ -50,12 +50,14 @@ export function frontAppId(value: string): string {
 }
 
 // The spellings each app's window is known by on Linux: X11's WM_CLASS class and Wayland's app id, which some desktops
-// lower-case. A class nobody could confirm has no row (the ChatGPT app's .desktop has no StartupWMClass).
+// lower-case. A class nobody could confirm has no row.
 const WINDOW_CLASSES: Readonly<Record<string, readonly string[]>> = {
   // cli/src/testing/recordedLinuxApps.ts, StartupWMClass.
   vscode: ['com.microsoft.VSCode', 'com.microsoft.vscode'],
   cursor: ['Cursor', 'cursor'],
   claude: ['com.anthropic.Claude', 'com.anthropic.claude'],
+  // The ChatGPT app's .desktop has no StartupWMClass: read from its code (recordedLinuxApps.ts, windowClasses).
+  codex: ['ChatGPT', 'chatgpt'],
   // WezTerm's default class (its config option `class`).
   wezterm: ['org.wezfurlong.wezterm'],
   // kitty's default class (its `--class` option).

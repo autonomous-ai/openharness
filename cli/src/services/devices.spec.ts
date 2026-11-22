@@ -9522,6 +9522,24 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
       ['/usr/bin/xdg-open', [`claude://code/continue?session=${LOCAL}`], 10_000]])
   })
 
+  // As a ChatGPT app thread's (the dial eval's X5): a row the store alone lists has no process to raise.
+  it('on Linux a tap whose link fails raises the app by its class, said in one line with no id', async () => {
+    const linux = fakeRaise()
+    // The app registered claude://, and xdg-open fails.
+    const run = async (file: string, args: string[], timeoutMs: number) => {
+      orcaRuns.push([file, args, timeoutMs])
+      return file === '/usr/bin/xdg-mime' ? { code: 0, stdout: 'com.anthropic.Claude.desktop\n' } : { code: 1, stdout: '' }
+    }
+    const { live } = withStore({ orca: { ...orca, platform: 'linux', onPath: (name: string) => `/usr/bin/${name}`, run }, raise: linux.raise })
+    await live()
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns).toEqual([['/usr/bin/xdg-mime', ['query', 'default', 'x-scheme-handler/claude'], 10_000],
+      ['/usr/bin/xdg-open', [`claude://code/continue?session=${LOCAL}`], 10_000]])
+    expect(linux.raised).toEqual([{ app: 'claude' }])
+    expect(logs.filter((line) => line.startsWith('[device] open'))).toEqual(['[device] open · claude · fallback'])
+    expect(logs.filter((line) => line.includes(LOCAL) || line.includes(SESSION))).toEqual([])
+  })
+
   it('on Windows a tap on a store row is the Windows raise\'s link, with the Claude app\'s bundle', async () => {
     const windows = fakeWindowsRaise()
     const { live } = withStore({ orca: { ...orca, platform: 'win32' }, windowsRaise: windows.raise })
@@ -10190,6 +10208,28 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
     fake.failing = 1
     expect(await host().openAgent(ID)).toBeUndefined()
     expect(orcaRuns).toEqual([opened(THREAD), ['/usr/bin/open', ['-b', BUNDLE], 10_000]])
+    expect(logs.filter((line) => line.startsWith('[device] open'))).toEqual(['[device] open · codex · fallback'])
+    expect(logs.filter((line) => line.includes(THREAD))).toEqual([])
+  })
+
+  // The dial eval's X5 (cli/src/testing/dialAppEval): a thread the reader alone lists has no process to raise.
+  it('on Linux a tap whose link fails raises the app by its class, said in one line with no id', async () => {
+    linuxApps('file')
+    const linux = fakeRaise()
+    const onLinux = {
+      ...orca, onPath: (name: string) => `/usr/bin/${name}`,
+      // The app registered codex://, and xdg-open fails.
+      run: async (file: string, args: string[], timeoutMs: number) => {
+        orcaRuns.push([file, args, timeoutMs])
+        return file === '/usr/bin/xdg-mime' ? { code: 0, stdout: 'chatgpt.desktop\n' } : { code: 1, stdout: '' }
+      },
+    }
+    const { live } = withThreads({ orca: onLinux, raise: linux.raise })
+    await live()
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns).toEqual([['/usr/bin/xdg-mime', ['query', 'default', 'x-scheme-handler/codex'], 10_000],
+      ['/usr/bin/xdg-open', [`codex://threads/${THREAD}`], 10_000]])
+    expect(linux.raised).toEqual([{ app: 'codex' }])
     expect(logs.filter((line) => line.startsWith('[device] open'))).toEqual(['[device] open · codex · fallback'])
     expect(logs.filter((line) => line.includes(THREAD))).toEqual([])
   })

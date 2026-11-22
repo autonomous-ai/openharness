@@ -449,6 +449,84 @@ describe('a tap on a Codex app session', () => {
     expect(calls).toEqual([lookup('codex')])
     expect(logs).toEqual([])
   })
+
+  // A hooked session has a process: its own window is the one raised, by that process, once, and one line says so,
+  // whatever the raise answered.
+  it('on Linux a hooked session whose link failed is raised once by its process, said in one line', async () => {
+    for (const answer of [true, false]) {
+      const raised: Window[] = []
+      const { logs, opener } = recorder({
+        platform: 'linux',
+        raise: { ready: () => true, raise: async (window) => { raised.push(window); return answer } },
+        windowOf: () => ({ pid: 4242, app: 'codex' }),
+        // The ChatGPT app registered codex://, and xdg-open fails.
+        run: async (file) => file.endsWith('/xdg-mime') ? { code: 0, stdout: 'chatgpt.desktop\n' } : { code: 1, stdout: '' },
+      })
+      expect(await opener.open('a1', hooked), String(answer)).toBe(answer)
+      expect(raised, String(answer)).toEqual([{ pid: 4242, app: 'codex' }])
+      expect(logs, String(answer)).toEqual([FALLBACK])
+    }
+  })
+})
+
+// The Claude app's sessions and the ChatGPT app's threads that only their apps' own stores list have no process, so the
+// observed source knows no window of theirs (the dial eval's X5): their target is the one those sources build, the app's
+// bundle and its pane (services/devices.ts).
+describe('a tap on Linux on an app\'s row with no process', () => {
+  const rows = [
+    { app: 'claude', handler: 'com.anthropic.Claude.desktop', scheme: 'claude', link: `claude://code/continue?session=${SESSION}`,
+      id: SESSION, target: { bundle: CLAUDE, pane: { adapter: 'claude', id: SESSION } }, classes: ['com.anthropic.Claude', 'com.anthropic.claude'] },
+    { app: 'codex', handler: 'chatgpt.desktop', scheme: 'codex', link: `codex://threads/${THREAD}`,
+      id: THREAD, target: { bundle: CODEX_APP, pane: { adapter: 'codex', id: THREAD } }, classes: ['ChatGPT', 'chatgpt'] },
+  ]
+
+  /** The raise itself, over a sway it found and the apps' own classes: only its backend is made up. No window is known
+   *  of any agent; xdg-mime names [handler] for every scheme, and xdg-open exits 1. */
+  async function onLinux(handler: string) {
+    const targets: RaiseTarget[] = []
+    const raise = createLinuxRaise({
+      find: async () => ({ kind: 'sway', socket: '/run/user/1000/sway-ipc.1000.7.sock' }),
+      backend: () => ({ raise: async (target) => { targets.push(target); return true } }),
+      processes: async () => [],
+      classes: windowClasses,
+      log: () => {},
+    })
+    await vi.waitFor(() => expect(raise.ready({ agent: true })).toBe(true))
+    const ran: Call[] = []
+    const r = recorder({
+      platform: 'linux',
+      raise,
+      windowOf: () => undefined,
+      run: async (file, args, timeoutMs) => {
+        ran.push({ file, args, timeoutMs })
+        return file.endsWith('/xdg-mime') ? { code: 0, stdout: handler } : { code: 1, stdout: '' }
+      },
+    })
+    return { ...r, ran, targets }
+  }
+
+  it.each(rows)('$app: a link that failed raises the app by its class, said in one line with no id', async (row) => {
+    const { ran, logs, opener, targets } = await onLinux(`${row.handler}\n`)
+    expect(opener.can('a1', row.target)).toBe(true)
+    expect(await opener.open('a1', row.target)).toBe(true)
+    expect(ran).toEqual([lookup(row.scheme), run('/fake/bin/xdg-open', row.link)])
+    expect(targets).toEqual([{ pids: [], classes: row.classes }])
+    expect(logs).toEqual([`[device] open · ${row.app} · fallback`])
+    for (const line of logs) expect(line).not.toContain(row.id)
+  })
+
+  // From the second look the row has no pane to take the tap (appLink.ts canFocus): the opener alone brings the app.
+  it.each(rows)('$app: with no app for its scheme, every tap raises the app by its class', async (row) => {
+    const { ran, logs, opener, targets } = await onLinux('')
+    for (const tap of ['first', 'second']) {
+      expect(opener.can('a1', row.target), tap).toBe(true)
+      expect(await opener.open('a1', row.target), tap).toBe(true)
+    }
+    expect(ran).toEqual([lookup(row.scheme)])
+    expect(targets).toEqual([{ pids: [], classes: row.classes }, { pids: [], classes: row.classes }])
+    // Only the first tap reached the link, so only it says the fallback.
+    expect(logs).toEqual([`[device] open · ${row.app} · fallback`])
+  })
 })
 
 // Each app says where its pane comes in a tap (adapter.ts `tap`): the opener keeps that order, knowing no app by name.

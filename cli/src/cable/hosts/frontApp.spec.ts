@@ -91,11 +91,12 @@ describe('frontAppId', () => {
   })
 })
 
-// Each app's window class spellings on Linux. ChatGPT's .desktop has no StartupWMClass, so codex has none recorded.
+// Each app's window class spellings on Linux. ChatGPT's .desktop has no StartupWMClass: its class is read from its code.
 const CLASSES: [string, string[]][] = [
   ['vscode', [RECORDED_LINUX_APPS.vscode.startupWmClass, RECORDED_LINUX_APPS.vscode.startupWmClass.toLowerCase()]],
   ['cursor', [RECORDED_LINUX_APPS.cursor.startupWmClass, RECORDED_LINUX_APPS.cursor.startupWmClass.toLowerCase()]],
   ['claude', [RECORDED_LINUX_APPS.claude.startupWmClass, RECORDED_LINUX_APPS.claude.startupWmClass.toLowerCase()]],
+  ['codex', [RECORDED_LINUX_APPS.chatgpt.windowClasses.x11, RECORDED_LINUX_APPS.chatgpt.windowClasses.wayland]],
   ['wezterm', ['org.wezfurlong.wezterm']],
   ['kitty', ['kitty']],
   ['ghostty', ['com.mitchellh.ghostty']],
@@ -113,7 +114,7 @@ describe('windowClasses', () => {
     for (const app of APP_IDS.filter((id) => !rows.has(id))) expect(windowClasses(app)).toEqual([])
   })
 
-  it.each(['codex', 'unknown', '', 'constructor', '__proto__', 'toString', 'Code', 'VSCODE'])(
+  it.each(['unknown', '', 'constructor', '__proto__', 'toString', 'Code', 'VSCODE'])(
     'an app with no row and an inherited key give none: %j', (app) => {
       expect(windowClasses(app)).toEqual([])
     })
