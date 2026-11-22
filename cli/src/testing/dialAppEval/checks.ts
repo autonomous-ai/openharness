@@ -464,10 +464,10 @@ const flagOf = (argv: string[], flag: string): string | undefined => {
 
 /**
  * An Orca row as the person sees it (docs/plans/2026-11-22-dial-eval-orca-plan.md, Decision 11): the last `worktree
- * activate` before the switch names its worktree (none ran passes), a `terminal switch` to its handle at this launch
- * succeeded, then a tap brings Orca forward, timed, and a rest does not; with no switch no part passes. Tier B on Linux
- * records no raise, so a tap there has no raise part. Evidence says what each command was and, for a switch, whose
- * handle it names.
+ * activate` before the switch names its worktree, as one must whenever Orca's last layout before the input lists that
+ * worktree (none ran passes only when none does), a `terminal switch` to its handle at this launch succeeded, then a tap
+ * brings Orca forward, timed, and a rest does not; with no switch no part passes. Tier B on Linux records no raise, so a
+ * tap there has no raise part. Evidence says what each command was and, for a switch, whose handle it names.
  */
 function orcaOpenParts(session: SessionDef, world: World, w: Window | undefined, tier: Tier, platform: Platform,
   commands: Seen['commands'], inputs: string[]): Part[] {
@@ -487,8 +487,15 @@ function orcaOpenParts(session: SessionDef, world: World, w: Window | undefined,
   const before = (i: number, j: number): boolean => i !== j && (tier === 'b' ? commands[i]!.at <= commands[j]!.at : i < j)
   const shown = switched < 0 ? undefined : commands.filter((c, i) => orcaRuns(c.argv, 'worktree', 'activate') && before(i, switched)).at(-1)
   const raised = switched < 0 ? undefined : commands.find((c, i) => raises(c) && before(switched, i))
-  const input = w ? world.seen.steps.filter((s) => within(s.at, w)).map((s) => world.scenario.steps[s.index]!)
-    .find((step) => (step.kind === 'tap' || step.kind === 'swipe') && step.session === session.key) : undefined
+  const made = w ? world.seen.steps.find((s) => {
+    const step = world.scenario.steps[s.index]!
+    return within(s.at, w) && (step.kind === 'tap' || step.kind === 'swipe') && step.session === session.key
+  }) : undefined
+  const input = made && world.scenario.steps[made.index]
+  // The product activates the worktree whenever its last read of Orca's layout lists it: the layout as the input was made.
+  const layout = w ? world.stepsBefore(made?.at ?? w.from)
+    .filter((s): s is StepOf<'orca.layout'> => s.kind === 'orca.layout').at(-1) : undefined
+  const laid = session.worktree !== undefined && layout?.worktrees.includes(session.worktree) === true
   const evidence = bounded([...inputs, ...commands.map((c) => {
     const to = target(c)
     const what = to !== undefined ? `switch ${owners.get(to) ?? 'other'}` : orcaRuns(c.argv, 'worktree', 'activate') ? 'worktree'
@@ -496,10 +503,10 @@ function orcaOpenParts(session: SessionDef, world: World, w: Window | undefined,
     return `command at ${c.at}: ${[what, !c.ok && 'failed'].filter(Boolean).join(' ') || 'other'}`
   }), ...(inputs.length > 0 && commands.length === 0 ? ['no command'] : []),
   ...(inputs.length > 0 && commands.length > 0 && switched < 0 ? ['no switch'] : [])])
+  const activated = shown !== undefined && flagOf(shown.argv, '--worktree') === `id:${orcaWorktreeId(session.worktree ?? '')}`
   // With no switch the pane was never shown: a dead input passes neither its worktree nor a rest's no raise.
   const parts: Part[] = [
-    { part: 'worktree', score: switched >= 0 && (shown === undefined
-      || flagOf(shown.argv, '--worktree') === `id:${orcaWorktreeId(session.worktree ?? '')}`) ? 1 : 0, timed: false, evidence },
+    { part: 'worktree', score: switched >= 0 && (activated || (shown === undefined && !laid)) ? 1 : 0, timed: false, evidence },
     { part: 'switch', score: switched < 0 ? 0 : 1, timed: false, evidence },
   ]
   if (input?.kind === 'swipe') parts.push({ part: 'noRaise', score: switched >= 0 && !commands.some(raises) ? 1 : 0, timed: false, evidence })
