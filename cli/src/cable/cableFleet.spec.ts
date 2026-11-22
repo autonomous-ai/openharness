@@ -1017,6 +1017,7 @@ describe('a Harness Pro that is silent from the moment its port opens', () => {
     constructor(readonly host: CableHost) { Quiet.made.push(this) }
     start() {}
     async stop() {}
+    focusRecorded() { return '' }
     petDial() { return { supported: false, held: [], sending: null, errors: {} } }
     silent() { this.host.onForeignPort?.('/dev/pro', 'silent') }
   }
@@ -1188,6 +1189,7 @@ describe('a port that never opened', () => {
     constructor(readonly host: CableHost) { Closed.made.push(this) }
     start() {}
     async stop() {}
+    focusRecorded() { return '' }
     petDial() { return { supported: false, held: [], sending: null, errors: {} } }
   }
   function setup() {
