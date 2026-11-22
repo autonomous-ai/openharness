@@ -309,10 +309,11 @@ export function orcaHandleOf(world: TierAWorld, key: SessionKey): string | undef
 }
 
 /** The live session whose open Orca pane has this handle and is its own terminal: a held one's is the terminal another
- *  program was started in, so what it is sent reaches no agent. */
+ *  program was started in, and a tmux one's runs tmux's client, so what either is sent reaches no agent. */
 export function keyOfOrcaHandle(world: TierAWorld, handle: string): SessionKey | undefined {
   for (const key of stateOf(world).live.keys()) {
-    if (!world.session(key).held && orcaHandleOf(world, key) === handle) return key
+    const s = world.session(key)
+    if (!s.held && !s.tmux && orcaHandleOf(world, key) === handle) return key
   }
   return undefined
 }

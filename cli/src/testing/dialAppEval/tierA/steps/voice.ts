@@ -25,9 +25,9 @@ function typedWords(argv: readonly string[]): { text: string; handle?: string } 
 
 /**
  * Each command that types words is a `typed` delivery. Of the terminals, tier A models Orca's panes alone: words sent to
- * one reach the session whose own pane it is (sessions.ts keyOfOrcaHandle). Any other, an Orca pane no session owns or a
- * held one, or another terminal's, is no session's: its target is none, which the gate counts as a wrong send. Answers
- * nothing, so the command is answered as before.
+ * one reach the session whose own pane it is (sessions.ts keyOfOrcaHandle). Any other, an Orca pane no session owns, a
+ * held one or a tmux one's, or another terminal's, is no session's: its target is none, which the gate counts as a wrong
+ * send. Answers nothing, so the command is answered as before.
  */
 export function recordTyping(world: TierAWorld): void {
   world.answer((argv) => {
