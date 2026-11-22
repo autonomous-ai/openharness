@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  composeNotice, isNoticeResult, NOTICE_HOUR_MS, noticeFolder, noticeKind, NoticeLimits, noticeLine,
+  composeNotice, isNoticeResult, NOTICE_HOUR_MS, noticeFolder, noticeKind, NoticeLimits, noticeLine, parseNotice,
 } from './dialNotice.js'
 
 const clock = () => {
@@ -24,6 +24,15 @@ describe('noticeLine', () => {
     const out = noticeLine('🙏'.repeat(200))
     expect(out).toBe(`${'🙏'.repeat(119)}…`)
     expect([...out].length).toBe(120)
+  })
+})
+
+describe('parseNotice', () => {
+  it('the words parse into the question, the suggestion, the state and --json', () => {
+    expect(parseNotice(['Which', 'DB?', '--suggest', ' Postgres ', '--proceeding', '--json']))
+      .toEqual({ question: 'Which DB?', suggest: ' Postgres ', state: 'proceeding', json: true })
+    expect(parseNotice(['Q', '--suggest'])).toEqual({ question: 'Q', json: false })
+    expect(parseNotice(['--waiting', '--proceeding', '-x', 'Q'])).toEqual({ question: '-x Q', state: 'waiting', json: false })
   })
 })
 

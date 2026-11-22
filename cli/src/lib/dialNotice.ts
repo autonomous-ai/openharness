@@ -1,6 +1,7 @@
 // An agent's notice to the dial: the one line it may show, and the limits on how often it may ring. Shared by the
 // `harness device notify` command, which cleans the line before sending, and the devices process, which cleans it
-// again (the line is data from outside) and counts it.
+// again (the line is data from outside) and counts it. The command's words are parsed here, with no imports, so the dial
+// skill eval reads an agent's flags exactly as the command does.
 
 export const NOTICE_MAX_CHARS = 120
 /** The bytes of a line the dial keeps whole: its drawer row cuts at 239, and a question of 256 or more reads "This
@@ -49,6 +50,27 @@ export function composeNotice(question: string, suggest?: string, state?: Notice
   const room = NOTICE_MAX_CHARS - [...fixed].length
   const bytes = NOTICE_LINE_MAX_BYTES - Buffer.byteLength(fixed)
   return `${row.opening}${fitQuestion(q, room, bytes)}${tail}`
+}
+
+export interface NoticeWords { question: string; suggest?: string; state?: NoticeState; json: boolean }
+
+/** [words]: what follows `harness device notify`. `--suggest` takes the next word whatever it is, so an agent's slip
+ *  (`--suggest --proceeding`) is still a ring; the last one decides. `--waiting` wins over `--proceeding`, the safer
+ *  word. Every other word, `-x` and `--suggest=x` too, is the question, joined by one space and not yet cleaned. */
+export function parseNotice(words: readonly string[]): NoticeWords {
+  const question: string[] = []
+  let suggest: string | undefined
+  let state: NoticeState | undefined
+  let json = false
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i]
+    if (word === '--suggest') suggest = words[++i]
+    else if (word === '--waiting') state = 'waiting'
+    else if (word === '--proceeding') state ??= 'proceeding'
+    else if (word === '--json') json = true
+    else question.push(word)
+  }
+  return { question: question.join(' '), suggest, state, json }
 }
 
 // The CLI fits the whole line, so the devices' byte cut never takes the suggestion off its end. The listener refuses a

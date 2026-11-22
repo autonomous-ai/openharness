@@ -3,7 +3,7 @@
  * by the command's own environment, and the devices' answer printed (docs/plans/2026-11-22-needs-you-notify-design.md). The devices are a spy: the listener's side is in services/devices.spec.ts.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { NOTICE_USAGE, noticeCaller, parseNotice, runNotice, type NoticeDeps } from './notice.js'
+import { NOTICE_USAGE, noticeCaller, runNotice, type NoticeDeps } from './notice.js'
 
 const CLAUDE = { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'sess-1' }
 
@@ -79,13 +79,6 @@ describe('harness device notify', () => {
     const asked = await notify(['Q', '--waiting', '--json'])
     expect(asked).toMatchObject({ code: 0, out: ['{"result":"shown"}'] })
     expect(asked.sent[0].text).toBe('Waiting · Q')
-  })
-
-  it('the words parse into the question, the suggestion, the state and --json', () => {
-    expect(parseNotice(['Which', 'DB?', '--suggest', ' Postgres ', '--proceeding', '--json']))
-      .toEqual({ question: 'Which DB?', suggest: ' Postgres ', state: 'proceeding', json: true })
-    expect(parseNotice(['Q', '--suggest'])).toEqual({ question: 'Q', json: false })
-    expect(parseNotice(['--waiting', '--proceeding', '-x', 'Q'])).toEqual({ question: '-x Q', state: 'waiting', json: false })
   })
 
   it('no text is the usage, and nothing is sent', async () => {

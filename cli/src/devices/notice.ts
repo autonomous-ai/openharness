@@ -6,7 +6,7 @@
  * `Proceeding · <q> · Doing: <s>` or `<q> · Suggest: <s>` (docs/plans/2026-11-22-needs-you-notify-design.md).
  */
 import { basename } from 'node:path'
-import { composeNotice, isNoticeResult, NOTICE_SESSION, noticeFolder, type NoticeAsk, type NoticeState } from '../lib/dialNotice.js'
+import { composeNotice, isNoticeResult, NOTICE_SESSION, noticeFolder, parseNotice, type NoticeAsk } from '../lib/dialNotice.js'
 import { askDevices } from './listenerClient.js'
 
 export const NOTICE_USAGE = 'harness device notify "<question>" [--suggest "<recommendation>"] [--waiting|--proceeding] [--json]  for an agent: ring the dial when it needs the person to decide or act'
@@ -37,27 +37,6 @@ export function noticeCaller(env: NodeJS.ProcessEnv, cwd: string): Pick<NoticeAs
   const folder = noticeFolder(basename(cwd))
   if (folder) caller.folder = folder
   return caller
-}
-
-export interface NoticeWords { question: string; suggest?: string; state?: NoticeState; json: boolean }
-
-/** [words]: what follows `notify`. `--suggest` takes the next word whatever it is, so an agent's slip
- *  (`--suggest --proceeding`) is still a ring; the last one decides. `--waiting` wins over `--proceeding`, the safer
- *  word. Every other word, `-x` and `--suggest=x` too, is the question, joined by one space and not yet cleaned. */
-export function parseNotice(words: readonly string[]): NoticeWords {
-  const question: string[] = []
-  let suggest: string | undefined
-  let state: NoticeState | undefined
-  let json = false
-  for (let i = 0; i < words.length; i++) {
-    const word = words[i]
-    if (word === '--suggest') suggest = words[++i]
-    else if (word === '--waiting') state = 'waiting'
-    else if (word === '--proceeding') state ??= 'proceeding'
-    else if (word === '--json') json = true
-    else question.push(word)
-  }
-  return { question: question.join(' '), suggest, state, json }
 }
 
 /** [words]: what follows `notify`. 0 with `shown`, `no dial` or `limited` on stdout; 1 with the usage when there is no text. */
