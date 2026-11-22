@@ -21,7 +21,7 @@ import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } 
 import type { Platform } from '../src/testing/dialAppEval/types.js'
 import { chatgptSteps } from './harness/appEvalChatgpt.js'
 import { claudeSteps } from './harness/appEvalClaude.js'
-import { inside, TierBDriver } from './harness/appEvalDriver.js'
+import { inside, orcaCliInside, TierBDriver } from './harness/appEvalDriver.js'
 import { cursorSteps, vscodeSteps } from './harness/appEvalEditor.js'
 
 const WIN32 = process.platform === 'win32'
@@ -49,6 +49,7 @@ describe.skipIf(WIN32)('the dial eval, tier B: the held-out set', () => {
     for (const path of [d.env.HOME, d.env.HARNESS_OPEN_BIN, d.env.HARNESS_VSCODE_BIN, d.env.HARNESS_CURSOR_BIN]) {
       expect(inside(d.root, path), path).toBe(true)
     }
+    expect(() => orcaCliInside(d.env, d.root, process.platform)).not.toThrow()
     expect(driver.networkReached()).toEqual([])
     expect(run.wrongSends).toEqual([])
     expect(uncaughtProbes(run)).toEqual([])

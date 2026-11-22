@@ -10,11 +10,20 @@ import type { Delivery, Scenario, Seen, SessionDef, SessionKey } from './dialApp
 // The dial eval's tier B Orca harness, the parts that need no daemon (docs/plans/2026-11-22-dial-eval-orca-design.md,
 // "Never the real Orca"). It is outside tsconfig's rootDir (src), so it is loaded untyped, as dialAppEvalTierB.spec.ts
 // loads the harness.
+/** What OrcaAgent.start reads of a daemon: its root, its environment and its projects folder. */
+type AgentDaemon = { root: string; projectsDir: string; env: NodeJS.ProcessEnv }
 const orca = await import('../../e2e/harness/appEvalOrca.js' as string) as {
   orcaEnv(d: { env: NodeJS.ProcessEnv }, s: SessionDef, hints: Record<string, string>): NodeJS.ProcessEnv
+  orcaHints(s: SessionDef, launch: number, platform: NodeJS.Platform, tmux?: Record<string, string>): Record<string, string>
+  OrcaAgent: {
+    start(d: AgentDaemon, children: ChildProcess[], s: SessionDef, hints: Record<string, string>): Promise<{
+      readonly pid: number; hook(event: 'start'): Promise<void>; close(): Promise<void>
+    }>
+  }
   startedWith(pid: number): string[]
   startOrcaPlugin(d: { root: string; env: NodeJS.ProcessEnv }, children: ChildProcess[]): { stop(): Promise<number | null> }
 }
+const { orcaHostCc } = await import('../../e2e/harness/orcaHost.js' as string) as { orcaHostCc: string | null }
 const inOrca = await import('../../e2e/harness/inOrca.js' as string) as { IN_ORCA: Record<string, string> }
 const plugin = await import('../../e2e/harness/pluginLoop.js' as string) as {
   pluginLoopEnv(d: { env: NodeJS.ProcessEnv }): NodeJS.ProcessEnv
@@ -77,6 +86,40 @@ describe("tier B's Orca agents' environment", () => {
       expect(workers(env)).toEqual([])
       expect(where(env)).toEqual({ ...where(d.env), ...inOrca.IN_ORCA, ORCA_AGENT_SESSION_ID: `eval-orca-${s.key}`, ...hints })
       expect(notDaemons(env, d.env)).toEqual([])
+    }
+  })
+})
+
+describe.skipIf(!orcaHostCc)("tier B's Orca agent whose hooks name no handle", () => {
+  it('a session whose hooks name no handle runs its hooks on its stand-in with no ORCA_TERMINAL_HANDLE', async () => {
+    for (const [name, value] of Object.entries(RUNNER)) vi.stubEnv(name, value)
+    dir = mkdtempSync(join(tmpdir(), 'tier-b-orca-agent-'))
+    const root = realpathSync(dir)
+    const home = join(root, 'home')
+    const said = join(root, 'hook.txt')
+    // Claude Code's settings as the daemon installs them: its start hook notes its environment, then its parent and tty.
+    mkdirSync(join(home, '.claude'), { recursive: true })
+    const command = `{ /usr/bin/env; echo; /bin/ps -o ppid= -o tty= -p $$; } > '${said}' # notify.mjs`
+    writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command }] }] } }))
+    const d: AgentDaemon = { root, projectsDir: join(root, 'projects'),
+      env: daemonEnvironment(process.env, { HOME: home, PATH: '/usr/bin:/bin', CLAUDE_PROJECTS_DIR: join(root, 'claude-projects') }) }
+    const s = session('b', { tab: 1, handle: 'none' })
+    const children: ChildProcess[] = []
+    try {
+      const agent = await orca.OrcaAgent.start(d, children, s, orca.orcaHints(s, 0, process.platform))
+      await agent.hook('start')
+      const [env, where] = readFileSync(said, 'utf8').split('\n\n')
+      const names = Object.fromEntries(env!.split('\n').filter(Boolean).map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]))
+      expect(names).not.toHaveProperty('ORCA_TERMINAL_HANDLE')
+      expect(names.ORCA_AGENT_SESSION_ID).toBe('eval-orca-b')
+      expect(workers(names)).toEqual([])
+      // Its runner, the stand-in's child on its pty, ran the hook.
+      const [ppid, tty] = where!.trim().split(/\s+/)
+      expect(Number(ppid)).toBe(agent.pid)
+      expect(['??', '?']).not.toContain(tty)
+      await agent.close()
+    } finally {
+      for (const child of children) child.kill('SIGKILL')
     }
   })
 })
