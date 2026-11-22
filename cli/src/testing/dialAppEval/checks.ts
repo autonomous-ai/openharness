@@ -662,7 +662,10 @@ function stateParts(check: CheckOf<'state'>, world: World, w: Window | undefined
 
 function voiceParts(check: CheckOf<'voice'>, world: World, w: Window | undefined): Part[] {
   const deliveries = w ? world.seen.deliveries.filter((d) => within(d.at, w)) : []
-  const mine = deliveries.filter((d) => d.target === check.session && (check.path === undefined || d.path === check.path))
+  const toSession = deliveries.filter((d) => d.target === check.session)
+  // Reached by the check's path alone; once counts the session's every delivery, so words that also came another way
+  // reached it twice.
+  const mine = toSession.filter((d) => check.path === undefined || d.path === check.path)
   const exact = mine.length > 0 && mine.every((d) => d.text === check.text)
   // What the dial was told of the voice (a refusal is a voice.error), so a voice that reached nobody says why.
   const told = w ? world.seen.frames.filter((f) => typeof f.message.t === 'string' && f.message.t.startsWith('voice.') && within(f.at, w)) : []
@@ -672,7 +675,7 @@ function voiceParts(check: CheckOf<'voice'>, world: World, w: Window | undefined
   ...(told.length > 0 && deliveries.length === 0 ? ['no delivery'] : [])])
   return [
     { part: 'reached', score: mine.length > 0 ? 1 : 0, timed: false, evidence },
-    { part: 'once', score: mine.length === 1 ? 1 : 0, timed: false, evidence },
+    { part: 'once', score: mine.length === 1 && toSession.length === 1 ? 1 : 0, timed: false, evidence },
     { part: 'exact', score: exact ? 1 : 0, timed: false, evidence },
   ]
 }

@@ -173,7 +173,7 @@ export type Check = { id: string; dim: Dimension; after?: Label; at?: Label } & 
   | { kind: 'still'; ms: number }
   | { kind: 'open'; session: SessionKey; link: boolean }
   | { kind: 'state'; session: SessionKey; state: 'working' | 'needs-you' | 'done' | 'idle' }
-  /** path: the words must reach the session by it; a delivery by another is not counted. */
+  /** path: the words must reach the session by it; one by another path does not reach it, and counts against once. */
   | { kind: 'voice'; session: SessionKey; text: string; path?: Delivery['path'] }
   | { kind: 'recap'; session: SessionKey; text: string }
   | { kind: 'cost' }
