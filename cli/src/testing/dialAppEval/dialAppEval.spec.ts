@@ -26,19 +26,8 @@ import { agentIdOf, orcaTerminalHandle, orcaWorktreeId, type Platform, type Scen
 const guard = await vi.hoisted(async () => (await import('./netGuard.js')).guardThisProcess())
 const { machine } = await vi.hoisted(async () => await import('./tierA/machine.js'))
 
-/** The processes started past the stand-ins. Each fails the case it happened in. */
-const reached = vi.hoisted(() => [] as string[])
-/** Every way to start a process, refused and noted. */
-const refused = vi.hoisted(() => async (real: () => Promise<Record<string, unknown>>) => {
-  const actual = await real()
-  const refuse = (name: string) => () => {
-    reached.push(name)
-    throw new Error(`tier A starts no process (${name})`)
-  }
-  const starts = Object.fromEntries(['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork']
-    .map((name) => [name, refuse(name)]))
-  return { ...actual, ...starts, default: { ...(actual.default as object), ...starts } }
-})
+// Every way to start a process, refused and noted: each one started past the stand-ins fails the case it happened in.
+const { reached, refused } = await vi.hoisted(async () => await import('./tierA/refuseProcesses.js'))
 vi.mock('node:child_process', refused)
 vi.mock('child_process', refused)
 // Each read is counted from its call to its end, so the clock moves on only once it lands (tierA/clock.ts).
