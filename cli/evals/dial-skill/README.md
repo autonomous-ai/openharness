@@ -121,4 +121,4 @@ The winning text changes only the trigger (`archive/before-needs-you/v1/change.p
 need them to do something you cannot" becomes "when the task stops on a step only they can take", its examples gain
 "get another person to sign off", and the body's first line asks to ring "before you hand it to them". The command
 line and the rules are unchanged. The full story, the before/after transcripts and what to try next:
-`flow/narrative.md`, written before the archive.
+`archive/before-needs-you/narrative.md`.
