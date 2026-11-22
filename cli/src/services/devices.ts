@@ -1804,8 +1804,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     source.setPaneNames('herdr', new Map(), placed)
     placedInHerdr = placed.size > 0
   }
-  // As cmux's: after each change of either, and herdr's source stopping drops its rows, and with them every place.
-  if (observed && herdr) {
+  // As cmux's: after each change of either, and herdr's source stopping drops its rows, and with them every place. None
+  // where the scan learns no app (Windows): there herdr's rows are as before.
+  if (observed && herdr && scanLearnsApps(apps.platform)) {
     const place = (): void => part.call('herdr', () => placeInHerdr(observed, herdr))
     observed.onChange(place)
     herdr.onChange(place)
