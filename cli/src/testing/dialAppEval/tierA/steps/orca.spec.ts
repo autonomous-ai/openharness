@@ -123,10 +123,18 @@ describe("tier A's Orca", () => {
       [[orca, 'terminal', 'switch', '--terminal', orcaTerminalHandle('a'), '--json'], true],
       [[orca, 'terminal', 'send', '--terminal', orcaTerminalHandle('a'), '--text=Eval words for alpha.', '--enter', '--wait-submit', '5', '--json'], true],
     ])
-    // Orca's account homes, should anything ask: none.
-    const homes = await readOrcaHomes({ ...deps.orca!, uid: 1,
+  })
+
+  it("account list names each Codex agent's own home, an Orca account's, and nothing else, as the devices' Orca homes do", async () => {
+    // b is the layout's one Codex with a home of its own; f's is the daemon's, no Orca account's.
+    const { world, deps } = worldOn('darwin', layout({ sessions: [...layout().sessions, orcaSession('f', { engine: 'codex', codexHome: undefined, tab: 3 })] }))
+    // Started, so its home is there, as an account's is.
+    await started(world, ['b', 'f'])
+    const home = join(world.folders.codexHomes, 'b')
+    const read = await readOrcaHomes({ ...deps.orca!, uid: process.getuid?.() ?? -1,
       run: async (file, args) => ({ ...await deps.orca!.run(file, args, 1_000), timedOut: false }) })
-    expect(homes).toEqual({ homes: { claude: [], codex: [] } })
+    expect(read).toEqual({ homes: { claude: [], codex: [home] } })
+    expect([deps.orcaHomes!.get(), deps.orcaHomes!.answered()]).toEqual([read.homes, true])
   })
 
   it('the CLI is found at the model\'s path on each platform, its accept never called, and exists true for HARNESS_ORCA_APP_BIN alone', () => {

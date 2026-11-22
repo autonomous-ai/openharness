@@ -5,7 +5,7 @@ import { join, relative } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { daemonEnvironment } from './daemonEnvironment.js'
 import { NET_GUARD_FILE_ENV, netGuardEnv, readNetGuard } from './dialAppEval/netGuard.js'
-import type { Delivery, Seen, SessionDef, SessionKey } from './dialAppEval/types.js'
+import type { Delivery, Scenario, Seen, SessionDef, SessionKey } from './dialAppEval/types.js'
 
 // The dial eval's tier B Orca harness, the parts that need no daemon (docs/plans/2026-11-22-dial-eval-orca-design.md,
 // "Never the real Orca"). It is outside tsconfig's rootDir (src), so it is loaded untyped, as dialAppEvalTierB.spec.ts
@@ -28,6 +28,8 @@ type OrcaRun = { argv: string[]; ok: boolean; at: number }
 const driver = await import('../../e2e/harness/appEvalDriver.js' as string) as {
   orcaDeliveries(runs: readonly OrcaRun[], ownerOf: (handle: string, at: number) => SessionKey | undefined): Delivery[]
   orcaCommands(runs: readonly OrcaRun[], projects: readonly string[]): Seen['commands']
+  orcaAccounts(scenario: Pick<Scenario, 'sessions'>): SessionKey[]
+  orcaAccountHome(root: string, key: SessionKey): string
 }
 
 /** This worker's own names, as a run inside Orca, in a tmux pane of its terminal, has them: made up, and none may reach
@@ -76,6 +78,19 @@ describe("tier B's Orca agents' environment", () => {
       expect(where(env)).toEqual({ ...where(d.env), ...inOrca.IN_ORCA, ORCA_AGENT_SESSION_ID: `eval-orca-${s.key}`, ...hints })
       expect(notDaemons(env, d.env)).toEqual([])
     }
+  })
+})
+
+describe("tier B's Orca accounts", () => {
+  it("the daemon's Orca lists a home for each Orca Codex agent with one of its own, inside the daemon's root, and nothing else", () => {
+    const sessions: SessionDef[] = [
+      session('a'), session('b', { engine: 'codex', codexHome: 'own' }), session('c', { engine: 'codex' }),
+      { ...session('d', { engine: 'codex', codexHome: 'own' }), app: 'vscode' }, session('e', { engine: 'codex', codexHome: 'own' }),
+    ]
+    // Claude Code, a Codex in the daemon's own home, and another app's Codex are no Orca account's.
+    expect(driver.orcaAccounts({ sessions })).toEqual(['b', 'e'])
+    expect(relative('/tmp/eval-root', driver.orcaAccountHome('/tmp/eval-root', 'b')).startsWith('..')).toBe(false)
+    expect(driver.orcaAccountHome('/tmp/eval-root', 'b')).not.toBe(driver.orcaAccountHome('/tmp/eval-root', 'e'))
   })
 })
 
