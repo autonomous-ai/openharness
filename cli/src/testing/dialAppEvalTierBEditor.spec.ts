@@ -1,3 +1,5 @@
+import { spawn } from 'node:child_process'
+import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
 import { APP_BUNDLES } from '../cable/hosts/hostDetect.js'
 import { MAIN } from './dialAppEval/catalog.js'
@@ -14,6 +16,37 @@ const cursor = await import('../../e2e/harness/cursorOutside.js' as string) as {
   hookRun(codexLine: string, env: NodeJS.ProcessEnv, hints: Record<string, string>, event: string,
     session: { sessionId: string; roots: string[]; transcriptPath: string }): { command: string; env: NodeJS.ProcessEnv; input: string }
 }
+
+type HookRun = (command: string, env: NodeJS.ProcessEnv, input: string) => Promise<{ code: number | null; stderr: string }>
+const outside = await import('../../e2e/harness/outsideAgent.js' as string) as {
+  HOOK_RUNNER: string
+  hookRuns(answers: NodeJS.ReadableStream, requests: NodeJS.WritableStream, cwd: string, what: string): HookRun
+}
+
+describe("tier B's agents' own hook runner", () => {
+  const runner = () => spawn(process.execPath, ['-e', outside.HOOK_RUNNER], { stdio: ['pipe', 'pipe', 'ignore'] })
+  const env = { PATH: process.env.PATH }
+
+  it('runs hooks asked at once one at a time, each answered with its own exit and stderr', async () => {
+    const own = runner()
+    try {
+      const run = outside.hookRuns(own.stdout, own.stdin, tmpdir(), 'eval')
+      // The first ends last: were both run at once, its answer would go to the second's caller.
+      const [slow, quick] = await Promise.all([run('sleep 0.2; echo slow >&2; exit 3', env, ''), run('cat >&2', env, 'quick')])
+      expect(slow).toEqual({ code: 3, stderr: 'slow\n' })
+      expect(quick).toEqual({ code: 0, stderr: 'quick' })
+    } finally {
+      own.kill('SIGKILL')
+    }
+  })
+
+  it('fails a hook its runner ended before, naming whose', async () => {
+    const own = runner()
+    const run = outside.hookRuns(own.stdout, own.stdin, tmpdir(), "eval's agent")
+    own.kill('SIGKILL')
+    await expect(run('exit 0', env, '')).rejects.toThrow("eval's agent")
+  })
+})
 
 describe("tier B's editor windows", () => {
   it("the window's printed lines become stream records: a show with the raise after it folded in, each scrolled line for the active terminal, each page key as a scroll for its shell, each state taken, shells by key", () => {
