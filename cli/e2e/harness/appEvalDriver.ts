@@ -58,6 +58,9 @@ const VOICE_PCM = Buffer.alloc(3_200, 1)
  *  the devices to drop the last scenario's rows, at their 30 s look at the latest (deskEmpty). */
 const START_WITHIN_MS = 45_000
 const CHILD_END_MS = 5_000
+/** For an app's own end as its world stops (TierBWorld.onStop): Orca's quit ends each of its agents, 32 at once in O3,
+ *  each a hook's run, which on a slow runner takes longer than a child's end may. */
+const APP_END_MS = 30_000
 /** The end of the watch's stderr a failure says. */
 const STDERR_KEPT = 2_000
 /** The devices take a Claude session whose mod poll closed this long ago for one whose next poll is coming
@@ -96,6 +99,9 @@ export interface TierBWorld {
   folder(path: string): string
   /** Ended at stop. */
   readonly children: ChildProcess[]
+  /** [end] runs at stop, before the children end, for at most APP_END_MS: one that throws or takes longer fails the stop
+   *  once, naming [what], and what it does after is dropped. */
+  onStop(what: string, end: () => Promise<void>): void
   /** Orca's CLI, as `orca` and `orca-ide`: the fake. */
   readonly orca: FakeOrca
   /** The session's own Orca pane opened on [handle] now, or closed (null): what a `terminal send` types to a handle
@@ -498,6 +504,7 @@ export class World implements TierBWorld {
   private watch: ChildProcess | undefined
   private waiting: Array<() => void> = []
   private readonly openers: Array<(run: OpenRun) => void> = []
+  private readonly stops: Array<{ what: string; end: () => Promise<void> }> = []
   /** Stopped: what a fake app says after it reaches no watch. */
   private closed = false
   /** The first failure a fake app had, not yet thrown. */
@@ -530,6 +537,7 @@ export class World implements TierBWorld {
   deliver(d: Omit<Delivery, 'at'>, at = Date.now()): void { this.deliveries.push({ at, ...d }) }
   gap(reason: string): void { this.gaps.push(reason) }
   onOpen(listener: (run: OpenRun) => void): void { this.openers.push(listener) }
+  onStop(what: string, end: () => Promise<void>): void { this.stops.push({ what, end }) }
   modPolled(sessionId: string): void { this.rig.polled.set(sessionId, Date.now()) }
   fail(error: unknown): void { this.failure ??= { error } }
   get failing(): boolean { return this.failure !== undefined }
@@ -658,12 +666,20 @@ export class World implements TierBWorld {
       ...(this.cost ? { cost: this.cost } : {}) }
   }
 
-  /** The last read, and every child ended: one that fails to end is thrown once the others are. */
+  /** The last read, each app's own end (onStop), then every child ended: one that fails is thrown once the others are. */
   async close(): Promise<void> {
     clearInterval(this.refreshing)
     this.read()
     this.closed = true
     let failed: { error: unknown } | undefined
+    for (const { what, end } of this.stops.splice(0)) {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const late = new Promise<never>((_, fail) => {
+        timer = setTimeout(() => fail(new Error(`${what} did not end within ${APP_END_MS / 1000} s`)), APP_END_MS)
+      })
+      // The race holds the end's own outcome: one that settles after the bound reaches no one.
+      try { await Promise.race([end(), late]) } catch (error) { failed ??= { error } } finally { clearTimeout(timer) }
+    }
     for (const child of this.children) {
       try { await end(child) } catch (error) { failed ??= { error } }
     }

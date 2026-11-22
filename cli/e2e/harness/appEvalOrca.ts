@@ -183,40 +183,39 @@ interface State {
 const states = new WeakMap<TierBWorld, State>()
 
 /**
- * Orca, running: made at its first step, its own process with it, which, ended, ends each agent first, as Orca's quit
- * does (Claude Code's SessionEnd, then its stand-in), then its watches, and only then goes; the driver's end of its
- * children waits for that. Killed, its agents' stand-ins go with the driver's other children, and each mod's poll, tmux
- * session and watch at once.
+ * Orca, running: made at its first step, its own process with it. As the world stops it quits: each agent ends, as
+ * Orca's quit ends them (Claude Code's SessionEnd, then its stand-in), then its watches, in a step of its own before the
+ * driver ends its children (TierBWorld.onStop), as 32 agents' ends take longer than a child's end may. Its process
+ * ended, what is left goes at once: each mod's poll, tmux session and watch; its agents' stand-ins go with the driver's
+ * other children.
  */
 function orcaOf(world: TierBWorld): State {
   const known = states.get(world)
   if (known) return known
   const state: State = { live: new Map(), launches: new Map() }
   states.set(world, state)
+  world.onStop("Orca's agents", () => endAll(world, state))
   // Only Orca's lifetime: what it does is in this file.
   const child = spawn(process.execPath, ['-e', 'process.stdin.resume()'], { cwd: world.d.root, env: world.d.env, stdio: ['pipe', 'ignore', 'ignore'] })
   world.children.push(child)
   const kill = child.kill.bind(child)
-  let ending: Promise<void> | undefined
   child.kill = (signal?: NodeJS.Signals | number) => {
-    if (signal === 'SIGKILL') {
-      for (const live of state.live.values()) {
-        live.mod?.abort()
-        if (live.tmux) killTmux(world, live.tmux)
-      }
-      state.live.clear()
-      world.orca.endWatch()
-      return kill('SIGKILL')
+    for (const live of state.live.values()) {
+      live.mod?.abort()
+      if (live.tmux) killTmux(world, live.tmux)
     }
-    ending ??= Promise.allSettled([...state.live.keys()].map((key) => endAgent(world, state, key, 'end')))
-      .then((ended) => {
-        for (const one of ended) if (one.status === 'rejected') world.fail(one.reason)
-        world.orca.endWatch()
-        kill('SIGKILL')
-      })
-    return true
+    state.live.clear()
+    world.orca.endWatch()
+    return kill(signal)
   }
   return state
+}
+
+/** Each running agent ends at once, as Orca's quit ends them, then its watches: one that failed to end is thrown. */
+async function endAll(world: TierBWorld, state: State): Promise<void> {
+  const ended = await Promise.allSettled([...state.live.keys()].map((key) => endAgent(world, state, key, 'end')))
+  for (const one of ended) if (one.status === 'rejected') throw one.reason
+  world.orca.endWatch()
 }
 
 /** The handle of the session's pane while its agent runs, at its current launch. */
@@ -383,9 +382,7 @@ export const orcaSteps: AppSteps = {
     orcaNamed(world, step.app)
     const state = orcaOf(world)
     const sessions = [...state.live.keys()]
-    const ended = await Promise.allSettled(sessions.map((key) => endAgent(world, state, key, 'end')))
-    for (const one of ended) if (one.status === 'rejected') throw one.reason
-    world.orca.endWatch()
+    await endAll(world, state)
     const plugin = state.plugin !== undefined
     if (plugin) await stopPlugin(world, state)
     state.quit = { sessions, plugin }

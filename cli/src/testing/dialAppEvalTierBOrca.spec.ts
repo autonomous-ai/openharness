@@ -140,7 +140,7 @@ describe.skipIf(process.platform === 'win32')("tier B's Orca agent in the person
     const children: ChildProcess[] = []
     const world = {
       d: { root, env, tmux: { socket, env, run: async (verb: string) => (verb === 'new-session' ? '%7' : `${socket},4242,$3`) } },
-      children, platform: process.platform, orca: { endWatch: () => {} },
+      children, platform: process.platform, orca: { endWatch: () => {} }, onStop: () => {},
       scenario: { id: 'T', app: 'orca', sessions: [s], steps: [], checks: [], probes: [] },
       session: () => s, folder: () => root,
     }
