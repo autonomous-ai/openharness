@@ -103,7 +103,25 @@ export interface ScannedAppDeps {
   roots: readonly string[]
   processes(): Promise<readonly ProcessName[]>
   bundleId(bundle: string): Promise<string | undefined>
+  /** The home whose iTerm2 folders hold iTerm2's server; homedir() when absent. */
+  home?: string
 }
+
+const ITERM_SERVER = /^iTermServer-[0-9][0-9A-Za-z.-]{0,31}$/
+
+/** Whether a process is iTerm2's server, by its path or its name alone. iTerm2 copies the server out of its bundle to
+ *  `iTermServer-<version>` in one of these folders and forks every shell from it; the copy outlives iTerm2 when it
+ *  relaunches with its sessions kept, under launchd then (iTerm2's iTermServerDeleter.swift). So a tab may have no
+ *  `.app` among its parents. Unmeasured: the form comes from iTerm2's source. */
+function isItermServer(executable: string, home: string): boolean {
+  const at = executable.lastIndexOf('/')
+  const folder = executable.slice(0, at + 1)
+  return ITERM_SERVER.test(executable.slice(at + 1))
+    && (folder === '' || folder === `${home}/Library/Application Support/iTerm2/` || folder === `${home}/.iterm2/`)
+}
+
+/** A step of a macOS walk: a bundle whose id names its app, or the app a fixed row names. */
+type Step = { bundle: string } | { app: string }
 
 /** A listed app, never the unknown one: the scan does not answer "Other", it leaves the session to its first hook. */
 const listed = (app: string): boolean => app !== UNKNOWN_APP && APP_IDS.includes(app)
@@ -126,23 +144,29 @@ export async function scannedApps(pids: readonly number[], deps: ScannedAppDeps)
     }
     return apps
   }
-  const bundles = walks.map(([pid, names]) => [pid, names.flatMap((name) => bundleOf(name, deps.roots) ?? [])] as const)
+  const home = deps.home ?? homedir()
+  const steps = walks.map(([pid, names]) => [pid, names.flatMap((name): Step[] => {
+    if (isItermServer(name, home)) return [{ app: 'iterm' }]
+    const bundle = bundleOf(name, deps.roots)
+    return bundle ? [{ bundle }] : []
+  })] as const)
   // Each bundle once a pass, all together, and a bounded number of them: a bundle past that is not read.
-  const read = [...new Set(bundles.flatMap(([, of]) => of))].slice(0, BUNDLES_A_PASS)
+  const read = [...new Set(steps.flatMap(([, of]) => of.flatMap((step) => ('bundle' in step ? [step.bundle] : []))))].slice(0, BUNDLES_A_PASS)
   const ids = new Map(await Promise.all(read.map(async (bundle) => [bundle, await deps.bundleId(bundle).catch(() => undefined)] as const)))
-  for (const [pid, of] of bundles) {
+  for (const [pid, of] of steps) {
     const app = nearestApp(of, ids)
     if (app) apps.set(pid, app)
   }
   return apps
 }
 
-/** The nearest listed app of a walk's bundles. A bundle with no id (not read this pass, or unreadable) ends the walk
+/** The nearest listed app of a walk's steps. A bundle with no id (not read this pass, or unreadable) ends the walk
  *  with none: it may be the session's own app, and an outer one would be a guess. One read but no table lists is
  *  passed over: a helper or an engine of its own. */
-function nearestApp(bundles: readonly string[], ids: ReadonlyMap<string, string | undefined>): string | undefined {
-  for (const bundle of bundles) {
-    const id = ids.get(bundle)
+function nearestApp(steps: readonly Step[], ids: ReadonlyMap<string, string | undefined>): string | undefined {
+  for (const step of steps) {
+    if ('app' in step) return step.app
+    const id = ids.get(step.bundle)
     if (!id) return undefined
     const app = frontAppId(id)
     if (listed(app)) return app
