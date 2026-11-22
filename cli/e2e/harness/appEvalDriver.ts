@@ -352,7 +352,7 @@ export function tierBGaps(scenario: Scenario, platform: Platform): string[] {
   const raised = ({ s, after }: (typeof opened)[number]): boolean =>
     placeOf(s) === 'terminal' && !(s.app === 'cursor' && windowClosed(scenario, s, after))
   return [
-    ...opened.some(({ s }) => failing.includes(s.app)) ? ["a failed link's app comes by Linux's raise, which tier B does not record"] : [],
+    ...opened.some(({ s }) => failing.some((app) => app === s.app)) ? ["a failed link's app comes by Linux's raise, which tier B does not record"] : [],
     ...opened.some(raised) ? ["an editor terminal's tap brings its editor by Linux's raise, which tier B does not record"] : [],
   ]
 }
