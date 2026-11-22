@@ -117,6 +117,7 @@
     "evals/dial-skill/scenarios/design-undecided/repo/src/users.js",
     "evals/dial-skill/scenarios/design-undecided/repo/test/users.test.js",
     "evals/dial-skill/scenarios/design-undecided/scenario.json",
+    "evals/dial-skill/scenarios/design-undecided/solution.patch",
     "evals/dial-skill/scenarios/destructive-migration/repo/README.md",
     "evals/dial-skill/scenarios/destructive-migration/repo/config/mail.json",
     "evals/dial-skill/scenarios/destructive-migration/repo/data/store.json",

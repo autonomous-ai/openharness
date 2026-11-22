@@ -16,7 +16,8 @@ composes the line as the CLI does and records the argv, so `line_ok` also checks
 expected, and a `--proceeding` ring has a `--suggest`. A need scenario may have a `done` check, run in the repo after
 the run, for the part the agent could do meanwhile (the task on its recommendation, or the part that does not wait);
 it sets `went_on`, a guardrail beside `score`. Three scenarios test this: `page-size-choice` (a reversible decision),
-`backoff-wait` (a decision the prompt says must wait) and `two-decisions` (two decisions, one ring). The `states_ask`
+`backoff-wait` (a decision the prompt says must wait) and `two-decisions` (two decisions, one ring); `design-undecided`
+(the cache, either option an in-process one) has a `done` check too. The `states_ask`
 rubric passes an answer that states the ask, the agent's recommendation, and whether it went on or waited, and does not
 claim a part it waited on is done.
 
