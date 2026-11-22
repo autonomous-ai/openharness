@@ -13,6 +13,8 @@ import { type Delivery, Inbox } from './inbox.js'
 import { askedLine, countWord, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps, type PromptSource } from './observed.js'
 import type { OpenTarget } from './open.js'
 import { createOrcaAdapter, MAX_TEXT, type OrcaDeps } from './orca.js'
+import type { Nested, NestedPlace } from './outer.js'
+import type { ProcessName } from './scannedApp.js'
 import { createTabsAdapter, type TabApp } from './tabs.js'
 import { createTmuxAdapter } from './tmux.js'
 import type { HostAgent, PaneSwitch, TypeResult } from './types.js'
@@ -942,7 +944,7 @@ describe('ObservedSource and the app the scan learns', () => {
     found(s, 'a', 11)
     found(s, 'b', 12)
     await s.src.scanOpen()
-    expect(s.logs).toEqual(['[observed] scan · 2 found · 1 app known · 0 named · 0 answered · 7 ms'])
+    expect(s.logs).toEqual(['[observed] scan · 2 found · 1 app known · 0 named · 0 answered · 7 ms · 0 nested placed'])
     for (const word of ['ghostty', 'terminal', '11', '12', '/x/', '/t/']) expect(s.logs.join('\n')).not.toContain(word)
   })
 
@@ -1118,7 +1120,7 @@ describe('ObservedSource and the name in a session\'s own record', () => {
     found(s, 'a', 11)
     await s.src.scanOpen()
     expect(s.src.list()[0].name).toBe('a')
-    expect(s.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 0 answered · 0 ms'])
+    expect(s.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 0 answered · 0 ms · 0 nested placed'])
     expect(s.logs.join('\n')).not.toContain('someone')
   })
 
@@ -1181,7 +1183,7 @@ describe('ObservedSource and the name in a session\'s own record', () => {
     found(s, 'a', 11)
     found(s, 'b', 12)
     await s.src.scanOpen()
-    expect(s.logs).toEqual(['[observed] scan · 2 found · 0 app known · 1 named · 0 answered · 0 ms'])
+    expect(s.logs).toEqual(['[observed] scan · 2 found · 0 app known · 1 named · 0 answered · 0 ms · 0 nested placed'])
   })
 
   it('with no reader the scan names by folder', async () => {
@@ -1189,7 +1191,7 @@ describe('ObservedSource and the name in a session\'s own record', () => {
     found(s, 'a', 11)
     await s.src.scanOpen()
     expect(s.src.list()[0].name).toBe('a')
-    expect(s.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 0 answered · 0 ms'])
+    expect(s.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 0 answered · 0 ms · 0 nested placed'])
   })
 })
 
@@ -1257,7 +1259,7 @@ describe('ObservedSource and the last answer the scan reads', () => {
     found(s, 'a', 11)
     await s.src.scanOpen()
     expect(s.src.list().map((a) => [a.sessionId, a.state, a.lastAnswer])).toEqual([['a', 'idle', undefined]])
-    expect(s.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 0 answered · 0 ms'])
+    expect(s.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 0 answered · 0 ms · 0 nested placed'])
     expect(s.logs.join('\n')).not.toContain('someone')
   })
 
@@ -1272,7 +1274,7 @@ describe('ObservedSource and the last answer the scan reads', () => {
     await s.src.scanOpen()
     expect(lastAnswer.mock.calls).toEqual([['claude', '/t/b.jsonl']])
     expect(s.src.list().map((a) => [a.sessionId, a.state, a.lastAnswer])).toEqual([['a', 'working', undefined], ['b', 'idle', 'answer of /t/b.jsonl']])
-    expect(s.logs).toEqual(['[observed] scan · 2 found · 0 app known · 0 named · 1 answered · 0 ms'])
+    expect(s.logs).toEqual(['[observed] scan · 2 found · 0 app known · 0 named · 1 answered · 0 ms · 0 nested placed'])
   })
 
   it('a hook heard while the answers are read wins', async () => {
@@ -1359,7 +1361,7 @@ describe('ObservedSource and the last answer the scan reads', () => {
     found(s, 'b', 12)
     await s.src.scanOpen()
     // 7 for the apps, 5 for each name, 3 for each busy check and 2 for each answer.
-    expect(s.logs).toEqual(['[observed] scan · 2 found · 1 app known · 1 named · 1 answered · 27 ms'])
+    expect(s.logs).toEqual(['[observed] scan · 2 found · 1 app known · 1 named · 1 answered · 27 ms · 0 nested placed'])
     for (const word of ['Done', '/t/', 'Tho', '7f3a91c2']) expect(s.logs.join('\n')).not.toContain(word)
   })
 })
@@ -2071,7 +2073,7 @@ describe('ObservedSource and the Herdr terminal a session the scan found runs in
     expect(agent).toMatchObject({ host: 'herdr', app: 'herdr', paneKeys: ['herdr-app:t7'], state: 'idle', lastAnswer: 'Done' })
     expect(agent).not.toHaveProperty('appPending')
     expect(s.changes).toHaveBeenCalledTimes(1)
-    expect(s.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 1 answered · 0 ms', '[observed] herdr · 1 paired'])
+    expect(s.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 1 answered · 0 ms · 0 nested placed', '[observed] herdr · 1 paired'])
     const h = hooked(inT7)
     const [twin] = h.src.list()
     expect(placeOf(agent)).toEqual(placeOf(twin))
@@ -2218,7 +2220,7 @@ describe('ObservedSource and the Herdr terminal a session the scan found runs in
     found(s, 'b', 12)
     s.terminals.set(11, 't7').set(12, 't8')
     await s.src.scanOpen()
-    expect(s.logs).toEqual(['[observed] scan · 2 found · 0 app known · 1 named · 2 answered · 0 ms', '[observed] herdr · 2 paired'])
+    expect(s.logs).toEqual(['[observed] scan · 2 found · 0 app known · 1 named · 2 answered · 0 ms · 0 nested placed', '[observed] herdr · 2 paired'])
     const said = s.logs.join('\n')
     for (const word of ['t7', 't8', '11', '12', ...s.src.list().map((a) => a.name)]) expect(said).not.toMatch(new RegExp(`\\b${word}\\b`))
   })
@@ -2337,7 +2339,7 @@ describe('ObservedSource and a Claude app session the scan found (docs/plans/202
 
   it('the scan\'s line is unchanged and no line holds the id', async () => {
     const t = await scanned()
-    expect(t.logs).toEqual(['[observed] scan · 1 found · 1 app known · 0 named · 0 answered · 0 ms'])
+    expect(t.logs).toEqual(['[observed] scan · 1 found · 1 app known · 0 named · 0 answered · 0 ms · 0 nested placed'])
     expect(t.logs.join('\n')).not.toContain('local_')
   })
 })
@@ -4674,6 +4676,253 @@ describe('ObservedSource outer place', () => {
     expect(t.actions.open.mock.calls).toEqual([[t.agent().id, { bundle: 'com.apple.Terminal', pane: { adapter: 'tmux', id: '%3:100:terminal-app' } }]])
     expect(t.actions.tabSelect.mock.calls).toEqual([['terminal-app', '/dev/ttys004', true]])
     expect(t.actions.open.mock.invocationCallOrder[0]).toBeLessThan(t.actions.tabSelect.mock.invocationCallOrder[0])
+  })
+})
+
+// Diego, 2026-11-22: after the devices started again, his idle agents in tmux and in herdr inside iTerm2 sat on Other's
+// page until each was next hooked. The scan asks each multiplexer's lookup by process (outer.ts NestedLookup).
+describe('ObservedSource and a nested session the scan found', () => {
+  /** The look's process table: the scan hands it on, and never reads it itself. */
+  const ROWS: readonly ProcessName[] = [
+    { pid: 100, ppid: 90, executable: 'claude' }, { pid: 90, ppid: 80, executable: 'zsh' }, { pid: 80, ppid: 1, executable: 'tmux' },
+  ]
+  const IN_TMUX = { host: 'tmux', maker: 80, tty: 'ttys010' }
+  const IN_HERDR = { host: 'herdr', maker: 180, tty: 'ttys020' }
+  const ITERM = { app: 'iterm', tty: '/dev/ttys004', pid: 4300 }
+
+  /** A source whose look reads one table, whose makers name [made], with the real tabs adapter, a walk that names no
+   *  app, and a tty read that answers at once; its nested lookups the test answers by hand, in the order asked. */
+  function scan(made: ReadonlyMap<number, Omit<Nested, 'pid' | 'rows'>>, deps: Partial<ObservedDeps> = {}) {
+    const table = vi.fn(async () => ROWS)
+    const apps = vi.fn(async (_pids: readonly number[], _rows?: readonly ProcessName[]): Promise<ReadonlyMap<number, string>> => new Map())
+    const madeBy = vi.fn(async (pids: readonly number[], _rows: readonly ProcessName[]) =>
+      new Map(pids.flatMap((pid) => (made.has(pid) ? [[pid, made.get(pid)!] as const] : []))))
+    const asks: Array<(place: NestedPlace) => void> = []
+    const nested = vi.fn((_found: Nested) => new Promise<NestedPlace>((resolve) => { asks.push(resolve) }))
+    const tty = vi.fn(async (_pid: number): Promise<string | undefined> => '/dev/ttys031')
+    const { actions } = fakeActions()
+    const s = setup({ actions, table, apps, madeBy, nested, tty, ...deps })
+    /** A session found open in a terminal, idle, its owner [pid]. */
+    const found = (sessionId: string, pid: number): void => {
+      s.open.set(sessionId, 'terminal')
+      s.owners.set(sessionId, { pid, engine: 'claude' })
+      s.externals.set(sessionId, { cwd: `/x/${sessionId}`, transcriptPath: `/t/${sessionId}.jsonl` })
+      s.working.set(sessionId, false)
+    }
+    /** Answers the [i]th lookup once it is asked, and lets its answer land. */
+    const answer = async (i: number, place: NestedPlace): Promise<void> => {
+      await vi.waitFor(() => expect(asks.length).toBeGreaterThan(i))
+      asks[i](place)
+      await flushed()
+    }
+    const agent = (sessionId: string) => s.src.list().find((a) => a.sessionId === sessionId)!
+    return { ...s, actions, table, apps, madeBy, nested, tty, found, answer, agent }
+  }
+
+  it('the devices start again with a tmux and a herdr agent idle: the scan puts each on its client\'s app with its tab, known, not on Other\'s page', async () => {
+    const t = scan(new Map([[100, IN_TMUX], [200, IN_HERDR]]))
+    t.found('a', 100)
+    t.found('b', 200)
+    const look = t.src.scanOpen()
+    await t.answer(0, ITERM)
+    await t.answer(1, { app: 'iterm', tty: '/dev/ttys005', pid: 4400 })
+    await look
+    expect(t.nested.mock.calls).toEqual([[{ ...IN_TMUX, pid: 100, rows: ROWS }], [{ ...IN_HERDR, pid: 200, rows: ROWS }]])
+    for (const [sessionId, tty, pid] of [['a', '/dev/ttys004', 4300], ['b', '/dev/ttys005', 4400]] as const) {
+      const { id } = t.agent(sessionId)
+      expect(t.agent(sessionId)).toMatchObject({ app: 'iterm' })
+      expect(t.agent(sessionId)).not.toHaveProperty('appPending')
+      expect(t.src.paneOf(id, 'tabs')).toBe(`iterm:${tty}`)
+      expect(t.src.windowOf(id)).toEqual({ pid, app: 'iterm' })
+      expect(await t.src.focus(t.agent(sessionId))).toBe(true)
+      expect(t.actions.open.mock.calls.at(-1)).toEqual([id, { bundle: 'com.googlecode.iterm2' }])
+      expect(t.actions.tabSelect.mock.calls.at(-1)).toEqual(['iterm', tty, true])
+    }
+    // Their tty is the multiplexer pane's pty, which no tab holds.
+    expect(t.tty).not.toHaveBeenCalled()
+    expect(t.logs).toEqual(['[observed] scan · 2 found · 0 app known · 0 named · 0 answered · 0 ms · 2 nested placed'])
+  })
+
+  it('a look reads the table once for its walk, its makers and its lookups', async () => {
+    const pids = Array.from({ length: 50 }, (_, i) => 100 + i)
+    const t = scan(new Map(pids.map((pid) => [pid, IN_TMUX])))
+    for (const pid of pids) t.found(`s${pid}`, pid)
+    const look = t.src.scanOpen()
+    for (const i of pids.keys()) await t.answer(i, {})
+    await look
+    expect(t.table).toHaveBeenCalledTimes(1)
+    expect(t.apps.mock.calls).toEqual([[pids, ROWS]])
+    expect(t.apps.mock.calls[0][1]).toBe(ROWS)
+    expect(t.madeBy.mock.calls).toEqual([[pids, ROWS]])
+    expect(t.madeBy.mock.calls[0][1]).toBe(ROWS)
+    expect(t.nested).toHaveBeenCalledTimes(50)
+    for (const [found] of t.nested.mock.calls) expect(found.rows).toBe(ROWS)
+  })
+
+  it('a look asks its nested lookups one at a time, once its sessions are listed, and says its line once they settled', async () => {
+    const t = scan(new Map([[100, IN_TMUX], [200, IN_HERDR]]))
+    t.found('a', 100)
+    t.found('b', 200)
+    const look = t.src.scanOpen()
+    await vi.waitFor(() => expect(t.nested).toHaveBeenCalledTimes(1))
+    await flushed()
+    expect(t.nested).toHaveBeenCalledTimes(1)
+    expect(t.src.list()).toHaveLength(2)
+    expect(t.changes).toHaveBeenCalledTimes(1)
+    expect(t.logs).toEqual([])
+    await t.answer(0, {})
+    expect(t.nested).toHaveBeenCalledTimes(2)
+    expect(t.logs).toEqual([])
+    await t.answer(1, {})
+    await look
+    expect(t.logs).toHaveLength(1)
+  })
+
+  it('a nested session never has its own tty read, even when the walk named a tab app', async () => {
+    // herdr's server is a child of its first client, whose app the walk names: not the one the person uses now.
+    const t = scan(new Map([[200, IN_HERDR]]), { apps: async () => new Map([[200, 'terminal-app'], [300, 'ghostty']]) })
+    t.found('b', 200)
+    t.found('c', 300)
+    const look = t.src.scanOpen()
+    await t.answer(0, {})
+    await look
+    expect(t.tty.mock.calls).toEqual([[300]])
+    expect(t.src.paneOf(t.agent('b').id, 'tabs')).toBeUndefined()
+    expect(t.src.paneOf(t.agent('c').id, 'tabs')).toBe('ghostty:/dev/ttys031')
+  })
+
+  it('an answer after a hook, or for a session gone, is dropped; a session hooked before its turn is not asked', async () => {
+    const t = scan(new Map([[100, IN_TMUX], [200, IN_TMUX]]))
+    t.found('a', 100)
+    t.found('b', 200)
+    const look = t.src.scanOpen()
+    await vi.waitFor(() => expect(t.nested).toHaveBeenCalledTimes(1))
+    t.src.ingest(t.ev('turn-start', { sessionId: 'a', callerPid: 100, hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    t.src.ingest(t.ev('session-start', { sessionId: 'b', callerPid: 200, hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    await t.answer(0, ITERM)
+    await look
+    expect(t.nested).toHaveBeenCalledTimes(1)
+    expect(t.src.list().map((a) => [a.sessionId, a.app])).toEqual([['a', 'ghostty'], ['b', 'ghostty']])
+    expect(t.src.windowOf(t.agent('a').id)).toEqual({ pid: 100, app: 'ghostty' })
+    expect(t.logs).toEqual(['[observed] scan · 2 found · 0 app known · 0 named · 0 answered · 0 ms · 0 nested placed'])
+
+    const gone = scan(new Map([[100, IN_TMUX]]))
+    gone.found('a', 100)
+    const looking = gone.src.scanOpen()
+    await vi.waitFor(() => expect(gone.nested).toHaveBeenCalledTimes(1))
+    gone.gens.set(100, null)
+    await gone.src.tick()
+    expect(gone.src.list()).toEqual([])
+    const told = gone.changes.mock.calls.length
+    await gone.answer(0, ITERM)
+    await looking
+    expect(gone.src.list()).toEqual([])
+    expect(gone.changes).toHaveBeenCalledTimes(told)
+    expect(gone.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 0 answered · 0 ms · 0 nested placed'])
+  })
+
+  it('an answer that names no app leaves the walk\'s app and appPending as they were, and counts nothing', async () => {
+    const t = scan(new Map([[100, IN_TMUX], [200, IN_HERDR]]), { apps: async () => new Map([[200, 'terminal-app']]) })
+    t.found('a', 100)
+    t.found('b', 200)
+    const look = t.src.scanOpen()
+    await vi.waitFor(() => expect(t.nested).toHaveBeenCalledTimes(1))
+    const listed = t.src.list()
+    await t.answer(0, {})
+    await t.answer(1, { tty: '/dev/ttys004', pid: 4300 })
+    await look
+    expect(t.src.list()).toEqual(listed)
+    expect(listed.map((a) => [a.sessionId, a.app, a.appPending])).toEqual([['a', 'terminal', true], ['b', 'terminal-app', undefined]])
+    expect(t.changes).toHaveBeenCalledTimes(1)
+    expect(t.src.windowOf(t.agent('a').id)).toEqual({ pid: 100, app: 'terminal' })
+    expect(t.src.windowOf(t.agent('b').id)).toEqual({ pid: 200, app: 'terminal-app' })
+    expect(t.logs).toEqual(['[observed] scan · 2 found · 1 app known · 0 named · 0 answered · 0 ms · 0 nested placed'])
+  })
+
+  it('a session madeBy leaves out asks nothing and has its tty read as before, and the look\'s others are still placed', async () => {
+    // Its maker's read failed (the process gone between the table and its tty read, or `ps` past its timeout).
+    const t = scan(new Map([[200, IN_TMUX]]), { apps: async () => new Map([[100, 'iterm']]) })
+    t.found('a', 100)
+    t.found('b', 200)
+    const look = t.src.scanOpen()
+    await t.answer(0, ITERM)
+    await look
+    expect(t.nested.mock.calls).toEqual([[{ ...IN_TMUX, pid: 200, rows: ROWS }]])
+    expect(t.tty.mock.calls).toEqual([[100]])
+    expect(t.src.paneOf(t.agent('a').id, 'tabs')).toBe('iterm:/dev/ttys031')
+    expect(t.src.paneOf(t.agent('b').id, 'tabs')).toBe('iterm:/dev/ttys004')
+
+    // A maker read that rejects counts as none.
+    const failed = scan(new Map(), { apps: async () => new Map([[100, 'iterm']]), madeBy: async () => { throw new Error('ps') } })
+    failed.found('a', 100)
+    await failed.src.scanOpen()
+    expect(failed.nested).not.toHaveBeenCalled()
+    expect(failed.tty.mock.calls).toEqual([[100]])
+  })
+
+  it('a session paired with a Herdr terminal is not asked', async () => {
+    const t = scan(new Map([[100, IN_TMUX], [200, IN_HERDR]]), { herdrTerminal: (pid) => (pid === 200 ? 't7' : undefined) })
+    t.found('a', 100)
+    t.found('b', 200)
+    const look = t.src.scanOpen()
+    await t.answer(0, ITERM)
+    await look
+    expect(t.nested.mock.calls).toEqual([[{ ...IN_TMUX, pid: 100, rows: ROWS }]])
+    expect(t.agent('b')).toMatchObject({ host: 'herdr', app: 'herdr', paneKeys: ['herdr-app:t7'] })
+    expect(t.agent('a').app).toBe('iterm')
+  })
+
+  it('a table that cannot be read lists every session not known, reads no maker, and says apps not read', async () => {
+    const t = scan(new Map([[100, IN_TMUX]]), { table: vi.fn(async () => { throw new Error('ps timed out under /Users/someone') }) })
+    t.found('a', 100)
+    t.found('b', 200)
+    await t.src.scanOpen()
+    expect(t.src.list().map((a) => [a.sessionId, a.app, a.appPending])).toEqual([['a', 'terminal', true], ['b', 'terminal', true]])
+    expect(t.apps).not.toHaveBeenCalled()
+    expect(t.madeBy).not.toHaveBeenCalled()
+    expect(t.nested).not.toHaveBeenCalled()
+    expect(t.logs).toEqual([
+      '[observed] scan · apps not read · Error',
+      '[observed] scan · 2 found · 0 app known · 0 named · 0 answered · 0 ms · 0 nested placed',
+    ])
+    expect(t.logs.join('\n')).not.toContain('someone')
+  })
+
+  it('with no table reader the scan asks apps with the pids alone, and no maker', async () => {
+    const t = scan(new Map([[100, IN_TMUX]]), { table: undefined })
+    t.found('a', 100)
+    t.found('b', 200)
+    await t.src.scanOpen()
+    expect(t.apps.mock.calls).toEqual([[[100, 200]]])
+    expect(t.apps.mock.calls[0]).toHaveLength(1)
+    expect(t.madeBy).not.toHaveBeenCalled()
+    expect(t.nested).not.toHaveBeenCalled()
+  })
+
+  it('a scan asked while a look\'s lookups run joins that look', async () => {
+    const t = scan(new Map([[100, IN_TMUX], [200, IN_HERDR]]))
+    t.found('a', 100)
+    t.found('b', 200)
+    const look = t.src.scanOpen()
+    await vi.waitFor(() => expect(t.nested).toHaveBeenCalledTimes(1))
+    const again = t.src.scanOpen()
+    await t.answer(0, ITERM)
+    await t.answer(1, {})
+    await Promise.all([look, again])
+    expect(t.looks()).toBe(1)
+    expect(t.nested).toHaveBeenCalledTimes(2)
+  })
+
+  it('the line counts the placed and names nothing', async () => {
+    const t = scan(new Map([[100, IN_TMUX], [200, IN_HERDR]]))
+    t.found('a', 100)
+    t.found('b', 200)
+    const look = t.src.scanOpen()
+    await t.answer(0, ITERM)
+    await t.answer(1, {})
+    await look
+    expect(t.logs).toEqual(['[observed] scan · 2 found · 0 app known · 0 named · 0 answered · 0 ms · 1 nested placed'])
+    for (const word of ['iterm', 'tmux', 'herdr', '4300', '100', '200', '80', 'ttys']) expect(t.logs.join('\n')).not.toContain(word)
   })
 })
 
