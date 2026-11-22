@@ -28,8 +28,8 @@ export interface AppLink {
   /** The app's bundle id, so only that app receives the link (`open -b`): another app that registers the same scheme
    *  never gets it. Absent, macOS picks the scheme's app. Linux has none: the scheme's app gets it. */
   bundle?: string
-  /** A tap's own way to bring the app forward once its link failed on macOS or Windows, answering whether the app came.
-   *  Absent, or on Linux, a failed link answers false and the opener's fallback decides (open.ts). A rest never runs it. */
+  /** A tap's own way to bring the app forward once its link failed, answering whether the app came. Absent, a failed
+   *  link answers false and the opener's fallback decides (open.ts). A rest never runs it. */
   forward?(): Promise<boolean>
 }
 
@@ -107,7 +107,7 @@ export function createAppLink(deps: AppLinkDeps, link: AppLink): AppLinkVerbs {
     async focus(pane) {
       if (!(byBundle || linux) || !link.session.test(pane.id)) return false
       if (await opens(pane.id)) return true
-      return byBundle && link.forward ? link.forward() : false
+      return link.forward ? link.forward() : false
     },
     // Asked at each look: the app may have left the front since the last one. A rest never waits on a command, so a
     // scheme not read yet answers no.
