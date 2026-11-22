@@ -2,13 +2,14 @@
  * One tier A scenario's world: the real devices (services/devices.ts) started in this process for one platform, with
  * the Claude app's store and the ChatGPT app's Codex home as fixtures in a fresh temp folder, the loopback dial on the
  * real cable, and every command, raise and send the devices make recorded with its virtual time and answered as the
- * scenario says. Nothing it hands the devices starts a process or reads this machine: the readers of the machine are
- * the spec's mocks (dialAppEval.spec.ts), answering from the model (machine.ts).
+ * scenario says, beside each line they log and each they write to an editor window. Nothing it hands the devices starts
+ * a process or reads this machine: the readers of the machine are the spec's mocks (dialAppEval.spec.ts), answering from
+ * the model (machine.ts).
  */
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { isAbsolute, join, relative } from 'node:path'
+import { isAbsolute, join, relative, win32 } from 'node:path'
 import { vi } from 'vitest'
 import { chatGptPlaces, claudeStoreRoots } from '../../../cable/hosts/appPlaces.js'
 import { ClaudeAppStore } from '../../../cable/hosts/claudeAppStore.js'
@@ -21,12 +22,13 @@ import type { OpencodeClient } from '../../../cable/hosts/opencodeClient.js'
 import type { OrcaReadDeps, OrcaReads } from '../../../cable/hosts/orca.js'
 import { env } from '../../../config/env.js'
 import { emptyPorts, type CoreApi, type CorePorts } from '../../../core/api.js'
-import type { VscodeEditor, VscodeExtensionDeps } from '../../../devices/vscodeExtension.js'
+import { VSCODE_EXTENSION_ID, type VscodeEditor, type VscodeExtensionDeps } from '../../../devices/vscodeExtension.js'
 import type { DevicesDeps, startDevices } from '../../../services/devices.js'
 import type { ListenerHandler, ListenerStreamHandler } from '../../../services/devicesListener.js'
 import { claudeAppFixture } from '../../claudeAppFixture.js'
 import { codexAppFixture } from '../../codexAppFixture.js'
 import { fakeCore } from '../../fakeCore.js'
+import { RECORDED_LINUX_APPS } from '../../recordedLinuxApps.js'
 import { agentIdOf, type App, type Delivery, type Platform, type Scenario, type Seen, type SessionDef, type SessionKey,
   type StepKind, type StepOf } from '../types.js'
 import { quiet } from './clock.js'
@@ -40,8 +42,15 @@ export interface TierAWorld {
   /** What `deps.listen` was handed: the devices' own listener's handlers. */
   readonly listener: Readonly<Record<string, ListenerHandler | ListenerStreamHandler>>
   readonly claudeStore: ReturnType<typeof claudeAppFixture>; readonly codexHome: ReturnType<typeof codexAppFixture>
-  /** Where the engines' transcripts go, Harness's own Claude Code and Codex homes: emptied for each scenario. */
-  readonly folders: { claudeProjects: string; codexSessions: string }
+  /**
+   * Where the engines' transcripts go: Harness's own Claude Code and Codex homes and the suite's Cursor home (env
+   * CURSOR_HOME), emptied for each scenario, and the folder of the world's own that holds each Codex with a home of its own.
+   */
+  readonly folders: { claudeProjects: string; codexSessions: string; cursorProjects: string; codexHomes: string }
+  /** Each line on an editor window's stream, both ways (steps/editor.ts). */
+  readonly streams: NonNullable<Seen['streams']>
+  /** Every line the devices log, at its virtual time. */
+  readonly logs: NonNullable<Seen['logs']>
   /** What the devices' transcriber answers. */
   speech: string | null
   /** The app in front, as the last front step told the watch. */
@@ -68,14 +77,18 @@ type Answer = { code: number; stdout?: string }
 const APPS: Readonly<Record<App, { bundle: string; scheme: string; desktopFile: string }>> = {
   claude: { bundle: 'com.anthropic.claudefordesktop', scheme: 'claude', desktopFile: 'com.anthropic.Claude.desktop' },
   chatgpt: { bundle: 'com.openai.codex', scheme: 'codex', desktopFile: 'chatgpt.desktop' },
+  vscode: { bundle: 'com.microsoft.VSCode', scheme: 'vscode', desktopFile: RECORDED_LINUX_APPS.vscode.schemeDesktopFile },
+  cursor: { bundle: 'com.todesktop.230313mzl4w4u92', scheme: 'cursor', desktopFile: RECORDED_LINUX_APPS.cursor.schemeDesktopFile },
 }
 /** The commands found on a Linux PATH here: the two a link needs. Nothing else of any platform's is installed. */
 const LINUX_TOOLS: ReadonlySet<string> = new Set(['xdg-mime', 'xdg-open'])
 /** Made-up places, recorded and never run. */
 const CODEX_BIN = '/opt/eval/bin/codex'
 const APP_CODEX_BIN = '/opt/eval/ChatGPT.app/codex'
+const CURSOR_BIN = '/opt/eval/bin/cursor'
 /** The programs whose commands the world answers as the scenario says, by name: macOS's and Linux's openers, the scheme
- *  lookup, the Windows helper and the Linux raise. A command of any other is one tier A does not model. */
+ *  lookup, the Windows helper and the Linux raise. Cursor's CLI is answered only as Linux's folder row runs it, on one
+ *  folder (cable/hosts/cursorFolder.ts). A command of any other is one tier A does not model. */
 const ANSWERED: ReadonlySet<string> = new Set(['open', 'xdg-open', 'xdg-mime', 'harness-pty', 'raise'])
 
 /** Harness's own engine homes are the suite's throwaway ones (vitest.setup.ts): never a folder outside this run's. */
@@ -89,6 +102,9 @@ function emptied(folder: string): string {
 
 /** A command's program, as its path or name ends. */
 const programOf = (argv: readonly string[]): string => (argv[0] ?? '').split(/[\\/]/).at(-1)!
+/** Whether the world answers a command (ANSWERED). */
+const answered = (argv: readonly string[]): boolean => ANSWERED.has(programOf(argv))
+  || (argv.length === 2 && argv[0] === CURSOR_BIN && isAbsolute(argv[1]!))
 
 /** Codex's queue's send (cable/hosts/codexQueue.ts): the thread and the words, the thread none unless it reads both. */
 function queued(args: readonly string[]): { thread: string | undefined; text: string } {
@@ -103,6 +119,25 @@ const noEditor = (editor: VscodeEditor, platform: Platform, root: string): Vscod
   executable: () => false, read: () => null, run: async () => ({ code: null, timedOut: false }), files: () => null,
   tempDir: () => join(root, 'vsix'), write: () => {}, remove: () => {},
 })
+/** The extension as this made-up build carries it, and the same version on in Cursor's record. */
+const EXTENSION_VERSION = '0.0.0-eval'
+/**
+ * Cursor installed, its CLI at a made-up path (`bin`, as HARNESS_CURSOR_BIN names one), with this build's extension on:
+ * the folder row's tap finds the CLI on Linux, and the extension's setup finds nothing to do. A run of the CLI is the
+ * setup's alone, never modelled: a gap.
+ */
+const cursorInstalled = (platform: Platform, root: string, gap: (reason: string) => void): VscodeExtensionDeps => {
+  const record = (platform === 'win32' ? win32.join : join)(root, '.cursor', 'extensions', 'extensions.json')
+  return {
+    ...noEditor('cursor', platform, root), bin: CURSOR_BIN, executable: (path) => path === CURSOR_BIN,
+    files: () => ({ manifest: JSON.stringify({ version: EXTENSION_VERSION }), main: '' }),
+    read: (path) => (path === record ? JSON.stringify([{ identifier: { id: VSCODE_EXTENSION_ID }, version: EXTENSION_VERSION }]) : null),
+    run: async () => {
+      gap("the editor extension's setup ran")
+      return { code: null, timedOut: false }
+    },
+  }
+}
 /**
  * herdr, Herdr Core and opencode with nobody listening, as their clients say when there is no socket or service. Tier A
  * models no pane of theirs: words one is asked to put in a pane are `typed` into no session, which the gate counts.
@@ -143,12 +178,14 @@ export class World implements TierAWorld {
   listener: Readonly<Record<string, ListenerHandler | ListenerStreamHandler>> = {}
   readonly claudeStore: ReturnType<typeof claudeAppFixture>
   readonly codexHome: ReturnType<typeof codexAppFixture>
-  readonly folders: { claudeProjects: string; codexSessions: string }
+  readonly folders: TierAWorld['folders']
   speech: string | null = null
   /** None until the driver's first front step, before the dial is plugged in. */
   front: App | 'other' = 'other'
   readonly commands: Seen['commands'] = []
   readonly deliveries: Seen['deliveries'] = []
+  readonly streams: NonNullable<Seen['streams']> = []
+  readonly logs: NonNullable<Seen['logs']> = []
   readonly gaps: string[] = []
   /** The virtual epoch ms of time 0: the driver sets it once the dial is welcomed and its page picked. */
   origin = Date.now()
@@ -177,7 +214,10 @@ export class World implements TierAWorld {
     const codexHome = join(root, '.codex')
     this.codexHome = codexAppFixture(codexHome)
     if (installed) this.install(root, codexHome)
-    this.folders = { claudeProjects: emptied(env.CLAUDE_PROJECTS_DIR), codexSessions: emptied(join(env.CODEX_HOME, 'sessions')) }
+    // The sessions' folders are there, the only ones: what Cursor's folder row opens.
+    for (const s of scenario.sessions) for (const folder of [s.cwd, ...s.folders ?? []]) machine.folders.add(folder)
+    this.folders = { claudeProjects: emptied(env.CLAUDE_PROJECTS_DIR), codexSessions: emptied(join(env.CODEX_HOME, 'sessions')),
+      cursorProjects: emptied(join(env.CURSOR_HOME, 'projects')), codexHomes: join(root, 'codex-homes') }
     this.dial = new LoopbackDial(() => Date.now())
     const dataDir = join(root, 'data')
     mkdirSync(dataDir)
@@ -242,7 +282,7 @@ export class World implements TierAWorld {
   seen(steps: Seen['steps']): Seen {
     const from0 = <T extends { at: number }>(rows: readonly T[]): T[] => rows.map((row) => ({ ...row, at: row.at - this.origin }))
     return { frames: from0(this.dial.frames), faces: from0(this.dial.faces), commands: from0(this.commands),
-      deliveries: from0(this.deliveries), steps: from0(steps) }
+      deliveries: from0(this.deliveries), steps: from0(steps), streams: from0(this.streams), logs: from0(this.logs) }
   }
 
   /** The devices stopped, on virtual time still, and whatever they were reading landed. */
@@ -284,7 +324,7 @@ export class World implements TierAWorld {
    * A command the devices ran: answered by the world's rules, and recorded at its virtual time with whether it ran to a
    * good end. One of a program the world does not answer (`modelled`) is a gap: its answer would be made up.
    */
-  private ran(argv: string[], modelled = ANSWERED.has(programOf(argv))): Required<Answer> {
+  private ran(argv: string[], modelled = answered(argv)): Required<Answer> {
     if (!modelled) this.gap(`a command tier A does not answer: ${programOf(argv)}`)
     let answer: Answer = { code: 0 }
     for (const rule of this.rules) {
@@ -350,10 +390,11 @@ export class World implements TierAWorld {
     // A link of an app the scenario says fails them is refused.
     this.answer((argv) => (apps.some(([app, { scheme }]) => failing.has(app) && argv.some((arg) => arg.startsWith(`${scheme}://`)))
       ? { code: 1 } : undefined))
-    // On Linux each installed app's desktop file takes its scheme's links (cable/hosts/appLink.ts readApp).
+    // On Linux each installed app's desktop file takes its scheme's links (cable/hosts/appLink.ts readApp): only the
+    // ChatGPT app is ever missing (world.chatgptInstalled).
     this.answer((argv) => {
       if (!argv[0]?.endsWith('xdg-mime') || argv[1] !== 'query' || argv[2] !== 'default') return undefined
-      const found = apps.find(([app, { scheme }]) => argv[3] === `x-scheme-handler/${scheme}` && (app === 'claude' || installed))
+      const found = apps.find(([app, { scheme }]) => argv[3] === `x-scheme-handler/${scheme}` && (app !== 'chatgpt' || installed))
       return { code: 0, stdout: found ? `${found[1].desktopFile}\n` : '' }
     })
     const orca: OrcaReadDeps = {
@@ -399,7 +440,7 @@ export class World implements TierAWorld {
       transcribe: async () => this.speech ?? '',
       bundleId: async (app) => machine.bundleIds.get(app),
       storePackageFolder: async () => (installed && platform === 'win32' ? join(root, 'OpenAI.Codex') : null),
-      log: () => {},
+      log: (line) => { this.logs.push({ at: Date.now(), line }) },
       onExit: () => {},
       listen: async (handlers) => {
         this.listener = handlers
@@ -409,7 +450,7 @@ export class World implements TierAWorld {
       claude: async () => null,
       orcaHomes: { get: () => ({ claude: [], codex: [] }), answered: () => true, refresh: async () => false },
       vscodeExtension: noEditor('vscode', platform, root),
-      cursorExtension: noEditor('cursor', platform, root),
+      cursorExtension: cursorInstalled(platform, root, (reason) => this.gap(reason)),
       orcaPlugin: { orca: () => null, run: async () => ({ code: null, stdout: '', timedOut: false }), files: () => null, folder: join(root, 'orca-plugin') },
       processParents: async () => [...machine.processes.values()].map(({ pid, ppid }) => ({ pid, ppid })),
       claudeFullscreen: async () => false,

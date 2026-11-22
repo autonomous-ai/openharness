@@ -18,9 +18,9 @@ export interface ScenarioRun {
   error?: string
 }
 
-type Source = 'spec' | 'claude' | 'chatgpt' | 'heldOut'
+type Source = 'spec' | 'claude' | 'chatgpt' | 'vscode' | 'cursor' | 'heldOut'
 /** The tier spec runs tier A; the e2e files, one per app and the held-out one, run tier B. Each writes its own file. */
-export const SOURCES: Readonly<Record<Tier, readonly Source[]>> = { a: ['spec'], b: ['claude', 'chatgpt', 'heldOut'] }
+export const SOURCES: Readonly<Record<Tier, readonly Source[]>> = { a: ['spec'], b: ['claude', 'chatgpt', 'vscode', 'cursor', 'heldOut'] }
 /** Every results file's name, as resultsName gives it. */
 export const RESULTS_FILE = /^results-[ab]-\w+\.json$/
 

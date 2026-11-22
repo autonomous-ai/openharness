@@ -149,14 +149,18 @@ describe.skipIf(WIN32)('the dial eval, tier B: the Claude app', () => {
     const answers = (folder: string): string[] => readdirSync(folder, { recursive: true }).map(String).filter((name) => name.endsWith('.jsonl'))
     const rollouts = join(d.env.CODEX_HOME!, 'sessions')
     expect(answers(d.env.CLAUDE_PROJECTS_DIR!)).not.toEqual([])
-    // A Codex session's rollout, as the ChatGPT app's steps leave one.
+    // A Codex session's rollout, as the ChatGPT app's steps leave one, and a Cursor agent's transcript, as the editors' do.
     mkdirSync(join(rollouts, '2026'), { recursive: true })
     writeFileSync(join(rollouts, '2026', 'rollout-2026-11-15T00-00-00-eval.jsonl'), '{}\n')
+    const cursor = join(d.env.HOME!, '.cursor', 'projects')
+    mkdirSync(join(cursor, 'eval', 'agent-transcripts', 'eval'), { recursive: true })
+    writeFileSync(join(cursor, 'eval', 'agent-transcripts', 'eval', 'eval.jsonl'), '{}\n')
     await driver.start(SCENARIOS.find((s) => s.id === 'C1')!, HOST)
     try {
       expect(driver.lastWorld().d).toBe(d)
       expect(answers(d.env.CLAUDE_PROJECTS_DIR!)).toEqual([])
       expect(answers(rollouts)).toEqual([])
+      expect(answers(cursor)).toEqual([])
     } finally {
       await driver.stop()
     }
@@ -186,6 +190,16 @@ describe.skipIf(WIN32)('the dial eval, tier B: the Claude app', () => {
     await runScenario(driver, { ...c12, steps, fresh: true }, HOST)
     // Its own daemon, so its log is this scenario's alone.
     expect(driver.lastWorld().d.log().split('\n').filter((line) => line.includes('[device] attach ·'))).not.toEqual([])
+  })
+
+  it("a permission asked right before its turn stops is drawn first, so the stop's Enter answers it", async () => {
+    const c7 = SCENARIOS.find((s) => s.id === 'C7')!
+    const steps = [...c7.steps, { kind: 'hook' as const, session: 'a', event: 'turn-stop' as const }]
+    const run = await runScenario(driver, { ...c7, steps, fresh: true }, HOST)
+    expect(run.error).toBeUndefined()
+    // Its own daemon, so its hook log is this scenario's alone.
+    const { id } = c7.sessions.find((s) => s.key === 'a')!
+    expect(driver.lastWorld().d.hookLog()).toMatch(new RegExp(`PermissionRequest session=${id} ran`))
   })
 
   it('the dial unplugged shows nothing, and its glass starts afresh when plugged in again', async () => {

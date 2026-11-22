@@ -2,8 +2,10 @@
  * The dial eval's scenarios (docs/plans/2026-11-21-dial-app-eval-design.md, "Scenarios"), one catalog both tiers run.
  * Every session is made up: titles start with "Eval ", folders with /work/eval-, ids are fixed UUIDs.
  */
+import { cursorScenarios } from './cursorScenarios.js'
 import { heldOut } from './heldOut.js'
-import type { App, Check, Platform, Scenario, SessionDef, SessionKey, Step, Tier } from './types.js'
+import { vscodeScenarios } from './vscodeScenarios.js'
+import type { App, Check, Editor, Platform, Scenario, SessionDef, SessionKey, Step, Tier } from './types.js'
 
 const EVERY_PLATFORM: Platform[] = ['darwin', 'win32', 'linux']
 export const S = 1_000
@@ -21,10 +23,16 @@ export const listed = (page: App, expect: SessionKey[]): Step[] => [
   { kind: 'wait', ms: READ_MS },
 ]
 
+/**
+ * How long an editor stays quit before the person starts it again, their own timing: longer than the 10 s end delay and
+ * the 30 s tick after it, so its rows leave the ring and the ring after the relaunch grades their return.
+ */
+export const EDITOR_AWAY_MS = 45 * S
+
 const NAMES: Readonly<Record<SessionKey, string>> = { a: 'Alpha', b: 'Bravo', c: 'Charlie', d: 'Delta', e: 'Echo', z: 'Zulu' }
 
 /** A fixed made-up UUID from the key's bytes, so each key has its own; `variant` keeps a session's two ids apart. */
-function uuid(key: SessionKey, variant: '8' | '9' | 'a'): string {
+function uuid(key: SessionKey, variant: '8' | '9' | 'a' | 'b'): string {
   const bytes = Buffer.from(key).toString('hex')
   if (bytes.length > 12) throw new Error(`session key ${key} is longer than 6 bytes`)
   return `00000000-0000-4000-${variant}000-${bytes.padStart(12, '0')}`
@@ -40,6 +48,17 @@ export function claudeSession(key: SessionKey, ageMs: number, more: Partial<Sess
 export function thread(key: SessionKey, ageMs: number, more: Partial<SessionDef> = {}): SessionDef {
   return { key, app: 'chatgpt', id: uuid(key, 'a'), title: titleOf(key), cwd: `/work/eval-${key}`, ageMs, ...more }
 }
+/** An editor's agent, a Claude Code in a terminal of its window w1 unless `more` says otherwise. The editors have no
+ *  store: its age is its start's. */
+export function editorSession(key: SessionKey, app: Editor, more: Partial<SessionDef> = {}): SessionDef {
+  return { key, app, id: uuid(key, 'b'), title: titleOf(key), cwd: `/work/eval-${key}`, ageMs: 0, place: 'terminal', window: 'w1', ...more }
+}
+export const vscode = (key: SessionKey, more: Partial<SessionDef> = {}): SessionDef => editorSession(key, 'vscode', more)
+export const cursor = (key: SessionKey, more: Partial<SessionDef> = {}): SessionDef => editorSession(key, 'cursor', more)
+/** A Claude Code panel session in the editor: no window holds a terminal of it. */
+export const panel = (key: SessionKey, app: Editor): SessionDef => editorSession(key, app, { place: 'panel', window: undefined })
+/** A probe of a ring check: the same ring with the ghost in it. */
+export const withGhost = (check: Extract<Check, { kind: 'ring' }>): Check => ({ ...check, expect: [...check.expect, 'z'] })
 /** Newest first, a minute apart, as the catalog's rows are unless they say otherwise. */
 export const claudeSessions = (keys: SessionKey[]): SessionDef[] => keys.map((key, i) => claudeSession(key, (i + 1) * MIN))
 export const threads = (keys: SessionKey[]): SessionDef[] => keys.map((key, i) => thread(key, (i + 1) * MIN))
@@ -50,6 +69,13 @@ export const keys = (prefix: string, from: number, to: number, width: number): S
 /** The sessions only probes name: never written or started, so a check of one fails whatever the product does. */
 export const claudeGhost: SessionDef = { ...claudeSession('z', 0), ghost: true }
 export const chatgptGhost: SessionDef = { ...thread('z', 0), ghost: true }
+export const editorGhost = (app: Editor): SessionDef => ({ ...editorSession('z', app), ghost: true })
+
+/** Each session's start hook in the order given, a second apart, so the last is the newest. */
+export const started = (keys: SessionKey[]): Step[] => keys.flatMap((session, i): Step[] => [
+  ...(i === 0 ? [] : [{ kind: 'wait', ms: S } as const]),
+  { kind: 'hook', session, event: 'start' },
+])
 
 const COST: Check = { id: 'cost', kind: 'cost', dim: 'D8' }
 type Def = Omit<Scenario, 'platforms' | 'tiers' | 'heldOut'> & { platforms?: Platform[]; tiers?: Tier[] }
@@ -401,6 +427,8 @@ export const MAIN: Scenario[] = [
     ],
     probes: [{ id: 'focus', kind: 'focus', dim: 'D2', session: 'z', after: 'last' }],
   }),
+  ...vscodeScenarios(),
+  ...cursorScenarios(),
 ]
 
 export const HELD_OUT: Scenario[] = heldOut()

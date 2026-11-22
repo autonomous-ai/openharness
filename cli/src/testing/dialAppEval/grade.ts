@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import {
-  DIMENSIONS, WEIGHTS, resultKey,
+  APPS, DIMENSIONS, WEIGHTS, resultKey,
   type App, type AppScores, type Baseline, type CheckResult, type CoverageGap, type Dimension, type Group,
   type Platform, type Report, type RunResults, type Scenario, type Tier, type Verdict,
 } from './types.js'
@@ -15,7 +15,6 @@ export const BASELINE_PATH = fileURLToPath(new URL('./baseline.json', import.met
  */
 export const SKIP_RATCHET_ENV = 'DIAL_EVAL_SKIP_RATCHET'
 
-const APPS: readonly App[] = ['claude', 'chatgpt']
 const UPDATE_TIER_A = 'run `npm run eval:dial-apps -- --tier a --update-baseline` and commit cli/src/testing/dialAppEval/baseline.json'
 
 type Run = Pick<CheckResult, 'tier' | 'platform' | 'scenario'>
@@ -71,7 +70,7 @@ function subsetScores(results: RunResults, subsets: Iterable<string>): Map<strin
   const gaps = results.gaps.filter((g) => !g.heldOut)
   return new Map([...subsets].map((subset) => {
     const scores = table(main.filter((r) => subsetOf(r) === subset), gaps.filter((g) => subsetOf(g) === subset))
-    return [subset, { claude: scores.claude.score, chatgpt: scores.chatgpt.score }]
+    return [subset, Object.fromEntries(APPS.map((app) => [app, scores[app].score])) as Record<App, number | null>]
   }))
 }
 

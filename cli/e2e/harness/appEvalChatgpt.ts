@@ -92,7 +92,7 @@ const answerLine = (text: string): string =>
 
 /** Each queue call from now to the scenario's stop, as a `codex` delivery: one reader of each ledger, a child ended at
  *  stop, from its next line on. */
-function hear(world: TierBWorld): void {
+export function hear(world: TierBWorld): void {
   const state = stateOf(world)
   if (state.heard) return
   state.heard = true

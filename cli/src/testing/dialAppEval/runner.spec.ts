@@ -2,8 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { collect, readResults, runScenario, SETTLE_END_MS, uncaughtProbes, writeResults, type ScenarioRun } from './runner.js'
-import { agentIdOf, type Check, type EvalDriver, type Platform, type Scenario, type Seen, type SessionDef,
+import { collect, readResults, runScenario, SETTLE_END_MS, SOURCES, uncaughtProbes, writeResults, type ScenarioRun } from './runner.js'
+import { agentIdOf, type Check, type EvalDriver, type Platform, type RunResults, type Scenario, type Seen, type SessionDef,
   type Step, type StepKind, type Tier } from './types.js'
 
 const uuid = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -206,6 +206,17 @@ it('results files round-trip and merge', async () => {
   expect(basename(writeResults(dir, 'claude', b))).toBe('results-b-claude.json')
   writeFileSync(join(dir, 'report.json'), '{}')
   expect(readResults(dir)).toEqual({ schema: 1, results: [...a.results, ...b.results], wrongSends: [], gaps: b.gaps })
+})
+
+it("the editors' results files are named results-b-vscode.json and results-b-cursor.json and merge with the others", () => {
+  dir = mkdtempSync(join(tmpdir(), 'dial-eval-results-'))
+  expect(SOURCES.b).toEqual(['claude', 'chatgpt', 'vscode', 'cursor', 'heldOut'])
+  const one = (scenario: string): RunResults => ({ schema: 1, results: [{ tier: 'b', platform: 'darwin', scenario,
+    check: 'ring.recall', app: 'claude', dim: 'D1', heldOut: false, score: 1, timed: false, evidence: [] }], wrongSends: [], gaps: [] })
+  expect(basename(writeResults(dir, 'vscode', one('V1')))).toBe('results-b-vscode.json')
+  expect(basename(writeResults(dir, 'cursor', one('U1')))).toBe('results-b-cursor.json')
+  writeResults(dir, 'claude', one('C1'))
+  expect(readResults(dir).results.map((r) => r.scenario)).toEqual(['C1', 'U1', 'V1'])
 })
 
 it('a step that throws still stops the driver, keeps the wrong sends seen so far and fails the run with what threw', async () => {

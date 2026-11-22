@@ -30,7 +30,8 @@
 // test writes `<name>.release` in the root (a minute at most), as an agent's turn goes on while a command it runs works,
 // and answers with that file's text when it holds any, so a test can give the turn's exact last answer; while it
 // holds, `<name>.permit` asks permission to run that file's command at once, its Notification without the 6 s wait, as
-// a dialog the person has left (a scenario's needs-input step), and the turn goes on as `!permit`'s,
+// a dialog the person has left (a scenario's needs-input step), and once it is answered the turn goes on until its
+// release file, answering with its text, or as `!permit`'s when it holds none,
 // `!tool <command>` runs a tool call first, `!background <command>` (Claude Code) starts the command in the background as
 // its Bash tool's `run_in_background` does, as the engine's own direct child, and ends the turn while it runs, `!commentary <text>` (Codex) says what it is about to do in a message of its own first,
 // `!grow <MiB>` appends that much compaction history
@@ -1531,8 +1532,8 @@ export async function run(engine, config = {}, { native = false } = {}) {
     ({ agent_id: agentId, agent_type: type, ...(stop ? { stop_hook_active: false } : {}) })
 
   // A permission asked for in a turn, answered: the command run (and written as the engine writes it)
-  // or not, and the turn over. `turnOf` is the turn that asked.
-  const permitted = (command, row, turnOf = turn) => {
+  // or not. Returns what the turn says of it. `turnOf` is the turn that asked.
+  const answered = (command, row, turnOf = turn) => {
     const allowed = row === 0 || row === 1
     const id = `call_${turnOf}_p`
     if (allowed) {
@@ -1544,8 +1545,10 @@ export async function run(engine, config = {}, { native = false } = {}) {
         codex('response_item', { type: 'function_call_output', call_id: id, output: `ran ${command}` })
       }
     }
-    return finish(allowed ? `ran ${command}` : `did not run ${command}`)
+    return allowed ? `ran ${command}` : `did not run ${command}`
   }
+  // The same, and the turn over with it.
+  const permitted = (command, row, turnOf = turn) => finish(answered(command, row, turnOf))
   // A dialog in the composer's place, as the CLIs draw theirs, until it is answered. Claude Code also says so to its
   // Notification hooks once a permission or MCP input dialog has waited 6 s with no key (2.1.x: `permission_prompt`,
   // "Claude needs your permission to use Bash"; `elicitation_dialog`): each key starts the wait again, and an answer in
@@ -2095,16 +2098,19 @@ export async function run(engine, config = {}, { native = false } = {}) {
       const permit = join(config.root, `${directive[2]}.permit`)
       await released(release, permit)
       if (!open) return
+      // A turn that asked goes on once answered, as one whose command ran works on, until its release file.
+      let said
       if (!existsSync(release) && existsSync(permit)) {
         const command = readFileSync(permit, 'utf8').trim() || 'printf hi'
         const row = await new Promise((resolve) => askPermission(command, resolve, 0))
-        await permitted(command, row)
-        return
+        said = answered(command, row)
+        await released(release)
+        if (!open) return
       }
       let answer = ''
       try { answer = readFileSync(release, 'utf8') } catch { /* not written within the minute */ }
-      if (answer) {
-        await finish(answer)
+      if (answer || said) {
+        await finish(answer || said)
         return
       }
     }

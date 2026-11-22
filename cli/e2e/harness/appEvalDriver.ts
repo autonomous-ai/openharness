@@ -4,28 +4,33 @@
  * `harness hardware watch --json` for the app in front, and the fake backend for the dial's speech. A daemon serves the
  * first scenario and every one after it, reset, until a scenario asks for one of its own (`fresh`).
  *
- * Isolation: each daemon's open (HARNESS_OPEN_BIN, which only records: `writeRecordingOpen`), its home, its apps' folder
- * and both apps' stores are checked to be inside its root before it starts, and it is signed in to the fake backend alone.
+ * Isolation: each daemon's open (HARNESS_OPEN_BIN, which only records: `writeRecordingOpen`), its home, its apps' folder,
+ * both apps' stores, the editors' CLIs (HARNESS_VSCODE_BIN, HARNESS_CURSOR_BIN; on Linux Cursor's only records:
+ * `writeRecordingCli`) and, on Linux, the raise's programs (`writeRaiseFakes`) are checked to be inside its root before it
+ * starts, and it is signed in to the fake backend alone.
  * The network guard (src/testing/dialAppEval/netGuard.ts) is in this process and preloaded into every process of the
  * daemon and every child started here: a start whose running core or devices process did not load it fails, and the
  * driver's close fails on any attempt not yet handed on, those its last daemon made as it closed among them.
  *
  * What it saw: the frames the dial received, at their arrival; the faces of the firmware's carousel model, fed those
  * frames and the person's own turns (a swipe moves the glass before the daemon hears of it); the commands of the
- * recording open, with their exit; the deliveries the app's steps record; and, after `stop`, what the scenario cost
- * (appEvalCost.ts).
+ * recording open and of the recording Cursor CLI, with their exit, a folder in the daemon's projects written as the
+ * catalog's `/work/` one; the deliveries and editor streams the app's steps record; the devices' log lines, at their
+ * read; and, after `stop`, what the scenario cost (appEvalCost.ts).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative } from 'node:path'
 import { chatGptPlaces, claudeStoreRoots } from '../../src/cable/hosts/appPlaces.js'
+import { resolveBinaryOnPath } from '../../src/lib/binaryOnPath.js'
 import { claudeAppFixture } from '../../src/testing/claudeAppFixture.js'
-import { describeAttempt, guardThisProcess, netGuardEnv, readNetGuard, type NetAttempt } from '../../src/testing/dialAppEval/netGuard.js'
-import { agentIdOf, PAGE, type App, type Delivery, type EvalDriver, type Platform, type Scenario, type Seen,
+import { describeAttempt, guardThisProcess, NET_GUARD_FILE_ENV, netGuardEnv, readNetGuard, type NetAttempt } from '../../src/testing/dialAppEval/netGuard.js'
+import { agentIdOf, PAGE, placeOf, type App, type Delivery, type EvalDriver, type Platform, type Scenario, type Seen,
   type SessionDef, type SessionKey, type Step, type StepKind, type StepOf } from '../../src/testing/dialAppEval/types.js'
 import { CAROUSEL_REFRESH_MS, DialCarousel, type DialMessage } from '../../src/testing/dialCarousel.js'
 import { writeExecutable } from '../../src/testing/executableFixture.js'
+import { RECORDED_LINUX_APPS } from '../../src/testing/recordedLinuxApps.js'
 import { beginCost, costEnv } from './appEvalCost.js'
 import { writeAppCodex } from './codexAppCli.js'
 import { IsolatedDaemon, SOURCES_CLI, until } from './daemon.js'
@@ -39,18 +44,20 @@ const FILTER = { appFilter: 'v1' }
 const SERIAL = 'EVAL-B'
 const MAC = 'e2:e0:00:00:0e:b1'
 /** The scheme of each app's links (cable/hosts/claudeApp.ts, codexApp.ts): the ChatGPT app's threads are Codex's. */
-const SCHEME: Readonly<Record<App, string>> = { claude: 'claude', chatgpt: 'codex' }
+const SCHEME: Readonly<Record<App, string>> = { claude: 'claude', chatgpt: 'codex', vscode: 'vscode', cursor: 'cursor' }
 /** The app in front as Harness Device names it: a bundle id on macOS, the window's process on Linux; `other` is an app
  *  the dial follows none of. */
 const FRONT: Readonly<Record<'darwin' | 'linux', Record<App | 'other', string>>> = {
-  darwin: { claude: 'com.anthropic.claudefordesktop', chatgpt: 'com.openai.codex', other: 'com.apple.Safari' },
-  linux: { claude: 'claude-desktop', chatgpt: 'ChatGPT', other: 'firefox' },
+  darwin: { claude: 'com.anthropic.claudefordesktop', chatgpt: 'com.openai.codex', vscode: 'com.microsoft.VSCode',
+    cursor: 'com.todesktop.230313mzl4w4u92', other: 'com.apple.Safari' },
+  linux: { claude: 'claude-desktop', chatgpt: 'ChatGPT', vscode: 'code', cursor: 'cursor', other: 'firefox' },
 }
 /** The machine each daemon signs in as, to hear its dial's words: the daemon asks its backend for each transcript. */
 const ME: FakeMachine = { machineId: 'e7'.repeat(16), computerId: 'e2e-dial-eval-computer', name: 'Fixture', token: 'e2e-dial-eval-token' }
 /** A fifth of a second of what the microphone heard: the fake backend answers its `speech` whatever the audio. */
 const VOICE_PCM = Buffer.alloc(3_200, 1)
-/** For the dial to be found, welcomed and shown its list: the fleet looks every 2 s, the dial greets every 2 s. */
+/** For the dial to be found, welcomed and shown its list: the fleet looks every 2 s, the dial greets every 2 s; and for
+ *  the devices to drop the last scenario's rows, at their 30 s look at the latest (deskEmpty). */
 const START_WITHIN_MS = 45_000
 const CHILD_END_MS = 5_000
 /** The end of the watch's stderr a failure says. */
@@ -83,13 +90,17 @@ export interface TierBWorld {
   fail(error: unknown): void
   /** A title of the ChatGPT app's window, as Harness Device reads it: a line on the watch. */
   title(text: string): void
+  /** A line on an editor window's stream, either way (Seen.streams); [at] as `deliver`'s. */
+  stream(window: string, line: Record<string, unknown>, at?: number): void
+  /** The catalog's folder `/work/<name>` on this daemon, made: `<projects>/<name>`, recorded back as `/work/<name>`. */
+  folder(path: string): string
   /** Ended at stop. */
   readonly children: ChildProcess[]
 }
 export type TierBHandler<K extends StepKind> = (world: TierBWorld, step: StepOf<K>) => Promise<void>
 
 /** The steps this driver runs itself, on the dial and the watch. */
-type GenericKind = 'front' | 'thread' | 'tap' | 'swipe' | 'unplug' | 'replug'
+type GenericKind = 'front' | 'thread' | 'tap' | 'swipe' | 'stroke' | 'unplug' | 'replug'
 /** The steps on an app's sessions and stores, and its voice, whose words land on that app's paths: each app's file gives
  *  those its scenarios take (appEvalClaude.ts, appEvalChatgpt.ts). */
 export type AppSteps = { [K in Exclude<StepKind, 'wait' | GenericKind>]?: TierBHandler<K> }
@@ -98,8 +109,11 @@ type Run = Exclude<Step, { kind: 'wait' }>
 /** A daemon, its desk and its backend, kept across the scenarios that do not ask for a fresh one. */
 interface Rig {
   d: IsolatedDaemon; desk: Desk; backend: FakeBackend
-  /** Where its recording open notes its runs. */
+  /** Where its recording open notes its runs, and its recording Cursor CLI its own (Linux's alone: none on macOS). */
   runs: string
+  cursorRuns: string
+  /** Its projects folder, as given and as the system resolves it: a command naming either names the catalog's /work/. */
+  projects: string[]
   /** The network guard's file: the processes it was loaded into and what it refused there. Outside the root, which goes
    *  with the daemon, so what its processes tried as they ended is read after. */
   guard: string
@@ -121,6 +135,21 @@ const CHATGPT_INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 `
 
 export const inside = (root: string, path: string | undefined): boolean => !!path && isAbsolute(path) && !relative(root, path).startsWith('..')
+/** The network guard's preload and file, from the daemon's environment: for a process started with one of its own. */
+export function guardEnv(d: IsolatedDaemon): Record<string, string> {
+  return { NODE_OPTIONS: d.env.NODE_OPTIONS!, [NET_GUARD_FILE_ENV]: d.env[NET_GUARD_FILE_ENV]! }
+}
+/**
+ * Throws unless the network guard's [file] says it was loaded into each of [pids], [name]'s processes, each one Node
+ * names [process] (netGuard.cjs processName). The pids are of processes running now: a line of a pid since reused proves
+ * nothing of them.
+ */
+export function guardLoaded(file: string, name: string, pids: readonly number[], process = name): void {
+  const { loaded } = readNetGuard(file)
+  if (pids.length === 0 || !pids.every((pid) => loaded.some((l) => l.process === process && l.pid === pid))) {
+    throw new Error(`the network guard is not in the ${name} process`)
+  }
+}
 /** The file beside the recording open that has the links of an app fail while it is there. */
 const failsFile = (open: string, app: App): string => join(dirname(open), `${SCHEME[app]}.fails`)
 
@@ -146,15 +175,72 @@ export function linksFail(path: string, apps: readonly App[]): void {
   }
 }
 
-/** Each run the recording open noted in [runs], in order, as the command it stood for on [platform]. */
-export function openRuns(runs: string, platform: Platform): OpenRun[] {
+/**
+ * Cursor's CLI as the devices run it on Linux to open a folder (HARNESS_CURSOR_BIN, devices/vscodeExtension.ts
+ * cursorFolderCli), in place of the harness's missing one: it opens nothing, and notes each run in [runs] as the recording
+ * open does, always with exit 0.
+ */
+export function writeRecordingCli(path: string, runs: string): void {
+  if ([path, runs].some((p) => p.includes("'"))) throw new Error('the recording CLI\'s folder holds a quote')
+  mkdirSync(dirname(path), { recursive: true })
+  writeExecutable(path, `#!/bin/sh\nprintf '0 %s\\n' "$*" >> '${runs}'\nexit 0\n`)
+}
+
+/** What Linux's raise runs, each found on the PATH (cable/hosts/linuxDesktop.ts, linuxRaise.ts, linuxRaiseKwin.ts). */
+export const RAISE_TOOLS = ['wmctrl', 'swaymsg', 'hyprctl', 'gdbus', 'dbus-send'] as const
+/**
+ * Each of them in [bin], refusing as the daemon's own wmctrl does (harness/daemon.ts): a daemon on a Linux desktop finds
+ * this login's sockets in /tmp/.X11-unix and the runtime folder whatever its home, so a tap with the computer's own would
+ * raise the developer's real editor.
+ */
+export function writeRaiseFakes(bin: string): void {
+  for (const tool of RAISE_TOOLS) writeExecutable(join(bin, tool), '#!/bin/sh\nexit 1\n')
+}
+/** Those a daemon under [env] finds outside [root], or not at all. */
+export function raiseToolsOutside(root: string, env: NodeJS.ProcessEnv): string[] {
+  return RAISE_TOOLS.filter((tool) => !inside(root, resolveBinaryOnPath(tool, env) ?? undefined))
+}
+
+/** Each run noted in [runs] as `<exit> <arguments>`, in order, as the command [program] with them. */
+function noted(runs: string, program: string): OpenRun[] {
   let text = ''
   try { text = readFileSync(runs, 'utf8') } catch { return [] }
   return text.split('\n').filter(Boolean).map((line) => {
     const space = line.indexOf(' ')
     const args = line.slice(space + 1)
-    return { argv: [platform === 'linux' ? 'xdg-open' : 'open', ...(args ? args.split(' ') : [])], ok: line.slice(0, space) === '0' }
+    return { argv: [program, ...(args ? args.split(' ') : [])], ok: line.slice(0, space) === '0' }
   })
+}
+/** Each run the recording open noted in [runs], in order, as the command it stood for on [platform]. */
+export function openRuns(runs: string, platform: Platform): OpenRun[] {
+  return noted(runs, platform === 'linux' ? 'xdg-open' : 'open')
+}
+/** The extension setup's runs of an editor's CLI (devices/vscodeExtension.ts): they open no folder. */
+const EXTENSION_SETUP: ReadonlySet<string> = new Set(['--install-extension', '--uninstall-extension'])
+/** Each run the recording Cursor CLI noted in [runs], in order, but the extension setup's. */
+export function cliRuns(runs: string): OpenRun[] {
+  return noted(runs, 'cursor').filter((run) => !EXTENSION_SETUP.has(run.argv[1] ?? ''))
+}
+
+/** [argv] with each argument inside one of [projects] written as the catalog's `/work/` folder (TierBWorld.folder), so
+ *  one evaluator grades both tiers. */
+export function workPaths(argv: readonly string[], projects: readonly string[]): string[] {
+  return argv.map((arg) => {
+    const dir = projects.find((p) => arg === p || arg.startsWith(`${p}/`))
+    return dir === undefined ? arg : `/work${arg.slice(dir.length)}`
+  })
+}
+
+/** The lines of [log] after offset [from] that hold the devices' `[device` tag, each from its tag on, and the offset after
+ *  the last whole line: one still being written is read once it ends. */
+export function deviceLines(log: string, from: number): { lines: string[]; next: number } {
+  const end = log.lastIndexOf('\n') + 1
+  if (end <= from) return { lines: [], next: from }
+  const lines = log.slice(from, end - 1).split('\n').flatMap((line) => {
+    const tag = line.indexOf('[device')
+    return tag < 0 ? [] : [line.slice(tag)]
+  })
+  return { lines, next: end }
 }
 /** The files in [dir] and below gone, its folders kept: the daemon's watches on them stay. */
 function emptied(dir: string): void {
@@ -163,11 +249,22 @@ function emptied(dir: string): void {
     if (!entry.isDirectory()) rmSync(join(entry.parentPath, entry.name), { force: true })
   }
 }
+/** Whether the session's window was closed, and not opened again, before the step labeled [after] (the scenario's end
+ *  without one). */
+function windowClosed(scenario: Scenario, s: SessionDef, after: string | undefined): boolean {
+  const end = after === undefined ? scenario.steps.length : scenario.steps.findIndex((step) => step.label === after)
+  const last = scenario.steps.slice(0, end).findLast((step) =>
+    (step.kind === 'editor.window' || step.kind === 'editor.reload' || step.kind === 'editor.close') && step.window === s.window)
+  return last?.kind === 'editor.close'
+}
+
 /**
  * What tier B leaves out of [scenario] on [platform]; it throws for a world tier B does not build, so no scenario passes
  * or fails on one it only seems to run. On Linux a tap whose link failed brings its app by the raise (cable/hosts/open.ts,
  * linuxRaise.ts), which no fake records, so an open check of an app whose links fail is left out there: it would fail
- * on a raise that ran.
+ * on a raise that ran. So is one of an editor's terminal row there, whose tap brings its editor by the same raise, but
+ * for a Cursor terminal row whose window closed before the tap: that tap opens its folder by Cursor's CLI, which the
+ * recording one stands for (U12).
  */
 export function tierBGaps(scenario: Scenario, platform: Platform): string[] {
   // Every daemon has the ChatGPT app installed before its first dial (openRig).
@@ -175,9 +272,15 @@ export function tierBGaps(scenario: Scenario, platform: Platform): string[] {
   // The fake Claude Code asks only a permission (fakeEngine.mjs `<name>.permit`): AskUserQuestion's hooks are not built.
   if (scenario.steps.some((s) => s.kind === 'hook' && s.asks === 'question')) throw new Error(`${scenario.id}: tier B's Claude Code asks no question`)
   const failing = scenario.world?.linkFails ?? []
-  const raised = platform === 'linux' && scenario.checks.some((c) => c.kind === 'open'
-    && failing.includes(scenario.sessions.find((s) => s.key === c.session)!.app))
-  return raised ? ["a failed link's app comes by Linux's raise, which tier B does not record"] : []
+  const opened = platform === 'linux'
+    ? scenario.checks.flatMap((c) => c.kind === 'open' ? [{ s: scenario.sessions.find((s) => s.key === c.session)!, after: c.after }] : [])
+    : []
+  const raised = ({ s, after }: (typeof opened)[number]): boolean =>
+    placeOf(s) === 'terminal' && !(s.app === 'cursor' && windowClosed(scenario, s, after))
+  return [
+    ...opened.some(({ s }) => failing.includes(s.app)) ? ["a failed link's app comes by Linux's raise, which tier B does not record"] : [],
+    ...opened.some(raised) ? ["an editor terminal's tap brings its editor by Linux's raise, which tier B does not record"] : [],
+  ]
 }
 
 /** The rows of the last whole list the dial was sent, or undefined before one. */
@@ -190,6 +293,17 @@ function lastList(messages: readonly DialMessage[]): DialMessage[] | undefined {
     else if (m.t === 'agents.end' && rows) { last = rows; rows = undefined }
   }
   return last
+}
+/**
+ * Whether the dial was welcomed and holds nothing of an earlier scenario: the last list it was sent is empty, and the
+ * last word of the apps names none with a row. The list is the shown page's alone, and the catalog's ids are shared: an
+ * ended session's row stays on its page until the devices drop it (10 s after its end, or at their 30 s look for one
+ * that said none), and the page picked next would show it.
+ */
+export function deskEmpty(messages: readonly DialMessage[]): boolean {
+  const apps = messages.findLast((m) => m.t === 'apps')?.apps
+  return messages.some((m) => m.t === 'welcome') && lastList(messages)?.length === 0
+    && Array.isArray(apps) && !apps.some((a: { count?: unknown }) => typeof a.count === 'number' && a.count > 0)
 }
 async function end(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return
@@ -214,15 +328,26 @@ async function openRig(guard: string): Promise<Rig> {
     const home = d.env.HOME
     const claudeStore = claudeStoreRoots(process.platform, d.env, home ?? '')[0]?.root
     const places = { open: d.env.HARNESS_OPEN_BIN, home, applications: d.env.HARNESS_APPLICATIONS_DIR, 'Claude store': claudeStore,
-      'Codex home': home && join(home, '.codex') }
+      'Codex home': home && join(home, '.codex'), 'VS Code CLI': d.env.HARNESS_VSCODE_BIN, 'Cursor CLI': d.env.HARNESS_CURSOR_BIN }
     for (const [name, path] of Object.entries(places)) if (!inside(d.root, path)) throw new Error(`the daemon's ${name} is not inside its root`)
     const runs = join(dirname(places.open!), 'runs.log')
     writeRecordingOpen(places.open!, runs)
+    const cursorRuns = join(dirname(places['Cursor CLI']!), 'runs.log')
+    mkdirSync(d.projectsDir, { recursive: true })
+    const projects = [...new Set([d.projectsDir, realpathSync(d.projectsDir)])]
     // The store's folders, as the app leaves them, so the devices watch them from the start.
     claudeAppFixture(claudeStore!).org()
     mkdirSync(places['Codex home']!, { recursive: true })
-    // Both apps' links have their app, as on a desktop with both installed.
-    if (process.platform === 'linux') writeSchemeApps(d, { claude: 'com.anthropic.Claude.desktop', codex: 'chatgpt.desktop' })
+    if (process.platform === 'linux') {
+      // Every app's links have their app, as on a desktop with all four installed.
+      writeSchemeApps(d, { claude: 'com.anthropic.Claude.desktop', codex: 'chatgpt.desktop',
+        vscode: RECORDED_LINUX_APPS.vscode.schemeDesktopFile, cursor: RECORDED_LINUX_APPS.cursor.schemeDesktopFile })
+      // A tap on a Cursor folder row runs Cursor's CLI there; macOS opens the folder by Cursor's bundle, through the open.
+      writeRecordingCli(places['Cursor CLI']!, cursorRuns)
+      writeRaiseFakes(d.binDir)
+      const outside = raiseToolsOutside(d.root, d.env)
+      if (outside.length > 0) throw new Error(`the daemon's ${outside.join(', ')} is not inside its root`)
+    }
     // The ChatGPT app installed before any dial comes, as the devices look for it at each attach: its bundle in the home's
     // Applications on macOS, its program in the root's stand-in for /usr/lib on Linux, and its own Codex CLI.
     const chatgpt = process.platform === 'linux'
@@ -243,7 +368,7 @@ async function openRig(guard: string): Promise<Rig> {
     await d.start()
     // An engine started by hand reads its hooks once, as it starts: they are in before any scenario starts one.
     await d.hooksInstalled(['claude', 'codex'])
-    return { d, desk: new Desk(dials), backend, runs, guard, given: 0, polled: new Map() }
+    return { d, desk: new Desk(dials), backend, runs, cursorRuns, projects, guard, given: 0, polled: new Map() }
   } catch (error) {
     await d?.close().catch(() => {})
     await backend.close()
@@ -251,8 +376,19 @@ async function openRig(guard: string): Promise<Rig> {
   }
 }
 
-/** One scenario's world: what the dial received and showed, from its start to its stop. */
-class World implements TierBWorld {
+/**
+ * Where in [messages] the push that left the dial's last whole list starts: its `apps` frame, when one went just before
+ * its `agents.begin`. Undefined before a whole list.
+ */
+function lastPush(messages: readonly DialMessage[]): number | undefined {
+  const end = messages.findLastIndex((m) => m.t === 'agents.end')
+  const begin = messages.findLastIndex((m, i) => i < end && m.t === 'agents.begin')
+  if (begin < 0) return undefined
+  return messages[begin - 1]?.t === 'apps' ? begin - 1 : begin
+}
+
+/** One scenario's world: what the dial received and showed, from the point its start found the desk empty to its stop. */
+export class World implements TierBWorld {
   readonly children: ChildProcess[] = []
   readonly steps: Seen['steps'] = []
   readonly gaps: string[] = []
@@ -266,10 +402,15 @@ class World implements TierBWorld {
   private readonly faces: Seen['faces'] = []
   private readonly commands: Seen['commands'] = []
   private readonly deliveries: Delivery[] = []
+  private readonly streams: NonNullable<Seen['streams']> = []
+  private readonly logs: NonNullable<Seen['logs']> = []
   private plugged: FakeDial | undefined
-  /** How many of the plugged dial's messages, and of the open's runs, were read. */
+  /** How many of the plugged dial's messages, of the open's runs and of the Cursor CLI's were read; where in the daemon's
+   *  log the next read starts. */
   private heard = 0
   private opened: number
+  private ranCli: number
+  private logged: number
   private page = ''
   private watch: ChildProcess | undefined
   private waiting: Array<() => void> = []
@@ -282,6 +423,8 @@ class World implements TierBWorld {
 
   constructor(private readonly rig: Rig, readonly scenario: Scenario, readonly platform: Platform) {
     this.opened = openRuns(rig.runs, platform).length
+    this.ranCli = cliRuns(rig.cursorRuns).length
+    this.logged = rig.d.log().lastIndexOf('\n') + 1
     // The firmware's refresh task, which applies a list a moment after it ends: each turn also reads what came.
     this.refreshing = setInterval(() => this.read(), CAROUSEL_REFRESH_MS)
   }
@@ -313,6 +456,14 @@ class World implements TierBWorld {
     if (failure) throw failure.error
   }
   title(text: string): void { this.tell({ thread: text }) }
+  stream(window: string, line: Record<string, unknown>, at = Date.now()): void { this.streams.push({ at, window, line }) }
+  folder(path: string): string {
+    if (!path.startsWith('/work/')) throw new Error(`${this.scenario.id}: ${path} is not a catalog folder`)
+    const made = join(this.d.projectsDir, path.slice('/work/'.length))
+    if (!inside(this.d.projectsDir, made)) throw new Error(`${this.scenario.id}: ${path} is outside the daemon's projects`)
+    mkdirSync(made, { recursive: true })
+    return made
+  }
 
   async plug(): Promise<void> {
     this.plugged = await this.desk.plug(SERIAL, MAC, FILTER)
@@ -366,7 +517,8 @@ class World implements TierBWorld {
     return new Promise((done) => this.waiting.push(done))
   }
 
-  /** What came since the last read: the dial's frames at their arrival, then the refresh, then the open's runs. */
+  /** What came since the last read: the dial's frames at their arrival, then the refresh, then the open's and the Cursor
+   *  CLI's runs, then the devices' log lines. */
   read(): void {
     const dial = this.plugged
     if (dial) {
@@ -383,17 +535,37 @@ class World implements TierBWorld {
     this.face(Date.now())
     const runs = openRuns(this.rig.runs, this.platform)
     for (; this.opened < runs.length; this.opened++) {
-      const run = runs[this.opened]!
+      const run = this.atWork(runs[this.opened]!)
       this.commands.push({ at: Date.now(), ...run })
       for (const listener of this.openers) listener(run)
     }
+    const ran = cliRuns(this.rig.cursorRuns)
+    for (; this.ranCli < ran.length; this.ranCli++) this.commands.push({ at: Date.now(), ...this.atWork(ran[this.ranCli]!) })
+    const { lines, next } = deviceLines(this.d.log(), this.logged)
+    this.logged = next
+    const at = Date.now()
+    for (const line of lines) this.logs.push({ at, line })
     for (const done of this.waiting.splice(0)) done()
+  }
+
+  /**
+   * What the dial was sent before the first [cut] of its messages, where the start found the desk empty, forgotten but
+   * the push that emptied its list, and every face but the one it shows now: the catalog's ids are shared, so an earlier
+   * scenario's list on a dial that still held it would pass or fail this one's checks. The world's first dial, so its
+   * frames are its messages, one for one.
+   */
+  forgetBefore(cut: number): void {
+    this.read()
+    this.frames.splice(0, lastPush(this.dial.messages.slice(0, cut)) ?? cut)
+    this.faces.length = 0
+    this.face(Date.now())
   }
 
   seen(): Seen {
     const from0 = <T extends { at: number }>(rows: readonly T[]): T[] => rows.map((row) => ({ ...row, at: row.at - this.origin }))
     return { frames: from0(this.frames), faces: from0(this.faces), commands: from0(this.commands),
-      deliveries: from0(this.deliveries), steps: from0(this.steps), ...(this.cost ? { cost: this.cost } : {}) }
+      deliveries: from0(this.deliveries), steps: from0(this.steps), streams: from0(this.streams), logs: from0(this.logs),
+      ...(this.cost ? { cost: this.cost } : {}) }
   }
 
   /** The last read, and every child ended: one that fails to end is thrown once the others are. */
@@ -407,6 +579,8 @@ class World implements TierBWorld {
     }
     if (failed) throw failed.error
   }
+
+  private atWork(run: OpenRun): OpenRun { return { ...run, argv: workPaths(run.argv, this.rig.projects) } }
 
   /** The face, recorded when it changed. */
   private face(at: number): void {
@@ -441,6 +615,12 @@ const GENERIC: { [K in GenericKind]: (world: World, step: StepOf<K>) => Promise<
   tap: async (world, step) => { world.dial.send({ t: 'agent.open', agentId: world.agentId(step.session) }) },
   // The rest that opens the session after a swipe is the cable's own timer: the step only turns the dial.
   swipe: async (world, step) => { world.swipe(world.agentId(step.session)) },
+  // Three lines toward older ones, as dialVscode.e2e.ts strokes: each move's 8 is one line (scrollLines.ts).
+  stroke: async (world) => {
+    world.dial.send({ t: 'scroll', phase: 'down', dy: 0, v: 0 })
+    for (let move = 0; move < 3; move++) world.dial.send({ t: 'scroll', phase: 'move', dy: 8, v: 0 })
+    world.dial.send({ t: 'scroll', phase: 'up', dy: 0, v: 0 })
+  },
   unplug: (world) => world.unplug(),
   replug: (world) => world.plug(),
 }
@@ -487,22 +667,17 @@ export class TierBDriver implements EvalDriver {
     const front = scenario.world?.front ?? scenario.app
     await GENERIC.front(world, { kind: 'front', app: front })
     await world.plug()
-    // The ring empty before the scenario goes on: nothing of the scenario before it is listed.
-    await until(`${scenario.id}: the dial welcomed and shown an empty list`, () => {
-      const { messages } = world.dial
-      return messages.some((m) => m.t === 'welcome') && lastList(messages)?.length === 0
-    }, START_WITHIN_MS, 50)
+    // Every page empty before the scenario goes on: nothing of the scenarios before it is listed, nor seen.
+    const cut = await until(`${scenario.id}: the dial welcomed, and no app's page with a row`,
+      () => deskEmpty(world.dial.messages) && world.dial.messages.length, START_WITHIN_MS, 50)
+    world.forgetBefore(cut)
     // The person picks the app's page. While no session of it is listed the devices keep the ring they show, and the
     // app in front decides it once one is.
     world.pick(PAGE[front === 'other' ? scenario.app : front])
     // The processes running now, by pid: a line of one the master has since started again proves nothing of this one.
-    const { loaded } = readNetGuard(rig.guard)
-    const running = { core: [rig.d.corePid()], devices: devicesPids(rig.d) }
-    for (const [name, pids] of Object.entries(running)) {
-      if (pids.length === 0 || !pids.every((pid) => loaded.some((l) => l.process === name && l.pid === pid))) {
-        throw new Error(`the network guard is not in the ${name} process`)
-      }
-    }
+    const core = rig.d.corePid()
+    const running = { core: core === null ? [] : [core], devices: devicesPids(rig.d) }
+    for (const [name, pids] of Object.entries(running)) guardLoaded(rig.guard, name, pids)
     const cost = await beginCost(rig.d)
     world.origin = Date.now()
     this.costEnd = cost.end
@@ -596,6 +771,7 @@ export class TierBDriver implements EvalDriver {
     // same file, and a recap could pass on an earlier scenario's answer.
     emptied(rig.d.env.CLAUDE_PROJECTS_DIR!)
     emptied(join(rig.d.env.CODEX_HOME!, 'sessions'))
+    emptied(join(home, '.cursor', 'projects'))
     rig.backend.speech = null
     await rig.desk.unplug(SERIAL)
   }

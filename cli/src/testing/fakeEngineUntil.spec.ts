@@ -91,6 +91,31 @@ describe('the fake Claude Code\'s `!until <name>`', () => {
     await claude.hooked('Notification', (input) => input.notification_type === 'permission_prompt', AT_ONCE_MS)
     expect(claude.hooks().filter((input) => input.hook_event_name === 'Stop')).toEqual([])
   }, 30_000)
+
+  it('goes on once its permission is answered until its release file, then answers with that file\'s text', async () => {
+    const claude = start()
+    claude.type('!until eval-turn')
+    const transcript = String((await claude.hooked('UserPromptSubmit')).transcript_path)
+    writeFileSync(join(root, 'eval-turn.permit'), 'printf eval')
+    await claude.hooked('PermissionRequest')
+    // Enter on the dialog's first row: allowed. The release is written only once the command's result is in.
+    claude.type('')
+    await vi.waitFor(() => { expect(readFileSync(transcript, 'utf8')).toContain('ran printf eval') }, { timeout: 20_000, interval: 20 })
+    expect(claude.hooks().filter((input) => input.hook_event_name === 'Stop')).toEqual([])
+    writeFileSync(join(root, 'eval-turn.release'), 'Eval exact answer.')
+    expect(answerOf(await claude.hooked('Stop'))).toBe('Eval exact answer.')
+  }, 30_000)
+
+  it('answers with the command its permission ran when its release file is empty', async () => {
+    const claude = start()
+    claude.type('!until eval-turn')
+    await claude.hooked('UserPromptSubmit')
+    writeFileSync(join(root, 'eval-turn.permit'), 'printf eval')
+    await claude.hooked('PermissionRequest')
+    claude.type('')
+    writeFileSync(join(root, 'eval-turn.release'), '')
+    expect(answerOf(await claude.hooked('Stop'))).toBe('ran printf eval')
+  }, 30_000)
 })
 
 describe('the fake Claude Code\'s session title', () => {

@@ -27,6 +27,10 @@ FOUR_BUILDS = [{"bundle": "appimage", "arch": "x64"}, {"bundle": "appimage", "ar
 NO_LINUX_E2E = {"linux_files": [], "linux_shards": 0, "linux_full": False}
 # The checkout the full-checkout tests read.
 REPOSITORY = Path(__file__).resolve().parents[2]
+# The dial app eval's tier B files, the held-out one last (docs/plans/2026-11-22-dial-eval-vscode-cursor-design.md).
+APP_EVAL_FILES = ("cli/e2e/dialAppEvalClaude.e2e.ts", "cli/e2e/dialAppEvalChatgpt.e2e.ts",
+                  "cli/e2e/dialAppEvalVscode.e2e.ts", "cli/e2e/dialAppEvalCursor.e2e.ts",
+                  "cli/e2e/dialAppEvalHeldOut.e2e.ts")
 # The e2e files that drive an Orca terminal through the stand-in but skip off macOS: no PR CI suite runs them.
 MACOS_ONLY_ORCA_E2E = ("cli/e2e/dialVscodeFollow.e2e.ts", "cli/e2e/deviceHerdrApp.e2e.ts",
                        "cli/e2e/dialHerdrTerminal.e2e.ts", "cli/e2e/dialTmuxTerminal.e2e.ts")
@@ -369,6 +373,8 @@ class SelectionTests(unittest.TestCase):
                 self.assertIn("dial-hosts", planner.select([path])[0])
                 self.assertEqual("linux-e2e" in planner.select([path])[0],
                                  planner.linux_e2e_canary_path(path) or planner.linux_e2e_app_eval_path(path))
+        # The stand-in outside agent is one the editors' eval files run too.
+        self.assertTrue(planner.linux_e2e_app_eval_path("cli/e2e/harness/outsideAgent.ts"))
         # A name that only starts like one, or one in a folder below, is not a dial host's: Vitest's glob stays in e2e/.
         for path in ("cli/e2e/deviceHerdrApp.e2e.ts", "cli/e2e/sub/dialHostKitty.e2e.ts"):
             with self.subTest(path=path):
@@ -457,12 +463,24 @@ class SelectionTests(unittest.TestCase):
                 self.assertFalse(planner.dial_hosts_path(path))
 
     def test_the_app_eval_e2e_files_are_plain_and_run_on_linux(self):
+        self.assertEqual(planner.LINUX_E2E_APP_EVAL_FILES, APP_EVAL_FILES)
         for path in planner.LINUX_E2E_APP_EVAL_FILES:
             with self.subTest(path=path):
                 self.assertTrue(planner.E2E_FILE.fullmatch(path))
                 self.assertTrue(planner.linux_e2e_file(path))
                 self.assertNotIn(path, planner.LINUX_E2E_NEVER)
                 self.assertFalse(planner.dial_hosts_path(path))
+
+    def test_every_path_the_app_eval_covers_is_in_the_checkout(self):
+        # A path renamed or deleted would leave its successor uncovered, the list still passing.
+        root = REPOSITORY
+        full_checkout(self, "cli/src/cable/hosts", "cli/e2e/harness", "plugins/harness-device-vscode/src")
+        for entry in planner.LINUX_E2E_APP_EVAL_PATHS:
+            with self.subTest(entry=entry):
+                if "*" in entry:
+                    self.assertTrue(list(root.glob(entry)))
+                else:
+                    self.assertTrue((root / entry).is_dir() if entry.endswith("/") else (root / entry).is_file())
 
     def test_the_orca_e2e_files_are_every_linux_one_through_the_stand_in(self):
         root = REPOSITORY
@@ -608,12 +626,14 @@ class SelectionTests(unittest.TestCase):
                 self.assertLessEqual(expected, planner.select([path])[0])
 
     def test_the_vscode_extension_belongs_to_the_cli_suite(self):
-        # cli/build.mjs inlines it and cli/vitest.config.ts runs its tests; windows-e2e runs the dial plugins on Windows.
-        for path in ("plugins/harness-device-vscode/src/loop.ts", "plugins/harness-device-vscode/package.json",
-                     "plugins/harness-device-vscode/gate/realVscode.gate.ts"):
+        # cli/build.mjs inlines it and cli/vitest.config.ts runs its tests; windows-e2e runs the dial plugins on Windows,
+        # and linux-e2e the dial app eval's editor files for its source.
+        for path, e2e in (("plugins/harness-device-vscode/src/loop.ts", {"windows-e2e", "linux-e2e"}),
+                          ("plugins/harness-device-vscode/package.json", {"windows-e2e"}),
+                          ("plugins/harness-device-vscode/gate/realVscode.gate.ts", {"windows-e2e"})):
             with self.subTest(path=path):
                 self.assertEqual(planner.owners(path), {"cli"})
-                self.assertEqual(planner.select([path])[0], {"cli", "cross-read-scan", "windows-e2e"})
+                self.assertEqual(planner.select([path])[0], {"cli", "cross-read-scan", *e2e})
                 self.assertTrue(planner.reads("cli", path))
                 self.assertIsNone(planner.shared_input(path))
         # A folder whose name only starts the same is not the extension's: it stays outside every component's suite.
@@ -948,8 +968,8 @@ class GitPlanTests(unittest.TestCase):
         canary = planner.LINUX_E2E_CANARY.removeprefix("cli/")
         orca = sorted(path.removeprefix("cli/") for path in planner.LINUX_E2E_ORCA_FILES)
         # The adapter is in the hosts' folder, which the dial app eval covers: it runs the eval's files too.
-        both = sorted([*orca, *(path.removeprefix("cli/") for path in planner.LINUX_E2E_APP_EVAL_FILES)])
-        for path in (planner.LINUX_E2E_CANARY, *planner.LINUX_E2E_ORCA_FILES, *planner.LINUX_E2E_APP_EVAL_FILES,
+        both = sorted([*orca, *(path.removeprefix("cli/") for path in APP_EVAL_FILES)])
+        for path in (planner.LINUX_E2E_CANARY, *planner.LINUX_E2E_ORCA_FILES, *APP_EVAL_FILES,
                      adapter, stand_in):
             self.write(path)
         self.hints({})
@@ -981,18 +1001,31 @@ class GitPlanTests(unittest.TestCase):
         hosts, catalog, carousel, driver = ("cli/src/cable/hosts/scannedApp.ts", "cli/src/testing/dialAppEval/catalog.ts",
                                             "cli/src/testing/dialCarousel.ts", "cli/e2e/harness/appEvalDriver.ts")
         notes = "cli/e2e/harness/appEvalNotes.md"
+        # What the editors' files cover outside the hosts' folder: the devices process and the `vscode` stream its
+        # listener serves the windows, the hook, the extension and its setup, Cursor's engine and discovery, and the
+        # harness's editor windows and outside agents.
+        editors = ("cli/src/services/devices.ts", "cli/src/services/devicesListener.ts", "cli/src/devices/listenerPath.ts",
+                   "cli/hook/notify.mjs", "plugins/harness-device-vscode/src/extension.ts",
+                   "cli/src/devices/vscodeExtension.ts", "cli/src/cable/vscodeExtensionSetup.ts",
+                   "cli/src/engines/cursor/adapter.ts", "cli/src/core/engines/cursorDiscovery.ts")
+        harness = tuple(f"cli/e2e/harness/{name}.ts" for name in ("vscodeWindow", "outsideAgent", "codexOutside",
+                                                                   "cursorOutside", "editorWindow"))
         canary = planner.LINUX_E2E_CANARY.removeprefix("cli/")
-        evals = sorted(path.removeprefix("cli/") for path in planner.LINUX_E2E_APP_EVAL_FILES)
-        for path in (planner.LINUX_E2E_CANARY, *planner.LINUX_E2E_APP_EVAL_FILES, hosts, catalog, carousel, driver, notes):
+        evals = sorted(path.removeprefix("cli/") for path in APP_EVAL_FILES)
+        for path in (planner.LINUX_E2E_CANARY, *APP_EVAL_FILES, hosts, catalog, carousel, driver, notes, *editors,
+                     *harness):
             self.write(path)
         self.hints({})
         self.base = self.commit()
-        # The hosts' folder, the eval's folder and the carousel run them alone; the tier B driver, a harness file, with
-        # the canary too; a deletion still runs them; a harness file whose name only starts as the driver's runs the
-        # canary alone.
-        for changed, deleted, files in (((hosts,), (), evals), ((catalog,), (), evals), ((carousel,), (), evals),
-                                        ((driver,), (), sorted([*evals, canary])), ((), (catalog,), evals),
-                                        ((notes,), (), [canary])):
+        # The hosts' folder, the eval's folder, the carousel and what the editors' files cover run them alone; the tier B
+        # driver and the editors' harness files, harness files, with the canary too; a deletion still runs them; a
+        # harness file whose name only starts as the driver's runs the canary alone.
+        cases = [((hosts,), (), evals), ((catalog,), (), evals), ((carousel,), (), evals),
+                 ((driver,), (), sorted([*evals, canary])), ((), (catalog,), evals), ((notes,), (), [canary])]
+        cases += [(changed, deleted, evals) for path in editors for changed, deleted in (((path,), ()), ((), (path,)))]
+        cases += [(changed, deleted, sorted([*evals, canary]))
+                  for path in harness for changed, deleted in (((path,), ()), ((), (path,)))]
+        for changed, deleted, files in cases:
             with self.subTest(changed=changed, deleted=deleted):
                 self.git("checkout", "-q", "--detach", self.base)
                 for path in changed:
@@ -1004,12 +1037,14 @@ class GitPlanTests(unittest.TestCase):
                 self.assertIn("linux-e2e", plan["reasons"][(changed or deleted)[0]])
                 self.assertEqual(plan["e2e"]["linux_files"], files)
         # A head without one of them fails the plan, naming it: a PR that renames or deletes one updates the list.
-        self.git("checkout", "-q", "--detach", self.base)
-        self.write(carousel, "changed")
-        (self.root / planner.LINUX_E2E_APP_EVAL_FILES[-1]).unlink()
-        self.commit()
-        with self.assertRaisesRegex(ValueError, re.escape(planner.LINUX_E2E_APP_EVAL_FILES[-1])):
-            self.plan()
+        for missing in (APP_EVAL_FILES[-1], "cli/e2e/dialAppEvalCursor.e2e.ts"):
+            with self.subTest(missing=missing):
+                self.git("checkout", "-q", "--detach", self.base)
+                self.write(carousel, "changed")
+                (self.root / missing).unlink()
+                self.commit()
+                with self.assertRaisesRegex(ValueError, re.escape(missing)):
+                    self.plan()
 
     def test_a_change_to_a_jobs_definition_in_ci_yml_runs_its_suite(self):
         # Answer P5: a job's block is part of what its suite tests. device-app-build serves the Device suites that
@@ -1970,6 +2005,7 @@ class FullCheckoutTests(unittest.TestCase):
     NAMES = ("SelectionTests.test_every_desktop_file_the_phone_tests_read_selects_mobile",
              "SelectionTests.test_the_dial_host_files_are_the_ones_cli_e2e_leaves_out",
              "SelectionTests.test_the_orca_e2e_files_are_every_linux_one_through_the_stand_in",
+             "SelectionTests.test_every_path_the_app_eval_covers_is_in_the_checkout",
              "SelectionTests.test_every_declared_input_exists",
              "CrossReadTests.test_every_cross_read_in_this_repository_is_declared")
 
