@@ -342,13 +342,14 @@ describe('iTerm2\'s server', () => {
     expect(await scannedApps([500], d)).toEqual(new Map([[500, 'ghostty']]))
   })
 
+  // The iTermServer session comes first: a slot it spent would leave the last app's bundle unread.
   it('the row takes none of the 16 bundles a pass', async () => {
     const pids = Array.from({ length: 16 }, (_, i) => 9000 + i)
     const d = atHome([
-      ...pids.flatMap((pid, i) => [[pid, pid + 100, 'claude'], [pid + 100, 1, `/Applications/App ${i}.app/Contents/MacOS/app`]] as Array<[number, number, string]>),
       [9500, 9499, 'claude'], [9499, 1, 'iTermServer-3.5.4'],
+      ...pids.flatMap((pid, i) => [[pid, pid + 100, 'claude'], [pid + 100, 1, `/Applications/App ${i}.app/Contents/MacOS/app`]] as Array<[number, number, string]>),
     ], Object.fromEntries(pids.map((_, i) => [`/Applications/App ${i}.app`, 'com.mitchellh.ghostty'])))
-    expect(await scannedApps([...pids, 9500], d)).toEqual(new Map([...pids.map((pid) => [pid, 'ghostty'] as const), [9500, 'iterm']]))
+    expect(await scannedApps([9500, ...pids], d)).toEqual(new Map([[9500, 'iterm'], ...pids.map((pid) => [pid, 'ghostty'] as const)]))
     expect(d.bundleId).toHaveBeenCalledTimes(16)
   })
 })
