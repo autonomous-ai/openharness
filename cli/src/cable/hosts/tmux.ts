@@ -77,13 +77,13 @@ async function runTmux(deps: Pick<TmuxDeps, 'run' | 'tmux'>, args: string[]): Pr
   return deps.run(found.state === 'adopted' ? found.path : 'tmux', args, RUN_TIMEOUT_MS).catch(() => ({ code: null, stdout: '' }))
 }
 
-/** A pane's process, and whether it is the person's by the rule the hook and the client filter hold (no daemon's tag,
- *  not in a session Harness named), from one line of TMUX_PANE_FACTS; nothing when it is out of form. */
-function factsOf(line: string): { pid: number; persons: boolean } | undefined {
+/** A pane's process, its session, and whether it is the person's by the rule the hook and the client filter hold (no
+ *  daemon's tag, not in a session Harness named), from one line of TMUX_PANE_FACTS; nothing when it is out of form. */
+function factsOf(line: string): { pid: number; session: string; persons: boolean } | undefined {
   const facts = TMUX_PANE_FACT.exec(line)
   if (!facts) return undefined
   const [, pid, session, owner] = facts
-  return { pid: Number(pid), persons: !owner && !isHarnessSession(session) }
+  return { pid: Number(pid), session, persons: !owner && !isHarnessSession(session) }
 }
 
 /** What tmux says of a pane (factsOf). `tmux` when no tmux was found, `pane` when tmux did not answer in form. */
@@ -330,6 +330,9 @@ export function createTmuxNested(deps: Omit<TmuxOuterDeps, 'processes' | 'tty'>)
   // The scan asks for up to fifty sessions a look: one listing serves them all, so a tmux that hangs costs the look one
   // timeout, not one an ask.
   const listings = heldAnswers<PaneListing>(deps.now)
+  // By the pane's session, failures too: every pane of a session has its clients, so a tmux that hangs on them costs
+  // the look one timeout, not one an agent.
+  const clients = heldAnswers<ClientPlace | NotRead>(deps.now)
   // By tty and agent: an answer holds for the agent whose chain held the pane.
   const asked = heldAnswers<NestedPlace>(deps.now)
 
@@ -353,7 +356,8 @@ export function createTmuxNested(deps: Omit<TmuxOuterDeps, 'processes' | 'tty'>)
       const facts = pane?.[2] === tty ? factsOf(pane[3]) : undefined
       if (!pane || !facts) continue
       if (!facts.persons || !holdsPane(found.rows, found.pid, facts.pid)) return {}
-      const place = await clientOf(deps, pane[1], found.rows)
+      // The app scan is what can throw: a held answer never rejects.
+      const place = await clients(facts.session, () => clientOf(deps, pane[1], found.rows).catch((): NotRead => 'app'))
       return typeof place !== 'string' && place.app ? { ...place, pane: { adapter: 'tmux', id: `${pane[1]}:${found.pid}:${place.app}` } } : place
     }
     return {}
