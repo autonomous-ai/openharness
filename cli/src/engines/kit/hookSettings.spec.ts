@@ -458,6 +458,7 @@ it('on Windows, writes the Codex rules file with the Windows launcher', async ()
   const home = join(root, 'codex')
   vi.spyOn(console, 'log').mockImplementation(() => {})
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  rmSync(join(env.HARNESS_AGENT_MESSAGES_DIR, 'hook.mjs'), { force: true })
   expect(await installHookSettings('codex', codex.settings, 19473, home, {}, 'win32')).toBe(true)
   const lines = readFileSync(join(home, 'rules', 'harness.rules'), 'utf8').split('\n')
   // The path as a Starlark string's contents: each backslash written twice.
@@ -465,6 +466,21 @@ it('on Windows, writes the Codex rules file with the Windows launcher', async ()
   expect(lines).toContain('prefix_rule(pattern=["harness", "device", "notify"], decision="allow")')
   expect(lines.filter((line) => line.includes(JSON.stringify(POSIX).slice(1, -1)))).toEqual([])
   expect(warn).not.toHaveBeenCalled()
+  const { hooks } = JSON.parse(readFileSync(join(home, codex.settings.fileName), 'utf8'))
+  expect(Object.values(hooks as Record<string, HookBlock[]>).flat().filter(isMessagesBlock)).toEqual([])
+  expect(existsSync(join(env.HARNESS_AGENT_MESSAGES_DIR, 'hook.mjs'))).toBe(false)
+})
+
+it('on Windows, a second install leaves Claude Code\'s settings.json and Codex\'s harness.rules as they were', async () => {
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  const claudeHome = join(root, 'claude'), codexHome = join(root, 'codex')
+  const install = async () => {
+    expect(await installHookSettings('claude', claude.settings, 19473, claudeHome, {}, 'win32')).toBe(true)
+    expect(await installHookSettings('codex', codex.settings, 19473, codexHome, {}, 'win32')).toBe(true)
+    return [readFileSync(join(claudeHome, claude.settings.fileName)), readFileSync(join(codexHome, 'rules', 'harness.rules'))]
+  }
+  const first = await install()
+  expect(await install()).toEqual(first)
 })
 
 // There Codex has no Agent Messages block and its allowance is a file of its own: nothing more goes in hooks.json.
