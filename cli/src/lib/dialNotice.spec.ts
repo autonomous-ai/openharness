@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { isNoticeResult, NOTICE_HOUR_MS, noticeFolder, NoticeLimits, noticeLine } from './dialNotice.js'
+import {
+  composeNotice, isNoticeResult, NOTICE_HOUR_MS, noticeFolder, noticeKind, NoticeLimits, noticeLine,
+} from './dialNotice.js'
 
 const clock = () => {
   let at = 0
@@ -22,6 +24,70 @@ describe('noticeLine', () => {
     const out = noticeLine('🙏'.repeat(200))
     expect(out).toBe(`${'🙏'.repeat(119)}…`)
     expect([...out].length).toBe(120)
+  })
+})
+
+describe('composeNotice', () => {
+  const Q = 'Which cache for the user lookup?'
+  const S = 'in-process LRU'
+  // The devices' listener drops a line that noticeLine would change: the CLI would print `no dial` with no ring.
+  const shown = (line: string): string => {
+    expect(noticeLine(line), JSON.stringify(line)).toBe(line)
+    return line
+  }
+
+  it.each([
+    [S, 'waiting', `Waiting · ${Q} · Suggest: ${S}`],
+    [undefined, 'waiting', `Waiting · ${Q}`],
+    [S, 'proceeding', `Proceeding · ${Q} · Doing: ${S}`],
+    [undefined, 'proceeding', `Proceeding · ${Q}`],
+    [S, undefined, `${Q} · Suggest: ${S}`],
+    [undefined, undefined, Q],
+  ] as const)('suggest %s, state %s', (suggest, state, line) => {
+    expect(shown(composeNotice(Q, suggest, state))).toBe(line)
+  })
+
+  it('keeps a suggestion of 40 letters at most', () => {
+    expect(shown(composeNotice('Q', 'x'.repeat(40)))).toBe(`Q · Suggest: ${'x'.repeat(40)}`)
+    expect(shown(composeNotice('Q', 'x'.repeat(41)))).toBe(`Q · Suggest: ${'x'.repeat(39)}…`)
+  })
+
+  it('cuts the question so the line is 120 letters', () => {
+    const line = shown(composeNotice('q'.repeat(200), 'LRU', 'proceeding'))
+    expect(line).toBe(`Proceeding · ${'q'.repeat(93)}… · Doing: LRU`)
+    expect([...line].length).toBe(120)
+  })
+
+  it('cuts the question so the line is 239 bytes', () => {
+    const line = shown(composeNotice('ữ'.repeat(100), 'Dùng Redis', 'waiting'))
+    expect(line).toBe(`Waiting · ${'ữ'.repeat(67)}… · Suggest: Dùng Redis`)
+    expect(Buffer.byteLength(line)).toBe(239)
+  })
+
+  it('drops the spaces before a cut question\'s ellipsis', () => {
+    expect(shown(composeNotice(`${'a'.repeat(92)}   ${'b'.repeat(30)}`, 'LRU', 'proceeding')))
+      .toBe(`Proceeding · ${'a'.repeat(92)}… · Doing: LRU`)
+  })
+
+  it('never cuts inside a surrogate pair', () => {
+    const line = shown(composeNotice('🙏'.repeat(100)))
+    expect(line).toBe(`${'🙏'.repeat(59)}…`)
+    expect(Buffer.byteLength(line)).toBe(239)
+    expect(line).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/)
+  })
+
+  it('cleans each part', () => {
+    expect(shown(composeNotice('Which\nDB?', ' a\t b ', 'waiting'))).toBe('Waiting · Which DB? · Suggest: a b')
+    expect(composeNotice(' \n ', 'x', 'waiting')).toBe('')
+    expect(shown(composeNotice('Q', ' \t ', 'proceeding'))).toBe('Proceeding · Q')
+  })
+})
+
+describe('noticeKind', () => {
+  it('reads the state from the opening', () => {
+    expect(noticeKind('Waiting · x')).toBe('waiting')
+    expect(noticeKind('Proceeding · Q · Doing: S')).toBe('proceeding')
+    for (const line of ['Waiting for CI', 'Proceeding·x', 'x']) expect(noticeKind(line), line).toBe('plain')
   })
 })
 
