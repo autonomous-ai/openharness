@@ -22,6 +22,7 @@ import type { Platform } from '../src/testing/dialAppEval/types.js'
 import { chatgptSteps } from './harness/appEvalChatgpt.js'
 import { claudeSteps } from './harness/appEvalClaude.js'
 import { inside, TierBDriver } from './harness/appEvalDriver.js'
+import { cursorSteps, vscodeSteps } from './harness/appEvalEditor.js'
 
 const WIN32 = process.platform === 'win32'
 const HOST = process.platform as Platform
@@ -30,7 +31,7 @@ const SCENARIOS = WIN32 ? [] : scenariosFor('b', HOST).filter((s) => s.heldOut)
 describe.skipIf(WIN32)('the dial eval, tier B: the held-out set', () => {
   let driver: TierBDriver
   const runs: ScenarioRun[] = []
-  beforeAll(() => { driver = new TierBDriver({ claude: claudeSteps, chatgpt: chatgptSteps }) })
+  beforeAll(() => { driver = new TierBDriver({ claude: claudeSteps, chatgpt: chatgptSteps, vscode: vscodeSteps, cursor: cursorSteps }) })
   afterAll(async () => {
     if (process.env.DIAL_EVAL_OUT) writeResults(process.env.DIAL_EVAL_OUT, 'heldOut', collect(runs))
     // It throws naming each attempt off this machine not asserted on yet, the last daemon's as it closed among them.

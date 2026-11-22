@@ -211,6 +211,8 @@ async function startSession(world: TierBWorld, key: SessionKey): Promise<void> {
   const state = editorOf(world)
   const s = world.session(key)
   const cwd = world.folder(s.cwd)
+  // A multi-root workspace's other folders are there too, as tier A makes them: Cursor's folder row opens only one that is.
+  for (const folder of s.folders ?? []) world.folder(folder)
   let shell: number | undefined
   if (s.tmux) shell = await inTmux(world, state, s, cwd)
   else {
