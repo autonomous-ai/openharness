@@ -60,14 +60,12 @@ function recorder(over: Partial<Over> = {}, codes: Array<number | null> = [], mo
     ...over,
   }
   const claude = createClaudeAppAdapter({ ...deps, inFront: () => true })
-  // The Codex app's own forward takes the raise, as the devices service hands it (services/devices.ts).
-  const linuxRaise = deps.raise
   const adapters: HostAdapter[] = [
     createHerdrAdapter({ ...deps, client: herdrClient, front: () => undefined }),
     createWeztermAdapter(deps),
     { ...createOrcaAdapter(deps), focus: (pane) => { switched.push(pane.id); return deps.orcaSwitch(pane.id) } },
     claude,
-    createCodexAppAdapter({ ...deps, inFront: () => true, raise: linuxRaise && ((window) => linuxRaise.raise(window)) }),
+    createCodexAppAdapter({ ...deps, inFront: () => true }),
     createTabsAdapter({ isOpen: () => false, select: () => false }),
     ...more,
   ]

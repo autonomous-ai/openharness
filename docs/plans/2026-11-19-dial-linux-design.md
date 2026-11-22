@@ -219,7 +219,7 @@ the exe table maps to `vscode`, `cursor`, `claude` and `codex`. The window class
 none; its class is read from the app's own code (26.1117.41037: `desktopName` `chatgpt.desktop` and
 `app.setName("ChatGPT")`), so X11's WM_CLASS is `chatgpt.ChatGPT` and Wayland's app id `chatgpt`, and the raise finds
 `codex` by `ChatGPT` or `chatgpt`. A tap whose `codex://` link failed raises the app by that class, as macOS brings it by
-its bundle. That file also claims `http` and `https`, which makes it a browser candidate but changes nothing for
+its bundle (§ 2.2). That file also claims `http` and `https`, which makes it a browser candidate but changes nothing for
 `codex://`.
 
 Each adapter's `paneOf` today needs a macOS bundle hint to know its app. On Linux it reads the same facts Linux
@@ -271,6 +271,9 @@ fails or finds nothing answers false and the tap's own outcome stays the pane's.
 2. None found by pid: the app's window by its class, from the place's app (`windowClasses` in `frontApp.ts`, one fixed
    table beside its exe names: `vscode` → `com.microsoft.VSCode`, `wezterm` → `org.wezfurlong.wezterm`, …, with the
    lower-cased spelling some desktops use), as macOS raises an app by bundle. An app with no confirmed class has no row.
+   A row no process holds (a Claude app session or a ChatGPT app thread its app's own store lists) has no window the
+   observed source knows: its app is the one its tap's bundle names, so a failed link still raises that app by class
+   (the dial eval's X5).
 
 ### 2.3 How, per desktop
 

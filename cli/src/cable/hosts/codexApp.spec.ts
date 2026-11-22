@@ -146,11 +146,9 @@ describe('the Codex app adapter', () => {
 describe('the Codex app on Linux', () => {
   const xdgMime: Call = { file: '/fake/bin/xdg-mime', args: ['query', 'default', 'x-scheme-handler/codex'], timeoutMs: 10_000 }
   const xdgOpen: Call = { file: '/fake/bin/xdg-open', args: [`codex://threads/${THREAD}`], timeoutMs: 10_000 }
-  /** The app registered codex:// (xdg-mime names it), and xdg-open exits with [code]. With [raised], the devices' raise
-   *  notes each window it is asked for and answers [raised]; without, there is none. */
-  function linux(code: number | null, raised?: boolean) {
+  /** The app registered codex:// (xdg-mime names it), and xdg-open exits with [code]. */
+  function linux(code: number | null) {
     const calls: Call[] = []
-    const windows: Array<{ pid?: number; app?: string }> = []
     const { logs, adapter } = recorder({
       platform: 'linux',
       onPath: (name) => `/fake/bin/${name}`,
@@ -158,47 +156,24 @@ describe('the Codex app on Linux', () => {
         calls.push({ file, args, timeoutMs })
         return file === xdgMime.file ? { code: 0, stdout: 'chatgpt.desktop\n' } : { code, stdout: '' }
       },
-      raise: raised === undefined ? undefined : async (window) => { windows.push(window); return raised },
     })
-    return { calls, logs, adapter, windows }
+    return { calls, logs, adapter }
   }
 
   it('a tap runs xdg-open with the thread\'s link alone', async () => {
-    const { calls, logs, adapter, windows } = linux(0, true)
+    const { calls, logs, adapter } = linux(0)
     expect(await adapter.focus(pane(THREAD))).toBe(true)
     expect(calls).toEqual([xdgMime, xdgOpen])
     expect(logs).toEqual([])
-    expect(windows).toEqual([])
   })
 
-  // A thread only the open scan found has no process: its window is raised by the app's class alone.
-  it('a failed link raises the app once by its class, in one line with no thread id, and answers what the raise did', async () => {
-    for (const code of [1, null]) {
-      for (const raised of [true, false]) {
-        const { calls, logs, adapter, windows } = linux(code, raised)
-        expect(await adapter.focus(pane(THREAD)), `${code} ${raised}`).toBe(raised)
-        expect(calls).toEqual([xdgMime, xdgOpen])
-        expect(windows).toEqual([{ app: 'codex' }])
-        expect(logs).toEqual([FALLBACK])
-        for (const line of logs) expect(line).not.toContain(THREAD)
-      }
-    }
-  })
-
-  it('a failed link with no raise logs no fallback and runs no open', async () => {
+  it('a failed link logs no fallback and runs no open', async () => {
     for (const code of [1, null]) {
       const { calls, logs, adapter } = linux(code)
       expect(await adapter.focus(pane(THREAD)), String(code)).toBe(false)
       expect(calls).toEqual([xdgMime, xdgOpen])
       expect(logs).toEqual([])
     }
-  })
-
-  it('a rest whose link failed raises nothing', async () => {
-    const { logs, adapter, windows } = linux(1, true)
-    expect(await adapter.show(pane(THREAD), 'a1')).toBe('failed')
-    expect(windows).toEqual([])
-    expect(logs).toEqual([])
   })
 })
 

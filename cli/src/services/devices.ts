@@ -562,7 +562,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** The Claude app's adapter as the dial's verbs reach it, a hooked agent's and a store row's alike: a rest's continue
    *  link is the dial's own move, and the app's attach that follows is its echo. */
   const claudeNoted = noting({ ...claude, show: (pane, agentId) => { noteLink(agentId); return claude.show(pane, agentId) } })
-  const codexApp = createCodexAppAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'codex', log, raise: raise && ((window) => raise.raise(window)), windows })
+  const codexApp = createCodexAppAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'codex', log, windows })
   /** The ChatGPT app threads the dial opened lately, by id. */
   const codexSwitches = dialMovesTo()
   /** The ChatGPT app's adapter as the dial's verbs reach it: a rest or a tap opens the thread's link, and the app's

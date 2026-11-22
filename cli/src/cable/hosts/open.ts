@@ -97,10 +97,19 @@ export function createOpenActions(deps: OpenDeps): {
     const adapter = pane && deps.adapters.find((known) => known.id === pane.adapter)
     return adapter && adapter.tap !== 'after' && adapter.canFocus(pane) ? { adapter, pane } : undefined
   }
+  // On Linux the agent's window as the observed source knows it: a bundle names only the host's app there, none for an
+  // app learnt from the agent's parents. A row no process holds (an app's own store lists it) has no window the source
+  // knows, so its app is the one its bundle names: with none, a failed link brought nothing on Linux (the dial eval's X5).
+  const windowFor = (agentId: string, target: OpenTarget): { pid?: number; app?: string } | undefined => {
+    const window = deps.windowOf?.(agentId)
+    if (window) return window
+    const app = Object.keys(APP_BUNDLES).find((id) => APP_BUNDLES[id] === target.bundle)
+    return app ? { app } : undefined
+  }
   // On Linux the agent's window, by its process or its app's class: the app the raise is handed (raiseWindow), as GNOME
-  // raises by class alone. A bundle names only the host's app there, none for an app learnt from the agent's parents.
+  // raises by class alone.
   const can = (agentId: string, target: OpenTarget): boolean =>
-    !!paneOn(target) || (byBundle && !!target.bundle) || !!raise?.ready({ agent: true, app: deps.windowOf?.(agentId)?.app })
+    !!paneOn(target) || (byBundle && !!target.bundle) || !!raise?.ready({ agent: true, app: windowFor(agentId, target)?.app })
   // Harness Desktop is started by its launcher on Windows, never raised: a running one takes the launch over and comes
   // forward itself (windowsRaise.ts).
   const forward = async (bundle: string): Promise<boolean> => windows
@@ -125,8 +134,8 @@ export function createOpenActions(deps: OpenDeps): {
 
   // Linux's raise brings forward the agent's window, where macOS brings its app: the window of [pid] when the pane's app
   // named the process holding it (a multiplexer's client its focus switched), else of the agent's own process.
-  const raiseWindow = (linux: LinuxRaise, agentId: string, pid?: number): Promise<boolean> => {
-    const window = deps.windowOf?.(agentId)
+  const raiseWindow = (linux: LinuxRaise, agentId: string, target: OpenTarget, pid?: number): Promise<boolean> => {
+    const window = windowFor(agentId, target)
     return linux.raise({ pid: pid ?? window?.pid, app: window?.app })
   }
 
@@ -163,11 +172,11 @@ export function createOpenActions(deps: OpenDeps): {
       // brought the app itself. The pane came, whatever the raise did.
       if (own.adapter.tap === 'before') {
         if (bundle) await forward(bundle)
-        else if (raise) await raiseWindow(raise, agentId, own.adapter.windowPid?.(own.pane))
+        else if (raise) await raiseWindow(raise, agentId, target, own.adapter.windowPid?.(own.pane))
       }
       return true
     }
-    const app = bundle ? () => forward(bundle) : raise && (() => raiseWindow(raise, agentId))
+    const app = bundle ? () => forward(bundle) : raise && (() => raiseWindow(raise, agentId, target))
     if (!app) return false
     // The Claude app's link is undocumented and may change with any release: the app still comes forward. Which app
     // only, never its session, pane or handle. A pane refused has said so already.

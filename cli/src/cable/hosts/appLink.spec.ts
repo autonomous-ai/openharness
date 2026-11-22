@@ -267,21 +267,14 @@ describe('a link on Linux', () => {
     expect(together.calls).toEqual([asked, xdgOpened('s1'), xdgOpened('s2')])
   })
 
-  // As on macOS: a session only the open scan found has no process the opener could raise (open.ts).
-  it('no app, no xdg-mime, no xdg-open or a failed open: a tap runs the forward once and answers it, a rest never', async () => {
+  it('no app, no xdg-mime, no xdg-open or a failed open answers false, and runs no forward', async () => {
     const tried = async (label: string, made: (link: AppLink) => ReturnType<typeof recorder>, calls: Call[]) => {
-      for (const answer of [true, false]) {
-        const { forward, link } = forwarding(answer)
-        const { calls: ran, verbs } = made(link)
-        expect(await verbs.focus(pane('s1')), label).toBe(answer)
-        expect(forward.runs, label).toBe(1)
-        expect(await verbs.show(pane('s1'), 'a1'), label).toBe('failed')
-        expect(forward.runs, label).toBe(1)
-        expect(ran, label).toEqual(calls)
-      }
-      // With no forward, a failed link answers false.
-      const { verbs } = made(FAKE)
+      const { forward, link } = forwarding(true)
+      const { calls: ran, verbs } = made(link)
       expect(await verbs.focus(pane('s1')), label).toBe(false)
+      expect(await verbs.show(pane('s1'), 'a1'), label).toBe('failed')
+      expect(forward.runs, label).toBe(0)
+      expect(ran, label).toEqual(calls)
     }
     // No app is kept as the read's answer: nothing opens, and nothing is read again.
     for (const handler of ['', '\n', 'fake-app', 'fake app.desktop', '../fake.desktop', `${'a'.repeat(129)}.desktop`]) {
