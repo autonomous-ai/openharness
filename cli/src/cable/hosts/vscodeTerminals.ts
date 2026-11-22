@@ -129,7 +129,8 @@ export interface VscodeTerminalsDeps {
   /** Which agents have a terminal changed. */
   changed(): void
   /** A person focused that terminal at `at` (now's clock): the pid of the listed agent running there, none when no
-   *  listed agent does. Each replaces the one before it, none too. `regained`: its window came into focus on the
+   *  listed agent does or while a chain that may be its agent's is read (it is told again once read). Each replaces the
+   *  one before it, none too. `regained`: its window came into focus on the
    *  terminal it had, as it does when the dial's own tap brings the editor forward. */
   focused(agentPid: number | undefined, terminal: VscodeTerminal, at: number, regained: boolean): void
   /** Monotonic milliseconds. */
@@ -385,6 +386,9 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
           if (!moved) return
           focus = { terminal: { window: id, shell: active as number }, window, at: deps.now(), regained }
           place()
+          // Waiting on a chain read, it is the person's latest all the same: told as none now, a focus the devices hold
+          // for the settle is over, and not followed should the settle come during the read.
+          if (focus) deps.focused(undefined, focus.terminal, focus.at, focus.regained)
         },
       },
     },
