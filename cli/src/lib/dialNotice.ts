@@ -45,7 +45,7 @@ export function composeNotice(question: string, suggest?: string, state?: Notice
   const row = ROWS[state ?? 'plain']
   const s = clean(suggest ?? '')
   const tail = s.length === 0 ? ''
-    : `${row.label}${s.length > NOTICE_SUGGEST_MAX ? `${s.slice(0, NOTICE_SUGGEST_MAX - 1).join('')}…` : s.join('')}`
+    : `${row.label}${s.length > NOTICE_SUGGEST_MAX ? `${s.slice(0, NOTICE_SUGGEST_MAX - 1).join('').trimEnd()}…` : s.join('')}`
   const fixed = row.opening + tail
   const room = NOTICE_MAX_CHARS - [...fixed].length
   const bytes = NOTICE_LINE_MAX_BYTES - Buffer.byteLength(fixed)
