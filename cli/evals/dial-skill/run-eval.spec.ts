@@ -13,22 +13,25 @@ const CLI = resolve(import.meta.dirname, '../..')
 const RUNNER = join(import.meta.dirname, 'run-eval.mjs')
 const SCENARIOS = new Map(loadScenarios().map((s) => [s.id, s]))
 
-/** The fake `claude`'s judge: passes when the line or answer is the expected ask, and echoes it in the reason. */
+/** The fake `claude`'s judge: passes when the line or answer is the expected ask, once the state and suggestion the CLI
+ *  composes around a line are taken off, and echoes it in the reason. */
 const JUDGE = String.raw`const prompt = process.argv[process.argv.indexOf('-p') + 1]
 const [ask, given] = [...prompt.matchAll(/^(\x60{3,})\n([\s\S]*?)\n\1$/gm)].map((m) => m[2])
+const asked = given.replace(/^(Waiting|Proceeding) · /, '').replace(/ · (Suggest|Doing): .*$/, '')
 console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: '',
-  structured_output: { pass: given === ask, reason: 'judged ' + given },
+  structured_output: { pass: asked === ask, reason: 'judged ' + given },
   usage: { input_tokens: 2, output_tokens: 1 }, modelUsage: { 'claude-opus-5-5': {} } }))`
 
-/** A fake agent run served by `model`: it rings the staged harness with a line holding $HOME, and prints its repo path. */
+/** A fake agent run served by `model`: it rings the staged harness with a line holding $HOME, waiting as the need
+ *  scenarios it runs on expect, and prints its repo path. */
 function agent(model: string, text = 'Looked around'): string {
   return String.raw`const home = process.env.HOME
-require('node:child_process').execFileSync('harness', ['device', 'notify', 'Check ' + home])
+require('node:child_process').execFileSync('harness', ['device', 'notify', 'Check ' + home, '--waiting'])
 for (const event of [
   { type: 'system', subtype: 'init', model: ${JSON.stringify(model)} },
   { type: 'assistant', parent_tool_use_id: null, message: { model: ${JSON.stringify(model)}, content: [
     { type: 'text', text: ${JSON.stringify(text)} + ' in ' + process.cwd() },
-    { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'harness device notify "Check ' + home + '"' } },
+    { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'harness device notify "Check ' + home + '" --waiting' } },
   ] } },
   { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'shown' }] } },
   { type: 'result', subtype: 'success', is_error: false, result: 'Stopped in ' + process.cwd() + ' under ' + home,
@@ -424,7 +427,7 @@ describe('run-eval.mjs with claude', () => {
     const need = rows.find((r) => r.prompt_id === 'api-key-missing.claude')
     expect(need).toMatchObject({ model: 'claude-opus-5-5', status: 'ok', meta: { skill: true }, rings: 1, tool_calls: 1 })
     // The judge's reason quoted the line, which named $HOME.
-    expect(need.explanation.line_ok).toBe('judged Check ~')
+    expect(need.explanation.line_ok).toBe('judged Waiting · Check ~')
 
     const traces = join(flow, 'baseline', 'traces')
     const trace = JSON.parse(readFileSync(join(traces, 'api-key-missing.claude_rep0.json'), 'utf8'))

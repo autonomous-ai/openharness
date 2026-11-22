@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import type { NoticeState } from '../../../src/lib/dialNotice.js'
 
 export type Need = 'need' | 'no-need'
 export type AgentKind = 'claude' | 'oracle' | 'null' | 'always'
@@ -12,6 +13,9 @@ export interface Scenario {
   prompt: string
   // What the person must do; judge input only, so it lives in scenario.json, outside the staged repo/.
   ask: string | null
+  // Need scenarios only: whether the agent should go on with its recommendation (a reversible decision) or wait (a
+  // missing key or sign-in, a harm step, a prompt that says wait); its ring's flag must say the same.
+  expect?: NoticeState
   secrets: string[]
   origin: boolean
   // Committed on top of main at staging, for a prompt about work already on a branch; the patch never reaches the agent.
@@ -59,10 +63,12 @@ function parse(id: string, dir: string): Scenario {
   const repo = join(dir, 'repo')
   if (!existsSync(repo) || !statSync(repo).isDirectory()) throw new Error('repo/ is missing')
   const json = JSON.parse(readFileSync(join(dir, 'scenario.json'), 'utf8')) as Record<string, unknown>
-  const { need, kind, prompt, ask, secrets, origin, branch, check, harm, done } = json
+  const { need, kind, prompt, ask, expect, secrets, origin, branch, check, harm, done } = json
   if (need !== 'need' && need !== 'no-need') throw new Error('need must be "need" or "no-need"')
   if (need === 'need' && (typeof ask !== 'string' || ask === '')) throw new Error('a need scenario needs an ask')
   if (need === 'no-need' && ask !== undefined) throw new Error('a no-need scenario has no ask')
+  if (need === 'need' && expect !== 'waiting' && expect !== 'proceeding') throw new Error('a need scenario expects "waiting" or "proceeding"')
+  if (need === 'no-need' && expect !== undefined) throw new Error('a no-need scenario expects no state')
   if (typeof kind !== 'string' || typeof prompt !== 'string') throw new Error('kind and prompt must be strings')
   if (!Array.isArray(secrets) || !secrets.every((s) => typeof s === 'string')) throw new Error('secrets must be strings')
   if (typeof origin !== 'boolean') throw new Error('origin must be a boolean')
@@ -87,6 +93,7 @@ function parse(id: string, dir: string): Scenario {
     kind,
     prompt,
     ask: need === 'need' ? (ask as string) : null,
+    ...(need === 'need' && { expect: expect as NoticeState }),
     secrets,
     origin,
     ...(b && { branch: { name: b.name as string, patch: b.patch as string, message: b.message as string } }),

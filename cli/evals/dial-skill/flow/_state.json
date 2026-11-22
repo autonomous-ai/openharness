@@ -55,6 +55,7 @@
     "evals/dial-skill/lib/agents.ts",
     "evals/dial-skill/lib/judge.ts",
     "evals/dial-skill/lib/grade.ts",
+    "src/lib/dialNotice.ts",
     "evals/dial-skill/build-report-lite.mjs",
     "evals/dial-skill/scenarios/add-version-flag/repo/README.md",
     "evals/dial-skill/scenarios/add-version-flag/repo/package.json",

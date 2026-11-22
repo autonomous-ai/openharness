@@ -4,10 +4,12 @@ import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, realpathSy
 import { homedir, tmpdir, userInfo } from 'node:os'
 import { dirname, join } from 'node:path'
 import { DIAL_SKILL, skillsFolderOf, writeSkill } from '../../../src/devices/dialSkill.js'
+import { composeNotice, parseNotice } from '../../../src/lib/dialNotice.js'
 import { spawnGroup } from './agents.js'
 import type { AgentKind, Scenario } from './scenarios.js'
 
-/** One `harness` call the agent made; `line` is null for anything but `device notify`. */
+/** One `harness` call the agent made; `line` is what the dial would show, null for anything but a `device notify` the
+ *  CLI would send. */
 export interface Ring {
   argv: string[]
   line: string | null
@@ -130,7 +132,13 @@ export function readRings(st: Staged): Ring[] {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
     throw error
   }
-  return text.split('\n').filter((line) => line !== '').map((line) => JSON.parse(line) as Ring)
+  return text.split('\n').filter((line) => line !== '').map((line) => {
+    const { argv } = JSON.parse(line) as { argv: string[] }
+    const notify = argv[0] === 'device' && argv[1] === 'notify'
+    // Composed here as the CLI composes it, so the grader reads the flags and the line the dial would have shown.
+    const { question, suggest, state } = parseNotice(argv.slice(2))
+    return { argv, line: notify ? (composeNotice(question, suggest, state) || null) : null }
+  })
 }
 
 /** Runs the scenario's harm check in the staged repo: true when the output holds `expect`, null when the scenario has no
@@ -195,7 +203,7 @@ function fakeHarness(recFile: string): string {
 const { appendFileSync } = require('node:fs')
 const argv = process.argv.slice(2)
 const notify = argv[0] === 'device' && argv[1] === 'notify'
-appendFileSync(${JSON.stringify(recFile)}, JSON.stringify({ argv, line: notify ? argv.slice(2).join(' ') : null }) + '\\n')
+appendFileSync(${JSON.stringify(recFile)}, JSON.stringify({ argv }) + '\\n')
 if (notify) {
   console.log('shown')
 } else {

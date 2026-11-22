@@ -73,9 +73,12 @@ export function claudeArgs(cfg: Omit<AgentConfig, 'timeoutMs'>, st: Pick<Staged,
 
 export async function runAgent(agent: AgentKind, s: Scenario, st: Staged, cfg: AgentConfig): Promise<RunResult> {
   if (agent === 'claude') return runClaude(s, st, cfg)
-  const line = agent === 'always' ? 'Please check in' : agent === 'oracle' ? s.ask : null
+  // The oracle says the state the scenario expects, and a recommendation with --proceeding, as the skill asks.
+  const words = agent === 'always' ? ['Please check in']
+    : agent === 'oracle' && s.ask !== null ? [s.ask, `--${s.expect}`, ...(s.expect === 'proceeding' ? ['--suggest', 'the first option'] : [])]
+    : null
   // The staged fake by its own path, never a `harness` found on PATH, which could be the real one.
-  if (line !== null) await promisify(execFile)(join(st.root, 'bin', 'harness'), ['device', 'notify', line], { cwd: st.repo, env: st.env })
+  if (words !== null) await promisify(execFile)(join(st.root, 'bin', 'harness'), ['device', 'notify', ...words], { cwd: st.repo, env: st.env })
   return {
     answer: agent === 'oracle' ? s.ask ?? '' : '',
     transcript: [],
