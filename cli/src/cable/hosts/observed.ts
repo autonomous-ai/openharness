@@ -269,6 +269,8 @@ interface Entry {
   sentStop?: boolean
   /** When the dial's words reached it, oldest first, each until a turn starts for it. */
   dialPrompts: { at: number }[]
+  /** A session-start was heard and no turn-start since: where cursor-agent's idle is read (idleKnown). Never the scan's. */
+  startedAtPrompt?: true
 }
 
 /** A pane's name as its app shows it, and whether the person set it. */
@@ -459,10 +461,15 @@ export class ObservedSource implements HostSource {
   /**
    * Claude Code's and Codex's idle is their turn state, as the scan and checkWorking read it. Nothing reads another
    * engine's turn: it reads idle only as it was listed, before any hook told of a turn, so it is at its prompt only once a
-   * hook said its turn ended, done or errored.
+   * hook said its turn ended, done or errored. cursor-agent is also at its prompt from a heard session-start until a turn
+   * starts (docs/plans/2026-11-22-dial-vscode-cursor-voice-design.md, "cursor-agent's idle"): its turn under way stays
+   * busy, as its approval prompt sends no hook and a typed Enter would answer it. Unverified: that cursor-agent sends
+   * `sessionStart` as its screen opens rather than at its first submit; either way the turn-start after that submit
+   * clears it.
    */
   private idleKnown(e: Entry): boolean {
     return e.agent.engine === 'claude' || e.agent.engine === 'codex' || e.agent.state === 'done' || e.agent.state === 'error'
+      || (e.agent.engine === 'cursor' && e.startedAtPrompt === true)
   }
 
   /** Still listed, and its session has not ended. */
@@ -907,8 +914,10 @@ export class ObservedSource implements HostSource {
     switch (e.event) {
       case 'session-start':
         // A start must not undo a state a faster event already set.
+        entry.startedAtPrompt = true
         break
       case 'turn-start':
+        entry.startedAtPrompt = undefined
         this.dropStop(entry)
         this.setState(entry, 'working', now)
         a.unseenDone = false
