@@ -368,6 +368,14 @@ export const vscodeSteps: AppSteps = {
     if (!held) throw new Error(`scenario ${world.scenario.id}: no open window holds ${step.session}'s terminal`)
     const [key, open] = held
     const shell = shellNamed(world, state, key, step.session)
+    // One window has the focus: the one that had it says it lost it first, as the editor tells its extension.
+    for (const [other, window] of [...state.windows]) {
+      if (other === key || !window.focused) continue
+      state.windows.delete(other)
+      state.windows.set(other, { ...window, focused: false })
+      window.loop.set({ focused: false })
+      await until(`${window.id} to lose the focus`, () => window.loop.took.at(-1)?.focused === false, TOOK_MS, 50)
+    }
     state.windows.delete(key)
     state.windows.set(key, { ...open, active: step.session, focused: true })
     open.loop.set({ active: shell, focused: true })
