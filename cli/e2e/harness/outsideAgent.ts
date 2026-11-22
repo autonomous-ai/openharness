@@ -5,7 +5,9 @@
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createServer, type Socket } from 'node:net'
 import { dirname, join } from 'node:path'
+import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
 import { observedAgentId } from '../../src/cable/hosts/observed.js'
 import { until, type IsolatedDaemon } from './daemon.js'
@@ -257,6 +259,91 @@ async function tabUnderItermServer(d: IsolatedDaemon, argv: readonly string[], e
         return false
       }, 10_000, 50)
     },
+  }
+}
+
+/**
+ * An agent's own process that runs its hooks as its CLI runs them (codexOutside.ts, cursorOutside.ts): each line it is
+ * handed, `{command, cwd, env, input}`, run through a shell, and answered with `{code, stderr}` once it ends. Named by its
+ * first argument when there is one: Linux knows a process by that name (its comm), as it knows the ChatGPT app's. Given a
+ * socket's path as its second, for one in a tab whose terminal its stdio are, its hooks come and go on that socket
+ * instead of its stdin and stdout.
+ */
+export const HOOK_RUNNER = `const { spawn } = require('node:child_process')
+if (process.argv[1]) process.title = process.argv[1]
+const channel = process.argv[2] ? require('node:net').connect(process.argv[2]) : undefined
+const answers = channel ?? process.stdout
+require('node:readline').createInterface({ input: channel ?? process.stdin }).on('line', (line) => {
+  const { command, cwd, env, input } = JSON.parse(line)
+  const hook = spawn('/bin/sh', ['-c', command], { cwd, env, stdio: ['pipe', 'ignore', 'pipe'] })
+  let stderr = ''
+  hook.stderr.on('data', (chunk) => { stderr += chunk })
+  hook.on('close', (code) => answers.write(JSON.stringify({ code, stderr }) + '\\n'))
+  hook.stdin.end(input)
+})`
+/** For a hook runner in a tab to reach its socket. */
+const CONNECT_MS = 30_000
+/** Each tab's socket a name of its own in the daemon's root. */
+let channels = 0
+
+/** One hook run by an agent's own process: its exit code and what it wrote on stderr. */
+export type HookRun = (command: string, env: NodeJS.ProcessEnv, input: string) => Promise<{ code: number | null; stderr: string }>
+
+/**
+ * Each hook handed to a hook runner (HOOK_RUNNER) on [requests], run in [cwd], and its answer read on [answers]. One at a
+ * time: the runner answers in the order its hooks end, so a hook asked while another runs waits for it, and two never
+ * take each other's answers. A hook whose runner ended first fails, naming [what].
+ */
+export function hookRuns(answers: NodeJS.ReadableStream, requests: NodeJS.WritableStream, cwd: string, what: string): HookRun {
+  const lines = createInterface({ input: answers })
+  let ended = false
+  lines.once('close', () => { ended = true })
+  // A line written as the runner ends fails with EPIPE: its end is the failure already.
+  requests.on('error', () => {})
+  const ask: HookRun = (command, env, input) => new Promise((resolve, reject) => {
+    const gone = (): void => {
+      lines.off('line', answered)
+      reject(new Error(`${what} ended before its hook did`))
+    }
+    const answered = (line: string): void => {
+      lines.off('close', gone)
+      resolve(JSON.parse(line) as { code: number | null; stderr: string })
+    }
+    if (ended) return gone()
+    lines.once('line', answered)
+    lines.once('close', gone)
+    requests.write(`${JSON.stringify({ command, cwd, env, input })}\n`)
+  })
+  let last: Promise<unknown> = Promise.resolve()
+  return (command, env, input) => {
+    const run = last.then(() => ask(command, env, input))
+    last = run.catch(() => {})
+    return run
+  }
+}
+
+/**
+ * A hook runner (HOOK_RUNNER) in a tab of its own (openTab) in [cwd], under [env] alone, as [how] says: its terminal is
+ * its stdio, so its hooks come and go on a socket in the daemon's root. Resolves once it reached that socket; [what] names
+ * it in a failure. Closed as any tab is (closeTab).
+ */
+export async function hookTab(d: IsolatedDaemon, cwd: string, env: NodeJS.ProcessEnv, how: TabOptions, what: string):
+  Promise<{ tab: Tab; run: HookRun }> {
+  const path = join(d.root, `hooks-${++channels}.sock`)
+  const server = createServer()
+  let socket: Socket | undefined
+  server.once('connection', (connected) => { socket = connected })
+  await new Promise<void>((listening, failed) => server.once('error', failed).listen(path, listening))
+  let tab: Tab | undefined
+  try {
+    tab = await openTab(d, cwd, env, [process.execPath, '-e', HOOK_RUNNER, '', path], how)
+    const connected = await until(`${what} on its socket`, () => socket, CONNECT_MS, 50)
+    return { tab, run: hookRuns(connected, connected, cwd, what) }
+  } catch (error) {
+    if (tab) await closeTab(tab, what)
+    throw error
+  } finally {
+    server.close()
   }
 }
 

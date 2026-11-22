@@ -10,33 +10,14 @@
  */
 import type { ChildProcess } from 'node:child_process'
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { createServer, type Socket } from 'node:net'
 import { dirname, join } from 'node:path'
-import { createInterface, type Interface } from 'node:readline'
-import type { Writable } from 'node:stream'
 import { expect } from 'vitest'
 import { inside } from './appEvalDriver.js'
 import { until, type IsolatedDaemon } from './daemon.js'
-import { closeTab, openTab, type Tab } from './outsideAgent.js'
+import { closeTab, hookTab, type HookRun, type Tab } from './outsideAgent.js'
 
-/** The agent's own process: each hook handed on the socket named by its argument run through a shell as Cursor runs it,
- *  one at a time, each answered there with its exit code and stderr. */
-const OWN = `const { spawn } = require('node:child_process')
-const channel = require('node:net').connect(process.argv[1])
-require('node:readline').createInterface({ input: channel }).on('line', (line) => {
-  const { command, cwd, env, input } = JSON.parse(line)
-  const hook = spawn('/bin/sh', ['-c', command], { cwd, env, stdio: ['pipe', 'ignore', 'pipe'] })
-  let stderr = ''
-  hook.stderr.on('data', (chunk) => { stderr += chunk })
-  hook.on('close', (code) => channel.write(JSON.stringify({ code, stderr }) + '\\n'))
-  hook.stdin.end(input)
-})`
-/** For an agent to reach its socket. */
-const CONNECT_MS = 30_000
 /** For the daemon's Codex hooks to be in their file: Cursor's line is made from theirs. */
 const LINE_MS = 30_000
-/** Each socket a name of its own in the daemon's root. */
-let channels = 0
 
 export type CursorEvent = 'start' | 'turn-start' | 'turn-stop' | 'end'
 /** Each event as Cursor's hooks name it (engines/cursor/contract.ts CURSOR_HOOK_SETTINGS). */
@@ -74,7 +55,7 @@ const said = (role: 'user' | 'assistant', text: string): string => `${JSON.strin
 export class CursorOutside {
   private constructor(private readonly d: IsolatedDaemon, private readonly tab: Tab, private readonly cwd: string,
     private readonly sessionId: string, private readonly roots: readonly string[], private readonly hints: Record<string, string>,
-    readonly transcriptPath: string, private readonly answers: Interface, private readonly requests: Writable) {}
+    readonly transcriptPath: string, private readonly run: HookRun) {}
 
   /**
    * In its folder under the daemon's projects, under a fake Cursor: with `terminal`, cursor-agent as the job of a shell
@@ -93,24 +74,10 @@ export class CursorOutside {
     mkdirSync(dirname(transcriptPath), { recursive: true })
     // A new one: the ids are the catalog's, and an earlier scenario on this daemon wrote under the same.
     writeFileSync(transcriptPath, '')
-    const path = join(d.root, `cursor-${++channels}.sock`)
-    const server = createServer()
-    let socket: Socket | undefined
-    server.once('connection', (connected) => { socket = connected })
-    await new Promise<void>((listening, failed) => server.once('error', failed).listen(path, listening))
-    let tab: Tab | undefined
-    try {
-      tab = await openTab(d, cwd, { ...d.env, ...hints, TERM: 'xterm-256color' }, [process.execPath, '-e', OWN, path],
-        { app: 'cursor', shell: terminal })
-      children.push(tab.process)
-      const connected = await until(`the Cursor agent in ${folder} on its socket`, () => socket, CONNECT_MS, 50)
-      return new CursorOutside(d, tab, cwd, sessionId, roots, hints, transcriptPath, createInterface({ input: connected }), connected)
-    } catch (error) {
-      if (tab) await closeTab(tab, folder)
-      throw error
-    } finally {
-      server.close()
-    }
+    const { tab, run } = await hookTab(d, cwd, { ...d.env, ...hints, TERM: 'xterm-256color' }, { app: 'cursor', shell: terminal },
+      `the Cursor agent in ${folder}`)
+    children.push(tab.process)
+    return new CursorOutside(d, tab, cwd, sessionId, roots, hints, transcriptPath, run)
   }
 
   get pid(): number { return this.tab.pid }
@@ -130,26 +97,14 @@ export class CursorOutside {
         return undefined
       }
     }, LINE_MS, 100)
-    const run = hookRun(codexLine, this.d.env, this.hints, event, { sessionId: this.sessionId, roots: this.roots, transcriptPath: this.transcriptPath })
-    const { code, stderr } = await this.ask(run)
+    const { command, env, input } = hookRun(codexLine, this.d.env, this.hints, event,
+      { sessionId: this.sessionId, roots: this.roots, transcriptPath: this.transcriptPath })
+    const { code, stderr } = await this.run(command, env, input)
     expect(code, stderr).toBe(0)
   }
 
   /** Its process and tab gone, with no hook: as Cursor ends its agent. */
   close(): Promise<void> {
     return closeTab(this.tab, this.cwd)
-  }
-
-  /** Through its own process, which answers each hook in turn: one ended first answers none. */
-  private ask({ command, env, input }: ReturnType<typeof hookRun>): Promise<{ code: number | null; stderr: string }> {
-    return new Promise((resolve, reject) => {
-      const gone = (): void => reject(new Error("Cursor's agent's process ended before its hook did"))
-      this.answers.once('line', (line) => {
-        this.answers.off('close', gone)
-        resolve(JSON.parse(line) as { code: number | null; stderr: string })
-      })
-      this.answers.once('close', gone)
-      this.requests.write(`${JSON.stringify({ command, cwd: this.cwd, env, input })}\n`)
-    })
   }
 }

@@ -9,35 +9,11 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
-import { createServer, type Socket } from 'node:net'
 import { dirname, join } from 'node:path'
-import { createInterface, type Interface } from 'node:readline'
-import type { Writable } from 'node:stream'
 import { expect } from 'vitest'
 import { observedAgentId } from '../../src/cable/hosts/observed.js'
 import { until, type IsolatedDaemon } from './daemon.js'
-import { closeTab, openTab, type Tab, type TabOptions } from './outsideAgent.js'
-
-/** The session's own process: each hook handed on its stdin run through a shell as Codex runs it, one at a time, each
- *  answered on its stdout with its exit code and stderr. Named by its first argument when there is one: Linux knows a
- *  process by that name (its comm), as it knows the ChatGPT app's. Given a socket's path as its second, in a tab whose
- *  terminal its stdio are, the hooks come and go on that socket instead. */
-const OWN = `const { spawn } = require('node:child_process')
-if (process.argv[1]) process.title = process.argv[1]
-const channel = process.argv[2] ? require('node:net').connect(process.argv[2]) : undefined
-const answers = channel ?? process.stdout
-require('node:readline').createInterface({ input: channel ?? process.stdin }).on('line', (line) => {
-  const { command, cwd, env, input } = JSON.parse(line)
-  const hook = spawn('/bin/sh', ['-c', command], { cwd, env, stdio: ['pipe', 'ignore', 'pipe'] })
-  let stderr = ''
-  hook.stderr.on('data', (chunk) => { stderr += chunk })
-  hook.on('close', (code) => answers.write(JSON.stringify({ code, stderr }) + '\\n'))
-  hook.stdin.end(input)
-})`
-/** For a Codex in a tab to reach its socket. */
-const CONNECT_MS = 30_000
-/** Each tab's socket a name of its own in the daemon's root. */
-let channels = 0
+import { closeTab, HOOK_RUNNER, hookRuns, hookTab, type HookRun, type Tab, type TabOptions } from './outsideAgent.js'
 
 export interface CodexOutsideOptions {
   /** Its thread: a new one when none is given. */
@@ -55,8 +31,8 @@ export class CodexOutside {
   readonly transcriptPath: string
   private readonly home: string
   private process: ChildProcess | undefined
-  private answers: Interface | undefined
-  private requests: Writable | undefined
+  /** Its own process's runs of its hooks, when it has one (HOOK_RUNNER). */
+  private ownRun: HookRun | undefined
   private tab: Tab | undefined
 
   constructor(private readonly d: IsolatedDaemon, folder: string, private readonly children: ChildProcess[],
@@ -72,10 +48,9 @@ export class CodexOutside {
     appendFileSync(this.transcriptPath, `${JSON.stringify({ timestamp: new Date().toISOString(), type: 'session_meta', payload: meta })}\n`)
     if (options.own) {
       const title = options.own.title
-      this.process = spawn(process.execPath, ['-e', OWN, ...(title ? [title] : [])], { cwd: this.cwd, env: d.env, stdio: ['pipe', 'pipe', 'ignore'] })
+      this.process = spawn(process.execPath, ['-e', HOOK_RUNNER, ...(title ? [title] : [])], { cwd: this.cwd, env: d.env, stdio: ['pipe', 'pipe', 'ignore'] })
       children.push(this.process)
-      this.answers = createInterface({ input: this.process.stdout! })
-      this.requests = this.process.stdin!
+      this.ownRun = hookRuns(this.process.stdout!, this.process.stdin!, this.cwd, "the Codex session's process")
     }
   }
 
@@ -87,23 +62,9 @@ export class CodexOutside {
   static async inTab(d: IsolatedDaemon, folder: string, children: ChildProcess[], hints: Record<string, string>,
     tab: TabOptions, options: Omit<CodexOutsideOptions, 'own'> = {}): Promise<CodexOutside> {
     const codex = new CodexOutside(d, folder, children, hints, options)
-    const path = join(d.root, `codex-${++channels}.sock`)
-    const server = createServer()
-    let socket: Socket | undefined
-    server.once('connection', (connected) => { socket = connected })
-    await new Promise<void>((listening, failed) => server.once('error', failed).listen(path, listening))
-    try {
-      codex.tab = await openTab(d, codex.cwd, { ...codex.env, TERM: 'xterm-256color' }, [process.execPath, '-e', OWN, '', path],
-        { ...tab, shell: true })
-      const connected = await until(`the Codex in ${folder} on its socket`, () => socket, CONNECT_MS, 50)
-      codex.answers = createInterface({ input: connected })
-      codex.requests = connected
-    } catch (error) {
-      if (codex.tab) await closeTab(codex.tab, folder)
-      throw error
-    } finally {
-      server.close()
-    }
+    const { tab: opened, run } = await hookTab(d, codex.cwd, { ...codex.env, TERM: 'xterm-256color' }, { ...tab, shell: true }, `the Codex in ${folder}`)
+    codex.tab = opened
+    codex.ownRun = run
     return codex
   }
 
@@ -131,7 +92,7 @@ export class CodexOutside {
     }, 30_000, 100)
     const env = this.env
     const input = JSON.stringify({ session_id: this.sessionId, cwd: this.cwd, transcript_path: this.transcriptPath, hook_event_name: event, ...fields })
-    const { code, stderr } = this.answers ? await this.ownRun(command, env, input) : await this.run(command, env, input)
+    const { code, stderr } = this.ownRun ? await this.ownRun(command, env, input) : await this.run(command, env, input)
     expect(code, stderr).toBe(0)
   }
 
@@ -153,19 +114,5 @@ export class CodexOutside {
     const exited = new Promise<number | null>((resolve) => child.once('close', resolve))
     child.stdin!.end(input)
     return { code: await exited, stderr }
-  }
-
-  /** Through its own process, which answers each hook in turn: one ended first answers none. */
-  private ownRun(command: string, env: NodeJS.ProcessEnv, input: string): Promise<{ code: number | null; stderr: string }> {
-    const answers = this.answers!
-    return new Promise((resolve, reject) => {
-      const gone = () => reject(new Error('the Codex session\'s process ended before its hook did'))
-      answers.once('line', (line) => {
-        answers.off('close', gone)
-        resolve(JSON.parse(line) as { code: number | null; stderr: string })
-      })
-      answers.once('close', gone)
-      this.requests!.write(`${JSON.stringify({ command, cwd: this.cwd, env, input })}\n`)
-    })
   }
 }
