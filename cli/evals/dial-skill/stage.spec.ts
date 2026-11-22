@@ -262,12 +262,21 @@ describe('stage', () => {
     }])
   })
 
-  it('reads a notify with flags and no question as no line, as the CLI shows nothing', () => {
+  it('answers a notify with flags and no question as the CLI does, with its usage and exit 1, and reads it as no line', () => {
     const st = staging('claude', { skill: true })
+    const asks = [['--waiting'], ['--suggest', 'Postgres', '--proceeding', '--json'], [' \n ', '--suggest']]
+    // The CLI's own usage, word for word: the eval cannot import it, as src/devices/notice.ts reaches the CLI's config.
+    const usage = readFileSync(join(OPENHARNESS, 'cli', 'src', 'devices', 'notice.ts'), 'utf8').match(/^export const NOTICE_USAGE = '(.+)'$/m)?.[1]
+    expect(usage).toBeTruthy()
 
-    sh(st, 'harness device notify --waiting')
+    for (const words of asks) {
+      const run = spawnSync(join(st.root, 'bin', 'harness'), ['device', 'notify', ...words], { cwd: st.repo, env: st.env, encoding: 'utf8' })
+      expect(run.status, JSON.stringify(words)).toBe(1)
+      expect(run.stdout).toBe('')
+      expect(run.stderr).toBe(`${usage}\n`)
+    }
 
-    expect(readRings(st)).toEqual([{ argv: ['device', 'notify', '--waiting'], line: null }])
+    expect(readRings(st)).toEqual(asks.map((words) => ({ argv: ['device', 'notify', ...words], line: null })))
   })
 
   it('refuses any other harness command, recorded with no line', () => {
