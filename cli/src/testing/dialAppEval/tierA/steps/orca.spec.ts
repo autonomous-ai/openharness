@@ -10,7 +10,7 @@ import { orcaBinary } from '../../../../devices/orcaHomes.js'
 import type { DevicesDeps, startDevices } from '../../../../services/devices.js'
 import { dialStream, orcaFrontHandler, type ListenerStream, type ListenerStreamHandler } from '../../../../services/devicesListener.js'
 import { orcaGhost, orcaSession, scenario } from '../../catalog.js'
-import { orcaTerminalHandle, orcaWorktreeId, type Platform, type Scenario, type SessionKey } from '../../types.js'
+import { ORCA_ECHO_MS, orcaTerminalHandle, orcaWorktreeId, type Platform, type Scenario, type SessionKey } from '../../types.js'
 import { installClock } from '../clock.js'
 import { machine } from '../machine.js'
 import { World } from '../world.js'
@@ -357,6 +357,21 @@ describe("tier A's Orca", () => {
     closeOrca(world)
     reopenOrca(world)
     expect([door.dial.isOpen(), door.opened.length]).toEqual([false, 2])
+  })
+
+  it("a switch's echo still to come as Orca quits is never told: its pane went with Orca", async () => {
+    const { world, deps } = worldOn('darwin', layout())
+    await started(world, ['a', 'b'])
+    const reads = createOrcaReads(deps.orca!)
+    expect(await createOrcaAdapter(deps.orca!).show({ adapter: 'orca', id: orcaTerminalHandle('b') }, 'eval-agent')).toBe('ok')
+    vi.advanceTimersByTime(ORCA_ECHO_MS - 1)
+    closeOrca(world)
+    reopenOrca(world)
+    const heard: Array<string | null> = []
+    reads.watchOrcaFocus((handle) => { heard.push(handle) })
+    vi.advanceTimersByTime(ORCA_ECHO_MS)
+    await landed()
+    expect(heard).toEqual([])
   })
 
   it("a watch after Orca's relaunch prints no focus from before its quit: that terminal went with it", async () => {
