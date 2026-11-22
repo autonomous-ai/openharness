@@ -50,7 +50,7 @@ export class InOwnTmux {
     // Its conversation, as its SessionStart hook named it: the only engine starting now.
     const started = new RegExp(`claude pid=(\\d+) SessionStart\\(${resume === undefined ? 'startup' : 'resume'}\\) session=(\\S+) ran`)
     const [, pid, sessionId] = await until(`${folder} to run its SessionStart hook`, () => started.exec(d.hookLog().slice(from)), 30_000, 100)
-    return new InOwnTmux(d, pane, sessionId!, Number(pid))
+    return new InOwnTmux(d, pane, sessionId, Number(pid))
   }
 
   /** Typed at its prompt, then Enter, as e2e/hookclient.e2e.ts types. */
