@@ -3,7 +3,7 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readLastAnswer } from '../../../../cable/hosts/lastAnswer.js'
 import { ptyMaker } from '../../../../cable/hosts/scannedApp.js'
 import type { InboxAnswer, InboxPoll } from '../../../../core/deviceHookCalls.js'
@@ -15,9 +15,15 @@ import { machine } from '../machine.js'
 import type { TierAWorld } from '../world.js'
 import { agentPid, dropSession, keyOfOrcaHandle, keyOfShell, orcaHandleOf, sessionsSteps, shellOf } from './sessions.js'
 
+// No process starts: the devices' own maker check and transcript readers run here, on the model alone.
+const { reached, refused } = await vi.hoisted(async () => await import('../refuseProcesses.js'))
+vi.mock('node:child_process', refused)
+vi.mock('child_process', refused)
+
 const roots: string[] = []
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
+  expect(reached.splice(0)).toEqual([])
 })
 
 const scenario: Scenario = {

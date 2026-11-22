@@ -17,6 +17,11 @@ import { World } from '../world.js'
 import { answerOrca, closeOrca, orcaModelSteps, reopenOrca } from './orca.js'
 import { sessionsSteps } from './sessions.js'
 
+// No process starts: the real reads of Orca run here, and one past the model would run this machine's `orca`.
+const { reached, refused } = await vi.hoisted(async () => await import('../refuseProcesses.js'))
+vi.mock('node:child_process', refused)
+vi.mock('child_process', refused)
+
 const PLATFORMS: readonly Platform[] = ['darwin', 'win32', 'linux']
 
 /** w1: a and c split in its first tab, b in its second, e in its third, never started; w2: d. */
@@ -33,6 +38,7 @@ afterEach(() => {
   for (const world of worlds.splice(0)) world.remove()
   vi.useRealTimers()
   vi.unstubAllEnvs()
+  expect(reached.splice(0)).toEqual([])
 })
 
 /** A world on that platform with Orca's answers, as the driver gives it, and the deps it handed the devices, whose

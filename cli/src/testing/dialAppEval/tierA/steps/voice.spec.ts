@@ -15,6 +15,11 @@ import type { TierAWorld } from '../world.js'
 import { sessionsSteps } from './sessions.js'
 import { recordTyping, voiceSteps } from './voice.js'
 
+// No process starts: the words the devices type are recorded from the commands they run, never run.
+const { reached, refused } = await vi.hoisted(async () => await import('../refuseProcesses.js'))
+vi.mock('node:child_process', refused)
+vi.mock('child_process', refused)
+
 const sessions = claudeSessions(['a', 'b'])
 const scenario = {
   id: 'S1', app: 'claude', sessions, checks: [], probes: [],
@@ -98,6 +103,7 @@ beforeEach(() => { vi.useFakeTimers() })
 afterEach(() => {
   vi.useRealTimers()
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
+  expect(reached.splice(0)).toEqual([])
 })
 
 describe("tier A's voice step", () => {
