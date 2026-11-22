@@ -200,7 +200,7 @@ export function closeOrca(world: TierAWorld): void {
 }
 
 /** Orca relaunched: the plugin opens its stream again where it was open. */
-export async function reopenOrca(world: TierAWorld): Promise<void> {
+export function reopenOrca(world: TierAWorld): void {
   const model = modelOf(world)
   if (model.reopen) openPlugin(world)
   model.reopen = false

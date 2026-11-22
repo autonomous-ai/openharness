@@ -47,7 +47,7 @@ const STEPS: { [K in Exclude<StepKind, 'wait'>]: StepHandler<K> } = {
   relaunch: async (world, step) => {
     await sessionsSteps.relaunch(world, step)
     if (isEditor(step.app)) await reopenWindows(world, step.app)
-    if (step.app === 'orca') await reopenOrca(world)
+    if (step.app === 'orca') reopenOrca(world)
   },
 }
 /** Virtual time for the dial to be found and welcomed: the fleet looks every 2 s, the dial greets every 2 s. */

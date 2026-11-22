@@ -542,7 +542,7 @@ describe("tier A's Orca agents", () => {
     const w = fakeWorld('darwin', orcaAgents())
     await w.hook('a', 'start')
     const { agent, shell, maker } = chainOf(w.world, 'a')
-    dropSession(w.world, 'a')
+    await dropSession(w.world, 'a')
     expect([machine.processes.has(agent.pid), machine.processes.has(shell.pid), machine.processes.has(maker.pid)]).toEqual([false, false, true])
     expect(w.told.map((e) => e.event)).toEqual(['session-start'])
     expect(machine.owners.has(orcaAgents().sessions[0]!.id)).toBe(false)
