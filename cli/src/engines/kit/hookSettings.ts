@@ -100,7 +100,7 @@ async function installMessagesBlock(engine: HookEngine, settings: HookSettings, 
       throw new HookPreparationHeld('the hook settings do not have the declared object shape')
     }
     let allowed = false
-    if (allow && 'list' in allow) for (const group of harnessRules(allow.rules, platform)) allowed = withRules(current, allow.list, group, allow.unless) || allowed
+    if (allow && 'list' in allow) for (const group of harnessRules(allow.rules, platform)) allowed = withRules(current, allow.list, group, allow.unless ?? [], platform) || allowed
     if (inbox) {
       const blocks = current.hooks[inbox.event] ?? []
       const ours = blocks.filter(isMessagesBlock)
@@ -176,14 +176,15 @@ export function harnessRules(rules: readonly string[], platform: NodeJS.Platform
  * every other rule. A shape Harness does not know is left as it is: the person's rules are never rewritten to fit.
  * None of the group is added where one of the person's `unless` lists (`deny`, `ask`) touches any of it.
  */
-function withRules(settings: Settings, [table, list]: readonly [string, string], rules: readonly string[], unless: readonly string[] = []): boolean {
+function withRules(settings: Settings, [table, list]: readonly [string, string], rules: readonly string[], unless: readonly string[],
+  platform: NodeJS.Platform): boolean {
   const at = settings[table] ?? {}
   if (!at || typeof at !== 'object' || Array.isArray(at)) return false
   const lists = at as Record<string, unknown>
   const current = lists[list] ?? []
   if (!Array.isArray(current)) return false
   const theirs = unless.flatMap((name) => Array.isArray(lists[name]) ? (lists[name] as unknown[]).filter((rule): rule is string => typeof rule === 'string') : [])
-  if (rules.some((rule) => theirs.some((other) => touches(other, rule)))) return false
+  if (rules.some((rule) => theirs.some((other) => touches(other, rule, platform)))) return false
   const missing = rules.filter((rule) => !current.includes(rule))
   if (!missing.length) return false
   settings[table] = { ...at, [list]: [...current, ...missing] }
@@ -194,12 +195,20 @@ function withRules(settings: Settings, [table, list]: readonly [string, string],
  * Whether the person's rule names the same command as ours, a broader one or a narrower one: with the closing
  * parenthesis and a trailing wildcard left off, one starts with the other. `Bash(harness:*)`, `Bash(harness close
  * --now)`, `Bash` and `mcp__harness` all touch `Bash(harness close:*)` or `mcp__harness__harness_close`; an unrelated
- * prefix such as `Bash(har*)` does too, which only leaves an allow out.
+ * prefix such as `Bash(har*)` does too, which only leaves an allow out. The person's rule counts as written, and with
+ * its program word by its name alone: the last part of its path, out of quotes, and on Windows ([platform]), which
+ * finds a program in any case and without its suffix, in lower case and without `.exe`, `.cmd`, `.bat` or `.com`. So
+ * `Bash(~/.local/bin/harness close)` touches it, and on Windows `Bash(Harness.exe:*)` and `Bash(C:/…/harness.exe close)`.
  */
-function touches(theirs: string, ours: string): boolean {
+function touches(theirs: string, ours: string, platform: NodeJS.Platform): boolean {
   const stem = (rule: string) => rule.replace(/\)$/, '').replace(/(:\*|\s*\*)$/, '').trimEnd()
-  const a = stem(theirs), b = stem(ours)
-  return a.length > 0 && (b.startsWith(a) || a.startsWith(b))
+  const b = stem(ours)
+  const meets = (a: string) => a.length > 0 && (b.startsWith(a) || a.startsWith(b))
+  const named = stem(theirs).replace(/^([A-Za-z]*\()("[^"]*"|'[^']*'|\S*)/, (_, open: string, word: string) => {
+    const last = word.replace(/^["']|["']$/g, '').split(/[\\/]/).pop()!
+    return open + (platform === 'win32' ? last.toLowerCase().replace(/\.(exe|cmd|bat|com)$/, '') : last)
+  })
+  return meets(stem(theirs)) || meets(named)
 }
 
 /** How Harness's rules file begins in every release: the commands the header lists after it change from one to the
