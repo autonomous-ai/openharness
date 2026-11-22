@@ -355,16 +355,16 @@ from before (`src/harnessd/services.spec.ts`, `e2e/messagesSkew.e2e.ts`).
 - Do not write to tmux, the registry or another service's files. A service never writes to Harness's tmux: no pane or
   session Harness made. One thing is allowed in the person's own tmux (PM, 2026-11-15,
   [the spec](../../../docs/specs/2026-11-15-device-wave1-checks.md)): the devices process may move to the pane a hook
-  named, once it has checked that the pane's process is the agent's or one of its parents (`cable/hosts/tmux.ts`). It
-  runs `select-window` and `select-pane` on the pane's own session, which every client on that session then shows, and
-  `switch-client` only when it found no app holding a client of that session; that names the client it moves. It runs
-  nothing on a session Harness made. It never types, creates or closes anything there. Harness's panes and the
+  named, or to the pane the open scan found by the agent's own tty, once it has checked that the pane's process is the
+  agent's or one of its parents (`cable/hosts/tmux.ts`). It runs `select-window` and `select-pane` on the pane's own
+  session, which every client on that session then shows, and `switch-client` only when it found no app holding a
+  client of that session; that names the client it moves. It runs nothing on a session Harness made. It never types, creates or closes anything there. Harness's panes and the
   person's can share one tmux server, so the rule is held per pane and session, by the owner tag the hook reads
   (`hook/notify.mjs` `paneFacts`).
 
   In the person's herdr the devices process runs `herdr agent focus <pane>` alone, for the pane a hook named in the
-  default session, at a tap, and at a rest only while the app holding that pane's client is in front
-  (`cable/hosts/herdr.ts`), beside the dial's words over herdr's socket. To find that client it reads only process
+  default session or the pane herdr's own list gives the agent's session, at a tap, and at a rest only while the app
+  holding that pane's client is in front (`cable/hosts/herdr.ts`), beside the dial's words over herdr's socket. To find that client it reads only process
   names, parents and ttys, the unix sockets of herdr's own processes (on macOS the rows `lsof` gives, on Linux the rows
   of `ss -xn src '*/herdr-client.sock'` and their `/proc/<pid>/fd` socket links) and a tty's access time, never another
   process's environment or argv (`cable/hosts/herdrOuter.ts`). It never creates or closes anything there.
