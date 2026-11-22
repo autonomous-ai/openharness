@@ -1123,8 +1123,6 @@ export class ObservedSource implements HostSource {
     const records = await this.recordsOf(listing, owners)
     const busy = await this.busyOf(listing, owners)
     const answers = await this.answersOf(listing, rows, busy)
-    // Every read of the look, so a slow one shows in the line.
-    const ms = this.deps.now() - learning
     let listed = 0
     let known = 0
     let named = 0
@@ -1182,6 +1180,9 @@ export class ObservedSource implements HostSource {
     // One at a time: a busy machine is not handed fifty lookups at once.
     let placed = 0
     for (const [entry, nest] of asks) if (await this.placeNested(entry, nest)) placed++
+    // Every read of the look and every nested lookup, so a slow one shows in the line, in its one count: the line's
+    // readers match its form.
+    const ms = this.deps.now() - learning
     // Counts only: an app, a pid or a path would say whose session runs where, and a name or an answer is the person's own.
     this.deps.log(`[observed] scan · ${listed} found · ${known} app known · ${named} named · ${answered} answered · ${ms} ms`
       + ` · ${placed} nested placed`)
