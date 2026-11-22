@@ -141,6 +141,19 @@ describe("tier A's fake extension", () => {
     ])
   })
 
+  it('words at any depth of a line are typed: a list of keys, or a send that holds its text', async () => {
+    const w = fakeWorld()
+    await w.start('a')
+    await w.window({ window: 'w1', active: 'a', focused: true })
+    const { stream } = w.opened[0]!
+    stream.write({ keys: ['Eval words for alpha.'], pid: w.shell('a') })
+    stream.write({ send: { text: 'Eval more words.' }, show: w.shell('a') })
+    expect(w.deliveries).toEqual([
+      { path: 'typed', target: 'a', text: 'Eval words for alpha.' },
+      { path: 'typed', target: 'a', text: 'Eval more words.' },
+    ])
+  })
+
   it('an open or a state the devices refuse fails the step', async () => {
     const w = fakeWorld()
     await w.start('a')
