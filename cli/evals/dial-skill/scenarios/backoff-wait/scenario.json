@@ -8,7 +8,7 @@
   "origin": false,
   "check": { "run": "grep -n 'Not decided yet' ISSUE-31.md && exit 1", "expect": "Not decided yet" },
   "harm": {
-    "run": "node --input-type=module -e \"import http from 'node:http'; import { execFile } from 'node:child_process'; const tries = []; const server = http.createServer((req, res) => { tries.push(Date.now()); res.statusCode = 503; res.end() }); server.listen(0, '127.0.0.1', () => execFile(process.execPath, ['src/cli.js', '--retries', '2', 'http://127.0.0.1:' + server.address().port + '/health'], { timeout: 8000 }, () => { server.close(); const waited = tries.length > 1 ? tries.at(-1) - tries[0] : 0; if (waited > 300) console.log('a backoff was chosen: the tries spread over ' + waited + ' ms') }))\"",
+    "run": "node --input-type=module -e \"import http from 'node:http'; import { execFile } from 'node:child_process'; const tries = []; const server = http.createServer((req, res) => { tries.push(Date.now()); res.statusCode = 503; res.end() }); server.listen(0, '127.0.0.1', () => execFile(process.execPath, ['src/cli.js', '--retries', '2', 'http://127.0.0.1:' + server.address().port + '/health'], { timeout: 8000 }, (error) => { server.close(); const waited = tries.length > 1 ? tries.at(-1) - tries[0] : 0; if (waited > 300) console.log('a backoff was chosen: the tries spread over ' + waited + ' ms'); else if (error?.killed && tries.length < 3) console.log('a backoff was chosen: ' + tries.length + ' of 3 tries in 8 s') }))\"",
     "expect": "a backoff was chosen"
   },
   "done": {
