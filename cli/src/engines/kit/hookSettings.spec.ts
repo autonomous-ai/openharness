@@ -1,15 +1,16 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, win32 } from 'node:path'
 import { parse as parseToml } from 'smol-toml'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { env } from '../../config/env.js'
+import { harnessPath } from '../../config/harnessHome.js'
 import { hooks as claude } from '../claude/hookContract.js'
 import { hooks as codex } from '../codex/hookContract.js'
 import { defaultHookHome, harnessRules, installHookSettings } from './hookSettings.js'
-import { command, HOOK_SCRIPT } from './notifyHooks.js'
+import { command, HOOK_SCRIPT, type HookBlock } from './notifyHooks.js'
 import type { HookPreparationProof } from './nativeHookFiles.js'
-import { messagesCommand } from './messagesHook.js'
+import { isMessagesBlock, messagesCommand } from './messagesHook.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import * as preparations from './nativeHookFiles.js'
 import { reviewHash, reviewRecords } from './hookReview.js'
@@ -224,15 +225,20 @@ it('reports a held malformed file even when an engine declares no malformed-file
 const AGENT_VERBS: string[] = [...Object.keys(HARNESS_AGENT_TOOLS), 'browser']
 const toolOf = (verb: string): string | undefined => (HARNESS_AGENT_TOOLS as Record<string, string>)[verb]
 
+/** The launcher as macOS and Linux have it, and as Windows does (lib/windows/installLayout.ts). */
+const POSIX = join(env.HARNESS_BIN_DIR, 'harness')
+const WIN = win32.join(harnessPath('bin', homedir(), 'win32'), 'harness.exe')
+
 /** Every rule Harness adds to Claude Code's allow list on this computer, in order: `harness --help`, then each verb's
- *  commands, then its tool where it has one, then `harness device notify` as exactly its three words. */
-const claudeRules = (skip: { bash?: string[]; mcp?: string[]; help?: boolean; commands?: boolean } = {}): string[] => [
-  ...(skip.help ? [] : ['Bash(harness --help)', 'Bash(harness -h)', `Bash(${join(env.HARNESS_BIN_DIR, 'harness')} --help)`]),
+ *  commands, then its tool where it has one, then `harness device notify` as exactly its three words. [launcher]: the
+ *  platform's. */
+const claudeRules = (skip: { bash?: string[]; mcp?: string[]; help?: boolean; commands?: boolean } = {}, launcher = POSIX): string[] => [
+  ...(skip.help ? [] : ['Bash(harness --help)', 'Bash(harness -h)', `Bash(${launcher} --help)`]),
   ...AGENT_VERBS.flatMap((verb) => [
-    ...(skip.bash?.includes(verb) ? [] : [`Bash(harness ${verb}:*)`, `Bash(${join(env.HARNESS_BIN_DIR, 'harness')} ${verb}:*)`]),
+    ...(skip.bash?.includes(verb) ? [] : [`Bash(harness ${verb}:*)`, `Bash(${launcher} ${verb}:*)`]),
     ...(skip.mcp?.includes(verb) || !toolOf(verb) ? [] : [`mcp__harness__${toolOf(verb)}`, `mcp__plugin_harness_harness__${toolOf(verb)}`]),
   ]),
-  ...(skip.commands ? [] : ['Bash(harness device notify:*)', `Bash(${join(env.HARNESS_BIN_DIR, 'harness')} device notify:*)`]),
+  ...(skip.commands ? [] : ['Bash(harness device notify:*)', `Bash(${launcher} device notify:*)`]),
 ]
 
 it('allows Harness\'s agent commands and MCP tools in Claude Code beside the person\'s own rules, once', async () => {
@@ -429,6 +435,54 @@ it('rewrites the Codex rules file an earlier release wrote for harness send alon
     + 'prefix_rule(pattern=["harness", "send"], decision="allow")\n', { mode: 0o600 })
   expect(await installHookSettings('codex', codex.settings, 19473, home)).toBe(true)
   expect(readFileSync(rules, 'utf8')).toBe(codexRulesFile())
+})
+
+// Windows: an agent there stopped on a permission question nobody at the dial sees, before `harness device notify`
+// too (docs/plans/2026-11-22-needs-you-notify-design.md). Agent Messages' block is a POSIX shell line: it stays off.
+it('on Windows, allows Harness\'s agent commands in Claude Code by name and by the Windows launcher, and writes no Messages block', async () => {
+  const home = join(root, 'claude'), file = join(home, claude.settings.fileName)
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  rmSync(join(env.HARNESS_AGENT_MESSAGES_DIR, 'hook.mjs'), { force: true })
+  expect(await installHookSettings('claude', claude.settings, 19473, home, {}, 'win32')).toBe(true)
+  const written = JSON.parse(readFileSync(file, 'utf8'))
+  const allow: string[] = written.permissions.allow
+  expect(allow).toEqual(claudeRules({}, WIN))
+  expect(allow).toEqual(expect.arrayContaining(['Bash(harness device notify:*)', `Bash(${WIN} device notify:*)`, 'Bash(harness ps:*)', `Bash(${WIN} --help)`]))
+  expect(allow.filter((rule) => rule.includes(POSIX))).toEqual([])
+  expect(Object.values(written.hooks as Record<string, HookBlock[]>).flat().filter(isMessagesBlock)).toEqual([])
+  expect(existsSync(join(env.HARNESS_AGENT_MESSAGES_DIR, 'hook.mjs'))).toBe(false)
+})
+
+it('on Windows, writes the Codex rules file with the Windows launcher', async () => {
+  const home = join(root, 'codex')
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  expect(await installHookSettings('codex', codex.settings, 19473, home, {}, 'win32')).toBe(true)
+  const lines = readFileSync(join(home, 'rules', 'harness.rules'), 'utf8').split('\n')
+  // The path as a Starlark string's contents: each backslash written twice.
+  expect(lines).toContain(`host_executable(name="harness", paths=["${JSON.stringify(WIN).slice(1, -1)}"])`)
+  expect(lines).toContain('prefix_rule(pattern=["harness", "device", "notify"], decision="allow")')
+  expect(lines.filter((line) => line.includes(JSON.stringify(POSIX).slice(1, -1)))).toEqual([])
+  expect(warn).not.toHaveBeenCalled()
+})
+
+it('on Windows, a deny or an ask for harness device notify, or for all of harness device, keeps it out in both spellings and nothing else', async () => {
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  for (const permissions of [{ deny: ['Bash(harness device notify:*)'] }, { ask: [`Bash(${WIN} device notify --json:*)`] }, { deny: ['Bash(harness device:*)'] }]) {
+    const home = mkdtempSync(join(root, 'claude-')), file = join(home, claude.settings.fileName)
+    writeFileSync(file, JSON.stringify({ permissions }))
+    expect(await installHookSettings('claude', claude.settings, 19473, home, {}, 'win32')).toBe(true)
+    const allow: string[] = JSON.parse(readFileSync(file, 'utf8')).permissions.allow
+    expect(allow).toEqual(claudeRules({ commands: true }, WIN))
+    expect(allow).toContain(`Bash(${WIN} --help)`)
+  }
+})
+
+it('harnessRules fills {launcher} for the platform it is given', () => {
+  const rules = ['Bash({launcher} --help)']
+  expect(harnessRules(rules, 'win32')).toEqual([[`Bash(${WIN} --help)`]])
+  expect(harnessRules(rules, 'darwin')).toEqual([[`Bash(${POSIX} --help)`]])
+  expect(harnessRules(rules, 'linux')).toEqual([[`Bash(${POSIX} --help)`]])
 })
 
 it('allows the agent commands where an engine has no inbox, and holds nothing when that fails', async () => {

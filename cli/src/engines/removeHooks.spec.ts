@@ -1,8 +1,9 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { dirname, join, win32 } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
+import { harnessPath } from '../config/harnessHome.js'
 import { COMMANDCODE_HOOK_SETTINGS } from './commandcode/contract.js'
 import { hookContracts } from './hooks.js'
 import { HERMES_HOOK_SETTINGS } from './hermes/contract.js'
@@ -111,6 +112,33 @@ describe('removeEngineHooks', () => {
     expect(existsSync(rules('codex-first'))).toBe(false)
     expect(outcomes).toContainEqual({ file: rules('codex-mine'), removed: 0, kept: 'another author’s file' })
     expect(existsSync(rules('codex-mine'))).toBe(true)
+  })
+})
+
+// The launcher as macOS and Linux have it, and as Windows does (lib/windows/installLayout.ts).
+const POSIX = join(env.HARNESS_BIN_DIR, 'harness')
+const WIN = win32.join(harnessPath('bin', homedir(), 'win32'), 'harness.exe')
+
+describe('Harness\'s allowance on Windows', () => {
+  it('the targets name the Windows launcher\'s rules', () => {
+    const { allowRules } = defaultHookTargets(join(machine().root, 'data'), () => ({ claude: [], codex: [] }), 'win32').claude
+    expect(allowRules).toContain(`Bash(${WIN} device notify:*)`)
+    expect(allowRules).toContain('Bash(harness device notify:*)')
+    expect(allowRules.filter((rule) => rule.includes(POSIX))).toEqual([])
+  })
+
+  it('an uninstall takes the Windows rules out of Claude Code\'s list and keeps the person\'s', async () => {
+    const { root, targets } = machine()
+    targets.claude.allowRules = defaultHookTargets(join(root, 'data'), () => ({ claude: [], codex: [] }), 'win32').claude.allowRules
+    const file = join(root, 'claude', 'settings.json')
+    const windows = ['Bash(harness --help)', `Bash(${WIN} --help)`, 'Bash(harness ps:*)', `Bash(${WIN} ps:*)`,
+      'mcp__harness__harness_list', 'Bash(harness device notify:*)', `Bash(${WIN} device notify:*)`]
+    write(file, JSON.stringify({ permissions: { allow: [...windows, 'Bash(npm test:*)'], deny: ['Bash(harness device:*)'] } }))
+
+    const outcomes = await removeEngineHooks(targets, 'win32')
+
+    expect(outcomes.filter((o) => o.failed)).toEqual([])
+    expect(JSON.parse(readFileSync(file, 'utf8')).permissions).toEqual({ allow: ['Bash(npm test:*)'], deny: ['Bash(harness device:*)'] })
   })
 })
 
