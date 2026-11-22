@@ -283,7 +283,7 @@ describe("tier A's live sessions", () => {
       await w.hook('c', 'start')
       hints[platform] = toldOf(w.told, sessionOf('c').id).hostHints
       const editor = machine.processes.get(machine.processes.get(agentPid(w.world, 'c')!)!.ppid)!
-      expect(editor).toMatchObject({ ppid: 1, app: platform === 'win32' ? undefined : 'cursor' })
+      expect([editor.ppid, editor.app]).toEqual([1, platform === 'win32' ? undefined : 'cursor'])
       expect(shellOf(w.world, 'c')).toBeUndefined()
     }
     expect(hints).toEqual({ darwin: { __CFBundleIdentifier: CURSOR }, win32: { __CFBundleIdentifier: CURSOR }, linux: {} })

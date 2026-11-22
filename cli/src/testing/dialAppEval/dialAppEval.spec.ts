@@ -75,7 +75,7 @@ vi.mock('../../lib/sessionSearch/external.js', async (real) => ({
 vi.mock('../../cable/hosts/scannedApp.js', async (real) => ({
   ...await real<typeof import('../../cable/hosts/scannedApp.js')>(),
   learnApps: async (pids: readonly number[]) => new Map(pids.flatMap((pid) => {
-    const app = machine.processes.get(pid)?.app
+    const app = machine.appOf(pid)
     return app ? [[pid, app] as const] : []
   })),
   readProcessNames: async () => [...machine.processes.values()].map(({ pid, ppid, executable, tty }) => ({ pid, ppid, executable, ...(tty ? { tty } : {}) })),

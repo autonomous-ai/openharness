@@ -17,12 +17,19 @@ import type { TierAWorld } from './world.js'
 /** How long an app takes to show and resume what a link opens. */
 const OPEN_MS = 500
 
-/** The link the devices make for a session (cable/hosts/claudeApp.ts, codexApp.ts): only the whole link opens it. */
-const linkOf = (s: SessionDef): string => (s.app === 'claude' ? `claude://code/continue?session=${s.localId}` : `codex://threads/${s.id}`)
+/** The link the devices make for a session (cable/hosts/claudeApp.ts, codexApp.ts): only the whole link opens it. An
+ *  editor's panel link shows its session and tells Harness nothing, so no editor's session is one these apps open. */
+function linkOf(s: SessionDef): string | undefined {
+  if (s.app === 'claude') return `claude://code/continue?session=${s.localId}`
+  return s.app === 'chatgpt' ? `codex://threads/${s.id}` : undefined
+}
 
 /** The session a command's link names, whichever opener runs it (open, xdg-open, harness-pty open-link). */
 function opened(world: TierAWorld, argv: readonly string[]): SessionDef | undefined {
-  return world.scenario.sessions.find((s) => !s.ghost && argv.includes(linkOf(s)))
+  return world.scenario.sessions.find((s) => {
+    const link = linkOf(s)
+    return !s.ghost && link !== undefined && argv.includes(link)
+  })
 }
 
 /** The thread's name as Codex keeps it, its last line in session_index.jsonl, else the scenario's title. */

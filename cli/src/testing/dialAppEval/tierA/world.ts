@@ -41,8 +41,11 @@ export interface TierAWorld {
   /** What `deps.listen` was handed: the devices' own listener's handlers. */
   readonly listener: Readonly<Record<string, ListenerHandler | ListenerStreamHandler>>
   readonly claudeStore: ReturnType<typeof claudeAppFixture>; readonly codexHome: ReturnType<typeof codexAppFixture>
-  /** Where the engines' transcripts go, Harness's own Claude Code and Codex homes: emptied for each scenario. */
-  readonly folders: { claudeProjects: string; codexSessions: string }
+  /**
+   * Where the engines' transcripts go: Harness's own Claude Code and Codex homes and the suite's Cursor home (env
+   * CURSOR_HOME), emptied for each scenario, and the folder of the world's own that holds each Codex with a home of its own.
+   */
+  readonly folders: { claudeProjects: string; codexSessions: string; cursorProjects: string; codexHomes: string }
   /** What the devices' transcriber answers. */
   speech: string | null
   /** The app in front, as the last front step told the watch. */
@@ -146,7 +149,7 @@ export class World implements TierAWorld {
   listener: Readonly<Record<string, ListenerHandler | ListenerStreamHandler>> = {}
   readonly claudeStore: ReturnType<typeof claudeAppFixture>
   readonly codexHome: ReturnType<typeof codexAppFixture>
-  readonly folders: { claudeProjects: string; codexSessions: string }
+  readonly folders: TierAWorld['folders']
   speech: string | null = null
   /** None until the driver's first front step, before the dial is plugged in. */
   front: App | 'other' = 'other'
@@ -180,7 +183,8 @@ export class World implements TierAWorld {
     const codexHome = join(root, '.codex')
     this.codexHome = codexAppFixture(codexHome)
     if (installed) this.install(root, codexHome)
-    this.folders = { claudeProjects: emptied(env.CLAUDE_PROJECTS_DIR), codexSessions: emptied(join(env.CODEX_HOME, 'sessions')) }
+    this.folders = { claudeProjects: emptied(env.CLAUDE_PROJECTS_DIR), codexSessions: emptied(join(env.CODEX_HOME, 'sessions')),
+      cursorProjects: emptied(join(env.CURSOR_HOME, 'projects')), codexHomes: join(root, 'codex-homes') }
     this.dial = new LoopbackDial(() => Date.now())
     const dataDir = join(root, 'data')
     mkdirSync(dataDir)
