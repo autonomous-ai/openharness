@@ -4976,6 +4976,28 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(editorLines()).toEqual(['[device] vscode · skipped · echo'])
   })
 
+  it('with VS Code settled, a window coming into focus on its terminal follows it, unless the dial\'s tap brought it within 2 s', async () => {
+    const { settle, listener, port } = await twoTerminals(VSCODE, { orca: mac })
+    port.observed(hook('session-start', { sessionId: UUID, hostHints: extension }))
+    await settle('vscode')
+    // Another VS Code window holds the focus; a tap on the session in its window's Claude Code tab brings this one.
+    expect(listener.vscodeState(WINDOW_ID, [SHELL, SHELL_B], SHELL, false)).toBeUndefined()
+    expect(await host().openAgent(V1)).toBeUndefined()
+    editorClock = 1_999
+    expect(listener.vscodeState(WINDOW_ID, [SHELL, SHELL_B], SHELL)).toBeUndefined()
+    expect(editorFollows()).toEqual([])
+    expect(editorLines()).toEqual(['[device] vscode · skipped · echo'])
+    // The person coming back to it later moves the dial, and choosing another terminal as it comes too.
+    expect(listener.vscodeState(WINDOW_ID, [SHELL, SHELL_B], SHELL, false)).toBeUndefined()
+    editorClock = 2_000
+    expect(listener.vscodeState(WINDOW_ID, [SHELL, SHELL_B], SHELL)).toBeUndefined()
+    expect(editorFollows()).toEqual([[ID, 'vscode']])
+    expect(await host().openAgent(V1)).toBeUndefined()
+    expect(listener.vscodeState(WINDOW_ID, [SHELL, SHELL_B], SHELL, false)).toBeUndefined()
+    expect(listener.vscodeState(WINDOW_ID, [SHELL, SHELL_B], SHELL_B)).toBeUndefined()
+    expect(editorFollows()).toEqual([[ID, 'vscode'], [B, 'vscode']])
+  })
+
   it('with no dial linked a focus follows nothing and counts nothing', async () => {
     const { front, settle, focus } = await twoTerminals()
     await settle('vscode')

@@ -435,19 +435,20 @@ describe('VS Code\'s windows', () => {
     expect(h.changed).toHaveBeenCalledTimes(3)
   })
 
-  // A person focusing another of a window's terminals tells the devices its agent, and when the state came
+  // A person focusing another of a window's terminals tells the devices its agent, when the state came, and whether its
+  // window came into focus on the terminal it had, as it does for the dial's own tap
   // (docs/plans/2026-11-17-dial-vscode-extension-design.md, "PR B, decided now" 3).
   it('a focused window\'s active terminal moving to another tells the devices that terminal\'s agent, once', async () => {
     const h = await placed()
     h.state(W1, [700, 710], { active: 700 })
     h.focused.mockClear()
     h.state(W1, [700, 710], { active: 710 })
-    expect(h.focused.mock.calls).toEqual([[910, { window: W1, shell: 710 }, 0]])
+    expect(h.focused.mock.calls).toEqual([[910, { window: W1, shell: 710 }, 0, false]])
     // The same state again moved nothing.
     h.state(W1, [700, 710], { active: 710 })
     expect(h.focused).toHaveBeenCalledTimes(1)
     h.state(W1, [700, 710], { active: 700 })
-    expect(h.focused.mock.calls.at(-1)).toEqual([900, { window: W1, shell: 700 }, 0])
+    expect(h.focused.mock.calls.at(-1)).toEqual([900, { window: W1, shell: 700 }, 0, false])
   })
 
   it('a window coming back into focus on its active terminal tells its agent; a window out of focus or with none active tells nothing', async () => {
@@ -459,7 +460,11 @@ describe('VS Code\'s windows', () => {
     expect(h.focused).not.toHaveBeenCalled()
     h.state(W1, [700, 710], { active: 710, focused: false })
     h.state(W1, [700, 710], { active: 710 })
-    expect(h.focused.mock.calls).toEqual([[910, { window: W1, shell: 710 }, 0]])
+    expect(h.focused.mock.calls).toEqual([[910, { window: W1, shell: 710 }, 0, true]])
+    // Into focus on another terminal than it had: the person chose that one.
+    h.state(W1, [700, 710], { active: 710, focused: false })
+    h.state(W1, [700, 710], { active: 700 })
+    expect(h.focused.mock.calls.at(-1)).toEqual([900, { window: W1, shell: 700 }, 0, false])
   })
 
   it('a window\'s first state on its stream follows nothing: a reload must not pull the dial', async () => {
@@ -482,9 +487,9 @@ describe('VS Code\'s windows', () => {
     h.state(W1, [700, 720], { active: 720 })
     await h.answer()
     h.state(W1, [700, 720], { active: 700 })
-    expect(h.focused.mock.calls).toEqual([[800, { window: W1, shell: 700 }, 0]])
+    expect(h.focused.mock.calls).toEqual([[800, { window: W1, shell: 700 }, 0, false]])
     h.state(W1, [700, 720], { active: 720 })
-    expect(h.focused.mock.calls.at(-1)).toEqual([undefined, { window: W1, shell: 720 }, 0])
+    expect(h.focused.mock.calls.at(-1)).toEqual([undefined, { window: W1, shell: 720 }, 0, false])
   })
 
   it('a focus while a chain is read is told once that read lands, by when its state came, and only the latest waits', async () => {
@@ -499,7 +504,7 @@ describe('VS Code\'s windows', () => {
     // A slow read: the devices judge the dial's own moves by the state's moment, not the read's.
     h.tick(2_900)
     await h.answer()
-    expect(h.focused.mock.calls).toEqual([[900, { window: W1, shell: 700 }, 100]])
+    expect(h.focused.mock.calls).toEqual([[900, { window: W1, shell: 700 }, 100, false]])
   })
 
   it('a focus waiting on a read is dropped by a later state of its window that left that terminal or the focus, or by a newer stream', async () => {
