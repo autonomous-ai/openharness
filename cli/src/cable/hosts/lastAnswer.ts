@@ -10,7 +10,12 @@ export const LAST_ANSWER_DEADLINE_MS = 1000
 
 /** The engines whose last answer the dial shows: each one's reader of its own transcript's last turn. */
 const TURN_TEXT = { claude: lastTurnTextFromRawLines, codex: lastCodexTurnText, cursor: lastCursorTurnText }
-type AnswerEngine = keyof typeof TURN_TEXT
+export type AnswerEngine = keyof typeof TURN_TEXT
+
+/** Whether the dial reads this engine's last answer: another engine's transcript is never opened. */
+export function answerEngine(engine: string): engine is AnswerEngine {
+  return Object.hasOwn(TURN_TEXT, engine)
+}
 
 export interface LastAnswerOptions {
   /** The engine's own folders; the caller resolves them (claudeProjectsRoots, codexHomeRoots + 'sessions', cursorDataDir +

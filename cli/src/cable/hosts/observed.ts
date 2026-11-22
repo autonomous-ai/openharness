@@ -12,6 +12,7 @@ import type { HostAdapter, Outer, Pane, Place } from './adapter.js'
 import { CODEX_THREAD, type CodexQueue, type CodexQueueFailure, type CodexRan } from './codexQueue.js'
 import { agentPlaceName, APP_BUNDLES, detectApp, detectHost, UNKNOWN_APP } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
+import { answerEngine, type AnswerEngine } from './lastAnswer.js'
 import { bundleOf, type OpenTarget } from './open.js'
 import { MAX_TEXT } from './orca.js'
 import type { Nested, NestedLookup, NestedPlace, OuterLookup } from './outer.js'
@@ -76,11 +77,6 @@ export function observedAgentId(engine: string, sessionId: string): string {
   return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20, 32)}`
 }
 
-/** The engines whose transcript's last answer is read (lastAnswer.ts); another engine's transcript is never opened. */
-function answerRead(engine: string): boolean {
-  return engine === 'claude' || engine === 'codex' || engine === 'cursor'
-}
-
 /** An answer as the dial's card keeps it. By code point: a cut through an emoji's surrogate pair leaves a broken
  *  character on the card. */
 function cutAnswer(text: string): string {
@@ -101,8 +97,8 @@ export interface ObservedDeps {
   alive(pid: number): boolean
   openSessions: Pick<OpenSessions, 'owners' | 'busy'>
   sessionRows: Pick<SessionRows, 'find'>
-  /** The last answer in a transcript (lastAnswer.ts), asked only for the engines answerRead names. */
-  lastAnswer(engine: string, path: string): Promise<string | undefined>
+  /** The last answer in a transcript (lastAnswer.ts), asked only for the engines answerEngine names. */
+  lastAnswer(engine: AnswerEngine, path: string): Promise<string | undefined>
   /** A transcript's last change (externals/support.ts fileStamp): one that grew while its agent waited was answered. */
   fileStamp: typeof fileStamp
   /** Folders whose sessions are Harness's own (its data folder), as the external sessions are given them: never observed. */
@@ -1114,10 +1110,11 @@ export class ObservedSource implements HostSource {
   }
 
   private async readAnswer(entry: Entry): Promise<void> {
-    if (!answerRead(entry.agent.engine) || !entry.transcriptPath) return
+    const { engine } = entry.agent
+    if (!answerEngine(engine) || !entry.transcriptPath) return
     let text: string | undefined
     try {
-      text = await this.deps.lastAnswer(entry.agent.engine, entry.transcriptPath)
+      text = await this.deps.lastAnswer(engine, entry.transcriptPath)
     } catch (error) {
       // Its kind only, never its text: that can hold the transcript's path, and so the account's name.
       this.deps.log(`[observed] last answer · not read · ${errorKind(error)}`)
@@ -1342,7 +1339,7 @@ export class ObservedSource implements HostSource {
     const answers = new Map<string, string>()
     for (const [sessionId, engine] of listing) {
       const { cwd, transcriptPath } = rows.get(sessionId)!
-      if (!answerRead(engine) || busy.has(sessionId) || !transcriptPath) continue
+      if (!answerEngine(engine) || busy.has(sessionId) || !transcriptPath) continue
       if (cwd && this.deps.excluded.some((dir) => within(dir, cwd))) continue
       // Cursor's turn is read for its answer alone: one under way holds that turn's words so far, no answer, and its state
       // stays as listed (idleKnown). One that cannot be told counts as under way, as busyOf counts it.
