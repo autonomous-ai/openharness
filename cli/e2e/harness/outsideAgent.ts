@@ -280,8 +280,8 @@ async function tabUnderItermServer(d: IsolatedDaemon, argv: readonly string[], e
  * An agent's own process that runs its hooks as its CLI runs them (codexOutside.ts, cursorOutside.ts): each line it is
  * handed, `{command, cwd, env, input}`, run through a shell, and answered with `{code, stderr}` once it ends. Named by its
  * first argument when there is one: Linux knows a process by that name (its comm), as it knows the ChatGPT app's. Given a
- * socket's path as its second, for one in a tab whose terminal its stdio are, its hooks come and go on that socket
- * instead of its stdin and stdout.
+ * socket's path as its second, for one in a tab (hookTab), its hooks come and go on that socket instead of its stdin and
+ * stdout.
  */
 export const HOOK_RUNNER = `const { spawn } = require('node:child_process')
 if (process.argv[1]) process.title = process.argv[1]
@@ -337,9 +337,9 @@ export function hookRuns(answers: NodeJS.ReadableStream, requests: NodeJS.Writab
 }
 
 /**
- * A hook runner (HOOK_RUNNER) in a tab of its own (openTab) in [cwd], under [env] alone, as [how] says: its terminal is
- * its stdio, so its hooks come and go on a socket in the daemon's root. Resolves once it reached that socket; [what] names
- * it in a failure. Closed as any tab is (closeTab).
+ * A hook runner (HOOK_RUNNER) in a tab of its own (openTab) in [cwd], under [env] alone, as [how] says: its stdio are its
+ * terminal, or the app's, so its hooks come and go on a socket in the daemon's root. Resolves once it reached that socket;
+ * [what] names it in a failure. Closed as any tab is (closeTab).
  */
 export async function hookTab(d: IsolatedDaemon, cwd: string, env: NodeJS.ProcessEnv, how: TabOptions, what: string):
   Promise<{ tab: Tab; run: HookRun }> {
