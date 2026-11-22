@@ -1,6 +1,8 @@
 import { expect, it } from 'vitest'
+import { frontAppId, FRONT_NONE } from '../../cable/hosts/frontApp.js'
 import { observedAgentId } from '../../cable/hosts/observed.js'
-import { APPS, DIMENSIONS, EDITORS, PAGE, WEIGHTS, agentIdOf, engineOf, placeOf, resultKey } from './types.js'
+import { APPS, DIMENSIONS, EDITORS, FRONT_NAMES, PAGE, WEIGHTS, agentIdOf, engineOf, hookHandle, orcaPaneHandle,
+  orcaTerminalHandle, orcaWorktreeId, placeOf, resultKey, type Platform } from './types.js'
 
 const id = '00000000-0000-4000-8000-0000000000e1'
 
@@ -29,12 +31,43 @@ it("VS Code has no agent of its own: a session in place 'agent' that is not Curs
 })
 
 it('PAGE names the editors\' pages by the wire\'s app ids', () => {
-  expect(PAGE).toEqual({ claude: 'claude', chatgpt: 'codex', vscode: 'vscode', cursor: 'cursor' })
+  expect(PAGE).toMatchObject({ claude: 'claude', chatgpt: 'codex', vscode: 'vscode', cursor: 'cursor' })
 })
 
-it('APPS is the four apps', () => {
-  expect(APPS).toEqual(['claude', 'chatgpt', 'vscode', 'cursor'])
+it("PAGE names Orca's page orca", () => {
+  expect(PAGE.orca).toBe('orca')
+})
+
+it('APPS is the five apps, Orca last', () => {
+  expect(APPS).toEqual(['claude', 'chatgpt', 'vscode', 'cursor', 'orca'])
   expect(EDITORS).toEqual(['vscode', 'cursor'])
+})
+
+it("orcaPaneHandle gives the session's handle at its first launch and 8d0n at its nth; a session whose hooks name none is laid out on its key's handle, and hookHandle gives it none", () => {
+  // o1's bytes are 6f31.
+  expect(orcaTerminalHandle('o1')).toBe('term_00000000-0000-4000-8d00-000000006f31')
+  expect(orcaPaneHandle({ key: 'o1' }, 0)).toBe('term_00000000-0000-4000-8d00-000000006f31')
+  expect(orcaPaneHandle({ key: 'o1' }, 2)).toBe('term_00000000-0000-4000-8d02-000000006f31')
+  expect(hookHandle({ key: 'o1' }, 1)).toBe('term_00000000-0000-4000-8d01-000000006f31')
+  expect(orcaPaneHandle({ key: 'o1', handle: 'none' }, 0)).toBe(orcaTerminalHandle('o1'))
+  expect(orcaPaneHandle({ key: 'o1', handle: 'none' }, 1)).toBe('term_00000000-0000-4000-8d01-000000006f31')
+  expect(hookHandle({ key: 'o1', handle: 'none' }, 0)).toBeUndefined()
+  expect(hookHandle({ key: 'o1', handle: 'none' }, 1)).toBeUndefined()
+})
+
+it('orcaWorktreeId is eval-repo::/work/eval-<key>', () => {
+  expect(orcaWorktreeId('w1')).toBe('eval-repo::/work/eval-w1')
+})
+
+it("every app but Orca maps through frontAppId to its own page from its FRONT_NAMES name on every platform; Orca's macOS name maps to orca", () => {
+  for (const platform of ['darwin', 'linux', 'win32'] as Platform[]) {
+    for (const app of APPS.filter((a) => a !== 'orca')) expect(frontAppId(FRONT_NAMES[platform][app]), `${platform} ${app}`).toBe(PAGE[app])
+    expect(frontAppId(FRONT_NAMES[platform].other), platform).toBe(FRONT_NONE)
+  }
+  expect(frontAppId(FRONT_NAMES.darwin.orca)).toBe('orca')
+  // Linux's and Windows' own names for Orca, which the dial is graded on there whether or not the product tells them.
+  expect(FRONT_NAMES.linux.orca).toBe('orca-ide')
+  expect(FRONT_NAMES.win32.orca).toBe('orca.exe')
 })
 
 it('the weights are the spec\'s and sum to 100', () => {

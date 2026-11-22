@@ -2,7 +2,7 @@
 // round dial's firmware does (devices/harness-device/firmware/main/cable_client.c), on virtual time.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CableDecoder, CableType, encodeCableFrame } from '../../../cable/cableFrame.js'
-import { CAROUSEL_REFRESH_MS } from '../../dialCarousel.js'
+import { CAROUSEL_REFRESH_MS, CAROUSEL_TILES, type DialCarousel } from '../../dialCarousel.js'
 import { LoopbackDial } from './loopbackDial.js'
 
 // The dial's timers are virtual; setImmediate stays real, so what it answers in a microtask lands.
@@ -81,5 +81,27 @@ describe("tier A's loopback dial", () => {
       { t: 'agents.end', total: 1 })
     vi.advanceTimersByTime(CAROUSEL_REFRESH_MS)
     expect(dial.faces.at(-1)).toMatchObject({ page: 'codex', tiles: ['eval-t1'], active: null })
+  })
+
+  it("each face records the carousel's refused count, and a refusal alone makes a new face", async () => {
+    const dial = new LoopbackDial(() => Date.now())
+    const { tell } = await opened(dial)
+    const list = (ids: string[]) => [{ t: 'agents.begin' }, ...ids.map((id) => ({ t: 'agent', id })), { t: 'agents.end', total: ids.length }]
+    const full = Array.from({ length: CAROUSEL_TILES }, (_, i) => `eval-s${i + 1}`)
+    await tell({ t: 'welcome', proto: 3 }, { t: 'apps', shown: 'orca' }, ...list(full))
+    vi.advanceTimersByTime(CAROUSEL_REFRESH_MS)
+    expect(dial.faces.at(-1)).toMatchObject({ tiles: full, refused: 0 })
+    // A newcomer over 16 tiles is refused as the firmware adds before it removes: the tile the list left goes after.
+    await tell(...list([...full.slice(1), 'eval-s17']))
+    vi.advanceTimersByTime(CAROUSEL_REFRESH_MS)
+    expect(dial.faces.at(-1)).toMatchObject({ tiles: full.slice(1), refused: 1 })
+    expect(dial.faces.every((f) => typeof f.refused === 'number')).toBe(true)
+    // The model removes a tile with every refusal, so only its own count can show a refusal on an unchanged face.
+    const faces = dial.faces.length
+    const { carousel } = dial as unknown as { carousel: DialCarousel }
+    carousel.refused += 1
+    vi.advanceTimersByTime(CAROUSEL_REFRESH_MS)
+    expect(dial.faces).toHaveLength(faces + 1)
+    expect(dial.faces.at(-1)).toMatchObject({ tiles: full.slice(1), refused: 2 })
   })
 })

@@ -26,7 +26,9 @@ const driver = await import('../../e2e/harness/appEvalDriver.js' as string) as {
   }
   writeRaiseFakes(bin: string): void
   raiseToolsOutside(root: string, env: NodeJS.ProcessEnv): string[]
+  faceChange(last: Face | undefined, next: Omit<Face, 'at'>): boolean
 }
+type Face = import('./dialAppEval/types.js').Seen['faces'][number]
 
 /** The parts of a world the fake Claude app's start reads. */
 interface AppWorld { d: { root: string; env: NodeJS.ProcessEnv }; children: import('node:child_process').ChildProcess[]; onOpen(listener: unknown): void }
@@ -201,6 +203,21 @@ describe("tier B's world at its start", () => {
     } finally {
       await world.close()
     }
+  })
+})
+
+describe("tier B's faces", () => {
+  const shown: Omit<Face, 'at'> = { page: 'orca', tiles: ['a', 'b'], active: 'a', refused: 0 }
+  const face: Face = { at: 100, ...shown }
+
+  it('faceChange is true for a change of page, tiles, the face or refused alone, and false for none', () => {
+    expect(driver.faceChange(undefined, shown)).toBe(true)
+    expect(driver.faceChange(face, { ...shown })).toBe(false)
+    expect(driver.faceChange(face, { ...shown, tiles: [...shown.tiles] })).toBe(false)
+    expect(driver.faceChange(face, { ...shown, page: 'claude' })).toBe(true)
+    expect(driver.faceChange(face, { ...shown, tiles: ['a'] })).toBe(true)
+    expect(driver.faceChange(face, { ...shown, active: 'b' })).toBe(true)
+    expect(driver.faceChange(face, { ...shown, refused: 1 })).toBe(true)
   })
 })
 
