@@ -699,6 +699,7 @@ describe.skipIf(process.platform === 'win32')('the scan\'s process read', () => 
     const exec = vi.fn(async (): Promise<string | null> => [...owners.values()].map(({ pid }) => `  ${pid}     1 claude`).join('\n'))
     const src = new ObservedSource({
       now: () => 0,
+      platform: 'darwin',
       processes: async () => [...owners.values()].map(({ pid }) => ({ pid, generation: `g${pid}` })),
       alive: () => true,
       openSessions: { owners: async () => new Map(owners), busy: async () => false } as unknown as ObservedDeps['openSessions'],
@@ -791,6 +792,7 @@ describe('the scan and a process name', () => {
     ])
     const src = new ObservedSource({
       now: () => 0,
+      platform: 'darwin',
       processes: async () => [],
       alive: () => true,
       openSessions: {

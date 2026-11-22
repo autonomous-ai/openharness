@@ -48,6 +48,7 @@ function setup(over: Partial<ObservedDeps> = {}) {
     new Map([...wanted.keys()].flatMap((id) => (externals.has(id) ? [[id, externals.get(id)!] as const] : []))))
   const deps: ObservedDeps = {
     now: () => clock.t,
+    platform: 'darwin',
     processes: procs,
     alive,
     openSessions: {

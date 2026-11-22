@@ -91,6 +91,8 @@ function folderName(cwd: string | undefined, engine: string): string {
 
 export interface ObservedDeps {
   now(): number
+  /** Only macOS gives a process an inherited bundle id (__CFBundleIdentifier): elsewhere the hook works it out (ownHints). */
+  platform: NodeJS.Platform
   /** The machine's processes, read once for every session (externals/support.ts listProcesses); none when unreadable. */
   processes(): Promise<readonly Pick<RunningProcess, 'pid' | 'generation'>[]>
   /** Whether a pid is running, for a session whose process has no generation to read (Windows has no `ps` here). */
@@ -880,8 +882,9 @@ export class ObservedSource implements HostSource {
       this.asked(e)
       return
     }
-    // Once, here: every reader after it, the place and the tap, sees the editor's own hints (eval V11).
-    e = { ...e, hostHints: ownHints(e.hostHints) }
+    // Once, here: every reader after it, the place and the tap, sees the editor's own hints (eval V11). macOS alone: on
+    // Windows the hook works the bundle id out from the process's parents (notify.mjs lookUpWindowsApp), never inherited.
+    if (this.deps.platform === 'darwin') e = { ...e, hostHints: ownHints(e.hostHints) }
     const known = this.entries.get(observedAgentId(e.engine, e.sessionId))
     // The end of a session never listed (one of the 50 dropped when full, or ended before the devices started) lists none.
     if (e.event === 'session-end' && !known) return

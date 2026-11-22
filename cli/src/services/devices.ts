@@ -292,8 +292,8 @@ function orcaHomesCache(now: () => number, log: (line: string) => void): OrcaHom
 /** This computer's agents outside a pane, read with ⌘P's readers (services/externalSessions.ts) in the daemon's own homes
  *  and Orca's account homes, and how the dial's voice and tap reach them. */
 function observedSource(
-  dataDir: string, log: (line: string) => void, orcaHomes: Pick<OrcaHomesCache, 'get'>, actions: ObservedActions,
-  tty: ObservedDeps['tty'], scanned: ObservedDeps['scanned'], herdrTerminal: ObservedDeps['herdrTerminal'],
+  dataDir: string, platform: NodeJS.Platform, log: (line: string) => void, orcaHomes: Pick<OrcaHomesCache, 'get'>,
+  actions: ObservedActions, tty: ObservedDeps['tty'], scanned: ObservedDeps['scanned'], herdrTerminal: ObservedDeps['herdrTerminal'],
   outer: ObservedDeps['outer'], ptyOwnerOf: ObservedDeps['ptyOwner'], nesting: Pick<ObservedDeps, 'table' | 'madeBy' | 'nested'>,
 ): ObservedSource {
   // Worked out at each read: a home the person moved is adopted while the daemon runs, and Orca's follow its last read.
@@ -311,6 +311,7 @@ function observedSource(
   }
   return new ObservedSource({
     now: Date.now,
+    platform,
     processes: listProcesses,
     alive: processAlive,
     openSessions: new OpenSessions({ providers, log }),
@@ -737,7 +738,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       nested: (found) => lookups[found.host](found),
     }
   }
-  const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, orcaHomes, {
+  const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, apps.platform, log, orcaHomes, {
     adapters,
     modReady: (sessionId) => inbox.ready(sessionId),
     // Words for a session the Claude app's wake still waits for would take its first poll ahead of the wake's: they are
