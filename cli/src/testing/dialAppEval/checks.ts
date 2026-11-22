@@ -336,7 +336,7 @@ function holder(streams: ReadonlyMap<string, Stream>, key: SessionKey): string |
  * An editor row is graded by its kind (docs/plans/2026-11-22-dial-eval-vscode-cursor-plan.md, Decision 6): a terminal
  * whose shell a stream holds as the window opens on its `show` with `raise` there, and its app brought forward; one with
  * none on VS Code's front or Cursor's folder, its last resort; Cursor's agent on its folder; a panel, as the base apps,
- * on its link and front.
+ * on its link and front. A row the dial was never sent scores 0 on every part.
  */
 function openParts(check: CheckOf<'open'>, world: World, w: Window | undefined, platform: Platform): Part[] {
   const session = world.session(check.session)
@@ -377,21 +377,33 @@ function openParts(check: CheckOf<'open'>, world: World, w: Window | undefined, 
     const latency = at !== undefined && w ? at - w.from : null
     return { part: 'latency', score: graded(latency, THRESHOLDS.open), timed: true, ms: latency, evidence }
   }
-  if (place === 'agent' || (place === 'terminal' && holding === undefined && session.app === 'cursor')) {
-    return [{ part: 'folder', score: folded ? 1 : 0, timed: false, evidence }, timing(folded?.at)]
+  // An editor row the dial was never sent cannot be opened from it: another tap bringing the editor forward must not
+  // pass a probe naming a session never written.
+  const id = agentIdOf(session)
+  const listed = w !== undefined && world.seen.frames.some((f) => f.at < w.to && f.message.t === 'agent' && f.message.id === id)
+  if (place !== undefined && !listed) {
+    const never = bounded([`${session.key} never listed`, ...evidence])
+    return editorParts().map((p) => ({ ...p, score: 0, ...(p.timed ? { ms: null } : {}), evidence: never }))
   }
-  const fronted = { part: 'front', score: front ? 1 : 0, timed: false, evidence }
-  if (holding !== undefined) {
-    // The show reached the window holding the shell alone: a show on another window brings up the wrong terminal.
-    const alone = shown !== undefined && shows.every((l) => l.window === holding)
-    return [{ part: 'show', score: alone ? 1 : 0, timed: false, evidence }, fronted,
-      timing(shown && front ? Math.max(shown.at, front.at) : undefined)]
+  return editorParts()
+
+  function editorParts(): Part[] {
+    if (place === 'agent' || (place === 'terminal' && holding === undefined && session.app === 'cursor')) {
+      return [{ part: 'folder', score: folded ? 1 : 0, timed: false, evidence }, timing(folded?.at)]
+    }
+    const fronted = { part: 'front', score: front ? 1 : 0, timed: false, evidence }
+    if (holding !== undefined) {
+      // The show reached the window holding the shell alone: a show on another window brings up the wrong terminal.
+      const alone = shown !== undefined && shows.every((l) => l.window === holding)
+      return [{ part: 'show', score: alone ? 1 : 0, timed: false, evidence }, fronted,
+        timing(shown && front ? Math.max(shown.at, front.at) : undefined)]
+    }
+    return [
+      ...(check.link ? [{ part: 'link', score: linked.length > 0 ? 1 : 0, timed: false, evidence }] : []),
+      fronted,
+      timing(front?.at),
+    ]
   }
-  return [
-    ...(check.link ? [{ part: 'link', score: linked.length > 0 ? 1 : 0, timed: false, evidence }] : []),
-    fronted,
-    timing(front?.at),
-  ]
 }
 
 /**
