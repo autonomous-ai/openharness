@@ -25,10 +25,13 @@ const driver = await import('../../e2e/harness/appEvalDriver.js' as string) as {
   raiseToolsOutside(root: string, env: NodeJS.ProcessEnv): string[]
 }
 
+/** The parts of a world the fake Claude app's start reads. */
+interface AppWorld { d: { root: string; env: NodeJS.ProcessEnv }; children: import('node:child_process').ChildProcess[]; onOpen(listener: unknown): void }
 const claude = await import('../../e2e/harness/appEvalClaude.js' as string) as {
   linkedSocket(root: string, code: number | null, stdout: string, stderr: string): string
   typedPrompts(transcript: string): Array<{ at?: number; text: string }>
   writeWhole(file: string, text: string): void
+  appOf(world: AppWorld, host?: (world: AppWorld, s: unknown) => { hints: Record<string, string> }): { process: import('node:child_process').ChildProcess }
 }
 
 const modInbox = await import('../../e2e/harness/modInbox.js' as string) as {
@@ -225,6 +228,22 @@ describe("tier B's Claude mod: the socket its link names", () => {
   it('says what the link printed on its stderr when it named none', () => {
     expect(() => claude.linkedSocket(root, 1, '', 'no devices process\n')).toThrow('no devices process')
     expect(() => claude.linkedSocket(root, 0, 'not json', '')).toThrow("named no devices' socket")
+  })
+})
+
+describe("tier B's fake Claude app", () => {
+  it('is one per world, started by the host that asked first: another host asking for it throws', () => {
+    dir = mkdtempSync(join(tmpdir(), 'tier-b-app-'))
+    const world: AppWorld = { d: { root: dir, env: { PATH: process.env.PATH } }, children: [], onOpen: () => {} }
+    const editor = (): { hints: Record<string, string> } => ({ hints: { TERM_PROGRAM: 'vscode' } })
+    const other = (): { hints: Record<string, string> } => ({ hints: {} })
+    try {
+      const app = claude.appOf(world, editor)
+      expect(claude.appOf(world, editor)).toBe(app)
+      expect(() => claude.appOf(world, other)).toThrow('another host')
+    } finally {
+      for (const child of world.children) child.kill('SIGKILL')
+    }
   })
 })
 
