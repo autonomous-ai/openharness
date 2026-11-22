@@ -223,14 +223,16 @@ Details:
   left out on Windows, never that line alone. Without it any `harness.bat` in any folder meets the `harness` rule:
   Codex lowercases a program's name and takes off `.exe`, `.cmd`, `.bat` or `.com` (`resolve_host_executables`). And
   a line Codex cannot parse makes it drop the person's own rules too.
-- The Windows check of #4545 (Win11 ARM64, Codex 0.170.0): Codex's `execpolicy` matches the launcher's full path
+- The Windows check of #4545 (Win11 ARM64, Codex 0.170.0): `codex execpolicy check` matches the launcher's full path
   `C:\Users\<u>\.harness\bin\harness.exe` to the `harness` rules only with `--resolve-host-executables`, and an
   upper-case `HARNESS.EXE` matches none. Agents type bare `harness`, which is allowed; a command by either other
   spelling may ask.
-- A person's deny or ask keeps a group of Harness's rules out of Claude Code's `permissions.allow` in any spelling
-  (`touches`), and one added after Harness wrote the group wins the same way: the next write (daemon start or launch)
-  takes the group's own rules out, on every platform. Only the exact rules Harness writes go; the person's own allows
-  stay, and an unchanged list is not rewritten. Codex's rules file needs no such step: Harness writes it whole from its
+- A person's deny or ask in the same `settings.json` keeps a group of Harness's rules out of its `permissions.allow` in
+  any spelling `touches` knows, and one added after Harness wrote the group wins the same way: the next write (daemon
+  start or launch) takes the group's own rules out, on every platform. Only the exact rules Harness writes now go (an
+  allow of the person's with the very same text goes with them, as at uninstall); their other allows stay, and an
+  unchanged list is not rewritten. A launcher-path rule written under another `HARNESS_BIN_DIR` is no longer Harness's
+  text and stays, as it does at uninstall. Codex's rules file needs no such step: Harness writes it whole from its
   declared rules and never reads the person's, and Codex itself ranks their forbidden and prompt rules above allow,
   the same whether they were written before or after.
 - This is the core's process, kept to the smallest change: no file is added (`architecture.coreFiles.txt` unchanged;
