@@ -189,8 +189,10 @@ function tell(world: TierAWorld, key: SessionKey, live: Live, event: ObservedEve
   // Claude Code alone says its session's name, on these two (hook/notify.mjs observedBody); Codex's and Cursor's hooks
   // carry none.
   const title = engine === 'claude' && (event === 'session-start' || event === 'turn-start') ? observedTitle(s.title) : undefined
+  // Cursor's hook says its workspace's roots, and notify.mjs takes the first as the cwd.
+  const cwd = engine === 'cursor' ? s.folders?.[0] ?? s.cwd : s.cwd
   observe(world, key, {
-    engine, sessionId: s.id, event, cwd: s.cwd, callerPid: live.pid, transcriptPath: live.transcriptPath,
+    engine, sessionId: s.id, event, cwd, callerPid: live.pid, transcriptPath: live.transcriptPath,
     hostHints: hintsOf(world, s), ...(title === undefined ? {} : { title }),
   })
 }

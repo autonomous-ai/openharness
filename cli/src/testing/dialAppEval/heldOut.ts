@@ -168,7 +168,7 @@ export function heldOut(): Scenario[] {
     scenario({
       id: 'UH2', app: 'cursor', title: 'Cursor\'s own agent in a multi-root workspace: a tap opens its first folder',
       dims: ['D3'],
-      sessions: [cursor('c', { place: 'agent', window: undefined, cwd: '/work/eval-c1', folders: ['/work/eval-c1', '/work/eval-c2'] }),
+      sessions: [cursor('c', { place: 'agent', window: undefined, cwd: '/work/eval-c', folders: ['/work/eval-c1', '/work/eval-c2'] }),
         editorGhost('cursor')],
       steps: [
         ...started(['c']),
