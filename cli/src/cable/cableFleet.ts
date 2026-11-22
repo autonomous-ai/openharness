@@ -47,8 +47,8 @@ const FAULTS_TO_DROP = 5
 const DROP_BACKOFF_MS = 5_000
 const DROP_BACKOFF_MAX_MS = 60_000
 const DROP_FORGIVEN_MS = 300_000
-/** Unplugged dials whose place is kept; past it the longest unplugged is forgotten. */
-const UNPLUGGED_FOCUS_MAX = 16
+/** Dials whose place is kept while they are away; past it the one away longest is forgotten. */
+const KEPT_FOCUS_MAX = 16
 /** Shown on a silent Harness Pro's row once a reset has not brought it back: short, the card gives it about two lines. */
 const UNANSWERED_NOTICE = 'Not answering — unplug and replug'
 /** A Harness Pro's greeting as the daemon writes it into that device's dial log (cableSession.ts, dialLog.ts). */
@@ -111,8 +111,8 @@ export class CableFleet {
   private readonly unanswered = new Map<string, Unanswered>()
   /** Whether a board's own dial logs show it greeting as a Harness Pro, read once per board. */
   private readonly proInLogs = new Map<string, boolean>()
-  /** The agent each unplugged dial was on, by id, handed to its next session so a replug comes back there. */
-  private readonly unpluggedFocus = new Map<string, string>()
+  /** The agent each dial away was on, by id, handed to its next session so the dial comes back there (keepFocus). */
+  private readonly keptFocus = new Map<string, string>()
 
   constructor(private readonly Session: SessionConstructor, private readonly host: CableHost,
               private readonly logs: string, private readonly Log: typeof DialLog,
@@ -187,6 +187,7 @@ export class CableFleet {
       if (!this.waitingForConsole) this.host.log('cable: USB belongs to the account at this computer\'s screen — releasing this connection')
       this.waitingForConsole = true
       await Promise.allSettled([...this.entries.values()].map(entry => entry.session.stop()))
+      for (const [id, entry] of this.entries) this.keepFocus(id, entry.session)
       // A silent Pro's notice is this account's to see, and its board no longer ours to reset.
       if (this.entries.size || this.unanswered.size) { this.entries.clear(); this.unanswered.clear(); this.publish() }
       return
@@ -208,12 +209,7 @@ export class CableFleet {
       if (present.get(id)?.path === entry.port.path) continue
       await entry.session.stop()
       this.entries.delete(id)
-      // Unplugged: the next session for this dial is a new one, and would land on the ring's first agent.
-      const agentId = entry.session.focusRecorded()
-      if (agentId) {
-        this.unpluggedFocus.set(id, agentId)
-        if (this.unpluggedFocus.size > UNPLUGGED_FOCUS_MAX) this.unpluggedFocus.delete(this.unpluggedFocus.keys().next().value!)
-      }
+      this.keepFocus(id, entry.session)
       removed = true
     }
     // A silent Pro is left alone for as long as its USB attachment lasts: unplugged, or plugged back in, it is
@@ -308,11 +304,24 @@ export class CableFleet {
         return opened
       }
       entry.session = new this.Session(host, new this.Log(join(this.logs, logFolder(id))), opener)
-      const kept = this.unpluggedFocus.get(id)
-      if (kept) { entry.session.recordFocus(kept); this.unpluggedFocus.delete(id) }
+      const kept = this.keptFocus.get(id)
+      if (kept) { entry.session.recordFocus(kept); this.keptFocus.delete(id) }
       this.entries.set(id, entry)
       entry.session.start()
     }
+  }
+
+  /**
+   * The fleet has ended a dial's session: unplugged, its USB passed to another account, dropped for its faults, or a
+   * silent Pro taken for a reset. Its next session is a new one, which would land the dial on the ring's first agent
+   * (dial eval C11: swiped to b, replugged, on a), so the agent it was on is kept for that session, as a port reopened
+   * under one session keeps it. A board written off as not a dial has no place to keep.
+   */
+  private keepFocus(id: string, session: Surface): void {
+    const agentId = session.focusRecorded()
+    if (!agentId) return
+    this.keptFocus.set(id, agentId)
+    if (this.keptFocus.size > KEPT_FOCUS_MAX) this.keptFocus.delete(this.keptFocus.keys().next().value!)
   }
 
   /**
@@ -351,6 +360,7 @@ export class CableFleet {
     setTimeout(() => void (async () => {
       if (this.entries.get(id) !== entry) return forget()
       this.entries.delete(id)
+      this.keepFocus(id, entry.session)
       await entry.session.stop()
       if (this.unanswered.get(id) !== held) return
       if (this.stopped || !this.canUseUsb(true)) return forget()
@@ -387,6 +397,7 @@ export class CableFleet {
     setTimeout(() => {
       if (this.entries.get(id) !== entry) return
       this.entries.delete(id)
+      this.keepFocus(id, entry.session)
       void entry.session.stop().finally(() => this.publish())
     }, 0)
   }
