@@ -1335,8 +1335,9 @@ export class ObservedSource implements HostSource {
     try {
       return await this.deps.table()
     } catch (error) {
-      // Its kind, no error text: a path in it holds the account's name.
-      this.deps.log(`[observed] scan · apps not read · ${errorKind(error)}`)
+      // Its kind, no error text: a path in it holds the account's name. The table feeds the walk, the makers and the
+      // lookups alike.
+      this.deps.log(`[observed] scan · processes not read · ${errorKind(error)}`)
       return null
     }
   }

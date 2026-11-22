@@ -4903,7 +4903,7 @@ describe('ObservedSource and a nested session the scan found', () => {
     expect(t.agent('a').app).toBe('iterm')
   })
 
-  it('a table that cannot be read lists every session not known, reads no maker, and says apps not read', async () => {
+  it('a table that cannot be read lists every session not known, reads no maker, and says processes not read', async () => {
     const t = scan(new Map([[100, IN_TMUX]]), { table: vi.fn(async () => { throw new Error('ps timed out under /Users/someone') }) })
     t.found('a', 100)
     t.found('b', 200)
@@ -4913,7 +4913,7 @@ describe('ObservedSource and a nested session the scan found', () => {
     expect(t.madeBy).not.toHaveBeenCalled()
     expect(t.nested).not.toHaveBeenCalled()
     expect(t.logs).toEqual([
-      '[observed] scan · apps not read · Error',
+      '[observed] scan · processes not read · Error',
       '[observed] scan · 2 found · 0 app known · 0 named · 0 answered · 0 ms · 0 nested placed',
     ])
     expect(t.logs.join('\n')).not.toContain('someone')
