@@ -1,7 +1,7 @@
 // Tier A's step of speaking to the dial, and the one delivery path the world does not record itself: words the devices
 // type into a terminal through their injected `run`. The mod's inbox (sessions.ts), the core's turns.send and the Codex
 // queue's `codex` run (world.ts) record theirs, each with its target, so the gate sees a send to the wrong session.
-import { flagOf } from '../argv.js'
+import { flagOf } from '../../argv.js'
 import type { StepHandler, TierAWorld } from '../world.js'
 import { keyOfOrcaHandle } from './sessions.js'
 

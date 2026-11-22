@@ -14,16 +14,13 @@
 import type { OrcaChild } from '../../../../cable/hosts/orca.js'
 import type { OrcaHomes } from '../../../../devices/orcaHomes.js'
 import { REFUSED, type ListenerStream, type ListenerStreamHandler, type StreamEnd } from '../../../../services/devicesListener.js'
+import { flagOf, ORCA_PROGRAMS, programOf } from '../../argv.js'
 import { orcaLayout, orcaListing } from '../../orcaListing.js'
 import { engineOf, type StepOf } from '../../types.js'
-import { flagOf, programOf } from '../argv.js'
 import type { StepHandler, TierAWorld } from '../world.js'
 import { codexHomeOf, dropSession, orcaHandleOf } from './sessions.js'
 import { handlerOf, tell } from './window.js'
 
-/** Orca's CLI by the name each platform's runs it as (devices/orcaHomes.ts orcaBinary): its launcher on macOS, the
- *  .deb's and the AppImage's `orca-ide` on Linux, `orca.exe` on Windows. */
-export const ORCA_PROGRAMS: readonly string[] = ['orca', 'orca-ide', 'orca.exe']
 /** How long Orca takes to tell the focus of a pane a switch showed (the plan's Decision 7). */
 const ECHO_MS = 100
 /** `orca terminal --help`'s Commands list, the part the devices read (cable/hosts/orca.ts listsWatchFocus). */

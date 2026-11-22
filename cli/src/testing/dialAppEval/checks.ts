@@ -7,6 +7,7 @@ import { APP_BUNDLES } from '../../cable/hosts/hostDetect.js'
 import { observedTitle } from '../../cable/hosts/observedTitle.js'
 import { WINDOWS_APPS } from '../../cable/hosts/windowsRaise.js'
 import { CAROUSEL_TILES } from '../dialCarousel.js'
+import { flagOf, ORCA_PROGRAMS, programOf } from './argv.js'
 import { tabTitle } from './orcaListing.js'
 import { agentIdOf, EDITORS, engineOf, orcaPaneHandle, orcaWorktreeId, PAGE, placeOf, SKIPPED_SCROLL, THRESHOLDS, type App, type Check,
   type CheckResult, type LinkedApp, type Platform, type Scenario, type Seen, type SessionDef, type SessionKey, type StepOf, type Tier,
@@ -318,9 +319,6 @@ function linkOf(session: SessionDef): string | undefined {
   return session.localId && `${SCHEMES.claude}code/continue?session=${session.localId}`
 }
 
-/** A command's program, without its folder or `.exe`. */
-const programOf = (argv: string[]): string => (argv[0] ?? '').split(/[\\/]/).at(-1)!.replace(/\.exe$/, '')
-
 /**
  * Whether a command brings the session's app to the front (the eval sees commands, not windows), in the form the
  * devices run it on each platform, or tier A records it (tierA/world.ts):
@@ -466,11 +464,7 @@ function openParts(check: CheckOf<'open'>, world: World, w: Window | undefined, 
 
 /** Whether a command is Orca's CLI running `<group> <verb>`, as `orca`, `orca-ide` or `orca.exe` from any folder. */
 const orcaRuns = (argv: string[], group: string, verb: string): boolean =>
-  ['orca', 'orca-ide'].includes(programOf(argv)) && argv[1] === group && argv[2] === verb
-const flagOf = (argv: string[], flag: string): string | undefined => {
-  const at = argv.indexOf(flag)
-  return at < 0 ? undefined : argv[at + 1]
-}
+  ORCA_PROGRAMS.includes(programOf(argv)) && argv[1] === group && argv[2] === verb
 
 /**
  * An Orca row as the person sees it (docs/plans/2026-11-22-dial-eval-orca-plan.md, Decision 11): the last `worktree

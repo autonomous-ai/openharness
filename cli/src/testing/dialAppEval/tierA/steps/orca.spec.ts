@@ -11,7 +11,6 @@ import type { DevicesDeps, startDevices } from '../../../../services/devices.js'
 import { dialStream, orcaFrontHandler, type ListenerStream, type ListenerStreamHandler } from '../../../../services/devicesListener.js'
 import { orcaGhost, orcaSession, scenario } from '../../catalog.js'
 import { orcaTerminalHandle, orcaWorktreeId, type Platform, type Scenario, type SessionKey } from '../../types.js'
-import { programOf } from '../argv.js'
 import { installClock } from '../clock.js'
 import { machine } from '../machine.js'
 import { World } from '../world.js'
@@ -162,7 +161,7 @@ describe("tier A's Orca", () => {
       expect(await read, platform).toBe(true)
       expect([handed!.orcaHomes!.get(), handed!.orcaHomes!.answered()], platform)
         .toEqual([{ claude: [], codex: [join(world.folders.codexHomes, 'b')] }, true])
-      expect(world.seen([]).commands.map(({ argv, ok }) => [programOf(argv), argv.slice(1).join(' '), ok]), platform)
+      expect(world.seen([]).commands.map(({ argv, ok }) => [win32.basename(argv[0]!), argv.slice(1).join(' '), ok]), platform)
         .toEqual([[programs[platform], 'account list --json', true]])
       vi.unstubAllEnvs()
     }
