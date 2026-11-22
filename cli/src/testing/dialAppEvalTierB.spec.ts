@@ -1,10 +1,10 @@
 import { spawnSync } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { Worker } from 'node:worker_threads'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MAIN } from './dialAppEval/catalog.js'
 import type { App, Platform, Scenario } from './dialAppEval/types.js'
 
@@ -27,6 +27,7 @@ const driver = await import('../../e2e/harness/appEvalDriver.js' as string) as {
   writeRaiseFakes(bin: string): void
   raiseToolsOutside(root: string, env: NodeJS.ProcessEnv): string[]
   faceChange(last: Face | undefined, next: Omit<Face, 'at'>): boolean
+  orcaCliInside(env: NodeJS.ProcessEnv, root: string, platform: NodeJS.Platform): string
 }
 type Face = import('./dialAppEval/types.js').Seen['faces'][number]
 
@@ -37,6 +38,10 @@ const claude = await import('../../e2e/harness/appEvalClaude.js' as string) as {
   typedPrompts(transcript: string): Array<{ at?: number; text: string }>
   writeWhole(file: string, text: string): void
   appOf(world: AppWorld, host?: (world: AppWorld, s: unknown) => { hints: Record<string, string> }): { process: import('node:child_process').ChildProcess }
+}
+
+const fakeOrca = await import('../../e2e/harness/fakeOrca.js' as string) as {
+  FakeOrca: { install(d: { env: NodeJS.ProcessEnv }, options?: { watchFocus?: boolean }): unknown }
 }
 
 const modInbox = await import('../../e2e/harness/modInbox.js' as string) as {
@@ -121,6 +126,99 @@ describe("tier B's raise on Linux", () => {
     driver.writeRaiseFakes(bin)
     expect(driver.raiseToolsOutside(dir, { PATH: `${bin}:/usr/bin:/bin` })).toEqual([])
     for (const tool of driver.RAISE_TOOLS) expect(spawnSync(join(bin, tool), ['-l', '-p']).status).toBe(1)
+  })
+})
+
+/** A file at [path] that Orca's install could have left: by its real path, the daemon takes it for Orca's CLI
+ *  (devices/orcaHomes.ts). */
+function launcherAt(path: string): string {
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+  return path
+}
+
+/**
+ * A daemon's root in a throwaway folder, as harness/daemon.ts lays one out: bin's `orca` and `orca-ide` linked to the
+ * refusing launcher in the Orca install the harness made, which is the Orca app's own too (HARNESS_ORCA_APP_BIN). Its
+ * PATH ends in a computer's folder of programs outside the root (`system`), where `installed` puts a real Orca's name,
+ * linked into a real Orca's install beside it, as Orca's .deb links /usr/bin/orca-ide.
+ */
+function daemonRoot(): { root: string; bin: string; launcher: string; system: string; env: NodeJS.ProcessEnv; installed(name: string): string } {
+  dir = mkdtempSync(join(tmpdir(), 'tier-b-orca-'))
+  const root = join(dir, 'root')
+  const bin = join(root, 'bin')
+  mkdirSync(bin, { recursive: true })
+  const launcher = launcherAt(join(root, 'orca-app', 'resources', 'bin', 'orca'))
+  for (const name of ['orca', 'orca-ide']) symlinkSync(launcher, join(bin, name))
+  const system = join(dir, 'usr', 'bin')
+  mkdirSync(system, { recursive: true })
+  const installed = (name: string): string => {
+    const real = launcherAt(join(dir, 'opt', 'Orca', 'resources', 'bin', name))
+    symlinkSync(real, join(system, name))
+    return real
+  }
+  return { root, bin, launcher, system, env: { PATH: `${bin}:${system}`, HARNESS_ORCA_APP_BIN: launcher }, installed }
+}
+
+describe("tier B's Orca CLI: the one the daemon would run is inside its root", () => {
+  const REFUSED = "the daemon's Orca CLI is not inside its root"
+  afterEach(() => { vi.unstubAllEnvs() })
+
+  it('orcaCliInside refuses an orca-ide first on PATH outside the root, on linux', () => {
+    const r = daemonRoot()
+    r.installed('orca-ide')
+    // A bin with no orca-ide: Linux looks for one before any orca, and the daemon's PATH ends in the computer's folders.
+    unlinkSync(join(r.bin, 'orca-ide'))
+    expect(() => driver.orcaCliInside(r.env, r.root, 'linux')).toThrow(REFUSED)
+    // One in bin that is not in Orca's install: the daemon passes over it to the computer's.
+    writeFileSync(join(r.bin, 'orca-ide'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    expect(() => driver.orcaCliInside(r.env, r.root, 'linux')).toThrow(REFUSED)
+  })
+
+  it('it refuses an orca outside the root first on PATH', () => {
+    const r = daemonRoot()
+    r.installed('orca')
+    const env = { ...r.env, PATH: `${r.system}:${r.bin}` }
+    // On Linux the daemon takes bin's orca-ide, but whatever runs `orca` by name gets the computer's.
+    for (const platform of ['linux', 'darwin'] as const) expect(() => driver.orcaCliInside(env, r.root, platform)).toThrow(REFUSED)
+  })
+
+  it("it refuses an orca in the root's bin that links to one outside it", () => {
+    const r = daemonRoot()
+    const real = r.installed('orca')
+    unlinkSync(join(r.bin, 'orca'))
+    symlinkSync(real, join(r.bin, 'orca'))
+    for (const platform of ['linux', 'darwin'] as const) expect(() => driver.orcaCliInside(r.env, r.root, platform)).toThrow(REFUSED)
+  })
+
+  it('on darwin with none on PATH it refuses an app path outside the root', () => {
+    const r = daemonRoot()
+    const empty = join(dir, 'empty')
+    mkdirSync(empty)
+    const app = launcherAt(join(dir, 'Applications', 'Orca.app', 'Contents', 'Resources', 'bin', 'orca'))
+    // This worker's own app path is inside the root: only the daemon's environment names the daemon's.
+    vi.stubEnv('HARNESS_ORCA_APP_BIN', r.launcher)
+    expect(() => driver.orcaCliInside({ PATH: empty, HARNESS_ORCA_APP_BIN: app }, r.root, 'darwin')).toThrow(REFUSED)
+    expect(process.env.HARNESS_ORCA_APP_BIN).toBe(r.launcher)
+    // The same daemon with its app path inside the root runs that one: none on PATH is not what was refused.
+    vi.stubEnv('HARNESS_ORCA_APP_BIN', app)
+    expect(driver.orcaCliInside({ PATH: empty, HARNESS_ORCA_APP_BIN: r.launcher }, r.root, 'darwin')).toBe(r.launcher)
+    expect(process.env.HARNESS_ORCA_APP_BIN).toBe(app)
+  })
+
+  it("the fake installed as orca and orca-ide resolves inside the root, through Orca's launcher folder, on linux and darwin", () => {
+    const r = daemonRoot()
+    // A real Orca in the computer's folders, after the daemon's own, as on a developer's Linux desktop.
+    r.installed('orca')
+    r.installed('orca-ide')
+    fakeOrca.FakeOrca.install({ env: { CLAUDE_PATH: join(r.bin, 'claude') } }, { watchFocus: true })
+    expect(driver.orcaCliInside(r.env, r.root, 'linux')).toBe(join(r.bin, 'orca-ide'))
+    expect(driver.orcaCliInside(r.env, r.root, 'darwin')).toBe(join(r.bin, 'orca'))
+    for (const name of ['orca', 'orca-ide']) {
+      expect(realpathSync(join(r.bin, name))).toBe(realpathSync(r.launcher))
+      // The fake answers to either name, as an Orca with watch-focus.
+      expect(spawnSync(join(r.bin, name), ['terminal', '--help'], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } }).stdout).toContain('watch-focus')
+    }
   })
 })
 
