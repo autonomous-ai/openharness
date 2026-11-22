@@ -485,6 +485,34 @@ describe('readDone', () => {
     expect(await readDone(withDone('cat README.md; exit 0', 'done:'), st)).toBe(false)
   })
 
+  // The check runs what the agent left (its tests, its CLI) after Claude's sandbox is gone.
+  it("refuses a check's write outside the run, and its reads of the person's ~/.harness and gh sign-in", async () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'dial-skill-home-')))
+    try {
+      const tokens = [join(home, '.harness', 'token'), join(home, '.config', 'gh', 'hosts.yml')]
+      for (const token of tokens) {
+        mkdirSync(dirname(token), { recursive: true })
+        writeFileSync(token, 'from-the-person\n')
+      }
+      vi.stubEnv('HOME', home)
+      const st = staging('oracle', { skill: false })
+      const outside = join(base, 'escaped')
+
+      expect(await readDone(withDone(`echo done: > ${outside}; cat ${outside}`, 'done:'), st)).toBe(false)
+      expect(existsSync(outside)).toBe(false)
+      for (const token of tokens) expect(await readDone(withDone(`cat ${token}`, 'from-the-person'), st), token).toBe(false)
+      expect(await readDone(withDone('echo done: > part && cat part', 'done:'), st)).toBe(true)
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('runs a check with HOME a folder of the run', async () => {
+    const st = staging('oracle', { skill: false })
+
+    expect(await readDone(withDone('cd ~ && pwd', join(st.root, 'home')), st)).toBe(true)
+  })
+
   it('throws harm_check when the check does not finish, rather than read it as not done', async () => {
     const st = staging('oracle', { skill: false })
 
