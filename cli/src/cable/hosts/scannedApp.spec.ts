@@ -267,6 +267,17 @@ describe('scannedApps elsewhere', () => {
     expect(await scannedApps([10], d)).toEqual(new Map([[10, 'harness']]))
   })
 
+  // Orca's daemon renames itself `orca-agents`, which names no app; Orca's main process, its parent in the .deb's record,
+  // names Orca, as it does in front (frontApp.ts), and makes the terminal itself when no daemon runs.
+  it('on Linux a session in an Orca terminal is in Orca, with the daemon and without it', async () => {
+    const { deb, inProcess } = RECORDED_ORCA.linux
+    const rows = [...deb.chain, ...inProcess.chain].map(({ pid, ppid, comm }): [number, number, string] => [pid, ppid, comm])
+    rows.push([deb.chain[deb.chain.length - 1].ppid, 1, inProcess.makerComm])
+    const d = deps(rows, {}, 'linux')
+    const [daemon, alone] = [deb.chain[0].pid, inProcess.chain[0].pid]
+    expect(await scannedApps([daemon, alone], d)).toEqual(new Map([[daemon, 'orca'], [alone, 'orca']]))
+  })
+
   it('a process named codex names no app', async () => {
     // The Codex CLI's own name: off macOS an exe name decides, and the CLI is no app.
     const d = deps([[500, 499, 'codex'], [499, 498, 'bash'], [498, 1, 'codex']], {}, 'linux')
