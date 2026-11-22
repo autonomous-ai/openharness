@@ -16,6 +16,7 @@ import { harnessRules, installHookSettings, RULES_HEADER } from './kit/hookSetti
 import { nativeHookHomes } from './kit/nativeHookHomes.js'
 import { removeNativeYamlHooks } from './kit/nativeHookYaml.js'
 import { nativePluginSource } from './kit/nativePlugin.js'
+import { hostPlatform } from './kit/windowsFiles.js'
 import { defaultHookTargets, pluginOwned, removeEngineHooks, type HookTargets } from './removeHooks.js'
 
 vi.mock('./kit/homeAdoption.js', async (importOriginal) => {
@@ -47,6 +48,10 @@ function machine(): { root: string; targets: HookTargets } {
     },
   }
 }
+
+// The launcher as macOS and Linux have it, and as Windows does (lib/windows/installLayout.ts).
+const POSIX = join(env.HARNESS_BIN_DIR, 'harness')
+const WIN = win32.join(harnessPath('bin', homedir(), 'win32'), 'harness.exe')
 const write = (file: string, text: string) => { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, text) }
 
 describe('removeEngineHooks', () => {
@@ -55,7 +60,9 @@ describe('removeEngineHooks', () => {
     // The rules this release writes, so a rule it adds is one it takes out.
     const allow = hookContracts.claude.settings.allow
     targets.claude.allowRules = allow ? harnessRules(allow.rules).flat() : []
-    const notify = ['Bash(harness device notify:*)', `Bash(${join(env.HARNESS_BIN_DIR, 'harness')} device notify:*)`]
+    // The launcher as this host spells it, as the rules above do: on a real Windows host, harness.exe.
+    const launcher = hostPlatform() === 'win32' ? WIN : POSIX
+    const notify = ['Bash(harness device notify:*)', `Bash(${launcher} device notify:*)`]
     write(join(root, 'claude', 'settings.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: OURS }] }] },
       permissions: { allow: ['Bash(harness ps:*)', 'Bash(ls)', ...notify, 'Bash(npm test:*)'] } }))
     write(join(root, 'codex', 'hooks.json'), JSON.stringify({ hooks: { SessionStart: [{ matcher: 'startup', hooks: [{ type: 'command', command: OURS }] }] } }))
@@ -114,10 +121,6 @@ describe('removeEngineHooks', () => {
     expect(existsSync(rules('codex-mine'))).toBe(true)
   })
 })
-
-// The launcher as macOS and Linux have it, and as Windows does (lib/windows/installLayout.ts).
-const POSIX = join(env.HARNESS_BIN_DIR, 'harness')
-const WIN = win32.join(harnessPath('bin', homedir(), 'win32'), 'harness.exe')
 
 describe('Harness\'s allowance on Windows', () => {
   it('the targets name the Windows launcher\'s rules', () => {
