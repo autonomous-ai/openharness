@@ -1148,6 +1148,18 @@ describe('Claude Code while Harness runs a Claude agent of its own (docs/plans/2
     expect(readSetup(r.dataDir).homes.claude).toEqual([skillsOf(r.claudeHome)])
   })
 
+  it('a write a Harness Claude agent brought with the plugin not on counts set up, with agent', () => {
+    const adopted = folder()
+    const r = rig({ adopted: () => ({ claude: [adopted], codex: [] }) })
+    writeSkill(skillsAt(adopted))
+    r.agents.now = 'listed'
+
+    r.writer.started()
+
+    // The adopted home already held it: only the default home's is a write.
+    expect(r.counted).toEqual([['claude', 'set up', 'agent'], ['codex', 'set up']])
+  })
+
   it('the last Harness Claude agent gone with the plugin not on takes our skill once none has held a scan\'s minute', () => {
     // A core restarting lists none of its agents until it has restored them: acted on at once, that none would take
     // the skill out of every Claude Code home.
