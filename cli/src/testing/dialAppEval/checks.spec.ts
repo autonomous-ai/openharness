@@ -1167,6 +1167,29 @@ describe('Orca', () => {
       .toBe(true)
   })
 
+  it("an Orca row's tab is its panes Orca lays out: those started and not ended, closed or quit, and back at a relaunch", () => {
+    // ow, Claude Code, is the tab's lowest split while its pane is open: the Codex ox beside it is named by it then.
+    const OW = orca('ow', 53, { tab: 1, split: 0 })
+    const OX = orca('ox', 54, { tab: 1, split: 1, engine: 'codex' })
+    const start = (key: string): Step => ({ kind: 'hook', session: key, event: 'start' })
+    const name = (steps: Step[]): string => {
+      const t = scenario([{ kind: 'orca.layout', worktrees: ['w1'] }, ...steps, { kind: 'tap', session: 'ox', label: 'end' }], [OW, OX])
+      const times = t.steps.map((_, i) => 100 * (i + 1))
+      const named = (title: string): boolean => scores(run({ id: 'r', kind: 'ring', dim: 'D1', page: 'orca', expect: ['ox'], at: 'end' }, t,
+        seen(t, times, { frames: list(times.at(-1)! - 50, 'orca', [[id(OX), title]]) }))).names === 1
+      return [OW.title, OX.title].find(named) ?? 'neither'
+    }
+    expect(name([start('ox')])).toBe(OX.title)
+    expect(name([start('ow'), start('ox')])).toBe(OW.title)
+    expect(name([start('ow'), start('ox'), { kind: 'hook', session: 'ow', event: 'end' }])).toBe(OX.title)
+    expect(name([start('ow'), start('ox'), { kind: 'orca.close', session: 'ow' }])).toBe(OX.title)
+    expect(name([start('ow'), start('ox'), { kind: 'quit', app: 'orca' }])).toBe(OX.title)
+    expect(name([start('ow'), start('ox'), { kind: 'quit', app: 'orca' }, { kind: 'relaunch', app: 'orca' }])).toBe(OW.title)
+    expect(name([start('ow'), start('ox'), { kind: 'orca.close', session: 'ow' }, { kind: 'quit', app: 'orca' },
+      { kind: 'relaunch', app: 'orca' }])).toBe(OX.title)
+    expect(name([start('ow'), start('ox'), { kind: 'quit', app: 'claude' }])).toBe(OW.title)
+  })
+
   it('no evidence holds a handle or a worktree id', () => {
     const t = scenario([{ kind: 'relaunch', app: 'orca' }, { kind: 'tap', session: 'oa', label: 'go' }], sessions)
     const commands = [activate(600, 'w2'), switchTo(650, handle(OA, 0)), switchTo(700, handle(OA, 1), false), switchTo(750, handle(OB, 1)),
