@@ -62,14 +62,15 @@ async function ringed(dial: LoopbackDial) {
 const WORDS = 'Eval words for alpha.'
 const roots: string[] = []
 
-/** Codex agents in Orca's panes, a and b, and h in a pane another program made, started (so no mod polls): the words the
- *  devices type through Orca's `terminal send` to a handle, and what reached whom. */
-async function orcaWorld() {
+/** Codex agents in Orca's panes, a and b, h in a pane another program made and t under tmux in its pane, started (so no
+ *  mod polls), the voice step speaking to `target`: the words the devices type through Orca's `terminal send` to a
+ *  handle, and what reached whom. */
+async function orcaWorld(target = 'a') {
   const of = {
     id: 'S2', app: 'orca', checks: [], probes: [], platforms: ['darwin'],
     sessions: [orcaSession('a', { engine: 'codex' }), orcaSession('b', { engine: 'codex', tab: 1 }),
-      orcaSession('h', { engine: 'codex', tab: 2, held: true })],
-    steps: [{ label: 'voice', kind: 'voice', transcript: WORDS, target: 'a' }],
+      orcaSession('h', { engine: 'codex', tab: 2, held: true }), orcaSession('t', { engine: 'codex', tab: 3, tmux: true })],
+    steps: [{ label: 'voice', kind: 'voice', transcript: WORDS, target }],
   } as unknown as Scenario
   const root = mkdtempSync(join(tmpdir(), 'dial-eval-voice-'))
   roots.push(root)
@@ -85,7 +86,7 @@ async function orcaWorld() {
     answer: (rule: (typeof rules)[number]) => { rules.push(rule) },
   } as unknown as TierAWorld
   recordTyping(world)
-  for (const session of ['a', 'b', 'h']) await sessionsSteps.hook(world, { kind: 'hook', session, event: 'start' })
+  for (const session of ['a', 'b', 'h', 't']) await sessionsSteps.hook(world, { kind: 'hook', session, event: 'start' })
   /** Orca's send as the devices run it (cable/hosts/orca.ts). */
   const send = (handle: string) => {
     for (const rule of rules) rule(['/opt/eval/orca/resources/bin/orca-ide', 'terminal', 'send', '--terminal', handle, `--text=${WORDS}`,
@@ -175,5 +176,12 @@ describe("tier A's voice step", () => {
     expect(wrongSends(of, seen())).toEqual([
       { scenario: 'S2', target: 'a', got: 'b', path: 'typed', at: 600 }, { scenario: 'S2', target: 'a', got: null, path: 'typed', at: 600 },
     ])
+  })
+
+  it("a send to a tmux session's Orca handle is a wrong send, even to that session: the pane runs tmux's client, not the agent", async () => {
+    const { of, deliveries, send, seen } = await orcaWorld('t')
+    send(orcaTerminalHandle('t'))
+    expect(deliveries).toEqual([{ at: 600, path: 'typed', target: null, text: WORDS }])
+    expect(wrongSends(of, seen())).toEqual([{ scenario: 'S2', target: 't', got: null, path: 'typed', at: 600 }])
   })
 })

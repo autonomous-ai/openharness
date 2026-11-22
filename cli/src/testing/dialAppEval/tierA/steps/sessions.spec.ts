@@ -529,6 +529,10 @@ describe("tier A's Orca agents", () => {
     // A held pane is laid out, but it is the terminal another program was started in: no agent owns what it is sent.
     expect(orcaHandleOf(w.world, 'h')).toBe(orcaTerminalHandle('h'))
     expect(keyOfOrcaHandle(w.world, orcaTerminalHandle('h'))).toBeUndefined()
+    // So is a tmux session's: its pane runs tmux's client, and the agent runs on a terminal of tmux's.
+    await w.hook('t', 'start')
+    expect(orcaHandleOf(w.world, 't')).toBe(orcaTerminalHandle('t'))
+    expect(keyOfOrcaHandle(w.world, orcaTerminalHandle('t'))).toBeUndefined()
     // b has not started: its pane is not open.
     expect(orcaHandleOf(w.world, 'b')).toBeUndefined()
     expect(keyOfOrcaHandle(w.world, orcaTerminalHandle('b'))).toBeUndefined()
