@@ -3,6 +3,10 @@
 // again (the line is data from outside) and counts it.
 
 export const NOTICE_MAX_CHARS = 120
+/** The bytes of a line the dial keeps whole: its drawer row cuts at 239, and a question of 256 or more reads "This
+ *  question needs the desktop" (firmware ui_habitat.c). 120 letters can be 360 bytes. */
+export const NOTICE_LINE_MAX_BYTES = 239
+export const NOTICE_SUGGEST_MAX = 40
 export const NOTICE_FOLDER_MAX = 64
 export const NOTICE_SESSION = /^[A-Za-z0-9._-]{1,128}$/
 
@@ -18,6 +22,50 @@ export function noticeLine(text: string): string {
   const chars = clean(text)
   // Cut by code points, never inside a surrogate pair.
   return chars.length > NOTICE_MAX_CHARS ? `${chars.slice(0, NOTICE_MAX_CHARS - 1).join('')}…` : chars.join('')
+}
+
+export type NoticeState = 'waiting' | 'proceeding'
+export type NoticeKind = NoticeState | 'plain'
+
+// The state opens the line because the round dial cuts near 90 letters and the Pro shows two rows: whether the agent
+// waits is what the person must see first.
+const ROWS: Record<NoticeKind, { opening: string; label: string }> = {
+  waiting: { opening: 'Waiting · ', label: ' · Suggest: ' },
+  proceeding: { opening: 'Proceeding · ', label: ' · Doing: ' },
+  plain: { opening: '', label: ' · Suggest: ' },
+}
+
+/** The line of a question, its suggestion and the agent's state: each part cleaned as noticeLine cleans, the
+ *  suggestion 40 letters at most, then the question cut so the line is 120 letters and NOTICE_LINE_MAX_BYTES bytes at
+ *  most. '' when the question is empty. */
+export function composeNotice(question: string, suggest?: string, state?: NoticeState): string {
+  const q = clean(question)
+  if (q.length === 0) return ''
+  const row = ROWS[state ?? 'plain']
+  const s = clean(suggest ?? '')
+  const tail = s.length === 0 ? ''
+    : `${row.label}${s.length > NOTICE_SUGGEST_MAX ? `${s.slice(0, NOTICE_SUGGEST_MAX - 1).join('')}…` : s.join('')}`
+  const fixed = row.opening + tail
+  const room = NOTICE_MAX_CHARS - [...fixed].length
+  const bytes = NOTICE_LINE_MAX_BYTES - Buffer.byteLength(fixed)
+  return `${row.opening}${fitQuestion(q, room, bytes)}${tail}`
+}
+
+// The CLI fits the whole line, so the devices' byte cut never takes the suggestion off its end. The listener refuses a
+// line that noticeLine would change (devicesListener.ts), so a cut never leaves a space before its `…`.
+function fitQuestion(q: string[], room: number, bytes: number): string {
+  if (q.length <= room && Buffer.byteLength(q.join('')) <= bytes) return q.join('')
+  let k = 0
+  let used = Buffer.byteLength('…')
+  // By code points, so never inside a surrogate pair.
+  while (k + 1 < room && used + Buffer.byteLength(q[k]) <= bytes) used += Buffer.byteLength(q[k++])
+  return `${q.slice(0, k).join('').trimEnd()}…`
+}
+
+/** The state a line was composed with, read from its opening. */
+export function noticeKind(line: string): NoticeKind {
+  if (line.startsWith(ROWS.waiting.opening)) return 'waiting'
+  return line.startsWith(ROWS.proceeding.opening) ? 'proceeding' : 'plain'
 }
 
 /** A folder's name for a card: through noticeLine's cleaning, 64 code points at most, no `…`; '' when nothing is left. */

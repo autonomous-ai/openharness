@@ -2,7 +2,7 @@
 // process holds it; the core knows nothing of notices.
 
 import { truncateUtf8 } from '../lib/deviceRecentTrim.js'
-import { NoticeLimits, type NoticeAsk, type NoticeResult } from '../lib/dialNotice.js'
+import { NOTICE_LINE_MAX_BYTES, NoticeLimits, type NoticeAsk, type NoticeResult } from '../lib/dialNotice.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
 import { SHOWN_ONLY_PREFIX } from './cableSession.js'
 import { hostDisplayName } from './hosts/hostDetect.js'
@@ -46,9 +46,6 @@ export interface NoticesDeps {
 }
 
 export const NOTICES_PENDING_MAX = 20
-/** The bytes of a line the dial keeps whole: its drawer row cuts at 239, and a question of 256 or more reads "This
- *  question needs the desktop" (firmware ui_habitat.c). 120 letters can be 360 bytes. */
-export const NOTICE_LINE_MAX_BYTES = 239
 /** A card's keys find its agent again after a restart (its session, then its panes): a few short ones, so the file
  *  stays small. */
 export const NOTICE_KEYS_MAX = 4
