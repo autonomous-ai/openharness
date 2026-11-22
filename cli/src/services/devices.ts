@@ -42,7 +42,7 @@ import { watchNearest } from '../cable/hosts/folderWatch.js'
 import { createCodexAppAdapter } from '../cable/hosts/codexApp.js'
 import { CodexAppSource, type CodexAppSourceDeps } from '../cable/hosts/codexAppSource.js'
 import { CodexAppThreads } from '../cable/hosts/codexAppThreads.js'
-import { APP_BUNDLES } from '../cable/hosts/hostDetect.js'
+import { APP_BUNDLES, APP_IDS, UNKNOWN_APP } from '../cable/hosts/hostDetect.js'
 import { APP_PACKAGE, codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
 import { createHcClient, hcClientDeps, hcPaneKey, hcSocketPath, type HcClient } from '../cable/hosts/hcClient.js'
 import { HcSource } from '../cable/hosts/hcSource.js'
@@ -1774,6 +1774,38 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const place = (): void => part.call('cmux', () => placeInCmux(observed, cmuxSource))
     observed.onChange(place)
     cmuxSource.onChange(place)
+  }
+
+  /**
+   * The open scan's copy of a session herdr lists with its session id, placed at that row's herdr pane: Diego's idle
+   * agents in herdr in an iTerm2 tab (2026-11-22) had no hook to name their pane after the devices started again, so a
+   * rest reached the tab alone. Only an agent with no herdr pane of its own. The place carries the app holding herdr's
+   * client once the scan's lookup named it, as a rest needs it (herdr.ts canShow); before that the bare pane, which a tap
+   * still focuses. A place opens and shows, never takes words (observed.ts shownOnly).
+   */
+  let placedInHerdr = false
+  const placeInHerdr = (source: ObservedSource, listing: HerdrSource): void => {
+    const rows = listing.list()
+    // Each observed change lands here, herdr running or not: with no row and no place to drop, there is nothing to tell.
+    if (rows.length === 0 && !placedInHerdr) return
+    const placed = new Map<string, string>()
+    for (const { id, engine, sessionId } of rows) {
+      if (sessionId === undefined) continue
+      const agentId = observedAgentId(engine, sessionId)
+      if (source.paneOf(agentId, 'herdr') !== undefined) continue
+      const app = source.windowOf(agentId)?.app
+      // A row it lists has its pane.
+      const pane = listing.paneAt(id)!
+      placed.set(agentId, app !== undefined && app !== UNKNOWN_APP && APP_IDS.includes(app) ? `${pane}:${app}` : pane)
+    }
+    source.setPaneNames('herdr', new Map(), placed)
+    placedInHerdr = placed.size > 0
+  }
+  // As cmux's: after each change of either, and herdr's source stopping drops its rows, and with them every place.
+  if (observed && herdr) {
+    const place = (): void => part.call('herdr', () => placeInHerdr(observed, herdr))
+    observed.onChange(place)
+    herdr.onChange(place)
   }
 
   // ── the worktree on Orca's screen ──────────────────────────────────────────────────────────────────
