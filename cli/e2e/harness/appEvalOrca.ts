@@ -16,7 +16,7 @@
  * the daemon's environment, made from scratch (testing/daemonEnvironment.ts), and the session's own names (`orcaEnv`).
  */
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process'
-import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs'
+import { appendFileSync, copyFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { APP_BUNDLES } from '../../src/cable/hosts/hostDetect.js'
 import { orcaLayout, orcaListing } from '../../src/testing/dialAppEval/orcaListing.js'
@@ -24,7 +24,7 @@ import { engineOf, HELD_MAKER, hookHandle, orcaPaneHandle, type SessionDef, type
   from '../../src/testing/dialAppEval/types.js'
 import { hear } from './appEvalChatgpt.js'
 import { holdMod } from './appEvalClaude.js'
-import { guardEnv, speak, type AppSteps, type TierBWorld } from './appEvalDriver.js'
+import { guardEnv, orcaAccountHome, speak, type AppSteps, type TierBWorld } from './appEvalDriver.js'
 import { CodexOutside } from './codexOutside.js'
 import { until, type IsolatedDaemon } from './daemon.js'
 import { IN_ORCA, InOrca } from './inOrca.js'
@@ -179,8 +179,6 @@ interface State {
   quit?: { sessions: SessionKey[]; plugin: boolean }
   /** Each session's launch, 0 its first: Orca's nth relaunch lays its pane out on its nth handle (orcaPaneHandle). */
   launches: Map<SessionKey, number>
-  /** Each Codex home of a session's own, by its session. */
-  homes: Map<SessionKey, string>
 }
 const states = new WeakMap<TierBWorld, State>()
 
@@ -193,7 +191,7 @@ const states = new WeakMap<TierBWorld, State>()
 function orcaOf(world: TierBWorld): State {
   const known = states.get(world)
   if (known) return known
-  const state: State = { live: new Map(), launches: new Map(), homes: new Map() }
+  const state: State = { live: new Map(), launches: new Map() }
   states.set(world, state)
   // Only Orca's lifetime: what it does is in this file.
   const child = spawn(process.execPath, ['-e', 'process.stdin.resume()'], { cwd: world.d.root, env: world.d.env, stdio: ['pipe', 'ignore', 'ignore'] })
@@ -254,14 +252,11 @@ function relist(world: TierBWorld, state: State): void {
   if (JSON.stringify(terminals) !== front.told) handFront(state, plugin, front.worktree, terminals)
 }
 
-/** A Codex home of the session's own, an Orca account's, in the root and not the daemon's CODEX_HOME, with Harness's hooks
- *  in it as the daemon installs them: one a session in a world, so a relaunched Codex goes on in it. */
-function ownHome(world: TierBWorld, state: State, key: SessionKey): string {
-  const known = state.homes.get(key)
-  if (known) return known
-  const home = mkdtempSync(join(world.d.root, 'codex-home-'))
+/** A Codex home of the session's own, the Orca account's the daemon's Orca lists (appEvalDriver.ts orcaAccounts), in the
+ *  root and not the daemon's CODEX_HOME, with Harness's hooks in it as the daemon installs them. */
+function ownHome(world: TierBWorld, key: SessionKey): string {
+  const home = orcaAccountHome(world.d.root, key)
   copyFileSync(join(world.d.env.CODEX_HOME!, 'hooks.json'), join(home, 'hooks.json'))
-  state.homes.set(key, home)
   return home
 }
 
@@ -299,7 +294,7 @@ async function startAgent(world: TierBWorld, state: State, key: SessionKey): Pro
     ...(world.platform === 'darwin' ? { __CFBundleIdentifier: APP_BUNDLES.orca } : {}),
     ...tmux?.hints,
   }
-  const home = engineOf(s) === 'codex' && s.codexHome === 'own' ? ownHome(world, state, key) : undefined
+  const home = engineOf(s) === 'codex' && s.codexHome === 'own' ? ownHome(world, key) : undefined
   const agent = await OrcaAgent.start(world.d, world.children, s, hints, home)
   const live: Live = { agent, ...(tmux ? { tmux: tmux.name } : {}) }
   state.live.set(key, live)

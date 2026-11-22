@@ -30,7 +30,7 @@ import { resolveBinaryOnPath } from '../../src/lib/binaryOnPath.js'
 import { claudeAppFixture } from '../../src/testing/claudeAppFixture.js'
 import { describeAttempt, guardThisProcess, NET_GUARD_FILE_ENV, netGuardEnv, readNetGuard, type NetAttempt } from '../../src/testing/dialAppEval/netGuard.js'
 import { orcaListing } from '../../src/testing/dialAppEval/orcaListing.js'
-import { agentIdOf, FRONT_NAMES, PAGE, placeOf, type App, type Delivery, type EvalDriver, type LinkedApp, type Platform,
+import { agentIdOf, engineOf, FRONT_NAMES, PAGE, placeOf, type App, type Delivery, type EvalDriver, type LinkedApp, type Platform,
   type Scenario, type Seen, type SessionDef, type SessionKey, type Step, type StepKind, type StepOf } from '../../src/testing/dialAppEval/types.js'
 import { CAROUSEL_REFRESH_MS, DialCarousel, type DialMessage } from '../../src/testing/dialCarousel.js'
 import { writeExecutable } from '../../src/testing/executableFixture.js'
@@ -117,6 +117,8 @@ interface Rig {
   /** Orca's CLI, as `orca` and `orca-ide`: the fake, and whether it has watch-focus now. */
   orca: FakeOrca
   watchFocus: boolean
+  /** The sessions whose Orca account's home its Orca lists (orcaAccounts). */
+  accounts: SessionKey[]
   /** Where its recording open notes its runs, and its recording Cursor CLI its own (Linux's alone: none on macOS). */
   runs: string
   cursorRuns: string
@@ -239,6 +241,13 @@ export function orcaCliInside(env: NodeJS.ProcessEnv, root: string, platform: No
   }
   return cli
 }
+
+/** The sessions whose Codex runs in a home of its own, an Orca account's: Orca lists that home (`orca account list`). */
+export function orcaAccounts(scenario: Pick<Scenario, 'sessions'>): SessionKey[] {
+  return scenario.sessions.filter((s) => s.app === 'orca' && engineOf(s) === 'codex' && s.codexHome === 'own').map((s) => s.key)
+}
+/** The Orca account's home a session's Codex runs in, in the daemon's root. */
+export const orcaAccountHome = (root: string, key: SessionKey): string => join(root, 'orca-accounts', key)
 
 /** The fake Orca's runs as commands, at their own times, each argument inside one of [projects] written as the catalog's
  *  `/work/` folder. */
@@ -373,7 +382,8 @@ async function end(child: ChildProcess): Promise<void> {
   clearTimeout(timer)
 }
 
-async function openRig(guard: string): Promise<Rig> {
+/** A daemon whose Orca lists the Orca accounts of [accounts]' sessions (orcaAccounts). */
+async function openRig(guard: string, accounts: SessionKey[]): Promise<Rig> {
   const backend = await FakeBackend.start()
   backend.addMachine(ME)
   let d: IsolatedDaemon | undefined
@@ -420,8 +430,12 @@ async function openRig(guard: string): Promise<Rig> {
     // inside its root: every session here runs inside the real Orca.
     const orca = FakeOrca.install(d, { watchFocus: true })
     orcaCliInside(d.env, d.root, process.platform)
-    // No account in Orca: its homes are not graded, and its list is answered empty, as tier A answers it.
-    orca.accounts({})
+    // Orca's accounts: the home each Codex agent of its runs in, there before the devices start, as they read Orca's list
+    // as they start and not again for 5 minutes (devices/orcaHomes.ts ORCA_HOMES_REFRESH_MS). Tier A lists the same.
+    const { root } = d
+    const homes = accounts.map((key) => orcaAccountHome(root, key))
+    for (const home of homes) mkdirSync(home, { recursive: true })
+    orca.accounts({ codex: homes })
     const dials = join(d.root, 'dials.json')
     d.env.HARNESSD_TEST_DIAL_PORT = dials
     writeFileSync(dials, '[]')
@@ -433,7 +447,7 @@ async function openRig(guard: string): Promise<Rig> {
     await d.start()
     // An engine started by hand reads its hooks once, as it starts: they are in before any scenario starts one.
     await d.hooksInstalled(['claude', 'codex'])
-    return { d, desk: new Desk(dials), backend, orca, watchFocus: true, runs, cursorRuns, projects, guard, given: 0, polled: new Map() }
+    return { d, desk: new Desk(dials), backend, orca, watchFocus: true, accounts, runs, cursorRuns, projects, guard, given: 0, polled: new Map() }
   } catch (error) {
     await d?.close().catch(() => {})
     await backend.close()
@@ -753,9 +767,13 @@ export class TierBDriver implements EvalDriver {
     const polled = this.rig?.polled
     const counted = polled !== undefined && scenario.steps.some((s) => s.kind === 'voice')
       && scenario.sessions.some((s) => Date.now() - (polled.get(s.id) ?? -Infinity) < MOD_READY_MS)
-    if (this.rig && (scenario.fresh || counted)) await this.closeRig()
+    // The devices read Orca's accounts once as they start: a Codex in an account the running Orca does not list has a
+    // daemon of its own, whose Orca lists it.
+    const accounts = orcaAccounts(scenario)
+    const unlisted = this.rig !== undefined && accounts.some((key) => !this.rig!.accounts.includes(key))
+    if (this.rig && (scenario.fresh || counted || unlisted)) await this.closeRig()
     if (this.rig) await this.reset(this.rig)
-    const rig = this.rig ??= await openRig(join(this.own, `net-guard-${++this.daemons}.jsonl`))
+    const rig = this.rig ??= await openRig(join(this.own, `net-guard-${++this.daemons}.jsonl`), accounts)
     // Rewritten only when it changes: each rewrite moves the launcher's mtime, and the devices ask `terminal --help` again.
     const watchFocus = scenario.world?.orca?.watchFocus !== false
     if (rig.watchFocus !== watchFocus) {
@@ -874,6 +892,7 @@ export class TierBDriver implements EvalDriver {
     // same file, and a recap could pass on an earlier scenario's answer.
     emptied(rig.d.env.CLAUDE_PROJECTS_DIR!)
     emptied(join(rig.d.env.CODEX_HOME!, 'sessions'))
+    for (const key of rig.accounts) emptied(join(orcaAccountHome(rig.d.root, key), 'sessions'))
     emptied(join(home, '.cursor', 'projects'))
     // Orca lays nothing out until a scenario's layout, its watches end with the last scenario, and a new one tells no
     // focus of it: a watch prints the last line told first.

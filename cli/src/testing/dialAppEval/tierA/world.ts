@@ -34,7 +34,7 @@ import { agentIdOf, type App, type Delivery, type LinkedApp, type Platform, type
 import { quiet } from './clock.js'
 import { LoopbackDial } from './loopbackDial.js'
 import { machine, type MachineModel } from './machine.js'
-import { ORCA_PROGRAMS, watchChild } from './steps/orca.js'
+import { ORCA_PROGRAMS, orcaAccountHomes, watchChild } from './steps/orca.js'
 import { createStoreWatch, onHost } from './storeWatch.js'
 
 export interface TierAWorld {
@@ -461,7 +461,8 @@ export class World implements TierAWorld {
       },
       tty: async (pid) => machine.processes.get(pid)?.tty,
       claude: async () => null,
-      orcaHomes: { get: () => ({ claude: [], codex: [] }), answered: () => true, refresh: async () => false },
+      // Orca's accounts' homes, as its `account list` names them (steps/orca.ts).
+      orcaHomes: { get: () => orcaAccountHomes(this), answered: () => true, refresh: async () => false },
       vscodeExtension: noEditor('vscode', platform, root),
       cursorExtension: cursorInstalled(platform, root, (reason) => this.gap(reason)),
       orcaPlugin: { orca: () => null, run: async () => ({ code: null, stdout: '', timedOut: false }), files: () => null, folder: join(root, 'orca-plugin') },

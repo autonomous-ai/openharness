@@ -208,13 +208,16 @@ function orcaPane(world: TierAWorld, s: SessionDef): { shell: number; parent: nu
 /** Codex's rollout of the session in a Codex home's sessions folder, as Codex names it. */
 const rollout = (sessions: string, id: string): string => join(sessions, '2026', '11', '21', `rollout-2026-11-21T09-00-00-${id}.jsonl`)
 
+/** The Codex home of a session with one of its own, in the world's folder of them: an Orca agent's is its account's. */
+export const codexHomeOf = (world: TierAWorld, key: SessionKey): string => join(world.folders.codexHomes, key)
+
 /** Where the engine writes the session's transcript: Harness's own homes, which the devices read answers in, a Codex
  *  home of its own, or Cursor's home (engines/cursor/contract.ts CURSOR_TRANSCRIPT, in a folder named by the cwd). */
 function transcriptOf(world: TierAWorld, s: SessionDef): string {
   const slug = s.cwd.replace(/[^A-Za-z0-9]/g, '-')
   switch (engineOf(s)) {
     case 'claude': return join(world.folders.claudeProjects, slug, `${s.id}.jsonl`)
-    case 'codex': return rollout(s.codexHome === 'own' ? join(world.folders.codexHomes, s.key, 'sessions') : world.folders.codexSessions, s.id)
+    case 'codex': return rollout(s.codexHome === 'own' ? join(codexHomeOf(world, s.key), 'sessions') : world.folders.codexSessions, s.id)
     case 'cursor': return join(world.folders.cursorProjects, slug.replace(/^-+/, ''), 'agent-transcripts', s.id, `${s.id}.jsonl`)
   }
 }

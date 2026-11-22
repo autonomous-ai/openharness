@@ -12,12 +12,13 @@
  * Orca's quit ends each watch and the stream; its relaunch opens the stream again where it was open.
  */
 import type { OrcaChild } from '../../../../cable/hosts/orca.js'
+import type { OrcaHomes } from '../../../../devices/orcaHomes.js'
 import { REFUSED, type ListenerHandler, type ListenerStream, type ListenerStreamHandler, type StreamEnd }
   from '../../../../services/devicesListener.js'
 import { orcaLayout, orcaListing } from '../../orcaListing.js'
-import type { StepOf } from '../../types.js'
+import { engineOf, type StepOf } from '../../types.js'
 import type { StepHandler, TierAWorld } from '../world.js'
-import { dropSession, orcaHandleOf } from './sessions.js'
+import { codexHomeOf, dropSession, orcaHandleOf } from './sessions.js'
 
 /** Orca's CLI by the name each platform's runs it as (devices/orcaHomes.ts orcaBinary): its launcher on macOS, the
  *  .deb's and the AppImage's `orca-ide` on Linux, `orca.exe` on Windows. */
@@ -26,8 +27,23 @@ export const ORCA_PROGRAMS: readonly string[] = ['orca', 'orca-ide', 'orca.exe']
 const ECHO_MS = 100
 /** `orca terminal --help`'s Commands list, the part the devices read (cable/hosts/orca.ts listsWatchFocus). */
 const help = (watches: boolean): string => ['Commands:', '  list', '  switch', '  send', ...(watches ? ['  watch-focus'] : []), ''].join('\n')
-/** What `account list --json` prints with no account in Orca, in Orca 1.4.256's shape. */
-const NO_ACCOUNTS = { id: 'eval', ok: true, result: { claude: { activeAccountId: null, accounts: [] }, codex: { activeAccountId: null, accounts: [] } } }
+
+/** Orca's accounts' homes (devices/orcaHomes.ts): the one each Codex agent in its panes runs in, an account's own. No
+ *  Claude Code agent runs in one. */
+export function orcaAccountHomes(world: TierAWorld): OrcaHomes {
+  const own = world.scenario.sessions.filter((s) => s.app === 'orca' && engineOf(s) === 'codex' && s.codexHome === 'own')
+  return { claude: [], codex: own.map((s) => codexHomeOf(world, s.key)) }
+}
+
+/** What `account list --json` prints for those homes, in Orca 1.4.256's shape: an account for each, with a made-up id. */
+function accountList(world: TierAWorld): object {
+  const engine = (homes: string[], name: string) => {
+    const accounts = homes.map((home, i) => ({ id: `eval-${name}-${i + 1}`, home }))
+    return { activeAccountId: accounts[0]?.id ?? null, accounts }
+  }
+  const { claude, codex } = orcaAccountHomes(world)
+  return { id: 'eval', ok: true, result: { claude: engine(claude, 'claude'), codex: engine(codex, 'codex') } }
+}
 
 interface Watch { print(line: string): void; end(): void }
 interface Model {
@@ -85,7 +101,7 @@ export function answerOrca(world: TierAWorld): void {
       case 'worktree activate':
       case 'terminal send':
         return { code: 0 }
-      case 'account list': return { code: 0, stdout: JSON.stringify(NO_ACCOUNTS) }
+      case 'account list': return { code: 0, stdout: JSON.stringify(accountList(world)) }
       default: return undefined
     }
   })
