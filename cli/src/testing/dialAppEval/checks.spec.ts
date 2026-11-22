@@ -484,14 +484,18 @@ describe('voice', () => {
     expect(scores(run(voice, s, seen(s, [500], { deliveries: [to(400, 'a')] }))).reached).toBe(0)
   })
 
-  it('a voice check with a path counts only the deliveries by it, and its evidence lists every one', () => {
+  it('a voice check with a path is reached only by it, once only when nothing else reached the session, and its evidence lists every one', () => {
     const typed: Seen['deliveries'][number] = { ...to(700, 'a'), path: 'typed' }
     const by = (path: Delivery['path'], deliveries: Seen['deliveries']): CheckResult[] =>
       run({ ...voice, path }, s, seen(s, [500], { deliveries }))
     expect(scores(by('mod', [typed]))).toEqual({ reached: 0, once: 0, exact: 0 })
     expect(scores(by('typed', [typed]))).toEqual({ reached: 1, once: 1, exact: 1 })
+    // The words came through the mod and were typed into the pane too: they reached the agent twice (O9: "nothing is
+    // typed into any pane").
     const both = by('mod', [to(600, 'a'), typed])
-    expect(scores(both)).toEqual({ reached: 1, once: 1, exact: 1 })
+    expect(scores(both)).toEqual({ reached: 1, once: 0, exact: 1 })
+    // Another session's delivery is the gate's, not this check's.
+    expect(scores(by('typed', [typed, { ...to(650, 'b'), path: 'mod' }]))).toEqual({ reached: 1, once: 1, exact: 1 })
     expect(both[0]!.evidence).toEqual(['delivery at 600 via mod to a, text exact', 'delivery at 700 via typed to a, text exact'])
   })
 
