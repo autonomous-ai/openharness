@@ -18,7 +18,7 @@ const EVERYDAY_PORT = '18473'
 
 /** One line the window printed (vscodeWindow.ts). */
 export interface Printed {
-  state?: string; show?: number; raise?: true; scroll?: 'up' | 'down'; key?: 'up' | 'down'; pid?: number; took?: WindowState; log?: string
+  state?: string; show?: number; raise?: true; scroll?: 'up' | 'down'; key?: 'up' | 'down'; pid?: number; typed?: string; took?: WindowState; log?: string
 }
 
 /** The extension's loop over a fake window, running. */
