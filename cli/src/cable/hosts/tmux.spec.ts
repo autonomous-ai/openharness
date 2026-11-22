@@ -758,7 +758,7 @@ describe('the place of an agent the scan found in the person\'s tmux', () => {
       run: async (file, args, timeoutMs) => {
         calls.push({ file, args, timeoutMs })
         if (args[0] === 'list-panes') await new Promise<void>((settle) => held.push(settle))
-        return { code: 0, stdout: args[0] === 'list-panes' ? PANES + paneLine('%4', '/dev/ttys011', says(190)) : ONE.clients }
+        return { code: 0, stdout: args[0] === 'list-panes' ? PANES + paneLine('%4', '/dev/ttys011', says(190, 'play')) : ONE.clients }
       },
     })
     const clientsOf = (pane: string): Call => ({ ...clientsAsked, args: ['list-clients', '-t', pane, ...clientsAsked.args.slice(3)] })
@@ -770,23 +770,63 @@ describe('the place of an agent the scan found in the person\'s tmux', () => {
     held[0]()
     const answerOf = (pid: number, pane: string) => ({ ...PLACED, pane: { adapter: 'tmux', id: `${pane}:${pid}:terminal-app` } })
     expect([await a, await again, await b]).toEqual([PLACED, PLACED, answerOf(200, '%4')])
-    // One listing; each pane's clients once, the same agent's two asks sharing one answer.
+    // One listing; each session's clients once, the same agent's two asks sharing one answer.
     expect(calls).toEqual([panesListed, clientsAsked, clientsOf('%4')])
-    // Within 5 s of the listing's start: the agent's answer with nothing run; another process on that tty lists only its clients.
+    // Within 5 s of their settle: the agent's answer, and another process's on that tty, with nothing run.
     clock.t = at + 4_999
     expect(await nested(first)).toEqual(PLACED)
     expect(await nested({ ...first, pid: 90 })).toEqual(answerOf(90, '%3'))
-    expect(calls.slice(3)).toEqual([clientsAsked])
+    expect(calls).toHaveLength(3)
     // At 5 s the listing runs again, and is shared while in flight past its own 5 s.
     clock.t = at + 5_000
     const later = nested(first)
-    await vi.waitFor(() => expect(calls.slice(4)).toEqual([panesListed]))
+    await vi.waitFor(() => expect(calls.slice(3)).toEqual([panesListed]))
     clock.t = at + 10_001
     const stuck = nested(first)
-    expect(calls.slice(4)).toEqual([panesListed])
+    expect(calls.slice(3)).toEqual([panesListed])
     held[1]()
     expect([await later, await stuck]).toEqual([PLACED, PLACED])
-    expect(calls.slice(4)).toEqual([panesListed, clientsAsked])
+    expect(calls.slice(3)).toEqual([panesListed, clientsAsked])
+  })
+
+  // A tmux that answers the listing, then hangs on the clients, costs the look one timeout, not one an agent: every
+  // pane of a session has that session's clients.
+  it('two agents in panes of one session run one list-clients, a failed one too, held 5 s from its settle', async () => {
+    const rows = [...AGENT.rows, { pid: 200, ppid: 190, tty: 'ttys011', executable: 'claude' }, { pid: 190, ppid: 80, tty: 'ttys011', executable: 'zsh' }]
+    const panes = PANES + paneLine('%4', '/dev/ttys011', says(190))
+    const shown = nestedLookup({}, [], { panes, clients: ONE.clients })
+    expect([await shown.nested({ ...AGENT, rows }), (await shown.nested({ pid: 200, tty: 'ttys011', rows }))?.pane])
+      .toEqual([PLACED, { adapter: 'tmux', id: '%4:200:terminal-app' }])
+    expect(shown.calls).toEqual([panesListed, clientsAsked])
+    expect(shown.logs).toEqual([...found, ...found])
+
+    const held: Array<() => void> = []
+    const { calls, clock, logs, nested } = nestedLookup({
+      run: async (file, args, timeoutMs) => {
+        calls.push({ file, args, timeoutMs })
+        if (args[0] !== 'list-clients') return { code: 0, stdout: panes }
+        // The first read of the clients hangs to its timeout; a second answers at once, so an ask that runs one fails
+        // rather than waits.
+        if (!held.length) await new Promise<void>((settle) => held.push(settle))
+        return { code: null, stdout: '' }
+      },
+    })
+    const clientReads = () => calls.filter((call) => call.args[0] === 'list-clients')
+    const at = clock.t
+    const first = nested({ ...AGENT, rows })
+    await vi.waitFor(() => expect(clientReads()).toHaveLength(1))
+    clock.t = at + 10_000
+    held[0]()
+    expect(await first).toEqual({})
+    const next = nested({ pid: 200, tty: 'ttys011', rows })
+    await ranBy()
+    expect(clientReads()).toHaveLength(1)
+    expect(await next).toEqual({})
+    expect(logs).toEqual([...notRead('clients'), ...notRead('clients')])
+    // 5 s from its settle, the session's clients are read again.
+    clock.t = at + 15_000
+    expect(await nested({ ...AGENT, rows, pid: 90 })).toEqual({})
+    expect(clientReads()).toHaveLength(2)
   })
 
   // The scan asks for its sessions one at a time: an answer kept from the listing's start would be gone after a listing
