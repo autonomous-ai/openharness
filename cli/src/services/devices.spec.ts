@@ -759,9 +759,9 @@ function fakeListener() {
     })).toBeUndefined()
     return { lines, end: (reason: string) => ended.abort(reason), break: () => { broken = true } }
   }
-  /** A window's shells, as its extension reports them, the first one active. */
-  const vscodeState = (window: string, terminals: number[]): unknown => (given[0].handlers['vscode-state'] as ListenerHandler)
-    .handle({ type: 'vscode-state', window, terminals, active: terminals[0] ?? null, focused: true }, new AbortController().signal)
+  /** A window's shells, as its extension reports them, the first one active unless the test names another. */
+  const vscodeState = (window: string, terminals: number[], active = terminals[0] ?? null): unknown => (given[0].handlers['vscode-state'] as ListenerHandler)
+    .handle({ type: 'vscode-state', window, terminals, active, focused: true }, new AbortController().signal)
   return { given, close, listen, front, attach, notify, notice, orcaFront, tabs, dial, vscode, vscodeState }
 }
 
@@ -4765,7 +4765,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       await vi.waitFor(() => expect(calls('syncAgents')).toHaveLength(looks + 1))
       return window
     }
-    return { ...started, front, reported }
+    return { ...started, listener, front, reported }
   }
 
   it('an agent in VS Code\'s terminal gets its terminal once its window reports the shell, and the dials are told to look', async () => {
@@ -4816,6 +4816,91 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     attach(port)
     expect(await caps()).toEqual([{ id: ID, caps: 's' }])
     expect(processTable.reads).toBe(0)
+  })
+
+  // Focusing another terminal in VS Code or Cursor turns the dial to its agent once the editor has settled in front
+  // (docs/plans/2026-11-17-dial-vscode-extension-design.md, "PR B, decided now" 3).
+  const SHELL_B = 4100
+  const B = observedAgentId('claude', 'sess-2')
+  let editorClock = 0
+  /** Two agents in one window's two terminals, ID's under SHELL and B's under SHELL_B, both chains read, the window's
+   *  first state on SHELL. `bundle` Cursor's: both are Cursor's. */
+  const twoTerminals = async (bundle = VSCODE) => {
+    editorClock = 0
+    const started = await inVscodeTerminal({ now: () => editorClock }, {}, bundle)
+    processTable.rows = [...TERMINAL_TREE, { pid: 4343, ppid: SHELL_B }, { pid: SHELL_B, ppid: 1 }]
+    const named: Record<string, string> = bundle !== VSCODE ? { __CFBundleIdentifier: bundle } : {}
+    started.port.observed(hook('session-start', { sessionId: 'sess-2', callerPid: 4343, transcriptPath: '/t/sess-2.jsonl', hostHints: { TERM_PROGRAM: 'vscode', ...named } }))
+    const window = started.listener.vscode(WINDOW_ID)
+    expect(started.listener.vscodeState(WINDOW_ID, [SHELL, SHELL_B])).toBeUndefined()
+    // Each agent's terminal found: a tap on it now reaches its window.
+    await vi.waitFor(async () => expect(await caps()).toEqual([{ id: ID, caps: 'sf' }, { id: B, caps: 'sf' }]))
+    const settle = async (app: string) => {
+      started.front(app)
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    }
+    const focus = (shell: number) => { expect(started.listener.vscodeState(WINDOW_ID, [SHELL, SHELL_B], shell)).toBeUndefined() }
+    return { ...started, window, settle, focus }
+  }
+  const editorFollows = () => calls('followLocal').filter(([, cause]) => cause === 'vscode')
+  const editorLines = () => logs.filter((line) => line.startsWith('[device] vscode ·'))
+
+  it('with VS Code settled in front, focusing another terminal turns the dial to its agent', async () => {
+    const { settle, focus } = await twoTerminals()
+    await settle('vscode')
+    focus(SHELL_B)
+    expect(editorFollows()).toEqual([[B, 'vscode']])
+    focus(SHELL)
+    expect(editorFollows()).toEqual([[B, 'vscode'], [ID, 'vscode']])
+  })
+
+  it('a focus before VS Code settles waits for the settle, and another app settling drops it', async () => {
+    const { front, settle, focus } = await twoTerminals()
+    await settle('ghostty')
+    front('vscode')
+    focus(SHELL_B)
+    expect(editorFollows()).toEqual([])
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    expect(editorFollows()).toEqual([[B, 'vscode']])
+    await settle('ghostty')
+    front('vscode')
+    focus(SHELL)
+    await settle('ghostty')
+    await settle('vscode')
+    expect(editorFollows()).toEqual([[B, 'vscode']])
+    expect(editorLines()).toEqual(['[device] vscode · skipped · not in front'])
+  })
+
+  it('the dial\'s own show of a terminal is its echo for 2 s: that terminal\'s focus moves nothing', async () => {
+    const { settle, focus, window } = await twoTerminals()
+    await settle('vscode')
+    expect(host().swipeSwitches(B)).toBe(true)
+    host().swipeEnded(B, 'rest')
+    await swiped('ok')
+    expect(window.lines).toEqual([{ show: SHELL_B }])
+    editorClock = 1_999
+    focus(SHELL_B)
+    expect(editorFollows()).toEqual([])
+    expect(editorLines()).toEqual(['[device] vscode · skipped · echo'])
+    // The person's own focus after it moves the dial.
+    focus(SHELL)
+    expect(editorFollows()).toEqual([[ID, 'vscode']])
+  })
+
+  it('with no dial linked a focus follows nothing and counts nothing', async () => {
+    const { settle, focus } = await twoTerminals()
+    await settle('vscode')
+    ;(seen.cable as unknown as { connected: boolean }).connected = false
+    focus(SHELL_B)
+    expect(editorFollows()).toEqual([])
+    expect(editorLines()).toEqual([])
+  })
+
+  it('in Cursor, settled in front, focusing another terminal turns the dial to its agent, by the same cause', async () => {
+    const { settle, focus } = await twoTerminals(CURSOR)
+    await settle('cursor')
+    focus(SHELL_B)
+    expect(editorFollows()).toEqual([[B, 'vscode']])
   })
 
   it('a throw on the VS Code path costs the dial nothing', async () => {

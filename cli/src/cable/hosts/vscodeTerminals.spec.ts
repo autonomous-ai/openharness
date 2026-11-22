@@ -57,11 +57,13 @@ function harness(table: ReadonlyArray<readonly [number, number]> = TREE) {
   const logged: string[] = []
   const processes = vi.fn<VscodeTerminalsDeps['processes']>(() => new Promise((resolve, reject) => { reads.push({ resolve, reject }) }))
   const changed = vi.fn<VscodeTerminalsDeps['changed']>()
+  const focused = vi.fn<VscodeTerminalsDeps['focused']>()
   const fullscreen = vi.fn<VscodeTerminalsDeps['fullscreen']>(async () => true)
   const foreground = vi.fn<VscodeTerminalsDeps['foreground']>(() => new Promise((resolve, reject) => { groupReads.push({ resolve, reject }) }))
   const terminals = vscodeStreams({
     processes,
     changed,
+    focused,
     fullscreen,
     foreground,
     now: () => at,
@@ -79,6 +81,7 @@ function harness(table: ReadonlyArray<readonly [number, number]> = TREE) {
     terminals,
     processes,
     changed,
+    focused,
     fullscreen,
     foreground,
     timers,
@@ -430,6 +433,68 @@ describe('VS Code\'s windows', () => {
     expect(h.changed).toHaveBeenCalledTimes(3)
     h.terminals.agents([])
     expect(h.changed).toHaveBeenCalledTimes(3)
+  })
+
+  // A person focusing another of a window's terminals tells the devices its agent
+  // (docs/plans/2026-11-17-dial-vscode-extension-design.md, "PR B, decided now" 3).
+  it('a focused window\'s active terminal moving to another tells the devices that terminal\'s agent, once', async () => {
+    const h = await placed()
+    h.state(W1, [700, 710], { active: 700 })
+    h.focused.mockClear()
+    h.state(W1, [700, 710], { active: 710 })
+    expect(h.focused.mock.calls).toEqual([[910, { window: W1, shell: 710 }]])
+    // The same state again moved nothing.
+    h.state(W1, [700, 710], { active: 710 })
+    expect(h.focused).toHaveBeenCalledTimes(1)
+    h.state(W1, [700, 710], { active: 700 })
+    expect(h.focused.mock.calls.at(-1)).toEqual([900, { window: W1, shell: 700 }])
+  })
+
+  it('a window coming back into focus on its active terminal tells its agent; a window out of focus or with none active tells nothing', async () => {
+    const h = await placed()
+    h.state(W1, [700, 710], { active: 700, focused: false })
+    h.focused.mockClear()
+    h.state(W1, [700, 710], { active: 710, focused: false })
+    h.state(W1, [700, 710], { active: null })
+    expect(h.focused).not.toHaveBeenCalled()
+    h.state(W1, [700, 710], { active: 710, focused: false })
+    h.state(W1, [700, 710], { active: 710 })
+    expect(h.focused.mock.calls).toEqual([[910, { window: W1, shell: 710 }]])
+  })
+
+  it('a window\'s first state on its stream follows nothing: a reload must not pull the dial', async () => {
+    const h = await placed()
+    h.focused.mockClear()
+    h.open(W2)
+    h.state(W2, [700, 710], { active: 710 })
+    // A newer stream of the same id starts with no state either.
+    h.open(W1)
+    h.state(W1, [700, 710], { active: 700 })
+    expect(h.focused).not.toHaveBeenCalled()
+  })
+
+  it('a terminal no listed agent runs in tells nothing; of two in one, the one nearest its shell', async () => {
+    const h = harness([...TREE, ...SECOND, [720, 600]])
+    h.open(W1)
+    h.terminals.agents([800, 900])
+    h.state(W1, [700, 720], { active: 720 })
+    await h.answer()
+    h.state(W1, [700, 720], { active: 700 })
+    expect(h.focused.mock.calls).toEqual([[800, { window: W1, shell: 700 }]])
+    h.state(W1, [700, 720], { active: 720 })
+    expect(h.focused).toHaveBeenCalledTimes(1)
+  })
+
+  it('a focus while a chain is read is told once that read lands, and only the latest waits', async () => {
+    const h = harness([...TREE, ...SECOND])
+    h.open(W1)
+    h.terminals.agents([900, 910])
+    h.state(W1, [700, 710], { active: 700 })
+    h.state(W1, [700, 710], { active: 710 })
+    h.state(W1, [700, 710], { active: 700 })
+    expect(h.focused).not.toHaveBeenCalled()
+    await h.answer()
+    expect(h.focused.mock.calls).toEqual([[900, { window: W1, shell: 700 }]])
   })
 
   it('a show is written at once on a writable stream; while a line drains the latest waits, and replaces an earlier one', () => {
