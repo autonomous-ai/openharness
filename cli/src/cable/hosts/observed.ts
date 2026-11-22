@@ -14,7 +14,7 @@ import { agentPlaceName, APP_BUNDLES, detectApp, detectHost, UNKNOWN_APP } from 
 import type { Delivery } from './inbox.js'
 import { bundleOf, type OpenTarget } from './open.js'
 import { MAX_TEXT } from './orca.js'
-import type { Nested, NestedLookup, OuterLookup } from './outer.js'
+import type { Nested, NestedLookup, NestedPlace, OuterLookup } from './outer.js'
 import type { SessionRecord } from './record.js'
 import type { ProcessName } from './scannedApp.js'
 import { isTabApp } from './tabs.js'
@@ -1194,11 +1194,19 @@ export class ObservedSource implements HostSource {
    * each until it was next hooked (2026-11-22). Asked, and its answer landing, only while it lives, no hook told of it
    * and no hc terminal holds it: a hook's word is newer. An answer that names an app places it there, known, with its
    * client's tab and process, as a hook's outer answer does, and at the multiplexer's pane it names, for a rest and a
-   * tap alone (Entry.placed); one that names none leaves what the walk gave it. Whether it was placed.
+   * tap alone (Entry.placed); one that names none, or fails, leaves what the walk gave it: a failed one must not stop
+   * the look's next. Whether it was placed.
    */
   private async placeNested(entry: Entry, nest: Nested): Promise<boolean> {
     const unhooked = (): boolean => this.live(entry) && entry.caller === undefined && !entry.paired
-    const place = unhooked() ? await this.deps.nested?.(nest) : undefined
+    let place: NestedPlace | undefined
+    try {
+      place = unhooked() ? await this.deps.nested?.(nest) : undefined
+    } catch (error) {
+      // Its kind, no error text: a path in it holds the account's name.
+      this.deps.log(`[observed] scan · lookup not read · ${errorKind(error)}`)
+      return false
+    }
     if (!place?.app || !unhooked()) return false
     entry.outer = { app: place.app, tty: place.tty, pid: place.pid }
     entry.scanPlaced = true
