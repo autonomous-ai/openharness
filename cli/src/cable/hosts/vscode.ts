@@ -31,7 +31,7 @@
  */
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { createAppLink, type AppLinkDeps } from './appLink.js'
-import { APP_BUNDLES } from './hostDetect.js'
+import { APP_BUNDLES, EXTENSION_TAB } from './hostDetect.js'
 import { openPath } from './open.js'
 import { RUN_TIMEOUT_MS } from './orca.js'
 import type { LinuxRaise } from './linuxRaise.js'
@@ -83,8 +83,9 @@ export function createVscodeAdapter(
   const { bundle: editorBundle, scheme } = EDITORS[editor]
   const mac = deps.platform === 'darwin'
   const openBin = openPath(deps.bin)
-  // No forward of its own: its pane exists only with its hook's own editor's bundle id, so a link that fails leaves
-  // the opener's fallback to bring that editor (open.ts).
+  // No forward of its own: its pane exists only with its hook's own editor's bundle id, or with none in the editor the
+  // caller's parents named, whose bundle the tap then carries (observed.ts placeApp), so a link that fails leaves the
+  // opener's fallback to bring that editor (open.ts).
   const tab = createAppLink(deps, {
     session: VSCODE_SESSION,
     url: (session) => `${scheme}://anthropic.claude-code/open?session=${session}`,
@@ -103,12 +104,14 @@ export function createVscodeAdapter(
       // The extension says the same word in either editor, so each editor's own bundle id is what its adapter takes:
       // an app known by TERM_PROGRAM alone may be another fork. The link names Claude Code's sessions alone: an engine
       // Claude Code's tools ran from the tab (`codex exec`) inherits the word and the bundle id, and a Codex thread id
-      // is a UUID too. Linux has no bundle id: there the editor is the app the process scan named.
-      const inEditor = bundle === editorBundle || (deps.platform === 'linux' && bundle === undefined && place.app === editor)
-      if (place.engine === 'claude' && entrypoint === 'claude-vscode' && inEditor && session
+      // is a UUID too. Linux has no bundle id, and on macOS one an editor started from another app inherited is dropped
+      // (hostDetect.ts ownHints): there the editor is the app the caller's parents named.
+      const inEditor = bundle === editorBundle
+        || ((mac || deps.platform === 'linux') && bundle === undefined && place.app === editor)
+      if (place.engine === 'claude' && entrypoint === EXTENSION_TAB && inEditor && session
         && VSCODE_SESSION.test(session)) return { adapter: editor, id: session }
       // The tab's word, inherited by what its tools run, is never a terminal's: the tab has no shell a window reports.
-      if (inTerminal(place) && place.app === editor && entrypoint !== 'claude-vscode' && isPid(place.pid)) {
+      if (inTerminal(place) && place.app === editor && entrypoint !== EXTENSION_TAB && isPid(place.pid)) {
         return { adapter: editor, id: `term:${place.pid}` }
       }
       return undefined

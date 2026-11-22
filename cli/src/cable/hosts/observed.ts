@@ -10,7 +10,7 @@ import { errorKind } from '../../lib/log.js'
 import { roundDrawable } from '../roundGlyphs.js'
 import type { HostAdapter, Outer, Pane, Place } from './adapter.js'
 import { CODEX_THREAD, type CodexQueue, type CodexQueueFailure, type CodexRan } from './codexQueue.js'
-import { agentPlaceName, APP_BUNDLES, detectApp, detectHost, UNKNOWN_APP } from './hostDetect.js'
+import { agentPlaceName, APP_BUNDLES, detectApp, detectHost, EXTENSION_TAB, ownHints, UNKNOWN_APP } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
 import { answerEngine, type AnswerEngine } from './lastAnswer.js'
 import { bundleOf, type OpenTarget } from './open.js'
@@ -91,6 +91,8 @@ function folderName(cwd: string | undefined, engine: string): string {
 
 export interface ObservedDeps {
   now(): number
+  /** Only macOS gives a process an inherited bundle id (__CFBundleIdentifier): elsewhere the hook works it out (ownHints). */
+  platform: NodeJS.Platform
   /** The machine's processes, read once for every session (externals/support.ts listProcesses); none when unreadable. */
   processes(): Promise<readonly Pick<RunningProcess, 'pid' | 'generation'>[]>
   /** Whether a pid is running, for a session whose process has no generation to read (Windows has no `ps` here). */
@@ -144,7 +146,8 @@ export interface ObservedDeps {
 const PTY_HINTS = ['WEZTERM_PANE', 'KITTY_WINDOW_ID', 'ZELLIJ_PANE_ID', 'HERDR_PANE_ID', 'ORCA_TERMINAL_HANDLE']
 
 /** Whether a caller's app is learnt from its parents: its hints name none, or name VS Code by TERM_PROGRAM alone, which
- *  Cursor's terminal says too. Only a bundle id tells the two apart, and Linux has none. */
+ *  Cursor's terminal says too. Only a bundle id tells the two apart: Linux has none, and an editor started from another
+ *  app has none once the one it inherited is dropped (hostDetect.ts ownHints). */
 function walked(hints: Readonly<Record<string, string>>): boolean {
   const named = detectApp(hints)
   return named === UNKNOWN_APP || (named === 'vscode' && !hints.__CFBundleIdentifier)
@@ -718,7 +721,8 @@ export class ObservedSource implements HostSource {
         return
       }
       const had = entry.agent.app
-      entry.agent.app = app ?? detectApp(entry.hints)
+      // Placed again for its app's bundle too: the editor its parents named is the one a tap opens.
+      this.placeApp(entry, entry.hints, pid)
       // Nested, its caller's tty is the multiplexer's pane's, which no tab holds: never read (askOuter).
       if (entry.agent.app === had || entry.outerAsk) this.locate(entry)
       else {
@@ -808,8 +812,13 @@ export class ObservedSource implements HostSource {
    *  that name none, or only a word Cursor says too (walked), learn it from the caller's parents. */
   private placeApp(entry: Entry, hints: Readonly<Record<string, string>>, pid: number): void {
     const named = detectApp(hints)
-    entry.agent.app = entry.outer?.app ?? (walked(hints) && this.deps.apps ? this.learnApp(entry, pid, named) : named)
-    entry.bundle = entry.outer ? APP_BUNDLES[entry.outer.app] : bundleOf(entry.agent.host, hints)
+    const walk = walked(hints)
+    entry.agent.app = entry.outer?.app ?? (walk && this.deps.apps ? this.learnApp(entry, pid, named) : named)
+    // An app named by a word another app says too (walked: VS Code's TERM_PROGRAM, which Cursor says) has the bundle of
+    // the app its parents named, else a tap on Cursor started from Terminal (`cursor .`) opened VS Code. So has the
+    // extension's tab, whose word names no app: a walk that names none leaves it none, never a guessed editor's.
+    const byApp = walk && (named !== UNKNOWN_APP || hints.CLAUDE_CODE_ENTRYPOINT === EXTENSION_TAB)
+    entry.bundle = entry.outer ? APP_BUNDLES[entry.outer.app] : bundleOf(byApp ? entry.agent.app : entry.agent.host, hints)
   }
 
   private emit(): void {
@@ -874,6 +883,9 @@ export class ObservedSource implements HostSource {
       this.asked(e)
       return
     }
+    // Once, here: every reader after it, the place and the tap, sees the editor's own hints (eval V11). macOS alone: on
+    // Windows the hook works the bundle id out from the process's parents (notify.mjs lookUpWindowsApp), never inherited.
+    if (this.deps.platform === 'darwin') e = { ...e, hostHints: ownHints(e.hostHints) }
     const known = this.entries.get(observedAgentId(e.engine, e.sessionId))
     // The end of a session never listed (one of the 50 dropped when full, or ended before the devices started) lists none.
     if (e.event === 'session-end' && !known) return

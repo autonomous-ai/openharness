@@ -122,6 +122,22 @@ export function inCmux(hints: Readonly<Record<string, string>>): boolean {
     && !NOT_CMUX.some((own) => hints[own])
 }
 
+/** The word Claude Code's extension gives the sessions of its tab, in VS Code and in its forks alike. */
+export const EXTENSION_TAB = 'claude-vscode'
+
+/** The hints of the app an agent's own terminal or tab is in. An editor started with `code .` or `cursor .` from another
+ *  app inherits that app's bundle id, while its own terminals say TERM_PROGRAM=vscode and its extension's tab says
+ *  EXTENSION_TAB: the bundle id named Terminal, and its agent sat on Terminal's page, a tap opening Terminal (eval V11).
+ *  A bundle id beside either word that is no editor's is dropped, and the editor is learnt from the caller's parents
+ *  (observed.ts walked). */
+export function ownHints(hints: Record<string, string>): Record<string, string> {
+  const bundle = hints.__CFBundleIdentifier
+  const inEditor = hints.TERM_PROGRAM === 'vscode' || hints.CLAUDE_CODE_ENTRYPOINT === EXTENSION_TAB
+  if (!inEditor || bundle === undefined || bundle === APP_BUNDLES.vscode || bundle === APP_BUNDLES.cursor) return hints
+  const { __CFBundleIdentifier: _inherited, ...own } = hints
+  return own
+}
+
 /** The outermost app an agent runs in. The bundle id and TERM_PROGRAM name it, unlike a multiplexer's own variables,
  *  which name the nearest host; with neither set, the nearest host is the only one known. */
 export function detectApp(hints: Record<string, string>): string {

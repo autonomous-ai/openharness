@@ -48,6 +48,7 @@ function setup(over: Partial<ObservedDeps> = {}) {
     new Map([...wanted.keys()].flatMap((id) => (externals.has(id) ? [[id, externals.get(id)!] as const] : []))))
   const deps: ObservedDeps = {
     now: () => clock.t,
+    platform: 'darwin',
     processes: procs,
     alive,
     openSessions: {
@@ -3092,6 +3093,73 @@ describe('ObservedSource and the app a hook\'s caller runs in', () => {
     expect(agent.app).toBe('iterm')
     expect(tty.mock.calls).toEqual([[100]])
     expect(s.src.hasPane(agent)).toBe(true)
+  })
+})
+
+// `code .` (or `cursor .`) from Terminal: the editor inherits Terminal's bundle id, while its terminals say
+// TERM_PROGRAM=vscode. The bundle id won, and the agent sat on Terminal's page, a tap opening Terminal (V11).
+describe('ObservedSource and an editor started from Terminal', () => {
+  const FROM_TERMINAL = { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: 'com.apple.Terminal' }
+
+  /** The real VS Code and Cursor adapters on macOS, the caller's parents naming [app]. */
+  function editors(app: string) {
+    const run = vi.fn(async (_file: string, _args: string[], _timeoutMs: number) => ({ code: 0, stdout: '' }))
+    const deps: OrcaDeps = { run, onPath: (name) => `/fake/bin/${name}`, exists: () => false, platform: 'darwin' }
+    const terminals = { terminalOf: () => undefined, show: () => false, scroll: () => false, pageKeys: () => false as const,
+      canType: () => false, type: async () => 'failed' as const }
+    const adapters = (['vscode', 'cursor'] as const).map((editor) => createVscodeAdapter(editor, { ...deps, inFront: () => true, terminals }))
+    const { actions } = fakeActions()
+    const s = setup({ actions: { ...actions, adapters }, apps: async (pids) => new Map(pids.map((pid) => [pid, app])) })
+    return { ...s, actions }
+  }
+
+  it.each([
+    ['VS Code', 'vscode', 'com.microsoft.VSCode'],
+    ['Cursor', 'cursor', 'com.todesktop.230313mzl4w4u92'],
+  ])('an agent in a terminal of %s started from Terminal is in that editor, at its terminal, and a tap opens that editor', async (_, app, bundle) => {
+    const s = editors(app)
+    s.src.ingest(s.ev('session-start', { hostHints: FROM_TERMINAL }))
+    await flushed()
+    const agent = s.src.list()[0]
+    expect([agent.host, agent.app]).toEqual(['vscode', app])
+    expect(s.src.paneOf(agent.id, app)).toBe('term:100')
+    // No window reported its terminal: the tap is the editor's bundle alone, Cursor's for an agent in Cursor.
+    expect(await s.src.focus(agent)).toBe(true)
+    expect(s.actions.open.mock.calls).toEqual([[agent.id, { bundle }]])
+  })
+
+  // The extension's tab runs with the editor's own environment, which has Terminal's bundle id and no TERM_PROGRAM.
+  it.each([
+    ['VS Code', 'vscode', 'com.microsoft.VSCode'],
+    ['Cursor', 'cursor', 'com.todesktop.230313mzl4w4u92'],
+  ])('a session in the extension\'s tab of %s started from Terminal is in that editor, at its tab, and a tap opens it there', async (_, app, bundle) => {
+    const sessionId = '8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+    const s = editors(app)
+    s.src.ingest(s.ev('session-start', { sessionId,
+      hostHints: { __CFBundleIdentifier: 'com.apple.Terminal', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' } }))
+    await flushed()
+    const agent = s.src.list()[0]
+    expect(agent.app).toBe(app)
+    expect(s.src.paneOf(agent.id, app)).toBe(sessionId)
+    expect(await s.src.focus(agent)).toBe(true)
+    expect(s.actions.open.mock.calls).toEqual([[agent.id, { bundle, pane: { adapter: app, id: sessionId } }]])
+  })
+
+  // Off macOS no app inherits a bundle id: on Windows the hook finds it from the process's parents, the Claude app's
+  // own word first (notify.mjs lookUpWindowsApp), and a Claude app session can carry an editor's TERM_PROGRAM.
+  it.each(['win32', 'linux'] as const)('on %s a bundle id beside TERM_PROGRAM=vscode is kept: a Claude app session stays on the Claude page', async (platform) => {
+    const SESSION = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+    const CLAUDE_APP = 'com.anthropic.claudefordesktop'
+    const { actions } = fakeActions({}, platform)
+    const s = setup({ platform, actions })
+    s.src.ingest(s.ev('session-start', { hostHints: { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: CLAUDE_APP,
+      CLAUDE_CODE_ENTRYPOINT: 'claude-desktop', CLAUDE_CODE_HOST_SESSION_ID: SESSION } }))
+    await flushed()
+    const agent = s.src.list()[0]
+    expect([agent.host, agent.app]).toEqual(['claude', 'claude'])
+    expect(s.src.paneOf(agent.id, 'claude')).toBe(SESSION)
+    expect(await s.src.focus(agent)).toBe(true)
+    expect(actions.open.mock.calls[0][1].bundle).toBe(CLAUDE_APP)
   })
 })
 
