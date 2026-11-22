@@ -5837,6 +5837,25 @@ describe('a machine list lands a dial that holds no agent (docs/plans/2026-11-18
       expect(said(host).slice(before).filter((l) => l.includes('dropped dial focus'))).toEqual([])
     } finally { await session.stop(); vi.useRealTimers() }
   })
+
+  // The same update, greeting inside a window a push opened for 0.0.58: no echo of it is coming from the new firmware.
+  it('a window opened for 0.0.58 closes when the dial greets again on 0.0.94', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    let caps = 'sf'
+    const { session, port, host } = await landed(() => machine(SAME_RING(caps)), { log: vi.fn() }, ECHOING)
+    try {
+      vi.advanceTimersByTime(1_100)
+      caps = 'svf'
+      await session.syncAgents()
+      port.sent.length = 0
+      await greet(port, { fw: '0.0.94' })
+      expect(focuses(port)).toContainEqual({ t: 'focus', agentId: 'a1' })
+      port.say({ t: 'focus', agentId: 'b1' })
+      await settle()
+      expect(host.focus).toHaveBeenCalledWith('b1')
+      expect(said(host).filter((l) => l.includes('dropped dial focus'))).toEqual([])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
 })
 
 describe('which dial echoes a move code made', () => {
