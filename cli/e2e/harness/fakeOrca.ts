@@ -46,7 +46,8 @@ const HELP_WATCH = HELP.replace(
 // `exec tail` makes the daemon's child the `tail` itself, so its SIGTERM ends it; `-n 1` prints the last line told before
 // the watch started, as Orca prints the focus of that moment first. A switch Orca takes moves its focus: one that exits 0
 // is told on every watch ORCA_ECHO_MS later, as tier A's Orca tells it, by a job of its own that holds none of the
-// run's output, so the switch itself returns at once.
+// run's output, so the switch itself returns at once. The job is named by its `echo` path, which no watch's command
+// holds, so endWatch drops it as Orca's quit drops that pane, and watching() never counts it.
 const script = (dir: string, watchFocus: boolean): string => `#!/bin/sh
 note() {
   file=$(mktemp '${dir}/log/.XXXXXX')
@@ -66,7 +67,7 @@ ${watchFocus ? `  'terminal watch-focus') note 0 "\${0##*/}" "$@"; exec tail -n 
     if [ "$code $2" = '0 switch' ]; then
       handle= prev=
       for arg in "$@"; do [ "$prev" = --terminal ] && handle=$arg; prev=$arg; done
-      ( sleep ${ORCA_ECHO_MS / 1000}; printf '{"handle":"%s"}\\n' "$handle" >> '${dir}/focus' ) </dev/null >/dev/null 2>&1 &
+      sh -c 'sleep ${ORCA_ECHO_MS / 1000}; printf "{\\"handle\\":\\"%s\\"}\\n" "$1" >> "\${0%/echo}/focus"' '${dir}/echo' "$handle" </dev/null >/dev/null 2>&1 &
     fi ;;
 esac
 note "$code" "\${0##*/}" "$@"
@@ -168,6 +169,7 @@ export class FakeOrca {
   /** Every `watch-focus` of this fake ends, as when Orca quits, and the focus told goes with them: the terminal it
    *  named went with Orca, so a watch after prints nothing until a focus is told. */
   endWatch(): void {
+    spawnSync('pkill', ['-f', join(this.dir, 'echo')])
     spawnSync('pkill', ['-f', join(this.dir, 'focus')])
     writeFileSync(join(this.dir, 'focus'), '')
   }
