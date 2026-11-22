@@ -4929,6 +4929,20 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(editorLines()).toEqual([])
   })
 
+  it('a focus waiting for the settle is set aside by the person\'s next focus while that one waits on a chain read', async () => {
+    const { front, settle, focus, port } = await twoTerminals()
+    await settle('ghostty')
+    front('vscode')
+    focus(SHELL_B)
+    const land = await holdRead(port)
+    focus(SHELL)
+    // The settle comes during the read: the terminal the person left is not followed, then the one they are on is.
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    expect(editorFollows()).toEqual([])
+    await land()
+    expect(editorFollows()).toEqual([[ID, 'vscode']])
+  })
+
   // A new agent's chain read can take up to ps's 3 s: what the dial did meanwhile is judged from the state's moment.
   it('a focus that waited on a chain read is judged by when its state came: the dial\'s show before it is still its echo', async () => {
     const { settle, focus, window, port } = await twoTerminals()

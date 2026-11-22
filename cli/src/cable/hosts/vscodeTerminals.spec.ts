@@ -500,11 +500,12 @@ describe('VS Code\'s windows', () => {
     h.state(W1, [700, 710], { active: 710 })
     h.tick(100)
     h.state(W1, [700, 710], { active: 700 })
-    expect(h.focused).not.toHaveBeenCalled()
+    // Each told as none at once: a focus the devices hold for the settle is over even while this one's agent is found.
+    expect(h.focused.mock.calls).toEqual([[undefined, { window: W1, shell: 710 }, 0, false], [undefined, { window: W1, shell: 700 }, 100, false]])
     // A slow read: the devices judge the dial's own moves by the state's moment, not the read's.
     h.tick(2_900)
     await h.answer()
-    expect(h.focused.mock.calls).toEqual([[900, { window: W1, shell: 700 }, 100, false]])
+    expect(h.focused.mock.calls.slice(2)).toEqual([[900, { window: W1, shell: 700 }, 100, false]])
   })
 
   it('a focus waiting on a read is dropped by a later state of its window that left that terminal or the focus, or by a newer stream', async () => {
@@ -521,7 +522,7 @@ describe('VS Code\'s windows', () => {
         h.state(W1, [700, 710], { active: 710 })
       }
       await h.answer()
-      expect(h.focused).not.toHaveBeenCalled()
+      expect(h.focused.mock.calls.map(([pid]) => pid)).toEqual([undefined])
     }
   })
 
