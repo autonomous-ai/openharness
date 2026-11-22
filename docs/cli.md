@@ -529,7 +529,7 @@ page, else on the Other page, as on macOS; a swipe and a tap focus the herdr pan
 forward where the desktop raises by process (X11, sway, KDE, Hyprland; not GNOME), and the tab holding the client is
 not selected. The same holds for tmux's client in those terminals.
 
-An agent in herdr or tmux the dial found before its first prompt is on that app's page too. Run
+An idle agent in herdr or tmux is on that app's page as soon as the dial attaches. Run
 `herdr integration install claude` so the dial focuses the right herdr pane.
 
 ## The daemon's control interface

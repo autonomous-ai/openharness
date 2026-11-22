@@ -1782,9 +1782,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /**
    * The open scan's copy of a session herdr lists with its session id, placed at that row's herdr pane: Diego's idle
    * agents in herdr in an iTerm2 tab (2026-11-22) had no hook to name their pane after the devices started again, so a
-   * rest reached the tab alone. Only an agent with no herdr pane of its own. The place carries the app holding herdr's
-   * client once the scan's lookup named it, as a rest needs it (herdr.ts canShow); before that the bare pane, which a tap
-   * still focuses. A place opens and shows, never takes words (observed.ts shownOnly).
+   * rest reached the tab alone. Only an agent with no herdr pane of its own. The place carries the app the agent is on,
+   * as a rest needs it (herdr.ts canShow); while that app is not known, the bare pane, which a tap still focuses. A place
+   * opens and shows, never takes words (observed.ts shownOnly).
    */
   let placedInHerdr = false
   const placeInHerdr = (source: ObservedSource, listing: HerdrSource): void => {

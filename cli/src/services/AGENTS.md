@@ -358,16 +358,17 @@ from before (`src/harnessd/services.spec.ts`, `e2e/messagesSkew.e2e.ts`).
   named, or to the pane the open scan found by the agent's own tty, once it has checked that the pane's process is the
   agent's or one of its parents (`cable/hosts/tmux.ts`). It runs `select-window` and `select-pane` on the pane's own
   session, which every client on that session then shows, and `switch-client` only when it found no app holding a
-  client of that session; that names the client it moves. It runs nothing on a session Harness made. It never types, creates or closes anything there. Harness's panes and the
-  person's can share one tmux server, so the rule is held per pane and session, by the owner tag the hook reads
-  (`hook/notify.mjs` `paneFacts`).
+  client of that session; that names the client it moves. It runs nothing on a session Harness made. It never types,
+  creates or closes anything there. Harness's panes and the person's can share one tmux server, so the rule is held per
+  pane and session, by the owner tag the hook reads (`hook/notify.mjs` `paneFacts`).
 
   In the person's herdr the devices process runs `herdr agent focus <pane>` alone, for the pane a hook named in the
   default session or the pane herdr's own list gives the agent's session, at a tap, and at a rest only while the app
-  holding that pane's client is in front (`cable/hosts/herdr.ts`), beside the dial's words over herdr's socket. To find that client it reads only process
-  names, parents and ttys, the unix sockets of herdr's own processes (on macOS the rows `lsof` gives, on Linux the rows
-  of `ss -xn src '*/herdr-client.sock'` and their `/proc/<pid>/fd` socket links) and a tty's access time, never another
-  process's environment or argv (`cable/hosts/herdrOuter.ts`). It never creates or closes anything there.
+  holding that pane's client is in front (`cable/hosts/herdr.ts`), beside the dial's words over herdr's socket. To find
+  that client it reads only process names, parents and ttys, the unix sockets of herdr's own processes (on macOS the
+  rows `lsof` gives, on Linux the rows of `ss -xn src '*/herdr-client.sock'` and their `/proc/<pid>/fd` socket links)
+  and a tty's access time, never another process's environment or argv (`cable/hosts/herdrOuter.ts`). It never creates
+  or closes anything there.
 
   The devices process types into an Orca terminal or a herdr pane only when Orca's terminal host or herdr made the
   agent's terminal (`cable/hosts/scannedApp.ts` `readPtyOwner`); an agent started from one, in VS Code or another
