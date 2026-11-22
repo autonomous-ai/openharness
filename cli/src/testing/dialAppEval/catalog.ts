@@ -4,6 +4,7 @@
  */
 import { cursorScenarios } from './cursorScenarios.js'
 import { heldOut } from './heldOut.js'
+import { orcaScenarios } from './orcaScenarios.js'
 import { vscodeScenarios } from './vscodeScenarios.js'
 import { orcaTerminalHandle, type App, type Check, type Editor, type Platform, type Scenario, type SessionDef, type SessionKey, type Step,
   type Tier } from './types.js'
@@ -451,6 +452,7 @@ export const MAIN: Scenario[] = [
   }),
   ...vscodeScenarios(),
   ...cursorScenarios(),
+  ...orcaScenarios(),
 ]
 
 export const HELD_OUT: Scenario[] = heldOut()
