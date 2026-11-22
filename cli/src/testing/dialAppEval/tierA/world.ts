@@ -19,7 +19,7 @@ import type { HcClient } from '../../../cable/hosts/hcClient.js'
 import type { HerdrClient } from '../../../cable/hosts/herdrClient.js'
 import { createLinuxRaise, type LinuxRaise } from '../../../cable/hosts/linuxRaise.js'
 import type { OpencodeClient } from '../../../cable/hosts/opencodeClient.js'
-import type { OrcaReadDeps, OrcaReads } from '../../../cable/hosts/orca.js'
+import type { OrcaReadDeps } from '../../../cable/hosts/orca.js'
 import { env } from '../../../config/env.js'
 import { emptyPorts, type CoreApi, type CorePorts } from '../../../core/api.js'
 import { VSCODE_EXTENSION_ID, type VscodeEditor, type VscodeExtensionDeps } from '../../../devices/vscodeExtension.js'
@@ -34,6 +34,7 @@ import { agentIdOf, type App, type Delivery, type LinkedApp, type Platform, type
 import { quiet } from './clock.js'
 import { LoopbackDial } from './loopbackDial.js'
 import { machine, type MachineModel } from './machine.js'
+import { ORCA_PROGRAMS, watchChild } from './steps/orca.js'
 import { createStoreWatch, onHost } from './storeWatch.js'
 
 export interface TierAWorld {
@@ -80,16 +81,28 @@ const APPS: Readonly<Record<LinkedApp, { bundle: string; scheme: string; desktop
   vscode: { bundle: 'com.microsoft.VSCode', scheme: 'vscode', desktopFile: RECORDED_LINUX_APPS.vscode.schemeDesktopFile },
   cursor: { bundle: 'com.todesktop.230313mzl4w4u92', scheme: 'cursor', desktopFile: RECORDED_LINUX_APPS.cursor.schemeDesktopFile },
 }
-/** The commands found on a Linux PATH here: the two a link needs. Nothing else of any platform's is installed. */
-const LINUX_TOOLS: ReadonlySet<string> = new Set(['xdg-mime', 'xdg-open'])
+/**
+ * The commands found on each platform's PATH here, made up, recorded and never run: Linux's two a link needs, and Orca's
+ * CLI where its installer puts it on PATH (devices/orcaHomes.ts orcaBinary; the plan's Decision 6). On macOS Orca's is
+ * the app's own (ORCA_APP_BIN). Nothing else of any platform's is installed.
+ */
+const ON_PATH: Readonly<Record<Platform, Readonly<Record<string, string>>>> = {
+  darwin: {},
+  linux: { 'xdg-mime': '/usr/bin/xdg-mime', 'xdg-open': '/usr/bin/xdg-open', 'orca-ide': '/opt/eval/orca/resources/bin/orca-ide' },
+  win32: { orca: 'C:\\Users\\eval\\AppData\\Local\\Programs\\orca\\resources\\bin\\orca.exe' },
+}
+/** The Orca app's CLI in the world's own folder, which HARNESS_ORCA_APP_BIN names: never this machine's Orca. */
+const ORCA_APP_BIN = join('Orca.app', 'Contents', 'Resources', 'bin', 'orca')
+/** Every file of Orca's has its release's time: its `terminal --help` is read once, as in a real run. */
+const ORCA_MTIME_MS = 1_763_337_600_000
 /** Made-up places, recorded and never run. */
 const CODEX_BIN = '/opt/eval/bin/codex'
 const APP_CODEX_BIN = '/opt/eval/ChatGPT.app/codex'
 const CURSOR_BIN = '/opt/eval/bin/cursor'
 /** The programs whose commands the world answers as the scenario says, by name: macOS's and Linux's openers, the scheme
- *  lookup, the Windows helper and the Linux raise. Cursor's CLI is answered only as Linux's folder row runs it, on one
- *  folder (cable/hosts/cursorFolder.ts). A command of any other is one tier A does not model. */
-const ANSWERED: ReadonlySet<string> = new Set(['open', 'xdg-open', 'xdg-mime', 'harness-pty', 'raise'])
+ *  lookup, the Windows helper, the Linux raise and Orca's CLI (steps/orca.ts). Cursor's CLI is answered only as Linux's
+ *  folder row runs it, on one folder (cable/hosts/cursorFolder.ts). A command of any other is one tier A does not model. */
+const ANSWERED: ReadonlySet<string> = new Set(['open', 'xdg-open', 'xdg-mime', 'harness-pty', 'raise', ...ORCA_PROGRAMS])
 
 /** Harness's own engine homes are the suite's throwaway ones (vitest.setup.ts): never a folder outside this run's. */
 function emptied(folder: string): string {
@@ -163,12 +176,6 @@ const noOpencode = (typed: (text: string) => void): OpencodeClient => ({
   events: (_onEvent, onClose) => { queueMicrotask(() => onClose('no_service')); return { close: () => {} } },
   prompt: async (_session, text) => { typed(text); return 'failed' },
 })
-/** Orca's reads, which never land: no Orca runs here. */
-const noOrca: OrcaReads = {
-  orcaWatchesFocus: () => new Promise(() => {}),
-  orcaTabs: () => new Promise(() => {}),
-  watchOrcaFocus: () => { throw new Error('no Orca in tier A') },
-}
 
 export class World implements TierAWorld {
   readonly machine = machine
@@ -206,6 +213,8 @@ export class World implements TierAWorld {
     for (const name of ['LOCALAPPDATA', 'APPDATA', 'XDG_CONFIG_HOME', 'HARNESS_APPLICATIONS_DIR', 'HARNESS_OPEN_BIN']) vi.stubEnv(name, '')
     // The welcome's voice language follows LANG (cableHost.ts voiceLang): the same on every host.
     vi.stubEnv('LANG', 'en_US.UTF-8')
+    // The Orca app the devices find on macOS is the world's own made-up one, whatever this machine has.
+    vi.stubEnv('HARNESS_ORCA_APP_BIN', join(root, ORCA_APP_BIN))
     // The fixture is at the platform's own first root, as this host names it (a Windows one's folders are this host's of
     // the same names): the readers read it there, and the store's watch on that root hears its writes as the app's.
     this.claudeStore = claudeAppFixture(onHost(claudeStoreRoots(platform, process.env, root)[0]!.root))
@@ -397,21 +406,25 @@ export class World implements TierAWorld {
       const found = apps.find(([app, { scheme }]) => argv[3] === `x-scheme-handler/${scheme}` && (app !== 'chatgpt' || installed))
       return { code: 0, stdout: found ? `${found[1].desktopFile}\n` : '' }
     })
+    // Orca's CLI is found and answered from the model (the plan's Decision 6), and the devices build their own reads of it
+    // on these. A lookup's accept is never asked: it reads the real disk.
     const orca: OrcaReadDeps = {
       run: async (file, args) => this.ran([file, ...args]),
-      onPath: (name) => (platform === 'linux' && LINUX_TOOLS.has(name) ? `/usr/bin/${name}` : null),
-      exists: () => false,
+      onPath: (name) => (Object.hasOwn(ON_PATH[platform], name) ? ON_PATH[platform][name]! : null),
+      exists: (path) => path === join(root, ORCA_APP_BIN),
       platform,
-      // Orca's focus watch: never started, as its reads are given.
-      spawn: () => ({ onData: () => {}, exited: Promise.resolve(), kill: () => {} }),
-      mtime: () => null,
+      // Its focus watch, whose start is a command Orca ran.
+      spawn: (file, args) => {
+        this.ran([file, ...args])
+        return watchChild(this)
+      },
+      mtime: (path) => ({ realPath: path, mtimeMs: ORCA_MTIME_MS }),
     }
     return {
       logsDir: join(root, 'logs'),
       petsDir: join(root, 'pets'),
       cable: this.dial.cable,
       orca,
-      orcaReads: noOrca,
       codex: {
         run: async (file, args) => {
           const queue = args[0] === 'queue'
