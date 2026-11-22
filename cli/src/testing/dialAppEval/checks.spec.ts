@@ -871,8 +871,19 @@ describe('editors', () => {
     expect(scores(run(ring('vscode', ['va', 'vx']), s, seen(s, [100], { frames: list(200, 'vscode', [VA, [id(VX), 'eval-vx']]) }))).names).toBe(1)
     expect(scores(run(ring('vscode', ['va', 'vx']), s, seen(s, [100], { frames: list(200, 'vscode', [VA, VX]) }))).names).toBe(0.5)
     expect(scores(run(ring('vscode', ['va']), s, seen(s, [100], { frames: list(200, 'vscode', [[id(VA), 'eval-va']]) }))).names).toBe(0)
-    expect(scores(run(ring('cursor', ['ca']), s, seen(s, [100], { frames: list(200, 'cursor', [[id(CA), 'eval-ca']]) }))).names).toBe(1)
     expect(scores(run(ring('cursor', ['ca']), s, seen(s, [100], { frames: list(200, 'cursor', [CA]) }))).names).toBe(0)
+  })
+
+  it('a Cursor agent in a multi-root workspace is named by its first root, as its hook sends it, in a check and a wait alike', () => {
+    const s = scenario([{ kind: 'hook', session: 'ca', event: 'start', label: 'w' }], sessions)
+    const ring: Check = { id: 'r', kind: 'ring', dim: 'D1', page: 'cursor', expect: ['ca'], after: 'w' }
+    expect(scores(run(ring, s, seen(s, [100], { frames: list(200, 'cursor', [[id(CA), 'eval-ca-root']]) }))).names).toBe(1)
+    expect(scores(run(ring, s, seen(s, [100], { frames: list(200, 'cursor', [[id(CA), 'eval-ca']]) }))).names).toBe(0)
+    const until: Until = { kind: 'ring', page: 'cursor', expect: ['ca'] }
+    expect(condition(until, s, seen(s, [], { frames: list(200, 'cursor', [[id(CA), 'eval-ca-root']]) })).holds).toBe(true)
+    // No folders: the cwd is the root.
+    const bare = scenario([{ kind: 'hook', session: 'ca', event: 'start', label: 'w' }], [...sessions.filter((x) => x !== CA), { ...CA, folders: undefined }])
+    expect(scores(run(ring, bare, seen(bare, [100], { frames: list(200, 'cursor', [[id(CA), 'eval-ca']]) }))).names).toBe(1)
   })
 })
 
