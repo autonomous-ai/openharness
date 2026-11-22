@@ -645,12 +645,14 @@ function stateParts(check: CheckOf<'state'>, world: World, w: Window | undefined
   }
   const changes = all.filter((c) => c.agentId === id)
   // Shown: at some moment in the window the row is in that state and in the last whole list, which is its page's: the
-  // dial holds no other, as the ring check reads it.
+  // dial holds no other, as the ring check reads it. A list from before an unplug since is gone, and one that lands at
+  // the moment is held from it on.
   const moments = w ? [w.from, ...changes.map((c) => c.at), ...rings.map((r) => r.at)].filter((at) => within(at, w)).sort((x, y) => x - y) : []
   const shownAt = moments.find((at) => {
     const now = changes.filter((c) => c.at <= at).at(-1)?.state ?? 'idle'
     const ring = rings.filter((r) => r.at <= at).at(-1)
-    return now === check.state && ring?.page === page && ring.rows.some((r) => r.id === id)
+    return now === check.state && ring !== undefined && (ring.at === at || world.held(ring.at, at)) && ring.page === page
+      && ring.rows.some((r) => r.id === id)
   })
   const seenChanges = w ? all.filter((c) => within(c.at, w)) : []
   const evidence = bounded(seenChanges.map((c) => `${world.keyOf(c.agentId)} ${c.state} at ${c.at}`))
