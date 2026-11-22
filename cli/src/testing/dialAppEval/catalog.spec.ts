@@ -334,9 +334,9 @@ describe('the catalog', () => {
     // pause after the reload, V11's rests between its tap, strokes and close, V13's rest before the stroke, V14's gap
     // between quit and relaunch, and V15's rest and its time unplugged; U8's turn, U12's pause after the close and U13's
     // gap between quit and relaunch; O4's rests after the focus and the tap, O7's after the tap and the swipe, O8's two
-    // turns and the pause between them, O10's rest on b, O12's time quit and its rest after the focus, O16's agents a
-    // second apart, and O17's rest and its time unplugged; VH1's rest on a, UH3's voice 200 ms after the prompt, OH1's rest
-    // on a and OH2's voice 200 ms after the focus.
+    // turns and the pause between them, O10's rest on b, O12's time quit, its time past the devices' next look after the
+    // relaunch and its rest after the focus, O16's agents a second apart, and O17's rest and its time unplugged; VH1's
+    // rest on a, UH3's voice 200 ms after the prompt, OH1's rest on a and OH2's voice 200 ms after the focus.
     const starts = (id: string, n: number): string[] => Array<string>(n - 1).fill(`${id} 1000`)
     expect(waits('own')).toEqual(['C6 5000', 'C9 1000', 'C9 3500', 'C10 2000', 'C11 1000', 'C11 3000', 'X3 5000', 'X8 2000',
       'X11 300', 'X11 300', ...starts('V1', 4), ...starts('V2', 20), ...starts('V3', 2), ...starts('V4', 2), ...starts('V5', 2),
@@ -344,7 +344,7 @@ describe('the catalog', () => {
       ...starts('V14', 3), 'V14 45000', ...starts('V15', 2), 'V15 1000', 'V15 3000',
       ...starts('U1', 4), ...starts('U2', 2), ...starts('U3', 2), ...starts('U4', 2), 'U8 2000', 'U12 2000', ...starts('U13', 3),
       'U13 45000', ...starts('U14', 2),
-      'O4 2000', 'O4 3000', 'O7 4000', 'O7 2000', 'O8 2000', 'O8 2000', 'O8 6000', 'O8 2000', 'O10 1000', 'O12 2000', 'O12 2000',
+      'O4 2000', 'O4 3000', 'O7 4000', 'O7 2000', 'O8 2000', 'O8 2000', 'O8 6000', 'O8 2000', 'O10 1000', 'O12 2000', 'O12 35000', 'O12 2000',
       ...starts('O16', 40), 'O17 1000', 'O17 3000', 'CH3 1000', 'XH3 200',
       ...starts('VH1', 2), 'VH1 1000', ...starts('VH3', 3), ...starts('UH3', 2), 'UH3 200',
       'OH1 1000', 'OH2 200'])

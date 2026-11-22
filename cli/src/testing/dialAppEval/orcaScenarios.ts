@@ -18,6 +18,12 @@ const pane = (key: SessionKey, worktree: string, tab: number, split = 0, more: P
 const codex: Partial<SessionDef> = { engine: 'codex' }
 
 export function orcaScenarios(): Scenario[] {
+  /**
+   * How long the person works on in Orca after its relaunch before focusing another pane, their own timing: past the
+   * devices' next 30 s look at their agents' processes (services/devices.ts OBSERVED_TICK_MS) whatever its phase, and the
+   * push after it, so a ring that look changes is graded the same on every run and in both tiers.
+   */
+  const pastLook = 35 * S
   const s16 = keys('s', 1, 16, 2)
   const t16 = keys('t', 1, 16, 2)
   const k40 = keys('k', 1, 40, 2)
@@ -199,7 +205,7 @@ export function orcaScenarios(): Scenario[] {
       probes: [ring(['a', 'b', 'z'])],
     }),
     scenario({
-      id: 'O12', app: 'orca', title: 'Orca quit and relaunched: the ring comes back right with no duplicate rows, and a focus is followed',
+      id: 'O12', app: 'orca', title: 'Orca quit and relaunched: the ring comes back right with no duplicate rows and stays so, and a focus is followed',
       dims: ['D7', 'D1', 'D2'], sessions: [pane('a', 'w1', 0), pane('b', 'w1', 1), orcaGhost],
       steps: [
         ...orcaOpening(['w1']),
@@ -213,11 +219,13 @@ export function orcaScenarios(): Scenario[] {
         { kind: 'front', app: 'orca' },
         { kind: 'orca.front', worktree: 'w1' },
         ...listed('orca', ['a', 'b']),
+        { kind: 'wait', ms: pastLook },
         { label: 'focus', kind: 'orca.focus', session: 'b' },
         { kind: 'wait', ms: 2 * S },
       ],
       checks: [
         ringKept(['a', 'b'], { after: 'relaunch' }),
+        // The ring past the devices' next look, as the focus line comes.
         ring(['a', 'b'], { after: 'relaunch', at: 'focus' }),
         { id: 'focus', kind: 'focus', dim: 'D2', session: 'b', after: 'focus' },
       ],
