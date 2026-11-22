@@ -163,7 +163,8 @@ Test `plugins/harness-device-vscode/src/loop.test.ts`.
 
 **Interfaces:**
 - Consumes: `WindowFacade.type(pid, words)`, `WindowFacade.enter(pid)`.
-- Produces: `take()` handles `{"type":<non-empty string>,"pid":<integer>}` → `window.type(pid, words)`, counted `typed`
+- Produces: `take()` handles `{"type":<non-empty string with no control character>,"pid":<integer>}` →
+  `window.type(pid, words)`, counted `typed`
   or `typeNotFound`; `{"enter":<integer>}` → `window.enter(pid)`, counted `entered` or `typeNotFound`; a throw from
   either is caught and counted `typeNotFound`, the stream goes on; any other shape of either is `skipped`.
   `LINE_BYTES = 65_536`. `stateBody()` adds `types: true` last. The minute line as Global Constraints gives it.
@@ -249,7 +250,8 @@ deps gain `platform: process.platform`; the gate is not run here); Test `cli/src
        `foreground` call; `deps.processes()` again (a rejection → `failed`); the agent's row must carry the start marker
        its chain was read with (kept per agent beside its chain, dropped with it) and `parentChain(agentPid, table)` must
        hold the shell, else `failed`.
-    5. `window.stream.write(line)` false → `failed`.
+    5. The same window and terminal and `atPrompt()` true again once the guard has read (a turn or a prompt may have
+       started during that read), else `failed`; then `window.stream.write(line)` false → `failed`.
     6. `deps.after(min(INJECT_PASTE_DELAY_MAX_MS, INJECT_PASTE_DELAY_BASE_MS + floor(words.length / 60)), …)`.
     7. The same window object (`windows.get(id) === window`), still typing, `terminalOf(agentPid)?.shell === shell`, the
        guard again passing, `atPrompt()` true, then `window.stream.write({ enter: shell })` true → `typed`. Any one

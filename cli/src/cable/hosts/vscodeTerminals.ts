@@ -35,7 +35,8 @@
  * on a line of 1 KiB, which a words line can pass: the devices write words only where a window says it types. A send
  * reaches exactly that agent or submits nothing: its words line goes only while the agent is in front of its terminal
  * and the caller says it is at its prompt, and its Enter line only once the same terminal, the same guard and the
- * caller's prompt check hold again after the settle. Any of them failing after the words leaves them in that agent's own input, submitted nowhere.
+ * caller's prompt check hold again after the settle. Any of them failing after the words leaves them in that agent's
+ * own input, submitted nowhere.
  */
 import { isAbsolute } from 'node:path'
 import { REFUSED, type ListenerHandler, type ListenerStream, type ListenerStreamHandler } from '../../services/devicesListener.js'

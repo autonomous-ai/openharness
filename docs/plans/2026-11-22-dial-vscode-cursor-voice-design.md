@@ -67,6 +67,8 @@ For U10 there is no safe route (below).
 - `WindowFacade` gains `type(pid, words): boolean` and `enter(pid): boolean`: the terminal whose shell has that pid gets
   `sendText(words, false)`, or `sendText('\r', false)`. False when no terminal has that shell. Keys, never a bracketed
   paste: on Windows a pseudo console turns a paste into key presses, and a bracket's ESC would reach the agent as a key.
+- A words line holding a control character (`\p{Cc}`), which the devices never send, is out of form and skipped: a
+  newline or CR in it would submit part of the words before their Enter line, an escape would steer the screen.
 - The line limit (`LINE_BYTES`, 1,024 today) rises to 64 KiB for every line. (An older extension ends its stream on a
   line of 1,024 bytes or more and opens it again: the `types` flag below keeps such lines from it.)
 - `vscode-state` gains `"types":true`, so the devices know this window's extension can type.
