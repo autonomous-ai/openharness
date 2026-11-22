@@ -167,20 +167,26 @@ describe.skipIf(!herdrBinary || !weztermBinary)("herdr's client in WezTerm", () 
   /** The daemon's rest lines, each from its `[device]` on. */
   const swipes = (d: IsolatedDaemon): string[] => lines(d, '[device] swipe ·')
 
-  /** WezTerm in front, then a rest on the agent until one is shown: a rest before the watch's front line lands shows
-   *  nothing, so the dial rests on the agent again every 2 s. */
-  const restShown = async (d: IsolatedDaemon, dial: FakeDial, agentId: string): Promise<void> => {
+  /** WezTerm in front, then a rest on the agent every 2 s until [done]: a rest before the watch's front line lands shows
+   *  nothing, and one before herdr's list places the scan's copy at its herdr pane focuses none. */
+  const restUntil = async (d: IsolatedDaemon, dial: FakeDial, agentId: string, what: string,
+    done: () => boolean | Promise<boolean>): Promise<void> => {
     watch(d, WEZTERM_FRONT)
-    const before = swipes(d).filter((line) => line === '[device] swipe · ok').length
     let sent = 0
-    await until('a rest shown', () => {
-      if (swipes(d).filter((line) => line === '[device] swipe · ok').length > before) return true
+    await until(what, async () => {
+      if (await done()) return true
       if (Date.now() - sent >= 2_000) {
         dial.send({ t: 'focus', agentId })
         sent = Date.now()
       }
       return undefined
     }, 60_000, 50)
+  }
+  /** Rests on the agent until one is shown. */
+  const restShown = (d: IsolatedDaemon, dial: FakeDial, agentId: string): Promise<void> => {
+    const oks = () => swipes(d).filter((line) => line === '[device] swipe · ok').length
+    const before = oks()
+    return restUntil(d, dial, agentId, 'a rest shown', () => oks() > before)
   }
 
   /** The pages of an apps frame that hold an agent, each `<app> <count>`. */
@@ -219,10 +225,9 @@ describe.skipIf(!herdrBinary || !weztermBinary)("herdr's client in WezTerm", () 
 
   it("found by the scan, with herdr's row of its session: one row on WezTerm's page; a rest with WezTerm in front activates the client's pane and tab, then focuses the agent's herdr pane", async () => {
     const { d, dial, herdr, mux, client, agent } = await fresh('session')
-    await restShown(d, dial, agent.id)
+    await restUntil(d, dial, agent.id, "the agent's pane focused in herdr", async () => await herdr.focused() === agent.pane)
     expect(await mux.activeTab(client.pane)).toBe(true)
     expect(await mux.active(client.pane)).toBe(true)
-    await until("the agent's pane focused in herdr", async () => await herdr.focused() === agent.pane, 30_000, 100)
     await scanPlaced(d)
     // herdr's row folds into the scan's copy by its session.
     await pages(dial, 'wezterm 1')
