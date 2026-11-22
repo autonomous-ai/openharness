@@ -670,7 +670,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       return { claude: [...moved.claude, ...orca.claude], codex: [...moved.codex, ...orca.codex] }
     },
     removed: () => readRemoved(core.dataDir),
-    // Cloud harnesses are not advertised, and run other engines.
+    // Cloud harnesses are in this view too, and match nothing: their engines are their own (fo, devin-cloud,
+    // cursor-cloud).
     claudeAgents: () => deps.agentsRead?.() === false ? 'unknown'
       : core.agents.advertised().some(({ engine }) => engine === 'claude') ? 'listed' : 'none',
     now: monotonic,
