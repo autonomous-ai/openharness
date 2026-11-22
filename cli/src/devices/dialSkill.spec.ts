@@ -70,7 +70,7 @@ describe('the dial skill', () => {
     expect(file).not.toBeNull()
     expect(parse(file![1])).toEqual({ name: 'dial', description: DIAL_SKILL_DESCRIPTION })
     expect(DIAL_SKILL.split('\n')[3]).toBe(MARKER)
-    expect(file![2]).toContain('\n    harness device notify "<the question, in one line>" --suggest "<your recommendation>" --proceeding\n')
+    expect(file![2]).toContain('\n    harness device notify "<the question, in one line>" --suggest "<your recommendation, a few words>" --proceeding\n')
     expect(Buffer.byteLength(DIAL_SKILL)).toBeLessThanOrEqual(4096)
   })
 
@@ -83,7 +83,7 @@ ${MARKER}
 
 When the task needs a decision or an action only the person can take, ring their dial once and keep working:
 
-    harness device notify "<the question, in one line>" --suggest "<your recommendation>" --proceeding
+    harness device notify "<the question, in one line>" --suggest "<your recommendation, a few words>" --proceeding
 
 - Never block on the person: no question form or tool (AskUserQuestion, request_user_input) for this. Ask in text.
 - \`--proceeding\`: go on with your recommendation meanwhile. Use it unless the next rule says wait.
@@ -91,8 +91,7 @@ When the task needs a decision or an action only the person can take, ring their
   key, a code, a VPN, a sign-in); or when the step cannot be taken back or others see it (deleting data, a deploy, a
   push others build on, spending money, a message to someone else). Work on the other parts meanwhile.
 - Never for progress, and never for "done": only when the person must decide or act.
-- One notice per ask, at most once for the same ask. Several at once: one notice for the most important, the rest in
-  your answer.
+- One notice per ask, never twice. Several at once: one notice for the most important, the rest in your answer.
 - Never put a secret, a token or a file's content in the line: anyone near the desk can read it.
 - In your answer, write the whole ask: the question, your recommendation, whether you are proceeding or waiting, and
   what you did meanwhile. The person answers there. The command prints \`shown\`, \`no dial\` or \`limited\`: whichever it
