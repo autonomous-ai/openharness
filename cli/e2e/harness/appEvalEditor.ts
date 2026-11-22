@@ -182,7 +182,7 @@ async function startCodex(world: TierBWorld, state: State, s: SessionDef, folder
 async function startCursor(world: TierBWorld, state: State, s: SessionDef, folder: string): Promise<number | undefined> {
   const roots = (s.folders ?? [s.cwd]).map((one) => world.folder(one))
   const cursor = await CursorOutside.start(world.d, folder, world.children,
-    { sessionId: s.id, roots, terminal: placeOf(s) === 'terminal', hints: editorHints(world, s) })
+    { sessionId: s.id, roots, terminal: placeOf(s) === 'terminal', hints: editorHints(world, s), launchedFrom: world.scenario.world?.launchedFrom })
   state.cursor.set(s.key, cursor)
   await cursor.hook('start')
   return cursor.shellPid

@@ -59,12 +59,13 @@ export class CursorOutside {
 
   /**
    * In its folder under the daemon's projects, under a fake Cursor: with `terminal`, cursor-agent as the job of a shell
-   * in a tab of it ([shellPid] is the shell the window reports), else Cursor's own agent under it with no terminal. Its
-   * hooks name [roots], its workspace's folders. Its process goes in [children] too, the driver's last resort when its
-   * tab was not closed.
+   * in a tab of it ([shellPid] is the shell the window reports), else Cursor's own agent under it with no terminal; with
+   * `launchedFrom`, that Cursor was started from a shell in Terminal (outsideAgent.ts openTab). Its hooks name [roots],
+   * its workspace's folders. Its process goes in [children] too, the driver's last resort when its tab was not closed.
    */
   static async start(d: IsolatedDaemon, folder: string, children: ChildProcess[],
-    { sessionId, roots, terminal, hints }: { sessionId: string; roots: readonly string[]; terminal: boolean; hints: Record<string, string> }):
+    { sessionId, roots, terminal, hints, launchedFrom }:
+      { sessionId: string; roots: readonly string[]; terminal: boolean; hints: Record<string, string>; launchedFrom?: 'terminal-app' }):
     Promise<CursorOutside> {
     const cwd = join(d.projectsDir, folder)
     mkdirSync(cwd, { recursive: true })
@@ -75,7 +76,7 @@ export class CursorOutside {
     // There from its start; one started again goes on in it, as a relaunched Cursor's agent does. An earlier scenario's
     // under the same id is gone with the driver's reset.
     appendFileSync(transcriptPath, '')
-    const { tab, run } = await hookTab(d, cwd, { ...d.env, ...hints, TERM: 'xterm-256color' }, { app: 'cursor', shell: terminal, terminal },
+    const { tab, run } = await hookTab(d, cwd, { ...d.env, ...hints, TERM: 'xterm-256color' }, { app: 'cursor', shell: terminal, terminal, launchedFrom },
       `the Cursor agent in ${folder}`)
     children.push(tab.process)
     return new CursorOutside(d, tab, cwd, sessionId, roots, hints, transcriptPath, run)
