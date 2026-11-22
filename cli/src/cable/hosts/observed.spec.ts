@@ -2033,6 +2033,56 @@ describe('ObservedSource actions', () => {
     expect(await src.focus(src.list()[0])).toBe(true)
     expect(actions.open.mock.calls).toEqual([[src.list()[0].id, { bundle: 'com.microsoft.VSCode' }]])
   })
+
+  describe('a typer that waits between its words and their Enter', () => {
+    // Another Codex home's: not queue-able, so its words are typed (V9 at this layer).
+    const outside = {
+      engine: 'codex' as const, sessionId: THREAD, hostHints: { TYPER_PANE: 'p1' },
+      transcriptPath: `/other/.codex/sessions/2026/11/22/rollout-2026-11-22T10-00-00-${THREAD}.jsonl`,
+    }
+    /** An adapter whose pane is its hint's, and whose `type` keeps the prompt check it was handed and answers once told. */
+    const typing = () => {
+      let atPrompt: (() => boolean) | undefined
+      let answer!: (typed: TypeResult) => void
+      const type = vi.fn((_pane: Pane, _text: string, _engine: string, check?: () => boolean) => {
+        atPrompt = check
+        return new Promise<TypeResult>((resolve) => { answer = resolve })
+      })
+      const typer: HostAdapter = { id: 'typer', tap: 'before', canFocus: () => false, focus: async () => false, type,
+        paneOf: (place) => (place.hints.TYPER_PANE ? { adapter: 'typer', id: place.hints.TYPER_PANE } : undefined) }
+      const { actions } = fakeActions()
+      const t = setup({ actions: { ...actions, adapters: [typer] } })
+      t.src.ingest(t.ev('session-start', outside))
+      return { ...t, actions, type, atPrompt: () => atPrompt!(), answer: (typed: TypeResult) => answer(typed) }
+    }
+
+    it('a Codex outside Harness\'s own Codex home, at its prompt, with a pane whose app types, is typed there and counted by that adapter: no codex queue', async () => {
+      const { src, actions, type, answer } = typing()
+      const sent = src.send(src.list()[0], 'next')
+      await flushed()
+      answer(true)
+      expect(await sent).toEqual({ ok: true })
+      expect(type.mock.calls.map(([pane, text, engine]) => [pane, text, engine])).toEqual([[{ adapter: 'typer', id: 'p1' }, 'next', 'codex']])
+      expect(actions.codexQueue.send).not.toHaveBeenCalled()
+      expect(counted(actions.count)).toEqual(['typer'])
+    })
+
+    it.each([
+      ['a turn starts', 'turn-start', {}],
+      ['the agent waits', 'needs-input', {}],
+      ['its session ends', 'session-end', {}],
+      ['a hook gives it another pane', 'session-start', { hostHints: { TYPER_PANE: 'p2' } }],
+    ] as const)('the typer is handed the prompt check: true at the prompt, false once %s', async (_what, event, over) => {
+      const { src, ev, atPrompt, answer } = typing()
+      const sent = src.send(src.list()[0], 'next')
+      await flushed()
+      expect(atPrompt()).toBe(true)
+      src.ingest(ev(event, { ...outside, ...over }))
+      expect(atPrompt()).toBe(false)
+      answer(false)
+      await sent
+    })
+  })
 })
 
 // hc's own foreground pid equal to the pid the scan lists a session by, in one terminal only, is where it runs (the
