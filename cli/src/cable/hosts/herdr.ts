@@ -91,9 +91,9 @@ export function createHerdrAdapter(deps: HerdrAdapterDeps): HerdrAdapter {
       const id = place.hints.HERDR_PANE_ID
       if (!id || !HERDR_PANE.test(id)) return undefined
       // A terminal, an editor or a multiplexer started in a herdr pane keeps HERDR_PANE_ID, and words sent to that pane
-      // land at its prompt: only a pane herdr made the agent's terminal for takes words. Any other only focuses. Windows
-      // reads no maker (no `ps`): there the pane stays the agent's.
-      if (deps.platform !== 'win32' && place.ptyOwner !== 'herdr') {
+      // land at its prompt: only a pane herdr made the agent's terminal for takes words. Any other only focuses. On every
+      // platform: the devices read the maker on Windows too, from the PTY host's process table.
+      if (place.ptyOwner !== 'herdr') {
         if (place.ptyOwner !== undefined) sayHeld(place.pid)
         return { adapter: 'herdr', id: `${HELD}${id}`, held: true }
       }
