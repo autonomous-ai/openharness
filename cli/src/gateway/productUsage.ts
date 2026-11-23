@@ -139,13 +139,13 @@ const engineSignedIn = async (engine: 'claude' | 'codex'): Promise<boolean | nul
   (await engineAccount(engine, { env: { ...loginShellEnvironment(), ...process.env }, lastUsed: false })).signedIn
 
 /** Another queue file in [file]'s folder, where start.ts keeps one per machine id, written since [file] (a missing one
- *  is the oldest). */
+ *  is the oldest). One set aside as unreadable counts, [file]'s own too: it read as missing, though it was there. */
 function anotherQueueSince(file: string): boolean {
   const folder = dirname(file)
   const written = (name: string): number => statSync(join(folder, name), { throwIfNoEntry: false })?.mtimeMs ?? -Infinity
   try {
     const own = written(basename(file))
-    return readdirSync(folder).some(name => name.endsWith('.json') && name !== basename(file) && written(name) > own)
+    return readdirSync(folder).some(name => /\.json(\.unreadable)?$/.test(name) && name !== basename(file) && written(name) > own)
   } catch { return false }
 }
 
