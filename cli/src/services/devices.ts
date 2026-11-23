@@ -17,7 +17,7 @@
  * of its own: it rides the gateway's sessions, and borrows the dial's walk and stroke through the core.
  */
 import { randomUUID } from 'node:crypto'
-import { existsSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, statSync, writeFileSync, type Stats } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { env } from '../config/env.js'
@@ -42,6 +42,7 @@ import { createCmuxAppAdapter } from '../cable/hosts/cmuxApp.js'
 import { CmuxSource } from '../cable/hosts/cmuxSource.js'
 import { createCursorFolderAdapter, isFolder } from '../cable/hosts/cursorFolder.js'
 import { watchNearest } from '../cable/hosts/folderWatch.js'
+import { startFocusPoll, type FocusPoll } from '../cable/hosts/focusPoll.js'
 import { createCodexAppAdapter } from '../cable/hosts/codexApp.js'
 import { CodexAppSource, type CodexAppSourceDeps } from '../cable/hosts/codexAppSource.js'
 import { CodexAppThreads } from '../cable/hosts/codexAppThreads.js'
@@ -284,14 +285,25 @@ function isFile(path: string): boolean {
   }
 }
 
-/** The uid owning the socket at [path], for kitty's: null when none is there, it is no socket, or on any error. */
-function socketOwner(path: string): number | null {
+/** The socket at [path], for kitty's: null when none is there, it is no socket, or on any error. */
+function socketStat(path: string): Stats | null {
   try {
     const stat = statSync(path)
-    return stat.isSocket() ? stat.uid : null
+    return stat.isSocket() ? stat : null
   } catch {
     return null
   }
+}
+
+/** The uid owning the socket at [path]. */
+function socketOwner(path: string): number | null {
+  return socketStat(path)?.uid ?? null
+}
+
+/** The identity of the socket at [path] (`<dev>:<ino>`): a kitty started again there listens on a new one. */
+function socketId(path: string): string | null {
+  const stat = socketStat(path)
+  return stat === null ? null : `${stat.dev}:${stat.ino}`
 }
 
 /** Orca's account homes on this computer, read with its own `orca` (devices/orcaHomes.ts). */
@@ -608,6 +620,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const selects = dialMovesTo()
   /** The Orca panes the dial switched to lately. */
   const orcaSwitches = dialMovesTo()
+  /** The WezTerm panes and kitty windows the dial focused lately (a tap): a read naming one is its echo. */
+  const paneFocuses = dialMovesTo()
   /** The dial's own moves, each as it starts: a hand's turn to any agent, a tap, and the pane a rest or a tap's raise
    *  switches. How many, and when the latest started: a settle is set aside by one made within it. */
   let dialMoves = 0
@@ -666,12 +680,17 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const zellijAt = zellijFinder()
   const tmux = noting(createTmuxAdapter({ run: apps.run, tmux: tmuxAt, processes: readProcessNames, log, front: () => cableHost.latestFront() }))
   // One lookup of kitty, for its windows and for the tab holding a multiplexer's client.
-  const kittyDeps = { run: apps.run, kitty: kittyFinder(), platform: apps.platform, log, uid: process.getuid?.() ?? -1, socketOwner }
+  const kittyDeps = { run: apps.run, kitty: kittyFinder(), platform: apps.platform, log, uid: process.getuid?.() ?? -1, socketOwner,
+    now: monotonic, socketId }
   const orca = createOrcaAdapter(apps, { worktreeOf: (handle) => orcaWorktrees.get(handle), log, switching: (handle) => orcaSwitches.note(handle) })
+  // Kept as built: the focus poll reads them (below).
+  const kitty = createKittyAdapter(kittyDeps)
+  const wezterm = createWeztermAdapter(apps)
   const adapters: readonly HostAdapter[] = [herdrNoted, noting(createZellijAdapter({ run: apps.run, zellij: zellijAt, platform: apps.platform })),
     tmux, herdrAppNoted, cmuxAppNoted, ...[
-    createKittyAdapter(kittyDeps),
-    createWeztermAdapter(apps),
+    // A tap's focus is the dial's own move: the poll's read that sees it, a moment later, is its echo.
+    { ...kitty, focus: (pane: Pane) => { paneFocuses.note(pane.id); return kitty.focus(pane) } },
+    { ...wezterm, focus: (pane: Pane) => { paneFocuses.note(pane.id); return wezterm.focus(pane) } },
     // A rest's or a tap's switch: Orca's focus line for that pane, a moment later, is the dial's own echo.
     { ...orca,
       show: (pane: Pane, agentId: string) => { orcaSwitches.note(orcaHandle(pane.id)); return orca.show(pane, agentId) },
@@ -1365,6 +1384,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       part.call('dial', () => tabSettled(app))
       part.call('dial', () => threadSettled(app))
       part.call('dial', () => editorSettled(app))
+      part.call('pane', () => {
+        paneFocusFailing = false
+        checkPaneFocus()
+      })
     },
     appPicked: () => {
       count((usage) => usage.used())
@@ -2124,6 +2147,78 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     log('[device] orca watch · ended')
   }
 
+  // ── the pane focused in WezTerm and kitty ──────────────────────────────────────────────────────────
+  //
+  // The dials turn to the agent in the WezTerm pane or kitty window the person focuses, as in Orca: a prompt they typed
+  // there was the only sign of it (docs/plans/2026-11-23-dial-wezterm-kitty-focus-follow-design.md). Neither app offers a
+  // focus event Harness may subscribe to (theirs need the person's `wezterm.lua` or `kitty.conf`), so each read asks the
+  // app (focusPoll.ts): one poll at most, only while its app is settled in front, a dial attached and an agent in a pane
+  // of its own there, and zero calls otherwise. A poll that stopped itself starts again only at a settle: a WezTerm whose
+  // GUI is gone is asked no more while it stays in front. Each line is an outcome or a count, never a pane, a socket or
+  // the agent.
+  /** A read's answer: per place with a focus of its own (`wezterm`, each kitty's socket), the agent's pane focused there
+   *  or null; and the dial's moves and the time as the read started. */
+  type PaneAnswer = { focused: ReadonlyMap<string, string | null>; moves: number; at: number }
+  /** The poll, its app, whether its first answer is still to come, and its last answer. */
+  type PaneFocus = { app: 'wezterm' | 'kitty'; poll: FocusPoll; first: boolean; last?: ReadonlyMap<string, string | null> }
+  let paneFocus: PaneFocus | undefined
+  /** Set as a poll stops itself; cleared at the next settle of any app: only a settle starts it again (spec). */
+  let paneFocusFailing = false
+  /** One read, of the panes the live agents have of their own in that app as it starts: an agent's own pane alone, as a
+   *  held one shows whatever is in front of it. */
+  const readPanes = async (source: ObservedSource, app: PaneFocus['app']): Promise<PaneAnswer | undefined> => {
+    const moves = dialMoves
+    const at = monotonic()
+    const panes = source.list().flatMap(({ id }) => source.paneOf(id, app) ?? [])
+    if (app === 'wezterm') {
+      const id = await wezterm.focusedPane()
+      if (id === undefined) return undefined
+      return { focused: new Map([['wezterm', id !== null && panes.includes(id) ? id : null]]), moves, at }
+    }
+    // The windows found focused last asked first, as focus mostly stays where it was: one call a kitty then. None at the
+    // poll's first read, which runs within startFocusPoll, before `paneFocus` holds its poll.
+    const lately = new Set(paneFocus?.last?.values())
+    const ordered = [...panes.filter((id) => lately.has(id)), ...panes.filter((id) => !lately.has(id))]
+    const focused = await kitty.focusedWindows(ordered.map((id) => ({ adapter: kitty.id, id })))
+    return focused === undefined ? undefined : { focused, moves, at }
+  }
+  /** An answer of the poll: kept, as the next is compared with it. */
+  const paneAnswered = (focus: PaneFocus, answer: PaneAnswer): void => {
+    focus.last = answer.focused
+  }
+  /** The poll's app left the front, its last agent went, or the dial went: the poll and the dial's taps its answers are
+   *  checked against go with it. */
+  const dropPaneFocus = (): void => {
+    paneFocuses.clear()
+    paneFocus?.poll.stop()
+    paneFocus = undefined
+  }
+  /** Starts the poll WezTerm or kitty settled in front wants, with a dial attached and a live agent with a pane of its
+   *  own there, and stops one no longer wanted. */
+  const checkPaneFocus = (): void => {
+    if (!observed) return
+    const app = cableHost.settledApp()
+    const wanted = dialOn && !paneFocusFailing && (app === 'wezterm' || app === 'kitty')
+      && observed.list().some(({ id }) => observed.paneOf(id, app) !== undefined) ? app : undefined
+    if (paneFocus?.app === wanted) return
+    dropPaneFocus()
+    if (wanted === undefined) return
+    // Its answers and its own stop run in a part, which logs a throw: the poll swallows one unsaid (focusPoll.ts).
+    const polling: PaneFocus = { app: wanted, first: true, poll: startFocusPoll<PaneAnswer>({
+      read: () => readPanes(observed, wanted),
+      answered: (answer) => part.call('pane', () => paneAnswered(polling, answer)),
+      failing: () => part.call('pane', () => {
+        paneFocus = undefined
+        paneFocuses.clear()
+        paneFocusFailing = true
+      }),
+      after: timerIn('pane'),
+      log,
+    }) }
+    paneFocus = polling
+  }
+  observed?.onChange(() => part.call('pane', checkPaneFocus))
+
   /** The scan, the reminders, herdr's and Herdr Core's sockets, opencode's service, the Claude app's store and the ChatGPT
    *  app's metadata, for an attached dial alone. */
   let attached: ReturnType<typeof setInterval>[] = []
@@ -2139,6 +2234,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // whatever source is on.
     // With the last gone, a Harness agent's next turn goes unheard, so its card ends now.
     part.call('notices', () => on ? notices.attached() : notices.detached())
+    // With no dial, WezTerm's and kitty's focus is read no more: the devices' stop detaches too.
+    part.call('pane', on ? checkPaneFocus : dropPaneFocus)
     if (!observed || !herdr || !opencode || !claudeAppSource || !codexAppSource) return
     // Only with herdr installed, read at each attach, as a tap needs it (herdr.ts): with none, no folder is watched
     // (~/.config, or the home folder, recursive on macOS) for a socket that never comes. herdr's zip on Windows puts it on
