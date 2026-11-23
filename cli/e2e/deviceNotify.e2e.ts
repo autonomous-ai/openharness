@@ -264,7 +264,7 @@ describe('harness device notify', () => {
     let since = dial.messages.length
     dial.send({ t: 'agent.open', agentId: claude.id })
     await dial.next((m) => m.t === 'focus' && m.agentId === claude.id, 45_000, 'its face', since)
-    expect(orca!.runs().map((run) => run.args)).toContain(`terminal switch --terminal ${handle} --json`)
+    expect(orca!.log().map((run) => run.argv.slice(1).join(' '))).toContain(`terminal switch --terminal ${handle} --json`)
 
     // The list asked after the tap is the barrier: whatever the daemon sent for the tap is sent by the time the list's
     // drawer is. The card is still one of its question rows, and nothing closed it.
