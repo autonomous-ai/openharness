@@ -645,6 +645,7 @@ fn screen_at(screen: Screen, phase: Phase, lines: Vec<String>) -> View {
 mod tests {
     use super::*;
     use crate::install::{DOWNLOADING_HARNESS, GETTING_READY, INSTALLING_TMUX};
+    use crate::model::UPDATING_APP;
     use crate::types::{
         Action, DialStatus, Effect, Event, ExportFailure, Exported, LoginEvent, MenuAction, MenuItem, NotifyMode,
         Phase, Saved, Screen, UpdateFailure, View,
@@ -1475,7 +1476,7 @@ mod tests {
         assert!(!has(&effects, &Effect::InstallUpdate));
         assert_eq!(logs(&effects), ["update: found 0.1.3"]);
         let menu = menu_of(&effects);
-        let row = MenuItem::Text("Updating Harness…".into());
+        let row = MenuItem::Text(UPDATING_APP.into());
         let at = menu.iter().position(|item| *item == row).expect("the row");
         assert_eq!(menu[at + 1], MenuItem::Separator);
         assert_eq!(app.handle(Event::UpdateDownloaded), [Effect::InstallUpdate]);
@@ -1483,7 +1484,7 @@ mod tests {
 
         let effects = app.handle(Event::UpdateInstalled);
         assert_eq!(logs(&effects), ["update: installed 0.1.3"]);
-        assert!(!rows(&effects).contains(&"Updating Harness…".to_string()));
+        assert!(!rows(&effects).contains(&UPDATING_APP.to_string()));
         assert!(!has(&effects, &Effect::Relaunch));
         assert_eq!(app.handle(tick(B + 10 + M1)), [Effect::StopWatch, Effect::Relaunch]);
     }
@@ -1548,7 +1549,7 @@ mod tests {
     /// The check finds 0.1.3 and its download answers, where installing ends the app: no row and no install yet.
     fn held(app: &mut App) {
         assert!(has(&app.handle(Event::UpdateChecked(Some("0.1.3".into()))), &Effect::DownloadUpdate));
-        assert!(!rows_now(app).contains(&"Updating Harness…".to_string()));
+        assert!(!rows_now(app).contains(&UPDATING_APP.to_string()));
         assert!(app.handle(Event::UpdateDownloaded).is_empty());
     }
 
@@ -1556,7 +1557,7 @@ mod tests {
     /// the watch is not stopped and nothing relaunches.
     fn starts_the_held_install(effects: &[Effect]) {
         assert_eq!(effects.len(), 4, "{effects:?}");
-        assert!(rows(&effects[..1]).contains(&"Updating Harness…".to_string()), "{effects:?}");
+        assert!(rows(&effects[..1]).contains(&UPDATING_APP.to_string()), "{effects:?}");
         assert_eq!(effects[2..], [Effect::Log("update: installing 0.1.3".into()), Effect::InstallUpdate]);
     }
 
@@ -1623,7 +1624,7 @@ mod tests {
         starts_the_held_install(&app.handle(tick(B + 10)));
         let effects = app.handle(Event::UpdateFailed(UpdateFailure::Install));
         assert_eq!(logs(&effects), ["update: failed install"]);
-        assert!(!rows(&effects).contains(&"Updating Harness…".to_string()));
+        assert!(!rows(&effects).contains(&UPDATING_APP.to_string()));
         // Still checked every minute; the same version waits two checks before it is fetched again, as on a Mac.
         assert!(has(&app.handle(tick(B + 10 + M1)), &Effect::CheckUpdate));
         assert!(app.handle(Event::UpdateChecked(Some("0.1.3".into()))).is_empty());
@@ -1649,7 +1650,7 @@ mod tests {
                 app.handle(Event::UpdateChecked(Some("0.1.3".into())));
                 let effects = app.handle(Event::UpdateFailed(kind));
                 assert_eq!(logs(&effects), [format!("update: failed {word}")], "{install_exits_app}");
-                assert!(!rows_now(&app).contains(&"Updating Harness…".to_string()), "{install_exits_app} {kind:?}");
+                assert!(!rows_now(&app).contains(&UPDATING_APP.to_string()), "{install_exits_app} {kind:?}");
                 assert!(has(&app.handle(tick(B + 5 + M1)), &Effect::CheckUpdate), "{install_exits_app} {kind:?}");
                 assert!(app.handle(Event::UpdateChecked(Some("0.1.3".into()))).is_empty(), "{install_exits_app}");
             }
@@ -1680,7 +1681,7 @@ mod tests {
             assert_eq!(logs(&effects), [format!("update: failed {word}")]);
             assert!(!has(&effects, &Effect::InstallUpdate) && !has(&effects, &Effect::Relaunch), "{kind:?}");
             sent.extend(effects);
-            assert!(!rows(&sent).contains(&"Updating Harness…".to_string()), "{kind:?}");
+            assert!(!rows(&sent).contains(&UPDATING_APP.to_string()), "{kind:?}");
             let effects = app.handle(tick(B + 10));
             assert!(!has(&effects, &Effect::CheckUpdate) && !has(&effects, &Effect::Relaunch), "{kind:?}");
             assert!(has(&app.handle(tick(B + 5 + M1)), &Effect::CheckUpdate), "{kind:?}");

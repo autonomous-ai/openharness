@@ -7,6 +7,7 @@
 use crate::app::App;
 use crate::follow::{AxTrust, NoFollow, Ungated};
 use crate::install::DOWNLOADING_HARNESS;
+use crate::model::UPDATING_APP;
 use crate::tick::menu_opened;
 use crate::types::{
     Action, DialStatus, Effect, Event, Exported, LoginEvent, MenuAction, MenuItem, NotifyMode, Saved, Screen,
@@ -148,7 +149,7 @@ fn the_one_os_property_of_the_rules_is_install_exits_app() {
 }
 
 fn shows_the_row(effects: &[Effect]) -> bool {
-    let row = MenuItem::Text("Updating Harness…".into());
+    let row = MenuItem::Text(UPDATING_APP.into());
     effects.iter().any(|effect| matches!(effect, Effect::Menu(items) if items.contains(&row)))
 }
 
