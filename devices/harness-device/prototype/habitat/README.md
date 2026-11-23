@@ -15,7 +15,7 @@ additional prompt is used.
 The [design system](DESIGN_SYSTEM.md) uses the desktop pane's charcoal, one lilac
 accent and one interface font size. `[1]` indicates unread messages and retains
 a wide bottom touch target. Opening an inbox message focuses its pane, acknowledges
-it and returns to the pet without showing the same recap again.
+it and returns to that pane's face with its recap.
 
 ## Rendered preview
 
