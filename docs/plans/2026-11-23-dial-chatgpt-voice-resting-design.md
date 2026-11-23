@@ -186,8 +186,7 @@ The new code is in the devices' import graph only; the core's static graph does 
 ### 7. What does not change
 
 The core, the firmware, Desktop, the thread reader, the Claude app's wake, a live thread's voice path (but for the
-wake's `waitsFor` gate while that thread's link runs, § 3), `codex queue`'s
-arguments (no `--resume`, Codex fact 4).
+wake's `waitsFor` gate while that thread's link runs, § 3), `codex queue`'s arguments (no `--resume`, Codex fact 4).
 
 ## Tests (fakes and throwaway homes only; never the real ChatGPT app or `~/.codex`)
 
@@ -199,14 +198,16 @@ arguments (no `--resume`, Codex fact 4).
   opens nothing; a second prompt while a wake runs (same row, another row, or a Claude wake) is refused busy and
   nothing reaches its thread; stopped, or timed out, during the link queues nothing, and the link's late answer queues
   nothing; stopped during the queue keeps the queue's answer; each queue outcome gives its text; `waitsFor` is true
-  for a ChatGPT wake's thread alone and only while its link runs; `stop('codex')` leaves a Claude wake running; every line and count is one of the fixed ones. The
-  Claude target's tests stay green unchanged.
+  for a ChatGPT wake's thread alone and only while its link runs; `stop('codex')` leaves a Claude wake running; every
+  line and count is one of the fixed ones. The Claude target's tests stay green unchanged.
 - `devices.spec.ts`: voice to a resting ChatGPT row through the devices' real wiring runs one `codex://threads/<id>`
   link, no forward (no bare `open -b com.openai.codex`, no Windows raise without the link), and one
   `codex queue --thread <id>`, link first; the dial's own switch is noted, so the app's window title of that thread
   right after does not count as a person's pick, and a late title of the thread shown before does not move the dial;
   on `linux` with no scheme app the row's caps lack `v`; with `CODEX_HOME` not the app's home they lack `v`; on
-  `win32` the link goes through the Windows raise fake.
+  `win32` the link goes through the Windows raise fake; a hook that lists the thread while its link runs gets the next
+  words refused as not taken yet, and they queue once the first did; a throw in the wake's 30 s timer is logged as the
+  `app-wake` part, never `claude-app`.
 - `cableSession.spec.ts`: a voice draft's send to such a row resolves with the wake's refusal text.
 - The dial eval: a new ChatGPT scenario `X12`, "Voice on a resting thread: it opens, then the exact words are queued to
   it once", with the existing step and check kinds: `codex.write ['t1']`, `listed('chatgpt', ['t1'])`, `voice`;
