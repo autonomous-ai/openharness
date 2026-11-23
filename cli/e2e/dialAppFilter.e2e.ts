@@ -328,7 +328,7 @@ describe('the dial\'s app filter', () => {
     ]))
   })
 
-  it('an unknown terminal in front ({"front":"org.alacritty"}) does not turn the dial to Other', async () => {
+  it('a terminal no table lists in front ({"front":"com.raphaelamorim.rio"}) does not turn the dial to Other, and Alacritty in front does', async () => {
     const { d, desk } = await fresh()
     const dial = await plugged(desk)
     const apple = await startFirst(d, dial, 'terminal-app', 'a1', { TERM_PROGRAM: 'Apple_Terminal' })
@@ -338,7 +338,7 @@ describe('the dial\'s app filter', () => {
     const run = watch(d)
     let since = dial.messages.length
     const written = Date.now()
-    run.front('org.alacritty')
+    run.front('com.raphaelamorim.rio')
     await settleWindowPassed(dial, written)
     expect(appsFrames(dial, since).every((apps) => apps.shown === 'terminal-app')).toBe(true)
     expect(switches(d, 'front')).toBe(0)
@@ -350,6 +350,11 @@ describe('the dial\'s app filter', () => {
     run.front('com.apple.Terminal')
     await shows(dial, 'terminal-app', [apple], since)
     expect(switches(d, 'front')).toBe(1)
+    // Alacritty's agents are on Other (detectApp), so Alacritty in front follows there, as Windows Terminal does.
+    since = dial.messages.length
+    run.front('org.alacritty')
+    await shows(dial, 'terminal', [other], since)
+    expect(switches(d, 'front')).toBe(2)
   })
 
   it('kitty\'s bundle id in front turns the dial to kitty\'s agents', async () => {

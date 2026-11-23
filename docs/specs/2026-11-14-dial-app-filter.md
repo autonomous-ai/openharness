@@ -268,9 +268,10 @@ and a desktop change. The rings are memory only too, as swipe-order decided.
   dropped), so `ChatGPT.exe` maps to `codex` too.
   The list is closed: a new row is a new decision.
 - An app the table does not know is `none`: no listed app is in front. `none` is not an app id. It is never the
-  unknown app `terminal` ("Other"): Safari in front and an agent in an unknown terminal are different things, so on
-  macOS and Linux the dial reaches "Other" by a pick or as the default, and never by following (the one row that
-  gives `terminal` is `WindowsTerminal.exe`). The raw value never leaves the CLI process.
+  unknown app `terminal` ("Other"): Safari in front and an agent in an unknown terminal are different things, so the
+  dial reaches "Other" by following only for the terminals whose agents are there, `WindowsTerminal.exe` and Alacritty
+  (`org.alacritty`, `alacritty.exe`, `alacritty`; the PM, 2026-11-24), and else by a pick or as the default. The raw
+  value never leaves the CLI process.
 - The watch sends `{ type: 'front', app }` to the devices listener. With no listener (an older daemon, or the devices
   process not running) it ignores the `front` lines and tries again on the next change. When its input ends (the
   Harness Device app quit), a watch that told an app in front tells `none` once, bounded, before it exits. It tells
