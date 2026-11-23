@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -324,6 +324,26 @@ describe("tier B's recording wrappers", () => {
     for (const { at } of runs) {
       expect(at).toBeGreaterThanOrEqual(before - 100)
       expect(at).toBeLessThanOrEqual(after + 100)
+    }
+  })
+
+  it('notes a run killed on its timeout (SIGTERM) as failed, and ends the real program with it', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'tier-b-wrapper-'))
+    const said = join(dir, 'real.pid')
+    const tmux = wrapped('tmux', '/bin/sh', ['-c'])
+    // The real program says its pid, whole, then hangs, as a tmux that does not answer.
+    const script = `echo $$ > '${said}.tmp' && mv '${said}.tmp' '${said}' && exec sleep 60`
+    const run = spawn(tmux.path, ['-c', script], { stdio: 'ignore' })
+    const ended = new Promise((done) => run.once('exit', done))
+    const real = await vi.waitFor(() => Number(readFileSync(said, 'utf8')), { timeout: 10_000, interval: 20 })
+    try {
+      run.kill('SIGTERM')
+      await ended
+      expect(runLog.runLog(tmux.runs).map(({ argv, ok }) => ({ argv, ok }))).toEqual([{ argv: ['tmux', '-c', script], ok: false }])
+      // Waited for by the wrapper, so gone by its end.
+      expect(() => process.kill(real, 0)).toThrow()
+    } finally {
+      try { process.kill(real, 'SIGKILL') } catch { /* gone */ }
     }
   })
 
