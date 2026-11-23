@@ -537,6 +537,18 @@ describe('the host that made a Windows process\'s terminal', () => {
     expect(windowsPtyOwner(10, codex)).toBe('orca')
     expect(windowsPtyOwner(10, under('claude.exe', 'powershell.exe', 'Orca.exe'))).toBe('orca')
     expect(windowsPtyOwner(10, under('bash.exe', 'sh.exe', 'pwsh.exe', 'Orca.exe'))).toBe('orca')
+    // Volta's shim starts Codex's script with Node, which starts the real `codex.exe`.
+    expect(windowsPtyOwner(10, win([[10, 11, 'codex.exe'], [11, 12, 'node.exe'], [12, 13, 'codex.exe'], [13, 14, 'pwsh.exe'], [14, 1, 'Orca.exe']]))).toBe('orca')
+  })
+
+  // An agent of the caller's own name above a shell is no shim: it is another agent that ran this one from its own tool,
+  // whose terminal (Codex's own pseudo-console) or pipes (Claude Code's shell tool) the caller runs on, not Orca's.
+  it('names none for an agent of the caller\'s own name above a shell', () => {
+    // Codex run by Codex in an Orca terminal: Codex's shell tool runs PowerShell on a pseudo-console Codex made.
+    expect(windowsPtyOwner(10, win([[10, 11, 'codex.exe'], [11, 12, 'pwsh.exe'], [12, 13, 'codex.exe'], [13, 14, 'node.exe'],
+      [14, 15, 'cmd.exe'], [15, 16, 'pwsh.exe'], [16, 1, 'Orca.exe']]))).toBeUndefined()
+    // `claude -p` from Claude Code's shell tool in an Orca terminal.
+    expect(windowsPtyOwner(10, under('bash.exe', 'claude.exe', 'pwsh.exe', 'Orca.exe'))).toBeUndefined()
   })
 
   it('names herdr and wezterm for theirs', () => {
