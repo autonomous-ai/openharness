@@ -1,6 +1,6 @@
-// The Notifications setting: whether an ordinary finished turn still beeps the dial (All) or only lists
-// (Needs you). It is this computer's, not the dial's, so it lives in the daemon's data folder and outlives the
-// devices' process, which restarts often. One writer: the devices' process.
+// The Notifications setting: whether an ordinary finished turn still beeps the dial and takes a row of its list (All)
+// or draws its agent's tile alone (Needs you). It is this computer's, not the dial's, so it lives in the daemon's data
+// folder and outlives the devices' process, which restarts often. One writer: the devices' process.
 import { closeSync, openSync, readSync } from 'node:fs'
 import { atomicWriteFile } from '../lib/secureState.js'
 

@@ -266,6 +266,8 @@ const LISTENER_WAIT_MS = 1_000
 /** How long after the dial's own continue link to a Claude app session an attach is that link's echo: the app attaches
  *  the session it shows within about a second. Also how long any move of the dial sets the Claude app's settle aside. */
 const ATTACH_ECHO_MS = 2_000
+/** How many agents whose last turn failed are remembered for Needs you's list: a bound on what a busy fleet leaves. */
+const FAILED_KEPT = 64
 
 /** Whether [path] is a file: false when nothing is there, it is a folder, or on any error. */
 function isFile(path: string): boolean {
@@ -357,6 +359,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   let listenerOpen = false
   const sayStatus = (status: DialStatus): void => core.clients.sendLocal({ type: 'dial_status',
     payload: { ...status, ...(listenerOpen ? { notify: notifyMode.get() } : {}) } })
+  // The agents whose last turn failed: in Needs you, the only finished turns the dial's list keeps (newsKept). In memory
+  // alone, so a turn that failed before the devices restarted is not kept; the oldest goes first past FAILED_KEPT.
+  const failedLast = new Set<string>()
+  const noteTurn = (agentId: string, failed: boolean): void => {
+    failedLast.delete(agentId)
+    if (!failed) return
+    failedLast.add(agentId)
+    if (failedLast.size > FAILED_KEPT) failedLast.delete(failedLast.values().next().value!)
+  }
 
   // What the windows on this computer last said: the desk the dial walks and whether it is in front, and
   // which window has the person's attention for a spoken selection, a visit or a form.
@@ -1190,6 +1201,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // read it does not.
     tapped: (agentId) => endNotice(agentId),
     noticeFrom: (agentId) => notices.from(agentId),
+    newsKept: (agentId) => notifyMode.get() !== 'you' || failedLast.has(agentId),
     // The notices and the waits are questions only the devices ask: what is unread replaces the dial's whole drawer,
     // which holds them too.
     noticeRows: () => {
@@ -1342,6 +1354,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  card came (toDial). */
   const dispatch = (event: DialEvent, notice: boolean): void | Promise<void> => {
     if (event.kind !== 'processing') latestUpdate.delete(event.agentId)
+    // A turn starting or ending says whether its agent's last one failed; a sub-agent's or a restored card is not its turn.
+    if (event.kind !== 'done' && !event.subagent) noteTurn(event.agentId, event.kind === 'error' || event.failed === true)
     if (event.kind === 'processing') {
       if (event.update) latestUpdate.set(event.agentId, event.update)
       else latestUpdate.delete(event.agentId)
@@ -1380,20 +1394,22 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (event.failed !== true && notice) { noted('silent', 'notice'); void cable.summary(agentId, recap, event.text, 'silent', event.fullText, false); return }
       const who = cableHost.describe(agentId)
       const needsYou = notifyMode.get() === 'you'
+      // Needs you: an ordinary finished turn draws its tile alone, with no drawer row, however its tier was decided.
+      const tileOnly = needsYou && event.failed !== true
       // Decided once already, by the recaps (services/recaps.ts) or another machine, for the phone as well: the dial
-      // follows it and nobody is asked again, but Needs you is this computer's, so an ordinary turn's alert is lowered
-      // here. A card without one (a cloud agent's, a recaps from before) is decided here.
+      // follows it and nobody is asked again, but Needs you is this computer's, so an ordinary turn is lowered here. A
+      // card without one (a cloud agent's, a recaps from before) is decided here.
       if (event.tier) {
-        const lowered = needsYou && event.tier === 'alert' && event.failed !== true
-        if (lowered) tally('list', 'rule:needs-you', 'needs-you', 0)
+        const lowered = tileOnly && event.tier !== 'silent'
+        if (lowered) tally('silent', 'rule:needs-you', 'needs-you', 0)
         else tally(event.tier, 'recaps', 'decided upstream', 0)
-        void cable.summary(agentId, recap, event.text, lowered ? 'list' : event.tier, event.fullText, false)
+        void cable.summary(agentId, recap, event.text, lowered ? 'silent' : event.tier, event.fullText, false)
         return
       }
       // Returned, so the agent's next card waits behind this one (inOrder): a late recap must not follow turn.started.
       return tierOf({ engine: who?.engine ?? '', recap, durationS: turn?.durationS ?? null,
         stats: turn?.stats ?? {}, subagent: false, onScreen: false, failed: event.failed === true, needsYou })
-        .then((d) => d.tier, () => 'list' as const)
+        .then((d) => d.tier, (): Tier => (tileOnly ? 'silent' : 'list'))
         .then((tier) => { void cable.summary(agentId, recap, event.text, tier, event.fullText, false) })
     }
     else {
@@ -2040,12 +2056,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** The watch's change of the Notifications setting: kept, then said at once with the dial's status, which is how the
    *  watch's line, and the menu's check, follow it. No revision: the dial itself did not change. */
   const setNotify = (mode: NotifyMode): { mode: NotifyMode } | { error: string } => {
+    const changed = mode !== notifyMode.get()
     const failed = notifyMode.set(mode)
     if (failed !== undefined) {
       log(`[device] notifications · not saved · ${failed}`)
       return { error: 'WRITE_FAILED' }
     }
     sayStatus(cableHost.currentDialStatus())
+    // Needs you's list holds fewer finished turns than All's: the drawer the dial holds is drawn again for a new mode.
+    // The menu's checked item clicked again sends the mode in force, which changes no row.
+    if (changed) void cable.replaceNotifications(cableHost.listUnread())
     log(`[device] notifications · ${mode}`)
     return { mode }
   }

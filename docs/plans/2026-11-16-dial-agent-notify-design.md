@@ -58,7 +58,7 @@ Done when, on a Mac with a dial and no Harness desktop app:
 | `harness device notify` from an agent (new) | rings, pinned, its line | rings, pinned, its line |
 | A question or a permission ask | rings (today) | rings |
 | A failed turn (`turn.error`, which includes Codex's usage limit) | rings (today) | rings |
-| An ordinary finished turn with a recap | rings (today) | drawer row (`list`), no beep, no wake |
+| An ordinary finished turn with a recap | rings (today) | its tile alone (`silent`), no row, no beep, no wake; a drawer row (`list`) until 2026-11-23 |
 | On screen, a sub-agent, an empty turn | silent (today) | silent |
 
 Default: **All**, so nobody's dial changes until they choose (my call).
@@ -162,7 +162,9 @@ needs no such wait.
 
 - Stored per computer in the daemon's data dir, read by the devices service where it sends `cable.summary`
   (`services/devices.ts`, both the upstream-tier and the `tierOf` paths): in Needs you an `alert` decided by
-  `rule:turn` becomes `list`, logged as `rule:needs-you`; nothing else is lowered.
+  `rule:turn` becomes `list`, logged as `rule:needs-you`; nothing else is lowered. Since 2026-11-23 an ordinary
+  finished turn becomes `silent` instead, its tile alone, and the dial's list keeps a window's finished turn only when
+  that agent's last turn failed (`cableHost.listUnread`, `newsKept`).
 - The menu-bar app reads and writes it through `harness hardware watch --json`, as its Sound item does (#4360): out,
   `"notify":"full"|"you"` on the watch line; in, exactly `{"notify":"full"}` or `{"notify":"you"}` on the watch's
   stdin; latest wins, one change in flight, 12 s bound, one stderr line on an error.

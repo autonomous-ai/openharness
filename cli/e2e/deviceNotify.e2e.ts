@@ -12,7 +12,9 @@
  * - it rings with a window open on its tab;
  * - with the dial unplugged, or no dial on this computer, it prints `no dial`, and the second starts nothing;
  * - a pending card comes back after the devices process restarts, as a silent row that opens to its line
- *   (docs/plans/2026-11-18-dial-notices-restart-design.md).
+ *   (docs/plans/2026-11-18-dial-notices-restart-design.md);
+ * - with the Notifications setting on Needs you, a plain finished turn draws its tile alone, and the dial's list holds the
+ *   notices and the window's questions but no finished turn, after a replug too.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -67,7 +69,8 @@ describe('harness device notify', () => {
     daemon = undefined
     desk = undefined
   })
-  const fresh = async (env: Record<string, string> = {}): Promise<{ d: IsolatedDaemon; desk: Desk }> => {
+  /** [before]: what is written into the daemon's data folder before it starts. */
+  const fresh = async (env: Record<string, string> = {}, before?: (d: IsolatedDaemon) => void): Promise<{ d: IsolatedDaemon; desk: Desk }> => {
     const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false', ...env } })
     daemon = d
     const file = join(d.root, 'dials.json')
@@ -76,6 +79,7 @@ describe('harness device notify', () => {
     const theDesk = new Desk(file)
     desk = theDesk
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-200).join('\n')}`) })
+    before?.(d)
     await d.start()
     // Claude Code started by hand reads its hooks once, as it starts: they must be in by then.
     await d.hooksInstalled(['claude'])
@@ -309,6 +313,44 @@ describe('harness device notify', () => {
     expect(await notify(d, caller, join(d.projectsDir, 'fix-login'))).toMatchObject({ code: 0, out: 'shown' })
     expect(await dial.next((m) => m.t === 'question' && m.agentId === engine.id, 45_000, 'the notice', since))
       .toMatchObject({ questions: rung() })
+    window.close()
+  })
+
+  it('with Notifications on Needs you, a plain finished turn draws its tile alone and the list holds only what needs the person, after a replug too', async () => {
+    const { d, desk } = await fresh({}, (d) => {
+      mkdirSync(d.dataDir, { recursive: true })
+      writeFileSync(join(d.dataDir, 'dial-notify.json'), '{"mode":"you"}\n')
+    })
+    const dial = await plugged(desk)
+    const engine = await startOutside(d, 'fix-login')
+    await listed(dial, engine.id)
+    const since = dial.messages.length
+    engine.type('hello')
+    expect(await dial.next((m) => m.t === 'summary' && m.agentId === engine.id, 60_000, 'its answer', since)).toMatchObject({ tier: 'silent' })
+
+    // A notice of a session nobody lists, and a window whose unread list holds that turn's end and another agent's question.
+    const sessionId = randomUUID()
+    const noticed = observedAgentId('claude', sessionId)
+    expect(await notify(d, { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: sessionId }, join(d.projectsDir, 'scratch')))
+      .toMatchObject({ code: 0, out: 'shown' })
+    await dial.next((m) => m.t === 'question' && m.agentId === noticed, 45_000, 'the notice')
+    const window = await LocalClient.connect(d)
+    window.send('app_unread', { items: [
+      { agentId: engine.id, machineId: d.computerId, text: 'done' },
+      { agentId: 'asks-1', machineId: d.computerId, question: true, text: 'Ship it?' },
+    ] })
+    const items = (m: DialMessage) => (m.items ?? []) as Array<Record<string, unknown>>
+    const drawer = async (on: FakeDial, from: number) => items(await on.next((m) => m.t === 'notif.replace' &&
+      items(m).some((item) => item.agentId === 'asks-1'), 60_000, 'the window\'s list', from)).map((item) => item.agentId)
+    expect(await drawer(dial, since)).toEqual([noticed, 'asks-1'])
+
+    // Plugged in again: the drawer it is handed holds no finished turn either.
+    await desk.unplug('E2E-A')
+    const again = await plugged(desk)
+    expect(await drawer(again, 0)).toEqual([noticed, 'asks-1'])
+    for (const on of [dial, again]) {
+      expect(on.messages.filter((m) => m.t === 'notif.replace' && items(m).some((item) => item.agentId === engine.id))).toEqual([])
+    }
     window.close()
   })
 

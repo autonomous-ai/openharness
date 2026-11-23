@@ -7489,28 +7489,29 @@ describe('the Notifications setting (docs/plans/2026-11-16-dial-agent-notify-des
     expect(listener.notify('you')).toEqual({ error: 'WRITE_FAILED' })
     expect(logs).toContain('[device] notifications · not saved · EISDIR')
     expect(statuses(core)).toEqual([])
+    expect(calls('replaceNotifications')).toEqual([])
     summary(port, 'a1', { recap: 'The requested build is ready.' })
     await vi.waitFor(() => expect(calls('summary')).toEqual([['a1', 'The requested build is ready.', 'done', 'alert', undefined, false]]))
   })
 
-  it('Needs you: a finished turn decided here is a drawer row', async () => {
+  it('Needs you: a finished turn decided here draws its tile alone', async () => {
     const { port } = needsYou()
     summary(port, 'a1', { recap: 'The requested build is ready.' })
-    await vi.waitFor(() => expect(calls('summary')).toEqual([['a1', 'The requested build is ready.', 'done', 'list', undefined, false]]))
-    expect(logs).toContainEqual(expect.stringMatching(/^\[cable\] notify · list · rule:needs-you · needs-you · \d+ms$/))
+    await vi.waitFor(() => expect(calls('summary')).toEqual([['a1', 'The requested build is ready.', 'done', 'silent', undefined, false]]))
+    expect(logs).toContainEqual(expect.stringMatching(/^\[cable\] notify · silent · rule:needs-you · needs-you · \d+ms$/))
     expect(logs.some((line) => line.includes('rule:turn'))).toBe(false)
   })
 
-  it('Needs you: a tier the recaps decided is lowered when it is an alert, and only then', () => {
+  it('Needs you: a tier the recaps decided is lowered to the tile alone, unless the turn failed', () => {
     const { port } = needsYou()
     summary(port, 'a1', { recap: 'Deployed', tier: 'alert' })
     summary(port, 'a2', { recap: 'Deployed', tier: 'list' })
     summary(port, 'a3', { recap: 'Deployed', tier: 'silent' })
     summary(port, 'a4', { recap: 'Deployed', tier: 'alert', failed: true })
-    expect(calls('summary').map(([agentId, , , tier]) => [agentId, tier])).toEqual([['a1', 'list'], ['a2', 'list'], ['a3', 'silent'], ['a4', 'alert']])
-    expect(logs.filter((line) => line.includes(' · rule:needs-you · '))).toEqual([expect.stringMatching(/^\[cable\] notify · list · rule:needs-you · needs-you · 0ms$/)])
+    expect(calls('summary').map(([agentId, , , tier]) => [agentId, tier])).toEqual([['a1', 'silent'], ['a2', 'silent'], ['a3', 'silent'], ['a4', 'alert']])
+    expect(logs.filter((line) => line.includes(' · rule:needs-you · '))).toEqual(Array(2).fill('[cable] notify · silent · rule:needs-you · needs-you · 0ms'))
     expect(logs.filter((line) => line.includes(' · recaps · decided upstream'))).toEqual([
-      expect.stringMatching(/ · list · recaps · /), expect.stringMatching(/ · silent · recaps · /), expect.stringMatching(/ · alert · recaps · /),
+      expect.stringMatching(/ · silent · recaps · /), expect.stringMatching(/ · alert · recaps · /),
     ])
   })
 
@@ -7521,23 +7522,76 @@ describe('the Notifications setting (docs/plans/2026-11-16-dial-agent-notify-des
     tell({ machineId: 'mac-mini', kind: 'summary', agentId: 'far-2', text: 'done', recap: 'Planned.' })
     tell({ machineId: 'mac-mini', kind: 'summary', agentId: 'far-3', text: 'done', recap: 'Planned.', tier: 'silent' })
     await vi.waitFor(() => expect(calls('summary')).toHaveLength(3))
-    expect(calls('summary').map(([agentId, , , tier]) => [agentId, tier])).toEqual([['far-1', 'list'], ['far-3', 'silent'], ['far-2', 'list']])
+    expect(calls('summary').map(([agentId, , , tier]) => [agentId, tier])).toEqual([['far-1', 'silent'], ['far-3', 'silent'], ['far-2', 'silent']])
   })
 
-  it('Needs you: another machine\'s failed card rings', async () => {
-    needsYou()
+  it('Needs you: another machine\'s failed card rings, and its row stays in the drawer', async () => {
+    const { port } = needsYou()
     seen.fleet!.events!({ machineId: 'cloud', kind: 'summary', agentId: 'far-1', text: 'done', recap: 'The build broke.', failed: true })
     await vi.waitFor(() => expect(calls('summary')).toEqual([['far-1', 'The build broke.', 'done', 'alert', undefined, false]]))
+    seen.fleet!.events!({ machineId: 'cloud', kind: 'error', agentId: 'far-2', text: 'boom', recap: '' })
+    await vi.waitFor(() => expect(calls('turnError')).toEqual([['far-2', 'boom']]))
+    const row = (agentId: string) => ({ agentId, machineId: 'cloud', question: false, text: 'done' })
+    port.unread([row('far-1'), row('far-2'), row('far-3')])
+    expect(calls('replaceNotifications').at(-1)).toEqual([[row('far-1'), row('far-2')]])
   })
 
-  it('Needs you: an agent outside a pane ends as a drawer row', async () => {
+  it('Needs you: an agent outside a pane ends on its tile alone', async () => {
     vi.useFakeTimers()
     readers.answer.mockResolvedValue('All 12 tests pass.')
     const { port } = needsYou()
     port.observed(hook('turn-start'))
     port.observed(hook('turn-stop'))
     await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
-    expect(calls('summary')).toEqual([[ID, 'All 12 tests pass.', 'All 12 tests pass.', 'list', 'All 12 tests pass.', false]])
+    expect(calls('summary')).toEqual([[ID, 'All 12 tests pass.', 'All 12 tests pass.', 'silent', 'All 12 tests pass.', false]])
+  })
+
+  it('Needs you: a decider that fails leaves an ordinary turn on its tile alone, and a failed one a row', async () => {
+    const { port } = needsYou({ decideTier: async () => { throw new Error('down') } })
+    summary(port, 'a1', { recap: 'The requested build is ready.' })
+    summary(port, 'a2', { recap: 'The build broke.', failed: true })
+    await vi.waitFor(() => expect(calls('summary').map(([agentId, , , tier]) => [agentId, tier])).toEqual([['a1', 'silent'], ['a2', 'list']]))
+  })
+
+  // The window's unread list replaces the dial's whole drawer: in Needs you, a finished turn's row is dropped from it
+  // unless that agent's last turn failed. Its questions stay.
+  it('Needs you: the drawer keeps the window\'s questions and the failed turns, and no other finished turn', async () => {
+    const { port } = needsYou()
+    const row = (agentId: string, question = false) => ({ agentId, machineId: 'm1', question, text: 'done' })
+    const unread = [row('a1'), row('a2'), row('a3', true), row('a4'), row('a5')]
+    port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'error', text: 'boom' } })
+    summary(port, 'a4', { recap: 'The build broke.', failed: true })
+    port.unread(unread)
+    expect(calls('replaceNotifications').at(-1)).toEqual([[row('a1'), row('a3', true), row('a4')]])
+    // Its next turn starts, or one ends well: that agent's finished row goes.
+    port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'processing', text: '' } })
+    summary(port, 'a4', { recap: 'Fixed.' })
+    // Behind the failed one, which the decider holds in a4's order.
+    await vi.waitFor(() => expect(calls('summary')).toHaveLength(2))
+    port.unread(unread)
+    expect(calls('replaceNotifications').at(-1)).toEqual([[row('a3', true)]])
+  })
+
+  it('Needs you: the drawer remembers the last 64 agents whose turn failed', () => {
+    const { port } = needsYou()
+    const ids = Array.from({ length: 65 }, (_, i) => `f${i}`)
+    for (const agentId of ids) port.card({ type: 'commander_event', agentId, payload: { kind: 'error', text: 'boom' } })
+    port.unread(ids.map((agentId) => ({ agentId, machineId: 'm1', question: false, text: 'done' })))
+    expect((calls('replaceNotifications').at(-1)![0] as Array<{ agentId: string }>).map((row) => row.agentId)).toEqual(ids.slice(1))
+  })
+
+  it('a change of the setting redraws the drawer once', async () => {
+    const { port, listener } = await listening()
+    const done = { agentId: 'a2', machineId: 'm1', question: false, text: 'Built.' }
+    port.unread([done])
+    expect(calls('replaceNotifications')).toEqual([[[done]]])
+    expect(listener.notify('you')).toEqual({ mode: 'you' })
+    expect(calls('replaceNotifications')).toEqual([[[done]], [[]]])
+    expect(listener.notify('full')).toEqual({ mode: 'full' })
+    expect(calls('replaceNotifications')).toEqual([[[done]], [[]], [[done]]])
+    // The mode in force picked again (the menu's checked item clicked) changes nothing: the dial's drawer stays as it is.
+    expect(listener.notify('full')).toEqual({ mode: 'full' })
+    expect(calls('replaceNotifications')).toEqual([[[done]], [[]], [[done]]])
   })
 
   it('Needs you: a failed turn, a question and a waiting prompt ring as in All', async () => {

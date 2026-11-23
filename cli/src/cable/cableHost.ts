@@ -129,6 +129,9 @@ export interface CableHostWiring {
   /** The questions only the devices ask (an agent's notice, a prompt it waits on), as drawer rows: the dial keeps a
    *  question as a row of the drawer that what is unread replaces whole. */
   noticeRows?: () => UnreadNotification[]
+  /** Whether a window's finished-turn row of that agent stays in the drawer: Needs you keeps a failed turn's alone.
+   *  Absent, every row stays. */
+  newsKept?: (agentId: string) => boolean
   /** Brings Harness Desktop forward, starting it when it is not running: a tap on one of this computer's agents with no
    *  window. False when it could not. Absent where a tap cannot start it (off macOS): its agents then take no tap. */
   launchDesktop?: () => Promise<boolean>
@@ -837,11 +840,13 @@ export class DaemonCableHost implements CableHost {
     this.unread = items
   }
 
-  /** What is unread, the devices' own questions first: a drawer carries one row an agent, the first the dial is sent. */
+  /** What is unread, the devices' own questions first: a drawer carries one row an agent, the first the dial is sent. A
+   *  window's question always stays; its finished turn only as `newsKept` says. */
   listUnread(): UnreadNotification[] {
     const asked = this.wiring.noticeRows?.() ?? []
     const agents = new Set(asked.map((row) => row.agentId))
-    return [...asked, ...this.unread.filter((row) => !agents.has(row.agentId))]
+    const kept = this.wiring.newsKept
+    return [...asked, ...this.unread.filter((row) => !agents.has(row.agentId) && (row.question || !kept || kept(row.agentId)))]
   }
 
   readNotification(agentId: string, readToken: string): void {
