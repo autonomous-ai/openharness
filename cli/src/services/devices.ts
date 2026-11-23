@@ -770,7 +770,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (target.pane?.adapter === claude.id && opener.can(agentId, target)) noteLink(agentId)
       return opener.open(agentId, target)
     },
-    codexQueue,
+    // Words for a ChatGPT thread the wake still opens would be queued ahead of the wake's: they are words not taken yet,
+    // as `codex queue` says while it queues the wake's (cable/hosts/appWake.ts waitsFor).
+    codexQueue: {
+      can: (isApp) => codexQueue.can(isApp),
+      send: (threadId, text, isApp) =>
+        appWake!.waitsFor(threadId) ? Promise.resolve({ outcome: 'busy' as const }) : codexQueue.send(threadId, text, isApp),
+    },
     codexHome: env.CODEX_HOME,
     count: (what) => voiced(countWord(what)),
   }, ttyOf, skill ? (owners) => part.call('skill', () => skill.scanned(owners.values())) : undefined,

@@ -61,7 +61,7 @@ type Word =
 
 export class AppWake {
   /** The wake under way, opening, waiting, delivering or queueing: its app, whose words, whether it still waits for a
-   *  Claude Code session, its stop. */
+   *  session, its stop. */
   private running: { app: WakeApp; name: string; waitsFor(sessionId: string): boolean; stop(): void } | undefined
 
   constructor(private readonly deps: AppWakeDeps) {}
@@ -162,8 +162,8 @@ export class AppWake {
       this.running = {
         app: 'codex',
         name: target.name,
-        // Its words go to Codex's queue, never to a mod's inbox.
-        waitsFor: () => false,
+        // Once queueing, `codex queue` itself refuses the thread's next words until these are queued.
+        waitsFor: (sessionId) => phase === 'linking' && sessionId === target.threadId,
         stop: () => {
           if (phase === 'linking') fail('stopped', `${target.name} did not answer.`)
         },
@@ -192,10 +192,11 @@ export class AppWake {
   }
 
   /**
-   * Whether a Claude wake still opens or waits for that Claude Code session, its words not handed on. Its copy can be
-   * listed meanwhile, and the dial's next words then take the copy's own path: a mod the inbox counts ready (a poll held
-   * while the link runs, or the last run's, 35 s) would hand them the first poll, ahead of these. They are refused
-   * instead (Decision 3). Its own words ask this as they go, once it no longer waits. A ChatGPT wake waits for none.
+   * Whether a wake still opens or waits for that session, its words not handed on: a Claude Code session id, or a
+   * ChatGPT thread's id, which is its Codex session id. Its copy can be listed meanwhile, and the dial's next words then
+   * take the copy's own path: a mod the inbox counts ready (a poll held while the link runs, or the last run's, 35 s)
+   * would hand them the first poll, and the copy's own `codex queue` would queue them, ahead of these. They are refused
+   * instead (Decision 3). A Claude wake's own words ask this as they go, once it no longer waits.
    */
   waitsFor(sessionId: string): boolean {
     return this.running?.waitsFor(sessionId) ?? false

@@ -97,7 +97,10 @@ Shape (names are the plan's to settle, the split is not):
 - The log prefix, the count word and the app's name in the copy come from the target's app (`say` takes the app):
   `[claude-app] wake · …` / `wake-…` as today, `[codex-app] wake · …` / `codex-wake-…`. The count goes through the
   devices' `voiced` (`[device] voice · <word>`), as today.
-- `waitsFor(sessionId)` answers true only for a Claude wake that still waits (it gates the Claude mod's inbox).
+- `waitsFor(sessionId)` answers true for a Claude wake that still waits (it gates the Claude mod's inbox) and for a
+  ChatGPT wake whose link still runs, for its thread id (it gates the live copy's `codex queue`: a hook can list the
+  thread before the wake queued, and the next words would go ahead of the first; once queueing, `codexQueue` refuses
+  them itself). Found in the final review, 2026-11-23.
 - `stop(app)` stops only that app's wake.
 
 Steps for a ChatGPT target:
@@ -182,7 +185,8 @@ The new code is in the devices' import graph only; the core's static graph does 
 
 ### 7. What does not change
 
-The core, the firmware, Desktop, the thread reader, the Claude app's wake, a live thread's voice path, `codex queue`'s
+The core, the firmware, Desktop, the thread reader, the Claude app's wake, a live thread's voice path (but for the
+wake's `waitsFor` gate while that thread's link runs, § 3), `codex queue`'s
 arguments (no `--resume`, Codex fact 4).
 
 ## Tests (fakes and throwaway homes only; never the real ChatGPT app or `~/.codex`)
@@ -194,8 +198,8 @@ arguments (no `--resume`, Codex fact 4).
   link then one queue call with the target's id and the exact text; a failed or busy link queues nothing; too long
   opens nothing; a second prompt while a wake runs (same row, another row, or a Claude wake) is refused busy and
   nothing reaches its thread; stopped, or timed out, during the link queues nothing, and the link's late answer queues
-  nothing; stopped during the queue keeps the queue's answer; each queue outcome gives its text; `waitsFor` is false
-  for a ChatGPT wake; `stop('codex')` leaves a Claude wake running; every line and count is one of the fixed ones. The
+  nothing; stopped during the queue keeps the queue's answer; each queue outcome gives its text; `waitsFor` is true
+  for a ChatGPT wake's thread alone and only while its link runs; `stop('codex')` leaves a Claude wake running; every line and count is one of the fixed ones. The
   Claude target's tests stay green unchanged.
 - `devices.spec.ts`: voice to a resting ChatGPT row through the devices' real wiring runs one `codex://threads/<id>`
   link, no forward (no bare `open -b com.openai.codex`, no Windows raise without the link), and one
