@@ -1,6 +1,7 @@
 // Which app an agent runs in, from the few environment values the hook sends. Own variables of a
 // multiplexer or terminal come first: they name the nearest host, while TERM_PROGRAM names the outermost one.
 
+import type { DialOtherApp } from '../../lib/dialUsageContract.js'
 import { HC_TERMINAL } from './hcClient.js'
 
 /** Each host's macOS app by the bundle id its Info.plist gives it: how `__CFBundleIdentifier` names the app, and how a
@@ -156,6 +157,44 @@ export function detectApp(hints: Record<string, string>): string {
   if (bundle || program) return UNKNOWN_APP
   if (hints.KITTY_WINDOW_ID) return 'kitty'
   return detectHost(hints)
+}
+
+// The apps behind the Other page the dial's counts name, each id from the app's own Info.plist, build config or source
+// (Nova's and Windsurf's from their Homebrew casks). Alacritty sets no TERM_PROGRAM; the hook names its bundle id on
+// Windows too (notify.mjs lookUpWindowsApp).
+const OTHER_BUNDLES: Readonly<Record<string, DialOtherApp>> = {
+  'dev.zed.Zed': 'zed',
+  'dev.zed.Zed-Preview': 'zed',
+  'org.alacritty': 'alacritty',
+  'co.zeit.hyper': 'hyper',
+  'org.tabby': 'tabby',
+  'com.raphaelamorim.rio': 'rio',
+  'dev.commandline.waveterm': 'wave',
+  'com.panic.Nova': 'nova',
+  'com.exafunction.windsurf': 'windsurf',
+}
+const OTHER_PROGRAMS: Readonly<Record<string, DialOtherApp>> = {
+  zed: 'zed',
+  Hyper: 'hyper',
+  Tabby: 'tabby',
+  rio: 'rio',
+  waveterm: 'wave',
+}
+/** Every JetBrains IDE's bundle id: one per product (com.jetbrains.intellij, com.jetbrains.pycharm, …). */
+const JETBRAINS_BUNDLE = 'com.jetbrains.'
+
+/** The product behind the Other page, for the dial's counts: the raw bundle id or TERM_PROGRAM stops here, as either
+ *  could name a person's own build, and only a name of the fixed list leaves (docs/plans/2026-11-23-dial-usage-counts-design.md).
+ *  A hint is outside text: only a table's own key names a product, never one an object inherits (`constructor`). */
+export function otherProduct(hints: Readonly<Record<string, string>>): DialOtherApp {
+  const bundle = Object.hasOwn(hints, '__CFBundleIdentifier') ? hints.__CFBundleIdentifier : ''
+  const program = Object.hasOwn(hints, 'TERM_PROGRAM') ? hints.TERM_PROGRAM : ''
+  if (bundle) {
+    if (Object.hasOwn(OTHER_BUNDLES, bundle)) return OTHER_BUNDLES[bundle]
+    return bundle.startsWith(JETBRAINS_BUNDLE) ? 'jetbrains' : 'unlisted'
+  }
+  if (program) return Object.hasOwn(OTHER_PROGRAMS, program) ? OTHER_PROGRAMS[program] : 'unlisted'
+  return 'unknown'
 }
 
 export function detectHost(hints: Record<string, string>): string {
