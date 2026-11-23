@@ -13,7 +13,8 @@
  * (cable/hosts/herdrOuter.ts), are answered from this model through the world's `run`. A server's socket appears as it
  * starts, and every watch on it is told.
  */
-import { HERDR_KIND, HERDR_PANE, type HerdrAnswer, type HerdrClient, type HerdrSubscriber } from '../../../../cable/hosts/herdrClient.js'
+import { HERDR_KIND, HERDR_PANE, herdrClientDeps, type HerdrAnswer, type HerdrClient, type HerdrSubscriber }
+  from '../../../../cable/hosts/herdrClient.js'
 import { CONTROL, MAX_TEXT } from '../../../../cable/hosts/orca.js'
 import { flagOf, programOf } from '../../argv.js'
 import { tabLabel, type TabRef } from '../../itermRecords.js'
@@ -91,13 +92,14 @@ function attach(world: TierAWorld, tab: TabRef): Client {
   return client
 }
 
-/** herdr started from that tab: the client, the server its child, and the server's socket, which each watch is told of. */
+/** herdr started from that tab: the client, the server its child, and the server's socket, which each watch on it is
+ *  told of: on the path the devices' client finds it at (herdrClientDeps). */
 function startServer(world: TierAWorld, model: Model, tab: TabRef): Server {
   const client = attach(world, tab)
   const server: Server = { pid: startProcess(world, client.pid, HERDR), tab, clients: [client], panes: new Map(),
     subscriptions: new Set() }
   model.server = server
-  queueMicrotask(() => { for (const watch of [...world.machine.socketWatches.values()].flatMap((watches) => [...watches])) watch() })
+  queueMicrotask(() => { for (const watch of [...world.machine.socketWatches.get(herdrClientDeps().socketPath) ?? []]) watch() })
   return server
 }
 
