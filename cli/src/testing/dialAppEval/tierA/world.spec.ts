@@ -1,8 +1,10 @@
 // Tier A's world (world.ts) with a recording start in place of the devices: what it hands them, and how it records
 // each command, raise and send they make. Every folder is a temp one, on virtual time.
 import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createCodexQueue } from '../../../cable/hosts/codexQueue.js'
+import { env } from '../../../config/env.js'
 import type { CoreApi } from '../../../core/api.js'
 import type { DevicesDeps, startDevices } from '../../../services/devices.js'
 import { claudeSessions, scenario, threads } from '../catalog.js'
@@ -66,6 +68,20 @@ describe("tier A's world", () => {
     vi.stubEnv('LANG', 'vi_VN.UTF-8')
     worldOn('darwin')
     expect(process.env.LANG).toBe('en_US.UTF-8')
+  })
+
+  it("a world whose codexHome is the app's runs the devices with CODEX_HOME at the app's Codex home, and puts it back at close", async () => {
+    const before = env.CODEX_HOME
+    let started: string | undefined
+    const start = (() => {
+      started = env.CODEX_HOME
+      return {}
+    }) as unknown as typeof startDevices
+    const world = new World({ ...S1, world: { codexHome: 'app' } }, 'darwin', start)
+    worlds.push(world)
+    expect([started, world.folders.codexSessions]).toEqual([world.codexHome.home, join(world.codexHome.home, 'sessions')])
+    await world.close()
+    expect(env.CODEX_HOME).toBe(before)
   })
 
   it("the core's turns.send reaches no session: tier A has no Harness agent, so a real core would refuse it", () => {
