@@ -163,13 +163,15 @@ export function dailyDialReview(rows: Row[], breakdowns: Row[], now: Date) {
     const fewest = (value: (day: Day) => number) => raw(column => over(days, value, column, 0, true))
     const bucket = (value: (day: Day) => number) => shown(fewest(value), cells(value))
     const less = (a: (day: Day) => number, b: (day: Day) => number) => (day: Day) => Math.max(0, a(day) - b(day))
-    const minutes = (ms: Raw): Raw => ({ day: Math.round(ms.day / 6000) / 10, d7: Math.round(ms.d7 / 6000) / 10, d28: Math.round(ms.d28 / 6000) / 10 })
+    // Tenths of a minute, from the audio's seconds or the transcription's milliseconds.
+    const minutes = (r: Raw, perMinute: number): Raw => ({ day: Math.round(r.day * 10 / perMinute) / 10, d7: Math.round(r.d7 * 10 / perMinute) / 10,
+      d28: Math.round(r.d28 * 10 / perMinute) / 10 })
     const accounts = of('voice_account_days'), over1m = of('voice_account_days_over_1m')
     const over5m = of('voice_account_days_over_5m'), over20m = of('voice_account_days_over_20m')
     const dialComputers = of('dial_voice_installation_days')
     const totals = (surface: 'dial' | 'rest', computers: Raw) => ({ clips: shown(computers, cells(of(`voice_${surface}_clips`))),
-      audioMinutes: shown(computers, minutes(cells(of(`voice_${surface}_audio_ms`)))),
-      transcribeMinutes: shown(computers, minutes(cells(of(`voice_${surface}_transcribe_ms`)))) })
+      audioMinutes: shown(computers, minutes(cells(of(`voice_${surface}_audio_s`)), 60)),
+      transcribeMinutes: shown(computers, minutes(cells(of(`voice_${surface}_transcribe_ms`)), 60_000)) })
     return { note: 'Voice from older CLIs counts as the rest until they update.',
       accountDays: { label: 'All voice on the account, dial and the rest: account-days by audio a day.',
         all: bucket(accounts), under1m: bucket(less(accounts, over1m)), m1to5: bucket(less(over1m, over5m)),
