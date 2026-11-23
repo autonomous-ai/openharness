@@ -942,10 +942,11 @@ export class ObservedSource implements HostSource {
     const nested = this.askOuter(entry, e)
     a.host = a.nest ?? detectHost(e.hostHints)
     this.placeApp(entry, e.hostHints, e.callerPid)
-    // One nested stays pending until its lookup answers: its hints' bundle id is the one its multiplexer's server started
-    // with (iTerm2's for a tmux started there), and that app in front must not turn the dial to it, then back once the
-    // answer puts it on tmux's page.
-    if (!nested) delete a.appPending
+    // One nested with no multiplexer known stays pending until its lookup answers: its hints' bundle id is the one its
+    // multiplexer's server started with (iTerm2's for a tmux started there), and that app in front must not turn the dial
+    // to it, then back once the answer puts it on tmux's page. One the scan's maker read put on its multiplexer's page,
+    // kept there (askOuter), is placed: its first turn's prompt follow turns the dial to that page.
+    if (!nested || a.nest) delete a.appPending
     // Every event's own: a session resumed elsewhere must not be typed into the terminal it left.
     entry.hints = e.hostHints
     entry.otherApp = otherProduct(e.hostHints)

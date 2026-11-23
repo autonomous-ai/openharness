@@ -27,10 +27,10 @@ export interface HostAgent {
   nest?: Nest
   /**
    * Nothing has said where it runs yet: the open scan found it and no hook has told of it, or its hook came from a
-   * multiplexer's pane whose lookup has not answered (`observed.ts` ingest). It sits on the unknown app's page, or its
-   * multiplexer's when `nest` is set, or meanwhile the page of the app its hints name, so it can be reached, but is not
-   * known to be in that app, so it counts for nothing in the dial's default nor for the app in front (`select.ts`
-   * counts).
+   * multiplexer's pane whose lookup has not answered, with no multiplexer known (`observed.ts` ingest). It sits on the
+   * unknown app's page, or its multiplexer's when `nest` is set, or meanwhile the page of the app its hints name, so it
+   * can be reached, but is not known to be in that app, so it counts for nothing in the dial's default nor for the app
+   * in front (`select.ts` counts).
    */
   appPending?: true
   /** Its session ended and its source still lists it (the observed source's, until its tick drops it): no tap, rest or
