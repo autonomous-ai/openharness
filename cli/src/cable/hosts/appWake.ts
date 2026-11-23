@@ -39,7 +39,7 @@ export type WakeTarget =
   | { app: 'codex'; threadId: string; agentId: string; name: string }
 
 export interface AppWakeDeps {
-  /** The tap's link without its fallback; false when it definitely failed. */
+  /** A Claude app session's tap link without its fallback; false when it definitely failed. */
   open(localId: string, agentId: string): Promise<boolean>
   observed: Pick<ObservedSource, 'list' | 'onChange' | 'send'>
   /** Called synchronously as the inbox holds a session's poll, with its Claude Code session id; its stop. */
@@ -48,6 +48,7 @@ export interface AppWakeDeps {
   after(ms: number, run: () => void): () => void
   /** A ChatGPT thread's link alone, never the app brought forward. */
   openThread(threadId: string, agentId: string): Promise<PaneSwitch>
+  /** Codex's queue, where a ChatGPT thread's words go once its link opened. */
   queue: Pick<CodexQueue, 'send'>
   monotonic(): number
   log(line: string): void
