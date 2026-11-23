@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -67,6 +67,15 @@ describe('the devices\' file, read by the gateway', () => {
     bad({ version: 2, series: 1, days: {} })
     bad({ version: 1, series: 1.5, days: {} })
     bad({ version: 1, series: 1, days: [] })
+  })
+
+  it('a file that is not JSON stays as the devices left it', () => {
+    write('{"version": 1, "series"')
+    // Read on two ticks: a cache read sets aside bytes that failed twice.
+    expect(readDialFile(path, within(TODAY)).read).toEqual({ state: 'bad' })
+    expect(readDialFile(path, within(TODAY)).read).toEqual({ state: 'bad' })
+    expect(readFileSync(path, 'utf8')).toBe('{"version": 1, "series"')
+    expect(existsSync(`${path}.unreadable`)).toBe(false)
   })
 
   it('no file: none; unchanged: same, unparsed', () => {
