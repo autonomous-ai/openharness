@@ -1113,6 +1113,9 @@ export class DaemonCableHost implements CableHost {
       return (outside.source.focus?.(outside.agent) ?? Promise.resolve(false)).then((opened) => {
         this.openEnded(agentId, opened ? { outcome: 'ok' } : { outcome: 'failed', code: 'not_opened' })
         return opened ? undefined : { ok: false as const, error: `${agentPlaceName(outside.agent)} did not open it.` }
+      }, (error: unknown) => {
+        this.openEnded(agentId, { outcome: 'failed', code: 'not_opened' })
+        throw error
       })
     }
     const machineId = this.machineOf(agentId)
