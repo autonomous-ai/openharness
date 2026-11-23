@@ -162,9 +162,10 @@ enum Step {
     Look,
     /// The permission once more, after macOS's notice.
     Trust,
-    /// The app is told what the menu's item shows.
+    /// The app is told the permission and whether ChatGPT is installed.
     Shown(Shown),
-    Offer,
+    /// ChatGPT came to the front without the permission: the log says so.
+    Skipped,
 }
 
 impl Chatgpt {
@@ -211,8 +212,8 @@ impl Chatgpt {
             if shown != sent {
                 return Some(Step::Shown(shown));
             }
-            if state.follow.take_offer() {
-                return Some(Step::Offer);
+            if state.follow.take_skipped() {
+                return Some(Step::Skipped);
             }
             if state.ended {
                 return None;
@@ -403,14 +404,6 @@ impl Runner {
             // On the caller's thread: macOS shows its own dialog and does not wait for it.
             Effect::AskAx => shared.doors.follow.prompt(),
             Effect::OpenAxSettings => shared.open(|open| open.url(AX_SETTINGS), "accessibility settings"),
-            // Read back here, the one way the rules hear the switch: no notice comes for it. The rules stop observing
-            // before this returns, so no title heard after the click is written, and the follow thread drops the
-            // observation.
-            Effect::FollowSwitch(on) => {
-                shared.doors.follow.switch(on);
-                let trusted = shared.doors.follow.trusted();
-                shared.chatgpt.tell(|follow| follow.trusted(trusted));
-            }
         }
         None
     }
@@ -544,7 +537,7 @@ impl Shared {
     /// nowhere else.
     fn front_changed(&self, value: &str) {
         self.tabs.tell(|follow| follow.front(value));
-        // Read before the offer is judged: a permission given since macOS's last notice is no reason to offer.
+        // Read before it is judged skipped: a permission given since macOS's last notice follows.
         let trusted = is_chatgpt_front(value).then(|| self.doors.follow.trusted());
         self.chatgpt.tell(|follow| {
             if let Some(trusted) = trusted {
@@ -605,7 +598,8 @@ impl Shared {
     }
 
     /// The follow thread: each door call that can wait on ChatGPT, one at a time and with no lock held, until the
-    /// runner goes. The app hears only the permission, whether ChatGPT is installed, and the offer.
+    /// runner goes. The app hears only the permission and whether ChatGPT is installed; ChatGPT in front without the
+    /// permission is a log line of fixed words.
     fn follow_chatgpt(self: Arc<Self>) {
         let door = &self.doors.follow;
         let mut observation: Option<Box<dyn Send>> = None;
@@ -639,7 +633,7 @@ impl Shared {
                     sent = shown;
                     self.answer(Event::Follow { trusted: shown.trusted, installed: shown.installed });
                 }
-                Step::Offer => self.answer(Event::FollowOffer),
+                Step::Skipped => self.doors.log.line("chatgpt: skipped · no permission"),
             }
         }
     }
@@ -1985,7 +1979,7 @@ mod tests {
     fn the_chatgpt_title_is_written_to_the_watch_with_chatgpt_in_front_the_dial_attached_and_the_permission() {
         let door = ChatgptDoor::answering(false, true);
         let (w, _fronts) = world_following(CHATGPT_BUNDLE, &door);
-        // Trusted from the start: the menu's item is checked.
+        // Trusted from the start: the app is told so.
         assert_eq!(w.next(), follow(true, false));
         w.fake.script("hardware watch --json", &ATTACHED);
         assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
@@ -2337,7 +2331,7 @@ mod tests {
         w.fake.script("hardware watch --json", &[r#"{"attached":true,"fw":"0.0.95"}"#, "@stdin"]);
         w.fake.script("auth status --json", &[r#"{"loggedIn":true}"#]);
         w.fake.script("--version", &["0.6.58"]);
-        let (mut app, mut effects) = App::new(Saved::default(), w.runner.find_cli(), false, B, false, false);
+        let (mut app, mut effects) = App::new(Saved::default(), w.runner.find_cli(), false, B, false);
         let connected = MenuItem::Text("Device ready".into());
         let (mut dial, mut auth, mut version) = (false, false, false);
         loop {

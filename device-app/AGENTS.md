@@ -5,10 +5,11 @@ Linux. People see it as **Harness**: only its installed name stays `Harness Devi
 Device.app` beside the desktop app's `Harness.app`, the `Harness Device` folder, Start menu entry and Run value on
 Windows, where the desktop app owns `Harness`), and the bundle id, binary, release files and update path keep the
 Harness Device name, so installed apps keep updating. It installs the `harness` CLI, keeps the daemon running, shows
-the dial's state in its menu, offers sign-in once and, with the ChatGPT app, follows its window: asked on macOS, a
-menu switch elsewhere, none on GNOME or KDE on Wayland. It also exports the logs (`Export logs`), through the CLI. It
-has no row for Claude Code, Codex or Orca: the devices service sets them up. Rust and Tauri 2 in `src-tauri/`; the
-window's three screens are plain TypeScript in `ui/`.
+the dial's state in its menu, offers sign-in once and, with the ChatGPT app, follows its window whenever it can:
+on macOS once Harness has Accessibility, asked once at first launch with the dial plugged in (the Follow ChatGPT
+screen, no menu item), always elsewhere, never on GNOME or KDE on Wayland. It also exports the logs (`Export logs`),
+through the CLI. It has no row for Claude Code, Codex or Orca: the devices service sets them up. Rust and Tauri 2 in
+`src-tauri/`; the window's three screens are plain TypeScript in `ui/`.
 
 ## Toolchain
 
@@ -92,7 +93,8 @@ window's three screens are plain TypeScript in `ui/`.
 - **The app in front is private.** It is written to the watch's stdin and nowhere else (`front.rs`), and never logged.
   Its sources: AppKit on macOS, a WinEvent hook on Windows, and on Linux X11, sway or Hyprland, whichever the session
   is; GNOME and KDE on Wayland give it to no other program, so there it is not followed.
-  The one Event derived from it is the offer cue, `Event::FollowOffer`: valueless, never logged.
+  The one thing derived from it is the fixed log line `chatgpt: skipped · no permission`, each time ChatGPT comes
+  to the front while macOS has not given Harness Accessibility.
 - **The ChatGPT window's title is private as a tty.** It is written to the watch's stdin and nowhere else
   (`follow.rs`), from whichever door the session has: Accessibility on macOS (`follow_macos.rs`), a WinEvent hook on
   Windows (`follow_windows.rs`), and on Linux X11, sway or Hyprland (`follow_x11.rs`, `follow_sway.rs`,
@@ -101,12 +103,12 @@ window's three screens are plain TypeScript in `ui/`.
 - **What Accessibility reads.** Only ChatGPT's focused window's `AXTitle`, and only while ChatGPT is in front, a watch
   runs, the dial is attached and Harness is trusted. It sets nothing and performs no action; `follow.rs`'s test holds
   `follow_macos.rs` to it.
-- **What the other doors read.** Only the title of ChatGPT's window in front, under the same conditions, with
-  Harness's own saved switch (the `Follow ChatGPT` item, on until turned off) in place of the permission: no other OS
-  gates reading a window's title. Windows reads the window's native text (`GetWindowTextW`) at a foreground or name
-  change, for a process whose program is under `\WindowsApps\OpenAI.Codex_`; X11 its `_NET_WM_NAME`, else `WM_NAME`;
-  sway the focused container's `name`; Hyprland the active window's `title`. On Linux the window's process must run
-  `/usr/lib/chatgpt/ChatGPT`. Each sets nothing and performs no action.
+- **What the other doors read.** Only the title of ChatGPT's window in front, under the same conditions but the
+  permission: no other OS gates reading a window's title, so nothing does here. Windows reads the window's native text
+  (`GetWindowTextW`) at a foreground or name change, for a process whose program is under
+  `\WindowsApps\OpenAI.Codex_`; X11 its `_NET_WM_NAME`, else `WM_NAME`; sway the focused container's `name`; Hyprland
+  the active window's `title`. On Linux the window's process must run `/usr/lib/chatgpt/ChatGPT`. Each sets nothing and
+  performs no action.
 - **Fixed scripts.** Every AppleScript is fixed text in `tabs_macos.rs`, for an app from its own list of three. A tty
   passes the tty check and reaches a script only as a handler parameter, never in its text.
 - **A tab's tty is private.** It is written to the watch's stdin and nowhere else. A `tabs:` log line names Terminal,

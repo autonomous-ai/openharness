@@ -1,8 +1,8 @@
-//! The menu is the same on every OS: the model and the app read no OS. main.rs hands them the two answers that differ,
-//! whether installing an update ends the app (Windows) and whether Follow ChatGPT is Harness's own switch (off macOS).
-//! The one refresh that differs, Linux's tick telling what a click tells elsewhere, is tick.rs's test; main.rs hands
-//! `tick::menu_opened` to the tray's click and `tick::tick` to the timer (`ticked`). Whether Follow ChatGPT shows comes
-//! from the door main.rs hands the runner (`follow::system`): the rules read only its answers.
+//! The menu is the same on every OS: the model and the app read no OS. main.rs hands them the one answer that differs,
+//! whether installing an update ends the app (Windows). The one refresh that differs, Linux's tick telling what a
+//! click tells elsewhere, is tick.rs's test; main.rs hands `tick::menu_opened` to the tray's click and `tick::tick` to
+//! the timer (`ticked`). Whether the Follow ChatGPT screen asks comes from the door main.rs hands the runner
+//! (`follow::system`), always trusted off macOS: the rules read only its answers.
 
 use crate::app::App;
 use crate::follow::{AxTrust, ChatgptWindow, NoFollow};
@@ -61,8 +61,8 @@ fn ticked(now: u64, desktop_running: bool) -> Event {
 
 /// The app where installing its update ends it (`true`, Windows) and where it does not.
 fn both(saved: Saved, cli_found: bool) -> (App, App) {
-    let (apart, first_apart) = App::new(saved, cli_found, false, B, true, false);
-    let (app, first) = App::new(saved, cli_found, false, B, false, false);
+    let (apart, first_apart) = App::new(saved, cli_found, false, B, true);
+    let (app, first) = App::new(saved, cli_found, false, B, false);
     assert_eq!(first_apart, first);
     (apart, app)
 }
@@ -156,7 +156,7 @@ fn shows_the_row(effects: &[Effect]) -> bool {
 /// dial attached, once the runner has told what the door answers.
 fn follow_shown(trusted: bool, installed: bool) -> (bool, bool) {
     let seen = Saved { cli_seen: true, asked_sign_in: true, login_item: true, ..Saved::default() };
-    let (mut app, mut effects) = App::new(seen, true, false, B, false, false);
+    let (mut app, mut effects) = App::new(seen, true, false, B, false);
     for event in
         [Event::StartDone { ok: true }, status(false), Event::Auth(Some(true)), Event::Follow { trusted, installed }]
     {

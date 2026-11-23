@@ -54,8 +54,9 @@ pub enum CliState {
     Removed,
 }
 
-/// state.json: `{ "version": 1, "cliSeen", "askedSignIn", "loginItem", "askedFollow", "askedAx", "followOff" }`.
-/// Default: version 1, all false. The keys of the Claude Code and Codex offers an older app wrote are ignored.
+/// state.json: `{ "version": 1, "cliSeen", "askedSignIn", "loginItem", "askedFollow", "askedAx" }`.
+/// Default: version 1, all false. The keys of the Claude Code and Codex offers and of the Follow ChatGPT switch
+/// (`followOff`) an older app wrote are ignored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Saved {
@@ -63,15 +64,12 @@ pub struct Saved {
     pub cli_seen: bool,
     pub asked_sign_in: bool,
     pub login_item: bool,
-    /// The Follow ChatGPT screen opened by itself. Default: a file from an app before it loads as it was.
+    /// The Follow ChatGPT screen showed: it is asked once. Default: a file from an app before it loads as it was.
     #[serde(default)]
     pub asked_follow: bool,
     /// macOS's Accessibility prompt was called: it shows its dialog only the first time.
     #[serde(default)]
     pub asked_ax: bool,
-    /// The person turned Follow ChatGPT off, off macOS, where it is Harness's own switch: following is on until then.
-    #[serde(default)]
-    pub follow_off: bool,
 }
 
 impl Default for Saved {
@@ -83,7 +81,6 @@ impl Default for Saved {
             login_item: false,
             asked_follow: false,
             asked_ax: false,
-            follow_off: false,
         }
     }
 }
@@ -137,12 +134,6 @@ pub enum MenuAction {
     About,
     Quit,
     ExportLogs,
-    /// The unchecked Follow ChatGPT item: its screen.
-    FollowChatgpt,
-    /// The checked one: System Settings' Accessibility list.
-    FollowSettings,
-    /// Off macOS, the item is Harness's own switch: a click turns following off or on.
-    FollowSwitch,
 }
 
 /// Text is a disabled line. Check: the action a click does, the label, whether it is checked. Submenu: its label and
@@ -191,15 +182,12 @@ pub struct AppState {
     pub follow: FollowState,
 }
 
-/// Following the ChatGPT window, as the menu and the window show it. Waiting: the screen opened by itself waits behind
-/// Install or Sign in. Switch: off macOS no permission gates the title, so the item is Harness's own switch, which
-/// `trusted` then mirrors, and there is no screen.
+/// Following the ChatGPT window, as the window shows it: the Follow ChatGPT screen asks for the permission while the
+/// app is installed without it. Off macOS no permission gates the title: always trusted.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FollowState {
     pub trusted: bool,
     pub installed: bool,
-    pub waiting: bool,
-    pub switch: bool,
 }
 
 /// AuthorizeUrl holds an `https:` URL only (account.rs lets no other through).
@@ -248,9 +236,6 @@ pub enum Event {
         trusted: bool,
         installed: bool,
     },
-    /// ChatGPT came to the front, untrusted, with the dial attached: the cue to offer the screen. It carries nothing of
-    /// the app in front.
-    FollowOffer,
 }
 
 /// What to do about it. Show(None) hides the window. ShowAbout: the About panel, with its credits line. AboutCredits:
@@ -291,8 +276,6 @@ pub enum Effect {
     AskAx,
     /// System Settings' Accessibility list.
     OpenAxSettings,
-    /// Off macOS: `true` turns following on.
-    FollowSwitch(bool),
 }
 
 /// A finished run.
