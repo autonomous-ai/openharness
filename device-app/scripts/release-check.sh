@@ -136,11 +136,13 @@ extract() { 7z e -y -r -bso0 -bsp0 -o"$(cygpath -w "$2")" "$(cygpath -w "$1")" "
 packed() { extract "$@" && [[ -f "$2/$3" ]]; }
 
 # The plugin DLLs the archive $1 carries, into the folder $2: at least one, so an extraction that finds nothing cannot
-# pass. NSIS keeps copies of one plugin under $PLUGINSDIR, which -y overwrites with the same file.
+# pass. NSIS keeps copies of one plugin under $PLUGINSDIR, which -y overwrites with the same file. The folder holds only
+# what 7-Zip wrote for *.dll, which matches a name in any case, so it and dlls_signed take every file there: bash's
+# *.dll glob would miss a .DLL.
 packed_dlls() {
   local dll
   extract "$1" "$2" '*.dll' || return 1
-  for dll in "$2"/*.dll; do
+  for dll in "$2"/*; do
     [[ -f "$dll" ]] && return 0
   done
   return 1
@@ -149,7 +151,7 @@ packed_dlls() {
 # Each DLL in the folder $1, naming on stderr the first that is not validly signed.
 dlls_signed() {
   local dll
-  for dll in "$1"/*.dll; do
+  for dll in "$1"/*; do
     authenticode_valid "$dll" || {
       echo "release-check: $(basename "$dll") is not Authenticode-signed" >&2
       return 1
