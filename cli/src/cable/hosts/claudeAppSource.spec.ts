@@ -241,7 +241,9 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
       s.answers.read = read([session({ title: 'Ship it' })])
       await after(s, () => s.fire(ORG, fileOf(session())))
       expect(await s.source.send(agent!, 'run the tests')).toEqual({ ok: true })
-      expect(s.wake.send.mock.calls).toEqual([[{ localId: LOCAL, sessionId: SESSION, agentId: ID, name: 'Ship it' }, 'run the tests']])
+      expect(s.wake.send.mock.calls).toEqual([
+        [{ app: 'claude', localId: LOCAL, sessionId: SESSION, agentId: ID, name: 'Ship it' }, 'run the tests'],
+      ])
       s.wake.send.mockResolvedValueOnce({ ok: false, reason: 'x' })
       expect(await s.source.send(agent!, 'and lint')).toEqual({ ok: false, reason: 'x' })
     })
@@ -256,12 +258,12 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
       expect(s.focus).not.toHaveBeenCalled()
     })
 
-    it('stop() stops the wake once', async () => {
+    it('stop() stops the Claude app\'s wake once, never the ChatGPT one', async () => {
       const s = await started()
       s.source.stop()
-      expect(s.wake.stop).toHaveBeenCalledTimes(1)
+      expect(s.wake.stop.mock.calls).toEqual([['claude']])
       s.source.stop()
-      expect(s.wake.stop).toHaveBeenCalledTimes(1)
+      expect(s.wake.stop.mock.calls).toEqual([['claude']])
     })
 
     it('a tap, a rest and its look go to the session\'s local id', async () => {

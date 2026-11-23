@@ -31,18 +31,18 @@ function checkKeys(check: Check): SessionKey[] {
 }
 
 describe('the catalog', () => {
-  it('the main ids are C1-C12, X1-X11, V1-V15, U1-U14 and O1-O17', () => {
+  it('the main ids are C1-C12, X1-X12, V1-V15, U1-U14 and O1-O17', () => {
     const range = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => `${prefix}${i + 1}`)
-    expect(MAIN.map((s) => s.id)).toEqual([...range('C', 12), ...range('X', 11), ...range('V', 15), ...range('U', 14),
+    expect(MAIN.map((s) => s.id)).toEqual([...range('C', 12), ...range('X', 12), ...range('V', 15), ...range('U', 14),
       ...range('O', 17)])
     expect(MAIN.every((s) => !s.heldOut)).toBe(true)
   })
 
-  it('the held out are CH1-CH3, XH1-XH3, VH1-VH4, UH1-UH3 and OH1-OH4: 17 of 86, VS Code 4 of 19, Cursor 3 of 17, Orca 4 of 21', () => {
+  it('the held out are CH1-CH3, XH1-XH3, VH1-VH4, UH1-UH3 and OH1-OH4: 17 of 87, VS Code 4 of 19, Cursor 3 of 17, Orca 4 of 21', () => {
     expect(HELD_OUT.map((s) => s.id)).toEqual(['CH1', 'CH2', 'CH3', 'XH1', 'XH2', 'XH3', 'VH1', 'VH2', 'VH3', 'VH4', 'UH1', 'UH2', 'UH3',
       'OH1', 'OH2', 'OH3', 'OH4'])
     expect(HELD_OUT.every((s) => s.heldOut)).toBe(true)
-    expect(ALL).toHaveLength(86)
+    expect(ALL).toHaveLength(87)
     const of = (app: string) => [HELD_OUT.filter((s) => s.app === app).length, ALL.filter((s) => s.app === app).length]
     expect([of('vscode'), of('cursor'), of('orca')]).toEqual([[4, 19], [3, 17], [4, 21]])
   })
@@ -217,14 +217,16 @@ describe('the catalog', () => {
     }
   })
 
-  it('a voice speaks to a session with a running process, or to one its link resumes', () => {
+  it('a voice speaks to a session with a running process, to one its link resumes, or to a resting ChatGPT thread Codex can queue to', () => {
     // Words for a session with no process are refused before any send: the voice check and the gate then test nothing.
+    // A resting thread of the ChatGPT app is queued to, when Harness's Codex home is the app's (X12).
     for (const s of ALL) {
       for (const [i, step] of s.steps.entries()) {
         if (step.kind !== 'voice') continue
         const started = s.steps.slice(0, i).some((h) => h.kind === 'hook' && h.event === 'start' && h.session === step.target)
-        const resumable = s.sessions.find((d) => d.key === step.target)!.resumable === true
-        expect(started || resumable, `${s.id} voice ${step.target}`).toBe(true)
+        const target = s.sessions.find((d) => d.key === step.target)!
+        const queued = target.app === 'chatgpt' && s.world?.codexHome === 'app'
+        expect(started || target.resumable === true || queued, `${s.id} voice ${step.target}`).toBe(true)
       }
     }
   })
@@ -242,8 +244,8 @@ describe('the catalog', () => {
     expect(byId('C8').steps.filter((s) => s.kind === 'tap' || s.kind === 'swipe')).toEqual([])
   })
 
-  it('C3, CH1, CH2, XH1, V2 and O16 are tier A only, V12 tier B only, every other scenario (C10, C11, X7, C8, X9, CH3 and XH3 among them) runs in both', () => {
-    const onlyA = ['C3', 'CH1', 'CH2', 'XH1', 'V2', 'O16']
+  it('C3, CH1, CH2, XH1, X12, V2 and O16 are tier A only, V12 tier B only, every other scenario (C10, C11, X7, C8, X9, CH3 and XH3 among them) runs in both', () => {
+    const onlyA = ['C3', 'CH1', 'CH2', 'XH1', 'X12', 'V2', 'O16']
     const onlyB = ['V12']
     for (const s of ALL) expect(s.tiers, s.id).toEqual(onlyA.includes(s.id) ? ['a'] : onlyB.includes(s.id) ? ['b'] : ['a', 'b'])
   })

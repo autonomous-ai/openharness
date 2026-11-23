@@ -238,6 +238,11 @@ export class World implements TierAWorld {
     const codexHome = join(root, '.codex')
     this.codexHome = codexAppFixture(codexHome)
     if (installed) this.install(root, codexHome)
+    if (scenario.world?.codexHome === 'app') {
+      const harnessHome = env.CODEX_HOME
+      env.CODEX_HOME = codexHome
+      this.onClose(() => { env.CODEX_HOME = harnessHome })
+    }
     // The sessions' folders are there, the only ones: what Cursor's folder row opens.
     for (const s of scenario.sessions) for (const folder of [s.cwd, ...s.folders ?? []]) machine.folders.add(folder)
     this.folders = { claudeProjects: emptied(env.CLAUDE_PROJECTS_DIR), codexSessions: emptied(join(env.CODEX_HOME, 'sessions')),

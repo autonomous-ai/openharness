@@ -8,7 +8,7 @@
  * first hook (observed.ts), so the opener alone could not bring the app (open.ts).
  */
 import type { HostAdapter, Pane, Place } from './adapter.js'
-import { createAppLink, type AppLinkDeps } from './appLink.js'
+import { createAppLink, type AppLinkDeps, type AppLinkVerbs } from './appLink.js'
 import { CODEX_THREAD } from './codexQueue.js'
 import { APP_BUNDLES } from './hostDetect.js'
 import { openPath } from './open.js'
@@ -16,7 +16,7 @@ import { RUN_TIMEOUT_MS } from './orca.js'
 
 export function createCodexAppAdapter(
   deps: AppLinkDeps & { log(line: string): void },
-): HostAdapter & Required<Pick<HostAdapter, 'canShow' | 'show'>> {
+): HostAdapter & Required<Pick<HostAdapter, 'canShow' | 'show'>> & Pick<AppLinkVerbs, 'canLink'> {
   const openBin = openPath(deps.bin)
   return {
     id: 'codex',

@@ -10574,8 +10574,9 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
   const SECOND = '2c4e6a80-1b3d-4f5a-9c7e-0d2f4b6a8c0e'
   const THIRD = '9e8d7c6b-5a49-4382-a1b0-c9d8e7f6a5b4'
   const ID = observedAgentId('codex', THREAD)
-  /** THREAD's row as the reader lists it. */
-  const ROW = { id: ID, name: 'Fix the build', caps: 'sf' }
+  /** THREAD's row as the reader lists it, on macOS: its link opens, the suite's codex can queue, and the suite's
+   *  CODEX_HOME is its throwaway home's .codex, the app's home there. */
+  const ROW = { id: ID, name: 'Fix the build', caps: 'svf' }
   const opened = (thread: string): [string, string[], number] => ['/usr/bin/open', ['-b', BUNDLE, `codex://threads/${thread}`], 10_000]
   /** A thread the reader lists: in /work/api, named Fix the build. */
   const thread = (over: Partial<CodexAppThread> = {}): CodexAppThread =>
@@ -10611,7 +10612,8 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
    * `fake.names`. Each bundle the look asks of is recorded and
    * answered from `fake.ids`, the app in /Applications unless the test says otherwise, or, while `hold` is set, held until
    * the test lands it with an id. Every `open` is a recorded run, nothing executed, the next `failing` of them answering
-   * code 1. `live` attaches the dial and lets the look and the first read land.
+   * code 1, and while `holdLinks` is set each waits until the test lets it go (`linked`). `live` attaches the dial and
+   * lets the look and the first read land.
    */
   const withThreads = (over: Parameters<typeof start>[0] = {}) => {
     const fake = {
@@ -10622,6 +10624,8 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
       hold: false,
       held: [] as Array<(id: string | undefined) => void>,
       failing: 0,
+      holdLinks: false,
+      linked: [] as Array<() => void>,
       names: new Map<string, string>(),
     }
     const threads: NonNullable<DevicesDeps['codexAppThreads']> = {
@@ -10638,6 +10642,7 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
       ...orca, platform: 'darwin' as const,
       run: async (file: string, args: string[], timeoutMs: number) => {
         orcaRuns.push([file, args, timeoutMs])
+        if (fake.holdLinks) await new Promise<void>((resolve) => { fake.linked.push(resolve) })
         if (fake.failing === 0) return { code: 0, stdout: '' }
         fake.failing--
         return { code: 1, stdout: '' }
@@ -10657,7 +10662,7 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
     return { ...started, fake, listener, front, live }
   }
 
-  it('on macOS with a dial attached the app\'s threads are listed sf, idle, on the ChatGPT page, the Codex home alone watched; detached, the source stops, its watch closes, the reader forgets and the rank goes', async () => {
+  it('on macOS with a dial attached the app\'s threads are listed svf, idle, on the ChatGPT page, the Codex home alone watched; detached, the source stops, its watch closes, the reader forgets and the rank goes', async () => {
     const { fake, live } = withThreads()
     const rank = vi.spyOn(host(), 'setRank')
     await flush()
@@ -10730,7 +10735,8 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
     const { fake, live } = withThreads({ orca: { ...orca, platform: 'linux' } })
     await live()
     expect(fake.calls).toEqual(starts ? ['there', 'read'] : [])
-    expect(await listed()).toEqual(starts ? [ROW] : [])
+    // No voice: xdg-mime names no app for codex:// here.
+    expect(await listed()).toEqual(starts ? [{ ...ROW, caps: 'sf' }] : [])
     // Linux has no bundle to read.
     expect(fake.asked).toEqual([])
   })
@@ -10963,7 +10969,7 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
       bundleId: async (app) => app === APPS ? BUNDLE : undefined })
     attach(port)
     await vi.waitFor(() => expect(logs).toContain('[codex-app] listed · 1 threads · 0 in projects'), { timeout: 5_000 })
-    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
   })
 
   it.skipIf(process.platform !== 'darwin')('with no reader or look given the devices find the app by its Info.plist and read the Codex home under the home folder', async () => {
@@ -10984,7 +10990,180 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
     const { port } = start({ faults: ['fleet'], orca: { ...orca, platform: 'darwin' }, tty: async () => undefined, codexAppThreads: null, bundleId: null })
     attach(port)
     await vi.waitFor(() => expect(logs).toContain('[codex-app] listed · 1 threads · 0 in projects'), { timeout: 5_000 })
-    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
+  })
+
+  describe('words to a resting thread (docs/plans/2026-11-23-dial-chatgpt-voice-resting-design.md)', () => {
+    /** The dial's refusal, as the cable host answers a source's. */
+    const refused = (reason: string) => ({ ok: false, machine: '', reason, message: reason })
+    /** `codex queue`'s run of these words to THREAD, under Harness's Codex home, from the home folder. */
+    const queued = (words: string) => ['/opt/codex/bin/codex', ['queue', '--thread', THREAD, `--message=${words}`],
+      { cwd: homedir(), env: { PATH: '/usr/bin', CODEX_HOME: env.CODEX_HOME }, timeoutMs: 10_000 }]
+    /** CODEX_HOME as the devices start with it, put back once the test ends. */
+    const codexHomeAt = (home: string) => {
+      const saved = env.CODEX_HOME
+      env.CODEX_HOME = home
+      onTestFinished(() => { env.CODEX_HOME = saved })
+    }
+
+    it('voice runs the thread\'s link alone, then one codex queue to that thread', async () => {
+      const { fake, live } = withThreads()
+      fake.read = read([thread(), thread({ id: SECOND, name: 'Ship it' })])
+      await live()
+      expect(await listed()).toEqual([ROW, { id: observedAgentId('codex', SECOND), name: 'Ship it', caps: 'svf' }])
+      fake.holdLinks = true
+      const sent = host().sendTurn(ID, 'run the tests')
+      await flush()
+      expect(orcaRuns).toEqual([opened(THREAD)])
+      expect(codexRuns).toEqual([])
+      fake.linked.shift()!()
+      expect(await sent).toEqual({ ok: true })
+      // The link alone: no bare `open -b` of the app.
+      expect(orcaRuns).toEqual([opened(THREAD)])
+      expect(codexRuns).toEqual([queued('run the tests')])
+      expect(JSON.stringify([orcaRuns, codexRuns])).not.toContain(SECOND)
+      expect(logs).toContain('[device] voice · codex-wake-sent')
+      expect(logs.filter((line) => /^\[codex-app\] wake · sent · \d+ ms$/.test(line))).toHaveLength(1)
+      expect(logs.filter((line) => [THREAD, SECOND, 'Fix the build', 'run the tests'].some((word) => line.includes(word)))).toEqual([])
+    })
+
+    it('a link that fails queues nothing: no fallback, and the dial is told it did not open in ChatGPT', async () => {
+      const { fake, live } = withThreads()
+      await live()
+      fake.failing = 1
+      expect(await host().sendTurn(ID, 'run the tests')).toEqual(refused('Fix the build did not open in ChatGPT.'))
+      expect(orcaRuns).toEqual([opened(THREAD)])
+      expect(codexRuns).toEqual([])
+      expect(logs).toEqual(expect.arrayContaining(['[codex-app] wake · open failed', '[device] voice · codex-wake-open-failed']))
+    })
+
+    it.each([['names an app', 'chatgpt.desktop\n', 'svf'], ['names none', '', 'sf']])('on Linux the row takes voice once xdg-mime %s', async (_, answer, caps) => {
+      linuxApps('file')
+      const run = async (file: string, args: string[], timeoutMs: number) => {
+        orcaRuns.push([file, args, timeoutMs])
+        return { code: 0, stdout: file === '/usr/bin/xdg-mime' ? answer : '' }
+      }
+      const { live } = withThreads({ orca: { ...orca, onPath: (name: string) => `/usr/bin/${name}`, run } })
+      await live()
+      // The first look starts xdg-mime's read, and offers no voice before its answer.
+      expect(await listed()).toEqual([{ ...ROW, caps: 'sf' }])
+      await flush()
+      expect(await listed()).toEqual([{ ...ROW, caps }])
+    })
+
+    // `codex queue` runs under CODEX_HOME: under another home every queue would answer thread not found.
+    it('with CODEX_HOME not the app\'s home the row has no voice', async () => {
+      codexHomeAt(join(homedir(), 'elsewhere'))
+      const { live } = withThreads()
+      await live()
+      expect(await listed()).toEqual([{ ...ROW, caps: 'sf' }])
+    })
+
+    // Review Focus 4.
+    it.each([
+      ['a trailing separator', `${join(homedir(), '.codex')}${sep}`],
+      ['a .. segment', `${join(homedir(), '.codex')}${sep}x${sep}..`],
+    ])('with CODEX_HOME the app\'s home spelled with %s the row takes voice', async (_, home) => {
+      codexHomeAt(home)
+      const { live } = withThreads()
+      await live()
+      expect(await listed()).toEqual([ROW])
+    })
+
+    it('with no codex, the app\'s or a launch\'s, the row has no voice', async () => {
+      const { live } = withThreads({ codex: { ...codex, platform: 'darwin', binary: () => null, appBinary: () => null } })
+      await live()
+      expect(await listed()).toEqual([{ ...ROW, caps: 'sf' }])
+    })
+
+    it('on Windows the link goes through the Windows raise, never its bare raise, then the queue', async () => {
+      const windows = fakeWindowsRaise()
+      const { live } = withThreads({ orca: { ...orca, platform: 'win32' }, windowsRaise: windows.raise, storePackageFolder: storePackage(dataDir).query })
+      await live()
+      expect(await listed()).toEqual([ROW])
+      expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+      expect(windows.links).toEqual([[`codex://threads/${THREAD}`, BUNDLE]])
+      expect(orcaRuns).toEqual([])
+      expect(codexRuns).toEqual([queued('run the tests')])
+      // A link that fails brings no app forward on whatever thread it shows.
+      windows.answer = false
+      expect(await host().sendTurn(ID, 'and lint')).toEqual(refused('Fix the build did not open in ChatGPT.'))
+      expect(windows.links).toHaveLength(2)
+      expect(windows.apps).toEqual([])
+      expect(codexRuns).toHaveLength(1)
+    })
+
+    it('detached while the link runs: did not answer, and nothing is queued', async () => {
+      const { fake, live } = withThreads()
+      await live()
+      fake.holdLinks = true
+      const sent = host().sendTurn(ID, 'run the tests')
+      await flush()
+      seen.host.watching!(false)
+      expect(await sent).toEqual(refused('Fix the build did not answer.'))
+      fake.linked.shift()!()
+      await flush()
+      expect(codexRuns).toEqual([])
+      expect(logs).toEqual(expect.arrayContaining(['[codex-app] wake · stopped', '[device] voice · codex-wake-stopped']))
+    })
+
+    // The wake is both apps': a throw in its 30 s timer, a ChatGPT wake's here, would send a reader to the Claude app.
+    it('a throw in the wake\'s 30 s timer is said as the wake\'s part, never as the Claude app\'s', async () => {
+      const { fake, live } = withThreads({ faults: ['fleet', 'app-wake'] })
+      await live()
+      fake.holdLinks = true
+      const sent = host().sendTurn(ID, 'run the tests')
+      await flush()
+      await wait(30_000)
+      expect(logs).toContain('[devices] app-wake failed · Error')
+      expect(logs.filter((line) => line.startsWith('[devices] claude-app'))).toEqual([])
+      fake.linked.shift()!()
+      expect(await sent).toEqual({ ok: true })
+    })
+
+    // Before its words reach the queue, the live copy's own `codex queue` would put the next words ahead of them.
+    it('a hook lists the thread while its first words still open it: the next words wait their turn', async () => {
+      const { fake, port, live } = withThreads()
+      await live()
+      fake.holdLinks = true
+      const first = host().sendTurn(ID, 'first')
+      await flush()
+      const transcriptPath = join(env.CODEX_HOME, 'sessions', '2026', '11', '23', `rollout-2026-11-23T10-00-00-${THREAD}.jsonl`)
+      port.observed({ ...hook('session-start'), transcriptPath })
+      expect(await host().sendTurn(ID, 'second')).toEqual(refused('Fix the build has not taken your last words yet.'))
+      expect(codexRuns).toEqual([])
+      fake.linked.shift()!()
+      expect(await first).toEqual({ ok: true })
+      expect(codexRuns).toEqual([queued('first')])
+      // Its words queued, the live copy takes the next ones.
+      expect(await host().sendTurn(ID, 'second')).toEqual({ ok: true })
+      expect(codexRuns.map(([, args]) => (args as string[]).at(-1))).toEqual(['--message=first', '--message=second'])
+    })
+
+    // Review Focus 2.
+    it('a hook lists the thread while its first words are being queued: the next words wait their turn', async () => {
+      let release = (): void => {}
+      const holding: NonNullable<DevicesDeps['codex']> = {
+        ...codex,
+        run: async (file, args, options) => {
+          codexRuns.push([file, args, options])
+          await new Promise<void>((resolve) => { release = resolve })
+          return 0
+        },
+      }
+      const { port, live } = withThreads({ codex: holding })
+      await live()
+      const first = host().sendTurn(ID, 'first')
+      await flush()
+      expect(codexRuns).toHaveLength(1)
+      // Its turn started: its live copy, its rollout in Harness's Codex home, takes the row and its voice.
+      const transcriptPath = join(env.CODEX_HOME, 'sessions', '2026', '11', '23', `rollout-2026-11-23T10-00-00-${THREAD}.jsonl`)
+      port.observed({ ...hook('session-start'), transcriptPath })
+      expect(await host().sendTurn(ID, 'second')).toEqual(refused('Fix the build has not taken your last words yet.'))
+      release()
+      expect(await first).toEqual({ ok: true })
+      expect(codexRuns).toHaveLength(1)
+    })
   })
 
   describe('the thread opened in the ChatGPT app moves the dial (docs/plans/2026-11-20-dial-chatgpt-follow-ax-design.md)', () => {
@@ -11122,6 +11301,23 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
       // The switch seen, the person opening SECOND moves the dial.
       report('Ship it')
       expect(asked()).toEqual([[observedAgentId('codex', SECOND), 'thread']])
+    })
+
+    // The window's title read before the app showed the words' thread is the one it showed before: followed, it would
+    // turn the dial there, and the person's next words with it.
+    it('the words\' link is the dial\'s own switch: that thread\'s title right after is its echo, and a late title of the thread shown before does not move the dial', async () => {
+      const { fake, front, report, live } = following()
+      fake.read = read([thread(), thread({ id: SECOND, name: 'Ship it' })])
+      fake.names = new Map([[THREAD, TITLE], [SECOND, 'Ship it']])
+      await live()
+      await front('codex')
+      expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+      expect(orcaRuns).toEqual([opened(THREAD)])
+      report('Ship it')
+      await wait(1_000)
+      report(TITLE)
+      expect(threadLines()).toEqual(['[device] thread · skipped · echo', '[device] thread · skipped · echo'])
+      expect(asked()).toEqual([])
     })
 
     it('a report followed at the settle within 2 s of a dial move is an echo, and one 2 s after it follows', async () => {

@@ -19,7 +19,7 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 import { env } from '../config/env.js'
 import { cursorDataDir } from '../engines/cursor/contract.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, type CoreApi, type CorePorts, type DeviceHookPort, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
@@ -761,7 +761,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     modReady: (sessionId) => inbox.ready(sessionId),
     // Words for a session the Claude app's wake still waits for would take its first poll ahead of the wake's: they are
     // words not taken yet (cable/hosts/appWake.ts waitsFor). The wake is built whenever this source is.
-    toMod: (sessionId, text) => claudeWake!.waitsFor(sessionId) ? Promise.resolve('busy' as const) : inbox.deliver(sessionId, text),
+    toMod: (sessionId, text) => appWake!.waitsFor(sessionId) ? Promise.resolve('busy' as const) : inbox.deliver(sessionId, text),
     canOpen: opener.can,
     // Noted before `open -b`, which can take a while, and for an app with no pane of its own. A tap on a Claude app agent
     // runs the continue link a rest runs: its attach is the dial's own echo too.
@@ -770,7 +770,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (target.pane?.adapter === claude.id && opener.can(agentId, target)) noteLink(agentId)
       return opener.open(agentId, target)
     },
-    codexQueue,
+    // Words for a ChatGPT thread the wake still opens would be queued ahead of the wake's: they are words not taken yet,
+    // as `codex queue` says while it queues the wake's (cable/hosts/appWake.ts waitsFor).
+    codexQueue: {
+      can: (isApp) => codexQueue.can(isApp),
+      send: (threadId, text, isApp) =>
+        appWake!.waitsFor(threadId) ? Promise.resolve({ outcome: 'busy' as const }) : codexQueue.send(threadId, text, isApp),
+    },
     codexHome: env.CODEX_HOME,
     count: (what) => voiced(countWord(what)),
   }, ttyOf, skill ? (owners) => part.call('skill', () => skill.scanned(owners.values())) : undefined,
@@ -899,9 +905,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }) : null
   /** The Claude app's stores, in the person's home: the app's own folders, not a Harness path. */
   const claudeAppRoots = claudeStoreRoots(apps.platform, process.env, homedir())
-  /** One for the whole devices process, every dial's words for a resting Claude app session, behind the observed agents'
-   *  switch (docs/plans/2026-11-21-dial-claude-app-wake-send-design.md). */
-  const claudeWake: AppWake | null = observed ? new AppWake({
+  /** One for the whole devices process and both apps, every dial's words for a resting Claude app session or ChatGPT app
+   *  thread, one at a time, behind the observed agents' switch (docs/plans/2026-11-21-dial-claude-app-wake-send-design.md,
+   *  docs/plans/2026-11-23-dial-chatgpt-voice-resting-design.md). */
+  const appWake: AppWake | null = observed ? new AppWake({
     // A tap's link and its notes, without the opener's fallback, which brings the app on whatever session it shows. The
     // raw adapter: the noted one would note the move twice.
     open: async (localId, agentId) => {
@@ -917,7 +924,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       onChange: (listener) => observed.onChange(() => part.call('claude-app', listener)),
     },
     onPoll: (listener) => inbox.onPoll((sessionId) => part.call('claude-app', () => listener(sessionId))),
-    after: timerIn('claude-app'),
+    // Its own part: the timer bounds a ChatGPT thread's wake as well as a Claude app session's.
+    after: timerIn('app-wake'),
+    // The link alone, never the adapter's forward, which brings the app on whatever thread it shows. The noted adapter
+    // notes the dial's own switch, so the title the app then shows is its echo.
+    openThread: (threadId, agentId) => codexNoted.show!(codexPane(threadId), agentId),
+    queue: codexQueue,
     monotonic,
     log,
     count: voiced,
@@ -927,7 +939,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  observed agents' switch, on macOS, Windows and Linux, where the app runs
    *  (docs/plans/2026-11-20-dial-app-sessions-win-linux-design.md). A session with a process is the observed source's
    *  copy, which holds its row while it runs (registry.ts). */
-  const claudeAppSource = claudeWake ? new ClaudeAppSource({
+  const claudeAppSource = appWake ? new ClaudeAppSource({
     store: deps.claudeAppStore ?? new ClaudeAppStore(claudeAppRoots.map(({ root }) => root)),
     roots: claudeAppRoots,
     watch: deps.watchStore ?? watchNearest,
@@ -942,18 +954,23 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // The noted copy keeps the show the Claude app's adapter has.
     show: (localId, agentId) => claudeNoted.show!(claudePane(localId), agentId),
     canLink: (localId) => claude.canLink(claudePane(localId)),
-    wake: claudeWake,
+    wake: appWake,
     monotonic,
     log,
   }) : null
   /** The ChatGPT app's own Codex home, in the person's home: the app's, not the `CODEX_HOME` Harness runs Codex under. */
   const codexAppHome = join(homedir(), '.codex')
+  /** Whether Harness's `CODEX_HOME` is that folder. `codex queue` runs under `CODEX_HOME` (cable/hosts/codexQueue.ts):
+   *  under another home every queue to an app thread answers thread not found, so its row offers no voice it cannot
+   *  give. The path's text, as a live thread's rollout is checked (observed.ts queueable): `relative` resolves both, so
+   *  a trailing separator or a `..` is the same folder, and on Windows it ignores case. */
+  const codexHomeIsApps = relative(env.CODEX_HOME, codexAppHome) === ''
   /** The ChatGPT app's Codex threads, with or without a process, listed from its metadata when a file of it changes, in
    *  its sidebar's order (docs/plans/2026-11-19-dial-chatgpt-ring-and-follow-design.md). It runs only while a dial is
    *  attached, behind the observed agents' switch, on macOS, Windows and Linux, and only with the ChatGPT app installed
    *  (dialAttached). A thread with a process is the observed source's copy, which holds its row while it runs
    *  (registry.ts). */
-  const codexAppSource = observed ? new CodexAppSource({
+  const codexAppSource = appWake ? new CodexAppSource({
     threads: deps.codexAppThreads ?? new CodexAppThreads(codexAppHome),
     watch: (changed) => (deps.watchStore ?? watchNearest)([codexAppHome], changed),
     after: timerIn('codex-app'),
@@ -962,6 +979,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     canShow: (threadId) => codexApp.canShow(codexPane(threadId)),
     // The noted copy keeps the show the ChatGPT app's adapter has.
     show: (threadId, agentId) => codexNoted.show!(codexPane(threadId), agentId),
+    canLink: (threadId) => codexApp.canLink(codexPane(threadId)),
+    // The thread is the app's: its own CLI, else the `codex` a launch would run.
+    canQueue: () => codexQueue.can(true),
+    inAppHome: codexHomeIsApps,
+    wake: appWake,
     rank: (rank) => cableHost.setRank('codex', rank),
     monotonic,
     log,

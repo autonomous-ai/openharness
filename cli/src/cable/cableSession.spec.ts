@@ -21,6 +21,7 @@ import { NO_ACCESS, NO_ACCESS_YET, PortAccessError } from './portAccess.js'
 import type { PetStore } from './pets/store.js'
 import { AppWake } from './hosts/appWake.js'
 import { ClaudeAppSource } from './hosts/claudeAppSource.js'
+import { CodexAppSource } from './hosts/codexAppSource.js'
 import { observedAgentId } from './hosts/observed.js'
 import { HostRegistry } from './hosts/registry.js'
 import type { AppEntry, AppList, AppPick, HostAgent, HostSource } from './hosts/types.js'
@@ -8033,6 +8034,9 @@ describe("a resting Claude app row's words (docs/plans/2026-11-21-dial-claude-ap
       observed: { list: () => [], onChange: () => () => {}, send: async () => ({ ok: true }) },
       onPoll: () => () => {},
       after: (ms, run) => { timers.push({ ms, run }); return () => {} },
+      // The ChatGPT app's: no ChatGPT row here.
+      openThread: vi.fn(),
+      queue: { send: vi.fn() },
       monotonic: () => 0,
       log: () => {},
       count: () => {},
@@ -8112,6 +8116,119 @@ describe("a resting Claude app row's words (docs/plans/2026-11-21-dial-claude-ap
       speak(port, 'u1')
       port.say({ t: 'voice.end', uploadId: 'u1' })
       await vi.waitFor(() => expect(opens).toHaveLength(1))
+      speak(port, 'u2')
+      port.say({ t: 'voice.end', uploadId: 'u2', review: true })
+      await vi.waitFor(() => expect(port.types()).toContain('voice.draft'))
+      const draft = port.sent.find((m) => m.t === 'voice.draft')!
+      port.say({ t: 'draft.command', draftId: draft.id, revision: draft.revision, requestId: 'r1', op: 'send' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual(expect.objectContaining({ t: 'draft.state', requestId: 'r1',
+        error: BUSY })))
+    } finally { vi.restoreAllMocks(); await session.stop() }
+  })
+})
+
+describe("a resting ChatGPT row's words (docs/plans/2026-11-23-dial-chatgpt-voice-resting-design.md)", () => {
+  const THREAD = '019a0000-0000-7000-8000-000000000001'
+  const ROW = observedAgentId('codex', THREAD)
+  const BUSY = 'Still opening Fix the build. Try again in a moment.'
+
+  /** The dial greeted on a host whose registry holds the ChatGPT app's real source and wake, on a fake reader listing
+   *  one thread, a link that never answers and a queue that records: a wake stays opening until the test fires its
+   *  timer. */
+  async function resting() {
+    const timers: Array<{ ms: number; run: () => void }> = []
+    const opens: string[] = []
+    const queued: Array<{ threadId: string; text: string }> = []
+    const wake = new AppWake({
+      // The Claude app's: no Claude row here.
+      open: vi.fn(),
+      observed: { list: () => [], onChange: () => () => {}, send: async () => ({ ok: true }) },
+      onPoll: () => () => {},
+      after: (ms, run) => { timers.push({ ms, run }); return () => {} },
+      openThread: (threadId) => { opens.push(threadId); return new Promise<never>(() => {}) },
+      queue: { send: async (threadId, text) => { queued.push({ threadId, text }); return { outcome: 'queued' } } },
+      monotonic: () => 0,
+      log: () => {},
+      count: () => {},
+    })
+    const source = new CodexAppSource({
+      threads: {
+        there: () => true,
+        read: async () => ({ ok: true, order: [THREAD], rows: 1, skipped: 0,
+          listed: [{ id: THREAD, cwd: '/work/api', name: 'Fix the build', at: 1, inProject: false }] }),
+        forget: () => {},
+        names: () => new Map(),
+      },
+      watch: () => () => {},
+      after: () => () => {},
+      focus: async () => true,
+      canShow: () => true,
+      show: async () => 'ok',
+      canLink: () => true,
+      canQueue: () => true,
+      inAppHome: true,
+      wake,
+      rank: () => {},
+      monotonic: () => 0,
+      log: () => {},
+    })
+    const host = new DaemonCableHost({
+      sessions: () => [], displayName: (s) => s.agentId, machineName: () => 'this-mac', machineId: () => 'mac-local',
+      computerId: () => 'abc', sendTurn: vi.fn(), stopTurn: vi.fn(), answer: vi.fn(), recent: () => [], recentAsks: () => [],
+      log: () => {},
+    })
+    host.setRegistry(new HostRegistry([host.harness, source]))
+    vi.spyOn(host, 'transcribe').mockResolvedValue('run the build')
+    const listed = new Promise<void>((resolve) => { source.onChange(resolve) })
+    source.start()
+    await listed
+    const c = await connect(host)
+    c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    await vi.waitFor(() => expect(c.port.types()).toContain('agents.end'))
+    return { ...c, timers, opens, queued }
+  }
+  const speak = (port: LoopbackPort, uploadId: string) => {
+    port.say({ t: 'voice.begin', agentId: ROW, lang: 'en', sr: 16000, uploadId })
+    port.pcm(Buffer.alloc(3200, 7))
+  }
+
+  it('a resting ChatGPT row takes voice; words while it opens are refused on the dial in plain words', async () => {
+    const { session, port, opens, queued } = await resting()
+    try {
+      speak(port, 'u1')
+      await settle()
+      // Taken at voice.begin, as a Harness agent's words are.
+      expect(port.types()).not.toContain('voice.error')
+      port.say({ t: 'voice.end', uploadId: 'u1' })
+      await vi.waitFor(() => expect(opens).toEqual([THREAD]))
+      speak(port, 'u2')
+      port.say({ t: 'voice.end', uploadId: 'u2' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'voice.error', uploadId: 'u2', message: BUSY }))
+      // The first words still wait for their link; neither reached a queue.
+      expect(port.sent.some((m) => m.t === 'voice.error' && m.uploadId === 'u1')).toBe(false)
+      expect(queued).toEqual([])
+    } finally { vi.restoreAllMocks(); await session.stop() }
+  })
+
+  it('30 s with the link not answered: the voice error says it did not open in ChatGPT', async () => {
+    const { session, port, timers, queued } = await resting()
+    try {
+      speak(port, 'u1')
+      port.say({ t: 'voice.end', uploadId: 'u1' })
+      await vi.waitFor(() => expect(timers.map((t) => t.ms)).toContain(30_000))
+      timers.find((t) => t.ms === 30_000)!.run()
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'voice.error', uploadId: 'u1',
+        message: 'Fix the build did not open in ChatGPT. Try again.' }))
+      expect(queued).toEqual([])
+    } finally { vi.restoreAllMocks(); await session.stop() }
+  })
+
+  it("a voice draft's send while it opens resolves with the wake's refusal", async () => {
+    const { session, port, opens } = await resting()
+    try {
+      speak(port, 'u1')
+      port.say({ t: 'voice.end', uploadId: 'u1' })
+      await vi.waitFor(() => expect(opens).toEqual([THREAD]))
       speak(port, 'u2')
       port.say({ t: 'voice.end', uploadId: 'u2', review: true })
       await vi.waitFor(() => expect(port.types()).toContain('voice.draft'))
