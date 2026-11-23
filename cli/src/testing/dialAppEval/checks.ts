@@ -308,10 +308,10 @@ const SCHEMES: Readonly<Record<LinkedApp, string>> = { claude: 'claude://', chat
 
 /**
  * The session's own link: the Claude app opens its store's `local_` id, the ChatGPT app the Codex thread, an editor's
- * Claude Code panel its session; an editor's other rows and Orca's have none.
+ * Claude Code panel its session; an editor's other rows, Orca's and iTerm2's have none.
  */
 function linkOf(session: SessionDef): string | undefined {
-  if (session.app === 'orca') return undefined
+  if (session.app === 'orca' || session.app === 'iterm') return undefined
   const place = placeOf(session)
   if (place === 'panel') return `${SCHEMES[session.app]}anthropic.claude-code/open?session=${session.id}`
   if (place !== undefined) return undefined

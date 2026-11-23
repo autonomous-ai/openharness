@@ -31,7 +31,7 @@ import { claudeAppFixture } from '../../src/testing/claudeAppFixture.js'
 import { flagOf } from '../../src/testing/dialAppEval/argv.js'
 import { describeAttempt, guardThisProcess, NET_GUARD_FILE_ENV, netGuardEnv, readNetGuard, type NetAttempt } from '../../src/testing/dialAppEval/netGuard.js'
 import { orcaListing } from '../../src/testing/dialAppEval/orcaListing.js'
-import { agentIdOf, engineOf, FRONT_NAMES, PAGE, placeOf, type App, type Delivery, type EvalDriver, type LinkedApp, type Platform,
+import { agentIdOf, engineOf, frontName, PAGE, placeOf, type App, type Delivery, type EvalDriver, type LinkedApp, type Platform,
   type Scenario, type Seen, type SessionDef, type SessionKey, type Step, type StepKind, type StepOf } from '../../src/testing/dialAppEval/types.js'
 import { CAROUSEL_REFRESH_MS, DialCarousel, type DialMessage } from '../../src/testing/dialCarousel.js'
 import { writeExecutable } from '../../src/testing/executableFixture.js'
@@ -718,7 +718,7 @@ export const speak: TierBHandler<'voice'> = async (world, step) => {
 const GENERIC: { [K in GenericKind]: (world: World, step: StepOf<K>) => Promise<void> } = {
   front: async (world, step) => {
     world.front = step.app
-    world.tell({ front: FRONT_NAMES[world.platform][step.app] })
+    world.tell({ front: frontName(world.platform, step.app) })
   },
   thread: async (world, step) => { world.title(step.title) },
   tap: async (world, step) => { world.dial.send({ t: 'agent.open', agentId: world.agentId(step.session) }) },

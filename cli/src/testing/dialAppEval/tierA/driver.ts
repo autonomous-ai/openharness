@@ -34,9 +34,16 @@ import { World, type StepHandler, type TierAWorld } from './world.js'
 
 type Run = Exclude<Step, { kind: 'wait' }>
 const isEditor = (app: App): app is Editor => (EDITORS as readonly App[]).includes(app)
+/** iTerm2's steps, each built by its own task of docs/plans/2026-11-22-dial-eval-iterm2-plan.md (Tasks 4-7): until
+ *  then a scenario that runs one fails. */
+const notBuilt = (kind: StepKind) => (): Promise<void> => Promise.reject(new Error(`tier A: the ${kind} step is not built yet`))
 const STEPS: { [K in Exclude<StepKind, 'wait'>]: StepHandler<K> } = {
   ...claudeStoreSteps, ...codexStoreSteps, ...sessionsSteps, ...windowSteps, ...dialSteps, ...voiceSteps, ...editorSteps,
   ...orcaModelSteps,
+  'iterm.tab': notBuilt('iterm.tab'), 'iterm.split': notBuilt('iterm.split'), 'iterm.closeTab': notBuilt('iterm.closeTab'),
+  'iterm.select': notBuilt('iterm.select'), 'iterm.relaunch': notBuilt('iterm.relaunch'), 'tmux.detach': notBuilt('tmux.detach'),
+  'tmux.attach': notBuilt('tmux.attach'), 'tmux.selectPane': notBuilt('tmux.selectPane'), 'herdr.focus': notBuilt('herdr.focus'),
+  'herdr.restart': notBuilt('herdr.restart'), 'devices.restart': notBuilt('devices.restart'),
   // An editor's windows go with it, and come back on its relaunch reporting its sessions' new shells. Orca's watches and
   // the plugin's stream go with Orca, and the stream comes back on its relaunch.
   quit: async (world, step) => {
