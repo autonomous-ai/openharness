@@ -2153,6 +2153,29 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     expect((await machineList(port)).agents).toEqual([])
   })
 
+  // The dial eval's VS Code V2: a closed integrated terminal's row waited for the ended session's 10 s.
+  it('an ended session whose process is gone leaves within 2 s', async () => {
+    vi.useFakeTimers()
+    const { port } = start({ faults: ['fleet'] })
+    port.observed(hook('session-start'))
+    port.observed(hook('session-end'))
+    readers.ended.add(4242)
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect((await machineList(port)).agents).toEqual([])
+  })
+
+  // A /clear ends a session in a process that runs on.
+  it('an ended session whose process still runs is listed until the ended rule\'s 10 s', async () => {
+    vi.useFakeTimers()
+    const { port } = start({ faults: ['fleet'] })
+    port.observed(hook('session-start'))
+    port.observed(hook('session-end'))
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect((await machineList(port)).agents.map((a) => a.id)).toEqual([ID])
+    await vi.advanceTimersByTimeAsync(9_000)
+    expect((await machineList(port)).agents).toEqual([])
+  })
+
   it('a gone for a poll not held looks at nothing', async () => {
     vi.useFakeTimers()
     const { port } = start({ faults: ['fleet'] })
