@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync, type PathLike } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { DIAL_USAGE_FILE } from '../lib/dialUsageContract.js'
 import { PRODUCT_USAGE_METRICS } from '../lib/productUsageContract.js'
 import { createProductUsage, type ProductUsageDeps } from './productUsage.js'
@@ -1102,6 +1102,25 @@ describe('the dial\'s day', () => {
     // A wait stays on this computer until its day closes.
     expect(dialSent()).toEqual({ [`${TODAY} dial_connected_installation_days`]: 1, [`${TODAY} dial_used_installation_days`]: 1,
       [`${TODAY} dial_open_ok`]: 2 })
+  })
+
+  // Each tick samples the gateway's resources into the product's own counts (gateway/productHealth.ts), so that group has
+  // counts waiting at every report: a group that went only once it was empty waited for its day to pass (the dial's e2e).
+  it('the dial\'s counts, the Node counters and hn\'s go the same day, though each tick adds the product\'s own', async () => {
+    vi.useFakeTimers({ now }); onTestFinished(() => { vi.useRealTimers() })
+    // A synchronous save, as in 'when reports go': the real one's I/O does not settle between fake ticks.
+    usage = createProductUsage({ file, now: () => Date.now(), request, random: () => 0.5, dialFile, context: CLI,
+      sample: () => ({ rss: 1, cpuPercent: 1 }), node: () => ({ version: 'v24.22.2', managed: true, migration: null }),
+      write: async (target, data) => { writeFileSync(target, data) } })
+    await usage.sync(false)
+    devices({ [TODAY]: { ...used, dial_open_ok: 2 } }); usage.counter('ui_tui_sign_in_started')
+    await vi.advanceTimersByTimeAsync(30 * 60_000)
+    // A report at most every 5 minutes, as before: ticks every 60 s from 35 s.
+    expect(sent).toHaveLength(6)
+    eachReportOneKind()
+    expect(dialSent()).toEqual({ [`${TODAY} dial_connected_installation_days`]: 1, [`${TODAY} dial_used_installation_days`]: 1,
+      [`${TODAY} dial_open_ok`]: 2 })
+    expect(totals()).toMatchObject({ health_cli_node_24: 1, ui_tui_sign_in_started: 1 })
   })
 
   it('a restart sends nothing twice', async () => {
