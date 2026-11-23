@@ -24,6 +24,7 @@ import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { devicesListenerPath } from '../src/devices/listenerPath.js'
+import { alive } from '../src/testing/spawnedRuns.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
@@ -161,13 +162,13 @@ describe.skipIf(process.platform !== 'darwin' || !herdrBinary)("an agent in the 
     }, 45_000, 100)
     expect(roster.map((m) => m.id).sort()).toEqual([agent.id, b.id].sort())
     expect(d.log()).toContain('[device] herdr client · found')
-    // The lookup saw the test's herdrs alone: the person's, there from start to end, were dropped from its table.
+    // The lookup saw the test's herdrs alone: none outside this worker's tree was kept, and each it dropped that still
+    // runs is outside it (othersNow tells the tree by pids and parents alone, never a process's name).
     const kept = hidden.kept()
     expect(kept).toEqual(expect.arrayContaining([herdr.pid, client.pid]))
     const now = othersNow()
     for (const pid of [...others, ...now]) expect(kept).not.toContain(pid)
-    const dropped = hidden.dropped()
-    for (const pid of others.filter((pid) => now.includes(pid))) expect(dropped).toContain(pid)
+    expect(hidden.dropped().filter((pid) => alive(pid) && !others.includes(pid) && !now.includes(pid))).toEqual([])
   })
 
   it("with Terminal in front a swipe selects the client's tab, then the agent's herdr pane", async () => {

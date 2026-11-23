@@ -13,8 +13,8 @@
 import { homedir, tmpdir } from 'node:os'
 import { basename } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { claudeGhost, claudeSessions, editorGhost, editorSession, keys, listed, MAIN, orcaGhost, orcaOpening, orcaSession, orcaStarted, scenario,
-  scenariosFor, started } from './catalog.js'
+import { claudeGhost, claudeSessions, editorGhost, editorSession, itermGhost, itermSession, keys, listed, MAIN, orcaGhost, orcaOpening,
+  orcaSession, orcaStarted, scenario, scenariosFor, started, turned } from './catalog.js'
 import { rings } from './checks.js'
 import { loadBaseline, SKIP_RATCHET_ENV, tierAVerdict } from './grade.js'
 import { describeAttempt } from './netGuard.js'
@@ -63,33 +63,62 @@ vi.mock('../../lib/sessionSearch/external.js', async (real) => ({
   },
 }))
 // Which app each process runs in, the process table and terminals a session's place is read from, and the apps' bundle
-// ids: the model's, never this machine's `ps` or `plutil`.
-vi.mock('../../cable/hosts/scannedApp.js', async (real) => ({
-  ...await real<typeof import('../../cable/hosts/scannedApp.js')>(),
-  learnApps: async (pids: readonly number[]) => new Map(pids.flatMap((pid) => {
-    const app = machine.appOf(pid)
-    return app ? [[pid, app] as const] : []
-  })),
-  readProcessNames: async () => [...machine.processes.values()].map(({ pid, ppid, executable, tty }) => ({ pid, ppid, executable, ...(tty ? { tty } : {}) })),
-  readTtyName: async (pid: number) => machine.processes.get(pid)?.tty,
-  readBundleId: async (bundle: string) => machine.bundleIds.get(bundle),
-}))
+// ids: the model's, never this machine's `ps` or `plutil`. A process the model names no app for is walked on an iTerm2
+// scenario's machine by the real walk, over the model's table and bundle ids, from iTerm2's home: iTerm2's own processes
+// carry no app id, so its server rule is what names them (docs/plans/2026-11-22-dial-eval-iterm2-plan.md, Decision 4).
+vi.mock('../../cable/hosts/scannedApp.js', async (real) => {
+  const actual = await real<typeof import('../../cable/hosts/scannedApp.js')>()
+  return {
+    ...actual,
+    learnApps: async (pids: readonly number[]) => {
+      const named = new Map(pids.flatMap((pid) => {
+        const app = machine.appOf(pid)
+        return app ? [[pid, app] as const] : []
+      }))
+      const home = machine.itermHome
+      const rest = pids.filter((pid) => !named.has(pid))
+      if (home === undefined || !rest.length) return named
+      const walked = await actual.scannedApps(rest, { platform: 'darwin', roots: actual.appRoots(home), home,
+        processes: async () => [...machine.processes.values()].map(({ pid, ppid, executable }) => ({ pid, ppid, executable })),
+        bundleId: async (bundle) => machine.bundleIds.get(bundle) })
+      return new Map([...named, ...walked])
+    },
+    readProcessNames: async () => [...machine.processes.values()].map(({ pid, ppid, executable, tty }) => ({ pid, ppid, executable, ...(tty ? { tty } : {}) })),
+    readTtyName: async (pid: number) => machine.processes.get(pid)?.tty,
+    readBundleId: async (bundle: string) => machine.bundleIds.get(bundle),
+  }
+})
 // The folders there are the model's: Cursor's folder row opens a session's own, never one of this machine's.
 vi.mock('../../cable/hosts/cursorFolder.js', async (real) => ({
   ...await real<typeof import('../../cable/hosts/cursorFolder.js')>(),
   isFolder: (path: string) => machine.folders.has(path),
 }))
-// No folder or socket of this machine is watched: the stores' watch is the world's (tierA/storeWatch.ts), and nothing
-// else of the machine changes.
+// No folder or socket of this machine is watched: the stores' watch is the world's (tierA/storeWatch.ts), and a watch on
+// a socket's folder is the model's, told as herdr's socket appears (tierA/steps/herdr.ts).
 vi.mock('../../cable/hosts/folderWatch.js', () => ({ watchNearest: () => () => {} }))
 vi.mock('../../cable/hosts/unixSocket.js', async (real) => ({
   ...await real<typeof import('../../cable/hosts/unixSocket.js')>(),
-  watchSocket: () => () => {},
+  watchSocket: (where: { socketPath: string }, changed: () => void) => {
+    const watch = (): void => changed()
+    const watches = machine.socketWatches.get(where.socketPath) ?? new Set()
+    machine.socketWatches.set(where.socketPath, watches.add(watch))
+    return () => { watches.delete(watch) }
+  },
 }))
-// The model's machine has no tmux, Zellij or kitty: no login shell is asked where they are.
+// A terminal's last access is the model's (tierA/machine.ts atimes): herdr's client lookup ranks clients by it, and the
+// real read would stat this machine's own /dev/ttysNNN.
+vi.mock('../../cable/hosts/herdrOuter.js', async (real) => ({
+  ...await real<typeof import('../../cable/hosts/herdrOuter.js')>(),
+  ttyAtime: async (tty: string) => machine.atimes.get(tty.replace(/^\/dev\//, '')),
+}))
+// The model's machine has no Zellij or kitty, and tmux only where the world installed it (an iTerm2 scenario's): no login
+// shell is asked where they are. A tmux found runs through the world's `run`, answered from its model (tierA/steps/tmux.ts).
 vi.mock('../../lib/tmuxOnPath.js', async (real) => ({
   ...await real<typeof import('../../lib/tmuxOnPath.js')>(),
-  ensureTmuxOnPath: async () => ({ state: 'absent', reason: 'not on the eval machine' }),
+  ensureTmuxOnPath: async () => {
+    const path = machine.installed.get('tmux')
+    return path === undefined ? { state: 'absent', reason: 'not on the eval machine' } : { state: 'adopted', path, from: 'standard install location' }
+  },
 }))
 vi.mock('../../cable/hosts/zellij.js', async (real) => ({
   ...await real<typeof import('../../cable/hosts/zellij.js')>(),
@@ -113,6 +142,9 @@ vi.mock('../../devices/orcaHomes.js', async (real) => ({
 }))
 
 const { startDevices } = await import('../../services/devices.js')
+const { learnApps } = await import('../../cable/hosts/scannedApp.js')
+const { ensureTmuxOnPath } = await import('../../lib/tmuxOnPath.js')
+const { ttyAtime } = await import('../../cable/hosts/herdrOuter.js')
 
 const PLATFORMS: readonly Platform[] = ['darwin', 'win32', 'linux']
 /**
@@ -417,11 +449,296 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     expect(lastList(seen, of)!.rows.map((r) => r.key)).toEqual(['a', 'b'])
   })
 
+  /** iTerm2's two plain tabs, a in w1's tab 0 and b in tab 1, started in `order` and listed, then `more`. */
+  const twoTabs = (id: string, title: string, order: string[], more: Step[]): Scenario => scenario({
+    id, app: 'iterm', title, dims: ['D3'], platforms: ['darwin'], tiers: ['a'],
+    sessions: [itermSession('a', { tab: 0 }), itermSession('b', { tab: 1 }), itermGhost],
+    steps: [...started(order), ...listed('iterm', [...order].reverse()), ...more],
+    checks: [], probes: [],
+  })
+
+  it("the walk names a plain tab's agent iterm by iTerm2's server, under iTerm2 and under launchd", async () => {
+    const one = scenario({
+      id: 'S6', app: 'iterm', title: 'Eval one tab, then iTerm2 relaunched', dims: ['D1'], platforms: ['darwin'], tiers: ['a'],
+      sessions: [itermSession('a'), itermGhost], steps: [...started(['a']), { kind: 'iterm.relaunch' }], checks: [], probes: [],
+    })
+    const driver = new TierADriver({ startDevices })
+    await driver.start(one, 'darwin')
+    try {
+      await driver.step(one.steps[0] as Exclude<Step, { kind: 'wait' }>)
+      const agent = machine.owners.get(one.sessions[0]!.id)!.pid
+      // No process of iTerm2's carries an app id: what names it is the real walk, over the model's table.
+      expect(machine.appOf(agent)).toBeUndefined()
+      const login = machine.processes.get(machine.processes.get(agent)!.ppid)!.ppid
+      const server = machine.processes.get(login)!.ppid
+      const iterm = machine.processes.get(server)!.ppid
+      expect(basename(machine.processes.get(server)!.executable)).toMatch(/^iTermServer-/)
+      expect(await learnApps([agent])).toEqual(new Map([[agent, 'iterm']]))
+      await driver.step(one.steps[1] as Exclude<Step, { kind: 'wait' }>)
+      expect([machine.processes.has(iterm), machine.processes.get(server)!.ppid]).toEqual([false, 1])
+      expect(await learnApps([agent])).toEqual(new Map([[agent, 'iterm']]))
+    } finally {
+      await driver.stop()
+    }
+  })
+
+  it("I5 on darwin: a tap on b runs open -b com.googlecode.iterm2 and writes b's select with raise on the tabs stream, and none "
+    + 'for another tab', async () => {
+    const i5 = twoTabs('I5', 'Eval a tap on a tab row', ['b', 'a'], [{ label: 'tap', kind: 'tap', session: 'b' }])
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, i5, 'darwin')
+    expect(run.error).toBeUndefined()
+    const { streams = [], commands, steps } = driver.seen()
+    const tap = steps.find((s) => s.label === 'tap')!
+    const after = commands.filter((c) => c.at >= tap.at)
+    expect(after.map(({ argv, ok }) => ({ argv, ok }))).toEqual([{ argv: ['/usr/bin/open', '-b', 'com.googlecode.iterm2'], ok: true }])
+    const selects = streams.filter((l) => l.window === 'tabs' && l.at >= tap.at)
+    expect(selects.map((l) => l.line)).toEqual([{ app: 'iterm', tab: 'w1.1.0', raise: true }])
+    expect(selects[0]!.at).toBeGreaterThanOrEqual(after[0]!.at)
+  })
+
+  it("I8: b's tab selected with iTerm2 settled in front turns the dial to b within 1 s", async () => {
+    // a first, so the face is on a: the dial keeps the row it shows as b arrives, and must move for the select.
+    const i8 = twoTabs('I8', "Eval the person selects b's tab", ['a', 'b'],
+      [{ label: 'select', kind: 'iterm.select', window: 'w1', tab: 1 }])
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, i8, 'darwin')
+    expect(run.error).toBeUndefined()
+    const { faces, steps } = driver.seen()
+    const select = steps.find((s) => s.label === 'select')!
+    const [a, b] = i8.sessions.slice(0, 2).map(agentIdOf)
+    expect(faces.filter((f) => f.at < select.at).at(-1)?.active).toBe(a)
+    const moved = faces.find((f) => f.at >= select.at && f.active === b)
+    expect((moved?.at ?? Infinity) - select.at).toBeLessThanOrEqual(1_000)
+  })
+
+  /** A plain tab a in w1's tab 0 and Claude Code in tmux t, whose client runs in tab 1, started t then a and listed, then
+   *  `more`. */
+  const tmuxTab = (id: string, title: string, more: Step[]): Scenario => scenario({
+    id, app: 'iterm', title, dims: ['D3'], platforms: ['darwin'], tiers: ['a'],
+    sessions: [itermSession('a', { tab: 0 }), itermSession('t', { place: 'tmux', tab: 1 }), itermGhost],
+    steps: [...started(['t', 'a']), ...listed('iterm', ['a', 't']), ...more],
+    checks: [], probes: [],
+  })
+
+  it("tmux is found on an iTerm2 scenario's machine alone", async () => {
+    const found = async (of: Scenario) => {
+      const driver = new TierADriver({ startDevices })
+      await driver.start(of, 'darwin')
+      try {
+        return await ensureTmuxOnPath()
+      } finally {
+        await driver.stop()
+      }
+    }
+    const c1 = MAIN.find((s) => s.id === 'C1')!
+    expect(await found(tmuxTab('S7', 'Eval tmux is installed', []))).toEqual({ state: 'adopted', path: '/opt/eval/bin/tmux',
+      from: 'standard install location' })
+    expect((await found(c1)).state).toBe('absent')
+    // C1's devices run no tmux.
+    const driver = new TierADriver({ startDevices })
+    expect((await runScenario(driver, c1, 'darwin')).error).toBeUndefined()
+    expect(driver.seen().commands.filter((c) => basename(c.argv[0]!) === 'tmux')).toEqual([])
+  })
+
+  it("I6 inline: a rest on the tmux row with iTerm2 in front writes its client's tab select without raise and runs "
+    + 'select-window ; select-pane for its pane', async () => {
+    const i6 = tmuxTab('I6', 'Eval a rest on a tmux row', [{ label: 'rest', kind: 'swipe', session: 't' }, { kind: 'wait', ms: 2_000 }])
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, i6, 'darwin')
+    expect(run.error).toBeUndefined()
+    expect(run.gaps).toEqual([])
+    const { streams = [], commands, steps } = driver.seen()
+    const rest = steps.find((s) => s.label === 'rest')!
+    const selects = streams.filter((l) => l.window === 'tabs' && l.at >= rest.at)
+    expect(selects.map((l) => l.line)).toEqual([{ app: 'iterm', tab: 'w1.1.0' }])
+    const after = commands.filter((c) => c.at >= rest.at)
+    expect(after.filter((c) => c.argv.includes('select-pane')).map(({ argv, ok }) => ({ argv, ok }))).toEqual([
+      { argv: ['/opt/eval/bin/tmux', 'select-window', '-t', 'pane:t', ';', 'select-pane', '-t', 'pane:t'], ok: true },
+    ])
+    // Nothing brings iTerm2 forward on a rest: it is in front.
+    expect(after.filter((c) => c.argv[0] === '/usr/bin/open')).toEqual([])
+  })
+
+  /** A plain tab a in w1's tab 0 and Claude Code in herdr h and g, whose client runs in tab 1, started h, g then a and
+   *  listed, then `more`. */
+  const herdrTab = (id: string, title: string, more: Step[]): Scenario => scenario({
+    id, app: 'iterm', title, dims: ['D3'], platforms: ['darwin'], tiers: ['a'],
+    sessions: [itermSession('a', { tab: 0 }), itermSession('h', { place: 'herdr', tab: 1 }),
+      itermSession('g', { place: 'herdr', tab: 1, split: 1 }), itermGhost],
+    steps: [...started(['h', 'g', 'a']), ...listed('iterm', ['a', 'g', 'h']), ...more],
+    checks: [], probes: [],
+  })
+
+  it("I7 inline: a tap on a herdr row runs herdr agent focus for its pane and open -b iTerm2, and writes its client's tab "
+    + 'select with raise', async () => {
+    const i7 = herdrTab('I7', 'Eval a tap on a herdr row', [{ label: 'tap', kind: 'tap', session: 'h' }])
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, i7, 'darwin')
+    expect(run.error).toBeUndefined()
+    expect(run.gaps).toEqual([])
+    const { streams = [], commands, steps } = driver.seen()
+    const tap = steps.find((s) => s.label === 'tap')!
+    const after = commands.filter((c) => c.at >= tap.at && ['herdr', 'open'].includes(basename(c.argv[0]!)))
+    expect(after.map(({ argv, ok }) => ({ argv, ok }))).toEqual([
+      { argv: ['/opt/eval/bin/herdr', 'agent', 'focus', 'pane:h'], ok: true },
+      { argv: ['/usr/bin/open', '-b', 'com.googlecode.iterm2'], ok: true },
+    ])
+    const selects = streams.filter((l) => l.window === 'tabs' && l.at >= tap.at)
+    expect(selects.map((l) => l.line)).toEqual([{ app: 'iterm', tab: 'w1.1.0', raise: true }])
+  })
+
+  it("every scenario but iTerm2's keeps noHerdr: C1's devices ask no herdr", async () => {
+    const herdrOf = async (of: Scenario) => {
+      const driver = new TierADriver({ startDevices })
+      expect((await runScenario(driver, of, 'darwin')).error).toBeUndefined()
+      const { logs = [], commands } = driver.seen()
+      return { said: logs.filter((l) => l.line.startsWith('[herdr]')).map((l) => l.line),
+        ran: commands.filter((c) => ['herdr', 'lsof', 'ps'].includes(basename(c.argv[0]!))).map((c) => c.argv) }
+    }
+    // On iTerm2's machine herdr is installed, and its source subscribes once its server runs.
+    expect((await herdrOf(herdrTab('S8', 'Eval herdr is installed', []))).said).toContain('[herdr] socket · live')
+    expect(await herdrOf(MAIN.find((s) => s.id === 'C1')!)).toEqual({ said: [], ran: [] })
+  })
+
+  /** The #4544 case (the spec's I2): a plain tab a in w1's tab 0, Claude Code in tmux t, whose client runs in tab 1, and
+   *  Claude Code in herdr h and g, whose client runs in tab 2, started a, t, h, then g, and listed in their tabs' order,
+   *  then `more`. */
+  const case4544 = (id: string, title: string, more: Step[]): Scenario => scenario({
+    id, app: 'iterm', title, dims: ['D1'], platforms: ['darwin'], tiers: ['a'],
+    sessions: [itermSession('a', { tab: 0 }), itermSession('t', { place: 'tmux', tab: 1 }), itermSession('h', { place: 'herdr', tab: 2 }),
+      itermSession('g', { place: 'herdr', tab: 2, split: 1 }), itermGhost],
+    steps: [...started(['a', 't', 'h', 'g']), ...listed('iterm', ['a', 't', 'h', 'g']), ...more],
+    checks: [], probes: [],
+  })
+  const i2 = case4544('I2', 'Eval the #4544 case, hooked', [])
+  /** I3: the four idle, each with a turn behind it, then the devices start again and no hook follows. */
+  const i3 = case4544('I3', 'Eval the #4544 case, found by the scan after the devices start again',
+    [...turned(['a', 't', 'h', 'g']), { label: 'restart', kind: 'devices.restart' }, { kind: 'wait', ms: 10_000 }])
+
+  it("I3: the four of I2, each with a turn behind it, are on iTerm2's page after the devices start again, before any hook, "
+    + 'and on no tmux, herdr or Other page', async () => {
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, i3, 'darwin')
+    expect(run.error).toBeUndefined()
+    expect(run.gaps).toEqual([])
+    const seen = driver.seen()
+    const restart = seen.steps.find((s) => s.label === 'restart')!
+    expect(seen.steps.filter((s) => s.index > restart.index && s.kind === 'hook')).toEqual([])
+    // What the new devices sent the dial, from their welcome on: the last hook came at the restart's own moment.
+    const welcome = seen.frames.findIndex((f) => f.at >= restart.at && f.message.t === 'welcome')
+    expect(welcome).toBeGreaterThanOrEqual(0)
+    const four = i3.sessions.slice(0, 4).map(agentIdOf)
+    const after = rings({ frames: seen.frames.slice(welcome) })
+    expect(after.at(-1)?.page).toBe('iterm')
+    expect(after.at(-1)!.rows.map((r) => r.id).sort()).toEqual([...four].sort())
+    expect(after.filter((r) => r.page !== 'iterm' && r.rows.some((row) => four.includes(row.id)))).toEqual([])
+  })
+
+  it('after the devices start again the mod polls the new devices: a voice reaches its session', async () => {
+    const spoken = scenario({
+      id: 'S9', app: 'iterm', title: 'Eval a voice after the devices start again', dims: ['D5'], platforms: ['darwin'], tiers: ['a'],
+      sessions: [itermSession('a'), itermGhost],
+      steps: [...started(['a']), ...listed('iterm', ['a']), ...turned(['a']), { kind: 'devices.restart' },
+        // The mod asks again within a minute of a poll the devices could not hold.
+        { kind: 'wait', ms: 60_000 },
+        { label: 'voice', kind: 'voice', transcript: 'Eval words for alpha.', target: 'a' }],
+      checks: [], probes: [],
+    })
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, spoken, 'darwin')
+    expect(run.error).toBeUndefined()
+    expect(run.gaps).toEqual([])
+    const { deliveries, steps } = driver.seen()
+    const voice = steps.find((s) => s.label === 'voice')!
+    expect(deliveries.filter((d) => d.at >= voice.at).map(({ path, target, text }) => ({ path, target, text })))
+      .toEqual([{ path: 'mod', target: 'a', text: 'Eval words for alpha.' }])
+  })
+
+  it("after the devices start again a rest on a tab row writes its select on the tabs stream the watch opened again", async () => {
+    const rested = twoTabs('S10', 'Eval a rest after the devices start again', ['a', 'b'],
+      [{ kind: 'devices.restart' }, { label: 'rest', kind: 'swipe', session: 'a' }, { kind: 'wait', ms: 2_000 }])
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, rested, 'darwin')
+    expect(run.error).toBeUndefined()
+    const { streams = [], steps } = driver.seen()
+    const rest = steps.find((s) => s.label === 'rest')!
+    // The devices' selects: the stream's open and the person's tab reports carry a type.
+    const selects = streams.filter((l) => l.window === 'tabs' && l.at >= rest.at && l.line.type === undefined)
+    expect(selects.map((l) => l.line)).toEqual([{ app: 'iterm', tab: 'w1.0.0' }])
+  })
+
+  it("after the devices start again the watch tells them the app in front again: b's tab selected turns the dial to b within 1 s",
+    async () => {
+    const selected = twoTabs('S11', "Eval b's tab selected after the devices start again", ['a', 'b'],
+      [{ kind: 'devices.restart' }, { kind: 'wait', ms: 2_000 }, { label: 'select', kind: 'iterm.select', window: 'w1', tab: 1 }])
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, selected, 'darwin')
+    expect(run.error).toBeUndefined()
+    const { faces, steps } = driver.seen()
+    const select = steps.find((s) => s.label === 'select')!
+    const [a, b] = selected.sessions.slice(0, 2).map(agentIdOf)
+    expect(faces.filter((f) => f.at < select.at).at(-1)?.active).toBe(a)
+    const moved = faces.find((f) => f.at >= select.at && f.active === b)
+    expect((moved?.at ?? Infinity) - select.at).toBeLessThanOrEqual(1_000)
+  })
+
+  it('a restart the dial never comes back from fails its step, saying so', async () => {
+    const unplugged = twoTabs('S12', 'Eval the devices start again with the dial unplugged', ['a'],
+      [{ kind: 'unplug' }, { kind: 'devices.restart' }])
+    const run = await runScenario(new TierADriver({ startDevices }), unplugged, 'darwin')
+    expect(run.error).toBe('step 4 (devices.restart) threw: S12: the devices never welcomed the dial after they started again')
+  })
+
+  it('after the devices start again the watch opens its tabs stream again on their listener on its own retry, waiting on no '
+    + 'dial', async () => {
+    const unplugged = twoTabs('S13', 'Eval the tabs stream after the devices start again with the dial unplugged', ['a'],
+      [{ kind: 'unplug' }, { label: 'restart', kind: 'devices.restart' }])
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, unplugged, 'darwin')
+    // The dial never comes back to them, so the step fails (S12), with the stream open again all the same.
+    expect(run.error).toBe('step 4 (devices.restart) threw: S13: the devices never welcomed the dial after they started again')
+    const { streams = [], steps } = driver.seen()
+    const restart = steps.find((s) => s.label === 'restart')!
+    expect(streams.filter((l) => l.window === 'tabs' && l.at >= restart.at).map((l) => l.line)).toEqual([{ type: 'tabs' }])
+  })
+
+  it.for([i2, i3])('$id twice gives the same frames, streams, commands and deliveries at the same virtual times', async (of) => {
+    const seen = async () => {
+      const driver = new TierADriver({ startDevices })
+      expect((await runScenario(driver, of, 'darwin')).error).toBeUndefined()
+      const { frames, streams, commands, deliveries } = driver.seen()
+      return { frames, streams, commands, deliveries }
+    }
+    const first = await seen()
+    const second = await seen()
+    expect(first.commands.some((c) => basename(c.argv[0]!) === 'tmux')).toBe(true)
+    expect(second).toEqual(first)
+  })
+
+  it("ttyAtime answers the model's access time, never this machine's", async () => {
+    machine.reset()
+    machine.atimes.set('ttys9998', 1_234)
+    expect(await ttyAtime('/dev/ttys9998')).toBe(1_234)
+    expect(await ttyAtime('/dev/ttys9999')).toBeUndefined()
+  })
+
   // The baseline is written on a Mac and checked on Linux: a result naming this host's folders would differ there.
-  it('no result carries an absolute path', () => {
+  // A tty or a pane id is the machine's, not the scenario's: evidence names tabs and panes by label (itermRecords.ts).
+  it('no result carries an absolute path, a tty or a pane id', () => {
     expect(runs.length).toBeGreaterThan(0)
-    const written = JSON.stringify(collect(runs))
-    for (const part of [tmpdir(), homedir(), '/work/eval-']) expect(written).not.toContain(part)
+    const results = collect(runs)
+    const written = JSON.stringify(results)
+    for (const part of [tmpdir(), homedir(), '/work/eval-', '/dev/tty', 'ttys0']) expect(written).not.toContain(part)
+    // tmux's and herdr's pane ids in any evidence, and a tmux session's name in iTerm2's: an editor's window id
+    // (eval-w2-1) is the scenario's own.
+    for (const { app, evidence } of results.results) {
+      for (const line of evidence) {
+        for (const id of [/%[0-9]+/, /w[0-9A-Z]+:p[0-9A-Z]+/, ...(app === 'iterm' ? [/eval-w[0-9]+-[0-9]+/] : [])]) {
+          expect(line).not.toMatch(id)
+        }
+      }
+    }
   })
 
   // The eval command judges the ratchet itself, over both tiers, and says so for its children (run.ts).

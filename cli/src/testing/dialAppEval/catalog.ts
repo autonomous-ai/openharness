@@ -4,6 +4,7 @@
  */
 import { cursorScenarios } from './cursorScenarios.js'
 import { heldOut } from './heldOut.js'
+import { itermScenarios } from './itermScenarios.js'
 import { orcaScenarios } from './orcaScenarios.js'
 import { vscodeScenarios } from './vscodeScenarios.js'
 import { orcaTerminalHandle, type App, type Check, type Editor, type Platform, type Scenario, type SessionDef, type SessionKey, type Step,
@@ -34,8 +35,8 @@ export const EDITOR_AWAY_MS = 45 * S
 const NAMES: Readonly<Record<SessionKey, string>> = { a: 'Alpha', b: 'Bravo', c: 'Charlie', d: 'Delta', e: 'Echo', z: 'Zulu' }
 
 /** A fixed made-up UUID from the key's bytes, so each key has its own; `variant` keeps a session's two ids apart, and an
- *  Orca session's (8c) from the others'. */
-function uuid(key: SessionKey, variant: '8' | '9' | 'a' | 'b' | '8c'): string {
+ *  Orca session's (8c) and an iTerm2 one's (8e) from the others'. */
+function uuid(key: SessionKey, variant: '8' | '9' | 'a' | 'b' | '8c' | '8e'): string {
   const bytes = Buffer.from(key).toString('hex')
   if (bytes.length > 12) throw new Error(`session key ${key} is longer than 6 bytes`)
   return `00000000-0000-4000-${variant.padEnd(4, '0')}-${bytes.padStart(12, '0')}`
@@ -70,6 +71,14 @@ export function orcaSession(key: SessionKey, more: Partial<SessionDef> = {}): Se
   return { key, app: 'orca', id: uuid(key, '8c'), handle: orcaTerminalHandle(key), title: titleOf(key), worktree, tab: 0, split: 0,
     cwd: `/work/eval-${worktree}`, ageMs: 0, ...(more.engine === 'codex' ? { codexHome: 'own' } : {}), ...more }
 }
+/**
+ * An iTerm2 session, Claude Code in its own plain tab, w1's first, unless `more` says otherwise
+ * (docs/plans/2026-11-22-dial-eval-iterm2-plan.md, Decision 1). iTerm2 has no store: its age is its start's.
+ */
+export function itermSession(key: SessionKey, more: Partial<SessionDef> = {}): SessionDef {
+  return { key, app: 'iterm', id: uuid(key, '8e'), title: titleOf(key), cwd: `/work/eval-${key}`, ageMs: 0, place: 'tab', window: 'w1',
+    tab: 0, split: 0, ...more }
+}
 /** A probe of a ring check: the same ring with the ghost in it. */
 export const withGhost = (check: Extract<Check, { kind: 'ring' }>): Check => ({ ...check, expect: [...check.expect, 'z'] })
 /** Newest first, a minute apart, as the catalog's rows are unless they say otherwise. */
@@ -84,11 +93,20 @@ export const claudeGhost: SessionDef = { ...claudeSession('z', 0), ghost: true }
 export const chatgptGhost: SessionDef = { ...thread('z', 0), ghost: true }
 export const editorGhost = (app: Editor): SessionDef => ({ ...editorSession('z', app), ghost: true })
 export const orcaGhost: SessionDef = { ...orcaSession('z'), ghost: true }
+export const itermGhost: SessionDef = { ...itermSession('z'), ghost: true }
 
 /** Each session's start hook in the order given, a second apart, so the last is the newest. */
 export const started = (keys: SessionKey[]): Step[] => keys.flatMap((session, i): Step[] => [
   ...(i === 0 ? [] : [{ kind: 'wait', ms: S } as const]),
   { kind: 'hook', session, event: 'start' },
+])
+
+/** Each session's turn in the order given, so its conversation is on disk for a scan to find
+ *  (docs/plans/2026-11-22-dial-eval-iterm2-plan.md, Decision 13); 2 s long, the shortest turn the catalog lets a person take. */
+export const turned = (keys: SessionKey[]): Step[] => keys.flatMap((session): Step[] => [
+  { kind: 'hook', session, event: 'turn-start' },
+  { kind: 'wait', ms: 2 * S },
+  { kind: 'hook', session, event: 'turn-stop' },
 ])
 
 /** Orca's worktrees laid out in this order, then the plugin's stream open, as every Orca scenario begins (the plan's
@@ -468,6 +486,7 @@ export const MAIN: Scenario[] = [
   ...vscodeScenarios(),
   ...cursorScenarios(),
   ...orcaScenarios(),
+  ...itermScenarios(),
 ]
 
 export const HELD_OUT: Scenario[] = heldOut()

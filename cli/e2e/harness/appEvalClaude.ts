@@ -6,7 +6,8 @@
  *   ones it runs itself: a turn is `!until <name>`, its last answer the release file's text, a permission it asks for
  *   `<name>.permit` (fakeEngine.mjs). The harness-device mod's inbox poll is held for it (modInbox.ts), and each text a
  *   poll is answered is a `mod` delivery to that session; each prompt its terminal took that no step typed is a `typed`
- *   one. So words that reach any session by either path are seen with their target;
+ *   one. So words that reach any session by either path are seen with their target. The same steps run a Claude Code in
+ *   any terminal a host gives it (ClaudeTerminal: iTerm2's tmux and herdr panes, appEvalIterm.ts);
  * - the mod's attach, through the real `harness device claude link --json` and its post, as dialClaudeAppFollow.e2e.ts;
  * - the app itself: a process for as long as it runs, which quits with its sessions and relaunches them, and resumes a
  *   resumable session whose continue link opened, then shows it, the mod in a running session's Claude Code saying its
@@ -28,7 +29,7 @@ import type { SessionDef, SessionKey } from '../../src/testing/dialAppEval/types
 import { inside, speak, type AppSteps, type OpenRun, type TierBWorld } from './appEvalDriver.js'
 import { SOURCES_CLI, until, type IsolatedDaemon } from './daemon.js'
 import { inboxPoll } from './modInbox.js'
-import { Outside, type FakeApp as OutsideApp } from './outsideAgent.js'
+import { NoKeys, Outside, type FakeApp as OutsideApp } from './outsideAgent.js'
 
 const LINUX = process.platform === 'linux'
 // How the real CLI is started: the run's bundle when there is one (E2E_BUNDLE), as the daemon runs, from any folder.
@@ -46,14 +47,29 @@ const LINK_MS = 30_000
 const STDERR_KEPT = 2_000
 
 /**
+ * The terminal a session's Claude Code runs in, as its steps use it: a tab of an app's (Outside), or a pane of tmux or
+ * herdr's. What is typed at its prompt, then Enter; whether its process ran a hook (`d.hookLog()`, as Outside.ran reads
+ * it); its close, with no hook; and its end at once, the driver's last resort. [shellPid]: the shell a terminal app
+ * reports for its tab, when it has one.
+ */
+export interface ClaudeTerminal {
+  readonly shellPid?: number
+  type(text: string): void | Promise<void>
+  ran(d: IsolatedDaemon, event: string, times?: number, from?: number): boolean
+  close(): Promise<void>
+  killTab(): void
+}
+/**
  * How an app starts a session's Claude Code (outsideAgent.ts Outside.start): the hints its hooks send beside the
- * session's title, the fake app it runs under, whether as a terminal's shell's job, and the app that app was started from.
+ * session's title, the fake app it runs under, whether as a terminal's shell's job, and the app that app was started from;
+ * or, with [terminal], in a terminal of the host's own, which goes on in the session's conversation and names its title.
  */
 export type ClaudeHost = (world: TierBWorld, s: SessionDef) => {
   hints: Record<string, string>; app?: OutsideApp; shell?: boolean; launchedFrom?: 'terminal-app'
+  terminal?: () => Promise<ClaudeTerminal>
 }
 interface Live {
-  outside: Outside
+  outside: ClaudeTerminal
   /** Ends the mod's poll. */
   mod: AbortController
   /** The prompts typed into it and the turns it answered; the open turn's name; a permission dialog waiting on the person. */
@@ -173,15 +189,15 @@ export function start(world: TierBWorld, app: FakeApp, key: SessionKey): Promise
   if (!starting) {
     starting = (async () => {
       const s = world.session(key)
-      const { hints, app: under, shell, launchedFrom } = app.host(world, s)
+      const { hints, app: under, shell, launchedFrom, terminal } = app.host(world, s)
       const folder = basename(s.cwd)
       const transcript = join(world.d.env.CLAUDE_PROJECTS_DIR!, join(world.d.projectsDir, folder).replace(/[^a-zA-Z0-9]/g, '-'), `${s.id}.jsonl`)
       let from = 0
       try { from = statSync(transcript).size } catch { /* its first run */ }
       installMod(world.d)
       // Its hooks name the session's title (session_title).
-      const outside = await Outside.start(world.d, folder, { ...hints, FAKE_CLAUDE_SESSION_TITLE: s.title }, under,
-        { shell, launchedFrom, resume: s.id })
+      const outside = await (terminal?.() ?? Outside.start(world.d, folder, { ...hints, FAKE_CLAUDE_SESSION_TITLE: s.title }, under,
+        { shell, launchedFrom, resume: s.id }))
       const live: Live = { outside, mod: new AbortController(), turns: 0, stops: 0, transcript, from }
       app.live.set(key, live)
       void holdMod(world, key, s.id, live.mod.signal)
@@ -231,20 +247,37 @@ function typedInto(world: TierBWorld, key: SessionKey, live: Live): void {
   for (const { at, text: words } of typedPrompts(text)) world.deliver({ path: 'typed', target: key, text: words }, at)
 }
 
-/** It leaves as Claude Code does when the app ends it: its open turn over, its SessionEnd hook, then its process. */
+/**
+ * It leaves as Claude Code does when the app ends it: its open turn over, its SessionEnd hook, then its process. One whose
+ * terminal takes no keys (NoKeys: iTerm2 relaunched) goes with that terminal, with no hook, as a session dropped does.
+ */
 async function end(world: TierBWorld, app: FakeApp, key: SessionKey, live: Live): Promise<void> {
   app.live.delete(key)
   const { outside } = live
   // A dialog waiting on the person is declined, as with Esc; an open turn answers as it would.
-  if (live.asking) outside.type('\x1b')
-  if (live.open) writeWhole(fileOf(world, live.open, 'release'), '')
-  outside.type('!exit')
   try {
+    if (live.asking) await outside.type('\x1b')
+    if (live.open) writeWhole(fileOf(world, live.open, 'release'), '')
+    await outside.type('!exit')
     await until(`${key}'s SessionEnd hook`, () => outside.ran(world.d, 'SessionEnd'), END_MS, 50)
+  } catch (error) {
+    if (!(error instanceof NoKeys)) throw error
   } finally {
     live.mod.abort()
     typedInto(world, key, live)
     await outside.close()
+  }
+}
+
+/** It goes with its terminal, as a process killed with it does: no hook, its mod's poll over, the words typed into it read. */
+export async function drop(world: TierBWorld, key: SessionKey): Promise<void> {
+  const live = liveOf(world, key)
+  stateOf(world).app!.live.delete(key)
+  live.mod.abort()
+  try {
+    await live.outside.close()
+  } finally {
+    typedInto(world, key, live)
   }
 }
 
@@ -260,7 +293,7 @@ async function close(world: TierBWorld, app: FakeApp): Promise<void> {
 
 function liveOf(world: TierBWorld, key: SessionKey): Live {
   const live = stateOf(world).app?.live.get(key)
-  if (!live) throw new Error(`scenario ${world.scenario.id}: a hook for ${key}, which is not running`)
+  if (!live) throw new Error(`scenario ${world.scenario.id}: a step on ${key}, which is not running`)
   return live
 }
 
@@ -358,7 +391,7 @@ export const claudeSteps = {
         if (live.open) throw new Error(`scenario ${world.scenario.id}: ${step.session}'s turn is open already`)
         live.open = `eval-turn-${++turnsTyped}`
         const turns = ++live.turns
-        outside.type(`!until ${live.open}`)
+        await outside.type(`!until ${live.open}`)
         await until(`${step.session}'s UserPromptSubmit hook`, () => outside.ran(d, 'UserPromptSubmit', turns), HOOK_MS, 50)
         break
       }
@@ -377,7 +410,7 @@ export const claudeSteps = {
         if (!live.open) throw new Error(`scenario ${world.scenario.id}: ${step.session} has no turn to stop`)
         // A dialog waiting on the person is allowed first, Enter on its first row: the turn then ends on its answer.
         if (live.asking) {
-          outside.type('')
+          await outside.type('')
           live.asking = undefined
         }
         const stops = ++live.stops

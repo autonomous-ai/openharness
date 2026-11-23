@@ -8,7 +8,7 @@ import { APPS, DIMENSIONS, type App, type AppScores, type Report } from './types
 /** Reported beside each app's score; a score below it never fails CI. */
 const TARGET = 95
 const APP_NAMES: Record<App, string> = { claude: 'the Claude app', chatgpt: 'the ChatGPT app', vscode: 'VS Code', cursor: 'Cursor',
-  orca: 'Orca' }
+  orca: 'Orca', iterm: 'iTerm2' }
 /** What no run of the eval drives, printed under the score table so a score is not read as covering it. */
 const NOT_COVERED = 'Not covered: tier B on Windows; in tier B on Linux, the raise of a tap on an Orca row; O16 in tier B, for its time'
 

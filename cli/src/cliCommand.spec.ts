@@ -21,9 +21,9 @@ const servers: Server[] = []
  * at its deadline (testing/spawnedRuns.ts). Twelve `cli.ts start` runs of this file that never exited
  * were found nine hours later, one spinning a core: tsx runs the CLI in a child of its own, a dev-mode
  * start becomes the daemon, and nothing killed either when a test timed out. The daemon a run's pid
- * file names counts as the run's when it is this checkout's CLI.
+ * file names counts as the run's while that pid started in the run's time.
  */
-const runs = new SpawnedRuns((command) => command.includes(CLI_SOURCE))
+const runs = new SpawnedRuns()
 // A worker that exits with a run still going (a cancelled run) takes the run's group with it.
 process.once('exit', () => runs.killAllSync())
 
@@ -229,19 +229,19 @@ describe('the processes this spec starts', () => {
   const idle = `['-e', 'setInterval(() => {}, 1000)']`
 
   it('a run that exits leaving processes behind is caught, and teardown ends every one', async () => {
-    const guard = new SpawnedRuns((command) => command.includes('--guard-daemon'))
+    const guard = new SpawnedRuns()
     const root = freshRoot()
     mkdirSync(join(root, 'data'), { recursive: true })
-    // Three ways a run leaves a process: a child in its group, a child in a session of its own that
-    // names the root, and a daemon in a session of its own that only the pid file names.
+    // Two ways a run leaves a process: a child in its group, and a daemon in a session of its own that
+    // only the pid file names. A child in a session of its own whose parent has gone is launchd's, and
+    // nothing but its pid, parent and group is read of a process outside the run's tree (spawnedRuns.ts).
     const script = `
       const { spawn } = require('node:child_process')
       const kept = spawn(process.execPath, ${idle}, { stdio: 'ignore' })
-      const orphan = spawn(process.execPath, [...${idle}, ${JSON.stringify(root)}], { stdio: 'ignore', detached: true })
-      const daemon = spawn(process.execPath, [...${idle}, '--', '--guard-daemon'], { stdio: 'ignore', detached: true })
+      const daemon = spawn(process.execPath, ${idle}, { stdio: 'ignore', detached: true })
       require('node:fs').writeFileSync(${JSON.stringify(join(root, 'data', 'adapter.pid'))}, daemon.pid + '\\n')
-      console.log(JSON.stringify([kept.pid, orphan.pid, daemon.pid]))
-      for (const child of [kept, orphan, daemon]) child.unref()
+      console.log(JSON.stringify([kept.pid, daemon.pid]))
+      for (const child of [kept, daemon]) child.unref()
     `
     const result = await guard.complete(root, ['-e', script], { label: 'leaky' })
     expect(result.status, result.stderr).toBe(0)
@@ -250,7 +250,7 @@ describe('the processes this spec starts', () => {
     expect(guard.belonging(result.run).map((row) => row.pid).sort()).toEqual([...pids].sort())
 
     const { leftBehind, survivors } = await guard.endAll()
-    expect(leftBehind).toHaveLength(3)
+    expect(leftBehind).toHaveLength(2)
     expect(survivors).toEqual([])
     expect(pids.filter(alive)).toEqual([])
   }, 30_000)

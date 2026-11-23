@@ -2,7 +2,7 @@
 // title from `harness hardware watch`, and the session the Claude app shows from the harness-device mod. The editors'
 // and Orca's fakes reach the listener the same way (handlerOf, tell).
 import { frontAppId } from '../../../../cable/hosts/frontApp.js'
-import { FRONT_NAMES } from '../../types.js'
+import { frontName } from '../../types.js'
 import type { ListenerHandler, ListenerStreamHandler } from '../../../../services/devicesListener.js'
 import type { StepHandler, TierAWorld } from '../world.js'
 
@@ -24,7 +24,7 @@ export const windowSteps: { front: StepHandler<'front'>; thread: StepHandler<'th
     world.front = step.app
     // The watch sends what the product makes of the OS's own name, so a platform where it cannot tell an app is graded
     // as the person sees it.
-    return tell(world, { type: 'front', app: frontAppId(FRONT_NAMES[world.platform][step.app]) })
+    return tell(world, { type: 'front', app: frontAppId(frontName(world.platform, step.app)) })
   },
   thread: (world, step) => tell(world, { type: 'thread', title: step.title }),
   // The mod names the Claude Code session the app attached: its cliSessionId.

@@ -160,11 +160,12 @@ DEVICE_APP_PACKAGES = (("appimage", "x64"), ("appimage", "arm64"), ("nsis", "x64
 DEVICE_APP_BUILDS = {"device-app-e2e": DEVICE_APP_PACKAGES, "device-app-desktop": DEVICE_APP_PACKAGES,
                      "device-app-install": (("appimage", "x64"),)}
 # linux-e2e: a CLI e2e file the PR adds or modifies, but those another job runs: windows-e2e the dial and the apps'
-# sessions on it on Windows, diskfull.e2e.ts needs macOS, the agent browser's Podman file runs by hand (about 50
-# minutes), and dial-hosts the files that need the hosts installed (cli/e2e/harness/dialHosts.ts's DIAL_HOST_FILES, which
-# the CI config leaves out).
+# sessions on it on Windows, diskfull.e2e.ts needs macOS, the dial app eval's iTerm2 file needs macOS (iTerm2 is a Mac
+# app; the tester runs it, docs/plans/2026-11-22-dial-eval-iterm2-design.md), the agent browser's Podman file runs by
+# hand (about 50 minutes), and dial-hosts the files that need the hosts installed (cli/e2e/harness/dialHosts.ts's
+# DIAL_HOST_FILES, which the CI config leaves out).
 LINUX_E2E_NEVER = {"cli/e2e/dialWindows.e2e.ts", "cli/e2e/dialWindowsAppSessions.e2e.ts", "cli/e2e/diskfull.e2e.ts",
-                   "cli/e2e/agentBrowserPodman.e2e.ts"}
+                   "cli/e2e/dialAppEvalIterm.e2e.ts", "cli/e2e/agentBrowserPodman.e2e.ts"}
 # What every e2e file runs on but none tests itself: the jobs' setup action (its real backend, which dial-hosts does not
 # ask for), the harness, Vitest's e2e configs and the timing hints. A change to one runs linux-e2e's canary, a short file
 # (two daemons on the real backend, one case) beside the PR's own; the canary's own deletion runs it, so that PR fails.
@@ -189,8 +190,10 @@ LINUX_E2E_ORCA_PATHS = ("cli/e2e/harness/orcaHost.ts", "cli/e2e/harness/inOrca.t
 # whose `vscode` stream the windows of both tiers open (and its path), the hook, the extension and its setup, Cursor's
 # engine and discovery, and the harness's editor windows and outside agents; for Orca, its plugin's code, the devices' Orca reads
 # (its homes and the recorded app), the harness's loop that runs the plugin and its dial stream, Orca's fake CLI and
-# terminal-host stand-in, and InOrca. A change to one runs them beside the PR's own files; its deletion too, as the
-# Orca paths' does.
+# terminal-host stand-in, and InOrca; for every app, the rest of the harness the driver runs (its desk, dial, backend,
+# mod inbox, scheme apps and ChatGPT's Codex CLI; iTerm2's tmux and herdr with the recording wrapper and the herdr-only
+# process table: test_ci_plan walks the imports). A change to one runs them beside the PR's own files; its deletion too,
+# as the Orca paths' does.
 LINUX_E2E_APP_EVAL_FILES = ("cli/e2e/dialAppEvalClaude.e2e.ts", "cli/e2e/dialAppEvalChatgpt.e2e.ts",
                             "cli/e2e/dialAppEvalVscode.e2e.ts", "cli/e2e/dialAppEvalCursor.e2e.ts",
                             "cli/e2e/dialAppEvalOrca.e2e.ts", "cli/e2e/dialAppEvalHeldOut.e2e.ts")
@@ -204,7 +207,10 @@ LINUX_E2E_APP_EVAL_PATHS = ("cli/src/cable/hosts/", "cli/src/testing/dialAppEval
                             *(f"cli/e2e/harness/{name}.ts" for name in ("vscodeWindow", "outsideAgent", "codexOutside",
                                                                          "cursorOutside", "editorWindow", "fakeOrca",
                                                                          "inOrca", "orcaHost", "pluginDial",
-                                                                         "pluginLoop")),
+                                                                         "pluginLoop", "desk", "fakeDial", "fakeBackend",
+                                                                         "modInbox", "schemeApps", "codexAppCli",
+                                                                         "herdrServer", "dialHosts", "ownTmux",
+                                                                         "runLog")),
                             *LINUX_E2E_APP_EVAL_FILES)
 DIAL_HOST_FILES = ("cli/e2e/dialHost*.e2e.ts", "cli/e2e/deviceHerdr.e2e.ts")
 # dial-hosts: those files, the code they run and the job's own definition. The daemon runs every host adapter from its
@@ -215,8 +221,8 @@ DIAL_HOST_PATHS = (
     "cli/e2e/harness/dialHosts.ts", "cli/vitest.e2e.dialHosts.config.ts", "cli/src/cable/hosts/",
     "cli/src/testing/dialCarousel.ts", *(f"cli/src/cable/{name}.ts" for name in ("cableFrame", "portAccess", "roundGlyphs")),
     *(f"cli/e2e/harness/{name}.ts" for name in ("desk", "fakeBackend", "fakeDial", "fakeOrca", "herdrServer", "inOrca",
-                                                 "kittyWindow", "orcaHost", "outsideAgent", "swayDesk", "weztermMux",
-                                                 "x11Desk", "zellijSession")),
+                                                 "kittyWindow", "orcaHost", "outsideAgent", "runLog", "swayDesk",
+                                                 "weztermMux", "x11Desk", "zellijSession")),
     ".github/workflows/cli-e2e-dial-hosts.yml", ".github/actions/cli-e2e-setup/",
 )
 # The names linux-e2e passes on: they reach the jobs' shells through env, and Vitest as file filters, so plain names only.

@@ -1,6 +1,6 @@
 // The dial eval's check evaluators: pure functions from what a driver saw to scores (docs/plans/2026-11-21-dial-app-eval-plan.md,
-// Task 5). Evidence names session keys, editor window ids and times only, never a title, a folder or spoken text, and
-// lists only what was observed: a driver that observes nothing leaves it empty, so its probes fail.
+// Task 5). Evidence names session keys, editor window ids, iTerm2 tab labels and times only, never a title, a folder or
+// spoken text, and lists only what was observed: a driver that observes nothing leaves it empty, so its probes fail.
 import { posix } from 'node:path'
 import { windowClasses } from '../../cable/hosts/frontApp.js'
 import { APP_BUNDLES } from '../../cable/hosts/hostDetect.js'
@@ -8,8 +8,9 @@ import { observedTitle } from '../../cable/hosts/observedTitle.js'
 import { WINDOWS_APPS } from '../../cable/hosts/windowsRaise.js'
 import { CAROUSEL_TILES } from '../dialCarousel.js'
 import { flagOf, ORCA_PROGRAMS, programOf } from './argv.js'
+import { isTabLabel, sessionTab, TABS_STREAM } from './itermRecords.js'
 import { tabTitle } from './orcaListing.js'
-import { agentIdOf, EDITORS, engineOf, orcaPaneHandle, orcaWorktreeId, PAGE, placeOf, SKIPPED_SCROLL, THRESHOLDS, type App, type Check,
+import { agentIdOf, EDITORS, engineOf, itermPlaceOf, orcaPaneHandle, orcaWorktreeId, PAGE, placeOf, SKIPPED_SCROLL, THRESHOLDS, type App, type Check,
   type CheckResult, type LinkedApp, type Platform, type Scenario, type Seen, type SessionDef, type SessionKey, type StepOf, type Tier,
   type Until, type WrongSend } from './types.js'
 
@@ -197,14 +198,15 @@ function apartPart(apart: SessionKey[], page: string, world: World, w: Window | 
 
 /**
  * The title a row should carry at `to`: the latest `codex.write` that renamed it before then, else the fixture's. The
- * hooks of Codex and Cursor's agents in an editor carry no title, so their rows are named by the folder the hook sends:
- * a Cursor hook's first root, as notify.mjs sends it, else its cwd.
+ * hooks of Codex and Cursor's agents in an editor or iTerm2 carry no title, so their rows are named by the folder the
+ * hook sends: a Cursor hook's first root, as notify.mjs sends it, else its cwd.
  */
 function titleOf(world: World, key: SessionKey, to: number): string {
   const session = world.session(key)
   if (session.app === 'orca') return orcaTitle(world, session, to)
   const folder = session.app === 'cursor' ? session.folders?.[0] ?? session.cwd : session.cwd
-  let title = placeOf(session) !== undefined && engineOf(session) !== 'claude' ? posix.basename(folder) : session.title
+  const hooked = placeOf(session) !== undefined || itermPlaceOf(session) !== undefined
+  let title = hooked && engineOf(session) !== 'claude' ? posix.basename(folder) : session.title
   for (const step of world.stepsBefore(to)) {
     if (step.kind === 'codex.write' && step.names && Object.hasOwn(step.names, key)) title = step.names[key]!
   }
@@ -308,10 +310,10 @@ const SCHEMES: Readonly<Record<LinkedApp, string>> = { claude: 'claude://', chat
 
 /**
  * The session's own link: the Claude app opens its store's `local_` id, the ChatGPT app the Codex thread, an editor's
- * Claude Code panel its session; an editor's other rows and Orca's have none.
+ * Claude Code panel its session; an editor's other rows, Orca's and iTerm2's have none.
  */
 function linkOf(session: SessionDef): string | undefined {
-  if (session.app === 'orca') return undefined
+  if (session.app === 'orca' || session.app === 'iterm') return undefined
   const place = placeOf(session)
   if (place === 'panel') return `${SCHEMES[session.app]}anthropic.claude-code/open?session=${session.id}`
   if (place !== undefined) return undefined
@@ -387,7 +389,8 @@ function holder(streams: ReadonlyMap<string, Stream>, key: SessionKey): string |
  * An editor row is graded by its kind (docs/plans/2026-11-22-dial-eval-vscode-cursor-plan.md, Decision 6): a terminal
  * whose shell a stream holds as the window opens on its `show` with `raise` there, and its app brought forward; one with
  * none on VS Code's front or Cursor's folder, its last resort; Cursor's agent on its folder; a panel, as the base apps,
- * on its link and front. An Orca row is graded by orcaOpenParts. A row the dial was never sent scores 0 on every part.
+ * on its link and front. An Orca row is graded by orcaOpenParts, an iTerm2 row by itermOpenParts. A row the dial was never
+ * sent scores 0 on every part.
  */
 function openParts(check: CheckOf<'open'>, world: World, w: Window | undefined, tier: Tier, platform: Platform): Part[] {
   const session = world.session(check.session)
@@ -433,6 +436,10 @@ function openParts(check: CheckOf<'open'>, world: World, w: Window | undefined, 
     const parts = orcaOpenParts(session, world, w, tier, platform, commands, inputs)
     return listed ? parts : never(parts)
   }
+  if (session.app === 'iterm') {
+    const parts = itermOpenParts(check, session, world, w, commands, inputs)
+    return listed ? parts : never(parts)
+  }
   const evidence = bounded([...inputs, ...commands.map((c) => `command at ${c.at}: ${
     [linked.includes(c) && 'link', brings(c) && 'front', folds(c) && 'folder', !c.ok && 'failed'].filter(Boolean).join(' ') || 'other'}`),
   ...shows.map((l) => `show at ${l.at} on ${l.window}: ${world.known(l.line.show)}${l.line.raise === true ? ' raise' : ''}`),
@@ -460,6 +467,15 @@ function openParts(check: CheckOf<'open'>, world: World, w: Window | undefined, 
       timing(front?.at),
     ]
   }
+}
+
+/** The first tap or swipe on the session in the window, at its time: what an Orca or iTerm2 row's open is graded from. */
+function inputOn(world: World, w: Window | undefined, key: SessionKey): { at: number; kind: 'tap' | 'swipe' } | undefined {
+  for (const s of w ? world.seen.steps : []) {
+    const step = world.scenario.steps[s.index]!
+    if (within(s.at, w!) && (step.kind === 'tap' || step.kind === 'swipe') && step.session === key) return { at: s.at, kind: step.kind }
+  }
+  return undefined
 }
 
 /** Whether a command is Orca's CLI running `<group> <verb>`, as `orca`, `orca-ide` or `orca.exe` from any folder. */
@@ -491,13 +507,9 @@ function orcaOpenParts(session: SessionDef, world: World, w: Window | undefined,
   const before = (i: number, j: number): boolean => i !== j && (tier === 'b' ? commands[i]!.at <= commands[j]!.at : i < j)
   const shown = switched < 0 ? undefined : commands.filter((c, i) => orcaRuns(c.argv, 'worktree', 'activate') && before(i, switched)).at(-1)
   const raised = switched < 0 ? undefined : commands.find((c, i) => raises(c) && before(switched, i))
-  const made = w ? world.seen.steps.find((s) => {
-    const step = world.scenario.steps[s.index]!
-    return within(s.at, w) && (step.kind === 'tap' || step.kind === 'swipe') && step.session === session.key
-  }) : undefined
-  const input = made && world.scenario.steps[made.index]
+  const input = inputOn(world, w, session.key)
   // The product activates the worktree whenever its last read of Orca's layout lists it: the layout as the input was made.
-  const layout = w ? world.stepsBefore(made?.at ?? w.from)
+  const layout = w ? world.stepsBefore(input?.at ?? w.from)
     .filter((s): s is StepOf<'orca.layout'> => s.kind === 'orca.layout').at(-1) : undefined
   const laid = session.worktree !== undefined && layout?.worktrees.includes(session.worktree) === true
   const evidence = bounded([...inputs, ...commands.map((c) => {
@@ -519,6 +531,72 @@ function orcaOpenParts(session: SessionDef, world: World, w: Window | undefined,
     parts.push({ part: 'raise', score: raised ? 1 : 0, timed: false, evidence },
       { part: 'latency', score: graded(latency, THRESHOLDS.open), timed: true, ms: latency, evidence })
   }
+  return parts
+}
+
+/** A tab's label as a select names it; anything else is never printed, as it may be a tty. */
+const labelled = (tab: unknown): string => (isTabLabel(tab) ? tab : 'other')
+
+/**
+ * The session whose pane a command selects: tmux's `select-pane -t pane:<key>`, herdr's `agent focus pane:<key>`, with
+ * panes named by key as both tiers record them (itermRecords.ts namedPanes); `other` for a pane no session holds.
+ */
+function paneSelect(argv: string[], world: World): { program: 'tmux' | 'herdr'; key: string } | undefined {
+  const at = argv.indexOf('select-pane')
+  const target = (pane: string | undefined, program: 'tmux' | 'herdr'): { program: 'tmux' | 'herdr'; key: string } | undefined =>
+    pane === undefined ? undefined : { program, key: pane.startsWith('pane:') ? world.known(pane.slice('pane:'.length)) : 'other' }
+  switch (programOf(argv)) {
+    case 'tmux': return target(at > 0 && argv[at + 1] === '-t' ? argv[at + 2] : undefined, 'tmux')
+    case 'herdr': return target(argv[1] === 'agent' && argv[2] === 'focus' ? argv[3] : undefined, 'herdr')
+  }
+  return undefined
+}
+
+/**
+ * An iTerm2 row by its place (docs/plans/2026-11-22-dial-eval-iterm2-plan.md, Decision 10), from the first tap or swipe on
+ * it in the window: a select on the watch's tabs stream naming its tab (check.tab when its client moved), with raise on a
+ * tap and without on a rest, and none naming another tab; a tmux or herdr row also its own pane selected by its own
+ * multiplexer, and no other session's; a tap brings iTerm2 forward, timed to the latest of those parts, and a rest raises
+ * nothing. Order between them is not graded. With no select of its tab nothing was shown, so a dead rest passes no part.
+ */
+function itermOpenParts(check: CheckOf<'open'>, session: SessionDef, world: World, w: Window | undefined,
+  commands: Seen['commands'], inputs: string[]): Part[] {
+  const want = check.tab ?? sessionTab(session)
+  const place = itermPlaceOf(session)
+  const rest = inputOn(world, w, session.key)?.kind === 'swipe'
+  // The devices' selects alone: the stream's open, the person's tab reports and its end carry a type or no tab.
+  const selects = w ? (world.seen.streams ?? [])
+    .filter((l) => l.window === TABS_STREAM && l.line.type === undefined && l.line.tab !== undefined && within(l.at, w)) : []
+  const mine = (l: StreamLine): boolean => l.line.app === PAGE.iterm && l.line.tab === want
+  const shown = selects.find((l) => mine(l) && (l.line.raise === true) !== rest)
+  const tabbed = shown !== undefined && selects.every(mine)
+  // iTerm2 runs on macOS alone (FRONT_NAMES), so it comes forward by macOS's `open -b`.
+  const fronting = (c: Seen['commands'][number]): boolean => fronts(c.argv, 'darwin', 'iterm', undefined)
+  const front = commands.find((c) => c.ok && fronting(c))
+  // A failed select moved no pane.
+  const picks = commands.filter((c) => c.ok).flatMap((c) => {
+    const picked = paneSelect(c.argv, world)
+    return picked ? [{ at: c.at, ...picked }] : []
+  })
+  // A tab row has no pane of its own, so no pick is its; a tmux or herdr row's is by its own multiplexer.
+  const paned = place === 'tab' ? undefined : picks.find((p) => p.program === place && p.key === session.key)
+  const stray = picks.some((p) => p.key !== session.key)
+  const evidence = bounded([...inputs, ...commands.map((c) => {
+    const pane = paneSelect(c.argv, world)
+    const what = pane ? `pane ${pane.key}` : fronting(c) ? 'front' : undefined
+    return `command at ${c.at}: ${[what, !c.ok && 'failed'].filter(Boolean).join(' ') || 'other'}`
+  }), ...selects.map((l) => `select at ${l.at}: ${labelled(l.line.tab)}${l.line.raise === true ? ' raise' : ''}`),
+  ...(inputs.length > 0 && selects.length === 0 ? ['no select'] : [])])
+  const pane = place === 'tab' ? undefined : { part: 'pane', score: paned && !stray ? 1 : 0, timed: false, evidence }
+  const parts: Part[] = [{ part: 'tab', score: tabbed ? 1 : 0, timed: false, evidence }, ...(pane ? [pane] : [])]
+  if (rest) {
+    parts.push({ part: 'noRaise', score: tabbed && !front && !selects.some((l) => l.line.raise === true) ? 1 : 0, timed: false, evidence })
+    return parts
+  }
+  const passed = tabbed && front !== undefined && (pane === undefined || pane.score === 1)
+  const latency = passed && w ? Math.max(shown!.at, front.at, ...(paned ? [paned.at] : [])) - w.from : null
+  parts.push({ part: 'front', score: front ? 1 : 0, timed: false, evidence },
+    { part: 'latency', score: graded(latency, THRESHOLDS.open), timed: true, ms: latency, evidence })
   return parts
 }
 

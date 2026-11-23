@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { frontAppId } from '../../../../cable/hosts/frontApp.js'
 import { attachHandler, frontHandler, threadHandler } from '../../../../services/devicesListener.js'
 import { claudeSessions, titleOf } from '../../catalog.js'
-import { APPS, FRONT_NAMES, type Platform, type Scenario } from '../../types.js'
+import { APPS, frontName, type Platform, type Scenario } from '../../types.js'
 import type { TierAWorld } from '../world.js'
 import { windowSteps } from './window.js'
 
@@ -31,15 +31,20 @@ describe("tier A's window steps", () => {
     expect(told).toEqual({ threads: ['Eval T2'], attached: [sessions[1]!.id] })
   })
 
-  it("the front step tells the listener what frontAppId makes of the platform's own front name, for each app and platform, Orca's included", async () => {
+  it("the front step tells the listener what frontAppId makes of the platform's own front name, for each app and platform it has one on, Orca's and iTerm2's included", async () => {
+    const told: string[] = []
     for (const platform of ['darwin', 'linux', 'win32'] as const satisfies readonly Platform[]) {
+      // iTerm2 is macOS only: it has no front name on Linux or Windows.
       for (const app of [...APPS, 'other'] as const) {
+        if (app === 'iterm' && platform !== 'darwin') continue
         const fronts: string[] = []
         const world = { platform, listener: { front: frontHandler((id) => fronts.push(id)) } } as unknown as TierAWorld
         await windowSteps.front(world, { kind: 'front', app })
-        expect(fronts, `${platform} ${app}`).toEqual([frontAppId(FRONT_NAMES[platform][app])])
+        expect(fronts, `${platform} ${app}`).toEqual([frontAppId(frontName(platform, app))])
+        told.push(`${platform} ${app}`)
       }
     }
+    expect(told).toContain('darwin iterm')
   })
 
   it('a message the listener refuses fails the step', async () => {

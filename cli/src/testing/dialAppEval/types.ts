@@ -1,12 +1,12 @@
 // The dial eval's contract: the catalog, the drivers, the runner, the grader and the report all speak these types
 // (docs/plans/2026-11-21-dial-app-eval-design.md, docs/plans/2026-11-22-dial-eval-vscode-cursor-design.md,
-// docs/plans/2026-11-22-dial-eval-orca-design.md).
+// docs/plans/2026-11-22-dial-eval-orca-design.md, docs/plans/2026-11-22-dial-eval-iterm2-design.md).
 import { observedAgentId } from '../../cable/hosts/observed.js'
 
-export type App = 'claude' | 'chatgpt' | 'vscode' | 'cursor' | 'orca'
+export type App = 'claude' | 'chatgpt' | 'vscode' | 'cursor' | 'orca' | 'iterm'
 export type Editor = Extract<App, 'vscode' | 'cursor'>
-/** The apps whose rows open by a link of their scheme: all but Orca. */
-export type LinkedApp = Exclude<App, 'orca'>
+/** The apps whose rows open by a link of their scheme: all but Orca and iTerm2. */
+export type LinkedApp = Exclude<App, 'orca' | 'iterm'>
 export type Dimension = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7' | 'D8'
 export type Platform = 'darwin' | 'win32' | 'linux'
 /** `a`: replay in process; `b`: scripted end to end on the real daemon, fake apps. */
@@ -16,10 +16,11 @@ export type Label = string
 
 export const DIMENSIONS: readonly Dimension[] = ['D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D8']
 /** The apps scored, in the order the grader and the report list them. */
-export const APPS: readonly App[] = ['claude', 'chatgpt', 'vscode', 'cursor', 'orca']
+export const APPS: readonly App[] = ['claude', 'chatgpt', 'vscode', 'cursor', 'orca', 'iterm']
 export const EDITORS: readonly Editor[] = ['vscode', 'cursor']
 /** The wire's name for an app's page, which is its app id on the host too (hostDetect.ts): the ChatGPT app's threads are Codex's. */
-export const PAGE: Readonly<Record<App, string>> = { claude: 'claude', chatgpt: 'codex', vscode: 'vscode', cursor: 'cursor', orca: 'orca' }
+export const PAGE: Readonly<Record<App, string>> = { claude: 'claude', chatgpt: 'codex', vscode: 'vscode', cursor: 'cursor', orca: 'orca',
+  iterm: 'iterm' }
 /** The maker of a held Orca pane's terminal, in both tiers: a program that is not Orca's terminal host. */
 export const HELD_MAKER = 'eval-terminal'
 /** How long after a switch Orca tells the focus it moved, in both tiers: inside the devices' 2 s echo window
@@ -30,18 +31,29 @@ export const ORCA_ECHO_MS = 1_500
  * The app in front as each OS names it, as Harness Device tells it: a bundle id on macOS, the window's process on Linux,
  * its program on Windows; `other` is an app the dial follows none of. Orca's are its own names on each (its bundle id,
  * src/testing/recordedOrca.ts's executable, orca.exe), whether or not the product tells Orca by them, so a platform it
- * cannot is graded as the person sees it.
+ * cannot is graded as the person sees it. iTerm2 runs on macOS alone, so it has no name on the others.
  */
-export const FRONT_NAMES: Readonly<Record<Platform, Readonly<Record<App | 'other', string>>>> = {
+export const FRONT_NAMES: Readonly<Record<Platform, Readonly<Partial<Record<App | 'other', string>>>>> = {
   darwin: { claude: 'com.anthropic.claudefordesktop', chatgpt: 'com.openai.codex', vscode: 'com.microsoft.VSCode',
-    cursor: 'com.todesktop.230313mzl4w4u92', orca: 'com.stablyai.orca', other: 'com.apple.Safari' },
+    cursor: 'com.todesktop.230313mzl4w4u92', orca: 'com.stablyai.orca', iterm: 'com.googlecode.iterm2', other: 'com.apple.Safari' },
   linux: { claude: 'claude-desktop', chatgpt: 'ChatGPT', vscode: 'code', cursor: 'cursor', orca: 'orca-ide', other: 'firefox' },
   win32: { claude: 'Claude.exe', chatgpt: 'ChatGPT.exe', vscode: 'Code.exe', cursor: 'Cursor.exe', orca: 'orca.exe', other: 'firefox.exe' },
+}
+
+/** The app's front name on the platform; an app with none there throws, as no scenario of it runs there. */
+export function frontName(platform: Platform, app: App | 'other'): string {
+  const name = FRONT_NAMES[platform][app]
+  if (name === undefined) throw new Error(`${app} has no front name on ${platform}`)
+  return name
 }
 /** The agent a session runs, which names its observed source. */
 export type Engine = 'claude' | 'codex' | 'cursor'
 /** Where an editor session runs: a terminal of its window, the Claude Code panel, or Cursor's own agent. */
 export type Place = 'terminal' | 'panel' | 'agent'
+/** Where an iTerm2 session runs: a tab or split of its own, or a pane of tmux or herdr whose client runs in a tab. */
+export type ItermPlace = 'tab' | 'tmux' | 'herdr'
+const ITERM_PLACES: readonly ItermPlace[] = ['tab', 'tmux', 'herdr']
+const isItermPlace = (place: Place | ItermPlace | undefined): place is ItermPlace => (ITERM_PLACES as readonly unknown[]).includes(place)
 /** What the devices log when a stroke scrolls nothing, followed by why. */
 export const SKIPPED_SCROLL = '[device] scroll · skipped · '
 
@@ -86,23 +98,29 @@ export interface SessionDef {
   cli?: true
   /** Never written or started: only probes name it. */
   ghost?: true
-  /** The editors only: `terminal` when unset. */
-  place?: Place
+  /** The editors: `terminal` when unset. iTerm2: `tab` when unset. */
+  place?: Place | ItermPlace
   /** `claude` when unset, but the ChatGPT app's threads are Codex's and Cursor's `agent` is Cursor's own. */
   engine?: Engine
-  /** The editor window that holds its terminal. */
+  /** The editor window that holds its terminal; iTerm2's window that holds its tab. */
   window?: string
   /** A Codex whose `CODEX_HOME` is a folder of its own. */
   codexHome?: 'own'
   /** Cursor's agent's workspace folders, under /work/eval-. */
   folders?: string[]
-  /** Claude Code run in the person's tmux, whose client runs in its terminal (V12). */
+  /** Claude Code run in the person's tmux, whose client runs in its terminal (V12, O11). Not iTerm2's: there tmux is a
+   *  place. */
   tmux?: true
   /** Orca only: the key of its Orca worktree. */
   worktree?: string
-  /** Orca only: where its pane sits in the layout, its worktree's tab and that tab's split. */
+  /**
+   * Orca: where its pane sits in the layout, its worktree's tab and that tab's split. iTerm2: its tab and split; for a
+   * tmux or herdr session, the tab its multiplexer's first client runs in and its pane's order in that multiplexer's window.
+   */
   tab?: number
   split?: number
+  /** iTerm2's herdr only: herdr's row gives no session id (IH4). */
+  herdrSession?: false
   /** Orca only: its terminal's fixed made-up `term_<uuid>`; `none`: its hooks name none. */
   handle?: string
   /** Orca only: its terminal's maker is another program than Orca's terminal host (HELD_MAKER). */
@@ -112,7 +130,9 @@ export interface SessionDef {
 export const STEP_KINDS = ['claude.write', 'codex.write', 'hook', 'front', 'thread', 'attach', 'tap', 'swipe',
   'voice', 'quit', 'relaunch', 'unplug', 'replug', 'wait',
   'editor.window', 'editor.focus', 'editor.closeTerminal', 'editor.reload', 'editor.close', 'stroke',
-  'orca.layout', 'orca.focus', 'orca.front', 'orca.plugin', 'orca.close'] as const
+  'orca.layout', 'orca.focus', 'orca.front', 'orca.plugin', 'orca.close',
+  'iterm.tab', 'iterm.split', 'iterm.closeTab', 'iterm.select', 'iterm.relaunch', 'tmux.detach', 'tmux.attach', 'tmux.selectPane',
+  'herdr.focus', 'herdr.restart', 'devices.restart'] as const
 export type StepKind = (typeof STEP_KINDS)[number]
 // One member per kind, so StepOf<K> narrows.
 export type Step = { label?: Label } & (
@@ -151,6 +171,28 @@ export type Step = { label?: Label } & (
   | { kind: 'orca.plugin'; open: boolean }
   /** The session's pane closes: its agent and shell end with no hook. */
   | { kind: 'orca.close'; session: SessionKey }
+  /** iTerm2 opens a tab, or a split of one, with an empty shell; a session's start opens its own when none is. */
+  | { kind: 'iterm.tab'; window: string; tab: number }
+  | { kind: 'iterm.split'; window: string; tab: number; split: number }
+  /** The tab closes: its shells and all under them end with no hook, while an agent in a multiplexer runs on under its
+   *  server. */
+  | { kind: 'iterm.closeTab'; window: string; tab: number }
+  /** The watch reports the tab, or one of its splits, as selected. */
+  | { kind: 'iterm.select'; window: string; tab: number; split?: number }
+  /** iTerm2's process ends and none starts: its server goes to launchd, and every session runs on. */
+  | { kind: 'iterm.relaunch' }
+  /** Every client of the session's tmux session ends. */
+  | { kind: 'tmux.detach'; session: SessionKey }
+  /** A client of the session's tmux session starts in the tab, used now. */
+  | { kind: 'tmux.attach'; session: SessionKey; window: string; tab: number }
+  /** The person's own pane moves, which the devices run no command for. */
+  | { kind: 'tmux.selectPane'; session: SessionKey }
+  | { kind: 'herdr.focus'; session: SessionKey }
+  /** herdr's server, its clients and agents end with no hook; then a new client in the same tab, a new server, and each
+   *  herdr session started again on a new pane, with its start hook and herdr's report. */
+  | { kind: 'herdr.restart' }
+  /** The devices stop and start again on the same root, sessions and dial. */
+  | { kind: 'devices.restart' }
   /**
    * With `until`, the wait ends once it holds and `ms` is only its limit: one that reaches it is a failing result.
    * Without, `ms` is the person's own timing.
@@ -171,7 +213,8 @@ export type Check = { id: string; dim: Dimension; after?: Label; at?: Label } & 
   | { kind: 'ring'; page: App; expect: SessionKey[]; timed?: true; apart?: SessionKey[] }
   | { kind: 'focus'; session: SessionKey; noBounce?: true }
   | { kind: 'still'; ms: number }
-  | { kind: 'open'; session: SessionKey; link: boolean }
+  /** tab: iTerm2 only, the label a select must name when the session's client moved to another tab (I13, IH2). */
+  | { kind: 'open'; session: SessionKey; link: boolean; tab?: string }
   | { kind: 'state'; session: SessionKey; state: 'working' | 'needs-you' | 'done' | 'idle' }
   /** path: the words must reach the session by it; one by another path does not reach it, and counts against once. */
   | { kind: 'voice'; session: SessionKey; text: string; path?: Delivery['path'] }
@@ -218,7 +261,7 @@ export interface Seen {
   deliveries: Delivery[]
   steps: Array<{ at: number; index: number; kind: StepKind; label?: Label }>
   cost?: { cpuPercent: number; loopP99Ms: number; leftovers: number }
-  /** Each message on an editor window's stream, both ways. */
+  /** Each message on an editor window's stream, both ways, and on the watch's tabs stream (window `tabs`). */
   streams?: Array<{ at: number; window: string; line: Record<string, unknown> }>
   /** Each devices log line; absent: the driver saw none. */
   logs?: Array<{ at: number; line: string }>
@@ -291,9 +334,19 @@ export interface EvalDriver {
   stop(): Promise<void>
 }
 
-/** The session as defined, refused when it runs in an agent its app has not: only Cursor has one of its own. */
-function owned<S extends Pick<SessionDef, 'app' | 'place'>>(s: S): S {
+/**
+ * The session as defined, refused when it runs in a place its app has not: only Cursor has an agent of its own, iTerm2's
+ * places are its alone and it has none of the editors', and an iTerm2 session's tmux is its place, not `tmux: true`.
+ */
+function owned<S extends Pick<SessionDef, 'app' | 'place'> & Pick<Partial<SessionDef>, 'tmux'>>(s: S): S {
   if (s.place === 'agent' && s.app !== 'cursor') throw new Error(`${s.app} has no agent of its own: only Cursor's sessions run in place 'agent'`)
+  if (s.app !== 'iterm' && isItermPlace(s.place)) {
+    throw new Error(`${s.app} has no ${s.place} place: only iTerm2's sessions run in a tab, tmux or herdr`)
+  }
+  if (s.app === 'iterm' && s.place !== undefined && !isItermPlace(s.place)) {
+    throw new Error(`iTerm2 has no ${s.place} place: its sessions run in a tab, tmux or herdr`)
+  }
+  if (s.app === 'iterm' && s.tmux) throw new Error("an iTerm2 session's tmux is its place: tmux: true is refused")
   return s
 }
 
@@ -301,9 +354,16 @@ export function engineOf(s: Pick<SessionDef, 'app' | 'engine' | 'place'>): Engin
   return owned(s).engine ?? (s.app === 'chatgpt' ? 'codex' : s.app === 'cursor' && s.place === 'agent' ? 'cursor' : 'claude')
 }
 
-/** An editor session's place; undefined for the base apps. */
+/** An editor session's place; undefined for every other app. */
 export function placeOf(s: Pick<SessionDef, 'app' | 'place'>): Place | undefined {
-  return (EDITORS as readonly App[]).includes(owned(s).app) ? s.place ?? 'terminal' : undefined
+  // owned refuses an iTerm2 place on an editor's session.
+  return (EDITORS as readonly App[]).includes(owned(s).app) ? s.place as Place | undefined ?? 'terminal' : undefined
+}
+
+/** An iTerm2 session's place, `tab` when unset; undefined for every other app. */
+export function itermPlaceOf(s: Pick<SessionDef, 'app' | 'place'> & Pick<Partial<SessionDef>, 'tmux'>): ItermPlace | undefined {
+  // owned refuses an editor's place on an iTerm2 session.
+  return owned(s).app === 'iterm' ? s.place as ItermPlace | undefined ?? 'tab' : undefined
 }
 
 /** The agent id the daemon's observed sources give this session: its engine's. */

@@ -5,11 +5,12 @@
  * as an Orca with `watch-focus`, takes every `worktree activate`, and lists the accounts a test tells it. The real Orca
  * never runs: every session here runs inside it.
  */
-import { spawnSync } from 'node:child_process'
-import { appendFileSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { ORCA_ECHO_MS } from '../../src/testing/dialAppEval/types.js'
+import { startTimes } from '../../src/testing/spawnedRuns.js'
 import type { IsolatedDaemon } from './daemon.js'
+import { noteFunction, runLog, type LoggedRun } from './runLog.js'
 
 /** A tab's panes, first to last: one handle is a leaf, more are pane splits (`first`, then `second`). With no title of
  *  its own a tab is titled `made up`. */
@@ -41,33 +42,31 @@ const HELP_WATCH = HELP.replace(
   '  switch             Switch to a terminal tab in the UI\n  watch-focus        Print the focused terminal, then each change\n',
 )
 
-// A run's note: its exit, then the name it was run by and each argument, one a line (the devices pass Orca no control
-// character, cable/hosts/orca.ts). Renamed into place, so it is read whole; its time is its mtime.
+// Each run is noted (runLog.ts) with its exit, the name it was run by and its arguments.
 // `exec tail` makes the daemon's child the `tail` itself, so its SIGTERM ends it; `-n 1` prints the last line told before
 // the watch started, as Orca prints the focus of that moment first. A switch Orca takes moves its focus: one that exits 0
 // is told on every watch ORCA_ECHO_MS later, as tier A's Orca tells it, by a job of its own that holds none of the
-// run's output, so the switch itself returns at once. The job is named by its `echo` path, which no watch's command
-// holds, so endWatch drops it as Orca's quit drops that pane, and watching() never counts it.
+// run's output, so the switch itself returns at once. Each watch and each such job notes its pid and its start (`noted`),
+// which keep naming it after an exec and once launchd has it: endWatch ends them by those alone, as Orca's quit drops
+// that pane, and nothing is asked of any other process.
+const noted = (file: string, pid: string): string => `echo "${pid} $(LC_ALL=C /bin/ps -o lstart= -p ${pid})" >> '${file}'`
 const script = (dir: string, watchFocus: boolean): string => `#!/bin/sh
-note() {
-  file=$(mktemp '${dir}/log/.XXXXXX')
-  printf '%s\\n' "$@" > "$file"
-  mv "$file" '${dir}/log/'"run\${file##*/}"
-}
+${noteFunction(dir)}
 code=1
 case "$1 $2" in
   'terminal --help') cat <<'HELP'
 ${watchFocus ? HELP_WATCH : HELP}HELP
     code=0 ;;
   'terminal list') cat '${dir}/layout.json' 2>/dev/null && code=0 ;;
-${watchFocus ? `  'terminal watch-focus') note 0 "\${0##*/}" "$@"; exec tail -n 1 -f '${dir}/focus' ;;\n` : ''}  'worktree activate') code=0 ;;
+${watchFocus ? `  'terminal watch-focus') note 0 "\${0##*/}" "$@"; ${noted(join(dir, 'watches'), '$$')}; exec tail -n 1 -f '${dir}/focus' ;;\n` : ''}  'worktree activate') code=0 ;;
   'account list') cat '${dir}/accounts.json' 2>/dev/null && code=0 ;;
   'terminal switch'|'terminal send')
     code=$(cat '${dir}/exit' 2>/dev/null); code=\${code:-0}
     if [ "$code $2" = '0 switch' ]; then
       handle= prev=
       for arg in "$@"; do [ "$prev" = --terminal ] && handle=$arg; prev=$arg; done
-      sh -c 'sleep ${ORCA_ECHO_MS / 1000}; printf "{\\"handle\\":\\"%s\\"}\\n" "$1" >> "\${0%/echo}/focus"' '${dir}/echo' "$handle" </dev/null >/dev/null 2>&1 &
+      sh -c 'sleep ${ORCA_ECHO_MS / 1000}; printf "{\\"handle\\":\\"%s\\"}\\n" "$1" >> "$0"' '${dir}/focus' "$handle" </dev/null >/dev/null 2>&1 &
+      ${noted(join(dir, 'echoes'), '$!')}
     fi ;;
 esac
 note "$code" "\${0##*/}" "$@"
@@ -89,7 +88,7 @@ export class FakeOrca {
     // The daemon's own `bin` (beside its fake engines): a daemon `beside` another shares that one's root, not its bin.
     const bin = dirname(d.env.CLAUDE_PATH!)
     const dir = join(dirname(bin), 'orca')
-    mkdirSync(join(dir, 'log'), { recursive: true })
+    mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, 'focus'), '')
     // Bin's link names the launcher in Orca's install the harness made, which is the Orca app's own too
     // (harness/daemon.ts): an `orca` anywhere else is not Orca's, and the daemon would run the app's, the stub.
@@ -113,14 +112,7 @@ export class FakeOrca {
   }
 
   /** Every run since install: the name it was run by and its arguments, its exit, and its time, oldest first. */
-  log(): Array<{ argv: string[]; ok: boolean; at: number }> {
-    const log = join(this.dir, 'log')
-    return readdirSync(log).filter((name) => name.startsWith('run')).map((name) => {
-      const path = join(log, name)
-      const [exit, ...argv] = readFileSync(path, 'utf8').split('\n').slice(0, -1)
-      return { argv, ok: exit === '0', at: statSync(path).mtimeMs }
-    }).sort((a, b) => a.at - b.at)
-  }
+  log(): LoggedRun[] { return runLog(this.dir) }
 
   /** `terminal switch` and `terminal send` exit 1 from now on. */
   refuse(): void { writeFileSync(join(this.dir, 'exit'), '1') }
@@ -163,15 +155,31 @@ export class FakeOrca {
    *  endWatch, then each new one. */
   focus(handle: string | null): void { appendFileSync(join(this.dir, 'focus'), `${JSON.stringify({ handle })}\n`) }
 
-  /** Whether a `watch-focus` of this fake still runs: a process whose command names its focus file. */
-  watching(): boolean { return spawnSync('pgrep', ['-f', join(this.dir, 'focus')]).status === 0 }
+  /** Whether a `watch-focus` of this fake still runs. */
+  watching(): boolean { return this.running('watches').length > 0 }
+
+  /** Whether a switch's echo is still to come. */
+  echoing(): boolean { return this.running('echoes').length > 0 }
 
   /** Every `watch-focus` of this fake ends, as when Orca quits, and the focus told goes with them: the terminal it
-   *  named went with Orca, so a watch after prints nothing until a focus is told. */
+   *  named went with Orca, so a watch after prints nothing until a focus is told, nor any switch's echo still to come. */
   endWatch(): void {
-    spawnSync('pkill', ['-f', join(this.dir, 'echo')])
-    spawnSync('pkill', ['-f', join(this.dir, 'focus')])
+    for (const pid of [...this.running('echoes'), ...this.running('watches')]) {
+      try { process.kill(pid, 'SIGTERM') } catch { /* gone meanwhile */ }
+    }
     writeFileSync(join(this.dir, 'focus'), '')
+  }
+
+  /** The pids of the watches or echoes this fake started that still run as themselves: each one's pid and start, as it
+   *  noted them, against its start now (startTimes); a pid that started at another time is another process's. */
+  private running(kind: 'watches' | 'echoes'): number[] {
+    const listed = existsSync(join(this.dir, kind)) ? readFileSync(join(this.dir, kind), 'utf8') : ''
+    const said = new Map(listed.split('\n').flatMap((line) => {
+      const match = /^(\d+)\s+(.+?)\s*$/.exec(line)
+      return match ? [[Number(match[1]), match[2]!] as const] : []
+    }))
+    const now = startTimes([...said.keys()])
+    return [...said].filter(([pid, started]) => now.get(pid) === started).map(([pid]) => pid)
   }
 
   /** Renamed into place: a run that reads it meanwhile prints the old answer or the new, never half of one. */

@@ -4,12 +4,19 @@
 //
 // Scored and reported apart, never in the headline score. A function, not a list: the catalog imports it and it uses
 // the catalog's builders, so it is called once the catalog has them.
-import { chatgptGhost, claudeGhost, claudeSession, claudeSessions, cursor, editorGhost, keys, listed, orcaGhost, orcaOpening, orcaSession,
-  orcaStarted, panel, S, scenario, started, threads, titleOf, vscode } from './catalog.js'
-import type { Scenario } from './types.js'
+import { chatgptGhost, claudeGhost, claudeSession, claudeSessions, cursor, editorGhost, itermGhost, itermSession, keys, listed, orcaGhost,
+  orcaOpening, orcaSession, orcaStarted, panel, S, scenario, started, threads, titleOf, turned, vscode, withGhost } from './catalog.js'
+import type { Check, Scenario } from './types.js'
 
 export function heldOut(): Scenario[] {
   const s16 = keys('s', 1, 16, 2)
+  const s20 = keys('s', 1, 20, 2)
+  // IH3's twenty start s20 first: the ring keeps the sixteen newest in the order they entered, s16 first
+  // (cable/hosts/select.ts DialRing).
+  const ih3Ring: Extract<Check, { kind: 'ring' }> =
+    { id: 'ring', kind: 'ring', dim: 'D1', page: 'iterm', expect: [...s16].reverse(), apart: [] }
+  // iTerm2's scenarios run on macOS alone (docs/plans/2026-11-22-dial-eval-iterm2-design.md, decision 2).
+  const darwin = { platforms: ['darwin' as const] }
   return [
     scenario({
       id: 'CH1', app: 'claude', title: 'Sixteen sessions and a new one: the oldest leaves, the new one is first',
@@ -241,6 +248,88 @@ export function heldOut(): Scenario[] {
       steps: [...orcaOpening(['w1']), ...orcaStarted(['b', 'a'])],
       checks: [{ id: 'ring', kind: 'ring', dim: 'D1', page: 'orca', expect: ['a', 'b'] }],
       probes: [{ id: 'ring', kind: 'ring', dim: 'D1', page: 'orca', expect: ['a', 'b', 'z'] }],
+    }, true),
+    scenario({
+      id: 'IH1', app: 'iterm', title: 'Voice 200 ms after a tab selection moved the dial: the words reach the newly followed agent',
+      // a first, so the face is on a: only the select can bring it to b before the words.
+      dims: ['D5'], ...darwin, sessions: [itermSession('a'), itermSession('b', { tab: 1 }), itermGhost],
+      steps: [
+        ...started(['a', 'b']),
+        ...listed('iterm', ['a', 'b']),
+        { label: 'select', kind: 'iterm.select', window: 'w1', tab: 1 },
+        { kind: 'wait', ms: 200 },
+        { label: 'voice', kind: 'voice', transcript: 'Eval words for bravo.', target: 'b' },
+      ],
+      checks: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'b', text: 'Eval words for bravo.', after: 'voice' }],
+      probes: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'z', text: 'Eval words for bravo.', after: 'voice' }],
+    }, true),
+    scenario({
+      id: 'IH2', app: 'iterm', title: 'tmux with clients in two tabs, the person typing into the second: a tap goes to the second tab',
+      dims: ['D3'], ...darwin, sessions: [itermSession('a'), itermSession('b', { place: 'tmux', tab: 1 }), itermGhost],
+      // A turn typed through each client in turn: the first tab's, then the second's, the one a tap must select.
+      steps: [
+        ...started(['a', 'b']),
+        ...listed('iterm', ['a', 'b']),
+        { kind: 'iterm.tab', window: 'w1', tab: 2 },
+        { label: 'attach', kind: 'tmux.attach', session: 'b', window: 'w1', tab: 2 },
+        { kind: 'wait', ms: 1 * S },
+        { kind: 'iterm.select', window: 'w1', tab: 1 },
+        { kind: 'wait', ms: 1 * S },
+        { kind: 'hook', session: 'b', event: 'turn-start' },
+        { kind: 'wait', ms: 2 * S },
+        { kind: 'hook', session: 'b', event: 'turn-stop' },
+        { kind: 'wait', ms: 1 * S },
+        { kind: 'iterm.select', window: 'w1', tab: 2 },
+        { kind: 'wait', ms: 1 * S },
+        { label: 'turn', kind: 'hook', session: 'b', event: 'turn-start' },
+        { kind: 'wait', ms: 2 * S },
+        { label: 'tap', kind: 'tap', session: 'b' },
+      ],
+      checks: [{ id: 'open', kind: 'open', dim: 'D3', session: 'b', link: false, tab: 'w1.2.0', after: 'tap' }],
+      probes: [{ id: 'open', kind: 'open', dim: 'D3', session: 'z', link: false, after: 'tap' }],
+    }, true),
+    scenario({
+      id: 'IH3', app: 'iterm', title: 'Twenty tabs with agents: the ring keeps the sixteen newest',
+      dims: ['D1'], tiers: ['a'], ...darwin, sessions: [...s20.map((key, i) => itermSession(key, { tab: i })), itermGhost],
+      // s01 starts last, the newest.
+      steps: [...started([...s20].reverse())],
+      checks: [ih3Ring],
+      probes: [withGhost(ih3Ring)],
+    }, true),
+    scenario({
+      id: 'IH4', app: 'iterm', title: 'A scan-found herdr agent whose herdr row has no session: one row on iTerm2\'s page, and a tap reaches its tab',
+      dims: ['D1', 'D3'], ...darwin, sessions: [itermSession('c', { place: 'herdr', herdrSession: false }), itermGhost],
+      // Its turn puts its conversation on disk, so the scan after the restart finds it (the plan's Decision 13).
+      steps: [
+        ...started(['c']),
+        ...turned(['c']),
+        ...listed('iterm', ['c']),
+        { label: 'restart', kind: 'devices.restart' },
+        ...listed('iterm', ['c']),
+        { label: 'tap', kind: 'tap', session: 'c' },
+      ],
+      checks: [
+        { id: 'ring', kind: 'ring', dim: 'D1', page: 'iterm', expect: ['c'], apart: [], after: 'restart', at: 'tap' },
+        { id: 'open', kind: 'open', dim: 'D3', session: 'c', link: false, after: 'tap' },
+      ],
+      probes: [{ id: 'open', kind: 'open', dim: 'D3', session: 'z', link: false, after: 'tap' }],
+    }, true),
+    scenario({
+      id: 'IH5', app: 'iterm', title: 'Codex in a tmux pane under the daemon\'s CODEX_HOME: working, then done, with its recap',
+      dims: ['D4', 'D6'], ...darwin, sessions: [itermSession('b', { place: 'tmux', engine: 'codex' }), itermGhost],
+      steps: [
+        ...started(['b']),
+        ...listed('iterm', ['b']),
+        { label: 'turn', kind: 'hook', session: 'b', event: 'turn-start' },
+        { kind: 'wait', ms: 2 * S },
+        { label: 'stop', kind: 'hook', session: 'b', event: 'turn-stop', lastAnswer: 'Eval codex answer.' },
+      ],
+      checks: [
+        { id: 'working', kind: 'state', dim: 'D4', session: 'b', state: 'working', after: 'turn', at: 'stop' },
+        { id: 'done', kind: 'state', dim: 'D4', session: 'b', state: 'done', after: 'stop' },
+        { id: 'recap', kind: 'recap', dim: 'D6', session: 'b', text: 'Eval codex answer.', after: 'stop' },
+      ],
+      probes: [{ id: 'recap', kind: 'recap', dim: 'D6', session: 'z', text: 'Eval codex answer.', after: 'stop' }],
     }, true),
   ]
 }
