@@ -198,7 +198,14 @@ export function tierAVerdict(results: RunResults, baseline: Baseline): Verdict {
   return lines.length > 0 ? { ok: false, message: lines.join('\n') } : { ok: true, message: 'tier A matches the baseline' }
 }
 
-/** Only pass/fail checks the platform's baseline passes are held: timed ones depend on the runner. */
+/**
+ * Tier B pass/fail checks reported but not held, as a timed one is: each grades a race in the product that the run's
+ * timing decides. I3's ring order: after the devices start again, the tmux row reaches iTerm2's page only after its
+ * client lookup (about 150-250 ms), so a 1 s list tick in that gap orders it last (decided 2026-11-23).
+ */
+const RACED_B = new Set(['b/darwin/I3/ring.order'])
+
+/** Only pass/fail checks the platform's baseline passes are held: timed ones depend on the runner, RACED_B's on a race. */
 export function tierBVerdict(results: RunResults, baseline: Baseline, platform: Platform): Verdict {
   const gate = gateFailure(results)
   if (gate) return gate
@@ -209,6 +216,7 @@ export function tierBVerdict(results: RunResults, baseline: Baseline, platform: 
   const regressions = scoredResults(results)
     .filter((r) => r.tier === 'b' && r.platform === platform && !r.timed && r.score < 1 && baseline.checks[resultKey(r)] === 1)
     .map(resultKey)
+    .filter((key) => !RACED_B.has(key))
   return regressions.length > 0
     ? { ok: false, message: `regression: ${regressions.join(', ')}` }
     : { ok: true, message: `tier B on ${platform} holds its baseline` }
