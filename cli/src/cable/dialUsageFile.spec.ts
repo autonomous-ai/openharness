@@ -200,6 +200,7 @@ describe("the devices' dial-usage.json", () => {
 
     // Every name every day is more than the cap holds: the oldest days are left out, only as many as needed.
     const capped = aFile()
+    vi.setSystemTime(NOW)
     const full = open(capped)
     for (let n = 0; n < DIAL_USAGE_DAYS; n++) {
       vi.setSystemTime(NOW + n * DAY)

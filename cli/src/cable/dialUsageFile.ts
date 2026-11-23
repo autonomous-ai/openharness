@@ -109,8 +109,8 @@ export class DialUsageFile implements DialUsageSink {
   private closed = false
   /** Memory holds what the file does not: a failed write leaves it so, for the next change or the stop to write. */
   private dirty = false
-  /** The file could not be read (EACCES, EMFILE): it may hold days the gateway has not sent, so nothing is written over
-   *  it and no first is spent on marks not known yet. Each write reads it again. */
+  /** The file could not be read (EACCES, EMFILE), or this clock is behind its making: it may hold days the gateway has
+   *  not sent, so nothing is written over it and no first is spent on marks not known yet. Each write reads it again. */
   private unread: boolean
 
   /** Reads the file. Nothing in it may stop the devices' process from starting, so this never throws. */
@@ -158,9 +158,12 @@ export class DialUsageFile implements DialUsageSink {
 
   /** The file into memory, what this run counted added to it; false while it cannot be read. */
   private read(): boolean {
-    const loaded = load(this.deps.file, this.deps.now())
+    const now = this.deps.now()
+    const loaded = load(this.deps.file, now)
     if (loaded === 'unreadable') return false
     if (typeof loaded === 'object') {
+      // A clock earlier than the file's own making read its latest days as not yet come, and left them out.
+      if (now < loaded.series) return false
       // Counts summed, a flag kept at 1. No mark is spent while the file is unread, so the file's marks stand.
       for (const [day, counts] of Object.entries(this.usage.days)) {
         const into = loaded.days[day] ??= {}
@@ -191,9 +194,10 @@ export class DialUsageFile implements DialUsageSink {
   private write(): void {
     // Read again at most once a DIAL_USAGE_WRITE_MS, so a read that failed once does not mute the whole run.
     if (this.unread) this.unread = !this.read()
-    if (this.unread) return
-    const { days } = this.usage
+    const { days, series } = this.usage
     const now = this.deps.now()
+    // A clock set back while running would drop the latest days as not yet come: they wait for it to be right.
+    if (this.unread || now < series) return
     for (const day of Object.keys(days)) if (!recent(day, now)) delete days[day]
     let text = textOf(this.usage)
     // The oldest days go first: the gateway has most likely sent them by now.
