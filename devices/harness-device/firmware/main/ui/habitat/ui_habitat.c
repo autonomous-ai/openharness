@@ -2444,14 +2444,6 @@ static void dispatch(action_t a)
             if (queue(open)) {
                 ht_visit_close(&visit);
                 COPY(s.opening_notice, a.id);
-                // The outcome was already read on this card. Keep its pane in
-                // presence mode, including panes whose history arrives later.
-                // Opening a question never answers or dismisses that question.
-                for (int i = 0; i < s.notice_count; i++)
-                    if (!strcmp(s.notice[i].agent_id, a.id) && !s.notice[i].question) {
-                        dismiss_result(a.id);
-                        break;
-                    }
             }
             else {
                 COPY(s.title,"Device busy");
