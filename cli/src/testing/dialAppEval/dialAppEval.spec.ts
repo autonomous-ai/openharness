@@ -690,6 +690,19 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     expect(run.error).toBe('step 4 (devices.restart) threw: S12: the devices never welcomed the dial after they started again')
   })
 
+  it('after the devices start again the watch opens its tabs stream again on their listener on its own retry, waiting on no '
+    + 'dial', async () => {
+    const unplugged = twoTabs('S13', 'Eval the tabs stream after the devices start again with the dial unplugged', ['a'],
+      [{ kind: 'unplug' }, { label: 'restart', kind: 'devices.restart' }])
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, unplugged, 'darwin')
+    // The dial never comes back to them, so the step fails (S12), with the stream open again all the same.
+    expect(run.error).toBe('step 4 (devices.restart) threw: S13: the devices never welcomed the dial after they started again')
+    const { streams = [], steps } = driver.seen()
+    const restart = steps.find((s) => s.label === 'restart')!
+    expect(streams.filter((l) => l.window === 'tabs' && l.at >= restart.at).map((l) => l.line)).toEqual([{ type: 'tabs' }])
+  })
+
   it.for([i2, i3])('$id twice gives the same frames, streams, commands and deliveries at the same virtual times', async (of) => {
     const seen = async () => {
       const driver = new TierADriver({ startDevices })
