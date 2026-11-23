@@ -204,6 +204,14 @@ interface OrcaWorktreeRow {
   readonly identity?: { readonly key: string }
 }
 
+/** The envelope of every `--json` answer of Orca's CLI, around its result. */
+interface OrcaAnswer<Result> {
+  readonly id: string
+  readonly ok: true
+  readonly result: Result & { readonly hostScope: { readonly hostIds: readonly string[]; readonly omittedHostIds: readonly string[] } }
+  readonly _meta: { readonly runtimeId: string }
+}
+
 /**
  * Orca's own answers to `orca agent list --json` and `orca worktree list --json`, recorded on Tony's Mac with Orca 1.4.271
  * on 2026-11-23 (docs/plans/2026-11-23-dial-orca-chats-design.md, Task 0): 17 chats, 16 of Claude and 1 of Codex, across
@@ -326,10 +334,7 @@ export const RECORDED_ORCA_AGENTS = {
     hostScope: { hostIds: ['local'], omittedHostIds: [] },
   },
   _meta: { runtimeId: 'x' },
-} as const satisfies {
-  readonly ok: true
-  readonly result: { readonly agents: readonly OrcaAgentRow[]; readonly truncated: boolean }
-}
+} as const satisfies OrcaAnswer<{ readonly agents: readonly OrcaAgentRow[]; readonly truncated: boolean }>
 
 /** The worktrees of the same recording (RECORDED_ORCA_AGENTS says what was replaced). */
 export const RECORDED_ORCA_WORKTREES = {
@@ -369,7 +374,8 @@ export const RECORDED_ORCA_WORKTREES = {
     truncated: false,
   },
   _meta: { runtimeId: 'x' },
-} as const satisfies {
-  readonly ok: true
-  readonly result: { readonly worktrees: readonly OrcaWorktreeRow[]; readonly totalCount: number }
-}
+} as const satisfies OrcaAnswer<{
+  readonly worktrees: readonly OrcaWorktreeRow[]
+  readonly totalCount: number
+  readonly truncated: boolean
+}>
