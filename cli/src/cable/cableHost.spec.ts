@@ -2592,7 +2592,7 @@ describe('the dial reaches the fleet through the core\'s port', () => {
     const answered = vi.fn((agentId: string, requestId: string) => { told.push(`answered ${agentId} ${requestId}`) })
     const host = new DaemonCableHost(wiring({ fleet: () => fleet, answered }))
     const outside: HostAgent = { id: 'outside-1', engine: 'claude', name: 'scratch', host: 'orca', app: 'orca', state: 'done',
-      lastActivityAt: 0 }
+      lastActivityAt: 0, unseenDone: false }
     host.setRegistry(new HostRegistry([host.harness, { id: 'observed', list: () => [outside],
       capabilities: () => ({ status: true, voice: false, focus: false, answer: false }) }]))
     const reviewed = (agentId: string, requestId: string) =>
