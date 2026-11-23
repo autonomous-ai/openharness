@@ -71,6 +71,7 @@ import { readRecord } from '../cable/hosts/record.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
 import { appRoots, learnApps, readBundleId, readMadeBy, readProcessNames, readPtyOwner, readTtyName, scanLearnsApps } from '../cable/hosts/scannedApp.js'
 import { createScrollLines } from '../cable/hosts/scrollLines.js'
+import { pageOf } from '../cable/hosts/select.js'
 import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
 import { createTmuxAdapter, createTmuxNested, createTmuxOuter } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
@@ -497,14 +498,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     hadDial: () => readSetup(core.dataDir).dial || greetedAsDial(dialPorts),
     log,
   })
-  /** Where the dial would place an agent with no window: its own app for one outside a pane, Harness for the rest. Read
-   *  from the registry itself, as the cable host answers none while a window holds the dial on its tab: [entries] when the
-   *  caller merged it already. */
+  /** Where the dial would place an agent with no window: its own page for one outside a pane (`pageOf`: tmux's or herdr's
+   *  for one nested there), Harness for the rest. Read from the registry itself, as the cable host answers none while a
+   *  window holds the dial on its tab: [entries] when the caller merged it already. */
   const usageAgent = (agentId: string, entries: HostEntry[] = registry.entries()): DialAgent | undefined => {
     const who = cableHost.describe(agentId)
     if (!who) return undefined
     const row = entries.find((e) => e.agent.id === agentId)?.agent
-    return { engine: who.engine, host: row?.host ?? 'harness', page: row?.app ?? 'harness', held: observed?.heldOnly(agentId) ?? false }
+    return { engine: who.engine, host: row?.host ?? 'harness', page: row ? pageOf(row) : 'harness', held: observed?.heldOnly(agentId) ?? false }
   }
   const dialUsage = createDialUsage({ sink: usageFile, now: wallClock, after: timerIn('dialUsage'), describe: usageAgent, log })
   /** A count is the devices' own part: one that throws never reaches the dial. */
