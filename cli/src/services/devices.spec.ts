@@ -13710,20 +13710,24 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
       notice(listener, 'h2', 'Connect the VPN so I can run the staging tests')
       await vi.advanceTimersByTimeAsync(40_000)
       seen.host.tapped!('h2')
-      // A notice that takes another's place ends that one's wait as none.
+      // A waiting notice that takes the place of its agent's own is the same wait: the person is still to act.
       notice(listener, 'h3', 'Waiting · Connect the VPN')
       await vi.advanceTimersByTimeAsync(60_000)
       notice(listener, 'h3', 'Waiting · Sign in to the registry')
       port.card({ type: 'agent_deleted', payload: { agentId: 'h3' } })
-      expect(await waits(port)).toEqual({ dial_wait_elsewhere_under_30s: 1, dial_wait_dial_30s_to_2m: 1, dial_wait_none: 2 })
+      expect(await waits(port)).toEqual({ dial_wait_elsewhere_under_30s: 1, dial_wait_dial_30s_to_2m: 1, dial_wait_none: 1 })
     })
 
-    it('a proceeding notice is no wait', async () => {
+    it('a proceeding notice is no wait, and ends the wait of the notice it takes the place of as answered', async () => {
+      vi.useFakeTimers()
       const { port, listener } = withNotices()
       await attach(port)
       notice(listener, 'h1', 'Proceeding · Running the migration')
-      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
-      expect(await waits(port)).toEqual({})
+      notice(listener, 'h2', 'Waiting · Connect the VPN')
+      await vi.advanceTimersByTimeAsync(60_000)
+      notice(listener, 'h2', 'Proceeding · Running the staging tests')
+      for (const agentId of ['h1', 'h2']) port.card({ type: 'commander_event', agentId, payload: { kind: 'turn_started' } })
+      expect(await waits(port)).toEqual({ dial_wait_elsewhere_30s_to_2m: 1 })
     })
 
     it('an outside agent\'s wait', async () => {
