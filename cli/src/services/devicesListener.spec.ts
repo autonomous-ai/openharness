@@ -14,7 +14,7 @@ import { newPipeNonce, PIPE_AUTH_HEADER, PIPE_PROOF_HEADER, pipeAuthValue, pipeP
 import {
   ATTACH_MAX_BYTES, ATTACH_PER_SECOND, attachHandler, DIAL_MAX_BYTES, DIAL_NAME_MAX, DIAL_PER_SECOND, dialStream, FRONT_MAX_BYTES, FRONT_PER_SECOND,
   frontHandler, LISTENER_DROPPED_PER_SECOND, LISTENER_MAX_CONNECTIONS, NOTICE_MAX_BYTES, NOTICE_PER_SECOND, noticeHandler, NOTIFY_MAX_BYTES,
-  NOTIFY_PER_SECOND, notifyHandler, openDevicesListener, ORCA_FRONT_MAX_BYTES, ORCA_FRONT_MAX_TERMINALS, ORCA_FRONT_PER_SECOND, orcaFrontHandler,
+  NOTIFY_PER_SECOND, notifyHandler, openDevicesListener, ORCA_FRONT_MAX_BYTES, ORCA_FRONT_MAX_TERMINALS, ORCA_FRONT_MAX_WORKSPACE, ORCA_FRONT_PER_SECOND, orcaFrontHandler,
   REFUSED, TAB_MAX_BYTES, TAB_PER_SECOND, tabHandler, THREAD_MAX_BYTES, THREAD_PER_SECOND, threadHandler,
   TABS_MAX_BYTES, TABS_PER_SECOND, tabsStream, type DevicesListener, type ListenerHandler, type ListenerStream, type ListenerStreamHandler, type StreamEnd,
 } from './devicesListener.js'
@@ -2030,6 +2030,59 @@ describe('orcaFront', () => {
     expect(longest).toBeLessThanOrEqual(ORCA_FRONT_MAX_BYTES)
   })
 
+  // The two forms Orca gives a plugin's workspaceId: `identity:<key>` for a worktree with an identity, else the
+  // worktree's own id, its repo's uuid, `::` and its folder.
+  const UUID = '0f6e2c1a-7b3d-4e5f-8a9b-1c2d3e4f5a6b'
+  const IDENTITY = `identity:wt2:local:${UUID}`
+  const WORKTREE = `${UUID}::/Users/someone/wt`
+  type Front = [readonly string[] | null, string | null | undefined]
+
+  it('orcaFront hands on the workspace with the terminals; no key is undefined, null is null', () => {
+    const fronts: Front[] = []
+    const handler = orcaFrontHandler(() => true, (terminals, workspace) => fronts.push([terminals, workspace]))
+    expect(handler.handle(orcaFront([H(1)]), gone)).toBeUndefined()
+    expect(handler.handle({ ...orcaFront([H(2)]), workspace: null }, gone)).toBeUndefined()
+    expect(handler.handle({ ...orcaFront(null), workspace: IDENTITY }, gone)).toBeUndefined()
+    expect(handler.handle({ ...orcaFront([H(3), H(1)]), workspace: WORKTREE }, gone)).toBeUndefined()
+    expect(fronts).toStrictEqual([[[H(1)], undefined], [[H(2)], null], [null, IDENTITY], [[H(3), H(1)], WORKTREE]])
+  })
+
+  it('orcaFront takes an identity id and a worktree id as Orca gives them', () => {
+    const workspaces: Array<string | null | undefined> = []
+    const handler = orcaFrontHandler(() => true, (_terminals, workspace) => workspaces.push(workspace))
+    const given = [IDENTITY, WORKTREE, `${UUID}::/Users/someone/Tài liệu/wt "two"`, 'x', 'w'.repeat(ORCA_FRONT_MAX_WORKSPACE)]
+    for (const workspace of given) expect(handler.handle({ ...orcaFront([]), workspace }, gone), workspace).toBeUndefined()
+    expect(workspaces).toStrictEqual(given)
+  })
+
+  it('orcaFront refuses a workspace that is empty, too long, has a control character, or is not a string', () => {
+    const front = vi.fn()
+    const handler = orcaFrontHandler(() => true, front)
+    const bad: unknown[] = [
+      '', 'w'.repeat(ORCA_FRONT_MAX_WORKSPACE + 1), 'identity:a\nb', `${WORKTREE}\u0000`, 'identity:a\u007fb', 'identity:a\u0085b', 7, {}, [], [IDENTITY], true,
+    ]
+    // The whole message goes, terminals and all: a scope with a workspace the listener would not take is no scope.
+    for (const workspace of bad) {
+      for (const terminals of [null, [H(1)]]) {
+        expect(handler.handle({ ...orcaFront(terminals), workspace }, gone), JSON.stringify(workspace)).toBe(REFUSED)
+      }
+    }
+    expect(front).not.toHaveBeenCalled()
+  })
+
+  it('50 handles and a 1024-character workspace fit in 4096 bytes', () => {
+    expect(ORCA_FRONT_MAX_WORKSPACE).toBe(1024)
+    const workspace = `${UUID}::/Users/someone/`.padEnd(ORCA_FRONT_MAX_WORKSPACE, 'w')
+    expect(workspace).toHaveLength(ORCA_FRONT_MAX_WORKSPACE)
+    const message = { ...orcaFront(handles(ORCA_FRONT_MAX_TERMINALS)), workspace }
+    const longest = Buffer.byteLength(JSON.stringify(message))
+    expect(longest).toBe(3273)
+    expect(longest).toBeLessThanOrEqual(ORCA_FRONT_MAX_BYTES)
+    const fronts: Front[] = []
+    expect(orcaFrontHandler(() => true, (terminals, given) => fronts.push([terminals, given])).handle(message, gone)).toBeUndefined()
+    expect(fronts).toStrictEqual([[handles(ORCA_FRONT_MAX_TERMINALS), workspace]])
+  })
+
   describe.skipIf(process.platform === 'win32')('on a real listener', () => {
     const DIAL = '{"type":"dial","standby":true}'
     const body = (terminals: unknown): string => JSON.stringify(orcaFront(terminals))
@@ -2099,6 +2152,28 @@ describe('orcaFront', () => {
       vi.advanceTimersByTime(MINUTE)
       expect(lines).toEqual(['[devices] listener open', '[devices] listener in the last minute: 0 unknown, 0 oversized, 0 over rate, 3 refused, 0 failed'])
       for (const text of [...lines, ...logged, ...answers]) expect(text).not.toMatch(/term_|someone/)
+    })
+
+    it('a refused workspace is counted in the minute line, and no line or answer holds it', async () => {
+      const { path, lines, logged, fronts } = await plugin({ now: () => 0 })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      await (await asked(path, DIAL)).got(1)
+      const sender = connection(path)
+      const answers: string[] = []
+      const refused = async (workspace: unknown): Promise<void> => {
+        const { status, body: answer } = await sender.send(JSON.stringify({ ...orcaFront([H(1)]), workspace }))
+        expect(status).toBe(400)
+        answers.push(answer)
+      }
+      await refused(`${WORKTREE}\n`)
+      await refused(`${WORKTREE}/`.padEnd(ORCA_FRONT_MAX_WORKSPACE + 1, 'w'))
+      await refused('')
+      await refused(7)
+      expect(fronts).toEqual([])
+      expect(answers).toEqual(['', '', '', ''])
+      vi.advanceTimersByTime(MINUTE)
+      expect(lines).toEqual(['[devices] listener open', '[devices] listener in the last minute: 0 unknown, 0 oversized, 0 over rate, 4 refused, 0 failed'])
+      for (const text of [...lines, ...logged, ...answers]) expect(text).not.toMatch(/term_|someone|0f6e2c1a|identity:/)
     })
   })
 })
