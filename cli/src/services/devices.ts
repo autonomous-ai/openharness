@@ -480,11 +480,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     log,
   })
   /** Where the dial would place an agent with no window: its own app for one outside a pane, Harness for the rest. Read
-   *  from the registry itself, as the cable host answers none while a window holds the dial on its tab. */
-  const usageAgent = (agentId: string): DialAgent | undefined => {
+   *  from the registry itself, as the cable host answers none while a window holds the dial on its tab: [entries] when the
+   *  caller merged it already. */
+  const usageAgent = (agentId: string, entries: HostEntry[] = registry.entries()): DialAgent | undefined => {
     const who = cableHost.describe(agentId)
     if (!who) return undefined
-    const row = registry.entries().find((e) => e.agent.id === agentId)?.agent
+    const row = entries.find((e) => e.agent.id === agentId)?.agent
     return { engine: who.engine, host: row?.host ?? 'harness', page: row?.app ?? 'harness', held: observed?.heldOnly(agentId) ?? false }
   }
   const dialUsage = createDialUsage({ sink: usageFile, now: wallClock, after: timerIn('dialUsage'), describe: usageAgent })
@@ -497,7 +498,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** Whether an agent outside a pane runs for the dial to show, read from the registry now: the first-agent clock starts
    *  at the attach or once one does. A Harness agent's coming is the refresh's to say. */
   const outsideRunning = (entries: HostEntry[] = outsideEntries()): boolean => entries.some(({ agent }) => running(agent))
-  const inbox =new Inbox({ now: monotonic, after: timerIn('inbox') })
+  const inbox = new Inbox({ now: monotonic, after: timerIn('inbox') })
   const apps = deps.orca ?? orcaDeps()
   /** Where herdr's socket is, from the daemon's own environment: the client reads it, and the herdr source watches for it. */
   const herdrAt = herdrClientDeps()
@@ -1637,9 +1638,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       count((usage) => usage.waitOpened(`outside:${agentId}`, agentId))
     }
   }
-  /** Asks what waits and closes what no longer does (or what a window's tab covers): before a line, which it takes the place of. */
-  const showWaits = (): void => {
-    const entries = outsideEntries()
+  /** Asks what waits and closes what no longer does (or what a window's tab covers): before a line, which it takes the place of.
+   *  [entries]: the outside list when the caller merged it already. */
+  const showWaits = (entries: HostEntry[] = outsideEntries()): void => {
     const waits = entries.filter((entry) => entry.source === observed && observed.waitingOn(entry.agent.id) !== undefined)
     countOutsideWaits(entries, new Set(waits.map(({ agent }) => agent.id)))
     const want = new Map(heldOnTab() ? [] : waits.map((entry) => [entry.agent.id, entry]))
@@ -1760,8 +1761,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
 
   /** What changed among them, told: run whenever a source of theirs says its list changed. */
   const outsideTurn = (): void => {
-    showWaits()
     const entries = outsideEntries()
+    showWaits(entries)
     // Before `told` is read: an agent listed busy for the first time ends its restored notice here, under the id the
     // notice was kept by.
     lookOutside(entries)
@@ -2548,14 +2549,17 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         if (event.event === 'turn-aborted') count((usage) => usage.turnAborted(observedAgentId(event.engine, event.sessionId)))
         if (event.event === 'turn-start') {
           const agentId = observedAgentId(event.engine, event.sessionId)
-          // Its voice delivered, and once a day where the dial found it: on no list, held, on the Other page or placed.
+          // Its voice delivered, and once a day where the dial found it: on no list, held, on the Other page or placed. Only
+          // a dial on counts where, so with none the registry is not merged for it.
           count((usage) => {
             usage.turnStarted(agentId)
+            if (!dialOn) return
+            const entries = registry.entries()
             // Its own row, or the row of the agent that holds its session: a Harness agent's, which the dial shows for it.
-            const listed = registry.entries().some(({ agent }) => running(agent)
+            const listed = entries.some(({ agent }) => running(agent)
               && (agent.id === agentId || (agent.engine === event.engine && agent.sessionId === event.sessionId)))
             const unknown = { engine: event.engine, host: UNKNOWN_APP, page: UNKNOWN_APP, held: false }
-            usage.hooked(agentId, { ...unknown, ...usageAgent(agentId), listed, otherApp: observed.otherApp(agentId) })
+            usage.hooked(agentId, { ...unknown, ...usageAgent(agentId, entries), listed, otherApp: observed.otherApp(agentId) })
           })
         }
         if (event.event === 'session-end') {
