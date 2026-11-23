@@ -680,7 +680,8 @@ static bool result_visible(void) {
 }
 static void notice_checks(const char *dir) {
     // Opening a finished-turn card leaves that turn's recap on the agent face,
-    // so the tap lands on the answer and not on the resting face. Exercise either receipt order, panes outside the current roster, and a
+    // so the tap lands on the answer and not on the resting face. Exercise
+    // either receipt order, panes outside the current roster, and a
     // notification restored before that pane's result history has arrived.
     for(int off_tab=0;off_tab<2;off_tab++) for(int cached=0;cached<2;cached++)
     for(int seen_first=0;seen_first<2;seen_first++) {
