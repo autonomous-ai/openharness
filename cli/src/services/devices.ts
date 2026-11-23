@@ -2198,7 +2198,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     inboxPoll: ({ pollId, sessionId }) => inbox.poll(pollId, sessionId),
     inboxGone: (pollId) => {
       const sessionId = inbox.gone(pollId)
-      if (sessionId !== undefined && observed) lookLater(leavings, GONE_MS, observed, observedAgentId('claude', sessionId))
+      // The observed source's part, as an ending's look is: a list that throws must not switch the voice inbox off.
+      if (sessionId !== undefined && observed) {
+        part.call('observed', () => lookLater(leavings, GONE_MS, observed, observedAgentId('claude', sessionId)))
+      }
     },
     stop: () => inbox.closeAll(),
   }), { inboxPoll, inboxGone, stop: undefined })
