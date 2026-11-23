@@ -96,7 +96,8 @@ export interface ObservedDeps {
   platform: NodeJS.Platform
   /** The machine's processes, read once for every session (externals/support.ts listProcesses); none when unreadable. */
   processes(): Promise<readonly Pick<RunningProcess, 'pid' | 'generation'>[]>
-  /** Whether a pid is running, for a session whose process has no generation to read (Windows has no `ps` here). */
+  /** Whether a pid is running: for a session whose process has no generation to read (Windows has no `ps` here), and
+   *  for a session's process when a hook other than its session-start comes from another (ingest). */
   alive(pid: number): boolean
   openSessions: Pick<OpenSessions, 'owners' | 'busy'>
   sessionRows: Pick<SessionRows, 'find'>
@@ -962,10 +963,13 @@ export class ObservedSource implements HostSource {
     }
     // A session that comes back after its end (a resume) is a live one again.
     entry.endAt = undefined
-    // And it runs in the process its hook came from: an app that restarts brings its sessions back in new processes, and
+    // And it runs in the process that took it up: an app that restarts brings its sessions back in new processes, and
     // the old one's pid would have the next tick remove them (Orca quit and relaunched, its agents dropped off the dial
-    // until the next 30 s scan, dial eval O12, 2026-11-23). The next tick notes the new process's generation.
-    if (e.callerPid !== entry.pid) {
+    // until the next 30 s scan, dial eval O12, 2026-11-23). A new process says so by its session-start, or is the one
+    // left once the old one is gone. Another hook may come from a process passing by: a late one of the process it
+    // left, or on Windows the PowerShell or cmd a failed climb names, which exits with its hook (hook/notify.mjs
+    // hookCallerPid); moved there, a live session would go at the next tick. That tick notes the new generation.
+    if (e.callerPid !== entry.pid && (e.event === 'session-start' || !this.deps.alive(entry.pid))) {
       entry.pid = e.callerPid
       entry.generation = undefined
     }
