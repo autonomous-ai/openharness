@@ -151,11 +151,14 @@ export function itermScenarios(): Scenario[] {
     }),
     scenario({
       id: 'I10', app: 'iterm', title: 'The person moves to another tmux pane in the selected tab: the dial follows to its agent',
-      // The select moves the dial to a, heard from last in that tab: the pane move must bring it to b.
+      // The person is on a's pane, so the select moves the dial to a, its active pane and heard from last in that tab: the
+      // move to b's pane must bring it to b. b's pane is active once both start, and a move to it would move nothing.
       dims: ['D2'], ...darwin, sessions: [inTmux('a', 0), inTmux('b', 0, 1), itermGhost],
       steps: [
         ...started(['b', 'a']),
         ...listed('iterm', ['b', 'a']),
+        { kind: 'tmux.selectPane', session: 'a' },
+        { kind: 'wait', ms: 1 * S },
         { label: 'select', kind: 'iterm.select', window: 'w1', tab: 0 },
         { kind: 'wait', ms: 2 * S },
         { label: 'pane', kind: 'tmux.selectPane', session: 'b' },
