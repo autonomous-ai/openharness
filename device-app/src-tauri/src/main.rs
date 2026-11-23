@@ -84,7 +84,7 @@ fn main() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("Harness could not start");
+        .expect("Harness Device could not start");
     // Decision 3: no Dock icon. Set before the event loop runs: in `setup`, macOS has already made the app Regular and
     // the window is made, so the Dock icon shows for a moment at each launch.
     #[cfg(target_os = "macos")]
