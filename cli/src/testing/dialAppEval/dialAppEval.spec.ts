@@ -34,6 +34,10 @@ vi.mock('child_process', refused)
 const counted = vi.hoisted(() => async (real: () => Promise<object>) => (await import('./tierA/clock.js')).countFsCalls(await real()))
 vi.mock('node:fs/promises', counted)
 vi.mock('fs/promises', counted)
+// Every random UUID from the machine's count, as every time is virtual: a scenario run twice makes the same frames.
+const counting = vi.hoisted(() => async (real: () => Promise<object>) => ({ ...await real(), randomUUID: () => machine.uuid() }))
+vi.mock('node:crypto', counting)
+vi.mock('crypto', counting)
 // The machine's processes, and whether one still runs, from the model. A session's transcript has no stamp there: one
 // waiting on the person stays so until its next hook.
 vi.mock('../../lib/sessionSearch/externals/support.js', async (real) => ({
@@ -42,14 +46,15 @@ vi.mock('../../lib/sessionSearch/externals/support.js', async (real) => ({
   processAlive: (pid: number) => machine.processes.has(pid),
   fileStamp: async () => null,
 }))
-// The sessions the machine's processes have open, and their folders and transcripts. Their record is not modelled, and
-// a session whose record cannot be read counts as busy, as OpenSessions.busy answers: a turn ends by its own Stop hook.
+// The sessions the machine's processes have open, their folders, transcripts and records (a Claude Code's names it, as
+// the scan reads it: steps/sessions.ts). Every session counts as busy, as OpenSessions.busy answers for a record it
+// cannot read: a turn ends by its own Stop hook.
 vi.mock('../../lib/sessionSearch/external.js', async (real) => ({
   ...await real<typeof import('../../lib/sessionSearch/external.js')>(),
   OpenSessions: class {
     async owners() {
       return new Map([...machine.owners].filter(([, owner]) => machine.processes.has(owner.pid))
-        .map(([sessionId, { engine, pid }]) => [sessionId, { pid, engine, tty: machine.processes.get(pid)?.tty ?? null, record: sessionId }]))
+        .map(([sessionId, { engine, pid, record }]) => [sessionId, { pid, engine, tty: machine.processes.get(pid)?.tty ?? null, record }]))
     }
     async busy() { return true }
   },
