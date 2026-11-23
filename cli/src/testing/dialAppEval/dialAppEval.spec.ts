@@ -13,8 +13,8 @@
 import { homedir, tmpdir } from 'node:os'
 import { basename } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { claudeGhost, claudeSessions, editorGhost, editorSession, keys, listed, MAIN, orcaGhost, orcaOpening, orcaSession, orcaStarted, scenario,
-  scenariosFor, started } from './catalog.js'
+import { claudeGhost, claudeSessions, editorGhost, editorSession, itermGhost, itermSession, keys, listed, MAIN, orcaGhost, orcaOpening,
+  orcaSession, orcaStarted, scenario, scenariosFor, started } from './catalog.js'
 import { rings } from './checks.js'
 import { loadBaseline, SKIP_RATCHET_ENV, tierAVerdict } from './grade.js'
 import { describeAttempt } from './netGuard.js'
@@ -113,6 +113,7 @@ vi.mock('../../devices/orcaHomes.js', async (real) => ({
 }))
 
 const { startDevices } = await import('../../services/devices.js')
+const { learnApps } = await import('../../cable/hosts/scannedApp.js')
 
 const PLATFORMS: readonly Platform[] = ['darwin', 'win32', 'linux']
 /**
@@ -415,6 +416,69 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     const before = lastList({ ...seen, frames: seen.frames.filter((f) => f.at < front.at) }, of)!
     expect(before.rows.map((r) => r.key)).toEqual(['a', 'b', 'd'])
     expect(lastList(seen, of)!.rows.map((r) => r.key)).toEqual(['a', 'b'])
+  })
+
+  /** iTerm2's two plain tabs, a in w1's tab 0 and b in tab 1, started in `order` and listed, then `more`. */
+  const twoTabs = (id: string, title: string, order: string[], more: Step[]): Scenario => scenario({
+    id, app: 'iterm', title, dims: ['D3'], platforms: ['darwin'], tiers: ['a'],
+    sessions: [itermSession('a', { tab: 0 }), itermSession('b', { tab: 1 }), itermGhost],
+    steps: [...started(order), ...listed('iterm', [...order].reverse()), ...more],
+    checks: [], probes: [],
+  })
+
+  it("the walk names a plain tab's agent iterm by iTerm2's server, under iTerm2 and under launchd", async () => {
+    const one = scenario({
+      id: 'S6', app: 'iterm', title: 'Eval one tab, then iTerm2 relaunched', dims: ['D1'], platforms: ['darwin'], tiers: ['a'],
+      sessions: [itermSession('a'), itermGhost], steps: [...started(['a']), { kind: 'iterm.relaunch' }], checks: [], probes: [],
+    })
+    const driver = new TierADriver({ startDevices })
+    await driver.start(one, 'darwin')
+    try {
+      await driver.step(one.steps[0] as Exclude<Step, { kind: 'wait' }>)
+      const agent = machine.owners.get(one.sessions[0]!.id)!.pid
+      // No process of iTerm2's carries an app id: what names it is the real walk, over the model's table.
+      expect(machine.appOf(agent)).toBeUndefined()
+      const login = machine.processes.get(machine.processes.get(agent)!.ppid)!.ppid
+      const server = machine.processes.get(login)!.ppid
+      const iterm = machine.processes.get(server)!.ppid
+      expect(basename(machine.processes.get(server)!.executable)).toMatch(/^iTermServer-/)
+      expect(await learnApps([agent])).toEqual(new Map([[agent, 'iterm']]))
+      await driver.step(one.steps[1] as Exclude<Step, { kind: 'wait' }>)
+      expect([machine.processes.has(iterm), machine.processes.get(server)!.ppid]).toEqual([false, 1])
+      expect(await learnApps([agent])).toEqual(new Map([[agent, 'iterm']]))
+    } finally {
+      await driver.stop()
+    }
+  })
+
+  it("I5 on darwin: a tap on b runs open -b com.googlecode.iterm2 and writes b's select with raise on the tabs stream, and none "
+    + 'for another tab', async () => {
+    const i5 = twoTabs('I5', 'Eval a tap on a tab row', ['b', 'a'], [{ label: 'tap', kind: 'tap', session: 'b' }])
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, i5, 'darwin')
+    expect(run.error).toBeUndefined()
+    const { streams = [], commands, steps } = driver.seen()
+    const tap = steps.find((s) => s.label === 'tap')!
+    const after = commands.filter((c) => c.at >= tap.at)
+    expect(after.map(({ argv, ok }) => ({ argv, ok }))).toEqual([{ argv: ['/usr/bin/open', '-b', 'com.googlecode.iterm2'], ok: true }])
+    const selects = streams.filter((l) => l.window === 'tabs' && l.at >= tap.at)
+    expect(selects.map((l) => l.line)).toEqual([{ app: 'iterm', tab: 'w1.1.0', raise: true }])
+    expect(selects[0]!.at).toBeGreaterThanOrEqual(after[0]!.at)
+  })
+
+  it("I8: b's tab selected with iTerm2 settled in front turns the dial to b within 1 s", async () => {
+    // a first, so the face is on a: the dial keeps the row it shows as b arrives, and must move for the select.
+    const i8 = twoTabs('I8', "Eval the person selects b's tab", ['a', 'b'],
+      [{ label: 'select', kind: 'iterm.select', window: 'w1', tab: 1 }])
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, i8, 'darwin')
+    expect(run.error).toBeUndefined()
+    const { faces, steps } = driver.seen()
+    const select = steps.find((s) => s.label === 'select')!
+    const [a, b] = i8.sessions.slice(0, 2).map(agentIdOf)
+    expect(faces.filter((f) => f.at < select.at).at(-1)?.active).toBe(a)
+    const moved = faces.find((f) => f.at >= select.at && f.active === b)
+    expect((moved?.at ?? Infinity) - select.at).toBeLessThanOrEqual(1_000)
   })
 
   // The baseline is written on a Mac and checked on Linux: a result naming this host's folders would differ there.

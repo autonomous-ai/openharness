@@ -9,7 +9,7 @@ import { ptyMaker } from '../../../../cable/hosts/scannedApp.js'
 import type { InboxAnswer, InboxPoll } from '../../../../core/deviceHookCalls.js'
 import type { ObservedEvent, ObservedHookEvent } from '../../../../core/observedHook.js'
 import { lastCursorTurnText } from '../../../../engines/cursor/normalizer.js'
-import { claudeSession, editorSession, orcaSession, thread } from '../../catalog.js'
+import { claudeSession, editorSession, itermSession, orcaSession, thread } from '../../catalog.js'
 import { orcaPaneHandle, orcaTerminalHandle, type Delivery, type Platform, type Scenario, type SessionKey, type StepOf } from '../../types.js'
 import { machine } from '../machine.js'
 import type { TierAWorld } from '../world.js'
@@ -59,6 +59,8 @@ function fakeWorld(platform: Platform, of: Scenario = scenario) {
   const root = mkdtempSync(join(tmpdir(), 'dial-eval-sessions-'))
   roots.push(root)
   machine.reset()
+  // iTerm2's server is copied under the world's home, as the world names it for an iTerm2 scenario.
+  machine.itermHome = root
   const told: ObservedEvent[] = []
   const polls: Array<{ poll: InboxPoll; answer(a: InboxAnswer): void; open: boolean }> = []
   const gone: string[] = []
@@ -609,19 +611,49 @@ describe("tier A's Orca agents", () => {
   })
 
   it("the other apps' hooks, hints and processes are as before", async () => {
-    /** What the Claude app's, the ChatGPT app's and VS Code's sessions tell and run as, pids aside, with an Orca agent of
-     *  `orca`'s started first. */
-    const others = async (platform: Platform, orca: Scenario['sessions']) => {
-      const w = fakeWorld(platform, { ...scenario, sessions: [...scenario.sessions, ...editors.sessions.slice(0, 1).map((s) => ({ ...s, key: 'v' })), ...orca] })
-      for (const s of orca) await w.hook(s.key, 'start')
-      const theirs = new Set(machine.processes.keys())
-      for (const key of ['a', 't1', 'c1', 'v']) await w.hook(key, 'start')
-      return { told: w.told.slice(orca.length).map((e) => (e as ObservedHookEvent).hostHints),
-        processes: [...machine.processes.values()].filter((p) => !theirs.has(p.pid))
-          .map((p) => ({ executable: p.executable, tty: p.tty, app: p.app, walked: machine.appOf(p.pid) })) }
-    }
     for (const platform of PLATFORMS) {
-      expect(await others(platform, [orcaSession('o', { tmux: true })]), platform).toEqual(await others(platform, []))
+      expect(await othersAfter(platform, [orcaSession('o', { tmux: true })]), platform).toEqual(await othersAfter(platform, []))
     }
   })
 })
+
+describe("tier A's iTerm2 agents", () => {
+  const ITERM_BUNDLE = 'com.googlecode.iterm2'
+  /** A Claude Code in w1's tab 0, and a Codex in tab 1. Made at each case, from the catalog's builder. */
+  const itermAgents = (): Scenario => ({
+    id: 'S6', app: 'iterm', title: 'Eval iTerm2', dims: ['D1'], platforms: ['darwin'], tiers: ['a'],
+    heldOut: false, steps: [], checks: [], probes: [],
+    sessions: [itermSession('a'), itermSession('b', { engine: 'codex', tab: 1 })],
+  })
+
+  it("a Claude Code in an iTerm2 tab hooks with TERM_PROGRAM=iTerm.app and iTerm2's bundle id", async () => {
+    const of = itermAgents()
+    const w = fakeWorld('darwin', of)
+    await w.hook('a', 'start')
+    await w.hook('b', 'start')
+    const [a, b] = of.sessions
+    expect(toldOf(w.told, a!.id)).toMatchObject({ engine: 'claude', callerPid: agentPid(w.world, 'a'), cwd: '/work/eval-a', title: 'Eval Alpha' })
+    for (const s of [a!, b!]) expect(toldOf(w.told, s.id).hostHints).toEqual({ TERM_PROGRAM: 'iTerm.app', __CFBundleIdentifier: ITERM_BUNDLE })
+    expect(toldOf(w.told, b!.id).engine).toBe('codex')
+    // Its agent runs on its tab's tty, under its shell, and the mod polls for the Claude Code alone.
+    const shell = machine.processes.get(shellOf(w.world, 'a')!)!
+    expect(machine.processes.get(agentPid(w.world, 'a')!)).toMatchObject({ ppid: shell.pid, tty: shell.tty, executable: 'claude' })
+    expect(w.open()).toEqual([a!.id])
+  })
+
+  it("the other apps' hooks, hints and processes are as before", async () => {
+    expect(await othersAfter('darwin', [itermSession('i')])).toEqual(await othersAfter('darwin', []))
+  })
+})
+
+/** What the Claude app's, the ChatGPT app's and VS Code's sessions tell and run as, pids aside, with the sessions of
+ *  `first` started first. */
+async function othersAfter(platform: Platform, first: Scenario['sessions']) {
+  const w = fakeWorld(platform, { ...scenario, sessions: [...scenario.sessions, ...editors.sessions.slice(0, 1).map((s) => ({ ...s, key: 'v' })), ...first] })
+  for (const s of first) await w.hook(s.key, 'start')
+  const theirs = new Set(machine.processes.keys())
+  for (const key of ['a', 't1', 'c1', 'v']) await w.hook(key, 'start')
+  return { told: w.told.slice(first.length).map((e) => (e as ObservedHookEvent).hostHints),
+    processes: [...machine.processes.values()].filter((p) => !theirs.has(p.pid))
+      .map((p) => ({ executable: p.executable, tty: p.tty, app: p.app, walked: machine.appOf(p.pid) })) }
+}
