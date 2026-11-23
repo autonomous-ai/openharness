@@ -74,10 +74,17 @@ export function readDialFile(file: string, validDay: (day: string) => boolean, l
   }
   if (last?.mtimeMs === stamp.mtimeMs && last.size === stamp.size) return { read: { state: 'same' }, stamp }
   if (stamp.size > DIAL_USAGE_FILE_MAX_BYTES) return { read: { state: 'bad' }, stamp }
-  // Bytes that are no JSON object are set aside as any cache file's (and then read as missing).
-  const read = readState(file, 'cache', jsonObject)
+  // The text as it is: the devices are the file's one writer and replace what does not parse at their next write,
+  // so this reader never sets it aside.
+  const read = readState(file, 'cache', (text) => text)
   if (read.state !== 'ok') return { read: { state: 'bad' } }
-  const { version, series, days } = read.value
+  let value: Record<string, unknown>
+  try {
+    value = jsonObject(read.value)
+  } catch {
+    return { read: { state: 'bad' }, stamp }
+  }
+  const { version, series, days } = value
   if (version !== DIAL_USAGE_FILE_VERSION || !Number.isSafeInteger(series) || !isRecord(days)) return { read: { state: 'bad' }, stamp }
   const kept: Record<string, DialCounts> = {}
   for (const [day, counts] of Object.entries(days)) if (validDay(day) && isRecord(counts)) kept[day] = cleanCounts(counts)

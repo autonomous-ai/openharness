@@ -59,7 +59,6 @@ describe('the devices\' file, read by the gateway', () => {
   })
 
   it('too large, not JSON, another version: bad', () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
     const bad = (value: unknown): void => { write(value); expect(readDialFile(path, within(TODAY)).read).toEqual({ state: 'bad' }) }
     bad({ version: 1, series: 1, days: {}, pad: 'x'.repeat(DIAL_USAGE_FILE_MAX_BYTES) })
     bad('{"version": 1, "series"')
