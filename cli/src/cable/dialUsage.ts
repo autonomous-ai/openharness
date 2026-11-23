@@ -19,6 +19,8 @@ export interface DialUsageDeps {
   now(): number // wall-clock ms
   after(ms: number, run: () => void): () => void
   describe(agentId: string): DialAgent | undefined
+  /** Fixed lines only, never an id. */
+  log(line: string): void
 }
 
 export interface DialUsage {
@@ -161,7 +163,8 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
   }
 
   interface Wait { agentId: string; at: number; onDial: boolean }
-  const waits = new Map<string, Wait>()
+  const waits = new Map<string, Wait>() // oldest first
+  let waitDropped = false
 
   return {
     attached(on) {
@@ -292,7 +295,13 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
     },
 
     waitOpened(key, agentId) {
-      if (attaches === 0 || waits.has(key) || waits.size >= WAITS_MAX) return
+      if (attaches === 0 || waits.has(key)) return
+      // The newest is the one the person is likeliest to answer: the oldest goes, and the first time is said.
+      if (waits.size >= WAITS_MAX) {
+        waits.delete(waits.keys().next().value as string)
+        if (!waitDropped) deps.log(`[device] usage · wait dropped · over ${WAITS_MAX} open`)
+        waitDropped = true
+      }
       waits.set(key, { agentId, at: now(), onDial: false })
     },
 
