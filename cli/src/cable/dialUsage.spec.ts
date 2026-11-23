@@ -32,15 +32,17 @@ function fileSink() {
 }
 
 function rig(agents: Record<string, DialAgent> = { a: tmuxClaude, b: orcaCodex }, { sink, added } = fileSink()) {
+  const logs: string[] = []
   const usage = createDialUsage({
     sink,
     now: Date.now,
     after: (ms, run) => { const timer = setTimeout(run, ms); return () => clearTimeout(timer) },
     describe: id => agents[id],
+    log: line => logs.push(line),
   })
   const count = (metric: string) => added.filter(m => m === metric).length
   const prefixed = (prefix: string) => added.filter(m => m.startsWith(prefix))
-  return { usage, added, count, prefixed, agents }
+  return { usage, added, count, prefixed, agents, logs }
 }
 
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(T0) })
@@ -476,6 +478,18 @@ describe('createDialUsage', () => {
     for (let i = 0; i < 65; i++) usage.waitOpened(`m${i}`, 'a')
     for (let i = 0; i < 65; i++) usage.waitEnded(`m${i}`, 'gone')
     expect(prefixed('dial_wait_none')).toHaveLength(1 + 64)
+  })
+
+  it('past 64 open waits the oldest is dropped, said once', () => {
+    const { usage, prefixed, logs } = rig()
+    usage.attached(true)
+    for (let i = 0; i < 66; i++) usage.waitOpened(`m${i}`, 'a')
+    usage.waitEnded('m0', 'answered')
+    usage.waitEnded('m1', 'answered')
+    expect(prefixed('dial_wait_')).toEqual([])
+    usage.waitEnded('m65', 'answered')
+    expect(prefixed('dial_wait_')).toEqual(['dial_wait_elsewhere_under_30s'])
+    expect(logs).toEqual(['[device] usage · wait dropped · over 64 open'])
   })
 
   it('a detach drops open waits', () => {
