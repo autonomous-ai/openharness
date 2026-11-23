@@ -2,24 +2,45 @@
  * Tier B of the dial eval for iTerm2 (docs/plans/2026-11-22-dial-eval-iterm2-design.md, "Tier B"). Its harness first: a
  * fake iTerm2 whose tabs run under its server (harness/outsideAgent.ts), relaunched keeping them, and a herdr of the test's
  * own started by its first client in one of those tabs (harness/herdrServer.ts), so no walk from a herdr pane reaches this
- * worker, and so the developer's terminal, before the fake iTerm2.
+ * worker, and so the developer's terminal, before the fake iTerm2. Then each main scenario of the catalog for iTerm2, on
+ * the real daemon and devices process, through the tier B driver (harness/appEvalDriver.ts) and iTerm2's steps
+ * (harness/appEvalIterm.ts): Claude Code in the fake iTerm2's tabs, in tmux on the daemon's private server and in that
+ * herdr, and the real `harness hardware watch` told the person's tabs.
  *
- * macOS only, as iTerm2. Never the person's iTerm2, herdr, daemon or dial, and no `osascript`: the fake iTerm2's bundle
- * and its server are in the daemon's throwaway home, herdr's config is in it too, and the daemon's table holds no herdr
- * outside this worker's tree (ownHerdrsOnly). Each process read is one of this test's own, alone, by its pid
- * (`ps -o ppid=,comm= -p`): never another process's environment, argv or the whole table's command lines.
+ * macOS only, as iTerm2. Never the person's iTerm2, tmux server, herdr, daemon or dial, and no `osascript`: the fake
+ * iTerm2's bundle and its server are in the daemon's throwaway home, herdr's config is in it too, tmux's socket is in its
+ * root, and the daemon's table holds no herdr outside this worker's tree (ownHerdrsOnly). Each process read is one of this
+ * test's own, alone, by its pid (`ps -o ppid=,comm= -p`): never another process's environment, argv or the whole table's
+ * command lines. The network guard runs in this process and in every process of each daemon.
  */
 import { execFile } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-import { basename, dirname, isAbsolute, join, relative } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { promisify } from 'node:util'
-import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
+import { resolveBinaryOnPath } from '../src/lib/binaryOnPath.js'
+import { scenariosFor } from '../src/testing/dialAppEval/catalog.js'
+import { loadBaseline, SKIP_RATCHET_ENV, tierBVerdict } from '../src/testing/dialAppEval/grade.js'
+import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from '../src/testing/dialAppEval/runner.js'
+import { itermPlaceOf } from '../src/testing/dialAppEval/types.js'
+import { inside, TierBDriver } from './harness/appEvalDriver.js'
+import { itermSteps } from './harness/appEvalIterm.js'
 import { IsolatedDaemon } from './harness/daemon.js'
-import { herdrBinary, ownHerdrsOnly, PrivateHerdr } from './harness/herdrServer.js'
+import { herdrBinary, othersNow, ownHerdrsOnly, PrivateHerdr } from './harness/herdrServer.js'
 import { closeTab, openTab, relaunchIterm, tabUnder } from './harness/outsideAgent.js'
 
 const execFileAsync = promisify(execFile)
 const MAC = process.platform === 'darwin'
+const SCENARIOS = MAC ? scenariosFor('b', 'darwin').filter((s) => s.app === 'iterm' && !s.heldOut) : []
+/** A conversation of the fake Claude Code's, made up. */
+const CONVERSATION = '00000000-0000-4000-8e00-0000000000e1'
+const runs: ScenarioRun[] = []
+
+// At file level, so a host that skips every case still writes it: the eval command reads one results file a source (the
+// plan's Decision 16), empty off macOS.
+afterAll(() => {
+  if (process.env.DIAL_EVAL_OUT) writeResults(process.env.DIAL_EVAL_OUT, 'iterm', collect(runs))
+})
 
 /** A process of this test's: its parent and the path it was started from (macOS's `comm`); undefined once it is gone. */
 const processOf = async (pid: number): Promise<{ pid: number; ppid: number; comm: string } | undefined> => {
@@ -45,7 +66,11 @@ const gone = (pid: number): boolean => {
   try { process.kill(pid, 0) } catch { return true }
   return false
 }
-const inside = (root: string, path: string): boolean => isAbsolute(path) && !relative(root, path).startsWith('..')
+/** The fake iTerm2's executable in its bundle, and its server, both in the daemon's home. */
+const iterm = (d: IsolatedDaemon) => ({
+  app: join(d.env.HOME!, 'Applications', 'iTerm.app', 'Contents', 'MacOS', 'iTerm2'),
+  server: join(d.env.HOME!, 'Library', 'Application Support', 'iTerm2', 'iTermServer-3.6.6'),
+})
 
 describe.skipIf(!MAC)('the dial eval, tier B: the fake iTerm2 and herdr started from its tab', () => {
   const closing: Array<() => Promise<void>> = []
@@ -59,11 +84,6 @@ describe.skipIf(!MAC)('the dial eval, tier B: the fake iTerm2 and herdr started 
     closing.push(() => d.close())
     return d
   }
-  /** The fake iTerm2's executable in its bundle, and its server, both in the daemon's home. */
-  const iterm = (d: IsolatedDaemon) => ({
-    app: join(d.env.HOME!, 'Applications', 'iTerm.app', 'Contents', 'MacOS', 'iTerm2'),
-    server: join(d.env.HOME!, 'Library', 'Application Support', 'iTerm2', 'iTermServer-3.6.6'),
-  })
 
   it("a tab of the fake iTerm2 runs its command under iTerm2's server, whose parent is the fake iTerm2, and the server is inside the daemon's home", async () => {
     const d = await daemon()
@@ -164,6 +184,18 @@ describe.skipIf(!MAC)('the dial eval, tier B: the fake iTerm2 and herdr started 
         .toMatchObject({ source: 'herdr:claude', agent: 'claude', value: agent.sessionId })
     })
 
+    // herdr tells an agent by its process's argv[0] whole: `claude --resume <id>` there must still read `claude`. Its first
+    // agent's pane it finds by another way, so this one is its second.
+    it("a pane's Claude Code going on in its conversation is herdr's agent, and its session reported is in its row", async () => {
+      const d = await started()
+      const herdr = await herdrIn(d)
+      await herdr.hooked('first')
+      const agent = await herdr.hooked('resumed', { resume: CONVERSATION })
+      await herdr.reportSession(agent.pane, agent.sessionId)
+      const { agents } = await herdr.rpc('agent.list') as { agents: Array<{ pane_id: string; agent: string; agent_session?: unknown }> }
+      expect(agents.find((row) => row.pane_id === agent.pane)).toMatchObject({ agent: 'claude', agent_session: { value: CONVERSATION } })
+    })
+
     it("herdr started again in a new tab goes on in a pane's conversation, and stopped leaves no tab", async () => {
       const d = await started()
       const first = await herdrIn(d)
@@ -179,5 +211,73 @@ describe.skipIf(!MAC)('the dial eval, tier B: the fake iTerm2 and herdr started 
       const pids = (await parents(agentPid(d, agent.sessionId, 'resume'))).map((p) => p.pid)
       expect(pids).toEqual(expect.arrayContaining([second.pid, second.tab.pid, second.tab.appPid]))
     })
+  })
+})
+
+describe.skipIf(!MAC)('the dial eval, tier B: iTerm2', () => {
+  let driver: TierBDriver
+  beforeAll(() => { driver = new TierBDriver({ iterm: itermSteps }) })
+  afterAll(async () => {
+    // It throws naming each attempt off this machine not asserted on yet, the last daemon's as it closed among them.
+    await driver?.close()
+  })
+  /** What a scenario's run proves beside its checks, read from its world as it stopped. */
+  const ALSO: Partial<Record<string, (run: ScenarioRun) => void>> = {
+    I2: () => {
+      const { d } = driver.lastWorld()
+      // The devices' tmux is the recording wrapper in the root, run on the root's TMUX_TMPDIR with no TMUX, and none of
+      // its runs names a server of its own: each reached the daemon's private server.
+      expect(inside(d.root, resolveBinaryOnPath('tmux', d.env) ?? undefined)).toBe(true)
+      expect([d.env.TMUX_TMPDIR, d.env.TMUX ?? '']).toEqual([d.tmux.root, ''])
+      const tmux = driver.seen().commands.filter((c) => c.argv[0] === 'tmux')
+      expect(tmux).not.toEqual([])
+      expect(tmux.filter((c) => c.argv.some((arg) => arg === '-S' || arg === '-L'))).toEqual([])
+      // herdr was on the daemon's PATH as its dial came, so herdr's own source listed both its agents.
+      expect(d.log()).toContain('[herdr] listed · 2 agents')
+    },
+    I5: (run) => {
+      const selects = (driver.seen().streams ?? []).filter((l) => l.window === 'tabs' && l.line.type === undefined).map((l) => l.line)
+      expect(selects).toContainEqual({ app: 'iterm', tab: 'w1.1.0', raise: true })
+      expect(JSON.stringify([run.results, run.probes])).not.toMatch(/\/dev\/|ttys[0-9]/)
+    },
+    // The Claude mod polled in tmux before the voice, so its words came by the mod, to b alone.
+    I19: () => {
+      expect(driver.seen().deliveries.filter((d) => d.path === 'mod').map(({ target, text }) => ({ target, text })))
+        .toEqual([{ target: 'b', text: 'Eval words for bravo.' }])
+    },
+  }
+
+  it.for(SCENARIOS)('$id: $title', async (scenario, { skip }) => {
+    // herdr's scenarios need herdr and the cc that builds its agent, as the harness's own herdr cases do.
+    if (!herdrBinary && scenario.sessions.some((s) => itermPlaceOf(s) === 'herdr')) skip()
+    const before = othersNow()
+    const began = Date.now()
+    const run = await runScenario(driver, scenario, 'darwin')
+    // Kept before any assertion, so a scenario that fails one is still in the results and the baseline's verdict.
+    runs.push(run)
+    expect(run.error).toBeUndefined()
+    console.log(`[dial eval] ${scenario.id}: ${Date.now() - began} ms`)
+    const { d, herdrs } = driver.lastWorld()
+    for (const path of [d.env.HOME, d.env.HARNESS_OPEN_BIN, iterm(d).server, d.env.TMUX_TMPDIR, join(d.env.HOME!, '.config', 'herdr'),
+      ...herdrBinary ? [resolveBinaryOnPath('herdr', d.env) ?? undefined] : []]) {
+      expect(inside(d.root, path), path).toBe(true)
+    }
+    // The herdrs outside this worker, the person's among them: the daemon's table kept none, and each it dropped that
+    // still runs is one of them. A herdr that ended since, the test's own once iTerm2 relaunched among them, runs no more.
+    const others = [...before, ...othersNow()]
+    expect(herdrs.kept().filter((pid) => others.includes(pid))).toEqual([])
+    expect(herdrs.dropped().filter((pid) => !others.includes(pid) && !gone(pid))).toEqual([])
+    ALSO[scenario.id]?.(run)
+    expect(driver.networkReached()).toEqual([])
+    expect(run.wrongSends).toEqual([])
+    expect(uncaughtProbes(run)).toEqual([])
+  })
+
+  // The eval command judges the ratchet itself, over every file's results (run.ts).
+  it.skipIf(process.env[SKIP_RATCHET_ENV] === '1')("matches this platform's baseline", () => {
+    const baseline = loadBaseline()
+    expect(baseline).not.toBeNull()
+    const verdict = tierBVerdict(collect(runs), baseline!, 'darwin')
+    expect(verdict.ok, verdict.message).toBe(true)
   })
 })
