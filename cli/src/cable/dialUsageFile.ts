@@ -104,27 +104,19 @@ const load = (file: string, now: number): Usage | Dropped | 'missing' | 'unreada
 const textOf = (usage: Usage): string => `${JSON.stringify(usage)}\n`
 
 export class DialUsageFile implements DialUsageSink {
-  private readonly usage: Usage
+  private usage: Usage
   private cancel: (() => void) | undefined
   private closed = false
   /** Memory holds what the file does not: a failed write leaves it so, for the next change or the stop to write. */
   private dirty = false
-  /** The file could not be read (EACCES, EMFILE): it may hold days the gateway has not sent, so this run writes
-   *  nothing over it. */
-  private readonly unread: boolean
+  /** The file could not be read (EACCES, EMFILE): it may hold days the gateway has not sent, so nothing is written over
+   *  it and no first is spent on marks not known yet. Each write reads it again. */
+  private unread: boolean
 
-  /** Reads the file once. Nothing in it may stop the devices' process from starting, so this never throws. */
+  /** Reads the file. Nothing in it may stop the devices' process from starting, so this never throws. */
   constructor(private readonly deps: DialUsageFileDeps) {
-    const loaded = load(deps.file, deps.now())
-    this.unread = loaded === 'unreadable'
-    if (typeof loaded === 'object') {
-      this.usage = loaded
-      return
-    }
-    if (loaded !== 'missing' && loaded !== 'unreadable') deps.log(`[device] usage · dropped · ${loaded}`)
-    // A computer that had a dial before this file existed spends no first connection or first use on it.
-    const before = deps.hadDial()
-    this.usage = { version: DIAL_USAGE_FILE_VERSION, series: deps.now(), connectedBefore: before, usedBefore: before, days: {} }
+    this.usage = { version: DIAL_USAGE_FILE_VERSION, series: deps.now(), connectedBefore: false, usedBefore: false, days: {} }
+    this.unread = !this.read()
   }
 
   add(metric: DialFileMetric, n = 1): boolean {
@@ -147,7 +139,7 @@ export class DialUsageFile implements DialUsageSink {
   }
 
   unreached(mark: 'connected' | 'used'): boolean {
-    return this.counting() && !this.usage[markField(mark)]
+    return this.counting() && !this.unread && !this.usage[markField(mark)]
   }
 
   /** The devices' process stops: what waits, or what a failed write left, is written now, and nothing after, so the
@@ -164,9 +156,32 @@ export class DialUsageFile implements DialUsageSink {
     return !this.closed && this.deps.signedIn()
   }
 
+  /** The file into memory, what this run counted added to it; false while it cannot be read. */
+  private read(): boolean {
+    const loaded = load(this.deps.file, this.deps.now())
+    if (loaded === 'unreadable') return false
+    if (typeof loaded === 'object') {
+      // Counts summed, a flag kept at 1. No mark is spent while the file is unread, so the file's marks stand.
+      for (const [day, counts] of Object.entries(this.usage.days)) {
+        const into = loaded.days[day] ??= {}
+        for (const [metric, n] of Object.entries(counts) as Array<[DialFileMetric, number]>) {
+          into[metric] = Math.min((into[metric] ?? 0) + n, ceiling(metric))
+        }
+      }
+      this.usage = loaded
+      return true
+    }
+    if (loaded !== 'missing') this.deps.log(`[device] usage · dropped · ${loaded}`)
+    // A computer that had a dial before this file existed spends no first connection or first use on it.
+    const before = this.deps.hadDial()
+    this.usage.connectedBefore = before
+    this.usage.usedBefore = before
+    return true
+  }
+
   private changed(): void {
     this.dirty = true
-    if (this.cancel || this.unread) return
+    if (this.cancel) return
     this.cancel = this.deps.after(DIAL_USAGE_WRITE_MS, () => {
       this.cancel = undefined
       this.write()
@@ -174,6 +189,8 @@ export class DialUsageFile implements DialUsageSink {
   }
 
   private write(): void {
+    // Read again at most once a DIAL_USAGE_WRITE_MS, so a read that failed once does not mute the whole run.
+    if (this.unread) this.unread = !this.read()
     if (this.unread) return
     const { days } = this.usage
     const now = this.deps.now()
