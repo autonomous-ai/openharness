@@ -139,18 +139,18 @@ export class TierADriver implements EvalDriver {
 
   /**
    * The devices start again under the dial (the plan's Decision 9): it is theirs once they welcome it on its port opened
-   * again. The watch opens its tabs stream on their listener, as it does a second after its stream ended, and tells them
-   * the app in front again, as it does on the status saying the dial is attached (devices/client.ts runDialWatch): the new
-   * devices know none.
+   * again. The watch opens its tabs stream on their listener as soon as it is open, on its own retry after its stream
+   * ended, whether or not the dial is theirs yet; and it tells them the app in front again, as it does on the status
+   * saying the dial is attached (devices/client.ts runDialWatch): the new devices know none.
    */
   private async restartDevices(world: World): Promise<void> {
     // The welcome flag still holds from the port that closed: the next welcome frame is the new devices'.
     const welcomes = (): number => world.dial.frames.filter((f) => f.message.t === 'welcome').length
     const before = welcomes()
     await world.restartDevices()
+    if (world.scenario.app === 'iterm') openTabs(world)
     await this.settle(START_WITHIN_MS, () => welcomes() > before)
     if (welcomes() === before) throw new Error(`${world.scenario.id}: the devices never welcomed the dial after they started again`)
-    if (world.scenario.app === 'iterm') openTabs(world)
     await windowSteps.front(world, { kind: 'front', app: world.front })
   }
 
