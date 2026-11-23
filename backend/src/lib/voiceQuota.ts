@@ -19,6 +19,9 @@ export interface VoiceQuotaSnapshot {
 export interface VoiceQuotaReservationResult {
   snapshot: VoiceQuotaSnapshot
   state: 'reserved' | 'pending' | 'committed'
+  /** The bucket's exact milliseconds before this clip, read in its transaction: where voice's account-day buckets
+   * (lib/voiceUsage.ts) start it. For a `pending` or `committed` one, the bucket as it stands. */
+  usedMsBefore: number
 }
 
 export class VoiceQuotaExceededError extends Error {
@@ -170,6 +173,7 @@ async function reserveInBucket(
       return {
         snapshot: snapshot(machineId, dayKey, resetAt, usage.usedMs, limitSeconds),
         state: existing.status,
+        usedMsBefore: usage.usedMs,
       }
     }
     if (limitSeconds > 0 && usage.usedMs + roundedDurationMs > limitMs) {
@@ -220,6 +224,7 @@ async function reserveInBucket(
     return {
       snapshot: snapshot(machineId, dayKey, resetAt, usage.usedMs + roundedDurationMs, limitSeconds),
       state: 'reserved',
+      usedMsBefore: usage.usedMs,
     }
   })
 }
