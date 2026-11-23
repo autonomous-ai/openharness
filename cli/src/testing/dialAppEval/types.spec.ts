@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest'
 import { frontAppId, FRONT_NONE } from '../../cable/hosts/frontApp.js'
 import { observedAgentId } from '../../cable/hosts/observed.js'
-import { claudeSession, itermSession } from './catalog.js'
+import { claudeSession, itermSession, orcaSession, vscode } from './catalog.js'
 import { APPS, DIMENSIONS, EDITORS, PAGE, WEIGHTS, agentIdOf, engineOf, frontName, hookHandle, itermPlaceOf, orcaPaneHandle,
   orcaTerminalHandle, orcaWorktreeId, pageId, placeOf, resultKey, sessionPage, type Platform } from './types.js'
 
@@ -51,6 +51,12 @@ it("pageId names tmux and herdr as themselves and an app by PAGE; sessionPage pu
   expect(sessionPage(itermSession('c', { place: 'herdr' }))).toBe('herdr')
   expect(sessionPage(itermSession('a'))).toBe('iterm')
   expect(sessionPage(claudeSession('a', 0))).toBe('claude')
+})
+
+it("sessionPage puts Claude Code in the person's tmux on tmux's page, in an editor's terminal too, but keeps Orca's on Orca's (decision 3)", () => {
+  expect(sessionPage(vscode('a', { tmux: true }))).toBe('tmux')
+  expect(sessionPage(vscode('a'))).toBe('vscode')
+  expect(sessionPage(orcaSession('c', { tmux: true }))).toBe('orca')
 })
 
 it('APPS is the six apps, iTerm2 last', () => {
