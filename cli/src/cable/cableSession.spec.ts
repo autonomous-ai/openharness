@@ -8033,6 +8033,9 @@ describe("a resting Claude app row's words (docs/plans/2026-11-21-dial-claude-ap
       observed: { list: () => [], onChange: () => () => {}, send: async () => ({ ok: true }) },
       onPoll: () => () => {},
       after: (ms, run) => { timers.push({ ms, run }); return () => {} },
+      // The ChatGPT app's: no ChatGPT row here.
+      openThread: vi.fn(),
+      queue: { send: vi.fn() },
       monotonic: () => 0,
       log: () => {},
       count: () => {},

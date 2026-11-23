@@ -761,7 +761,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     modReady: (sessionId) => inbox.ready(sessionId),
     // Words for a session the Claude app's wake still waits for would take its first poll ahead of the wake's: they are
     // words not taken yet (cable/hosts/appWake.ts waitsFor). The wake is built whenever this source is.
-    toMod: (sessionId, text) => claudeWake!.waitsFor(sessionId) ? Promise.resolve('busy' as const) : inbox.deliver(sessionId, text),
+    toMod: (sessionId, text) => appWake!.waitsFor(sessionId) ? Promise.resolve('busy' as const) : inbox.deliver(sessionId, text),
     canOpen: opener.can,
     // Noted before `open -b`, which can take a while, and for an app with no pane of its own. A tap on a Claude app agent
     // runs the continue link a rest runs: its attach is the dial's own echo too.
@@ -899,9 +899,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }) : null
   /** The Claude app's stores, in the person's home: the app's own folders, not a Harness path. */
   const claudeAppRoots = claudeStoreRoots(apps.platform, process.env, homedir())
-  /** One for the whole devices process, every dial's words for a resting Claude app session, behind the observed agents'
-   *  switch (docs/plans/2026-11-21-dial-claude-app-wake-send-design.md). */
-  const claudeWake: AppWake | null = observed ? new AppWake({
+  /** One for the whole devices process and both apps, every dial's words for a resting Claude app session or ChatGPT app
+   *  thread, one at a time, behind the observed agents' switch (docs/plans/2026-11-21-dial-claude-app-wake-send-design.md,
+   *  docs/plans/2026-11-23-dial-chatgpt-voice-resting-design.md). */
+  const appWake: AppWake | null = observed ? new AppWake({
     // A tap's link and its notes, without the opener's fallback, which brings the app on whatever session it shows. The
     // raw adapter: the noted one would note the move twice.
     open: async (localId, agentId) => {
@@ -918,6 +919,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     },
     onPoll: (listener) => inbox.onPoll((sessionId) => part.call('claude-app', () => listener(sessionId))),
     after: timerIn('claude-app'),
+    // The link alone, never the adapter's forward, which brings the app on whatever thread it shows. The noted adapter
+    // notes the dial's own switch, so the title the app then shows is its echo.
+    openThread: (threadId, agentId) => codexNoted.show!(codexPane(threadId), agentId),
+    queue: codexQueue,
     monotonic,
     log,
     count: voiced,
@@ -927,7 +932,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  observed agents' switch, on macOS, Windows and Linux, where the app runs
    *  (docs/plans/2026-11-20-dial-app-sessions-win-linux-design.md). A session with a process is the observed source's
    *  copy, which holds its row while it runs (registry.ts). */
-  const claudeAppSource = claudeWake ? new ClaudeAppSource({
+  const claudeAppSource = appWake ? new ClaudeAppSource({
     store: deps.claudeAppStore ?? new ClaudeAppStore(claudeAppRoots.map(({ root }) => root)),
     roots: claudeAppRoots,
     watch: deps.watchStore ?? watchNearest,
@@ -942,7 +947,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // The noted copy keeps the show the Claude app's adapter has.
     show: (localId, agentId) => claudeNoted.show!(claudePane(localId), agentId),
     canLink: (localId) => claude.canLink(claudePane(localId)),
-    wake: claudeWake,
+    wake: appWake,
     monotonic,
     log,
   }) : null

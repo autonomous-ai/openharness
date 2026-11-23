@@ -137,8 +137,9 @@ export class ClaudeAppSource implements HostSource {
     if (!this.running) return
     this.running = false
     this.stops++
-    // The dial detached: a wake still opening or waiting answers that its session did not answer.
-    this.deps.wake.stop()
+    // The dial detached: a wake still opening or waiting answers that its session did not answer. The Claude app's
+    // only: the wake is the ChatGPT app's too.
+    this.deps.wake.stop('claude')
     for (const stop of this.unwatch) stop()
     this.unwatch = []
     this.watchFolders(NO_FOLDERS)
@@ -177,7 +178,7 @@ export class ClaudeAppSource implements HostSource {
     const row = this.find(agent.id)
     if (!row) return { ok: false, reason: `${agent.name} did not answer.` }
     const { localId, agent: { id, sessionId, name } } = row
-    return this.deps.wake.send({ localId, sessionId: sessionId!, agentId: id, name }, text)
+    return this.deps.wake.send({ app: 'claude', localId, sessionId: sessionId!, agentId: id, name }, text)
   }
 
   async focus(agent: HostAgent): Promise<boolean> {
