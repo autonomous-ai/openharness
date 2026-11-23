@@ -13877,10 +13877,11 @@ describe('the dial follows the pane focused in WezTerm and kitty (docs/plans/202
   }
   /** What the apps answer: the pane WezTerm's GUI focused (none: no GUI, RECORDED_WEZTERM.listClients.noGui), the window
    *  kitty focused, or, by socket, the window each kitty focused, and whether kitty refuses (focusedMatch.password). While
-   *  `held`, WezTerm's reads wait until the spec lands them. A tap's `activate-pane` or `focus-window` moves that focus,
+   *  `held`, WezTerm's reads wait until the spec lands them; while `heldKitty`, kitty's calls do. A tap's `activate-pane` or `focus-window` moves that focus,
    *  as the apps do. */
-  const focus = { pane: 0 as number | undefined, window: 1, windows: new Map<string, number>(), refused: false, held: false, land: [] as Array<() => void> }
-  beforeEach(() => { Object.assign(focus, { pane: 0, window: 1, windows: new Map(), refused: false, held: false, land: [] }) })
+  const focus = { pane: 0 as number | undefined, window: 1, windows: new Map<string, number>(), refused: false, held: false, heldKitty: false,
+    land: [] as Array<() => void> }
+  beforeEach(() => { Object.assign(focus, { pane: 0, window: 1, windows: new Map(), refused: false, held: false, heldKitty: false, land: [] }) })
   /** The devices' runs, recorded; `list-clients` and `get-colors` answered as the recorded apps did. */
   const apps = { ...orca, run: async (file: string, args: string[], timeoutMs: number) => {
     orcaRuns.push([file, args, timeoutMs])
@@ -13893,6 +13894,7 @@ describe('the dial follows the pane focused in WezTerm and kitty (docs/plans/202
     if (args.includes('activate-pane')) focus.pane = Number(args.at(-1))
     if (args[3] === 'focus-window') focus.windows.set(args[2], Number(args[5].slice('id:'.length)))
     if (args[3] !== 'get-colors') return { code: 0, stdout: '' }
+    if (focus.heldKitty) await new Promise<void>((resolve) => { focus.land.push(resolve) })
     if (focus.refused) return { code: focusedMatch.password.code, stdout: '', stderr: focusedMatch.password.stderr }
     const expr = args[5]
     const focused = focus.windows.get(args[2]) ?? focus.window
@@ -14050,6 +14052,22 @@ describe('the dial follows the pane focused in WezTerm and kitty (docs/plans/202
       expect(reads().filter(([, args]) => args.includes('list-clients'))).toEqual([LIST_CLIENTS])
       expect(matches()).toEqual(Array(3).fill('id:2 and state:focused'))
       expect(polls()).toEqual([STARTED, stopped(0), STARTED])
+    })
+
+    it('kitty: a read under way as the poll stops starts no more calls', async () => {
+      const kitty = await kittyAt()
+      const { settle, next } = await dialWith({ hooks: [1, 2, 3].map((n) => inKitty(n, kitty.listenOn)), makers: ['kitty'] })
+      // Focus on a shell: window 1 alone, then the `or` of 2 and 3, would be asked.
+      focus.window = 9
+      focus.heldKitty = true
+      await settle('kitty')
+      await settle('ghostty')
+      expect(polls()).toEqual([STARTED, stopped(0)])
+      for (const land of focus.land) land()
+      await settled()
+      await next(2)
+      expect(matches()).toEqual(['id:1 and state:focused'])
+      expect(logs).not.toContain(REFUSED_LINE)
     })
 
     it('three failed reads stop it as failing; an agents\' change or an attach does not start it again; the next settle of WezTerm does', async () => {

@@ -892,6 +892,26 @@ describe("kitty's focused windows (docs/plans/2026-11-23-dial-wezterm-kitty-focu
       expect(logs).toEqual([REFUSED, REFUSED])
     })
 
+    // The poll stopped while the read ran (focusPoll.ts): its front is no longer followed.
+    it('a read whose signal is aborted starts no more calls, marks nothing and says nothing', async () => {
+      const { calls, deps, focused, logs, adapter } = recorder()
+      focused.set(L, '9')
+      const stop = new AbortController()
+      const run = deps.run
+      deps.run = async (...args) => {
+        const answer = await run(...args)
+        stop.abort()
+        return answer
+      }
+      expect(await adapter.focusedWindows([at('1'), at('2'), at('3')], stop.signal)).toBeUndefined()
+      expect(matches(calls)).toEqual([alone('1')])
+      expect(logs).toEqual([])
+      deps.run = run
+      calls.length = 0
+      expect(await adapter.focusedWindows([at('1'), at('2'), at('3')])).toEqual(new Map([[L, null]]))
+      expect(calls).toHaveLength(2)
+    })
+
     it('a read that ran out of time marks nothing', async () => {
       const { calls, clock, focused, logs, adapter } = recorder()
       focused.set(L, '2')

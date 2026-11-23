@@ -13,11 +13,13 @@ const turn = () => new Promise((resolve) => setImmediate(resolve))
 /** A poll on fakes: reads the spec answers by hand, an `after` on the faked setTimeout, and what it told. */
 function setup(answered: (answer: string) => void = () => {}) {
   const reads: Read[] = []
+  const signals: AbortSignal[] = []
   const answers: string[] = []
   const lines: string[] = []
   let failing = 0
   const poll = startFocusPoll<string>({
-    read: () => new Promise<string | undefined>((resolve, reject) => {
+    read: (signal) => new Promise<string | undefined>((resolve, reject) => {
+      signals.push(signal)
       reads.push({
         answer: async (value) => { resolve(value); await turn() },
         reject: async (error) => { reject(error); await turn() },
@@ -36,7 +38,7 @@ function setup(answered: (answer: string) => void = () => {}) {
     await reads[reads.length - 1].answer(value)
     vi.advanceTimersByTime(FOCUS_POLL_MS)
   }
-  return { poll, reads, answers, lines, failing: () => failing, next }
+  return { poll, reads, signals, answers, lines, failing: () => failing, next }
 }
 
 const STARTED = '[device] focus poll · started'
@@ -93,6 +95,15 @@ describe('startFocusPoll', () => {
     expect(s.lines).toHaveLength(2)
     vi.advanceTimersByTime(FOCUS_POLL_MS * 2)
     expect(s.reads).toHaveLength(3)
+  })
+
+  it('a stop aborts the signal each read is given, so the read under way starts no more calls', async () => {
+    const s = setup()
+    await s.next('a')
+    expect(s.signals).toHaveLength(2)
+    expect(s.signals.some((signal) => signal.aborted)).toBe(false)
+    s.poll.stop()
+    expect(s.signals.every((signal) => signal.aborted)).toBe(true)
   })
 
   it('a stop between reads cancels the next one', async () => {
