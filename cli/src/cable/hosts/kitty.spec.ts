@@ -6,7 +6,8 @@ import type { FoundFrom, TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
 import { RECORDED_KITTY } from '../../testing/recordedKitty.js'
 import type { Place } from './adapter.js'
 import { APP_BUNDLES } from './hostDetect.js'
-import { createKittyAdapter, createKittyTabAdapter, kittyFinder, type KittyDeps } from './kitty.js'
+import { FOCUS_READ_MS } from './focusPoll.js'
+import { createKittyAdapter, createKittyTabAdapter, FOCUS_PANES_MAX, kittyFinder, type KittyDeps } from './kitty.js'
 import { MAX_TEXT } from './orca.js'
 import type { ProcessName } from './scannedApp.js'
 
@@ -38,7 +39,7 @@ const FAKE_KITTEN = '/fake/bin/kitten'
 const {
   env, envFromConf, envRemoteControlOff, focusWindow, sendText, sendTextBackslash, sendKeyOtherActive,
   sendTextOtherActive, enter, kittyAt, kittyPlusKitten, remoteControlOff, noSocket, missingWindow, focusWindowPid,
-  focusWindowPidDescendant,
+  focusWindowPidDescendant, focusedMatch,
 } = RECORDED_KITTY
 /** kitten where the finder found it, off the devices' PATH. */
 const FOUND = async (): Promise<TmuxPathOutcome> => ({ state: 'adopted', path: FAKE_KITTEN, from: 'login shell' })
@@ -48,19 +49,34 @@ const OFF = '[device] kitty · remote control off'
 const UID = 1000
 
 interface Call { file: string; args: readonly string[]; timeoutMs: number }
+type Answer = Awaited<ReturnType<KittyDeps['run']>>
 
 /** A runner that answers as the recorded kitty did, so no spec speaks to the developer's own kitty: it listens at
  *  `unix:/tmp/kitty` alone, with windows 1 and 2; any other address has no socket, any other window is missing. [answer]
- *  replaces its answer for the verb it names. */
-function recorder(over: Partial<KittyDeps> = {}, answer: Record<string, { code: number }> = {}) {
+ *  replaces its answer for the verb it names, as long as it holds it. `get-colors --match` matches the window [focused]
+ *  names for its socket, as RECORDED_KITTY.focusedMatch did; a socket [focused] has no entry for has no kitty. [ids] are
+ *  the socket files of this account's, by path, with their identity. Each call moves the spec's [clock] by [tick]. */
+function recorder(over: Partial<KittyDeps> = {}, answer: Record<string, Partial<Answer>> = {}) {
   const calls: Call[] = []
   const logs: string[] = []
   const owners: string[] = []
+  const focused = new Map<string, string>([[env.KITTY_LISTEN_ON, '1']])
+  const ids = new Map<string, string>([['/tmp/kitty', '1:1']])
+  const clock = { ms: 0, tick: 0 }
+  const colors = (to: string, match: string): Answer => {
+    const window = focused.get(to)
+    if (window === undefined) return { code: noSocket.code, stdout: '', stderr: noSocket.stderr }
+    const asked = [...match.matchAll(/id:([0-9]+)/g)].map(([, id]) => id)
+    return asked.includes(window) ? { code: focusedMatch.focused.code, stdout: `${focusedMatch.focused.stdoutFirstLine}\n`, stderr: '' }
+      : { code: focusedMatch.notFocused.code, stdout: '', stderr: `Error: No matching windows for expression: ${match}\n` }
+  }
   const deps: KittyDeps = {
     run: async (file, args, timeoutMs) => {
       calls.push({ file, args, timeoutMs })
+      clock.ms += clock.tick
       const [, , to, verb, , match] = args
-      if (answer[verb]) return { code: answer[verb].code, stdout: '' }
+      if (answer[verb]) return { code: 0, stdout: '', ...answer[verb] }
+      if (verb === 'get-colors') return colors(to, match)
       if (to !== env.KITTY_LISTEN_ON) return { code: noSocket.code, stdout: '' }
       if (match !== 'id:1' && match !== 'id:2') return { code: missingWindow.code, stdout: '' }
       return { code: verb === 'send-text' ? sendText.code : focusWindow.code, stdout: '' }
@@ -71,11 +87,13 @@ function recorder(over: Partial<KittyDeps> = {}, answer: Record<string, { code: 
     uid: UID,
     socketOwner: (path) => {
       owners.push(path)
-      return path === '/tmp/kitty' ? UID : null
+      return ids.has(path) ? UID : null
     },
+    now: () => clock.ms,
+    socketId: (path) => ids.get(path) ?? null,
     ...over,
   }
-  return { calls, logs, owners, deps, adapter: createKittyAdapter(deps) }
+  return { calls, logs, owners, focused, ids, clock, deps, adapter: createKittyAdapter(deps) }
 }
 
 /** A place, by default an agent on the pseudo-terminal of kitty's own window. */
@@ -436,6 +454,8 @@ function tabRecorder(over: Partial<KittyDeps> = {}, table: () => Promise<readonl
       owners.push(path)
       return path === '/tmp/kitty' ? UID : null
     },
+    now: () => 0,
+    socketId: () => null,
     ...over,
     front: () => front,
     processes: () => { reads++; return table() },
@@ -652,5 +672,244 @@ describe('kitty as the core finds tmux', () => {
     expect((await kitty()).state).toBe('absent')
     const path = install(where.PATH, 'kitty')
     expect(await kitty()).toEqual(adopted(path, 'PATH'))
+  })
+})
+
+const REFUSED = '[device] kitty · focus refused'
+const L = env.KITTY_LISTEN_ON
+/** A second kitty of this account's, at a path as kitty.conf's `listen_on` makes one. */
+const KB = 'unix:/tmp/kB'
+const ABSTRACT = 'unix:@kitty'
+/** Window [id] on socket [to], as paneOf gives an own one. */
+const at = (id: string, to: string = L) => pane(`${id}@${to}`)
+const alone = (id: string) => `id:${id} and state:focused`
+const colorsOf = (match: string, to: string = L) => ['kitten', '@', '--to', to, 'get-colors', '--match', match]
+/** A call of the focus read, as the adapter runs it: with the read's time left. */
+const reading = (args: readonly string[], timeoutMs = FOCUS_READ_MS): Call => ({ ...ran(args), timeoutMs })
+const matches = (calls: Call[]) => calls.map(({ args }) => args.at(-1))
+
+describe("kitty's focused windows (docs/plans/2026-11-23-dial-wezterm-kitty-focus-follow-design.md)", () => {
+  it('the recorder answers get-colors as the recorded kitty did', async () => {
+    const { deps } = recorder()
+    const asked = async ({ args }: { args: readonly string[] }) => deps.run(FAKE_KITTEN, args.slice(1), 1)
+    expect(await asked(focusedMatch.focused)).toMatchObject({ code: 0, stderr: focusedMatch.focused.stderr })
+    expect(await asked(focusedMatch.orFocused)).toMatchObject({ code: 0, stderr: focusedMatch.orFocused.stderr })
+    expect(await asked(focusedMatch.notFocused)).toEqual({ code: 1, stdout: '', stderr: focusedMatch.notFocused.stderr })
+    expect(await asked(focusedMatch.orNone)).toEqual({ code: 1, stdout: '', stderr: focusedMatch.orNone.stderr })
+  })
+
+  it('one call while focus stays on the pane asked first', async () => {
+    const { calls, adapter } = recorder()
+    expect(await adapter.focusedWindows([OWN])).toEqual(new Map([[L, OWN.id]]))
+    expect(calls).toEqual([reading(focusedMatch.focused.args)])
+  })
+
+  it('the first pane alone, then the rest in one or with parentheses, narrowed one id at a time', async () => {
+    const { calls, focused, adapter } = recorder()
+    focused.set(L, '3')
+    expect(await adapter.focusedWindows([at('1'), at('2'), at('3')])).toEqual(new Map([[L, at('3').id]]))
+    // The last left is the one the `or` matched: no fourth call.
+    expect(matches(calls)).toEqual([alone('1'), focusedMatch.orNone.args.at(-1), alone('2')])
+    focused.set(L, '2')
+    calls.length = 0
+    expect(await adapter.focusedWindows([at('1'), at('2'), at('3')])).toEqual(new Map([[L, at('2').id]]))
+    expect(matches(calls)).toEqual([alone('1'), 'state:focused and (id:2 or id:3)', alone('2')])
+  })
+
+  it('focus on another window: two calls and null', async () => {
+    const { calls, focused, adapter } = recorder()
+    focused.set(L, '3')
+    expect(await adapter.focusedWindows([at('1'), at('2')])).toEqual(new Map([[L, null]]))
+    expect(calls).toEqual([reading(colorsOf(alone('1'))), reading(colorsOf(alone('2')))])
+    calls.length = 0
+    expect(await adapter.focusedWindows([at('1'), at('2'), at('4')])).toEqual(new Map([[L, null]]))
+    expect(matches(calls)).toEqual([alone('1'), 'state:focused and (id:2 or id:4)'])
+  })
+
+  it('one pane, not focused: one call and null', async () => {
+    const { calls, focused, adapter } = recorder()
+    focused.set(L, '2')
+    expect(await adapter.focusedWindows([OWN])).toEqual(new Map([[L, null]]))
+    expect(calls).toEqual([reading(focusedMatch.focused.args)])
+  })
+
+  it("the caller's order: the pane it puts first is asked alone", async () => {
+    const { calls, adapter } = recorder()
+    expect(await adapter.focusedWindows([at('3'), at('1'), at('2')])).toEqual(new Map([[L, OWN.id]]))
+    expect(matches(calls)).toEqual([alone('3'), 'state:focused and (id:1 or id:2)', alone('1')])
+  })
+
+  it('each socket its own entry, asked in the order its panes first come', async () => {
+    const { calls, focused, ids, adapter } = recorder()
+    ids.set('/tmp/kB', '2:1')
+    focused.set(KB, '2')
+    const answer = await adapter.focusedWindows([at('1', KB), OWN, at('2', KB)])
+    expect([...answer!]).toEqual([[KB, at('2', KB).id], [L, OWN.id]])
+    expect(calls).toEqual([reading(colorsOf(alone('1'), KB)), reading(colorsOf(alone('2'), KB)), reading(colorsOf(alone('1')))])
+  })
+
+  it('at most 16 panes and 16 calls', async () => {
+    expect(FOCUS_PANES_MAX).toBe(16)
+    const many = recorder()
+    many.focused.set(L, '17')
+    const seventeen = Array.from({ length: 17 }, (_, i) => at(String(i + 1)))
+    expect(await many.adapter.focusedWindows(seventeen)).toEqual(new Map([[L, null]]))
+    for (const call of many.calls) expect(call.args.at(-1)).not.toMatch(/id:17\b/)
+    const last = recorder()
+    last.focused.set(L, '16')
+    expect(await last.adapter.focusedWindows(seventeen.slice(0, 16))).toEqual(new Map([[L, at('16').id]]))
+    expect(last.calls).toHaveLength(16)
+  })
+
+  it('one deadline for the read', async () => {
+    const { calls, clock, focused, adapter } = recorder()
+    focused.set(L, '3')
+    clock.tick = 500
+    await adapter.focusedWindows([at('1'), at('2'), at('3')])
+    expect(calls.map(({ timeoutMs }) => timeoutMs)).toEqual([2_000, 1_500, 1_000])
+    // The deadline is the read's own: the next starts with the whole time again.
+    calls.length = 0
+    focused.set(L, '2')
+    clock.tick = FOCUS_READ_MS
+    expect(await adapter.focusedWindows([at('1'), at('2')])).toBeUndefined()
+    // The clock is at the deadline after the first call: the second is not started.
+    expect(calls).toEqual([reading(colorsOf(alone('1')))])
+  })
+
+  it("only panes in form, of its own window and on a socket of this account's are asked", async () => {
+    const { calls, focused, adapter } = recorder({ socketOwner: (path) => (path === '/tmp/kitty' ? UID : 1001) })
+    focused.set(ABSTRACT, '1')
+    expect(await adapter.focusedWindows([HELD, pane(`x@${L}`), pane('1@tcp:localhost:5000'), at('1', 'unix:/tmp/theirs')]))
+      .toEqual(new Map())
+    expect(calls).toEqual([])
+    // Linux's abstract socket has no owner to read: it costs a look, as a tap does.
+    expect(await adapter.focusedWindows([at('1', ABSTRACT)])).toEqual(new Map([[ABSTRACT, at('1', ABSTRACT).id]]))
+    expect(calls).toEqual([reading(colorsOf(alone('1'), ABSTRACT))])
+    const mac = recorder({ platform: 'darwin' })
+    expect(await mac.adapter.focusedWindows([at('1', ABSTRACT)])).toEqual(new Map())
+    expect(mac.calls).toEqual([])
+  })
+
+  const refusals: Array<[string, Partial<Answer>]> = [
+    ['remote control off', remoteControlOff],
+    ['a password kitty', focusedMatch.password],
+    ['no kitty on the socket', noSocket],
+    ['a timeout', { code: null }],
+    ['exit 2', { code: 2, stderr: '' }],
+    ['exit 1 with no stderr', { code: 1 }],
+  ]
+  it.each(refusals)('%s is undefined', async (_name, refusal) => {
+    const { adapter } = recorder({}, { 'get-colors': { code: refusal.code, stderr: refusal.stderr } })
+    expect(await adapter.focusedWindows([OWN])).toBeUndefined()
+  })
+
+  // kitty in password mode with no password may ask the person on each call (focusedMatch.password): so kitty asks once a
+  // start at most.
+  describe('a refused socket is asked once a kitty start', () => {
+    it('a refusal: that read is undefined, the next asks that socket nothing and answers no entry for it', async () => {
+      const { calls, adapter } = recorder({}, { 'get-colors': focusedMatch.password })
+      expect(await adapter.focusedWindows([OWN])).toBeUndefined()
+      expect(calls).toHaveLength(1)
+      expect(await adapter.focusedWindows([OWN])).toEqual(new Map())
+      expect(calls).toHaveLength(1)
+    })
+
+    it('a timeout (exit null) alike', async () => {
+      const { calls, adapter } = recorder({}, { 'get-colors': { code: null } })
+      expect(await adapter.focusedWindows([OWN])).toBeUndefined()
+      expect(await adapter.focusedWindows([OWN])).toEqual(new Map())
+      expect(calls).toHaveLength(1)
+    })
+
+    it('the same path with a new socket identity is asked again', async () => {
+      const answer: Record<string, Partial<Answer>> = { 'get-colors': focusedMatch.password }
+      const { calls, ids, adapter } = recorder({}, answer)
+      await adapter.focusedWindows([OWN])
+      expect(await adapter.focusedWindows([OWN])).toEqual(new Map())
+      // A new kitty there, with remote control on.
+      ids.set('/tmp/kitty', '1:2')
+      delete answer['get-colors']
+      expect(await adapter.focusedWindows([OWN])).toEqual(new Map([[L, OWN.id]]))
+      expect(calls).toHaveLength(2)
+    })
+
+    it('an abstract socket refused, a read with no pane on it, then a pane on it again: asked again', async () => {
+      const { calls, adapter } = recorder({}, { 'get-colors': focusedMatch.password })
+      const abstract = at('1', ABSTRACT)
+      expect(await adapter.focusedWindows([abstract])).toBeUndefined()
+      expect(await adapter.focusedWindows([abstract])).toEqual(new Map())
+      expect(calls).toHaveLength(1)
+      expect(await adapter.focusedWindows([])).toEqual(new Map())
+      expect(calls).toHaveLength(1)
+      expect(await adapter.focusedWindows([abstract])).toBeUndefined()
+      expect(calls).toEqual([reading(colorsOf(alone('1'), ABSTRACT)), reading(colorsOf(alone('1'), ABSTRACT))])
+    })
+
+    it('another socket keeps being asked', async () => {
+      const { calls, ids, adapter } = recorder()
+      // Ours, with no kitty listening: refused as noSocket.
+      ids.set('/tmp/kB', '2:1')
+      expect(await adapter.focusedWindows([at('1', KB), OWN])).toBeUndefined()
+      expect(calls).toEqual([reading(colorsOf(alone('1'), KB)), reading(colorsOf(alone('1')))])
+      for (let read = 0; read < 2; read++) {
+        calls.length = 0
+        expect(await adapter.focusedWindows([at('1', KB), OWN])).toEqual(new Map([[L, OWN.id]]))
+        expect(calls).toEqual([reading(colorsOf(alone('1')))])
+      }
+    })
+
+    it('the line once per refusal', async () => {
+      const { logs, ids, adapter } = recorder({}, { 'get-colors': focusedMatch.password })
+      for (let read = 0; read < 3; read++) await adapter.focusedWindows([OWN])
+      expect(logs).toEqual([REFUSED])
+      ids.set('/tmp/kitty', '1:2')
+      expect(await adapter.focusedWindows([OWN])).toBeUndefined()
+      expect(logs).toEqual([REFUSED, REFUSED])
+    })
+
+    it('a read that ran out of time marks nothing', async () => {
+      const { calls, clock, focused, logs, adapter } = recorder()
+      focused.set(L, '2')
+      clock.tick = FOCUS_READ_MS
+      expect(await adapter.focusedWindows([at('1'), at('2')])).toBeUndefined()
+      clock.tick = 0
+      calls.length = 0
+      expect(await adapter.focusedWindows([at('1'), at('2')])).toEqual(new Map([[L, at('2').id]]))
+      expect(calls).toHaveLength(2)
+      expect(logs).toEqual([])
+    })
+
+    it('at most 16 refused sockets kept', async () => {
+      const { calls, ids, logs, adapter } = recorder()
+      const sockets = Array.from({ length: 17 }, (_, i) => `/tmp/k${i + 1}`)
+      for (const [i, path] of sockets.entries()) ids.set(path, `3:${i}`)
+      const on = (path: string) => at('1', `unix:${path}`)
+      expect(await adapter.focusedWindows(sockets.slice(0, 16).map(on))).toBeUndefined()
+      expect(await adapter.focusedWindows([on(sockets[16])])).toBeUndefined()
+      expect(calls).toHaveLength(17)
+      expect(logs).toEqual(Array(17).fill(REFUSED))
+      // The first refused was dropped for the 17th, then the second for the first again; the third is still kept.
+      expect(await adapter.focusedWindows([on(sockets[0])])).toBeUndefined()
+      expect(calls).toHaveLength(18)
+      expect(await adapter.focusedWindows([on(sockets[2])])).toEqual(new Map())
+      expect(calls).toHaveLength(18)
+    })
+  })
+
+  it('stdout is never read', async () => {
+    const { adapter } = recorder({}, { 'get-colors': { code: 0, stdout: focusedMatch.notFocused.stderr } })
+    expect(await adapter.focusedWindows([OWN])).toEqual(new Map([[L, OWN.id]]))
+  })
+
+  it('no kitty found runs nothing and is undefined', async () => {
+    const { calls, adapter } = recorder({ kitty: ABSENT })
+    expect(await adapter.focusedWindows([OWN])).toBeUndefined()
+    expect(calls).toEqual([])
+  })
+
+  it('no panes: an empty map, no call', async () => {
+    const { calls, adapter } = recorder()
+    expect(await adapter.focusedWindows([])).toEqual(new Map())
+    expect(calls).toEqual([])
   })
 })
