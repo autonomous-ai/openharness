@@ -63,6 +63,14 @@ describe('createDialUsage', () => {
     expect(count('dial_connected_installation_days')).toBe(3)
   })
 
+  it('a day used is a day connected, though a sleep kept the midnight timer from running', () => {
+    const { usage, count } = rig()
+    usage.attached(true)
+    vi.setSystemTime(T0 + DAY_MS)
+    usage.used()
+    expect(count('dial_connected_installation_days')).toBe(2)
+  })
+
   it('an attach alone is no use', () => {
     const { usage, prefixed } = rig()
     usage.agentsPresent(true)
