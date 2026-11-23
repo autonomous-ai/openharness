@@ -306,6 +306,24 @@ const ORCA_CALLERS: ProcessRow[] = [{ pid: 3900, ppid: 1, executable: 'orca-agen
 /** The hook's caller (4242) in the shell (4000) of a pane of the person's tmux, whose server made their terminal. */
 const IN_TMUX: ProcessRow[] = [{ pid: 4242, ppid: 4000, tty: 'pts/5', executable: 'claude' },
   { pid: 4000, ppid: 3900, tty: 'pts/5', executable: 'zsh' }, { pid: 3900, ppid: 1, executable: 'tmux' }]
+/** Diego's iTerm2 (2026-11-23), on macOS: Claude Code (4101) in a plain tab on ttys001, and one (4242) in pane %3 of his
+ *  tmux, whose server made its terminal and whose client (4300) is in another tab, on ttys002, each tab's login under
+ *  iTerm2's server. */
+const TMUX_IN_ITERM: ProcessRow[] = [
+  { pid: 4101, ppid: 4102, tty: 'ttys001', executable: 'claude' }, { pid: 4102, ppid: 4103, tty: 'ttys001', executable: '-zsh' },
+  { pid: 4103, ppid: 4297, executable: 'login' },
+  { pid: 4242, ppid: 4000, tty: 'ttys030', executable: 'claude' }, { pid: 4000, ppid: 3900, tty: 'ttys030', executable: 'zsh' },
+  { pid: 3900, ppid: 1, executable: 'tmux' },
+  { pid: 4300, ppid: 4299, executable: 'tmux' }, { pid: 4299, ppid: 4298, executable: '-zsh' }, { pid: 4298, ppid: 4297, executable: 'login' },
+  { pid: 4297, ppid: 4296, executable: join(homedir(), 'Library', 'Application Support', 'iTerm2', 'iTermServer-3.6.6') },
+  { pid: 4296, ppid: 1, executable: '/Applications/iTerm.app/Contents/MacOS/iTerm2' },
+]
+/** tmux's answers for that pane, its process, and its session's one client, in the tab on ttys002. Every run is recorded. */
+const tmuxInItermRun = async (file: string, args: string[], timeoutMs: number) => {
+  orcaRuns.push([file, args, timeoutMs])
+  const stdout = args[0] === 'display-message' ? '4000|work|\n' : args[0] === 'list-clients' ? '1794700050|4300|/dev/ttys002\n' : ''
+  return { code: 0, stdout }
+}
 /** Lets the read of a hook's caller's terminal's maker land, on real timers. */
 const landed = () => new Promise((done) => setImmediate(done))
 /** herdr's client lookup on macOS for the caller madeBy('herdr') gives (herdrOuter.ts): its one run asks the server's
@@ -6129,6 +6147,27 @@ describe('a person\'s prompt in the app in front turns the dial (docs/specs/2026
     expect(asked()).toEqual([[ID, 'prompt']])
   })
 
+  // Diego's decision 4 (2026-11-23): a follow to an agent in tmux turns the dial to tmux's page.
+  it('a prompt in the tmux agent, iTerm2 settled, turns the dial to tmux\'s page and asks the dials to follow it', async () => {
+    vi.useFakeTimers()
+    readers.processes.mockResolvedValue(TMUX_IN_ITERM)
+    const listener = fakeListener()
+    const { port } = start({ faults: ['fleet'], listen: listener.listen, orca: { ...orca, platform: 'darwin', run: tmuxInItermRun } })
+    const inTmux = { hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux' } }
+    port.observed(hook('session-start', inTmux))
+    // A plain iTerm2 tab's agent: iTerm2's settle shows its own page.
+    port.observed(hook('session-start', { sessionId: 'sess-p', callerPid: 4101, hostHints: { TERM_PROGRAM: 'iTerm.app' } }))
+    seen.host.watching!(true)
+    port.swarms(null)
+    await vi.waitFor(() => expect(logs).toContain('[device] tmux client · found'))
+    expect(listener.front('iterm')).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    port.observed(hook('turn-start', inTmux))
+    expect(asked()).toEqual([[ID, 'prompt']])
+    expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('tmux')
+    expect(logs.filter((line) => line.startsWith('[device] app filter: switched ·'))).toEqual(['[device] app filter: switched · follow'])
+  })
+
   it('a prompt in the Claude app, with the Claude app in front, asks the dials to follow it', async () => {
     const { port } = await dialWith('claude')
     port.observed(hook('turn-start', { sessionId: 'desk-1', hostHints: { __CFBundleIdentifier: 'com.anthropic.claudefordesktop' } }))
@@ -7088,6 +7127,9 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     const { port, listener, report } = await dialWith()
     expect(Object.keys(seen.host).filter((key) => /settled/i.test(key))).toEqual(['appSettled'])
     report('terminal-app', TTY)
+    // As the filter tells them: the settling judges the waiting report, before the settle shows anything (its page is the
+    // agent's), and the settled follows its agent.
+    seen.host.appSettling!('terminal-app')
     seen.host.appSettled!('terminal-app')
     expect(asked()).toEqual([[ID, 'tab']])
     // The session the Claude app shows, attached while it was not in front: kept for the app's settle.
@@ -7109,6 +7151,160 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     seen.host.appSettled!('claude')
     expect(logs).toContain('[devices] dial failed · Error')
     expect(tabLines()).toEqual(['[device] tab · skipped · not in front', '[device] tab · skipped · not in front'])
+  })
+})
+
+// Diego's decision 4 (2026-11-23): selecting the tab of a tmux client turns the dial to tmux's page, with no step through
+// the terminal's own (docs/plans/2026-11-23-dial-tmux-herdr-apps-design.md, "A follow turns the page").
+describe('selecting a tmux client\'s tab turns the dial to tmux\'s page (docs/plans/2026-11-23-dial-tmux-herdr-apps-design.md)', () => {
+  const ID = observedAgentId('claude', 'sess-1')
+  const PLAIN = observedAgentId('claude', 'sess-p')
+  const PLAIN_TAB = '/dev/ttys001'
+  const TMUX_TAB = '/dev/ttys002'
+  const hooked = (sessionId: string, callerPid: number, hostHints: Record<string, string>): ObservedHookEvent =>
+    ({ engine: 'claude', sessionId, event: 'session-start', cwd: '/work/api', callerPid, transcriptPath: `/t/${sessionId}.jsonl`, hostHints })
+  const host = () => seen.dial as unknown as DaemonCableHost
+  let clock = 0
+  /** A dial on the cable with no window, on macOS: an agent in a Terminal tab, whose page a spec shows first, the agent in
+   *  tmux whose client is in an iTerm2 tab, its client found, and unless `plain` is false one in a plain iTerm2 tab, with
+   *  its tty read. A watch's stream is open, no app settled in front, and the devices' monotonic clock at 0. `report` is a
+   *  tab line through the listener's handler; `settle` keeps an app in front for the settle. */
+  const dialWith = async ({ plain = true } = {}) => {
+    vi.useFakeTimers()
+    clock = 0
+    readers.processes.mockResolvedValue(TMUX_IN_ITERM)
+    const listener = fakeListener()
+    const tty = vi.fn(async (pid: number): Promise<string | undefined> => (pid === 4101 ? PLAIN_TAB : undefined))
+    const started = start({ faults: ['fleet'], orca: { ...orca, platform: 'darwin', run: tmuxInItermRun }, listen: listener.listen, tty, now: () => clock })
+    started.port.observed(hooked('sess-t', 4110, { __CFBundleIdentifier: 'com.apple.Terminal' }))
+    if (plain) started.port.observed(hooked('sess-p', 4101, { TERM_PROGRAM: 'iTerm.app' }))
+    started.port.observed(hooked('sess-1', 4242, { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux' }))
+    seen.host.watching!(true)
+    started.port.swarms(null)
+    await vi.waitFor(() => expect(logs).toContain('[device] tmux client · found'))
+    await Promise.all(tty.mock.results.map(({ value }) => value))
+    const stream = listener.tabs()
+    const report = (app: string, tty: string): unknown =>
+      (listener.given[0].handlers.tab as ListenerHandler).handle({ type: 'tab', app, tty }, new AbortController().signal)
+    const settle = async (app: string) => {
+      expect(listener.front(app)).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    }
+    return { ...started, listener, stream, report, settle }
+  }
+  const asked = () => calls('followLocal')
+  const switches = () => logs.filter((line) => line.startsWith('[device] app filter: switched ·'))
+  const views = () => logs.filter((line) => line.startsWith('[device] app filter: view'))
+  const tabLines = () => logs.filter((line) => line.startsWith('[device] tab'))
+  const read = () => host().listAgentSnapshot({ apps: true })
+
+  it('a tab report of the tmux client\'s tab, iTerm2 settled: the dials are asked to follow its agent, and the list a dial that says appFilter reads shows tmux\'s page with it', async () => {
+    const { report, settle } = await dialWith()
+    await settle('iterm')
+    expect(report('iterm', TMUX_TAB)).toBeUndefined()
+    expect(asked()).toEqual([[ID, 'tab']])
+    const list = await read()
+    expect(list.apps?.shown).toBe('tmux')
+    expect(list.agents.map(({ id }) => id)).toEqual([ID])
+    expect(switches().at(-1)).toBe('[device] app filter: switched · follow')
+    // And keeps it while iTerm2 stays in front.
+    expect((await read()).apps?.shown).toBe('tmux')
+  })
+
+  it('a report waiting for iTerm2 to settle: the settle shows tmux\'s page directly', async () => {
+    const { listener, report, settle } = await dialWith()
+    await settle('terminal-app')
+    expect(listener.front('iterm')).toBeUndefined()
+    report('iterm', TMUX_TAB)
+    expect(asked()).toEqual([])
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    // From Terminal's page straight to tmux's: never iTerm2's on the way.
+    expect(switches()).toEqual(['[device] app filter: switched · follow'])
+    expect(asked()).toEqual([[ID, 'tab']])
+    expect((await read()).apps?.shown).toBe('tmux')
+  })
+
+  it('iTerm2 with no agents of its own: its settle shows nothing new, and the follow turns the page', async () => {
+    const { report, settle } = await dialWith({ plain: false })
+    await settle('terminal-app')
+    await settle('iterm')
+    expect(switches()).toEqual([])
+    report('iterm', TMUX_TAB)
+    expect(switches()).toEqual(['[device] app filter: switched · follow'])
+    expect(asked()).toEqual([[ID, 'tab']])
+    expect((await read()).apps?.shown).toBe('tmux')
+  })
+
+  it('the tmux tab, then a plain tab, both before the settle: the latest wins, and the settle shows iTerm2\'s page, front', async () => {
+    const { listener, report, settle } = await dialWith()
+    await settle('terminal-app')
+    expect(listener.front('iterm')).toBeUndefined()
+    report('iterm', TMUX_TAB)
+    report('iterm', PLAIN_TAB)
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    expect(switches()).toEqual(['[device] app filter: switched · front'])
+    expect(asked()).toEqual([[PLAIN, 'tab']])
+    expect((await read()).apps?.shown).toBe('iterm')
+  })
+
+  it('the dial\'s own rest on the tmux row selects its tab: iTerm2\'s report of it is its echo, and the page stays', async () => {
+    const { report, settle, stream } = await dialWith()
+    await settle('iterm')
+    host().swipeEnded(ID, 'rest')
+    await vi.waitFor(() => expect(logs).toContain('[device] swipe · ok'))
+    expect(stream.lines).toStrictEqual([{ app: 'iterm', tty: TMUX_TAB }])
+    report('iterm', TMUX_TAB)
+    expect(tabLines()).toEqual(['[device] tab · skipped · echo'])
+    expect(asked()).toEqual([])
+    expect(switches()).toEqual([])
+    expect((await read()).apps?.shown).toBe('iterm')
+  })
+
+  it('a pick on the dial holds: the tmux tab\'s report turns no page', async () => {
+    const { report, settle } = await dialWith()
+    await settle('iterm')
+    expect(host().pickApp('terminal-app')).toBe('switched')
+    report('iterm', TMUX_TAB)
+    // The dials are asked all the same: one whose ring lacks the agent answers no tile.
+    expect(asked()).toEqual([[ID, 'tab']])
+    expect(switches()).toEqual(['[device] app filter: switched · pick'])
+    expect((await read()).apps?.shown).toBe('terminal-app')
+  })
+
+  it('a pick of tmux\'s page brings no app', async () => {
+    const { settle } = await dialWith()
+    await settle('iterm')
+    const runs = orcaRuns.length
+    expect(host().pickApp('tmux')).toBe('switched')
+    expect((await read()).apps?.shown).toBe('tmux')
+    // tmux has no bundle: a pick of iTerm2 after it is the one that brings an app.
+    expect(host().pickApp('iterm')).toBe('switched')
+    const brought = () => logs.filter((line) => line.startsWith('[device] app filter: bring'))
+    await vi.waitFor(() => expect(brought()).toHaveLength(1))
+    expect(brought()).toEqual(['[device] app filter: bring · ok'])
+    expect(orcaRuns.slice(runs)).toEqual([['/usr/bin/open', ['-b', 'com.googlecode.iterm2'], 10_000]])
+  })
+
+  it('with a window open on its tab and iTerm2 holding no agent of its own, the follow turns the view to apps on tmux\'s page', async () => {
+    const { port, report, settle } = await dialWith({ plain: false })
+    port.swarms({ active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: [], panes: 0 }], tiles: [] })
+    await settle('iterm')
+    expect(views()).toEqual(['[device] app filter: view tabs · window'])
+    report('iterm', TMUX_TAB)
+    expect(views()).toEqual(['[device] app filter: view tabs · window', '[device] app filter: view apps · front'])
+    expect(asked()).toEqual([[ID, 'tab']])
+    const list = await read()
+    expect(list.apps?.shown).toBe('tmux')
+    expect(list.agents.map(({ id }) => id)).toEqual([ID])
+  })
+
+  it('stop forgets the agent a settle judged: the settled that follows asks nothing', async () => {
+    const { port, report } = await dialWith()
+    report('iterm', TMUX_TAB)
+    seen.host.appSettling!('iterm')
+    await port.stop()
+    seen.host.appSettled!('iterm')
+    expect(asked()).toEqual([])
   })
 })
 
