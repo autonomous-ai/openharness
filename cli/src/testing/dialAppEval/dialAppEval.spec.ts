@@ -93,12 +93,22 @@ vi.mock('../../cable/hosts/cursorFolder.js', async (real) => ({
   ...await real<typeof import('../../cable/hosts/cursorFolder.js')>(),
   isFolder: (path: string) => machine.folders.has(path),
 }))
-// No folder or socket of this machine is watched: the stores' watch is the world's (tierA/storeWatch.ts), and nothing
-// else of the machine changes.
+// No folder or socket of this machine is watched: the stores' watch is the world's (tierA/storeWatch.ts), and a watch on
+// a socket's folder is the model's, told as herdr's socket appears (tierA/steps/herdr.ts).
 vi.mock('../../cable/hosts/folderWatch.js', () => ({ watchNearest: () => () => {} }))
 vi.mock('../../cable/hosts/unixSocket.js', async (real) => ({
   ...await real<typeof import('../../cable/hosts/unixSocket.js')>(),
-  watchSocket: () => () => {},
+  watchSocket: (_where: unknown, changed: () => void) => {
+    const watch = (): void => changed()
+    machine.socketWatches.add(watch)
+    return () => { machine.socketWatches.delete(watch) }
+  },
+}))
+// A terminal's last access is the model's (tierA/machine.ts atimes): herdr's client lookup ranks clients by it, and the
+// real read would stat this machine's own /dev/ttysNNN.
+vi.mock('../../cable/hosts/herdrOuter.js', async (real) => ({
+  ...await real<typeof import('../../cable/hosts/herdrOuter.js')>(),
+  ttyAtime: async (tty: string) => machine.atimes.get(tty.replace(/^\/dev\//, '')),
 }))
 // The model's machine has no Zellij or kitty, and tmux only where the world installed it (an iTerm2 scenario's): no login
 // shell is asked where they are. A tmux found runs through the world's `run`, answered from its model (tierA/steps/tmux.ts).

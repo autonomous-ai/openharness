@@ -32,6 +32,8 @@ export interface MachineModel {
   installed: Map<string, string>
   /** Each tty's last access by its bare name (`ttys004`), at virtual time. */
   atimes: Map<string, number>
+  /** What the spec's watchSocket mock was handed, each until its stop: told as a socket appears (steps/herdr.ts). */
+  socketWatches: Set<() => void>
 }
 
 export const machine: MachineModel = {
@@ -41,6 +43,7 @@ export const machine: MachineModel = {
   owners: new Map(),
   installed: new Map(),
   atimes: new Map(),
+  socketWatches: new Set(),
   reset() {
     this.processes.clear()
     this.bundleIds.clear()
@@ -49,6 +52,7 @@ export const machine: MachineModel = {
     this.itermHome = undefined
     this.installed.clear()
     this.atimes.clear()
+    this.socketWatches.clear()
   },
   start(p) {
     this.processes.set(p.pid, p)

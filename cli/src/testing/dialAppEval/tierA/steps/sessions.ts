@@ -5,7 +5,8 @@
  * the panel and Cursor's own agent under the editor, the editor under Terminal when it was started from there; an Orca
  * agent under its pane's shell, on that pane's terminal, which Orca's terminal host made (orcaPane); an iTerm2 agent
  * under its tab's shell, on that tab's terminal (iterm.ts tabShell); an agent under tmux, Orca's or iTerm2's, under its
- * tmux pane's shell (tmux.ts tmuxPane). Its transcript is in Harness's own engine homes, a Codex with a home of its own
+ * tmux pane's shell (tmux.ts tmuxPane), and one under iTerm2's herdr under its herdr pane's (herdr.ts herdrPane), which
+ * herdr hears of at each hook (herdrHeard). Its transcript is in Harness's own engine homes, a Codex with a home of its own
  * in that home, and Cursor's in Cursor's. What each sends is chosen by the session's engine and place, never by its app. For a Claude Code session the mod is
  * this file: a loop holding `ports.devices.inboxPoll` open, so the devices' `modReady` holds as with the real plugin,
  * and each text a poll is answered with is a `mod` delivery to that session.
@@ -21,6 +22,7 @@ import { RECORDED_ORCA } from '../../../recordedOrca.js'
 import { engineOf, HELD_MAKER, hookHandle, itermPlaceOf, orcaPaneHandle, placeOf, type App, type Editor, type Engine, type Platform,
   type SessionDef, type SessionKey } from '../../types.js'
 import type { StepHandler, TierAWorld } from '../world.js'
+import { herdrHeard, herdrPane, herdrPaneId } from './herdr.js'
 import { tabShell } from './iterm.js'
 import { panesChanged } from './orca.js'
 import { closePane, tmuxPane, tmuxPaneId, typedThrough } from './tmux.js'
@@ -56,7 +58,7 @@ const ORCA_HOSTS: Readonly<Record<Platform, string>> = {
 interface Live {
   pid: number
   /** Its terminal's shell: an editor terminal's, the agent's parent, its Orca pane's, its iTerm2 tab's or its iTerm2 tmux
-   *  pane's. */
+   *  or herdr pane's. */
   shell?: number
   /** The other processes of its Orca pane or iTerm2 tab, which end with it: a held one's maker and an iTerm2 tab's login.
    *  Its tmux pane closes with it too (tmux.ts closePane). */
@@ -121,14 +123,16 @@ const fromTerminal = (world: TierAWorld): boolean => world.scenario.world?.launc
  *
  * An iTerm2 tab's agent (docs/plans/2026-11-22-dial-eval-iterm2-plan.md, Decision 8): iTerm2's TERM_PROGRAM and its
  * bundle id, as iTerm2 gives every shell it starts. In tmux, tmux's TERM_PROGRAM and its pane, beside the bundle id the
- * server started with, iTerm2's.
+ * server started with, iTerm2's. In herdr, herdr's pane beside the TERM_PROGRAM and bundle id its server started with,
+ * iTerm2's: herdr sets no TERM_PROGRAM of its own.
  */
 function hintsOf(world: TierAWorld, s: SessionDef): Record<string, string> {
   const { platform } = world
   if (s.app === 'iterm') {
-    return itermPlaceOf(s) === 'tmux'
-      ? { TERM_PROGRAM: 'tmux', TMUX_PANE: tmuxPaneId(world, s), __CFBundleIdentifier: APP_BUNDLES.iterm }
-      : { TERM_PROGRAM: 'iTerm.app', __CFBundleIdentifier: APP_BUNDLES.iterm }
+    const place = itermPlaceOf(s)
+    if (place === 'tmux') return { TERM_PROGRAM: 'tmux', TMUX_PANE: tmuxPaneId(world, s), __CFBundleIdentifier: APP_BUNDLES.iterm }
+    return { ...(place === 'herdr' ? { HERDR_PANE_ID: herdrPaneId(world, s.key) } : {}), TERM_PROGRAM: 'iTerm.app',
+      __CFBundleIdentifier: APP_BUNDLES.iterm }
   }
   if (s.app === 'orca') {
     const handle = hookHandle(s, stateOf(world).orcaLaunch)
@@ -223,14 +227,13 @@ function orcaPane(world: TierAWorld, s: SessionDef): { shell: number; parent: nu
 }
 
 /** The session's iTerm2 tab or split (the plan's Decision 4): its shell, opened when none is, and the tab's login, which
- *  ends with it; or its tmux pane, whose client runs in its tab. A herdr session's pane is built by its own task (Task 6). */
+ *  ends with it; or its tmux or herdr pane, whose client runs in its tab. */
 function itermTab(world: TierAWorld, s: SessionDef): { shell: number; parent: number; others: number[] } {
   const place = itermPlaceOf(s)
-  if (place === 'tmux') {
-    const { shell } = tmuxPane(world, s)
+  if (place === 'tmux' || place === 'herdr') {
+    const { shell } = place === 'tmux' ? tmuxPane(world, s) : herdrPane(world, s)
     return { shell, parent: shell, others: [] }
   }
-  if (place !== 'tab') throw new Error(`tier A: an iTerm2 session in ${place} is not built yet`)
   const { pid: shell } = tabShell(world, { window: s.window!, tab: s.tab!, split: s.split })
   return { shell, parent: shell, others: [world.machine.processes.get(shell)!.ppid] }
 }
@@ -378,6 +381,7 @@ export async function startSession(world: TierAWorld, key: SessionKey): Promise<
   state.live.set(key, live)
   // Orca made the pane's terminal before its agent started in it: the plugin hears of the pane first.
   if (s.app === 'orca') await panesChanged(world)
+  if (itermPlaceOf(s) === 'herdr') herdrHeard(world, key, 'start')
   tell(world, key, live, 'session-start')
   if (live.mod) holdMod(world, key, s.id, live.mod)
 }
@@ -427,6 +431,8 @@ export const sessionsSteps: { hook: StepHandler<'hook'>; quit: StepHandler<'quit
     if (step.event === 'start') return startSession(world, step.session)
     const live = liveOf(world, step.session)
     const s = world.session(step.session)
+    // herdr hears its agent as the hook runs, a turn typed through its client first.
+    if (itermPlaceOf(s) === 'herdr') herdrHeard(world, step.session, step.event)
     switch (step.event) {
       case 'turn-start':
         // The person typed the prompt: through the client in iTerm2's selected tab, when one shows its tmux session.

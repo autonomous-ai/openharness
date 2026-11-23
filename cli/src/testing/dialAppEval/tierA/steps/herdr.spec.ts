@@ -200,7 +200,7 @@ describe("tier A's herdr", () => {
     await w.step('herdr.restart', {})
     await landed()
     expect(heard.slice(6)).toEqual([{ closed: 'ended' }])
-    // With no server a subscription closes at once; one closed by its caller is told nothing.
+    // One its caller closes is told nothing, not even its start.
     const none = hearing()
     w.client.subscribe(KINDS, none.to).close()
     await landed()

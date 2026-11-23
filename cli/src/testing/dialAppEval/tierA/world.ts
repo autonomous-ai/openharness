@@ -37,6 +37,7 @@ import { agentIdOf, type App, type Delivery, type LinkedApp, type Platform, type
 import { quiet } from './clock.js'
 import { LoopbackDial } from './loopbackDial.js'
 import { machine, type MachineModel } from './machine.js'
+import { answerHerdr, HERDR, herdrClient } from './steps/herdr.js'
 import { answerOrca, orcaAccountHomes, watchChild } from './steps/orca.js'
 import { answerTmux, TMUX } from './steps/tmux.js'
 import { recordTyping } from './steps/voice.js'
@@ -93,7 +94,7 @@ const APPS: Readonly<Record<LinkedApp, { bundle: string; scheme: string; desktop
  * The commands found on each platform's PATH here, made up, recorded and never run: Linux's two a link needs, and Orca's
  * CLI where its .deb puts it on PATH (devices/orcaHomes.ts orcaBinary; the plan's Decision 6). On macOS Orca's is the
  * app's own (orcaAppBin), and on Windows the per-user install's (ORCA_EXE), whose folder Orca's installer does not put
- * on PATH. Nothing else of any platform's is installed.
+ * on PATH. Nothing else of any platform's is there but what the machine installed (machine.ts installed).
  */
 const ON_PATH: Readonly<Record<Platform, Readonly<Record<string, string>>>> = {
   darwin: {},
@@ -120,10 +121,11 @@ const CODEX_BIN = '/opt/eval/bin/codex'
 const APP_CODEX_BIN = '/opt/eval/ChatGPT.app/codex'
 const CURSOR_BIN = '/opt/eval/bin/cursor'
 /** The programs whose commands the world answers as the scenario says, by name: macOS's and Linux's openers, the scheme
- *  lookup, the Windows helper, the Linux raise, Orca's CLI (steps/orca.ts) and tmux (steps/tmux.ts). Cursor's CLI is
- *  answered only as Linux's folder row runs it, on one folder (cable/hosts/cursorFolder.ts). A command of any other is one
- *  tier A does not model. */
-const ANSWERED: ReadonlySet<string> = new Set(['open', 'xdg-open', 'xdg-mime', 'harness-pty', 'raise', 'tmux', ...ORCA_PROGRAMS])
+ *  lookup, the Windows helper, the Linux raise, Orca's CLI (steps/orca.ts), tmux (steps/tmux.ts), and herdr with the
+ *  lsof and ps of its client lookup (steps/herdr.ts). Cursor's CLI is answered only as Linux's folder row runs it, on one
+ *  folder (cable/hosts/cursorFolder.ts). A command of any other is one tier A does not model. */
+const ANSWERED: ReadonlySet<string> = new Set(['open', 'xdg-open', 'xdg-mime', 'harness-pty', 'raise', 'tmux', 'herdr', 'lsof', 'ps',
+  ...ORCA_PROGRAMS])
 /** The programs whose commands name panes by id. */
 const MULTIPLEXERS: ReadonlySet<string> = new Set(['tmux', 'herdr'])
 
@@ -173,8 +175,9 @@ const cursorInstalled = (platform: Platform, root: string, gap: (reason: string)
   }
 }
 /**
- * herdr, Herdr Core and opencode with nobody listening, as their clients say when there is no socket or service. Tier A
- * models no pane of theirs: words one is asked to put in a pane are `typed` into no session, which the gate counts.
+ * herdr (on every machine but iTerm2's, steps/herdr.ts), Herdr Core and opencode with nobody listening, as their clients
+ * say when there is no socket or service. There tier A models no pane of theirs: words one is asked to put in a pane are
+ * `typed` into no session, which the gate counts.
  */
 const noHerdr = (typed: (text: string) => void): HerdrClient => ({
   request: async () => ({ ok: false, fault: 'no_socket' }),
@@ -446,11 +449,13 @@ export class World implements TierAWorld {
     // read Orca's homes at once. Typing is seen first, as Orca's rule answers its sends.
     recordTyping(this)
     answerOrca(this)
-    // tmux is on an iTerm2 scenario's machine alone (the plan's Decision 5): every other app's devices find none and run
-    // none, as on main.
+    // tmux and herdr are on an iTerm2 scenario's machine alone (the plan's Decisions 5 and 7): every other app's devices
+    // find neither and run neither, as on main.
     if (scenario.app === 'iterm') {
       machine.installed.set('tmux', TMUX)
       answerTmux(this)
+      machine.installed.set('herdr', HERDR)
+      answerHerdr(this)
     }
     // Orca's CLI is found from the model too (the plan's Decision 6), and the devices build their own reads of it on
     // these. A lookup's accept is never asked: it reads the real disk. Of Orca's files only its CLI is there, where the
@@ -458,7 +463,7 @@ export class World implements TierAWorld {
     const orcaInstall = { darwin: orcaAppBin(), linux: ON_PATH.linux['orca-ide']!, win32: ORCA_EXE(join(root, LOCAL_APP_DATA)) }[platform]
     const orca: OrcaReadDeps = {
       run: async (file, args) => this.ran([file, ...args]),
-      onPath: (name) => (Object.hasOwn(ON_PATH[platform], name) ? ON_PATH[platform][name]! : null),
+      onPath: (name) => machine.installed.get(name) ?? (Object.hasOwn(ON_PATH[platform], name) ? ON_PATH[platform][name]! : null),
       exists: (path) => path === orcaInstall,
       platform,
       localAppData: process.env.LOCALAPPDATA,
@@ -497,7 +502,7 @@ export class World implements TierAWorld {
         readLoginShell: () => {},
         platform,
       },
-      herdr: noHerdr(typed),
+      herdr: scenario.app === 'iterm' ? herdrClient(this) : noHerdr(typed),
       hc: noHc(typed),
       cmux: { binary: () => null, sessions: async () => ({ ok: false, fault: 'no-binary' }), mode: async () => undefined,
         inputState: async () => undefined, paste: async (_workspace, _surface, text) => { typed(text); return false } },
