@@ -1,13 +1,13 @@
 // Harness Max as a Linux program: the device's boot order (main/app_main.c) over the Linux drivers, with the cable's far
 // end chosen on the command line. The output is a build choice (MAX_LINUX_OUTPUT).
 //
-//   harness-max [--live [--port N] | --usb [PORT] | --demo | --story] [--screenshot SECONDS FILE.bmp]
+//   harness-max [--live [--port N] | --usb [PORT] | --demo | --story | --update] [--screenshot SECONDS FILE.bmp]
 //
 // --live (the default): a real daemon dials in over TCP (HARNESS_CABLE_TCP=host:7531). --usb: a real daemon over the
 // USB cable, through the serial port of the gadget orangepi/harness-max-usb makes (/dev/ttyGS0). --demo: the scripted
 // daemon in main/demo runs inside the program, every agent at rest until a person talks to one. --story: the same
-// daemon, its agents playing their story on their own, in a loop. --screenshot (the SDL window only): save the glass
-// after SECONDS, then quit.
+// daemon, its agents playing their story on their own, in a loop. --update: the firmware update screen, played over
+// --demo's daemon in a loop. --screenshot (the SDL window only): save the glass after SECONDS, then quit.
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,6 +24,7 @@
 #include "max_output.h"
 #include "pro_display.h"
 #include "sys/config_store.h"
+#include "sys/fw_update.h"
 #include "sys/last_words.h"
 #include "sys/ram_telemetry.h"
 #include "terminal.h"
@@ -34,6 +35,27 @@
 #include "freertos/task.h"
 
 static const char *TAG = "app";
+
+// TEMP (the owner's call of 23 Nov, to see the update screen on the bar): --update plays an update as the cable's
+// installer drives the screen (sys/fw_update.h), with no image written: about a minute of writing, a few seconds of
+// checking at 100 %, then restarting, over again. Goes before the merge, with deploy-orangepi.sh's --update.
+static bool s_update_preview;
+
+static void update_preview(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        fw_update_ui_begin("0.6.0", "0.6.1");
+        for (int pct = 0; pct < 100; pct++) {
+            fw_update_ui_pct(pct);
+            vTaskDelay(pdMS_TO_TICKS(600));
+        }
+        fw_update_ui_pct(100);
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        fw_update_ui_restarting("0.6.1");
+        vTaskDelay(pdMS_TO_TICKS(10000));
+    }
+}
 
 // app_main's order, without the board's coprocessor and I2C bus (none here) and the image confirmation (a Linux build
 // is never installed over the cable, so there is nothing to confirm).
@@ -54,12 +76,14 @@ static void boot(void *arg)
     ram_telemetry_checkpoint("app_ready");
     if (pro_app_wait_first_frame(10000)) ESP_LOGI(TAG, "first frame at %lld ms", (long long)(esp_timer_get_time() / 1000));
     else ESP_LOGE(TAG, "no first frame in 10 s");
+    if (s_update_preview && xTaskCreate(update_preview, "update_preview", 4096, NULL, 1, NULL) != pdPASS)
+        ESP_LOGE(TAG, "no update preview");
     vTaskDelete(NULL);
 }
 
 static int usage(void)
 {
-    fprintf(stderr, "usage: harness-max [--live [--port N] | --usb [PORT] | --demo | --story]%s\n",
+    fprintf(stderr, "usage: harness-max [--live [--port N] | --usb [PORT] | --demo | --story | --update]%s\n",
 #ifdef MAX_OUTPUT_SDL
             " [--screenshot SECONDS FILE.bmp]"
 #else
@@ -77,6 +101,9 @@ int main(int argc, char **argv)
             max_ui_demo(true);   // the person's demo: its welcome is --story's, so only this says it rests on Ambient
         } else if (!strcmp(argv[i], "--story")) {
             cable_linux_use_demo(true);
+        } else if (!strcmp(argv[i], "--update")) {   // TEMP (the owner's call of 23 Nov): see update_preview
+            cable_linux_use_demo(false);
+            s_update_preview = true;
         } else if (!strcmp(argv[i], "--live")) {
             cable_linux_use_tcp(CABLE_LINUX_PORT);
         } else if (!strcmp(argv[i], "--usb")) {

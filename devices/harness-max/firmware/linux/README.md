@@ -34,6 +34,9 @@ list of portable sources; `../main/CMakeLists.txt` adds the ESP32-P4 drivers to 
   question the bar answers by tap or by voice) on the 1st, 3rd, 5th... words, their line in between. New Harness
   agents stay until a re-plug (14 agents at most). `--story` runs the same daemon playing its 160 s story by itself, in
   a loop (the old `--demo`).
+  `--update` (TEMP, the owner's call of 23 Nov, goes before the merge) plays the firmware update screen over
+  `--demo`'s daemon, in a loop: about a minute of writing, a few seconds of checking, then restarting. No image is
+  written.
 
 The glass is 1920 x 480 by default, the ESP32-P4 panel's, so the bar shows exactly what a Harness Max draws: the
 Orange Pi's 1480 x 320 bar shows it at 1280 x 320 in the middle, 100 px of black either side, and a touch on the black
@@ -55,6 +58,7 @@ build/max-sim/harness-max                                              # waits f
 build/max-sim/harness-max --demo                                       # the demo, driven by the person
 build/max-sim/harness-max --story                                      # the demo playing its story by itself
 build/max-sim/harness-max --story --screenshot 8 lanes.bmp             # saves the glass after 8 s and quits
+build/max-sim/harness-max --update                                     # the update screen, in a loop (TEMP)
 ```
 
 A daemon reaches `--live` with `HARNESS_CABLE_TCP=localhost:7531` (or `<address>:7531` for a board), the dev-only TCP
@@ -77,6 +81,7 @@ devices/harness-max/firmware/linux/deploy-orangepi.sh                    # the M
 devices/harness-max/firmware/linux/deploy-orangepi.sh --live             # the Mac's daemon over TCP
 devices/harness-max/firmware/linux/deploy-orangepi.sh --demo --no-build  # the demo, without building again
 devices/harness-max/firmware/linux/deploy-orangepi.sh --story --no-build # the demo's story, playing by itself
+devices/harness-max/firmware/linux/deploy-orangepi.sh --update          # the update screen, in a loop (TEMP)
 ```
 
 It copies the sources to the board, builds there (`MAX_LINUX_OUTPUT=drm`, `MAX_GLASS_H=480`), runs the host tests,

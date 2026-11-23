@@ -2,13 +2,15 @@
 # Builds Harness Max for the Orange Pi 4 Pro's bar on the board itself, installs it and switches the bar to it. Runs on
 # the Mac, from any directory.
 #
-#   deploy-orangepi.sh [--usb | --live | --demo | --story] [--no-build] [ssh-host]
+#   deploy-orangepi.sh [--usb | --live | --demo | --story | --update] [--no-build] [ssh-host]
 #
 # --usb (the default): the bar is a USB device on the board's Type-C port, which the Mac's daemon finds as it finds a
 # Harness Max; the cable to the Mac also powers the board. --live: the bar waits for a daemon on TCP port 7531 (on the
 # Mac: HARNESS_CABLE_TCP=<board address>:7531), which answers no permission prompt. --demo: the scripted demo daemon
 # runs inside the program, no computer needed, and the person drives it. --story: the same demo plays its story by
-# itself, in a loop. --no-build switches the bar that is installed to the mode, in seconds.
+# itself, in a loop. --update (TEMP, the owner's call of 23 Nov; goes with harness-max's --update before the merge):
+# the firmware update screen plays in a loop, no image written. --no-build switches the bar that is installed to the
+# mode, in seconds.
 #
 # Board: the ssh-host argument or HARNESS_MAX_BOARD / HARNESS_MAX_SSH_OPTS; when none is set, near-demo's board
 # (NEAR_BOARD / NEAR_SSH_OPTS, else ~/.config/near/board.env); otherwise plain `opi`. Nothing about the board is kept in
@@ -29,14 +31,14 @@ LINUX=$(cd "$(dirname "$0")" && pwd)
 DEVICES=$(cd "$LINUX/../../.." && pwd)
 
 usage() {
-    echo "usage: deploy-orangepi.sh [--usb | --live | --demo | --story] [--no-build] [ssh-host]"
+    echo "usage: deploy-orangepi.sh [--usb | --live | --demo | --story | --update] [--no-build] [ssh-host]"
 }
 
 ARGS=--usb
 BUILD=1
 while [ $# -gt 0 ]; do
     case $1 in
-        --usb|--live|--demo|--story) ARGS=$1 ;;
+        --usb|--live|--demo|--story|--update) ARGS=$1 ;;
         --no-build) BUILD=0 ;;
         -h|--help) usage; exit 0 ;;
         -*) usage >&2; exit 2 ;;
