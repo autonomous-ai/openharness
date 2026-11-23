@@ -29,7 +29,7 @@ import type { SessionDef, SessionKey } from '../../src/testing/dialAppEval/types
 import { inside, speak, type AppSteps, type OpenRun, type TierBWorld } from './appEvalDriver.js'
 import { SOURCES_CLI, until, type IsolatedDaemon } from './daemon.js'
 import { inboxPoll } from './modInbox.js'
-import { Outside, type FakeApp as OutsideApp } from './outsideAgent.js'
+import { NoKeys, Outside, type FakeApp as OutsideApp } from './outsideAgent.js'
 
 const LINUX = process.platform === 'linux'
 // How the real CLI is started: the run's bundle when there is one (E2E_BUNDLE), as the daemon runs, from any folder.
@@ -247,7 +247,10 @@ function typedInto(world: TierBWorld, key: SessionKey, live: Live): void {
   for (const { at, text: words } of typedPrompts(text)) world.deliver({ path: 'typed', target: key, text: words }, at)
 }
 
-/** It leaves as Claude Code does when the app ends it: its open turn over, its SessionEnd hook, then its process. */
+/**
+ * It leaves as Claude Code does when the app ends it: its open turn over, its SessionEnd hook, then its process. One whose
+ * terminal takes no keys (NoKeys: iTerm2 relaunched) goes with that terminal, with no hook, as a session dropped does.
+ */
 async function end(world: TierBWorld, app: FakeApp, key: SessionKey, live: Live): Promise<void> {
   app.live.delete(key)
   const { outside } = live
@@ -257,6 +260,8 @@ async function end(world: TierBWorld, app: FakeApp, key: SessionKey, live: Live)
     if (live.open) writeWhole(fileOf(world, live.open, 'release'), '')
     await outside.type('!exit')
     await until(`${key}'s SessionEnd hook`, () => outside.ran(world.d, 'SessionEnd'), END_MS, 50)
+  } catch (error) {
+    if (!(error instanceof NoKeys)) throw error
   } finally {
     live.mod.abort()
     typedInto(world, key, live)

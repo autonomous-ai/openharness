@@ -35,7 +35,7 @@ import { guardEnv, guardLoaded, speak, type AppSteps, type TierBWorld } from './
 import { CodexOutside } from './codexOutside.js'
 import { until, type IsolatedDaemon } from './daemon.js'
 import { PrivateHerdr, type HerdrTab } from './herdrServer.js'
-import { closeTab, killTab, openTab, Outside, relaunchIterm, type Tab } from './outsideAgent.js'
+import { closeTab, killTab, openTab, Outside, relaunchIterm, typeInto, type Tab } from './outsideAgent.js'
 import { InOwnTmux } from './ownTmux.js'
 
 const execFileAsync = promisify(execFile)
@@ -326,7 +326,7 @@ async function inTmux(world: TierBWorld, state: State, s: SessionDef, folder: st
       // Through its tab's pseudo-terminal, as Outside types, so tmux reads it from that client's tty.
       const client = await selectedClient(world, state, name, own.pane)
       if (client) {
-        client.processes.process.stdin!.write(`${text}\r`)
+        typeInto(client.processes.process, `${text}\r`)
         return
       }
       // `send-keys -l` types no Enter alone.

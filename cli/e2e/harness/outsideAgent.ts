@@ -186,6 +186,24 @@ export async function openTab(d: IsolatedDaemon, cwd: string, env: NodeJS.Proces
   return shell ? { process: tab, pid: engine!, shellPid: child, appPid } : { process: tab, pid: child, appPid }
 }
 
+/** A tab's keys typed after the process they go in through ended (typeInto). */
+export class NoKeys extends Error {
+  constructor() {
+    super('the tab takes no keys: the process its keys go in through has ended')
+    this.name = 'NoKeys'
+  }
+}
+
+/**
+ * [text] keyed into a tab through the stdin of [tab], its outermost process, which the tab's pseudo-terminal's helper
+ * reads. Node closes that stdin as the process ends, the fake iTerm2's at relaunchIterm among them, and keys written
+ * after would be lost without a word: they throw NoKeys instead.
+ */
+export function typeInto(tab: ChildProcess, text: string): void {
+  if (tab.exitCode !== null || tab.signalCode !== null) throw new NoKeys()
+  tab.stdin!.write(text)
+}
+
 /** Whether no process has [pid]. */
 function gone(pid: number): boolean {
   try { process.kill(pid, 0) } catch { return true }
@@ -263,7 +281,7 @@ export async function tabUnder(d: IsolatedDaemon, app: FakeApp, argv: readonly s
     pid,
     ...(iterm ? { appPid: tab.pid } : {}),
     // The app's stdin is its helper's, which writes it to the pseudo-terminal.
-    type: (text) => { tab.stdin!.write(text) },
+    type: (text) => typeInto(tab, text),
     async close() {
       try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ }
       // The helper ends with its pseudo-terminal, then iTerm2's server, then the app; one that does not is killed. The
@@ -464,8 +482,7 @@ export class Outside {
 
   /** Typed at its prompt, then Enter, as a person does. */
   type(text: string): void {
-    this.tab.process.stdin!.write(text)
-    this.tab.process.stdin!.write('\r')
+    typeInto(this.tab.process, `${text}\r`)
   }
 
   /** Its process record (fakeEngine.mjs announceProcess), in the config folder it runs in, which nothing rewrites later. */
@@ -507,7 +524,7 @@ export class Outside {
    */
   async background(): Promise<void> {
     if (this.shellPid === undefined) throw new Error(`${this.folder} was started without a shell`)
-    this.tab.process.stdin!.write('\x1a')
+    typeInto(this.tab.process, '\x1a')
     await until(`${this.folder}'s engine in the background`, async () => {
       const { stdout } = await execFileAsync('ps', ['-o', 'pgid=,tpgid=', '-p', String(this.pid)])
       const [pgid, tpgid] = stdout.trim().split(/\s+/).map(Number)
