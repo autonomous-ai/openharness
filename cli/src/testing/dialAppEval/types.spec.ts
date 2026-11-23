@@ -1,8 +1,9 @@
 import { expect, it } from 'vitest'
 import { frontAppId, FRONT_NONE } from '../../cable/hosts/frontApp.js'
 import { observedAgentId } from '../../cable/hosts/observed.js'
+import { claudeSession, itermSession } from './catalog.js'
 import { APPS, DIMENSIONS, EDITORS, PAGE, WEIGHTS, agentIdOf, engineOf, frontName, hookHandle, itermPlaceOf, orcaPaneHandle,
-  orcaTerminalHandle, orcaWorktreeId, placeOf, resultKey, type Platform } from './types.js'
+  orcaTerminalHandle, orcaWorktreeId, pageId, placeOf, resultKey, sessionPage, type Platform } from './types.js'
 
 const id = '00000000-0000-4000-8000-0000000000e1'
 
@@ -40,6 +41,16 @@ it("PAGE names Orca's page orca", () => {
 
 it("PAGE names iTerm2's page iterm", () => {
   expect(PAGE.iterm).toBe('iterm')
+})
+
+it("pageId names tmux and herdr as themselves and an app by PAGE; sessionPage puts an iTerm2 session in tmux or herdr on that page, and every other session on its app's", () => {
+  expect(pageId('tmux')).toBe('tmux')
+  expect(pageId('herdr')).toBe('herdr')
+  expect(pageId('chatgpt')).toBe('codex')
+  expect(sessionPage(itermSession('b', { place: 'tmux' }))).toBe('tmux')
+  expect(sessionPage(itermSession('c', { place: 'herdr' }))).toBe('herdr')
+  expect(sessionPage(itermSession('a'))).toBe('iterm')
+  expect(sessionPage(claudeSession('a', 0))).toBe('claude')
 })
 
 it('APPS is the six apps, iTerm2 last', () => {
