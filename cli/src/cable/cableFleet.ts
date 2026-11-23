@@ -240,13 +240,14 @@ export class CableFleet {
       this.heldNotes.delete(port.path)
       if (this.stopped) return
       const entry: Entry = { port, attached: false, status: { attached: false }, session: undefined!, faults: [] }
-      const attached = () => {
+      const attached = (): void | Promise<void> => {
         this.verdicts.markDial(port, entry.status.board)
         this.unanswered.delete(id)
         if (entry.attached) return
         const sibling = [...this.entries.values()].find(e => e.attached)
         entry.attached = true
-        if (!sibling) { this.host.onDialAttached?.(); return }
+        // What the attach started, for the greeting to wait on. With a sibling attached its sources already run: nothing.
+        if (!sibling) return this.host.onDialAttached?.()
         // The host asks again only as the first dial arrives, so this one is given what its sibling would be asked again.
         // Mid-greeting: the session only takes them in here, and asks each once as its greeting's push ends.
         const failed = (error: unknown) => this.host.log(`cable: ${serialPortName(port.path)} open questions: ${errorKind(error)} [usb ${id}]`)

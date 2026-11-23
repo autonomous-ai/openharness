@@ -120,6 +120,11 @@ const bounded = (value: unknown, max: number): number =>
 const MACHINES_POLL_MS = 15_000
 /** The least time between two pushes of the machine list (spec 2026-11-13-device-without-the-app, "When"). */
 const AGENTS_PUSH_GAP_MS = 1_000
+/** The most a greeting holds its push for the reads its attach started (the Claude app's and the ChatGPT app's first,
+ *  devices.ts dialAttached): pushed before them, its list had none of their rows until the next tick's push, 1-2 s on
+ *  (the dial eval's C11). A read that lands in a moment makes the first list; a slow or stuck one costs the greeting no
+ *  more than this, and its rows follow at the next push. */
+const ATTACH_READS_MS = 500
 /**
  * A programmatic focus write may be followed by the dial reporting the tile it was painting just before
  * that write. Real hardware delivered that stale report 23 ms after the machine switch completed; keep
@@ -573,8 +578,11 @@ export interface CableHost {
    * The daemon holds its cloud lane ON THE DIAL'S BEHALF — nothing else in this process uses it. So with
    * no dial there is nobody to hold it for, and holding it anyway leaves the account showing a device
    * that is attached to a machine while sitting unplugged in a drawer.
+   *
+   * What it returns ends once the reads the attach started have landed: the greeting's push waits for it, at most
+   * ATTACH_READS_MS.
    */
-  onDialAttached?(): void
+  onDialAttached?(): void | Promise<void>
   onDialGone?(): void
   /**
    * The port this session opened turned out not to be a Harness dial: it talked in something else, or
@@ -1601,7 +1609,8 @@ export class CableSession {
           this.greeting = true
           this.questionInbox.forget()
           try {
-            this.host.onDialAttached?.()
+            const reads = this.host.onDialAttached?.()
+            if (reads) await this.awaitAttachReads(reads)
             // Both halves of the test above mean the same thing to this line: a dial with nothing on its
             // screen. A repeat greeting from the same dial on the same image is a keepalive and is skipped,
             // which is the whole reason the branch exists.
@@ -3182,6 +3191,17 @@ export class CableSession {
         this.restoring = false
         if (this.restoreAgain) this.restoreInBackground()
       })
+  }
+
+  /** The reads an attach started, waited for at most ATTACH_READS_MS: one that fails or is late is pushed without. */
+  private async awaitAttachReads(reads: Promise<void>): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const late = new Promise<void>((resolve) => { timer = setTimeout(resolve, ATTACH_READS_MS) })
+    try {
+      await Promise.race([reads.catch(() => {}), late])
+    } finally {
+      clearTimeout(timer)
+    }
   }
 
   /** Attach: tell the dial everything, whether or not any of it looks unchanged from here. */

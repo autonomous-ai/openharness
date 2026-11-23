@@ -10803,6 +10803,15 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
     expect(await attached).toEqual({ ms: 100, ids: [ID, observedAgentId('codex', SECOND)].sort() })
   })
 
+  // What the greeting waits on never fails it: a look for the app that fails ends the attach, said by the part's guard.
+  it('an attach whose look for the app fails still ends, with no threads, said in one line', async () => {
+    const { port } = withThreads({ bundleId: async () => { throw new Error('plutil failed') } })
+    await expect(Promise.resolve(seen.host.watching!(true))).resolves.toBeUndefined()
+    port.swarms(null)
+    expect(await ids()).toEqual([])
+    expect(logs).toContainEqual(expect.stringMatching(/^\[devices\] codex-app failed · /))
+  })
+
   it('the Claude app\'s store and the ChatGPT app\'s Codex home are watched through watchStore when given', async () => {
     const stored = { calls: [] as Array<readonly string[]>, stopped: 0 }
     const watchStore: NonNullable<DevicesDeps['watchStore']> = (folders) => {

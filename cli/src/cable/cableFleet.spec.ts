@@ -405,7 +405,7 @@ describe('USB dial fleet', () => {
     vi.mocked(f.host.onDialAttached!).mockReturnValue(started)
     try {
       f.fleet.start(); await vi.waitFor(() => expect(f.ports).toHaveLength(2))
-      const [first, second] = [...(f.fleet['entries'] as Map<string, { session: CableSession }>).values()]
+      const [first, second] = [...(f.fleet['entries'] as unknown as Map<string, { session: CableSession }>).values()]
         .map(({ session }) => (session as unknown as { host: CableHost }).host.onDialAttached?.())
       expect(first).toBe(started)
       expect(second).toBeUndefined()

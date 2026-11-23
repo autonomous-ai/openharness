@@ -121,11 +121,16 @@ export class CodexAppSource implements HostSource {
   private said: string | undefined
   /** Whether the last read of this start failed, so a run of failures says one line. */
   private failed = false
+  /** Ends the promise of this start, once its first read ended or it stopped. */
+  private firstRead: (() => void) | undefined
 
   constructor(private readonly deps: CodexAppSourceDeps) {}
 
-  start(): void {
-    if (this.running) return
+  /** Ends once this start's first read has: its rows taken, the read failed, or the source stopped meanwhile; with no home,
+   *  at once. The dial's greeting waits for it (devices.ts dialAttached), so its first list holds the app's threads. A
+   *  start while it runs ends at once. */
+  start(): Promise<void> {
+    if (this.running) return Promise.resolve()
     this.running = true
     this.slowest = undefined
     this.failed = false
@@ -135,17 +140,20 @@ export class CodexAppSource implements HostSource {
       this.deps.log(`[codex-app] watch · ${there ? 'on' : 'none'}`)
     }
     // With no home, nothing is watched or read: the next attach looks again.
-    if (!there) return
+    if (!there) return Promise.resolve()
+    const first = new Promise<void>((resolve) => { this.firstRead = resolve })
     this.unwatch = this.deps.watch((file) => {
       if (file === undefined || WATCHED.has(file)) this.wake()
     })
     this.wake()
+    return first
   }
 
   stop(): void {
     if (!this.running) return
     this.running = false
     this.stops++
+    this.firstReadEnded()
     // The dial detached, or the app was not found at an attach: a wake still opening answers that its thread did not
     // answer. The ChatGPT app's only: the wake is the Claude app's too.
     this.deps.wake.stop('codex')
@@ -281,8 +289,15 @@ export class CodexAppSource implements HostSource {
       this.fail(errorKind(error))
     } finally {
       pass.under = false
+      // A read begun before the last stop is not this start's: the start ends with its own.
+      if (this.stops === stops) this.firstReadEnded()
       this.next()
     }
+  }
+
+  private firstReadEnded(): void {
+    this.firstRead?.()
+    this.firstRead = undefined
   }
 
   private fail(kind: string): void {
