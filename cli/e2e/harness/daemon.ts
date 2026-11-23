@@ -14,7 +14,7 @@
  * It runs on a copy of the worker's Node alone in its folder (e2e/harness/testNode.ts), so it finds no engine beside
  * its Node.
  */
-import { execFile, spawn, type ChildProcess } from 'node:child_process'
+import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, symlink, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
@@ -34,7 +34,7 @@ import { OUTSIDE_HOME } from '../../src/lib/log.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
 import { endRootProcesses } from '../../src/testing/rootProcesses.js'
 import { assertSocketPathFits } from '../../src/testing/socketPathRoom.js'
-import { alive, processTable } from '../../src/testing/spawnedRuns.js'
+import { alive } from '../../src/testing/spawnedRuns.js'
 import { assertNodeAlone } from '../../src/testing/testNode.js'
 import { SYSTEM_FOLDERS } from '../../src/testing/testPath.js'
 import { forgetGroup, forgetTmux, leaderGone, watchGroup, watchTmux } from './reaper.js'
@@ -167,6 +167,15 @@ export function loggedServicePids(log: string, name: string, master: number | nu
   const children = new Set(table.filter((row) => row.ppid === master).map((row) => row.pid))
   const logged = [...log.matchAll(new RegExp(`\\[harnessd\\] service ${name} started \\(pid (\\d+)\\)`, 'g'))].map((match) => Number(match[1]))
   return [...new Set(logged)].filter((pid) => children.has(pid))
+}
+
+/** Each process's pid and its parent's, from the whole table, and nothing else of any: no command line, which a service's
+ *  pids need not read, and the devices' restart asks for these every 100 ms (appEvalDriver.ts restartDevices). */
+function processParents(): Array<{ pid: number; ppid: number }> {
+  return execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }).split('\n').flatMap((line) => {
+    const row = /^\s*(\d+)\s+(\d+)\s*$/.exec(line)
+    return row ? [{ pid: Number(row[1]), ppid: Number(row[2]) }] : []
+  })
 }
 
 /** listeningPort of [output]; before the daemon said one, an error by name rather than a guess. */
@@ -603,7 +612,7 @@ esac
   /** The service process [name]'s pids (`search`, `edge`, `models`, `gateway`, `devices`, `agentBrowser`), started by
    *  its own master, by the pid it logged, and still its child. Not by name: no process sets a title, and a daemon under
    *  test runs on a Node with no name link, so `ps` shows `node` for every one of them. */
-  servicePids(name: string): number[] { return loggedServicePids(this.output, name, this.pid, processTable()) }
+  servicePids(name: string): number[] { return loggedServicePids(this.output, name, this.pid, processParents()) }
 
   /** `ready: 'port'` returns as soon as the port answers, the way a client sees a restarting daemon;
    *  `'none'` as soon as the process is started. */

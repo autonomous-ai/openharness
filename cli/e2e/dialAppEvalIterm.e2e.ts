@@ -10,8 +10,13 @@
  * macOS only, as iTerm2. Never the person's iTerm2, tmux server, herdr, daemon or dial, and no `osascript`: the fake
  * iTerm2's bundle and its server are in the daemon's throwaway home, herdr's config is in it too, tmux's socket is in its
  * root, and the daemon's table holds no herdr outside this worker's tree or this daemon's own fake iTerm2 server
- * (ownHerdrsOnly). Each process read is one of this test's own, alone, by its pid (`ps -o ppid=,comm= -p`): never another
- * process's environment, argv or the whole table's command lines. The network guard runs in this process and in every process of each daemon.
+ * (ownHerdrsOnly). What the harness reads of processes: of its own, by pid, their parent, path (`comm`) and tty, the
+ * herdr client's child named herdr (`pgrep -P -x`) and that server's sockets (`lsof -p`); of the whole table, each one's
+ * pid, parent and path, to tell this worker's herdrs from the rest (othersNow, ownHerdrsOnly), and pid and parent alone,
+ * to find the devices again after their restart; and, as at every tier B scenario's cost and every daemon's close, each
+ * one's command line and working folder, matched against the daemon's root, only those under it kept (appEvalCost.ts,
+ * testing/rootProcesses.ts). Never another process's environment. The network guard runs in this process and in every
+ * process of each daemon.
  */
 import { execFile } from 'node:child_process'
 import { readFileSync } from 'node:fs'
