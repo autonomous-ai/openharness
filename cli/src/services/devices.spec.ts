@@ -7763,6 +7763,18 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     expect(calls('questionClose')).toEqual([[ID, ids()[0]]])
   })
 
+  // A caller no list holds has no face on the dial to ask on and nothing to open, and with no session its next turn is
+  // never heard: kept, its card would stay pinned until the devices restart.
+  it('the card of a caller no list holds goes as the person taps "In <app>", never as the alert opens to be read', async () => {
+    const { listener } = devices()
+    listener.notice({ text: LINE, folder: 'web' })
+    const caller = observedAgentId('notify', 'web')
+    await host().openAgent(caller, 'question')
+    expect(calls('questionClose')).toEqual([])
+    await host().openAgent(caller)
+    expect(calls('questionClose')).toEqual([[caller, ids()[0]]])
+  })
+
   it('its card goes with its agent', async () => {
     vi.useFakeTimers()
     const { port, listener } = devices({ core: bound() })

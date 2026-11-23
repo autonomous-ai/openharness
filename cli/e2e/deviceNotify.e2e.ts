@@ -5,7 +5,8 @@
  * - an outside Claude Code session's and a Codex session's notice is a card on their own row, answered in their app;
  *   the same line again is limited; reading the card leaves it, and the agent's next prompt closes it;
  * - the turn that sent a notice ends silent, and its card stays;
- * - a Harness agent's notice is tied to the Harness agent, and a session nobody lists rings under its folder;
+ * - a Harness agent's notice is tied to the Harness agent, and a session nobody lists rings under its folder, and its
+ *   card goes at a tap, which opens nothing;
  * - a decision asked with `--suggest` and `--proceeding`, by a Harness agent or an outside session, rings once on its
  *   own card with the one line the command composed, its turn ends silent, and the answer in its app takes the card
  *   down; a plain finished turn rings no question (docs/plans/2026-11-22-needs-you-notify-design.md);
@@ -327,16 +328,22 @@ describe('harness device notify', () => {
     client.close()
   })
 
-  it('a session nobody lists still rings, under its folder', async () => {
+  it('a session nobody lists still rings, under its folder, and its card goes at a tap', async () => {
     const { d, desk } = await fresh()
     const dial = await plugged(desk)
     const sessionId = randomUUID()
     const agentId = observedAgentId('claude', sessionId)
     expect(await notify(d, { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: sessionId }, join(d.projectsDir, 'scratch')))
       .toMatchObject({ code: 0, out: 'shown' })
-    expect(await dial.next((m) => m.t === 'question' && m.agentId === agentId, 45_000, 'the notice'))
-      .toMatchObject({ name: 'scratch', id: expect.stringMatching(/^shown:/), questions: rung() })
+    const question = await dial.next((m) => m.t === 'question' && m.agentId === agentId, 45_000, 'the notice')
+    expect(question).toMatchObject({ name: 'scratch', id: expect.stringMatching(/^shown:/), questions: rung() })
     expect(await opened(dial, agentId)).toMatchObject({ ok: true, questions: card('Terminal') })
+
+    // The person taps "In Terminal": nothing lists the session, so nothing opens and the dial has no face of it to ask
+    // on, and its next turn may never be heard. The tap is its card's end.
+    const tapped = dial.messages.length
+    dial.send({ t: 'agent.open', agentId })
+    await dial.next((m) => m.t === 'question.close' && m.agentId === agentId && m.id === question.id, 45_000, 'the card closed', tapped)
   })
 
   it('it rings with a window open on its tab', async () => {

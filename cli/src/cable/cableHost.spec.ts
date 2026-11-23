@@ -937,9 +937,11 @@ describe('the dial with no window: this computer\'s agents', () => {
   })
 
   // A question screen that came up by itself brings a Harness agent forward and never switches another app: a tap does both.
-  it('a tap opens an agent of any app, a question screen only a Harness one', async () => {
+  // A tap on an agent no list holds opens nothing, and is told so the notice desk can end its card.
+  it('a tap opens an agent of any app, a question screen only a Harness one, and an agent no list holds is told', async () => {
     const told: string[] = []
-    const host = new DaemonCableHost(wiring({ sessions, opened: (_machine, id) => told.push(`opened ${id}`) }), fleetOf([]))
+    const host = new DaemonCableHost(wiring({ sessions, opened: (_machine, id) => told.push(`opened ${id}`),
+      tappedUnlisted: (id) => told.push(`unlisted ${id}`) }), fleetOf([]))
     host.setRegistry(new HostRegistry([host.harness, { ...observed([observedAgent({ id: 'o1', host: 'orca' })]),
       focus: async (agent) => { told.push(`focus ${agent.id}`); return true } }]))
     onTab(host, ['h1'])
@@ -948,7 +950,7 @@ describe('the dial with no window: this computer\'s agents', () => {
       await host.openAgent(id, 'question')
       await host.openAgent(id)
     }
-    expect(told).toEqual(['focus o1', 'opened h1', 'opened h1'])
+    expect(told).toEqual(['focus o1', 'opened h1', 'opened h1', 'unlisted ghost'])
   })
 
   it('an agent no list holds is described by its notice', async () => {
