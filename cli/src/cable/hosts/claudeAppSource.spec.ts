@@ -695,6 +695,38 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
       s.source.stop()
       expect(s.ranks).toEqual([rankOf([session()]), undefined])
     })
+
+    it('a read cut short keeps it, and the root removed drops it until the root is made again', async () => {
+      const s = await started()
+      s.answers.read = read([nth(1)], { more: true })
+      await after(s, () => s.fire(ORG, undefined))
+      expect(s.ranks).toEqual([rankOf([session()])])
+      // The read it asks for with no event, whole and in the same order.
+      s.answers.read = read([session()])
+      await s.land()
+      s.gap()
+      expect(s.ranks).toEqual([rankOf([session()])])
+      s.answers.folders = undefined
+      await after(s, () => s.fire(ROOT, 'acc'))
+      expect(s.ranks).toEqual([rankOf([session()]), undefined])
+      s.answers.folders = FOLDERS
+      s.answers.read = read([session()])
+      await after(s, () => s.fire(ROOT, 'claude-code-sessions'))
+      expect(s.ranks).toEqual([rankOf([session()]), undefined, rankOf([session()])])
+    })
+
+    // The dial unplugged and plugged in again: its page is ranked again, though the store's order did not change.
+    it('a pass that lands after a stop gives none, and the next start gives it again in the same order', async () => {
+      const s = await started()
+      s.fire(ORG, fileOf(nth(1)))
+      await s.reply()
+      s.source.stop()
+      await s.reply(read([nth(1), session()]))
+      expect(s.ranks).toEqual([rankOf([session()]), undefined])
+      s.source.start()
+      await s.land()
+      expect(s.ranks).toEqual([rankOf([session()]), undefined, rankOf([session()])])
+    })
   })
 
   describe('start and stop', () => {
