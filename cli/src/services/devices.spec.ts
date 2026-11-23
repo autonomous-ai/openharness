@@ -1,6 +1,6 @@
 // The devices (services/devices.ts): what the core tells them reaches the dial and the window bridges, what
 // they say reaches the core through its API alone, and the fleet failing costs the dial nothing.
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
 import { delimiter, dirname, join, parse, posix, sep, win32 } from 'node:path'
@@ -13,6 +13,7 @@ import type { CodexRunEnd } from '../cable/hosts/codexQueue.js'
 import type { ClaudeAppSession } from '../cable/hosts/claudeAppStore.js'
 import type { CodexAppRead, CodexAppThread } from '../cable/hosts/codexAppThreads.js'
 import { CMUX_APP_BINARY, type CmuxClient, type CmuxInputState, type CmuxSession } from '../cable/hosts/cmuxCli.js'
+import { FOCUS_POLL_MS } from '../cable/hosts/focusPoll.js'
 import { hcClientDeps, type HcClient, type HcPrompt, type HcSubscriber, type HcTerminal } from '../cable/hosts/hcClient.js'
 import { herdrClientDeps, type HerdrAnswer, type HerdrClient, type HerdrEntry, type HerdrPrompt, type HerdrSubscriber } from '../cable/hosts/herdrClient.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
@@ -52,6 +53,8 @@ import { codexAppFixture } from '../testing/codexAppFixture.js'
 import { fakeCmux, touchStore } from '../testing/fakeCmux.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { herdrAppStatus } from '../testing/herdrAppStatus.js'
+import { RECORDED_KITTY } from '../testing/recordedKitty.js'
+import { RECORDED_WEZTERM } from '../testing/recordedWezterm.js'
 import type { Fleet, FleetDeps } from './fleet.js'
 import type { DevicesDeps } from './devices.js'
 import {
@@ -13835,6 +13838,574 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
       await vi.advanceTimersByTimeAsync(9_999)
       port.observed(hook('turn-aborted'))
       expect(await counted(port)).toMatchObject({ dial_voice_interrupted_10s: 1, dial_voice_host_orca_interrupted_10s: 1 })
+    })
+  })
+})
+
+describe('the dial follows the pane focused in WezTerm and kitty (docs/plans/2026-11-23-dial-wezterm-kitty-focus-follow-design.md)', () => {
+  type Run = [string, string[], number]
+  const { listClients } = RECORDED_WEZTERM
+  const { focusedMatch } = RECORDED_KITTY
+  /** The callers of the hooks below (4240 + n), each on a terminal of its own made by the n-th of [makers], the last for
+   *  the rest: whose pane is the agent's own (scannedApp.ts ptyMaker). */
+  const callers = (...makers: string[]): ProcessRow[] => Array.from({ length: 16 }, (_, at) => [
+    { pid: 3900 + at, ppid: 1, executable: makers[Math.min(at, makers.length - 1)] },
+    { pid: 4241 + at, ppid: 3900 + at, tty: `pts/${at + 1}`, executable: 'claude' },
+  ]).flat()
+  /** Claude Code in session n, its caller 4240 + n, as its hook says with [hints]. */
+  const hook = (n: number, hints: Record<string, string>, over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
+    engine: 'claude', sessionId: `sess-${n}`, event: 'session-start', cwd: '/work/api', callerPid: 4240 + n,
+    transcriptPath: `/t/sess-${n}.jsonl`, hostHints: hints, ...over,
+  })
+  /** In WezTerm's pane n. */
+  const inWezterm = (n: number, over: Partial<ObservedHookEvent> = {}) => hook(n, { WEZTERM_PANE: String(n), TERM_PROGRAM: 'WezTerm' }, over)
+  /** In kitty's window n, of the kitty listening on [listenOn]. */
+  const inKitty = (n: number, listenOn: string, over: Partial<ObservedHookEvent> = {}) => hook(n, { KITTY_WINDOW_ID: String(n), KITTY_LISTEN_ON: listenOn }, over)
+  /** A socket of this account's at a short path, as kitty's (the Zellij and kitty describe's kittyAt), and another
+   *  listening at that path once the spec moved the first aside. */
+  const kittyAt = async () => {
+    const folder = mkdtempSync('/tmp/hk-')
+    onTestFinished(() => { rmSync(folder, { recursive: true, force: true }) })
+    const path = join(folder, 's')
+    const listen = async (): Promise<void> => {
+      const server = createServer()
+      await new Promise<void>((resolve) => { server.listen(path, resolve) })
+      onTestFinished(() => { server.close() })
+    }
+    await listen()
+    return { path, listenOn: `unix:${path}`, listen }
+  }
+  /** What the apps answer: the pane WezTerm's GUI focused (none: no GUI, RECORDED_WEZTERM.listClients.noGui), the window
+   *  kitty focused, or, by socket, the window each kitty focused, and whether kitty refuses (focusedMatch.password). While
+   *  `held`, WezTerm's reads wait until the spec lands them; while `heldKitty`, kitty's calls do. A tap's `activate-pane` or `focus-window` moves that focus,
+   *  as the apps do. */
+  const focus = { pane: 0 as number | undefined, window: 1, windows: new Map<string, number>(), refused: false, held: false, heldKitty: false,
+    land: [] as Array<() => void> }
+  beforeEach(() => { Object.assign(focus, { pane: 0, window: 1, windows: new Map(), refused: false, held: false, heldKitty: false, land: [] }) })
+  /** The devices' runs, recorded; `list-clients` and `get-colors` answered as the recorded apps did. */
+  const apps = { ...orca, run: async (file: string, args: string[], timeoutMs: number) => {
+    orcaRuns.push([file, args, timeoutMs])
+    if (args.includes('list-clients')) {
+      if (focus.held) await new Promise<void>((resolve) => { focus.land.push(resolve) })
+      if (focus.pane === undefined) return { code: listClients.noGui.exitCode, stdout: '', stderr: listClients.noGui.stderr }
+      const clients = (JSON.parse(listClients.gui.stdout) as object[]).map((client) => ({ ...client, focused_pane_id: focus.pane }))
+      return { code: listClients.gui.exitCode, stdout: JSON.stringify(clients), stderr: '' }
+    }
+    if (args.includes('activate-pane')) focus.pane = Number(args.at(-1))
+    if (args[3] === 'focus-window') focus.windows.set(args[2], Number(args[5].slice('id:'.length)))
+    if (args[3] !== 'get-colors') return { code: 0, stdout: '' }
+    if (focus.heldKitty) await new Promise<void>((resolve) => { focus.land.push(resolve) })
+    if (focus.refused) return { code: focusedMatch.password.code, stdout: '', stderr: focusedMatch.password.stderr }
+    const expr = args[5]
+    const focused = focus.windows.get(args[2]) ?? focus.window
+    return [...expr.matchAll(/id:([0-9]+)/g)].some(([, id]) => Number(id) === focused)
+      ? { code: focusedMatch.focused.code, stdout: `${focusedMatch.focused.stdoutFirstLine}\n`, stderr: '' }
+      : { code: focusedMatch.notFocused.code, stdout: '', stderr: `Error: No matching windows for expression: ${expr}\n` }
+  } }
+  /** WezTerm's one read, with the binary the verbs use (the spec's `onPath`). */
+  const LIST_CLIENTS: Run = ['/opt/orca/bin/orca', ['cli', '--no-auto-start', 'list-clients', '--format', 'json'], 2_000]
+  const getColors = (listenOn: string, expr: string): Run => ['kitten', ['@', '--to', listenOn, 'get-colors', '--match', expr], 2_000]
+  const reads = () => orcaRuns.filter(([, args]) => args.includes('list-clients') || args.includes('get-colors'))
+  /** kitty's `--match` expressions, in order. */
+  const matches = () => reads().flatMap(([, args]) => args.includes('get-colors') ? [args.at(-1)] : [])
+  const polls = () => logs.filter((line) => line.startsWith('[device] focus poll'))
+  const STARTED = '[device] focus poll · started'
+  const stopped = (reads: number, failed = 0) => `[device] focus poll · stopped · ${reads} reads, ${failed} failed`
+  const REFUSED_LINE = '[device] kitty · focus refused'
+  let clock = 0
+  /** Lets what a landing sets off run. */
+  const settled = () => new Promise((resolve) => setImmediate(resolve))
+  /** The devices on the apps above, the agents of [hooks] (one in WezTerm's pane 1 unless given) on terminals [makers]
+   *  made (WezTerm's unless given), no window, a dial attached unless `attached` is false, no app settled in front, and
+   *  the devices' monotonic clock at 0. `settle` keeps an app in front for the settle, as `harness hardware watch` tells
+   *  it; `next` lets FOCUS_POLL_MS pass, [times] over, each read landing. The timers are held; `setImmediate` is left to
+   *  let a landing run. */
+  const dialWith = async (over: { hooks?: ObservedHookEvent[]; makers?: string[]; attached?: boolean } = {}) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    clock = 0
+    readers.processes.mockResolvedValue(callers(...over.makers ?? ['wezterm-gui']))
+    const listener = fakeListener()
+    const started = start({ faults: ['fleet'], listen: listener.listen, now: () => clock, orca: apps })
+    for (const event of over.hooks ?? [inWezterm(1)]) started.port.observed(event)
+    // The reads of their terminals' maker land.
+    await settled()
+    if (over.attached !== false) seen.host.watching!(true)
+    started.port.swarms(null)
+    const settle = async (app: string) => {
+      expect(listener.front(app)).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+      await settled()
+    }
+    const next = async (times = 1) => {
+      for (let i = 0; i < times; i++) {
+        await vi.advanceTimersByTimeAsync(FOCUS_POLL_MS)
+        await settled()
+      }
+    }
+    return { ...started, listener, settle, next }
+  }
+
+  describe('its life', () => {
+    it('WezTerm settled with a dial attached and an agent in a WezTerm pane of its own starts one poll', async () => {
+      const { listener, next, settle } = await dialWith()
+      // In front, not yet settled: nothing.
+      expect(listener.front('wezterm')).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS - 1)
+      expect(reads()).toEqual([])
+      await settle('ghostty')
+      await settle('wezterm')
+      expect(reads()).toEqual([LIST_CLIENTS])
+      await next()
+      expect(reads()).toEqual([LIST_CLIENTS, LIST_CLIENTS])
+      expect(polls()).toEqual([STARTED])
+    })
+
+    it.each([
+      ['no dial attached', { attached: false }, 'wezterm'],
+      ['another app settled', {}, 'ghostty'],
+      ['kitty settled, its agents in WezTerm', {}, 'kitty'],
+      // A shell's terminal holding the agent's: WezTerm's pane shows whatever is in front of it.
+      ['only held WezTerm panes', { makers: ['zsh'] }, 'wezterm'],
+    ])('nothing runs with %s', async (_, over, app) => {
+      const { settle, next } = await dialWith(over)
+      await settle(app)
+      await next(3)
+      expect(reads()).toEqual([])
+      expect(polls()).toEqual([])
+    })
+
+    it('another app or none settling stops it with its counts; so do the last dial going and the devices stopping', async () => {
+      const { port, settle, next } = await dialWith()
+      await settle('wezterm')
+      await next()
+      // The third read lands before Ghostty settles.
+      await settle('ghostty')
+      expect(polls()).toEqual([STARTED, stopped(3)])
+      const ran = reads().length
+      await next(4)
+      expect(reads()).toHaveLength(ran)
+      await settle('wezterm')
+      await settle('none')
+      expect(polls()).toEqual([STARTED, stopped(3), STARTED, stopped(2)])
+      await settle('wezterm')
+      seen.host.watching!(false)
+      expect(polls()).toEqual([STARTED, stopped(3), STARTED, stopped(2), STARTED, stopped(1)])
+      seen.host.watching!(true)
+      await settled()
+      await port.stop()
+      expect(polls()).toEqual([STARTED, stopped(3), STARTED, stopped(2), STARTED, stopped(1), STARTED, stopped(1)])
+      const all = reads().length
+      await next(4)
+      expect(reads()).toHaveLength(all)
+    })
+
+    it('the last WezTerm agent going stops it, and one starting while WezTerm is settled with a dial starts it', async () => {
+      const { port, settle, next } = await dialWith()
+      await settle('wezterm')
+      port.observed(inWezterm(1, { event: 'session-end' }))
+      expect(polls()).toEqual([STARTED, stopped(1)])
+      await next(3)
+      expect(reads()).toEqual([LIST_CLIENTS])
+      port.observed(inWezterm(2))
+      // Its terminal's maker read lands: its pane is its own.
+      await settled()
+      expect(polls()).toEqual([STARTED, stopped(1), STARTED])
+      expect(reads()).toEqual([LIST_CLIENTS, LIST_CLIENTS])
+    })
+
+    it('a dial attaching with WezTerm settled starts it', async () => {
+      const { settle } = await dialWith({ attached: false })
+      await settle('wezterm')
+      expect(reads()).toEqual([])
+      seen.host.watching!(true)
+      await settled()
+      expect(reads()).toEqual([LIST_CLIENTS])
+      expect(polls()).toEqual([STARTED])
+    })
+
+    it('a settle of the app whose poll runs keeps that poll', async () => {
+      const { listener, settle, next } = await dialWith()
+      await settle('wezterm')
+      // Ghostty in front for a moment, and WezTerm again before Ghostty settled.
+      expect(listener.front('ghostty')).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS / 2)
+      await settle('wezterm')
+      const ran = reads().length
+      await next()
+      expect(reads()).toHaveLength(ran + 1)
+      expect(polls()).toEqual([STARTED])
+    })
+
+    it('one poll at most: kitty settling stops WezTerm\'s and starts kitty\'s, on the agent\'s socket; WezTerm\'s read under way lands on nothing', async () => {
+      const kitty = await kittyAt()
+      const { settle, next } = await dialWith({ hooks: [inWezterm(1), inKitty(2, kitty.listenOn)], makers: ['wezterm-gui', 'kitty'] })
+      focus.held = true
+      await settle('wezterm')
+      expect(reads()).toEqual([LIST_CLIENTS])
+      await settle('kitty')
+      expect(polls()).toEqual([STARTED, stopped(0), STARTED])
+      expect(reads()).toEqual([LIST_CLIENTS, getColors(kitty.listenOn, 'id:2 and state:focused')])
+      // Its answer is dropped: no WezTerm read follows it, and its poll counted none.
+      for (const land of focus.land) land()
+      await settled()
+      await next(2)
+      expect(reads().filter(([, args]) => args.includes('list-clients'))).toEqual([LIST_CLIENTS])
+      expect(matches()).toEqual(Array(3).fill('id:2 and state:focused'))
+      expect(polls()).toEqual([STARTED, stopped(0), STARTED])
+    })
+
+    it('kitty: a read under way as the poll stops starts no more calls', async () => {
+      const kitty = await kittyAt()
+      const { settle, next } = await dialWith({ hooks: [1, 2, 3].map((n) => inKitty(n, kitty.listenOn)), makers: ['kitty'] })
+      // Focus on a shell: window 1 alone, then the `or` of 2 and 3, would be asked.
+      focus.window = 9
+      focus.heldKitty = true
+      await settle('kitty')
+      await settle('ghostty')
+      expect(polls()).toEqual([STARTED, stopped(0)])
+      for (const land of focus.land) land()
+      await settled()
+      await next(2)
+      expect(matches()).toEqual(['id:1 and state:focused'])
+      expect(logs).not.toContain(REFUSED_LINE)
+    })
+
+    it('three failed reads stop it as failing; an agents\' change or an attach does not start it again; the next settle of WezTerm does', async () => {
+      const { port, settle, next } = await dialWith()
+      focus.pane = undefined
+      await settle('wezterm')
+      await next(2)
+      const FAILING = `${stopped(3, 3)} · failing`
+      expect(polls()).toEqual([STARTED, FAILING])
+      focus.pane = 1
+      port.observed(inWezterm(2))
+      await settled()
+      seen.host.watching!(false)
+      seen.host.watching!(true)
+      await settled()
+      await next(4)
+      expect(reads()).toHaveLength(3)
+      await settle('ghostty')
+      expect(reads()).toHaveLength(3)
+      await settle('wezterm')
+      expect(reads()).toHaveLength(4)
+      expect(polls()).toEqual([STARTED, FAILING, STARTED])
+    })
+
+    it('kitty: the pane found focused last is asked first', async () => {
+      const kitty = await kittyAt()
+      const { settle, next } = await dialWith({ hooks: [1, 2, 3].map((n) => inKitty(n, kitty.listenOn)), makers: ['kitty'] })
+      focus.window = 3
+      await settle('kitty')
+      await next()
+      // The first read asks window 3 alone after the `or`, as focus may have moved; the next asks it first.
+      expect(matches()).toEqual(['id:1 and state:focused', 'state:focused and (id:2 or id:3)', 'id:2 and state:focused',
+        'id:3 and state:focused', 'id:3 and state:focused'])
+    })
+
+    it('kitty: two live agents on one window ask for it once a read', async () => {
+      const kitty = await kittyAt()
+      // An ended session not yet seen as ended holds its window beside the one started there.
+      const hints = { KITTY_WINDOW_ID: '1', KITTY_LISTEN_ON: kitty.listenOn }
+      const { settle, next } = await dialWith({ hooks: [hook(1, hints), hook(2, hints)], makers: ['kitty'] })
+      focus.window = 3
+      await settle('kitty')
+      await next()
+      expect(matches()).toEqual(['id:1 and state:focused', 'id:1 and state:focused'])
+    })
+
+    it('a read\'s panes are the live agents\' own as it starts', async () => {
+      const kitty = await kittyAt()
+      const { port, settle, next } = await dialWith({ hooks: [inKitty(1, kitty.listenOn)], makers: ['kitty'] })
+      await settle('kitty')
+      port.observed(inKitty(2, kitty.listenOn))
+      await settled()
+      focus.window = 2
+      await next()
+      port.observed(inKitty(1, kitty.listenOn, { event: 'session-end' }))
+      await next()
+      expect(matches()).toEqual(['id:1 and state:focused', 'id:1 and state:focused', 'id:2 and state:focused', 'id:2 and state:focused'])
+    })
+
+    it('a kitty that refuses is asked once: no poll stop, one line; a new socket at its path is asked once more', async () => {
+      const kitty = await kittyAt()
+      const { settle, next } = await dialWith({ hooks: [inKitty(1, kitty.listenOn)], makers: ['kitty'] })
+      focus.refused = true
+      await settle('kitty')
+      await next(4)
+      expect(reads()).toEqual([getColors(kitty.listenOn, 'id:1 and state:focused')])
+      expect(logs.filter((line) => line === REFUSED_LINE)).toHaveLength(1)
+      // That kitty gone, and none at its path: not asked.
+      renameSync(kitty.path, `${kitty.path}-old`)
+      await next()
+      expect(reads()).toHaveLength(1)
+      // Another kitty listening there: another socket, whose identity is not the refused one's (that one, moved aside,
+      // keeps its own, so the new socket cannot take it).
+      await kitty.listen()
+      await next(3)
+      expect(reads()).toEqual(Array(2).fill(getColors(kitty.listenOn, 'id:1 and state:focused')))
+      expect(logs.filter((line) => line === REFUSED_LINE)).toHaveLength(2)
+      expect(polls()).toEqual([STARTED])
+    })
+
+    it('with the observed agents off, nothing runs', async () => {
+      const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
+      switched.HARNESS_DEVICE_OBSERVED = false
+      onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
+      const { settle, next } = await dialWith()
+      await settle('wezterm')
+      seen.host.watching!(false)
+      seen.host.watching!(true)
+      await settled()
+      await next(3)
+      expect(reads()).toEqual([])
+      expect(polls()).toEqual([])
+    })
+  })
+
+  describe('following', () => {
+    const agent = (n: number) => observedAgentId('claude', `sess-${n}`)
+    const host = () => seen.dial as unknown as DaemonCableHost
+    const asked = () => calls('followLocal')
+    const paneLines = () => logs.filter((line) => line.startsWith('[device] pane'))
+    const unlinked = (off: boolean) => { (seen.cable as unknown as { connected: boolean }).connected = !off }
+    const ECHO = '[device] pane · skipped · echo'
+    /** Agents in WezTerm's panes 1 to n. */
+    const inPanes = (n: number) => Array.from({ length: n }, (_, at) => inWezterm(at + 1))
+    /** Lands the WezTerm reads held, and what their answers set off. */
+    const land = async () => {
+      for (const landing of focus.land.splice(0)) landing()
+      await settled()
+    }
+
+    it('the first answer is the settle\'s: the focused agent\'s pane turns the dial', async () => {
+      const { settle, next } = await dialWith({ hooks: inPanes(2) })
+      focus.pane = 2
+      await settle('wezterm')
+      expect(asked()).toEqual([[agent(2), 'pane']])
+      // Unchanged since: nothing more.
+      await next(2)
+      expect(asked()).toHaveLength(1)
+      // What the dials make of it is theirs to count.
+      expect(paneLines()).toEqual([])
+      seen.host.localFollowed!('pane', 'moved')
+      seen.host.localFollowed!('pane', 'no-tile')
+      expect(paneLines()).toEqual(['[device] pane · moved', '[device] pane · skipped · no tile'])
+    })
+
+    it('a dial move within ATTACH_ECHO_MS before the first answer sets it aside as echo', async () => {
+      const { settle } = await dialWith({ hooks: inPanes(2) })
+      focus.pane = 2
+      turnTo(agent(1))
+      clock = 1_999
+      await settle('wezterm')
+      expect(paneLines()).toEqual([ECHO])
+      expect(asked()).toEqual([])
+      // WezTerm's next settle starts another poll: its first answer, 2 s after the move, follows.
+      await settle('ghostty')
+      clock = 2_000
+      await settle('wezterm')
+      expect(asked()).toEqual([[agent(2), 'pane']])
+      expect(paneLines()).toEqual([ECHO])
+    })
+
+    it('a poll started at an agents\' change, WezTerm already settled, takes its first answer as the settle', async () => {
+      const { port, settle } = await dialWith({ hooks: [] })
+      focus.pane = 1
+      await settle('wezterm')
+      port.observed(inWezterm(1))
+      await settled()
+      expect(asked()).toEqual([[agent(1), 'pane']])
+    })
+
+    it('a poll a dial\'s attach started, WezTerm already settled, takes its first answer as the settle', async () => {
+      const { settle } = await dialWith({ attached: false })
+      focus.pane = 1
+      await settle('wezterm')
+      seen.host.watching!(true)
+      await settled()
+      expect(asked()).toEqual([[agent(1), 'pane']])
+    })
+
+    it('with no dial linked nothing is followed, and the first answer stays the first until one is read linked', async () => {
+      const { settle, next } = await dialWith({ hooks: inPanes(2) })
+      focus.pane = 2
+      unlinked(true)
+      await settle('wezterm')
+      await next(2)
+      expect(reads()).toHaveLength(3)
+      expect(asked()).toEqual([])
+      expect(paneLines()).toEqual([])
+      // The same answer all along: linked, the next is the first read linked, followed as the settle.
+      unlinked(false)
+      await next()
+      expect(asked()).toEqual([[agent(2), 'pane']])
+    })
+
+    it('a focus change turns the dial; an unchanged answer, a failed read and a pane no agent runs in turn nothing', async () => {
+      const { settle, next } = await dialWith({ hooks: inPanes(2) })
+      focus.pane = 1
+      await settle('wezterm')
+      await next()
+      focus.pane = 2
+      await next()
+      expect(asked()).toEqual([[agent(1), 'pane'], [agent(2), 'pane']])
+      // WezTerm's pane 0, a shell's: no agent runs there.
+      focus.pane = 0
+      await next()
+      // No GUI: the read fails.
+      focus.pane = undefined
+      await next()
+      expect(asked()).toHaveLength(2)
+      expect(paneLines()).toEqual([])
+    })
+
+    it('a failed read between two equal answers turns nothing: the next is compared with the last good one', async () => {
+      const { settle, next } = await dialWith({ hooks: inPanes(2) })
+      focus.pane = 1
+      await settle('wezterm')
+      focus.pane = undefined
+      await next()
+      focus.pane = 1
+      await next(2)
+      expect(asked()).toEqual([[agent(1), 'pane']])
+      expect(polls()).toEqual([STARTED])
+    })
+
+    it('a shell focused, then the same agent\'s pane again, turns the dial again', async () => {
+      const { settle, next } = await dialWith({ hooks: inPanes(2) })
+      focus.pane = 1
+      await settle('wezterm')
+      focus.pane = 0
+      await next()
+      focus.pane = 1
+      await next()
+      expect(asked()).toEqual([[agent(1), 'pane'], [agent(1), 'pane']])
+    })
+
+    it('a hand turn while the focus stays: no read pulls the dial back', async () => {
+      const { settle, next } = await dialWith({ hooks: inPanes(2) })
+      focus.pane = 1
+      await settle('wezterm')
+      turnTo(agent(2))
+      await next(3)
+      expect(asked()).toEqual([[agent(1), 'pane']])
+      expect(paneLines()).toEqual([])
+    })
+
+    it('two kittys: both focused on agents as kitty settles moves nothing; a window changed in one turns the dial to its agent; going from one to the other moves nothing', async () => {
+      const [one, two] = [await kittyAt(), await kittyAt()]
+      const { settle, next } = await dialWith({ hooks: [inKitty(1, one.listenOn), inKitty(2, two.listenOn), inKitty(3, one.listenOn),
+        inKitty(4, two.listenOn)], makers: ['kitty'] })
+      focus.windows.set(one.listenOn, 1).set(two.listenOn, 2)
+      await settle('kitty')
+      await next()
+      expect(asked()).toEqual([])
+      focus.windows.set(one.listenOn, 3)
+      await next()
+      expect(asked()).toEqual([[agent(3), 'pane']])
+      // The person goes to the other kitty's OS window: neither kitty's focused window changes.
+      await next(2)
+      expect(asked()).toHaveLength(1)
+      // The next focus change inside it does.
+      focus.windows.set(two.listenOn, 4)
+      await next()
+      expect(asked()).toEqual([[agent(3), 'pane'], [agent(4), 'pane']])
+      expect(paneLines()).toEqual([])
+    })
+
+    it('not the latest in front: skipped as not in front', async () => {
+      const { listener, settle, next } = await dialWith({ hooks: inPanes(2) })
+      focus.pane = 1
+      await settle('wezterm')
+      // Ghostty told in front, not yet settled: WezTerm's poll still runs.
+      expect(listener.front('ghostty')).toBeUndefined()
+      focus.pane = 2
+      await next()
+      expect(asked()).toEqual([[agent(1), 'pane']])
+      expect(paneLines()).toEqual(['[device] pane · skipped · not in front'])
+      expect(polls()).toEqual([STARTED])
+    })
+
+    it.each(['wezterm', 'kitty'] as const)('%s: the dial\'s tap on a pane, and a hand turn after it, are not pulled back by the read that sees the tap within TAB_ECHO_MS; the person focusing that pane again later turns the dial', async (app) => {
+      const kitty = await kittyAt()
+      const { settle, next } = await dialWith(app === 'wezterm' ? { hooks: inPanes(3) }
+        : { hooks: [1, 2, 3].map((n) => inKitty(n, kitty.listenOn)), makers: ['kitty'] })
+      const focusOn = (n: number) => { if (app === 'wezterm') focus.pane = n; else focus.windows.set(kitty.listenOn, n) }
+      focusOn(1)
+      await settle(app)
+      // The tap's activate-pane or focus-window moves the app's focus to pane 2, and the hand turns on to agent 3.
+      expect(await host().openAgent(agent(2))).toBeUndefined()
+      turnTo(agent(3))
+      clock = 1_999
+      await next()
+      expect(paneLines()).toEqual([ECHO])
+      expect(asked()).toEqual([[agent(1), 'pane']])
+      focusOn(1)
+      await next()
+      focusOn(2)
+      await next()
+      expect(asked()).toEqual([[agent(1), 'pane'], [agent(1), 'pane'], [agent(2), 'pane']])
+      expect(paneLines()).toEqual([ECHO])
+    })
+
+    it('a dial move while the read ran sets its answer aside as echo', async () => {
+      const { settle, next } = await dialWith({ hooks: inPanes(3) })
+      focus.pane = 1
+      await settle('wezterm')
+      focus.held = true
+      await next()
+      // The read under way finds pane 2 focused, and the dial turns to agent 3 meanwhile: the answer names a pane the
+      // dial has left.
+      focus.pane = 2
+      turnTo(agent(3))
+      await land()
+      expect(paneLines()).toEqual([ECHO])
+      focus.held = false
+      await next(2)
+      expect(asked()).toEqual([[agent(1), 'pane']])
+    })
+
+    it('an agent gone during the read: skipped as unknown agent', async () => {
+      const { port, settle, next } = await dialWith({ hooks: inPanes(2) })
+      focus.pane = 1
+      await settle('wezterm')
+      focus.held = true
+      await next()
+      focus.pane = 2
+      port.observed(inWezterm(2, { event: 'session-end' }))
+      await land()
+      expect(paneLines()).toEqual(['[device] pane · skipped · unknown agent'])
+      expect(asked()).toEqual([[agent(1), 'pane']])
+    })
+
+    it('a prompt typed in a WezTerm pane still turns the dial while the poll runs', async () => {
+      const { port, settle } = await dialWith({ hooks: inPanes(2) })
+      focus.pane = 1
+      await settle('wezterm')
+      port.observed(inWezterm(2, { event: 'turn-start' }))
+      expect(asked()).toEqual([[agent(1), 'pane'], [agent(2), 'prompt']])
+    })
+
+    it('its lines name no pane, socket or agent', async () => {
+      const kitty = await kittyAt()
+      const { listener, settle, next } = await dialWith({ hooks: [inKitty(1, kitty.listenOn), inKitty(2, kitty.listenOn)], makers: ['kitty'] })
+      // The settle's answer just after a turn, the read that sees a tap, and one with Ghostty told in front.
+      turnTo(agent(2))
+      await settle('kitty')
+      await host().openAgent(agent(2))
+      await next()
+      expect(listener.front('ghostty')).toBeUndefined()
+      focus.windows.set(kitty.listenOn, 1)
+      await next()
+      seen.host.watching!(false)
+      seen.host.localFollowed!('pane', 'moved')
+      seen.host.localFollowed!('pane', 'no-tile')
+      const lines = [...polls(), ...paneLines()]
+      expect(lines).toHaveLength(7)
+      for (const line of lines) {
+        expect(line).toMatch(/^\[device\] (pane · (moved|skipped · (no tile|echo|unknown agent|not in front))|focus poll · (started|stopped · \d+ reads, \d+ failed( · failing)?))$/)
+      }
     })
   })
 })

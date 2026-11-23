@@ -11,12 +11,16 @@
  * holding a multiplexer's client, focused by its own process on the socket the agent's hints name, after kitty is in
  * front. kitty matches a window by its own process alone (RECORDED_KITTY.focusWindowPid), and its `ls` is never read:
  * it holds the windows' environment.
+ *
+ * kitty's focused windows (docs/plans/2026-11-23-dial-wezterm-kitty-focus-follow-design.md): for the dial's focus poll
+ * (focusPoll.ts), which of the agents' windows is each kitty's focused one, asked by `get-colors --match`.
  */
 import { join } from 'node:path'
 import { binaryOnPath, resolveBinaryOnPath } from '../../lib/binaryOnPath.js'
 import { binaryFinder } from '../../lib/binaryFinder.js'
 import { resolveViaLoginShell, tmuxInstallDirectories, type TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
 import type { HostAdapter, Pane, Place } from './adapter.js'
+import { FOCUS_READ_MS } from './focusPoll.js'
 import { APP_BUNDLES } from './hostDetect.js'
 import { CONTROL, MAX_TEXT, RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 import { parentChain, readPtyMaker, type ProcessName } from './scannedApp.js'
@@ -35,6 +39,13 @@ const HELD = 'held:'
 const PANE = /^(held:)?([0-9]{1,9})@(.+)$/
 /** `<client's pid>@<socket>`: a tab of an outer place. */
 const TAB = /^([1-9][0-9]{0,9})@(.+)$/
+/** The calls one focus read makes at most. Also the refused sockets kept: one read asks of 16 sockets at most. */
+export const FOCUS_CALLS_MAX = 16
+/** The least time a focus call is started with: ~20x the recorded call (RECORDED_KITTY.focusedMatch.callMs), so one
+ *  that times out is kitty's failure, not the read's sliver, which would mark a healthy kitty refused. */
+const FOCUS_CALL_MIN_MS = 250
+/** kitty's answer to a `--match` no window meets (RECORDED_KITTY.focusedMatch.notFocused); a refusal exits 1 too. */
+const NO_MATCH = 'Error: No matching windows'
 
 export interface KittyDeps {
   run: OrcaDeps['run']
@@ -46,6 +57,10 @@ export interface KittyDeps {
   uid: number
   /** The uid owning the socket at [path]; null when none is there, it is no socket, or on any error. */
   socketOwner(path: string): number | null
+  /** The devices' monotonic clock. */
+  now(): number
+  /** The identity (`<dev>:<ino>`) of the socket at [path]; null when none is there, it is no socket, or on any error. */
+  socketId(path: string): string | null
 }
 
 /** A kitten in a folder the core looks in for tmux without a shell, else on macOS kitty.app's own. */
@@ -82,17 +97,35 @@ function socketOf(platform: NodeJS.Platform, listenOn: string): { listenOn: stri
 // prompt. So only a socket at a path that is this account's takes words.
 const ours = (deps: KittyDeps, path: string | undefined): boolean => path === undefined || deps.socketOwner(path) === deps.uid
 
-/** One `@` command to the window's kitty where kitty was found; false when none was or it did not exit 0. */
-async function remote(deps: KittyDeps, listenOn: string, args: string[]): Promise<boolean> {
+/** kitty's remote control where it was found; none when it was not. */
+async function kittenOf(deps: KittyDeps): Promise<string | undefined> {
   const found = await deps.kitty()
-  if (found.state === 'absent') return false
-  return (await deps.run(found.state === 'adopted' ? found.path : 'kitten', ['@', '--to', listenOn, ...args], RUN_TIMEOUT_MS)).code === 0
+  return found.state === 'absent' ? undefined : found.state === 'adopted' ? found.path : 'kitten'
 }
 
-export function createKittyAdapter(deps: KittyDeps): HostAdapter & Required<Pick<HostAdapter, 'type' | 'canType'>> {
+/** One `@` command to the window's kitty where kitty was found; false when none was or it did not exit 0. */
+async function remote(deps: KittyDeps, listenOn: string, args: string[]): Promise<boolean> {
+  const file = await kittenOf(deps)
+  return file !== undefined && (await deps.run(file, ['@', '--to', listenOn, ...args], RUN_TIMEOUT_MS)).code === 0
+}
+
+export function createKittyAdapter(deps: KittyDeps): HostAdapter & Required<Pick<HostAdapter, 'type' | 'canType'>> & {
+  /** Per socket (`listenOn`), which of [panes] on it is that kitty's focused window (its Pane.id), or null for none of
+   *  them; undefined when any call failed or [signal] was aborted, after which no call starts. A refused socket has no
+   *  entry and is not asked. */
+  focusedWindows(panes: readonly Pane[], signal?: AbortSignal): Promise<Map<string, string | null> | undefined>
+} {
   // Per window, the words being typed: two sends at once would mix in its prompt. Busy queues nothing.
   const sending = new Set<string>()
   let toldOff = false
+  // The sockets whose focus read was refused or timed out, oldest first, each with its socket's identity then (null for
+  // an abstract one). kitty 0.32.2 in password mode refused at once without asking the person
+  // (RECORDED_KITTY.focusedMatch.password); a socket is still asked once a kitty start, so a refusing kitty is not asked
+  // twice a second, and a prompt an unrecorded kitty version may show comes at most once a kitty start: until a new
+  // socket is at its path, or, as an abstract socket has no file to tell, until a read has no pane on it. The poll's
+  // FOCUS_FAILS_MAX so counts only the refused read: the later ones, with only refused sockets, answer an empty map, a
+  // good read.
+  const refused = new Map<string, string | null>()
 
   const windowOf = (pane: Pane): { own: boolean; id: string; listenOn: string; path?: string } | undefined => {
     const parts = PANE.exec(pane.id)
@@ -102,6 +135,53 @@ export function createKittyAdapter(deps: KittyDeps): HostAdapter & Required<Pick
   const typable = (pane: Pane) => {
     const at = windowOf(pane)
     return at?.own && at.path !== undefined ? at : undefined
+  }
+
+  const refuse = (listenOn: string, path: string | undefined) => {
+    if (refused.size === FOCUS_CALLS_MAX) refused.delete(refused.keys().next().value!)
+    refused.set(listenOn, path === undefined ? null : deps.socketId(path))
+    deps.log('[device] kitty · focus refused')
+  }
+  // `get-colors`, as its output is kitty's colour table, discarded: `ls` holds the windows' environment (#4227). Only
+  // its exit code and, on exit 1, whether kitty found no such window are read. `state:focused` is each kitty's focused
+  // window; `state:active` is each tab's active one and `state:focused_os_window` matched in no kitty of two
+  // (RECORDED_KITTY.focusedMatch activeOfEveryTab, twoKittys). A call that ran and failed is a refusal; one with less
+  // than FOCUS_CALL_MIN_MS left, or after the read's signal was aborted (its poll stopped), is not started and marks
+  // nothing.
+  type Read = { deadline: number; signal?: AbortSignal }
+  const ask = async (file: string, socket: { listenOn: string; path?: string }, expr: string, read: Read):
+  Promise<'match' | 'none' | 'failed'> => {
+    const left = read.deadline - deps.now()
+    if (left < FOCUS_CALL_MIN_MS || read.signal?.aborted) return 'failed'
+    const { code, stderr } = await deps.run(file, ['@', '--to', socket.listenOn, 'get-colors', '--match', expr], left)
+    if (code === 0) return 'match'
+    if (code === 1 && stderr?.startsWith(NO_MATCH)) return 'none'
+    refuse(socket.listenOn, socket.path)
+    return 'failed'
+  }
+  /** The first of [ids] asked alone that is the socket's kitty's focused window, in order; null when none is. */
+  const firstFocused = async (file: string, socket: { listenOn: string; path?: string }, ids: readonly string[], read: Read):
+  Promise<string | null | undefined> => {
+    for (const id of ids) {
+      const one = await ask(file, socket, `id:${id} and state:focused`, read)
+      if (one !== 'none') return one === 'match' ? id : undefined
+    }
+    return null
+  }
+  /** Which of [ids] is the socket's kitty's focused window: the first alone, as focus mostly stays where it was, then
+   *  from a third the rest in one `or` (kitty 0.32.2 takes parentheses, focusedMatch.orFocused), and on a match each
+   *  alone, the last too: focus may have moved since. So a socket's n windows take n calls at most, and one more from
+   *  the third. */
+  const focusedOn = async (file: string, socket: { listenOn: string; path?: string }, ids: readonly string[], read: Read):
+  Promise<string | null | undefined> => {
+    const [first, ...rest] = ids
+    const firstAsked = await firstFocused(file, socket, [first], read)
+    if (firstAsked !== null) return firstAsked
+    if (rest.length > 1) {
+      const any = await ask(file, socket, `state:focused and (${rest.map((id) => `id:${id}`).join(' or ')})`, read)
+      if (any !== 'match') return any === 'none' ? null : undefined
+    }
+    return firstFocused(file, socket, rest, read)
   }
 
   return {
@@ -148,6 +228,39 @@ export function createKittyAdapter(deps: KittyDeps): HostAdapter & Required<Pick
       } finally {
         sending.delete(pane.id)
       }
+    },
+    async focusedWindows(panes, signal) {
+      for (const [listenOn, id] of refused) {
+        const path = PATH_SOCKET.exec(listenOn)?.[1]
+        const restarted = path === undefined ? !panes.some((pane) => windowOf(pane)?.listenOn === listenOn) : deps.socketId(path) !== id
+        if (restarted) refused.delete(listenOn)
+      }
+      // Only the agent's own windows: a held one shows whatever is in front of it. Per socket, in the caller's order.
+      const sockets = new Map<string, { socket: { listenOn: string; path?: string }; ids: string[] }>()
+      // The calls the panes taken can take (focusedOn): one each, and a socket's third brings its `or`.
+      let calls = 0
+      for (const pane of panes) {
+        const at = windowOf(pane)
+        if (!at?.own || refused.has(at.listenOn) || !ours(deps, at.path)) continue
+        const cost = sockets.get(at.listenOn)?.ids.length === 2 ? 2 : 1
+        if (calls + cost > FOCUS_CALLS_MAX) break
+        const on = sockets.get(at.listenOn) ?? sockets.set(at.listenOn, { socket: at, ids: [] }).get(at.listenOn)!
+        on.ids.push(at.id)
+        calls += cost
+      }
+      const focused = new Map<string, string | null>()
+      if (sockets.size === 0) return focused
+      const file = await kittenOf(deps)
+      if (file === undefined) return undefined
+      const read = { deadline: deps.now() + FOCUS_READ_MS, signal }
+      let failed = false
+      // Each socket is asked, a refused one too, so one read finds every kitty that refuses.
+      for (const [listenOn, { socket, ids }] of sockets) {
+        const id = await focusedOn(file, socket, ids, read)
+        if (id === undefined) failed = true
+        else focused.set(listenOn, id === null ? null : `${id}@${listenOn}`)
+      }
+      return failed ? undefined : focused
     },
   }
 }

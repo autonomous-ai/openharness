@@ -7,6 +7,7 @@
  * holding a multiplexer's client, found by the client's tty in `wezterm cli list`, and activated after WezTerm is in front.
  */
 import type { HostAdapter, Pane, Place } from './adapter.js'
+import { FOCUS_READ_MS } from './focusPoll.js'
 import { CONTROL, MAX_TEXT, RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 import { clientTtyForm } from './tabs.js'
 import type { PaneSwitch } from './types.js'
@@ -19,6 +20,8 @@ const HELD = 'held:'
 const CLI = ['cli', '--no-auto-start']
 /** The most panes a `wezterm cli list` is read with: a longer one is not WezTerm's answer to rely on. */
 export const LISTED_PANES_MAX = 256
+/** The most clients a `wezterm cli list-clients` is read with: a longer one is not WezTerm's answer to rely on. */
+export const FOCUS_CLIENTS_MAX = 16
 
 /** `wezterm cli`, found once: canType runs at every look, each second for each WezTerm agent, and finding it walks PATH.
  *  None found, or a run that failed, is asked again: WezTerm installed, moved or removed since. */
@@ -27,10 +30,10 @@ function weztermCli(deps: OrcaDeps) {
   const binary = () =>
     (found ??= deps.onPath('wezterm') ?? (deps.platform === 'darwin' && deps.exists(APP_WEZTERM) ? APP_WEZTERM : null))
   /** What the command printed, or null when it failed. */
-  const run = async (wezterm: string, args: string[]): Promise<string | null> => {
+  const run = async (wezterm: string, args: string[], timeoutMs = RUN_TIMEOUT_MS): Promise<string | null> => {
     let out: string | null = null
     try {
-      const { code, stdout } = await deps.run(wezterm, [...CLI, ...args], RUN_TIMEOUT_MS)
+      const { code, stdout } = await deps.run(wezterm, [...CLI, ...args], timeoutMs)
       if (code === 0) out = stdout
       return out
     } finally {
@@ -40,7 +43,11 @@ function weztermCli(deps: OrcaDeps) {
   return { binary, run }
 }
 
-export function createWeztermAdapter(deps: OrcaDeps): HostAdapter {
+export function createWeztermAdapter(deps: OrcaDeps): HostAdapter & {
+  /** The focused pane's id (`<n>`, as paneOf builds it) of the client idle least; null when no client is listed;
+   *  undefined when the call failed or its answer is out of form anywhere. */
+  focusedPane(): Promise<string | null | undefined>
+} {
   // Per pane, the words being typed: two sends at once would mix in its prompt. Busy queues nothing.
   const sending = new Set<string>()
   const cli = weztermCli(deps)
@@ -80,7 +87,44 @@ export function createWeztermAdapter(deps: OrcaDeps): HostAdapter {
         sending.delete(pane.id)
       }
     },
+    // `list`'s `is_active` is a pane's place in its own tab only, so it cannot say which tab or window has focus:
+    // `list-clients` names the pane keyboard input goes to (docs/plans/2026-11-23-dial-wezterm-kitty-focus-follow-design.md).
+    async focusedPane() {
+      const wezterm = cli.binary()
+      if (!wezterm) return undefined
+      const listed = await cli.run(wezterm, ['list-clients', '--format', 'json'], FOCUS_READ_MS)
+      return listed === null ? undefined : focusedOfClients(listed)
+    },
   }
+}
+
+/** The `focused_pane_id` of the client idle least in `wezterm cli list-clients --format json`'s [stdout], of equals the
+ *  first; null when none is listed; undefined when the list is out of form anywhere: an answer not wholly WezTerm's
+ *  names no pane in front. Only `focused_pane_id` and `idle_time` are read. `idle_time` counts from the client's last
+ *  key or click, so the least is the one the person is at; only the GUI's one client was recorded. A `focused_pane_id`
+ *  of null, unrecorded, is WezTerm's own word (its ClientInfo's Option) for a client with no focused pane, as a
+ *  `wezterm connect` with no pane yet: it is passed over. */
+function focusedOfClients(stdout: string): string | null | undefined {
+  let entries: unknown
+  try {
+    entries = JSON.parse(stdout)
+  } catch {
+    return undefined
+  }
+  if (!Array.isArray(entries) || entries.length > FOCUS_CLIENTS_MAX) return undefined
+  let focused: { id: string; secs: number; nanos: number } | null = null
+  for (const entry of entries) {
+    if (typeof entry !== 'object' || entry === null) return undefined
+    const { focused_pane_id: id, idle_time: idle } = entry as { focused_pane_id?: unknown; idle_time?: unknown }
+    if ((id !== null && (typeof id !== 'number' || !WEZTERM_PANE.test(String(id)))) || typeof idle !== 'object' || idle === null) return undefined
+    const { secs, nanos } = idle as { secs?: unknown; nanos?: unknown }
+    if (typeof secs !== 'number' || !Number.isFinite(secs) || typeof nanos !== 'number' || !Number.isFinite(nanos)) return undefined
+    if (id === null) continue
+    if (focused === null || secs < focused.secs || (secs === focused.secs && nanos < focused.nanos)) {
+      focused = { id: String(id), secs, nanos }
+    }
+  }
+  return focused?.id ?? null
 }
 
 /** The id of the pane on [tty] in `wezterm cli list --format json`'s [stdout]; none when no pane holds it, or when the

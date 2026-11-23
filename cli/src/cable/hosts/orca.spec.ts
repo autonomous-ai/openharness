@@ -271,9 +271,15 @@ describe('Orca actions', () => {
     const fake = fakeOrca('exit 3')
     const orca = createOrcaActions({ ...orcaDeps(), onPath: () => fake.file })
     expect(await orca.send(HANDLE, 'hi')).toBe(false)
-    expect(await orcaDeps().run(fake.file, [], 10_000)).toEqual({ code: 3, stdout: '' })
+    expect(await orcaDeps().run(fake.file, [], 10_000)).toEqual({ code: 3, stdout: '', stderr: '' })
     // A binary that cannot start has no exit code.
-    expect(await orcaDeps().run(join(dir, 'missing'), [], 10_000)).toEqual({ code: null, stdout: '' })
+    expect(await orcaDeps().run(join(dir, 'missing'), [], 10_000)).toEqual({ code: null, stdout: '', stderr: '' })
+  })
+
+  // kitty's focus read tells no match from a refusal by it: both exit 1 (kitty.ts focusedWindows).
+  it("a run's stderr is in its answer", async () => {
+    const fake = fakeOrca('echo nope >&2\nexit 1')
+    expect(await orcaDeps().run(fake.file, [], 10_000)).toEqual({ code: 1, stdout: '', stderr: 'nope\n' })
   })
 
   it('a run its file or an argument refuses before starting, a NUL byte in it, has no exit code and leaves no deadline', async () => {
@@ -284,10 +290,16 @@ describe('Orca actions', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
+  // kitty's focus read gives each run what is left of a deadline on the devices' performance.now() clock, a fraction.
+  it('a run whose timeout is a fraction of a millisecond runs the command', async () => {
+    const fake = fakeOrca('exit 3')
+    expect(await orcaDeps().run(fake.file, [], 1999.5)).toEqual({ code: 3, stdout: '', stderr: '' })
+  })
+
   // tmux's answer is what it printed: the pane's process (tmux.ts).
   it('run answers what the command printed', async () => {
     const fake = fakeOrca('echo 4242')
-    expect(await orcaDeps().run(fake.file, [], 10_000)).toEqual({ code: 0, stdout: '4242\n' })
+    expect(await orcaDeps().run(fake.file, [], 10_000)).toEqual({ code: 0, stdout: '4242\n', stderr: '' })
   })
 
   /** A `run` that holds each command until the test lets it end. */
@@ -1239,10 +1251,10 @@ describe("Orca's commands on Windows", () => {
     vi.useRealTimers()
   })
 
-  /** execFile, once, answering exit 0 with [stdout] and starting nothing. */
+  /** execFile, once, answering exit 0 with [stdout], nothing on stderr, and starting nothing. */
   function answeredOnce(stdout = '') {
-    vi.mocked(execFile).mockImplementationOnce(((_file: string, _args: string[], _options: object, callback: (error: null, stdout: string) => void) => {
-      callback(null, stdout)
+    vi.mocked(execFile).mockImplementationOnce(((_file: string, _args: string[], _options: object, callback: (error: null, stdout: string, stderr: string) => void) => {
+      callback(null, stdout, '')
       return new ChildProcess()
     }) as never)
   }
@@ -1259,7 +1271,7 @@ describe("Orca's commands on Windows", () => {
   it('run starts orca.exe with the text as one argument, unchanged, hidden, with no shell and no environment of its own', async () => {
     answeredOnce('ok')
     const args = ['terminal', 'send', '--terminal', HANDLE, TEXT, '--enter', '--json']
-    expect(await orcaDeps('win32').run(ORCA_EXE, args, 10_000)).toEqual({ code: 0, stdout: 'ok' })
+    expect(await orcaDeps('win32').run(ORCA_EXE, args, 10_000)).toEqual({ code: 0, stdout: 'ok', stderr: '' })
     expect(vi.mocked(execFile).mock.calls.at(-1)).toEqual([ORCA_EXE, args, { timeout: 10_000, killSignal: 'SIGKILL', windowsHide: true }, expect.any(Function)])
   })
 
@@ -1274,7 +1286,7 @@ describe("Orca's commands on Windows", () => {
     const exe = place(join(root, 'Code.exe'))
     const script = place(join(root, '8a14f0cc1b', 'resources', 'app', 'out', 'cli.js'))
     answeredOnce()
-    expect(await orcaDeps('win32').run(launcher, ['--list-extensions'], 10_000)).toEqual({ code: 0, stdout: '' })
+    expect(await orcaDeps('win32').run(launcher, ['--list-extensions'], 10_000)).toEqual({ code: 0, stdout: '', stderr: '' })
     const [file, args, options] = vi.mocked(execFile).mock.calls.at(-1)! as unknown as [string, string[], { env?: NodeJS.ProcessEnv; windowsHide?: boolean }]
     expect([file, args]).toEqual([exe, [script, '--list-extensions']])
     expect(options.windowsHide).toBe(true)
@@ -1362,7 +1374,7 @@ describe("Orca's commands on Windows", () => {
   it('on macOS a batch file runs as named, and stopping a watch sends its signal', async () => {
     vi.mocked(endProcessTree).mockClear()
     answeredOnce()
-    expect(await orcaDeps('darwin').run('/made/up/orca.cmd', [TEXT], 10_000)).toEqual({ code: 0, stdout: '' })
+    expect(await orcaDeps('darwin').run('/made/up/orca.cmd', [TEXT], 10_000)).toEqual({ code: 0, stdout: '', stderr: '' })
     expect(vi.mocked(execFile).mock.calls.at(-1)!.slice(0, 2)).toEqual(['/made/up/orca.cmd', [TEXT]])
     const child = fakeChild(4321)
     createOrcaReads({ ...orcaDeps('darwin'), onPath: () => FAKE_PATH_ORCA, exists: () => false }).watchOrcaFocus(() => {}).stop()
