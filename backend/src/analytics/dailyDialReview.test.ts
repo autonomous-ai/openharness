@@ -77,6 +77,19 @@ describe('dailyDialReview', () => {
       transcribeMinutes: { day: '<5', d7: '<5', d28: 1 } })
   })
 
+  it('hides the rest\'s voice until five accounts with voice are beside the dial\'s computers', () => {
+    // Five dial accounts and one phone account: the rest is one person's phone.
+    const rest = (accounts: number) => dailyDialReview([row(1, 'voice_account_days', accounts), row(1, 'dial_voice_installation_days', 5),
+      row(1, 'voice_rest_clips', 3), row(1, 'voice_rest_audio_ms', 60_000), row(1, 'voice_rest_transcribe_ms', 6_000)], [], now).voice.outsideTeam.rest
+    expect(rest(6)).toEqual({ clips: { day: '<5', d7: '<5', d28: '<5' }, audioMinutes: { day: '<5', d7: '<5', d28: '<5' },
+      transcribeMinutes: { day: '<5', d7: '<5', d28: '<5' } })
+    expect(rest(10).clips).toEqual({ day: 3, d7: 3, d28: 3 })
+  })
+
+  it('says a testing build\'s dial clips count outside the team', () => {
+    expect(dailyDialReview([], [], now).limits.join(' ')).toMatch(/testing: build's dial clips count outside the team/)
+  })
+
   it('labels the period flags and first use as distinct computers, connected as computer-days', () => {
     const review = dailyDialReview([row(1, 'dial_connected_installation_days', 9), row(1, 'dial_used_installation_days', 6),
       row(2, 'dial_used_installation_days', 6), row(2, 'dial_used_week_installations', 7), row(20, 'dial_used_28d_installations', 8),
