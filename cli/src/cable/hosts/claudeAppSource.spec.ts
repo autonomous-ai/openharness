@@ -4,6 +4,7 @@ import type { ClaudeStoreRoot } from './appPlaces.js'
 import { observedAgentId } from './observed.js'
 import { ClaudeAppSource, type ClaudeAppSourceDeps } from './claudeAppSource.js'
 import type { ClaudeAppSession, StoreFolders, StoreRead } from './claudeAppStore.js'
+import type { RingRank } from './select.js'
 import { capsLetters, type HostAgent, type PaneSwitch, type SendResult } from './types.js'
 
 const ROOT = '/h/Library/Application Support/Claude/claude-code-sessions'
@@ -50,6 +51,9 @@ const nth = (n: number, over: Partial<ClaudeAppSession> = {}) => session({
   cwd: `/work/p${n}`, title: `Task ${n}`, lastActivityAt: T - n * 1000, ...over,
 })
 const fileOf = (one: ClaudeAppSession) => `${one.localId}.json`
+/** The rank the store's order gives: each session's agent at its place. */
+const rankOf = (sessions: ClaudeAppSession[]): RingRank =>
+  new Map(sessions.map((one, at) => [observedAgentId('claude', one.sessionId), at]))
 const read = (sessions: ClaudeAppSession[], over: Partial<StoreRead> = {}): StoreRead => ({
   sessions, parsed: sessions.length, skipped: 0, over: 0, more: false, ...over,
 })
@@ -97,6 +101,7 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
     const show = vi.fn(async (_localId: string, _agentId: string): Promise<PaneSwitch> => 'ok')
     const canLink = vi.fn((_localId: string) => true)
     const wake = { send: vi.fn(async (): Promise<SendResult> => ({ ok: true })), stop: vi.fn() }
+    const ranks: Array<RingRank | undefined> = []
     /** What the store answers when the test does not say: the one session, in one org folder. */
     const answers: { folders: StoreFolders | undefined; read: StoreRead } = { folders: FOLDERS, read: read([session()]) }
     const deps: ClaudeAppSourceDeps = {
@@ -123,6 +128,7 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
       show,
       canLink,
       wake,
+      rank: (rank) => { ranks.push(rank) },
       monotonic: () => clock.mono,
       log: (line) => {
         log.push(line)
@@ -137,7 +143,7 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
       await turn()
     }
     return {
-      source, answers, watches, timers, clock, log, focus, canShow, show, canLink, wake,
+      source, answers, watches, timers, clock, log, focus, canShow, show, canLink, wake, ranks,
       get changes() { return changes },
       /** The store's calls, in order. */
       calls: () => calls.map(({ name }) => name),
@@ -655,6 +661,39 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
         await after(s, () => s.fire(ORG, undefined))
         expect(s.changes).toBe(at + 2)
       }
+    })
+  })
+
+  describe('the rank', () => {
+    it('is the store\'s order, newest first, and is given again only for a new order', async () => {
+      const s = await started()
+      expect(s.ranks).toEqual([rankOf([session()])])
+      s.answers.read = read([session({ title: 'Fix the tests', lastActivityAt: T + 5000 })])
+      await after(s, () => s.fire(ORG, fileOf(session())))
+      expect(s.ranks).toHaveLength(1)
+      const newer = nth(1, { lastActivityAt: T + 9000 })
+      s.answers.read = read([newer, session()])
+      await after(s, () => s.fire(ORG, fileOf(newer)))
+      expect(s.ranks).toEqual([rankOf([session()]), rankOf([newer, session()])])
+    })
+
+    it('a new rank is set before the change is told, so the dial\'s next list has it', async () => {
+      const s = setup()
+      const ranked: number[] = []
+      s.source.onChange(() => { ranked.push(s.ranks.length) })
+      s.source.start()
+      await s.land()
+      s.gap()
+      s.answers.read = read([nth(1, { lastActivityAt: T + 9000 }), session()])
+      await after(s, () => s.fire(ORG, undefined))
+      expect(ranked).toEqual([1, 2])
+    })
+
+    it('stop drops it once', async () => {
+      const s = await started()
+      s.source.stop()
+      s.source.stop()
+      expect(s.ranks).toEqual([rankOf([session()]), undefined])
     })
   })
 
