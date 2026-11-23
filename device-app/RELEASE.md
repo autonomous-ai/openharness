@@ -88,7 +88,8 @@ The first Windows and Linux release:
   ([Windows code signing](../docs/windows-code-signing.md)), always, since Smart App Control blocks an unsigned
   program; then NSIS packs it, with `--no-binary-patching`, so Tauri writes nothing into the signed exe and it keeps
   its signature. Inside the bundle Tauri's sign command (`scripts/windows-sign.ps1`) signs NSIS's five plugin DLLs,
-  the uninstaller makensis writes and the installer, and the script refuses any other file. Then the update
+  and beside them `LangDLL.dll`, which only the uninstaller carries and Tauri does not sign; then the uninstaller
+  makensis writes and the installer, and the script refuses any other file. Then the update
   signature, last, over the bytes that ship. This job runs no build code: the Tauri CLI comes from
   `tauri-cli-windows`, which checks out no app code, so a crate's build script or an npm package cannot replace the
   program that runs beside the signing identity and the updater key. The sums `publish` checks are recorded here too,

@@ -15,7 +15,7 @@ signs.
 | --- | --- | --- |
 | Desktop (`release-desktop.yml`) | `sign-windows` | every `.exe` and `.dll` in `Harness-windows-x64.zip` and `Harness-windows-arm64.zip` (`Harness.exe`, `harness-desktop.exe`, `harness_pipe_io.dll`, Flutter's and the plugins' DLLs), then `app/<version>/harness-desktop.cat`, a catalog of every file in the version folder, and `harness-install.exe` |
 | CLI (`release.yml`) | `pty-sign` | `harness-pty.exe`, `harness-launch.exe`, `harness.exe`, `harness-serial.exe` for x64 and arm64 |
-| Harness Device (`release-device.yml`) | `sign-windows` | `harness-device.exe` for x64 and arm64. Then, inside each bundle through Tauri's sign command (`device-app/scripts/windows-sign.ps1`), NSIS's five plugin DLLs, the uninstaller NSIS writes and each `Harness-Device-windows-<arch>-setup.exe`. Always on: it does not wait for `WINDOWS_SIGNING`, since Smart App Control blocks an unsigned program |
+| Harness Device (`release-device.yml`) | `sign-windows` | `harness-device.exe` for x64 and arm64. Then, inside each bundle through Tauri's sign command (`device-app/scripts/windows-sign.ps1`), NSIS's five plugin DLLs, the `LangDLL.dll` only the uninstaller carries (Tauri signs the five; the script adds it), the uninstaller NSIS writes and each `Harness-Device-windows-<arch>-setup.exe`. Always on: it does not wait for `WINDOWS_SIGNING`, since Smart App Control blocks an unsigned program |
 
 A file that already carries a valid signature keeps it: Microsoft's `conpty.dll` and `OpenConsole.exe` are not
 re-signed. A file whose signature is broken fails the job.
@@ -174,8 +174,8 @@ unsigned again. Files already published stay validly signed, because each signat
 - **Growth:** N/A. Nothing is stored. The Azure account logs each signing request; Azure retains those logs.
 - **Concurrency:** N/A. Each release signs its own artifacts in its own job.
 - **Read cost:** N/A.
-- **Scale:** a Desktop release signs about 20 to 40 files, a CLI release 8 and a Harness Device release with Windows 16
-  (per arch the exe, five plugin DLLs, the uninstaller and the installer).
+- **Scale:** a Desktop release signs about 20 to 40 files, a CLI release 8 and a Harness Device release with Windows 18
+  (per arch the exe, five plugin DLLs, `LangDLL.dll`, the uninstaller and the installer).
   The Basic plan includes 5,000 signatures a month, about 100 releases. The first warning is the Azure quota on the
   account's metrics page, or a `429` in the signing step.
 - **Compatibility:** Windows does not care whether a file is signed. The updater and `install.ps1` compare sha256 from

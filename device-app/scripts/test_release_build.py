@@ -301,7 +301,7 @@ for file, content in files.items():
 
 # The plugin DLLs Tauri's NSIS installer carries, and those its uninstaller carries.
 PLUGIN_DLLS = ("NSISdl.dll", "StartMenu.dll", "System.dll", "nsDialogs.dll", "nsis_tauri_utils.dll")
-UNINSTALLER_DLLS = ("System.dll", "nsDialogs.dll", "nsis_tauri_utils.dll")
+UNINSTALLER_DLLS = ("System.dll", "LangDLL.dll", "nsis_tauri_utils.dll")
 
 
 def elf(machine, interp=False):

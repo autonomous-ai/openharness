@@ -222,6 +222,7 @@ case "$os" in
         # Control blocks an unsigned one (Code Integrity 3033/3089), so uninstall fails. The plugin DLLs, the
         # installer's and the uninstaller's, are signed alike so a reputation change cannot block them.
         uninstaller="$folder/uninstall.exe"
+        # 7-Zip names an uninstaller that was never finalized (signed) uninstall.exe.nsis: such an installer fails here.
         check "$name packs uninstall.exe" packed "$installer" "$folder" uninstall.exe
         check "the uninstall.exe in $name is Authenticode-signed" authenticode_valid "$uninstaller"
         check "$name carries plugin DLLs" packed_dlls "$installer" "$folder/dlls"

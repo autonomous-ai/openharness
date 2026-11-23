@@ -46,8 +46,11 @@ command once per file, with the file's path for `%1`:
 2. **The plugin DLLs**: Tauri copies NSIS's `Plugins/x86-unicode` and its downloaded `additional/` folder into
    `target/<target>/release/nsis/<x64|arm64>/Plugins/x86-unicode/` and signs the copies of `NSISdl.dll`,
    `StartMenu.dll`, `System.dll`, `nsDialogs.dll` and `additional/nsis_tauri_utils.dll`; the template's
-   `!addplugindir` puts that folder first, so makensis embeds the signed copies. These five are every plugin the
-   template calls.
+   `!addplugindir` puts that folder first, so makensis embeds the signed copies. The installer carries only these
+   five, but the uninstaller also loads `LangDLL.dll`: the template's `un.onInit` runs `MUI_UNGETLANGUAGE` and nothing
+   saves the installer's language. Tauri copies it with the folder and does not sign it, so `windows-sign.ps1` signs
+   it beside the plugin DLL it is handed. The Windows VM trial found it: `release-check.sh --signed` refused the
+   uninstaller's unsigned `LangDLL.dll`.
 3. **The uninstaller**: the template sets `!uninstfinalize` to the same command. makensis (NSIS 3.13) writes the
    uninstaller to a `GetTempFileName` file in the user's temp folder (`%TEMP%\nst<hex>.tmp`), runs the command through
    `cmd.exe /C IF 1==1 <command>`, then reads the file back and stores it whole in the installer. **makensis ignores
@@ -66,7 +69,7 @@ It opens the extracted uninstaller the same way.
 
 | | What | Trade-off |
 |---|---|---|
-| **A (chosen)** | Tauri's `signCommand`, given only to `sign-windows`'s Bundle step, runs `device-app/scripts/windows-sign.ps1`, which signs through `Invoke-ArtifactSigning`: the module and the parameters `azure/artifact-signing-action@v2` itself uses. The exes keep their action step before the bundle; the action's second step ("Sign the installers") is removed, since Tauri now signs the installers through the command. | Covers the uninstaller, the five DLLs and the installer with Tauri's own supported door. The script relies on the module and the Azure CLI session the first action step left in the job, and fails clearly when they are not there. |
+| **A (chosen)** | Tauri's `signCommand`, given only to `sign-windows`'s Bundle step, runs `device-app/scripts/windows-sign.ps1`, which signs through `Invoke-ArtifactSigning`: the module and the parameters `azure/artifact-signing-action@v2` itself uses. The exes keep their action step before the bundle; the action's second step ("Sign the installers") is removed, since Tauri now signs the installers through the command. | Covers the uninstaller, the five DLLs, `LangDLL.dll` and the installer with Tauri's own supported door. The script relies on the module and the Azure CLI session the first action step left in the job, and fails clearly when they are not there. |
 | B | Drop the action from this job: `azure/login`, `Install-Module ArtifactSigning` pinned, and the command signs everything, the exes too. | One signing engine in the job, but a larger change that repeats the action's setup, and the exes lose the action's checks. |
 | C | `!uninstfinalize` in an NSIS `installerHooks` file. | Signs the uninstaller only (the DLLs stay unsigned), and adds a second way beside Tauri's. |
 
@@ -103,6 +106,8 @@ The release folder is `target/<target>/release` of the arch being bundled (absol
      uninstaller makensis just wrote.
 
    Paths compare case-insensitively after `GetFullPath`, with no wildcard but the version and the temp name's hex.
+   Handed one of the plugin DLLs, it also takes `LangDLL.dll` in the same `x86-unicode` folder through steps 2 to 5,
+   reading every status before it signs anything; handed on its own, `LangDLL.dll` is refused.
 2. **Already signed.** `Get-AuthenticodeSignature` reads the file: `Valid` → leaves it as it is and says so (the exe
    the action signed); `NotSigned` → signs it; any other status → refuses (it was changed after it was signed).
 3. **Signs** with `Invoke-ArtifactSigning -Endpoint -CodeSigningAccountName -CertificateProfileName -Files <file>
@@ -148,16 +153,16 @@ unsigned DLL in the uninstaller, no DLL at all).
   nothing deletes the Run value.
 - `docs/windows-code-signing.md`: the Harness Device row of "What is signed"; first-run item 4's bullet (an update does
   not run `uninstall.exe`; the uninstaller and DLLs are signed now); Design → Scale (a Harness Device release with
-  Windows signs 16 files: per arch the exe, five DLLs, the uninstaller and the installer).
+  Windows signs 18 files: per arch the exe, five DLLs, `LangDLL.dll`, the uninstaller and the installer).
 - `device-app/src-tauri/src/packaging.rs`: the doc comment on `the_run_value_is_named_after_the_product` (an update
   does not run the old uninstaller).
 
 ### Data and security lines
 
 - Growth, concurrency, read cost: N/A, nothing is stored or read.
-- Scale: 16 signatures per Windows release instead of 4, inside the Basic plan's 5,000 a month.
+- Scale: 18 signatures per Windows release instead of 4, inside the Basic plan's 5,000 a month.
 - Time: in run 45098872790 the two signing steps took 48 s for four files (about 10 s a call once the module is
-  cached); 12 more calls inside the two bundles add about 2 to 3 minutes, well inside `sign-windows`'s 30.
+  cached); 14 more calls inside the two bundles add about 2 to 3 minutes, well inside `sign-windows`'s 30.
 - Identity: unchanged, the `release` environment's OIDC subject, only in `sign-windows`.
 - Failure: a refused or failed signature of the exe, a DLL or the installer fails the Bundle step; a failed uninstaller
   signature fails `check-windows`; either way nothing reaches `publish`.
