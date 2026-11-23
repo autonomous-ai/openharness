@@ -5397,6 +5397,28 @@ describe('ObservedSource and a nested session the scan found', () => {
     expect(t.agent('a')).not.toHaveProperty('nest')
   })
 
+  // A detached session, a client in a terminal with no page, or a step not read: the scan's lookup names no app, yet its
+  // maker read put the agent on its multiplexer's page. Its pane inherited the bundle id of the app its server started in.
+  it('the scan\'s lookup named no app: a nested first hook from the process it found keeps nest, host and page while its own lookup runs', async () => {
+    const cases = [
+      [IN_TMUX, { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'com.googlecode.iterm2' }],
+      [IN_HERDR, { HERDR_PANE_ID: 'w1:p2', __CFBundleIdentifier: 'com.googlecode.iterm2' }],
+    ] as const
+    for (const [made, hostHints] of cases) {
+      const outer = vi.fn((_hints: Readonly<Record<string, string>>, _pid: number) => new Promise<OuterAnswer>(() => {}))
+      const t = scan(new Map([[100, made]]), { outer })
+      t.found('a', 100)
+      const look = t.src.scanOpen()
+      await t.answer(0, {})
+      await look
+      expect(t.agent('a'), made.host).toMatchObject({ nest: made.host, host: made.host })
+      t.src.ingest(t.ev('turn-start', { sessionId: 'a', hostHints }))
+      expect(outer.mock.calls, made.host).toEqual([[hostHints, 100]])
+      expect(t.agent('a'), made.host).toMatchObject({ nest: made.host, host: made.host })
+      expect(pageOf(t.agent('a')), made.host).toBe(made.host)
+    }
+  })
+
   describe('its placed tmux pane, and its first hook', () => {
     /** The pane tmux's lookup by process names for `a`: tmux's pane id, the agent's process and its client's app. */
     const PANE = { adapter: 'tmux', id: '%3:100:iterm' }
