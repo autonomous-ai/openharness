@@ -4,9 +4,11 @@
  * catalog's builders, so it is called once the catalog has them.
  *
  * Each agent is in an Orca pane, laid out by `orca.layout`: every ring here lists its agents in Orca's tab order, each
- * worktree in its order, then its tabs, then each tab's splits.
+ * worktree in its order, then its tabs, then each tab's splits. O18 to O23 add Orca's chats
+ * (docs/plans/2026-11-23-dial-orca-chats-plan.md, Task 8), which no pane holds: a ring lists them after the panes'
+ * agents, in the order of Orca's list of them, which is the order they are declared in.
  */
-import { keys, listed, orcaGhost, orcaOpening, orcaSession, orcaStarted, S, scenario, started, withGhost } from './catalog.js'
+import { keys, listed, orcaChat, orcaGhost, orcaOpening, orcaSession, orcaStarted, S, scenario, started, withGhost } from './catalog.js'
 import type { Check, Scenario, SessionDef, SessionKey } from './types.js'
 
 type Ring = Extract<Check, { kind: 'ring' }>
@@ -16,6 +18,12 @@ const ringKept = (expect: SessionKey[], more: Partial<Ring> = {}): Ring => ring(
 const pane = (key: SessionKey, worktree: string, tab: number, split = 0, more: Partial<SessionDef> = {}): SessionDef =>
   orcaSession(key, { worktree, tab, split, ...more })
 const codex: Partial<SessionDef> = { engine: 'codex' }
+/** A chat of Orca's in worktree `worktree`: one no process runs, and one whose Claude Code runs and hooks. */
+const resting = (key: SessionKey, worktree: string, more: Partial<SessionDef> = {}): SessionDef =>
+  orcaChat(key, 'resting', { worktree, ...more })
+const live = (key: SessionKey, worktree: string): SessionDef => orcaChat(key, 'live', { worktree })
+/** Tier A alone: tier B's fake Orca lists no chats until the chats plan's Task 7 teaches it to. */
+const CHATS_TIERS: Scenario['tiers'] = ['a']
 
 export function orcaScenarios(): Scenario[] {
   /**
@@ -30,6 +38,7 @@ export function orcaScenarios(): Scenario[] {
   const w40 = keys('w', 1, 40, 2)
   const o16Ring = ['k05', ...k40.slice(25)]
   const o1Ring = ring(['a', 'c', 'b', 'd', 'e'])
+  const o18Ring = ring(['a', 'c', 'd', 'e'])
   return [
     scenario({
       id: 'O1', app: 'orca', title: 'Five agents in two worktrees: the ring has those five in tab order, by their names',
@@ -330,6 +339,94 @@ export function orcaScenarios(): Scenario[] {
         { id: 'open', kind: 'open', dim: 'D3', session: 'b', link: false, after: 'tap' },
       ],
       probes: [{ id: 'open', kind: 'open', dim: 'D3', session: 'z', link: false, after: 'tap' }],
+    }),
+    scenario({
+      id: 'O18', app: 'orca', title: "An agent in a pane and three chats of Orca's: the ring has the pane's agent, then each chat, resting or live, by its name",
+      dims: ['D1', 'D7'], tiers: CHATS_TIERS,
+      // d's Claude Code runs and hooks, the other two run nothing: Orca's list alone names them.
+      sessions: [pane('a', 'w1', 0), resting('c', 'w1'), live('d', 'w2'), resting('e', 'w2', codex), orcaGhost],
+      steps: [...orcaOpening(['w1', 'w2']), ...orcaStarted(['d', 'a']), ...listed('orca', ['a', 'c', 'd', 'e'])],
+      checks: [o18Ring, ringKept(['a', 'c', 'd', 'e'])],
+      probes: [withGhost(o18Ring)],
+    }),
+    scenario({
+      id: 'O19', app: 'orca', title: "The worktree on screen lists its chats beside its agents, named by its identity or, with none, by its id",
+      dims: ['D1', 'D7'], tiers: CHATS_TIERS,
+      // Orca gives w2 no identity, so its plugin names it by its id (2 of the 14 worktrees on Tony's Mac).
+      sessions: [pane('a', 'w1', 0), pane('b', 'w2', 0), resting('c', 'w1'), resting('d', 'w2'), orcaGhost],
+      world: { orca: { noIdentity: ['w2'] } },
+      steps: [
+        ...orcaOpening(['w1', 'w2']),
+        ...orcaStarted(['b', 'a']),
+        ...listed('orca', ['a', 'b', 'c', 'd']),
+        { label: 'front', kind: 'orca.front', worktree: 'w1' },
+        ...listed('orca', ['a', 'c']),
+        { label: 'open', kind: 'orca.front', worktree: 'w2' },
+        ...listed('orca', ['b', 'd']),
+      ],
+      checks: [
+        ring(['a', 'c'], { after: 'front', at: 'open' }),
+        ring(['b', 'd'], { id: 'moved', after: 'open', timed: true }),
+        ringKept(['b', 'd']),
+      ],
+      probes: [ring(['b', 'd', 'z'], { after: 'open' })],
+    }),
+    scenario({
+      id: 'O20', app: 'orca', title: "A tap on a chat in the other worktree opens that worktree and brings Orca up; a swipe's rest on a chat opens its worktree alone",
+      dims: ['D3'], tiers: CHATS_TIERS,
+      sessions: [pane('a', 'w1', 0), resting('c', 'w2'), resting('d', 'w1'), orcaGhost],
+      steps: [
+        ...orcaOpening(['w1', 'w2']),
+        ...orcaStarted(['a']),
+        ...listed('orca', ['a', 'c', 'd']),
+        { label: 'tap', kind: 'tap', session: 'c' },
+        { kind: 'wait', ms: 4 * S },
+        { label: 'rest', kind: 'swipe', session: 'd' },
+        { kind: 'wait', ms: 2 * S },
+      ],
+      checks: [
+        { id: 'open', kind: 'open', dim: 'D3', session: 'c', link: false, after: 'tap', at: 'rest' },
+        { id: 'rest', kind: 'open', dim: 'D3', session: 'd', link: false, after: 'rest' },
+      ],
+      probes: [{ id: 'open', kind: 'open', dim: 'D3', session: 'z', link: false, after: 'tap' }],
+    }),
+    scenario({
+      id: 'O21', app: 'orca', title: "A prompt typed in a live chat moves the dial to it, while Orca's focus watch runs",
+      // Orca's focus watch tells its panes alone, so a chat's prompt is the one sign the person turned to it.
+      dims: ['D2'], tiers: CHATS_TIERS, sessions: [pane('a', 'w1', 0), live('b', 'w1'), orcaGhost],
+      steps: [
+        ...orcaOpening(['w1']),
+        ...orcaStarted(['b', 'a']),
+        ...listed('orca', ['a', 'b']),
+        { label: 'prompt', kind: 'hook', session: 'b', event: 'turn-start' },
+      ],
+      checks: [{ id: 'focus', kind: 'focus', dim: 'D2', session: 'b', after: 'prompt' }],
+      probes: [{ id: 'focus', kind: 'focus', dim: 'D2', session: 'z', after: 'prompt' }],
+    }),
+    scenario({
+      id: 'O22', app: 'orca', title: 'Words to a resting chat: the dial says to type them in Orca, and they reach no agent',
+      dims: ['D5'], tiers: CHATS_TIERS, sessions: [resting('a', 'w1'), orcaGhost],
+      steps: [
+        ...orcaOpening(['w1']),
+        ...listed('orca', ['a']),
+        { label: 'voice', kind: 'voice', transcript: 'Eval words for alpha.', target: 'a' },
+      ],
+      checks: [{ id: 'refused', kind: 'refused', dim: 'D5', session: 'a', text: 'Type in Orca for chats.', after: 'voice' }],
+      probes: [{ id: 'refused', kind: 'refused', dim: 'D5', session: 'z', text: 'Type in Orca for chats.', after: 'voice' }],
+    }),
+    scenario({
+      id: 'O23', app: 'orca', title: "Voice on a live Claude Code chat: the exact words reach it once by Harness's mod, today's route until the owner tries it in Orca by hand",
+      // The chats plan's Task 0 keeps or turns off this route once the owner has seen the words land in Orca's chat; until
+      // then it is what the product does, and turned off, this scenario's check becomes O22's refusal.
+      dims: ['D5'], tiers: CHATS_TIERS, sessions: [live('a', 'w1'), orcaGhost],
+      steps: [
+        ...orcaOpening(['w1']),
+        ...orcaStarted(['a']),
+        ...listed('orca', ['a']),
+        { label: 'voice', kind: 'voice', transcript: 'Eval words for alpha.', target: 'a' },
+      ],
+      checks: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'a', text: 'Eval words for alpha.', path: 'mod', after: 'voice' }],
+      probes: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'z', text: 'Eval words for alpha.', after: 'voice' }],
     }),
   ]
 }

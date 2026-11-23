@@ -8,16 +8,17 @@ const byId = (id: string): Scenario => ORCA.find((s) => s.id === id)!
 const agents = (s: Scenario): SessionDef[] => s.sessions.filter((d) => d.app === 'orca' && !d.ghost)
 
 describe("Orca's scenarios", () => {
-  it("Orca's main ids are O1-O17, none held out, 17", () => {
-    expect(ORCA.map((s) => s.id)).toEqual(Array.from({ length: 17 }, (_, i) => `O${i + 1}`))
+  it("Orca's main ids are O1-O23, none held out, 23", () => {
+    expect(ORCA.map((s) => s.id)).toEqual(Array.from({ length: 23 }, (_, i) => `O${i + 1}`))
     expect(ORCA.every((s) => !s.heldOut)).toBe(true)
     expect(HELD_OUT.filter((s) => s.id.startsWith('O') && !s.id.startsWith('OH'))).toEqual([])
   })
 
-  it('every O scenario runs on every platform in both tiers, but O16 in tier A alone, for its time in tier B', () => {
+  it("every O scenario runs on every platform in both tiers, but O16 in tier A alone, for its time in tier B, and the chats' O18-O23, which tier B's fake Orca does not list", () => {
+    const onlyA = ['O16', 'O18', 'O19', 'O20', 'O21', 'O22', 'O23']
     for (const s of ORCA) {
       expect(s.platforms, s.id).toEqual(['darwin', 'win32', 'linux'])
-      expect(s.tiers, s.id).toEqual(s.id === 'O16' ? ['a'] : ['a', 'b'])
+      expect(s.tiers, s.id).toEqual(onlyA.includes(s.id) ? ['a'] : ['a', 'b'])
     }
   })
 
@@ -25,7 +26,8 @@ describe("Orca's scenarios", () => {
     const dims: Record<string, Dimension[]> = {
       O1: ['D1'], O2: ['D1', 'D7'], O3: ['D1', 'D7'], O4: ['D2'], O5: ['D2'], O6: ['D2', 'D1'], O7: ['D3'], O8: ['D4', 'D6'],
       O9: ['D5'], O10: ['D5'], O11: ['D1'], O12: ['D7', 'D1', 'D2'], O13: ['D7', 'D1', 'D3'], O14: ['D7', 'D1'],
-      O15: ['D7', 'D1'], O16: ['D1', 'D7'], O17: ['D7', 'D3'],
+      O15: ['D7', 'D1'], O16: ['D1', 'D7'], O17: ['D7', 'D3'], O18: ['D1', 'D7'], O19: ['D1', 'D7'], O20: ['D3'], O21: ['D2'],
+      O22: ['D5'], O23: ['D5'],
     }
     for (const s of ORCA) {
       const want = [...dims[s.id]!, ...s.tiers.includes('b') ? ['D8'] : []]
@@ -41,17 +43,41 @@ describe("Orca's scenarios", () => {
     }
   })
 
-  it("O5's world has no watch-focus and O13's no plugin", () => {
+  it("O5's world has no watch-focus, O13's no plugin, and O19's w2 no identity", () => {
     for (const s of ORCA) {
-      expect(s.world?.orca, s.id).toEqual({ O5: { watchFocus: false }, O13: { plugin: false } }[s.id])
+      expect(s.world?.orca, s.id).toEqual({ O5: { watchFocus: false }, O13: { plugin: false }, O19: { noIdentity: ['w2'] } }[s.id])
     }
   })
 
-  it('no two sessions of a scenario share a pane', () => {
+  it('no two sessions of a scenario share a pane, and no chat has one', () => {
     for (const s of ORCA) {
-      const panes = agents(s).map((d) => `${d.worktree} ${d.tab} ${d.split}`)
+      const panes = agents(s).filter((d) => !d.chat).map((d) => `${d.worktree} ${d.tab} ${d.split}`)
       expect(new Set(panes).size, s.id).toBe(panes.length)
+      for (const d of agents(s).filter((d) => d.chat)) expect([d.handle, d.tab, d.split], `${s.id} ${d.key}`).toEqual([undefined, undefined, undefined])
     }
+  })
+
+  it("the chats' scenarios hold resting chats and live ones, of Claude Code and Codex, in worktrees Orca lays out", () => {
+    const chats = (id: string) => agents(byId(id)).filter((d) => d.chat).map((d) => [d.key, d.chat, d.engine ?? 'claude', d.worktree])
+    expect(chats('O18')).toEqual([['c', 'resting', 'claude', 'w1'], ['d', 'live', 'claude', 'w2'], ['e', 'resting', 'codex', 'w2']])
+    expect(chats('O19')).toEqual([['c', 'resting', 'claude', 'w1'], ['d', 'resting', 'claude', 'w2']])
+    expect(chats('O20')).toEqual([['c', 'resting', 'claude', 'w2'], ['d', 'resting', 'claude', 'w1']])
+    expect([chats('O21'), chats('O22'), chats('O23')]).toEqual([[['b', 'live', 'claude', 'w1']], [['a', 'resting', 'claude', 'w1']],
+      [['a', 'live', 'claude', 'w1']]])
+    for (const s of ORCA) {
+      const laid = new Set(s.steps.flatMap((step) => (step.kind === 'orca.layout' ? step.worktrees : [])))
+      for (const d of agents(s).filter((d) => d.chat)) expect(laid.has(d.worktree!), `${s.id} ${d.key}`).toBe(true)
+      // Only a live chat's process hooks: a resting one's row is Orca's list's alone.
+      for (const step of s.steps) {
+        if (step.kind === 'hook') expect(s.sessions.find((d) => d.key === step.session)!.chat, `${s.id} ${step.session}`).not.toBe('resting')
+      }
+    }
+  })
+
+  it("O22's words to a resting chat are refused with Orca's sentence, and O23's to a live Claude Code chat go by the mod", () => {
+    expect(byId('O22').checks).toEqual([{ id: 'refused', kind: 'refused', dim: 'D5', session: 'a', text: 'Type in Orca for chats.', after: 'voice' }])
+    expect(byId('O23').checks.flatMap((c) => (c.kind === 'voice' ? [[c.session, c.path]] : []))).toEqual([['a', 'mod']])
+    expect(byId('O23').title).toContain('until the owner tries it in Orca by hand')
   })
 
   it("O12 grades its ring and its focus line past the devices' next 30 s look after the relaunch, whatever its phase", () => {
@@ -118,11 +144,14 @@ describe("Orca's scenarios", () => {
     expect(o16.steps.filter((step) => step.kind === 'orca.front').length).toBeLessThanOrEqual(1)
   })
 
-  it("a ring an O scenario waits for or expects lists its agents in Orca's tab order", () => {
-    // Each worktree in the order it was first laid out, then its tabs, then each tab's splits.
+  it("a ring an O scenario waits for or expects lists its agents in Orca's tab order, then its chats in Orca's list order", () => {
+    // Each worktree in the order it was first laid out, then its tabs, then each tab's splits; the chats after them all,
+    // in the order Orca lists them, which is the order they are declared in.
     for (const s of ORCA) {
       const worktrees = [...new Set(s.steps.flatMap((step) => (step.kind === 'orca.layout' ? step.worktrees : [])))]
-      const place = new Map(agents(s).map((d) => [d.key, [worktrees.indexOf(d.worktree!), d.tab!, d.split!]]))
+      const chats = agents(s).filter((d) => d.chat)
+      const place = new Map(agents(s).map((d) => [d.key, d.chat ? [worktrees.length, chats.indexOf(d), 0]
+        : [worktrees.indexOf(d.worktree!), d.tab!, d.split!]]))
       const before = (x: SessionKey, y: SessionKey): number => {
         const [p, q] = [place.get(x)!, place.get(y)!]
         return p[0]! - q[0]! || p[1]! - q[1]! || p[2]! - q[2]!

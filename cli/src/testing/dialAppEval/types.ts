@@ -107,6 +107,12 @@ export interface SessionDef {
   handle?: string
   /** Orca only: its terminal's maker is another program than Orca's terminal host (HELD_MAKER). */
   held?: true
+  /**
+   * Orca only: a chat of Orca's in its worktree, which `orca agent list` lists and no terminal holds
+   * (docs/plans/2026-11-23-dial-orca-chats-design.md): no layout has a pane of it, and its hooks name its Orca session and
+   * no handle. `resting`: no process runs it, so no hook ever names it and its row is Orca's alone, by its Orca session id.
+   */
+  chat?: 'live' | 'resting'
 }
 
 export const STEP_KINDS = ['claude.write', 'codex.write', 'hook', 'front', 'thread', 'attach', 'tap', 'swipe',
@@ -161,7 +167,7 @@ export type Step = { label?: Label } & (
 export type Until = { kind: 'ring'; page: App; expect: SessionKey[] }
 export type StepOf<K extends StepKind> = Extract<Step, { kind: K }>
 
-export const CHECK_KINDS = ['ring', 'focus', 'still', 'open', 'state', 'voice', 'recap', 'cost', 'scroll', 'logged', 'face'] as const
+export const CHECK_KINDS = ['ring', 'focus', 'still', 'open', 'state', 'voice', 'refused', 'recap', 'cost', 'scroll', 'logged', 'face'] as const
 export type CheckKind = (typeof CHECK_KINDS)[number]
 export type Check = { id: string; dim: Dimension; after?: Label; at?: Label } & (
   /**
@@ -175,6 +181,9 @@ export type Check = { id: string; dim: Dimension; after?: Label; at?: Label } & 
   | { kind: 'state'; session: SessionKey; state: 'working' | 'needs-you' | 'done' | 'idle' }
   /** path: the words must reach the session by it; one by another path does not reach it, and counts against once. */
   | { kind: 'voice'; session: SessionKey; text: string; path?: Delivery['path'] }
+  /** Words to the session on the dial's face that the product takes no route for: the dial says `text`, the product's
+   *  own sentence, and the words reach no session. */
+  | { kind: 'refused'; session: SessionKey; text: string }
   | { kind: 'recap'; session: SessionKey; text: string }
   | { kind: 'cost' }
   /** The window that holds the session's shell ran scroll lines for that shell while it was active. */
@@ -195,8 +204,9 @@ export interface Scenario {
     /** The Harness extension is not installed, so no window opens a stream (V13). */
     extension?: false
     /** watchFocus false: Orca's CLI has no `terminal watch-focus`. plugin false: the Harness plugin is not installed in
-     *  Orca, so no `dial` stream opens (O13). */
-    orca?: { watchFocus?: false; plugin?: false }
+     *  Orca, so no `dial` stream opens (O13). noIdentity: the worktrees Orca gives no identity, which its plugin names by
+     *  their id (2 of the 14 on Tony's Mac, docs/plans/2026-11-23-dial-orca-chats-design.md, Task 0). */
+    orca?: { watchFocus?: false; plugin?: false; noIdentity?: string[] }
     /** Harness's `CODEX_HOME` is the ChatGPT app's Codex home, as on a computer that never set it. Tier A only. */
     codexHome?: 'app' }
   steps: Step[]; checks: Check[]
@@ -338,6 +348,12 @@ export function hookHandle(s: Pick<SessionDef, 'key' | 'handle'>, launch: number
 /** Orca's id of the worktree, as `terminal list` prints it, in both tiers. */
 export function orcaWorktreeId(worktree: string): string {
   return `eval-repo::/work/eval-${worktree}`
+}
+
+/** The Orca session of the session's agent, as its hooks name it (ORCA_AGENT_SESSION_ID) in both tiers: a chat's
+ *  `orcaSessionId` in `orca agent list`. */
+export function orcaAgentSessionId(key: SessionKey): string {
+  return `eval-orca-${key}`
 }
 
 /** A result's key in the baseline: tier/platform/scenario/check. */

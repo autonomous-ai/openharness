@@ -70,6 +70,14 @@ export function orcaSession(key: SessionKey, more: Partial<SessionDef> = {}): Se
   return { key, app: 'orca', id: uuid(key, '8c'), handle: orcaTerminalHandle(key), title: titleOf(key), worktree, tab: 0, split: 0,
     cwd: `/work/eval-${worktree}`, ageMs: 0, ...(more.engine === 'codex' ? { codexHome: 'own' } : {}), ...more }
 }
+/**
+ * A chat of Orca's, Claude Code's in worktree w1 unless `more` says otherwise (docs/plans/2026-11-23-dial-orca-chats-design.md):
+ * Orca runs it on no terminal, so no layout has a pane, tab or handle of it, and its folder is its worktree's.
+ */
+export function orcaChat(key: SessionKey, chat: 'live' | 'resting', more: Partial<SessionDef> = {}): SessionDef {
+  const worktree = more.worktree ?? 'w1'
+  return { key, app: 'orca', id: uuid(key, '8c'), title: titleOf(key), worktree, cwd: `/work/eval-${worktree}`, ageMs: 0, chat, ...more }
+}
 /** A probe of a ring check: the same ring with the ghost in it. */
 export const withGhost = (check: Extract<Check, { kind: 'ring' }>): Check => ({ ...check, expect: [...check.expect, 'z'] })
 /** Newest first, a minute apart, as the catalog's rows are unless they say otherwise. */

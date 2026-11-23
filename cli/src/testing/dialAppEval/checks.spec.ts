@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { observedAgentId } from '../../cable/hosts/observed.js'
 import { condition, evaluate, graded, wrongSends } from './checks.js'
 import { uncaughtProbes } from './runner.js'
 import { agentIdOf, orcaPaneHandle, orcaWorktreeId, THRESHOLDS, type Check, type CheckResult, type Delivery, type Platform,
@@ -505,6 +506,46 @@ describe('voice', () => {
     const results = run(voice, s, seen(s, [500], { frames }))
     expect(results.map((r) => [r.check, r.score])).toEqual([['v.reached', 0], ['v.once', 0], ['v.exact', 0]])
     expect(results[0]!.evidence).toEqual(['voice.error at 700', 'voice.transcript at 800', 'no delivery'])
+  })
+})
+
+describe('refused', () => {
+  const s = scenario([{ kind: 'voice', transcript: 'Eval hello', target: 'a', label: 'go' }])
+  const refused: Check = { id: 'n', kind: 'refused', dim: 'D5', session: 'a', text: 'Eval no route.', after: 'go' }
+  const error = (at: number, message = 'Eval no route.') => frame(at, { t: 'voice.error', message })
+  const to = (at: number, target: string | null): Seen['deliveries'][number] => ({ at, path: 'mod', target, text: 'Eval hello' })
+
+  it("the product's own sentence, while the face showed the session, and no words delivered, passes", () => {
+    const results = run(refused, s, seen(s, [500], { faces: [face(100, B), face(400, A)], frames: [error(600)] }))
+    expect(scores(results)).toEqual({ said: 1, kept: 1 })
+    expect(results.every((r) => !r.timed)).toBe(true)
+    expect(results[0]!.evidence).toEqual(['face at 400: a', 'voice.error at 600, text exact'])
+  })
+
+  it('another sentence fails said, words delivered to any session fail kept, and no refusal fails both', () => {
+    expect(scores(run(refused, s, seen(s, [500], { faces: [face(400, A)], frames: [error(600, 'Eval other.')] })))).toEqual({ said: 0, kept: 1 })
+    const sent = run(refused, s, seen(s, [500], { faces: [face(400, A)], frames: [error(600)], deliveries: [to(700, 'b')] }))
+    expect(scores(sent)).toEqual({ said: 1, kept: 0 })
+    expect(sent[0]!.evidence).toEqual(['face at 400: a', 'voice.error at 600, text exact', 'delivery at 700 via mod to b'])
+    expect(scores(run(refused, s, seen(s, [500], { faces: [face(400, A)], deliveries: [to(700, 'a')] })))).toEqual({ said: 0, kept: 0 })
+    expect(scores(run(refused, s, seen(s, [500], { faces: [face(400, A)] })))).toEqual({ said: 0, kept: 0 })
+  })
+
+  it('words spoken to another session were not refused for this one, and a refusal before `after` is not this step\'s', () => {
+    expect(scores(run(refused, s, seen(s, [500], { faces: [face(400, B)], frames: [error(600)] })))).toEqual({ said: 0, kept: 0 })
+    expect(scores(run(refused, s, seen(s, [500], { faces: [face(400, A)], frames: [error(450)] })))).toEqual({ said: 0, kept: 0 })
+    // A face after the words is not the one they were spoken to.
+    expect(scores(run(refused, s, seen(s, [500], { faces: [face(400, B), face(550, A)], frames: [error(600)] })))).toEqual({ said: 0, kept: 0 })
+  })
+
+  it("a probe on a session never on the face is caught, and no evidence holds the words or the product's sentence", () => {
+    const ghost: Check = { ...refused, session: 'ghost' }
+    const results = run(ghost, s, seen(s, [500], { faces: [face(400, A)], frames: [error(600), frame(650, { t: 'voice.transcript', text: 'Eval hello' })],
+      deliveries: [to(700, 'a')] }))
+    expect(uncaughtProbes({ scenario: 'S1', platform: 'darwin', results: [], probes: results, wrongSends: [], gaps: [] })).toEqual([])
+    for (const line of results.flatMap((r) => r.evidence)) expect(line).not.toMatch(/Eval/)
+    // A driver that saw nothing says nothing.
+    expect(run(refused, s, seen(s, [500])).flatMap((r) => r.evidence)).toEqual([])
   })
 })
 
@@ -1118,6 +1159,92 @@ describe('Orca', () => {
       // A driver that saw nothing says nothing.
       const s = input('tap', 'oz')
       expect(run({ ...open, session: 'oz' }, s, seen(s, [500])).flatMap((r) => r.evidence)).toEqual([])
+    })
+  })
+
+  describe('chats', () => {
+    // Orca's CLI opens no chat: a tap and a rest bring its worktree up, and a tap then Orca forward
+    // (docs/plans/2026-11-23-dial-orca-chats-design.md, "Dial to Orca").
+    const chat = (key: string, n: number, kind: 'live' | 'resting', more: Partial<SessionDef> = {}): SessionDef => {
+      const worktree = more.worktree ?? 'w2'
+      return { key, app: 'orca', id: uuid(n), title: `Eval ${key}`, cwd: `/work/eval-${worktree}`, ageMs: 0, worktree, chat: kind, ...more }
+    }
+    const OC = chat('oc', 43, 'resting')
+    const OL = chat('ol', 44, 'live')
+    const chats = [OA, OB, OC, OL, OZ]
+    const on = (kind: 'tap' | 'swipe', key = 'oc'): Scenario => scenario([{ kind, session: key, label: 'go' }], chats)
+    const opened: Check = { ...open, session: 'oc' }
+    const shown = (s: Scenario, times: number[], parts: Partial<Omit<Seen, 'steps'>> = {}): Seen =>
+      seen(s, times, { ...parts, frames: [...list(0, 'orca', [OA, OB, OC, OL]), ...(parts.frames ?? [])] })
+
+    it("a tap on a chat passes on its worktree's activate, then Orca's raise, with no switch, on each platform", () => {
+      const s = on('tap')
+      for (const platform of ['darwin', 'linux', 'win32'] as const) {
+        const results = run(opened, s, shown(s, [500], { commands: [activate(600, 'w2', platform), cmd(800, RAISE[platform])] }), 'a', platform)
+        expect(scores(results), platform).toEqual({ worktree: 1, raise: 1, latency: 1 })
+        expect(ms(results, 'latency')).toBe(300)
+        expect(results[0]!.evidence).toEqual(['tap on oc at 500', 'command at 600: worktree', 'command at 800: front'])
+      }
+      // A live chat's row is its hooked copy's, opened the same way.
+      const live = on('tap', 'ol')
+      expect(scores(run({ ...opened, session: 'ol' }, live, shown(live, [500], { commands: [activate(600, 'w2'), cmd(800, RAISE.darwin)] }))))
+        .toEqual({ worktree: 1, raise: 1, latency: 1 })
+      // Tier B on Linux records no raise.
+      expect(scores(run(opened, s, shown(s, [500], { commands: [activate(600, 'w2', 'linux')] }), 'b', 'linux'))).toEqual({ worktree: 1 })
+    })
+
+    it("another worktree's activate, one that failed, or a raise before it fails a chat's tap, saying no activate", () => {
+      const s = on('tap')
+      const other = run(opened, s, shown(s, [500], { commands: [activate(600, 'w1'), cmd(800, RAISE.darwin)] }))
+      expect(scores(other)).toEqual({ worktree: 0, raise: 0, latency: 0 })
+      expect(other[0]!.evidence).toEqual(['tap on oc at 500', 'command at 600: worktree', 'command at 800: front', 'no activate'])
+      const failed = { ...activate(600, 'w2'), ok: false }
+      expect(scores(run(opened, s, shown(s, [500], { commands: [failed, cmd(800, RAISE.darwin)] })))).toEqual({ worktree: 0, raise: 0, latency: 0 })
+      const early = run(opened, s, shown(s, [500], { commands: [cmd(550, RAISE.darwin), activate(600, 'w2')] }))
+      expect(scores(early)).toEqual({ worktree: 1, raise: 0, latency: 0 })
+      expect(ms(early, 'latency')).toBeNull()
+      // A terminal switch is no part of a chat's opening.
+      expect(scores(run(opened, s, shown(s, [500], { commands: [switchTo(600, handle(OA)), cmd(800, RAISE.darwin)] }))))
+        .toEqual({ worktree: 0, raise: 0, latency: 0 })
+      expect(run(opened, s, shown(s, [500])).flatMap((r) => r.evidence)).toEqual(['tap on oc at 500', 'no command'])
+    })
+
+    it("a rest on a chat passes on its worktree's activate with no raise, fails on a raise, and has no latency part", () => {
+      const s = on('swipe')
+      const rest = run(opened, s, shown(s, [500], { commands: [activate(600, 'w2')] }))
+      expect(scores(rest)).toEqual({ worktree: 1, noRaise: 1 })
+      expect(rest.every((r) => !r.timed)).toBe(true)
+      expect(scores(run(opened, s, shown(s, [500], { commands: [activate(600, 'w2'), cmd(800, RAISE.darwin)] })))).toEqual({ worktree: 1, noRaise: 0 })
+      expect(scores(run(opened, s, shown(s, [500], { commands: [] })))).toEqual({ worktree: 0, noRaise: 0 })
+    })
+
+    it("a resting chat is listed by its Orca session: a row by its Claude Code's id is none of its own", () => {
+      const s = on('tap')
+      const frames = list(0, 'orca', [OA, OB, [observedAgentId('claude', OC.id), OC.title], OL])
+      const never = run(opened, s, seen(s, [500], { frames, commands: [activate(600, 'w2'), cmd(800, RAISE.darwin)] }))
+      expect(never.map((r) => r.score)).toEqual([0, 0, 0])
+      expect(never[0]!.evidence).toContain('oc never listed')
+    })
+
+    it("a chat is named by its title, a Codex one too, and is no pane of any tab: a pane beside it is named by its own", () => {
+      // od, a Codex pane in w2's first tab, beside the live chat declared before it; oe, a Codex chat in a worktree Orca
+      // does not lay out.
+      const OD = orca('od', 45, { worktree: 'w2', engine: 'codex' })
+      const OE = chat('oe', 46, 'resting', { worktree: 'w3', engine: 'codex' })
+      const named = [OL, OD, OE]
+      const t = scenario([{ kind: 'orca.layout', worktrees: ['w1', 'w2'] }, { kind: 'hook', session: 'ol', event: 'start' },
+        { kind: 'hook', session: 'od', event: 'start' }, { kind: 'tap', session: 'od', label: 'end' }], named)
+      const times = [100, 200, 300, 1000]
+      const ring: Check = { id: 'r', kind: 'ring', dim: 'D1', page: 'orca', expect: ['od', 'ol', 'oe'], at: 'end' }
+      expect(scores(run(ring, t, seen(t, times, { frames: list(500, 'orca', [OD, OL, OE]) }))).names).toBe(1)
+      expect(scores(run(ring, t, seen(t, times, { frames: list(500, 'orca', [[id(OD), OL.title], OL, [id(OE), 'eval-w3']]) }))).names).toBe(1 / 3)
+    })
+
+    it('no evidence of a chat holds a worktree id or a name', () => {
+      const s = on('tap')
+      const lines = run(opened, s, shown(s, [500], { commands: [activate(600, 'w1'), activate(650, 'w2'), cmd(800, RAISE.darwin)] }))
+        .flatMap((r) => r.evidence)
+      for (const line of lines) expect(line).not.toMatch(/term_|eval-repo|\/work\/|Eval|orca\b|[0-9a-f]{8}-/)
     })
   })
 
