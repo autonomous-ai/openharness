@@ -3308,6 +3308,63 @@ describe('cable session', () => {
       await session.stop()
     }
   })
+
+  // A list read already under way as the dial greets ends inside the wait: it lacked the app's rows, and went first.
+  it('a list read under way as the dial greets does not go while the greeting waits', async () => {
+    const listed = [...AGENTS]
+    const snapshot = () => ({ agents: [...listed], tab: '', total: listed.length, view: 'machine' as const })
+    let read: (() => void) | undefined
+    let land: (() => void) | undefined
+    const { session, port } = await connect(makeHost({
+      listAgentSnapshot: () => read ? Promise.resolve(snapshot()) : new Promise((resolve) => { read = () => resolve(snapshot()) }),
+      onDialAttached: () => new Promise<void>((resolve) => { land = resolve }),
+    }))
+    try {
+      const pushed = session.syncAgents()
+      await vi.waitFor(() => expect(read).toBeDefined())
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(land).toBeDefined())
+      read!()
+      await pushed
+      for (let i = 0; i < 5; i++) await settle()
+      expect(port.types()).not.toContain('agents.begin')
+      listed.push({ id: 'app-1', name: 'Fix the build', engine: 'claude' })
+      land!()
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      expect(firstList(port)).toEqual(['a1', 'a2', 'app-1'])
+    } finally { await session.stop() }
+  })
+
+  // A dial that greets again inside the wait (back on new firmware, its port reopened) starts reads of its own: the
+  // first wait's late end let the first greeting's list go before them.
+  it('a greeting inside another\'s wait holds every list until its own reads land', async () => {
+    const listed = [...AGENTS]
+    const lands: Array<() => void> = []
+    const { session, port } = await connect(makeHost({
+      listAgents: async () => listed,
+      agentTotal: () => listed.length,
+      onDialAttached: () => new Promise<void>((resolve) => { lands.push(resolve) }),
+    }))
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1' })
+      await vi.waitFor(() => expect(lands).toHaveLength(1))
+      await vi.advanceTimersByTimeAsync(300)
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '2' })
+      await vi.waitFor(() => expect(lands).toHaveLength(2))
+      // The first wait ends, late; the second's reads are under way still.
+      await vi.advanceTimersByTimeAsync(300)
+      for (let i = 0; i < 5; i++) await vi.advanceTimersByTimeAsync(0)
+      expect(port.types()).not.toContain('agents.begin')
+      listed.push({ id: 'app-1', name: 'Fix the build', engine: 'claude' })
+      lands[1]()
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      expect(firstList(port)).toEqual(['a1', 'a2', 'app-1'])
+    } finally {
+      vi.useRealTimers()
+      await session.stop()
+    }
+  })
 })
 
 describe('speak an answer, then review', () => {
