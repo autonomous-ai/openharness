@@ -1200,8 +1200,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     noticeFrom: (agentId) => notices.from(agentId),
     newsKept: (agentId) => notifyMode.get() !== 'you' || failedLast.has(agentId),
     // A caller no list holds has no face on the dial to ask on, and with no session its next turn is never heard: kept,
-    // its card would stay pinned until the devices restart. The tap is its end, as its leaving would be.
-    tappedUnlisted: (agentId) => endNotice(agentId),
+    // its card would stay pinned until the devices restart. The tap is its end, as its leaving would be. Only a card its
+    // notice found no list for (`who`): a router that has read no list yet, as while the fleet is unavailable, finds no
+    // machine for a Harness agent either, whose card waits for its next turn.
+    tappedUnlisted: (agentId) => part.call('notices', () => { if (notices.from(agentId)) notices.ended(agentId) }),
     // The notices and the waits are questions only the devices ask: what is unread replaces the dial's whole drawer,
     // which holds them too.
     noticeRows: () => {
@@ -1578,7 +1580,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // In its agent's order, as an ask is.
     hold: (agentId, id, questions) => inOrder(agentId, () => { void cable.hold(agentId, id, questions) }),
   })
-  /** That agent's next turn started, it left, or no list holds it and the person tapped it: its card goes. */
+  /** That agent's next turn started or it left: its card goes. */
   const endNotice = (agentId: string): void => part.call('notices', () => notices.ended(agentId))
   /** Another question of that agent closed: its notice, covered or held back by it, is asked again. */
   const reaskNotice = (agentId: string): void => part.call('notices', () => notices.reask(agentId))

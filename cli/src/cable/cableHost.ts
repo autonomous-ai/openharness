@@ -123,8 +123,9 @@ export interface CableHostWiring {
   opened?: (machineId: string, agentId: string, reason?: OpenReason) => void
   /** Who sent a notice, for an agent no list holds: `describe` asks it last, after the outside agents and the fleet. */
   noticeFrom?: (agentId: string) => { name: string; engine: string; machine: string } | undefined
-  /** A person's tap on an agent no list holds, which nothing here opens: the notice desk ends its card, as the dial has
-   *  no face of that agent to ask on. Never a question screen that came up by itself. */
+  /** A person's tap on an agent no list holds, which nothing here opens: the notice desk ends its card when its notice
+   *  found no list for it either (a router that has read none knows no machine of a listed agent), as the dial has no
+   *  face of that agent to ask on. Never a question screen that came up by itself. */
   tappedUnlisted?: (agentId: string) => void
   /** The questions only the devices ask (an agent's notice, a prompt it waits on), as drawer rows: the dial keeps a
    *  question as a row of the drawer that what is unread replaces whole. */
