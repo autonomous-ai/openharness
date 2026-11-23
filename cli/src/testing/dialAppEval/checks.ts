@@ -573,13 +573,13 @@ function itermOpenParts(check: CheckOf<'open'>, session: SessionDef, world: Worl
   // iTerm2 runs on macOS alone (FRONT_NAMES), so it comes forward by macOS's `open -b`.
   const fronting = (c: Seen['commands'][number]): boolean => fronts(c.argv, 'darwin', 'iterm', undefined)
   const front = commands.find((c) => c.ok && fronting(c))
-  const program = place === 'tmux' ? 'tmux' : 'herdr'
   // A failed select moved no pane.
   const picks = commands.filter((c) => c.ok).flatMap((c) => {
     const picked = paneSelect(c.argv, world)
     return picked ? [{ at: c.at, ...picked }] : []
   })
-  const paned = picks.find((p) => p.program === program && p.key === session.key)
+  // A tab row has no pane of its own, so no pick is its; a tmux or herdr row's is by its own multiplexer.
+  const paned = place === 'tab' ? undefined : picks.find((p) => p.program === place && p.key === session.key)
   const stray = picks.some((p) => p.key !== session.key)
   const evidence = bounded([...inputs, ...commands.map((c) => {
     const pane = paneSelect(c.argv, world)
