@@ -101,7 +101,9 @@ export function createWeztermAdapter(deps: OrcaDeps): HostAdapter & {
 /** The `focused_pane_id` of the client idle least in `wezterm cli list-clients --format json`'s [stdout], of equals the
  *  first; null when none is listed; undefined when the list is out of form anywhere: an answer not wholly WezTerm's
  *  names no pane in front. Only `focused_pane_id` and `idle_time` are read. `idle_time` counts from the client's last
- *  key or click, so the least is the one the person is at; only the GUI's one client was recorded. */
+ *  key or click, so the least is the one the person is at; only the GUI's one client was recorded. A `focused_pane_id`
+ *  of null, unrecorded, is WezTerm's own word (its ClientInfo's Option) for a client with no focused pane, as a
+ *  `wezterm connect` with no pane yet: it is passed over. */
 function focusedOfClients(stdout: string): string | null | undefined {
   let entries: unknown
   try {
@@ -114,9 +116,10 @@ function focusedOfClients(stdout: string): string | null | undefined {
   for (const entry of entries) {
     if (typeof entry !== 'object' || entry === null) return undefined
     const { focused_pane_id: id, idle_time: idle } = entry as { focused_pane_id?: unknown; idle_time?: unknown }
-    if (typeof id !== 'number' || !WEZTERM_PANE.test(String(id)) || typeof idle !== 'object' || idle === null) return undefined
+    if ((id !== null && (typeof id !== 'number' || !WEZTERM_PANE.test(String(id)))) || typeof idle !== 'object' || idle === null) return undefined
     const { secs, nanos } = idle as { secs?: unknown; nanos?: unknown }
     if (typeof secs !== 'number' || !Number.isFinite(secs) || typeof nanos !== 'number' || !Number.isFinite(nanos)) return undefined
+    if (id === null) continue
     if (focused === null || secs < focused.secs || (secs === focused.secs && nanos < focused.nanos)) {
       focused = { id: String(id), secs, nanos }
     }

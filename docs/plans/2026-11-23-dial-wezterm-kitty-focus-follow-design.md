@@ -73,8 +73,9 @@ sliver would time out on a healthy kitty and mark it refused. A read with less l
   the client with the least `idle_time` (the one the person typed or clicked in last; only one client, the GUI, was
   recorded, so this choice for several is unrecorded). It is `undefined` when the call failed or its answer is out of
   form anywhere (not JSON, not an array, more than 16 clients, a `focused_pane_id` that is not a pane id, an
-  `idle_time` that is not `{secs, nanos}` numbers). Only `focused_pane_id` and `idle_time` are read; `username`,
-  `hostname` and `pid` are not. The same `weztermCli` as the verbs: the binary found once, asked again after a failure.
+  `idle_time` that is not `{secs, nanos}` numbers). A `focused_pane_id` of null, WezTerm's word (an `Option` in its
+  `ClientInfo`, unrecorded) for a client with no focused pane, passes that client over; with none other, null. Only
+  `focused_pane_id` and `idle_time` are read; `username`, `hostname` and `pid` are not. The same `weztermCli` as the verbs: the binary found once, asked again after a failure.
 - **kitty** (`cable/hosts/kitty.ts`): `focusedWindows(panes: Pane[])` answers, per socket, which of the given agents'
   kitty panes on it is that kitty's focused window. Per socket: `get-colors --match 'id:<last> and state:focused'` for
   the pane found focused last there (the caller's order), then, unless that matched,
