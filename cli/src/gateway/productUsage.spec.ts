@@ -1089,6 +1089,8 @@ describe('the dial\'s day', () => {
     writeFileSync(dialFile, JSON.stringify({ version: 1, series, connectedBefore: true, usedBefore: true, days }))
     mtime += 10; utimesSync(dialFile, mtime, mtime)
   }
+  /** The gateway's first tick of the next day, then a minute on: the day before closes. */
+  const nextDay = async () => { now += DAY; await usage.sync(); now += 60_000; await flush() }
   /** The dial's names the reports carried, summed by `<day> <name>`. */
   const dialSent = () => {
     const result: Record<string, number> = {}
@@ -1270,6 +1272,17 @@ describe('the dial\'s day', () => {
     expect(dialSent()[`${TODAY} dial_open_ok`]).toBe(2)
   })
 
+  // Asleep over midnight: the devices' write held at sleep fires on waking, and can land after the gateway's tick.
+  it('a day closes a minute past the gateway\'s first tick of the next, so a write held over sleep counts', async () => {
+    start(); await usage.sync()
+    now = Date.parse(`${TODAY}T23:59:58Z`)
+    devices({ [TODAY]: { dial_open_ok: 1 } }); await usage.sync()
+    now = Date.parse(`${day(1)}T08:00:00Z`); await usage.sync()
+    devices({ [TODAY]: { dial_open_ok: 2 } })
+    now += 60_000; await flush()
+    expect(dialSent()[`${TODAY} dial_open_ok`]).toBe(2)
+  })
+
   it('a 400 to dial names only is dropped, no rejection counted, and the next report goes', async () => {
     // A backend from before the dial's names: one unknown name makes the whole report invalid.
     const accepted: Record<string, number>[] = []
@@ -1302,8 +1315,7 @@ describe('the dial\'s day', () => {
     for (const n of [0, 1, 7, 28]) {
       now = Date.parse(`${day(n)}T10:00:00Z`)
       days[day(n)] = used; devices(days); await flush()
-      // The next day closes it.
-      now += DAY; await flush()
+      await nextDay()
     }
     expect(expired).toEqual([])
     expect(Object.fromEntries(Object.entries(dialSent()).filter(([name]) => name.includes('_returning_')))).toEqual({
@@ -1318,7 +1330,8 @@ describe('the dial\'s day', () => {
   it('a Desktop window connected before sharing is read makes the day a Desktop day', async () => {
     start(); usage.presence(true, true); await usage.sync()
     devices({ [TODAY]: used }); await flush()
-    now += DAY; await flush()
+    await nextDay()
+    expect(dialSent()).toMatchObject({ [`${TODAY} dial_used_week_installations`]: 1 })
     expect(Object.keys(dialSent()).filter(name => name.includes('outside_app'))).toEqual([])
   })
 
@@ -1329,7 +1342,7 @@ describe('the dial\'s day', () => {
     devices({ [day(27)]: used })
     now += DAY; devices({ [day(27)]: used, [day(28)]: used }); await flush()
     // The devices' file unchanged: its last read closes the day.
-    now += DAY; await flush()
+    await nextDay()
     // Desktop opened on day 0 lies in day 27's last 28 days, not in day 28's.
     expect(Object.keys(dialSent()).filter(name => name.endsWith(' dial_used_outside_app_installation_days')))
       .toEqual([`${day(28)} dial_used_outside_app_installation_days`])
