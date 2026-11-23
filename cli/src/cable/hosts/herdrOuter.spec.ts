@@ -46,6 +46,8 @@ const TWO: Said = { lsof: sockets({ 80: SERVER, 4300: [['0xb1', '->0xa2']], 4310
 const lsofAsked = (pids: string): Call => ({ file: LSOF, args: ['-a', '-U', '-p', pids, '-F', 'pdn'], timeoutMs: 10_000 })
 const psAsked = (pids: string): Call => ({ file: PS, args: ['-o', 'pid=,tty=', '-p', pids], timeoutMs: 10_000 })
 const IN_TERMINAL = { app: 'terminal-app', tty: '/dev/ttys004', pid: 4300 }
+/** A hooked lookup's answer once herdr's server made the caller's terminal: [place] on herdr's page. */
+const herdrs = (place: object = {}) => ({ ...place, nest: 'herdr' })
 const found = ['[device] herdr client · found']
 const none = ['[device] herdr client · none']
 /** The lookup's line when a step could not be read, naming that step. */
@@ -138,7 +140,7 @@ describe('the outer place of an agent in the person\'s herdr', () => {
 
   it('one client in a Terminal tab: its app, tty and process, as tmux\'s', async () => {
     const { calls, logs, reads, stats, outer } = lookup({}, [], ONE)
-    expect(await outer(PANE, 100)).toEqual(IN_TERMINAL)
+    expect(await outer(PANE, 100)).toEqual(herdrs(IN_TERMINAL))
     expect(calls).toEqual([lsofAsked('80,4300'), psAsked('4300')])
     expect(reads()).toBe(1)
     // One client left: no tty's access time is asked.
@@ -148,7 +150,7 @@ describe('the outer place of an agent in the person\'s herdr', () => {
 
   it('a pane id with herdr\'s letters, w2:pE, is looked up', async () => {
     const { calls, logs, outer } = lookup({}, [], ONE)
-    expect(await outer({ HERDR_PANE_ID: 'w2:pE' }, 100)).toEqual(IN_TERMINAL)
+    expect(await outer({ HERDR_PANE_ID: 'w2:pE' }, 100)).toEqual(herdrs(IN_TERMINAL))
     expect(calls).toEqual([lsofAsked('80,4300'), psAsked('4300')])
     expect(logs).toEqual(found)
   })
@@ -179,11 +181,47 @@ describe('the outer place of an agent in the person\'s herdr', () => {
   // One table read, then the caller's terminal and its parents' up to the server, which runs on none.
   it('the server is the herdr that made the caller\'s terminal', async () => {
     const { calls, logs, reads, ttys, outer } = lookup({}, [], ONE)
-    expect(await outer(PANE, 100)).toEqual(IN_TERMINAL)
+    expect(await outer(PANE, 100)).toEqual(herdrs(IN_TERMINAL))
     expect(ttys).toEqual([100, 90, 80])
     expect(calls).toEqual([lsofAsked('80,4300'), psAsked('4300')])
     expect(reads()).toBe(1)
     expect(logs).toEqual(found)
+  })
+
+  // The pane is herdr's from the maker's read on, whatever the clients' steps read: the agent is on herdr's page even
+  // with no app known (Diego, 2026-11-23).
+  it('the answer says herdr once its server made the caller\'s terminal: a client in an app, a client in no app, no client, a client inside the person\'s tmux, and the sockets or ttys not read', async () => {
+    const inTmux = [
+      ...TABLE.filter((p) => p.pid !== 4300),
+      { pid: 4400, ppid: 4399, tty: 'ttys009', executable: HERDR }, { pid: 4399, ppid: 4398, tty: 'ttys009', executable: '-zsh' },
+      { pid: 4398, ppid: 1, executable: 'tmux' },
+    ]
+    const cases: Array<[string, ReturnType<typeof lookup>, Record<string, unknown>, string[]]> = [
+      ['a client in an app', lookup({}, [], ONE), { ...IN_TERMINAL, nest: 'herdr' }, found],
+      ['a client in no app', lookup({ bundleId: async () => 'com.example.other' }, [], ONE), { pid: 4300, nest: 'herdr' }, none],
+      ['no client', lookup({ processes: async () => TABLE.filter((p) => p.pid !== 4300) }, [], { ps: '80 ??\n' }), { nest: 'herdr' }, none],
+      ['a client inside the person\'s tmux', lookup({ processes: async () => inTmux }, [], {
+        lsof: sockets({ 80: SERVER, 4400: [['0xb4', '->0xa1']] }), ps: '4400 ttys009\n',
+      }), { nest: 'herdr' }, none],
+      ['the sockets not read', lookup({}, [null], ONE), { nest: 'herdr' }, notRead('sockets')],
+      ['the ttys not read', lookup({}, [0, null], ONE), { nest: 'herdr' }, notRead('ttys')],
+    ]
+    for (const [name, { logs, outer }, answer, said] of cases) {
+      expect(await outer(PANE, 100), name).toStrictEqual(answer)
+      expect(logs, name).toEqual(said)
+    }
+  })
+
+  it('a terminal started from a herdr pane, whose maker is not herdr, and a table not read answer {} with no nest', async () => {
+    const fromPane = async () => [
+      ...TABLE, { pid: 300, ppid: 90, tty: 'ttys010', executable: '/Applications/WezTerm.app/Contents/MacOS/wezterm-gui' },
+      { pid: 301, ppid: 300, tty: 'ttys020', executable: '-zsh' }, { pid: 302, ppid: 301, tty: 'ttys020', executable: 'claude' },
+    ]
+    const cases: Array<[string, ReturnType<typeof lookup>, number]> = [
+      ['a terminal started from a herdr pane', lookup({ processes: fromPane }, [], ONE), 302],
+      ['a table not read', lookup({ processes: async () => { throw new Error('process table not read') } }, [], ONE), 100],
+    ]
+    for (const [name, { outer }, pid] of cases) expect(await outer(PANE, pid), name).toStrictEqual({})
   })
 
   // On Linux every program started from a pane is its child: the herdr server is among a WezTerm's parents, and the
@@ -223,7 +261,7 @@ describe('the outer place of an agent in the person\'s herdr', () => {
   it('a detached server with no client: {}', async () => {
     const table = TABLE.filter((p) => p.pid !== 4300)
     const { calls, logs, outer } = lookup({ processes: async () => table }, [], { ps: '80 ??\n' })
-    expect(await outer(PANE, 100)).toEqual({})
+    expect(await outer(PANE, 100)).toEqual(herdrs())
     expect(calls).toEqual([psAsked('80')])
     expect(logs).toEqual(none)
   })
@@ -232,7 +270,7 @@ describe('the outer place of an agent in the person\'s herdr', () => {
     const table = [...TABLE, { pid: 4500, ppid: 4000, executable: HERDR }]
     const lsof = sockets({ 80: SERVER, 4300: [], 4500: [['0xc1', '->0xa3']] })
     const { calls, logs, outer } = lookup({ processes: async () => table }, [], { lsof, ps: '80 ??\n' })
-    expect(await outer(PANE, 100)).toEqual({})
+    expect(await outer(PANE, 100)).toEqual(herdrs())
     expect(calls).toEqual([lsofAsked('80,4300,4500'), psAsked('80')])
     expect(logs).toEqual(none)
   })
@@ -244,7 +282,7 @@ describe('the outer place of an agent in the person\'s herdr', () => {
     ]
     for (const [name, lsof] of cases) {
       const { calls, logs, outer } = lookup({}, [], { lsof, ps: '80 ??\n' })
-      expect(await outer(PANE, 100), name).toEqual({})
+      expect(await outer(PANE, 100), name).toEqual(herdrs())
       expect(calls, name).toEqual([lsofAsked('80,4300'), psAsked('80')])
       expect(logs, name).toEqual(none)
     }
@@ -259,7 +297,7 @@ describe('the outer place of an agent in the person\'s herdr', () => {
     ]
     for (const [atime, tty, pid] of cases) {
       const { calls, logs, stats, outer } = lookup({ processes }, [], { ...TWO, atime })
-      expect(await outer(PANE, 100), tty).toStrictEqual({ app: 'terminal-app', tty, pid })
+      expect(await outer(PANE, 100), tty).toStrictEqual(herdrs({ app: 'terminal-app', tty, pid }))
       expect(calls, tty).toEqual([lsofAsked('80,4300,4310'), psAsked('4300,4310')])
       expect(stats, tty).toEqual(['/dev/ttys004', '/dev/ttys007'])
       expect(logs, tty).toEqual(found)
@@ -278,7 +316,7 @@ describe('the outer place of an agent in the person\'s herdr', () => {
     ]
     for (const [name, said, answer, asked] of cases) {
       const { stats, outer } = lookup({ processes }, [], said)
-      expect(await outer(PANE, 100), name).toStrictEqual(answer)
+      expect(await outer(PANE, 100), name).toStrictEqual(herdrs(answer))
       expect(stats, name).toEqual(asked)
     }
   })
@@ -291,7 +329,7 @@ describe('the outer place of an agent in the person\'s herdr', () => {
     const lsof = sockets({ 80: SERVER, 4300: [['0xb1', '->0xa2']], 4400: [['0xb4', '->0xa1']] })
     const atime = { '/dev/ttys004': 1000, '/dev/ttys009': 9000 }
     const { calls, logs, outer } = lookup({ processes }, [], { lsof, ps: '4300 ttys004\n4400 ttys009\n', atime })
-    expect(await outer(PANE, 100)).toEqual(IN_TERMINAL)
+    expect(await outer(PANE, 100)).toEqual(herdrs(IN_TERMINAL))
     expect(calls).toEqual([lsofAsked('80,4300,4400'), psAsked('4300,4400')])
     expect(logs).toEqual(found)
   })
@@ -312,7 +350,7 @@ describe('the outer place of an agent in the person\'s herdr', () => {
       const { calls, logs, ttys, outer } = lookup({ processes, bundleId: async () => 'com.example.other' }, [], {
         lsof, ps: '4310 ttys007\n4400 ttys009\n', atime,
       })
-      expect(await outer({ ...PANE, TMUX_PANE: '%3' }, 100), maker).toStrictEqual({})
+      expect(await outer({ ...PANE, TMUX_PANE: '%3' }, 100), maker).toStrictEqual(herdrs())
       // Another herdr's server is a herdr process too, and no client of this one's.
       expect(calls, maker).toEqual([lsofAsked(maker === HERDR ? '80,4310,4398,4400' : '80,4310,4400'), psAsked('4310,4400')])
       expect(ttys, maker).toEqual([100, 90, 80, 4400, 4399, 4398])
@@ -331,18 +369,18 @@ describe('the outer place of an agent in the person\'s herdr', () => {
     // The client typed into last is the one answered.
     const atime = { '/dev/ttys004': 1000, '/dev/ttys007': 2000 }
     const { logs, outer } = lookup({ processes }, [], { ...TWO, atime })
-    expect(await outer(PANE, 100)).toStrictEqual({ pid: 4310 })
+    expect(await outer(PANE, 100)).toStrictEqual(herdrs({ pid: 4310 }))
     expect(logs).toEqual(none)
     // Linux: the recorded clients, each in a terminal the dial lists no page for.
     const linux = onLinux(scene(), { ps: recordedTtys(P.clientA, P.clientB), atime: { '/dev/pts/0': 2000, '/dev/pts/2': 1000 } })
-    expect(await linux.outer(LINUX_PANE, P.agent)).toStrictEqual({ pid: P.clientA })
+    expect(await linux.outer(LINUX_PANE, P.agent)).toStrictEqual(herdrs({ pid: P.clientA }))
     expect(linux.logs).toEqual(none)
   })
 
   it('a client gone before ps is dropped', async () => {
     const processes = async () => [...TABLE, ...SECOND]
     const { calls, logs, stats, outer } = lookup({ processes }, [0, 1], { ...TWO, ps: '4300 ttys004\n' })
-    expect(await outer(PANE, 100)).toEqual(IN_TERMINAL)
+    expect(await outer(PANE, 100)).toEqual(herdrs(IN_TERMINAL))
     expect(calls).toEqual([lsofAsked('80,4300,4310'), psAsked('4300,4310')])
     expect(stats).toEqual([])
     expect(logs).toEqual(found)
@@ -351,7 +389,7 @@ describe('the outer place of an agent in the person\'s herdr', () => {
   it('a tty out of form: the app and the client\'s process', async () => {
     for (const tty of ['console', '??', 'pts/3', 'ttys004/../x', 'ttys12345']) {
       const { logs, stats, outer } = lookup({}, [], { ...ONE, ps: `4300 ${tty}\n` })
-      expect(await outer(PANE, 100), tty).toStrictEqual({ app: 'terminal-app', pid: 4300 })
+      expect(await outer(PANE, 100), tty).toStrictEqual(herdrs({ app: 'terminal-app', pid: 4300 }))
       expect(stats, tty).toEqual([])
       expect(logs, tty).toEqual(found)
     }
@@ -360,13 +398,13 @@ describe('the outer place of an agent in the person\'s herdr', () => {
   it('ps rows out of form are passed over', async () => {
     const ps = ['4300\n', 'x ttys004\n', '0 ttys004\n', '43000000000 ttys004\n', '4300 ttys004 x\n'].join('')
     const { logs, outer } = lookup({}, [], { ...ONE, ps })
-    expect(await outer(PANE, 100)).toEqual({})
+    expect(await outer(PANE, 100)).toEqual(herdrs())
     expect(logs).toEqual(none)
   })
 
   it('a client whose parents name no listed app: the client\'s process alone', async () => {
     const { logs, outer } = lookup({ bundleId: async () => 'com.example.other' }, [], ONE)
-    expect(await outer(PANE, 100)).toStrictEqual({ pid: 4300 })
+    expect(await outer(PANE, 100)).toStrictEqual(herdrs({ pid: 4300 }))
     expect(logs).toEqual(none)
   })
 
@@ -376,7 +414,7 @@ describe('the outer place of an agent in the person\'s herdr', () => {
       { pid: 4290, ppid: 1, executable: '/opt/herdr-core/libexec/herdr-core-holder' },
     ]
     const { logs, outer } = lookup({ processes }, [], ONE)
-    expect(await outer(PANE, 100)).toStrictEqual({ pid: 4300 })
+    expect(await outer(PANE, 100)).toStrictEqual(herdrs({ pid: 4300 }))
     expect(logs).toEqual(none)
   })
 
@@ -389,7 +427,7 @@ describe('the outer place of an agent in the person\'s herdr', () => {
       { pid: 4298, ppid: 1, executable: TERMINAL },
     ]
     const { calls, logs, ttys, outer } = lookup({ processes }, [], { ps: '80 ttys005\n' })
-    expect(await outer(PANE, 100)).toStrictEqual({ app: 'terminal-app', tty: '/dev/ttys005', pid: 80 })
+    expect(await outer(PANE, 100)).toStrictEqual(herdrs({ app: 'terminal-app', tty: '/dev/ttys005', pid: 80 }))
     expect(ttys).toEqual([100, 90, 80])
     expect(calls).toEqual([psAsked('80')])
     expect(logs).toEqual(found)
@@ -398,7 +436,7 @@ describe('the outer place of an agent in the person\'s herdr', () => {
   // Each exits 1 when a pid in its list has gone, with the rest of its output intact (macOS, 2026-11-19).
   it('lsof and ps that exit 1 with their output are read', async () => {
     const { logs, outer } = lookup({}, [1, 1], ONE)
-    expect(await outer(PANE, 100)).toEqual(IN_TERMINAL)
+    expect(await outer(PANE, 100)).toEqual(herdrs(IN_TERMINAL))
     expect(logs).toEqual(found)
   })
 
@@ -419,7 +457,7 @@ describe('the outer place of an agent in the person\'s herdr', () => {
       }, [], ONE), [lsofAsked('80,4300'), psAsked('4300')], notRead('ttys')],
     ]
     for (const [name, { calls, logs, outer }, ran, said] of cases) {
-      expect(await outer(PANE, 100), name).toEqual({})
+      expect(await outer(PANE, 100), name).toEqual(name === 'the table is not read' ? {} : herdrs())
       expect(calls, name).toEqual(ran)
       expect(logs, name).toEqual(said)
     }
@@ -459,41 +497,41 @@ describe('the outer place of an agent in the person\'s herdr', () => {
     const other = outer({ HERDR_PANE_ID: 'w1:p3' }, 100)
     await vi.waitFor(() => expect(lsofs()).toEqual([asked, asked]))
     held[1]()
-    expect(await other).toEqual(IN_TERMINAL)
+    expect(await other).toEqual(herdrs(IN_TERMINAL))
     held[0]()
-    expect([await first, await again]).toEqual([IN_TERMINAL, IN_TERMINAL])
+    expect([await first, await again]).toEqual([herdrs(IN_TERMINAL), herdrs(IN_TERMINAL)])
     expect(lsofs()).toEqual([asked, asked])
     // The answer holds for that caller alone.
     clock.t = at + 3
     const caller = outer(PANE, 90)
     await vi.waitFor(() => expect(lsofs().length).toBe(3))
     held[2]()
-    expect(await caller).toEqual(IN_TERMINAL)
+    expect(await caller).toEqual(herdrs(IN_TERMINAL))
     // Asked again within 5 s of its settle: the last answer, with nothing run.
     const count = calls.length
     clock.t = at + 5_000
     const kept = outer(PANE, 100)
     await ranBy()
     expect(calls.length).toBe(count)
-    expect(await kept).toEqual(IN_TERMINAL)
+    expect(await kept).toEqual(herdrs(IN_TERMINAL))
     // At 5 s from its settle it runs again, while the caller's answer, settled later, still holds.
     clock.t = at + 5_001
     const later = outer(PANE, 100)
-    expect(await outer(PANE, 90)).toEqual(IN_TERMINAL)
+    expect(await outer(PANE, 90)).toEqual(herdrs(IN_TERMINAL))
     await vi.waitFor(() => expect(calls.slice(count)).toEqual([asked]))
     // Still in flight past its 5 s: one lookup, shared.
     clock.t = at + 10_002
     const stuck = outer(PANE, 100)
     expect(calls.slice(count)).toEqual([asked])
     held[3]()
-    expect([await later, await stuck]).toEqual([IN_TERMINAL, IN_TERMINAL])
+    expect([await later, await stuck]).toEqual([herdrs(IN_TERMINAL), herdrs(IN_TERMINAL)])
     // A lookup that ran 5 s holds 5 s from its settle, not its start: an lsof that hangs costs one timeout.
     const settled = calls.length
     clock.t = at + 15_001
     const after = outer(PANE, 100)
     await ranBy()
     expect(calls.length).toBe(settled)
-    expect(await after).toEqual(IN_TERMINAL)
+    expect(await after).toEqual(herdrs(IN_TERMINAL))
   })
 
   it('its lines name no pane, pid, tty, path, bundle or app', async () => {
@@ -515,7 +553,7 @@ describe('herdr\'s clients on Linux', () => {
   it('Linux: one client in a WezTerm window: wezterm, its /dev/pts tty and its process', async () => {
     const table = scene({ [P.terminalA]: 'wezterm-gui' }, [P.clientB])
     const { calls, held, logs, reads, stats, ttys, outer } = onLinux(table, { ps: recordedTtys(P.clientA) })
-    expect(await outer(LINUX_PANE, P.agent)).toStrictEqual({ app: 'wezterm', tty: '/dev/pts/0', pid: P.clientA })
+    expect(await outer(LINUX_PANE, P.agent)).toStrictEqual(herdrs({ app: 'wezterm', tty: '/dev/pts/0', pid: P.clientA }))
     expect(ttys).toEqual([P.agent, P.agentShell, P.serverA])
     expect(calls).toEqual([ssAsked, psAsked(String(P.clientA))])
     // The descriptors read are those of herdr's own processes alone: the server and every other herdr.
@@ -528,7 +566,7 @@ describe('herdr\'s clients on Linux', () => {
     // The default server and `herdr agent wait`, which is connected to herdr.sock alone.
     const table = scene({}, [P.clientA, P.clientB, P.terminalOther, P.otherClient, P.otherServer, P.otherShell])
     const { calls, logs, outer } = onLinux(table, { ps: recordedTtys(P.serverA) })
-    expect(await outer(LINUX_PANE, P.agent)).toEqual({})
+    expect(await outer(LINUX_PANE, P.agent)).toEqual(herdrs())
     expect(calls).toEqual([ssAsked, psAsked(String(P.serverA))])
     expect(logs).toEqual(none)
   })
@@ -545,7 +583,7 @@ describe('herdr\'s clients on Linux', () => {
     for (const [atime, place] of cases) {
       const name = JSON.stringify(atime)
       const { calls, logs, stats, outer } = onLinux(table, { ps: recordedTtys(P.clientA, P.clientB), atime })
-      expect(await outer(LINUX_PANE, P.agent), name).toStrictEqual(place)
+      expect(await outer(LINUX_PANE, P.agent), name).toStrictEqual(herdrs(place))
       expect(calls, name).toEqual([ssAsked, psAsked(`${P.clientA},${P.clientB}`)])
       expect(stats, name).toEqual(['/dev/pts/0', '/dev/pts/2'])
       expect(logs, name).toEqual(found)
@@ -559,11 +597,11 @@ describe('herdr\'s clients on Linux', () => {
     // The named session's client is the one typed into last.
     const atime = { '/dev/pts/0': 1000, '/dev/pts/2': 2000, '/dev/pts/4': 9000 }
     const inDefault = onLinux(table, { ps: recordedTtys(P.clientA, P.clientB), atime })
-    expect(await inDefault.outer(LINUX_PANE, P.agent)).toStrictEqual({ app: 'wezterm', tty: '/dev/pts/2', pid: P.clientB })
+    expect(await inDefault.outer(LINUX_PANE, P.agent)).toStrictEqual(herdrs({ app: 'wezterm', tty: '/dev/pts/2', pid: P.clientB }))
     expect(inDefault.calls).toEqual([ssAsked, psAsked(`${P.clientA},${P.clientB}`)])
     // An agent in the named session's pane: that server's one client.
     const inOther = onLinux(table, { ps: recordedTtys(P.otherClient), atime })
-    expect(await inOther.outer({ HERDR_PANE_ID: 'w1:p1' }, P.otherShell)).toStrictEqual({ app: 'wezterm', tty: '/dev/pts/4', pid: P.otherClient })
+    expect(await inOther.outer({ HERDR_PANE_ID: 'w1:p1' }, P.otherShell)).toStrictEqual(herdrs({ app: 'wezterm', tty: '/dev/pts/4', pid: P.otherClient }))
     expect(inOther.calls).toEqual([ssAsked, psAsked(String(P.otherClient))])
     // A client-socket row the other way round, the named session's client's socket bound there and the default server's
     // its peer, makes no client of the default server either.
@@ -573,7 +611,7 @@ describe('herdr\'s clients on Linux', () => {
       [P.otherClient]: [...RECORDED_SOCKETS[P.otherClient], '60001'],
     }
     const otherWay = onLinux(table, { ps: recordedTtys(P.clientA, P.clientB), atime, ss, sockets })
-    expect(await otherWay.outer(LINUX_PANE, P.agent)).toStrictEqual({ app: 'wezterm', tty: '/dev/pts/2', pid: P.clientB })
+    expect(await otherWay.outer(LINUX_PANE, P.agent)).toStrictEqual(herdrs({ app: 'wezterm', tty: '/dev/pts/2', pid: P.clientB }))
     expect(otherWay.calls).toEqual([ssAsked, psAsked(`${P.clientA},${P.clientB}`)])
   })
 
@@ -587,7 +625,7 @@ describe('herdr\'s clients on Linux', () => {
       ['the server\'s descriptors', onLinux(table, { sockets: { ...RECORDED_SOCKETS, [P.serverA]: undefined } }), [ssAsked]],
     ]
     for (const [name, { calls, logs, outer }, ran] of cases) {
-      expect(await outer(LINUX_PANE, P.agent), name).toEqual({})
+      expect(await outer(LINUX_PANE, P.agent), name).toEqual(herdrs())
       expect(calls, name).toEqual(ran)
       expect(logs, name).toEqual(notRead('sockets'))
     }
@@ -601,14 +639,14 @@ describe('herdr\'s clients on Linux', () => {
     const at = (ps: string | null) => ({ onPath: (name: string) => (name === 'ss' ? SS : name === 'ps' ? ps : null) })
     const table = scene({ [P.terminalA]: 'wezterm-gui' }, [P.clientB])
     const onNixos = onLinux(table, { ps: recordedTtys(P.clientA) }, at(nixos))
-    expect(await onNixos.outer(LINUX_PANE, P.agent)).toStrictEqual({ app: 'wezterm', tty: '/dev/pts/0', pid: P.clientA })
+    expect(await onNixos.outer(LINUX_PANE, P.agent)).toStrictEqual(herdrs({ app: 'wezterm', tty: '/dev/pts/0', pid: P.clientA }))
     expect(onNixos.calls).toEqual([ssAsked, { ...psAsked(String(P.clientA)), file: nixos }])
     const noPs = onLinux(table, { ps: recordedTtys(P.clientA) }, at(null))
-    expect(await noPs.outer(LINUX_PANE, P.agent)).toEqual({})
+    expect(await noPs.outer(LINUX_PANE, P.agent)).toEqual(herdrs())
     expect(noPs.calls).toEqual([ssAsked])
     expect(noPs.logs).toEqual(notRead('ttys'))
     const onMac = lookup(at(nixos), [], ONE)
-    expect(await onMac.outer(PANE, 100)).toStrictEqual(IN_TERMINAL)
+    expect(await onMac.outer(PANE, 100)).toStrictEqual(herdrs(IN_TERMINAL))
     expect(onMac.calls).toEqual([lsofAsked('80,4300'), psAsked('4300')])
   })
 
@@ -616,7 +654,7 @@ describe('herdr\'s clients on Linux', () => {
     const table = scene({ [P.terminalA]: 'wezterm-gui', [P.terminalB]: 'kitty' })
     const sockets = { ...RECORDED_SOCKETS, [P.clientA]: undefined }
     const { calls, logs, stats, outer } = onLinux(table, { ps: recordedTtys(P.clientB), sockets, atime: { '/dev/pts/0': 9000 } })
-    expect(await outer(LINUX_PANE, P.agent)).toStrictEqual({ app: 'kitty', tty: '/dev/pts/2', pid: P.clientB })
+    expect(await outer(LINUX_PANE, P.agent)).toStrictEqual(herdrs({ app: 'kitty', tty: '/dev/pts/2', pid: P.clientB }))
     expect(calls).toEqual([ssAsked, psAsked(String(P.clientB))])
     expect(stats).toEqual([])
     expect(logs).toEqual(found)
@@ -640,7 +678,7 @@ describe('herdr\'s clients on Linux', () => {
       `u_str ESTAB 0      0      /home/u w/.config/herdr/herdr-client.sock 48696            * 48695       `,
     ]
     const { calls, logs, outer } = onLinux(table, { ss: `${rows.join('\n')}\n`, ps: recordedTtys(P.clientB) })
-    expect(await outer(LINUX_PANE, P.agent)).toStrictEqual({ app: 'kitty', tty: '/dev/pts/2', pid: P.clientB })
+    expect(await outer(LINUX_PANE, P.agent)).toStrictEqual(herdrs({ app: 'kitty', tty: '/dev/pts/2', pid: P.clientB }))
     expect(calls).toEqual([ssAsked, psAsked(String(P.clientB))])
     expect(logs).toEqual(found)
   })
@@ -674,7 +712,8 @@ describe('the place of an agent the scan found in the person\'s herdr', () => {
     ]
     for (const [name, over] of cases) {
       const hooked = lookup(over, [], ONE)
-      const answer = await hooked.outer(PANE, 100)
+      const { nest, ...answer } = (await hooked.outer(PANE, 100))!
+      expect(nest, name).toBe('herdr')
       const { calls, logs, reads, ttys, nested } = lookup(over, [], ONE)
       expect(await nested({ pid: 100, maker: 80, rows: TABLE }), name).toStrictEqual(answer)
       expect(calls, name).toEqual(hooked.calls)
