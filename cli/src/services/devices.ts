@@ -398,13 +398,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // waiting for a Harness agent find it (`lookHarness`): a dial can attach before the first read. Inside the core's
   // process the agents are read directly, with no refresh, and the look runs all the same: on Windows the devices there
   // have their listener (services/inline.ts), so a notice is made and restored there too.
-  // The same read starts the dial's first-agent clock once a Harness agent runs. Only a coming is said here: whether any
-  // agent runs is read whole at each attach and each change outside a pane.
+  // The same read starts the dial's first-agent clock once a Harness agent runs on this computer, as just read: the cable
+  // host's total is the account's, every machine's, from the list before. Only a coming is said here: the agents outside a
+  // pane are read at each attach and each change of theirs.
   // And it says again that a dial is connected today: a dial's hello can come before the core's first view says signed
   // in, which leaves its attach uncounted. A flag set once a day, so a read every second changes nothing.
   const refresh = (): Promise<void> => (deps.refresh?.() ?? Promise.resolve()).then(() => {
     lookHarness()
-    if (cableHost.agentTotal() > 0) count((usage) => usage.agentsPresent(true))
+    if (core.agents.advertised().length > 0) count((usage) => usage.agentsPresent(true))
     if (dialOn) part.call('dialUsage', () => usageFile.add('dial_connected_installation_days'))
   })
   const fleet: Fleet | null = part.start('fleet', () => startFleet(core, { machines, desk: () => desk, refresh }).fleet, FLEET_FALLBACKS)
@@ -493,9 +494,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const questionWait = (agentId: string, requestId: string): string => `question:${agentId}:${requestId}`
   /** A row with a process behind it: an ended session or a row of an app's store runs nothing. */
   const running = (agent: HostAgent): boolean => !agent.ended && !agent.resting
-  /** Whether an agent runs for the dial to show: the first-agent clock starts at the attach or once one does. */
-  const agentsRunning = (entries: HostEntry[] = outsideEntries()): boolean =>
-    cableHost.agentTotal() > 0 || entries.some(({ agent }) => running(agent))
+  /** Whether an agent outside a pane runs for the dial to show, read from the registry now: the first-agent clock starts
+   *  at the attach or once one does. A Harness agent's coming is the refresh's to say. */
+  const outsideRunning = (entries: HostEntry[] = outsideEntries()): boolean => entries.some(({ agent }) => running(agent))
   const inbox =new Inbox({ now: monotonic, after: timerIn('inbox') })
   const apps = deps.orca ?? orcaDeps()
   /** Where herdr's socket is, from the daemon's own environment: the client reads it, and the herdr source watches for it. */
@@ -1238,9 +1239,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (on && orcaSetup) part.call('orcaPlugin', () => orcaSetup.pass())
       dialAttached(on)
       part.call('dialStream', () => dial.attached(on))
-      // Whether an agent runs first: an attach with one starts the first-agent clock at once.
+      // Whether an agent outside a pane runs first: an attach with one starts the first-agent clock at once, and a Harness
+      // agent starts it at the list's read that follows (refresh).
       count((usage) => {
-        usage.agentsPresent(agentsRunning())
+        usage.agentsPresent(outsideRunning())
         usage.attached(on)
       })
     },
@@ -1808,7 +1810,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       else if (ended && agent.state === 'error') tellOf(agent.id, { ...card, kind: 'error' })
     }
     if (fresh.size) part.call('dial', () => check(fresh))
-    count((usage) => usage.agentsPresent(agentsRunning(entries)))
+    count((usage) => usage.agentsPresent(outsideRunning(entries)))
   }
   observed?.onChange(() => part.call('dial', outsideTurn))
   herdr?.onChange(() => part.call('dial', outsideTurn))
