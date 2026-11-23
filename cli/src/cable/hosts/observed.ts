@@ -245,8 +245,8 @@ interface Entry {
   /** The app and tab it is seen in, from that answer, while its caller and hints are those it was asked for; for a
    *  session the scan found nested, from the scan's lookup (placeNested) until its first hook's own answer lands. */
   outer?: Outer
-  /** Its outer place is the scan's (placeNested), and no hook has come since: the first hook keeps it while that hook's
-   *  own ask runs (askOuter). */
+  /** Its outer place is the scan's (placeNested), or its multiplexer is (HostAgent.nest from the scan's maker read), and
+   *  no hook has come since: the first hook keeps them while that hook's own ask runs (askOuter). */
   scanPlaced?: true
   /** The multiplexer's pane the scan's lookup placed a session found nested at, until its first hook: a rest and a tap
    *  show it (placeIn), and it is never one of its panes, so no words reach it before a hook names the pane. */
@@ -775,12 +775,14 @@ export class ObservedSource implements HostSource {
    * Terminal tab ran sat on a "herdr" page the same way (2026-11-19). Asked at its session's start and
    * at each turn's, as the person may have attached from another app since, and at an event whose caller or hints the
    * last ask was not for. Another caller or pane drops the place at once; a new ask keeps it until its answer, so the
-   * agent does not leave its page meanwhile. The scan's place counts as such an ask at the first hook, when that hook is
-   * nested too and comes from the process the scan found: Diego's idle agent placed on iTerm2's page by the scan
-   * (2026-11-22) must not drop to tmux's page while its first hook's own lookup runs, while a resume in another pane
-   * holds another client. Only the latest ask's answer lands, while the session lives. Its multiplexer (HostAgent.nest)
-   * goes where the place goes and stays where it stays, and the answer gives the answer's, its host with it: an agent is
-   * on tmux's or herdr's page only while that lookup confirms its own terminal is the pane (Diego, 2026-11-23).
+   * agent does not leave its page meanwhile. The scan's place, or the multiplexer its maker read gave with no place,
+   * counts as such an ask at the first hook, when that hook is nested too and comes from the process the scan found:
+   * Diego's idle agent placed on iTerm2's page by the scan (2026-11-22) must not drop to tmux's page while its first
+   * hook's own lookup runs, while a resume in another pane holds another client; nor one the scan put on tmux's page
+   * drop to the page of the app its pane's bundle id names. Only the latest ask's answer lands, while the session
+   * lives. Its multiplexer (HostAgent.nest) goes where the place goes and stays where it stays, and the answer gives the
+   * answer's, its host with it: an agent is on tmux's or herdr's page only while that lookup confirms its own terminal
+   * is the pane (Diego, 2026-11-23).
    * Whether it is nested: its caller's tty is then the multiplexer's pane's, which no tab holds, so it is never read and
    * an old one goes.
    */
@@ -1249,10 +1251,12 @@ export class ObservedSource implements HostSource {
       // nested caller's. Paired, it is in an hc terminal, whose pane is its own.
       if (nest && !entry.paired) {
         // The maker's read confirmed its own terminal is that multiplexer's pane: on its page from here, whatever the
-        // lookup answers, as its first hook's lookup would put it (Diego, 2026-11-23). Zellij keeps its app's.
+        // lookup answers, as its first hook's lookup would put it (Diego, 2026-11-23), and kept there by a nested first
+        // hook from this process while that hook's own lookup runs (askOuter). Zellij keeps its app's.
         if (nest.host === 'tmux' || nest.host === 'herdr') {
           entry.agent.nest = nest.host
           entry.agent.host = nest.host
+          entry.scanPlaced = true
         }
         this.locate(entry)
         asks.push([entry, nest])
