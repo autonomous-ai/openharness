@@ -200,8 +200,10 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
       today()
       if (agentId === null) return
       if (measure) endMeasure(bucket(now() - (measure.start ?? now()), FIRST_AGENT_EDGES, DIAL_FIRST_AGENT_BUCKETS))
+      // Asked before the agent is described: every move of the dial comes here.
+      if (shownToday.has(agentId)) return
       const agent = deps.describe(agentId)
-      if (!agent || shownToday.has(agentId)) return
+      if (!agent) return
       const engine = dialEngine(agent.engine)
       const host = dialHost(agent.host)
       add(`dial_engine_${engine}_installation_days`)
