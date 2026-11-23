@@ -11107,6 +11107,20 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
       expect(logs).toEqual(expect.arrayContaining(['[codex-app] wake · stopped', '[device] voice · codex-wake-stopped']))
     })
 
+    // The wake is both apps': a throw in its 30 s timer, a ChatGPT wake's here, would send a reader to the Claude app.
+    it('a throw in the wake\'s 30 s timer is said as the wake\'s part, never as the Claude app\'s', async () => {
+      const { fake, live } = withThreads({ faults: ['fleet', 'app-wake'] })
+      await live()
+      fake.holdLinks = true
+      const sent = host().sendTurn(ID, 'run the tests')
+      await flush()
+      await wait(30_000)
+      expect(logs).toContain('[devices] app-wake failed · Error')
+      expect(logs.filter((line) => line.startsWith('[devices] claude-app'))).toEqual([])
+      fake.linked.shift()!()
+      expect(await sent).toEqual({ ok: true })
+    })
+
     // Review Focus 2.
     it('a hook lists the thread while its first words are being queued: the next words wait their turn', async () => {
       let release = (): void => {}
