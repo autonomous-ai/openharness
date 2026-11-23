@@ -348,6 +348,25 @@ describe("the devices' dial-usage.json", () => {
     expect(readdirSync(dirname(file))).toEqual([DIAL_USAGE_FILE])
   })
 
+  // One read that failed (EMFILE, a scanner's EBUSY) must not mute the whole run.
+  it('a file unreadable at the start is read again at the next write, what this run counted added to it', () => {
+    const file = aFile()
+    mkdirSync(file)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { usage, logs } = open(file)
+    // Its marks are not known until it is read: no first is spent on a guess.
+    expect(usage.firstEver('used')).toBe(false)
+    usage.add('dial_open_ok')
+    usage.add('dial_used_installation_days')
+    rmSync(file, { recursive: true })
+    const before = { ...GOOD, usedBefore: false, days: { [TODAY]: { dial_open_ok: 2, dial_used_installation_days: 1 } } }
+    writeFileSync(file, JSON.stringify(before))
+    flush()
+    expect(saved(file)).toEqual({ ...before, days: { [TODAY]: { dial_open_ok: 3, dial_used_installation_days: 1 } } })
+    expect(usage.firstEver('used')).toBe(true)
+    expect(logs).toEqual([])
+  })
+
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('never writes over a file this account cannot read', () => {
     const file = aFile()
     writeFileSync(file, JSON.stringify(GOOD), { mode: 0o600 })
