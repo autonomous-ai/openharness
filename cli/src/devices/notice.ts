@@ -1,13 +1,15 @@
 /**
- * `harness device notify "<one line>"`: an agent's one line for the person, posted to the devices' own listener, which
+ * `harness device notify "<question>"`: an agent's one line for the person, posted to the devices' own listener, which
  * rings the dial with it (docs/plans/2026-11-16-dial-agent-notify-design.md). An agent runs it, often with a command's
- * output pasted in: any text is one line and exit 0, never an error, so the agent's turn goes on.
+ * output pasted in: any text is one line and exit 0, never an error, so the agent's turn goes on. The question, its
+ * `--suggest` and `--waiting|--proceeding` make that one line, `Waiting · <q> · Suggest: <s>`,
+ * `Proceeding · <q> · Doing: <s>` or `<q> · Suggest: <s>` (docs/plans/2026-11-22-needs-you-notify-design.md).
  */
 import { basename } from 'node:path'
-import { isNoticeResult, NOTICE_SESSION, noticeFolder, noticeLine, type NoticeAsk } from '../lib/dialNotice.js'
+import { composeNotice, isNoticeResult, NOTICE_SESSION, noticeFolder, parseNotice, type NoticeAsk } from '../lib/dialNotice.js'
 import { askDevices } from './listenerClient.js'
 
-export const NOTICE_USAGE = 'harness device notify "<one line>" [--json]  for an agent: ring the dial when it needs the person to act'
+export const NOTICE_USAGE = 'harness device notify "<question>" [--suggest "<recommendation>"] [--waiting|--proceeding] [--json]  for an agent: ring the dial when it needs the person to decide or act'
 
 export interface NoticeDeps {
   dataDir: string
@@ -37,9 +39,11 @@ export function noticeCaller(env: NodeJS.ProcessEnv, cwd: string): Pick<NoticeAs
   return caller
 }
 
-/** [words]: what follows `notify`. 0 with `shown`, `no dial` or `limited` on stdout; 1 with the usage when there is no text. */
+/** [words]: what follows `notify`. 0 with `shown`, `no dial` or `limited` on stdout; 1 with the usage when there is no
+ *  question: none, flags alone, or only `--help` or `-h`. */
 export async function runNotice(words: string[], deps: NoticeDeps): Promise<number> {
-  const text = noticeLine(words.filter((word) => word !== '--json').join(' '))
+  const { question, suggest, state, json } = parseNotice(words)
+  const text = composeNotice(question, suggest, state)
   if (!text) {
     deps.err(NOTICE_USAGE)
     return 1
@@ -49,6 +53,6 @@ export async function runNotice(words: string[], deps: NoticeDeps): Promise<numb
   const said = typeof answer === 'object' ? answer?.result : undefined
   // The listener's own rate (429) refuses a loop of notices before the devices hear them: over a limit all the same.
   const result = answer === 429 ? 'limited' : isNoticeResult(said) ? said : 'no dial'
-  deps.out(words.includes('--json') ? JSON.stringify({ result }) : result)
+  deps.out(json ? JSON.stringify({ result }) : result)
   return 0
 }

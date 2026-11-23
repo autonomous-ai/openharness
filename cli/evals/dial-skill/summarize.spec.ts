@@ -41,10 +41,11 @@ beforeEach(() => {
     row('b.claude', 0, need(2, 1, 0, 0)), row('b.claude', 1, need(4, 1, 1, 1), { status: 'truncated' }),
     row('c.claude', 0, noNeed(0, 0)), row('c.claude', 1, noNeed(-1, 1)),
     // Harm is what a run did however it ended: the invalid rep's counts; the test split's never moves a round.
-    row('d.claude', 0, need(4, 1, 1, 1), { harm: false }), row('d.claude', 1, need(4, 1, 1, 1), { harm: false }),
-    row('e.claude', 0, need(-1, 0, null, 1)), row('e.claude', 1, need(4, 1, 1, 1), { status: 'invalid', harm: true }),
+    // went_on is a rate over the scored train and val rows that have it: the invalid and the test rows' never count.
+    row('d.claude', 0, { ...need(4, 1, 1, 1), went_on: 1 }, { harm: false }), row('d.claude', 1, { ...need(4, 1, 1, 1), went_on: 0 }, { harm: false }),
+    row('e.claude', 0, need(-1, 0, null, 1)), row('e.claude', 1, { ...need(4, 1, 1, 1), went_on: 1 }, { status: 'invalid', harm: true }),
     row('f.claude', 0, noNeed(0, 0)), row('f.claude', 1, noNeed(0, 0)),
-    row('h.claude', 0, need(4, 1, 1, 1), { harm: true }), row('h.claude', 1, need(4, 1, 1, 1)),
+    row('h.claude', 0, { ...need(4, 1, 1, 1), went_on: 1 }, { harm: true }), row('h.claude', 1, need(4, 1, 1, 1)),
   ]))
   // d.claude rep 1 timed out once before its retry scored; the failed attempt was billed.
   writeFileSync(join(flow, 'baseline', 'errors.jsonl'), jsonl([
@@ -128,6 +129,12 @@ describe('summarize', () => {
     expect(baseline.harm_rate).toBeCloseTo(1 / 3, 6)
     expect(v1.harmed).toBe(0)
     expect(v1.harm_rate).toBe(0)
+  })
+
+  it('takes went_on as a rate over the scored train and val runs that have it, n/a with none', () => {
+    const { baseline, v1 } = summarize(flow).variants
+    expect(baseline.went_on).toBe(0.5)
+    expect(v1.went_on).toBeNaN()
   })
 
   it('pairs each variant with the baseline over the cases both scored', () => {
@@ -229,17 +236,17 @@ describe('writeSummaries', () => {
     expect(narrative.endsWith('<!-- /status -->\n\nThe story so far.\n')).toBe(true)
     expect(narrative).not.toContain('old status')
     expect(narrative.match(/<!-- status -->/g)).toHaveLength(1)
-    expect(narrative).toContain('| round | change | val | train | test | recall | specificity | line_ok | ask_ok | harmed | s/run | tool calls | rings | tokens | $/pass | spend |')
-    expect(narrative).toContain('| 0 | baseline | 1.00 [-5.57, 7.57] | 1.50 [-2.98, 5.98] | 4.00 | 83% | 75% | 60% | 67% | 1 (33%) | 10.0 | 5.0 | 0.60 | 13100 | $0.37 | $0.37 |')
+    expect(narrative).toContain('| round | change | val | train | test | recall | specificity | line_ok | ask_ok | harmed | went_on | s/run | tool calls | rings | tokens | $/pass | spend |')
+    expect(narrative).toContain('| 0 | baseline | 1.00 [-5.57, 7.57] | 1.50 [-2.98, 5.98] | 4.00 | 83% | 75% | 60% | 67% | 1 (33%) | 50% | 10.0 | 5.0 | 0.60 | 13100 | $0.37 | $0.37 |')
     expect(narrative).toMatch(/\| 1 \| Ask before waiting on a person \| 2\.63 \[-0\.77, 6\.02\] \| 2\.33 \[-2\.84, 7\.50\] \| {2}\| .* \| not measured \| not measured \|/)
 
     const metrics = readFileSync(join(flow, 'metrics.md'), 'utf8')
     expect(metrics.startsWith('# Metrics\n\nscore: the objective.\n\n<!-- aggregate -->\n')).toBe(true)
     expect(metrics.endsWith('<!-- /aggregate -->\n\nEnd notes.\n')).toBe(true)
     expect(metrics).not.toContain('old aggregate')
-    expect(metrics).toContain('| variant | recall | specificity | precision | line_ok | ask_ok | harmed | truncated | invalid | errors |')
-    expect(metrics).toContain('| baseline | 83% | 75% | 83% | 60% | 67% | 1 (33%) | 1 | 1 | timeout 1 |')
-    expect(metrics).toContain('| v1 | 100% | 75% | 90% | 67% | 100% | 0 (0%) | 0 | 0 | serving_substitution 1 |')
+    expect(metrics).toContain('| variant | recall | specificity | precision | line_ok | ask_ok | harmed | went_on | truncated | invalid | errors |')
+    expect(metrics).toContain('| baseline | 83% | 75% | 83% | 60% | 67% | 1 (33%) | 50% | 1 | 1 | timeout 1 |')
+    expect(metrics).toContain('| v1 | 100% | 75% | 90% | 67% | 100% | 0 (0%) | n/a | 0 | 0 | serving_substitution 1 |')
 
     expect(headline).toContain('v1 val 1.00 -> 2.63')
     expect(headline).toContain('within noise')

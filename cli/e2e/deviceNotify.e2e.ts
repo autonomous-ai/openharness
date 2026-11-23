@@ -6,6 +6,9 @@
  *   the same line again is limited; reading the card leaves it, and the agent's next prompt closes it;
  * - the turn that sent a notice ends silent, and its card stays;
  * - a Harness agent's notice is tied to the Harness agent, and a session nobody lists rings under its folder;
+ * - a decision asked with `--suggest` and `--proceeding`, by a Harness agent or an outside session, rings once on its
+ *   own card with the one line the command composed, its turn ends silent, and the answer in its app takes the card
+ *   down; a plain finished turn rings no question (docs/plans/2026-11-22-needs-you-notify-design.md);
  * - it rings with a window open on its tab;
  * - with the dial unplugged, or no dial on this computer, it prints `no dial`, and the second starts nothing;
  * - a pending card comes back after the devices process restarts, as a silent row that opens to its line
@@ -25,6 +28,9 @@ import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { Outside } from './harness/outsideAgent.js'
 
 const LINE = 'Connect the VPN so I can run the staging tests'
+/** A decision as the dial skill asks it, and the line the command makes of it. */
+const ASK = ['Which cache for the user lookup?', '--suggest', 'in-process LRU', '--proceeding']
+const COMPOSED = 'Proceeding · Which cache for the user lookup? · Doing: in-process LRU'
 
 // The run's bundle when there is one (E2E_BUNDLE), as the daemon runs. Run from the caller's folder, where a bare
 // `--import tsx` would not resolve: tsx and the sources by their paths.
@@ -89,9 +95,9 @@ describe('harness device notify', () => {
     dial.next((m) => m.t === 'agent' && m.id === agentId, 45_000, 'the agent listed')
 
   /** The command as an agent's shell runs it: the daemon's environment, the caller's variables, in its folder. */
-  async function notify(d: IsolatedDaemon, caller: Record<string, string>, cwd: string): Promise<{ code: number | null; out: string; err: string }> {
+  async function notify(d: IsolatedDaemon, caller: Record<string, string>, cwd: string, words = [LINE]): Promise<{ code: number | null; out: string; err: string }> {
     mkdirSync(cwd, { recursive: true })
-    const child = spawn(process.execPath, [...CLI_ENTRY, 'device', 'notify', LINE], {
+    const child = spawn(process.execPath, [...CLI_ENTRY, 'device', 'notify', ...words], {
       cwd, env: { ...d.env, TMUX_PANE: '', ...caller }, stdio: ['ignore', 'pipe', 'pipe'],
     })
     children.push(child)
@@ -103,9 +109,9 @@ describe('harness device notify', () => {
   }
   const questions = (dial: FakeDial, agentId: string): DialMessage[] =>
     dial.messages.filter((m) => m.t === 'question' && m.agentId === agentId)
-  const card = (app: string) => [{ key: 'notice', q: LINE, options: [`In ${app}`] }]
+  const card = (app: string, line = LINE) => [{ key: 'notice', q: line, options: [`In ${app}`] }]
   /** What a ring carries of the card: its line, as the drawer row shows it. The dial reads the card itself. */
-  const rung = [{ key: '', q: LINE, options: [] }]
+  const rung = (line = LINE) => [{ key: '', q: line, options: [] }]
 
   it('an outside Claude Code session\'s notice is its own card, read without closing it, and closed by its next prompt', async () => {
     const { d, desk } = await fresh()
@@ -117,7 +123,7 @@ describe('harness device notify', () => {
 
     expect(await notify(d, caller, cwd)).toMatchObject({ code: 0, out: 'shown' })
     const question = await dial.next((m) => m.t === 'question' && m.agentId === engine.id, 45_000, 'the notice')
-    expect(question).toMatchObject({ agentId: engine.id, name: 'fix-login', id: expect.stringMatching(/^shown:/), questions: rung })
+    expect(question).toMatchObject({ agentId: engine.id, name: 'fix-login', id: expect.stringMatching(/^shown:/), questions: rung() })
 
     // The same line again, within the minute: limited, and nothing more on the dial.
     expect(await notify(d, caller, cwd)).toMatchObject({ code: 0, out: 'limited' })
@@ -174,6 +180,80 @@ describe('harness device notify', () => {
     await until('the silent end in the daemon\'s log', () => d.log().includes('[cable] notify · silent · rule:notice · notice · 0ms'), 30_000, 50)
   })
 
+  it('a Harness agent\'s decision rings once on its card with the composed line, its turn ends silent, and the answer typed in the app takes the card down', async () => {
+    const { d, desk } = await fresh()
+    const client = await LocalClient.connect(d)
+    const harness = await create(d, client, 'in-harness')
+    const dial = await plugged(desk)
+    await listed(dial, harness.id)
+    const caller = { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: harness.sessionId }
+    const started = dial.messages.length
+    client.send('message', { agentId: harness.id, content: '!until in-harness' })
+    await dial.next((m) => m.t === 'turn.started' && m.agentId === harness.id, 45_000, 'its turn started', started)
+    expect(await notify(d, caller, join(d.projectsDir, 'in-harness'), ASK)).toMatchObject({ code: 0, out: 'shown' })
+    const question = await dial.next((m) => m.t === 'question' && m.agentId === harness.id, 45_000, 'the notice', started)
+    expect(question).toMatchObject({ id: expect.stringMatching(/^shown:/), questions: rung(COMPOSED) })
+    writeFileSync(join(d.engineConfig.root, 'in-harness.release'), '')
+    const summary = await dial.next((m) => m.t === 'summary' && m.agentId === harness.id, 60_000, 'its answer', started)
+    expect(summary).toMatchObject({ tier: 'silent', silent: true })
+    expect(await opened(dial, harness.id)).toMatchObject({ ok: true, id: question.id, questions: card('Harness', COMPOSED) })
+    expect([...new Set(questions(dial, harness.id).map((m) => m.id))]).toEqual([question.id])
+
+    // The person answers in the app: the message reaches the agent's pane as a turn, and the card goes.
+    const prompted = dial.messages.length
+    const ended = client.turn(harness.id, 'Use Redis')
+    await dial.next((m) => m.t === 'question.close' && m.agentId === harness.id && m.id === question.id, 45_000, 'the card closed', prompted)
+    await ended
+    await until('the notice in the daemon\'s log', () => d.log().includes('[device] notify · claude · shown'), 30_000, 50)
+    expect(d.log().split('\n').filter((line) => line.includes(ASK[0]) || line.includes(ASK[2]))).toEqual([])
+    client.close()
+  })
+
+  it('an outside Claude Code session\'s decision rings once on its own card, its turn ends silent, and its next prompt closes it', async () => {
+    const { d, desk } = await fresh()
+    const dial = await plugged(desk)
+    const engine = await startOutside(d, 'fix-login')
+    await listed(dial, engine.id)
+    const caller = { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: engine.sessionId }
+    const started = dial.messages.length
+    engine.type('!until fix-login')
+    await dial.next((m) => m.t === 'turn.started' && m.agentId === engine.id, 45_000, 'its turn started', started)
+    expect(await notify(d, caller, join(d.projectsDir, 'fix-login'), ASK)).toMatchObject({ code: 0, out: 'shown' })
+    const question = await dial.next((m) => m.t === 'question' && m.agentId === engine.id, 45_000, 'the notice', started)
+    expect(question).toMatchObject({ name: 'fix-login', id: expect.stringMatching(/^shown:/), questions: rung(COMPOSED) })
+    writeFileSync(join(d.engineConfig.root, 'fix-login.release'), '')
+    const summary = await dial.next((m) => m.t === 'summary' && m.agentId === engine.id, 60_000, 'its answer', started)
+    expect(summary).toMatchObject({ tier: 'silent', silent: true })
+    expect(await opened(dial, engine.id)).toMatchObject({ ok: true, id: question.id, questions: card('Ghostty', COMPOSED) })
+    expect([...new Set(questions(dial, engine.id).map((m) => m.id))]).toEqual([question.id])
+
+    const prompted = dial.messages.length
+    engine.type('Use Redis')
+    await dial.next((m) => m.t === 'question.close' && m.agentId === engine.id && m.id === question.id, 45_000, 'the card closed', prompted)
+    await until('the notice in the daemon\'s log', () => d.log().includes('[device] notify · claude · shown'), 30_000, 50)
+    expect(d.log().split('\n').filter((line) => line.includes(ASK[0]) || line.includes(ASK[2]))).toEqual([])
+  })
+
+  // A guard for the skill's rule: a turn that only finished asks nothing, so the dial gets no question for it.
+  it('a plain finished turn of a Harness agent or an outside session sends no question frame', async () => {
+    const { d, desk } = await fresh()
+    const client = await LocalClient.connect(d)
+    const harness = await create(d, client, 'in-harness')
+    const dial = await plugged(desk)
+    await listed(dial, harness.id)
+    const engine = await startOutside(d, 'fix-login')
+    await listed(dial, engine.id)
+    let since = dial.messages.length
+    client.send('message', { agentId: harness.id, content: 'hello' })
+    await dial.next((m) => m.t === 'summary' && m.agentId === harness.id, 60_000, 'its answer', since)
+    expect(questions(dial, harness.id)).toEqual([])
+    since = dial.messages.length
+    engine.type('hello')
+    await dial.next((m) => m.t === 'summary' && m.agentId === engine.id, 60_000, 'its answer', since)
+    expect(questions(dial, engine.id)).toEqual([])
+    client.close()
+  })
+
   it('a Codex session\'s notice is its own card', async () => {
     const { d, desk } = await fresh()
     const dial = await plugged(desk)
@@ -182,7 +262,7 @@ describe('harness device notify', () => {
     await listed(dial, codex.id)
     expect(await notify(d, { CODEX_THREAD_ID: codex.sessionId }, codex.cwd)).toMatchObject({ code: 0, out: 'shown' })
     expect(await dial.next((m) => m.t === 'question' && m.agentId === codex.id, 45_000, 'the notice'))
-      .toMatchObject({ name: 'api', id: expect.stringMatching(/^shown:/), questions: rung })
+      .toMatchObject({ name: 'api', id: expect.stringMatching(/^shown:/), questions: rung() })
     expect(await opened(dial, codex.id)).toMatchObject({ ok: true, questions: card('Ghostty') })
     await until('the notice in the daemon\'s log', () => d.log().includes('[device] notify · codex · shown'), 30_000, 50)
   })
@@ -196,7 +276,7 @@ describe('harness device notify', () => {
     const caller = { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: harness.sessionId }
     expect(await notify(d, caller, join(d.projectsDir, 'in-harness'))).toMatchObject({ code: 0, out: 'shown' })
     expect(await dial.next((m) => m.t === 'question' && m.agentId === harness.id, 45_000, 'the notice'))
-      .toMatchObject({ id: expect.stringMatching(/^shown:/), questions: rung })
+      .toMatchObject({ id: expect.stringMatching(/^shown:/), questions: rung() })
     expect(await opened(dial, harness.id)).toMatchObject({ ok: true, questions: card('Harness') })
     expect(questions(dial, observedAgentId('claude', harness.sessionId))).toEqual([])
     client.close()
@@ -210,7 +290,7 @@ describe('harness device notify', () => {
     expect(await notify(d, { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: sessionId }, join(d.projectsDir, 'scratch')))
       .toMatchObject({ code: 0, out: 'shown' })
     expect(await dial.next((m) => m.t === 'question' && m.agentId === agentId, 45_000, 'the notice'))
-      .toMatchObject({ name: 'scratch', id: expect.stringMatching(/^shown:/), questions: rung })
+      .toMatchObject({ name: 'scratch', id: expect.stringMatching(/^shown:/), questions: rung() })
     expect(await opened(dial, agentId)).toMatchObject({ ok: true, questions: card('Terminal') })
   })
 
@@ -228,7 +308,7 @@ describe('harness device notify', () => {
     const caller = { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: engine.sessionId }
     expect(await notify(d, caller, join(d.projectsDir, 'fix-login'))).toMatchObject({ code: 0, out: 'shown' })
     expect(await dial.next((m) => m.t === 'question' && m.agentId === engine.id, 45_000, 'the notice', since))
-      .toMatchObject({ questions: rung })
+      .toMatchObject({ questions: rung() })
     window.close()
   })
 

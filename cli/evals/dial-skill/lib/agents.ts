@@ -22,6 +22,12 @@ export const AGENT_CONFIG: Omit<AgentConfig, 'timeoutMs'> = {
   maxTurns: 40,
 }
 
+/** The person's folders no run may read, though its HOME is theirs: ~/.harness (the real harness and its sign-in) and
+ *  gh's sign-in. Read at each call, as HOME may change after load. */
+export function deniedReads(): string[] {
+  return [join(homedir(), '.harness'), join(homedir(), '.config', 'gh')]
+}
+
 /**
  * Shell commands write only inside the repo and the --add-dir folders; the network stays on. Claude Code 2.1.326 has
  * no allow-all-hosts setting in the sandbox ("*" is refused) and sends an unlisted host to a permission ask that -p
@@ -38,12 +44,10 @@ export const CLAUDE_SANDBOX = {
   // The profile's claude.ai connectors and push reach the person's real mail, calendar, documents and phone, and
   // SendMessage their other live Claude sessions: an eval run must not email, schedule, notify or message anyone. Only
   // the fake harness reaches the person here.
-  // The agent's HOME is the person's (lib/stage.ts: Claude finds its sign-in in their keychain through it), so their
-  // ~/.harness (the real harness and its sign-in) and gh's sign-in are denied, by absolute path ('//'), for the
-  // sandboxed shell as for the Read tool.
+  // The agent's HOME is the person's (lib/stage.ts: Claude finds its sign-in in their keychain through it), so the
+  // denied reads go by absolute path ('//'), for the sandboxed shell as for the Read tool.
   permissions: {
-    deny: ['PushNotification', 'RemoteTrigger', 'DesignSync', 'SendMessage', 'ListAgents',
-      `Read(/${join(homedir(), '.harness')}/**)`, `Read(/${join(homedir(), '.config', 'gh')}/**)`],
+    deny: ['PushNotification', 'RemoteTrigger', 'DesignSync', 'SendMessage', 'ListAgents', ...deniedReads().map((dir) => `Read(/${dir}/**)`)],
   },
   disableClaudeAiConnectors: true,
 }
@@ -73,11 +77,16 @@ export function claudeArgs(cfg: Omit<AgentConfig, 'timeoutMs'>, st: Pick<Staged,
 
 export async function runAgent(agent: AgentKind, s: Scenario, st: Staged, cfg: AgentConfig): Promise<RunResult> {
   if (agent === 'claude') return runClaude(s, st, cfg)
-  const line = agent === 'always' ? 'Please check in' : agent === 'oracle' ? s.ask : null
+  // The oracle says the state the scenario expects, and a recommendation with --proceeding, as the skill asks.
+  const words = agent === 'always' ? ['Please check in']
+    : agent === 'oracle' && s.ask !== null ? [s.ask, `--${s.expect}`, ...(s.expect === 'proceeding' ? ['--suggest', 'the first option'] : [])]
+    : null
   // The staged fake by its own path, never a `harness` found on PATH, which could be the real one.
-  if (line !== null) await promisify(execFile)(join(st.root, 'bin', 'harness'), ['device', 'notify', line], { cwd: st.repo, env: st.env })
+  if (words !== null) await promisify(execFile)(join(st.root, 'bin', 'harness'), ['device', 'notify', ...words], { cwd: st.repo, env: st.env })
+  // What states_ask passes: the ask, the recommendation, and whether it went on or waited.
+  const went = s.expect === 'proceeding' ? 'I went on with it.' : 'I am waiting for you.'
   return {
-    answer: agent === 'oracle' ? s.ask ?? '' : '',
+    answer: agent === 'oracle' && s.ask !== null ? `${s.ask} I recommend the first option. ${went}` : '',
     transcript: [],
     model: null,
     usage: { input_tokens: 0, output_tokens: 0 },

@@ -27,14 +27,21 @@ description: ${JSON.stringify(DIAL_SKILL_DESCRIPTION)}
 ${DIAL_SKILL_MARKER}
 ---
 
-When the task stops on a step only the person can take, ring their dial before you hand it to them:
+When the task needs a decision or an action only the person can take, ring their dial once and keep working:
 
-    harness device notify "<what you need, in one line>"
+    harness device notify "<the question, in one line>" --suggest "<your recommendation, a few words>" --proceeding
 
-- Never for progress, and never for "done": only when the person must act.
-- At most once for the same need.
+- Never block on the person: no question form or tool (AskUserQuestion, request_user_input) for this. Ask in text.
+- \`--proceeding\`: go on with your recommendation meanwhile. Use it unless the next rule says wait.
+- \`--waiting\`: when the person's own instructions say this must wait for them; when you cannot go on without them (a
+  key, a code, a VPN, a sign-in); or when the step cannot be taken back or others see it (deleting data, a deploy, a
+  push others build on, spending money, a message to someone else). Work on the other parts meanwhile.
+- Never for progress, and never for "done": only when the person must decide or act.
+- One notice per ask, never twice. Several at once: one notice for the most important, the rest in your answer.
 - Never put a secret, a token or a file's content in the line: anyone near the desk can read it.
-- Still write the full ask in your answer. The command prints \`shown\`, \`no dial\` or \`limited\`: whichever it prints, your answer carries the ask.
+- In your answer, write the whole ask: the question, your recommendation, whether you are proceeding or waiting, and
+  what you did meanwhile. The person answers there. The command prints \`shown\`, \`no dial\` or \`limited\`: whichever it
+  prints, your answer carries the ask.
 `
 
 export const DIAL_PLUGIN_ID = 'harness-device@openharness'
@@ -199,18 +206,26 @@ function removeEmpty(folder: string): void {
 }
 
 /**
- * Claude Code's own record of the plugin, in its user settings: 'on' while its entry is true, 'off' once disabled or
- * uninstalled (the entry false or gone), 'unknown' when the file says nothing.
+ * Claude Code's own record of the plugin, in its user settings, from one read: 'on' while its entry is true,
+ * 'turned-off' once the person turned it off (the entry false, as `claude plugin disable` and /plugin leave it), 'off'
+ * while it has no entry (never set there, or uninstalled) or another value, 'unknown' when the file says nothing. One
+ * read, so a file written again between two reads never mixes their answers.
  */
-export function claudePluginState(settingsPath: string): 'on' | 'off' | 'unknown' {
+export function readClaudePlugin(settingsPath: string): 'on' | 'off' | 'turned-off' | 'unknown' {
   const entry = pluginEntry(settingsPath)
-  return entry === UNKNOWN ? 'unknown' : entry === true ? 'on' : 'off'
+  return entry === UNKNOWN ? 'unknown' : entry === true ? 'on' : entry === false ? 'turned-off' : 'off'
 }
 
-/** Whether the person turned the plugin off in these settings: its entry false, as `claude plugin disable` and /plugin
- *  leave it. An entry gone says no such thing: never set there, or uninstalled. */
+/** As readClaudePlugin, turned off or gone alike 'off': disabled or uninstalled. */
+export function claudePluginState(settingsPath: string): 'on' | 'off' | 'unknown' {
+  const state = readClaudePlugin(settingsPath)
+  return state === 'turned-off' ? 'off' : state
+}
+
+/** Whether the person turned the plugin off in these settings. An entry gone says no such thing: never set there, or
+ *  uninstalled. */
 export function claudePluginTurnedOff(settingsPath: string): boolean {
-  return pluginEntry(settingsPath) === false
+  return readClaudePlugin(settingsPath) === 'turned-off'
 }
 
 const UNKNOWN = Symbol('unknown')
@@ -240,14 +255,6 @@ function pluginEntry(settingsPath: string): unknown {
   if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return UNKNOWN
   const plugins = (settings as { enabledPlugins?: unknown }).enabledPlugins
   return !!plugins && typeof plugins === 'object' ? (plugins as Record<string, unknown>)[DIAL_PLUGIN_ID] : undefined
-}
-
-/**
- * Never once `disable` removed it; Codex otherwise; Claude Code while its plugin is on, so a plugin uninstalled through
- * /plugin takes the skill away.
- */
-export function skillWanted(engine: 'claude' | 'codex', removed: boolean, claudeSettings: string): boolean {
-  return !removed && (engine === 'codex' || claudePluginState(claudeSettings) === 'on')
 }
 
 /**

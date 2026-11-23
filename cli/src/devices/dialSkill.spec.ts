@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parse } from 'yaml'
-import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION, claudePluginState, ownDirectory, ownWindowsPath, refreshSkill, removeSkill, skillWanted, skillsFolderOf, writeSkill } from './dialSkill.js'
+import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION, claudePluginState, ownDirectory, ownWindowsPath, readClaudePlugin, refreshSkill, removeSkill, skillsFolderOf, writeSkill } from './dialSkill.js'
 
 const MARKER = '# Written by Harness. Remove it with harness device claude disable or harness device codex disable.'
 /** The line 0.6.58 wrote: files in people's homes still hold it. */
@@ -70,8 +70,57 @@ describe('the dial skill', () => {
     expect(file).not.toBeNull()
     expect(parse(file![1])).toEqual({ name: 'dial', description: DIAL_SKILL_DESCRIPTION })
     expect(DIAL_SKILL.split('\n')[3]).toBe(MARKER)
-    expect(file![2]).toContain('\n    harness device notify "<what you need, in one line>"\n')
+    expect(file![2]).toContain('\n    harness device notify "<the question, in one line>" --suggest "<your recommendation, a few words>" --proceeding\n')
     expect(Buffer.byteLength(DIAL_SKILL)).toBeLessThanOrEqual(4096)
+  })
+
+  it('the skill is the needs-you text, byte for byte', () => {
+    expect(DIAL_SKILL).toBe(`---
+name: dial
+description: ${JSON.stringify(DIAL_SKILL_DESCRIPTION)}
+${MARKER}
+---
+
+When the task needs a decision or an action only the person can take, ring their dial once and keep working:
+
+    harness device notify "<the question, in one line>" --suggest "<your recommendation, a few words>" --proceeding
+
+- Never block on the person: no question form or tool (AskUserQuestion, request_user_input) for this. Ask in text.
+- \`--proceeding\`: go on with your recommendation meanwhile. Use it unless the next rule says wait.
+- \`--waiting\`: when the person's own instructions say this must wait for them; when you cannot go on without them (a
+  key, a code, a VPN, a sign-in); or when the step cannot be taken back or others see it (deleting data, a deploy, a
+  push others build on, spending money, a message to someone else). Work on the other parts meanwhile.
+- Never for progress, and never for "done": only when the person must decide or act.
+- One notice per ask, never twice. Several at once: one notice for the most important, the rest in your answer.
+- Never put a secret, a token or a file's content in the line: anyone near the desk can read it.
+- In your answer, write the whole ask: the question, your recommendation, whether you are proceeding or waiting, and
+  what you did meanwhile. The person answers there. The command prints \`shown\`, \`no dial\` or \`limited\`: whichever it
+  prints, your answer carries the ask.
+`)
+  })
+
+  it('the text the previous release wrote is ours, and is written over', () => {
+    const PREVIOUS = `---
+name: dial
+description: ${JSON.stringify(DIAL_SKILL_DESCRIPTION)}
+${MARKER}
+---
+
+When the task stops on a step only the person can take, ring their dial before you hand it to them:
+
+    harness device notify "<what you need, in one line>"
+
+- Never for progress, and never for "done": only when the person must act.
+- At most once for the same need.
+- Never put a secret, a token or a file's content in the line: anyone near the desk can read it.
+- Still write the full ask in your answer. The command prints \`shown\`, \`no dial\` or \`limited\`: whichever it prints, your answer carries the ask.
+`
+    for (const [act, result] of [[writeSkill, 'written'], [refreshSkill, 'updated']] as const) {
+      const skills = skillsAt()
+      const path = skillOf(skills, PREVIOUS)
+      expect(act(skills)).toBe(result)
+      expect(readFileSync(path, 'utf8')).toBe(DIAL_SKILL)
+    }
   })
 
   it('the skill\'s marker line names the disable commands', () => {
@@ -148,22 +197,6 @@ describe('the dial skill', () => {
     const home = folder()
     expect(refreshSkill(join(home, 'skills'))).toBe('gone')
     expect(readdirSync(home)).toEqual([])
-  })
-
-  it('skillWanted: Codex unless removed; Claude Code with its plugin on and not removed', () => {
-    const dir = folder()
-    const on = join(dir, 'on.json')
-    writeFileSync(on, '{"enabledPlugins":{"harness-device@openharness":true}}')
-    const off = join(dir, 'off.json')
-    writeFileSync(off, '{"enabledPlugins":{"harness-device@openharness":false}}')
-    const missing = join(dir, 'missing.json')
-
-    expect(skillWanted('codex', false, missing)).toBe(true)
-    expect(skillWanted('codex', true, on)).toBe(false)
-    expect(skillWanted('claude', false, on)).toBe(true)
-    expect(skillWanted('claude', true, on)).toBe(false)
-    expect(skillWanted('claude', false, off)).toBe(false)
-    expect(skillWanted('claude', false, missing)).toBe(false)
   })
 
   it('leaves the person\'s file', () => {
@@ -475,6 +508,19 @@ describe('the dial skill', () => {
       ['a FIFO', join(dir, 'fifo.json')],
     ]
     for (const [what, path] of unknown) expect(claudePluginState(path), what).toBe('unknown')
+  })
+
+  it('readClaudePlugin: the person\'s off told from an entry gone, in one read', () => {
+    const dir = folder()
+    const at = (name: string, text: string): string => {
+      writeFileSync(join(dir, name), text)
+      return join(dir, name)
+    }
+    expect(readClaudePlugin(at('on.json', '{"enabledPlugins":{"harness-device@openharness":true}}'))).toBe('on')
+    expect(readClaudePlugin(at('false.json', '{"enabledPlugins":{"harness-device@openharness":false}}'))).toBe('turned-off')
+    expect(readClaudePlugin(at('absent.json', '{"enabledPlugins":{"other@x":false}}'))).toBe('off')
+    expect(readClaudePlugin(at('string.json', '{"enabledPlugins":{"harness-device@openharness":"false"}}'))).toBe('off')
+    expect(readClaudePlugin(at('bad.json', '{"enabledPlugins":{"harness-device@openharness":fa'))).toBe('unknown')
   })
 
   it('it loads only node modules', () => {

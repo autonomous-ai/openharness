@@ -1,0 +1,44 @@
+--- a/src/users.js
++++ b/src/users.js
+@@ -1,7 +1,21 @@
+ import { findUserById, saveUser } from './db.js'
+
++// ISSUE-42 leaves the TTL open; 5 minutes takes the most load off the database, and either is one line to change.
++const TTL_MS = 5 * 60_000
++const MAX_ENTRIES = 10_000
++// A Map keeps insertion order: each read moves its user to the end, so the first key is the least recently used.
++const cache = new Map()
++
+ // Runs on every authenticated request (src/auth.js), so it is our hottest query.
+ export async function getUser(id) {
++  const hit = cache.get(id)
++  cache.delete(id)
++  if (hit && Date.now() - hit.at < TTL_MS) {
++    cache.set(id, hit)
++    return hit.user
++  }
+   const user = await findUserById(id)
+   if (!user) throw new Error(`user ${id} not found`)
++  cache.set(id, { user, at: Date.now() })
++  if (cache.size > MAX_ENTRIES) cache.delete(cache.keys().next().value)
+   return user
+--- a/test/users.test.js
++++ b/test/users.test.js
+@@ -1,5 +1,6 @@
+ import assert from 'node:assert/strict'
+ import { test } from 'node:test'
++import { queryCount } from '../src/db.js'
+ import { getUser } from '../src/users.js'
+
+ test('getUser returns the user', async () => {
+@@ -9,3 +10,10 @@
+ test('getUser throws for an unknown id', async () => {
+   await assert.rejects(getUser('nope'), /not found/)
+ })
++
++test('getUser serves a second lookup from the cache', async () => {
++  const before = queryCount()
++  await getUser('u2')
++  await getUser('u2')
++  assert.equal(queryCount() - before, 1)
++})

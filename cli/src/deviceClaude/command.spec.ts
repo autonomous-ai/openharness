@@ -660,6 +660,25 @@ describe('the dial skill', () => {
     expect(existsSync(skillAt(claudeHome))).toBe(false)
   })
 
+  it('disable keeps the skill in a folder Claude Code holds it in with its plugin not on, once a dial attached', async () => {
+    // A Harness Claude agent brings Claude Code's skill without the plugin (docs/plans/2026-11-22-needs-you-notify-design.md),
+    // and the devices leave a folder emptied by Codex's disable as it is.
+    pluginOn(false)
+    const claudeSkills = skillIn(claudeHome)
+    const dataDir = folder()
+    recorded(dataDir, { claude: [claudeSkills] })
+    const codexHome = folder()
+    symlinkSync(claudeSkills, join(codexHome, 'skills'))
+
+    expect(await device(['codex', 'disable'], { dataDir, codexHome })).toEqual({ code: 0, out: [], err: [] })
+    expect(existsSync(skillAt(claudeHome)) && readFileSync(skillAt(claudeHome), 'utf8')).toBe(DIAL_SKILL)
+
+    // The person turned the plugin off: Claude Code holds nothing, and Codex's disable takes it.
+    writeFileSync(settings, JSON.stringify({ enabledPlugins: { 'harness-device@openharness': false } }))
+    expect(await device(['codex', 'disable'], { dataDir, codexHome })).toEqual({ code: 0, out: [], err: [] })
+    expect(existsSync(skillAt(claudeHome))).toBe(false)
+  })
+
   it('a failing step still runs the rest', async () => {
     const dataDir = folder()
     skillIn(claudeHome)
@@ -1090,7 +1109,7 @@ describe('harness device notify', () => {
   })
 
   it('the usage names notify', () => {
-    expect(DEVICE_USAGE).toContain('harness device notify "<one line>" [--json]')
+    expect(DEVICE_USAGE).toContain('harness device notify "<question>" [--suggest "<recommendation>"] [--waiting|--proceeding] [--json]')
   })
 })
 

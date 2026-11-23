@@ -597,7 +597,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; storePackageFolder?: DevicesDeps['storePackageFolder']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null; transcribe?: DevicesDeps['transcribe']; watchStore?: DevicesDeps['watchStore'] } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; agentsRead?: DevicesDeps['agentsRead']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; storePackageFolder?: DevicesDeps['storePackageFolder']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null; transcribe?: DevicesDeps['transcribe']; watchStore?: DevicesDeps['watchStore'] } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const apps = over.orca ?? orca
   // None, and no read under way, unless the spec gives its own; null leaves the devices to read this computer's.
@@ -614,6 +614,7 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     readUsage: over.readUsage,
     now: over.now,
     refresh: over.refresh,
+    agentsRead: over.agentsRead,
     orca: apps,
     orcaReads: over.orcaReads ?? inertOrcaReads,
     codex: over.codex ?? codex,
@@ -7594,7 +7595,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     port.observed(hook('turn-start'))
     expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
     expect(calls('question')).toEqual([[ID, expect.stringMatching(/^shown:[0-9a-f-]{36}$/), card('Orca')]])
-    expect(logs).toContain('[device] notify · claude · shown')
+    expect(logs).toContain('[device] notify · claude · shown · plain')
   })
 
   it('a Harness agent\'s notice is tied to the agent, by the session the core bound to it', () => {
@@ -7930,7 +7931,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     ;(seen.cable as unknown as { connected: boolean }).connected = false
     expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'no dial' })
     expect(calls('question')).toEqual([])
-    expect(logs).toContain('[device] notify · claude · no dial')
+    expect(logs).toContain('[device] notify · claude · no dial · plain')
   })
 
   it('the limits hold across callers of one agent', () => {
@@ -7940,7 +7941,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     expect(listener.notice({ text: 'Sign in to the registry', engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'limited' })
     expect(calls('question')).toHaveLength(1)
     expect(calls('questionClose')).toEqual([])
-    expect(logs).toContain('[device] notify · claude · limited')
+    expect(logs).toContain('[device] notify · claude · limited · plain')
   })
 
   it('a notices part that throws answers no dial, and costs the dial nothing', () => {
@@ -7960,16 +7961,24 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     ;(seen.cable as unknown as { connected: boolean }).connected = false
     listener.notice({ text: LINE, engine: 'codex', sessionId: 'sess-2', folder: 'secret-folder' })
     expect(logs.filter((line) => line.startsWith('[device] notify') && !line.includes(' · day '))).toEqual([
-      '[device] notify · claude · shown', '[device] notify · claude · limited', '[device] notify · codex · no dial',
+      '[device] notify · claude · shown · plain', '[device] notify · claude · limited · plain', '[device] notify · codex · no dial · plain',
     ])
     expect(logs.filter((line) => ['VPN', 'sess-1', 'sess-2', 'secret-folder'].some((secret) => line.includes(secret)))).toEqual([])
+  })
+
+  it('a notice is counted with its kind, and no log line holds its suggestion', () => {
+    const { port, listener } = devices()
+    port.observed(hook('turn-start'))
+    expect(listener.notice({ text: 'Proceeding · Which DB? · Doing: Postgres', engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+    expect(logs).toContain('[device] notify · claude · shown · proceeding')
+    expect(logs.filter((line) => line.includes('Postgres'))).toEqual([])
   })
 
   it('a notice is counted in the day\'s tally, by engine', () => {
     const { listener } = devices()
     ;(seen.cable as unknown as { connected: boolean }).connected = false
     expect(listener.notice({ text: LINE })).toEqual({ result: 'no dial' })
-    expect(logs).toContain('[device] notify · agent · no dial')
+    expect(logs).toContain('[device] notify · agent · no dial · plain')
     expect(logs).toContainEqual(expect.stringMatching(/^\[device\] notify · day \d{4}-\d\d-\d\d · claude shown 0 no dial 0 limited 0 · codex shown 0 no dial 0 limited 0 · agent shown 0 no dial 1 limited 0$/))
   })
 
@@ -11281,7 +11290,10 @@ describe('the dial setup, from the devices\' own process (cable/dialSetup.ts)', 
     const orca = join(homes, 'orca-codex')
     mkdirSync(orca)
     const read = fakeOrcaHomes()
-    start({ faults: ['fleet'], listen: fakeListener().listen, orcaHomes: read })
+    // A Claude agent of Harness's listed throughout: a none would come to hold at the minute's scan, a new stamp of its
+    // own.
+    const core = fakeCore({ dataDir, agents: { advertised: vi.fn(() => [{ agentId: 'h1', registeredAt: 1, engine: 'claude' }] as RegisteredSession[]) } })
+    start({ core, faults: ['fleet'], listen: fakeListener().listen, orcaHomes: read })
     await read.landed()
     // Each scan reads Orca's homes first, so this fake's reads count these devices' scans: a scan of devices an earlier
     // spec left attached is not one.
@@ -11372,6 +11384,57 @@ describe('the dial setup, from the devices\' own process (cable/dialSetup.ts)', 
     seen.host.watching!(true)
     expect(held(env.CODEX_HOME)).toBeUndefined()
     await vi.waitFor(() => expect(readers.apps.mock.calls.map(([pids]) => pids)).toEqual([[77]]))
+  })
+
+  describe('Claude Code\'s skill while Harness runs a Claude agent, with its plugin never on', () => {
+    beforeEach(() => mkdirSync(claudeHome()))
+    /** A core that lists one agent of Harness's, of [engine]. */
+    const listing = (engine: string) =>
+      fakeCore({ dataDir, agents: { advertised: vi.fn(() => [{ agentId: 'h1', registeredAt: 1, engine }] as RegisteredSession[]) } })
+    /** A dial's first attach, and the plugin's pass after it: the fake's install turns nothing on. */
+    const attach = async (claude: ReturnType<typeof fakeClaude>) => {
+      seen.host.watching!(true)
+      await vi.waitFor(() => expect(claude.calls).toContain('plugin install harness-device@openharness --scope user'))
+      await new Promise((resolve) => setImmediate(resolve))
+    }
+
+    it('before the devices\' first view of the core\'s agents Claude Code gets none, and Codex is set up as ever', async () => {
+      const claude = fakeClaude()
+      start({ core: listing('claude'), faults: ['fleet'], listen: fakeListener().listen, claude: claude.found, agentsRead: () => false })
+
+      await attach(claude)
+
+      expect(held(claudeHome())).toBeUndefined()
+      expect(held(env.CODEX_HOME)).toBe(DIAL_SKILL)
+    })
+
+    it('once the view landed, a Claude agent of Harness\'s brings Claude Code\'s skill', async () => {
+      const claude = fakeClaude()
+      start({ core: listing('claude'), faults: ['fleet'], listen: fakeListener().listen, claude: claude.found, agentsRead: () => true })
+
+      await attach(claude)
+
+      expect(held(claudeHome())).toBe(DIAL_SKILL)
+    })
+
+    it('inside the core\'s process, whose agents are its own, a Claude agent brings it too', async () => {
+      const claude = fakeClaude()
+      start({ core: listing('claude'), faults: ['fleet'], listen: fakeListener().listen, claude: claude.found })
+
+      await attach(claude)
+
+      expect(held(claudeHome())).toBe(DIAL_SKILL)
+    })
+
+    it.each(['codex', 'fo'])('an agent of %s brings Claude Code none', async (engine) => {
+      const claude = fakeClaude()
+      start({ core: listing(engine), faults: ['fleet'], listen: fakeListener().listen, claude: claude.found, agentsRead: () => true })
+
+      await attach(claude)
+
+      expect(held(claudeHome())).toBeUndefined()
+      expect(held(env.CODEX_HOME)).toBe(DIAL_SKILL)
+    })
   })
 })
 
@@ -12174,7 +12237,8 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
     await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
     expect(calls('summary')).toEqual([[agent(1), 'Shipped.', 'Shipped.', 'alert', 'Shipped.', false]])
     expect(logs.filter((line) => /secret/i.test(line))).toEqual([])
-    expect(logs).toContain('[cable] notify · alert · rule:turn · turn · 0ms')
+    // The decider's ms is wall-clock time (Date is not faked here): under load the line can read 1ms.
+    expect(logs).toContainEqual(expect.stringMatching(/^\[cable\] notify · alert · rule:turn · turn · \d+ms$/))
   })
 
   it('no line holds a handle or an agent', async () => {

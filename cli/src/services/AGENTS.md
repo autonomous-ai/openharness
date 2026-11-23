@@ -228,9 +228,10 @@ master too old to run it starts it beside itself, still in its own process (`src
   title of the ChatGPT app's window, the mod's `attach`, the session the Claude app shows, `notice`, an agent's line
   from `harness device notify`, `notify`,
   the Notifications setting, and `orcaFront`, the terminals of the worktree on Orca's screen from Orca's Harness
-  Device plugin, taken only while its `dial` stream is open (src/services/devices.ts). Where the listener does not
-  run (Windows, and devices inside the core, as on Harness OS) `harness device notify` answers `no dial` and the
-  dial's status carries no Notifications setting, which nothing could change: a known gap. A handler of a second kind holds a stream open,
+  Device plugin, taken only while its `dial` stream is open (src/services/devices.ts). The listener runs on every
+  platform, on Windows over its pipe. Only where the devices run inside the core with no listener (Harness OS) does
+  `harness device notify` answer `no dial` and the dial's status carry no Notifications setting, which nothing could
+  change: a known gap. A handler of a second kind holds a stream open,
   one of its type across every connection (a keyed type keeps one per key up to its limit, a new key past it
   answered 409), and is told when the stream can take a line (`onWritable`) and why it
   ended (`StreamEnd`): on `tabs` the devices tell the watch which terminal tab to select; on `dial` (`dialStream`),

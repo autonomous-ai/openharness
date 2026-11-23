@@ -142,6 +142,9 @@ export interface DevicesDeps {
   /** Read this computer's agents again before a list is built from them: in their own process the devices
    *  keep a copy, asked of the core as the dial's tick or ⌘K needs it (services/devicesProcess.ts). */
   refresh?: () => Promise<void>
+  /** Whether a view of the core's agents has landed in that copy: before one it is empty, which is not the core saying
+   *  Harness runs no Claude agent. Absent inside the core's process, whose agents are its own and always known. */
+  agentsRead?: () => boolean
   /** Called with a function this part runs whenever its link to the core drops: the calls that core held have failed. */
   onCoreGone?: (run: () => void) => void
   /** An agent's conversation token totals, read fresh (not the 15 s cache); null when unknown or remote.
@@ -667,6 +670,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       return { claude: [...moved.claude, ...orca.claude], codex: [...moved.codex, ...orca.codex] }
     },
     removed: () => readRemoved(core.dataDir),
+    // Cloud harnesses are in this view too, and match nothing: their engines are their own (fo, devin-cloud,
+    // cursor-cloud).
+    claudeAgents: () => deps.agentsRead?.() === false ? 'unknown'
+      : core.agents.advertised().some(({ engine }) => engine === 'claude') ? 'listed' : 'none',
     now: monotonic,
     count: createEngineTally('[device] dial setup', ['claude', 'codex'], SETUP_COUNTS, log),
     log,

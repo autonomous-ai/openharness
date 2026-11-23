@@ -88,6 +88,9 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
    *  that had ended, and no recaps, until the next restart. */
   let dialWatching = false
   let view: View = { agents: [], machine: { id: '', computerId: options.machineId, name: 'This machine' }, signedIn: false, environment: '', hasWindow: false }
+  /** Whether a view landed: before one, `view.agents` is a stand-in, and the dial setup must not read it as the core
+   *  listing no Claude agent, which would take out the skill a Harness Claude agent brought (services/devices.ts). */
+  let viewed = false
   /** One ask of the core's view at a time: the dial's tick and ⌘K asking together share it. */
   let viewing: Promise<void> | null = null
   const refresh = (): Promise<void> => {
@@ -95,6 +98,7 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     if (!core) return Promise.resolve()
     const asking = core.query('view').then((answer) => {
       if (!Array.isArray(answer.agents)) return
+      viewed = true
       const machine = object(answer.machine)
       view = {
         agents: answer.agents as Viewed[],
@@ -217,6 +221,7 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     cableDisabled: env.CABLE_DISABLE,
     faults: faultsOf(processEnv.HARNESSD_TEST_FAULTS),
     refresh,
+    agentsRead: () => viewed,
     onCoreGone: (run) => { coreGone = run },
     // Their own listener: the devices started inside the core's process are given none but on Windows (services/inline.ts).
     listen: listenForDevices(options.dataDir, options.platform ?? process.platform, options.openListener ?? openDevicesListener),

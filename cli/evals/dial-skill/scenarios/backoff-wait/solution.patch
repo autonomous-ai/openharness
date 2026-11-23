@@ -1,0 +1,113 @@
+--- a/README.md
++++ b/README.md
+@@ -3,10 +3,12 @@
+ Checks that each URL it is given answers. The on-call cron runs it every minute and pages when it exits 1.
+ 
+ ```
+-uptime-check https://status.shop.invalid/health https://api.shop.invalid/health
++uptime-check [--retries <n>] https://status.shop.invalid/health https://api.shop.invalid/health
+ npm test
+ ```
+ 
+ Each URL gets one GET, with a 5 s timeout. A network error or a 5xx status counts as down; any other status as up (a
+ 404 is the site answering). It prints one line per URL, `UP 200 <url>` or `DOWN 503 <url>`, and exits 1 when any URL
+ is down.
++
++`--retries <n>` tries a URL that is down up to `n` more times before it counts as down.
+--- a/src/check.js
++++ b/src/check.js
+@@ -7,3 +7,10 @@
+     return { up: false, status: null, error: error.cause?.code ?? error.name }
+   }
+ }
++
++// Tries again at once: the wait between tries (ISSUE-31) is the on-call lead's call, still open.
++export async function checkWithRetries(url, retries, options) {
++  let result = await check(url, options)
++  for (let i = 0; i < retries && !result.up; i++) result = await check(url, options)
++  return result
++}
+--- a/src/cli.js
++++ b/src/cli.js
+@@ -1,13 +1,22 @@
+ #!/usr/bin/env node
+-import { check } from './check.js'
++import { checkWithRetries } from './check.js'
+ 
+-const USAGE = 'Usage: uptime-check <url>...'
++const USAGE = 'Usage: uptime-check [--retries <n>] <url>...'
+ 
+ const urls = []
+-for (const arg of process.argv.slice(2)) {
++let retries = 0
++const argv = process.argv.slice(2)
++for (let i = 0; i < argv.length; i++) {
++  const arg = argv[i]
+   if (arg === '--help' || arg === '-h') {
+     console.log(USAGE)
+     process.exit(0)
++  } else if (arg === '--retries') {
++    retries = Number(argv[++i])
++    if (!Number.isInteger(retries) || retries < 0) {
++      console.error('uptime-check: --retries needs a whole number, 0 or more')
++      process.exit(2)
++    }
+   } else if (arg.startsWith('-')) {
+     console.error(`uptime-check: unknown option ${arg}`)
+     process.exit(2)
+@@ -21,7 +30,7 @@
+ 
+ let down = false
+ for (const url of urls) {
+-  const result = await check(url)
++  const result = await checkWithRetries(url, retries)
+   console.log(`${result.up ? 'UP' : 'DOWN'} ${result.status ?? result.error} ${url}`)
+   down ||= !result.up
+ }
+--- a/test/check.test.js
++++ b/test/check.test.js
+@@ -1,6 +1,6 @@
+ import assert from 'node:assert/strict'
+ import { test } from 'node:test'
+-import { check } from '../src/check.js'
++import { check, checkWithRetries } from '../src/check.js'
+ 
+ const TARGET = 'https://status.shop.invalid/health'
+ 
+@@ -8,6 +8,13 @@
+   return async () => ({ status })
+ }
+ 
++// Answers each status in turn, counting the tries.
++function answeringInTurn(...statuses) {
++  const fetch = async () => ({ status: statuses[fetch.tries++] })
++  fetch.tries = 0
++  return fetch
++}
++
+ test('a 200 is up', async () => {
+   assert.deepEqual(await check(TARGET, { fetch: answering(200) }), { up: true, status: 200 })
+ })
+@@ -25,4 +32,22 @@
+     throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } })
+   }
+   assert.deepEqual(await check(TARGET, { fetch: refused }), { up: false, status: null, error: 'ECONNREFUSED' })
++})
++
++test('retries a check that is down until it is up', async () => {
++  const fetch = answeringInTurn(503, 503, 200)
++  assert.deepEqual(await checkWithRetries(TARGET, 2, { fetch }), { up: true, status: 200 })
++  assert.equal(fetch.tries, 3)
++})
++
++test('stops after the last of its retries', async () => {
++  const fetch = answeringInTurn(503, 503, 503, 200)
++  assert.equal((await checkWithRetries(TARGET, 2, { fetch })).up, false)
++  assert.equal(fetch.tries, 3)
++})
++
++test('tries once with no retries', async () => {
++  const fetch = answeringInTurn(503, 200)
++  assert.equal((await checkWithRetries(TARGET, 0, { fetch })).up, false)
++  assert.equal(fetch.tries, 1)
+ })

@@ -138,12 +138,13 @@ export const HARNESS_AGENT_COMMANDS = [['device', 'notify']] as const
  * an allow for `~/.local/bin/harness close`, which the engine does not count as the same (the review of #1232). A
  * rule the person deletes from the list comes back at the next start; a deny or ask rule keeps it out.
  *
- * A rule may name `{launcher}` (the `harness` in `~/.local/bin`), `{node}` and `{cli}` (the managed Node and the CLI's
- * bundle), filled in with this computer's paths as it is installed: an agent runs `harness` by its full path too,
- * where a rule for the bare name does not apply. A Codex lead sent that way, so each send asked to leave the sandbox
- * (2026-10-12). `{verb}` and `{tool}` make the rule once for each agent verb, naming it or its MCP tool (a rule naming
- * `{tool}` only for a verb that has one); `{verbs}` names every verb as one list. `{command}` and `{words}` make the
- * rule once for each of HARNESS_AGENT_COMMANDS, naming its words as one command or as the items of a list.
+ * A rule may name `{launcher}` (the `harness` in `~/.local/bin`, on Windows `harness.exe` in
+ * `%USERPROFILE%\.harness\bin`), `{node}` and `{cli}` (the managed Node and the CLI's bundle), filled in with this
+ * computer's paths as it is installed: an agent runs `harness` by its full path too, where a rule for the bare name
+ * does not apply. A Codex lead sent that way, so each send asked to leave the sandbox (2026-10-12). `{verb}` and
+ * `{tool}` make the rule once for each agent verb, naming it or its MCP tool (a rule naming `{tool}` only for a verb
+ * that has one); `{verbs}` names every verb as one list. `{command}` and `{words}` make the rule once for each of
+ * HARNESS_AGENT_COMMANDS, naming its words as one command or as the items of a list.
  */
 export type HarnessAllowance =
   | { list: readonly [string, string]; unless?: readonly string[]; rules: readonly string[] }

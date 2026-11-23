@@ -7,8 +7,9 @@
  */
 import { mkdirSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, win32 } from 'node:path'
 import { env } from '../../config/env.js'
+import { harnessPath } from '../../config/harnessHome.js'
 import { HARNESS_AGENT_COMMANDS, HARNESS_AGENT_TOOLS, HARNESS_AGENT_VERBS, type HarnessAgentVerb, type HookSettings } from '../facets/hooks.js'
 import { prepareReviewed } from './hookReview.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
@@ -57,13 +58,13 @@ export async function installHookSettings(engine: HookEngine, settings: HookSett
     const entry = notifyHookEntry(settings, hookArgv(port, engine, settings.commandNamesHome ? home : undefined, undefined, options.environment), platform)!
     return await runHookPreparation(files, async attempt => {
       await installNotifyHooks(settings, port, home, entry, attempt, platform)
-      // Windows: Agent Messages' block is a POSIX shell line, and the allowance names the POSIX launcher. Neither is
-      // installed there yet (Phase B4 notes), so neither is the confirmation of the required files that stage uses.
-      if (platform !== 'win32') {
-        const required = files.map(file => inspectHookFile(file))
-        const verifyRequired = () => { attempt.verify(); for (const file of required) file.verify() }
-        if (settings.inbox || settings.allow) await installMessagesBlock(engine, settings, home, attempt, verifyRequired)
-      }
+      const required = files.map(file => inspectHookFile(file))
+      const verifyRequired = () => { attempt.verify(); for (const file of required) file.verify() }
+      // Windows: Agent Messages' block is a POSIX shell line, so it is not installed there (Phase B4 notes). The
+      // allowance is: without it an agent there stops on a permission question nobody at the dial sees
+      // (docs/plans/2026-11-22-needs-you-notify-design.md).
+      const own = platform === 'win32' ? { ...settings, inbox: undefined } : settings
+      if (own.inbox || own.allow) await installMessagesBlock(engine, own, home, attempt, verifyRequired, platform)
       return true
     }, { ...options, identity: JSON.stringify([engine, identitySettings(settings, platform), port, home, entry.args ? [entry.command, entry.args] : entry.command, env.HARNESS_AGENT_MESSAGES_DIR]) })
   } catch (err) {
@@ -83,13 +84,16 @@ export async function installHookSettings(engine: HookEngine, settings: HookSett
  * harmless only while the required hooks remain exactly as confirmed; an uncertain partial write holds launch.
  * A message can still reach an idle agent, typed, and a command not allowed asks, as before.
  */
-async function installMessagesBlock(engine: HookEngine, settings: HookSettings, home: string, attempt: HookPreparationAttempt, verifyRequired: () => void): Promise<void> {
+async function installMessagesBlock(engine: HookEngine, settings: HookSettings, home: string, attempt: HookPreparationAttempt, verifyRequired: () => void,
+  platform: NodeJS.Platform): Promise<void> {
   const file = join(home, settings.fileName)
   const root = env.HARNESS_AGENT_MESSAGES_DIR
   const inboxCommand = messagesCommand(root)
   const { inbox, allow } = settings
   let blockChanged = inbox !== undefined
-  try {
+  // The settings file only for what goes in it: on Windows Codex has no Messages block and its allowance is a file of
+  // its own, so its hooks.json and review records stay as the hooks' own write left them.
+  if (inbox || (allow && 'list' in allow)) try {
     verifyRequired()
     const observed = inspectHookFile(file)
     const current = (observed.content === null ? {} : JSON.parse(observed.content)) as Settings
@@ -98,7 +102,7 @@ async function installMessagesBlock(engine: HookEngine, settings: HookSettings, 
       throw new HookPreparationHeld('the hook settings do not have the declared object shape')
     }
     let allowed = false
-    if (allow && 'list' in allow) for (const group of harnessRules(allow.rules)) allowed = withRules(current, allow.list, group, allow.unless) || allowed
+    if (allow && 'list' in allow) for (const group of harnessRules(allow.rules, platform)) allowed = withRules(current, allow.list, group, allow.unless ?? [], platform) || allowed
     if (inbox) {
       const blocks = current.hooks[inbox.event] ?? []
       const ours = blocks.filter(isMessagesBlock)
@@ -108,7 +112,7 @@ async function installMessagesBlock(engine: HookEngine, settings: HookSettings, 
     }
     const changed = allowed || blockChanged
     const next = changed ? JSON.stringify(current, null, 2) + '\n' : observed.content!
-    const reviewed = settings.reviewed ? prepareReviewed(settings.reviewed, home, file, JSON.parse(next) as Settings) : null
+    const reviewed = settings.reviewed ? prepareReviewed(settings.reviewed, home, file, JSON.parse(next) as Settings, platform) : null
     reviewed?.verify()
     const published = await observed.replace(next, attempt)
     const approval = await reviewed?.commit(attempt)
@@ -128,24 +132,28 @@ async function installMessagesBlock(engine: HookEngine, settings: HookSettings, 
   }
   if (allow && 'fileName' in allow) {
     // Each path written as a Starlark string's contents: the file's rules are `prefix_rule(pattern=["…"])`.
-    try { writeRulesFile(join(home, allow.fileName), harnessRules(allow.rules, (path) => JSON.stringify(path).slice(1, -1)).flat().join('\n')) } catch (err) {
+    try { writeRulesFile(join(home, allow.fileName), harnessRules(allow.rules, platform, (path) => JSON.stringify(path).slice(1, -1)).flat().join('\n')) } catch (err) {
       console.warn(`[hooks] could not allow Harness's agent commands in ${engineName(engine)}'s ${allow.fileName} (the engine asks before each one):`, errorKind(err))
     }
   }
 }
 
 /**
- * The declared rules as this computer has them (facets/hooks.ts HarnessAllowance): its paths in place of
- * `{launcher}`, `{node}` and `{cli}`, every verb as one Starlark list in place of `{verbs}`, a rule that names
- * `{verb}` or `{tool}` once for each agent verb (`{tool}` only for a verb with an MCP tool), and a rule that names
- * `{command}` or `{words}` once for each of HARNESS_AGENT_COMMANDS. In groups that are added together or not at all:
- * the rules naming no verb or command, then each verb's rules of one kind (`Bash(…)`, `mcp__…`), its spellings of the
- * same command, then each command's the same way, so a deny for it keeps out its own rules alone; a kind with no rule
- * for a verb is no group.
+ * The declared rules as this computer has them (facets/hooks.ts HarnessAllowance): its paths in place of `{launcher}`
+ * (as [platform] spells it: `harness.exe` in Harness's `bin` folder on Windows, where install.ps1 puts it, else the
+ * `harness` in HARNESS_BIN_DIR), `{node}` and `{cli}` (on Windows `{cli}` names a file install.ps1 never writes, as
+ * it keeps the bundle in `cli\<version>\cli.js`: Codex's `{node} {cli}` rule matches no command there), every verb as
+ * one Starlark list in place of `{verbs}`, a rule that names `{verb}` or `{tool}` once for each agent verb (`{tool}`
+ * only for a verb with an MCP tool), and a rule that names `{command}` or `{words}` once for each of
+ * HARNESS_AGENT_COMMANDS. In groups that are added together or not at all: the rules naming no verb or command, then
+ * each verb's rules of one kind (`Bash(…)`, `mcp__…`), its spellings of the same command, then each command's the same
+ * way, so a deny for it keeps out its own rules alone; a kind with no rule for a verb is no group.
  */
-export function harnessRules(rules: readonly string[], quote: (path: string) => string = (path) => path): string[][] {
+export function harnessRules(rules: readonly string[], platform: NodeJS.Platform = hostPlatform(),
+  quote: (path: string) => string = (path) => path): string[][] {
   const paths: Record<string, string> = {
-    launcher: join(env.HARNESS_BIN_DIR, 'harness'), node: managedNodePath(), cli: join(env.ADAPTER_CLI_DIR, 'cli.js'),
+    launcher: platform === 'win32' ? win32.join(harnessPath('bin', homedir(), 'win32'), 'harness.exe') : join(env.HARNESS_BIN_DIR, 'harness'),
+    node: managedNodePath(), cli: join(env.ADAPTER_CLI_DIR, 'cli.js'),
   }
   const verbs = `[${HARNESS_AGENT_VERBS.map((verb) => JSON.stringify(verb)).join(', ')}]`
   const tools: Partial<Record<HarnessAgentVerb, string>> = HARNESS_AGENT_TOOLS
@@ -169,16 +177,24 @@ export function harnessRules(rules: readonly string[], quote: (path: string) => 
 /**
  * Add a group of `rules` to the list at `[table, list]` (`permissions.allow`), creating what is missing and keeping
  * every other rule. A shape Harness does not know is left as it is: the person's rules are never rewritten to fit.
- * None of the group is added where one of the person's `unless` lists (`deny`, `ask`) touches any of it.
+ * None of the group is added where one of the person's `unless` lists (`deny`, `ask`) touches any of it, and the
+ * group's own rules already there are taken out: a deny added after them in another spelling would not stop the
+ * engine running the command on ours. The person's other rules for the same command stay.
  */
-function withRules(settings: Settings, [table, list]: readonly [string, string], rules: readonly string[], unless: readonly string[] = []): boolean {
+function withRules(settings: Settings, [table, list]: readonly [string, string], rules: readonly string[], unless: readonly string[],
+  platform: NodeJS.Platform): boolean {
   const at = settings[table] ?? {}
   if (!at || typeof at !== 'object' || Array.isArray(at)) return false
   const lists = at as Record<string, unknown>
   const current = lists[list] ?? []
   if (!Array.isArray(current)) return false
   const theirs = unless.flatMap((name) => Array.isArray(lists[name]) ? (lists[name] as unknown[]).filter((rule): rule is string => typeof rule === 'string') : [])
-  if (rules.some((rule) => theirs.some((other) => touches(other, rule)))) return false
+  if (rules.some((rule) => theirs.some((other) => touches(other, rule, platform)))) {
+    const kept = current.filter((rule) => !rules.includes(rule))
+    if (kept.length === current.length) return false
+    settings[table] = { ...at, [list]: kept }
+    return true
+  }
   const missing = rules.filter((rule) => !current.includes(rule))
   if (!missing.length) return false
   settings[table] = { ...at, [list]: [...current, ...missing] }
@@ -189,12 +205,20 @@ function withRules(settings: Settings, [table, list]: readonly [string, string],
  * Whether the person's rule names the same command as ours, a broader one or a narrower one: with the closing
  * parenthesis and a trailing wildcard left off, one starts with the other. `Bash(harness:*)`, `Bash(harness close
  * --now)`, `Bash` and `mcp__harness` all touch `Bash(harness close:*)` or `mcp__harness__harness_close`; an unrelated
- * prefix such as `Bash(har*)` does too, which only leaves an allow out.
+ * prefix such as `Bash(har*)` does too, which only leaves an allow out. The person's rule counts as written, and with
+ * its program word by its name alone: the last part of its path, out of quotes, and on Windows ([platform]), which
+ * finds a program in any case and without its suffix, in lower case and without `.exe`, `.cmd`, `.bat` or `.com`. So
+ * `Bash(~/.local/bin/harness close)` touches it, and on Windows `Bash(Harness.exe:*)` and `Bash(C:/…/harness.exe close)`.
  */
-function touches(theirs: string, ours: string): boolean {
+function touches(theirs: string, ours: string, platform: NodeJS.Platform): boolean {
   const stem = (rule: string) => rule.replace(/\)$/, '').replace(/(:\*|\s*\*)$/, '').trimEnd()
-  const a = stem(theirs), b = stem(ours)
-  return a.length > 0 && (b.startsWith(a) || a.startsWith(b))
+  const b = stem(ours)
+  const meets = (a: string) => a.length > 0 && (b.startsWith(a) || a.startsWith(b))
+  const named = stem(theirs).replace(/^([A-Za-z]*\()("[^"]*"|'[^']*'|\S*)/, (_, open: string, word: string) => {
+    const last = word.replace(/^["']|["']$/g, '').split(/[\\/]/).pop()!
+    return open + (platform === 'win32' ? last.toLowerCase().replace(/\.(exe|cmd|bat|com)$/, '') : last)
+  })
+  return meets(stem(theirs)) || meets(named)
 }
 
 /** How Harness's rules file begins in every release: the commands the header lists after it change from one to the

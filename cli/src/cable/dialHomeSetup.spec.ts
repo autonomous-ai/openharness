@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DIAL_PLUGIN_ID, DIAL_SKILL, removeSkill, writeSkill } from '../devices/dialSkill.js'
 import { DIAL_SETUP_FILE, DIAL_SKILL_FILE, MAX_HOMES, readRemoved, readSetup, writeRemoved, writeSetup, type DialRemoved, type DialSkillHomes } from '../devices/dialSkillFiles.js'
 import type { RolloutOwner } from './codexRolloutHome.js'
-import { createDialHomeSetup, type DialHomeSetupDeps } from './dialHomeSetup.js'
+import { createDialHomeSetup, type ClaudeAgents, type DialHomeSetupDeps } from './dialHomeSetup.js'
 
 // A copy of the module, so a test can watch the file calls a scan makes.
 vi.mock('node:fs', async (original) => ({ ...await original<object>() }))
@@ -84,7 +84,9 @@ function fileCalls(): [string, unknown][] {
 
 /** A setup over throwaway homes, on a computer a dial attached on once unless [dial] is false or the test gives its own
  *  data dir, whose record it writes itself. `removed` reads the real dial-skill.json unless the test gives its own;
- *  every call to it is counted. The day's tally is `counted`, and `clock.at` the monotonic clock. */
+ *  every call to it is counted. The day's tally is `counted`, and `clock.at` the monotonic clock. The core's Claude
+ *  agents are `agents.now`, none unless the test says so, each read counted in `agents.reads`: a none from the start
+ *  holds Claude Code with its plugin not on until it has held a minute, and a scan says so once. */
 function rig(over: Partial<DialHomeSetupDeps> = {}, dial = true) {
   const dataDir = over.dataDir ?? folder()
   if (!over.dataDir && dial) dialOnce(dataDir)
@@ -93,11 +95,16 @@ function rig(over: Partial<DialHomeSetupDeps> = {}, dial = true) {
   const counted: string[][] = []
   const clock = { at: 0 }
   const read = { removed: 0 }
+  const agents: { now: ClaudeAgents; reads: number } = { now: 'none', reads: 0 }
   const deps: DialHomeSetupDeps = {
     uid,
     claudeHome: folder(),
     codexHome: folder(),
     adopted: () => ({ claude: [], codex: [] }),
+    claudeAgents: () => {
+      agents.reads++
+      return agents.now
+    },
     log: (line) => lines.push(line),
     now: () => clock.at,
     count: (engine, kind, reason) => { counted.push(reason === undefined ? [engine, kind] : [engine, kind, reason]) },
@@ -108,7 +115,7 @@ function rig(over: Partial<DialHomeSetupDeps> = {}, dial = true) {
       return removed()
     },
   }
-  return { ...deps, lines, counted, clock, read, writer: createDialHomeSetup(deps) }
+  return { ...deps, lines, counted, clock, read, agents, writer: createDialHomeSetup(deps) }
 }
 
 describe('a computer that never had a dial', () => {
@@ -259,7 +266,7 @@ describe('the devices set the dial skill up', () => {
     expect(hasSkill(inTerminal)).toBe(true)
     expect(hasSkill(server)).toBe(true)
     expect(sorted(readSetup(r.dataDir).homes.codex)).toEqual(sorted([r.codexHome, inTerminal, server].map(skillsOf)))
-    expect(r.lines).toEqual([counts([0, 0], [2, 0])])
+    expect(r.lines).toEqual(['dial skill: claude held (agents not known)', counts([0, 0], [2, 0])])
   })
 
   it('a profile linked to another home\'s skills is one write', () => {
@@ -273,7 +280,7 @@ describe('the devices set the dial skill up', () => {
 
     expect(hasSkill(profile)).toBe(true)
     expect(readSetup(r.dataDir).homes.codex).toEqual([shared])
-    expect(r.lines).toEqual([counts([0, 0], [1, 0])])
+    expect(r.lines).toEqual([counts([0, 0], [1, 0]), 'dial skill: claude held (agents not known)'])
   })
 
   it('an Orca Codex home gets the skill, and a second start pass writes nothing twice', () => {
@@ -359,10 +366,13 @@ describe('the devices set the dial skill up', () => {
     writeRemoved(r.dataDir, 'claude', false, [skillsOf(recorded)])
 
     r.writer.started()
+    // Off once the core's none has held a minute: at the start it is not known yet.
+    r.clock.at = 60_000
+    r.writer.scanned([])
 
     expect(existsSync(join(r.claudeHome, 'skills', 'dial'))).toBe(false)
     expect(existsSync(join(recorded, 'skills', 'dial'))).toBe(false)
-    expect(r.lines).toEqual([counts([0, 2], [1, 0])])
+    expect(r.lines).toEqual([counts([0, 0], [1, 0]), counts([0, 2], [0, 0])])
   })
 
   it('the plugin uninstalled through /plugin takes the skill at the next scan', () => {
@@ -371,8 +381,10 @@ describe('the devices set the dial skill up', () => {
     r.writer.started()
     expect(hasSkill(r.claudeHome)).toBe(true)
 
-    // Claude Code writes its settings again, without the entry; dial-skill.json is untouched.
+    // Claude Code writes its settings again, without the entry, a minute on, once the core's none has held;
+    // dial-skill.json is untouched.
     writeFileSync(join(r.claudeHome, 'settings.json'), JSON.stringify({ enabledPlugins: {} }))
+    r.clock.at = 60_000
     r.writer.scanned([])
 
     expect(existsSync(skillFile(r.claudeHome))).toBe(false)
@@ -696,7 +708,7 @@ describe('the devices set the dial skill up', () => {
     r.writer.scanned(owners)
     r.writer.scanned(owners)
 
-    expect(r.lines).toEqual(['dial skill: path refused (shape)', 'dial skill: path refused (owner)', 'dial skill: path refused (missing)'])
+    expect(r.lines).toEqual(['dial skill: claude held (agents not known)', 'dial skill: path refused (shape)', 'dial skill: path refused (owner)', 'dial skill: path refused (missing)'])
     expect(r.lines.join('\n')).not.toContain('/')
     expect(existsSync(join(someone, 'skills'))).toBe(false)
     expect(existsSync(gone)).toBe(false)
@@ -885,6 +897,14 @@ describe('the devices set the dial skill up', () => {
 })
 
 describe('what the person removed stays removed, and Harness\'s own is kept current', () => {
+  /** A rig whose Claude Code answer is its plugin's, on: it stays as the clock runs, where the core's none coming to hold
+   *  a minute on would turn Claude Code off, and an engine turned off tries every refused home again. */
+  const steady = (): ReturnType<typeof rig> => {
+    const r = rig()
+    pluginOn(r.claudeHome)
+    return r
+  }
+
   it('a recorded home whose skill was deleted is not written again: at a start, an attach and a scan', () => {
     const r = rig()
     const home = folder()
@@ -901,7 +921,7 @@ describe('what the person removed stays removed, and Harness\'s own is kept curr
     expect(existsSync(skillFile(home))).toBe(false)
     expect(readSetup(r.dataDir).homes.codex).toEqual(listed)
     expect(r.counted).toEqual([['codex', 'left removed']])
-    expect(r.lines).toEqual([])
+    expect(r.lines).toEqual(['dial skill: claude held (agents not known)'])
   })
 
   it('a Claude Code skill the person deleted stays deleted through the plugin turned off and on again', () => {
@@ -1011,7 +1031,7 @@ describe('what the person removed stays removed, and Harness\'s own is kept curr
   })
 
   it('a home that could not be written is tried again no sooner than an hour later', () => {
-    const r = rig()
+    const r = steady()
     // A dial folder that takes no file.
     const dial = join(skillsAt(r.codexHome), 'dial')
     mkdirSync(dial)
@@ -1032,7 +1052,7 @@ describe('what the person removed stays removed, and Harness\'s own is kept curr
   })
 
   it('each refused home waits out its own hour', () => {
-    const r = rig()
+    const r = steady()
     // No skills folder to be had: a file in its place.
     const [a, b] = [folder(), folder()]
     for (const home of [a, b]) writeFileSync(join(home, 'skills'), 'mine')
@@ -1055,21 +1075,21 @@ describe('what the person removed stays removed, and Harness\'s own is kept curr
   })
 
   it('Claude Code saving another setting tries no refused home again', () => {
-    const r = rig()
+    const r = steady()
     const noFolder = folder()
     writeFileSync(join(noFolder, 'skills'), 'mine')
     r.writer.started()
     r.writer.scanned([ownerIn(noFolder)])
 
     r.clock.at = 60_000
-    writeFileSync(join(r.claudeHome, 'settings.json'), JSON.stringify({ theme: 'dark' }))
+    writeFileSync(join(r.claudeHome, 'settings.json'), JSON.stringify({ theme: 'dark', enabledPlugins: { [DIAL_PLUGIN_ID]: true } }))
     r.writer.scanned([ownerIn(noFolder)])
 
     expect(r.counted.filter(([, kind]) => kind === 'failed')).toEqual([['codex', 'failed', 'write']])
   })
 
   it('a home that could not be written waits out its hour through an attach', () => {
-    const r = rig()
+    const r = steady()
     // A dial folder that takes no file.
     const dial = join(skillsAt(r.codexHome), 'dial')
     mkdirSync(dial)
@@ -1088,7 +1108,7 @@ describe('what the person removed stays removed, and Harness\'s own is kept curr
   })
 
   it('a recorded folder whose skill cannot be brought current is tried once, and waits out its hour through an attach', () => {
-    const r = rig()
+    const r = steady()
     // The default home's, so the pass's look at the record and at the home both meet it.
     const skills = skillsAt(r.codexHome)
     oldSkillIn(skills)
@@ -1106,6 +1126,298 @@ describe('what the person removed stays removed, and Harness\'s own is kept curr
     r.writer.attached()
     expect(hasSkill(r.codexHome)).toBe(true)
     expect(r.counted).toEqual([['codex', 'failed', 'write'], ['codex', 'updated']])
+  })
+})
+
+describe('Claude Code while Harness runs a Claude agent of its own (docs/plans/2026-11-22-needs-you-notify-design.md)', () => {
+  /** The plugin turned off by the person, as `claude plugin disable` and /plugin leave it. */
+  const pluginOff = (claudeHome: string): void =>
+    writeFileSync(join(claudeHome, 'settings.json'), JSON.stringify({ enabledPlugins: { [DIAL_PLUGIN_ID]: false } }))
+  /** The plugin uninstalled through /plugin: its entry gone, which says nothing of the person's wish. */
+  const pluginGone = (claudeHome: string): void =>
+    writeFileSync(join(claudeHome, 'settings.json'), JSON.stringify({ enabledPlugins: {} }))
+  /** The open scan's interval (services/devices.ts OPEN_SCAN_MS): how long a none must hold before it is acted on. */
+  const SCAN_MS = 60_000
+
+  it('Claude Code on with its plugin not on while Harness lists a Claude agent of its own', () => {
+    const r = rig()
+    r.agents.now = 'listed'
+
+    r.writer.started()
+
+    expect(hasSkill(r.claudeHome)).toBe(true)
+    expect(readSetup(r.dataDir).homes.claude).toEqual([skillsOf(r.claudeHome)])
+  })
+
+  it('a write a Harness Claude agent brought with the plugin not on counts set up, with agent', () => {
+    const adopted = folder()
+    const r = rig({ adopted: () => ({ claude: [adopted], codex: [] }) })
+    writeSkill(skillsAt(adopted))
+    r.agents.now = 'listed'
+
+    r.writer.started()
+
+    // The adopted home already held it: only the default home's is a write.
+    expect(r.counted).toEqual([['claude', 'set up', 'agent'], ['codex', 'set up']])
+  })
+
+  it('the last Harness Claude agent gone with the plugin not on takes our skill once none has held a scan\'s minute', () => {
+    // A core restarting lists none of its agents until it has restored them: acted on at once, that none would take
+    // the skill out of every Claude Code home.
+    const r = rig()
+    r.agents.now = 'listed'
+    r.writer.started()
+    expect(hasSkill(r.claudeHome)).toBe(true)
+
+    // Two passes back to back, as a moment runs them, and a scan within the minute keep it.
+    r.agents.now = 'none'
+    r.writer.scanned([])
+    r.writer.scanned([])
+    r.clock.at += SCAN_MS - 1
+    r.writer.scanned([])
+    expect(hasSkill(r.claudeHome)).toBe(true)
+    expect(readSetup(r.dataDir).homes.claude).toEqual([skillsOf(r.claudeHome)])
+
+    r.clock.at += 1
+    r.writer.scanned([])
+    expect(existsSync(skillFile(r.claudeHome))).toBe(false)
+    expect(readSetup(r.dataDir).homes.claude).toEqual([])
+  })
+
+  it('a Claude agent listed again within the minute starts the wait over', () => {
+    const r = rig()
+    r.agents.now = 'listed'
+    r.writer.started()
+    r.agents.now = 'none'
+    r.writer.scanned([])
+    r.clock.at += SCAN_MS / 2
+    r.agents.now = 'listed'
+    r.writer.scanned([])
+
+    r.clock.at += SCAN_MS / 2
+    r.agents.now = 'none'
+    r.writer.scanned([])
+    expect(hasSkill(r.claudeHome)).toBe(true)
+
+    r.clock.at += SCAN_MS
+    r.writer.scanned([])
+    expect(existsSync(skillFile(r.claudeHome))).toBe(false)
+  })
+
+  it('a none read again after no pass for longer than two scans starts its wait over', () => {
+    // No dial for hours, then one attaches while a restarted core restores its agents: the none it lists then is new,
+    // not the one read before the dial went, and no read in between saw the core list none.
+    const r = rig()
+    r.agents.now = 'listed'
+    r.writer.started()
+    r.agents.now = 'none'
+    r.writer.scanned([])
+
+    r.clock.at += 2 * 3_600_000
+    r.writer.attached()
+    expect(hasSkill(r.claudeHome)).toBe(true)
+    expect(readSetup(r.dataDir).homes.claude).toEqual([skillsOf(r.claudeHome)])
+
+    r.clock.at += SCAN_MS
+    r.writer.scanned([])
+    expect(existsSync(skillFile(r.claudeHome))).toBe(false)
+  })
+
+  it('none right after not known leaves everything as it is until it has held a scan\'s minute', () => {
+    // A devices start beside a core restoring its agents, with the plugin not on: its first view lists none of them yet.
+    const r = rig()
+    const skills = skillsAt(r.claudeHome)
+    oldSkillIn(skills)
+    dialOnce(r.dataDir, { claude: [skills], codex: [] })
+    r.agents.now = 'unknown'
+    r.writer.started()
+
+    r.agents.now = 'none'
+    r.writer.scanned([])
+    r.writer.scanned([])
+
+    expect(existsSync(skillFile(r.claudeHome)) && readFileSync(skillFile(r.claudeHome), 'utf8')).toBe(OLD_SKILL)
+    expect(readSetup(r.dataDir).homes.claude).toEqual([skills])
+
+    r.clock.at += SCAN_MS
+    r.writer.scanned([])
+    expect(existsSync(skillFile(r.claudeHome))).toBe(false)
+    expect(readSetup(r.dataDir).homes.claude).toEqual([])
+  })
+
+  it('the person\'s own plugin off wins over a Harness Claude agent', () => {
+    const r = rig()
+    pluginOff(r.claudeHome)
+    r.agents.now = 'listed'
+    r.writer.started()
+    expect(existsSync(join(r.claudeHome, 'skills'))).toBe(false)
+
+    // The skill there from a Harness Claude agent, then the person turns the plugin off.
+    const later = rig()
+    later.agents.now = 'listed'
+    later.writer.started()
+    expect(hasSkill(later.claudeHome)).toBe(true)
+    pluginOff(later.claudeHome)
+    later.writer.scanned([])
+    expect(existsSync(skillFile(later.claudeHome))).toBe(false)
+    expect(readSetup(later.dataDir).homes.claude).toEqual([])
+  })
+
+  it('the person\'s plugin off is one read: settings half written right after it still keep the skill out', () => {
+    // Claude Code writing its settings again during the pass: a second read would find them saying nothing.
+    const r = rig()
+    pluginOff(r.claudeHome)
+    r.agents.now = 'listed'
+    const settings = join(r.claudeHome, 'settings.json')
+    const module = fs as unknown as Record<string, (...args: unknown[]) => unknown>
+    const open = module.openSync
+    let opens = 0
+    vi.spyOn(module, 'openSync').mockImplementation((...args) => {
+      if (args[0] === settings && ++opens === 2) writeFileSync(settings, '{"enabledPlugins":{')
+      return open(...args)
+    })
+
+    r.writer.started()
+
+    expect(existsSync(join(r.claudeHome, 'skills'))).toBe(false)
+  })
+
+  it('claude: false wins over a Harness Claude agent', () => {
+    const r = rig({ removed: () => ({ claude: true }) })
+    r.agents.now = 'listed'
+
+    r.writer.started()
+
+    expect(existsSync(join(r.claudeHome, 'skills'))).toBe(false)
+  })
+
+  it('not known yet at a start changes nothing', () => {
+    // A devices restart with the plugin off, before the core's agents are read: the skill a Harness Claude agent brought
+    // is neither taken out nor brought current, and a home without one gets none.
+    const adopted = folder()
+    const r = rig({ adopted: () => ({ claude: [adopted], codex: [] }) })
+    const skills = skillsAt(r.claudeHome)
+    oldSkillIn(skills)
+    dialOnce(r.dataDir, { claude: [skills], codex: [] })
+    r.agents.now = 'unknown'
+
+    r.writer.started()
+
+    expect(existsSync(skillFile(r.claudeHome)) && readFileSync(skillFile(r.claudeHome), 'utf8')).toBe(OLD_SKILL)
+    expect(readSetup(r.dataDir).homes.claude).toEqual([skills])
+    expect(existsSync(join(adopted, 'skills'))).toBe(false)
+
+    // The first view lands, with a Claude agent listed: a new stamp, so the next scan sets Claude Code up.
+    r.agents.now = 'listed'
+    r.writer.scanned([])
+
+    expect(hasSkill(r.claudeHome)).toBe(true)
+    expect(hasSkill(adopted)).toBe(true)
+    expect(sorted(readSetup(r.dataDir).homes.claude)).toEqual(sorted([skills, skillsOf(adopted)]))
+  })
+
+  it('a scan that still finds Claude Code held says so once; the start pass does not', () => {
+    const r = rig()
+    r.agents.now = 'unknown'
+    r.writer.started()
+    r.writer.attached()
+    expect(r.lines).toEqual([counts([0, 0], [1, 0])])
+
+    r.writer.scanned([])
+    r.writer.scanned([])
+
+    expect(r.lines).toEqual([counts([0, 0], [1, 0]), 'dial skill: claude held (agents not known)'])
+  })
+
+  it('an unknown read after a known one keeps the known answer', () => {
+    const r = rig()
+    rmSync(r.claudeHome, { recursive: true })
+    r.agents.now = 'listed'
+    r.writer.started()
+
+    // Claude Code installed since, and a read that does not know: the scan writes its home as the known answer says.
+    mkdirSync(r.claudeHome)
+    r.agents.now = 'unknown'
+    r.writer.scanned([])
+
+    expect(hasSkill(r.claudeHome)).toBe(true)
+    expect(readSetup(r.dataDir).homes.claude).toEqual([skillsOf(r.claudeHome)])
+  })
+
+  it('a Codex disable keeps a folder it shares with Claude while Claude is not known yet', () => {
+    const r = rig({ removed: () => ({ codex: true }) })
+    // Codex's skills linked to Claude Code's, as a person may link them, holding the skill a Harness Claude agent brought.
+    const shared = skillsAt(r.claudeHome)
+    symlinkSync(shared, join(r.codexHome, 'skills'))
+    writeSkill(shared)
+    dialOnce(r.dataDir, { claude: [shared], codex: [shared] })
+    r.agents.now = 'unknown'
+
+    r.writer.started()
+
+    expect(hasSkill(r.claudeHome)).toBe(true)
+    expect(readSetup(r.dataDir).homes).toEqual({ claude: [shared], codex: [] })
+  })
+
+  it('the race: the plugin read gone within a pass while not known yet writes nothing more and takes nothing out', () => {
+    // The recorded folder is the person's other home's; the default home has none yet.
+    const listedHome = folder()
+    let reads = 0
+    const r = rig({
+      removed: () => {
+        // Uninstalled through /plugin right after the pass read it on: Codex's read is the second.
+        if (++reads === 2) pluginGone(r.claudeHome)
+        return {}
+      },
+    })
+    pluginOn(r.claudeHome)
+    const listed = skillsAt(listedHome)
+    writeSkill(listed)
+    dialOnce(r.dataDir, { claude: [listed], codex: [] })
+    r.agents.now = 'unknown'
+
+    r.writer.started()
+
+    expect(existsSync(join(r.claudeHome, 'skills'))).toBe(false)
+    expect(hasSkill(listedHome)).toBe(true)
+    expect(readSetup(r.dataDir).homes.claude).toEqual([listed])
+  })
+
+  it('the race: the plugin read gone right after a write while not known yet keeps what was written', () => {
+    const r = rig({
+      removed: () => {
+        if (existsSync(skillFile(r.claudeHome))) pluginGone(r.claudeHome)
+        return {}
+      },
+    })
+    pluginOn(r.claudeHome)
+    r.agents.now = 'unknown'
+
+    r.writer.started()
+
+    expect(hasSkill(r.claudeHome)).toBe(true)
+    expect(readSetup(r.dataDir).homes.claude).toEqual([skillsOf(r.claudeHome)])
+  })
+
+  it('the agents are read once a pass, and not before a dial', () => {
+    const never = rig({}, false)
+    never.writer.started()
+    never.writer.scanned([])
+    expect(never.agents.reads).toBe(0)
+
+    const r = rig()
+    r.writer.started()
+    expect(r.agents.reads).toBe(1)
+    r.writer.attached()
+    expect(r.agents.reads).toBe(2)
+    r.writer.scanned([])
+    expect(r.agents.reads).toBe(3)
+
+    // A changed answer is a new stamp: the scan's one read is the start pass's too.
+    r.agents.now = 'listed'
+    r.writer.scanned([])
+    expect(r.agents.reads).toBe(4)
+    expect(hasSkill(r.claudeHome)).toBe(true)
   })
 })
 

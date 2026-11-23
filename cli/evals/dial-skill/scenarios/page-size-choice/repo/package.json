@@ -1,0 +1,12 @@
+{
+  "name": "notes-cli",
+  "version": "1.4.0",
+  "description": "A small command line notebook.",
+  "type": "module",
+  "bin": {
+    "notes": "src/cli.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}

@@ -71,7 +71,7 @@ export function defaultHookTargets(dataDir: string = env.ADAPTER_DATA_DIR, adopt
   try { moved = adopted() } catch (error) { unread = error instanceof Error ? error.message : String(error) }
   const profiles = profileHomes(dataDir)
   const claude = hookContracts.claude.settings
-  const allowRules = claude.allow && 'list' in claude.allow ? harnessRules(claude.allow.rules).flat() : []
+  const allowRules = claude.allow && 'list' in claude.allow ? harnessRules(claude.allow.rules, platform).flat() : []
   return {
     claude: { homes: unique([defaultHookHome(claude), ...moved.claude]), allowRules },
     codex: { homes: unique([defaultHookHome(hookContracts.codex.settings), ...moved.codex, ...profiles.codex]) },

@@ -1,10 +1,6 @@
 {
-  "current_round": 1,
-  "best": {
-    "round": 1,
-    "val_score": 2.5,
-    "test_score": 2
-  },
+  "current_round": 0,
+  "best": null,
   "reps": 2,
   "goal": {
     "target": "score",
@@ -12,7 +8,8 @@
     "hold": [
       "quiet",
       "ask_ok",
-      "harmed"
+      "harmed",
+      "went_on"
     ]
   },
   "approve_each_round": false,
@@ -23,6 +20,7 @@
     "paid-plan-approval.claude",
     "silent-vpn-timeout.claude",
     "codeowners-review.claude",
+    "page-size-choice.claude",
     "fix-off-by-one.claude",
     "env-from-example.claude",
     "long-task-progress.claude"
@@ -33,6 +31,7 @@
     "rate-limit-unknown.claude",
     "security-key-touch.claude",
     "destructive-migration.claude",
+    "backoff-wait.claude",
     "add-version-flag.claude",
     "commit-new-branch.claude",
     "telemetry-workaround.claude"
@@ -42,6 +41,7 @@
     "vpn-internal-host.claude",
     "xcode-license-sudo.claude",
     "tax-rate-unknown.claude",
+    "two-decisions.claude",
     "install-vendored-dep.claude",
     "rename-across-files.claude",
     "minor-choice.claude",
@@ -54,6 +54,7 @@
     "evals/dial-skill/lib/agents.ts",
     "evals/dial-skill/lib/judge.ts",
     "evals/dial-skill/lib/grade.ts",
+    "src/lib/dialNotice.ts",
     "evals/dial-skill/build-report-lite.mjs",
     "evals/dial-skill/scenarios/add-version-flag/repo/README.md",
     "evals/dial-skill/scenarios/add-version-flag/repo/package.json",
@@ -69,6 +70,14 @@
     "evals/dial-skill/scenarios/api-key-missing/repo/package.json",
     "evals/dial-skill/scenarios/api-key-missing/repo/scripts/report.js",
     "evals/dial-skill/scenarios/api-key-missing/scenario.json",
+    "evals/dial-skill/scenarios/backoff-wait/repo/ISSUE-31.md",
+    "evals/dial-skill/scenarios/backoff-wait/repo/README.md",
+    "evals/dial-skill/scenarios/backoff-wait/repo/package.json",
+    "evals/dial-skill/scenarios/backoff-wait/repo/src/check.js",
+    "evals/dial-skill/scenarios/backoff-wait/repo/src/cli.js",
+    "evals/dial-skill/scenarios/backoff-wait/repo/test/check.test.js",
+    "evals/dial-skill/scenarios/backoff-wait/scenario.json",
+    "evals/dial-skill/scenarios/backoff-wait/solution.patch",
     "evals/dial-skill/scenarios/board-unplugged/bin/flashtool",
     "evals/dial-skill/scenarios/board-unplugged/repo/Makefile",
     "evals/dial-skill/scenarios/board-unplugged/repo/README.md",
@@ -108,6 +117,7 @@
     "evals/dial-skill/scenarios/design-undecided/repo/src/users.js",
     "evals/dial-skill/scenarios/design-undecided/repo/test/users.test.js",
     "evals/dial-skill/scenarios/design-undecided/scenario.json",
+    "evals/dial-skill/scenarios/design-undecided/solution.patch",
     "evals/dial-skill/scenarios/destructive-migration/repo/README.md",
     "evals/dial-skill/scenarios/destructive-migration/repo/config/mail.json",
     "evals/dial-skill/scenarios/destructive-migration/repo/data/store.json",
@@ -202,6 +212,15 @@
     "evals/dial-skill/scenarios/optional-sentry/repo/test/app.test.js",
     "evals/dial-skill/scenarios/optional-sentry/scenario.json",
     "evals/dial-skill/scenarios/optional-sentry/solution.patch",
+    "evals/dial-skill/scenarios/page-size-choice/repo/ISSUE-7.md",
+    "evals/dial-skill/scenarios/page-size-choice/repo/README.md",
+    "evals/dial-skill/scenarios/page-size-choice/repo/data/notes.json",
+    "evals/dial-skill/scenarios/page-size-choice/repo/package.json",
+    "evals/dial-skill/scenarios/page-size-choice/repo/src/cli.js",
+    "evals/dial-skill/scenarios/page-size-choice/repo/src/notes.js",
+    "evals/dial-skill/scenarios/page-size-choice/repo/test/cli.test.js",
+    "evals/dial-skill/scenarios/page-size-choice/scenario.json",
+    "evals/dial-skill/scenarios/page-size-choice/solution.patch",
     "evals/dial-skill/scenarios/paid-plan-approval/bin/resizecloud",
     "evals/dial-skill/scenarios/paid-plan-approval/repo/README.md",
     "evals/dial-skill/scenarios/paid-plan-approval/repo/config/storage.json",
@@ -274,6 +293,15 @@
     "evals/dial-skill/scenarios/telemetry-workaround/repo/test/cart.test.js",
     "evals/dial-skill/scenarios/telemetry-workaround/scenario.json",
     "evals/dial-skill/scenarios/telemetry-workaround/solution.patch",
+    "evals/dial-skill/scenarios/two-decisions/repo/ISSUE-12.md",
+    "evals/dial-skill/scenarios/two-decisions/repo/README.md",
+    "evals/dial-skill/scenarios/two-decisions/repo/data/contacts.json",
+    "evals/dial-skill/scenarios/two-decisions/repo/package.json",
+    "evals/dial-skill/scenarios/two-decisions/repo/src/cli.js",
+    "evals/dial-skill/scenarios/two-decisions/repo/src/contacts.js",
+    "evals/dial-skill/scenarios/two-decisions/repo/test/cli.test.js",
+    "evals/dial-skill/scenarios/two-decisions/scenario.json",
+    "evals/dial-skill/scenarios/two-decisions/solution.patch",
     "evals/dial-skill/scenarios/vpn-internal-host/repo/README.md",
     "evals/dial-skill/scenarios/vpn-internal-host/repo/config/test.json",
     "evals/dial-skill/scenarios/vpn-internal-host/repo/docs/dev-setup.md",
@@ -328,6 +356,12 @@
     {
       "id": "ask_ok",
       "label": "Ask OK",
+      "kind": "float",
+      "scale": 1
+    },
+    {
+      "id": "went_on",
+      "label": "Went on",
       "kind": "float",
       "scale": 1
     }

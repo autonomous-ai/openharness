@@ -36,7 +36,7 @@ import { gradeRun } from './lib/grade.ts';
 import { claudeJudge, JUDGE_EFFORT, JUDGE_MODEL, RUBRIC_SHA } from './lib/judge.ts';
 import { sumUsage } from './lib/parse.ts';
 import { caseId, loadScenarios } from './lib/scenarios.ts';
-import { readHarm, readRings, scrub, stage, unstage } from './lib/stage.ts';
+import { readDone, readHarm, readRings, scrub, stage, unstage } from './lib/stage.ts';
 
 // Every output write refuses symlinks: the flow dir is model-influenced, and a
 // prompt-injected round can plant `results.jsonl -> ~/.bashrc` where the next
@@ -264,11 +264,20 @@ async function runCase(input, ctx) {
     // The skill the agent had leads the trace, so a trace reads on its own.
     const transcript = [{ role: 'system', content: st.skill ?? 'no skill' }, ...run.transcript]
       .map(turn => Object.fromEntries(Object.entries(turn).map(([key, value]) => [key, clean(value)])));
+    // Before the checks, which run the agent's code: a ring that code makes there is the check's, not the agent's.
+    const rings = readRings(st);
     // Read before unstage removes the repo. A harm check that does not finish fails the case in gradeCase, where the
-    // error row keeps the billed run's model and usage.
-    let harm = null, harmError = null;
-    try { harm = await readHarm(scenario, st); } catch (e) { harmError = e; }
-    return { ...run, transcript, rings: readRings(st), harm, harmError, clean };
+    // error row keeps the billed run's model and usage. A done check that does not finish costs only went_on, a guardrail
+    // beside the score: it reads null, said here, and the row keeps its harm and score.
+    let harm = null, done = null, checkError = null;
+    try { harm = await readHarm(scenario, st); } catch (e) { checkError = e; }
+    if (!checkError) {
+      try { done = await readDone(scenario, st); } catch (e) {
+        if (e?.failure_class !== 'done_check') checkError = e;
+        else eprint(`  [${ctx.variant}] ${input.id}: ${clean(String(e.message))}; went_on not graded`);
+      }
+    }
+    return { ...run, transcript, rings, harm, done, checkError, clean };
   } catch (e) {
     // An account limit lasts hours: the workers take no new case and main exits 3.
     if (e?.failure_class === 'account_limited') ctx.stop = true;
@@ -287,9 +296,9 @@ async function gradeCase(input, run, ref, ctx) {
     e.failure_class = 'serving_substitution';
     throw e;
   }
-  if (run.harmError) throw run.harmError;
+  if (run.checkError) throw run.checkError;
   let g;
-  try { g = await gradeRun(input.scenario, run, run.rings, ctx.judge, run.harm); }
+  try { g = await gradeRun(input.scenario, run, run.rings, ctx.judge, run.harm, run.done); }
   catch (e) {
     // The judge runs under the same account, so its limit stops the pass as the agent's does.
     if (e?.failure_class === 'account_limited') ctx.stop = true;
@@ -309,10 +318,11 @@ function addUsage(a, b) {
   return a && b ? sumUsage([a, b]) : a ?? b;
 }
 
-/** `rings` counts `device notify` calls only: any other harness call shows nothing on the dial. `harm` is what the
- *  scenario's harm check found after the run, null when it has none; it rides here, the one fill-in the row spreads. */
+/** `rings` counts `device notify` calls only: any other harness call shows nothing on the dial. `harm` and `done` are what
+ *  the scenario's harm and done checks found after the run, null when it has none; they ride here, the one fill-in the
+ *  row spreads. */
 function perfFrom(run) {
-  return { tool_calls: run.tool_calls, rings: run.rings.filter(r => r.line !== null).length, harm: run.harm };
+  return { tool_calls: run.tool_calls, rings: run.rings.filter(r => r.line !== null).length, harm: run.harm, done: run.done };
 }
 
 // --- harness (you usually won't need to touch below this line) --------------

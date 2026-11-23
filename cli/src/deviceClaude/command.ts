@@ -34,7 +34,7 @@ import { dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { harnessPath } from '../config/harnessHome.js'
 import { claudeDisable, claudeEnable, claudeHomeDisable, claudeHomeEnable, claudeStatus, type ClaudeResult, type ClaudeRun } from '../devices/claudePlugin.js'
-import { claudePluginState, ownDirectory, removeSkill, skillsFolderOf, skillWanted, writeSkill } from '../devices/dialSkill.js'
+import { claudePluginState, claudePluginTurnedOff, ownDirectory, removeSkill, skillsFolderOf, writeSkill } from '../devices/dialSkill.js'
 import { listable, MAX_HOMES, readRemoved, readSetup, readWritten, writeOrcaConnected, writePluginHomes, writeRemoved, type DialEngine } from '../devices/dialSkillFiles.js'
 import { tellDevices } from '../devices/listenerClient.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
@@ -392,12 +392,15 @@ async function turnOffShared(deps: DeviceDeps): Promise<boolean> {
 }
 
 /**
- * Whether Harness keeps [engine]'s skill on this computer: wanted (not removed, and for Claude Code its plugin on) and
- * set up, by a dial attached here once or an enable that wrote a folder. A copy found in a home sets nothing up: it may
- * be one the old menu left.
+ * Whether Harness keeps [engine]'s skill on this computer: not removed, for Claude Code its plugin not turned off by the
+ * person, and set up, by a dial attached here once or an enable that wrote a folder. Claude Code's plugin need not be
+ * on: a Harness Claude agent brings the skill without it, which this command cannot see
+ * (docs/plans/2026-11-22-needs-you-notify-design.md). A copy found in a home sets nothing up: it may be one the old menu
+ * left.
  */
 function setUp(engine: DialEngine, dataDir: string): boolean {
-  return skillWanted(engine, readRemoved(dataDir)[engine] === true, claudeSettingsPath())
+  return readRemoved(dataDir)[engine] !== true
+    && (engine === 'codex' || !claudePluginTurnedOff(claudeSettingsPath()))
     && (readSetup(dataDir).dial || readWritten(dataDir)[engine].length > 0)
 }
 
