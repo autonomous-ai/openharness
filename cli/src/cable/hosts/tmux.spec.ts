@@ -433,6 +433,41 @@ describe('the outer place of an agent in the person\'s tmux', () => {
     expect(logs).toEqual(found)
   })
 
+  // Diego, 2026-11-23: an agent in a pane of the person's tmux is on tmux's page, whether or not a client shows it.
+  it('the answer says tmux once the pane is the person\'s, holds the caller and tmux made its terminal: a client in an app, no client, and the clients not read', async () => {
+    const cases: Array<[string, ReturnType<typeof lookup>, object, string[]]> = [
+      ['a client in an app', lookup({}, [], ONE), { app: 'terminal-app', tty: '/dev/ttys004', pid: 4300, nest: 'tmux' }, found],
+      ['no client', lookup({}, [], { ...ONE, clients: '' }), { nest: 'tmux' }, none],
+      ['the clients not read', lookup({}, [0, 1], ONE), { nest: 'tmux' }, notRead('clients')],
+    ]
+    for (const [name, { logs, outer }, answer, said] of cases) {
+      expect(await outer(NESTED, 100), name).toStrictEqual(answer)
+      expect(logs, name).toEqual(said)
+    }
+  })
+
+  it('a terminal started from a tmux pane (code .), a pane Harness made, a pane holding no process of the caller\'s, and facts not read answer {} with no nest', async () => {
+    const started = async () => [
+      { pid: 100, ppid: 96, tty: 'ttys011', executable: 'claude' }, { pid: 96, ppid: 95, tty: 'ttys011', executable: 'zsh' },
+      { pid: 95, ppid: 90, executable: 'Code Helper' }, ...TABLE.filter((p) => p.pid !== 100), ...CLIENT_CHAIN,
+    ]
+    const cases: Array<[string, ReturnType<typeof lookup>]> = [
+      ['a terminal started from a tmux pane', lookup({ processes: started }, [], ONE)],
+      ['a pane Harness made', lookup({}, [], { ...ONE, pane: HARNESS_PANES[0] })],
+      ['a pane holding no process of the caller\'s', lookup({}, [], { ...ONE, pane: says(4242) })],
+      ['the pane\'s facts not read', lookup({}, [1], ONE)],
+      ['the table not read', lookup({ processes: async () => { throw new Error('process table not read') } }, [], ONE)],
+      ['the caller\'s terminal not read', lookup({ tty: async () => { throw new Error('tty not read') } }, [], ONE)],
+    ]
+    for (const [name, { outer }] of cases) expect(await outer(NESTED, 100), name).toStrictEqual({})
+  })
+
+  it('tmux inside a herdr pane: hints naming both panes, tmux the maker: the answer says tmux', async () => {
+    const { logs, outer } = lookup({}, [], ONE)
+    expect(await outer({ HERDR_PANE_ID: 'w1:p1', TMUX_PANE: PANE }, 100)).toStrictEqual({ app: 'terminal-app', tty: '/dev/ttys004', pid: 4300, nest: 'tmux' })
+    expect(logs).toEqual(found)
+  })
+
   it('a Harness pane answers {} and lists no client', async () => {
     for (const pane of HARNESS_PANES) {
       const { calls, logs, outer } = lookup({}, [], { ...ONE, pane })
