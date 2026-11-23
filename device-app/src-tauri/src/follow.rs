@@ -351,6 +351,12 @@ impl ChatgptFollow {
         self.installed = on;
     }
 
+    /// The runner's look tells no one else; only the tests ask the rules.
+    #[cfg(test)]
+    pub fn knows_installed(&self) -> bool {
+        self.installed
+    }
+
     pub fn observes(&self) -> bool {
         self.chatgpt && self.watching && self.attached && self.trusted
     }
