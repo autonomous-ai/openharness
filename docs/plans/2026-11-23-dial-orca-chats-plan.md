@@ -171,7 +171,7 @@ No code. Each result goes into the spec's "What we found", with its date, by the
   - `capabilities` is `{ status: true, voice: false, focus: true, answer: false }`; `voiceRefusal` is `Type in Orca for chats.`; `focus(agent)` calls `deps.focus(agent.id, worktreeOfAgent(agent.id))` for a listed row, else `false`.
   - `read()` with no binary, or an `orca agent --help` that does not list `list` (read once per binary's real path and mtime), lists nothing and logs nothing more than once.
 
-- [ ] **Step 1: Write the failing tests**, the Max branch's cases kept (with the poll's cases replaced by the push cases) and these added:
+- [x] **Step 1: Write the failing tests**, the Max branch's cases kept (with the poll's cases replaced by the push cases) and these added:
   - `reads nothing until asked, and nothing after stop`.
   - `a read asked during a read runs once after it, however many were asked`.
   - `the recorded answer gives its chats newest first, each with its worktreeId; terminal rows and remote hosts are left out`.
@@ -183,10 +183,10 @@ No code. Each result goes into the spec's "What we found", with its date, by the
   - `worktree rows with no identity, or outside the bounds, are skipped`.
   - `an Orca whose agent --help lacks list lists nothing, and is asked again only when its binary changes`.
   - `no log line holds a title, folder, id or workspace` (every line the source logs, checked against the fixture's values).
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/orcaChatSource.spec.ts`. Expected: FAIL (the module does not exist).
-- [ ] **Step 3: Implement.** The file's head comment names the spec and says why no timer (decided 3) and why at most 64.
-- [ ] **Step 4: Run** the step 2 command and `npm run typecheck`. Expected: PASS.
-- [ ] **Step 5: Commit** `devices: a source lists Orca's chats from orca agent list, read on pushes`.
+- [x] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/orcaChatSource.spec.ts`. Expected: FAIL (the module does not exist).
+- [x] **Step 3: Implement.** The file's head comment names the spec and says why no timer (decided 3) and why at most 64.
+- [x] **Step 4: Run** the step 2 command and `npm run typecheck`. Expected: PASS.
+- [x] **Step 5: Commit** `devices: a source lists Orca's chats from orca agent list, read on pushes`.
 
 ### Task 2: The observed source names each hooked chat's Orca session; Task 0's routes for words
 
@@ -202,14 +202,14 @@ No code. Each result goes into the spec's "What we found", with its date, by the
 - Produces: `ObservedSource.orcaSessions(): ReadonlyMap<string, { engine: string; sessionId: string }>`: for each live agent whose latest hints name `ORCA_AGENT_SESSION_ID` and no `ORCA_TERMINAL_HANDLE`, that id to its engine and session. `export function cutAnswer` (as `6decff7e69`).
 - If Task 0 c is **off**: `modReady` answers false for an agent with an `ORCA_CHAT_ADAPTER` pane. If Task 0 d is **off**: `queueable` does too. A route that is kept is not touched.
 
-- [ ] **Step 1: Write the failing tests** in `describe('ObservedSource')`:
+- [x] **Step 1: Write the failing tests** in `describe('ObservedSource')`:
   - `orcaSessions names a hooked Orca chat's session, and not an agent in an Orca terminal or one that ended`.
   - For a route Task 0 kept: `a live Orca chat takes the dial's words through <the mod|codex queue>, as any session` (locks today's behavior for chats).
   - For a route Task 0 turned off: `a live Orca chat's words go to no <mod|queue>, and voiceRefusal says Type in Orca for chats.` (`toMod` or `codexQueue.send` never called; `capabilities(agent).voice` false).
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/observed.spec.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement.** A route turned off says why in its comment: Task 0's date and what Orca's chat showed.
-- [ ] **Step 4: Run** the step 2 command, `npx vitest run src/cable/hosts/registry.spec.ts` and `npm run typecheck`. Expected: PASS.
-- [ ] **Step 5: Commit** `devices: the observed source names each hooked Orca chat's session` (and, if a route is off, `; words to an Orca chat go by the routes Orca shows`).
+- [x] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/observed.spec.ts`. Expected: FAIL.
+- [ ] **Step 3: Implement.** A route turned off says why in its comment: Task 0's date and what Orca's chat showed. Done 2026-11-23 for the session names; the routes stay as today until Task 0 c and d.
+- [x] **Step 4: Run** the step 2 command, `npx vitest run src/cable/hosts/registry.spec.ts` and `npm run typecheck`. Expected: PASS.
+- [x] **Step 5: Commit** `devices: the observed source names each hooked Orca chat's session` (and, if a route is off, `; words to an Orca chat go by the routes Orca shows`).
 
 ### Task 3: The chat adapter brings a chat's worktree up
 
@@ -233,7 +233,7 @@ No code. Each result goes into the spec's "What we found", with its date, by the
   - `paneOf(place)`: `{ adapter: 'orca-chat', id: orcaChatId(place.hints) }`, or undefined. `canFocus(pane)`: the id passes `orcaChatId`'s check and `worktreeOf` knows it. `focus` and `show`: `activate(worktreeOf(id))`. `tap: 'before'`. No `type`. `voiceRefusal(place)`: `ORCA_CHAT_REFUSAL` when `paneOf(place)` is one.
   - `activate(worktreeId)`: `orca worktree activate --worktree id:<worktreeId> --json` through `deps.run`, the id checked against the `worktreeId` bounds first, one run at a time per id (a second call is the same promise), the run timeout of `cable/hosts/orca.ts`. `false` and one `[device] orca activate · failed` line on a non-zero exit, a timeout or a refused id; never throws.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - `paneOf names a chat by its Orca session id, and not an agent in an Orca terminal, nor hints outside the bounds`.
   - `a tap and a rest run worktree activate with the chat's worktree id as one argument`.
   - `a chat with no known worktree cannot be focused and runs nothing`.
@@ -241,10 +241,10 @@ No code. Each result goes into the spec's "What we found", with its date, by the
   - `a failed, timed-out or refused activate answers false and logs one line with no id`.
   - `voiceRefusal says Type in Orca for chats. for a chat alone`.
   - `the adapter has no type: words are never typed for a chat`.
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/orcaChat.spec.ts`. Expected: FAIL (the module does not exist).
-- [ ] **Step 3: Implement.** The head comment says why there is no `type` (no terminal; Part 2's `orca agent send`) and why a rest activates (no tab to switch to).
-- [ ] **Step 4: Run** the step 2 command, `npx vitest run src/cable/hosts/orca.spec.ts` and `npm run typecheck`. Expected: PASS.
-- [ ] **Step 5: Commit** `devices: a tap on an Orca chat brings its worktree up`.
+- [x] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/orcaChat.spec.ts`. Expected: FAIL (the module does not exist).
+- [x] **Step 3: Implement.** The head comment says why there is no `type` (no terminal; Part 2's `orca agent send`) and why a rest activates (no tab to switch to).
+- [x] **Step 4: Run** the step 2 command, `npx vitest run src/cable/hosts/orca.spec.ts` and `npm run typecheck`. Expected: PASS.
+- [x] **Step 5: Commit** `devices: a tap on an Orca chat brings its worktree up`.
 
 ### Task 4: The listener takes the worktree on screen
 
@@ -264,16 +264,16 @@ No code. Each result goes into the spec's "What we found", with its date, by the
   ```
   - `workspace` is `undefined` when the body has no such key (an older plugin), `null`, or a string of 1 to 1024 characters with no control character. Anything else refuses the whole message; `front` is not called.
 
-- [ ] **Step 1: Write the failing tests** in `describe('orcaFront')`:
+- [x] **Step 1: Write the failing tests** in `describe('orcaFront')`:
   - `orcaFront hands on the workspace with the terminals; no key is undefined, null is null`.
   - `orcaFront takes an identity id and a worktree id as Orca gives them` (`'identity:wt2:local:<uuid>'`, `'<uuid>::/Users/someone/wt'`).
   - `orcaFront refuses a workspace that is empty, too long, has a control character, or is not a string` (`''`, 1025 characters, `'identity:a\nb'`, `7`, `{}`).
   - `50 handles and a 1024-character workspace fit in 4096 bytes`.
   - On a real listener: `a refused workspace is counted in the minute line, and no line or answer holds it`.
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/services/devicesListener.spec.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement.** The comment says why Orca's id is taken as it is: a worktree with no identity is named by its `id`, the `worktreeId` the devices read from Orca's CLI anyway (Task 0: 6 of 17 chats).
-- [ ] **Step 4: Run** the step 2 command, then `npm run test:core && npm run typecheck`. Expected: PASS, 100% for `services/devicesListener.ts` (`devices.ts` compiles with an ignored second argument until Task 6).
-- [ ] **Step 5: Commit** `devices: the listener takes the Orca worktree on screen with its terminals`.
+- [x] **Step 2: Run** `cd cli && npx vitest run src/services/devicesListener.spec.ts`. Expected: FAIL.
+- [x] **Step 3: Implement.** The comment says why Orca's id is taken as it is: a worktree with no identity is named by its `id`, the `worktreeId` the devices read from Orca's CLI anyway (Task 0: 6 of 17 chats).
+- [x] **Step 4: Run** the step 2 command, then `npm run test:core && npm run typecheck`. Expected: PASS, 100% for `services/devicesListener.ts` (`devices.ts` compiles with an ignored second argument until Task 6).
+- [x] **Step 5: Commit** `devices: the listener takes the Orca worktree on screen with its terminals`.
 
 ### Task 5: The plugin sends the worktree on screen
 
@@ -292,13 +292,13 @@ No code. Each result goes into the spec's "What we found", with its date, by the
 - Produces: `front(terminals: readonly string[] | null, workspace?: string | null): void`. The body is `{"type":"orcaFront","terminals":…,"workspace":…}`; `workspace` is the given id when it is 1 to 1024 characters with no control character, else `null`. Bodies are compared as sent, as today: a change of workspace alone sends.
 - `worker.ts`: `dial.front(context && context.terminals.map(({ id }) => id), context ? context.workspaceId : null)`.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - `dial.test.ts`: `front sends the workspace with the terminals, an identity id or a worktree id as given`; `an empty workspace, one past 1024 characters or one with a control character goes as null`; `a change of workspace alone sends again; the same body does not`.
   - `worker.test.ts`: `workspace.changed hands the workspace id on; no context hands null`.
-- [ ] **Step 2: Run** `iso test`. Expected: FAIL.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** `iso test`, `iso check`, `iso validate` and the plugin's type check. Expected: PASS, no output from the type check.
-- [ ] **Step 5: Commit** `orca plugin: tell the devices which worktree is on screen`.
+- [x] **Step 2: Run** `iso test`. Expected: FAIL.
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run** `iso test`, `iso check`, `iso validate` and the plugin's type check. Expected: PASS, no output from the type check.
+- [x] **Step 5: Commit** `orca plugin: tell the devices which worktree is on screen`.
 
 ### Task 6: The devices list, scope, rank and open Orca's chats
 
@@ -318,7 +318,7 @@ No code. Each result goes into the spec's "What we found", with its date, by the
 - `orcaFronted(terminals, workspace)`: keeps both; logs `[device] orca front · set · <n> terminals` as today (no word for the workspace); its scope is `inScope(agentId) = <today's terminal test> || (named !== undefined && orcaChats.worktreeOfAgent(agentId) === named)`, where `named` is `orcaChats.worktreeFor(workspace)` for an `identity:` workspace and the workspace itself otherwise, read at each call.
 - The Orca rank: the tab order's map, then each of `orcaChats.order()` not in it at `tabs.size + index`.
 
-- [ ] **Step 1: Write the failing tests** in the Orca part of `devices.spec.ts`, with the fake `orca` answering the recorded answers:
+- [x] **Step 1: Write the failing tests** in the Orca part of `devices.spec.ts`, with the fake `orca` answering the recorded answers:
   - `with a dial attached, Orca's page lists its chats, and the APPS count holds them`.
   - `no dial, no read: a detach stops the source and empties its rows`.
   - `with Orca settled in front and the plugin's workspace, the ring is that worktree's terminals then its chats`.
@@ -330,10 +330,10 @@ No code. Each result goes into the spec's "What we found", with its date, by the
   - `a tap on a hooked chat goes through the chat adapter`.
   - `words for a chat follow Task 0's result` (kept route: delivered; off: the refusal on the dial).
   - `no log line holds a title, folder, id or workspace`.
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/services/devices.spec.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement.** Comments say why each read is pushed, never polled (decided 3), and why chats come after terminals (decided 6).
-- [ ] **Step 4: Run** the step 2 command, then `npm run test:core && npm run typecheck`, and `npx vitest run src/cable/hosts/orcaChatSource.spec.ts src/cable/hosts/orcaChat.spec.ts src/cable/hosts/observed.spec.ts src/cable/cableHost.spec.ts`. Expected: PASS, 100% for `services/devices.ts`.
-- [ ] **Step 5: Commit** `dial: Orca's ring holds the chats of the worktree on screen, after its terminals`.
+- [x] **Step 2: Run** `cd cli && npx vitest run src/services/devices.spec.ts`. Expected: FAIL.
+- [x] **Step 3: Implement.** Comments say why each read is pushed, never polled (decided 3), and why chats come after terminals (decided 6).
+- [x] **Step 4: Run** the step 2 command, then `npm run test:core && npm run typecheck`, and `npx vitest run src/cable/hosts/orcaChatSource.spec.ts src/cable/hosts/orcaChat.spec.ts src/cable/hosts/observed.spec.ts src/cable/cableHost.spec.ts`. Expected: PASS, 100% for `services/devices.ts`.
+- [x] **Step 5: Commit** `dial: Orca's ring holds the chats of the worktree on screen, after its terminals`.
 
 ### Task 7: End to end: chats on a fake dial
 
@@ -344,7 +344,7 @@ No code. Each result goes into the spec's "What we found", with its date, by the
 - Modify: `cli/e2e/harness/pluginDial.ts` (its stdin line may carry the workspace: `{"terminals":[…],"workspace":"identity:…"}`)
 - Modify: `cli/e2e/dialStream.e2e.ts`, `cli/e2e/deviceOrca.e2e.ts`, `cli/e2e/deviceClaudeOrca.e2e.ts`
 
-- [ ] **Step 1: Write the cases**, the real daemon, a fake dial, the fake `orca`, the plugin's real loop:
+- [x] **Step 1: Write the cases**, the real daemon, a fake dial, the fake `orca`, the plugin's real loop:
   - `two worktrees with chats and a terminal: Orca in front with one on screen lists its terminal then its chats`.
   - `the plugin's other worktree switches the ring`.
   - `a tap on a chat runs worktree activate with its worktree id`.
@@ -352,8 +352,8 @@ No code. Each result goes into the spec's "What we found", with its date, by the
   - `words to a resting chat get Type in Orca for chats.`.
   - `an Orca whose agent --help lacks list gives today's ring`.
   - For each route Task 0 kept, in `cli/e2e/deviceClaudeOrca.e2e.ts` (its mod poll through `e2e/harness/modInbox.ts`): `words to a live Orca chat whose mod polls reach that poll once, and the dial shows them sent`. For each route it turned off: `words to a live Orca chat reach no poll, and the dial says Type in Orca for chats.`.
-- [ ] **Step 2: Run** `cd cli && npx vitest run --config vitest.e2e.config.ts e2e/dialStream.e2e.ts e2e/deviceOrca.e2e.ts e2e/deviceClaudeOrca.e2e.ts`. Expected: PASS.
-- [ ] **Step 3: Commit** `e2e: Orca's chats on a fake dial, scoped by the plugin's worktree`.
+- [x] **Step 2: Run** `cd cli && npx vitest run --config vitest.e2e.config.ts e2e/dialStream.e2e.ts e2e/deviceOrca.e2e.ts e2e/deviceClaudeOrca.e2e.ts`. Expected: PASS.
+- [x] **Step 3: Commit** `e2e: Orca's chats on a fake dial, scoped by the plugin's worktree`.
 
 ### Task 8: The dial eval's Orca tier gains chats
 
@@ -364,10 +364,10 @@ No code. Each result goes into the spec's "What we found", with its date, by the
 **Files:**
 - Modify: `cli/src/testing/dialAppEval/orcaScenarios.ts`, `tierA/steps/orca.ts`, their specs, `cli/src/testing/fakeOrcaCli.ts` (the eval's fake answers `agent list` and `worktree list`)
 
-- [ ] **Step 1: Write the failing scenarios:** chats listed; scoped to the worktree on screen; a tap activates its worktree; a prompt follows; words get the refusal (or are delivered, per Task 0).
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/testing/dialAppEval/orcaScenarios.spec.ts src/testing/dialAppEval/tierA/steps/orca.spec.ts src/testing/fakeOrca.spec.ts`. Expected: FAIL, then PASS after Step 3.
-- [ ] **Step 3: Implement** the steps and the fake's answers.
-- [ ] **Step 4: Commit** `dial eval: Orca's tier covers chats`.
+- [x] **Step 1: Write the failing scenarios:** chats listed; scoped to the worktree on screen; a tap activates its worktree; a prompt follows; words get the refusal (or are delivered, per Task 0).
+- [x] **Step 2: Run** `cd cli && npx vitest run src/testing/dialAppEval/orcaScenarios.spec.ts src/testing/dialAppEval/tierA/steps/orca.spec.ts src/testing/fakeOrca.spec.ts`. Expected: FAIL, then PASS after Step 3.
+- [x] **Step 3: Implement** the steps and the fake's answers.
+- [x] **Step 4: Commit** `dial eval: Orca's tier covers chats`.
 
 ### Task 9: Say it in the docs
 
@@ -377,8 +377,8 @@ No code. Each result goes into the spec's "What we found", with its date, by the
 - Modify: `cli/AGENTS.md` (the devices row: Orca's chats, read from `orca agent list` on pushes while a dial is attached, at most 64, scoped by the plugin's worktree, a tap activates their worktree, words per decided 8)
 - Modify: `docs/plans/2026-11-23-dial-orca-chats-design.md` ("What we found": Task 0's results, dated)
 
-- [ ] **Step 1: Write** both, in the row's own style.
-- [ ] **Step 2: Commit** `docs: the dial lists and opens Orca's chats`.
+- [x] **Step 1: Write** both, in the row's own style.
+- [x] **Step 2: Commit** `docs: the dial lists and opens Orca's chats`.
 
 ---
 
