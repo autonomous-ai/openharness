@@ -1196,6 +1196,20 @@ describe('the dial\'s day', () => {
     expect(dialSent()).toEqual({ [`${TODAY} dial_open_ok`]: 1 })
   })
 
+  // Torn bytes are set aside as `.unreadable` and read as no queue (lib/secureState.ts), though this account had one.
+  it('a queue that could not be read takes the file as sent', async () => {
+    start(); await usage.sync()
+    devices({ [TODAY]: { dial_connected_installation_days: 1, dial_open_ok: 2 } }); await flush()
+    await usage.stop()
+    writeFileSync(file, '{"revision": 0, "dial":')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    sent = []
+    start(); await flush()
+    expect(dialSent()).toEqual({})
+    devices({ [TODAY]: { dial_connected_installation_days: 1, dial_open_ok: 3 } }); await flush()
+    expect(dialSent()).toEqual({ [`${TODAY} dial_open_ok`]: 1 })
+  })
+
   it('a first state with no queue file sends what the file holds', async () => {
     devices({ [day(-1)]: { dial_connected_installation_days: 1, dial_open_ok: 2 }, [TODAY]: { dial_connected_installation_days: 1 } })
     start(); await flush()
