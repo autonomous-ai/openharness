@@ -13575,4 +13575,122 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
       expect(Number.isSafeInteger(n)).toBe(true)
     }
   })
+
+  describe('the waits on the person and the interrupt', () => {
+    /** The wait counts alone: no other name tells a wait. */
+    const waits = async (port: DevicesPort): Promise<Record<string, number>> =>
+      Object.fromEntries(Object.entries(await counted(port)).filter(([name]) => name.startsWith('dial_wait_')))
+    const question = (requestId: string) => ({ type: 'commander_question', agentId: 'h1', payload: { requestId, questions: [] } })
+    const closed = (requestId: string) => ({ type: 'commander_question_close', agentId: 'h1', payload: { requestId } })
+    /** Harness agents h1-h3, each with the engine session the core bound to it, and the listener a notice comes through.
+     *  The devices' clock is the faked wall clock: a notice an agent a minute. */
+    const withNotices = () => {
+      const listener = fakeListener()
+      const sessions = ['h1', 'h2', 'h3'].map((agentId) => ({ agentId, registeredAt: 1, engine: 'claude', sessionId: `s-${agentId}` }))
+      const core = fakeCore({ dataDir, agents: { advertised: vi.fn(() => sessions as RegisteredSession[]) } })
+      return { ...start({ core, faults: ['fleet'], listen: listener.listen, now: () => Date.now() }), listener }
+    }
+    const notice = (listener: ReturnType<typeof fakeListener>, agentId: string, text: string) =>
+      expect(listener.notice({ text, engine: 'claude', sessionId: `s-${agentId}` })).toEqual({ result: 'shown' })
+    const asked = (over: Partial<ObservedAsked> = {}): ObservedAsked => ({
+      engine: 'claude', sessionId: 'sess-1', event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/work/api', ...over,
+    })
+
+    it('a question answered on the dial is a dial wait', async () => {
+      vi.useFakeTimers()
+      const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
+      await attach(port)
+      port.card(question('q1'))
+      await vi.advanceTimersByTimeAsync(30_000)
+      seen.host.answer('h1', 'q1', { q: 'yes' })
+      port.card(closed('q1'))
+      port.card(question('q2'))
+      void seen.host.answerReviewed!({ agentId: 'h1', requestId: 'q2' } as never)
+      port.card(closed('q2'))
+      // A question whose agent goes was answered nowhere.
+      port.card(question('q3'))
+      port.card({ type: 'agent_deleted', payload: { agentId: 'h1' } })
+      expect(await waits(port)).toEqual({ dial_wait_dial_30s_to_2m: 1, dial_wait_dial_under_30s: 1, dial_wait_none: 1 })
+    })
+
+    it('a question closed elsewhere is an elsewhere wait', async () => {
+      vi.useFakeTimers()
+      const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
+      await attach(port)
+      port.card(question('q1'))
+      await vi.advanceTimersByTimeAsync(600_000)
+      port.card(closed('q1'))
+      // Closed twice: one wait.
+      port.card(closed('q1'))
+      expect(await waits(port)).toEqual({ dial_wait_elsewhere_over_10m: 1 })
+    })
+
+    it('a waiting notice ended by its next turn is elsewhere, by a tap is dial, by its agent leaving is none', async () => {
+      vi.useFakeTimers()
+      const { port, listener } = withNotices()
+      await attach(port)
+      notice(listener, 'h1', 'Waiting · Connect the VPN')
+      await vi.advanceTimersByTimeAsync(1_000)
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
+      // A plain line waits on the person too (Decision 8).
+      notice(listener, 'h2', 'Connect the VPN so I can run the staging tests')
+      await vi.advanceTimersByTimeAsync(40_000)
+      seen.host.tapped!('h2')
+      // A notice that takes another's place ends that one's wait as none.
+      notice(listener, 'h3', 'Waiting · Connect the VPN')
+      await vi.advanceTimersByTimeAsync(60_000)
+      notice(listener, 'h3', 'Waiting · Sign in to the registry')
+      port.card({ type: 'agent_deleted', payload: { agentId: 'h3' } })
+      expect(await waits(port)).toEqual({ dial_wait_elsewhere_under_30s: 1, dial_wait_dial_30s_to_2m: 1, dial_wait_none: 2 })
+    })
+
+    it('a proceeding notice is no wait', async () => {
+      const { port, listener } = withNotices()
+      await attach(port)
+      notice(listener, 'h1', 'Proceeding · Running the migration')
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
+      expect(await waits(port)).toEqual({})
+    })
+
+    it('an outside agent\'s wait', async () => {
+      vi.useFakeTimers()
+      const { port } = start({ faults: ['fleet'] })
+      port.observed(hook('session-start'))
+      port.observed(hook('session-start', { sessionId: 'sess-2' }))
+      await attach(port)
+      port.observed(hook('turn-start'))
+      port.observed(asked())
+      await vi.advanceTimersByTimeAsync(130_000)
+      // A new prompt, or a window's tab that covers the question, is the same wait.
+      port.observed(asked({ summary: 'npm run build' }))
+      port.swarms({ active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: [], panes: 0 }], tiles: [] })
+      port.swarms(null)
+      port.observed(hook('turn-stop'))
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+      // Answered after a tap on it is the dial's.
+      port.observed(hook('turn-start', { sessionId: 'sess-2' }))
+      port.observed(asked({ sessionId: 'sess-2' }))
+      seen.host.tapped!(observedAgentId('claude', 'sess-2'))
+      port.observed(hook('turn-stop', { sessionId: 'sess-2' }))
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+      // Its session ending answers nothing.
+      port.observed(hook('turn-start'))
+      port.observed(asked())
+      port.observed(hook('session-end'))
+      expect(await waits(port)).toEqual({ dial_wait_elsewhere_2m_to_10m: 1, dial_wait_dial_under_30s: 1, dial_wait_none: 1 })
+    })
+
+    // Decision 2: hooked agents only; a Harness agent's aborted turn ends as a finished one does.
+    it('a turn aborted within 10 s of a delivered voice', async () => {
+      vi.useFakeTimers()
+      const { port } = start({ faults: ['fleet'] })
+      port.observed(hook('session-start'))
+      await attach(port)
+      seen.host.voiceEnded!({ outcome: 'sent', agentId: ID })
+      port.observed(hook('turn-start'))
+      await vi.advanceTimersByTimeAsync(9_999)
+      port.observed(hook('turn-aborted'))
+      expect(await counted(port)).toMatchObject({ dial_voice_interrupted_10s: 1, dial_voice_host_orca_interrupted_10s: 1 })
+    })
+  })
 })
