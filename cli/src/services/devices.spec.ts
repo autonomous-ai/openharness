@@ -12933,7 +12933,8 @@ describe('Orca\'s chats on the dial (docs/plans/2026-11-23-dial-orca-chats-desig
     // The one ring leaves resting rows to the app pages.
     expect((await host().listAgentSnapshot()).agents).toEqual([])
     expect(logs).toContain('[orca-chat] listed · 17 chats · 0 heard')
-    expect([runs('agent --help'), runs('agent list --json'), runs('worktree list --json')]).toEqual([1, 1, 0])
+    // One read at the attach and one at Orca's settle in front; `--help` once for this binary.
+    expect([runs('agent --help'), runs('agent list --json'), runs('worktree list --json')]).toEqual([1, 2, 0])
   })
 
   it('no dial, no read: a detach stops the source and empties its rows', async () => {
@@ -12993,12 +12994,13 @@ describe('Orca\'s chats on the dial (docs/plans/2026-11-23-dial-orca-chats-desig
     await settled()
     expect(await ring()).toEqual([agent(2), agent(1)])
     expect(await orcaCount()).toBe(19)
-    expect([runs('agent list --json'), runs('worktree list --json')]).toEqual([1, 0])
+    // The attach's read and the settle's alone.
+    expect([runs('agent list --json'), runs('worktree list --json')]).toEqual([2, 0])
   })
 
   it('a new workspace reads the worktree list once on a miss, and the ring changes', async () => {
     const { listener } = await scoped()
-    expect(runs('agent list --json')).toBe(1)
+    expect(runs('agent list --json')).toBe(2)
     listener.orcaFront([], ON_WT5)
     await settled()
     expect(await ring()).toEqual([resting(1), resting(2), resting(3)])
@@ -13013,11 +13015,11 @@ describe('Orca\'s chats on the dial (docs/plans/2026-11-23-dial-orca-chats-desig
     listener.orcaFront([], ON_WT5)
     await settled()
     expect(await ring()).toEqual([resting(1), resting(2), resting(3)])
-    expect([runs('agent list --json'), runs('worktree list --json')]).toEqual([5, 1])
+    expect([runs('agent list --json'), runs('worktree list --json')]).toEqual([6, 1])
     // The same worktree told again asks nothing.
     listener.orcaFront([], ON_WT5)
     await settled()
-    expect(runs('agent list --json')).toBe(5)
+    expect(runs('agent list --json')).toBe(6)
   })
 
   // Review Focus 3.
@@ -13163,6 +13165,21 @@ describe('Orca\'s chats on the dial (docs/plans/2026-11-23-dial-orca-chats-desig
     expect(await host().openAgent(hooked(3))).toBeUndefined()
     expect(orcaRuns).toEqual([ORCA_FORWARD])
     expect(logs.filter((line) => line.startsWith('[device] orca chat'))).toEqual(['[device] orca chat · no worktree'])
+  })
+
+  it('with the observed agents switched off a workspace is taken, puts no chat in scope and reads nothing', async () => {
+    const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
+    switched.HARNESS_DEVICE_OBSERVED = false
+    onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
+    const { listener } = await withChats()
+    const setScope = vi.spyOn(host(), 'setScope')
+    seen.host.watching!(true)
+    listener.dial()
+    expect(listener.orcaFront([], ON_WT8)).toBeUndefined()
+    await settled()
+    expect(setScope).toHaveBeenCalledTimes(1)
+    expect(setScope.mock.calls[0][1]?.inScope(resting(13))).toBe(false)
+    expect(orcaRuns.filter(([, args]) => args[0] === 'agent' || args[0] === 'worktree')).toEqual([])
   })
 
   // Task 0's c and d are not run yet (docs/plans/2026-11-23-dial-orca-chats-plan.md): this holds today's routes until they
