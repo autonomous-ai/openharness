@@ -2527,12 +2527,16 @@ export class CableSession {
     }
     try {
       await this.answerVoice(segments, review, end)
+    } catch (error) {
+      // This daemon's own error, not the person's cancel.
+      end({ outcome: 'failed', code: 'unlisted', agentId: turn?.agentId })
+      throw error
     } finally {
       // Every way out that did not use the transcript stops the uploads; once finish() has settled this does nothing.
       segments?.abort()
       if (this.voiceSegments === segments) this.voiceSegments = undefined
-      // An exit that decided nothing returned because a newer recording, an abort or the port closing took the turn (or
-      // the answer threw): the words reached no agent.
+      // An exit that decided nothing returned because a newer recording, an abort or the port closing took the turn:
+      // the words reached no agent.
       end({ outcome: 'cancelled', agentId: turn?.agentId })
     }
   }
