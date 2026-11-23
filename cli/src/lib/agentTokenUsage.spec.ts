@@ -513,3 +513,68 @@ describe('token counts by model', () => {
     expect(usage?.models).toEqual({ 'claude-opus-5-5': { input: 10, output: 5, cacheRead: 0, cacheWrite: 0 } })
   })
 })
+
+describe('the conversation\'s current context', () => {
+  let dir: string
+  let store: AgentTokenUsageCache
+  let target: Pick<RegisteredSession, 'agentId' | 'sessionId' | 'engine' | 'transcriptPath' | 'registeredAt'>
+  const read = async () => { store.changed(target); await store.settled(); return store.get(target) }
+  const fixture = (name: string) => readFile(join(import.meta.dirname, '__fixtures__', name), 'utf8')
+  const reply = (id: string, model: string, usage: Record<string, number>) => JSON.stringify({ type: 'assistant', timestamp: at,
+    sessionId: 'conversation', requestId: `req-${id}`, message: { id, model, usage } }) + '\n'
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'harness-token-context-'))
+    target = { agentId: 'harness', sessionId: 'conversation', engine: 'claude', transcriptPath: join(dir, 'transcript.jsonl'), registeredAt: 1 }
+    store = new AgentTokenUsageCache(join(dir, 'cache'), { refreshMs: 0 })
+  })
+  afterEach(async () => { store.dispose(); await store.settled(); await rm(dir, { recursive: true, force: true }) })
+
+  it('reads Claude\'s from its latest reply\'s prompt, past a sub-agent\'s and an error\'s, and lowers it after a compact', async () => {
+    await writeFile(target.transcriptPath!, await fixture('context-claude.jsonl'))
+    // input + cache read + cache write of msg_2: the sub-agent's row and the zero-usage error row after it are not this context.
+    expect(await read()).toMatchObject({ contextTokens: 150_002, contextWindow: 200_000 })
+    await appendFile(target.transcriptPath!, reply('after-compact', 'claude-opus-5-5',
+      { input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 19_990, output_tokens: 100 }))
+    expect(await read()).toMatchObject({ contextTokens: 20_000, contextWindow: 200_000 })
+  })
+
+  it('takes Claude\'s window as 1M past 200k, or when the model says 1m', async () => {
+    await writeFile(target.transcriptPath!, reply('big', 'claude-opus-5-5', { input_tokens: 1, cache_read_input_tokens: 250_000 }))
+    expect(await read()).toMatchObject({ contextTokens: 250_001, contextWindow: 1_000_000 })
+    await appendFile(target.transcriptPath!, reply('small', 'claude-sonnet-5-5[1m]', { input_tokens: 1, cache_read_input_tokens: 9 }))
+    expect(await read()).toMatchObject({ contextTokens: 10, contextWindow: 1_000_000 })
+  })
+
+  it('reads Codex\'s from its latest token count, cached input included, with the window the engine names', async () => {
+    target.engine = 'codex'
+    await writeFile(target.transcriptPath!, await fixture('context-codex.jsonl'))
+    expect(await read()).toMatchObject({ contextTokens: 210_000, contextWindow: 258_400 })
+    // A compacted thread's next count is smaller; an older Codex names no window, so the window is unknown.
+    await appendFile(target.transcriptPath!, JSON.stringify({ timestamp: at, type: 'event_msg', payload: { type: 'token_count', info: {
+      total_token_usage: { input_tokens: 300_000, cached_input_tokens: 200_000, output_tokens: 2500, reasoning_output_tokens: 800 },
+      last_token_usage: { input_tokens: 30_000, cached_input_tokens: 0, output_tokens: 400 } } } }) + '\n')
+    const usage = await read()
+    expect(usage).toMatchObject({ contextTokens: 30_000 })
+    expect(usage).not.toHaveProperty('contextWindow')
+    expect(validUsage(usage)).toBe(true)
+  })
+
+  it('is unknown before any reply', async () => {
+    await writeFile(target.transcriptPath!, (await fixture('context-claude.jsonl')).split('\n')[0] + '\n'
+      + reply('empty', 'claude-opus-5-5', { output_tokens: 0 }))
+    const usage = await read()
+    expect(usage).not.toHaveProperty('contextTokens')
+    expect(usage).not.toHaveProperty('contextWindow')
+  })
+
+  it('replays a checkpoint from before context once', async () => {
+    await writeFile(target.transcriptPath!, await fixture('context-claude.jsonl'))
+    await read()
+    const file = join(dir, 'cache', (await readdir(join(dir, 'cache')))[0])
+    const { context: _context, ...before } = { ...JSON.parse(await readFile(file, 'utf8')), version: 6 }
+    await writeFile(file, JSON.stringify(before))
+    store.dispose()
+    store = new AgentTokenUsageCache(join(dir, 'cache'), { refreshMs: 0 })
+    expect(await read()).toMatchObject({ contextTokens: 150_002, contextWindow: 200_000 })
+  })
+})

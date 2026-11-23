@@ -95,6 +95,7 @@ static int refresh_projects(void)
         ui_project_set_engine(pr[i].id, pr[i].engine);
         ui_project_set_machine(pr[i].id, pr[i].machine_id, pr[i].machine);
         ui_project_set_host_caps(pr[i].id, pr[i].host, pr[i].caps);
+        ui_project_set_context(pr[i].id, pr[i].context);
 
         ui_project_reconcile_selected_model(pr[i].id, pr[i].selected_model);
     }

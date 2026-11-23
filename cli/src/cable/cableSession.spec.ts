@@ -8948,3 +8948,84 @@ describe('a long recording is transcribed while the person talks', () => {
     } finally { await session.stop() }
   })
 })
+
+describe('agent.context: how full each agent\'s context window is', () => {
+  const HELLO = { t: 'hello', product: 'harness', mac: 'aa:cc', context: 'v1' }
+  const frames = (port: LoopbackPort) => port.sent.filter((m) => m.t === 'agent.context').map((m) => JSON.stringify(m))
+  const greeted = async (port: LoopbackPort, hello: Record<string, unknown> = HELLO) => {
+    port.say(hello)
+    await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+  }
+
+  it('tells a dial that says context v1 nothing until it greets, and no other dial at all', async () => {
+    const { session, port } = await connect()
+    try {
+      await session.agentContext('a1', 2)
+      await greeted(port, { t: 'hello', product: 'harness', mac: 'aa:cc' })
+      await session.agentContext('a2', 1)
+      await session.syncAgents(true)
+      expect(frames(port)).toEqual([])
+      expect(session.wantsContext).toBe(false)
+    } finally { await session.stop() }
+  })
+
+  it('sends a level as it changes, never the same one twice, and a fall to 0 only after a level was sent', async () => {
+    const { session, port } = await connect()
+    try {
+      await greeted(port)
+      expect(session.wantsContext).toBe(true)
+      port.sent.length = 0
+      await session.agentContext('a2', 0)
+      await session.agentContext('a1', 1)
+      await session.agentContext('a1', 1)
+      await session.agentContext('a1', 2)
+      await session.agentContext('a1', 0)
+      await session.agentContext('a1', 0)
+      expect(frames(port)).toEqual([
+        '{"t":"agent.context","agentId":"a1","level":1}',
+        '{"t":"agent.context","agentId":"a1","level":2}',
+        '{"t":"agent.context","agentId":"a1","level":0}',
+      ])
+      // A later hello that does not name it switches it off again.
+      await greeted(port, { t: 'hello', product: 'harness', mac: 'aa:cc', fw: 'other' })
+      port.sent.length = 0
+      await session.agentContext('a1', 2)
+      expect(frames(port)).toEqual([])
+    } finally { await session.stop() }
+  })
+
+  it('tells every listed agent above 0 again after each full list, so a dial that came back catches up', async () => {
+    const { session, port } = await connect()
+    try {
+      // Known before the dial greets: the level the devices read as it attached, and a sibling dial's, seeded.
+      await session.agentContext('a1', 2)
+      session.knowContext([['a2', 1], ['gone', 2]])
+      await greeted(port)
+      const sent = port.types()
+      const end = sent.indexOf('agents.end')
+      expect(sent.slice(end + 1, end + 3)).toEqual(['agent.context', 'agent.context'])
+      // Only the agents the list named: one it did not name has no tile to grow.
+      expect(frames(port)).toEqual(['{"t":"agent.context","agentId":"a1","level":2}', '{"t":"agent.context","agentId":"a2","level":1}'])
+      port.sent.length = 0
+      await session.agentContext('a1', 2)
+      expect(frames(port)).toEqual([])
+      await session.agentContext('a2', 0)
+      port.sent.length = 0
+      await session.syncAgents(true)
+      expect(frames(port)).toEqual(['{"t":"agent.context","agentId":"a1","level":2}'])
+    } finally { await session.stop() }
+  })
+
+  it('keeps at most 256 agents\' levels, the oldest dropped first', async () => {
+    const { session, port } = await connect()
+    try {
+      for (let i = 0; i < 257; i++) await session.agentContext(i === 0 ? 'a1' : `x${i}`, 2)
+      await greeted(port)
+      expect(frames(port)).toEqual([])
+      await session.agentContext('a2', 1)
+      port.sent.length = 0
+      await session.syncAgents(true)
+      expect(frames(port)).toEqual(['{"t":"agent.context","agentId":"a2","level":1}'])
+    } finally { await session.stop() }
+  })
+})

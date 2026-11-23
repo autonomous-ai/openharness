@@ -469,10 +469,10 @@ static void focus_face(void)
             if (lines < 4) {
                 // the same 2x drawing (99 px tall) at 1.5x over one, two or three lines: Claude stays there (owner, 2026-10-06)
                 static const int want_zoom[3] = {6, 6, 6}, want_h[3] = {75, 75, 75};
-                assert(mark->sprite.zoom == want_zoom[lines - 1] && mark->sprite.height == want_h[lines - 1]);
+                assert(mark->sprite.zoom_y == want_zoom[lines - 1] * 8 && mark->sprite.height == want_h[lines - 1]);
                 assert(mark->x == (466 - mark->sprite.width) / 2);
             } else {
-                assert(mark->sprite.zoom == 4 && mark->sprite.width == cp->w && mark->sprite.height == cp->h &&
+                assert(mark->sprite.zoom_y == 32 && mark->sprite.width == cp->w && mark->sprite.height == cp->h &&
                        mark->x == (466 - cp->w) / 2);
             }
             // Within 3 px: the pet is placed by the line's capitals, and a tall letter (l, d, h) reaches a little over them.
@@ -561,7 +561,7 @@ static void focus_face(void)
                 assert(l1->y == 233 - ht_lv_inter_30.base.height / 2);
                 // The pet (Claude resting is its 1.5x drawing) is centred over the resting line itself: as far from the
                 // name above it as from the line under it (owner, 2026-10-07).
-                assert(scene.runs[1].sprite.zoom == 6 && scene.runs[1].sprite.height == 75);
+                assert(scene.runs[1].sprite.zoom_y == 48 && scene.runs[1].sprite.height == 75);
                 // Within 4 px: a resting line's tall letters (l, d, b at 36 px) reach over its capitals.
                 int d = pet_gaps(&scene, &scene.runs[1]);
                 assert(d >= -4 && d <= 4);
@@ -782,8 +782,8 @@ static void focus_face(void)
             // name above it and the resting line under it (owner, 2026-10-07).
             if (!strcmp(eng, "claude") || !strcmp(eng, "codex")) {
                 int z = !strcmp(eng, "claude") ? 6 : 8;
-                assert(cm->sprite.zoom == (z == 8 ? 0 : z) && cm->sprite.height == (pet->cells[fr].rows * pet->cells[fr].cell * z + 7) / 8);
-            } else assert(cm->sprite.zoom == 4 && cm->sprite.width == pet->w && cm->sprite.height == pet->h);
+                assert(cm->sprite.zoom_y == (z == 8 ? 0 : z * 8) && cm->sprite.height == (pet->cells[fr].rows * pet->cells[fr].cell * z + 7) / 8);
+            } else assert(cm->sprite.zoom_y == 32 && cm->sprite.width == pet->w && cm->sprite.height == pet->h);
             assert(cm->x == (466 - cm->sprite.width) / 2);
             int d = pet_gaps(&cs, cm);
             assert(d >= -4 && d <= 4);
@@ -924,7 +924,7 @@ static void focus_face(void)
             bool claude = !strcmp(pt->engine, "claude");
             const ht_cell_frame_t *fr0 = &pt->cells[pt->loops[HT_PET_IDLE][0].frame];
             int h = (fr0->rows * fr0->cell * (claude ? 6 : 8) + 7) / 8;
-            assert(m->sprite.cells == fr0->cells && m->sprite.height == h && m->sprite.zoom == (claude ? 6 : 0));
+            assert(m->sprite.cells == fr0->cells && m->sprite.height == h && m->sprite.zoom_y == (claude ? 48 : 0));
             int d = pet_gaps(&sc, m);
             assert(d >= -3 && d <= 3);
         }
@@ -939,7 +939,7 @@ static void focus_face(void)
             int lines = 0;
             for (int i = 3; i < 7; i++) lines += sc.runs[i].text[0] != 0;
             const ht_run_t *m = &sc.runs[1];
-            assert(lines == 4 && m->sprite.cells && m->sprite.zoom == (e ? 4 : 5));
+            assert(lines == 4 && m->sprite.cells && m->sprite.zoom_y == (e ? 32 : 40));
             assert(m->y >= 44 && m->y + m->sprite.height <= sc.runs[3].y + ht_lv_inter_30.ascent - 22);
         }
         // No pane's engine (no pet, no mark: design 2026-10-06 "No pane"): the resting line alone, its one or two lines
@@ -1617,7 +1617,7 @@ static void focus_relaxing(void)
             assert(scene.count == 11 + (int)want[e].shapes);   // the same runs on every step of it
             assert(scene.runs[0].arc == 1 && !strcmp(scene.runs[0].text, "Payments refactor"));
             const ht_run_t *m = &scene.runs[1];
-            assert(m->sprite.cells == rs->frames[rs->loop[st]].cells && !m->sprite.zoom);
+            assert(m->sprite.cells == rs->frames[rs->loop[st]].cells && !m->sprite.zoom_y);
             assert(m->x == (466 - rs->w) / 2 + rs->dx && m->y == 233 + 4 - rs->h / 2 + rs->dy + (rs->step_dy ? rs->step_dy[st] : 0));
             assert(!scene.runs[2].box.h || scene.runs[2].box.fill == scene.runs[2].box.border);   // no card
             for (int i = 3; i < 10; i++) {
@@ -1861,7 +1861,7 @@ static void focus_custom_pet_relaxing(void)
     ht_scene_t old; ht_scene_clear(&old, 0);
     ht_character_face(&old, &c, &f, 0xffff, "");
     assert(old.count == 11 && (old.runs[8].text[0] || old.runs[9].text[0]) && !old.runs[10].arc);
-    assert(old.runs[8].font == &ht_lv_inter_36.base && old.runs[1].sprite.zoom);   // the small pet, drawn zoomed
+    assert(old.runs[8].font == &ht_lv_inter_36.base && old.runs[1].sprite.zoom_y);   // the small pet, drawn zoomed
     pet_store_release_frame();
     pack_unload();
     // v2: the relaxing face
@@ -1878,7 +1878,7 @@ static void focus_custom_pet_relaxing(void)
         assert(scene.count == 11);                        // no shapes: the eleven runs
         const ht_run_t *m = &scene.runs[1];
         unsigned st = f.clock_ms / 150 % 2;
-        assert(m->sprite.cells == pet->cells[rs->loop[st]].cells && !m->sprite.zoom);
+        assert(m->sprite.cells == pet->cells[rs->loop[st]].cells && !m->sprite.zoom_y);
         assert(m->x == (466 - rs->w) / 2 + 4 && m->y == 233 - rs->h / 2 + 4 - 6);
         for (int i = 3; i < 10; i++) assert(!scene.runs[i].text[0] && !scene.runs[i].sprite.width);
         assert(scene.runs[10].arc == 2 && scene.runs[10].fg == ht_rgb(0x9a9aa6) && scene.runs[10].text[0]);
@@ -1902,7 +1902,7 @@ static void focus_custom_pet_relaxing(void)
     // working, and a recap, are not relaxing
     ht_character_face_t w = custom_face(true, 0);
     ht_scene_t ws; ht_scene_clear(&ws, 0); ht_character_face(&ws, &c, &w, 0xffff, "");
-    assert(ws.runs[1].sprite.cells && !ws.runs[1].sprite.zoom && ws.runs[10].arc == 2 && ws.runs[10].fg == ht_rgb(0x00ff2f));
+    assert(ws.runs[1].sprite.cells && !ws.runs[1].sprite.zoom_y && ws.runs[10].arc == 2 && ws.runs[10].fg == ht_rgb(0x00ff2f));
     ht_scene_t rc; ht_scene_clear(&rc, 0); ht_character_face(&rc, &c, &f, 0xffff, "Done.");
     assert(rc.runs[3].text[0] && !rc.runs[10].arc);
     pet_store_release_frame();
@@ -1924,7 +1924,7 @@ static void focus_custom_pet_relaxing(void)
         assert(pet && !pet->relaxing_scene);
         ht_scene_t e; ht_scene_clear(&e, 0);
         ht_character_face(&e, &c, &f, 0xffff, "");
-        assert(e.count == 11 && (e.runs[8].text[0] || e.runs[9].text[0]) && !e.runs[10].arc && e.runs[1].sprite.zoom);
+        assert(e.count == 11 && (e.runs[8].text[0] || e.runs[9].text[0]) && !e.runs[10].arc && e.runs[1].sprite.zoom_y);
     }
     pet_store_release_frame();
     pack_unload();
@@ -2132,6 +2132,125 @@ static void focus_builder(void)
            seen[0], seen[1], 2 * bs->steps);
 }
 
+// Which of the pet's own fat drawings this sprite is (0 plump, 1 or 2 fat), or -1.
+static int fat_frame(const ht_pet_t *pet, const ht_sprite_t *sp)
+{
+    for (int k = 0; pet->fat && k < 3; k++) if (sp->cells == pet->fat[k].cells) return k;
+    return -1;
+}
+// The sweat drops of a face (a cell sprite that is not one of the pet's drawings), or NULL.
+static const ht_run_t *sweat_run(const ht_scene_t *scene, const ht_pet_t *pet)
+{
+    const ht_run_t *found = NULL;
+    for (int i = 0; i < scene->count; i++)
+        if (scene->runs[i].sprite.cells && pet_frame(pet, &scene->runs[i].sprite) < 0 && fat_frame(pet, &scene->runs[i].sprite) < 0) {
+            assert(!found); found = &scene->runs[i];
+        }
+    return found;
+}
+/*
+ * A FULLER CONTEXT WINDOW (agent.context 0..2), fat enough to read (owner, 2026-11-23). Claude shows its own drawings:
+ * plump at 1, fat at 2 (wider and taller, the sweat in the drawing, its stress lines flickering). Every other pet is
+ * drawn 1.3x wide at 1, 1.6x wide and 1.1x tall at 2 with drops beside its head that slip with the clock. Always
+ * centred; the run count never moves with the level, the damage of a level change rebuilds the frame exactly, the face
+ * wakes for every move, and the scenes are left as they are drawn.
+ */
+static void focus_context(void)
+{
+    ht_character_t c = {0};
+    assert(ht_character_select(&c, HT_CHARACTER_FOCUS));
+    static const char *const recaps[] = {"Done.", "Flashed 0.0.91 to both dials and verified the image on each. All 44 "
+                                         "host checks pass, including the new reader tests. Nothing is committed yet."};
+    unsigned faces = 0;
+    assert(pet_of("claude")->fat && !pet_of("codex")->fat && !pet_of("muse")->fat && !pet_of("fo")->fat);
+    for (unsigned i = 0; i < ht_pet_count; i++)
+        for (unsigned r = 0; r < 2; r++) {
+            const ht_pet_t *pet = &ht_pets[i];
+            const bool own = pet->fat != NULL;
+            ht_scene_t at[4];
+            for (unsigned level = 0; level < 4; level++) {
+                ht_character_face_t f = {.recipient = "Payments refactor", .engine = pet->engine, .status = "",
+                    .mood = HT_CHARACTER_DONE, .foreground = 0xffff, .clock_ms = 1, .context_level = (uint8_t)level};
+                ht_scene_clear(&at[level], 0);
+                ht_character_face(&at[level], &c, &f, 0xffff, recaps[r]);
+                redraw(level ? &at[level - 1] : NULL, &at[level]);   // a level change repaints exactly
+                faces++;
+            }
+            const ht_run_t *m[3] = {&at[0].runs[1], &at[1].runs[1], &at[2].runs[1]};
+            int w[3], h[3];
+            for (unsigned level = 0; level < 3; level++) {
+                w[level] = m[level]->sprite.width; h[level] = m[level]->sprite.height;
+                assert(at[level].count == at[0].count && m[level]->x == (HT_WIDTH - w[level]) / 2);
+                if (own && level) assert(fat_frame(pet, &m[level]->sprite) == (level == 1 ? 0 : 1));
+                else assert(pet_frame(pet, &m[level]->sprite) >= 0);
+                assert(!sweat_run(&at[level], pet) == (own || level < 2));   // Claude's sweat is in its drawing
+            }
+            assert(w[0] < w[1] && w[1] < w[2]);
+            if (own) {   // plump: a fifth wider and a little taller; fat: round and big
+                assert(w[1] * 100 >= w[0] * 120 && h[1] > h[0]);
+                assert(w[2] * 100 >= w[0] * 125 && h[2] * 100 >= h[0] * 140);
+            }
+            else {
+                // ~1.3x and ~1.6x wide (to the pixel), as tall at 1 and ~1.1x at 2.
+                assert(w[1] * 100 >= w[0] * 128 && w[2] * 100 >= w[0] * 157 && h[1] == h[0]);
+                assert(h[2] * 100 >= h[0] * 107 && h[2] * 100 <= h[0] * 112);
+            }
+            assert(at[3].count == at[2].count && !memcmp(at[3].runs, at[2].runs, sizeof at[2].runs[0] * at[2].count));
+            ink_inside_r230(&at[2]);
+            // The drops: right of the pet's middle, their top over its upper half.
+            const ht_run_t *d = sweat_run(&at[2], pet);
+            if (d) assert(d->x > HT_WIDTH / 2 && d->y < m[2]->y + h[2] / 2 && d->y + d->sprite.height > m[2]->y);
+            // They slip (or the stress lines flicker) with the clock, and the face wakes for every move: nothing
+            // changes before the next wake.
+            int ys[2] = {d ? d->y : 0, d ? d->y : 0};
+            bool flick[2] = {false, false};
+            for (uint32_t clock = 1; clock < 2000;) {
+                ht_character_face_t f = {.recipient = "Payments refactor", .engine = pet->engine, .status = "",
+                    .mood = HT_CHARACTER_DONE, .foreground = 0xffff, .clock_ms = clock, .context_level = 2};
+                ht_scene_t now, before_wake;
+                ht_scene_clear(&now, 0);
+                ht_character_face(&now, &c, &f, 0xffff, recaps[r]);
+                uint32_t next = ht_focus_pet_next_ms(&f, recaps[r]);
+                assert(next > clock && now.count == at[2].count);
+                const ht_run_t *dn = sweat_run(&now, pet);
+                assert(!dn == own);
+                if (dn && dn->y < ys[0]) ys[0] = dn->y;
+                if (dn && dn->y > ys[1]) ys[1] = dn->y;
+                if (own) flick[fat_frame(pet, &now.runs[1].sprite) - 1] = true;
+                f.clock_ms = next - 1;
+                ht_scene_clear(&before_wake, 0);
+                ht_character_face(&before_wake, &c, &f, 0xffff, recaps[r]);
+                assert(!memcmp(now.runs, before_wake.runs, sizeof now.runs[0] * now.count));
+                clock = next;
+            }
+            assert(own ? flick[0] && flick[1] : ys[1] > ys[0]);
+            // Held (asleep): fat and sweating still, and still.
+            ht_character_face_t held = {.recipient = "Payments refactor", .engine = pet->engine, .status = "",
+                .mood = HT_CHARACTER_ASLEEP, .foreground = 0xffff, .clock_ms = 0, .context_level = 2};
+            ht_scene_t hs; ht_scene_clear(&hs, 0);
+            ht_character_face(&hs, &c, &held, 0xffff, recaps[r]);
+            assert((own ? fat_frame(pet, &hs.runs[1].sprite) == 1 : sweat_run(&hs, pet) != NULL) &&
+                   !ht_focus_pet_next_ms(&held, recaps[r]));
+        }
+    // The working and relaxing scenes are drawn as they are at every level.
+    for (unsigned i = 0; i < ht_pet_count; i++)
+        for (unsigned working = 0; working < 2; working++) {
+            ht_scene_t s0, s2;
+            for (unsigned level = 0; level <= 2; level += 2) {
+                ht_character_face_t f = {.recipient = "Payments refactor", .engine = ht_pets[i].engine,
+                    .activity = working ? "Working" : "", .elapsed = 5, .status = "", .mood = HT_CHARACTER_IDLE,
+                    .foreground = 0xffff, .clock_ms = 5000, .context_level = (uint8_t)level};
+                ht_scene_t *s = level ? &s2 : &s0;
+                ht_scene_clear(s, 0);
+                ht_character_face(s, &c, &f, 0xffff, "");
+            }
+            assert(s0.count == s2.count && !memcmp(s0.runs, s2.runs, sizeof s0.runs[0] * s0.count));
+        }
+    printf("Context: %u faces, Claude plump then fat in its own drawings, the others 1.3x then 1.6x wide with drops, "
+           "fixed slots, scenes as drawn PASS\n",
+           faces);
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2) { fprintf(stderr, "usage: test_character <pet_min.hpet> [--custom-only]\n"); return 2; }
@@ -2143,6 +2262,6 @@ int main(int argc, char **argv)
     if (argc > 2 && !strcmp(argv[2], "--custom-only")) { custom_pet(); return 0; }
     assert(HT_CHARACTER_COUNT == 1 && !strcmp(ht_character_name(HT_CHARACTER_FOCUS), "Focus"));
     clocks(); faces(); caption_ink(); focus_face();
-    focus_relaxing(); focus_builder(); custom_pet();
+    focus_relaxing(); focus_builder(); focus_context(); custom_pet();
     printf("Characters: Focus, eight moods, three recaps, pause/mic/wrap/swap and %u exact incremental redraws PASS\n", redraws);
 }

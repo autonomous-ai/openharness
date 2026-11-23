@@ -636,6 +636,22 @@ def claude_render(cells):
     return CLAUDE_IMAGES[cells['i']]
 
 
+# ---- A FULLER CONTEXT WINDOW (focus.c): a pet's own drawings of it (ht_pet_t.fat), at the small pet's 2x ----
+# Clawd plump at level 1 and fat at 2 (assets/pets/claude/fat: round, squinting > <, sweat on its body, stress lines
+# over its head drawn twice so they flicker). A pet without them is drawn wider instead.
+FAT = {'claude': (CLAUDE / 'fat', ('plump', 'fat-0', 'fat-1'))}
+
+
+def generate_fat(prefix, engine):
+    folder, names = FAT[engine]
+    ims = [Image.open(folder / f'{n}.png').convert('RGBA') for n in names]
+    grids, palette = quantise_pieces(ims)
+    out = [f'static const uint16_t {prefix}_pal[{len(palette)}] = {{' + ','.join(str(0 if k == 0 else rgb565_panel(c)) for k, c in enumerate(palette)) + '};\n']
+    code, order, n, nbytes = cell_frames(prefix, [(im.width, im.height, g) for im, g in zip(ims, grids)], f'{prefix}_pal')
+    assert order == [0, 1, 2]                      # pets.h: [level 1, level 2, level 2 flickered]
+    return out + code, n, nbytes + len(palette) * 2
+
+
 def rgb565(rgb):
     """Native RGB565, what ht_rgb() returns and ht_box() takes (the sprites' palettes are panel order)."""
     r, g, b = rgb
@@ -1063,7 +1079,13 @@ def generate():
             out += code
             scene_stats.append((rprefix, n, nbytes))
             relax = '&' + rprefix
-        table.append(f'{{"{engine}",{w},{h},{"NULL" if cells_out else prefix + "_frames"},{prefix}_loops,{prefix}_step_ms,{",".join(refs_to)},{prefix + "_frames" if cells_out else "NULL"},&{engine}_alert,{0 if n_steps == STEPS else n_steps},{relax},{alt}}}')
+        fat = 'NULL'
+        if engine in FAT:
+            code, n, nbytes = generate_fat(f'{engine}_fat', engine)
+            out += code
+            scene_stats.append((f'{engine}_fat', n, nbytes))
+            fat = f'{engine}_fat_frames'
+        table.append(f'{{"{engine}",{w},{h},{"NULL" if cells_out else prefix + "_frames"},{prefix}_loops,{prefix}_step_ms,{",".join(refs_to)},{prefix + "_frames" if cells_out else "NULL"},&{engine}_alert,{0 if n_steps == STEPS else n_steps},{relax},{alt},{fat}}}')
     out.append('const ht_pet_t ht_pets[] = {' + ','.join(table) + '};\n')
     out.append(f'const unsigned ht_pet_count = {len(PETS)};\n')
     return dedupe_arrays(''.join(out)), counts, scene_stats

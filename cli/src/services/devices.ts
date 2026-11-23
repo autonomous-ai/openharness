@@ -27,7 +27,7 @@ import { CableFleet, testDialDiscovery, type CableFleetOptions } from '../cable/
 import { isLocalOnly } from '../lib/cardUpdate.js'
 import { TurnStats, type TurnStatsFields } from '../cable/turnStats.js'
 import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, DaemonCableHost, type CableHostWiring } from '../cable/cableHost.js'
-import { CableSession, SHOWN_ONLY_PREFIX, type DialStatus, type FollowCause } from '../cable/cableSession.js'
+import { CableSession, SHOWN_ONLY_PREFIX, type ContextLevel, type DialStatus, type FollowCause } from '../cable/cableSession.js'
 import { createDialUsage, type DialAgent, type DialUsage } from '../cable/dialUsage.js'
 import { DialUsageFile } from '../cable/dialUsageFile.js'
 import type { HostAdapter, Pane } from '../cable/hosts/adapter.js'
@@ -150,9 +150,9 @@ export interface DevicesDeps {
   agentsRead?: () => boolean
   /** Called with a function this part runs whenever its link to the core drops: the calls that core held have failed. */
   onCoreGone?: (run: () => void) => void
-  /** An agent's conversation token totals, read fresh (not the 15 s cache); null when unknown or remote.
+  /** An agent's conversation token totals and current context, read fresh (not the 15 s cache); null when unknown or remote.
    *  Defaults to the core's `usageFresh`. */
-  readUsage?: (agentId: string) => Promise<{ input?: number; cached?: number; output?: number } | null>
+  readUsage?: (agentId: string) => Promise<{ input?: number; cached?: number; output?: number; context?: number; window?: number } | null>
   /** For this service's tests: the dial's session, and how dials are found and opened. */
   Session?: ConstructorParameters<typeof CableFleet>[0]
   cable?: Partial<CableFleetOptions>
@@ -1248,6 +1248,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         usage.agentsPresent(outsideRunning())
         usage.attached(on)
       })
+      // Told as the first dial greets (cableSession.ts hello), so whether it says `context` is known here.
+      if (on && cable.wantsContext()) void readContexts()
     },
     dialShows: (agent) => {
       part.call('dialStream', () => dial.shows(agent))
@@ -1419,9 +1421,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
 
   const readUsage = deps.readUsage ?? (async (agentId: string) => {
     const usage = await core.usageFresh?.(agentId)
-    return usage ? { input: usage.inputTokens, cached: usage.cachedTokens, output: usage.outputTokens } : null
+    return usage ? { input: usage.inputTokens, cached: usage.cachedTokens, output: usage.outputTokens,
+      context: usage.contextTokens, window: usage.contextWindow } : null
   })
-  type Reading = { input?: number; cached?: number; output?: number } | null
+  type Reading = { input?: number; cached?: number; output?: number; context?: number; window?: number } | null
   /** Each agent's reading from when its turn started, until the turn ends. */
   const starts = new Map<string, Promise<Reading>>()
   /** When each agent's turn began (the first `processing`), for the summary's duration. */
@@ -1439,16 +1442,39 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     typeof a === 'number' && typeof b === 'number' && b - a >= 0 && b - a <= MAX_TOKENS ? b - a : undefined
   /** The tokens this turn used: the end reading minus the start one, or nothing when either is missing, the
    *  difference is out of range, or the fresh read takes over 2 s (the turn's end never waits longer). */
-  const turnTokens = async (agentId: string, start: Promise<Reading>): Promise<Pick<TurnStatsFields, 'tokensIn' | 'tokensOut'>> => {
+  const turnTokens = async (start: Promise<Reading>, end: Promise<Reading>): Promise<Pick<TurnStatsFields, 'tokensIn' | 'tokensOut'>> => {
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       const [from, to] = await Promise.race([
-        Promise.all([settle(start), settle(readUsage(agentId))]),
+        Promise.all([settle(start), end]),
         new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), TOKENS_WAIT_MS) }),
       ]) ?? [null, null]
       const tokensIn = diff(fresh(from), fresh(to)), tokensOut = diff(from?.output, to?.output)
       return { ...(tokensIn === undefined ? {} : { tokensIn }), ...(tokensOut === undefined ? {} : { tokensOut }) }
     } finally { clearTimeout(timer) }
+  }
+
+  /** How full the agent's context window is, for a dial that says `context: 'v1'` (its pet grows with it): 0 under 50%, 1
+   *  to 80%, 2 past it; nothing when the context or its window is unknown, which the dial reads as 0. */
+  const contextLevel = (r: Reading): ContextLevel | undefined => {
+    if (typeof r?.context !== 'number' || !r.window) return undefined
+    return r.context >= r.window * 0.8 ? 2 : r.context >= r.window * 0.5 ? 1 : 0
+  }
+  /** The level a reading gives, told to the dials, which send it only when it changed (cableSession.ts agentContext). */
+  const noteContext = (agentId: string, reading: Promise<Reading>): void => {
+    void reading.then((r) => {
+      const level = contextLevel(r)
+      if (level !== undefined) void cable.agentContext(agentId, level)
+    })
+  }
+  /** The agents read as a dial attaches, so its pets are right before the first turn: Claude Code's and Codex's alone,
+   *  whose transcripts say it, and at most 64, one read at a time in the usage reader's queue. */
+  const CONTEXT_READS = 64
+  const readContexts = async (): Promise<void> => {
+    // In its own process the copy of the core's agents may not have landed as the dial attaches.
+    await deps.refresh?.().catch(() => {})
+    const agents = core.agents.advertised().filter(({ engine }) => engine === 'claude' || engine === 'codex').slice(0, CONTEXT_READS)
+    for (const { agentId } of agents) noteContext(agentId, settle(readUsage(agentId)))
   }
 
   /** One card for the dial, in its four calls. A remote machine's and this computer's are the same calls,
@@ -1476,8 +1502,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         if (Object.keys(all).length) void cable.turnStats(event.agentId, all)
         void cable.turnDone(event.agentId)
       }
-      if (!start || !cable.wantsStats()) return finish({})
-      return turnTokens(event.agentId, start).then(finish)
+      // One read at the end serves both: the turn's tokens and how full its context is now.
+      const counting = cable.wantsStats() ? start : undefined
+      const end = counting || cable.wantsContext() ? settle(readUsage(event.agentId)) : null
+      if (end && cable.wantsContext()) noteContext(event.agentId, end)
+      if (!counting || !end) return finish({})
+      return turnTokens(counting, end).then(finish)
     }
     // On screen or a sub-agent's: silent, nobody is asked. Otherwise the tier decides how loudly the dial tells. The
     // tile still updates either way — the recap is what it draws.
@@ -2312,7 +2342,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       questionsOpen.delete(ran.agentId)
       endReplies(ran.agentId, false)
       stats.take(ran.agentId)
-      if (cable.wantsStats()) starts.set(ran.agentId, settle(readUsage(ran.agentId)))
+      // One read at the start serves both: the turn's tokens and how full its context was going in.
+      if (cable.wantsStats() || cable.wantsContext()) {
+        const reading = settle(readUsage(ran.agentId))
+        if (cable.wantsStats()) starts.set(ran.agentId, reading)
+        if (cable.wantsContext()) noteContext(ran.agentId, reading)
+      }
       return
     }
     if (isLocalOnly(frame) && ran.agentId && ran.payload?.id) {

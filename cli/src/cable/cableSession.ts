@@ -409,6 +409,11 @@ import { APP_IDS, appDisplayName, hostDisplayName } from './hosts/hostDetect.js'
 import { RING_PLACES } from './hosts/select.js'
 import type { AppList, AppPick } from './hosts/types.js'
 
+/** How full an agent's context window is, as `agent.context` says it: 0 under 50%, 1 from 50% to under 80%, 2 from 80%. */
+export type ContextLevel = 0 | 1 | 2
+/** The agents whose level a session keeps: the dial holds far fewer tiles (RING_PLACES), so these bound a long run's churn. */
+const CONTEXT_AGENTS = 256
+
 export interface RouteDecision {
   agentId: string
   confidence: number
@@ -820,6 +825,13 @@ export class CableSession {
   /** `appCards: 'v1'` (the Harness Pro, docs/plans/2026-11-20-pro-app-data-daemon-design.md): `working` on each `apps`
    *  row, and a change of it alone pushes `apps`. Any other device gets today's `apps` frame byte for byte. */
   private appCards = false
+  /** `context: 'v1'` (the round dial, whose pet grows as an agent's context window fills): `agent.context` frames. */
+  private contextFill = false
+  /** Each agent's context level above 0 as the devices last read it (services/devices.ts), whichever dial is greeted:
+   *  a dial that greets later is told them after its list. At most CONTEXT_AGENTS, the oldest change dropped first. */
+  private contextKnown = new Map<string, ContextLevel>()
+  /** The level this dial was last sent for each agent, so an unchanged one is never sent again. */
+  private contextSent = new Map<string, ContextLevel>()
   private playerOffset = 0
   private playerRequest = 0
   private playerLibraryKey = ''
@@ -836,14 +848,15 @@ export class CableSession {
 
   /** For the greeting's log line: which capabilities this hello named, or nothing. */
   private capabilitiesNamed(): string {
-    const named = [this.swarmMembers && 'swarms', this.longRecap && 'recap', this.stepsActivity && 'activity', this.statsTurn && 'stats', this.playerCapable && 'player', this.appFilter && 'appFilter', this.questionTier && 'questionTier', this.appCards && 'appCards']
+    const named = [this.swarmMembers && 'swarms', this.longRecap && 'recap', this.stepsActivity && 'activity', this.statsTurn && 'stats', this.playerCapable && 'player', this.appFilter && 'appFilter', this.questionTier && 'questionTier', this.appCards && 'appCards', this.contextFill && 'context']
       .filter(Boolean)
     return named.length ? ` caps ${named.join(',')}` : ''
   }
 
   private resetCapabilities(): void {
     this.swarmMembers = this.longRecap = this.stepsActivity = this.statsTurn = this.playerCapable = this.appFilter = false
-    this.questionTier = this.appCards = false
+    this.questionTier = this.appCards = this.contextFill = false
+    this.contextSent.clear()
     this.seqOn = false
     this.seq = 0
     this.resyncAt = 0
@@ -1522,6 +1535,7 @@ export class CableSession {
         this.appFilter = str('appFilter') === 'v1'
         this.questionTier = str('questionTier') === 'v1'
         this.appCards = str('appCards') === 'v1'
+        this.contextFill = str('context') === 'v1'
         this.seqOn = str('board') === 'pro'
         this.seq = 0
         const mac = str('mac') ?? ''
@@ -1591,6 +1605,8 @@ export class CableSession {
           // first turns on the new one; the push below opens one again only for a dial that echoes.
           this.expectedAppFocusEcho = ''
           this.expectedAppFocusEchoUntil = 0
+          // Redrawn from nothing, it holds no level: what it was sent before is not on its screen.
+          this.contextSent.clear()
           this.log(`cable: dial ${mac} ${returning ? 'back ' : ''}on fw ${fw} proto ${msg.proto}${hw ? ` hw ${hw}` : ''}${board ? ` board ${board}` : ''}${this.capabilitiesNamed()}`)
           this.dialLog.greeted()
           this.report({ fw })
@@ -3068,6 +3084,14 @@ export class CableSession {
     // Read before the ring takes this push's agents: whether the dial held none until this list.
     const heldNone = this.lastRing.length === 0
     this.lastRing = agents.map(({ id, name, host }) => ({ id, name, host }))
+    // A dial back on the wire, or on another app's ring, holds no level for these tiles: each listed agent above 0 is
+    // told again, once a list. Only the listed: an agent with no tile has no pet to grow.
+    if (this.contextFill) {
+      for (const { id } of agents) {
+        const level = this.contextKnown.get(id)
+        if (level && await this.send({ t: 'agent.context', agentId: id, level })) this.contextSent.set(id, level)
+      }
+    }
     // A rename, or the shown agent leaving the ring, reaches the host with no move of the dial.
     this.reportShown()
 
@@ -3597,6 +3621,28 @@ export class CableSession {
     if (!this.statsTurn || !Object.keys(stats).length) return
     await this.send({ t: 'turn.stats', agentId, ...stats })
   }
+  /** A connected dial that says `context: 'v1'`: the usage reads behind `agent.context` are only worth doing for one. */
+  get wantsContext(): boolean { return this.contextFill && this.isConnected }
+  /** How full an agent's context window is now (0 under 50%, 1 to 80%, 2 past it), for a `context: 'v1'` dial: sent when
+   *  it differs from what this dial was last sent, a 0 only to undo a level sent. Kept either way, for the next list. */
+  async agentContext(agentId: string, level: ContextLevel): Promise<void> {
+    this.knowContext([[agentId, level]])
+    if (!this.contextFill || !this.isConnected || (this.contextSent.get(agentId) ?? 0) === level) return
+    if (!await this.send({ t: 'agent.context', agentId, level })) return
+    if (level) this.contextSent.set(agentId, level)
+    else this.contextSent.delete(agentId)
+  }
+  /** Levels another dial was told (cableFleet.ts), kept for this one's next list and sent nothing now. */
+  knowContext(levels: Iterable<[string, ContextLevel]>): void {
+    for (const [agentId, level] of levels) {
+      this.contextKnown.delete(agentId)
+      if (!level) continue
+      this.contextKnown.set(agentId, level)
+      if (this.contextKnown.size > CONTEXT_AGENTS) this.contextKnown.delete(this.contextKnown.keys().next().value!)
+    }
+  }
+  /** The levels above 0 this session knows, for a dial that attaches beside it (cableFleet.ts). */
+  contextLevels(): Array<[string, ContextLevel]> { return [...this.contextKnown] }
   async turnDone(agentId: string): Promise<void> {
     this.endLive(agentId)
     this.activityReads.delete(agentId)

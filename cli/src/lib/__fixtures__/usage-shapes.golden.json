@@ -8,6 +8,8 @@
       "inputTokens": 380,
       "outputTokens": 40,
       "cachedTokens": 160,
+      "contextTokens": 190,
+      "contextWindow": 200000,
       "models": {
         "unknown": {
           "input": 200,
@@ -23,6 +25,8 @@
       "inputTokens": 380,
       "outputTokens": 40,
       "cachedTokens": 160,
+      "contextTokens": 190,
+      "contextWindow": 200000,
       "models": {
         "unknown": {
           "input": 200,
@@ -38,6 +42,8 @@
       "inputTokens": 570,
       "outputTokens": 60,
       "cachedTokens": 240,
+      "contextTokens": 190,
+      "contextWindow": 200000,
       "models": {
         "unknown": {
           "input": 300,
@@ -53,6 +59,8 @@
       "inputTokens": 570,
       "outputTokens": 60,
       "cachedTokens": 240,
+      "contextTokens": 190,
+      "contextWindow": 200000,
       "models": {
         "unknown": {
           "input": 300,
@@ -96,6 +104,8 @@
       "inputTokens": 570,
       "outputTokens": 60,
       "cachedTokens": 240,
+      "contextTokens": 190,
+      "contextWindow": 200000,
       "models": {
         "unknown": {
           "input": 300,
@@ -139,6 +149,8 @@
       "inputTokens": 390,
       "outputTokens": 20,
       "cachedTokens": 80,
+      "contextTokens": 390,
+      "contextWindow": 200000,
       "models": {
         "unknown": {
           "input": 300,
@@ -174,6 +186,8 @@
       "inputTokens": 290,
       "outputTokens": 40,
       "cachedTokens": 80,
+      "contextTokens": 290,
+      "contextWindow": 200000,
       "models": {
         "unknown": {
           "input": 200,
@@ -189,6 +203,7 @@
       "inputTokens": 200,
       "outputTokens": 50,
       "cachedTokens": 100,
+      "contextTokens": 100,
       "models": {
         "unknown": {
           "input": 100,
@@ -204,6 +219,7 @@
       "inputTokens": 300,
       "outputTokens": 80,
       "cachedTokens": 150,
+      "contextTokens": 100,
       "models": {
         "unknown": {
           "input": 150,
@@ -230,6 +246,8 @@
       "inputTokens": 480,
       "outputTokens": 60,
       "cachedTokens": 160,
+      "contextTokens": 290,
+      "contextWindow": 200000,
       "models": {
         "unknown": {
           "input": 300,
@@ -263,6 +281,8 @@
       "inputTokens": 480,
       "outputTokens": 60,
       "cachedTokens": 160,
+      "contextTokens": 290,
+      "contextWindow": 200000,
       "models": {
         "unknown": {
           "input": 300,
@@ -360,6 +380,8 @@
       "inputTokens": 380,
       "outputTokens": 40,
       "cachedTokens": 160,
+      "contextTokens": 190,
+      "contextWindow": 200000,
       "models": {
         "unknown": {
           "input": 200,
@@ -375,6 +397,8 @@
       "inputTokens": 380,
       "outputTokens": 40,
       "cachedTokens": 160,
+      "contextTokens": 190,
+      "contextWindow": 200000,
       "models": {
         "unknown": {
           "input": 200,
@@ -390,6 +414,8 @@
       "inputTokens": 570,
       "outputTokens": 60,
       "cachedTokens": 240,
+      "contextTokens": 190,
+      "contextWindow": 200000,
       "models": {
         "unknown": {
           "input": 300,
@@ -405,6 +431,8 @@
       "inputTokens": 570,
       "outputTokens": 60,
       "cachedTokens": 240,
+      "contextTokens": 190,
+      "contextWindow": 200000,
       "models": {
         "unknown": {
           "input": 300,
@@ -448,6 +476,8 @@
       "inputTokens": 570,
       "outputTokens": 60,
       "cachedTokens": 240,
+      "contextTokens": 190,
+      "contextWindow": 200000,
       "models": {
         "unknown": {
           "input": 300,
@@ -491,6 +521,8 @@
       "inputTokens": 390,
       "outputTokens": 20,
       "cachedTokens": 80,
+      "contextTokens": 390,
+      "contextWindow": 200000,
       "models": {
         "unknown": {
           "input": 300,
@@ -526,6 +558,8 @@
       "inputTokens": 290,
       "outputTokens": 40,
       "cachedTokens": 80,
+      "contextTokens": 290,
+      "contextWindow": 200000,
       "models": {
         "unknown": {
           "input": 200,
@@ -541,6 +575,7 @@
       "inputTokens": 200,
       "outputTokens": 50,
       "cachedTokens": 100,
+      "contextTokens": 100,
       "models": {
         "unknown": {
           "input": 100,
@@ -556,6 +591,7 @@
       "inputTokens": 300,
       "outputTokens": 80,
       "cachedTokens": 150,
+      "contextTokens": 100,
       "models": {
         "unknown": {
           "input": 150,
@@ -582,6 +618,8 @@
       "inputTokens": 480,
       "outputTokens": 60,
       "cachedTokens": 160,
+      "contextTokens": 290,
+      "contextWindow": 200000,
       "models": {
         "unknown": {
           "input": 300,
@@ -615,6 +653,8 @@
       "inputTokens": 480,
       "outputTokens": 60,
       "cachedTokens": 160,
+      "contextTokens": 290,
+      "contextWindow": 200000,
       "models": {
         "unknown": {
           "input": 300,

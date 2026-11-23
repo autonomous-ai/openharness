@@ -17,7 +17,7 @@ export type { AgentTokenUsage } from './agentUsageWire.js'
 type Buckets = [number, number, number, number]
 type CodexTotals = [number, number, number, number]
 type Checkpoint = {
-  version: 6; key: string; offset: number; size: number; mtime: number; inode: string;
+  version: 7; key: string; offset: number; size: number; mtime: number; inode: string;
   boundary: string; total: number; observed: boolean; updatedAt: string | null;
   claude: Record<string, Buckets>; codex: CodexTotals | null; seen: Record<string, true>;
   output: OutputLedger;
@@ -27,6 +27,8 @@ type Checkpoint = {
   models: Record<string, Buckets>
   /** The model Codex's latest turn settings named: its token counts carry none of their own. */
   codexModel: string | null
+  /** The context the latest reply was prompted with, and the window it fills (0: the engine named none); null before one. */
+  context: [number, number] | null
 }
 type Entry = {
   target: Target; value: AgentTokenUsage | null; checked: number; pending: Promise<void> | null;
@@ -40,6 +42,9 @@ const MAX_CACHE_BYTES = 8 * 1024 * 1024
 const MAX_TRANSCRIPT_BYTES = 128 * 1024 * 1024
 const MAX_LINE_BYTES = 8 * 1024 * 1024
 const MAX_ENTRIES = 512
+/** Claude's context windows: the standard one, and the 1M one the [1m] models have. */
+const CLAUDE_WINDOW = 200_000
+const CLAUDE_1M_WINDOW = 1_000_000
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
 const object = (value: unknown): Record<string, unknown> | null =>
   value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
@@ -100,9 +105,9 @@ function targetSnapshot(s: Target): Target {
     ...(s.openclawStateDir ? { openclawStateDir: s.openclawStateDir } : {}) }
 }
 function empty(key: string): Checkpoint {
-  return { version: 6, key, offset: 0, size: 0, mtime: 0, inode: '', boundary: '', total: 0, usage: [0, 0, 0],
+  return { version: 7, key, offset: 0, size: 0, mtime: 0, inode: '', boundary: '', total: 0, usage: [0, 0, 0],
     observed: false, updatedAt: null, claude: {}, codex: null, seen: {}, output: emptyOutputLedger(),
-    work: emptySessionWork(), sourceSession: null, models: {}, codexModel: null }
+    work: emptySessionWork(), sourceSession: null, models: {}, codexModel: null, context: null }
 }
 function rawCodex(value: unknown): CodexTotals | null {
   const row = object(value)
@@ -167,6 +172,15 @@ function ingest(state: Checkpoint, line: string, target: Target): void {
     state.usage[2] += merged[2] - old[2]
     addModel(state, message?.model, merged.map((n, i) => n - old[i]) as Buckets)
     state.observed = true
+    // The context now is what the latest reply was prompted with, so a /compact or /clear lowers it at its next reply.
+    // A sub-agent's row is its own context, and an API error's synthetic row counts nothing: neither is this one's.
+    const context = next[0] + next[2] + next[3]
+    if (row.isSidechain !== true && context > 0) {
+      // Claude Code writes the plain model id even for the [1m] variant, so the window is read from the model only when
+      // it says so, and otherwise from the context itself: past 200k it can only be the 1M window.
+      const named = typeof message?.model === 'string' && /\b1m\b/i.test(message.model)
+      state.context = [context, named || context > CLAUDE_WINDOW ? CLAUDE_1M_WINDOW : CLAUDE_WINDOW]
+    }
   } else {
     const payload = object(row.payload)
     const info = object(payload?.info)
@@ -186,6 +200,10 @@ function ingest(state: Checkpoint, line: string, target: Target): void {
       delta = last ?? (regressed ? null : total.map((n, i) => Math.max(0, n - previous[i])) as CodexTotals)
     } else delta = last ?? total
     state.codex = total ?? (last && previous ? previous.map((n, i) => n + last[i]) as CodexTotals : null)
+    // Codex's last request's input, cached input included (input_tokens is the whole prompt: cached_input_tokens is a
+    // part of it), is what its context holds; the window is the engine's own, absent before Codex wrote it (0: unknown).
+    // Set only past the stale and repeated records above, so a replayed old count never brings an old context back.
+    if (last) state.context = [last[0], tokens(info.model_context_window)]
     if (delta) {
       // Codex input includes cache reads; output includes reasoning.
       state.total += Math.max(delta[0], delta[1]) + delta[2]
@@ -310,6 +328,7 @@ export class AgentTokenUsageCache {
       ...(state.observed ? { inputTokens: state.usage[0], outputTokens: state.usage[1], cachedTokens: state.usage[2] } : {}),
       ...(state.observed && models.length ? { models: Object.fromEntries(models.map(([model, [input, output, cacheRead, cacheWrite]]) =>
         [model, { input, output, cacheRead, cacheWrite } satisfies ModelTokens])) } : {}),
+      ...(state.observed && state.context ? { contextTokens: state.context[0], ...(state.context[1] ? { contextWindow: state.context[1] } : {}) } : {}),
       ...(output ? { output } : {}), ...(work ? { work } : {}) }
     if (previous?.totalTokens !== entry.value.totalTokens
       || JSON.stringify(previous?.output) !== JSON.stringify(output ?? undefined)
@@ -321,8 +340,9 @@ export class AgentTokenUsageCache {
       if ((await stat(file)).size > MAX_CACHE_BYTES) return empty(key)
       const raw = JSON.parse(await readFile(file, 'utf8')) as Checkpoint
       const version: number = raw.version
-      // v5 kept no per-model counts: replayed once like v3 and v4, so a session's counts by model cover all of it.
-      if ((version === 3 || version === 4 || version === 5) && raw.key === key) {
+      // v5 kept no per-model counts: replayed once like v3 and v4, so a session's counts by model cover all of it. v6
+      // kept no current context, which only a replay finds (the dial's pet, services/devices.ts).
+      if ((version === 3 || version === 4 || version === 5 || version === 6) && raw.key === key) {
         const work = { ...raw.work, currentOrder: 0, failedOrder: 0 }
         if (validSessionWork(work)) {
           // Receipts may already have been compacted out of the transcript. Replay the available
@@ -336,7 +356,7 @@ export class AgentTokenUsageCache {
         }
       }
       // Replay old transcripts once: v3 skipped ordinary batched code-mode receipts, including PRs.
-      if (raw.version === 6 && raw.key === key && Number.isSafeInteger(raw.total) && raw.total >= 0
+      if (raw.version === 7 && raw.key === key && Number.isSafeInteger(raw.total) && raw.total >= 0
         && Array.isArray(raw.usage) && raw.usage.length === 3 && raw.usage.every(n => Number.isSafeInteger(n) && n >= 0)
         && typeof raw.observed === 'boolean'
         && (raw.updatedAt === null || typeof raw.updatedAt === 'string' && Number.isFinite(Date.parse(raw.updatedAt)))
@@ -349,7 +369,9 @@ export class AgentTokenUsageCache {
         && validSessionWork(raw.work) && (raw.sourceSession === null || typeof raw.sourceSession === 'string')
         && object(raw.models) && Object.keys(raw.models).length <= MAX_USAGE_MODELS
         && Object.entries(raw.models).every(([model, buckets]) => usageModelName(model) === model && validBuckets(buckets))
-        && (raw.codexModel === null || usageModelName(raw.codexModel) === raw.codexModel)) return raw
+        && (raw.codexModel === null || usageModelName(raw.codexModel) === raw.codexModel)
+        && (raw.context === null || Array.isArray(raw.context) && raw.context.length === 2
+          && raw.context.every(n => Number.isSafeInteger(n) && n >= 0))) return raw
     } catch { /* First run, corrupt cache, or removed cache: rebuild from the trusted transcript. */ }
     return empty(key)
   }

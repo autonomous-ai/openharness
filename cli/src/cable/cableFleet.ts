@@ -132,6 +132,9 @@ export class CableFleet {
   /** Is any connected dial asking for `turn.stats`? */
   wantsStats(): boolean { return [...this.entries.values()].some(e => e.session.wantsStats) }
 
+  /** Is any connected dial asking for `agent.context`? */
+  wantsContext(): boolean { return [...this.entries.values()].some(e => e.session.wantsContext) }
+
   /** Is any connected dial showing one app's ring? */
   wantsApps(): boolean { return [...this.entries.values()].some(e => e.session.wantsApps) }
 
@@ -247,6 +250,9 @@ export class CableFleet {
         const sibling = [...this.entries.values()].find(e => e.attached)
         entry.attached = true
         if (!sibling) { this.host.onDialAttached?.(); return }
+        // The devices read every agent's context as the first dial attaches, not this one: it takes its sibling's levels,
+        // sent after its own list.
+        entry.session.knowContext(sibling.session.contextLevels())
         // The host asks again only as the first dial arrives, so this one is given what its sibling would be asked again.
         // Mid-greeting: the session only takes them in here, and asks each once as its greeting's push ends.
         const failed = (error: unknown) => this.host.log(`cable: ${serialPortName(port.path)} open questions: ${errorKind(error)} [usb ${id}]`)
@@ -468,6 +474,7 @@ export class CableFleet {
   turnStep(...args: Parameters<Surface['turnStep']>) { return this.send('turnStep', ...args) }
   turnReply(...args: Parameters<Surface['turnReply']>) { return this.send('turnReply', ...args) }
   turnStats(...args: Parameters<Surface['turnStats']>) { return this.send('turnStats', ...args) }
+  agentContext(...args: Parameters<Surface['agentContext']>) { return this.send('agentContext', ...args) }
   turnDone(...args: Parameters<Surface['turnDone']>) { return this.send('turnDone', ...args) }
   summary(...args: Parameters<Surface['summary']>) { return this.send('summary', ...args) }
   turnError(...args: Parameters<Surface['turnError']>) { return this.send('turnError', ...args) }

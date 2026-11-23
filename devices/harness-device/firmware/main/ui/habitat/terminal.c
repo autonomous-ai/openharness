@@ -584,17 +584,20 @@ uint8_t ht_cell_at(const ht_cell_frame_t *f, int col, int row)
     if (!f || f->cols > HT_CELL_COLS_MAX || col < 0 || row < 0 || col >= f->cols || row >= f->rows) return 0;
     return cell_row(f->cells, f->row_at, f->cols, row, buf)[col];
 }
-bool ht_cell_sprite_zoom(ht_scene_t *s, int x, int y, const ht_cell_frame_t *f, unsigned zoom)
+bool ht_cell_sprite_zoom(ht_scene_t *s, int x, int y, const ht_cell_frame_t *f, unsigned zoom_x, unsigned zoom_y)
 {
-    if (zoom >= 8) return ht_cell_sprite(s, x, y, f);
-    if (!zoom || !ht_cell_sprite(s, x, y, f)) return false;
+    // At least an eighth on each axis: a glass row then spans at most nine frame rows (sprite_raster's buffer).
+    if (zoom_x < 8 || zoom_x > 128 || zoom_y < 8 || zoom_y > 128) return false;
+    if (zoom_x == 64 && zoom_y == 64) return ht_cell_sprite(s, x, y, f);
+    if (!ht_cell_sprite(s, x, y, f)) return false;
     ht_run_t *r = &s->runs[s->count - 1];
     r->sprite.src_w = (uint16_t)(f->cols * f->cell);
     r->sprite.src_h = (uint16_t)(f->rows * f->cell);
-    r->sprite.zoom = (uint8_t)zoom;
-    r->w = (int16_t)((r->sprite.src_w * zoom + 7) / 8);
+    r->sprite.zoom_x = (uint8_t)zoom_x;
+    r->sprite.zoom_y = (uint8_t)zoom_y;
+    r->w = (int16_t)((r->sprite.src_w * zoom_x + 63) / 64);
     r->sprite.width = (uint16_t)r->w;
-    r->sprite.height = (uint16_t)((r->sprite.src_h * zoom + 7) / 8);
+    r->sprite.height = (uint16_t)((r->sprite.src_h * zoom_y + 63) / 64);
     return true;
 }
 bool ht_box(ht_scene_t *s, int x, int y, int w, int h, int radius, uint16_t fill, uint16_t border)
@@ -1646,33 +1649,34 @@ static void sprite_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
     if(!s->pixels&&!s->cells)return;
     int left=imax(clip.x,r->x),right=imin(clip.x+clip.w,r->x+s->width);
     int top=imax(clip.y,r->y),bottom=imin(clip.y+clip.h,r->y+s->height);
-    if(s->cells&&s->zoom){
-        // Zoomed: in units where a frame pixel is `zoom` wide and a glass pixel 8, each glass pixel is the mean of the
-        // frame pixels it overlaps, weighted by the overlap (a transparent one counts as the black ground).
-        int cols=s->src_w/s->cell,z=s->zoom;
-        static uint8_t unpacked[9][HT_CELL_COLS_MAX];   // the frame rows one glass row covers (8 / zoom + 1 at most)
+    if(s->cells&&s->zoom_y){
+        // Zoomed: in units where a frame pixel is `zoom_x` wide and `zoom_y` tall and a glass pixel 64 by 64, each
+        // glass pixel is the mean of the frame pixels it overlaps, weighted by the overlap (a transparent one counts as
+        // the black ground); the whole pixel weighs 64 x 64.
+        int cols=s->src_w/s->cell,z=s->zoom_y,zx=s->zoom_x;
+        static uint8_t unpacked[9][HT_CELL_COLS_MAX];   // the frame rows one glass row covers (64 / zoom_y + 1 at most)
         for(int y=top;y<bottom;y++){
-            int v0=(y-r->y)*8,v1=v0+8;
+            int v0=(y-r->y)*64,v1=v0+64;
             uint16_t *dst=out+(y-clip.y)*clip.w+left-clip.x;
             const uint8_t *rows[9];
             for(int sy=v0/z,k=0;sy*z<v1&&sy<s->src_h&&k<9;sy++,k++)
                 rows[k]=cell_row(s->cells,s->row_at,cols,sy/s->cell,unpacked[k]);
             for(int x=left;x<right;x++,dst++){
-                int u0=(x-r->x)*8,u1=u0+8;
+                int u0=(x-r->x)*64,u1=u0+64;
                 unsigned rr=0,gg=0,bb=0,cover=0;
                 for(int sy=v0/z;sy*z<v1&&sy<s->src_h;sy++){
                     int wy=imin(v1,(sy+1)*z)-imax(v0,sy*z);
                     const uint8_t *row=rows[sy-v0/z];
-                    for(int sx=u0/z;sx*z<u1&&sx<s->src_w;sx++){
+                    for(int sx=u0/zx;sx*zx<u1&&sx<s->src_w;sx++){
                         unsigned i=row[sx/s->cell];
                         if(!i)continue;
-                        unsigned w=(unsigned)(wy*(imin(u1,(sx+1)*z)-imax(u0,sx*z)));
+                        unsigned w=(unsigned)(wy*(imin(u1,(sx+1)*zx)-imax(u0,sx*zx)));
                         uint16_t c=panel16(s->palette[i]);
                         rr+=(c>>11)*w;gg+=((c>>5)&63)*w;bb+=(c&31)*w;cover+=w;
                     }
                 }
-                if(cover*4<64)continue;
-                *dst=panel16((uint16_t)(((rr+32)/64)<<11|((gg+32)/64)<<5|((bb+32)/64)));
+                if(cover*4<4096)continue;
+                *dst=panel16((uint16_t)(((rr+2048)/4096)<<11|((gg+2048)/4096)<<5|((bb+2048)/4096)));
             }
         }
         return;

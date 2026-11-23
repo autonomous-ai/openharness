@@ -113,6 +113,9 @@ typedef struct {
                                                  // working_scene, drawn at random as it starts showing (focus.c
                                                  // ht_focus_pick_working); the alert is the one alert_scene, its
                                                  // bubble placed from the scene that plays (beside either hat)
+    const ht_cell_frame_t *fat;                  // NULL: none, the small pet is drawn wider as its context fills; else
+                                                 // [3] at the same 2x as `cells`: level 1, then level 2 twice (its
+                                                 // stress lines flicker) (focus.c A FULLER CONTEXT WINDOW; Claude's)
 } ht_pet_t;
 // A pet's loop length.
 static inline unsigned ht_pet_steps(const ht_pet_t *pet) { return pet->steps ? pet->steps : HT_PET_STEPS; }

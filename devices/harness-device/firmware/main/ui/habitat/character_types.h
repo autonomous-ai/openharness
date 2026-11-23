@@ -56,6 +56,9 @@ typedef struct {
     // The working face plays the pet's second working scene (ht_pet_t.working_alt, Claude's builder) when
     // it has one. Drawn by ht_focus_pick_working as the scene starts showing, and kept while it shows.
     bool working_alt;
+    // How full the agent's context window is (agent.context: 0..2, 0 when the daemon never said). The small pet eats
+    // it: wider at each level, sweating at 2 (focus.c A FULLER CONTEXT WINDOW).
+    uint8_t context_level;
     uint16_t foreground;
 } ht_character_face_t;
 

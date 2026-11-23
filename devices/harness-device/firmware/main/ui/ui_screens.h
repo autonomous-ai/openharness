@@ -58,6 +58,9 @@ void ui_project_set_machine(const char *project_id, const char *machine_id, cons
 // use on it. An agent outside Harness can be watched, not spoken to, so a face tap without voice shows
 // "See it in {Host}" instead of opening the microphone.
 void ui_project_set_host_caps(const char *project_id, const char *host, uint8_t caps);
+
+// How full an agent's context window is, 0..2 (agent.context): its pet on the face grows fat with it.
+void ui_project_set_context(const char *project_id, uint8_t level);
 // `view: machine` on the roster: it is this computer's agents rather than a tab's, so each face names
 // where its agent lives under the agent's name.
 void ui_fleet_set_view(bool machine);
