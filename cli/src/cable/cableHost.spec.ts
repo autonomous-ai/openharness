@@ -1805,12 +1805,23 @@ describe('the dial that shows one app at a time', () => {
     expect((await host.listAgentSnapshot({ apps: true })).apps?.apps.map((a) => a.id)).toEqual(others.slice(0, 16))
   })
 
-  it('appOf is the agent\'s app in the machine view, undefined on the window\'s tab', async () => {
+  it('appOf is the agent\'s page in the machine view, undefined on the window\'s tab', async () => {
     const host = setup([agent('g1', 'ghostty'), agent('z1', 'ghostty', { host: 'zellij' })], { sessions })
     await host.listAgentSnapshot({ apps: true })
     expect(['h1', 'g1', 'z1', 'nobody'].map((id) => host.appOf(id))).toEqual(['harness', 'ghostty', 'ghostty', undefined])
     onTab(host, ['h1'])
     expect(['h1', 'g1'].map((id) => host.appOf(id))).toEqual([undefined, undefined])
+  })
+
+  it('appOf is the page an agent is on: tmux\'s or herdr\'s for a nested agent, Orca\'s for one in Orca; a notice\'s pick of a nested agent turns the dial there', async () => {
+    const host = setup([
+      agent('a1', 'iterm'), agent('b1', 'iterm', { nest: 'tmux', host: 'tmux' }), agent('c1', 'ghostty', { nest: 'herdr', host: 'herdr' }),
+      agent('o1', 'orca', { nest: 'tmux' }), agent('g1', 'ghostty'),
+    ], { sessions })
+    await host.listAgentSnapshot({ apps: true })
+    expect(['a1', 'b1', 'c1', 'o1'].map((id) => host.appOf(id))).toEqual(['iterm', 'tmux', 'herdr', 'orca'])
+    expect(host.pickApp('tmux', 'notice')).toBe('switched')
+    expect((await host.listAgentSnapshot({ apps: true })).apps?.shown).toBe('tmux')
   })
 
   // Windows: the scan learns no agent's app (scannedApp.ts) and nothing reports the app in front, so an agent it found is
