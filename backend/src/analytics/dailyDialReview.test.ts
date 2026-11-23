@@ -101,25 +101,25 @@ describe('dailyDialReview', () => {
     expect(review.team).toEqual([])
   })
 
-  it('reads a return from its complete cohorts only, outside the app apart', () => {
-    const review = dailyDialReview([row(2, 'dial_used_installation_days', 6), row(2, 'dial_d1_returning_installations', 5),
-      row(1, 'dial_used_installation_days', 9), row(1, 'dial_d1_returning_installations', 9),
-      row(2, 'dial_used_outside_app_installation_days', 5), row(2, 'dial_d1_returning_outside_app_installations', 5)], [], now)
+  it('reads a return on its return day against the day L days earlier, outside the app apart', () => {
+    // The gateway counts a return on day N+L, the day the computer is used again.
+    const review = dailyDialReview([row(2, 'dial_used_installation_days', 6), row(1, 'dial_d1_returning_installations', 5),
+      row(1, 'dial_used_installation_days', 9), row(2, 'dial_used_outside_app_installation_days', 5),
+      row(1, 'dial_d1_returning_outside_app_installations', 5)], [], now)
     const rows = review.outsideTeam.find(s => s.name.startsWith('Return'))!.rows
     expect(rows.find(r => r.name === 'Used on day N (N+1 complete)')?.computers.day).toBe(6)
     expect(rows.find(r => r.name === 'Again on N+1')?.computers.day).toBe(5)
     expect(rows.find(r => r.name === 'Outside the app, again on N+1')?.computers.day).toBe(5)
   })
 
-  it('shows an N+28 return from a cohort older than 28 days, and only the return names that far back', () => {
-    const review = dailyDialReview([row(40, 'dial_used_installation_days', 6), row(40, 'dial_d28_returning_installations', 5),
-      row(40, 'dial_used_outside_app_installation_days', 5), row(40, 'dial_d28_returning_outside_app_installations', 5),
-      row(40, 'dial_connected_installation_days', 9)], [], now)
+  it('rates an N+28 return against a used day 29 days back, and reads only the used days that far back', () => {
+    const review = dailyDialReview([row(29, 'dial_used_installation_days', 6), row(1, 'dial_d28_returning_installations', 5),
+      row(29, 'dial_used_outside_app_installation_days', 5), row(1, 'dial_d28_returning_outside_app_installations', 5),
+      row(40, 'dial_d28_returning_installations', 7), row(40, 'dial_connected_installation_days', 9)], [], now)
     const section = review.outsideTeam.find(s => s.name.startsWith('Return'))!
-    expect(section.name).not.toMatch(/28 days read/)
-    expect(section.rows.find(r => r.name === 'Used on day N (N+28 complete)')?.computers).toEqual({ day: '<5', d7: '<5', d28: 6 })
-    expect(section.rows.find(r => r.name === 'Again on N+28')?.computers.d28).toBe(5)
-    expect(section.rows.find(r => r.name === 'Outside the app, again on N+28')?.computers.d28).toBe(5)
+    expect(section.rows.find(r => r.name === 'Used on day N (N+28 complete)')?.computers.day).toBe(6)
+    expect(section.rows.find(r => r.name === 'Again on N+28')?.computers).toEqual({ day: 5, d7: 5, d28: 5 })
+    expect(section.rows.find(r => r.name === 'Outside the app, again on N+28')?.computers.day).toBe(5)
     expect(review.outsideTeam.find(s => s.name === 'Who uses a dial')).toBeUndefined()
   })
 
