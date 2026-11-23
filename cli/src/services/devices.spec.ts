@@ -13687,6 +13687,18 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
       expect(await waits(port)).toEqual({ dial_wait_elsewhere_over_10m: 1 })
     })
 
+    it('every question its agent holds ends with its next turn, as answered, or with the agent, as none', async () => {
+      const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
+      await attach(port)
+      port.card(question('q1'))
+      port.card(question('q2'))
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
+      port.card(question('q3'))
+      port.card(question('q4'))
+      port.card({ type: 'agent_deleted', payload: { agentId: 'h1' } })
+      expect(await waits(port)).toEqual({ dial_wait_elsewhere_under_30s: 2, dial_wait_none: 2 })
+    })
+
     it('a waiting notice ended by its next turn is elsewhere, by a tap is dial, by its agent leaving is none', async () => {
       vi.useFakeTimers()
       const { port, listener } = withNotices()
