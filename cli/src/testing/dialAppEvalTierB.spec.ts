@@ -23,6 +23,7 @@ const driver = await import('../../e2e/harness/appEvalDriver.js' as string) as {
   RAISE_TOOLS: readonly string[]
   World: new (rig: unknown, scenario: Scenario, platform: Platform) => {
     plug(): Promise<void>; read(): void; forgetBefore(cut: number): void; seen(): import('./dialAppEval/types.js').Seen; close(): Promise<void>
+    readonly muxPanes: Map<string, string>; takeMux(): void
   }
   writeRaiseFakes(bin: string): void
   raiseToolsOutside(root: string, env: NodeJS.ProcessEnv): string[]
@@ -58,6 +59,15 @@ const modInbox = await import('../../e2e/harness/modInbox.js' as string) as {
 
 let dir = ''
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
+
+/** A run noted under [runs] as the recording wrapper notes one (runLog.ts): its exit, the name it was run by, then each
+ *  argument, one a line, in `log/[name]`, at [at]. */
+function noteIn(runs: string, name: string, lines: string[], at: number): void {
+  const path = join(runs, 'log', name)
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, lines.map((line) => `${line}\n`).join(''))
+  utimesSync(path, new Date(at), new Date(at))
+}
 
 /** A recording open in a throwaway folder: its path and the file it notes its runs in. */
 function open(): { path: string; runs: string; run(...args: string[]): number | null } {
@@ -312,19 +322,11 @@ describe("tier B's recording wrappers", () => {
 
   it('runLog reads each run at its mtime, and skips a note not yet moved in', () => {
     dir = mkdtempSync(join(tmpdir(), 'tier-b-runs-'))
-    const notes = join(dir, 'log')
-    mkdirSync(notes)
-    // A note as the wrapper writes one: its exit, the name it was run by, then each argument, one a line.
-    const note = (name: string, lines: string[], at: number): void => {
-      const path = join(notes, name)
-      writeFileSync(path, lines.map((line) => `${line}\n`).join(''))
-      utimesSync(path, new Date(at), new Date(at))
-    }
     const at = Date.parse('2026-11-23T10:00:00.000Z')
-    note('run.b2Xk9q', ['0', 'tmux', 'select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], at + 2_000)
-    note('run.a7Pq2z', ['1', 'herdr', 'agent', 'focus', 'w1:p2'], at + 1_000)
+    noteIn(dir, 'run.b2Xk9q', ['0', 'tmux', 'select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], at + 2_000)
+    noteIn(dir, 'run.a7Pq2z', ['1', 'herdr', 'agent', 'focus', 'w1:p2'], at + 1_000)
     // Still being written aside: it is moved in whole, or not read.
-    note('.c3Rt8w', ['0', 'tmux'], at + 3_000)
+    noteIn(dir, '.c3Rt8w', ['0', 'tmux'], at + 3_000)
     expect(runLog.runLog(dir)).toEqual([
       { argv: ['herdr', 'agent', 'focus', 'w1:p2'], ok: false, at: at + 1_000 },
       { argv: ['tmux', 'select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], ok: true, at: at + 2_000 },
@@ -396,6 +398,39 @@ describe("tier B's world at its start", () => {
       expect(seen.faces.map((f) => f.tiles)).toEqual([[], ['b']])
     } finally {
       await world.close()
+    }
+  })
+})
+
+describe("tier B's tmux and herdr runs", () => {
+  it("a non-iTerm2 world's commands hold no tmux or herdr run though their logs have some; an iTerm2 world's name each pane by its session", async () => {
+    dir = mkdtempSync(join(tmpdir(), 'tier-b-mux-'))
+    const rig = { d: { log: () => '' }, runs: join(dir, 'runs.log'), cursorRuns: join(dir, 'cursor-runs.log'), projects: [],
+      tmuxRuns: join(dir, 'tmux-runs'), herdrRuns: join(dir, 'herdr-runs') }
+    const iterm: Scenario = {
+      id: 'EVAL', app: 'iterm', title: 'Eval tmux', dims: ['D3'], platforms: ['darwin'], tiers: ['b'], heldOut: false,
+      sessions: [{ key: 'a', app: 'iterm', id: '00000000-0000-4000-8e00-00000000000a', title: 'Eval alpha', cwd: '/work/eval-a', ageMs: 0,
+        place: 'tmux', window: 'w1', tab: 1, split: 0 }],
+      steps: [], checks: [], probes: [],
+    }
+    const worlds = [new driver.World(rig, byId('V11'), 'darwin'), new driver.World(rig, iterm, 'darwin')]
+    try {
+      // The devices' runs and the core's, after both worlds began.
+      const at = Date.now() + 1_000
+      noteIn(rig.tmuxRuns, 'run.t1', ['0', 'tmux', 'select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], at)
+      noteIn(rig.tmuxRuns, 'run.t2', ['0', 'tmux', 'list-panes', '-a', '-F', '#{pane_id}'], at + 100)
+      noteIn(rig.herdrRuns, 'run.h1', ['0', 'herdr', 'agent', 'focus', 'w1:p2'], at + 200)
+      const [vscode, itermWorld] = worlds
+      itermWorld!.muxPanes.set('%3', 'a')
+      for (const world of worlds) world.takeMux()
+      expect(vscode!.seen().commands).toEqual([])
+      expect(itermWorld!.seen().commands.map(({ argv, ok }) => ({ argv, ok }))).toEqual([
+        { argv: ['tmux', 'select-window', '-t', 'pane:a', ';', 'select-pane', '-t', 'pane:a'], ok: true },
+        { argv: ['tmux', 'list-panes', '-a', '-F', '#{pane_id}'], ok: true },
+        { argv: ['herdr', 'agent', 'focus', 'pane:other'], ok: true },
+      ])
+    } finally {
+      for (const world of worlds) await world.close()
     }
   })
 })
