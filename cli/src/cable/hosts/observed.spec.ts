@@ -5419,6 +5419,20 @@ describe('ObservedSource and a nested session the scan found', () => {
     }
   })
 
+  // Pending, it would count for no page: its first turn's prompt follow to its multiplexer's page would find none there.
+  it('the scan\'s lookup named no app: a nested first hook from the process it found is no longer pending, as the maker read confirmed its page', async () => {
+    const outer = vi.fn((_hints: Readonly<Record<string, string>>, _pid: number) => new Promise<OuterAnswer>(() => {}))
+    const t = scan(new Map([[100, IN_TMUX]]), { outer })
+    t.found('a', 100)
+    const look = t.src.scanOpen()
+    await t.answer(0, {})
+    await look
+    expect(t.agent('a')).toMatchObject({ appPending: true, nest: 'tmux' })
+    t.src.ingest(t.ev('turn-start', { sessionId: 'a', hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'com.googlecode.iterm2' } }))
+    expect(t.agent('a')).toMatchObject({ app: 'iterm', nest: 'tmux' })
+    expect(t.agent('a')).not.toHaveProperty('appPending')
+  })
+
   describe('its placed tmux pane, and its first hook', () => {
     /** The pane tmux's lookup by process names for `a`: tmux's pane id, the agent's process and its client's app. */
     const PANE = { adapter: 'tmux', id: '%3:100:iterm' }
