@@ -1,6 +1,7 @@
 /**
- * Claude Code in a tmux session the person opened shows on the page of the app that holds the tmux client attached to
- * it, and a swipe reaches it there (docs/plans/2026-11-19-dial-tmux-terminal-design.md), on the real daemon: the engine
+ * Claude Code in a tmux session the person opened is on tmux's page, seen in the app that holds the tmux client attached
+ * to it, and a swipe reaches it there (docs/plans/2026-11-19-dial-tmux-terminal-design.md,
+ * docs/plans/2026-11-23-dial-tmux-herdr-apps-design.md), on the real daemon: the engine
  * runs in a window of a session on the daemon's private tmux server (harness/ownTmux.ts), which a client attached from a
  * tab of a fake Terminal shows: a Node under `$HOME/Applications/Terminal.app` of the daemon's throwaway home, whose
  * Info.plist says `com.apple.Terminal`, running the pseudo-terminal helper that runs `tmux attach`
@@ -45,7 +46,7 @@ const EVERYDAY_PORT = '18473'
 // How `harness hardware watch` is started: the run's bundle when there is one (E2E_BUNDLE), as the daemon runs.
 const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : ['--import', 'tsx', 'src/cli.ts']
 
-describe.skipIf(process.platform !== 'darwin')("an agent in the person's tmux, on the page of the app that holds its client", () => {
+describe.skipIf(process.platform !== 'darwin')("an agent in the person's tmux, on tmux's page, seen in the app that holds its client", () => {
   let daemon: IsolatedDaemon | undefined
   let desk: Desk | undefined
   const children: ChildProcess[] = []
@@ -73,9 +74,10 @@ describe.skipIf(process.platform !== 'darwin')("an agent in the person's tmux, o
     children.push(child)
     const printed: string[] = []
     createInterface({ input: child.stdout! }).on('line', (line) => { printed.push(line) })
-    const front = (bundle: string): void => { child.stdin!.write(`${JSON.stringify({ front: bundle })}\n`) }
+    const write = (value: unknown): void => { child.stdin!.write(`${JSON.stringify(value)}\n`) }
+    const front = (bundle: string): void => write({ front: bundle })
     front(TERMINAL)
-    return { front, selects: () => printed.filter((line) => line.startsWith('{"select"')) }
+    return { front, tab: (tty: string): void => write({ tab: { app: 'terminal-app', tty } }), selects: () => printed.filter((line) => line.startsWith('{"select"')) }
   }
 
   /** The daemon's swipe lines, each from its `[device]` on. */
@@ -152,13 +154,15 @@ describe.skipIf(process.platform !== 'darwin')("an agent in the person's tmux, o
       const last = dial.messages.filter((m) => m.t === 'apps').at(-1)
       return last && appsOf(last).some((a) => a.id === app && a.count === count) ? last : undefined
     }, 45_000, 100)
-  /** Its ring's list, as the dial was last sent it, once it holds [agent]. */
-  const rosterWith = (dial: FakeDial, agent: InOwnTmux): Promise<DialMessage[]> =>
+  /** Its ring's list, as the dial was last sent it, once it holds [agent]; [meanwhile] runs at each look. */
+  const rosterWith = (dial: FakeDial, agent: InOwnTmux, meanwhile = (): void => {}): Promise<DialMessage[]> =>
     until('a list with the agent', () => {
       const begin = dial.messages.map((m) => m.t).lastIndexOf('agents.begin')
       const end = dial.messages.map((m) => m.t).lastIndexOf('agents.end')
       const rows = begin >= 0 && end > begin ? dial.messages.slice(begin, end).filter((m) => m.t === 'agent') : []
-      return rows.some((m) => m.id === agent.id) ? rows : undefined
+      if (rows.some((m) => m.id === agent.id)) return rows
+      meanwhile()
+      return undefined
     }, 45_000, 100)
   /** Neither the tab's tty, by its name alone too (`ttys012` names the tab as well), nor a pane, the person's session's
    *  name or a session id is in the daemon's log. */
@@ -184,18 +188,27 @@ describe.skipIf(process.platform !== 'darwin')("an agent in the person's tmux, o
   }
   const selectOf = (tty: string, app = 'terminal-app'): string => JSON.stringify({ select: { app, tty } })
 
-  it("an agent in the person's tmux is on Terminal's page, one row, and on no tmux page", async () => {
+  it("an agent in the person's tmux is on tmux's page, one row, and Terminal's page holds B alone", async () => {
     const { d, dial, agent } = await fresh()
-    const frame = await pageOf(dial, "Terminal's page holding both agents", 'terminal-app', 2)
-    expect(appsOf(frame).map((a) => a.id)).not.toContain('tmux')
-    expect((await rosterWith(dial, agent)).filter((m) => m.id === agent.id)).toHaveLength(1)
+    const frame = await pageOf(dial, "tmux's page holding the agent", 'tmux', 1)
+    expect(appsOf(frame)).toContainEqual(expect.objectContaining({ id: 'terminal-app', count: 1 }))
+    // Terminal settling in front ends a pick made before it (another app settled), so the pick is made again every 2 s
+    // until tmux's ring is listed, as a person picks again.
+    let picked = 0
+    const roster = await rosterWith(dial, agent, () => {
+      if (Date.now() - picked < 2_000) return
+      dial.pick('tmux')
+      picked = Date.now()
+    })
+    expect(roster.filter((m) => m.id === agent.id)).toHaveLength(1)
     expect(d.log()).toContain('[device] tmux client · found')
   })
 
-  it("found by the scan after the devices start, an agent in the person's tmux whose client is in an iTerm2 tab is on iTerm2's page, one row, and on no tmux or Other page", async () => {
+  it("found by the scan after the devices start, an agent in the person's tmux whose client is in an iTerm2 tab is on tmux's page, one row, with no iTerm2 or Other page", async () => {
     const { d, dial, client, agent } = await foundByScan()
-    const frame = await pageOf(dial, "iTerm2's page holding the agent", 'iterm', 1)
-    expect(appsOf(frame).map((a) => a.id)).not.toContain('tmux')
+    const frame = await pageOf(dial, "tmux's page holding the agent", 'tmux', 1)
+    // iTerm2 holds no agent of its own (Diego's decision 2, 2026-11-23).
+    expect(appsOf(frame).map((a) => a.id)).not.toContain('iterm')
     expect(appsOf(frame).map((a) => a.id)).not.toContain(UNKNOWN_APP)
     expect((await rosterWith(dial, agent)).filter((m) => m.id === agent.id)).toHaveLength(1)
     // Said once the lookups settled, a moment after the place reached the dial.
@@ -206,13 +219,15 @@ describe.skipIf(process.platform !== 'darwin')("an agent in the person's tmux, o
 
   it("found by the scan, with iTerm2 in front a swipe selects the client's tab, then the agent's pane", async () => {
     const { d, dial, client, agent } = await foundByScan()
-    await pageOf(dial, "iTerm2's page holding the agent", 'iterm', 1)
-    // After the scan, so it found the agent alone; in iTerm2 too, as the dial lists the ring of iTerm2's page alone.
+    await pageOf(dial, "tmux's page holding the agent", 'tmux', 1)
+    // iTerm2 in front before B starts: the dial lists the ring of one page alone, and shows iTerm2's once it settles
+    // there with B, whatever its default showed.
+    const run = watch(d)
+    run.front(ITERM)
+    // After the scan, so it found the agent alone; in iTerm2 too, so B is on iTerm2's page.
     const b = await Outside.start(d, 'b', { __CFBundleIdentifier: ITERM })
     closing.push(() => b.close())
     await dial.next((m) => m.t === 'agent' && m.id === b.id, 45_000, 'b listed')
-    const run = watch(d)
-    run.front(ITERM)
     const tty = await client.tty()
     await swipedTo(dial, b, agent, run, selectOf(tty, 'iterm'))
     await until("the agent's pane active in the person's session", async () => (await active(d)) === agent.pane, 30_000, 50)
@@ -223,6 +238,20 @@ describe.skipIf(process.platform !== 'darwin')("an agent in the person's tmux, o
     const { d, dial, b, client, agent, run } = await fresh()
     await swipedTo(dial, b, agent, run, selectOf(await client.tty()))
     await until("the agent's pane active in the person's session", async () => (await active(d)) === agent.pane, 30_000, 50)
+  })
+
+  it("with Terminal settled in front, selecting the client's tab turns the dial to tmux's page and its agent", async () => {
+    const { d, dial, b, client, agent, run } = await fresh()
+    // B is Terminal's own agent, so Terminal has a page to settle on.
+    await dial.next((m) => m.t === 'apps' && m.shown === 'terminal-app', 45_000, "Terminal's page")
+    const since = dial.messages.length
+    const tty = await client.tty()
+    run.tab(tty)
+    await dial.next((m) => m.t === 'apps' && m.shown === 'tmux', 30_000, "tmux's page", since)
+    await dial.next((m) => m.t === 'focus' && m.agentId === agent.id, 30_000, "the agent's focus", since)
+    await until('the tab line moved the dial', () => d.log().includes('[device] tab · moved'), 30_000, 50)
+    expect(d.log().split('\n').filter((line) => line.includes('[device] app filter: switched · follow'))).toHaveLength(1)
+    unsaid(d, tty, agent, b)
   })
 
   it('with another app in front a swipe changes nothing in tmux', async () => {
