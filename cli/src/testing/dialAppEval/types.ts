@@ -134,7 +134,7 @@ export interface SessionDef {
 }
 
 export const STEP_KINDS = ['claude.write', 'codex.write', 'hook', 'front', 'thread', 'attach', 'tap', 'swipe',
-  'voice', 'quit', 'relaunch', 'unplug', 'replug', 'wait',
+  'voice', 'quit', 'relaunch', 'unplug', 'replug', 'pick', 'wait',
   'editor.window', 'editor.focus', 'editor.closeTerminal', 'editor.reload', 'editor.close', 'stroke',
   'orca.layout', 'orca.focus', 'orca.front', 'orca.plugin', 'orca.close',
   'iterm.tab', 'iterm.split', 'iterm.closeTab', 'iterm.select', 'iterm.relaunch', 'tmux.detach', 'tmux.attach', 'tmux.selectPane',
@@ -157,6 +157,8 @@ export type Step = { label?: Label } & (
   | { kind: 'relaunch'; app: App }
   | { kind: 'unplug' }
   | { kind: 'replug' }
+  /** The person picks a page on the dial's Apps screen (ui_habitat.c app_pick). */
+  | { kind: 'pick'; page: Page }
   /** A window opens its stream and reports its shells: by default the live terminal sessions whose `window` is it. */
   | { kind: 'editor.window'; window: string; active: SessionKey | null; focused: boolean; terminals?: SessionKey[] }
   /** A terminal becomes its window's active one, and the window is focused. */

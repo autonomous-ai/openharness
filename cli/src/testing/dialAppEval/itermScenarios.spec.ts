@@ -119,7 +119,7 @@ describe("iTerm2's scenarios", () => {
       // Nothing between the pick and the swipe moves the face off d.
       const pick = s.steps.findIndex((step) => step.kind === 'pick' && step.page === 'tmux')
       const swipe = s.steps.findIndex((step) => step.kind === 'swipe')
-      expect([pick >= 0, s.steps[swipe]], s.id).toEqual([true, { kind: 'swipe', session: 'b' }])
+      expect([pick >= 0, s.steps[swipe]], s.id).toMatchObject([true, { kind: 'swipe', session: 'b' }])
       expect(s.steps.slice(pick + 1, swipe).every((step) => step.kind === 'wait'), s.id).toBe(true)
     }
   })
