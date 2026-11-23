@@ -2403,6 +2403,35 @@ describe('ObservedSource and the Herdr terminal a session the scan found runs in
     expect(s.actions.hcPrompt).not.toHaveBeenCalled()
   })
 
+  // The scan's maker read put it on tmux's page: a pairing is on Herdr's page, and gives that multiplexer back as it gives
+  // back the app.
+  it('a session the scan put on tmux\'s page is on Herdr\'s while paired, and on tmux\'s again once not, or at a nested hook', async () => {
+    const rows: ProcessName[] = [{ pid: 11, ppid: 90, executable: 'claude' }, { pid: 90, ppid: 80, executable: 'zsh' }, { pid: 80, ppid: 1, executable: 'tmux' }]
+    const outer = vi.fn((_hints: Readonly<Record<string, string>>, _pid: number) => new Promise<OuterAnswer>(() => {}))
+    const s = paired({
+      table: async () => rows, madeBy: async () => new Map([[11, { host: 'tmux', maker: 80, tty: 'ttys010' }]]), nested: async () => ({}), outer,
+    })
+    found(s, 'a', 11)
+    await s.src.scanOpen()
+    const a = (): HostAgent => s.src.list()[0]
+    expect(a()).toMatchObject({ host: 'tmux', nest: 'tmux', app: 'terminal', appPending: true })
+    s.terminals.set(11, 't7')
+    s.src.placeHerdr()
+    expect(placeOf(a())).toEqual({ host: 'herdr', app: 'herdr', appPending: undefined, paneKeys: ['herdr-app:t7'] })
+    expect(a()).not.toHaveProperty('nest')
+    expect(pageOf(a())).toBe('herdr')
+    s.terminals.delete(11)
+    s.src.placeHerdr()
+    expect(a()).toMatchObject({ host: 'tmux', nest: 'tmux', app: 'terminal', appPending: true })
+    expect(pageOf(a())).toBe('tmux')
+    // Paired again, then its first hook, nested, from its own process: tmux's page while that hook's lookup runs.
+    s.terminals.set(11, 't7')
+    s.src.placeHerdr()
+    s.src.ingest(s.ev('turn-start', { sessionId: 'a', callerPid: 11, cwd: '/x/a', hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'com.googlecode.iterm2' } }))
+    expect(a()).toMatchObject({ host: 'tmux', nest: 'tmux' })
+    expect(pageOf(a())).toBe('tmux')
+  })
+
   it('a hook heard after the pairing places it by its own hints, and no later placeHerdr pairs it again', async () => {
     const s = paired()
     found(s, 'a', 11)
