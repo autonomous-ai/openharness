@@ -25,7 +25,7 @@
  */
 import { execFile, spawn, spawnSync } from 'node:child_process'
 import { appendFileSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename } from 'node:path'
 import { promisify } from 'node:util'
 import { APP_BUNDLES } from '../../src/cable/hosts/hostDetect.js'
 import { sessionTab, tabLabel, type TabRef } from '../../src/testing/dialAppEval/itermRecords.js'
@@ -42,8 +42,6 @@ import { InOwnTmux } from './ownTmux.js'
 const execFileAsync = promisify(execFile)
 /** For tmux to answer, as isolatedTmux.ts waits for each of its commands: a server that hangs blocks no stop. */
 const TMUX_MS = 5_000
-/** The parents read at most from a tab's command up to its fake iTerm2: its shell, the tab's pty, iTerm2's server. */
-const UP_TO_APP = 6
 /** What a `harness` command finds its daemon by, which a tab's has from the daemon's environment and a tmux pane's from
  *  the server's does not: the mod's PermissionRequest hook (`harness device claude asked`) tells the daemon a prompt
  *  waits through it. */
@@ -164,19 +162,6 @@ async function ttyOf(pid: number): Promise<string> {
   return `/dev/${(await execFileAsync('/bin/ps', ['-o', 'tty=', '-p', String(pid)])).stdout.trim()}`
 }
 
-/** The fake iTerm2 a tab's command [pid] runs under: the first of its parents started from the fake iTerm2's bundle, each
- *  one of this test's own processes. */
-async function appAbove(d: IsolatedDaemon, pid: number): Promise<number> {
-  const app = join(d.env.HOME!, 'Applications', 'iTerm.app', 'Contents', 'MacOS', 'iTerm2')
-  for (let at = pid, up = 0; at > 1 && up < UP_TO_APP; up++) {
-    const row = /^(\d+)\s+(.*)$/.exec((await execFileAsync('/bin/ps', ['-o', 'ppid=,comm=', '-p', String(at)])).stdout.trim())
-    if (!row) break
-    if (row[2] === app) return at
-    at = Number(row[1])
-  }
-  throw new Error(`no fake iTerm2 above process ${pid}`)
-}
-
 /** The tab at [at] opened on [tty], under the fake iTerm2 [app]: it takes its label over. */
 function opening(world: TierBWorld, at: TabRef, tty: string, app: number | undefined): Opened {
   const label = tabLabel(at)
@@ -226,7 +211,7 @@ async function inTab(world: TierBWorld, state: State, s: SessionDef, folder: str
   await closeEmpty(world, state, tabLabel(at))
   const outside = await Outside.start(world.d, folder, { ...itermHints(s), FAKE_CLAUDE_SESSION_TITLE: s.title }, 'iterm',
     { shell: true, resume: s.id })
-  const tab = opening(world, at, await ttyOf(outside.pid), await appAbove(world.d, outside.pid))
+  const tab = opening(world, at, await ttyOf(outside.pid), outside.appPid)
   state.tabs.set(s.key, tab)
   const closed = (): void => {
     state.tabs.delete(s.key)
@@ -259,7 +244,7 @@ async function attach(world: TierBWorld, state: State, name: string, at: TabRef)
     await closeTab(processes, `the client tab of ${name}`)
     throw error
   }
-  const tab = opening(world, at, await ttyOf(pid), await appAbove(d, pid))
+  const tab = opening(world, at, await ttyOf(pid), processes.appPid)
   state.tmux.get(name)!.push({ ...tab, pid, processes })
 }
 

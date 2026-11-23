@@ -439,6 +439,8 @@ export class Outside {
   get pid(): number { return this.tab.pid }
   /** With `shell`, the shell's pid: the one a terminal app reports for its tab. */
   get shellPid(): number | undefined { return this.tab.shellPid }
+  /** Under the fake iTerm2, its process (relaunchIterm). */
+  get appPid(): number | undefined { return this.tab.appPid }
 
   /** The dial's id for it. */
   get id(): string { return observedAgentId('claude', this.sessionId) }
