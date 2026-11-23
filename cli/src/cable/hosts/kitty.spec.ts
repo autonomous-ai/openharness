@@ -708,12 +708,25 @@ describe("kitty's focused windows (docs/plans/2026-11-23-dial-wezterm-kitty-focu
     const { calls, focused, adapter } = recorder()
     focused.set(L, '3')
     expect(await adapter.focusedWindows([at('1'), at('2'), at('3')])).toEqual(new Map([[L, at('3').id]]))
-    // The last left is the one the `or` matched: no fourth call.
-    expect(matches(calls)).toEqual([alone('1'), focusedMatch.orNone.args.at(-1), alone('2')])
+    // The last left is asked alone too: focus may have moved since the `or`.
+    expect(matches(calls)).toEqual([alone('1'), focusedMatch.orNone.args.at(-1), alone('2'), alone('3')])
     focused.set(L, '2')
     calls.length = 0
     expect(await adapter.focusedWindows([at('1'), at('2'), at('3')])).toEqual(new Map([[L, at('2').id]]))
     expect(matches(calls)).toEqual([alone('1'), 'state:focused and (id:2 or id:3)', alone('2')])
+  })
+
+  it('focus moved to another window after the or matched: null', async () => {
+    const { calls, deps, focused, adapter } = recorder()
+    focused.set(L, '3')
+    const run = deps.run
+    deps.run = async (...args) => {
+      const answer = await run(...args)
+      if (calls.length === 2) focused.set(L, '9')
+      return answer
+    }
+    expect(await adapter.focusedWindows([at('1'), at('2'), at('3')])).toEqual(new Map([[L, null]]))
+    expect(matches(calls)).toEqual([alone('1'), 'state:focused and (id:2 or id:3)', alone('2'), alone('3')])
   })
 
   it('focus on another window: two calls and null', async () => {
@@ -748,17 +761,28 @@ describe("kitty's focused windows (docs/plans/2026-11-23-dial-wezterm-kitty-focu
     expect(calls).toEqual([reading(colorsOf(alone('1'), KB)), reading(colorsOf(alone('2'), KB)), reading(colorsOf(alone('1')))])
   })
 
-  it('at most 16 panes and 16 calls', async () => {
+  // Each pane is one call at most, and a socket's `or` one more once it has a third pane: on one socket, 15 panes.
+  it('at most 16 calls', async () => {
     expect(FOCUS_PANES_MAX).toBe(16)
     const many = recorder()
-    many.focused.set(L, '17')
-    const seventeen = Array.from({ length: 17 }, (_, i) => at(String(i + 1)))
-    expect(await many.adapter.focusedWindows(seventeen)).toEqual(new Map([[L, null]]))
-    for (const call of many.calls) expect(call.args.at(-1)).not.toMatch(/id:17\b/)
+    many.focused.set(L, '16')
+    const sixteen = Array.from({ length: 16 }, (_, i) => at(String(i + 1)))
+    expect(await many.adapter.focusedWindows(sixteen)).toEqual(new Map([[L, null]]))
+    for (const call of many.calls) expect(call.args.at(-1)).not.toMatch(/id:16\b/)
     const last = recorder()
-    last.focused.set(L, '16')
-    expect(await last.adapter.focusedWindows(seventeen.slice(0, 16))).toEqual(new Map([[L, at('16').id]]))
+    last.focused.set(L, '15')
+    expect(await last.adapter.focusedWindows(sixteen)).toEqual(new Map([[L, at('15').id]]))
     expect(last.calls).toHaveLength(16)
+    // Two panes a socket have no `or`: 16 panes on 8 sockets.
+    const paired = recorder()
+    const sockets = Array.from({ length: 9 }, (_, i) => `/tmp/k${i + 1}`)
+    for (const [i, path] of sockets.entries()) {
+      paired.ids.set(path, `3:${i}`)
+      paired.focused.set(`unix:${path}`, '2')
+    }
+    const answer = await paired.adapter.focusedWindows(sockets.flatMap((path) => [at('1', `unix:${path}`), at('2', `unix:${path}`)]))
+    expect(answer?.size).toBe(8)
+    expect(paired.calls).toHaveLength(16)
   })
 
   it('one deadline for the read', async () => {
@@ -766,7 +790,7 @@ describe("kitty's focused windows (docs/plans/2026-11-23-dial-wezterm-kitty-focu
     focused.set(L, '3')
     clock.tick = 500
     await adapter.focusedWindows([at('1'), at('2'), at('3')])
-    expect(calls.map(({ timeoutMs }) => timeoutMs)).toEqual([2_000, 1_500, 1_000])
+    expect(calls.map(({ timeoutMs }) => timeoutMs)).toEqual([2_000, 1_500, 1_000, 500])
     // The deadline is the read's own: the next starts with the whole time again.
     calls.length = 0
     focused.set(L, '2')
