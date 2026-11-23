@@ -21,10 +21,10 @@ const kAttachedTaskSettle = Duration(milliseconds: 800);
 /// or an old prompt in scrollback.
 enum _CodexStartup { waiting, updating, ready }
 
-/// Codex's composer row (CLI engines/codex/composer.ts), never a numbered row
-/// of a menu: a trust, hooks or update question selects its first row with `›`.
-final _codexComposer = RegExp(r'^\s*›(?:\s|$)');
-final _codexMenuRow = RegExp(r'^\s*[›>]?\s*\d+\.\s');
+/// Codex's composer markers match the CLI reader (engines/codex/composer.ts).
+/// A numbered menu choice can also start with either marker.
+final _codexComposer = RegExp(r'^\s*[›»](?:\s|$)');
+final _codexMenuRow = RegExp(r'^\s*[›»>]?\s*\d+\.\s');
 
 /// Under the composer Codex draws only its footer, at most a few rows. More
 /// is some other screen below a prompt left in the conversation.

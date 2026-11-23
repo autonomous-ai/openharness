@@ -300,6 +300,39 @@ void main() {
       expect(problem, contains('did not open in time'));
     });
 
+    testWidgets('waits for the Codex composer when the pane uses »', (
+      tester,
+    ) async {
+      final app = _app(engine: 'codex');
+      addTearDown(app.dispose);
+      final session = _RecordingSession();
+      session.terminal.write(
+        'Hooks need review\r\n» 1. Review hooks\r\n'
+        'Press enter to confirm',
+      );
+      app.adoptSessionForTest(session);
+      String? problem = 'pending';
+      unawaited(
+        deliverAttachedTask(
+          app,
+          machineId: 'box',
+          agentId: 'a1',
+          files: [_file('shot.png')],
+          task: 'Look',
+        ).then((value) => problem = value),
+      );
+      await tester.pump(kAttachedTaskSettle);
+      expect(problem, 'pending');
+      expect(session.calls, isEmpty);
+
+      final composer = _codex154Ready.replaceFirst('›', '»');
+      session.terminal.write('\u001b[2J\u001b[H$composer');
+      await tester.pump(kAttachedTaskSettle);
+      await tester.pump(kAttachedTaskOpenTimeout);
+      expect(problem, isNull);
+      expect(session.calls, ['file:shot.png', 'paste: ', 'send:Look']);
+    });
+
     test('files first, each followed by a space, then the task', () async {
       final app = _app();
       addTearDown(app.dispose);
