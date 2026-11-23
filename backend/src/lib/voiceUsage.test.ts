@@ -52,6 +52,12 @@ describe('voiceIncrements', () => {
       ['voice_dial_clips', 1], ['voice_dial_audio_ms', 2_501], ['voice_dial_transcribe_ms', 813], ['voice_account_days_over_1m', 1],
     ])
   })
+
+  it('counts an empty clip as the 1 ms the quota charges, so an edge it reaches is not skipped', () => {
+    expect(voiceIncrements('dial', 59_999, 0, 0)).toEqual([
+      ['voice_dial_clips', 1], ['voice_dial_audio_ms', 1], ['voice_dial_transcribe_ms', 0], ['voice_account_days_over_1m', 1],
+    ])
+  })
 })
 
 describe('voiceSurface', () => {
