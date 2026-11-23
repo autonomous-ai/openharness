@@ -247,6 +247,7 @@ const FOLLOWED: Record<FollowCause | 'settle', Record<'moved' | 'no-tile', strin
   focus: { moved: '[device] focus · moved', 'no-tile': '[device] focus · skipped · no tile' },
   thread: { moved: '[device] thread · moved', 'no-tile': '[device] thread · skipped · no tile' },
   vscode: { moved: '[device] vscode · moved', 'no-tile': '[device] vscode · skipped · no tile' },
+  pane: { moved: '[device] pane · moved', 'no-tile': '[device] pane · skipped · no tile' },
 }
 /** A tab app reports back each tab the dial selects, and Orca each pane it switches to: a report within this long of the
  *  dial's move there is that move's echo. Every move of that long is kept, as a fast swipe's late report for a place it
@@ -2182,9 +2183,33 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const focused = await kitty.focusedWindows(ordered.map((id) => ({ adapter: kitty.id, id })))
     return focused === undefined ? undefined : { focused, moves, at }
   }
-  /** An answer of the poll: kept, as the next is compared with it. */
-  const paneAnswered = (focus: PaneFocus, answer: PaneAnswer): void => {
+  /** An answer of the poll turns the dials to the agent in the one focused pane whose place changed since the last
+   *  answer; for the poll's first, the one focused as its app settled, or as an agent or a dial came with it settled.
+   *  Two places each with an agent focused cannot say which the person looks at: two kittys as kitty settles. With no
+   *  dial linked nothing is followed or counted, and the answer is not kept: the first stays the first until one is read
+   *  linked, so a dial attaching with WezTerm settled still turns to its focused agent. */
+  const paneAnswered = (source: ObservedSource, focus: PaneFocus, answer: PaneAnswer): Promise<void> | undefined => {
+    if (!cable.isConnected) return
+    const { first, last } = focus
+    // None is kept before the first, so its every focused agent's pane is one. An unchanged answer moves nothing: a dial
+    // turned by hand meanwhile stays where it was turned. A failed read is no answer: the next is compared with the last
+    // good one.
+    const changed = [...answer.focused].flatMap(([place, id]) => id !== null && last?.get(place) !== id ? [id] : [])
+    focus.first = false
     focus.last = answer.focused
+    if (changed.length !== 1) return
+    const [id] = changed
+    // The app the person went to settles FRONT_SETTLE_MS after the switch, and the poll of the one they left runs till then.
+    if (cableHost.latestFront() !== focus.app) { log('[device] pane · skipped · not in front'); return }
+    // The first: a turn or a tap as the app came forward put the dial where the person wants it, and the focus as it
+    // settles must not turn it back, as Orca's settle must not (#4311), nor the Claude app's. After it: a move of the
+    // dial's own while the read ran leaves the pane it names, as for a tab report, and a tap's focus is seen a read later.
+    if (first ? dialMovedAt !== undefined && monotonic() - dialMovedAt < ATTACH_ECHO_MS
+      : answer.moves !== dialMoves || paneFocuses.echo(id, answer.at)) { log('[device] pane · skipped · echo'); return }
+    // Gone while the read ran.
+    const agent = source.byPane(focus.app, id)
+    if (!agent) { log('[device] pane · skipped · unknown agent'); return }
+    return cable.followLocal(agent.id, 'pane')
   }
   /** The poll's app left the front, its last agent went, or the dial went: the poll and the dial's taps its answers are
    *  checked against go with it. */
@@ -2206,7 +2231,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // Its answers and its own stop run in a part, which logs a throw: the poll swallows one unsaid (focusPoll.ts).
     const polling: PaneFocus = { app: wanted, first: true, poll: startFocusPoll<PaneAnswer>({
       read: () => readPanes(observed, wanted),
-      answered: (answer) => part.call('pane', () => paneAnswered(polling, answer)),
+      answered: (answer) => part.call('pane', () => paneAnswered(observed, polling, answer)),
       failing: () => part.call('pane', () => {
         paneFocus = undefined
         paneFocuses.clear()
