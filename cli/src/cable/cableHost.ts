@@ -1128,7 +1128,8 @@ export class DaemonCableHost implements CableHost {
     }
     this.wiring.log(`cable: open ${machineId}/${agentId} (${reason ?? 'notification'})`)
     this.wiring.opened?.(machineId, agentId, reason)
-    if (!reason) this.openEnded(agentId, { outcome: 'ok' })
+    // With no window, nothing hears the open.
+    if (!reason) this.openEnded(agentId, this.swarms ? { outcome: 'ok' } : { outcome: 'failed', code: 'desktop_no_window' })
   }
 
   /** The tap waits from now, before Desktop is asked: a window that connects while it is still being started finds it. */
