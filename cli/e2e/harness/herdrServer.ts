@@ -26,7 +26,7 @@ import { writeExecutable } from '../../src/testing/executableFixture.js'
 import { RECORDED_HERDR } from '../../src/testing/recordedHerdr.js'
 import { type IsolatedDaemon, until } from './daemon.js'
 import { dialHost } from './dialHosts.js'
-import { tabUnder, type FakeApp } from './outsideAgent.js'
+import { itermServerPath, tabUnder, type FakeApp } from './outsideAgent.js'
 import { forgetGroup, leaderGone, watchGroup } from './reaper.js'
 import { recordingWrapper } from './runLog.js'
 
@@ -449,9 +449,6 @@ export function othersNow(): number[] {
   return rows.filter((row) => row.herdr && !ours(row.pid)).map((row) => row.pid)
 }
 
-/** The fake iTerm2's server in a daemon's home: outsideAgent.ts's ITERM_SERVER. */
-const ITERM_SERVER = ['Library', 'Application Support', 'iTerm2', 'iTermServer-3.6.6']
-
 /**
  * The daemon's process table holds no herdr but the test's: a herdr of the developer's runs on the Mac that runs the tests,
  * and the daemon's herdr lookup must never read it (PM, 2026-11-19). A `ps` first on the daemon's PATH, admitted before
@@ -465,7 +462,7 @@ const ITERM_SERVER = ['Library', 'Application Support', 'iTerm2', 'iTermServer-3
  * runs it as it was. It exits with ps's status, never awk's. Called after `IsolatedDaemon.create`, before `start`.
  */
 export function ownHerdrsOnly(d: IsolatedDaemon, root: number = process.pid, ps = '/bin/ps'): { kept(): number[]; dropped(): number[] } {
-  const server = join(d.env.HOME!, ...ITERM_SERVER)
+  const server = itermServerPath(d)
   if (!isAbsolute(server) || relative(d.root, server).startsWith('..')) {
     throw new Error(`the daemon's home ${d.env.HOME} is outside its root ${d.root}: its herdrs cannot be told from the person's`)
   }

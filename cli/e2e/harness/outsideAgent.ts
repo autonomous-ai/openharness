@@ -79,7 +79,9 @@ const FAKE_APPS = {
  * with its sessions kept (Diego's report of 2026-11-22): a tab tabUnder opens under it is launchd's child, as that copy
  * is; Outside's engine runs under it as the test's child. Under the fake `iterm`, it is that app's child, one per tab.
  */
-const ITERM_SERVER = ['Library', 'Application Support', 'iTerm2', 'iTermServer-3.6.6']
+export function itermServerPath(d: IsolatedDaemon): string {
+  return join(d.env.HOME!, 'Library', 'Application Support', 'iTerm2', 'iTermServer-3.6.6')
+}
 export type FakeApp = keyof typeof FAKE_APPS | 'iterm-server'
 
 /**
@@ -102,7 +104,7 @@ tab.on('exit', (code) => process.exit(code ?? 1))
 function fakeApp(d: IsolatedDaemon, app: FakeApp): string {
   if (app === 'iterm-server') {
     if (process.platform !== 'darwin') throw new Error("iTerm2's server is faked on macOS only")
-    const path = join(d.env.HOME!, ...ITERM_SERVER)
+    const path = itermServerPath(d)
     if (existsSync(path)) return path
     mkdirSync(dirname(path), { recursive: true })
     symlinkSync(process.execPath, path)
