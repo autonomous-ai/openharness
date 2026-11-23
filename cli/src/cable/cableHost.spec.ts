@@ -116,6 +116,21 @@ describe('notification read receipts', () => {
     host.setUnread([{ agentId: 'o1', machineId: 'mine', question: false, text: 'Done.', readToken: 'turn-1' }, done])
     expect(host.listUnread()).toEqual([notice, done])
   })
+
+  // Needs you (docs/plans/2026-11-22-needs-you-notify-design.md): the window's finished turns stay out of the drawer
+  // unless the devices keep one; its questions and the devices' own rows always stay.
+  it('a window\'s finished turn is a row only when the devices keep it', () => {
+    const notice = { agentId: 'o1', machineId: 'mine', question: true, text: 'Connect the VPN' }
+    const done = { agentId: 'a2', machineId: 'other', question: false, text: 'Built.' }
+    const broke = { agentId: 'a3', machineId: 'other', question: false, text: 'The build broke.' }
+    const asks = { agentId: 'a4', machineId: 'other', question: true, text: 'Ship it?' }
+    const host = new DaemonCableHost(wiring({ noticeRows: () => [notice], newsKept: (agentId) => agentId === 'a3' }))
+    host.setUnread([done, broke, asks])
+    expect(host.listUnread()).toEqual([notice, broke, asks])
+    const all = new DaemonCableHost(wiring())
+    all.setUnread([done, broke, asks])
+    expect(all.listUnread()).toEqual([done, broke, asks])
+  })
 })
 
 /** The window, open on one tab that holds these panes in this order. */
