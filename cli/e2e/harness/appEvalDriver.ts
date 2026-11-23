@@ -115,8 +115,10 @@ export interface TierBWorld {
   /** Each iTerm2 tab's tty (`/dev/ttysNNN`) by its label (itermRecords.ts tabLabel), as the iTerm2 steps open them: a tab
    *  opened again under a label takes it over. A select of a tty no label holds is recorded as `other`. */
   readonly tabs: Map<string, string>
-  /** Each tmux and herdr pane's session, by pane id: the devices' tmux and herdr runs name their panes by it. */
-  readonly muxPanes: Map<string, SessionKey>
+  /** The session's own tmux or herdr pane opened at [at] (now when not given), or closed (null): the devices' tmux and
+   *  herdr runs name a pane by the session that held it at each run's time, as herdr gives a pane id again once it
+   *  started again. */
+  muxPane(key: SessionKey, pane: string | null, at?: number): void
   /** The person's selected tab of iTerm2, by its label: told on the watch, and recorded on the tabs stream. */
   reportTab(label: string): void
   /** The herdrs the daemon's process table kept, this worker's, and dropped, all others (ownHerdrsOnly): an iTerm2
@@ -293,9 +295,9 @@ export function orcaDeliveries(runs: readonly LoggedRun[], ownerOf: (handle: str
 }
 
 /** The devices' tmux and herdr runs as commands, at their own times, each pane id written as the session [keyOf] says
- *  holds it (namedPanes), so no pane id reaches a result. */
-export function muxCommands(runs: readonly LoggedRun[], keyOf: (pane: string) => SessionKey | undefined): Seen['commands'] {
-  return runs.map(({ argv, ok, at }) => ({ at, argv: namedPanes(argv, keyOf), ok }))
+ *  held it at the run's time (namedPanes), so no pane id reaches a result. */
+export function muxCommands(runs: readonly LoggedRun[], keyOf: (pane: string, at: number) => SessionKey | undefined): Seen['commands'] {
+  return runs.map(({ argv, ok, at }) => ({ at, argv: namedPanes(argv, (pane) => keyOf(pane, at)), ok }))
 }
 
 /** A select the watch printed (devices/client.ts): `{"select":{"app","tty","raise"?}}`; undefined for any other line. */
@@ -542,7 +544,6 @@ export class World implements TierBWorld {
   readonly steps: Seen['steps'] = []
   readonly gaps: string[] = []
   readonly tabs = new Map<string, string>()
-  readonly muxPanes = new Map<string, SessionKey>()
   /** The firmware's, from its last power on. */
   carousel = new DialCarousel()
   cost: Seen['cost']
@@ -559,6 +560,8 @@ export class World implements TierBWorld {
   private readonly logs: NonNullable<Seen['logs']> = []
   /** Each Orca pane a session owned, by its handle, from its open to its close. */
   private readonly panes: Array<{ key: SessionKey; handle: string; from: number; to: number }> = []
+  /** Each tmux and herdr pane a session held, by its id, from its open to its close. */
+  private readonly muxes: Array<{ key: SessionKey; pane: string; from: number; to: number }> = []
   /** When it began, ms since the epoch: the fake Orca's runs since are its own. */
   private readonly began = Date.now()
   private plugged: FakeDial | undefined
@@ -630,6 +633,11 @@ export class World implements TierBWorld {
     const open = this.panes.find((p) => p.key === key && p.to === Infinity)
     if (open) open.to = now
     if (handle !== null) this.panes.push({ key, handle, from: now, to: Infinity })
+  }
+  muxPane(key: SessionKey, pane: string | null, at = Date.now()): void {
+    const open = this.muxes.find((p) => p.key === key && p.to === Infinity)
+    if (open) open.to = at
+    if (pane !== null) this.muxes.push({ key, pane, from: at, to: Infinity })
   }
   folder(path: string): string {
     if (!path.startsWith('/work/')) throw new Error(`${this.scenario.id}: ${path} is not a catalog folder`)
@@ -780,7 +788,7 @@ export class World implements TierBWorld {
     const kit = this.rig.iterm
     if (!kit) return
     const runs = [...runLog(kit.tmuxRuns), ...runLog(kit.herdrRuns)].filter((run) => run.at >= this.began)
-    this.commands.push(...muxCommands(runs, (pane) => this.muxPanes.get(pane)))
+    this.commands.push(...muxCommands(runs, (pane, at) => this.muxes.find((p) => p.pane === pane && p.from <= at && at < p.to)?.key))
     this.commands.sort((a, b) => a.at - b.at)
   }
 

@@ -17,7 +17,8 @@
  * - an empty tab or split the person opens runs a shell alone; a session or client that starts in it takes its place.
  * Each Claude Code goes on in its session's conversation under its title, on the Claude app's own session steps
  * (appEvalClaude.ts). Each tab's tty is in `world.tabs` by its label, so the watch's selects and the person's reports name
- * tabs by label, and each tmux and herdr pane is in `world.muxPanes` by its session.
+ * tabs by label, and each tmux and herdr pane is the world's by its session (`muxPane`), from before its start to its
+ * close.
  *
  * At stop the Claude Code sessions end first, each in its terminal; then this file's own process ends the rest: the empty
  * tabs, the tmux sessions and their clients' tabs, herdr and its tab. Killed, it takes them with it at once.
@@ -313,14 +314,19 @@ async function inTmux(world: TierBWorld, state: State, s: SessionDef, folder: st
   const { d } = world
   const { name, shell } = await tmuxSession(world, state, s)
   const daemon = Object.fromEntries(DAEMON_ENV.map((variable) => [variable, d.env[variable]!]))
+  // Its pane is its own from before it is made: the devices ask tmux of it at its start hook.
+  const opened = Date.now()
   const own = await InOwnTmux.startIn(d, name, folder,
     { resume: s.id, env: { ...guardEnv(d), ...daemon, ...itermHints(s), FAKE_CLAUDE_SESSION_TITLE: s.title } })
   if (shell !== undefined) await d.tmux.run('kill-pane', '-t', shell)
   // As in every process of the daemon: its hooks are its children.
   guardLoaded(d.env[NET_GUARD_FILE_ENV]!, `${name} pane's Claude Code`, [own.pid], 'node')
-  world.muxPanes.set(own.pane, s.key)
+  world.muxPane(s.key, own.pane, opened)
   state.inTmux.set(s.key, { name, pane: own.pane })
-  const gone = (): void => { state.inTmux.delete(s.key) }
+  const gone = (): void => {
+    state.inTmux.delete(s.key)
+    world.muxPane(s.key, null)
+  }
   return {
     type: async (text) => {
       // Through its tab's pseudo-terminal, as Outside types, so tmux reads it from that client's tty.
@@ -352,13 +358,17 @@ async function inHerdr(world: TierBWorld, state: State, s: SessionDef, folder: s
     state.herdr = { server, opened: opening(world, at, server.tab.tty, server.tab.appPid) }
   }
   const { server } = state.herdr
+  const opened = Date.now()
   const agent = await server.hooked(folder, { resume: s.id, env: { FAKE_CLAUDE_SESSION_TITLE: s.title } })
   guardLoaded(d.env[NET_GUARD_FILE_ENV]!, `herdr pane's Claude Code`, [agent.pid], 'node')
   // herdr's own Claude Code report, unless its row gives no session (IH4).
   if (s.herdrSession !== false) await server.reportSession(agent.pane, agent.sessionId)
-  world.muxPanes.set(agent.pane, s.key)
+  world.muxPane(s.key, agent.pane, opened)
   state.inHerdr.set(s.key, agent.pane)
-  const gone = (): void => { state.inHerdr.delete(s.key) }
+  const gone = (): void => {
+    state.inHerdr.delete(s.key)
+    world.muxPane(s.key, null)
+  }
   return {
     type: (text) => server.type(agent.pane, text),
     ran: (log, event, times, from) => ran(log, agent.pid, agent.sessionId, event, times, from),
@@ -380,10 +390,11 @@ async function startCodex(world: TierBWorld, s: SessionDef): Promise<void> {
   const state = itermOf(world)
   if (itermPlaceOf(s) !== 'tmux') throw new Error(`scenario ${world.scenario.id}: tier B runs iTerm2's Codex in tmux alone`)
   const { name, shell } = await tmuxSession(world, state, s)
+  const opened = Date.now()
   const codex = await CodexOutside.inTmux(world.d, name, basename(world.folder(s.cwd)), world.children, itermHints(s), { sessionId: s.id })
   if (shell !== undefined) await world.d.tmux.run('kill-pane', '-t', shell)
   state.codex.set(s.key, codex)
-  world.muxPanes.set(codex.pane!, s.key)
+  world.muxPane(s.key, codex.pane!, opened)
   state.inTmux.set(s.key, { name, pane: codex.pane! })
   await codex.hook('SessionStart', { source: 'startup' })
 }
@@ -401,7 +412,8 @@ async function codexHook(world: TierBWorld, step: { session: SessionKey; event: 
     case 'end':
       state.codex.delete(step.session)
       state.inTmux.delete(step.session)
-      return codex.end()
+      await codex.end()
+      return world.muxPane(step.session, null)
     default: throw new Error(`scenario ${world.scenario.id}: tier B's Codex in iTerm2 has no ${step.event} step`)
   }
 }
