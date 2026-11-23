@@ -18,6 +18,13 @@ export function tabLabel(ref: TabRef): string {
   return `${ref.window}.${ref.tab}.${ref.split ?? 0}`
 }
 
+const TAB_LABEL = /^[a-z][a-z0-9]*\.[0-9]+\.[0-9]+$/
+
+/** Whether `text` is a label tabLabel writes: anything else may be a tty, so it is never printed. */
+export function isTabLabel(text: unknown): text is string {
+  return typeof text === 'string' && TAB_LABEL.test(text)
+}
+
 /** The tab an iTerm2 session's select names: its own tab and split, or for tmux and herdr its client's tab (split 0). */
 export function sessionTab(s: Pick<SessionDef, 'place' | 'window' | 'tab' | 'split'>): string {
   if (s.window === undefined || s.tab === undefined) throw new Error('an iTerm2 session names its window and tab')

@@ -8,7 +8,7 @@ import { observedTitle } from '../../cable/hosts/observedTitle.js'
 import { WINDOWS_APPS } from '../../cable/hosts/windowsRaise.js'
 import { CAROUSEL_TILES } from '../dialCarousel.js'
 import { flagOf, ORCA_PROGRAMS, programOf } from './argv.js'
-import { sessionTab, TABS_STREAM } from './itermRecords.js'
+import { isTabLabel, sessionTab, TABS_STREAM } from './itermRecords.js'
 import { tabTitle } from './orcaListing.js'
 import { agentIdOf, EDITORS, engineOf, itermPlaceOf, orcaPaneHandle, orcaWorktreeId, PAGE, placeOf, SKIPPED_SCROLL, THRESHOLDS, type App, type Check,
   type CheckResult, type LinkedApp, type Platform, type Scenario, type Seen, type SessionDef, type SessionKey, type StepOf, type Tier,
@@ -534,9 +534,8 @@ function orcaOpenParts(session: SessionDef, world: World, w: Window | undefined,
   return parts
 }
 
-/** A tab's label as a select names it (itermRecords.ts tabLabel); anything else is never printed, as it may be a tty. */
-const TAB_LABEL = /^[a-z][a-z0-9]*\.[0-9]+\.[0-9]+$/
-const labelled = (tab: unknown): string => (typeof tab === 'string' && TAB_LABEL.test(tab) ? tab : 'other')
+/** A tab's label as a select names it; anything else is never printed, as it may be a tty. */
+const labelled = (tab: unknown): string => (isTabLabel(tab) ? tab : 'other')
 
 /**
  * The session whose pane a command selects: tmux's `select-pane -t pane:<key>`, herdr's `agent focus pane:<key>`, with

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { namedPanes, selectRecord, sessionTab, tabLabel } from './itermRecords.js'
+import { isTabLabel, namedPanes, selectRecord, sessionTab, tabLabel } from './itermRecords.js'
 import type { SessionKey } from './types.js'
 
 describe('iTerm2 records', () => {
@@ -8,6 +8,13 @@ describe('iTerm2 records', () => {
     expect(tabLabel({ window: 'w2', tab: 0 })).toBe('w2.0.0')
     expect(sessionTab({ place: 'tab', window: 'w1', tab: 2, split: 1 })).toBe('w1.2.1')
     expect(sessionTab({ window: 'w1', tab: 0 })).toBe('w1.0.0')
+  })
+
+  it('isTabLabel takes what tabLabel writes and nothing else, so no tty, pane id or session name passes for one', () => {
+    expect([tabLabel({ window: 'w1', tab: 0 }), tabLabel({ window: 'w12', tab: 3, split: 1 })].map(isTabLabel)).toEqual([true, true])
+    for (const other of ['/dev/ttys004', 'ttys004', '%3', 'w1:p2', 'eval-w1-2', 'other', 'w1.1', 'W1.1.0', 'w1.1.0 ', undefined, 7]) {
+      expect(isTabLabel(other), String(other)).toBe(false)
+    }
   })
 
   it("a tmux or herdr session's tab is its client's, split 0", () => {
