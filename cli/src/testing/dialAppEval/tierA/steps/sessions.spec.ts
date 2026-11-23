@@ -78,7 +78,7 @@ function fakeWorld(platform: Platform, of: Scenario = scenario) {
     },
   }
   const world = {
-    scenario: of, platform, machine,
+    scenario: of, platform, machine, panes: new Map<string, SessionKey>(),
     ports: { devices },
     folders: { claudeProjects: join(root, 'projects'), codexSessions: join(root, 'codex', 'sessions'),
       cursorProjects: join(root, 'cursor', 'projects'), codexHomes: join(root, 'codex-homes') },
@@ -619,12 +619,13 @@ describe("tier A's Orca agents", () => {
 
 describe("tier A's iTerm2 agents", () => {
   const ITERM_BUNDLE = 'com.googlecode.iterm2'
-  /** A Claude Code in w1's tab 0, and a Codex in tab 1. Made at each case, from the catalog's builder. */
+  /** A Claude Code in w1's tab 0, and a Codex in tab 1; in tmux, whose client runs in tab 2, a Claude Code and a Codex; in
+   *  herdr, whose client runs in tab 3, a Claude Code. Made at each case, from the catalog's builder. */
   const itermAgents = (): Scenario => ({
     id: 'S6', app: 'iterm', title: 'Eval iTerm2', dims: ['D1'], platforms: ['darwin'], tiers: ['a'],
     heldOut: false, steps: [], checks: [], probes: [],
     sessions: [itermSession('a'), itermSession('b', { engine: 'codex', tab: 1 }), itermSession('t', { place: 'tmux', tab: 2 }),
-      itermSession('x', { place: 'tmux', engine: 'codex', tab: 2, split: 1 })],
+      itermSession('x', { place: 'tmux', engine: 'codex', tab: 2, split: 1 }), itermSession('h', { place: 'herdr', tab: 3 })],
   })
 
   it("a Claude Code in an iTerm2 tab hooks with TERM_PROGRAM=iTerm.app and iTerm2's bundle id", async () => {
@@ -663,9 +664,21 @@ describe("tier A's iTerm2 agents", () => {
     expect(x.hostHints).toEqual({ TERM_PROGRAM: 'tmux', TMUX_PANE: '%3', __CFBundleIdentifier: ITERM_BUNDLE })
   })
 
+  it("a Claude Code in herdr hooks with HERDR_PANE_ID, TERM_PROGRAM=iTerm.app and iTerm2's bundle id", async () => {
+    const of = itermAgents()
+    const w = fakeWorld('darwin', of)
+    await w.hook('h', 'start')
+    const h = of.sessions[4]!
+    expect(toldOf(w.told, h.id)).toMatchObject({ engine: 'claude', callerPid: agentPid(w.world, 'h') })
+    // herdr's first pane: the server started with iTerm2's TERM_PROGRAM and bundle id, and its panes inherit both.
+    expect(toldOf(w.told, h.id).hostHints).toEqual({ HERDR_PANE_ID: 'w1:p1', TERM_PROGRAM: 'iTerm.app', __CFBundleIdentifier: ITERM_BUNDLE })
+    expect(w.open()).toEqual([h.id])
+  })
+
   it("the other apps' hooks, hints and processes are as before", async () => {
     expect(await othersAfter('darwin', [itermSession('i')])).toEqual(await othersAfter('darwin', []))
     expect(await othersAfter('darwin', [itermSession('i', { place: 'tmux' })])).toEqual(await othersAfter('darwin', []))
+    expect(await othersAfter('darwin', [itermSession('i', { place: 'herdr' })])).toEqual(await othersAfter('darwin', []))
   })
 })
 

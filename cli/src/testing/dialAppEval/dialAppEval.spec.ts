@@ -133,6 +133,7 @@ vi.mock('../../devices/orcaHomes.js', async (real) => ({
 const { startDevices } = await import('../../services/devices.js')
 const { learnApps } = await import('../../cable/hosts/scannedApp.js')
 const { ensureTmuxOnPath } = await import('../../lib/tmuxOnPath.js')
+const { ttyAtime } = await import('../../cable/hosts/herdrOuter.js')
 
 const PLATFORMS: readonly Platform[] = ['darwin', 'win32', 'linux']
 /**
@@ -546,6 +547,54 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     ])
     // Nothing brings iTerm2 forward on a rest: it is in front.
     expect(after.filter((c) => c.argv[0] === '/usr/bin/open')).toEqual([])
+  })
+
+  /** A plain tab a in w1's tab 0 and Claude Code in herdr h and g, whose client runs in tab 1, started h, g then a and
+   *  listed, then `more`. */
+  const herdrTab = (id: string, title: string, more: Step[]): Scenario => scenario({
+    id, app: 'iterm', title, dims: ['D3'], platforms: ['darwin'], tiers: ['a'],
+    sessions: [itermSession('a', { tab: 0 }), itermSession('h', { place: 'herdr', tab: 1 }),
+      itermSession('g', { place: 'herdr', tab: 1, split: 1 }), itermGhost],
+    steps: [...started(['h', 'g', 'a']), ...listed('iterm', ['a', 'g', 'h']), ...more],
+    checks: [], probes: [],
+  })
+
+  it("I7 inline: a tap on a herdr row runs herdr agent focus for its pane and open -b iTerm2, and writes its client's tab "
+    + 'select with raise', async () => {
+    const i7 = herdrTab('I7', 'Eval a tap on a herdr row', [{ label: 'tap', kind: 'tap', session: 'h' }])
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, i7, 'darwin')
+    expect(run.error).toBeUndefined()
+    expect(run.gaps).toEqual([])
+    const { streams = [], commands, steps } = driver.seen()
+    const tap = steps.find((s) => s.label === 'tap')!
+    const after = commands.filter((c) => c.at >= tap.at && ['herdr', 'open'].includes(basename(c.argv[0]!)))
+    expect(after.map(({ argv, ok }) => ({ argv, ok }))).toEqual([
+      { argv: ['/opt/eval/bin/herdr', 'agent', 'focus', 'pane:h'], ok: true },
+      { argv: ['/usr/bin/open', '-b', 'com.googlecode.iterm2'], ok: true },
+    ])
+    const selects = streams.filter((l) => l.window === 'tabs' && l.at >= tap.at)
+    expect(selects.map((l) => l.line)).toEqual([{ app: 'iterm', tab: 'w1.1.0', raise: true }])
+  })
+
+  it("every scenario but iTerm2's keeps noHerdr: C1's devices ask no herdr", async () => {
+    const herdrOf = async (of: Scenario) => {
+      const driver = new TierADriver({ startDevices })
+      expect((await runScenario(driver, of, 'darwin')).error).toBeUndefined()
+      const { logs = [], commands } = driver.seen()
+      return { said: logs.filter((l) => l.line.startsWith('[herdr]')).map((l) => l.line),
+        ran: commands.filter((c) => ['herdr', 'lsof', 'ps'].includes(basename(c.argv[0]!))).map((c) => c.argv) }
+    }
+    // On iTerm2's machine herdr is installed, and its source subscribes once its server runs.
+    expect((await herdrOf(herdrTab('S8', 'Eval herdr is installed', []))).said).toContain('[herdr] socket · live')
+    expect(await herdrOf(MAIN.find((s) => s.id === 'C1')!)).toEqual({ said: [], ran: [] })
+  })
+
+  it("ttyAtime answers the model's access time, never this machine's", async () => {
+    machine.reset()
+    machine.atimes.set('ttys9998', 1_234)
+    expect(await ttyAtime('/dev/ttys9998')).toBe(1_234)
+    expect(await ttyAtime('/dev/ttys9999')).toBeUndefined()
   })
 
   // The baseline is written on a Mac and checked on Linux: a result naming this host's folders would differ there.
