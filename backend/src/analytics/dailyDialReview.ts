@@ -1,6 +1,6 @@
 import type { PrismaClient } from '@prisma/client'
 import { DIAL_FIRST_AGENT_BUCKETS, DIAL_OPEN_FAILURES, DIAL_OTHER_APPS, DIAL_RECOGNITION, DIAL_USAGE_ENGINES, DIAL_USAGE_HOSTS,
-  DIAL_USAGE_METRICS, DIAL_VOICE_FAILURES, DIAL_VOICE_OUTCOMES, DIAL_WAIT_BUCKETS } from '../types/dialUsage.js'
+  DIAL_USAGE_MARGIN_METRICS, DIAL_USAGE_METRICS, DIAL_VOICE_FAILURES, DIAL_VOICE_OUTCOMES, DIAL_WAIT_BUCKETS } from '../types/dialUsage.js'
 import { VOICE_USAGE_METRICS } from '../lib/voiceUsage.js'
 
 /** The `dial` section of usage:daily (docs/plans/2026-11-23-dial-usage-counts-design.md, "Daily review"). */
@@ -28,6 +28,12 @@ const RETURN_DAYS = [1, 7, 28] as const
 // 28-day column needs used days 29-56 days back, so they read 28 days more than the rest (Design 3).
 const COHORT_NAMES = new Set<string>(['dial_used_installation_days', 'dial_used_outside_app_installation_days'])
 const COHORT_READ_DAYS = READ_DAYS + Math.max(...RETURN_DAYS)
+type MarginMetric = typeof DIAL_USAGE_MARGIN_METRICS[number]
+/** Each flag the margins are written for (lib/productHealth.ts), by its name in the review. */
+const MARGIN_FLAGS = { dial_connected_installation_days: 'connected', dial_used_installation_days: 'used',
+  dial_used_outside_app_installation_days: 'usedOutsideApp' } as const satisfies Record<MarginMetric, string>
+type Flags = Record<typeof MARGIN_FLAGS[MarginMetric], number>
+const MARGIN = new RegExp(`^breakdown:(release|platform):cli:([^:]+):(health_cli_collector_days|${DIAL_USAGE_MARGIN_METRICS.join('|')})$`)
 const NAMES = new Set<string>([...DIAL_USAGE_METRICS, ...VOICE_USAGE_METRICS, 'health_cli_collector_days'])
 /** [names], outside the team and the team's (`staff:`, `testing:`; lib/productUsage.ts apartPrefixes). */
 const withTeam = (names: Set<string>) => [...names].flatMap(name => [name, `staff:${name}`, `testing:${name}`])
@@ -182,21 +188,24 @@ export function dailyDialReview(rows: Row[], breakdowns: Row[], now: Date) {
   }
 
   // Release and platform, each on its own (no cross product), where the day's collectors reach the health review's 20.
-  const margins = new Map<string, { day: number; dimension: 'platform' | 'release'; bucket: string; collectors: number; used: number }>()
+  const margins = new Map<string, { day: number; dimension: 'platform' | 'release'; bucket: string; collectors: number } & Flags>()
   for (const row of breakdowns) {
-    const m = /^breakdown:(release|platform):cli:([^:]+):(dial_used_installation_days|health_cli_collector_days)$/.exec(row.metric)
+    const m = MARGIN.exec(row.metric)
     const day = row.dayUtc.getTime()
     if (!m || day >= today || !Number.isSafeInteger(row.value) || row.value < 0) continue
     const key = `${day}:${m[1]}:${m[2]}`
-    const margin = margins.get(key) ?? { day, dimension: m[1] as 'platform' | 'release', bucket: m[2]!, collectors: 0, used: 0 }
+    const margin = margins.get(key) ?? { day, dimension: m[1] as 'platform' | 'release', bucket: m[2]!, collectors: 0,
+      connected: 0, used: 0, usedOutsideApp: 0 }
     if (m[3] === 'health_cli_collector_days') margin.collectors += row.value
-    else margin.used += row.value
+    else margin[MARGIN_FLAGS[m[3] as MarginMetric]] += row.value
     margins.set(key, margin)
   }
+  const count = (n: number): Count => n < FEWEST ? '<5' : n
   const margin = (dimension: 'platform' | 'release') => [...margins.values()]
-    .filter(m => m.dimension === dimension && m.collectors >= 20 && m.used > 0)
+    .filter(m => m.dimension === dimension && m.collectors >= 20 && (m.connected > 0 || m.used > 0 || m.usedOutsideApp > 0))
     .sort((a, b) => b.day - a.day || a.bucket.localeCompare(b.bucket))
-    .map(m => ({ day: new Date(m.day).toISOString().slice(0, 10), bucket: m.bucket, computers: m.used < FEWEST ? '<5' as const : m.used }))
+    .map(m => ({ day: new Date(m.day).toISOString().slice(0, 10), bucket: m.bucket, connected: count(m.connected), used: count(m.used),
+      usedOutsideApp: count(m.usedOutsideApp) }))
 
   /** [value] outside the team, a 7- or 28-day column tested by its largest day. */
   const outsideCells = (value: (day: Day) => number) =>
