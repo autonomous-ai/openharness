@@ -233,10 +233,12 @@ export function killTab(tab: Tab): void {
  * A tab of a fake [app] running [argv] on a pseudo-terminal of its own (PTY), under [env] alone: its parents are the
  * pseudo-terminal's helper, the app, the test; under the fake iTerm2, the helper, iTerm2's server, the app, the test
  * ([appPid] the app's process, relaunchIterm); under `iterm-server`, the helper, the server, launchd. [pid] is the
- * command's own process. Closed, the command is killed and the tab waited for, so nothing of it outlives the test.
+ * command's own process. [type] keys [text] into the tab's pseudo-terminal, as the person at its keyboard; under
+ * `iterm-server` there is none, as the tab's helper is started in the background with no input. Closed, the command is
+ * killed and the tab waited for, so nothing of it outlives the test.
  */
 export async function tabUnder(d: IsolatedDaemon, app: FakeApp, argv: readonly string[], env: NodeJS.ProcessEnv):
-  Promise<{ pid: number; appPid?: number; close(): Promise<void> }> {
+  Promise<{ pid: number; appPid?: number; type?(text: string): void; close(): Promise<void> }> {
   if (app === 'iterm-server') return tabUnderItermServer(d, argv, env)
   const [file, ...args] = [...underApp(d, app), 'python3', '-c', PTY, ...argv]
   const tab = spawn(file, args, { env, stdio: ['pipe', 'pipe', 'pipe'] })
@@ -258,6 +260,8 @@ export async function tabUnder(d: IsolatedDaemon, app: FakeApp, argv: readonly s
   return {
     pid,
     ...(iterm ? { appPid: tab.pid } : {}),
+    // The app's stdin is its helper's, which writes it to the pseudo-terminal.
+    type: (text) => { tab.stdin!.write(text) },
     async close() {
       try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ }
       // The helper ends with its pseudo-terminal, then iTerm2's server, then the app; one that does not is killed. The

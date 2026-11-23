@@ -62,10 +62,11 @@ export class InOwnTmux {
 
 /**
  * A client of the person's attached to [session] from a tab of a fake [app] (outsideAgent.ts tabUnder), as a person
- * types `tmux attach` in Terminal: it has a tty, and its parents name the app. Resolved once tmux lists it.
+ * types `tmux attach` in Terminal: it has a tty, and its parents name the app. Resolved once tmux lists it. [type] keys
+ * [text] into its tab, so the client reads them from its tty and is used, as the person typing in that tab.
  */
 export async function tabClient(d: IsolatedDaemon, session: string, app: FakeApp):
-  Promise<{ pid: number; tty(): Promise<string>; close(): Promise<void> }> {
+  Promise<{ pid: number; tty(): Promise<string>; type(text: string): void; close(): Promise<void> }> {
   const tab = await tabUnder(d, app, ['tmux', '-S', d.tmux.socket, '-f', '/dev/null', 'attach-session', '-t', session],
     { ...d.tmux.env, TERM: 'xterm-256color' })
   const tty = async (): Promise<string | undefined> => {
@@ -84,6 +85,10 @@ export async function tabClient(d: IsolatedDaemon, session: string, app: FakeApp
       const found = await tty()
       if (!found) throw new Error(`client ${tab.pid} is not attached`)
       return found
+    },
+    type(text) {
+      if (!tab.type) throw new Error(`a client in a ${app} tab takes no keys`)
+      tab.type(text)
     },
     close: () => tab.close(),
   }

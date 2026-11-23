@@ -5,7 +5,10 @@
  * - a tab's Claude Code is its shell's job there (Outside), with iTerm2's hints;
  * - a tmux one runs in a tmux session of the person's on the daemon's private server (ownTmux.ts), one session a tab its
  *   first client runs in (`eval-<window>-<tab>`, as tier A's), that client attached from a tab of the fake iTerm2 before
- *   any Claude Code starts in it, so each one's start hook finds it there; each Claude Code in a window of its own;
+ *   any agent starts in it, so each one's start hook finds it there; each agent in a window of its own. A Claude Code's
+ *   prompt is typed through a client of its session in the tab the person last selected, when one is there, so that
+ *   client is the one used (the plan's Decision 6); else into its pane. A Codex is a process of its own in its pane
+ *   (codexOutside.ts), told by its hooks, under the daemon's CODEX_HOME;
  * - a herdr one runs in a pane of the test's own herdr (herdrServer.ts), started by its first client in a tab of the fake
  *   iTerm2, so its panes keep iTerm2's hints and their parents reach the fake iTerm2 before this worker; herdr is told
  *   its session, herdr's own Claude Code report, unless the scenario says its row gives none;
@@ -18,14 +21,16 @@
  * tabs, the tmux sessions and their clients' tabs, herdr and its tab. Killed, it takes them with it at once.
  */
 import { execFile, spawn, spawnSync } from 'node:child_process'
+import { appendFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { promisify } from 'node:util'
 import { APP_BUNDLES } from '../../src/cable/hosts/hostDetect.js'
 import { sessionTab, tabLabel, type TabRef } from '../../src/testing/dialAppEval/itermRecords.js'
 import { NET_GUARD_FILE_ENV } from '../../src/testing/dialAppEval/netGuard.js'
-import { itermPlaceOf, type SessionDef, type SessionKey } from '../../src/testing/dialAppEval/types.js'
+import { engineOf, itermPlaceOf, type SessionDef, type SessionKey } from '../../src/testing/dialAppEval/types.js'
 import { appOf, claudeSteps, drop, start as startClaude, type ClaudeHost, type ClaudeTerminal } from './appEvalClaude.js'
 import { guardEnv, guardLoaded, speak, type AppSteps, type TierBWorld } from './appEvalDriver.js'
+import { CodexOutside } from './codexOutside.js'
 import type { IsolatedDaemon } from './daemon.js'
 import { PrivateHerdr, type HerdrTab } from './herdrServer.js'
 import { closeTab, killTab, openTab, Outside, relaunchIterm, type Tab } from './outsideAgent.js'
@@ -68,7 +73,7 @@ export function tabClosed(tabs: Map<string, string>, label: string, tty: string)
 /** A tab of the fake iTerm2's: where it is, its tty, and its fake iTerm2's process, none once iTerm2 relaunched. */
 interface Opened { window: string; tab: number; label: string; tty: string; app?: number }
 /** A tmux client's tab. */
-interface Client extends Opened { pid: number; close(): Promise<void> }
+interface Client extends Opened { pid: number; type(text: string): void; close(): Promise<void> }
 interface State {
   /** The empty tabs and splits the person opened, by label. */
   empty: Map<string, Opened & { processes: Tab }>
@@ -81,6 +86,10 @@ interface State {
    *  in the order they started. */
   herdr?: { server: PrivateHerdr & { tab: HerdrTab }; opened: Opened }
   inHerdr: Map<SessionKey, string>
+  /** The tab the person last selected, by label. */
+  selected?: string
+  /** Each Codex, by session. */
+  codex: Map<SessionKey, CodexOutside>
 }
 const states = new WeakMap<TierBWorld, State>()
 
@@ -94,7 +103,7 @@ function itermOf(world: TierBWorld): State {
   if (known) return known
   // The app that ends the Claude Code sessions at stop is a child before this one: each says its end in its terminal.
   appOf(world, ITERM_HOST)
-  const state: State = { empty: new Map(), tabs: new Map(), tmux: new Map(), inTmux: new Map(), inHerdr: new Map() }
+  const state: State = { empty: new Map(), tabs: new Map(), tmux: new Map(), inTmux: new Map(), inHerdr: new Map(), codex: new Map() }
   states.set(world, state)
   // Only the terminals' lifetime: what they do is in this file.
   const child = spawn(process.execPath, ['-e', 'process.stdin.resume()'], { cwd: world.d.root, env: world.d.env, stdio: ['pipe', 'ignore', 'ignore'] })
@@ -237,7 +246,7 @@ async function attach(world: TierBWorld, state: State, name: string, at: TabRef)
   await closeEmpty(world, state, tabLabel(at))
   const client = await tabClient(world.d, name, 'iterm')
   const tab = opening(world, at, await ttyOf(client.pid), await appAbove(world.d, client.pid))
-  state.tmux.get(name)!.push({ ...tab, pid: client.pid, close: client.close })
+  state.tmux.get(name)!.push({ ...tab, pid: client.pid, type: client.type, close: client.close })
 }
 
 /** A client's tab closed: tmux runs on without it. */
@@ -247,17 +256,31 @@ async function detach(world: TierBWorld, state: State, client: Client): Promise<
   tabClosed(world.tabs, client.label, client.tty)
 }
 
+/** The person's tmux session in [s]'s tab, its first client attached there: its name, and the pane of the shell it opened
+ *  with when it opened now, which goes once its first agent runs, so it holds its agents' windows alone. */
+async function tmuxSession(world: TierBWorld, state: State, s: SessionDef): Promise<{ name: string; shell?: string }> {
+  const name = `eval-${s.window}-${s.tab}`
+  if (state.tmux.has(name)) return { name }
+  const shell = await world.d.tmux.run('new-session', '-d', '-s', name, '-P', '-F', '#{pane_id}')
+  state.tmux.set(name, [])
+  await attach(world, state, name, { window: s.window!, tab: s.tab! })
+  return { name, shell }
+}
+
+/** The client of tmux session [name] in the tab the person last selected, if one is there; it must show [pane], where its
+ *  keys go. */
+async function selectedClient(world: TierBWorld, state: State, name: string, pane: string): Promise<Client | undefined> {
+  const client = state.tmux.get(name)?.find((one) => one.label === state.selected)
+  if (!client) return undefined
+  const shown = (await world.d.tmux.run('list-clients', '-F', '#{client_pid} #{pane_id}')).split('\n')
+  if (!shown.includes(`${client.pid} ${pane}`)) throw new Error(`scenario ${world.scenario.id}: the client in ${client.label} shows no pane of its session's agent`)
+  return client
+}
+
 /** In a window of its own of the person's tmux session in its tab, on the daemon's private server. */
 async function inTmux(world: TierBWorld, state: State, s: SessionDef, folder: string): Promise<ClaudeTerminal> {
   const { d } = world
-  const name = `eval-${s.window}-${s.tab}`
-  // The session opens with a shell, which goes once its first Claude Code runs: it holds its agents' windows alone.
-  let shell: string | undefined
-  if (!state.tmux.has(name)) {
-    shell = await d.tmux.run('new-session', '-d', '-s', name, '-P', '-F', '#{pane_id}')
-    state.tmux.set(name, [])
-    await attach(world, state, name, { window: s.window!, tab: s.tab! })
-  }
+  const { name, shell } = await tmuxSession(world, state, s)
   const daemon = Object.fromEntries(DAEMON_ENV.map((variable) => [variable, d.env[variable]!]))
   const own = await InOwnTmux.startIn(d, name, folder,
     { resume: s.id, env: { ...guardEnv(d), ...daemon, ...itermHints(s), FAKE_CLAUDE_SESSION_TITLE: s.title } })
@@ -268,8 +291,13 @@ async function inTmux(world: TierBWorld, state: State, s: SessionDef, folder: st
   state.inTmux.set(s.key, { name, pane: own.pane })
   const gone = (): void => { state.inTmux.delete(s.key) }
   return {
-    // `send-keys -l` types no Enter alone.
-    type: (text) => text === '' ? d.tmux.run('send-keys', '-t', own.pane, 'Enter').then(() => {}) : own.type(text),
+    type: async (text) => {
+      // Through its tab's pseudo-terminal, as Outside types, so tmux reads it from that client's tty.
+      const client = await selectedClient(world, state, name, own.pane)
+      if (client) return client.type(`${text}\r`)
+      // `send-keys -l` types no Enter alone.
+      await (text === '' ? d.tmux.run('send-keys', '-t', own.pane, 'Enter') : own.type(text))
+    },
     ran: (log, event, times, from) => ran(log, own.pid, own.sessionId, event, times, from),
     // Its pane goes, its Claude Code with it; one that ended went with it already.
     close: () => d.tmux.run('kill-pane', '-t', own.pane).then(gone, gone),
@@ -309,6 +337,41 @@ async function inHerdr(world: TierBWorld, state: State, s: SessionDef, folder: s
   }
 }
 
+/** The answer as Codex's rollout holds it (cable/hosts/lastAnswer.ts reads it back). */
+const answerLine = (text: string): string =>
+  `${JSON.stringify({ type: 'event_msg', payload: { type: 'agent_message', phase: 'final_answer', message: text } })}\n`
+
+/** The session's Codex, in a window of its own of the person's tmux session in its tab, under the daemon's CODEX_HOME. */
+async function startCodex(world: TierBWorld, s: SessionDef): Promise<void> {
+  const state = itermOf(world)
+  if (itermPlaceOf(s) !== 'tmux') throw new Error(`scenario ${world.scenario.id}: tier B runs iTerm2's Codex in tmux alone`)
+  const { name, shell } = await tmuxSession(world, state, s)
+  const codex = await CodexOutside.inTmux(world.d, name, basename(world.folder(s.cwd)), world.children, itermHints(s), { sessionId: s.id })
+  if (shell !== undefined) await world.d.tmux.run('kill-pane', '-t', shell)
+  state.codex.set(s.key, codex)
+  world.muxPanes.set(codex.pane!, s.key)
+  state.inTmux.set(s.key, { name, pane: codex.pane! })
+  await codex.hook('SessionStart', { source: 'startup' })
+}
+
+/** A step on the session's Codex: its hooks, as Codex runs them; it runs none as it ends, its process goes. */
+async function codexHook(world: TierBWorld, step: { session: SessionKey; event: string; lastAnswer?: string }): Promise<void> {
+  const state = itermOf(world)
+  const codex = state.codex.get(step.session)
+  if (!codex) throw new Error(`scenario ${world.scenario.id}: a hook for ${step.session}, which has not started`)
+  switch (step.event) {
+    case 'turn-start': return codex.hook('UserPromptSubmit')
+    case 'turn-stop':
+      if (step.lastAnswer !== undefined) appendFileSync(codex.transcriptPath, answerLine(step.lastAnswer))
+      return codex.hook('Stop')
+    case 'end':
+      state.codex.delete(step.session)
+      state.inTmux.delete(step.session)
+      return codex.end()
+    default: throw new Error(`scenario ${world.scenario.id}: tier B's Codex in iTerm2 has no ${step.event} step`)
+  }
+}
+
 function tmuxOf(world: TierBWorld, state: State, key: SessionKey): { name: string; pane: string } {
   const found = state.inTmux.get(key)
   if (!found) throw new Error(`scenario ${world.scenario.id}: ${key} runs in no tmux`)
@@ -317,6 +380,9 @@ function tmuxOf(world: TierBWorld, state: State, key: SessionKey): { name: strin
 
 export const itermSteps: AppSteps = {
   hook: async (world, step) => {
+    if (engineOf(world.session(step.session)) === 'codex') {
+      return step.event === 'start' ? startCodex(world, world.session(step.session)) : codexHook(world, step)
+    }
     if (step.event !== 'start') return claudeSteps.hook(world, step)
     itermOf(world)
     await startClaude(world, appOf(world, ITERM_HOST), step.session)
@@ -339,7 +405,9 @@ export const itermSteps: AppSteps = {
     for (const client of clients) await detach(world, state, client)
   },
   'iterm.select': async (world, { window, tab, split }) => {
-    world.reportTab(tabLabel({ window, tab, split }))
+    const label = tabLabel({ window, tab, split })
+    itermOf(world).selected = label
+    world.reportTab(label)
   },
   'iterm.relaunch': async (world) => {
     const state = itermOf(world)
