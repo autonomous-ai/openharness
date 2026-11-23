@@ -205,7 +205,8 @@ export function tierAVerdict(results: RunResults, baseline: Baseline): Verdict {
  * client lookup (about 150-250 ms), so a 1 s list tick in that gap orders it last. The ring's other parts still hold
  * that list.
  */
-const RACED_B = new Set(['b/darwin/I3/ring.order', 'b/darwin/I3/ringKept', 'b/darwin/I15/ring.order', 'b/darwin/I15/ringKept'])
+export const RACED_B: ReadonlySet<string> =
+  new Set(['b/darwin/I3/ring.order', 'b/darwin/I3/ringKept', 'b/darwin/I15/ring.order', 'b/darwin/I15/ringKept'])
 
 /** Only pass/fail checks the platform's baseline passes are held: timed ones depend on the runner, RACED_B's on a race. */
 export function tierBVerdict(results: RunResults, baseline: Baseline, platform: Platform): Verdict {

@@ -2,9 +2,10 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { claudeGhost, claudeSessions, listed, scenario } from './catalog.js'
-import { BASELINE_PATH, droppedKeys, grade, loadBaseline, tierAVerdict, tierBVerdict, updateBaseline } from './grade.js'
-import type { Baseline, CheckResult, CoverageGap, RunResults, WrongSend } from './types.js'
+import { claudeGhost, claudeSessions, HELD_OUT, listed, MAIN, scenario } from './catalog.js'
+import { evaluate } from './checks.js'
+import { BASELINE_PATH, droppedKeys, grade, loadBaseline, RACED_B, tierAVerdict, tierBVerdict, updateBaseline } from './grade.js'
+import type { Baseline, CheckResult, CoverageGap, Platform, RunResults, WrongSend } from './types.js'
 
 function result(over: Partial<CheckResult> & Pick<CheckResult, 'check' | 'dim' | 'score'>): CheckResult {
   return { tier: 'a', platform: 'darwin', scenario: 'C1', app: 'claude', heldOut: false, timed: false, evidence: [], ...over }
@@ -365,6 +366,18 @@ describe('tierBVerdict', () => {
       .toEqual({ ok: true, message: 'tier B on darwin holds its baseline' })
     expect(tierBVerdict(run([kept('I3', 1), kept('I15', 1), kept('I21', 0)]), before, 'darwin'))
       .toEqual({ ok: false, message: 'regression: b/darwin/I21/ringKept' })
+  })
+
+  it('each check tier B reports and does not hold is a tier B result of the catalog, so a rename cannot hold it again unseen', () => {
+    expect(RACED_B.size).toBeGreaterThan(0)
+    for (const key of RACED_B) {
+      const [tier, platform, id, check] = key.split('/') as [string, Platform, string, string]
+      const s = [...MAIN, ...HELD_OUT].find((one) => one.id === id)
+      expect([tier, s?.tiers.includes('b'), s?.platforms.includes(platform)], key).toEqual(['b', true, true])
+      // A check gives its results, a D7 one its pass/fail alone, whatever was seen: a driver that saw nothing gives each.
+      const given = s!.checks.flatMap((c) => evaluate(c, s!, { frames: [], faces: [], commands: [], deliveries: [], steps: [] }, 'b', platform))
+      expect(given.map((r) => r.check), key).toContain(check)
+    }
   })
 })
 
