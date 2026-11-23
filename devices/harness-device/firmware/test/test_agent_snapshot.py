@@ -27,7 +27,7 @@ code += defines('ID_MAX','CABLE_NAME_MAX','CABLE_MAX_AGENTS','CABLE_CAP_S','CABL
 code += r'''
 typedef struct { int valueint; const char *tab, *view, *id, *host, *caps; bool number; } cJSON;
 static cable_agent_t rows[4], *s_agents=rows;
-static int s_agents_lock=1, held, reloads, s_agent_count, s_agents_total;
+static int s_agents_lock=1, held, reloads, s_agent_count, s_agents_prev, s_agents_total;
 static bool s_agents_building,s_has_window,s_agents_machine_view;
 static char s_agents_tab[ID_MAX];
 static uint32_t s_agents_generation;

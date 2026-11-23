@@ -41,7 +41,7 @@ _Static_assert(sizeof(((cable_agent_t *)0)->machine) == 40, "machine names retai
 #define portMAX_DELAY 0
 static struct { uint64_t before; cable_agent_t rows[CABLE_MAX_AGENTS]; uint64_t after; } storage;
 static cable_agent_t *s_agents=storage.rows;
-static int s_agents_lock=1,s_agent_count,held;
+static int s_agents_lock=1,s_agent_count,s_agents_prev,held;
 static bool s_agents_building=true;
 static int s_models_sem=2,s_models_n,s_models_max;
 static bool s_models_replied;

@@ -1,6 +1,6 @@
 // Real Focus scene transitions: rastering only ht_damage()'s rectangles onto the previous frame must give exactly
 // a full raster of the new frame. Scenes come from ht_character_face(), the call the board makes, over recaps,
-// moods, engines (every pet), activity lines and animation clocks.
+// moods, engines (every pet), activity lines, animation clocks and context levels (the fat pet, its drops).
 #include "../main/ui/habitat/character.h"
 #include "../main/ui/habitat/pets.h"
 #include <assert.h>
@@ -34,7 +34,7 @@ int main(void)
         ht_character_face_t f = {.recipient = names[next() % 4], .engine = engine, .activity = acts[next() % 4],
             .elapsed = next() % 90, .status = "", .foreground = 0xffff,
             .mood = mood == 0 ? HT_CHARACTER_DONE : HT_CHARACTER_IDLE, .asking = mood == 1,
-            .clock_ms = next() % 20000 + 1};
+            .clock_ms = next() % 20000 + 1, .context_level = (uint8_t)(next() % 3)};
         const char *recap = recaps[next() % 6];
         ht_scene_clear(&b, 0);
         ht_character_face(&b, &c, &f, 0xffff, recap);

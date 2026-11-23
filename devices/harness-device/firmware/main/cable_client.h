@@ -52,6 +52,7 @@ typedef struct {
     // that predates the field sends none, which reads as everything, so nothing changes for it.
     char host[16];
     uint8_t caps;
+    uint8_t context;   // how full its context window is, 0..2 (agent.context); 0 when the daemon never said
 } project_t;
 #define CABLE_CAP_S 1      // status
 #define CABLE_CAP_V 2      // voice

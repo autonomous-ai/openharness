@@ -115,6 +115,7 @@ vi.mock('../cable/cableFleet.js', async (real) => {
     turnReply = recorder('turnReply')
     turnDone = recorder('turnDone')
     turnStats = recorder('turnStats')
+    agentContext = recorder('agentContext')
     summary = recorder('summary')
     turnError = recorder('turnError')
     petsChanged = recorder('petsChanged')
@@ -123,6 +124,9 @@ vi.mock('../cable/cableFleet.js', async (real) => {
     connected = true
     get isConnected() { return this.connected }
     wantsStats() { return this.wants }
+    /** Off unless a spec says: every other spec's dial says no `context`, and its calls stay as they were. */
+    context = false
+    wantsContext() { return this.context }
     apps = true
     wantsApps() { return this.apps }
     petDial = () => ({ supported: false, held: [] as string[], sending: null })
@@ -1648,6 +1652,95 @@ describe('what the windows say, reaching the dial', () => {
       ev(port, { kind: 'done', text: 'done' })
       expect(calls('turnDone')).toHaveLength(1)
       expect(read).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('an agent\'s context fill, for a dial that says context v1', () => {
+    const ev = (port: DevicesPort, payload: object, agentId = 'a1') => port.card({ type: 'commander_event', agentId, payload })
+    const wants = (stats: boolean, context: boolean) => {
+      const fake = seen.cable as unknown as { wants: boolean; context: boolean }
+      fake.wants = stats
+      fake.context = context
+    }
+    const filled = (context: number, window = 200_000) => ({ input: 1, cached: 0, output: 1, context, window })
+
+    it('tells the dial the level as a turn starts and as it ends, from the same reads as the turn\'s tokens', async () => {
+      const read = vi.fn(async (_id: string) => null as ReturnType<typeof filled> | null)
+        .mockResolvedValueOnce(filled(99_999)).mockResolvedValueOnce(filled(100_000))
+        .mockResolvedValueOnce(filled(159_999)).mockResolvedValueOnce(filled(160_000))
+      const { port } = start({ readUsage: read })
+      wants(true, true)
+      ev(port, { kind: 'turn_started' })
+      ev(port, { kind: 'done', text: 'done' })
+      await vi.waitFor(() => expect(calls('agentContext')).toHaveLength(2))
+      expect(calls('agentContext')).toEqual([['a1', 0], ['a1', 1]])
+      wants(false, true)
+      ev(port, { kind: 'turn_started' })
+      ev(port, { kind: 'done', text: 'done' })
+      await vi.waitFor(() => expect(calls('agentContext')).toHaveLength(4))
+      expect(calls('agentContext').slice(2)).toEqual([['a1', 1], ['a1', 2]])
+      expect(read).toHaveBeenCalledTimes(4)
+    })
+
+    it.each([
+      ['unknown', null],
+      ['its window is unknown', { input: 1, cached: 0, output: 1, context: 10 }],
+      ['its window is 0', filled(10, 0)],
+    ] as const)('tells nothing when the usage is %s', async (_name, reading) => {
+      const { port } = start({ readUsage: vi.fn(async () => reading) })
+      wants(false, true)
+      ev(port, { kind: 'turn_started' })
+      ev(port, { kind: 'done', text: 'done' })
+      await vi.waitFor(() => expect(calls('turnDone')).toHaveLength(1))
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      expect(calls('agentContext')).toEqual([])
+    })
+
+    it('reads nothing for it when no dial says context', async () => {
+      const read = vi.fn(async () => filled(190_000))
+      const { port } = start({ readUsage: read })
+      wants(false, false)
+      ev(port, { kind: 'turn_started' })
+      ev(port, { kind: 'done', text: 'done' })
+      seen.host.watching!(true)
+      expect(read).not.toHaveBeenCalled()
+      expect(calls('agentContext')).toEqual([])
+    })
+
+    it('reads this computer\'s Claude Code and Codex agents as a dial attaches, from a fresh copy of them', async () => {
+      const core = fakeCore({ dataDir })
+      vi.mocked(core.agents.advertised).mockReturnValue([{ agentId: 'c1', engine: 'claude' }, { agentId: 'x1', engine: 'codex' },
+        { agentId: 'o1', engine: 'opencode' }] as never)
+      const refresh = vi.fn(async () => {})
+      const read = vi.fn(async (id: string) => (id === 'c1' ? filled(900_000, 1_000_000) : id === 'x1' ? filled(10) : null))
+      start({ core, readUsage: read, refresh })
+      wants(false, true)
+      seen.host.watching!(true)
+      await vi.waitFor(() => expect(calls('agentContext')).toHaveLength(2))
+      expect(refresh).toHaveBeenCalled()
+      expect(read.mock.calls.map(([id]) => id)).toEqual(['c1', 'x1'])
+      expect(calls('agentContext')).toEqual([['c1', 2], ['x1', 0]])
+      seen.host.watching!(false)
+      expect(read).toHaveBeenCalledTimes(2)
+    })
+
+    it('reads the agents it has when a fresh copy of them fails, and at most 64', async () => {
+      const core = fakeCore({ dataDir })
+      vi.mocked(core.agents.advertised).mockReturnValue(Array.from({ length: 70 }, (_, i) => ({ agentId: `c${i}`, engine: 'claude' })) as never)
+      const read = vi.fn(async () => filled(150_000))
+      start({ core, readUsage: read, refresh: async () => { throw new Error('core gone') } })
+      wants(false, true)
+      seen.host.watching!(true)
+      await vi.waitFor(() => expect(calls('agentContext')).toHaveLength(64))
+      expect(read).toHaveBeenCalledTimes(64)
+    })
+
+    it('carries the core\'s fresh context by default', async () => {
+      const usageFresh = vi.fn(async () => ({ totalTokens: 1, updatedAt: '2026-11-23T00:00:00Z', contextTokens: 170_000, contextWindow: 200_000 }))
+      const { port } = start({ core: { ...fakeCore({ dataDir }), usageFresh } })
+      wants(false, true)
+      ev(port, { kind: 'turn_started' })
+      await vi.waitFor(() => expect(calls('agentContext')).toEqual([['a1', 2]]))
     })
   })
 

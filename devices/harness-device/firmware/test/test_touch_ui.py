@@ -241,7 +241,7 @@ code += 'static void dispatch(action_t a);\n'
 for name in ['notice_drop', 'notice_remove', 'notice_remove_question', 'notice_sync_view', 'notice_selection', 'notice_restore_selection', 'notice_make_room', 'notice_add', 'notice_expire', 'on_face', 'notice_read_now', 'ui_notify_summary', 'ui_turn_error', 'ui_notif_seen', 'ui_notif_read', 'ui_notif_replace', 'ui_notif_open', 'ui_question_close', 'ui_answer_receipt']:
     code += function(name)
 code += '#define ui_notify_task_done(a,b,c,d) ui_notify_summary(a,b,c,d,"alert",false,false)\n'
-for name in ['ui_project_set_host_caps', 'ui_fleet_set_view', 'ui_apps_replace', 'ui_apps_forget', 'event', 'ui_project_emit', 'ui_project_restore_event', 'ui_project_clear_event', 'ui_project_set_name', 'ui_project_remove', 'ui_project_clear_all', 'ui_project_apply_order']:
+for name in ['ui_project_set_host_caps', 'ui_project_set_context', 'ui_fleet_set_view', 'ui_apps_replace', 'ui_apps_forget', 'event', 'ui_project_emit', 'ui_project_restore_event', 'ui_project_clear_event', 'ui_project_set_name', 'ui_project_remove', 'ui_project_clear_all', 'ui_project_apply_order']:
     code += function(name)
 visit_actions=source.split('    case A_LATEST:',1)[1].split('    case A_TABS:',1)[0]
 code+='static void visit_action(action_t a) { switch(a.kind) { case A_LATEST:'+visit_actions+'default: break; } }\n'
@@ -2378,6 +2378,15 @@ int main(int argc, char **argv) {
         ui_project_set_host_caps("a","orca",CABLE_CAPS_ALL); scene_take();
         assert(rest_invitations(40) > 0);
     }
+    // agent.context reaches the face: a level that changes redraws a wider pet, the same one or another agent's does not
+    { reset(); fake_ms = 1000; strcpy(s.agents[0].engine, "claude"); active()->recap_ready = true;
+      strcpy(active()->preview, "The update is ready."); scene_take();
+      int thin = scene.runs[1].sprite.width, runs = scene.count;
+      assert(scene.runs[1].sprite.cells && thin > 0);
+      unsigned before = changes; ui_project_set_context("a", 2); assert(changes == before + 1 && s.agents[0].context == 2);
+      scene_take(); assert(scene.runs[1].sprite.width > thin && scene.count == runs);
+      before = changes; ui_project_set_context("a", 2); ui_project_set_context("zz", 1); assert(changes == before);
+      ui_project_set_context("b", 1); assert(s.agents[1].context == 1); }
     // question screen hides [ say ] without V
     reset(); s.view=QUESTION; s.q.valid=s.q.supported=true; s.q.count=1; s.q.revision=1;
     strcpy(s.q.agent,"a"); strcpy(s.q.token,"token-a"); strcpy(s.q.name,"Research helper");

@@ -50,3 +50,14 @@ it('carries counts by model only, copied field by field, and refuses anything el
     expect(validUsage({ totalTokens: 10, updatedAt: at, models }), JSON.stringify(models)).toBe(false)
   }
 })
+
+it('carries the conversation\'s current context and its window, copied field by field', () => {
+  const value = { totalTokens: 10, updatedAt: at, contextTokens: 150_000, contextWindow: 200_000 }
+  expect(validUsage(value)).toBe(true)
+  expect(usageSnapshot(value)).toEqual(value)
+  // The window alone is unknown for an engine that names none (Codex before model_context_window).
+  expect(usageSnapshot({ totalTokens: 10, updatedAt: at, contextTokens: 5 })).toEqual({ totalTokens: 10, updatedAt: at, contextTokens: 5 })
+  for (const bad of [{ contextTokens: -1 }, { contextTokens: 1.5 }, { contextWindow: '200000' }, { contextWindow: Infinity }]) {
+    expect(validUsage({ ...value, ...bad }), JSON.stringify(bad)).toBe(false)
+  }
+})

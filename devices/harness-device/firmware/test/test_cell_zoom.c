@@ -1,8 +1,9 @@
 // Host test for ht_cell_sprite_zoom (one 2x pet drawing shown at 1x, 1.5x, 1.75x, 2x): the drawn size is the frame's
-//   times zoom / 8; a solid frame stays solid inside; a glass pixel is the overlap-weighted mean of the frame pixels
-//   it covers over black, and one under a quarter covered is left as it was; strips equal the full raster; and pixel
-//   art whose cells land on whole glass pixels (8 px cells at zoom 6 = 6 px) stays exact. A packed frame (transparent
-//   runs as (skip, count) pairs, terminal.h) draws exactly as its plain grid at every zoom, in strips too.
+//   times zoom / 8 (each axis in 64ths: z * 8); a solid frame stays solid inside; a glass pixel is the overlap-weighted
+//   mean of the frame pixels it covers over black, and one under a quarter covered is left as it was; strips equal the
+//   full raster; pixel art whose cells land on whole glass pixels (8 px cells at zoom 6 = 6 px) stays exact, and so
+//   does a scale of its own on each axis (a fat pet). A packed frame (transparent runs as (skip, count) pairs,
+//   terminal.h) draws exactly as its plain grid at every zoom, in strips too.
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -20,11 +21,11 @@ int main(void)
     ht_cell_frame_t fr = {10, 10, 1, pal, cells, NULL};
     for (unsigned z = 1; z <= 8; z++) {
         ht_scene_t s; ht_scene_clear(&s, 0);
-        assert(ht_cell_sprite_zoom(&s, 100, 100, &fr, z) && s.count == 1);
+        assert(ht_cell_sprite_zoom(&s, 100, 100, &fr, z * 8, z * 8) && s.count == 1);
         const ht_run_t *r = &s.runs[0];
         int w = (int)((10 * z + 7) / 8);
         assert(r->sprite.width == w && r->sprite.height == w && r->w == w);
-        assert(z == 8 ? !r->sprite.zoom : r->sprite.zoom == z);
+        assert(z == 8 ? !r->sprite.zoom_y && !r->sprite.zoom_x : r->sprite.zoom_y == z * 8 && r->sprite.zoom_x == z * 8);
         memset(full, 0, sizeof full);
         ht_raster(&s, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, full);
         for (int y = 0; y < HT_HEIGHT; y++) for (int x = 0; x < HT_WIDTH; x++) {
@@ -54,11 +55,41 @@ int main(void)
     for (int i = 0; i < 16; i++) grid[i] = ((i / 4 + i % 4) & 1) ? 2 : 1;
     ht_cell_frame_t px = {4, 4, 8, pal, grid, NULL};
     ht_scene_t s; ht_scene_clear(&s, 0);
-    assert(ht_cell_sprite_zoom(&s, 50, 60, &px, 6) && s.runs[0].sprite.width == 24);
+    assert(ht_cell_sprite_zoom(&s, 50, 60, &px, 48, 48) && s.runs[0].sprite.width == 24);
     memset(full, 0, sizeof full);
     ht_raster(&s, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, full);
     for (int y = 0; y < 24; y++) for (int x = 0; x < 24; x++)
         assert(full[(60 + y) * HT_WIDTH + 50 + x] == pal[grid[(y / 6) * 4 + x / 6]]);
+    // Each axis its own (a fat pet, focus.c WIDEN, TALLER), in 64ths. 8 px cells at 128 wide and 64 tall are 16 x 8 px,
+    // at 64 wide and 96 tall 8 x 12 px, exact; at 60 wide and 48 tall a solid frame stays solid, sized by each axis.
+    for (int tall = 0; tall < 2; tall++) {
+        ht_scene_clear(&s, 0);
+        int zx = tall ? 64 : 128, zy = tall ? 96 : 64, cw = zx / 8, ch = zy / 8;
+        assert(ht_cell_sprite_zoom(&s, 50, 60, &px, zx, zy) && s.runs[0].sprite.zoom_x == zx && s.runs[0].sprite.zoom_y == zy);
+        assert(s.runs[0].sprite.width == 4 * cw && s.runs[0].sprite.height == 4 * ch && s.runs[0].w == 4 * cw);
+        memset(full, 0, sizeof full);
+        ht_raster(&s, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, full);
+        for (int y = 0; y < 4 * ch; y++) for (int x = 0; x < 4 * cw; x++)
+            assert(full[(60 + y) * HT_WIDTH + 50 + x] == pal[grid[(y / ch) * 4 + x / cw]]);
+    }
+    static uint8_t solid[100];
+    memset(solid, 1, sizeof solid);
+    ht_cell_frame_t sf = {10, 10, 1, pal, solid, NULL};
+    ht_scene_clear(&s, 0);
+    assert(ht_cell_sprite_zoom(&s, 100, 100, &sf, 60, 48));
+    assert(s.runs[0].sprite.width == 10 && s.runs[0].sprite.height == 8);   // ceil(10 * 60 / 64), ceil(10 * 48 / 64)
+    memset(full, 0, sizeof full);
+    ht_raster(&s, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, full);
+    for (int y = 100; y < 107; y++) for (int x = 100; x < 109; x++) assert(full[y * HT_WIDTH + x] == 0xffff);
+    for (int y0 = 98; y0 < 110; y0 += 3) {   // strips equal the full raster
+        ht_rect_t clip = {97, (int16_t)y0, 20, 3};
+        ht_raster(&s, clip, part);
+        for (int y = 0; y < clip.h; y++) for (int x = 0; x < clip.w; x++)
+            assert(part[y * clip.w + x] == full[(clip.y + y) * HT_WIDTH + clip.x + x]);
+    }
+    // Out of range: under an eighth or past 2x on either axis.
+    assert(!ht_cell_sprite_zoom(&s, 0, 0, &sf, 7, 64) && !ht_cell_sprite_zoom(&s, 0, 0, &sf, 64, 7) &&
+           !ht_cell_sprite_zoom(&s, 0, 0, &sf, 129, 64) && !ht_cell_sprite_zoom(&s, 0, 0, &sf, 64, 129));
     // Packed: a frame with holes, runs at both edges and a row of nothing, packed as gen_pets.py packs it.
     static uint8_t plain[12 * 9], packed[12 * 9 * 3];
     static uint16_t row_at[9];
@@ -80,7 +111,7 @@ int main(void)
         for (int y = 0; y < 9; y++) for (int x = 0; x < 12; x++) assert(ht_cell_at(&b, x, y) == plain[y * 12 + x]);
         for (unsigned z = 1; z <= 8; z++) {
             ht_scene_t sa, sb; ht_scene_clear(&sa, 0); ht_scene_clear(&sb, 0);
-            assert(ht_cell_sprite_zoom(&sa, 201, 203, &a, z) && ht_cell_sprite_zoom(&sb, 201, 203, &b, z));
+            assert(ht_cell_sprite_zoom(&sa, 201, 203, &a, z * 8, z * 8) && ht_cell_sprite_zoom(&sb, 201, 203, &b, z * 8, z * 8));
             memset(full, 0, sizeof full); memset(part, 0, sizeof part);
             ht_raster(&sa, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, full);
             ht_raster(&sb, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, part);

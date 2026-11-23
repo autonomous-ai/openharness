@@ -157,6 +157,7 @@ typedef struct {
     // so a zeroed row (every new agent) can do everything, which is what an older daemon means.
     char host[16];
     uint8_t caps_off;
+    uint8_t context;   // how full its context window is, 0..2: the face's pet grows fat with it
     // The row receives the same bounded result stored in pane memory. Keeping
     // an unused 4 KB tail here wasted RAM and enlarged every roster swap.
     char preview[240], full[PANE_RESULT_BYTES], tool[100];
@@ -1209,6 +1210,7 @@ static void render_home(ht_scene_t *f)
         .notice_ms = bell ? s.notice_ms : 0,
         .notices = bell ? (uint16_t)(unread > 65535 ? 65535 : unread) : 0,
         .footer_action = carry.active || carry.error[0] || visit.available,
+        .context_level = a ? a->context : 0,
         .foreground = FG};
     if (!carry.active && carry.error[0]) f_.status = "Text expired";
     // Chef or builder: drawn once as the working scene starts showing for this agent, kept while it shows.
@@ -3538,6 +3540,16 @@ void ui_project_set_host_caps(const char *id, const char *host, uint8_t caps)
             s.agents[i].caps_off = off;
             change();
         }
+    }
+    display_unlock();
+}
+void ui_project_set_context(const char *id, uint8_t level)
+{
+    display_lock();
+    int i = find(id);
+    if (i >= 0 && s.agents[i].context != level) {
+        s.agents[i].context = level;
+        change();
     }
     display_unlock();
 }

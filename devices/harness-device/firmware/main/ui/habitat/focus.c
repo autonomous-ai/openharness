@@ -37,9 +37,10 @@
  * every frame — name, mark, card (drawn under a recap, an invisible placeholder otherwise, so the count and
  * order never move), recap ×4, status, resting line ×2, lower-arc status — each empty
  * where it has nothing to say. Do not make one conditional. The lower arc is a working scene's
- * status line (arc_status below), or a relaxing scene's quiet line; every other state, and every other engine,
- * leaves it empty. A scene's overlay (Codex's sandbox bubble, its paper plane) takes the first recap line's slot,
- * which a working or relaxing scene (no recap) leaves empty, and is emitted after the scene's own run so it draws
+ * status line (arc_status below), or a relaxing scene's quiet line; under the small pet it holds the pet's sweat drops
+ * when its context window is full (A FULLER CONTEXT WINDOW); every other state, and every other engine, leaves it
+ * empty. A scene's overlay (Codex's sandbox bubble, its paper plane) takes the first recap line's slot, which a working
+ * or relaxing scene (no recap) leaves empty, and is emitted after the scene's own run so it draws
  * over it. A relaxing scene with SHAPES (Claude's balls, Muse's beach ball: pets.h ht_pet_shapes_t) emits them after
  * the eleven, `count` ring arcs on every step of it (an empty slot keeps a shape's place), so on that face the
  * runs are 11 + count, the same on every frame of it.
@@ -339,6 +340,35 @@ static void cell_ink_rows(const ht_cell_frame_t *fr, int *first, int *end)
             }
 }
 /*
+ * A FULLER CONTEXT WINDOW (agent.context, ht_character_face_t.context_level): the small pet eats it (owner,
+ * 2026-11-23: "it needs to be fatter"). A pet with its own drawings of it (ht_pet_t.fat: Claude's round, squinting,
+ * sweating Clawd) shows them, plump at 1 and fat at 2, its stress lines flickering every FLICKER_MS. Any other pet is
+ * drawn wider at each level, WIDEN[level] / 64 of its width, and at 2 a little taller (TALLER), centred where it stood;
+ * at 2 it sweats, drops beside its head that slip down a step every SWEAT_STEP_MS. The drops take the lower arc's slot,
+ * which is always empty under the small pet, so the run count is the same at every level. The working and relaxing
+ * scenes are drawn as they are: their overlays, bubbles and shapes sit at offsets from the scene's origin that a wider
+ * body would leave behind.
+ */
+static const uint8_t WIDEN[3] = {64, 83, 102}, TALLER[3] = {64, 64, 70};   // 1x, 1.3x, 1.6x wide; 1.1x tall at 2
+enum { SWEAT_STEP_MS = 200, SWEAT_SLIP = 4, FLICKER_MS = 400 };
+// Two drops, drawn like the pets at 2x (4 px cells: 2 px at 1x) and zoomed with the pet: light blue, a white glint,
+// a darker edge.
+static const uint16_t SWEAT_PAL[4] = {0, 0xdf9e, 0xffff, 0x1d4d};   // panel order: 0x9ad8ff, 0xffffff, 0x4aa3e8
+static const uint8_t SWEAT_CELLS[10 * 9] = {
+    0, 0, 0, 0, 0, 0, 0, 1, 0,
+    0, 0, 0, 0, 0, 0, 1, 1, 1,
+    0, 0, 0, 0, 0, 0, 2, 1, 1,
+    0, 0, 1, 0, 0, 0, 1, 1, 3,
+    0, 1, 1, 1, 0, 0, 0, 3, 0,
+    0, 2, 1, 1, 0, 0, 0, 0, 0,
+    1, 2, 1, 1, 3, 0, 0, 0, 0,
+    1, 1, 1, 1, 3, 0, 0, 0, 0,
+    1, 1, 1, 3, 3, 0, 0, 0, 0,
+    0, 3, 3, 3, 0, 0, 0, 0, 0,
+};
+static const ht_cell_frame_t SWEAT = {9, 10, 4, SWEAT_PAL, SWEAT_CELLS, NULL};
+static unsigned context_level(const ht_character_face_t *f) { return f->context_level > 2 ? 2 : f->context_level; }
+/*
  * The name's ink foot over a drawing `half` px either side of the glass's centre (owner, 2026-10-07: "the gap from the
  * name to the pet's head should match the pet's feet to the text"). The name runs on a circle about the centre, its
  * cells' foot at TITLE_BOTTOM at the top of the curve, so over a wide pet it reaches lower: measured at 2x, 65 px
@@ -548,11 +578,18 @@ uint32_t ht_focus_pet_next_ms(const ht_character_face_t *f, const char *recap)
     uint32_t each = pet->step_ms[state], now = f->clock_ms / each;
     unsigned steps = ht_pet_steps(pet);
     const ht_pet_step_t *cur = &pet->loops[state][now % steps];
+    // A pet's own fat drawing stands in for the loop's frames: only the hop still moves it.
+    bool own = context_level(f) && pet->fat;
+    uint32_t next = 0;
     for (unsigned i = 1; i <= steps; i++) {
         const ht_pet_step_t *p = &pet->loops[state][(now + i) % steps];
-        if (p->frame != cur->frame || p->dy != cur->dy) return (now + i) * each;
+        if ((!own && p->frame != cur->frame) || p->dy != cur->dy) { next = (now + i) * each; break; }
     }
-    return 0;
+    if (context_level(f) == 2) {   // the drops slip, or the stress lines flicker
+        uint32_t every = own ? FLICKER_MS : SWEAT_STEP_MS, tick = (f->clock_ms / every + 1) * every;
+        if (!next || tick < next) next = tick;
+    }
+    return next;
 }
 
 /*
@@ -913,6 +950,7 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
     const ht_pet_scene_t *alert = scene ? alert_scene(f, recap, &alert_step, NULL) : NULL;   // never without its scene
     ht_rect_t drawn_alert;
     bool coded = !alert && code_alert(f, recap, &drawn_alert);   // a custom pet's alert, drawn in code
+    int sweat_x = 0, sweat_y = 0, sweat_z = 0;   // the drops' place and zoom; sweat_z 0 = none
     if (scene || relax) {
         // The working (or relaxing) scene in the mark's slot: centred on the glass, a touch low for its hat.
         const ht_pet_scene_t *sc = scene ? scene : relax;
@@ -929,18 +967,27 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
             // One 2x drawing, shown at 1x — or larger over a short recap, centred between the name and the recap's
             // first line, its hop scaled with it (zoom in eighths of the drawing: 4 = 1x, 6, 7, 8 = 2x).
             static const uint8_t zooms[4] = {4, 6, 7, 8};
-            const ht_cell_frame_t *fr = &pet->cells[p->frame];
+            unsigned level = context_level(f);
+            const ht_cell_frame_t *own = level && pet->fat ? &pet->fat[level == 1 ? 0 : 1 + f->clock_ms / FLICKER_MS % 2] : NULL;
+            const ht_cell_frame_t *fr = own ? own : &pet->cells[p->frame];
             int z = codex_full ? 5 : zooms[size + 1];
-            int pw = (fr->cols * fr->cell * z + 7) / 8, ph = (fr->rows * fr->cell * z + 7) / 8;
+            int zx = (z * (own ? 64 : WIDEN[level]) + 4) / 8, zy = (z * (own ? 64 : TALLER[level]) + 4) / 8;
+            int pw = (fr->cols * fr->cell * zx + 63) / 64, ph = (fr->rows * fr->cell * zy + 63) / 64;
             // Centred by its ink, not its box (Codex's robot has empty rows over its head), and by the loop's first
             // frame, so a pose that reaches higher does not move the pet.
             int r0, r1;
-            cell_ink_rows(&pet->cells[pet->loops[state][0].frame], &r0, &r1);
-            int ink_top = r0 * fr->cell * z / 8, ink_h = (r1 - r0) * fr->cell * z / 8;
+            cell_ink_rows(own ? own : &pet->cells[pet->loops[state][0].frame], &r0, &r1);
+            int ink_top = r0 * fr->cell * zy / 64, ink_h = (r1 - r0) * fr->cell * zy / 64;
             if (ink_h <= 0) { ink_top = 0; ink_h = ph; }
             int px = (HT_WIDTH - pw) / 2, top = title_foot(s, title_run, pw / 2), foot = empty ? rest_cap : status[0] && !has_recap && !retry ? body_y + ht_pfont(sf)->ascent - RECAP_CAP : below;
             int py = top + (foot - top - ink_h) / 2 - ink_top + p->dy * z / 4;
-            ht_cell_sprite_zoom(s, px, py, fr, (unsigned)z);
+            ht_cell_sprite_zoom(s, px, py, fr, (unsigned)zx, (unsigned)zy);
+            if (level == 2 && !own) {   // a pet's own fat drawing sweats in it
+                // Astride the pet's right edge, level with the top of its head, slipping a step at a time.
+                sweat_z = z;
+                sweat_x = px + pw - SWEAT.cols * SWEAT.cell * z / 16;
+                sweat_y = py + ink_top + (int)(f->clock_ms / SWEAT_STEP_MS % SWEAT_SLIP) * z / 4;
+            }
         } else {
             int px = (HT_WIDTH - pet->w) / 2, py = mark_top + (MARK_SIZE - pet->h) / 2 + p->dy;
             ht_icon(s, px, py, &pet->frames[p->frame]);
@@ -1028,6 +1075,8 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
         // the bell pill (y 400, notices > 0; this face has no bubble to tell them) or a footer control (y 389..439)
         // has the lower edge.
         ht_arc_status_face(s, ht_rgb(FOCUS_REST), relaxing_line(f), &ht_arc_inter_lower);
+    else if (sweat_z)   // the small pet's drops: no scene here, so the lower arc is free
+        ht_cell_sprite_zoom(s, sweat_x, sweat_y, &SWEAT, (unsigned)sweat_z * 8, (unsigned)sweat_z * 8);
     if (s->count == before) no_text(s, sf);
 
     // The relaxing scene's shapes (Claude's balls, Muse's beach ball), after the eleven: the same count every step.

@@ -557,6 +557,21 @@ describe('a dial plugged in beside one already attached', () => {
     } finally { await f.fleet.stop() }
   })
 
+  it('is told the context levels the first dial knows, after its own list', async () => {
+    const f = await firstAlone()
+    try {
+      expect(f.fleet.wantsContext()).toBe(false)
+      await f.fleet.agentContext('a', 2)
+      expect(f.ports[0].sent.filter(m => m.t === 'agent.context')).toEqual([])
+      f.setPorts([device('/dev/tim', 'AA:01'), device('/dev/tux', 'BB:02')])
+      await f.fleet['scan']()
+      await vi.waitFor(() => expect(f.ports).toHaveLength(2))
+      f.ports[1].say({ t: 'hello', product: 'harness', mac: 'BB:02', fw: 'fixture', proto: 3, context: 'v1' })
+      await vi.waitFor(() => expect(f.ports[1].sent.filter(m => m.t === 'agent.context')).toEqual([{ t: 'agent.context', agentId: 'a', level: 2 }]))
+      expect(f.fleet.wantsContext()).toBe(true)
+    } finally { await f.fleet.stop() }
+  })
+
   it('is shown a notice whose turn has ended', async () => {
     const f = await firstAlone()
     try {

@@ -117,9 +117,10 @@ typedef struct {
     const uint16_t *palette;
     const uint16_t *row_at;   // packed cells (ht_cell_frame_t), NULL plain
     uint8_t cell;
-    // A cell sprite drawn smaller (ht_cell_sprite_zoom): width x height is the frame's src_w x src_h px times zoom / 8,
-    // each pixel the area-weighted mean of the frame pixels it covers, over black. 0 = drawn at its own size.
-    uint8_t zoom;
+    // A cell sprite drawn scaled (ht_cell_sprite_zoom): width x height is the frame's src_w x src_h px times
+    // zoom_x / 64 x zoom_y / 64, each pixel the area-weighted mean of the frame pixels it covers, over black. 0 = drawn
+    // at its own size. Each axis has its own scale so a pet can grow fatter than it grows tall (focus.c WIDEN, TALLER).
+    uint8_t zoom_x, zoom_y;
     uint16_t src_w, src_h;
 } ht_sprite_t;
 typedef struct {
@@ -175,10 +176,11 @@ void ht_center(ht_scene_t *scene, int y, const ht_font_t *font, uint16_t fg, con
 bool ht_icon(ht_scene_t *scene, int x, int y, const ht_icon_t *icon);
 // A cell sprite (ht_cell_frame_t) as one run; its frame pointer is what ht_damage compares.
 bool ht_cell_sprite(ht_scene_t *scene, int x, int y, const ht_cell_frame_t *frame);
-// The frame at zoom / 8 of its size (1..8; 8 = ht_cell_sprite), box-filtered so one picture drawn large reads sharp at
-// every smaller size (the pets: one 2x drawing shown at 1x, 1.5x, 1.75x and 2x). Edges darken toward the black ground,
+// The frame at zoom_x / 64 of its width and zoom_y / 64 of its height (8..128 each: an eighth to twice; 64 and 64 =
+// ht_cell_sprite), box-filtered so one picture drawn large reads sharp at every smaller size (the pets: one 2x drawing
+// shown at 1x, 1.5x, 1.75x and 2x, and wider as their agent's context fills). Edges darken toward the black ground,
 // as the art's own anti-aliasing does; a pixel less than a quarter covered is left as it was.
-bool ht_cell_sprite_zoom(ht_scene_t *scene, int x, int y, const ht_cell_frame_t *frame, unsigned zoom);
+bool ht_cell_sprite_zoom(ht_scene_t *scene, int x, int y, const ht_cell_frame_t *frame, unsigned zoom_x, unsigned zoom_y);
 // A rounded box — Focus's pills and cards. Colours are already mixed over what they sit on.
 bool ht_box(ht_scene_t *scene, int x, int y, int w, int h, int radius, uint16_t fill, uint16_t border);
 // A RING ARC — a piece of a circle's band, drawn in one colour (already mixed over the ground), anti-aliased

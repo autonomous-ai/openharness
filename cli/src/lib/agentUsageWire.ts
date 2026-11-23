@@ -8,7 +8,10 @@ import type { SessionWork } from './sessionWork.js'
 export type ModelTokens = { input: number; output: number; cacheRead: number; cacheWrite: number }
 export type AgentTokenUsage = { totalTokens: number | null; updatedAt: string; inputTokens?: number; outputTokens?: number; cachedTokens?: number
   /** By the model that answered (agentTokenUsage.ts); absent for an engine whose records name none (OpenCode). */
-  models?: Record<string, ModelTokens>; output?: AgentOutputStats; work?: SessionWork }
+  models?: Record<string, ModelTokens>; output?: AgentOutputStats; work?: SessionWork
+  /** What the conversation holds in its context now (its latest reply's prompt), and the window it fills; the round dial's
+   *  pet grows with the share (services/devices.ts). Absent when unknown: the window alone for an engine that names none. */
+  contextTokens?: number; contextWindow?: number }
 export type AgentUsageTarget = Pick<RegisteredSession, 'engine' | 'sessionId' | 'transcriptPath' | 'codexHome' | 'agentId' | 'forkedFrom' | 'registeredAt'>
   & Partial<Pick<RegisteredSession, 'cwd' | 'openclawStateDir'>>
 export const USAGE_LIMIT = 512
@@ -46,7 +49,7 @@ export function validUsageTarget(v: unknown): v is AgentUsageTarget {
 export function validUsage(v: unknown): v is AgentTokenUsage | null {
   if (v === null) return true
   if (!object(v) || !(v.totalTokens === null || count(v.totalTokens)) || !stamp(v.updatedAt)
-    || !['inputTokens', 'outputTokens', 'cachedTokens'].every(k => v[k] === undefined || count(v[k]))) return false
+    || !['inputTokens', 'outputTokens', 'cachedTokens', 'contextTokens', 'contextWindow'].every(k => v[k] === undefined || count(v[k]))) return false
   if (v.models !== undefined && !validModelTokens(v.models)) return false
   if (v.output !== undefined && (!object(v.output) || !['linesAdded', 'linesRemoved', 'pullRequestsCreated']
     .every(k => (v.output as Record<string, unknown>)[k] === null || count((v.output as Record<string, unknown>)[k])))) return false
@@ -67,6 +70,8 @@ export function usageSnapshot(v: AgentTokenUsage | null): AgentTokenUsage | null
     ...(v.inputTokens === undefined ? {} : { inputTokens: v.inputTokens }),
     ...(v.outputTokens === undefined ? {} : { outputTokens: v.outputTokens }),
     ...(v.cachedTokens === undefined ? {} : { cachedTokens: v.cachedTokens }),
+    ...(v.contextTokens === undefined ? {} : { contextTokens: v.contextTokens }),
+    ...(v.contextWindow === undefined ? {} : { contextWindow: v.contextWindow }),
     ...(v.models ? { models: Object.fromEntries(Object.entries(v.models).map(([model, t]) =>
       [model, { input: t.input, output: t.output, cacheRead: t.cacheRead, cacheWrite: t.cacheWrite }])) } : {}),
     ...(v.output ? { output: { linesAdded: v.output.linesAdded, linesRemoved: v.output.linesRemoved, pullRequestsCreated: v.output.pullRequestsCreated } } : {}),

@@ -51,11 +51,13 @@ typedef struct {
     char machine[CABLE_NAME_MAX];     // that machine's name, drawn under the agent's
     char host[16];              // where it runs (orca, ghostty, ...); "" from a daemon that predates it
     uint8_t caps;               // CABLE_CAP_* set; all of them when the daemon sends none
+    uint8_t context;            // agent.context, 0..2: a frame of its own, so a rebuild carries it (handle_agent)
 } cable_agent_t;
 
 
 static cable_agent_t     *s_agents;
 static int                s_agent_count;
+static int                s_agents_prev;   // while building: rows [s_agent_count, s_agents_prev) are the last roster's
 static bool               s_agents_building;
 static SemaphoreHandle_t  s_agents_lock;
 
@@ -259,6 +261,8 @@ static void send_hello(void)
     // This dial files a `question` with `tier: "list"` as a silent row once the welcome lists `question.tier`. An
     // older daemon ignores the field and never sends the tier.
     msg_string(&root, "questionTier", "v1");
+    // This dial reads `agent.context` (handle_agent_context): an older daemon ignores the field and sends no levels.
+    msg_string(&root, "context", "v1");
     // Which of the two dials this is (board.h) — informational, so a log or a bug report can say. A
     // daemon that predates the field ignores it.
     msg_string(&root, "hw", board()->name);
@@ -752,6 +756,7 @@ int cable_client_list_agents_snapshot(project_t *out, int max, cable_agent_snaps
         snprintf(out[n].machine, sizeof(out[n].machine), "%s", s_agents[i].machine);
         snprintf(out[n].host, sizeof(out[n].host), "%s", s_agents[i].host);
         out[n].caps = s_agents[i].caps;
+        out[n].context = s_agents[i].context;
 
         // The [mark][Model][Effort] chip row reads ONE shape — the opaque runtime-v1 profile — so the
         // daemon's plain model/effort are assembled into it here rather than teaching the UI a second
@@ -979,8 +984,18 @@ static void handle_agent(const cJSON *p)
         for (int i = 0; i < s_agent_count; i++) if (!strcmp(s_agents[i].id, id)) {
             xSemaphoreGive(s_agents_lock); return;
         }
+        // The context level arrives on its own frame, only when it changes, so it is carried from the last roster's
+        // row of this agent. The row about to be overwritten moves into that row's place, keeping every row of the
+        // last roster not yet streamed between s_agent_count and s_agents_prev.
+        uint8_t context = 0;
+        for (int i = s_agent_count; i < s_agents_prev; i++) if (!strcmp(s_agents[i].id, id)) {
+            context = s_agents[i].context;
+            if (i != s_agent_count) s_agents[i] = s_agents[s_agent_count];
+            break;
+        }
         cable_agent_t *a = &s_agents[s_agent_count++];
         memset(a, 0, sizeof(*a));
+        a->context = context;
         snprintf(a->id, sizeof(a->id), "%s", id);
         const char *name = str_of(p, "name");
         snprintf(a->name, sizeof(a->name), "%s", name && name[0] ? name : id);
@@ -1011,6 +1026,8 @@ static void handle_agents_begin(void)
 {
     if (!s_agents_lock) return;
     xSemaphoreTake(s_agents_lock, portMAX_DELAY);
+    // A begin without its end: the rows streamed so far and the last roster's rest are both still the last word.
+    if (!s_agents_building || s_agent_count > s_agents_prev) s_agents_prev = s_agent_count;
     s_agent_count = 0;
     s_agents_building = true;
     xSemaphoreGive(s_agents_lock);
@@ -1039,6 +1056,27 @@ static void handle_agents_end(const cJSON *p)
     // app_main's refresh reads the list and rebuilds the tiles. Going through the same request the
     // backend path used means the carousel's landing, naming and removal logic has one implementation.
     ui_request_agent_reload();
+}
+
+// `agent.context`: how full one agent's context window is, 0..2 — its pet grows fat with it (focus.c). Kept on the
+// agent's row, found among the roster being streamed as well as the last one, and drawn through the same refresh as
+// the roster. A level that is not a number, or none at all, is 0; one for an agent the dial does not hold is dropped.
+static void handle_agent_context(const cJSON *p)
+{
+    const char *id = str_of(p, "agentId");
+    if (!id || strlen(id) >= ID_MAX || !s_agents || !s_agents_lock) return;
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(p, "level");
+    const uint8_t level = !cJSON_IsNumber(v) || v->valueint < 0 ? 0 : v->valueint > 2 ? 2 : (uint8_t)v->valueint;
+    bool changed = false;
+    xSemaphoreTake(s_agents_lock, portMAX_DELAY);
+    const int rows = s_agents_building && s_agents_prev > s_agent_count ? s_agents_prev : s_agent_count;
+    for (int i = 0; i < rows; i++) if (!strcmp(s_agents[i].id, id)) {
+        changed = s_agents[i].context != level;
+        s_agents[i].context = level;
+        break;
+    }
+    xSemaphoreGive(s_agents_lock);
+    if (changed) ui_request_agent_reload();
 }
 
 // ── the machine wheel ───────────────────────────────────────────────────────────────────────────────
@@ -1251,6 +1289,7 @@ static void handle_message(const cJSON *root)
     if (strcmp(t, "settings.set") == 0) { handle_settings_set(p); return; }
     if (strcmp(t, "models") == 0) { handle_models(p); return; }
     if (strcmp(t, "swarms") == 0) { handle_swarms(p); return; }
+    if (strcmp(t, "agent.context") == 0) { handle_agent_context(p); return; }
 
     if (strcmp(t, "agent.updated") == 0) {
         // One agent changed. Cheapest correct answer is to re-ask: the daemon is on the other end of a
