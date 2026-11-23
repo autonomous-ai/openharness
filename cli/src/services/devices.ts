@@ -622,7 +622,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** The Orca panes the dial switched to lately. */
   const orcaSwitches = dialMovesTo()
   /** The WezTerm panes and kitty windows the dial focused lately (a tap): a read naming one is its echo. */
-  const paneFocuses = dialMovesTo()
+  const paneTaps = dialMovesTo()
   /** The dial's own moves, each as it starts: a hand's turn to any agent, a tap, and the pane a rest or a tap's raise
    *  switches. How many, and when the latest started: a settle is set aside by one made within it. */
   let dialMoves = 0
@@ -690,8 +690,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const adapters: readonly HostAdapter[] = [herdrNoted, noting(createZellijAdapter({ run: apps.run, zellij: zellijAt, platform: apps.platform })),
     tmux, herdrAppNoted, cmuxAppNoted, ...[
     // A tap's focus is the dial's own move: the poll's read that sees it, a moment later, is its echo.
-    { ...kitty, focus: (pane: Pane) => { paneFocuses.note(pane.id); return kitty.focus(pane) } },
-    { ...wezterm, focus: (pane: Pane) => { paneFocuses.note(pane.id); return wezterm.focus(pane) } },
+    { ...kitty, focus: (pane: Pane) => { paneTaps.note(pane.id); return kitty.focus(pane) } },
+    { ...wezterm, focus: (pane: Pane) => { paneTaps.note(pane.id); return wezterm.focus(pane) } },
     // A rest's or a tap's switch: Orca's focus line for that pane, a moment later, is the dial's own echo.
     { ...orca,
       show: (pane: Pane, agentId: string) => { orcaSwitches.note(orcaHandle(pane.id)); return orca.show(pane, agentId) },
@@ -2167,7 +2167,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   let paneFocusFailing = false
   /** One read, of the panes the live agents have of their own in that app as it starts: an agent's own pane alone, as a
    *  held one shows whatever is in front of it. */
-  const readPanes = async (source: ObservedSource, app: PaneFocus['app']): Promise<PaneAnswer | undefined> => {
+  const readFocus = async (source: ObservedSource, app: PaneFocus['app']): Promise<PaneAnswer | undefined> => {
     const moves = dialMoves
     const at = monotonic()
     // Once each: two live agents can share a pane, as an ended session not yet seen as ended beside its successor.
@@ -2206,7 +2206,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // settles must not turn it back, as Orca's settle must not (#4311), nor the Claude app's. After it: a move of the
     // dial's own while the read ran leaves the pane it names, as for a tab report, and a tap's focus is seen a read later.
     if (first ? dialMovedAt !== undefined && monotonic() - dialMovedAt < ATTACH_ECHO_MS
-      : answer.moves !== dialMoves || paneFocuses.echo(id, answer.at)) { log('[device] pane · skipped · echo'); return }
+      : answer.moves !== dialMoves || paneTaps.echo(id, answer.at)) { log('[device] pane · skipped · echo'); return }
     // Gone while the read ran.
     const agent = source.byPane(focus.app, id)
     if (!agent) { log('[device] pane · skipped · unknown agent'); return }
@@ -2215,7 +2215,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** The poll's app left the front, its last agent went, or the dial went: the poll and the dial's taps its answers are
    *  checked against go with it. */
   const dropPaneFocus = (): void => {
-    paneFocuses.clear()
+    paneTaps.clear()
     paneFocus?.poll.stop()
     paneFocus = undefined
   }
@@ -2231,11 +2231,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (wanted === undefined) return
     // Its answers and its own stop run in a part, which logs a throw: the poll swallows one unsaid (focusPoll.ts).
     const polling: PaneFocus = { app: wanted, first: true, poll: startFocusPoll<PaneAnswer>({
-      read: () => readPanes(observed, wanted),
+      read: () => readFocus(observed, wanted),
       answered: (answer) => part.call('pane', () => paneAnswered(observed, polling, answer)),
       failing: () => part.call('pane', () => {
         paneFocus = undefined
-        paneFocuses.clear()
+        paneTaps.clear()
         paneFocusFailing = true
       }),
       after: timerIn('pane'),
