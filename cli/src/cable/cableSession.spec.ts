@@ -3240,11 +3240,14 @@ describe('cable session', () => {
     } finally { await session.stop() }
   })
 
-  it('an attach whose reads never end holds the greeting\'s push 500 ms, no longer', async () => {
+  // A late read is said: the first list without its rows is what the dial eval's C11 measures.
+  it('an attach whose reads never end holds the greeting\'s push 500 ms, no longer, and says so', async () => {
     let called!: () => void
     const attached = new Promise<void>((resolve) => { called = resolve })
+    const lines: string[] = []
     const { session, port } = await connect(makeHost({
       onDialAttached: () => { called(); return new Promise<void>(() => {}) },
+      log: (line) => { lines.push(line) },
     }))
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     try {
@@ -3252,9 +3255,11 @@ describe('cable session', () => {
       await attached
       await vi.advanceTimersByTimeAsync(499)
       expect(port.types()).not.toContain('agents.begin')
+      expect(lines.filter((line) => line.startsWith('cable: attach reads'))).toEqual([])
       await vi.advanceTimersByTimeAsync(1)
       await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
       expect(firstList(port)).toEqual(['a1', 'a2'])
+      expect(lines.filter((line) => line.startsWith('cable: attach reads'))).toEqual(['cable: attach reads · late · pushed without them'])
     } finally {
       vi.useRealTimers()
       await session.stop()
