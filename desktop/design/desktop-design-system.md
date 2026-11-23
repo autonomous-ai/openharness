@@ -774,8 +774,7 @@ Off (Settings ▸ Experimental ▸ Hachi), none of them is drawn and ⇧⌘H is 
 ## Harness Device
 
 Harness Device is the menu-bar app for the dial (`device-app/`), on macOS,
-Windows and Linux, named **Harness** wherever a person sees it; only its file
-stays `Harness Device.app`, and its installed name `Harness Device` on Windows.
+Windows and Linux, named **Harness Device** wherever a person sees it.
 It sets up
 Harness, keeps it running and shows the dial's state; it offers sign-in and,
 with the ChatGPT app, follows its window. Claude Code, Codex and Orca
