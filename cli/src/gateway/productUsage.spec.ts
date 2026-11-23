@@ -1208,6 +1208,9 @@ describe('the dial\'s day', () => {
     start(); await usage.sync()
     devices({ [TODAY]: { dial_connected_installation_days: 1, dial_open_ok: 1 } }); await flush()
     await usage.stop()
+    // Written well before the other sign-in, as it is in life: a file's time can move only once a clock tick (Linux), so
+    // two queues written within one would be neither older.
+    utimesSync(file, 1_000, 1_000)
     start(join(dir, 'another-account.json')); await flush()
     devices({ [TODAY]: { ...used, dial_open_ok: 5 } }); await flush()
     await usage.stop()
