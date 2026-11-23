@@ -186,18 +186,24 @@ export class SpawnedRuns {
 
   private async terminate(runs: Run[], table: ProcessRow[] = processTable()): Promise<string[]> {
     const rows = runs.flatMap((run) => this.belonging(run, table))
-    const groups = runs.filter((run) => groupIsOurs(run, table))
-    const signal = (name: NodeJS.Signals) => {
+    // Read before anything is signalled, while each is the run's: what tells it from a process given its pid later.
+    const started = startTimes(rows.map((row) => row.pid))
+    const signal = (name: NodeJS.Signals, groups: readonly Run[], pids: readonly number[]) => {
       for (const run of groups) { try { process.kill(-run.pgid, name) } catch { /* group empty */ } }
-      for (const row of rows) { try { process.kill(row.pid, name) } catch { /* gone */ } }
+      for (const pid of pids) { try { process.kill(pid, name) } catch { /* gone */ } }
     }
-    signal('SIGTERM')
+    signal('SIGTERM', runs.filter((run) => groupIsOurs(run, table)), rows.map((row) => row.pid))
     const gone = async (ms: number) => {
       const deadline = Date.now() + ms
       while (Date.now() < deadline && rows.some((row) => alive(row.pid))) await sleep(50)
     }
     await gone(3_000)
-    signal('SIGKILL')
+    // Up to 3 s on, a pid that ended at its SIGTERM can be another process's, and a group whose leader's pid is: each
+    // asked again, and only what still runs as itself is killed.
+    const now = processTable()
+    const still = startTimes(rows.map((row) => row.pid))
+    signal('SIGKILL', runs.filter((run) => groupIsOurs(run, now)),
+      rows.filter((row) => started.has(row.pid) && still.get(row.pid) === started.get(row.pid)).map((row) => row.pid))
     await gone(3_000)
     // A tmux server daemonizes into a session of its own; it is found by the socket under the root.
     for (const run of runs) killTmuxServer(run.root)

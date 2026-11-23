@@ -89,12 +89,11 @@ const clientEnv = (d: IsolatedDaemon, config: string, env: NodeJS.ProcessEnv = {
 /** For `ps` to read one process: one that hangs blocks no stop. */
 const PS_MS = 5_000
 
-/** What tells [pid]'s process from one given its pid later: when it started and the path it was started from, never its
- *  argv; undefined once no process has it (ps exits 1). A ps that fails otherwise, on its timeout among them, tells
- *  nothing: it throws. */
-export function identityOf(pid: number): string | undefined {
+/** [field] of [pid]'s process; undefined once no process has it (ps exits 1). A ps that fails otherwise, on its timeout
+ *  among them, tells nothing: it throws. */
+function psField(pid: number, field: 'lstart' | 'comm'): string | undefined {
   try {
-    return execFileSync('/bin/ps', ['-o', 'lstart=,comm=', '-p', String(pid)],
+    return execFileSync('/bin/ps', ['-o', `${field}=`, '-p', String(pid)],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: PS_MS }).trim() || undefined
   } catch (error) {
     if ((error as { status?: number | null }).status === 1) return undefined
@@ -102,17 +101,37 @@ export function identityOf(pid: number): string | undefined {
   }
 }
 
+/** What tells a process of the test's from one given its pid later: when it started and the path it was started from,
+ *  never its argv. */
+export interface Identity { readonly started: string; readonly path: string }
+
+/** [pid]'s identity, read while it is the test's; undefined once no process has it. Throws as psField does. */
+export function identityOf(pid: number): Identity | undefined {
+  const started = psField(pid, 'lstart')
+  const path = started === undefined ? undefined : psField(pid, 'comm')
+  return started === undefined || path === undefined ? undefined : { started, path }
+}
+
+/** Whether [pid] is the process [identity] names now, `gone` once no process has it. Its start is read first: the path
+ *  of a process that started at another time, someone else's, is never read. Throws as psField does. */
+function isNow(pid: number, identity: Identity): boolean | 'gone' {
+  const started = psField(pid, 'lstart')
+  if (started === undefined) return 'gone'
+  if (started !== identity.started) return false
+  const path = psField(pid, 'comm')
+  return path === undefined ? 'gone' : path === identity.path
+}
+
 /** herdr's server as its first client started it (startIn), not this worker's child: ended once no process has its pid,
- *  and that pid another process's once one with another identity than [identity] (identityOf, read as it started) has
- *  it, or once its identity cannot be read: nothing is killed on a guess. */
-export function clientStarted(pid: number, identity: string | undefined): ServerProcess {
+ *  and that pid another process's once one other than [identity] (identityOf, read as it started) has it, or once its
+ *  identity cannot be read: nothing is killed on a guess. */
+export function clientStarted(pid: number, identity: Identity | undefined): ServerProcess {
   return {
     pid,
     ended: () => (gone(pid) ? 'gone' : undefined),
     reused: () => {
       try {
-        const now = identityOf(pid)
-        return now !== undefined && now !== identity
+        return identity === undefined ? psField(pid, 'lstart') !== undefined : isNow(pid, identity) === false
       } catch {
         return true
       }
@@ -122,9 +141,9 @@ export function clientStarted(pid: number, identity: string | undefined): Server
 
 /** [pid] killed while it is the process [identity] names (identityOf, read while it was the test's), never one given its
  *  pid after it ended, nor one whose identity was never read or cannot be read now. */
-export function killOwn(pid: number, identity: string | undefined): void {
+export function killOwn(pid: number, identity: Identity | undefined): void {
   try {
-    if (identity === undefined || identityOf(pid) !== identity) return
+    if (identity === undefined || isNow(pid, identity) !== true) return
   } catch {
     return
   }
@@ -174,7 +193,7 @@ export class PrivateHerdr {
 
   /** [tab]: the tab whose client started the server (startIn). */
   private constructor(private readonly d: IsolatedDaemon, private readonly server: ServerProcess, private readonly config: string,
-    readonly socket: string, readonly tab?: HerdrTab, private readonly clientIdentity?: string) {}
+    readonly socket: string, readonly tab?: HerdrTab, private readonly clientIdentity?: Identity) {}
 
   /** The server's process. */
   get pid(): number { return this.server.pid }
@@ -246,7 +265,7 @@ export class PrivateHerdr {
     watchGroup(pid)
     d.own(pid)
     // Each read now, while both are this test's: the client has run herdr since it started its server.
-    let identities: { server?: string; client?: string }
+    let identities: { server?: Identity; client?: Identity }
     try {
       identities = { server: identityOf(pid), client: identityOf(tab.pid) }
     } catch (error) {

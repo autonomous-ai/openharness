@@ -10,6 +10,7 @@ import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
 import { observedAgentId } from '../../src/cable/hosts/observed.js'
+import { startTimes } from '../../src/testing/spawnedRuns.js'
 import { until, type IsolatedDaemon } from './daemon.js'
 
 const execFileAsync = promisify(execFile)
@@ -145,9 +146,13 @@ const SAYS_SERVER = 'echo "server $$" >&2; exec "$@"'
 /** The line a tab's helper (PTY), or SAYS_PID, says its command's pid on: the pid alone. */
 const PID_LINE = /^\d+$/
 
-/** A command in a tab of its own (openTab), the shell it runs in there when it has one, and the fake iTerm2's process
- *  when the tab's outermost app is iTerm2 (relaunchIterm). */
-export interface Tab { readonly process: ChildProcess; readonly pid: number; readonly shellPid?: number; readonly appPid?: number }
+/** A command in a tab of its own (openTab), the shell it runs in there when it has one, the fake iTerm2's process when
+ *  the tab's outermost app is iTerm2 (relaunchIterm), and when the command and the shell started, read as the tab said
+ *  their pids: what a kill of either checks first (signalOwn). */
+export interface Tab {
+  readonly process: ChildProcess; readonly pid: number; readonly shellPid?: number; readonly appPid?: number
+  readonly started: ReadonlyMap<number, string>
+}
 /** The app a tab is in, whether its command runs in a shell, the app that app was started from, and whether it has a
  *  terminal (openTab). */
 export interface TabOptions { app?: FakeApp; shell?: boolean; launchedFrom?: FakeApp; terminal?: boolean }
@@ -187,7 +192,8 @@ export async function openTab(d: IsolatedDaemon, cwd: string, env: NodeJS.Proces
   // Noted for the close's sweep and the reaper: the fake iTerm2's server is launchd's once that app ends, and the tab's
   // own process once the worker does.
   for (const pid of [tab.pid!, ...servers]) d.own(pid)
-  return shell ? { process: tab, pid: engine!, shellPid: child, appPid } : { process: tab, pid: child, appPid }
+  const started = startTimes(engine === undefined ? [child] : [child, engine])
+  return shell ? { process: tab, pid: engine!, shellPid: child, appPid, started } : { process: tab, pid: child, appPid, started }
 }
 
 /** A tab's keys typed after the process they go in through ended (typeInto). */
@@ -214,25 +220,32 @@ export function gone(pid: number): boolean {
   return false
 }
 
-/** The process gone at once, with no hook: a crash, a closed terminal. */
-function killNow(pid: number): void {
+/** [signals] sent to [pid] in turn while it runs as the process that started when [started] says (startTimes, read as
+ *  the test started it): never to one given its pid since, nor to one whose start was never read. */
+function signalOwn(pid: number, started: ReadonlyMap<number, string>, ...signals: NodeJS.Signals[]): void {
+  const start = started.get(pid)
+  if (start === undefined || startTimes([pid]).get(pid) !== start) return
   try {
-    // A suspended engine is stopped: continued, as a shell continues a stopped job it kills.
-    process.kill(pid, 'SIGCONT')
-    process.kill(pid, 'SIGKILL')
+    for (const signal of signals) process.kill(pid, signal)
   } catch { /* already gone */ }
+}
+
+/** The process gone at once, with no hook: a crash, a closed terminal. A suspended engine is stopped: continued first,
+ *  as a shell continues a stopped job it kills. */
+function killNow(pid: number, started: ReadonlyMap<number, string>): void {
+  signalOwn(pid, started, 'SIGCONT', 'SIGKILL')
 }
 
 /** The tab's command killed, then its shell, and the tab: nothing of it outlives the test. [what] names it in a failure. */
 export async function closeTab(tab: Tab, what: string): Promise<void> {
-  killNow(tab.pid)
+  killNow(tab.pid, tab.started)
   const shell = tab.shellPid
   try {
     if (shell !== undefined) {
       // The shell stays after its engine and holds the terminal open, so the tab's helper reads on while it lives:
       // killed, and waited for, gone once the helper, its parent, ends with the terminal, so nothing of the test
       // outlives it.
-      try { process.kill(shell, 'SIGKILL') } catch { /* already gone */ }
+      signalOwn(shell, tab.started, 'SIGKILL')
       await until(`${what}'s shell gone`, () => gone(shell), 10_000, 50)
     }
   } finally {
@@ -248,8 +261,8 @@ export async function closeTab(tab: Tab, what: string): Promise<void> {
 /** The tab gone at once, with no wait: its command, its shell and the tab killed, as the driver's last resort ends what
  *  it cannot wait for. The pseudo-terminal's helper ends with its terminal. */
 export function killTab(tab: Tab): void {
-  killNow(tab.pid)
-  if (tab.shellPid !== undefined) killNow(tab.shellPid)
+  killNow(tab.pid, tab.started)
+  if (tab.shellPid !== undefined) killNow(tab.shellPid, tab.started)
   tab.process.kill('SIGKILL')
 }
 
@@ -284,18 +297,19 @@ export async function tabUnder(d: IsolatedDaemon, app: FakeApp, argv: readonly s
   // Noted for the close's sweep and the reaper: the fake iTerm2's server is launchd's once that app ends (relaunchIterm),
   // and the app once the worker does.
   for (const noted of [tab.pid!, ...(server === undefined ? [] : [server])]) d.own(noted)
+  const started = startTimes(server === undefined ? [pid] : [pid, server])
   return {
     pid,
     ...(iterm ? { appPid: tab.pid } : {}),
     // The app's stdin is its helper's, which writes it to the pseudo-terminal.
     type: (text) => typeInto(tab, text),
     async close() {
-      try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ }
+      signalOwn(pid, started, 'SIGKILL')
       // The helper ends with its pseudo-terminal, then iTerm2's server, then the app; one that does not is killed. The
       // server, launchd's once the app ended, is waited for by its pid.
       const timer = setTimeout(() => {
         tab.kill('SIGKILL')
-        if (server !== undefined) killNow(server)
+        if (server !== undefined) killNow(server, started)
       }, 5_000)
       try {
         await exited
@@ -340,13 +354,15 @@ async function tabUnderItermServer(d: IsolatedDaemon, argv: readonly string[], e
   })
   // launchd's from its start: only the note keeps it the test's for the close's sweep and the reaper.
   d.own(server)
+  const started = startTimes([pid, server])
   await left
   return {
     pid,
     async close() {
-      try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ }
-      // launchd's child, not the test's: killed by its pid, and gone once no signal reaches it and the helper ended.
-      try { process.kill(server, 'SIGKILL') } catch { /* already gone */ }
+      signalOwn(pid, started, 'SIGKILL')
+      // launchd's child, not the test's: killed by its pid while it runs as itself, and gone once no signal reaches it
+      // and the helper ended.
+      signalOwn(server, started, 'SIGKILL')
       await until("iTerm2's server and its tab gone", () => gone(server) && closed, 10_000, 50)
     },
   }
@@ -542,7 +558,7 @@ export class Outside {
 
   /** The process gone at once, with no hook: a crash, a closed terminal. */
   kill(): void {
-    killNow(this.pid)
+    killNow(this.pid, this.tab.started)
   }
 
   /** Its whole tab gone at once (killTab): the engine, its shell and the tab, with no hook. */
