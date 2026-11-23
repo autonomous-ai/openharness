@@ -170,7 +170,7 @@ describe("tier A's tmux", () => {
     expect(machine.atimes.get(tab.tty)).toBe(T0 + 5_000)
   })
 
-  it('tmux.selectPane moves the active pane and records no command', async () => {
+  it("tmux.selectPane makes the session's pane its window's active one", async () => {
     const w = fakeWorld()
     await w.start('t', 'u')
     await w.step('tmux.selectPane', { session: 'u' })

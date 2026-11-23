@@ -293,7 +293,7 @@ describe("tier A's herdr", () => {
     expect(w.run('/usr/bin/open', '-b', 'com.googlecode.iterm2')).toEqual({ code: 0, stdout: '' })
   })
 
-  it('herdr.focus records no command', async () => {
+  it("herdr.focus moves herdr's focus to the session's pane, with no hook and nothing typed", async () => {
     const w = fakeWorld()
     await w.start('h', 'g')
     // The person's own move inside herdr: herdr's focus moves, and nothing reaches the devices.
