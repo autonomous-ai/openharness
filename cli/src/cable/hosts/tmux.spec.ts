@@ -786,6 +786,30 @@ describe('the place of an agent the scan found in the person\'s tmux', () => {
     }
   })
 
+  // A step that throws is said as no tmux is, as the hooked lookup's is: its listing is held 5 s from its settle like any
+  // other answer, never kept as a rejection for every later look.
+  it('the finder or tmux throws: {} and not read · tmux, never a rejection, and the listing is asked again 5 s on', async () => {
+    const said = { panes: PANES, clients: ONE.clients }
+    let finds = 0
+    const throwing = async (): Promise<TmuxPathOutcome> => {
+      finds++
+      throw new Error('finder under /Users/someone')
+    }
+    const cases: Array<[string, ReturnType<typeof nestedLookup>]> = [
+      ['the finder throws', nestedLookup({ tmux: throwing }, [], said)],
+      ['tmux throws at once', nestedLookup({ run: () => { throw new Error('spawn /x/bin/tmux EACCES') } }, [], said)],
+    ]
+    for (const [name, { calls, logs, clock, nested }] of cases) {
+      expect(await nested(AGENT), name).toEqual({})
+      expect(calls, name).toEqual([])
+      expect(logs, name).toEqual(notRead('tmux'))
+      clock.t += 5_000
+      expect(await nested(AGENT), name).toEqual({})
+      expect(logs, name).toEqual([...notRead('tmux'), ...notRead('tmux')])
+    }
+    expect(finds).toBe(2)
+  })
+
   // The scan asks for up to fifty sessions a look: a tmux that hangs costs the look one timeout, not one an ask.
   it('one listing serves every ask for 5 s, one in flight shared; one answer per tty and process', async () => {
     // A second agent (200) in pane %4 on ttys011.
