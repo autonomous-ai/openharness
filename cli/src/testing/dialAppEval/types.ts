@@ -2,8 +2,12 @@
 // (docs/plans/2026-11-21-dial-app-eval-design.md, docs/plans/2026-11-22-dial-eval-vscode-cursor-design.md,
 // docs/plans/2026-11-22-dial-eval-orca-design.md, docs/plans/2026-11-22-dial-eval-iterm2-design.md).
 import { observedAgentId } from '../../cable/hosts/observed.js'
+import type { Nest } from '../../cable/hosts/types.js'
 
 export type App = 'claude' | 'chatgpt' | 'vscode' | 'cursor' | 'orca' | 'iterm'
+/** A page of the dial's Apps screen: an app's, or tmux's or herdr's, which count their agents across every terminal app
+ *  (docs/plans/2026-11-23-dial-tmux-herdr-apps-design.md, decision 1). */
+export type Page = App | Nest
 export type Editor = Extract<App, 'vscode' | 'cursor'>
 /** The apps whose rows open by a link of their scheme: all but Orca and iTerm2. */
 export type LinkedApp = Exclude<App, 'orca' | 'iterm'>
@@ -21,6 +25,8 @@ export const EDITORS: readonly Editor[] = ['vscode', 'cursor']
 /** The wire's name for an app's page, which is its app id on the host too (hostDetect.ts): the ChatGPT app's threads are Codex's. */
 export const PAGE: Readonly<Record<App, string>> = { claude: 'claude', chatgpt: 'codex', vscode: 'vscode', cursor: 'cursor', orca: 'orca',
   iterm: 'iterm' }
+/** The wire's name for a page: tmux's and herdr's are their own, an app's is PAGE's. */
+export const pageId = (page: Page): string => page === 'tmux' || page === 'herdr' ? page : PAGE[page]
 /** The maker of a held Orca pane's terminal, in both tiers: a program that is not Orca's terminal host. */
 export const HELD_MAKER = 'eval-terminal'
 /** How long after a switch Orca tells the focus it moved, in both tiers: inside the devices' 2 s echo window
@@ -199,8 +205,9 @@ export type Step = { label?: Label } & (
    */
   | { kind: 'wait'; ms: number; until?: Until }
 )
-/** What a wait ends on: what the dial has received from the scenario's start, as a ring check reads it. */
-export type Until = { kind: 'ring'; page: App; expect: SessionKey[] }
+/** What a wait ends on: what the dial has received from the scenario's start, as a ring check reads it, its `apart`
+ *  too, so a wait ends only once the other pages count theirs. */
+export type Until = { kind: 'ring'; page: Page; expect: SessionKey[]; apart?: SessionKey[] }
 export type StepOf<K extends StepKind> = Extract<Step, { kind: K }>
 
 export const CHECK_KINDS = ['ring', 'focus', 'still', 'open', 'state', 'voice', 'recap', 'cost', 'scroll', 'logged', 'face'] as const
@@ -210,7 +217,7 @@ export type Check = { id: string; dim: Dimension; after?: Label; at?: Label } & 
    * apart: sessions on other pages (a terminal's), each counted there as a row of its own. The dial is sent no list of a
    * page it has not picked, so they are read from the `apps` frame's counts: one merged into this page's rows is missing there.
    */
-  | { kind: 'ring'; page: App; expect: SessionKey[]; timed?: true; apart?: SessionKey[] }
+  | { kind: 'ring'; page: Page; expect: SessionKey[]; timed?: true; apart?: SessionKey[] }
   | { kind: 'focus'; session: SessionKey; noBounce?: true }
   | { kind: 'still'; ms: number }
   /** tab: iTerm2 only, the label a select must name when the session's client moved to another tab (I13, IH2). */
@@ -364,6 +371,16 @@ export function placeOf(s: Pick<SessionDef, 'app' | 'place'>): Place | undefined
 export function itermPlaceOf(s: Pick<SessionDef, 'app' | 'place'> & Pick<Partial<SessionDef>, 'tmux'>): ItermPlace | undefined {
   // owned refuses an editor's place on an iTerm2 session.
   return owned(s).app === 'iterm' ? s.place as ItermPlace | undefined ?? 'tab' : undefined
+}
+
+/**
+ * The wire's name for the page the session's row is on: an iTerm2 session in tmux or herdr is on that multiplexer's
+ * page, as one tmux page and one herdr page count their agents across every terminal app
+ * (docs/plans/2026-11-23-dial-tmux-herdr-apps-design.md, decision 1); every other session is on its app's.
+ */
+export function sessionPage(s: SessionDef): string {
+  const place = itermPlaceOf(s)
+  return place === 'tmux' || place === 'herdr' ? place : PAGE[s.app]
 }
 
 /** The agent id the daemon's observed sources give this session: its engine's. */

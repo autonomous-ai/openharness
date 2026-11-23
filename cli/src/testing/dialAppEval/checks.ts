@@ -10,9 +10,9 @@ import { CAROUSEL_TILES } from '../dialCarousel.js'
 import { flagOf, ORCA_PROGRAMS, programOf } from './argv.js'
 import { isTabLabel, sessionTab, TABS_STREAM } from './itermRecords.js'
 import { tabTitle } from './orcaListing.js'
-import { agentIdOf, EDITORS, engineOf, itermPlaceOf, orcaPaneHandle, orcaWorktreeId, PAGE, placeOf, SKIPPED_SCROLL, THRESHOLDS, type App, type Check,
-  type CheckResult, type LinkedApp, type Platform, type Scenario, type Seen, type SessionDef, type SessionKey, type StepOf, type Tier,
-  type Until, type WrongSend } from './types.js'
+import { agentIdOf, EDITORS, engineOf, itermPlaceOf, orcaPaneHandle, orcaWorktreeId, PAGE, pageId, placeOf, sessionPage, SKIPPED_SCROLL,
+  THRESHOLDS, type App, type Check, type CheckResult, type LinkedApp, type Platform, type Scenario, type Seen, type SessionDef,
+  type SessionKey, type StepOf, type Tier, type Until, type WrongSend } from './types.js'
 
 /** A failing check's evidence stays readable in the report, however long the scenario ran. */
 const MAX_EVIDENCE = 20
@@ -117,7 +117,7 @@ export function rings(seen: Pick<Seen, 'frames'>): Ring[] {
  */
 function ringParts(check: CheckOf<'ring'>, world: World, w: Window | undefined): Part[] {
   const expected = check.expect.map((key) => agentIdOf(world.session(key)))
-  const page = PAGE[check.page]
+  const page = pageId(check.page)
   const all = rings(world.seen)
   const held = w ? all.filter((r) => world.held(r.at, w.to)).at(-1) : undefined
   const last = held?.page === page ? held : undefined
@@ -703,7 +703,7 @@ const STATE_MARKS = { working: THRESHOLDS.working, 'needs-you': THRESHOLDS.needs
 function stateParts(check: CheckOf<'state'>, world: World, w: Window | undefined): Part[] {
   const session = world.session(check.session)
   const id = agentIdOf(session)
-  const page = PAGE[session.app]
+  const page = sessionPage(session)
   const lists = rings(world.seen)
   // Every session's changes, not only this one's: the evidence lists those in the window, so a probe on a session that
   // never changes still says what the driver saw.
