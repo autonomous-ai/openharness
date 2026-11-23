@@ -47,7 +47,8 @@ shell, a launcher or a shim of the caller.
   the `w:<FILETIME>` start markers, since Windows reuses pids and never reparents);
 - skips the caller itself, then every parent that is a shell or launcher (`pwsh`, `powershell`, `cmd`, `bash`, `sh`,
   `node`: an npm shim runs Codex as `cmd` → `node` → `codex.exe`) or bears the caller's own name (a Scoop or Volta
-  shim `claude.exe` that starts the real `claude.exe`);
+  shim `claude.exe` that starts the real `claude.exe`) below any shell: one of that name above a shell is another agent
+  that ran the caller from its own tool (Codex run by Codex, `claude -p` from Claude Code's shell tool), not a shim;
 - the first other parent is the maker. Its name is read Windows' way: `win32.basename`, a trailing `.exe` dropped, both
   case-insensitively. It names a host only through a Windows-only table, `WINDOWS_PTY_HOSTS`: `orca` → `orca` (the
   app's image name, which its terminal host runs under: Electron run as Node keeps it), `herdr` → `herdr`,

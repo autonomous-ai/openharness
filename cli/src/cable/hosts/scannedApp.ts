@@ -286,8 +286,10 @@ const WINDOWS_PTY_HOSTS: Readonly<Record<string, string>> = {
   'wezterm-mux-server': 'wezterm',
 }
 
-/** The shells and launchers between a pane's maker and its agent: an npm shim runs Codex as `cmd` → `node`. */
-const WINDOWS_PASSED = new Set(['pwsh', 'powershell', 'cmd', 'bash', 'sh', 'node'])
+/** The shells between a pane's maker and its agent. */
+const WINDOWS_SHELLS = new Set(['pwsh', 'powershell', 'cmd', 'bash', 'sh'])
+/** The launcher between them: an npm shim runs Codex as `cmd` → `node` → `codex.exe`, Volta's as `codex.exe` → `node`. */
+const WINDOWS_LAUNCHER = 'node'
 
 /** A Windows image name as the tables hold it: Windows matches names with no case, and `.exe` says nothing. */
 const windowsName = (executable: string): string => win32.basename(executable).replace(/\.exe$/i, '').toLowerCase()
@@ -295,17 +297,24 @@ const windowsName = (executable: string): string => win32.basename(executable).r
 /**
  * The host that made the pseudo-console a Windows process runs on. Windows names no terminal, but the program that makes
  * a pseudo-console starts its shell as its own child (ConPTY), so the maker is the caller's nearest parent that is no
- * shell, launcher or shim of the caller's own name (a Scoop or Volta `claude.exe` starting the real one). That parent
- * decides: none when WINDOWS_PTY_HOSTS does not list it, when the caller is not in [rows], or when the walk finds shells
- * alone. Its name is matched and dropped, never kept.
+ * shell, launcher or shim of the caller's own name (a Scoop or Volta `claude.exe` starting the real one). A shim starts
+ * it itself or through Node: one of that name above a shell is another agent that ran the caller from its own tool
+ * (Codex run by Codex, `claude -p` from Claude Code's shell tool), and the caller is on its terminal or pipes, not the
+ * pane's. That parent decides: none when WINDOWS_PTY_HOSTS does not list it, when the caller is not in [rows], or when
+ * the walk finds shells alone. Its name is matched and dropped, never kept.
  */
 export function windowsPtyOwner(pid: number, rows: readonly WindowsProcess[]): string | undefined {
   const [own, ...parents] = parentChain(pid, new Map(rows.map((p) => [p.pid, p])))
   if (!own) return undefined
   const ownName = windowsName(own.executable)
+  let shelled = false
   for (const parent of parents) {
     const name = windowsName(parent.executable)
-    if (WINDOWS_PASSED.has(name) || name === ownName) continue
+    if (name === WINDOWS_LAUNCHER || (name === ownName && !shelled)) continue
+    if (WINDOWS_SHELLS.has(name)) {
+      shelled = true
+      continue
+    }
     return Object.hasOwn(WINDOWS_PTY_HOSTS, name) ? WINDOWS_PTY_HOSTS[name] : undefined
   }
   return undefined

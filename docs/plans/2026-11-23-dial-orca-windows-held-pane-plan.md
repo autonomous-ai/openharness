@@ -25,7 +25,7 @@ Linux.
 - `WINDOWS_PTY_HOSTS`: `orca` → `orca`, `herdr` → `herdr`, `wezterm-gui` → `wezterm`, `wezterm-mux-server` → `wezterm`
   (keys are names after `win32.basename`, a trailing `.exe` dropped, lower-cased).
 - Skipped parents: `pwsh`, `powershell`, `cmd`, `bash`, `sh`, `node`, and any parent whose name equals the caller's own
-  (same normalisation). Nothing else.
+  (same normalisation) while no shell has been passed (final review: one above a shell is another agent). Nothing else.
 - A process name is outside text: matched and dropped, never kept, logged or put in an error.
 - No new process, no Rust change, no new dependency, no polling. One table read per new caller process (the existing
   `learnPtyOwner` path, `TTY_RETRY_MS` retry).
