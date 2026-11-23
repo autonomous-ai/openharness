@@ -317,6 +317,45 @@ describe('ObservedSource removal', () => {
     expect(src.list()).toHaveLength(0)
   })
 
+  it('a session its app brings back in a new process after its end stays listed', async () => {
+    const { src, clock, gens, ev } = setup()
+    src.ingest(ev('session-start'))
+    await src.tick()
+    // The app quits: its agent ends, and the app's relaunch resumes the session in a process of its own.
+    src.ingest(ev('session-end'))
+    gens.set(100, null)
+    src.ingest(ev('session-start', { callerPid: 200 }))
+    clock.t += 20_000
+    await src.tick()
+    await src.tick()
+    expect(src.list()).toHaveLength(1)
+    expect(src.list()[0]).not.toHaveProperty('ended')
+  })
+
+  it('a session that comes back in a new process with no end of its old one stays listed', async () => {
+    const { src, clock, gens, ev } = setup()
+    src.ingest(ev('session-start'))
+    await src.tick()
+    // Its process is killed with no hook, and a new one carries on the session.
+    gens.set(100, null)
+    src.ingest(ev('turn-start', { callerPid: 200 }))
+    clock.t += 20_000
+    await src.tick()
+    await src.tick()
+    expect(src.list()).toHaveLength(1)
+  })
+
+  it('a session that came back in a new process is removed once that process goes', async () => {
+    const { src, gens, ev } = setup()
+    src.ingest(ev('session-start'))
+    await src.tick()
+    src.ingest(ev('session-start', { callerPid: 200 }))
+    await src.tick()
+    gens.set(200, 'reused')
+    await src.tick()
+    expect(src.list()).toHaveLength(0)
+  })
+
   it('tick reads every session\'s process generation in one call', async () => {
     const { src, procs, ev } = setup()
     for (let i = 0; i < 50; i++) src.ingest(ev('session-start', { sessionId: `s${i}`, callerPid: 200 + i }))
