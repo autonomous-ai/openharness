@@ -202,8 +202,10 @@ describe('each voice turn reports one end', () => {
       ...over,
     } as CableHost
     let port!: LoopbackPort
-    const session = new CableSession(host, new DialLog(mkdtempSync(join(tmpdir(), 'cable-voice-'))), async (onData) => {
+    let closed!: (why: string) => void
+    const session = new CableSession(host, new DialLog(mkdtempSync(join(tmpdir(), 'cable-voice-'))), async (onData, onClosed) => {
       port = new LoopbackPort(onData)
+      closed = onClosed
       return port
     })
     session.start()
@@ -220,7 +222,9 @@ describe('each voice turn reports one end', () => {
       expect(port.voice()).toHaveLength(1)
       expect(host.voiceEnded).toHaveBeenCalled()
     })
-    return { port, host, voiceEnded, speak, answered }
+    /** The port closes under the session, as an unplugged dial's does. */
+    const unplug = () => closed('unplugged')
+    return { port, host, voiceEnded, speak, answered, unplug }
   }
 
   it('each voice turn reports one end: sent to the agent named', async () => {
@@ -304,6 +308,79 @@ describe('each voice turn reports one end', () => {
     port.say({ t: 'voice.begin', uploadId: 'new', agentId: 'a2' })
     port.pcm(Buffer.alloc(3200, 7)); port.say({ t: 'voice.end' }); await answered()
     expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'cancelled', agentId: 'a1' }], [{ outcome: 'sent', agentId: 'a2' }]])
+  })
+
+  it('each voice turn reports one end: cancelled, the port closed while recording', async () => {
+    const { port, voiceEnded, unplug } = await talk()
+    port.say({ t: 'voice.begin', uploadId: 'u1', agentId: 'a1' })
+    port.pcm(Buffer.alloc(3200, 7))
+    unplug()
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'cancelled', agentId: 'a1' }]])
+  })
+
+  it('each voice turn reports one end: cancelled, its carried text dropped while recording', async () => {
+    const { port, voiceEnded } = await talk()
+    port.say({ t: 'voice.begin', uploadId: 'u1', agentId: 'a1', carryId: 'c1' })
+    port.say({ t: 'carry.cancel', carryId: 'c1' })
+    await vi.waitFor(() => expect(voiceEnded).toHaveBeenCalled())
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'cancelled', agentId: 'a1' }]])
+  })
+
+  it('each voice turn reports one end: no_speech, a recording past the length cap', async () => {
+    const { port, voiceEnded, answered } = await talk()
+    port.say({ t: 'voice.begin', uploadId: 'u1', agentId: 'a1' })
+    const frame = Buffer.alloc(8_000, 7)
+    // 615 s of 16 kHz audio, then a byte more.
+    const bytes = 615 * 32_000 + 1
+    for (let at = 0; at < bytes; at += frame.length) port.pcm(frame.subarray(0, Math.min(frame.length, bytes - at)))
+    port.say({ t: 'voice.end' })
+    await answered()
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'no_speech', agentId: 'a1' }]])
+  }, 60_000)
+
+  it('each voice turn reports one end: cancelled, a recording refused at its begin then aborted or replaced', async () => {
+    const capsOf = (id: string) => id === 'a1' ? 's' : 'svfa'
+    const aborted = await talk({ capsOf })
+    aborted.port.say({ t: 'voice.begin', uploadId: 'u1', agentId: 'a1' })
+    aborted.port.say({ t: 'voice.abort', uploadId: 'u1' })
+    await vi.waitFor(() => expect(aborted.voiceEnded).toHaveBeenCalled())
+    expect(aborted.voiceEnded.mock.calls).toEqual([[{ outcome: 'cancelled', agentId: 'a1' }]])
+
+    const replaced = await talk({ capsOf })
+    replaced.port.say({ t: 'voice.begin', uploadId: 'old', agentId: 'a1' })
+    replaced.speak({ agentId: 'a2' }); await replaced.answered()
+    expect(replaced.voiceEnded.mock.calls).toEqual([[{ outcome: 'cancelled', agentId: 'a1' }], [{ outcome: 'sent', agentId: 'a2' }]])
+  })
+
+  it('each voice turn reports one end: other, a form field\'s recording aborted', async () => {
+    const { port, voiceEnded } = await talk()
+    port.say({ t: 'voice.begin', uploadId: 'u1', formId: 'form-one', formRevision: 2 })
+    port.say({ t: 'voice.abort', uploadId: 'u1' })
+    await vi.waitFor(() => expect(voiceEnded).toHaveBeenCalled())
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'other' }]])
+  })
+
+  it('each voice turn reports one end: no_agent, the carried text\'s recipient gone', async () => {
+    const selectPassage = vi.fn<NonNullable<CableHost['selectPassage']>>(async (command) => command.op === 'pin'
+      ? { ok: true, selectionId: 'p', revision: 2, rows: 1, extending: false, excerpt: 'source', text: 'source' }
+      : { ok: false, error: 'Closed' })
+    const { port, voiceEnded, speak, answered } = await talk({ selectPassage })
+    port.say({ t: 'carry.prepare', carryId: 'c1', requestId: 'r', agentId: 'a1', selectionId: 'p', revision: 1 })
+    await vi.waitFor(() => expect(port.sent.some((m) => m.t === 'carry.state' && m.active === true)).toBe(true))
+    speak({ agentId: 'a3', carryId: 'c1' }); await answered()
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'no_agent', agentId: 'a3' }]])
+  })
+
+  it('each voice turn reports one end: unlisted, carried text gone at the begin', async () => {
+    const { voiceEnded, speak, answered } = await talk()
+    speak({ agentId: 'a1', carryId: 'missing' }); await answered()
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'unlisted', agentId: 'a1' }]])
+  })
+
+  it('each voice turn reports one end: unlisted, selected text that could not be pinned', async () => {
+    const { voiceEnded, speak, answered } = await talk({ selectPassage: async () => ({ ok: false, error: 'Gone' }) })
+    speak({ agentId: 'a1', selectionId: 's1', selectionRevision: 1 }); await answered()
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'unlisted', agentId: 'a1' }]])
   })
 
   it('each voice turn reports one end: no_speech, nothing recorded', async () => {
