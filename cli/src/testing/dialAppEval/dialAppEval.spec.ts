@@ -714,8 +714,18 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
   // A tty or a pane id is the machine's, not the scenario's: evidence names tabs and panes by label (itermRecords.ts).
   it('no result carries an absolute path, a tty or a pane id', () => {
     expect(runs.length).toBeGreaterThan(0)
-    const written = JSON.stringify(collect(runs))
-    for (const part of [tmpdir(), homedir(), '/work/eval-', '/dev/tty', 'ttys0', '%0', ':p1']) expect(written).not.toContain(part)
+    const results = collect(runs)
+    const written = JSON.stringify(results)
+    for (const part of [tmpdir(), homedir(), '/work/eval-', '/dev/tty', 'ttys0']) expect(written).not.toContain(part)
+    // tmux's and herdr's pane ids in any evidence, and a tmux session's name in iTerm2's: an editor's window id
+    // (eval-w2-1) is the scenario's own.
+    for (const { app, evidence } of results.results) {
+      for (const line of evidence) {
+        for (const id of [/%[0-9]+/, /w[0-9A-Z]+:p[0-9A-Z]+/, ...(app === 'iterm' ? [/eval-w[0-9]+-[0-9]+/] : [])]) {
+          expect(line).not.toMatch(id)
+        }
+      }
+    }
   })
 
   // The eval command judges the ratchet itself, over both tiers, and says so for its children (run.ts).
