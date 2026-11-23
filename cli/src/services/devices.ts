@@ -72,7 +72,7 @@ import { ORCA_CHAT_TIMEOUT_MS, OrcaChatSource } from '../cable/hosts/orcaChatSou
 import { firstOuter, type NestedLookup } from '../cable/hosts/outer.js'
 import { readRecord } from '../cable/hosts/record.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
-import { appRoots, learnApps, readBundleId, readMadeBy, readProcessNames, readPtyOwner, readTtyName, scanLearnsApps } from '../cable/hosts/scannedApp.js'
+import { appRoots, learnApps, readBundleId, readMadeBy, readProcessNames, readPtyOwner, readTtyName, readWindowsPtyOwner, scanLearnsApps } from '../cable/hosts/scannedApp.js'
 import { createScrollLines } from '../cable/hosts/scrollLines.js'
 import { pageOf } from '../cable/hosts/select.js'
 import { createTabsAdapter, isTabApp, readTty, type Tab, type TabApp } from '../cable/hosts/tabs.js'
@@ -933,8 +933,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   firstOuter(createHerdrOuter({ ...outerDeps, atime: ttyAtime, tty: readTtyName, onPath: apps.onPath, sockets: procSockets }),
     firstOuter(createTmuxOuter({ ...outerDeps, tmux: tmuxAt, tty: readTtyName }),
       createZellijOuter({ ...outerDeps, zellij: zellijAt, tty: readTtyName }))),
-  // Windows has no `ps`: there no terminal's pane is read as the agent's own, and none takes its words.
-  apps.platform === 'win32' ? undefined : async (pid) => readPtyOwner(pid, await readProcessNames(), readTtyName), nesting()) : null
+  // Windows has no `ps` and no ttys: the PTY host's process table, which the open scan reads too, gives the maker as the
+  // first parent past the shells; its read that failed gives no rows, which readWindowsPtyOwner turns into a rejection.
+  apps.platform === 'win32' ? (pid) => readWindowsPtyOwner(pid, listProcesses)
+    : async (pid) => readPtyOwner(pid, await readProcessNames(), readTtyName), nesting()) : null
   // Orca is asked only for the parts that use its homes, the first time as the devices start: the start pass waits for
   // that read (at most its 5 s), so an Orca home gets the skill with the default one.
   if (skill || observed) void orcaHomes.refresh().then(() => {

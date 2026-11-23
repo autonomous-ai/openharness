@@ -132,8 +132,9 @@ export interface ObservedDeps {
   /** The tty of a process in a tab app (tabs.ts readTty), rejecting when `ps` could not be read; absent (off macOS), no
    *  agent has a tab. */
   tty?(pid: number): Promise<string | undefined>
-  /** The host that made the pseudo-terminal a process runs on (scannedApp.ts readPtyOwner), rejecting when the process table
-   *  could not be read. Absent (Windows), no terminal's or multiplexer's pane is any agent's own. */
+  /** The host that made the pseudo-terminal a process runs on (scannedApp.ts readPtyOwner, on Windows
+   *  readWindowsPtyOwner), rejecting when the process table could not be read. Absent, no terminal's or multiplexer's
+   *  pane is any agent's own. */
   ptyOwner?(pid: number): Promise<string | undefined>
   /** Every owner a scan read, before any is listed. Absent, nothing is told. */
   scanned?(owners: ReadonlyMap<string, SessionOwner>): void
