@@ -326,8 +326,6 @@ describe('the dial and the apps follow each other', () => {
     front(d, ORCA)
     await typedUntilMoved(d, dial, a.claude)
     expect(moved(d)).toBe(1)
-    // The tile it centred, reported as the firmware does: the daemon drops the dial's turns until it hears it (750 ms).
-    dial.send({ t: 'focus', agentId: a.claude.id })
     let since = dial.messages.length
     await a.claude.hook('Stop')
     await dial.next((m) => m.t === 'turn.done' && m.agentId === a.claude.id, 30_000, "A's turn done", since)
