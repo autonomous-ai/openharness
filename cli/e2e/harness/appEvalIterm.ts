@@ -4,8 +4,10 @@
  * the daemon's throwaway home:
  * - a tab's Claude Code is its shell's job there (Outside), with iTerm2's hints;
  * - a tmux one runs in a tmux session of the person's on the daemon's private server (ownTmux.ts), one session a tab its
- *   first client runs in (`eval-<window>-<tab>`, as tier A's), that client attached from a tab of the fake iTerm2 before
- *   any agent starts in it, so each one's start hook finds it there; each agent in a window of its own. A Claude Code's
+ *   first client runs in (`eval-<window>-<tab>`, as tier A's), that client attached at the shell of a tab of the fake
+ *   iTerm2 before any agent starts in it, so each one's start hook finds it there; each agent in a window of its own. A
+ *   client detached leaves its tab open on that shell, as tier A's does: macOS gives a closed tab's tty to the next tab,
+ *   and the tab a session's start looked up would read as the next one's (I13). A Claude Code's
  *   prompt is typed through a client of its session in the tab the person last selected, when one is there, so that
  *   client is the one used (the plan's Decision 6); else into its pane. A Codex is a process of its own in its pane
  *   (codexOutside.ts), told by its hooks, under the daemon's CODEX_HOME;
@@ -31,10 +33,10 @@ import { engineOf, itermPlaceOf, type SessionDef, type SessionKey } from '../../
 import { appOf, claudeSteps, drop, start as startClaude, type ClaudeHost, type ClaudeTerminal } from './appEvalClaude.js'
 import { guardEnv, guardLoaded, speak, type AppSteps, type TierBWorld } from './appEvalDriver.js'
 import { CodexOutside } from './codexOutside.js'
-import type { IsolatedDaemon } from './daemon.js'
+import { until, type IsolatedDaemon } from './daemon.js'
 import { PrivateHerdr, type HerdrTab } from './herdrServer.js'
 import { closeTab, killTab, openTab, Outside, relaunchIterm, type Tab } from './outsideAgent.js'
-import { InOwnTmux, tabClient } from './ownTmux.js'
+import { InOwnTmux } from './ownTmux.js'
 
 const execFileAsync = promisify(execFile)
 /** For tmux to answer, as isolatedTmux.ts waits for each of its commands: a server that hangs blocks no stop. */
@@ -72,8 +74,8 @@ export function tabClosed(tabs: Map<string, string>, label: string, tty: string)
 
 /** A tab of the fake iTerm2's: where it is, its tty, and its fake iTerm2's process, none once iTerm2 relaunched. */
 interface Opened { window: string; tab: number; label: string; tty: string; app?: number }
-/** A tmux client's tab. */
-interface Client extends Opened { pid: number; type(text: string): void; close(): Promise<void> }
+/** A tmux client's tab: the client (pid) is its shell's job. */
+interface Client extends Opened { pid: number; processes: Tab }
 interface State {
   /** The empty tabs and splits the person opened, by label. */
   empty: Map<string, Opened & { processes: Tab }>
@@ -137,7 +139,7 @@ function closeAll(world: TierBWorld, state: State): Array<Promise<void>> {
     ...[...state.tmux].map(async ([name, clients]) => {
       // It went with its last pane; one still there goes now, with its clients.
       await world.d.tmux.run('kill-session', '-t', `=${name}`).catch(() => {})
-      await Promise.all(clients.map((client) => client.close()))
+      await Promise.all(clients.map((client) => closeTab(client.processes, `the client tab ${client.label}`)))
     }),
     ...state.herdr ? [state.herdr.server.stop()] : [],
   ]
@@ -147,7 +149,7 @@ function killAll(world: TierBWorld, state: State): void {
   for (const { processes } of state.empty.values()) killTab(processes)
   for (const [name, clients] of state.tmux) {
     spawnSync('tmux', ['-S', world.d.tmux.socket, '-f', '/dev/null', 'kill-session', '-t', `=${name}`], { env: world.d.tmux.env, timeout: TMUX_MS })
-    for (const client of clients) killNow(client.pid)
+    for (const client of clients) killTab(client.processes)
   }
   if (state.herdr) {
     // Its server leads a process group of its own, with what its panes run.
@@ -241,19 +243,48 @@ async function inTab(world: TierBWorld, state: State, s: SessionDef, folder: str
   }
 }
 
-/** A client of the tmux session [name], attached from a new tab of the fake iTerm2 at [at]: used now. */
+/** A client of the tmux session [name], attached at the shell of a new tab of the fake iTerm2 at [at], as the person
+ *  types `tmux attach` there: used now, once tmux lists it. */
 async function attach(world: TierBWorld, state: State, name: string, at: TabRef): Promise<void> {
+  const { d } = world
   await closeEmpty(world, state, tabLabel(at))
-  const client = await tabClient(world.d, name, 'iterm')
-  const tab = opening(world, at, await ttyOf(client.pid), await appAbove(world.d, client.pid))
-  state.tmux.get(name)!.push({ ...tab, pid: client.pid, type: client.type, close: client.close })
+  const processes = await openTab(d, d.env.HOME!, { ...d.tmux.env, TERM: 'xterm-256color' },
+    ['tmux', '-S', d.tmux.socket, '-f', '/dev/null', 'attach-session', '-t', name], { app: 'iterm', shell: true })
+  const { pid } = processes
+  try {
+    await until(`a client on ${name} in an iTerm2 tab`,
+      async () => (await d.tmux.run('list-clients', '-F', '#{client_pid}')).split('\n').includes(String(pid)), 30_000, 50)
+  } catch (error) {
+    await closeTab(processes, `the client tab of ${name}`)
+    throw error
+  }
+  const tab = opening(world, at, await ttyOf(pid), await appAbove(d, pid))
+  state.tmux.get(name)!.push({ ...tab, pid, processes })
+}
+
+/** The client gone from its session's clients. */
+function leave(state: State, client: Client): void {
+  for (const clients of state.tmux.values()) if (clients.includes(client)) clients.splice(clients.indexOf(client), 1)
 }
 
 /** A client's tab closed: tmux runs on without it. */
-async function detach(world: TierBWorld, state: State, client: Client): Promise<void> {
-  for (const clients of state.tmux.values()) if (clients.includes(client)) clients.splice(clients.indexOf(client), 1)
-  await client.close()
+async function closeClient(world: TierBWorld, state: State, client: Client): Promise<void> {
+  leave(state, client)
+  await closeTab(client.processes, `the client tab ${client.label}`)
   tabClosed(world.tabs, client.label, client.tty)
+}
+
+/** The client detached, as `tmux detach` in its tab: it ends, and its tab stays open on its shell, an empty one that holds
+ *  its tty, so no tab opened after takes it. */
+async function detach(world: TierBWorld, state: State, client: Client): Promise<void> {
+  leave(state, client)
+  await world.d.tmux.run('detach-client', '-t', client.tty)
+  await until(`the client in ${client.label} ended`, () => {
+    try { process.kill(client.pid, 0) } catch { return true }
+    return false
+  }, 10_000, 50)
+  const { window, tab, label, tty, app, processes } = client
+  state.empty.set(label, { window, tab, label, tty, app, processes })
 }
 
 /** The person's tmux session in [s]'s tab, its first client attached there: its name, and the pane of the shell it opened
@@ -294,7 +325,10 @@ async function inTmux(world: TierBWorld, state: State, s: SessionDef, folder: st
     type: async (text) => {
       // Through its tab's pseudo-terminal, as Outside types, so tmux reads it from that client's tty.
       const client = await selectedClient(world, state, name, own.pane)
-      if (client) return client.type(`${text}\r`)
+      if (client) {
+        client.processes.process.stdin!.write(`${text}\r`)
+        return
+      }
       // `send-keys -l` types no Enter alone.
       await (text === '' ? d.tmux.run('send-keys', '-t', own.pane, 'Enter') : own.type(text))
     },
@@ -402,7 +436,7 @@ export const itermSteps: AppSteps = {
     // tmux runs on under its server.
     for (const key of sessions) await drop(world, key)
     for (const empty of empties) await closeEmpty(world, state, empty.label)
-    for (const client of clients) await detach(world, state, client)
+    for (const client of clients) await closeClient(world, state, client)
   },
   'iterm.select': async (world, { window, tab, split }) => {
     const label = tabLabel({ window, tab, split })
