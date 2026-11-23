@@ -235,6 +235,16 @@ describe('each voice turn reports one end', () => {
     expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'sent', agentId: 'a1' }]])
   })
 
+  // The agent's turn the words start may come before the dial is answered: it must find the voice sent.
+  it('each voice turn reports one end: sent, before the dial is answered', async () => {
+    let told = () => -1
+    const toldAtEnd: number[] = []
+    const { port, speak, answered } = await talk({ voiceEnded: vi.fn(() => { toldAtEnd.push(told()) }) })
+    told = () => port.voice().length
+    speak({ agentId: 'a1' }); await answered()
+    expect(toldAtEnd).toEqual([0])
+  })
+
   it('each voice turn reports one end: sent by the window', async () => {
     const { voiceEnded, speak, answered } = await talk({ routeInWindow: async () => ({ t: 'sent', agentId: 'a2' }) })
     speak(); await answered()
