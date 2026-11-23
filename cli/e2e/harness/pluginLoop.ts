@@ -20,8 +20,10 @@ export interface PluginLoop {
   states: DialState[]
   /** Its log lines. */
   logs: string[]
-  /** Hands it the terminals of the worktree on Orca's screen, as Orca does, or null for none. */
-  front(terminals: string[] | null): void
+  /** Hands it the terminals of the worktree on Orca's screen, as Orca does, or null for none; with [workspace], Orca's id
+   *  of that worktree beside them, as the worker hands both. With none, the line is the ids alone, as before, which the
+   *  loop takes as Orca naming no workspace. */
+  front(terminals: string[] | null, workspace?: string | null): void
   /** Ends its stdin, which stops it; its exit code, once it exits within 10 s. */
   stop(): Promise<number | null>
 }
@@ -70,7 +72,9 @@ export function startPluginLoop(d: IsolatedDaemon, children: ChildProcess[], env
   child.once('close', (code) => { exited = { code } })
   return {
     states, logs,
-    front: (terminals) => { child.stdin.write(`${JSON.stringify(terminals)}\n`) },
+    front: (terminals, workspace) => {
+      child.stdin.write(`${JSON.stringify(workspace === undefined ? terminals : { terminals, workspace })}\n`)
+    },
     stop: async () => {
       child.stdin.end()
       return (await until('the loop to exit', () => exited, 10_000, 50)).code

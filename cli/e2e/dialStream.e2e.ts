@@ -13,6 +13,11 @@
  * launcher shim in that home, and nothing on this Mac's PATH. Handed the worktree on Orca's screen, as Orca hands its
  * terminals to the plugin, it tells the devices, and while Orca is in front a dial that says appFilter lists only that
  * worktree's agents (docs/plans/2026-11-18-dial-orca-tab-scope-design.md).
+ *
+ * Orca's chats run on no terminal, so the loop is handed Orca's id of the worktree beside its terminals, and the fake
+ * `orca` lists the chats and worktrees in Orca's own answers (docs/plans/2026-11-23-dial-orca-chats-design.md): the ring
+ * is that worktree's terminal agents, then its chats in Orca's order; a tap on a chat brings its worktree up; a chat's
+ * prompt moves the dial; a resting chat takes no words; and an Orca that lists no chats gives the ring as before.
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -21,7 +26,9 @@ import { request, type ClientRequest } from 'node:http'
 import { join, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { observedAgentId } from '../src/cable/hosts/observed.js'
 import { devicesListenerPath } from '../src/devices/listenerPath.js'
+import { RECORDED_ORCA_AGENTS } from '../src/testing/recordedOrca.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
@@ -76,9 +83,9 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
   /**
    * A daemon of its own, with a desk it finds its dials on, and a fake `orca` first on its PATH (harness/fakeOrca.ts): a
    * swipe to an agent in an Orca terminal runs `orca terminal switch`, and with none on PATH a Mac's daemon runs the Orca
-   * app's own.
+   * app's own. [agentList] false: an Orca whose `agent` has no `list`.
    */
-  const fresh = async () => {
+  const fresh = async ({ agentList }: { agentList?: boolean } = {}) => {
     const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false' } })
     daemon = d
     const file = join(d.root, 'dials.json')
@@ -86,7 +93,7 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
     writeFileSync(file, '[]')
     const theDesk = new Desk(file)
     desk = theDesk
-    const orca = FakeOrca.install(d)
+    const orca = FakeOrca.install(d, { agentList })
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-200).join('\n')}`) })
     await d.start()
     return { d, desk: theDesk, orca }
@@ -341,7 +348,7 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
   }
 
   /** The dial's latest list, once one sent after [since] is [agents], in that order. */
-  const lists = (dial: FakeDial, agents: InOrca[], since: number, what: string) => until(what, () => {
+  const lists = (dial: FakeDial, agents: ReadonlyArray<{ readonly id: string }>, since: number, what: string) => until(what, () => {
     const latest = latestList(dial)
     return latest && latest.at >= since && latest.agents.map((m) => m.id).join() === agents.map((a) => a.id).join() ? latest : undefined
   }, 45_000, 50)
@@ -434,5 +441,186 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
       expect(loopLog).not.toContain(handle)
     }
     expect(plugin.logs).not.toContain('dial: front not sent')
+  })
+
+  // ── Orca's chats (docs/plans/2026-11-23-dial-orca-chats-design.md) ─────────────────────────────────────────────────
+
+  /** Every line the chat source says: fixed words and counts, never a title, folder, id or workspace. */
+  const CHAT_LINE = /^\[orca-chat\] (listed · \d+ chats · \d+ heard|read · failed · (exit|no answer|unreadable)|read · (<0\.5s|<2s|>2s))$/
+  const chatLines = (d: IsolatedDaemon): string[] =>
+    d.log().split('\n').filter((line) => line.includes('[orca-chat]')).map((line) => line.slice(line.indexOf('[orca-chat]')))
+
+  /** A chat of Orca's: its Orca session id, the id of its row while no hook has named it, its worktree and its title. */
+  interface OrcaChat { readonly orcaId: string; readonly id: string; readonly worktreeId: string; readonly title: string }
+  const orcaChat = (worktreeId: string): OrcaChat => {
+    const orcaId = randomUUID()
+    return { orcaId, id: observedAgentId('orca', orcaId), worktreeId, title: `Chat ${orcaId.slice(0, 8)}` }
+  }
+  /** Its row of `orca agent list --json`: the recording's first chat's, with this chat's values. */
+  const chatRow = (chat: OrcaChat, agent: string, updatedAt: number) => ({
+    ...RECORDED_ORCA_AGENTS.result.agents[0], orcaSessionId: chat.orcaId, agent, state: 'done', worktreeId: chat.worktreeId,
+    workspace: chat.worktreeId.slice(chat.worktreeId.lastIndexOf('/') + 1), repo: 'e2e', paneKey: randomUUID(),
+    title: chat.title, lastAssistantMessage: `${chat.title} answered.`, updatedAt,
+  })
+  /** The fake Orca's runs with exactly these words, after the name it was run by. */
+  const ran = (orca: FakeOrca, words: string) => orca.log().filter(({ argv }) => argv.slice(1).join(' ') === words)
+  /** The count the dial's latest APPS page gives Orca. */
+  const orcaCount = (dial: FakeDial): number | undefined =>
+    (dial.messages.filter((m) => m.t === 'apps').at(-1)?.apps as { id: string; count: number }[] | undefined)?.find((app) => app.id === 'orca')?.count
+
+  /**
+   * Orca with two worktrees, in the shapes its CLI lists them (testing/recordedOrca.ts): A, which has an identity, holds
+   * terminal T, where Claude Code runs, a Claude chat and a Codex chat; B, which has none, a Claude chat, and no terminal.
+   * Orca lists A's Claude chat, B's, then A's Codex chat, the newest last, so a ring in time's order would differ. The
+   * plugin's loop is handed A before any dial, by Orca's `identity:` id; a dial that says appFilter is plugged in, and T's
+   * agent starts. [agentList] false: an Orca whose `agent` has no `list`.
+   */
+  const twoWorktrees = async ({ agentList = true }: { agentList?: boolean } = {}) => {
+    const { d, desk, orca } = await fresh({ agentList })
+    const repo = randomUUID()
+    const worktreeA = `${repo}::/e2e/orca-chats/wt-a`
+    const worktreeB = `${repo}::/e2e/orca-chats/wt-b`
+    const identityA = `wt2:local:${randomUUID()}`
+    const onA = `identity:${identityA}`
+    const chats = { a1: orcaChat(worktreeA), b1: orcaChat(worktreeB), a2: orcaChat(worktreeA) }
+    const t = `term_${randomUUID()}`
+    orca.layout([[[t]]])
+    const at = Date.now()
+    orca.agents([chatRow(chats.a1, 'claude', at - 3_000), chatRow(chats.b1, 'claude', at - 2_000), chatRow(chats.a2, 'codex', at - 1_000)])
+    orca.worktrees([{ id: worktreeA, identity: { key: identityA } }, { id: worktreeB }])
+    const plugin = loop(d)
+    onTestFailed(() => { console.log(`---- the loop's states\n${plugin.states.map((s) => JSON.stringify(s)).join('\n')}\n---- its log\n${plugin.logs.join('\n')}`) })
+    plugin.front([t], onA)
+    const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a', FILTER)
+    await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
+    await until('attached', () => plugin.states.at(-1)?.state === 'attached', 60_000)
+    await said(d, '[device] orca front · set · 1 terminals')
+    const inT = inOrca(d, 'in-t', t)
+    await inT.hook('SessionStart', { source: 'startup' })
+    await dial.next((m) => m.t === 'agent' && m.id === inT.id, 45_000, "T's agent listed")
+    /** No title, Orca id, worktree id, folder, identity or handle of the case's in the daemon's log or the loop's. */
+    const unlogged = (): void => {
+      const loopLog = plugin.logs.join('\n')
+      for (const secret of [...Object.values(chats).flatMap((c) => [c.orcaId, c.title, c.worktreeId]), '/e2e/orca-chats', identityA, t]) {
+        expect(d.log()).not.toContain(secret)
+        expect(loopLog).not.toContain(secret)
+      }
+      for (const line of chatLines(d)) expect(line).toMatch(CHAT_LINE)
+      expect(plugin.logs).not.toContain('dial: front not sent')
+    }
+    return { d, dial, orca, plugin, chats, inT, t, onA, worktreeA, worktreeB, front: frontWatch(d), unlogged }
+  }
+
+  it("two worktrees with chats and a terminal: Orca in front with one on screen lists its terminal then its chats, and the plugin's other worktree switches the ring, named by its identity or by its own id", async () => {
+    const { d, dial, plugin, chats, inT, t, onA, worktreeB, front, unlogged } = await twoWorktrees()
+    const onScreenA = [inT, chats.a1, chats.a2]
+
+    // 1. No app settled in front: every Orca agent, T's at its tab's place, then every chat in Orca's order.
+    await lists(dial, [inT, chats.a1, chats.b1, chats.a2], 0, 'every Orca agent, its chats after its terminal')
+
+    // 2. Orca in front, A on screen by its identity, which Orca's worktree list maps to A's id: T's agent, then A's chats,
+    // each named as Orca names it. The APPS page counts every Orca agent, chats included.
+    let since = dial.messages.length
+    front(ORCA)
+    const scoped = await lists(dial, onScreenA, since, "A's terminal agent, then its chats")
+    expect(scoped.end.total).toBe(3)
+    expect(scoped.agents.slice(1).map((m) => m.name)).toEqual([chats.a1.title, chats.a2.title])
+    await until('APPS counting every Orca agent', () => orcaCount(dial) === 4 || undefined, 30_000, 50)
+
+    // 3. B on screen, which has no identity, by its own id as Orca names it: its chat alone, as it has no terminal.
+    since = dial.messages.length
+    plugin.front([], worktreeB)
+    await lists(dial, [chats.b1], since, "B's chat")
+
+    // 4. A again, by its identity.
+    since = dial.messages.length
+    plugin.front([t], onA)
+    await lists(dial, onScreenA, since, "A's agents again")
+
+    // 5. Counts and fixed words only, and every send was taken.
+    expect(chatLines(d)).toContain('[orca-chat] listed · 3 chats · 0 heard')
+    unlogged()
+  })
+
+  it('a tap on a chat runs worktree activate with its worktree id, and words to a resting chat get Type in Orca for chats.', async () => {
+    const { d, dial, orca, plugin, chats, inT, worktreeA, worktreeB, front, unlogged } = await twoWorktrees()
+    let since = dial.messages.length
+    front(ORCA)
+    await lists(dial, [inT, chats.a1, chats.a2], since, "A's agents")
+    /** Each `worktree activate` Orca ran, by the worktree it named and whether it exited 0. */
+    const activated = () => orca.log().filter(({ argv }) => argv[1] === 'worktree' && argv[2] === 'activate')
+      .map(({ argv, ok }) => ({ args: argv.slice(1), ok }))
+    const activates = (worktreeId: string) => ({ args: ['worktree', 'activate', '--worktree', `id:${worktreeId}`, '--json'], ok: true })
+
+    // 1. A tap on A's Codex chat: A's worktree comes up by its id, one argument, then Orca comes forward.
+    const opened = d.opens().length
+    dial.send({ t: 'agent.open', agentId: chats.a2.id })
+    await until("A's worktree activated", () => activated().some((run) => JSON.stringify(run) === JSON.stringify(activates(worktreeA))) || undefined, 30_000, 50)
+    // macOS brings an app forward by its bundle id; Linux raises its window, which no e2e desktop has.
+    if (process.platform === 'darwin') {
+      await until('Orca forward', () => d.opens().slice(opened).some((args) => args.join(' ') === `-b ${ORCA}`) || undefined, 30_000, 50)
+    }
+
+    // 2. On B, which Orca names by its own id, holding its folder: a tap on its chat brings B up, the id still one argument.
+    since = dial.messages.length
+    plugin.front([], worktreeB)
+    await lists(dial, [chats.b1], since, "B's chat")
+    dial.send({ t: 'agent.open', agentId: chats.b1.id })
+    await until("B's worktree activated", () => activated().some((run) => JSON.stringify(run) === JSON.stringify(activates(worktreeB))) || undefined, 30_000, 50)
+
+    // 3. Words to B's chat, which has no process: refused on the dial before any audio is kept, and typed nowhere.
+    since = dial.messages.length
+    dial.send({ t: 'voice.begin', agentId: chats.b1.id, uploadId: 'spoken-chat', sr: 16_000, lang: 'en' })
+    dial.audio(Buffer.alloc(3_200, 1))
+    dial.send({ t: 'voice.end', uploadId: 'spoken-chat' })
+    expect(await dial.next((m) => (m.t === 'voice.transcript' || m.t === 'voice.error') && m.uploadId === 'spoken-chat', 45_000, 'the answer to its words', since))
+      .toMatchObject({ t: 'voice.error', message: 'Type in Orca for chats.' })
+    expect(orca.log().filter(({ argv }) => argv[1] === 'terminal' && argv[2] === 'send')).toEqual([])
+    unlogged()
+  })
+
+  it('a prompt hook carrying ORCA_AGENT_SESSION_ID, with no terminal handle, moves the dial to that chat', async () => {
+    const { d, dial, chats, inT, front, unlogged } = await twoWorktrees()
+    let since = dial.messages.length
+    front(ORCA)
+    await lists(dial, [inT, chats.a1, chats.a2], since, "A's agents")
+
+    // 1. A's Claude chat's process, which Orca runs on no terminal: its hook names its Orca session and no handle. Its row is
+    // the hooked copy now, in the resting row's place and named as Orca names the chat: one card.
+    const a1 = new InOrca(d, 'chat-a1', children, { ORCA_AGENT_SESSION_ID: chats.a1.orcaId, ORCA_STRUCTURED_SESSION: '1', __CFBundleIdentifier: ORCA })
+    since = dial.messages.length
+    await a1.hook('SessionStart', { source: 'startup' })
+    await lists(dial, [inT, a1, chats.a2], since, "A1's hooked copy in its row's place")
+    await dial.next((m) => m.t === 'agent' && m.id === a1.id && m.name === chats.a1.title, 45_000, "A1 named by Orca's title", since)
+
+    // 2. The dial turned to T's agent by hand, then a prompt typed in A1: the dial moves to A1.
+    await dial.turnUntil(inT.id, 'the swipe', () => (d.log().includes('[device] swipe · ok') || undefined))
+    since = dial.messages.length
+    expect(await prompted(d, a1)).toBe('[device] prompt · moved')
+    await dial.next((m) => m.t === 'focus' && m.agentId === a1.id, 30_000, "A1's focus", since)
+    unlogged()
+  })
+
+  it("an Orca whose agent --help lacks list gives today's ring", async () => {
+    const { d, dial, orca, plugin, inT, t, onA, worktreeB, front } = await twoWorktrees({ agentList: false })
+    // Asked once whether it lists chats, at the dial's attach: it does not.
+    await until('agent --help asked', () => ran(orca, 'agent --help').length > 0 || undefined, 30_000, 50)
+    await lists(dial, [inT], 0, "T's agent alone")
+
+    // Orca in front: B, which has no terminal, is an empty ring, and A is T's agent alone, as before Orca's chats.
+    front(ORCA)
+    let since = dial.messages.length
+    plugin.front([], worktreeB)
+    expect((await lists(dial, [], since, 'an empty list')).end.total).toBe(0)
+    since = dial.messages.length
+    plugin.front([t], onA)
+    expect((await lists(dial, [inT], since, "T's agent alone again")).end.total).toBe(1)
+    expect(orcaCount(dial)).toBe(1)
+
+    // Neither list was read, `--help` was not asked again for the same binary, and nothing was said of it.
+    expect(ran(orca, 'agent list --json')).toEqual([])
+    expect(ran(orca, 'worktree list --json')).toEqual([])
+    expect(ran(orca, 'agent --help')).toHaveLength(1)
+    expect(chatLines(d)).toEqual([])
   })
 })
