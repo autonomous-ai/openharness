@@ -20,7 +20,7 @@ import type { Nested, NestedLookup, NestedPlace, OuterLookup } from './outer.js'
 import type { SessionRecord } from './record.js'
 import type { ProcessName } from './scannedApp.js'
 import { isTabApp } from './tabs.js'
-import type { Caps, HostAgent, HostAgentState, HostSource, PaneSwitch, SendResult } from './types.js'
+import type { Caps, HostAgent, HostAgentState, HostSource, Nest, PaneSwitch, SendResult } from './types.js'
 
 export { detectHost, hostDisplayName } from './hostDetect.js'
 
@@ -222,9 +222,9 @@ interface Entry {
   otherApp?: DialOtherApp
   /** The process its latest event came from: none for a session the scan found, until its first. */
   caller?: number
-  /** The hc terminal a session the scan found runs in, until its first hook, and the app the scan gave it, which a
-   *  pairing that no longer holds puts back. No hook's hints: only locate() reads it. */
-  paired?: { address: string; app: string; appPending?: true }
+  /** The hc terminal a session the scan found runs in, until its first hook, and the app and multiplexer the scan gave
+   *  it, which a pairing that no longer holds puts back. No hook's hints: only locate() reads it. */
+  paired?: { address: string; app: string; appPending?: true; nest?: Nest }
   /** The Claude app's id of a session the scan found, from its record, until its first hook: only locate() reads it. */
   hostSession?: string
   /** Every pane an adapter knows it by, from its latest event and its tty, in the adapters' order. */
@@ -930,8 +930,12 @@ export class ObservedSource implements HostSource {
     const a = entry.agent
     a.lastActivityAt = now
     // Its own hook places it now, and with a caller it is never paired again. The pairing's Herdr is given back first:
-    // no hook said it, so until the caller's parents answer it keeps the app the scan gave it.
-    if (entry.paired) a.app = entry.paired.app
+    // no hook said it, so until the caller's parents answer it keeps the app the scan gave it, and until its lookup
+    // answers the multiplexer (askOuter).
+    if (entry.paired) {
+      a.app = entry.paired.app
+      if (entry.paired.nest) a.nest = entry.paired.nest
+    }
     entry.paired = undefined
     entry.hostSession = undefined
     // From its first hook, its panes are the hook's: the scan's pane goes, as the hook names the pane it runs in.
@@ -1357,17 +1361,20 @@ export class ObservedSource implements HostSource {
     const a = entry.agent
     if (address !== undefined) {
       // A move keeps what the scan gave it, not the Herdr it was placed in.
-      const { app, appPending } = entry.paired ?? a
-      entry.paired = { address, app, ...(appPending ? { appPending } : {}) }
+      const { app, appPending, nest } = entry.paired ?? a
+      entry.paired = { address, app, ...(appPending ? { appPending } : {}), ...(nest ? { nest } : {}) }
       a.host = 'herdr'
       a.app = 'herdr'
       delete a.appPending
+      // On Herdr's page: a multiplexer would hold it on its own (pageOf).
+      delete a.nest
       entry.bundle = APP_BUNDLES.herdr
     } else {
-      const { app, appPending } = entry.paired!
-      a.host = 'terminal'
+      const { app, appPending, nest } = entry.paired!
+      a.host = nest ?? 'terminal'
       a.app = app
       if (appPending) a.appPending = appPending
+      if (nest) a.nest = nest
       entry.bundle = undefined
       entry.paired = undefined
     }
