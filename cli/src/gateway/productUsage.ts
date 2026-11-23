@@ -57,6 +57,9 @@ const requestActions = new Map<string, Reach>([
 const isTuiMetric = (metric: string): boolean => metric.startsWith('ui_tui_') || metric.startsWith('health_tui_')
 const isNodeMetric = (metric: string): boolean => metric.startsWith('health_cli_node_')
 const isDialMetric = (metric: string): boolean => metric.startsWith('dial_')
+// A report's group, in the order they take turns: the product's own, the dial's, the Node counters, hn's.
+const GROUPS = 4
+const groupOf = (metric: string): number => isDialMetric(metric) ? 1 : isNodeMetric(metric) ? 2 : isTuiMetric(metric) ? 3 : 0
 // The dial's names live in a vocabulary the core's process never loads (lib/dialUsageContract.ts), so the report's
 // names are both lists, in a type of this file's own.
 type UsageMetric = ProductUsageMetric | DialUsageMetric
@@ -159,6 +162,8 @@ export function createProductUsage(deps: ProductUsageDeps) {
   let postAt = 0, backoffs = 0
   // When the ticks next read the choice and next report (SETTINGS_EVERY_MS, REPORT_EVERY_MS).
   let settingsAt = 0, reportAt = 0
+  // The group whose turn the next report is, when it has counts waiting (groupOf).
+  let turn = 0
   // The devices' file as last judged: one unchanged since is not read again, and that read stands for it.
   let dialStamp: DialStamp | undefined, dialRead: Exclude<DialRead, { state: 'same' }> = { state: 'none' }
   // hn's counters: those it observed before the first choice read, held in RAM until that is known
@@ -426,12 +431,13 @@ export function createProductUsage(deps: ProductUsageDeps) {
         const day = Object.keys(state.days).sort().find(d => validDay(d) && Object.keys(state.days[d]).length)
         if (!day) return
         // hn's counters, the dial's and the Node counters each travel alone: a backend from before their names refuses
-        // the whole report (400), and that refusal drops the report, so it must never carry the other counts.
+        // the whole report (400), and that refusal drops the report, so it must never carry the other counts. The groups
+        // with counts waiting take turns: each tick's resource sample refills the product's own, so a group sent only
+        // once that one was empty waited for its day to pass (e2e/dialUsage.e2e.ts).
         const entries = Object.entries(state.days[day])
-        const own = entries.filter(([metric]) => !isTuiMetric(metric) && !isNodeMetric(metric) && !isDialMetric(metric))
-        const dial = entries.filter(([metric]) => isDialMetric(metric))
-        const node = entries.filter(([metric]) => isNodeMetric(metric))
-        const group = own.length ? own : dial.length ? dial : node.length ? node : entries
+        const next = Array.from({ length: GROUPS }, (_, i) => (turn + i) % GROUPS).find(g => entries.some(([metric]) => groupOf(metric) === g))!
+        turn = (next + 1) % GROUPS
+        const group = entries.filter(([metric]) => groupOf(metric) === next)
         const counters = Object.fromEntries(group.slice(0, MAX_REPORT_METRICS)) as Counters
         const reportContext = state.dayContexts[day] ?? context
         state.pending = { schemaVersion: 1, revision: state.revision, id: uuid(), day, counters, ...(reportContext ? { context: reportContext } : {}) }
