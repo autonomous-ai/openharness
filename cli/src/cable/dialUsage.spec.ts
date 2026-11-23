@@ -415,6 +415,18 @@ describe('createDialUsage', () => {
     expect(count('dial_hooked_claude_placed')).toBe(2)
   })
 
+  it('hooked agents by state and by app, at most 16 a name a day', () => {
+    const { usage, count } = rig()
+    usage.attached(true)
+    for (let i = 0; i < DIAL_USAGE_AGENTS_MAX + 4; i++) {
+      usage.hooked(`p${i}`, { ...tmuxClaude, listed: true })
+      usage.hooked(`z${i}`, { engine: 'codex', host: 'terminal', page: 'terminal', held: false, listed: true, otherApp: 'zed' })
+    }
+    expect(count('dial_hooked_claude_placed')).toBe(DIAL_USAGE_AGENTS_MAX)
+    expect(count('dial_hooked_codex_other')).toBe(DIAL_USAGE_AGENTS_MAX)
+    expect(count('dial_other_app_zed_agents')).toBe(DIAL_USAGE_AGENTS_MAX)
+  })
+
   it('wait buckets at 29 999, 30 000, 120 000, 600 000 ms', () => {
     const { usage, prefixed } = rig()
     usage.attached(true)
