@@ -19,9 +19,10 @@ import { CONTROL, MAX_TEXT } from '../../../../cable/hosts/orca.js'
 import { flagOf, programOf } from '../../argv.js'
 import { tabLabel, type TabRef } from '../../itermRecords.js'
 import { engineOf, type SessionDef, type SessionKey, type StepOf } from '../../types.js'
-import type { StepHandler, TierAWorld } from '../world.js'
+import type { Answer, StepHandler, TierAWorld } from '../world.js'
 import { labelOf, selectedTab, tabShell } from './iterm.js'
 import { dropSession, nextTty, running, SHELLS, startProcess, startSession } from './sessions.js'
+import { FAILED, lines } from './tmux.js'
 
 /** Where the eval's machine has herdr: the server and every client run it. */
 export const HERDR = '/opt/eval/bin/herdr'
@@ -31,8 +32,6 @@ const CLIENT_SOCKET = '/opt/eval/herdr/herdr-client.sock'
 const DIGITS = '123456789ABCDEFGHJKMNPQRSTVWXYZ0'
 const WORKSPACE = 'w1'
 
-type Answer = { code: number; stdout?: string }
-const FAILED: Answer = { code: 1 }
 type HookEvent = StepOf<'hook'>['event']
 type Status = 'idle' | 'working' | 'blocked' | 'done'
 /** herdr's status of an agent after each of its hooks. */
@@ -249,8 +248,6 @@ export function herdrClient(world: TierAWorld): HerdrClient {
   }
 }
 
-/** A listing's lines, each ended as the program ends it. */
-const lines = (rows: string[]): string => rows.map((row) => `${row}\n`).join('')
 /** The kernel address of the server's end of a client's connection, and of the client's own. */
 const served = (client: Client): string => `0x${(client.pid * 2).toString(16)}`
 const own = (client: Client): string => `0x${(client.pid * 2 + 1).toString(16)}`

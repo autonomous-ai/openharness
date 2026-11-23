@@ -71,7 +71,7 @@ export interface TierAWorld {
   session(key: SessionKey): SessionDef
   deliver(d: Omit<Delivery, 'at'>): void
   /** How a command the devices run is answered: the first rule that answers decides, and one none answers exits 0. */
-  answer(rule: (argv: readonly string[]) => { code: number; stdout?: string } | undefined): void
+  answer(rule: (argv: readonly string[]) => Answer | undefined): void
   /** This scenario on this platform cannot be graded: why. */
   gap(reason: string): void
   /** What a step holds open for the scenario (the app's WAL writer), closed as the world closes, before its folder goes. */
@@ -81,7 +81,8 @@ export interface TierAWorld {
 
 export type StepHandler<K extends StepKind> = (world: TierAWorld, step: StepOf<K>) => Promise<void>
 
-type Answer = { code: number; stdout?: string }
+/** What a command the devices run exits with, and what it prints. */
+export type Answer = { code: number; stdout?: string }
 
 /** Each app's macOS bundle id, the scheme of its links, and its Linux desktop file: Orca's rows open by no link. */
 const APPS: Readonly<Record<LinkedApp, { bundle: string; scheme: string; desktopFile: string }>> = {

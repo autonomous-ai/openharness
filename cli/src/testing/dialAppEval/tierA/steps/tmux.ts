@@ -13,7 +13,7 @@
 import { programOf } from '../../argv.js'
 import { tabLabel } from '../../itermRecords.js'
 import type { SessionDef, SessionKey } from '../../types.js'
-import type { StepHandler, TierAWorld } from '../world.js'
+import type { Answer, StepHandler, TierAWorld } from '../world.js'
 import { labelOf, selectedTab, tabShell } from './iterm.js'
 import { nextTty, SHELLS, startProcess } from './sessions.js'
 
@@ -27,8 +27,10 @@ interface Client { pid: number; tty?: string; session: Session; used: number }
 interface Model { server: number; sessions: Map<string, Session>; clients: Client[] }
 const models = new WeakMap<TierAWorld, Model>()
 
-type Answer = { code: number; stdout?: string }
-const FAILED: Answer = { code: 1 }
+/** A command of the multiplexers' models that failed, and the lines of a listing, each ended as the program ends it:
+ *  tmux's here, herdr's lsof and ps (herdr.ts). */
+export const FAILED: Answer = { code: 1 }
+export const lines = (rows: string[]): string => rows.map((row) => `${row}\n`).join('')
 
 /** The pane id of the session's tmux pane: its index in the scenario. */
 export const tmuxPaneId = (world: TierAWorld, s: SessionDef): string => `%${world.scenario.sessions.indexOf(s)}`
@@ -207,9 +209,6 @@ function expand(world: TierAWorld, format: string, names: Record<string, string>
   }
   return out
 }
-
-/** The lines of a listing, each ended as tmux ends it. */
-const lines = (rows: string[]): string => rows.map((row) => `${row}\n`).join('')
 
 /** One tmux command: its flags, the value after each of -t, -F and -c, and the rest. */
 function parse(args: readonly string[]): { name: string; flags: Set<string>; values: Map<string, string>; rest: string[] } {
