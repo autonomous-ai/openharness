@@ -1313,8 +1313,17 @@ describe('the dial\'s day', () => {
     })
   })
 
+  // The gateway hears the windows at its start, before its first read of the choice (gatewayProcess.ts), and a
+  // window's open can be lost with a restart: a Desktop window connected at a tick says the day is the app's.
+  it('a Desktop window connected before sharing is read makes the day a Desktop day', async () => {
+    start(); usage.presence(true, true); await usage.sync()
+    devices({ [TODAY]: used }); await flush()
+    now += DAY; await flush()
+    expect(Object.keys(dialSent()).filter(name => name.includes('outside_app'))).toEqual([])
+  })
+
   it('keeps Desktop\'s days 35 days for the outside flag', async () => {
-    start(); await usage.sync(); usage.opened('desktop')
+    start(); await usage.sync(); usage.presence(true, true)
     await usage.stop()
     now += 27 * DAY; start(); await usage.sync()
     devices({ [day(27)]: used })

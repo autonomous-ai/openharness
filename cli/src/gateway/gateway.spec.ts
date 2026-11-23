@@ -60,6 +60,18 @@ it('passes only lifecycle scalars to product reporting and keeps relaying if rep
   await socket.stop()
 })
 
+it('tells product reporting whether a window, and a Desktop window, is connected', async () => {
+  const socket = relaySocket(MACHINE)
+  const gateway = gatewayOf(socket)
+  const presence = vi.fn()
+  gateway.productUsage = { observe: vi.fn(), opened: vi.fn(), presence }
+  gateway.localClients({ desktop: 1, tui: 0 })
+  gateway.localClients({ desktop: 0, tui: 1 })
+  gateway.localClients({ desktop: 0, tui: 0 })
+  expect(presence.mock.calls).toEqual([[true, true], [true, false], [false, false]])
+  await socket.stop()
+})
+
 type Frame = Record<string, unknown>
 
 /** What the gateway queued for the relay, addressed to one connection. */
