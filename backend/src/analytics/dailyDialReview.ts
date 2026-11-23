@@ -20,18 +20,17 @@ const COLUMNS = Object.keys(SPAN) as Column[]
 // At G1 30-50 computers, many of them the team's: a smaller cell is a person (design, "Small numbers also identify").
 const FEWEST = 5
 const RETURN_DAYS = [1, 7, 28] as const
-// A return is counted on its cohort's day N once N+L closes, so N+28 needs cohorts 29-56 days back: the return flags and
-// the used days they are rated against read 28 days more than the rest (Design 3).
-const RETURN_NAMES = new Set<string>(['dial_used_installation_days', 'dial_used_outside_app_installation_days',
-  ...RETURN_DAYS.flatMap(lag => [`dial_d${lag}_returning_installations`, `dial_d${lag}_returning_outside_app_installations`])])
-const RETURN_READ_DAYS = READ_DAYS + Math.max(...RETURN_DAYS)
+// A return is counted on its return day N+L and rated against the used day N, L days earlier: an N+28 return in the
+// 28-day column needs used days 29-56 days back, so they read 28 days more than the rest (Design 3).
+const COHORT_NAMES = new Set<string>(['dial_used_installation_days', 'dial_used_outside_app_installation_days'])
+const COHORT_READ_DAYS = READ_DAYS + Math.max(...RETURN_DAYS)
 const NAMES = new Set<string>([...DIAL_USAGE_METRICS, ...VOICE_USAGE_METRICS, 'health_cli_collector_days'])
 /** [names], outside the team and the team's (`staff:`, `testing:`; lib/productUsage.ts apartPrefixes). */
 const withTeam = (names: Set<string>) => [...names].flatMap(name => [name, `staff:${name}`, `testing:${name}`])
 /** Every dial and voice name, outside the team and the team's. */
 export const DIAL_REVIEW_METRICS = withTeam(NAMES)
 
-/** The 28 complete days before [now] of DIAL_REVIEW_METRICS, and the 28 before those of the return names. Plain `$match`es:
+/** The 28 complete days before [now] of DIAL_REVIEW_METRICS, and the 28 before those of the used days. Plain `$match`es:
  * Prisma sends `in` as `$expr`, which no index bounds (backend/AGENTS.md rule 3). Bounded by the (day, name) unique index:
  * one row a day and name at most. */
 export async function readDialRows(db: Pick<PrismaClient, 'productUsageTotal'>, now: Date): Promise<Row[]> {
@@ -41,7 +40,7 @@ export async function readDialRows(db: Pick<PrismaClient, 'productUsageTotal'>, 
       metric: { $in: metrics } } },
     { $project: { _id: 0, day: { $dateToString: { date: '$dayUtc', format: '%Y-%m-%d', timezone: 'UTC' } }, metric: 1, value: 1 } },
   ], options: { maxTimeMS: 15_000, allowDiskUse: false } }) as unknown as Array<{ day: string; metric: string; value: number }>
-  const rows = (await Promise.all([read(READ_DAYS, 0, DIAL_REVIEW_METRICS), read(RETURN_READ_DAYS, READ_DAYS, withTeam(RETURN_NAMES))])).flat()
+  const rows = (await Promise.all([read(READ_DAYS, 0, DIAL_REVIEW_METRICS), read(COHORT_READ_DAYS, READ_DAYS, withTeam(COHORT_NAMES))])).flat()
   return rows.map(row => ({ dayUtc: new Date(row.day), metric: row.metric, value: row.value }))
 }
 
@@ -58,11 +57,11 @@ export function dailyDialReview(rows: Row[], breakdowns: Row[], now: Date) {
     const stamp = row.dayUtc.getTime()
     if (!Number.isSafeInteger(row.value) || row.value < 0 || stamp >= today) continue
     const [, prefix, name] = /^(staff:|testing:)?(.*)$/.exec(row.metric)!
-    if (!NAMES.has(name!) || stamp < today - (RETURN_NAMES.has(name!) ? RETURN_READ_DAYS : READ_DAYS) * DAY) continue
+    if (!NAMES.has(name!) || stamp < today - (COHORT_NAMES.has(name!) ? COHORT_READ_DAYS : READ_DAYS) * DAY) continue
     const days = prefix ? team : outside, c = days.get(stamp) ?? {}
     c[name!] = (c[name!] ?? 0) + row.value; days.set(stamp, c)
   }
-  /** [metric] over [column]'s complete days, [lag] days earlier: a return's cohort. */
+  /** [metric] over [column]'s complete days, [lag] days earlier: the used days a return is rated against. */
   const total = (days: Map<number, Record<string, number>>, metric: string, column: Column, lag = 0) => {
     let n = 0
     for (let i = 1; i <= SPAN[column]; i++) n += days.get(today - (i + lag) * DAY)?.[metric] ?? 0
@@ -136,12 +135,12 @@ export function dailyDialReview(rows: Row[], breakdowns: Row[], now: Date) {
           ...line(`${h}: interrupted within 10 s`, sum(`dial_voice_host_${h}_installation_days`), sum(`dial_voice_host_${h}_interrupted_10s`)),
         ]),
       ] },
-      // A return is counted on its cohort's day once day N+L closes (the gateway): each column reads the cohorts L days earlier.
-      { name: 'Return (day, d7 and d28 are the latest cohorts whose N+L day is complete)', rows: RETURN_DAYS.flatMap(lag => [
+      // The gateway counts a return on its return day N+L: each column's returns against the used days L days earlier.
+      { name: 'Return (day, d7 and d28 are return days N+L; day N is L days earlier)', rows: RETURN_DAYS.flatMap(lag => [
         ...line(`Used on day N (N+${lag} complete)`, sum(used, lag)),
-        ...line(`Again on N+${lag}`, sum(`dial_d${lag}_returning_installations`, lag)),
+        ...line(`Again on N+${lag}`, sum(`dial_d${lag}_returning_installations`)),
         ...line(`Used outside the app on day N (N+${lag} complete)`, sum(usedOutside, lag)),
-        ...line(`Outside the app, again on N+${lag}`, sum(`dial_d${lag}_returning_outside_app_installations`, lag)),
+        ...line(`Outside the app, again on N+${lag}`, sum(`dial_d${lag}_returning_outside_app_installations`)),
       ]) },
     ].filter(section => section.rows.length)
   }
