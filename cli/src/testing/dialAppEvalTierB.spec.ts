@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { Worker } from 'node:worker_threads'
@@ -55,6 +55,10 @@ const fakeOrca = await import('../../e2e/harness/fakeOrca.js' as string) as {
 
 const modInbox = await import('../../e2e/harness/modInbox.js' as string) as {
   inboxPoll(d: { socketPath: string }, sessionId: string): Promise<{ status: number; body: unknown }>
+}
+
+const daemon = await import('../../e2e/harness/daemon.js' as string) as {
+  IsolatedDaemon: { prototype: { servicePids(this: { output: string; pid: number | null }, name: string): number[] } }
 }
 
 let dir = ''
@@ -432,6 +436,25 @@ describe("tier B's tmux and herdr runs", () => {
     } finally {
       for (const world of worlds) await world.close()
     }
+  })
+})
+
+describe("tier B's devices restart", () => {
+  afterEach(() => { vi.unstubAllEnvs() })
+
+  it("finds the devices' new pid by each process's pid and parent alone, never a command line", () => {
+    dir = mkdtempSync(join(tmpdir(), 'tier-b-pids-'))
+    const bin = join(dir, 'bin')
+    mkdirSync(bin)
+    const asked = join(dir, 'asked')
+    // The ps a daemon's pid wait runs, first on this worker's PATH: it notes what it was asked, and prints the master
+    // 100's devices 101 and search 103, and 102, a logged pid another process took since.
+    writeFileSync(join(bin, 'ps'), `#!/bin/sh\nprintf '%s\\n' "$@" > '${asked}'\nprintf '  101   100\\n  102     1\\n  103   100\\n'\n`, { mode: 0o755 })
+    vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
+    const log = '[harnessd] service devices started (pid 102)\n[harnessd] service devices started (pid 101)\n[harnessd] service search started (pid 103)\n'
+    const pids = daemon.IsolatedDaemon.prototype.servicePids.call({ output: log, pid: 100 }, 'devices')
+    expect(readFileSync(asked, 'utf8').split('\n').filter(Boolean)).toEqual(['-A', '-o', 'pid=,ppid='])
+    expect(pids).toEqual([101])
   })
 })
 
