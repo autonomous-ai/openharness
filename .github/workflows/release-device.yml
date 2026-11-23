@@ -8,12 +8,13 @@ run-name: Harness Device ${{ inputs.publish && 'release' || 'candidate' }} ${{ i
 # updater secrets, and `build-linux` the updater key, only in the steps after `Compile`, on the same runner (code that
 # means harm could leave something for a later step). Windows compiles in `build-windows`, with no secret and no
 # identity, and is signed in `sign-windows`, which compiles and installs nothing: the Tauri CLI it runs comes from
-# `tauri-cli-windows`, where no app code runs, and the Windows sums publish checks are taken there too. A job that runs
-# the build's code can still replace another job's artifact, so the CLI's sha256 and the sums' reach the jobs that take
-# them as job outputs, which only the job that made them can set. Only `sign-windows` and `publish` may mint an OIDC
-# token, and neither runs the build's code. Which credential each token gets is the identity providers' to decide:
-# Azure's federated credential trusts the `release` environment, which only `sign-windows` is in; GCP's workload
-# identity provider must refuse that environment's subject.
+# `tauri-cli-windows`, where no app code runs, and the Windows sums publish checks are taken there too. The signing
+# action signs the exes there, and Tauri's sign command signs the installers, their uninstallers and the plugin DLLs
+# inside the bundle. A job that runs the build's code can still replace another job's artifact, so the CLI's sha256 and
+# the sums' reach the jobs that take them as job outputs, which only the job that made them can set. Only
+# `sign-windows` and `publish` may mint an OIDC token, and neither runs the build's code. Which credential each token
+# gets is the identity providers' to decide: Azure's federated credential trusts the `release` environment, which only
+# `sign-windows` is in; GCP's workload identity provider must refuse that environment's subject.
 
 on:
   workflow_dispatch:
@@ -306,8 +307,9 @@ jobs:
 
   # Authenticode through Azure Artifact Signing (docs/windows-code-signing.md), always: Smart App Control blocks an
   # unsigned program. This job's OIDC identity is the signing credential, and an identity is the whole job's, so no
-  # build script or package runs here. The app's exe is signed before NSIS packs it, the installer after, and the
-  # update signature last, so it covers the bytes that ship.
+  # build script or package runs here. The app's exe is signed before NSIS packs it. The installers, their uninstallers
+  # and the plugin DLLs are signed inside the bundle by Tauri's command, and the update signature comes last, so it
+  # covers the bytes that ship.
   sign-windows:
     needs: [version, tauri-cli-windows, build-windows]
     runs-on: windows-latest
@@ -377,32 +379,31 @@ jobs:
           account: ${{ vars.SIGNING_ACCOUNT }}
           profile: ${{ vars.SIGNING_PROFILE }}
 
-      # Only the Tauri CLI runs here, with no secret: each signed exe goes back where the build left it, and NSIS packs
-      # it.
+      # Only the Tauri CLI and this repository's windows-sign.ps1 run here, with no secret: each signed exe goes back
+      # where the build left it, and NSIS packs it. Tauri's sign command signs NSIS's plugin DLLs, the uninstaller and
+      # the installer inside the bundle, through the Azure session `Sign the exes` left; the identifiers below are not
+      # secrets. Only this step gives the command, so PR CI's and local bundles stay unsigned. Its paths use forward
+      # slashes because makensis gets the command as Rust's Debug of it.
       - name: Bundle
+        env:
+          SIGNING_ENDPOINT: ${{ vars.SIGNING_ENDPOINT }}
+          SIGNING_ACCOUNT: ${{ vars.SIGNING_ACCOUNT }}
+          SIGNING_PROFILE: ${{ vars.SIGNING_PROFILE }}
+          WINDOWS_SIGNING_PUBLISHER: ${{ vars.WINDOWS_SIGNING_PUBLISHER || 'AUTONOMOUS INC.' }}
         run: |
           set -euo pipefail
+          script="$(cygpath -m "$PWD/device-app/scripts/windows-sign.ps1")"
           for pair in x64:x86_64-pc-windows-msvc arm64:aarch64-pc-windows-msvc; do
             arch="${pair%%:*}" target="${pair#*:}"
             release="device-app/src-tauri/target/$target/release"
             mkdir -p "$release"
             mv "sign/$arch/harness-device.exe" "$release/"
-            DEVICE_TARGET="$target" bash device-app/scripts/release-build.sh bundle "$VERSION" "bundle/$arch"
+            folder="$(cygpath -m "$PWD/$release")"
+            sign='{"bundle":{"windows":{"signCommand":{"cmd":"pwsh","args":["-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-File","'"$script"'","'"$folder"'","%1"]}}}}'
+            DEVICE_TARGET="$target" bash device-app/scripts/release-build.sh bundle "$VERSION" "bundle/$arch" "$sign"
           done
           mkdir out
           mv bundle/x64/* bundle/arm64/* out/
-
-      - name: Sign the installers
-        uses: ./.github/actions/windows-signing
-        with:
-          path: out
-          publisher: ${{ vars.WINDOWS_SIGNING_PUBLISHER || 'AUTONOMOUS INC.' }}
-          azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
-          azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          endpoint: ${{ vars.SIGNING_ENDPOINT }}
-          account: ${{ vars.SIGNING_ACCOUNT }}
-          profile: ${{ vars.SIGNING_PROFILE }}
 
       # The only step that holds the updater key, after Authenticode wrote the installers' last bytes.
       - name: Sign the updates

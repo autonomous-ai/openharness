@@ -128,11 +128,35 @@ authenticode_valid() {
       'if ((Get-AuthenticodeSignature -LiteralPath $env:SIGNED_FILE).Status -ne "Valid") { exit 1 }'
 }
 
-# The harness-device.exe the installer $1 packs, read out by 7-Zip (on Windows runners), which reads NSIS installers,
-# into the folder $2.
-packed_app() {
-  7z e -y -r -bso0 -bsp0 -o"$(cygpath -w "$2")" "$(cygpath -w "$1")" harness-device.exe &&
-    [[ -f "$2/harness-device.exe" ]]
+# Every file named $3 (a name or a 7-Zip wildcard) anywhere in the archive $1, read out by 7-Zip (on Windows runners),
+# which reads NSIS installers and the uninstaller inside one, into the folder $2.
+extract() { 7z e -y -r -bso0 -bsp0 -o"$(cygpath -w "$2")" "$(cygpath -w "$1")" "$3"; }
+
+# The file $3 the archive $1 packs, into the folder $2.
+packed() { extract "$@" && [[ -f "$2/$3" ]]; }
+
+# The plugin DLLs the archive $1 carries, into the folder $2: at least one, so an extraction that finds nothing cannot
+# pass. NSIS keeps copies of one plugin under $PLUGINSDIR, which -y overwrites with the same file. The folder holds only
+# what 7-Zip wrote for *.dll, which matches a name in any case and one that starts with a dot, so it and dlls_signed
+# take every file there, under dotglob: bash's *.dll glob would miss a .DLL, and * without dotglob a .x.dll.
+packed_dlls() {
+  local dll
+  extract "$1" "$2" '*.dll' || return 1
+  for dll in "$2"/*; do
+    [[ -f "$dll" ]] && return 0
+  done
+  return 1
+}
+
+# Each DLL in the folder $1, naming on stderr the first that is not validly signed.
+dlls_signed() {
+  local dll
+  for dll in "$1"/*; do
+    authenticode_valid "$dll" || {
+      echo "release-check: $(basename "$dll") is not Authenticode-signed" >&2
+      return 1
+    }
+  done
 }
 
 # The version resource tauri-build wrote from the version compile was given, compared in PowerShell, whose output would
@@ -178,7 +202,7 @@ case "$os" in
     check "the update signature is for $version" signed_version "$appimage"
     ;;
   windows)
-    shopt -s nullglob
+    shopt -s nullglob dotglob
     installers=("$dir"/Harness-Device-windows-*-setup.exe)
     check "an installer" test ${#installers[@]} -gt 0
     for installer in "${installers[@]}"; do
@@ -191,9 +215,20 @@ case "$os" in
         # blocks it otherwise.
         folder="$work/${name%.exe}"
         app="$folder/harness-device.exe"
-        check "$name packs harness-device.exe" packed_app "$installer" "$folder"
+        check "$name packs harness-device.exe" packed "$installer" "$folder" harness-device.exe
         check "the harness-device.exe in $name keeps its Authenticode signature" authenticode_valid "$app"
         check "the harness-device.exe in $name is $version" app_version "$app"
+        # The gate for the uninstaller: makensis ignores the exit code of the command that signs it, and Smart App
+        # Control blocks an unsigned one (Code Integrity 3033/3089), so uninstall fails. The plugin DLLs, the
+        # installer's and the uninstaller's, are signed alike so a reputation change cannot block them.
+        uninstaller="$folder/uninstall.exe"
+        # 7-Zip names an uninstaller that was never finalized (signed) uninstall.exe.nsis: such an installer fails here.
+        check "$name packs uninstall.exe" packed "$installer" "$folder" uninstall.exe
+        check "the uninstall.exe in $name is Authenticode-signed" authenticode_valid "$uninstaller"
+        check "$name carries plugin DLLs" packed_dlls "$installer" "$folder/dlls"
+        check "every DLL in $name is Authenticode-signed" dlls_signed "$folder/dlls"
+        check "the uninstall.exe in $name carries plugin DLLs" packed_dlls "$uninstaller" "$folder/uninstall-dlls"
+        check "every DLL in the uninstall.exe in $name is Authenticode-signed" dlls_signed "$folder/uninstall-dlls"
       fi
     done
     ;;

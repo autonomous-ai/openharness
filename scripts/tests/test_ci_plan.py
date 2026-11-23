@@ -535,10 +535,12 @@ class SelectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(planner.reads("cross-read-scan", path))
 
-    def test_either_release_workflow_runs_the_device_app_suite(self):
+    def test_either_release_workflow_or_the_signing_action_runs_the_device_app_suite(self):
         # Its test_release_workflow.py reads both through a path built from parts, which the scan cannot see: a change
-        # to either alone, Desktop's runners or signing inputs too, must run it.
-        for path in (".github/workflows/release-device.yml", ".github/workflows/release-desktop.yml"):
+        # to either alone, Desktop's runners or signing inputs too, must run it. So must one to the signing action,
+        # which test_windows_sign.py holds windows-sign.ps1's settings to through a path built from parts.
+        for path in (".github/workflows/release-device.yml", ".github/workflows/release-desktop.yml",
+                     ".github/actions/windows-signing/action.yml"):
             with self.subTest(path=path):
                 self.assertEqual(planner.select([path])[0], {"device-app"})
                 self.assertTrue(planner.reads("device-app", path))
