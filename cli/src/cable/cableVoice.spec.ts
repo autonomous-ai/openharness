@@ -377,6 +377,14 @@ describe('each voice turn reports one end', () => {
     expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'other' }]])
   })
 
+  it('each voice turn reports one end: unlisted, an error of this daemon\'s own, still thrown', async () => {
+    const onFault = vi.fn()
+    const { voiceEnded, speak } = await talk({ onFault, listAgents: async () => { throw new Error('the list broke') } })
+    speak({ agentId: 'a1' })
+    await vi.waitFor(() => expect(onFault).toHaveBeenCalled())
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'unlisted', agentId: 'a1' }]])
+  })
+
   it('a count that throws changes nothing the dial is told', async () => {
     const { port, host, speak, answered } = await talk({ voiceEnded: vi.fn(() => { throw new Error('count failed') }) })
     speak({ agentId: 'a1' }); await answered()
