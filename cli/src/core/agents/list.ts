@@ -15,10 +15,13 @@ import type { createHarnessResourcesReader } from '../../lib/harnessResources.js
 import type { createHarnessStorageReader } from '../../lib/harnessTelemetry.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import type { stoppedAgents } from '../../lib/stoppedAgents.js'
+import { readEngineLiveness } from '../../lib/paneEngineProcess.js'
+import { paneReadIdentity } from '../transcripts/readIdentity.js'
 
 const DEVICE_AGENT_LIST_LIMIT = 100
 const DEVICE_AGENT_NAME_MAX_CODEPOINTS = 15
 const DEVICE_AGENT_NAME_MAX_BYTES = 39 // device project_t.name[40], including trailing NUL on-device.
+const ENGINE_LIVENESS_LIMIT = 256
 const DEVICE_ELLIPSIS = '…'
 
 function byteLen(s: string): number {
@@ -63,7 +66,9 @@ export function deviceAgentRow(raw: unknown): boolean {
 }
 
 export interface AgentListDeps {
-  registry: Pick<typeof registry, 'advertised'>
+  registry: Pick<typeof registry, 'advertised' | 'byAgent'>
+  /** An engine is between processes during a restart or restore. */
+  runtimeChanging: (agentId: string) => boolean
   /** The saved conversations of stopped agents, less those running again. */
   stoppedAgents: Pick<typeof stoppedAgents, 'available'>
   /** A live agent's frame and a stopped one's, as the socket builds them for every other reply. */
@@ -82,7 +87,7 @@ export interface AgentListDeps {
 
 export function createAgentList({
   registry, stoppedAgents, toProject, toStoppedProject, harnessResourcesReader, harnessStorageReader,
-  monitorActivityProvider, monitorCompletions, cloudFrames = () => [],
+  monitorActivityProvider, monitorCompletions, cloudFrames = () => [], runtimeChanging,
 }: AgentListDeps) {
   /**
    * Answers `agents_list` through `reply`: before it returns, or, for the monitor's readings, once
@@ -152,6 +157,24 @@ export function createAgentList({
           } }
         }), sharedResources: snapshot.shared ?? [], sampledAt: snapshot.sampledAt })
       })().catch(() => reply({ error: 'UNAVAILABLE' }))
+    } else if (payload.engineLiveness === true && ['darwin', 'linux'].includes(process.platform)) {
+      // The CLI asks for these observations only when displaying state. Probe the daemon's own recorded tmux
+      // engines together in one bounded read. Do not hold the terminal-input queue while waiting for it.
+      const snapshots = sessions.flatMap(s => s.active && s.processIdentity && !isTerminalEngine(s.engine)
+        && s.runtimes.length === 1 && s.runtimes[0].backend === 'tmux'
+        ? [{ id: s.agentId, process: s.processIdentity, identity: paneReadIdentity(s),
+          changing: s.launch?.state === 'starting' || runtimeChanging(s.agentId) }]
+        : [])
+      const wanted = snapshots.filter(s => !s.changing).slice(0, ENGINE_LIVENESS_LIMIT)
+      void readEngineLiveness(wanted.map(s => s.process)).catch(() => new Map()).then(observed => {
+        const evidence = new Map(snapshots.map(s => {
+          const current = registry.byAgent(s.id)
+          const liveness = !s.changing && current?.launch?.state !== 'starting' && !runtimeChanging(s.id)
+            && s.identity === paneReadIdentity(current) ? observed.get(s.process) : undefined
+          return [s.id, liveness ?? 'unknown']
+        }))
+        reply({ agents: projects.map(frame => evidence.has(frame.id) ? { ...frame, engineLiveness: evidence.get(frame.id) } : frame) })
+      })
     } else reply({ agents: projects })
   }
 

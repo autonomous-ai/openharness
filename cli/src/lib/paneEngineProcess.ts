@@ -2,11 +2,15 @@
  * Which process in a pane is the engine — asked of whichever terminal backend holds the pane. The backend
  * answers only for the pane's own root process; the walk below it is the process table's (processTable.ts).
  */
+import { execFile } from 'node:child_process'
+import { psEnv } from './childLocale.js'
+import { patientExec } from './patientExec.js'
+import { processExists } from './processLiveness.js'
 import { agentCommandOwnershipSnapshotAsync, type AgentCommandOwnershipSnapshot } from './engineBin.js'
 import type { AgentEngine } from '../engines/types.js'
 import { errorKind } from './log.js'
 import { registry, type ProcessIdentity, type RegisteredSession } from './registry.js'
-import { comparableStartMarker, enrichProcessRows, processRows, processTreePids, selectEngineProcess, type ProcessRow } from './processTable.js'
+import { comparableStartMarker, enrichProcessRows, processRows, processTreePids, selectEngineProcess, LSTART_MARKER_RE, parseProcessRow, withStartTicks, type ProcessRow } from './processTable.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import { processIdentityOf, sameProcessIdentity, terminalRuntimeLabel } from './terminalRuntime.js'
 import type { TerminalRuntimeRef } from './terminalTypes.js'
@@ -68,6 +72,35 @@ export async function resolvePaneEngineProcess(
 ): Promise<ProcessIdentity | null> {
   const found = await lookupPaneEngineProcess(backend, runtime, engine)
   return found.ok ? found.identity : null
+}
+
+const run = patientExec(execFile)
+
+/** Liveness of already identified Unix engines, without reading other processes' rows or any arguments. */
+export type EngineLiveness = RuntimeCheck['state']
+
+export function readEngineLiveness(identities: readonly ProcessIdentity[]): Promise<Map<ProcessIdentity, EngineLiveness>> {
+  const pids = [...new Set(identities.map(({ pid }) => pid))]
+  if (!pids.length) return Promise.resolve(new Map())
+  return new Promise((resolve) => {
+    run('ps', ['-p', pids.join(','), '-o', 'pid=,ppid=,state=,lstart='], { timeout: 2_000, env: psEnv() }, (err, stdout, stderr) => {
+      const result = new Map<ProcessIdentity, EngineLiveness>()
+      // Both BSD and procps exit 1, with no output, when no selected PID exists.
+      if (stderr.trim() || (err && (err.code !== 1 || stdout.trim()))) { resolve(result); return }
+      const rows = stdout.trim() ? stdout.trim().split('\n').map(parseProcessRow) : []
+      if (rows.some(row => !row || !LSTART_MARKER_RE.test(row.startMarker))) { resolve(result); return }
+      const live = new Map(withStartTicks(rows.filter(row => row !== null)).map(row => [row.pid, row]))
+      for (const identity of identities) {
+        const row = live.get(identity.pid)
+        const state = row?.executable[0]
+        result.set(identity, !row ? processExists(identity.pid) ? 'unknown' : 'gone'
+          : state === 'Z' || (process.platform === 'linux' && (state === 'X' || state === 'x')) ? 'gone'
+          : state === '?' || !LSTART_MARKER_RE.test(identity.startMarker) ? 'unknown'
+          : sameProcessIdentity(row, identity) ? 'alive' : 'gone')
+      }
+      resolve(result)
+    })
+  })
 }
 
 /**
