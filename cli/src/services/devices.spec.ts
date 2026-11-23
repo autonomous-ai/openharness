@@ -13531,12 +13531,12 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
     // Once a day.
     port.observed(hook('turn-start'))
     port.observed(hook('turn-start', zed))
-    // On no list under its own id.
+    // Shown under the Harness agent that holds its session: placed, on Harness's page.
     port.observed(hook('turn-start', { sessionId: 'sess-3', engine: 'codex' }))
     expect(await counted(port)).toMatchObject({
       dial_hooked_claude_installation_days: 1, dial_hooked_claude_placed: 1, dial_hooked_claude_other: 1,
       dial_other_app_zed_installation_days: 1, dial_other_app_zed_agents: 1,
-      dial_hooked_codex_installation_days: 1, dial_hooked_codex_not_shown: 1,
+      dial_hooked_codex_installation_days: 1, dial_hooked_codex_placed: 1,
     })
   })
 
