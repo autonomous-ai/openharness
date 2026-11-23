@@ -879,6 +879,22 @@ describe("kitty's focused windows (docs/plans/2026-11-23-dial-wezterm-kitty-focu
       expect(logs).toEqual([])
     })
 
+    // Two kittys: the first answers with half a millisecond of the read left, too little for the second's call, which
+    // would time out (orca.ts' run gives it 1 ms) on a healthy kitty.
+    it('a sliver of time left: the next socket is not asked and not marked', async () => {
+      const { calls, clock, focused, ids, logs, adapter } = recorder()
+      ids.set('/tmp/kB', '2:1')
+      focused.set(KB, '2')
+      clock.tick = FOCUS_READ_MS - 0.5
+      expect(await adapter.focusedWindows([OWN, at('2', KB)])).toBeUndefined()
+      expect(calls).toEqual([reading(colorsOf(alone('1')))])
+      clock.tick = 0
+      calls.length = 0
+      expect(await adapter.focusedWindows([OWN, at('2', KB)])).toEqual(new Map([[L, OWN.id], [KB, at('2', KB).id]]))
+      expect(calls).toHaveLength(2)
+      expect(logs).toEqual([])
+    })
+
     it('at most 16 refused sockets kept', async () => {
       const { calls, ids, logs, adapter } = recorder()
       const sockets = Array.from({ length: 17 }, (_, i) => `/tmp/k${i + 1}`)
