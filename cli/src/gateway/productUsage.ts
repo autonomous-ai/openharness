@@ -640,11 +640,11 @@ export function createProductUsage(deps: ProductUsageDeps) {
           add('working_installation_days')
           add(state.workedBefore ? 'repeat_work_installation_days' : 'first_work_installations')
           state.workDay = key(now()); state.workedBefore = true
-          // Return counters belong to the earlier working-day cohort, not today's new starts.
-          // Only these date flags stay here; no server-side installation/user join is needed.
+          // Only these date flags stay here; no server-side installation/user join is needed. The backend takes a
+          // report for the last three days only: D1 goes on the earlier working day, D7 and D28 on the day of the return.
           for (const [lag, metric] of [[1, 'd1_returning_work_installations'], [7, 'd7_returning_work_installations'], [28, 'd28_returning_work_installations']] as const) {
             const cohort = key(now() - lag * DAY)
-            if (state.workDays.includes(cohort)) add(metric, cohort)
+            if (state.workDays.includes(cohort)) add(metric, lag === 1 ? cohort : key(now()))
           }
           state.workDays = [...state.workDays.filter(validDay), key(now())]
         }
