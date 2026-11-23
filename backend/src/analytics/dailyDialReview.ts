@@ -166,6 +166,7 @@ export function dailyDialReview(rows: Row[], breakdowns: Row[], now: Date) {
     const minutes = (ms: Raw): Raw => ({ day: Math.round(ms.day / 6000) / 10, d7: Math.round(ms.d7 / 6000) / 10, d28: Math.round(ms.d28 / 6000) / 10 })
     const accounts = of('voice_account_days'), over1m = of('voice_account_days_over_1m')
     const over5m = of('voice_account_days_over_5m'), over20m = of('voice_account_days_over_20m')
+    const dialComputers = of('dial_voice_installation_days')
     const totals = (surface: 'dial' | 'rest', computers: Raw) => ({ clips: shown(computers, cells(of(`voice_${surface}_clips`))),
       audioMinutes: shown(computers, minutes(cells(of(`voice_${surface}_audio_ms`)))),
       transcribeMinutes: shown(computers, minutes(cells(of(`voice_${surface}_transcribe_ms`)))) })
@@ -173,8 +174,9 @@ export function dailyDialReview(rows: Row[], breakdowns: Row[], now: Date) {
       accountDays: { label: 'All voice on the account, dial and the rest: account-days by audio a day.',
         all: bucket(accounts), under1m: bucket(less(accounts, over1m)), m1to5: bucket(less(over1m, over5m)),
         m5to20: bucket(less(over5m, over20m)), over20m: bucket(over20m) },
-      // The dial's totals by its own computers; the rest's, the phone and older CLIs, by the accounts with voice.
-      dial: totals('dial', fewest(of('dial_voice_installation_days'))), rest: totals('rest', fewest(accounts)) }
+      // The dial's totals by its own computers. The rest's, the phone and older CLIs, by the accounts with voice less the
+      // dial's computers: five dial accounts and one phone would otherwise show that one person's phone.
+      dial: totals('dial', fewest(dialComputers)), rest: totals('rest', fewest(less(accounts, dialComputers))) }
   }
 
   // Release and platform, each on its own (no cross product), where the day's collectors reach the health review's 20.
@@ -201,6 +203,7 @@ export function dailyDialReview(rows: Row[], breakdowns: Row[], now: Date) {
       'Agents found covers hooked engines only: an agent with no hook is invisible to the dial and to these counts.',
       'Computer counts are computer-days unless a row says distinct computers; event counts beside them are not people.',
       'Distinct computers count a computer once a Monday week or fixed 28-day period: a column across two periods can count it twice.',
+      "A clip carries no build, so a testing: build's dial clips count outside the team.",
       'Any cell under 5 computers, and the events beside it, shows "<5"; a 7- or 28-day column of computer-days goes by its largest day.',
       'day is the last complete UTC day; d7 and d28 the 7 and 28 complete days before today.',
     ],
