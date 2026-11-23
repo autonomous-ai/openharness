@@ -361,6 +361,18 @@ describe('createDialUsage', () => {
     expect(count('dial_voice_interrupted_10s')).toBe(1)
   })
 
+  it('a turn no voice started, stopped, is no voice interrupted', () => {
+    const { usage, count } = rig()
+    usage.attached(true)
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a' })
+    usage.turnStarted('a')
+    vi.advanceTimersByTime(2_000)
+    usage.turnStarted('a')
+    vi.advanceTimersByTime(3_000)
+    usage.turnAborted('a')
+    expect(count('dial_voice_interrupted_10s')).toBe(0)
+  })
+
   it('opened ok and failed by code, by host', () => {
     const { usage, count } = rig()
     usage.attached(true)
