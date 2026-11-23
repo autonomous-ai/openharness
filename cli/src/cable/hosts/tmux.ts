@@ -359,7 +359,9 @@ export function createTmuxNested(deps: Omit<TmuxOuterDeps, 'processes' | 'tty'>)
   /** `{}` when no pane of the person's on [tty] holds the agent or one of its parents, or no client of its session is
    *  in a listed app; the step that could not be read, when one could not. */
   async function placeOf(found: Pick<Nested, 'pid' | 'tty' | 'rows'>, tty: string): Promise<NestedPlace | NotRead> {
-    const panes = await listings('', listPanes)
+    // What is left to throw is tmux's finder or run, said as no tmux, as the hooked lookup says it: a held answer never
+    // rejects, or it would be held past its 5 s for every later look.
+    const panes = await listings('', () => listPanes().catch((): PaneListing => 'tmux'))
     if (typeof panes === 'string') return panes
     for (const line of panes) {
       const pane = TMUX_PANE_LINE.exec(line)
