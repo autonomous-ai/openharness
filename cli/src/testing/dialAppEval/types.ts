@@ -207,9 +207,13 @@ export type Step = { label?: Label } & (
    */
   | { kind: 'wait'; ms: number; until?: Until }
 )
-/** What a wait ends on: what the dial has received from the scenario's start, as a ring check reads it, its `apart`
- *  too, so a wait ends only once the other pages count theirs. */
-export type Until = { kind: 'ring'; page: Page; expect: SessionKey[]; apart?: SessionKey[] }
+/** What a wait ends on. `ring`: what the dial has received from the scenario's start, as a ring check reads it, its
+ *  `apart` too, so a wait ends only once the other pages count theirs. `apps`: the Apps screen alone, as a person reads
+ *  it before a pick: an apps frame since the last step shows that page and counts exactly these pages' agents, so a
+ *  screen left from before a restart is not the devices' count. */
+export type Until =
+  | { kind: 'ring'; page: Page; expect: SessionKey[]; apart?: SessionKey[] }
+  | { kind: 'apps'; shown: Page; counts: Partial<Record<Page, number>> }
 export type StepOf<K extends StepKind> = Extract<Step, { kind: K }>
 
 export const CHECK_KINDS = ['ring', 'focus', 'still', 'open', 'state', 'voice', 'recap', 'cost', 'scroll', 'logged', 'face'] as const

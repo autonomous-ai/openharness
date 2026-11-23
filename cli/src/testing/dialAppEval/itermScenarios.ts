@@ -8,7 +8,7 @@
  * first: a check that the dial moves to a row starts that row's agent later, so the dial must move for it to pass.
  */
 import type { Nest } from '../../cable/hosts/types.js'
-import { itermGhost, itermSession, listed, S, scenario, started, turned, withGhost } from './catalog.js'
+import { counted, itermGhost, itermSession, listed, S, scenario, started, turned, withGhost } from './catalog.js'
 import type { Check, Scenario, SessionDef, SessionKey } from './types.js'
 
 type Ring = Extract<Check, { kind: 'ring' }>
@@ -81,9 +81,9 @@ export function itermScenarios(): Scenario[] {
         // d's prompt, the last, turns the dial to herdr's page.
         ...listed('herdr', ['c', 'd'], ['a', 'b']),
         { label: 'restart', kind: 'devices.restart' },
-        // The person's own rests, not listed waits: every row the scan finds after a restart has the wrong name today,
+        // The Apps screen's counts, not a listed wait: every row the scan finds after a restart has the wrong name today,
         // so a listed wait would only run to its limit.
-        { kind: 'wait', ms: 2 * S },
+        ...counted('iterm', { iterm: 1, tmux: 1, herdr: 2 }),
         { label: 'toTmux', kind: 'pick', page: 'tmux' },
         { kind: 'wait', ms: 2 * S },
         { label: 'toHerdr', kind: 'pick', page: 'herdr' },
@@ -296,8 +296,10 @@ export function itermScenarios(): Scenario[] {
         { label: 'relaunch', kind: 'iterm.relaunch' },
         { kind: 'wait', ms: 2 * S },
         { label: 'restart', kind: 'devices.restart' },
-        // Listed waits, as the taps need their rows listed; each tap on the page that lists its row.
+        // Listed waits, as the taps need their rows listed; each tap on the page that lists its row. The pick waits for
+        // the Apps screen's counts too, as a listed wait after a restart runs to its limit on the rows' names.
         ...listed('iterm', ['a'], ['b', 'c']),
+        ...counted('iterm', { iterm: 1, tmux: 1, herdr: 1 }),
         { label: 'toTmux', kind: 'pick', page: 'tmux' },
         ...listed('tmux', ['b'], ['a', 'c']),
         { label: 'tapB', kind: 'tap', session: 'b' },

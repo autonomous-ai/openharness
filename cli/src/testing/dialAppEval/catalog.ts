@@ -28,6 +28,15 @@ export const listed = (page: Page, expect: SessionKey[], apart?: SessionKey[]): 
 ]
 
 /**
+ * A wait for the Apps screen to show the page and count exactly these pages' agents, then the person reads it: what they
+ * look at before a pick, as a pick of a page whose agents the devices have not counted yet is ignored.
+ */
+export const counted = (shown: Page, counts: Partial<Record<Page, number>>): Step[] => [
+  { kind: 'wait', ms: UNTIL_MS, until: { kind: 'apps', shown, counts } },
+  { kind: 'wait', ms: READ_MS },
+]
+
+/**
  * How long an editor stays quit before the person starts it again, their own timing: longer than the 10 s end delay and
  * the 30 s tick after it, so its rows leave the ring and the ring after the relaunch grades their return.
  */

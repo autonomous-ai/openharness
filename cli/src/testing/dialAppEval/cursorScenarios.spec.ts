@@ -59,7 +59,7 @@ describe("Cursor's scenarios", () => {
     // The dial's ring keeps each agent where it entered and puts a new one at the end (cable/hosts/select.ts DialRing).
     for (const s of CURSOR) {
       const order: SessionKey[] = s.steps.flatMap((step) => (step.kind === 'hook' && step.event === 'start' ? [step.session] : []))
-      const rings = [...s.steps.flatMap((step) => (step.kind === 'wait' && step.until ? [step.until.expect] : [])),
+      const rings = [...s.steps.flatMap((step) => (step.kind === 'wait' && step.until?.kind === 'ring' ? [step.until.expect] : [])),
         ...s.checks.flatMap((c) => (c.kind === 'ring' ? [c.expect] : [])), ...s.probes.flatMap((c) => (c.kind === 'ring' ? [c.expect] : []))]
       for (const ring of rings) expect(ring.filter((key) => key !== 'z'), s.id).toEqual(order.filter((key) => ring.includes(key)))
     }

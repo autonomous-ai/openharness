@@ -274,7 +274,7 @@ describe('the catalog', () => {
     for (const s of ALL) {
       for (const c of s.checks.filter((c) => c.kind === 'state')) {
         const step = s.steps.findIndex((step) => step.label === c.after)
-        const listed = s.steps.slice(0, step).some((w) => w.kind === 'wait' && w.until?.expect.includes(c.session) === true)
+        const listed = s.steps.slice(0, step).some((w) => w.kind === 'wait' && w.until?.kind === 'ring' && w.until.expect.includes(c.session))
         expect(listed, `${s.id} ${c.id}`).toBe(true)
       }
       for (const [i, step] of s.steps.entries()) {
@@ -406,8 +406,8 @@ describe('the catalog', () => {
     // gap between quit and relaunch; O4's rests after the focus, the tap and the swipe, O7's after the tap and the
     // swipe, O8's two turns and the pause between them, O10's rest on b, O12's time quit, its time past the devices'
     // next look after the relaunch and its rest after the focus, O16's agents a second apart, and O17's rest and its
-    // time unplugged; iTerm2's agents a second apart (started), I3's and I15's turns (turned), I3's rests after the
-    // devices start again and after each pick, I4's pause before and after the split and its rest after the first tap, I6's rest, I7's rest after the first tap, I9's rests on b and on
+    // time unplugged; iTerm2's agents a second apart (started), I3's and I15's turns (turned), I3's rests after each
+    // pick, I4's pause before and after the split and its rest after the first tap, I6's rest, I7's rest after the first tap, I9's rests on b and on
     // a and its wait after the echo, I10's rest after the move to a's pane, I10's and I11's rests after the select, I13's
     // rests after the detach and the attach, I14's time past the devices' next look after herdr starts again, I15's time
     // after the relaunch and its rest after the first tap, I16's long turn, I17's turn, I20's rest on c and I21's rest
@@ -424,7 +424,7 @@ describe('the catalog', () => {
       'O4 2000', 'O4 1000', 'O4 3000', 'O7 4000', 'O7 2000', 'O8 2000', 'O8 2000', 'O8 6000', 'O8 2000', 'O10 1000', 'O12 2000',
       'O12 35000', 'O12 2000',
       ...starts('O16', 40), 'O17 1000', 'O17 3000',
-      ...starts('I2', 4), ...starts('I3', 4), 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000',
+      ...starts('I2', 4), ...starts('I3', 4), 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000',
       'I4 1000', 'I4 1000', 'I4 4000', ...starts('I5', 2), ...starts('I6', 3), 'I6 2000', ...starts('I7', 3), 'I7 4000',
       ...starts('I8', 2), ...starts('I9', 2), 'I9 1000', 'I9 500', 'I9 3000', ...starts('I10', 2), 'I10 1000', 'I10 2000', ...starts('I11', 2), 'I11 2000',
       ...starts('I12', 2), ...starts('I13', 2), 'I13 2000', 'I13 2000', ...starts('I14', 3), 'I14 35000',
@@ -478,7 +478,8 @@ describe('the catalog', () => {
       // hand (I15's tap on tmux's row while herdr's page is shown).
       let listed: readonly SessionKey[] = []
       for (const step of s.steps) {
-        if (step.kind === 'wait' && step.until) listed = step.until.expect
+        // An apps wait lists no rows.
+        if (step.kind === 'wait' && step.until) listed = step.until.kind === 'ring' ? step.until.expect : []
         const row = step.kind === 'tap' || step.kind === 'swipe' || step.kind === 'attach' ? step.session
           : step.kind === 'voice' ? step.target
           : step.kind === 'thread' ? s.sessions.find((d) => d.title === step.title)!.key

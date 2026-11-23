@@ -43,7 +43,7 @@ describe("VS Code's scenarios", () => {
     // V2's ring is full, so the agents that replace others go to the end in their turn: its own case holds it.
     for (const s of VSCODE.filter((s) => s.id !== 'V2')) {
       const order: SessionKey[] = s.steps.flatMap((step) => (step.kind === 'hook' && step.event === 'start' ? [step.session] : []))
-      const rings = [...s.steps.flatMap((step) => (step.kind === 'wait' && step.until ? [step.until.expect] : [])),
+      const rings = [...s.steps.flatMap((step) => (step.kind === 'wait' && step.until?.kind === 'ring' ? [step.until.expect] : [])),
         ...s.checks.flatMap((c) => (c.kind === 'ring' ? [c.expect] : [])), ...s.probes.flatMap((c) => (c.kind === 'ring' ? [c.expect] : []))]
       for (const ring of rings) expect(ring.filter((key) => key !== 'z'), s.id).toEqual(order.filter((key) => ring.includes(key)))
     }
