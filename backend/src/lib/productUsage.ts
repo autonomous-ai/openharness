@@ -6,7 +6,8 @@ import type { Prisma, PrismaClient } from '@prisma/client'
 import { env } from '../config/env.js'
 import { prisma } from './prisma.js'
 import { ensureIndex } from './db/indexes.js'
-import { PRODUCT_USAGE_DAYS, type ProductUsageChoice, type ProductUsageReport } from '../types/productUsage.js'
+import { PRODUCT_USAGE_DAYS, type ProductUsageChoice, type ProductUsageMetric, type ProductUsageReport } from '../types/productUsage.js'
+import type { DialUsageMetric } from '../types/dialUsage.js'
 import { ACTIVITY_DAYS, type ActivitySurface } from '../types/productUsageActivity.js'
 import { PRODUCT_USAGE_RECEIPT_DAYS, PRODUCT_USAGE_RECEIPT_EXPIRY_DAYS } from '../types/productUsageReceipt.js'
 import { incrementUsageTotals, type UsageIncrement } from './productUsageWrite.js'
@@ -56,8 +57,12 @@ async function productUsageChoices(userIds: string[], db: Db): Promise<Map<strin
   return choices
 }
 
+/** A signed-in report: product names and the dial's. Declared here, not in types/productUsage.ts, whose bytes the
+ * CLI's core shares and which knows nothing of the dial. */
+export type UsageReport = Omit<ProductUsageReport, 'counters'> & { counters: Partial<Record<ProductUsageMetric | DialUsageMetric, number>> }
+
 /** Identity is used for permission only. Neither it nor the report body reaches analytics storage. */
-export async function ingestProductUsage(userId: string, report: ProductUsageReport, now = new Date()) {
+export async function ingestProductUsage(userId: string, report: UsageReport, now = new Date()) {
   if (!validDay(report.day, now)) return { accepted: false, reason: 'EXPIRED' }
   return ingestCounters(report, userId, now)
 }
