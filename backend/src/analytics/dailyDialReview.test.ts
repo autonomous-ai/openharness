@@ -29,6 +29,15 @@ describe('dailyDialReview', () => {
     expect(review.coverage).toEqual({ day: 40, d7: 40, d28: 40 })
   })
 
+  it('shows the days the gateway could not read the devices\' file, beside coverage', () => {
+    const review = dailyDialReview([row(1, 'dial_file_unreadable_installation_days', 6), row(2, 'dial_file_unreadable_installation_days', 2),
+      row(1, 'health_cli_collector_days', 40)], [], now)
+    const keys = Object.keys(review)
+    expect(keys.indexOf('fileUnreadable')).toBe(keys.indexOf('coverage') + 1)
+    expect((review as Record<string, unknown>).fileUnreadable).toEqual({ name: "Devices' file unreadable (computer-days)",
+      computers: { day: 6, d7: 8, d28: 8 } })
+  })
+
   it('shows <5 under five computers, and on the events beside them', () => {
     const review = dailyDialReview([row(1, 'dial_engine_claude_installation_days', 3), row(1, 'dial_engine_claude_agents', 40),
       row(10, 'dial_engine_claude_installation_days', 5), row(10, 'dial_engine_claude_agents', 2)], [], now)
