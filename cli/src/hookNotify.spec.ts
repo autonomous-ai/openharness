@@ -3083,6 +3083,18 @@ describe('hook notify: a session outside a pane', () => {
     expect(requests[0].body.hostHints).toEqual(sent)
   })
 
+  // An Orca session id with no terminal handle is a chat's (cable/hosts/orcaChat.ts orcaChatId): the cap drops an Orca
+  // terminal's session id before its handle, so it is never taken for a chat.
+  it('an Orca terminal past nine other hints keeps its handle, and the cap drops its session id', async () => {
+    const { port, requests } = await collect()
+    const before = { TERM_PROGRAM: 't', __CFBundleIdentifier: 'b', REX_BLOCK: 'r', ZELLIJ: '0', ZELLIJ_PANE_ID: '3',
+      ZELLIJ_SESSION_NAME: 's1', KITTY_WINDOW_ID: '1', KITTY_LISTEN_ON: 'unix:/tmp/kitty-1', WEZTERM_PANE: '2' }
+    await runHook({ port, env: { ...noHints, ...before, ORCA_AGENT_SESSION_ID: 'orca-1', ORCA_TERMINAL_HANDLE: 'h-1' },
+      input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    await received(requests)
+    expect(requests[0].body.hostHints).toEqual({ ...before, ORCA_TERMINAL_HANDLE: 'h-1' })
+  })
+
   // A cut pane id, session name or socket would name another pane, session or socket: such a value is left out instead,
   // before the cap counts it, so it costs no other hint its place.
   it('a socket or a session name over 64 characters is left out, not cut, and takes none of the MAX_HINTS', async () => {
