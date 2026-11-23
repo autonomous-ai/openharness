@@ -3199,13 +3199,14 @@ export class CableSession {
       })
   }
 
-  /** The reads an attach started, waited for at most ATTACH_READS_MS: one that fails or is late is pushed without. */
+  /** The reads an attach started, waited for at most ATTACH_READS_MS: one that fails or is late is pushed without, a late
+   *  one said, as its rows miss the first list. */
   private async awaitAttachReads(reads: Promise<void>): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined
-    const late = new Promise<void>((resolve) => { timer = setTimeout(resolve, ATTACH_READS_MS) })
+    const late = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), ATTACH_READS_MS) })
     this.attachReading = true
     try {
-      await Promise.race([reads.catch(() => {}), late])
+      if (await Promise.race([reads.then(() => false, () => false), late])) this.log('cable: attach reads · late · pushed without them')
     } finally {
       this.attachReading = false
       clearTimeout(timer)
