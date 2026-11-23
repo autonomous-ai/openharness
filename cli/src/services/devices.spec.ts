@@ -837,7 +837,7 @@ describe('the devices\' own listener (services/devicesListener.ts)', () => {
     expect(listener.listen).toHaveBeenCalledTimes(1)
     const [{ handlers, log }] = listener.given
     expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tab', 'thread', 'tabs', 'dial', 'orcaFront', 'notify', 'notice', 'vscode', 'vscode-state'])
-    expect(handlers.orcaFront).toMatchObject({ maxBytes: 4096, perSecond: 10 })
+    expect(handlers.orcaFront).toMatchObject({ maxBytes: 8192, perSecond: 10 })
     expect(handlers.notice).toMatchObject({ maxBytes: NOTICE_MAX_BYTES, perSecond: NOTICE_PER_SECOND })
     expect(handlers.front).toMatchObject({ maxBytes: FRONT_MAX_BYTES, perSecond: FRONT_PER_SECOND })
     expect([FRONT_MAX_BYTES, FRONT_PER_SECOND]).toEqual([64, 10])

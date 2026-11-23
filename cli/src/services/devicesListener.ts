@@ -666,11 +666,13 @@ export function dialStream({ log, after, ended }: {
 
 /** Ten a second on a connection: the plugin sends one each time Orca's worktree on screen changes. */
 export const ORCA_FRONT_PER_SECOND = 10
-/** Its longest message, 50 handles and a 1024-character workspace, is 3273 bytes. */
-export const ORCA_FRONT_MAX_BYTES = 4096
+/** Its longest message is 50 handles and a workspace of 1024 three-byte letters, 5321 bytes; one of 1024 quotes and
+ *  backslashes, two bytes each once escaped, is 4297. 4096 refused the letters, so the bound is past both. */
+export const ORCA_FRONT_MAX_BYTES = 8192
 /** The most terminals of a workspace Orca tells a plugin (its PLUGIN_WORKSPACE_TERMINAL_LIMIT). */
 export const ORCA_FRONT_MAX_TERMINALS = 50
-/** The longest workspace id Orca gives a plugin, in characters: Orca's own limit. */
+/** The longest workspace id Orca gives a plugin: its plugin API holds the id to zod's `string().min(1).max(1024)`, which
+ *  counts UTF-16 units as `length` does here. */
 export const ORCA_FRONT_MAX_WORKSPACE = 1024
 
 // Every control character, C0, DEL and C1 (Unicode's Cc). No `g` flag: a test keeps no position between ids.

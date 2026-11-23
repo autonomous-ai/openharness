@@ -2024,7 +2024,7 @@ describe('orcaFront', () => {
     const handler = orcaFrontHandler(() => true, () => {})
     expect(Object.keys(handler).sort()).toEqual(['handle', 'maxBytes', 'perSecond'])
     expect(handler).toMatchObject({ maxBytes: ORCA_FRONT_MAX_BYTES, perSecond: ORCA_FRONT_PER_SECOND })
-    expect([ORCA_FRONT_PER_SECOND, ORCA_FRONT_MAX_BYTES, ORCA_FRONT_MAX_TERMINALS]).toEqual([10, 4096, 50])
+    expect([ORCA_FRONT_PER_SECOND, ORCA_FRONT_MAX_BYTES, ORCA_FRONT_MAX_TERMINALS]).toEqual([10, 8192, 50])
     const longest = Buffer.byteLength(JSON.stringify(orcaFront(handles(ORCA_FRONT_MAX_TERMINALS))))
     expect(longest).toBe(2234)
     expect(longest).toBeLessThanOrEqual(ORCA_FRONT_MAX_BYTES)
@@ -2070,33 +2070,48 @@ describe('orcaFront', () => {
     expect(front).not.toHaveBeenCalled()
   })
 
-  it('50 handles and a 1024-character workspace fit in 4096 bytes', () => {
+  // Orca's longest workspace id beside its most terminals, in ASCII, in letters of three bytes, and in characters JSON
+  // escapes: Orca counts the id in UTF-16 units, as `length` does, so 'ệ' is one unit and three bytes of UTF-8, and a quote
+  // or a backslash one unit and two bytes once escaped.
+  const LONGEST = [
+    { workspace: `${UUID}::/Users/someone/`.padEnd(1024, 'w'), bytes: 3273 },
+    { workspace: 'ệ'.repeat(1024), bytes: 5321 },
+    { workspace: '"\\'.repeat(512), bytes: 4297 },
+  ]
+  const longestFront = (workspace: string): Record<string, unknown> => ({ ...orcaFront(handles(ORCA_FRONT_MAX_TERMINALS)), workspace })
+
+  it('50 handles and Orca\'s longest workspace id fit in 8192 bytes, in three-byte letters or characters JSON escapes', () => {
     expect(ORCA_FRONT_MAX_WORKSPACE).toBe(1024)
-    const workspace = `${UUID}::/Users/someone/`.padEnd(ORCA_FRONT_MAX_WORKSPACE, 'w')
-    expect(workspace).toHaveLength(ORCA_FRONT_MAX_WORKSPACE)
-    const message = { ...orcaFront(handles(ORCA_FRONT_MAX_TERMINALS)), workspace }
-    const longest = Buffer.byteLength(JSON.stringify(message))
-    expect(longest).toBe(3273)
-    expect(longest).toBeLessThanOrEqual(ORCA_FRONT_MAX_BYTES)
-    const fronts: Front[] = []
-    expect(orcaFrontHandler(() => true, (terminals, given) => fronts.push([terminals, given])).handle(message, gone)).toBeUndefined()
-    expect(fronts).toStrictEqual([[handles(ORCA_FRONT_MAX_TERMINALS), workspace]])
+    expect(['ệ'.length, Buffer.byteLength('ệ'), JSON.stringify('"\\')]).toEqual([1, 3, '"\\"\\\\"'])
+    for (const { workspace, bytes } of LONGEST) {
+      expect(workspace).toHaveLength(ORCA_FRONT_MAX_WORKSPACE)
+      expect(Buffer.byteLength(JSON.stringify(longestFront(workspace))), workspace.slice(0, 8)).toBe(bytes)
+      expect(bytes).toBeLessThanOrEqual(ORCA_FRONT_MAX_BYTES)
+      const fronts: Front[] = []
+      expect(orcaFrontHandler(() => true, (terminals, given) => fronts.push([terminals, given])).handle(longestFront(workspace), gone)).toBeUndefined()
+      expect(fronts).toStrictEqual([[handles(ORCA_FRONT_MAX_TERMINALS), workspace]])
+    }
   })
 
   describe.skipIf(process.platform === 'win32')('on a real listener', () => {
     const DIAL = '{"type":"dial","standby":true}'
     const body = (terminals: unknown): string => JSON.stringify(orcaFront(terminals))
 
-    /** The plugin's listener: its dial stream, the orcaFront it takes while that stream is open, every terminals handed
-     *  on, and each time the stream ended. */
+    /** The plugin's listener: its dial stream, the orcaFront it takes while that stream is open, every terminals and
+     *  workspace handed on, and each time the stream ended. */
     async function plugin(options: { now?: () => number } = {}) {
       const ended = vi.fn()
       const logged: string[] = []
       const fronts: Array<readonly string[] | null> = []
+      const workspaces: Array<string | null | undefined> = []
       const dial = dialStream({ log: (line) => logged.push(line), after: () => () => {}, ended })
       const opened = vi.spyOn(dial.handler, 'open')
-      const { path, lines } = await open({ dial: dial.handler, orcaFront: orcaFrontHandler(dial.isOpen, (terminals) => fronts.push(terminals)) }, options)
-      return { path, lines, logged, fronts, ended, opened }
+      const handler = orcaFrontHandler(dial.isOpen, (terminals, workspace) => {
+        fronts.push(terminals)
+        workspaces.push(workspace)
+      })
+      const { path, lines } = await open({ dial: dial.handler, orcaFront: handler }, options)
+      return { path, lines, logged, fronts, workspaces, ended, opened }
     }
 
     /** An orcaFront of one handle padded to exactly `bytes`. */
@@ -2122,7 +2137,15 @@ describe('orcaFront', () => {
       expect(fronts).toEqual([[H(2)], null])
     })
 
-    it('an orcaFront of 4097 bytes is 413; the 11th within a second on one connection is 429', async () => {
+    it('Orca\'s longest orcaFront, in three-byte letters or characters JSON escapes, is taken whole', async () => {
+      const { path, fronts, workspaces } = await plugin({ now: () => 0 })
+      await (await asked(path, DIAL)).got(1)
+      for (const { workspace } of LONGEST) expect((await connection(path).send(JSON.stringify(longestFront(workspace)))).status).toBe(204)
+      expect(fronts).toEqual(LONGEST.map(() => handles(ORCA_FRONT_MAX_TERMINALS)))
+      expect(workspaces).toStrictEqual(LONGEST.map(({ workspace }) => workspace))
+    })
+
+    it('an orcaFront of 8193 bytes is 413; the 11th within a second on one connection is 429', async () => {
       const { path, fronts } = await plugin({ now: () => 0 })
       await (await asked(path, DIAL)).got(1)
       expect((await connection(path).send(orcaFrontOf(ORCA_FRONT_MAX_BYTES))).status).toBe(204)
