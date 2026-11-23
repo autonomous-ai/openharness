@@ -124,6 +124,16 @@ export function killGroup(server: ServerProcess): void {
   try { process.kill(-server.pid, 'SIGKILL') } catch { /* none left */ }
 }
 
+/**
+ * Whether a line typed into a pane's shell was lost, so it is typed again: [screen], herdr's read of the pane, does not
+ * show it whole. A shell that shows it whole was only slow to run it, and a second copy would reach the program it
+ * starts. herdr wraps a long line and cuts each line's trailing space: spaces and line ends are not compared.
+ */
+export function launchLost(screen: string, line: string): boolean {
+  const flat = (text: string): string => text.replace(/\s+/g, '')
+  return !flat(screen).includes(flat(line))
+}
+
 /** [parent]'s child named [name], by pgrep, which prints no other process; undefined while it has none. */
 async function childNamed(parent: number, name: string): Promise<number | undefined> {
   const { stdout } = await execFileAsync('/usr/bin/pgrep', ['-P', String(parent), '-x', name])
@@ -383,7 +393,8 @@ export class PrivateHerdr {
   /**
    * [line] typed into the new [pane]'s shell once it has drawn its prompt, until [ran] holds. The shell can lose a line
    * typed as it sets its terminal up, its prompt drawn (measured: in 1 of 30 panes it kept only the first letter): typed
-   * again, the half line cleared first (Ctrl+U), while nothing it was typed runs, the shell holding the foreground.
+   * again, the half line cleared first (Ctrl+U), while nothing it was typed runs, the shell holding the foreground, and
+   * its screen does not show the line whole (launchLost).
    */
   private async launch<T>(pane: string, folder: string, line: string, what: string,
     ran: () => Promise<T | null | undefined | false> | T | null | undefined | false): Promise<T> {
@@ -392,7 +403,7 @@ export class PrivateHerdr {
     let typed = Date.now()
     return until(what, async () => {
       const done = await ran()
-      if (!done && Date.now() - typed >= RETYPE_MS && await this.shellInFront(pane)) {
+      if (!done && Date.now() - typed >= RETYPE_MS && await this.shellInFront(pane) && launchLost(await this.screen(pane), line)) {
         await this.type(pane, `\x15${line}`)
         typed = Date.now()
       }
