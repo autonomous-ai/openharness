@@ -82,7 +82,8 @@ export class RelayGateway implements GatewayPort {
   productUsage?: {
     launch?(signal: ProductUsageLaunchSignal): void
     counter?(metric: ProductUsageMetric): void
-    presence(active: boolean): void
+    /** [active]: a window is connected; [desktop]: a Desktop window is. */
+    presence(active: boolean, desktop: boolean): void
     opened(surface: WindowSurface): void
     observe(type: 'turn_started' | 'turn_ended' | 'text_delta' | 'error', agent: string, replay: boolean, interrupted?: boolean): void
     /** An agent's launch state as its `agent_synced` frame says it, the failure's code a listed name only. */
@@ -331,7 +332,7 @@ export class RelayGateway implements GatewayPort {
 
   localClients(windows: LocalWindows): void {
     this.localWindows = windows
-    try { this.productUsage?.presence(windows.desktop + windows.tui > 0) } catch { /* Reporting is optional. */ }
+    try { this.productUsage?.presence(windows.desktop + windows.tui > 0, windows.desktop > 0) } catch { /* Reporting is optional. */ }
     for (const surface of WINDOW_SURFACES) if (windows[surface] === 0) this.link.noLocalClients(surface)
   }
 

@@ -157,7 +157,8 @@ export function createProductUsage(deps: ProductUsageDeps) {
   const now = deps.now ?? Date.now, uuid = deps.uuid ?? randomUUID, random = deps.random ?? Math.random
   const context = cleanUsageContext(deps.context)
   // `unread`: the queue file could not be read (EACCES, EMFILE); this run writes nothing over what it holds.
-  let state = fresh(-1), enabled = false, stopped = false, active = false, unread = false
+  // `desktopWindow`: a Desktop window is connected, so each tick of the day makes it a Desktop day.
+  let state = fresh(-1), enabled = false, stopped = false, active = false, desktopWindow = false, unread = false
   let syncing: Promise<void> | null = null, persistTimer: ReturnType<typeof setTimeout> | undefined
   let writing: Promise<boolean> | null = null, writeAgain = false
   // What stop() wrote as the process went: nothing written after it may replace it.
@@ -341,6 +342,13 @@ export function createProductUsage(deps: ProductUsageDeps) {
     if (!enabled || stopped) return
     if (state.activeDay !== key(now())) { state.activeDay = key(now()); add('active_installation_days') }
   }
+  /** Today is a day Desktop was used, for the dial's outside-app flags. From the windows connected rather than a
+   *  window's open: at a restart the open can be lost, or come before the choice is read. */
+  function markDesktop(): void {
+    if (!enabled || stopped || state.desktopDays.includes(key(now()))) return
+    state.desktopDays = [...state.desktopDays.filter(validDay), key(now())]
+    dirty()
+  }
   /** Adds what the devices' file holds over what was sent of it, and closes the days past (gateway/dialUsage.ts). */
   function countDial(file: string): void {
     const { read, stamp } = readDialFile(file, validDay, dialStamp)
@@ -427,6 +435,7 @@ export function createProductUsage(deps: ProductUsageDeps) {
       }
       for (const [agent, at] of starting) if (now() - at >= LATE_FAILURE_WATCH_MS) starting.delete(agent)
       if (active) markActive()
+      if (desktopWindow) markDesktop()
       if (deps.dialFile) countDial(deps.dialFile)
       // Refused today: hn's counts go, rather than waiting to become a past day's report.
       if (tuiRefused()) for (const day of Object.keys(state.days)) {
@@ -622,11 +631,14 @@ export function createProductUsage(deps: ProductUsageDeps) {
       if (value === 'failed') { starting.delete(agent); lateFailure(code) }
       else if (value === 'ready') starting.delete(agent)
     },
-    presence(value: boolean): void { active = value; if (value) markActive() },
+    presence(value: boolean, desktop: boolean): void {
+      active = value; desktopWindow = desktop
+      if (value) markActive()
+      if (desktop) markDesktop()
+    },
     opened(surface: 'desktop' | 'tui'): void {
       if (!enabled || stopped) return
       markActive(); add(surface === 'desktop' ? 'desktop_opens' : 'tui_opens')
-      if (surface === 'desktop' && !state.desktopDays.includes(key(now()))) state.desktopDays = [...state.desktopDays.filter(validDay), key(now())]
     },
     observe(type: 'turn_started' | 'turn_ended' | 'text_delta' | 'error', agent: string, replay: boolean, interrupted = false): void {
       if (!enabled || stopped || replay || !agent || agent.length > 256) return
