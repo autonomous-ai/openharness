@@ -253,6 +253,11 @@ Claude Code's plugins on Windows (Claude Code 2.1.328 and 2.1.329, VM, 2026-11-2
 
 ## 5. Testing on Windows
 
+- **The Windows viewer reads its address on page completion.** With WebView2 installed, a viewer
+  could fall back to the browser because `webview_win_floating` 2.3.2 throws when registering
+  `onUrlChange`. Use the adapter's page-completion callback and show the WebView2 installation hint
+  only when the runtime probe reports it missing. The regression mounts the locked Dart adapter and
+  delivers a page-completion event through its native channel. [Viewer regression](../desktop/test/web_pane_windows_test.dart)
 - Pin every injected platform flag in a fixture. Setting `isMacOS` and `isLinux` leaves `isWindows` at the host default:
   the Unix Node 22 readiness fixture then checked for a Windows terminal host and failed on both Windows architectures.
   `desktop/test/environment_provisioner_test.dart` sets all three; the Windows fixture does the same in

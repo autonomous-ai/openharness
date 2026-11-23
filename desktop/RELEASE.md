@@ -547,8 +547,8 @@ retain its attribution in Flutter's bundled notices.
 Windows alone: `3.x` registers on Linux too, where it would replace `webview_all_linux`. Its
 `fullscreen_window` dependency still adds that small native plugin to the Linux build. It is
 BSD-3-Clause and one author's work, not endorsed by Flutter. Upgrading it requires reviewing its
-native code and retesting on Windows. Its DLL ships in the Windows package, which the release
-signs. Retain its attribution in Flutter's bundled notices.
+native code and [retesting on Windows](../docs/windows-rules.md#5-testing-on-windows).
+Its DLL ships in the Windows package, which the release signs. Retain its attribution in Flutter's bundled notices.
 
 The official [`webview_flutter`](https://pub.dev/packages/webview_flutter/versions/4.14.1)
 currently lists Android, iOS and macOS implementations, with no endorsed Linux
