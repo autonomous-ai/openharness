@@ -85,7 +85,7 @@ import { listedAgent, noticeKeys, Notices, type NoticeCaller } from '../cable/no
 import { NOTIFY_MODE_FILE, NotifyModeStore, type NotifyMode } from '../cable/notifyMode.js'
 import { PetStore } from '../cable/pets/store.js'
 import { DialLog } from '../cable/dialLog.js'
-import { DialVerdicts } from '../cable/dialPortVerdicts.js'
+import { DialVerdicts, greetedAsDial } from '../cable/dialPortVerdicts.js'
 import { createDialSetup } from '../cable/dialSetup.js'
 import { claudeFound, type ClaudeRun } from '../devices/claudePlugin.js'
 import { readOrcaConnected, readRemoved, readSetup, SETUP_COUNTS } from '../devices/dialSkillFiles.js'
@@ -471,12 +471,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // The dial's usage counts (docs/plans/2026-11-23-dial-usage-counts-design.md): fixed names in a file of the devices'
   // own, which the gateway reads, so no count goes through the core. Signed-in computers only.
   const wallClock = (): number => Date.now()
+  const dialPorts = join(core.dataDir, 'dial-ports.json')
   const usageFile = new DialUsageFile({
     file: join(core.dataDir, DIAL_USAGE_FILE),
     now: wallClock,
     after: timerIn('dialUsage'),
     signedIn: () => core.account.signedIn(),
-    hadDial: () => readSetup(core.dataDir).dial,
+    // The setup's mark is written since CLI 0.6.79; a board's greeting has been kept since 0.4.54.
+    hadDial: () => readSetup(core.dataDir).dial || greetedAsDial(dialPorts),
     log,
   })
   /** Where the dial would place an agent with no window: its own app for one outside a pane, Harness for the rest. Read
@@ -1406,7 +1408,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }
   const cable = new CableFleet(deps.Session ?? CableSession, cableHost, deps.logsDir, DialLog, {
     serials: deps.dialSerials,
-    verdicts: new DialVerdicts(join(core.dataDir, 'dial-ports.json')),
+    verdicts: new DialVerdicts(dialPorts),
     faults: deps.faults,
     ...testDialDiscovery(deps.testDialPort),
     ...deps.cable,
