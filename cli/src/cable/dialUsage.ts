@@ -251,12 +251,14 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
     },
 
     turnStarted(agentId) {
+      // A newer turn ends the agent's last: a stop now stops this one, which a voice delivers or not.
+      delivered.delete(agentId)
       const voice = voices.find(v => v.agentId === agentId)
       if (!voice) return
       voices.splice(voices.indexOf(voice), 1)
       voice.stop()
       outcome('delivered', voice.host)
-      delivered.delete(agentId) // set again below, so the map stays oldest first
+      // Set after the delete above, so the map stays oldest first.
       delivered.set(agentId, { host: voice.host, at: now() })
       if (delivered.size > DELIVERED_TURNS_MAX) delivered.delete(delivered.keys().next().value as string)
     },
