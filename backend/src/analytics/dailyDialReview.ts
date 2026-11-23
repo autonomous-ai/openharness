@@ -196,7 +196,9 @@ export function dailyDialReview(rows: Row[], breakdowns: Row[], now: Date) {
     .sort((a, b) => b.day - a.day || a.bucket.localeCompare(b.bucket))
     .map(m => ({ day: new Date(m.day).toISOString().slice(0, 10), bucket: m.bucket, computers: m.used < FEWEST ? '<5' as const : m.used }))
 
-  const collectors = of('health_cli_collector_days')
+  /** [value] outside the team, a 7- or 28-day column tested by its largest day. */
+  const outsideCells = (value: (day: Day) => number) =>
+    shown(raw(column => over(outside, value, column, 0, true)), raw(column => over(outside, value, column)))
   return {
     limits: [
       'Signed-in computers only: voice needs a sign-in, so these lean to voice users and are not all dial users.',
@@ -207,7 +209,9 @@ export function dailyDialReview(rows: Row[], breakdowns: Row[], now: Date) {
       'Any cell under 5 computers, and the events beside it, shows "<5"; a 7- or 28-day column of computer-days goes by its largest day.',
       'day is the last complete UTC day; d7 and d28 the 7 and 28 complete days before today.',
     ],
-    coverage: shown(raw(column => over(outside, collectors, column, 0, true)), raw(column => over(outside, collectors, column))),
+    coverage: outsideCells(of('health_cli_collector_days')),
+    // Too large or misshapen, once a computer a day: while it is, that computer's dial counts are not sent.
+    fileUnreadable: { name: "Devices' file unreadable (computer-days)", computers: outsideCells(of('dial_file_unreadable_installation_days')) },
     outsideTeam: sections(outside), team: sections(team),
     voice: { outsideTeam: voice(outside), team: voice(team) },
     margins: { platform: margin('platform'), release: margin('release') },
