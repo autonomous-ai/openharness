@@ -34,7 +34,7 @@ const ACCOUNT_DAY_EDGES: Array<[VoiceUsageMetric, number]> = [
 export function voiceIncrements(surface: VoiceSurface, beforeMs: number, clipMs: number,
   transcribeMs: number): Array<[VoiceUsageMetric, number]> {
   // Rounded up as the quota charges it, so this clip ends where the next one's [beforeMs] starts.
-  const audioMs = Math.max(0, Math.ceil(clipMs))
+  const audioMs = Math.max(1, Math.ceil(clipMs))
   const increments: Array<[VoiceUsageMetric, number]> = [[`voice_${surface}_clips`, 1], [`voice_${surface}_audio_ms`, audioMs],
     [`voice_${surface}_transcribe_ms`, Math.max(0, Math.round(transcribeMs))]]
   if (beforeMs === 0) increments.push(['voice_account_days', 1])
