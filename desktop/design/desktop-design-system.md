@@ -778,7 +778,7 @@ Windows and Linux, named **Harness** wherever a person sees it; only its file
 stays `Harness Device.app`, and its installed name `Harness Device` on Windows.
 It sets up
 Harness, keeps it running and shows the dial's state; it offers sign-in and,
-with the ChatGPT app, Follow ChatGPT. Claude Code, Codex and Orca
+with the ChatGPT app, follows its window. Claude Code, Codex and Orca
 need no setting: Harness sets them up once a dial is plugged in. The desktop
 app offers and installs it ([Surface families](#surface-families), Menu-bar app offer).
 
@@ -811,9 +811,13 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
   capsules, 32 high at least, trailing: secondary first, primary last, as the
   desktop's dialogs. The spinner stands still under Reduce Motion.
 - Focus: Return takes the primary button, as a dialog's default. Follow ChatGPT
-  focuses `Not now`, `Allow` still primary: it opens by itself as the person
-  switches to ChatGPT, where a Return they type must not allow. A screen with
-  only `Cancel` focuses nothing.
+  focuses `Not now`, `Allow` still primary: it opens by itself, where a Return
+  typed for another app must not allow. A screen with only `Cancel` focuses
+  nothing.
+- Follow ChatGPT asks once, on macOS only: at the first launch, after Install
+  and Sign in, while Harness lacks Accessibility, whatever is plugged in or
+  installed. `Not now` or closing declines for good. The menu has no follow
+  item on any OS.
 - The menu-bar icon is the Pixel H drawn 8x8 pixels, a template image 18 points
   square (`device-app/src-tauri/icons/tray.png`): black on a light bar, white on
   a dark one. The app icon is the Pixel H, a black H of 7x7 square pixels on the
@@ -824,10 +828,6 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
   the one in force checked. Notifications is the first.
 - A menu action that asks for more before it is done ends in `…`; one that acts at
   once has none.
-- A permission another app keeps (macOS's Accessibility) is one check item,
-  checked when given. Its click always asks for more (unchecked: the Follow
-  ChatGPT screen; checked: System Settings' Accessibility list), so it has no
-  `…`; its label never changes, as every check item's.
 - The dial line names no firmware version: it reads `Updating device…`
   while the firmware updates. **About** opens macOS's standard About panel,
   brought to the front, with the app's name and version and one credits line,
@@ -851,10 +851,9 @@ differences, each an OS limit:
   and the same credits line: macOS's standard panel is AppKit's.
 - **Export logs** selects the zip in Explorer on Windows; on Linux it opens the
   zip's folder, as the file manager cannot select a file.
-- `Follow ChatGPT` is a plain on/off check item, as Sound, with no screen:
-  nothing gates reading a window's title, so the permission rule is macOS's
-  only. GNOME and KDE on Wayland show no item, as they give no other program
-  the window in front.
+- ChatGPT is always followed, with no screen: nothing gates reading a
+  window's title, so the permission is macOS's only. GNOME and KDE on Wayland
+  never follow it, as they give no other program the window in front.
 - The window has no taskbar button, as it has no Dock icon on macOS.
 
 The menu, top to bottom:
@@ -864,7 +863,6 @@ The menu, top to bottom:
   Signed in
 ✓ Sound
   Notifications ▸
-✓ Follow ChatGPT
 ──────────
   Open Harness
   Export logs

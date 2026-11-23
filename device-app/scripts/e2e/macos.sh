@@ -127,10 +127,12 @@ logged() { run_log | grep -Fxq -- "$1"; }
 times_logged() { run_log | grep -Fxc -- "$1" || true; }
 gone() { ! kill -0 "$1" 2>/dev/null; }
 
-# cliSeen, askedSignIn and loginItem: nothing is installed, no window opens and no login item is registered.
+# cliSeen, askedSignIn, loginItem and askedFollow: nothing is installed, no window opens and no login item is
+# registered. The test's bundle id has no Accessibility, so without askedFollow the Follow ChatGPT screen would open at
+# launch, and an open window holds the update's relaunch.
 mkdir -p "$data"
 chmod 700 "$data"
-printf '%s\n' '{"version":1,"cliSeen":true,"askedSignIn":true,"loginItem":true}' >"$data/state.json"
+printf '%s\n' '{"version":1,"cliSeen":true,"askedSignIn":true,"loginItem":true,"askedFollow":true}' >"$data/state.json"
 
 # The app's own environment: nothing of this account's but its name.
 base=(HOME="$home" CFFIXED_USER_HOME="$home" TMPDIR="$work/tmp/" USER="$(id -un)" LOGNAME="$(id -un)" SHELL=/bin/sh

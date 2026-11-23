@@ -56,7 +56,7 @@ const FACES: Partial<Record<`${Screen}.${Phase}`, Face>> = {
         "Your dial moves to the thread you open in ChatGPT. Harness reads only the ChatGPT window's title, while ChatGPT is in front.",
       ],
     },
-    // It opens by itself as the person switches to ChatGPT: a Return typed for ChatGPT must not press Allow.
+    // It opens by itself: a Return typed for another app must not press Allow.
     buttons: [
       { label: 'Not now', action: 'later', focused: true },
       { label: 'Allow', action: 'allow', primary: true },

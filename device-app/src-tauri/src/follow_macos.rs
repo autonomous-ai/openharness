@@ -62,6 +62,10 @@ impl AxTrust for MacFollow {
         unsafe { AXIsProcessTrusted() }
     }
 
+    fn gated(&self) -> bool {
+        true
+    }
+
     fn prompt(&self) {
         // SAFETY: the framework's constant, set before any code runs.
         let key: &CFString = unsafe { kAXTrustedCheckOptionPrompt };
@@ -348,6 +352,11 @@ mod tests {
         fs::create_dir_all(folder.join("Contents").join("Info.plist")).unwrap();
         assert_eq!(bundle_id(&folder), None);
         assert_eq!(bundle_id(&root.path().join("Gone.app")), None);
+    }
+
+    #[test]
+    fn the_mac_door_asks_for_accessibility() {
+        assert!(MacFollow::new(PathBuf::from("/Users/someone")).gated());
     }
 
     #[test]
