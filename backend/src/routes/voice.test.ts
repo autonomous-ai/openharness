@@ -313,7 +313,7 @@ describe('POST /api/voice/stt', () => {
       expect((await send(app, wav(3), 'user-1', 'audio/wav', DIAL)).statusCode).toBe(200)
       expect(recordVoiceUsage).toHaveBeenCalledOnce()
       expect(recordVoiceUsage).toHaveBeenCalledWith('user-1', expect.any(Date), [
-        ['voice_dial_clips', 1], ['voice_dial_audio_ms', 3_000], ['voice_dial_transcribe_ms', 1_500], ['voice_account_days', 1],
+        ['voice_dial_clips', 1], ['voice_dial_audio_s', 3], ['voice_dial_transcribe_ms', 1_500], ['voice_account_days', 1],
       ])
     })
 
@@ -322,8 +322,8 @@ describe('POST /api/voice/stt', () => {
       // The second clip starts where the account's day stood: 2 s in, so it is no new account-day and it crosses 1 min.
       expect((await send(app, wav(59))).statusCode).toBe(200)
       expect(recordVoiceUsage.mock.calls.map(([, , increments]) => increments)).toEqual([
-        [['voice_rest_clips', 1], ['voice_rest_audio_ms', 2_000], ['voice_rest_transcribe_ms', 1_500], ['voice_account_days', 1]],
-        [['voice_rest_clips', 1], ['voice_rest_audio_ms', 59_000], ['voice_rest_transcribe_ms', 1_500], ['voice_account_days_over_1m', 1]],
+        [['voice_rest_clips', 1], ['voice_rest_audio_s', 2], ['voice_rest_transcribe_ms', 1_500], ['voice_account_days', 1]],
+        [['voice_rest_clips', 1], ['voice_rest_audio_s', 59], ['voice_rest_transcribe_ms', 1_500], ['voice_account_days_over_1m', 1]],
       ])
     })
 

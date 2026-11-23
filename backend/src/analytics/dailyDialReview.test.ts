@@ -76,8 +76,8 @@ describe('dailyDialReview', () => {
 
   it('shows the dial\'s voice apart from the rest, each hidden under its own five, with the older-CLI note', () => {
     const { voice } = dailyDialReview([row(1, 'dial_voice_installation_days', 6), row(1, 'voice_dial_clips', 30),
-      row(1, 'voice_dial_audio_ms', 90_000), row(1, 'voice_dial_transcribe_ms', 30_000), row(1, 'voice_account_days', 3),
-      row(1, 'voice_rest_clips', 12), row(1, 'voice_rest_audio_ms', 600_000), row(1, 'voice_rest_transcribe_ms', 60_000),
+      row(1, 'voice_dial_audio_s', 90), row(1, 'voice_dial_transcribe_ms', 30_000), row(1, 'voice_account_days', 3),
+      row(1, 'voice_rest_clips', 12), row(1, 'voice_rest_audio_s', 600), row(1, 'voice_rest_transcribe_ms', 60_000),
       row(10, 'voice_account_days', 5), row(10, 'voice_rest_clips', 1)], [], now)
     expect(voice.outsideTeam.note).toBe('Voice from older CLIs counts as the rest until they update.')
     expect(voice.outsideTeam.dial).toEqual({ clips: { day: 30, d7: 30, d28: 30 }, audioMinutes: { day: 1.5, d7: 1.5, d28: 1.5 },
@@ -89,7 +89,7 @@ describe('dailyDialReview', () => {
   it('hides the rest\'s voice until five accounts with voice are beside the dial\'s computers', () => {
     // Five dial accounts and one phone account: the rest is one person's phone.
     const rest = (accounts: number) => dailyDialReview([row(1, 'voice_account_days', accounts), row(1, 'dial_voice_installation_days', 5),
-      row(1, 'voice_rest_clips', 3), row(1, 'voice_rest_audio_ms', 60_000), row(1, 'voice_rest_transcribe_ms', 6_000)], [], now).voice.outsideTeam.rest
+      row(1, 'voice_rest_clips', 3), row(1, 'voice_rest_audio_s', 60), row(1, 'voice_rest_transcribe_ms', 6_000)], [], now).voice.outsideTeam.rest
     expect(rest(6)).toEqual({ clips: { day: '<5', d7: '<5', d28: '<5' }, audioMinutes: { day: '<5', d7: '<5', d28: '<5' },
       transcribeMinutes: { day: '<5', d7: '<5', d28: '<5' } })
     expect(rest(10).clips).toEqual({ day: 3, d7: 3, d28: 3 })

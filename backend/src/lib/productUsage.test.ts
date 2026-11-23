@@ -639,9 +639,9 @@ describe('voice seconds', () => {
   it('counts voice on its day, the team under staff:, nothing with sharing off', async () => {
     db.productUsagePreference.findUnique.mockImplementation(async ({ where }) => ({ enabled: where.userId !== 'off-account', revision: 1 }))
     emails({ 'person-account': 'person@example.com', 'team-account': 'Dee@Autonomous.AI', 'off-account': 'off@example.com' })
-    await recordVoiceUsage('person-account', now, [['voice_dial_clips', 1], ['voice_dial_audio_ms', 3_000],
+    await recordVoiceUsage('person-account', now, [['voice_dial_clips', 1], ['voice_dial_audio_s', 3],
       ['voice_dial_transcribe_ms', 0], ['voice_account_days', 1]])
-    await recordVoiceUsage('person-account', new Date('2026-10-14T00:00:01Z'), [['voice_rest_clips', 1], ['voice_rest_audio_ms', 2_000]])
+    await recordVoiceUsage('person-account', new Date('2026-10-14T00:00:01Z'), [['voice_rest_clips', 1], ['voice_rest_audio_s', 2]])
     await recordVoiceUsage('team-account', now, [['voice_rest_clips', 1]])
     await recordVoiceUsage('off-account', now, [['voice_dial_clips', 1]])
     await flushRelayUsage()
@@ -649,9 +649,9 @@ describe('voice seconds', () => {
     expect(sent()).toEqual([
       ['2026-10-13', 'staff:voice_rest_clips', 1],
       ['2026-10-13', 'voice_account_days', 1],
-      ['2026-10-13', 'voice_dial_audio_ms', 3_000],
+      ['2026-10-13', 'voice_dial_audio_s', 3],
       ['2026-10-13', 'voice_dial_clips', 1],
-      ['2026-10-14', 'voice_rest_audio_ms', 2_000],
+      ['2026-10-14', 'voice_rest_audio_s', 2],
       ['2026-10-14', 'voice_rest_clips', 1],
     ])
     // One lookup for each sharing account, then kept.

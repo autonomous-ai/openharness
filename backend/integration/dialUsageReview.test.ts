@@ -64,8 +64,8 @@ it('counts the dial outside the team and the team apart, a dial clip and a rest 
   const rows = await review.readDialRows(db, now)
   const value = (metric: string) => rows.find(r => r.metric === metric)?.value
   expect(rows.filter(r => r.dayUtc < ago(28)).map(r => [r.metric, r.value])).toEqual([['dial_used_installation_days', 6]])
-  expect([value('voice_dial_clips'), value('voice_dial_audio_ms'), value('voice_rest_clips'), value('voice_rest_audio_ms')])
-    .toEqual([1, 30_000, 1, 45_000])
+  expect([value('voice_dial_clips'), value('voice_dial_audio_s'), value('voice_rest_clips'), value('voice_rest_audio_s')])
+    .toEqual([1, 30, 1, 45])
   const section = review.dailyDialReview(rows, [], now)
   const connected = (sections: typeof section.outsideTeam) => sections.find(s => s.name === 'Who uses a dial')!.rows
     .find(r => r.name === 'Connected (computer-days)')!.computers.day
