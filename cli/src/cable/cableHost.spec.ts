@@ -1117,6 +1117,15 @@ describe('the dial with no window: this computer\'s agents', () => {
       expect(openEnded.mock.calls).toEqual([['o1', opened ? { outcome: 'ok' } : { outcome: 'failed', code: 'not_opened' }]])
     })
 
+    it('a tap reports its open: the other app failed to open it, and the failure still reaches the dial', async () => {
+      const openEnded = vi.fn()
+      const { host } = await setup({ openEnded })
+      host.setRegistry(new HostRegistry([host.harness, { ...outsideApp(true), focus: async () => { throw new Error('gone') } }]))
+      await host.listAgentSnapshot()
+      await expect(host.openAgent('o1')).rejects.toThrow('gone')
+      expect(openEnded.mock.calls).toEqual([['o1', { outcome: 'failed', code: 'not_opened' }]])
+    })
+
     it('a tap reports its open: handed to the window', async () => {
       const openEnded = vi.fn()
       const { host } = await setup({ openEnded })
