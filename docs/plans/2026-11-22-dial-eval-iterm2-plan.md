@@ -140,8 +140,11 @@ Files this branch shares with Orca (the spec's Coordination section, completed):
    scenarios only; every other keeps `noHerdr`): `agent.list` answers each live herdr session's `{ pane_id, agent:
    'claude', agent_status, cwd, agent_session }` (no `agent_session` for `herdrSession: false`, no `name`, so a folded row
    is named by its hook's title), status `idle` at start, `working` at `turn-start`, `blocked` at `needs-input`, `done` at
-   `turn-stop`, told as `pane.agent_status_changed` to subscriptions naming the pane; `prompt(pane)` is a `typed` delivery
-   to the session in that pane (none for another) answering `sent`; `socketStamp()` a stamp while the server runs. `lsof -a
+   `turn-stop`, told as `pane.agent_status_changed` to subscriptions naming the pane; `prompt(pane, kind, text)` follows
+   `createHerdrClient().prompt`: `bad_request` for a malformed pane, kind or text, `no_socket` with no server, then
+   herdr's `agent.get` of the pane: `failed/rejected/agent_not_found` for a pane with no agent, `not_that_agent` for
+   another kind, `busy` unless the pane is `idle` or `done`, else a `typed` delivery of the text with its control
+   characters replaced by spaces to the session in that pane, answering `sent`; `socketStamp()` a stamp while the server runs. `lsof -a
    -U -p … -F pdn` lists one `herdr-client.sock` descriptor of the server per client and each client's peer of it
    (`herdrOuter.ts connectedOf`'s form); `ttyAtime` is mocked to `machine.atimes`; the `watchSocket` mock keeps every
    watch the devices hold and `herdr.restart` fires them all.
