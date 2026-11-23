@@ -1157,6 +1157,27 @@ describe('the dial with no window: this computer\'s agents', () => {
       expect(openEnded.mock.calls).toEqual([['h1', { outcome: 'failed', code: 'desktop_no_window' }]])
     })
 
+    it('a tap reports its open: a later tap took its place', async () => {
+      const openEnded = vi.fn()
+      const { host } = await setup({ openEnded })
+      await host.openAgent('h1')
+      await host.openAgent('h2')
+      expect(openEnded.mock.calls).toEqual([['h1', { outcome: 'failed', code: 'desktop_no_window' }]])
+      onTab(host, [])
+      expect(openEnded.mock.calls).toEqual([['h1', { outcome: 'failed', code: 'desktop_no_window' }], ['h2', { outcome: 'ok' }]])
+    })
+
+    it('a tap reports its open: its agent left the list', async () => {
+      let listed = sessions()
+      const openEnded = vi.fn()
+      const { host } = await setup({ openEnded, sessions: () => listed })
+      await host.openAgent('h1')
+      listed = listed.filter((s) => s.agentId !== 'h1')
+      await host.listAgentSnapshot()
+      onTab(host, [])
+      expect(openEnded.mock.calls).toEqual([['h1', { outcome: 'failed', code: 'unknown_agent' }]])
+    })
+
     it('a tap reports its open: no window, and none to start', async () => {
       const openEnded = vi.fn()
       const { host, w } = await setup({ openEnded, launchDesktop: undefined })
