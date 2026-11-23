@@ -841,10 +841,11 @@ export class CableSession {
   /** From a dial's greeting to its push's walk of the open questions: a question asked meanwhile waits for that walk,
    *  which asks it after the drawer that would clear it. */
   private greeting = false
-  /** While the greeting waits for the reads its attach started (awaitAttachReads): no list goes, as the greeting's own
-   *  push follows. A tick's list inside that wait lacked their rows and, with the agent the dial was on before a replug
-   *  not in it, landed the first agent over that record. */
-  private attachReading = false
+  /** The greetings waiting for the reads their attach started (awaitAttachReads): while any does, no list goes, as the
+   *  last one's own push follows. A tick's list inside that wait lacked their rows and, with the agent the dial was on
+   *  before a replug not in it, landed the first agent over that record. A count, not a flag: a dial back on new firmware
+   *  greets again inside the first wait, and that wait's end let the first greeting's list go before the new reads. */
+  private attachReading = 0
 
   /** For the greeting's log line: which capabilities this hello named, or nothing. */
   private capabilitiesNamed(): string {
@@ -2993,6 +2994,8 @@ export class CableSession {
     // Not even read: on a dial that says appFilter, a read without the app's rows turns the shown app away from it.
     if (this.attachReading) return
     const { agents: full, tab, total, view, apps } = await this.agentSnapshot()
+    // A read under way as the dial greeted lacks the rows the greeting waits for.
+    if (this.attachReading) return
     // A ring that, with the tiles the dial holds, is more than RING_PLACES goes in two steps. The firmware adds a list's
     // agents before it removes the tiles the list no longer names, and refuses one past RING_PLACES (app_main.c
     // refresh_projects, ui_habitat.c ensure): such a list lost every agent the dial did not hold. Diego, 2026-11-20
@@ -3204,11 +3207,11 @@ export class CableSession {
   private async awaitAttachReads(reads: Promise<void>): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined
     const late = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), ATTACH_READS_MS) })
-    this.attachReading = true
+    this.attachReading++
     try {
       if (await Promise.race([reads.then(() => false, () => false), late])) this.log('cable: attach reads · late · pushed without them')
     } finally {
-      this.attachReading = false
+      this.attachReading--
       clearTimeout(timer)
     }
   }
