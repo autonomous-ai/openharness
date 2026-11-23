@@ -2136,6 +2136,11 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     vi.useFakeTimers()
     const { port } = start({ faults: ['fleet'] })
     port.observed(hook('session-start'))
+    // A poll a newer one replaced is told gone first too (core/deviceHookCalls.ts): its look finds the process running.
+    const replaced = port.inboxPoll({ pollId: 'p0', sessionId: 'sess-1' })
+    port.inboxGone('p0')
+    expect(await replaced).toEqual({})
+    await vi.advanceTimersByTimeAsync(2_000)
     const poll = port.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })
     expect((await machineList(port)).agents.map((a) => a.id)).toEqual([ID])
     readers.ended.add(4242)

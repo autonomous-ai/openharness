@@ -1834,8 +1834,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  up to 40 s. One per listed session (fifty at most), a later end of it putting its look off. */
   const endings = new Map<string, ReturnType<typeof setTimeout>>()
   /** A look at the processes for each Claude Code whose held poll lost its client: a closed pane or a removed worktree
-   *  sends no session-end hook, and its row waited for the 30 s look (the dial eval's Orca O14/O15). Apart from the
-   *  endings, so a poll's client going as its session ends does not put off that session's own look. */
+   *  sends no session-end hook, and its row waited for the 30 s look (the dial eval's Orca O14/O15). A poll a newer one
+   *  replaced is told gone too, and its look finds the process running and changes nothing: one read of the process
+   *  table. Apart from the endings, so a poll's client going as its session ends does not put off that session's own
+   *  look. */
   const leavings = new Map<string, ReturnType<typeof setTimeout>>()
   const lookLater = (looks: Map<string, ReturnType<typeof setTimeout>>, ms: number, source: ObservedSource, agentId: string): void => {
     if (!outside(agentId)) return
