@@ -113,6 +113,9 @@ export class CableFleet {
   private readonly proInLogs = new Map<string, boolean>()
   /** The agent each dial away was on, by id, handed to its next session so the dial comes back there (keepFocus). */
   private readonly keptFocus = new Map<string, string>()
+  /** What the host's attach started for the first dial, which every dial attached beside it waits for too: two dials back
+   *  from one hub greet a moment apart, and the second's list lacked those rows until a tick's push. */
+  private attachReads: void | Promise<void> = undefined
 
   constructor(private readonly Session: SessionConstructor, private readonly host: CableHost,
               private readonly logs: string, private readonly Log: typeof DialLog,
@@ -246,8 +249,8 @@ export class CableFleet {
         if (entry.attached) return
         const sibling = [...this.entries.values()].find(e => e.attached)
         entry.attached = true
-        // What the attach started, for the greeting to wait on. With a sibling attached its sources already run: nothing.
-        if (!sibling) return this.host.onDialAttached?.()
+        // What the attach started, for the greeting to wait on (cableSession.ts awaitAttachReads).
+        if (!sibling) return this.attachReads = this.host.onDialAttached?.()
         // The host asks again only as the first dial arrives, so this one is given what its sibling would be asked again.
         // Mid-greeting: the session only takes them in here, and asks each once as its greeting's push ends.
         const failed = (error: unknown) => this.host.log(`cable: ${serialPortName(port.path)} open questions: ${errorKind(error)} [usb ${id}]`)
@@ -255,6 +258,8 @@ export class CableFleet {
         for (const open of sibling.session.owedQuestions()) (open.held
           ? entry.session.hold(open.agentId, open.id, open.questions)
           : entry.session.question(open.agentId, open.id, open.questions)).catch(failed)
+        // Under way still when both came back together; long landed, it holds the greeting for nothing.
+        return this.attachReads
       }
       const gone = () => {
         if (!entry.attached) return
