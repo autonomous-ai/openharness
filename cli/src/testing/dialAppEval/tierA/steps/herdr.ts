@@ -122,10 +122,10 @@ function stopServer(world: TierAWorld, model: Model, server: Server): void {
 }
 
 /**
- * The session's herdr pane, made now: its shell on a terminal of its own, which the agent runs under. herdr starts from
- * the session's tab when none runs, and a tab with no client of it gets one.
+ * The session's herdr pane, made now: its shell on a terminal of its own, which the agent runs under (the pid given).
+ * herdr starts from the session's tab when none runs, and a tab with no client of it gets one.
  */
-export function herdrPane(world: TierAWorld, s: SessionDef): { shell: number; tty: string; pane: string } {
+export function herdrPane(world: TierAWorld, s: SessionDef): number {
   const model = modelOf(world)
   const tab = { window: s.window!, tab: s.tab! }
   let server = model.server
@@ -140,7 +140,7 @@ export function herdrPane(world: TierAWorld, s: SessionDef): { shell: number; tt
   server.panes.set(pane.id, pane)
   server.focused = pane.id
   world.panes.set(pane.id, s.key)
-  return { shell: pane.shell, tty, pane: pane.id }
+  return pane.shell
 }
 
 /** The pane the session's hooks name in HERDR_PANE_ID. */

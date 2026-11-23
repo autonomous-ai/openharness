@@ -223,7 +223,7 @@ function orcaPane(world: TierAWorld, s: SessionDef): { shell: number; parent: nu
   const maker = s.held ? startProcess(world, 1, HELD_MAKER) : state.orcaHost ??= startProcess(world, 1, ORCA_HOSTS[world.platform])
   if (s.held) others.push(maker)
   const shell = startProcess(world, maker, SHELLS[world.platform], nextTty(world))
-  return { shell, parent: s.tmux ? tmuxPane(world, s, shell).shell : shell, others }
+  return { shell, parent: s.tmux ? tmuxPane(world, s, shell) : shell, others }
 }
 
 /** The session's iTerm2 tab or split (the plan's Decision 4): its shell, opened when none is, and the tab's login, which
@@ -231,7 +231,7 @@ function orcaPane(world: TierAWorld, s: SessionDef): { shell: number; parent: nu
 function itermTab(world: TierAWorld, s: SessionDef): { shell: number; parent: number; others: number[] } {
   const place = itermPlaceOf(s)
   if (place === 'tmux' || place === 'herdr') {
-    const { shell } = place === 'tmux' ? tmuxPane(world, s) : herdrPane(world, s)
+    const shell = place === 'tmux' ? tmuxPane(world, s) : herdrPane(world, s)
     return { shell, parent: shell, others: [] }
   }
   const { pid: shell } = tabShell(world, { window: s.window!, tab: s.tab!, split: s.split })

@@ -59,11 +59,11 @@ function attach(world: TierAWorld, model: Model, session: Session, shell: number
 }
 
 /**
- * The session's tmux pane, made now: its shell on a terminal of its own, which the agent runs under. Its tmux session's
- * first pane starts that session with a client, under [client] when given (an Orca pane's shell), else under the
- * session's iTerm2 tab's.
+ * The session's tmux pane, made now: its shell on a terminal of its own, which the agent runs under (the pid given).
+ * Its tmux session's first pane starts that session with a client, under [client] when given (an Orca pane's shell),
+ * else under the session's iTerm2 tab's.
  */
-export function tmuxPane(world: TierAWorld, s: SessionDef, client?: number): { shell: number; tty: string | undefined; pane: string } {
+export function tmuxPane(world: TierAWorld, s: SessionDef, client?: number): number {
   const model = modelOf(world)
   const name = s.app === 'iterm' ? `eval-${s.window!}-${s.tab!}` : `eval-${s.key}`
   const tty = nextTty(world)
@@ -78,7 +78,7 @@ export function tmuxPane(world: TierAWorld, s: SessionDef, client?: number): { s
   session.panes = [...session.panes, pane].sort((a, b) => split(a) - split(b))
   // A tmux run names the pane only where the devices found tmux: an iTerm2 scenario's machine (world.ts).
   if (world.machine.installed.has('tmux')) world.panes.set(pane.id, s.key)
-  return { shell: pane.shell, tty, pane: pane.id }
+  return pane.shell
 }
 
 /** The session's pane, when it runs in one, and its tmux session. */
