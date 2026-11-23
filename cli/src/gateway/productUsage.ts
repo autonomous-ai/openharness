@@ -3,9 +3,9 @@ import type { NodeStatus } from '../lib/nodeStatus.js'
 import { cleanHealthState, createProductHealth, type HealthState } from './productHealth.js'
 import { reportFailure } from './reportFailure.js'
 import { cleanDialRecord, freshDialRecord, mergeDial, readDialFile, type DialRead, type DialRecord, type DialStamp } from './dialUsage.js'
-import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
+import { mkdirSync, readdirSync, statSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
-import { basename, dirname } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { engineAccount } from '../lib/engineAccount.js'
 import { atomicWriteFile, atomicWriteFileAsync, jsonObject, readState } from '../lib/secureState.js'
@@ -138,9 +138,15 @@ export interface ProductUsageDeps {
 const engineSignedIn = async (engine: 'claude' | 'codex'): Promise<boolean | null> =>
   (await engineAccount(engine, { env: { ...loginShellEnvironment(), ...process.env }, lastUsed: false })).signedIn
 
-/** Another queue file in [file]'s folder, where start.ts keeps one per machine id. */
-function anotherQueue(file: string): boolean {
-  try { return readdirSync(dirname(file)).some(name => name.endsWith('.json') && name !== basename(file)) } catch { return false }
+/** Another queue file in [file]'s folder, where start.ts keeps one per machine id, written since [file] (a missing one
+ *  is the oldest). */
+function anotherQueueSince(file: string): boolean {
+  const folder = dirname(file)
+  const written = (name: string): number => statSync(join(folder, name), { throwIfNoEntry: false })?.mtimeMs ?? -Infinity
+  try {
+    const own = written(basename(file))
+    return readdirSync(folder).some(name => name.endsWith('.json') && name !== basename(file) && written(name) > own)
+  } catch { return false }
 }
 
 /** A reporting component of the gateway service; the core never waits for it.
@@ -219,9 +225,10 @@ export function createProductUsage(deps: ProductUsageDeps) {
       }
     } else if (saved.revision === -1 && saved.dial?.baseline === true) state = fresh(-1, true)
   } catch { /* Missing, past its bound or of another shape: telemetry must not affect a session. */ }
-  // start.ts names this queue file by the machine id, which is an account's (backend routes/deviceAuth.ts): another
-  // queue beside a missing one is another sign-in on this computer, whose days the devices' file may still hold.
-  if (deps.dialFile && !existsSync(deps.file) && anotherQueue(deps.file)) state.dial = freshDialRecord(true)
+  // start.ts names this queue file by the machine id, which is an account's (backend routes/deviceAuth.ts), and an
+  // account signing in again on this computer gets its id back: another queue written since this one is another
+  // sign-in, whose days the devices' file may still hold. This account's own used days stay, for its returns and periods.
+  if (deps.dialFile && anotherQueueSince(deps.file)) state.dial.baseline = true
 
   const health = createProductHealth(add, now, state.health)
 
