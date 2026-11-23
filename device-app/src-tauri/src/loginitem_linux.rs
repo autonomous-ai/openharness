@@ -4,11 +4,13 @@
 //! the installer's own. What is whose is the first `Exec=` line: the installer leaves a file whose line is not its own
 //! `<launcher> start`, and this app takes over any entry that is on, so the desktop session starts the app, and the app
 //! the daemon. An entry the person turned off stays off, and one they deleted stays deleted: neither side writes a
-//! second file.
+//! second file. The entry the app writes or takes over reads `Name=Harness Device`, as Startup Applications lists it;
+//! a name the person gave it stays.
 
 use crate::app_list::write;
 #[cfg(target_os = "linux")]
 use crate::loginitem::{LoginItem, SystemLoginItem};
+use crate::types::APP_NAME;
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
@@ -72,9 +74,9 @@ fn quoted(path: &Path) -> Option<String> {
     (!text.chars().any(refused)).then(|| format!("'{}'", text.replace('%', "%%")))
 }
 
-/// A new entry, in the installer's format but for the line.
+/// A new entry, in the installer's format but for its `Exec=` line and its name.
 pub fn fresh(exec: &str) -> String {
-    format!("[Desktop Entry]\nType=Application\nName=Harness\nExec={exec}\nX-GNOME-Autostart-enabled=true\n")
+    format!("[Desktop Entry]\nType=Application\nName={APP_NAME}\nExec={exec}\nX-GNOME-Autostart-enabled=true\n")
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -85,7 +87,8 @@ pub enum Change {
 
 /// What the entry becomes. None there: written on the app's first registration only, so one the person deleted (KDE's
 /// way of turning it off) stays deleted. Turned off: left as it is. On, with another `Exec=` line (the installer's, or
-/// an AppImage since moved): that line becomes the app's, and the rest is kept.
+/// an AppImage since moved): that line becomes the app's, the entry is named (`named`), and the rest is kept. On and
+/// the app's: written only while it is still named Harness, so once.
 pub fn change(existing: Option<&str>, exec: &str, first: bool) -> Change {
     let Some(existing) = existing else {
         return if first { Change::Write(fresh(exec)) } else { Change::Leave };
@@ -100,13 +103,47 @@ pub fn change(existing: Option<&str>, exec: &str, first: bool) -> Change {
         let content = line.strip_suffix('\n').unwrap_or(line);
         if content.starts_with("Exec=") {
             if content == own {
-                return Change::Leave;
+                return named(existing, false).map_or(Change::Leave, Change::Write);
             }
-            return Change::Write(format!("{}{own}{}", &existing[..start], &existing[start + content.len()..]));
+            let taken = format!("{}{own}{}", &existing[..start], &existing[start + content.len()..]);
+            return Change::Write(named(&taken, true).unwrap_or(taken));
         }
         start += line.len();
     }
     Change::Write(fresh(exec))
+}
+
+/// The entry with the app's name, None when that changes nothing. Its name line is the first `Name` key (not a
+/// language's `Name[xx]`) in its `[Desktop Entry]` group, read as `is_off` reads a line. Harness, the name the
+/// installer and older apps wrote, becomes the app's; any other name is the person's and stays. With `add`, an entry
+/// with no name line gets one after the group's `Type=` line, else after its header. An entry with no header has no
+/// group to name.
+fn named(entry: &str, add: bool) -> Option<String> {
+    let name = format!("Name={APP_NAME}");
+    let (mut start, mut group, mut typed) = (0, None, None);
+    for line in entry.split_inclusive('\n') {
+        let content = line.strip_suffix('\n').unwrap_or(line);
+        let end = start + line.len();
+        if group.is_none() {
+            group = (content == "[Desktop Entry]").then_some(end);
+        } else if content.starts_with('[') {
+            break;
+        } else if let Some((key, value)) = content.split_once('=') {
+            match (key.trim(), value.trim()) {
+                ("Name", "Harness") => {
+                    return Some(format!("{}{name}{}", &entry[..start], &entry[start + content.len()..]));
+                }
+                ("Name", _) => return None,
+                ("Type", _) if typed.is_none() => typed = Some(end),
+                _ => {}
+            }
+        }
+        start = end;
+    }
+    let (before, after) = entry.split_at(typed.or(group).filter(|_| add)?);
+    // A last line with no newline gets one, so the name is a line of its own.
+    let newline = if before.ends_with('\n') { "" } else { "\n" };
+    Some(format!("{before}{newline}{name}\n{after}"))
 }
 
 /// Turned off where the person turns off any login item, as the installer reads it (install.sh login_entry_off), with
