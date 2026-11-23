@@ -918,7 +918,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       onChange: (listener) => observed.onChange(() => part.call('claude-app', listener)),
     },
     onPoll: (listener) => inbox.onPoll((sessionId) => part.call('claude-app', () => listener(sessionId))),
-    after: timerIn('claude-app'),
+    // Its own part: the timer bounds a ChatGPT thread's wake as well as a Claude app session's.
+    after: timerIn('app-wake'),
     // The link alone, never the adapter's forward, which brings the app on whatever thread it shows. The noted adapter
     // notes the dial's own switch, so the title the app then shows is its echo.
     openThread: (threadId, agentId) => codexNoted.show!(codexPane(threadId), agentId),
