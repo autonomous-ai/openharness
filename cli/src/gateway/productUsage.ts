@@ -64,7 +64,8 @@ const groupOf = (metric: string): number => isDialMetric(metric) ? 1 : isNodeMet
 // names are both lists, in a type of this file's own.
 type UsageMetric = ProductUsageMetric | DialUsageMetric
 const USAGE_METRICS: readonly UsageMetric[] = [...PRODUCT_USAGE_METRICS, ...DIAL_USAGE_METRICS]
-// A day closes for the dial a minute after midnight, UTC: the devices' last writes of it (5 s apart) are in by then.
+// A day closes for the dial a minute past the gateway's first tick of the next, UTC: the devices' last writes of it
+// (5 s apart) are in by then, though one held over sleep fires only as the computer wakes, as that tick does.
 const DIAL_CLOSE_MS = 60_000
 const key = (now: number) => new Date(now).toISOString().slice(0, 10)
 const week = (now: number) => { const d = new Date(now); return key(now - ((d.getUTCDay() + 6) % 7) * DAY) }
@@ -173,6 +174,8 @@ export function createProductUsage(deps: ProductUsageDeps) {
   let turn = 0
   // The devices' file as last judged: one unchanged since is not read again, and that read stands for it.
   let dialStamp: DialStamp | undefined, dialRead: Exclude<DialRead, { state: 'same' }> = { state: 'none' }
+  // The day of the last tick that counted the dial, and when the first tick of it came (DIAL_CLOSE_MS).
+  let dialDay: string | null = null, dialDayAt = 0
   // hn's counters: those it observed before the first choice read, held in RAM until that is known
   // (hn is often opened at the daemon's start), and the UTC day a backend from before `tui` refused
   // them. Neither is persisted; a restart tries again.
@@ -351,6 +354,7 @@ export function createProductUsage(deps: ProductUsageDeps) {
   }
   /** Adds what the devices' file holds over what was sent of it, and closes the days past (gateway/dialUsage.ts). */
   function countDial(file: string): void {
+    if (dialDay !== key(now())) { dialDay = key(now()); dialDayAt = now() }
     const { read, stamp } = readDialFile(file, validDay, dialStamp)
     dialStamp = stamp
     if (read.state !== 'same') dialRead = read
@@ -364,7 +368,7 @@ export function createProductUsage(deps: ProductUsageDeps) {
     const before = JSON.stringify(state.dial)
     // An unchanged file is merged again, which adds nothing: it closes the day past for an idle dial.
     const merged = mergeDial(state.dial, dialRead.state === 'ok' ? dialRead.file : { series: -1, days: {} },
-      { closeBefore: key(now() - DIAL_CLOSE_MS), desktopDays: state.desktopDays, validDay })
+      { closeBefore: now() - dialDayAt >= DIAL_CLOSE_MS ? dialDay : key(now() - DAY), desktopDays: state.desktopDays, validDay })
     state.dial = merged.record
     for (const { metric, day, value } of merged.adds) add(metric, day, value)
     if (JSON.stringify(state.dial) !== before) dirty()
