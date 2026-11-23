@@ -818,3 +818,22 @@ would let later pull requests run checks 2 and 3 on GitHub.
    the gate to pass, and `heldOut.ts` says whoever fixes a failing group does not read it. Recommended: Task 14's
    implementer edits them for the new pages only (no product fix is tuned to them), and the baseline records IH4's 0.5
    under Decision 1.
+
+## Decisions after the rebase (PM, 2026-11-24)
+
+3. No waiver of "no app's score drops". The pre-existing names gap after a restart (a row the scan found shows its
+   folder's name instead of the session's after the devices start again, plain tabs included; I3 and I15 score 0 on
+   it) is fixed in this branch as **Task 15** (effort high), its red test taken from I3/I15. Goal: iTerm2 does not drop,
+   ideally rises. If the cause turns out large (more than about 150 lines, or it touches stored data), stop and tell
+   the PM, who then splits it into its own item.
+4. Task 14's held-out part is allowed: IH2, IH4 and IH5 in `heldOut.ts` change only their expected pages (rings per
+   page, counts per page). An independent reviewer confirms the `heldOut.ts` diff changes only pages and per-page
+   counts. The PR body states: held-out iTerm2 90.36 → 91.07, and IH4's precision 0.5 from the accepted herdr
+   double-count gap.
+
+### Task 15: A row the scan found keeps its session's name after the devices start again
+
+**Files:** found by the task (expected: `cli/src/cable/hosts/observed.ts` and its spec, maybe `record.ts`); not
+`heldOut.ts`, `baseline.json`. **Test that must fail first:** a unit test reproducing I3/I15: after the devices start
+again, a session the scan found (a plain iTerm2 tab, and a tmux/herdr pane) is listed with its session's name, not its
+folder's. **Depends on:** the product review fixes (shares `observed.ts`). **Effort:** high. **Stop rule:** above.
