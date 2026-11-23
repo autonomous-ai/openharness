@@ -163,11 +163,12 @@ export function mergeDial(record: DialRecord, file: DialFileRead, at: { closeBef
       if (counts.dial_first_use_installations === 1) add('dial_first_use_outside_app_installations', day)
     }
     if (used) {
-      // Returns go to the earlier day's cohort, as the working-day returns of productUsage.ts do.
+      // A return goes on its own day: the backend takes a report for the last three days only, so one on the earlier
+      // day would be refused at N+7 and N+28. Outside the app is the earlier day's.
       for (const lag of RETURN_LAGS) {
         const cohort = shift(day, -lag)
-        if (usedDays.includes(cohort)) add(`dial_d${lag}_returning_installations`, cohort)
-        if (usedOutsideDays.includes(cohort)) add(`dial_d${lag}_returning_outside_app_installations`, cohort)
+        if (usedDays.includes(cohort)) add(`dial_d${lag}_returning_installations`, day)
+        if (usedOutsideDays.includes(cohort)) add(`dial_d${lag}_returning_outside_app_installations`, day)
       }
       const first = (days: string[], length: number): boolean => !days.some(other => period(other, length) === period(day, length))
       if (first(usedDays, 7)) add('dial_used_week_installations', day)
