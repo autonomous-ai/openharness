@@ -137,8 +137,8 @@ packed() { extract "$@" && [[ -f "$2/$3" ]]; }
 
 # The plugin DLLs the archive $1 carries, into the folder $2: at least one, so an extraction that finds nothing cannot
 # pass. NSIS keeps copies of one plugin under $PLUGINSDIR, which -y overwrites with the same file. The folder holds only
-# what 7-Zip wrote for *.dll, which matches a name in any case, so it and dlls_signed take every file there: bash's
-# *.dll glob would miss a .DLL.
+# what 7-Zip wrote for *.dll, which matches a name in any case and one that starts with a dot, so it and dlls_signed
+# take every file there, under dotglob: bash's *.dll glob would miss a .DLL, and * without dotglob a .x.dll.
 packed_dlls() {
   local dll
   extract "$1" "$2" '*.dll' || return 1
@@ -202,7 +202,7 @@ case "$os" in
     check "the update signature is for $version" signed_version "$appimage"
     ;;
   windows)
-    shopt -s nullglob
+    shopt -s nullglob dotglob
     installers=("$dir"/Harness-Device-windows-*-setup.exe)
     check "an installer" test ${#installers[@]} -gt 0
     for installer in "${installers[@]}"; do
