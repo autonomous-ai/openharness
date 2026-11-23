@@ -23,6 +23,9 @@ export interface AppFilterDeps {
    *  the last read's. */
   counts(): AppCounts
   switched(cause: SwitchCause): void
+  /** An app stayed in front for FRONT_SETTLE_MS (`settledApp()` already reads it), told before the settle shows
+   *  anything: a `follow` made here shows the followed page in place of the app's, never the app's page first. */
+  settling?(app: string): void
   /** An app stayed in front for FRONT_SETTLE_MS (`settledApp()` already reads it), told after any switch it caused:
    *  `none`, an app with no agents and the same app again too, since what follows the front acts on the settle, not on
    *  what the dial shows. */
@@ -42,18 +45,20 @@ const sameCounts = (a: ReadonlyMap<string, number>, b: ReadonlyMap<string, numbe
   a.size === b.size && [...a].every(([app, n]) => b.get(app) === n)
 
 /**
- * Which app the dial with no Harness window shows: the one the person brought to the front, the one picked on the dial, or
- * the one with the most agents whose app is known. An agent the open scan found, which nothing has told of yet, is on the
- * unknown app's page and counts for nothing in that default: a dial plugged in over many agents already running would
- * otherwise open on that page. It is the default only while no app has a known agent, and gives way once one has; a pick
- * or the front can still show it. The app in front is shown whenever it has known or resting agents and no pick holds, so a
- * default gives way to it. One per cable host, shared by every dial on it. Time and chance come in through `deps`,
- * so a test drives both.
+ * Which app the dial with no Harness window shows: the one the person brought to the front (or the page of an agent of
+ * it the person followed there), the one picked on the dial, or the one with the most agents whose app is known. An
+ * agent the open scan found, which nothing has told of yet, is on the unknown app's page and counts for nothing in that
+ * default: a dial plugged in over many agents already running would otherwise open on that page. It is the default only
+ * while no app has a known agent, and gives way once one has; a pick or the front can still show it. The app in front
+ * is shown whenever it has known or resting agents and no pick holds, so a default gives way to it. One per cable host,
+ * shared by every dial on it. Time and chance come in through `deps`, so a test drives both.
  */
 export class AppFilter {
   private showing: string | undefined
   /** Set by a pick on the dial; another app settling in front ends it. */
   private pickedOnDial = false
+  /** The page a follow holds as the front's (`follow`); never set while a pick holds. */
+  private followed: string | undefined
   /** The default chose the shown app: nobody picked it or brought it to the front. */
   private byDefault = false
   /** A tie is drawn once and held while the counts stay the ones it was drawn over, so the dial does not flip between equals. */
@@ -72,7 +77,7 @@ export class AppFilter {
    */
   shown(): string | undefined {
     const { all: counts, known, inFront } = this.deps.counts()
-    const front = this.settledFront
+    const front = this.held(inFront) ?? this.settledFront
     // An agent started in the app the person is using turns the dial to it, over any default (the PM, D1). `none` is no
     // app, so it never has agents.
     if (!this.pickedOnDial && front !== undefined && front !== this.showing && has(inFront, front)) {
@@ -109,6 +114,7 @@ export class AppFilter {
     // Done on the shown app is how a person leaves the picker without changing anything (the PM, D2): it holds nothing.
     if (app === this.showing) return 'same'
     this.pickedOnDial = true
+    this.followed = undefined
     this.byDefault = false
     this.show(app, cause)
     return 'switched'
@@ -120,8 +126,31 @@ export class AppFilter {
   hold(app: string): boolean {
     if (!has(this.deps.counts().all, app)) return false
     this.pickedOnDial = true
+    this.followed = undefined
     this.byDefault = false
     this.show(app, 'pick')
+    return true
+  }
+
+  /**
+   * A tab or prompt follow to an agent of `app` whose page is `page`: selecting a terminal tab that runs tmux or herdr
+   * turns the dial to that page (Diego's decision 4, 2026-11-23). Only for the app settled in front with no pick
+   * holding, and a page with agents counted for the front: the page is then held as the front's, so the next reads
+   * keep it while that app stays in front, until another app settles, a pick, or a later follow (the spec's "A follow
+   * turns the page"). A follow to an agent on its app's own page ends a hold and turns nothing: the next read's front
+   * rule shows the app. True while the page is held, shown already or not; false and nothing changed otherwise.
+   */
+  follow(app: string, page: string): boolean {
+    if (this.pickedOnDial || app !== this.settledFront) return false
+    if (page === app) {
+      this.followed = undefined
+      return false
+    }
+    // The count the hold is kept by (`held`): a page held with none would turn back at the next read.
+    if (!has(this.deps.counts().inFront, page)) return false
+    this.followed = page
+    this.byDefault = false
+    this.show(page, 'follow')
     return true
   }
 
@@ -129,14 +158,27 @@ export class AppFilter {
     this.cancelSettle = undefined
     if (app !== this.settledFront) {
       this.pickedOnDial = false
+      this.followed = undefined
       this.settledFront = app
     }
+    this.deps.settling?.(app)
     // `none` (no listed app in front) is no app, so it never has agents and never shows.
-    if (!this.pickedOnDial && has(this.deps.counts().all, app)) {
-      this.byDefault = false
-      this.show(app, 'front')
+    if (!this.pickedOnDial) {
+      const { all, inFront } = this.deps.counts()
+      const page = this.held(inFront) ?? app
+      if (has(all, page)) {
+        this.byDefault = false
+        this.show(page, 'front')
+      }
     }
     this.deps.settled(app)
+  }
+
+  /** The page a follow holds, the hold ending once that page has no agents counted for the front: the agent ended or
+   *  its next hook is not nested, and the front rule then shows the app in front, else the default. */
+  private held(inFront: ReadonlyMap<string, number>): string | undefined {
+    if (this.followed !== undefined && !has(inFront, this.followed)) this.followed = undefined
+    return this.followed
   }
 
   /** A page the default chose, none of whose agents is known to be there, once an app has a known agent. */

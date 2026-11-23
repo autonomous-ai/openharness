@@ -74,8 +74,9 @@ export type DialView = 'tabs' | 'apps'
  *  opening, the shown app left as Harness or no app. */
 export type ViewCause = 'front' | 'pick' | 'window' | 'empty'
 
-/** Why the shown app changed. */
-export type SwitchCause = 'front' | 'pick' | 'empty' | 'notice'
+/** Why the shown app changed. `follow`: a tab or prompt follow to an agent of the app in front turned to the agent's
+ *  own page, tmux's or herdr's (AppFilter.follow). */
+export type SwitchCause = 'front' | 'pick' | 'empty' | 'notice' | 'follow'
 
 export interface Caps {
   status: boolean
