@@ -251,6 +251,16 @@ describe('createDialUsage', () => {
     expect(count('dial_host_tmux_agents')).toBe(DIAL_USAGE_AGENTS_MAX + 1)
   })
 
+  it('an agent counted today is not described again at each move of the dial', () => {
+    let described = 0
+    const { usage } = rig({ get a() { described++; return tmuxClaude } })
+    usage.attached(true)
+    usage.shown('a')
+    usage.shown('a')
+    usage.shown('a')
+    expect(described).toBe(1)
+  })
+
   it('an unknown engine and host are other; terminal-app is terminal_app', () => {
     expect(dialEngine('claude')).toBe('claude')
     expect(dialEngine('a-new-engine')).toBe('other')
