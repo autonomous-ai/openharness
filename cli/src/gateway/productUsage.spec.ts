@@ -330,7 +330,11 @@ it('counts first-response latency, silent waits and errors once without reading 
   expect(JSON.stringify(sent)).not.toContain('PRIVATE_AGENT')
 })
 
-it('attributes D1/D7 return to the original working day, surviving restarts and deduplicating turns', async () => {
+// The backend takes a report for the last three days only: D1 is still taken on the earlier working day, D7 and D28
+// only on the day of the return.
+it('counts D1 return on the earlier working day and D7 on its own, surviving restarts and deduplicating turns', async () => {
+  const expired: unknown[] = []
+  request.mockImplementation(backendDays(expired))
   const work = async () => { usage.observe('turn_started', 'a', false); usage.observe('turn_ended', 'a', false); await usage.sync() }
   await usage.sync(); await work(); await usage.stop()
   now += 86400000; usage = createProductUsage({ file, now: () => now, request }); await usage.sync()
@@ -338,8 +342,9 @@ it('attributes D1/D7 return to the original working day, surviving restarts and 
   now += 6 * 86400000; await work()
   await usage.sync() // the remaining current-day batch
   const returns = (sent as {day: string; counters: Record<string, number>}[]).filter(r => r.counters.d1_returning_work_installations || r.counters.d7_returning_work_installations)
-  expect(returns.map(r => r.day)).toEqual(['2026-10-12', '2026-10-12'])
+  expect(returns.map(r => r.day)).toEqual(['2026-10-12', '2026-10-19'])
   expect(totals()).toMatchObject({ d1_returning_work_installations: 1, d7_returning_work_installations: 1 })
+  expect(expired).toEqual([])
 })
 
 it('accepts only known scalar counters and stops diagnostics with the privacy choice', async () => {
@@ -475,7 +480,9 @@ it('counts feature reach and repeat use once per installation day, independently
     store_install_first_installations: 1, store_install_repeat_installation_days: 1 })
 })
 
-it('attributes four-week return to its original day and counts consecutive calendar months', async () => {
+it('counts four-week return on its own day and consecutive calendar months', async () => {
+  const expired: unknown[] = []
+  request.mockImplementation(backendDays(expired))
   const work = () => { usage.observe('turn_started', 'synthetic', false); usage.observe('turn_ended', 'synthetic', false) }
   await usage.sync(); work(); await usage.sync()
   now += 28 * 86400000; work()
@@ -483,7 +490,8 @@ it('attributes four-week return to its original day and counts consecutive calen
   expect(totals()).toMatchObject({ d28_returning_work_installations: 1, monthly_working_installations: 2,
     monthly_returning_installations: 1, reactivated_after_7d_installations: 1 })
   const report = (sent as { day: string; counters: Record<string, number> }[]).find(r => r.counters.d28_returning_work_installations)
-  expect(report?.day).toBe('2026-10-12')
+  expect(report?.day).toBe('2026-11-09')
+  expect(expired).toEqual([])
 })
 
 it('keeps memory and disk bounded during a long reporting outage', async () => {
