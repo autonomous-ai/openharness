@@ -102,6 +102,14 @@ describe("iTerm2's scenarios", () => {
     expect(focus([face(0, a!)])).toEqual([['focus.lands', 0], ['focus.latency', 0]])
   })
 
+  it("I10's pane move leaves the active pane: the person is on a's pane when the tab is selected, then moves to b's", () => {
+    // A move to the pane already active moves nothing: following the active pane on the tab report would pass it.
+    const steps = byId('I10').steps
+    const select = steps.findIndex((step) => step.label === 'select')
+    expect(steps.flatMap((step, i) => (step.kind === 'tmux.selectPane' ? [[step.session, i < select ? 'before select' : step.label]] : [])))
+      .toEqual([['a', 'before select'], ['b', 'pane']])
+  })
+
   it("I9's echo can fail: the dial left on a after the rest passes, iTerm2's report of b's tab pulling it back fails", () => {
     const i9 = byId('I9')
     const [a, b] = agents(i9).map(agentIdOf)
