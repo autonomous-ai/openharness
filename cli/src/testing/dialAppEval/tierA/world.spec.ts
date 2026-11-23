@@ -153,6 +153,13 @@ describe("tier A's world records every send, failing closed", () => {
     expect(world.gaps).toEqual(['a command tier A does not answer: osascript', 'a command tier A does not answer: codex'])
   })
 
+  it("tmux, herdr and the lsof and ps of herdr's client lookup are answered on iTerm2's machine alone: a Claude world's ps is a gap",
+    async () => {
+    const { world, deps } = worldOn('darwin', { ...S1, app: 'claude' })
+    await deps.orca!.run('/bin/ps', ['-o', 'pid=,tty=', '-p', '41000'], 1_000)
+    expect(world.gaps).toEqual(['a command tier A does not answer: ps'])
+  })
+
   it("Cursor's CLI is answered only on a folder, as Linux's folder row runs it: any other run is a gap", async () => {
     const { world, deps } = worldOn('linux')
     await deps.orca!.run('/opt/eval/bin/cursor', ['/work/eval-a'], 1_000)
