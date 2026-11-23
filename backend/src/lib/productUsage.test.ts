@@ -76,6 +76,17 @@ describe('kept apart', () => {
     expect(stored().every(metric => metric.startsWith('staff:'))).toBe(true)
   })
 
+  it('keeps a staff account\'s dial counts under staff:', async () => {
+    accounts('Dee@Autonomous.AI')
+    const context = { surface: 'cli', release: '0.6.82', platform: 'macos', channel: 'production' } as const
+    expect(await ingestProductUsage('team-account', { ...report, context,
+      counters: { dial_used_installation_days: 1, dial_voice_delivered: 2 } }, now)).toEqual({ accepted: true })
+    await flushRelayUsage()
+    expect(stored()).toEqual(expect.arrayContaining(['staff:dial_used_installation_days', 'staff:dial_voice_delivered',
+      'staff:breakdown:release:cli:0.6.82:dial_used_installation_days']))
+    expect(stored().every(metric => metric.startsWith('staff:'))).toBe(true)
+  })
+
   it('keeps a tester\'s build under testing:, without margins, whoever signed in', async () => {
     const context = { surface: 'phone', release: '1.0.7', platform: 'ios', channel: 'testing' } as const
     expect(await ingestProductUsage('someone', { ...report, context }, now)).toEqual({ accepted: true })
