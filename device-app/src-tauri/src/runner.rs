@@ -692,7 +692,7 @@ mod tests {
     use super::*;
     use crate::account::NO_RESULT;
     use crate::app::App;
-    use crate::follow::{AX_SETTINGS, AxTrust, CHATGPT_BUNDLE, ChatgptWindow, Heard, NoFollow, Switched};
+    use crate::follow::{AX_SETTINGS, AxTrust, CHATGPT_BUNDLE, ChatgptWindow, Heard, NoFollow};
     use crate::front::{FrontSource, NoFront};
     use crate::install::{FINISH_IN_TERMINAL, GETTING_READY, INSTALLING_TMUX, NOT_INSTALLED, Place, Run, Shell, runs};
     use crate::loginitem::LoginItem;
@@ -1382,7 +1382,6 @@ mod tests {
             Effect::Reveal(PathBuf::from("/tmp/harness-logs-20261118-1030.zip")),
             Effect::AskAx,
             Effect::OpenAxSettings,
-            Effect::FollowSwitch(true),
         ];
         for effect in others {
             assert_eq!(w.runner.run(effect.clone()), None, "{effect:?}");
@@ -1552,11 +1551,6 @@ mod tests {
         fn start(&self, changed: Box<dyn Fn() + Send + Sync>) {
             self.with(|state| state.changed = Some(Arc::from(changed)));
         }
-    }
-
-    /// A door off macOS, as every door there is: the test's window, and the switch.
-    fn switched(window: &ChatgptDoor, on: bool) -> Arc<Switched<ChatgptDoor>> {
-        Arc::new(Switched::new(ChatgptDoor(window.0.clone()), on))
     }
 
     #[test]
@@ -2171,8 +2165,14 @@ mod tests {
         assert_eq!(w.rest(), [Event::WatchExit(Some(0))]);
     }
 
+    const SKIPPED: &str = "chatgpt: skipped · no permission";
+
+    fn skipped(lines: &[String]) -> usize {
+        lines.iter().filter(|line| *line == SKIPPED).count()
+    }
+
     #[test]
-    fn the_offer_is_one_event_when_chatgpt_comes_to_the_front_and_none_for_the_app_in_front_at_start() {
+    fn chatgpt_coming_to_the_front_untrusted_is_one_log_line_each_time_and_none_for_the_app_in_front_at_start() {
         let door = ChatgptDoor::answering(true, false);
         let (w, fronts) = world_following(CHATGPT_BUNDLE, &door);
         w.fake.script("hardware watch --json", &ATTACHED);
@@ -2182,56 +2182,37 @@ mod tests {
         fronts.tell(CHATGPT_BUNDLE);
         fronts.tell(VSCODE);
         fronts.tell(CHATGPT_BUNDLE);
-        assert_eq!(w.next(), Event::FollowOffer);
-        // Allowed since macOS's last notice: the read as ChatGPT comes to the front finds it, and nothing is offered.
+        w.fake.log().until(|lines| skipped(lines) == 1);
+        fronts.tell(VSCODE);
+        fronts.tell(CHATGPT_BUNDLE);
+        w.fake.log().until(|lines| skipped(lines) == 2);
+        // Allowed since macOS's last notice: the read as ChatGPT comes to the front finds it, and nothing is said.
         fronts.tell(VSCODE);
         door.trust(&[true]);
         fronts.tell(CHATGPT_BUNDLE);
         assert_eq!(w.next(), follow(true, true));
+        assert_eq!(skipped(&w.fake.log().lines()), 2);
+        // The app opens nothing for it: no event but the watch's end.
         assert_eq!(w.rest(), [Event::WatchExit(Some(0))]);
     }
 
     #[test]
-    fn chatgpt_exe_in_front_reads_the_permission_before_the_offer_is_judged_as_the_bundle_id_does() {
+    fn chatgpt_exe_in_front_reads_the_permission_before_skipping_as_the_bundle_id_does() {
         let door = ChatgptDoor::answering(true, false);
         let (w, fronts) = world_following(VSCODE, &door);
         w.fake.script("hardware watch --json", &ATTACHED);
         assert_eq!(w.runner.run(Effect::SpawnWatch), None);
         w.next_in_any_order(&[a_dial(), follow(false, true)]);
         fronts.tell("ChatGPT.exe");
-        assert_eq!(w.next(), Event::FollowOffer);
-        // Switched on since: the read as ChatGPT comes to the front finds it, nothing is offered, and it observes.
+        w.fake.log().until(|lines| skipped(lines) == 1);
+        // Allowed since: the read as ChatGPT comes to the front finds it, nothing is said, and it observes.
         fronts.tell(VSCODE);
         door.trust(&[true]);
         fronts.tell("ChatGPT.exe");
         assert_eq!(w.next(), follow(true, true));
         door.observed(1);
+        assert_eq!(skipped(&w.fake.log().lines()), 1);
         assert_eq!(w.rest(), [Event::WatchExit(Some(0))]);
-    }
-
-    #[test]
-    fn the_switch_turned_off_drops_the_observation_at_once_and_turned_on_writes_the_first_title_again() {
-        let door = ChatgptDoor::answering(false, false);
-        let (w, _fronts) = world_following(CHATGPT_BUNDLE, &switched(&door, true));
-        assert_eq!(w.next(), follow(true, false));
-        w.fake.script("hardware watch --json", &ATTACHED);
-        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
-        door.observed(1);
-        door.hear(0, title("Fix login"));
-        assert_eq!(w.runner.run(Effect::FollowSwitch(false)), None);
-        // Read back once at the click: off macOS no notice comes, and so no read a moment later either.
-        assert!(w.runner.0.chatgpt.state.lock().unwrap().trust_at.is_none());
-        // Heard after the click, before the follow thread has dropped its box: no line.
-        door.hear(0, title("Plan the trip"));
-        door.dropped(0);
-        assert_eq!(w.next(), follow(false, false));
-        assert_eq!(w.runner.run(Effect::FollowSwitch(true)), None);
-        assert_eq!(w.next(), follow(true, false));
-        door.observed(2);
-        // The same title as the last one written: a new observation writes its first.
-        door.hear(1, title("Fix login"));
-        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [CHATGPT_LINE, FIX_LOGIN, FIX_LOGIN]);
     }
 
     #[test]

@@ -85,10 +85,8 @@ fn the_one_os_property_of_the_rules_is_install_exits_app() {
         Event::Login(LoginEvent::Done(Ok(()))),
         Event::Auth(Some(true)),
         Event::Follow { trusted: false, installed: true },
-        Event::FollowOffer,
         Event::Act(Action::Allow),
         Event::Follow { trusted: true, installed: true },
-        Event::Menu(MenuAction::FollowSettings),
         menu_opened(B + 70, true),
         Event::Menu(MenuAction::SoundOff),
         status(true),
@@ -154,50 +152,43 @@ fn shows_the_row(effects: &[Effect]) -> bool {
     effects.iter().any(|effect| matches!(effect, Effect::Menu(items) if items.contains(&row)))
 }
 
-/// Whether the menu's last Follow ChatGPT item and its screen show, signed in with a dial attached, once the runner has
-/// told what the door answers and ChatGPT came to the front. `switch`: the rules off macOS.
-fn follow_shown(switch: bool, trusted: bool, installed: bool) -> (bool, bool) {
+/// Whether the menu's last version has a follow item and whether the Follow ChatGPT screen shows, signed in with a
+/// dial attached, once the runner has told what the door answers.
+fn follow_shown(trusted: bool, installed: bool) -> (bool, bool) {
     let seen = Saved { cli_seen: true, asked_sign_in: true, login_item: true, ..Saved::default() };
-    let (mut app, mut effects) = App::new(seen, true, false, B, false, switch);
+    let (mut app, mut effects) = App::new(seen, true, false, B, false, false);
     for event in
         [Event::StartDone { ok: true }, status(false), Event::Auth(Some(true)), Event::Follow { trusted, installed }]
     {
         effects.extend(app.handle(event));
     }
-    effects.extend(app.handle(Event::FollowOffer));
     let menu = effects.iter().rev().find_map(|effect| match effect {
         Effect::Menu(items) => Some(items),
         _ => None,
     });
     let item = menu.is_some_and(|items| {
-        items.iter().any(|item| {
-            matches!(
-                item,
-                MenuItem::Check(MenuAction::FollowChatgpt | MenuAction::FollowSettings | MenuAction::FollowSwitch, ..)
-            )
+        items.iter().any(|item| match item {
+            MenuItem::Action(_, label) | MenuItem::Check(_, label, _) => label.to_lowercase().contains("follow"),
+            _ => false,
         })
     });
     (item, app.view().is_some_and(|view| view.screen == Screen::Follow))
 }
 
 #[test]
-fn follow_chatgpt_shows_only_with_a_door_that_has_the_chatgpt_app() {
-    // macOS's door, the ChatGPT app installed and no permission yet: the item, and the offer's screen.
-    assert_eq!(follow_shown(false, false, true), (true, true));
-    // A door off macOS with the ChatGPT app installed, its switch on: the item, and no screen, since nothing is asked.
-    assert_eq!(follow_shown(true, true, true), (true, false));
-    // A desktop with no door (GNOME or KDE on Wayland), off macOS's rules: no item and no screen.
-    assert_eq!(follow_shown(true, NoFollow.trusted(), NoFollow.installed()), (false, false));
+fn only_macos_without_the_permission_asks_and_no_menu_has_a_follow_item() {
+    // macOS's door, the ChatGPT app installed and no permission yet: the screen, at start.
+    assert_eq!(follow_shown(false, true), (false, true));
+    // macOS's door with the permission, and every door off macOS, which is always trusted: neither.
+    assert_eq!(follow_shown(true, true), (false, false));
+    // A desktop with no door (GNOME or KDE on Wayland): neither.
+    assert_eq!(follow_shown(NoFollow.trusted(), NoFollow.installed()), (false, false));
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Windows always has its door. On Linux the door is the session's (NoFollow on CI, with no window system): follow's
+/// door_kind test and its off_macos_a_door_is_always_trusted_and_nothing_is_asked hold it.
+#[cfg(windows)]
 #[test]
-fn off_macos_the_saved_switch_is_what_the_door_trusts() {
-    let door = |switch_on| crate::follow::system(std::env::temp_dir(), switch_on).trusted();
-    // Windows always has its door. On Linux the door is the session's (NoFollow on CI, with no window system), so
-    // only the switch off is held here: follow's door_kind test and its
-    // off_macos_the_switch_is_the_permission_and_nothing_is_asked_or_told hold the rest.
-    #[cfg(windows)]
-    assert!(door(true));
-    assert!(!door(false));
+fn off_macos_the_door_is_trusted_with_nothing_saved() {
+    assert!(crate::follow::system(std::env::temp_dir()).trusted());
 }

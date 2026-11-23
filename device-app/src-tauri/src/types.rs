@@ -494,8 +494,7 @@ mod tests {
             "askedSignIn": false,
             "loginItem": false,
             "askedFollow": false,
-            "askedAx": false,
-            "followOff": false
+            "askedAx": false
         });
         assert_eq!(serde_json::to_value(Saved::default()).unwrap(), keys);
         assert_eq!(serde_json::from_value::<Saved>(keys).unwrap(), Saved::default());
