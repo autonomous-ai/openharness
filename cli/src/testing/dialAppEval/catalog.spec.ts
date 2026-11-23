@@ -79,7 +79,8 @@ describe('the catalog', () => {
     }
   })
 
-  it("IH4's ring fails with its herdr row also on herdr's page: an apps frame of iterm 1, herdr 1", () => {
+  it("IH4's ring on herdr's page counts no other page: an apps frame shown herdr with herdr 1 passes its apart, and iterm 1 "
+    + 'beside it fails', () => {
     const ih4 = byId('IH4')
     const ring = ih4.checks.find((c) => c.id === 'ring')!
     const c = ih4.sessions.find((d) => d.key === 'c')!
@@ -88,11 +89,11 @@ describe('the catalog', () => {
       return { at, index, kind: ih4.steps[index]!.kind, label }
     }
     const apart = (apps: Array<{ id: string; count: number }>): number | undefined => evaluate(ring, ih4, {
-      frames: [{ at: 2000, message: { t: 'apps', shown: 'iterm', apps } }, { at: 2000, message: { t: 'agents.begin' } },
+      frames: [{ at: 2000, message: { t: 'apps', shown: 'herdr', apps } }, { at: 2000, message: { t: 'agents.begin' } },
         { at: 2000, message: { t: 'agent', id: agentIdOf(c), name: c.title } }, { at: 2000, message: { t: 'agents.end', total: 1, tab: '' } }],
       faces: [], commands: [], deliveries: [], steps: [step(1000, 'restart'), step(9000, 'tap')],
     }, 'a', 'darwin').find((r) => r.check === 'ring.apart')?.score
-    expect(apart([{ id: 'iterm', count: 1 }])).toBe(1)
+    expect(apart([{ id: 'herdr', count: 1 }])).toBe(1)
     expect(apart([{ id: 'iterm', count: 1 }, { id: 'herdr', count: 1 }])).toBe(0)
   })
 
