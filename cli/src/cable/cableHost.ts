@@ -146,6 +146,9 @@ export interface CableHostWiring {
   voiceEnded?: (end: DialVoiceEnd) => void
   /** How a person's tap ended, once a tap, for the same counts. A question screen that came up by itself is no tap. */
   openEnded?: (agentId: string, end: DialOpenEnd) => void
+  /** The dial answered a Harness agent's question, told before the answer is routed, for the same counts: with the fleet
+   *  on, the answer goes through the fleet's router and never through `answer` or `answerReviewed` here. */
+  answered?: (agentId: string, requestId: string) => void
   notificationRead?: (machineId: string, agentId: string, readToken: string) => void
   /** A fork the dial asked for is open: the window puts it beside its source and focuses it. */
   forked?: (machineId: string, agentId: string, sourceAgentId: string) => void
@@ -1228,11 +1231,19 @@ export class DaemonCableHost implements CableHost {
 
   answerReviewed(answer: ReviewedAnswer): Promise<AnswerReceipt> {
     if (this.outside(answer.agentId)) return Promise.resolve({ ok: false, error: 'Use the terminal to answer this question.' })
+    this.answered(answer.agentId, answer.requestId)
     return this.viaFleet((r) => r.answerReviewed(answer))
   }
 
   answer(agentId: string, requestId: string, answers: Record<string, string>): void {
-    if (!this.outside(agentId)) this.viaFleet((r) => r.answer(agentId, requestId, answers))
+    if (this.outside(agentId)) return
+    this.answered(agentId, requestId)
+    this.viaFleet((r) => r.answer(agentId, requestId, answers))
+  }
+
+  /** An answer on the dial, for the dial's usage counts. A count never changes where the answer goes. */
+  private answered(agentId: string, requestId: string): void {
+    try { this.wiring.answered?.(agentId, requestId) } catch { this.wiring.log('cable: answer not counted') }
   }
 
 
