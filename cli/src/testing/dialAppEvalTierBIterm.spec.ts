@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -18,16 +18,17 @@ const iterm = await import('../../e2e/harness/appEvalIterm.js' as string) as {
 /** A tab of the fake iTerm2 as iTerm2's steps hold it. */
 interface Opened { window: string; tab: number; label: string; tty: string; app?: number }
 
-/** The parts of a daemon the fake apps read: its root, and its home in it. */
-interface FakeDaemon { root: string; env: NodeJS.ProcessEnv }
+/** The parts of a daemon the fake apps use: its root, its home in it, and its note of what they start (own). */
+interface FakeDaemon { root: string; env: NodeJS.ProcessEnv; own(pid: number): void }
 type Tab = { process: ChildProcess; pid: number; shellPid?: number; appPid?: number }
 const outside = await import('../../e2e/harness/outsideAgent.js' as string) as {
-  tabUnder(d: FakeDaemon, app: 'iterm', argv: readonly string[], env: NodeJS.ProcessEnv):
+  tabUnder(d: FakeDaemon, app: 'iterm' | 'iterm-server', argv: readonly string[], env: NodeJS.ProcessEnv):
     Promise<{ pid: number; appPid?: number; type?(text: string): void; close(): Promise<void> }>
   openTab(d: FakeDaemon, cwd: string, env: NodeJS.ProcessEnv, command: readonly string[], options: { app: 'iterm'; shell: boolean }): Promise<Tab>
   closeTab(tab: Tab, what: string): Promise<void>
   relaunchIterm(tab: { appPid?: number }): Promise<void>
   typeInto(tab: ChildProcess, text: string): void
+  itermServerPath(d: FakeDaemon): string
 }
 
 /** herdr's server as tier B ends it (harness/herdrServer.ts). */
@@ -81,7 +82,7 @@ describe("tier B's iTerm2", () => {
 describe.skipIf(process.platform !== 'darwin')("tier B's fake iTerm2, relaunched", () => {
   it("a tab of it takes no keys, and typing into one throws: its keys went in through the app's stdin, which Node closed as it ended", async () => {
     dir = mkdtempSync(join(tmpdir(), 'tier-b-relaunch-'))
-    const d: FakeDaemon = { root: dir, env: { HOME: join(dir, 'home'), PATH: process.env.PATH } }
+    const d: FakeDaemon = { root: dir, env: { HOME: join(dir, 'home'), PATH: process.env.PATH }, own: () => {} }
     const client = await outside.tabUnder(d, 'iterm', ['/bin/cat'], d.env)
     const shell = await outside.openTab(d, dir, d.env, ['/bin/cat'], { app: 'iterm', shell: true })
     try {
@@ -92,6 +93,31 @@ describe.skipIf(process.platform !== 'darwin')("tier B's fake iTerm2, relaunched
     } finally {
       await client.close()
       await outside.closeTab(shell, 'the shell tab')
+    }
+  })
+
+  it("each tab's fake iTerm2 and its server are noted to the daemon as they start: the server is launchd's once the fake iTerm2 ends, or from its start", async () => {
+    dir = mkdtempSync(join(tmpdir(), 'tier-b-noted-'))
+    const owned: number[] = []
+    const d: FakeDaemon = { root: dir, env: { HOME: join(dir, 'home'), PATH: process.env.PATH }, own: (pid) => { owned.push(pid) } }
+    const client = await outside.tabUnder(d, 'iterm', ['/bin/cat'], d.env)
+    const shell = await outside.openTab(d, dir, d.env, ['/bin/cat'], { app: 'iterm', shell: true })
+    const alone = await outside.tabUnder(d, 'iterm-server', ['/bin/cat'], d.env)
+    /** A process of this test's: its parent and the path it was started from (macOS's `comm`). */
+    const processOf = (pid: number) => {
+      const [ppid, ...comm] = execFileSync('/bin/ps', ['-o', 'ppid=,comm=', '-p', String(pid)], { encoding: 'utf8' }).trim().split(/\s+/)
+      return { ppid: Number(ppid), comm: comm.join(' ') }
+    }
+    try {
+      await outside.relaunchIterm(client)
+      await outside.relaunchIterm(shell)
+      expect(owned).toEqual(expect.arrayContaining([client.appPid, shell.appPid]))
+      const servers = owned.filter((pid) => pid !== client.appPid && pid !== shell.appPid).map(processOf)
+      expect(servers).toEqual([1, 2, 3].map(() => ({ ppid: 1, comm: outside.itermServerPath(d) })))
+    } finally {
+      await client.close()
+      await outside.closeTab(shell, 'the shell tab')
+      await alone.close()
     }
   })
 })

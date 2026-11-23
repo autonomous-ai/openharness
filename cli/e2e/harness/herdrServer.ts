@@ -149,7 +149,7 @@ export function launchLost(screen: string, line: string): boolean {
 }
 
 /** [parent]'s child named [name], by pgrep, which prints no other process; undefined while it has none. */
-async function childNamed(parent: number, name: string): Promise<number | undefined> {
+export async function childNamed(parent: number, name: string): Promise<number | undefined> {
   const { stdout } = await execFileAsync('/usr/bin/pgrep', ['-P', String(parent), '-x', name])
     .catch((error: { stdout?: string }) => ({ stdout: error.stdout ?? '' }))
   const [pid] = stdout.split('\n').filter(Boolean)

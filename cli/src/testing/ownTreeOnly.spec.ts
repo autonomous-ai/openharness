@@ -37,8 +37,18 @@ const machine = vi.hoisted(() => {
     ANSWER,
     answer: new Function(`return ${ANSWER}`)() as (rows: Made[], name: string, args: readonly string[]) => { stdout: string; status: number },
     rows: [] as Made[], runs: [] as Array<{ file: string; args: string[] }>, signals: [] as Array<[number, string | number]>,
+    /** Whether `ps -A` fails there, as one cut off at its timeout does. */
+    tableFails: false,
   }
 })
+
+/** What the harness told the worker's reaper of the processes it started (reaper.ts watchOwn): never a real reaper. */
+const told = vi.hoisted(() => [] as Array<[number, string]>)
+vi.mock('../../e2e/harness/reaper.js', async (importOriginal) => ({
+  ...await importOriginal<object>(),
+  watchOwn: (pid: number, started: string) => { told.push([pid, started]) },
+  forgetOwn: () => {},
+}))
 
 vi.mock('node:child_process', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:child_process')>()
@@ -51,6 +61,7 @@ vi.mock('node:child_process', async (importOriginal) => {
   const answer = (file: string, args: readonly string[]): { stdout: string; status: number } => {
     machine.runs.push({ file, args: [...args] })
     const name = basename(file)
+    if (name === 'ps' && args.includes('-A') && machine.tableFails) return { stdout: '', status: 1 }
     return name === 'pgrep' || name === 'pkill' ? { stdout: '', status: 1 } : machine.answer(machine.rows, name, args)
   }
   const failed = (file: string, status: number, stdout: string) =>
@@ -123,6 +134,7 @@ beforeEach(() => {
   machine.rows = []
   machine.runs = []
   machine.signals = []
+  machine.tableFails = false
   const kill = process.kill.bind(process)
   // Signal 0 to a made-up pid: gone. Any other signal is noted and sent nowhere; none ever reaches a real process.
   vi.spyOn(process, 'kill').mockImplementation((pid: number, signal?: string | number) => {
@@ -178,6 +190,30 @@ function daemonUnder(root: string): Made[] {
 /** The test's tree on that machine: the worker's, and the tmux server's. */
 const TREE = [WORKER, MASTER, CORE, CODEX, CODEX_CHILD, TMUX, PANE, LEFT, OWN_CALL]
 
+const SERVER = P(50), HELPER = P(51), CAT = P(52), HERDR = P(60), HERDR_PANE = P(61), STALE = P(70)
+/**
+ * What the harness started and noted as it started it (IsolatedDaemon.own), launchd's now that its parent is gone: the
+ * fake iTerm2's server, in the worker's group, with its tab's helper and the helper's `cat`, which name nothing of the
+ * root; herdr's server its client started, leading a group of its own with a pane's shell, naming nothing of the root
+ * and working outside it; and a pid noted for a server since gone, which a process of the person's has now, of the same
+ * path, started later.
+ */
+function noted(root: string): Made[] {
+  const server = `${root}/home/Library/Application Support/iTerm2/iTermServer-3.6.6`
+  return [
+    made(SERVER, 1, VITEST, `${server} -e under-app python3 -c pty /bin/cat`),
+    made(HELPER, SERVER, VITEST, 'python3 -c pty /bin/cat'),
+    made(CAT, HELPER, CAT, '/bin/cat'),
+    made(HERDR, 1, HERDR, '/opt/homebrew/bin/herdr server', '/Users/person'),
+    made(HERDR_PANE, HERDR, HERDR, '-zsh', '/Users/person'),
+    made(STALE, 1, STALE, `${server} -e under-app`, '/Users/person', 'Mon Nov 23 10:07:00 2026'),
+  ]
+}
+/** The pids noted and the start each had then. */
+const NOTED = new Map([[SERVER, LSTART], [HERDR, LSTART], [STALE, LSTART]])
+/** What descends from the noted processes that still run as themselves. */
+const NOTED_TREE = [SERVER, HELPER, CAT, HERDR, HERDR_PANE]
+
 describe("the process table the harness reads of every process", () => {
   it('is each one\'s pid, parent and group, and nothing else', () => {
     machine.rows = daemonUnder('/tmp/htmux-x')
@@ -221,9 +257,57 @@ describe("the daemon's close sweep", () => {
     machine.rows = machine.rows.filter((row) => ![MASTER, TMUX, PANE].includes(row.pid))
       .map((row) => row.pid === CORE ? made(CORE, 1, CORE, 'bash', root, 'Mon Nov 23 10:05:00 2026')
         : [CODEX, LEFT].includes(row.pid) ? { ...row, ppid: 1 } : row)
-    expect(await endRootProcesses(root, seen, 0)).toEqual([])
+    expect(await endRootProcesses(root, seen, new Map(), 0)).toEqual([])
     expect(machine.signals).toEqual([[-CODEX, 'SIGKILL'], [-LEFT, 'SIGKILL'], [OWN_CALL, 'SIGKILL']])
     expect(beyond([WORKER, CODEX, CODEX_CHILD, LEFT, OWN_CALL], TREE)).toEqual([])
+  })
+
+  it.runIf(FOLDERS)('ends what the harness noted it started and what descends from it, by its start, once launchd has it, whatever it names, and spares a process given a noted pid since', async () => {
+    const root = testRoot()
+    machine.rows = [...daemonUnder(root), ...noted(root)]
+    // Nothing seen before: only the note keeps the fake iTerm2's server and herdr's the test's.
+    expect(await endRootProcesses(root, new Map(), NOTED, 0)).toEqual([])
+    const ended = machine.signals.map(([pid]) => pid)
+    expect(ended).toEqual(expect.arrayContaining([SERVER, HELPER, -CAT, -HERDR]))
+    expect(ended.filter((pid) => [STALE, ...PERSON].includes(Math.abs(pid)))).toEqual([])
+    expect(beyond([WORKER, MASTER, CORE, CODEX, CODEX_CHILD, OWN_CALL, ...NOTED_TREE], NOTED.keys())).toEqual([])
+  })
+})
+
+describe("the harness's note of a process it started (IsolatedDaemon.own)", () => {
+  /** An IsolatedDaemon of the made-up machine, its tmux server [TMUX], with no daemon started. */
+  async function daemon(): Promise<{ own(pid: number): void; treeRoots(): Promise<number[]>; kill(): Promise<void> } & Record<string, unknown>> {
+    const { IsolatedDaemon } = await import('../../e2e/harness/daemon.js' as string) as { IsolatedDaemon: { prototype: object } }
+    return Object.assign(Object.create(IsolatedDaemon.prototype), { owned: new Map(), seen: new Map(), tmux: { run: async () => String(TMUX) } })
+  }
+
+  it.runIf(FOLDERS)("reads its start alone, tells the worker's reaper, and keeps it and its tree the test's once launchd has it, never a process given its pid since", async () => {
+    const root = testRoot()
+    told.length = 0
+    machine.rows = [...daemonUnder(root), ...noted(root).map((row) => row.pid === STALE ? { ...row, started: LSTART } : row)]
+    const d = await daemon()
+    for (const pid of NOTED.keys()) d.own(pid)
+    expect(told).toEqual([...NOTED])
+    expect(beyond([], NOTED.keys())).toEqual([])
+    // The server noted as STALE is gone, and a process of the person's has its pid.
+    machine.rows = [...daemonUnder(root), ...noted(root)]
+    machine.runs = []
+    const roots = await d.treeRoots()
+    expect(roots).toEqual([WORKER, TMUX, SERVER, HERDR])
+    // Tier B's leftover check counts the server, which names the root, from the note alone.
+    expect(underRoot(root, roots).map((row) => row.pid)).toContain(SERVER)
+    expect(beyond([...TREE, ...NOTED_TREE], NOTED.keys())).toEqual([])
+  })
+
+  it('ends the daemon as a crash does though the process table cannot be read', async () => {
+    const d = await daemon()
+    const kill = vi.fn()
+    d.child = { kill, once: (_event: string, done: () => void) => done() }
+    machine.tableFails = true
+    const said = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await d.kill()
+    expect(kill).toHaveBeenCalledWith('SIGKILL')
+    expect(said.mock.calls).toEqual([[expect.stringMatching(/^\[e2e sweep\] could not see the test's processes before ending the daemon: /)]])
   })
 })
 
@@ -328,6 +412,24 @@ process.exit(status)
     machine.runs = readFileSync(runs, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as { file: string; args: string[] })
     expect(beyond([LEFT], [TMUX, PANE, LEFT])).toEqual([])
   })
+
+  it.runIf(FOLDERS)('ends what the worker noted it started and what descends from it, by its start, once launchd has it, and spares a process given a noted pid since', async () => {
+    const root = testRoot()
+    const GONE = P(2)
+    machine.rows = [...daemonUnder(root), ...noted(root)]
+      .map((row) => ({ ...row, pid: row.pid === WORKER ? GONE : row.pid, ppid: row.ppid === WORKER ? GONE : row.ppid }))
+    const { bin, runs } = fakeBin([TMUX, PANE])
+    const reaper = spawn(process.execPath, [REAPER], { stdio: ['pipe', 'ignore', 'pipe'], env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } })
+    let said = ''
+    reaper.stderr!.on('data', (chunk: Buffer) => { said += chunk.toString() })
+    reaper.stdin!.end([{ tmux: join(root, 'tmux-501', 'default'), root }, ...[...NOTED].map(([own, started]) => ({ own, started }))]
+      .map((line) => `${JSON.stringify(line)}\n`).join(''))
+    const [code] = await once(reaper, 'exit')
+    expect(code, said).toBe(0)
+    expect(said).toContain(`[e2e reaper] the test worker ended with ${NOTED_TREE.length} processes it started, or theirs, still running: SIGKILL`)
+    machine.runs = readFileSync(runs, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as { file: string; args: string[] })
+    expect(beyond([LEFT, ...NOTED_TREE], [TMUX, PANE, LEFT, ...NOTED.keys()])).toEqual([])
+  })
 })
 
 describe('the harness beside the sweep', () => {
@@ -339,6 +441,16 @@ describe('the harness beside the sweep', () => {
     expect(others).toContain(P(500))
     expect(others).not.toContain(P(400))
     expect(beyond([])).toEqual([])
+  })
+
+  it("finds herdr's server as its client's child from each process's pid and parent and the client's children's paths alone", async () => {
+    const { childNamed } = await import('../../e2e/harness/herdrServer.js' as string) as { childNamed(parent: number, name: string): Promise<number | undefined> }
+    const CLIENT = P(400), ITS_SERVER = P(401), ITS_SHELL = P(402)
+    machine.rows = [made(VITEST, 1, VITEST, 'node vitest'), made(WORKER, VITEST, VITEST, 'node (vitest 1)'),
+      made(CLIENT, WORKER, CLIENT, '/opt/homebrew/bin/herdr'), made(ITS_SHELL, CLIENT, CLIENT, '/bin/sh -c stty'),
+      made(ITS_SERVER, CLIENT, ITS_SERVER, '/opt/homebrew/bin/herdr server'), made(P(500), 1, P(500), '/Users/person/.local/bin/herdr server')]
+    expect(await childNamed(CLIENT, 'herdr')).toBe(ITS_SERVER)
+    expect(beyond([ITS_SHELL, ITS_SERVER])).toEqual([])
   })
 
   it("finds the endurance run's strays in the test's tree alone", async () => {
