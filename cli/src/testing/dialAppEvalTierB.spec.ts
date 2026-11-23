@@ -336,14 +336,17 @@ describe("tier B's recording wrappers", () => {
     const run = spawn(tmux.path, ['-c', script], { stdio: 'ignore' })
     const ended = new Promise((done) => run.once('exit', done))
     const real = await vi.waitFor(() => Number(readFileSync(said, 'utf8')), { timeout: 10_000, interval: 20 })
+    let gone = false
     try {
       run.kill('SIGTERM')
       await ended
       expect(runLog.runLog(tmux.runs).map(({ argv, ok }) => ({ argv, ok }))).toEqual([{ argv: ['tmux', '-c', script], ok: false }])
       // Waited for by the wrapper, so gone by its end.
       expect(() => process.kill(real, 0)).toThrow()
+      gone = true
     } finally {
-      try { process.kill(real, 'SIGKILL') } catch { /* gone */ }
+      // Only while it may still be the sleep: once gone, its pid may be another process's.
+      if (!gone) try { process.kill(real, 'SIGKILL') } catch { /* gone */ }
     }
   })
 
