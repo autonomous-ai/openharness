@@ -156,6 +156,19 @@ describe("the devices' dial-usage.json", () => {
     expect(usage.firstEver('used')).toBe(true)
   })
 
+  it('unreached says what firstEver would, and spends nothing', () => {
+    let signedIn = false
+    const { usage } = open(aFile(), { signedIn: () => signedIn })
+    expect(usage.unreached('connected')).toBe(false)
+    signedIn = true
+    expect(usage.unreached('connected')).toBe(true)
+    expect(usage.unreached('connected')).toBe(true)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(usage.firstEver('connected')).toBe(true)
+    expect(usage.unreached('connected')).toBe(false)
+    expect(usage.unreached('used')).toBe(true)
+  })
+
   it('firstEver is true once, and stays false after a reload', () => {
     const file = aFile()
     const first = open(file)

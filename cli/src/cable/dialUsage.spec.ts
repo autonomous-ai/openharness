@@ -25,6 +25,7 @@ function fileSink() {
       values.set(key, FLAGS.has(metric) ? 1 : was + n)
       return values.get(key) !== was
     },
+    unreached: mark => !spent.has(mark),
     firstEver: mark => !spent.has(mark) && !!spent.add(mark),
   }
   return { sink, added }
@@ -168,6 +169,21 @@ describe('createDialUsage', () => {
     after.usage.shown('a')
     expect(after.prefixed('dial_first_agent_')).toEqual([
       'dial_first_agent_first_under_1m_installations', 'dial_first_agent_day_under_1m_installations'])
+  })
+
+  it('a restart before the first agent measures the first connection again', () => {
+    const file = fileSink()
+    const before = rig(undefined, file)
+    before.usage.agentsPresent(true)
+    before.usage.attached(true)
+    vi.advanceTimersByTime(30_000)
+    before.usage.stop()
+    const after = rig(undefined, file)
+    after.usage.agentsPresent(true)
+    after.usage.attached(true)
+    vi.advanceTimersByTime(120_000)
+    after.usage.shown('a')
+    expect(after.prefixed('dial_first_agent_')).toEqual(['dial_first_agent_first_1m_to_3m_installations'])
   })
 
   it('engine and host of each agent shown, an agent once a day, at most 16', () => {
