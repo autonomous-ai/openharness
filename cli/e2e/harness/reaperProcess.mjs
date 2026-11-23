@@ -8,7 +8,10 @@
  * a pipe from the worker, and the kernel closes it when the worker exits, by any path. Then every process group the worker
  * still has registered gets SIGTERM, and SIGKILL for whatever is left after the grace; every tmux server it registered is
  * stopped (tmux daemonizes into a session of its own); then, once its throwaway root is known to be a test's, every process
- * that still names that root or works in it is ended, and the root is removed, read-only folders and all.
+ * of the worker's tree that still names that root or works in it is ended, and the root is removed, read-only folders and
+ * all. The worker's tree is what its groups and its tmux servers held when it went, seen by start time before anything is
+ * ended: once they are gone, what they started is launchd's. Of the machine's other processes nothing is read but each
+ * one's pid, parent and group: the person's own run on the same computer (PM, 2026-11-23).
  *
  * The worker's lines on stdin, one JSON object each: {"group":N} a process group to end, {"leaderGone":N} its leader exited,
  * {"forget":N} it was closed; {"tmux":socket,"root":folder} a tmux server to stop, then what still names its root or works
@@ -70,26 +73,91 @@ function isTestRoot(root) {
   }
 }
 
+/** Each process's pid, parent and group, and nothing else of any (src/testing/spawnedRuns.ts processTable). Throws when
+ *  ps cannot run. */
+function processTable() {
+  return execFileSync('ps', ['-A', '-o', 'pid=,ppid=,pgid='], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 5_000 })
+    .split('\n').flatMap((line) => {
+      const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s*$/.exec(line)
+      return match ? [{ pid: Number(match[1]), ppid: Number(match[2]), pgid: Number(match[3]) }] : []
+    })
+}
+
+/** [roots] and what descends from them in [table]: each one's children, and the members of a group one of them leads;
+ *  never pid 1 (src/testing/spawnedRuns.ts processTree). */
+function processTree(table, roots) {
+  const tree = new Set(roots.filter((pid) => pid > 1))
+  for (let grew = true; grew;) {
+    grew = false
+    const leaders = new Set(table.filter((row) => tree.has(row.pid) && row.pid === row.pgid).map((row) => row.pid))
+    for (const row of table) {
+      if (row.pid > 1 && !tree.has(row.pid) && (tree.has(row.ppid) || leaders.has(row.pgid))) { tree.add(row.pid); grew = true }
+    }
+  }
+  return table.filter((row) => tree.has(row.pid))
+}
+
+/** [field] of each of [pids] still running, by pid, as `ps -p` prints it: never of a process not asked of. It exits 1
+ *  once none of them runs, and what it printed is read whatever its status; C's dates, so each read prints a start alike. */
+function psOf(pids, field) {
+  if (!pids.length) return new Map()
+  const listed = spawnSync('ps', ['-ww', '-o', `pid=,${field}=`, '-p', pids.join(',')],
+    { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' }, maxBuffer: 64 * 1024 * 1024, timeout: 5_000 })
+  return new Map(String(listed.stdout ?? '').split('\n').flatMap((line) => {
+    const match = /^\s*(\d+)\s+(.*?)\s*$/.exec(line)
+    return match ? [[Number(match[1]), match[2]]] : []
+  }))
+}
+
+/** The pid of the tmux server at [socket], asked of that server alone; none when it does not answer. */
+function serverPid(socket) {
+  try {
+    const pid = Number(execFileSync('tmux', ['-S', socket, 'display-message', '-p', '#{pid}'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5_000 }).trim())
+    return pid > 1 ? [pid] : []
+  } catch {
+    return []
+  }
+}
+
 /**
- * The working folder of each of this account's processes in [table], pid to folder: lsof on macOS, /proc on Linux.
- * Another account's is left out, so only this account's processes are matched by folder. Empty, and one line logged,
- * when lsof gives none: the sweep then goes by command line alone.
+ * Each process the worker's registered groups and tmux servers hold now, by its start time: seen before anything is
+ * ended, since once they are gone what they started is launchd's, and only this keeps it the worker's. Empty, and one
+ * line logged, when ps cannot run.
  */
-function workingFolders(table) {
+function seenNow() {
+  let table
+  try {
+    table = processTable()
+  } catch (error) {
+    console.error(`[e2e reaper] could not list the worker's processes: ${error.code ?? error.message}`)
+    return new Map()
+  }
+  const left = [...groups.keys()].filter(ours)
+  const roots = [...table.filter((row) => left.includes(row.pgid)).map((row) => row.pid), ...[...tmuxServers.keys()].flatMap(serverPid)]
+  return psOf(processTree(table, roots).map((row) => row.pid), 'lstart')
+}
+
+/**
+ * The working folder of each of [pids], processes of the worker's tree, pid to folder: lsof on macOS, /proc on Linux.
+ * Another account's is left out, so only this account's processes are matched by folder. Empty, and one line logged,
+ * when lsof cannot run: the sweep then goes by command line alone.
+ */
+function workingFolders(pids) {
   const uid = process.getuid()
   const folders = new Map()
+  if (!pids.length) return folders
   if (process.platform === 'linux') {
-    for (const { pid } of table) {
+    for (const pid of pids) {
       try {
         if (statSync(`/proc/${pid}`).uid === uid) folders.set(pid, readlinkSync(`/proc/${pid}/cwd`))
       } catch { /* gone, or not this account's to read: judged by its command line alone */ }
     }
     return folders
   }
-  const lsof = spawnSync('lsof', ['-a', '-d', 'cwd', '-F', 'pnu'], { encoding: 'utf8', timeout: 5_000, maxBuffer: 64 * 1024 * 1024 })
-  // lsof exits 1 when some process cannot be read, and what it printed still counts. What it printed before it was cut
-  // short (timed out, over the buffer, killed) does not: its last folder could be cut to another root's name.
-  if (lsof.error || lsof.status === null || !lsof.stdout) {
+  const lsof = spawnSync('lsof', ['-a', '-d', 'cwd', '-F', 'pnu', '-p', pids.join(',')], { encoding: 'utf8', timeout: 5_000, maxBuffer: 64 * 1024 * 1024 })
+  // lsof exits 1 when one of them is gone, and what it printed still counts. What it printed before it was cut short
+  // (timed out, over the buffer, killed) does not: its last folder could be cut to another root's name.
+  if (lsof.error || lsof.status === null) {
     const why = lsof.error?.message ?? (lsof.signal ? `killed by ${lsof.signal}` : `exit ${lsof.status}`)
     console.error(`[e2e reaper] no working folders read (lsof: ${why}): swept by command line alone`)
     return folders
@@ -106,8 +174,9 @@ function workingFolders(table) {
 }
 
 /**
- * SIGKILL every process that still names [root] or works in it, [root] being a test's (isTestRoot), and wait, at most
- * 5 s, until none is left: the rule of src/testing/rootProcesses.ts, which plain Node cannot import. A Codex rate-limit
+ * SIGKILL every process of the worker's tree that still names [root] or works in it, [root] being a test's (isTestRoot),
+ * and wait, at most 5 s, until none is left: the rule of src/testing/rootProcesses.ts, which plain Node cannot import. The
+ * tree is what was [seen] (seenNow) that still runs as the same process, and what descends from it. A Codex rate-limit
  * read runs in a process group of its own (lib/codexRateLimits.ts), out of reach of the worker's groups: the census of
  * 2026-11-14 found 14 such pairs outliving their runs. And a process started by name in a pane names no root, and a real
  * engine survives its pane's end: the audit of 2026-11-15 found many real `claude`, and some `opencode` and
@@ -116,19 +185,20 @@ function workingFolders(table) {
  * that leads a group is ended with it, as the fake Codex's child names nothing of the root; any other alone. This process
  * leads its own group (reaper.ts), so no match's group is this one's.
  */
-async function endRootProcesses(root) {
-  let table
+async function endRootProcesses(root, seen) {
+  const now = psOf([...seen.keys()], 'lstart')
+  const still = [...seen].filter(([pid, started]) => now.get(pid) === started).map(([pid]) => pid)
+  if (!still.length) return
+  let tree
   try {
-    table = execFileSync('ps', ['-A', '-ww', '-o', 'pid=,pgid=,command='], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 5_000 })
-      .split('\n').flatMap((line) => {
-        const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line)
-        return match ? [{ pid: Number(match[1]), pgid: Number(match[2]), command: match[3] }] : []
-      })
+    tree = processTree(processTable(), still)
   } catch (error) {
     console.error(`[e2e reaper] could not list the processes of ${root}: ${error.code ?? error.message}`)
     return
   }
-  const folders = workingFolders(table)
+  const commands = psOf(tree.map((row) => row.pid), 'command')
+  const table = tree.flatMap((row) => commands.has(row.pid) ? [{ ...row, command: commands.get(row.pid) }] : [])
+  const folders = workingFolders(table.map((row) => row.pid))
   const spared = [process.pid, process.ppid, 1]
   const named = (row) => {
     const folder = folders.get(row.pid)
@@ -174,6 +244,7 @@ function ownerWritable(folder) {
 }
 
 async function reap() {
+  const seen = seenNow()
   const left = [...groups.keys()].filter(ours)
   for (const pgid of left) {
     console.error(`[e2e reaper] the test worker ended with process group ${pgid} still running: stopping it`)
@@ -186,14 +257,14 @@ async function reap() {
     signal(pgid, 'SIGKILL')
   }
   for (const [socket, root] of tmuxServers) {
-    // The server names the root on its own command line: stopped first, its panes with it, so the sweep meets only what
-    // left the worker's groups. Swept before the removal, so nothing that names the root writes into it as it goes.
+    // Stopped first, its panes with it, so the sweep meets only what they left, which was seen before. Swept before the
+    // removal, so nothing that names the root writes into it as it goes.
     try { execFileSync('tmux', ['-S', socket, 'kill-server'], { stdio: 'ignore', timeout: 5_000 }) } catch { /* already gone */ }
     if (!isTestRoot(root)) {
       console.error(`[e2e reaper] not a test root, left alone: ${root}`)
       continue
     }
-    await endRootProcesses(root)
+    await endRootProcesses(root, seen)
     removeRoot(root)
   }
 }

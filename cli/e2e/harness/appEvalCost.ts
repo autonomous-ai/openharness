@@ -1,7 +1,9 @@
 /**
  * What a tier B scenario of the dial eval costs (docs/plans/2026-11-21-dial-app-eval-design.md, "Tier B", D8): the
  * devices process's CPU over the scenario's wall time, its event-loop delay p99 as corePerf.cjs measures it in that
- * process, and the processes under the daemon's root the scenario left running. The daemon exposes no such stat itself.
+ * process, and the processes of the test's tree under the daemon's root the scenario left running
+ * (testing/rootProcesses.ts underRoot): nothing more than a pid, a parent and a group is read of any other process. The
+ * daemon exposes no such stat itself.
  */
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -9,8 +11,8 @@ import { mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Seen } from '../../src/testing/dialAppEval/types.js'
-import { rootProcesses, workingFolders } from '../../src/testing/rootProcesses.js'
-import { alive, processTable } from '../../src/testing/spawnedRuns.js'
+import { underRoot } from '../../src/testing/rootProcesses.js'
+import { alive } from '../../src/testing/spawnedRuns.js'
 import { until, type IsolatedDaemon } from './daemon.js'
 import { devicesPids } from './desk.js'
 
@@ -54,11 +56,9 @@ function cpuMs(pid: number): number {
   return (Number(fields[11]) + Number(fields[12])) * 1_000 / ticks
 }
 
-/** Every process under the root, by pid, with its command. */
-function underRoot(root: string): Map<number, string> {
-  const table = processTable()
-  const { all } = rootProcesses(root, table, process.pid, workingFolders(table))
-  return new Map(table.filter((row) => all.includes(row.pid)).map((row) => [row.pid, row.command]))
+/** Every process of the test's tree under [d]'s root, by pid, with its command. */
+async function running(d: IsolatedDaemon): Promise<Map<number, string>> {
+  return new Map(underRoot(d.root, await d.treeRoots()).map((row) => [row.pid, row.command]))
 }
 
 async function perf(port: number, token: string, path: '/start' | '/end'): Promise<Record<string, any>> {
@@ -81,7 +81,7 @@ export async function beginCost(d: IsolatedDaemon): Promise<{ end(): Promise<Cos
   const { port } = await until("the devices process's perf probe", () => {
     try { return JSON.parse(readFileSync(ready, 'utf8')) as { port: number } } catch { return null }
   }, 30_000, 50)
-  const before = underRoot(d.root)
+  const before = await running(d)
   await perf(port, token, '/start')
   const cpu = cpuMs(pid)
   const began = Date.now()
@@ -92,7 +92,7 @@ export async function beginCost(d: IsolatedDaemon): Promise<{ end(): Promise<Cos
       const measured = await perf(port, token, '/end')
       const p99 = measured.eventLoop?.p99Ms
       if (typeof p99 !== 'number') throw new Error("the devices process's perf probe measured no event-loop delay")
-      const fresh = [...underRoot(d.root)].filter(([at, command]) => !before.has(at) && !DAEMON_OWN.test(command)).map(([at]) => at)
+      const fresh = [...await running(d)].filter(([at, command]) => !before.has(at) && !DAEMON_OWN.test(command)).map(([at]) => at)
       const deadline = Date.now() + LEFT_WITHIN_MS
       while (fresh.some(alive) && Date.now() < deadline) await new Promise((done) => setTimeout(done, 100))
       return {

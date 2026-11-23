@@ -12,11 +12,11 @@
  * root, and the daemon's table holds no herdr outside this worker's tree or this daemon's own fake iTerm2 server
  * (ownHerdrsOnly). What the harness reads of processes: of its own, by pid, their parent, start time, path (`comm`) and
  * tty, the herdr client's child named herdr (`pgrep -P -x`) and that server's sockets (`lsof -p`); of the whole table,
- * each one's pid, parent and path, to tell this worker's herdrs from the rest (othersNow, ownHerdrsOnly), and pid and
- * parent alone, to find the devices again after their restart; and, as at every tier B scenario's cost and every
- * daemon's close, each one's command line and working folder, matched against the daemon's root, only those under it
- * kept (appEvalCost.ts, testing/rootProcesses.ts). Never another process's environment. The network guard runs in this
- * process and in every process of each daemon.
+ * each one's pid, parent and group alone, to tell this worker's tree from the rest (othersNow) and to find the devices
+ * again after their restart; and, at every tier B scenario's cost and every daemon's close, the command line and working
+ * folder of the processes of the test's own tree alone, by pid, matched against the daemon's root (appEvalCost.ts,
+ * testing/rootProcesses.ts). Never another process's environment. The network guard runs in this process and in every
+ * process of each daemon.
  */
 import { execFile } from 'node:child_process'
 import { readFileSync } from 'node:fs'

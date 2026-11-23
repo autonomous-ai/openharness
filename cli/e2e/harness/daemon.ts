@@ -32,7 +32,7 @@ import { hooks as codexHooks } from '../../src/engines/codex/hookContract.js'
 import { readAdoptedHomes } from '../../src/engines/kit/homeAdoption.js'
 import { OUTSIDE_HOME } from '../../src/lib/log.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
-import { endRootProcesses } from '../../src/testing/rootProcesses.js'
+import { endRootProcesses, seenNow } from '../../src/testing/rootProcesses.js'
 import { assertSocketPathFits } from '../../src/testing/socketPathRoom.js'
 import { alive } from '../../src/testing/spawnedRuns.js'
 import { assertNodeAlone } from '../../src/testing/testNode.js'
@@ -347,6 +347,9 @@ export class IsolatedDaemon {
     private readonly settingNames: readonly string[],
     /** Its own fakes and stubs, first on its PATH: a test writes a fake of a command there (harness/schemeApps.ts). */
     readonly binDir: string,
+    /** What the test's tree held each time a stop or a kill was about to end this daemon, by start time (see): what the
+     *  close's sweep still knows to be the test's once launchd has it. A daemon beside another shares that one's. */
+    private readonly seen: Map<number, string>,
   ) {}
 
   static async create(options: DaemonOptions = {}): Promise<IsolatedDaemon> {
@@ -564,7 +567,7 @@ esac
       TERMINAL_RECONCILE_INTERVAL_MS: '5000',
     }
     const env = daemonEnvironment(tmux.env, { ...settings, ...options.env })
-    return new IsolatedDaemon(root, tmux, port, env, options, config, opensLog, Object.keys(settings), dirs.bin)
+    return new IsolatedDaemon(root, tmux, port, env, options, config, opensLog, Object.keys(settings), dirs.bin, beside?.seen ?? new Map())
   }
 
   /** What the fake engines noted of every hook they ran (fakeEngine.mjs `hookLog`); kept once the root is gone. */
@@ -613,6 +616,18 @@ esac
    *  its own master, by the pid it logged, and still its child. Not by name: no process sets a title, and a daemon under
    *  test runs on a Node with no name link, so `ps` shows `node` for every one of them. */
   servicePids(name: string): number[] { return loggedServicePids(this.output, name, this.pid, processParents()) }
+
+  /** Where the test's own process tree starts (spawnedRuns.ts processTree): this worker, whose children the daemon's
+   *  masters are, and the root's tmux server, which daemonizes to launchd, by its pid asked of its own socket. */
+  async treeRoots(): Promise<number[]> {
+    const server = Number(await this.tmux.run('display-message', '-p', '#{pid}').catch(() => ''))
+    return [process.pid, ...(server > 1 ? [server] : [])]
+  }
+
+  /** What the test's tree holds now, noted by start time before a stop or a kill ends anything (seenNow). */
+  private async see(): Promise<void> {
+    for (const [pid, started] of seenNow(await this.treeRoots())) this.seen.set(pid, started)
+  }
 
   /** `ready: 'port'` returns as soon as the port answers, the way a client sees a restarting daemon;
    *  `'none'` as soon as the process is started. */
@@ -746,6 +761,7 @@ esac
   async stop(ms = 15_000): Promise<void> {
     const child = this.child
     if (!child) return
+    await this.see()
     const exited = new Promise<void>((done) => child.once('exit', () => done()))
     child.kill('SIGTERM')
     const timer = setTimeout(() => IsolatedDaemon.killGroup(child), ms)
@@ -769,6 +785,7 @@ esac
   async kill(): Promise<void> {
     const child = this.child
     if (!child) return
+    await this.see()
     const exited = new Promise<void>((done) => child.once('exit', () => done()))
     child.kill('SIGKILL')
     await exited
@@ -846,6 +863,8 @@ esac
   async close(): Promise<void> {
     // While the panes are still there: a daemon that stops can take its agents' panes with it.
     if (artifactsEnabled()) await this.keepPanes()
+    // Seen before the tmux server goes: a stop sees for a daemon still running.
+    if (!this.child) await this.see()
     await this.stop().catch(() => {})
     // Once the daemon has said all it will, and before the root (and the engines' hook log) is removed.
     let escaped: unknown = null
@@ -864,13 +883,12 @@ esac
     // A daemon beside another shares its tmux server and its root: that one closes them.
     let left: string[] = []
     if (!this.options.beside) {
-      // The server names the root on its own command line: stopped first, its panes with it, so the sweep meets only
-      // what left the daemon's groups.
+      // Stopped first, its panes with it, so the sweep meets only what left the daemon's groups, seen before.
       await this.tmux.run('kill-server').catch(() => { /* already gone */ })
       // The census of 2026-11-14 found 14 fake `codex app-server` pairs outliving their runs: a Codex rate-limit read
       // runs in a process group of its own (lib/codexRateLimits.ts), out of reach of the daemon's groups. Ended before
       // the root is removed, so nothing that names it writes into it as it goes.
-      left = await endRootProcesses(this.root)
+      left = await endRootProcesses(this.root, this.seen)
       await this.tmux.close()
       forgetTmux(this.tmux.socket)
     }

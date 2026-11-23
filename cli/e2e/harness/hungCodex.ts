@@ -8,7 +8,7 @@
  */
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { processTable, type ProcessRow } from '../../src/testing/spawnedRuns.js'
+import { namedTree, type NamedRow } from '../../src/testing/spawnedRuns.js'
 import { LocalClient } from './client.js'
 import { fakeEngineShim, until, type IsolatedDaemon } from './daemon.js'
 
@@ -28,15 +28,16 @@ export function writeHungCodex(daemon: IsolatedDaemon): void {
 
 /** Asks [daemon] for its rate limits and returns the three rows of the read's process group: its leader, the tie's
  *  watcher (lib/tied.ts: the leader's child, which shares its argv) and the hung child. The read is never answered:
- *  `usage_read` answers once the read settles, and this Codex never ends. */
-export async function hungRateLimitRead(daemon: IsolatedDaemon): Promise<ProcessRow[]> {
+ *  `usage_read` answers once the read settles, and this Codex never ends. Found in the daemon master's tree, whose
+ *  command lines alone are read. */
+export async function hungRateLimitRead(daemon: IsolatedDaemon): Promise<NamedRow[]> {
   await until('the usage service to connect', () => daemon.log().includes('[services] usage connected') || null, 30_000, 100)
   const client = await LocalClient.connect(daemon)
   try {
     client.send('usage_read', { requestId: 'hung-read' })
     const command = `${join(daemon.root, 'bin', 'codex')} app-server`
     return await until('the rate-limit read\'s Codex, its watcher and its child', () => {
-      const table = processTable()
+      const table = namedTree([daemon.pid!])
       const leader = table.find((row) => row.pid === row.pgid && row.command.includes(command))
       const rest = leader ? table.filter((row) => row.pgid === leader.pgid && row !== leader) : []
       const watcher = rest.find((row) => row.command.includes(command))

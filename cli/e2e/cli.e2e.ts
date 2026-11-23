@@ -21,7 +21,6 @@ import { pathToFileURL } from 'node:url'
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { LAUNCHD_LABEL, SYSTEMD_UNIT, launchdPlist, systemdUnit } from '../src/harnessd/platform.js'
 import { savedDaemonPort } from '../src/lib/daemonRecord.js'
-import { processTable } from '../src/testing/spawnedRuns.js'
 import { assertNodeAlone } from '../src/testing/testNode.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until, type DaemonOptions } from './harness/daemon.js'
@@ -361,7 +360,13 @@ describe('harness start, stop and status from the installed bundle', () => {
   // One machine for both halves: without the unit no platform is asked, whatever HARNESSD_TEST_PLATFORM names.
   it('two starts at once, as the login entry and Desktop: one master', async () => {
     const m = await install('systemd')
-    const masters = () => processTable().filter((row) => row.command.includes(`${m.daemon.root}/`) && row.command.endsWith(' __harnessd'))
+    // Of every process, as this check alone still reads them: a second master a start left to launchd is in no tree of
+    // the test's own (testing/spawnedRuns.ts processTree).
+    const masters = () => execFileSync('ps', ['-A', '-ww', '-o', 'pid=,command='], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+      .split('\n').flatMap((line) => {
+        const row = /^\s*(\d+)\s+(.*)$/.exec(line)
+        return row && row[2]!.includes(`${m.daemon.root}/`) && row[2]!.endsWith(' __harnessd') ? [{ pid: Number(row[1]) }] : []
+      })
     const together = async () => {
       const runs = await Promise.all([harness(m, 'start'), harness(m, 'start')])
       for (const run of runs) expect(run.status, said(run)).toBe(0)

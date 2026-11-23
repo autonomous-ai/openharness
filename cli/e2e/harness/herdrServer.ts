@@ -24,6 +24,7 @@ import { resolveBinaryOnPath } from '../../src/lib/binaryOnPath.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
 import { writeExecutable } from '../../src/testing/executableFixture.js'
 import { RECORDED_HERDR } from '../../src/testing/recordedHerdr.js'
+import { processTable, processTree } from '../../src/testing/spawnedRuns.js'
 import { type IsolatedDaemon, until } from './daemon.js'
 import { dialHost } from './dialHosts.js'
 import { gone, itermServerPath, tabUnder, type FakeApp } from './outsideAgent.js'
@@ -500,19 +501,12 @@ export class PrivateHerdr {
   }
 }
 
-/** The pids of the herdr processes outside this worker's tree, from the whole table: names are matched and dropped, and
- *  nothing is asked of those processes. */
+/** The pids of every process outside this worker's tree, the person's herdr among them, from each one's pid, parent and
+ *  group alone: the daemon's table names which are herdrs (ownHerdrsOnly), and nothing more is read of any here. */
 export function othersNow(): number[] {
-  const rows = execFileSync('/bin/ps', ['-axo', 'pid=,ppid=,comm='], { encoding: 'utf8' }).split('\n').flatMap((line) => {
-    const row = /^\s*(\d+)\s+(\d+)\s+(.*?)\s*$/.exec(line)
-    return row ? [{ pid: Number(row[1]), ppid: Number(row[2]), herdr: row[3].split('/').pop() === 'herdr' }] : []
-  })
-  const parent = new Map(rows.map((row) => [row.pid, row.ppid]))
-  const ours = (pid: number): boolean => {
-    for (let at = pid, step = 0; at > 0 && step < 64; at = parent.get(at) ?? 0, step++) if (at === process.pid) return true
-    return false
-  }
-  return rows.filter((row) => row.herdr && !ours(row.pid)).map((row) => row.pid)
+  const table = processTable()
+  const ours = new Set(processTree(table, [process.pid]).map((row) => row.pid))
+  return table.filter((row) => !ours.has(row.pid)).map((row) => row.pid)
 }
 
 /**
