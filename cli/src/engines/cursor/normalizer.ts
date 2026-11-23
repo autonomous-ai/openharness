@@ -398,7 +398,7 @@ export function lastCursorTurnText(rawLines: string[]): LastTurnText | null {
   let userMessage = ''
   // The answer is the text after the last tool call, as in Claude's recap (lastTurnTextFromRawLines). Joining
   // every block put the narration Cursor writes before each call ahead of it: "Let me look…\n\nRenamed it."
-  // (hill-climb #7, 2026-11-23). The narration stays for a turn that ended on a tool call.
+  // (dial eval hill-climb #7, 2026-11-23). The narration stays for a turn that ended on a tool call.
   let assistantParts: string[] = []
   let narration: string[] = []
   for (const line of rawLines) {
