@@ -16,8 +16,9 @@
 # The target is universal-apple-darwin on macOS and the host's on Linux. On Windows DEVICE_TARGET names it,
 # x86_64-pc-windows-msvc or aarch64-pc-windows-msvc: both are built on one x64 runner.
 #
-# compile and bundle take the same VERSION and CONFIG_JSON: the binary embeds the configuration the bundle describes.
-# CONFIG_JSON, when given, is merged last (a test build's updater keys and endpoint).
+# compile and bundle take the same VERSION and CONFIG_JSON, but for sign-windows's sign command: the binary embeds the
+# configuration the bundle describes. CONFIG_JSON, when given, is merged last (a test build's updater keys and
+# endpoint).
 #
 # The signing and notarization come from the environment, as Tauri reads it: the `secrets` below. This script names
 # none of their values.
