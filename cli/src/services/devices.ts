@@ -2530,7 +2530,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
           // Its voice delivered, and once a day where the dial found it: on no list, held, on the Other page or placed.
           count((usage) => {
             usage.turnStarted(agentId)
-            const listed = outsideEntries().some(({ agent }) => agent.id === agentId && running(agent))
+            // Its own row, or the row of the agent that holds its session: a Harness agent's, which the dial shows for it.
+            const listed = registry.entries().some(({ agent }) => running(agent)
+              && (agent.id === agentId || (agent.engine === event.engine && agent.sessionId === event.sessionId)))
             const unknown = { engine: event.engine, host: UNKNOWN_APP, page: UNKNOWN_APP, held: false }
             usage.hooked(agentId, { ...unknown, ...usageAgent(agentId), listed, otherApp: observed.otherApp(agentId) })
           })
