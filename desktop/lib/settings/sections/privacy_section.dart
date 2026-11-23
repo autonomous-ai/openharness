@@ -208,7 +208,7 @@ class _ProductUsagePreferenceState extends State<ProductUsagePreference> {
                   '• Agent turns started, ended, or interrupted (including automated work)\n'
                   '• Turn durations: under 10 seconds, 10–60 seconds, 1–5 minutes, or over 5 minutes\n'
                   '• Launch, resume, restart, model change and history request outcomes, fixed failure categories and wait buckets\n'
-                  '• Dial use: connections, agents shown by engine and host, voice and tap outcomes, wait buckets; seconds of voice transcribed, the dial\'s apart\n'
+                  '• Dial use: days connected, used and returned to; time to first agent; agents shown by engine, host and app (from a fixed list); voice and tap results; how long agents wait for you; seconds of voice turned into text\n'
                   '• First response waits, missing responses and error-event counts; first-launch 24-hour response counts and D1/D7/D28 working-day returns\n'
                   '• A fixed feedback answer only when you choose to send one\n'
                   '• Protocol version and the revision of your sharing preference\n\n'

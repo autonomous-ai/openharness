@@ -57,8 +57,9 @@ const List<_Field> _sent = [
   (
     label: 'Dial and voice',
     text:
-        'Dial connections, agents shown by engine and host, voice and tap outcomes, '
-        'wait buckets; seconds of voice transcribed, the dial\'s apart.',
+        'Days connected, used and returned to; time to first agent; agents shown '
+        'by engine, host and app (from a fixed list); voice and tap results; '
+        'how long agents wait for you; seconds of voice turned into text.',
   ),
   (label: 'Feedback', text: 'Only your selected task outcome or reason.'),
   (

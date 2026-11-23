@@ -89,7 +89,16 @@ void main() {
     await tester.tap(find.text('See what’s shared'));
     await tester.pumpAndSettle();
     // The label and its line are one Text.rich, so the label is matched as the line's start.
-    expect(find.textContaining('Dial and voice\n'), findsOneWidget);
-    expect(find.textContaining('seconds of voice transcribed'), findsOneWidget);
+    expect(
+      find.textContaining(
+        'Dial and voice\nDays connected, used and returned to; '
+        'time to first agent; agents shown by engine, host and app',
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('seconds of voice turned into text'),
+      findsOneWidget,
+    );
   });
 }
