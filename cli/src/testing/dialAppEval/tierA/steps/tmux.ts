@@ -299,9 +299,12 @@ export const tmuxSteps: { [K in 'tmux.detach' | 'tmux.attach' | 'tmux.selectPane
   'tmux.attach': async (world, { session, window, tab }) => {
     attach(world, modelOf(world), needPane(world, session).session, tabShell(world, { window, tab }).pid)
   },
-  // The person's own move: nothing of the devices' runs.
+  // The person's own move: nothing of the devices' runs. One that moves nothing is the scenario's mistake.
   'tmux.selectPane': async (world, { session }) => {
     const { session: moved, pane } = needPane(world, session)
+    if (moved.active === pane.id) {
+      throw new Error(`scenario ${world.scenario.id}: ${session}'s tmux pane is already its window's active one`)
+    }
     moved.active = pane.id
   },
 }
