@@ -475,16 +475,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     hadDial: () => readSetup(core.dataDir).dial,
     log,
   })
-  /** Where the dial would place an agent with no window: its own app for one outside a pane, Harness for the rest. */
-  const asItself = { apps: true }
+  /** Where the dial would place an agent with no window: its own app for one outside a pane, Harness for the rest. Read
+   *  from the registry itself, as the cable host answers none while a window holds the dial on its tab. */
   const usageAgent = (agentId: string): DialAgent | undefined => {
     const who = cableHost.describe(agentId)
-    return who && {
-      engine: who.engine,
-      host: cableHost.hostOf(agentId, asItself) ?? 'harness',
-      page: cableHost.appOf(agentId, asItself) ?? 'harness',
-      held: observed?.heldOnly(agentId) ?? false,
-    }
+    if (!who) return undefined
+    const row = registry.entries().find((e) => e.agent.id === agentId)?.agent
+    return { engine: who.engine, host: row?.host ?? 'harness', page: row?.app ?? 'harness', held: observed?.heldOnly(agentId) ?? false }
   }
   const dialUsage = createDialUsage({ sink: usageFile, now: wallClock, after: timerIn('dialUsage'), describe: usageAgent })
   /** A count is the devices' own part: one that throws never reaches the dial. */
