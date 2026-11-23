@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { HELD_OUT, MAIN, titleOf } from './catalog.js'
+import { evaluate } from './checks.js'
 import { runScenario } from './runner.js'
-import { hookHandle, orcaTerminalHandle, STEP_KINDS, THRESHOLDS, type Check, type CheckKind, type EvalDriver, type Scenario, type SessionKey, type Step,
-  type StepKind } from './types.js'
+import { agentIdOf, hookHandle, orcaTerminalHandle, STEP_KINDS, THRESHOLDS, type Check, type CheckKind, type EvalDriver, type Scenario, type Seen,
+  type SessionKey, type Step, type StepKind } from './types.js'
 
 const ALL = [...MAIN, ...HELD_OUT]
 const byId = (id: string): Scenario => ALL.find((s) => s.id === id)!
@@ -56,6 +57,29 @@ describe('the catalog', () => {
   it('IH4\'s herdr row gives no session', () => {
     const agents = byId('IH4').sessions.filter((d) => !d.ghost)
     expect(agents.map((d) => [d.key, d.place, d.herdrSession])).toEqual([['c', 'herdr', false]])
+  })
+
+  it("every iTerm2 ring, a check or a probe, counts the other pages too: none on tmux's, herdr's or Other's", () => {
+    for (const s of ALL.filter((s) => s.app === 'iterm')) {
+      for (const c of [...s.checks, ...s.probes]) if (c.kind === 'ring') expect(c.apart, `${s.id} ${c.id}`).toEqual([])
+    }
+  })
+
+  it("IH4's ring fails with its herdr row also on herdr's page: an apps frame of iterm 1, herdr 1", () => {
+    const ih4 = byId('IH4')
+    const ring = ih4.checks.find((c) => c.id === 'ring')!
+    const c = ih4.sessions.find((d) => d.key === 'c')!
+    const step = (at: number, label: string): Seen['steps'][number] => {
+      const index = ih4.steps.findIndex((s) => s.label === label)
+      return { at, index, kind: ih4.steps[index]!.kind, label }
+    }
+    const apart = (apps: Array<{ id: string; count: number }>): number | undefined => evaluate(ring, ih4, {
+      frames: [{ at: 2000, message: { t: 'apps', shown: 'iterm', apps } }, { at: 2000, message: { t: 'agents.begin' } },
+        { at: 2000, message: { t: 'agent', id: agentIdOf(c), name: c.title } }, { at: 2000, message: { t: 'agents.end', total: 1, tab: '' } }],
+      faces: [], commands: [], deliveries: [], steps: [step(1000, 'restart'), step(9000, 'tap')],
+    }, 'a', 'darwin').find((r) => r.check === 'ring.apart')?.score
+    expect(apart([{ id: 'iterm', count: 1 }])).toBe(1)
+    expect(apart([{ id: 'iterm', count: 1 }, { id: 'herdr', count: 1 }])).toBe(0)
   })
 
   it('IH5\'s Codex runs in tmux under the daemon\'s CODEX_HOME', () => {
