@@ -236,7 +236,7 @@ LINUX_E2E_FULL_SHARDS = 8
 # The desktop VM tests run in a sparse checkout of exactly these inputs (ci-source-inputs.py).
 DEPENDS = {
     "backend": ("cli/src/lib/productHealthContract.ts", "cli/src/lib/productUsageContract.ts",
-                "daemons/frames.json",
+                "cli/src/lib/dialUsageContract.ts", "daemons/frames.json",
                 "desktop/lib/measurement/", "mobile/lib/measurement/",
                 "provider/reference-provider/", "tests/fixtures/"),
     "cli": ("backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts", "desktop/",
@@ -306,7 +306,7 @@ DEPENDS.update({
 # hand, or named in full where it is read. A miss here runs one suite too few on a PR; reuse still sees the change.
 PR_READS = {
     "backend": ("cli/src/lib/productHealthContract.ts", "cli/src/lib/productUsageContract.ts",
-                "daemons/frames.json",
+                "cli/src/lib/dialUsageContract.ts", "daemons/frames.json",
                 "desktop/lib/measurement/", "mobile/lib/measurement/",
                 "provider/reference-provider/", "tests/fixtures/"),
     # cli/scripts/connector-assets.mjs, which a spec imports, names the connector icons' desktop and phone copies it writes.
