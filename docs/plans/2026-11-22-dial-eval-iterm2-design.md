@@ -328,6 +328,10 @@ section "Reconciled with Orca's merge" lists where the merged code differed from
 - **CI rules**, as in the base spec:
   - tier A matches its baseline exactly;
   - tier B fails on a wrong-session send, or on a pass/fail check its baseline passes;
+  - a race in the product is reported in tier B, never held (PM, 2026-11-23): I3's and I15's `ring.order`, and their
+    `ringKept`, pass/fail over the same list, after the devices start again. The tmux row reaches iTerm2's page only
+    after its client lookup, so a list tick in that gap orders it last; the ring's other parts still hold the list. The
+    list is `RACED_B` in `grade.ts`;
   - a score below 95 never fails CI.
 - **A wrong send at baseline.** If the baseline run shows a wrong-session send, the pull request stops and asks the PM
   before merging.

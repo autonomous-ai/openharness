@@ -200,10 +200,12 @@ export function tierAVerdict(results: RunResults, baseline: Baseline): Verdict {
 
 /**
  * Tier B pass/fail checks reported but not held, as a timed one is: each grades a race in the product that the run's
- * timing decides. I3's and I15's ring order: after the devices start again, the tmux row reaches iTerm2's page only
- * after its client lookup (about 150-250 ms), so a 1 s list tick in that gap orders it last (decided 2026-11-23).
+ * timing decides (the spec's CI rules, PM 2026-11-23). I3's and I15's ring order, and their ringKept, pass/fail over the
+ * same list and so its order too: after the devices start again, the tmux row reaches iTerm2's page only after its
+ * client lookup (about 150-250 ms), so a 1 s list tick in that gap orders it last. The ring's other parts still hold
+ * that list.
  */
-const RACED_B = new Set(['b/darwin/I3/ring.order', 'b/darwin/I15/ring.order'])
+const RACED_B = new Set(['b/darwin/I3/ring.order', 'b/darwin/I3/ringKept', 'b/darwin/I15/ring.order', 'b/darwin/I15/ringKept'])
 
 /** Only pass/fail checks the platform's baseline passes are held: timed ones depend on the runner, RACED_B's on a race. */
 export function tierBVerdict(results: RunResults, baseline: Baseline, platform: Platform): Verdict {
