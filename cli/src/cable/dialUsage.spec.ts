@@ -71,6 +71,20 @@ describe('createDialUsage', () => {
     expect(count('dial_connected_installation_days')).toBe(2)
   })
 
+  // A Wi-Fi device's stroke comes through the same wiring as the dial's.
+  it('use with no dial attached is none, and spends no first use', () => {
+    const { usage, prefixed } = rig()
+    usage.used()
+    usage.attached(true)
+    usage.attached(false)
+    usage.used()
+    expect(prefixed('dial_used_')).toEqual([])
+    expect(prefixed('dial_first_use_')).toEqual([])
+    usage.attached(true)
+    usage.used()
+    expect(prefixed('dial_first_use_')).toEqual(['dial_first_use_installations'])
+  })
+
   it('an attach alone is no use', () => {
     const { usage, prefixed } = rig()
     usage.agentsPresent(true)
