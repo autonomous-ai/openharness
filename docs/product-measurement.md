@@ -132,6 +132,37 @@ Authenticated requests still reach the service; infrastructure request logs and 
 own retention, which the release owner must verify separately. The account preference remains
 linked to the account so the switch works everywhere.
 
+## The dial's counts
+
+The devices component counts the dial's day; the gateway sends it in its signed-in report, under the account's "Share
+product usage data". Voice is counted at the backend's transcription route (`/api/voice/stt`). The names live in
+`cli/src/lib/dialUsageContract.ts`, which the core's process never loads, and its byte-identical backend copy
+(`backend/src/types/dialUsage.ts`). Every count is per UTC day; a computer count (`_installation_days`,
+`_installations`: at most 1 a computer a day) comes first, an event or agent count beside it.
+
+| Question | Signal | Interpretation |
+| --- | --- | --- |
+| Who uses a dial? | `dial_connected_installation_days`, `dial_used_installation_days` (a turn, a stroke, a tap, an answer, an app pick, a voice), `dial_first_use_installations`; `dial_used_week_installations`, `dial_used_28d_installations` | The unit is the computer, not the dial. An attach alone is not use: a dial that greets and restores its focus with no hand on it is connected, never used. The week (from UTC Monday) and fixed 28-day period flags make the review's 7- and 28-day dial-used columns distinct computers; first use fires once ever a computer, so its sums are distinct computers too; connected stays computer-days. A computer that had a dial before this release spends no first use. |
+| Who is outside the app? | The same names with `_outside_app_` (`dial_connected_outside_app_installation_days`, `dial_used_outside_app_installation_days`, `dial_first_use_outside_app_installations`, and the used week and 28-day flags) | Desktop not opened on this computer in the 28 days up to that day, added by the gateway as each day closes. The gateway keeps Desktop's days from this release on, so the twin reads true only 28 days after a computer's update. |
+| Does a new dial work fast? | `dial_first_agent_first_<bucket>_installations` on the first connection ever, `dial_first_agent_day_<bucket>_installations` on each day's first; buckets `under_1m`, `1m_to_3m`, `3m_to_10m`, `over_10m`, `none_1h` | From a dial attached with an agent running (whichever came last) to the first agent on the dial. A measurement survives a detach but not a restart of the devices: it is then lost. |
+| Which engines and hosts? | `dial_engine_<engine>_installation_days`, `_agents`; `dial_host_<host>_installation_days`, `_agents` | The host is the dial's own host id (`harness` for Harness's agents, `other` for the Other page). Distinct agents are counted within a devices' run, so a restart can count one again, at most 16 a name a day. |
+| Does the dial find the agents? | `dial_hooked_<engine>_installation_days`, `dial_hooked_<engine>_<placed\|held\|other\|not_shown>`; `dial_other_app_<app>_installation_days`, `_agents` | Hooked engines only: an agent with no hook is invisible to both sides. Read at each hooked agent's first turn of the day while a dial is attached. `held` is a pane the dial does not type into by design. The Other page's app comes from a fixed list ending in `unlisted` and `unknown`. |
+| Does voice reach the agent? | `dial_voice_installation_days`, `dial_voice_<delivered\|failed\|held\|cancelled>`, `dial_voice_failed_<code>`, each by host (`dial_voice_host_<host>_…`); `dial_open_installation_days`, `dial_open_ok`, `dial_open_failed`, `dial_open_failed_<code>`, by host | Delivered means the agent's turn began within 10 s, so words queued into a busy agent read `no_turn`. A voice to a draft, a form field or a search is use, not voice. |
+| What does voice cost? | `voice_dial_clips`, `voice_dial_audio_ms`, `voice_dial_transcribe_ms` and the same for `voice_rest_`; `voice_account_days`, `voice_account_days_over_1m`, `_over_5m`, `_over_20m` | Per account-day, at the route, which knows the account, not the computer. The dial's clips are told apart by the devices' one fixed header (`x-harness-voice-surface: dial`, no id); the rest is the phone and any older CLI, which sends none, so the dial's share reads low until computers update. The account-day buckets cover all of an account's voice, dial and rest together; transcription time is a total only. A clip Deepgram fails is given back to the quota and can let a later clip cross an edge again. |
+| Does the dial shorten an agent's wait? | `dial_wait_used_day_installation_days`, `dial_wait_used_day_<dial\|elsewhere>_<bucket>`, `dial_wait_used_day_none`; `dial_wait_unused_day_installation_days`, `dial_wait_unused_day_elsewhere_<bucket>`, `dial_wait_unused_day_none`; buckets `under_30s`, `30s_to_2m`, `2m_to_10m`, `over_10m` | A Harness agent's question, a `waiting` or `plain` notice (not `proceeding`), or an outside agent's wait, timed to the person's answer: on the dial (or after a tap on its agent) or elsewhere. Seen only while a dial is attached. The comparison is days a dial was used against days it was connected but not used: a computer with no dial runs no devices component. |
+| Did voice go to the wrong agent? | `dial_voice_redirected_30s`, `dial_voice_interrupted_10s`, each by host | Proxies, not errors: a voice followed within 30 s by a voice to another agent; a delivered voice whose turn the person interrupts within 10 s. The interrupt covers hooked agents only (their `turn-aborted` hook); Harness's own agents' aborted turns look finished. |
+| Do they come back? | `dial_d<1\|7\|28>_returning_installations`, `dial_d<1\|7\|28>_returning_outside_app_installations` | Computers using a dial on day N and again on N+1, N+7, N+28, added as the later day closes. Mature only after that day. |
+
+Reading the dial's counts:
+
+- Signed in only: voice needs a sign-in, so the counted computers lean to voice users. Not all dial users.
+- Never an id, serial, MAC, account, machine name, window title, path, project, prompt, voice text or transcript;
+  product names only from the fixed lists. No cross products: engine, host and the release and OS margins are separate
+  one-way splits.
+- `dial_file_unreadable_installation_days`: the gateway found the devices' file too large or misshapen, once a day.
+- Testers and the team stay apart under `testing:` and `staff:` as elsewhere; voice has no channel, so the team's voice
+  is under `staff:` only.
+
 ## Runtime and storage budget
 
 Desktop/CLI health adds separate marginal totals for the numeric public release and broad OS
@@ -245,6 +276,14 @@ doubles from two minutes to half an hour with each such refusal in a row, and ne
 answer's Retry-After (held to the same half hour); any other answer resets it. Ticks still read the
 choice meanwhile. Unknown or failed preference checks stop collection. Slow or failed reporting can
 lose counts and cannot become a product dependency. A failed disk write also disables collection.
+
+The devices keep the dial's day in `dial-usage.json` (`cli/src/cable/dialUsageFile.ts`), their one writer: fixed
+names and numbers only, at most 35 UTC days and 128 KiB, older days dropped at each write, one write per 5 s at most
+and none while idle or signed out. The gateway stats it at its existing report tick and parses it only when its
+mtime or size changed, after a size check (`cli/src/gateway/dialUsage.ts`); it keeps only names in the vocabulary
+and logs nothing of what it drops. It remembers per day what it sent and the file's series, so a restart of either
+side, or a file made again, sends no flag twice. No new endpoint, sender or timer. The voice counts add to the
+backend's existing totals write once a clip is transcribed, never awaited by the answer.
 
 Stopping the gateway writes the collector's final, clean state synchronously before it returns
 (a temporary file and a rename, at most the 256 KiB queue), and its process stops the gateway before
@@ -405,6 +444,13 @@ Decision: keep | revise | revert | inconclusive
 Next review date:
 ```
 
+The `dial` section reads the dial's counts in day, 7-day and 28-day columns (complete UTC days, today left out),
+outside the team first, the team (`staff:` and `testing:`) apart. Its first lines name its limits: signed in only,
+hooked engines only. Any cell under 5 computers, and the event cells beside it, shows `"<5"`; a row with nothing is
+left out. Voice comes apart: the account-day buckets, labelled all voice on the account, then the dial's and the
+rest's clips and minutes, with the note that older CLIs' voice counts as the rest. The dial-used margins by platform
+and release show only where the day's collector margin is 20 or more.
+
 The `review` output proposes investigations, not code changes or automatic deployments. Its unknown
 launch refusals and its engines that did not start after a create each name their five most frequent
 codes; a large `unlisted` share means a code is missing from `LAUNCH_ERROR_CODES`. Feedback
@@ -443,6 +489,12 @@ route and loses whatever the website sends it, and a backend that does not know 
 refuses the whole report, so a new Hub counter also ships backend first (shared-link counters: backend,
 then the web app's release). Then check that a browser
 with Global Privacy Control and a signed-in reader with sharing off send nothing.
+
+The dial's counts roll out backend first. The gateway sends them in a report of their own: an older backend refuses
+a report of dial names only, which the CLI drops without counting a rejection, and the next report goes. An older
+backend ignores the dial's voice header; an older CLI sends none. "See what's shared" on Desktop and the phone each
+name the dial and voice in one line. Turning sharing off, then on, or another account signing in takes what the file
+held as sent, so nothing counted before it goes.
 
 People counts roll out in this order: deploy the backend without `PRODUCT_USAGE_SUBJECT_KEY` (no marks
 are written); release desktop, phone and CLI with the updated "See what's shared" text; then set the key
