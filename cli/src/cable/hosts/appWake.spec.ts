@@ -762,10 +762,14 @@ describe("the ChatGPT app's wake (docs/plans/2026-11-23-dial-chatgpt-voice-resti
     expect(again.value).toEqual({ ok: true })
   })
 
-  it('waitsFor is false for a ChatGPT wake', async () => {
+  // A live copy listed while the link runs takes the dial's next words through its own `codex queue`: asked first, they
+  // would be queued ahead of these. Once queueing, `codex queue` refuses them itself.
+  it('waitsFor is true for its thread alone, and only while the link runs', async () => {
     const t = setup()
     const sent = track(t.wake.send(CODEX, WORDS))
-    expect(t.wake.waitsFor(THREAD)).toBe(false)
+    expect(t.wake.waitsFor(THREAD)).toBe(true)
+    expect(t.wake.waitsFor(THREAD_SECOND)).toBe(false)
+    expect(t.wake.waitsFor(SESSION)).toBe(false)
     t.links[0].resolve('ok')
     await turn()
     expect(t.threads()).toEqual([THREAD])
@@ -773,6 +777,10 @@ describe("the ChatGPT app's wake (docs/plans/2026-11-23-dial-chatgpt-voice-resti
     t.queued[0].resolve({ outcome: 'queued' })
     await turn()
     expect(sent.value).toEqual({ ok: true })
+    // Stopped while it links: over, it waits for nothing.
+    void t.wake.send(CODEX, WORDS)
+    t.wake.stop('codex')
+    expect(t.wake.waitsFor(THREAD)).toBe(false)
   })
 
   it('stop("codex") leaves a Claude wake running, and stop("claude") a ChatGPT one', async () => {

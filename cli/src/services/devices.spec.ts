@@ -11121,6 +11121,25 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
       expect(await sent).toEqual({ ok: true })
     })
 
+    // Before its words reach the queue, the live copy's own `codex queue` would put the next words ahead of them.
+    it('a hook lists the thread while its first words still open it: the next words wait their turn', async () => {
+      const { fake, port, live } = withThreads()
+      await live()
+      fake.holdLinks = true
+      const first = host().sendTurn(ID, 'first')
+      await flush()
+      const transcriptPath = join(env.CODEX_HOME, 'sessions', '2026', '11', '23', `rollout-2026-11-23T10-00-00-${THREAD}.jsonl`)
+      port.observed({ ...hook('session-start'), transcriptPath })
+      expect(await host().sendTurn(ID, 'second')).toEqual(refused('Fix the build has not taken your last words yet.'))
+      expect(codexRuns).toEqual([])
+      fake.linked.shift()!()
+      expect(await first).toEqual({ ok: true })
+      expect(codexRuns).toEqual([queued('first')])
+      // Its words queued, the live copy takes the next ones.
+      expect(await host().sendTurn(ID, 'second')).toEqual({ ok: true })
+      expect(codexRuns.map(([, args]) => (args as string[]).at(-1))).toEqual(['--message=first', '--message=second'])
+    })
+
     // Review Focus 2.
     it('a hook lists the thread while its first words are being queued: the next words wait their turn', async () => {
       let release = (): void => {}
