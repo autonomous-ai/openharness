@@ -14080,8 +14080,9 @@ describe('the dial follows the pane focused in WezTerm and kitty (docs/plans/202
       focus.window = 3
       await settle('kitty')
       await next()
+      // The first read asks window 3 alone after the `or`, as focus may have moved; the next asks it first.
       expect(matches()).toEqual(['id:1 and state:focused', 'state:focused and (id:2 or id:3)', 'id:2 and state:focused',
-        'id:3 and state:focused'])
+        'id:3 and state:focused', 'id:3 and state:focused'])
     })
 
     it('kitty: two live agents on one window ask for it once a read', async () => {
