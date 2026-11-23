@@ -488,7 +488,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const row = entries.find((e) => e.agent.id === agentId)?.agent
     return { engine: who.engine, host: row?.host ?? 'harness', page: row?.app ?? 'harness', held: observed?.heldOnly(agentId) ?? false }
   }
-  const dialUsage = createDialUsage({ sink: usageFile, now: wallClock, after: timerIn('dialUsage'), describe: usageAgent })
+  const dialUsage = createDialUsage({ sink: usageFile, now: wallClock, after: timerIn('dialUsage'), describe: usageAgent, log })
   /** A count is the devices' own part: one that throws never reaches the dial. */
   const count = (run: (usage: DialUsage) => void): void => part.call('dialUsage', () => run(dialUsage))
   /** A Harness agent's question, as the dial's wait on the person: by its request, as an agent can hold two. */
