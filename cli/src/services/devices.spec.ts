@@ -14084,6 +14084,17 @@ describe('the dial follows the pane focused in WezTerm and kitty (docs/plans/202
         'id:3 and state:focused'])
     })
 
+    it('kitty: two live agents on one window ask for it once a read', async () => {
+      const kitty = await kittyAt()
+      // An ended session not yet seen as ended holds its window beside the one started there.
+      const hints = { KITTY_WINDOW_ID: '1', KITTY_LISTEN_ON: kitty.listenOn }
+      const { settle, next } = await dialWith({ hooks: [hook(1, hints), hook(2, hints)], makers: ['kitty'] })
+      focus.window = 3
+      await settle('kitty')
+      await next()
+      expect(matches()).toEqual(['id:1 and state:focused', 'id:1 and state:focused'])
+    })
+
     it('a read\'s panes are the live agents\' own as it starts', async () => {
       const kitty = await kittyAt()
       const { port, settle, next } = await dialWith({ hooks: [inKitty(1, kitty.listenOn)], makers: ['kitty'] })
