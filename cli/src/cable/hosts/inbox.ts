@@ -68,16 +68,19 @@ export class Inbox {
     return () => { this.pollListeners.delete(listener) }
   }
 
-  /** The poll's client went, or a newer poll replaced it. */
-  gone(pollId: string): void {
+  /** The poll's client went, or a newer poll replaced it. The session whose open poll it closed: its client may have gone
+   *  mid-hold, as when Claude Code dies with its pane, which sends no session-end hook. The core tells a replaced poll gone
+   *  before it hands on the newer one, so that one names its session too, with its client still there. */
+  gone(pollId: string): string | undefined {
     for (const [sessionId, open] of this.polls) {
       if (open.pollId === pollId) {
         this.close(sessionId, open, {})
-        return
+        return sessionId
       }
     }
     this.early.add(pollId)
     if (this.early.size > MAX_EARLY_GONE) this.early.delete(this.early.values().next().value!)
+    return undefined
   }
 
   ready(sessionId: string): boolean {

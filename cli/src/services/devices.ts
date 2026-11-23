@@ -264,6 +264,9 @@ const REMIND_MS = 20_000
 /** The observed source drops an ended session 10 s after its end, by the wall clock (observed.ts); looked at a beat later,
  *  as a timer can fire a little before the wall clock says it is due. */
 const ENDED_MS = 10_500
+/** A look at the processes this long after a Claude Code's held poll lost its client, once the dying process has left the
+ *  process table. */
+const GONE_MS = 1_000
 /** How long the cable waits for the devices' listener to open: it opens in a few milliseconds. */
 const LISTENER_WAIT_MS = 1_000
 /** How long after the dial's own continue link to a Claude app session an attach is that link's echo: the app attaches
@@ -1830,13 +1833,20 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** A look at the processes for each session that ended, once it is old enough to go: the 30 s one leaves it listed for
    *  up to 40 s. One per listed session (fifty at most), a later end of it putting its look off. */
   const endings = new Map<string, ReturnType<typeof setTimeout>>()
-  const dropEnded = (source: ObservedSource, agentId: string): void => {
+  /** A look at the processes for each Claude Code whose held poll lost its client: a closed pane or a removed worktree
+   *  sends no session-end hook, and its row waited for the 30 s look (the dial eval's Orca O14/O15). A poll a newer one
+   *  replaced is told gone too, and its look finds the process running and changes nothing: one read of the process
+   *  table. Apart from the endings, so a poll's client going as its session ends does not put off that session's own
+   *  look. */
+  const leavings = new Map<string, ReturnType<typeof setTimeout>>()
+  const lookLater = (looks: Map<string, ReturnType<typeof setTimeout>>, ms: number, source: ObservedSource, agentId: string): void => {
     if (!outside(agentId)) return
-    clearTimeout(endings.get(agentId))
-    const timer = setTimeout(() => { endings.delete(agentId); part.call('observed', () => source.tick()) }, ENDED_MS)
+    clearTimeout(looks.get(agentId))
+    const timer = setTimeout(() => { looks.delete(agentId); part.call('observed', () => source.tick()) }, ms)
     timer.unref()
-    endings.set(agentId, timer)
+    looks.set(agentId, timer)
   }
+  const dropEnded = (source: ObservedSource, agentId: string): void => lookLater(endings, ENDED_MS, source, agentId)
   /** Each observed agent mid-turn that a dial lists (sixteen at most of the fifty in each list), told again: the dial forgets
    *  a turn it hears nothing of for 25 s, and one that just came, whose window just closed, or whose app the dial was just
    *  turned to, has heard nothing of it yet. */
@@ -2188,7 +2198,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const { inboxPoll, inboxGone } = DEVICES_FALLBACKS
   const inboxCalls = part.start('inbox', (): Pick<DeviceHookPort, 'inboxPoll' | 'inboxGone'> & { stop(): void } => ({
     inboxPoll: ({ pollId, sessionId }) => inbox.poll(pollId, sessionId),
-    inboxGone: (pollId) => inbox.gone(pollId),
+    inboxGone: (pollId) => {
+      const sessionId = inbox.gone(pollId)
+      // The observed source's part, as an ending's look is: a list that throws must not switch the voice inbox off.
+      if (sessionId !== undefined && observed) {
+        part.call('observed', () => lookLater(leavings, GONE_MS, observed, observedAgentId('claude', sessionId)))
+      }
+    },
     stop: () => inbox.closeAll(),
   }), { inboxPoll, inboxGone, stop: undefined })
   /** Every poll held for the core's calls: that core went, or the devices stop. */
@@ -2656,7 +2672,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       await (await listening)?.close()
       for (const agentId of [...replies.keys()]) endReplies(agentId, false)   // no timer may fire into a stopped cable
       for (const timer of timers) clearInterval(timer)
-      for (const timer of endings.values()) clearTimeout(timer)
+      for (const timer of [...endings.values(), ...leavings.values()]) clearTimeout(timer)
       for (const timer of pending) clearTimeout(timer)
       tabReport = undefined
       selects.clear()

@@ -206,6 +206,8 @@ const readers = vi.hoisted(() => ({
   // A process's terminal, as its made-up row gives it: the table the devices read holds none.
   tty: vi.fn(async (pid: number): Promise<string | undefined> => (await readers.processes()).find((p) => p.pid === pid)?.tty),
   bundleId: vi.fn(async (_bundle: string): Promise<string | undefined> => undefined),
+  /** The pids whose process ended: every other one runs. */
+  ended: new Set<number>(),
 }))
 vi.mock('../lib/sessionSearch/external.js', async (real) => ({
   ...await real<typeof import('../lib/sessionSearch/external.js')>(),
@@ -227,7 +229,7 @@ vi.mock('../lib/sessionSearch/external.js', async (real) => ({
 vi.mock('../lib/sessionSearch/externals/support.js', async (real) => ({
   ...await real<typeof import('../lib/sessionSearch/externals/support.js')>(),
   listProcesses: async () => [],
-  processAlive: () => true,
+  processAlive: (pid: number) => !readers.ended.has(pid),
   fileStamp: async () => null,
 }))
 // Which app each session found runs in, the process table a tap on a tmux pane checks and the bundle ids its client's
@@ -574,7 +576,7 @@ beforeEach(() => {
   seen.bridges = {}
   seen.fleet = null
   readers.open = readers.external = null
-  readers.known.clear(); readers.owners.clear(); readers.rows.clear(); readers.working.clear()
+  readers.known.clear(); readers.owners.clear(); readers.rows.clear(); readers.working.clear(); readers.ended.clear()
   readers.scans = 0
   vi.clearAllMocks()
   readers.answer.mockResolvedValue(undefined)
@@ -2128,12 +2130,61 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     expect((await machineList(port)).agents.map((a) => a.id)).toEqual([codex])
   })
 
+  // The dial eval's Orca O14/O15: a closed pane or a removed worktree sends no session-end hook, and the row waited for
+  // the 30 s look at the processes.
+  it('a Claude Code whose pane closed leaves within 2 s of its held poll\'s client going', async () => {
+    vi.useFakeTimers()
+    const { port } = start({ faults: ['fleet'] })
+    port.observed(hook('session-start'))
+    // A poll a newer one replaced is told gone first too (core/deviceHookCalls.ts): its look finds the process running.
+    const replaced = port.inboxPoll({ pollId: 'p0', sessionId: 'sess-1' })
+    port.inboxGone('p0')
+    expect(await replaced).toEqual({})
+    await vi.advanceTimersByTimeAsync(2_000)
+    const poll = port.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })
+    expect((await machineList(port)).agents.map((a) => a.id)).toEqual([ID])
+    readers.ended.add(4242)
+    port.inboxGone('p1')
+    expect(await poll).toEqual({})
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect((await machineList(port)).agents).toEqual([])
+  })
+
+  it('a gone for a poll not held looks at nothing', async () => {
+    vi.useFakeTimers()
+    const { port } = start({ faults: ['fleet'] })
+    port.observed(hook('session-start'))
+    const timers = vi.getTimerCount()
+    // Before its own poll, and for a session never listed.
+    port.inboxGone('early')
+    const poll = port.inboxPoll({ pollId: 'p2', sessionId: 'never-listed' })
+    port.inboxGone('p2')
+    expect(await poll).toEqual({})
+    expect(vi.getTimerCount()).toBe(timers)
+  })
+
+  // The look is the observed source's work: five failing in a minute switched the voice inbox off for the process's life.
+  it('a look that fails as a poll\'s client goes is the observed source\'s to say, and the inbox holds on', async () => {
+    const { port } = start({ faults: ['fleet'] })
+    vi.spyOn(ObservedSource.prototype, 'list').mockImplementation(() => { throw new Error('list broken') })
+    for (const pollId of ['p1', 'p2', 'p3', 'p4', 'p5']) {
+      const poll = port.inboxPoll({ pollId, sessionId: 'sess-1' })
+      port.inboxGone(pollId)
+      expect(await poll).toEqual({})
+    }
+    expect(logs.filter((line) => line.startsWith('[devices] inbox'))).toEqual([])
+    expect(logs).toContain('[devices] observed failed · Error')
+  })
+
   it('timers stop when the service stops', async () => {
     vi.useFakeTimers()
     const { port } = start()
     seen.host.watching!(true)
-    // An ended session's look at the processes, still to come.
+    // A gone poll's and an ended session's looks at the processes, still to come.
     port.observed(hook('session-start'))
+    const poll = port.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })
+    port.inboxGone('p1')
+    expect(await poll).toEqual({})
     port.observed(hook('session-end'))
     expect(vi.getTimerCount()).toBeGreaterThan(0)
     await port.stop()
