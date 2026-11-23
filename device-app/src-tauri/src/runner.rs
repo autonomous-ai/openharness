@@ -2116,7 +2116,8 @@ mod tests {
         assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
         door.observed(1);
         let before = door.with(|state| state.reads.len());
-        // The list changes just after macOS's notice: the read at it still finds Harness there, the one after does not.
+        // The list changes just after macOS's notice: the read at it still finds Harness Device there, the one after
+        // does not.
         door.trust(&[true, false]);
         let noticed = Instant::now();
         door.notice();

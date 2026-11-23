@@ -196,7 +196,7 @@ mod tests {
         }
     }
 
-    /// macOS's door, which asks for Accessibility, Harness trusted or not.
+    /// macOS's door, which asks for Accessibility, Harness Device trusted or not.
     fn following(trusted: bool) -> FollowState {
         FollowState { trusted, gated: true }
     }

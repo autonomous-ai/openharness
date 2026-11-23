@@ -235,8 +235,8 @@ pub enum Event {
     UpdateInstalled,
     UpdateFailed(UpdateFailure),
     LogsExported(Result<Exported, ExportFailure>),
-    /// Whether Harness may follow the ChatGPT window and whether a permission gates it (macOS's Accessibility): at
-    /// start, then at each change. Never told with no door.
+    /// Whether Harness Device may follow the ChatGPT window and whether a permission gates it (macOS's
+    /// Accessibility): at start, then at each change. Never told with no door.
     Follow {
         trusted: bool,
         gated: bool,

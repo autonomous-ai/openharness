@@ -94,7 +94,7 @@ pub trait ChatgptWindow: Send + Sync {
     fn observe(&self, heard: Box<dyn Fn(Heard) + Send + Sync>) -> Option<Box<dyn Send>>;
 }
 
-/// Whether Harness may use Accessibility.
+/// Whether Harness Device may use Accessibility.
 pub trait AxTrust: Send + Sync {
     fn trusted(&self) -> bool;
     /// Whether a permission gates following, which the Follow ChatGPT screen asks for: macOS's Accessibility only.
@@ -424,7 +424,7 @@ mod tests {
         json!({ "thread": title }).to_string()
     }
 
-    /// ChatGPT in front, a watch running, the dial attached and Harness trusted, its first start taken.
+    /// ChatGPT in front, a watch running, the dial attached and Harness Device trusted, its first start taken.
     fn observing() -> (ChatgptFollow, u64) {
         let mut follow = ChatgptFollow::default();
         follow.front(CHATGPT_BUNDLE);
@@ -611,8 +611,8 @@ mod tests {
         logs_hold_no_title(&outs);
     }
 
-    /// A watch running, the dial attached, ChatGPT installed, Harness not trusted, and `first` the front source's
-    /// first value.
+    /// A watch running, the dial attached, ChatGPT installed, Harness Device not trusted, and `first` the front
+    /// source's first value.
     fn untrusted(first: &str) -> ChatgptFollow {
         let mut follow = ChatgptFollow::default();
         follow.front(first);
