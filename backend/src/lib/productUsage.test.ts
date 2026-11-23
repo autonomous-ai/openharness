@@ -19,7 +19,7 @@ const db = vi.hoisted(() => ({
 vi.mock('./prisma.js', () => ({ prisma: db }))
 // A configured key, so deletion through setProductUsageChoice and the legacy delete path is real.
 vi.mock('../config/env.js', () => ({ env: { PRODUCT_USAGE_SUBJECT_KEY: 'k'.repeat(32) } }))
-import { activitySubject, deleteActivity, deleteLegacyProductUsage, ensureProductUsageExpiry, markActivity, resetActivityMarksForTests, resetStaffAccountsForTests, ingestProductUsage, ingestSetupUsage, productUsageChoice, recordRelayUsage, setProductUsageChoice, flushRelayUsage, resetRelayUsageForTests, startRelayUsageFlush } from './productUsage.js'
+import { activitySubject, deleteActivity, deleteLegacyProductUsage, ensureProductUsageExpiry, markActivity, resetActivityMarksForTests, resetStaffAccountsForTests, ingestProductUsage, ingestSetupUsage, productUsageChoice, recordRelayUsage, recordVoiceUsage, setProductUsageChoice, flushRelayUsage, resetRelayUsageForTests, startRelayUsageFlush } from './productUsage.js'
 import { LAUNCH_ERROR_CODES, LAUNCH_ERROR_FAMILIES, PRODUCT_USAGE_METRICS, type ProductUsageReport } from '../types/productUsage.js'
 
 it('commits release and platform margins under the same unlinked receipt and discards development reports', async () => {
@@ -626,6 +626,66 @@ describe('relay connects', () => {
       await markActivity('a', now, { surface: 'desktop' })
       expect(db.productUsageActivity.upsert).not.toHaveBeenCalled()
     })
+  })
+})
+
+describe('voice seconds', () => {
+  const sent = (): Array<[string, string, number]> => db.$runCommandRaw.mock.calls.flatMap(([command]) =>
+    (command as { updates: Array<{ q: { dayUtc: { $date: string }; metric: string }; u: { $inc: { value: number } } }> }).updates
+      .map(u => [u.q.dayUtc.$date.slice(0, 10), u.q.metric, u.u.$inc.value] as [string, string, number])).sort()
+  const emails = (byId: Record<string, string>) => db.user.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
+    byId[where.id] ? { createdAt: new Date('2026-10-01T08:00:00Z'), email: byId[where.id] } : null)
+
+  it('counts voice on its day, the team under staff:, nothing with sharing off', async () => {
+    db.productUsagePreference.findUnique.mockImplementation(async ({ where }) => ({ enabled: where.userId !== 'off-account', revision: 1 }))
+    emails({ 'person-account': 'person@example.com', 'team-account': 'Dee@Autonomous.AI', 'off-account': 'off@example.com' })
+    await recordVoiceUsage('person-account', now, [['voice_dial_clips', 1], ['voice_dial_audio_ms', 3_000],
+      ['voice_dial_transcribe_ms', 0], ['voice_account_days', 1]])
+    await recordVoiceUsage('person-account', new Date('2026-10-14T00:00:01Z'), [['voice_rest_clips', 1], ['voice_rest_audio_ms', 2_000]])
+    await recordVoiceUsage('team-account', now, [['voice_rest_clips', 1]])
+    await recordVoiceUsage('off-account', now, [['voice_dial_clips', 1]])
+    await flushRelayUsage()
+    // A zero adds no row; the off account adds nothing at all.
+    expect(sent()).toEqual([
+      ['2026-10-13', 'staff:voice_rest_clips', 1],
+      ['2026-10-13', 'voice_account_days', 1],
+      ['2026-10-13', 'voice_dial_audio_ms', 3_000],
+      ['2026-10-13', 'voice_dial_clips', 1],
+      ['2026-10-14', 'voice_rest_audio_ms', 2_000],
+      ['2026-10-14', 'voice_rest_clips', 1],
+    ])
+    // One lookup for each sharing account, then kept.
+    expect(db.user.findUnique).toHaveBeenCalledTimes(2)
+    expect(JSON.stringify([db.$runCommandRaw.mock.calls, db.productUsageReceipt.createMany.mock.calls])).not.toContain('-account')
+  })
+
+  it('knows the team from the lookup a report already made', async () => {
+    accounts('Dee@Autonomous.AI')
+    await ingestProductUsage('team-account', report, now)
+    await recordVoiceUsage('team-account', now, [['voice_dial_clips', 1]])
+    await flushRelayUsage()
+    expect(db.user.findUnique).not.toHaveBeenCalled()
+    expect(sent()).toContainEqual(['2026-10-13', 'staff:voice_dial_clips', 1])
+  })
+
+  it('a failed read never reaches the route', async () => {
+    const log = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+    try {
+      db.user.findUnique.mockRejectedValue(new Error('PRIVATE_DATABASE_CANARY'))
+      await expect(recordVoiceUsage('PRIVATE_ACCOUNT_CANARY', now, [['voice_dial_clips', 1]])).resolves.toBeUndefined()
+      db.productUsagePreference.findUnique.mockRejectedValue(new Error('PRIVATE_DATABASE_CANARY'))
+      await expect(recordVoiceUsage('PRIVATE_ACCOUNT_CANARY', now, [['voice_dial_clips', 1]])).resolves.toBeUndefined()
+      expect(log.mock.calls).toEqual([['[product-usage] Some voice counts are unavailable.']])
+      clock.mockReturnValue(1_060_000)
+      await recordVoiceUsage('PRIVATE_ACCOUNT_CANARY', now, [['voice_dial_clips', 1]])
+      expect(log).toHaveBeenCalledTimes(2)
+      await flushRelayUsage()
+      expect(db.$transaction).not.toHaveBeenCalled()
+    } finally {
+      clock.mockRestore()
+      log.mockRestore()
+    }
   })
 })
 
