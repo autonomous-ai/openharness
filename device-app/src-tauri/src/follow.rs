@@ -97,6 +97,8 @@ pub trait ChatgptWindow: Send + Sync {
 /// Whether Harness may use Accessibility.
 pub trait AxTrust: Send + Sync {
     fn trusted(&self) -> bool;
+    /// Whether a permission gates following, which the Follow ChatGPT screen asks for: macOS's Accessibility only.
+    fn gated(&self) -> bool;
     /// macOS's own prompt.
     fn prompt(&self);
     /// `changed` is called each time macOS may have changed the permission. Off macOS nothing changes it.
@@ -123,6 +125,10 @@ impl<W: ChatgptWindow> ChatgptWindow for Ungated<W> {
 impl<W: Send + Sync> AxTrust for Ungated<W> {
     fn trusted(&self) -> bool {
         true
+    }
+
+    fn gated(&self) -> bool {
+        false
     }
 
     /// Nothing to ask.
@@ -218,6 +224,11 @@ impl AxTrust for NoFollow {
         false
     }
 
+    /// Nothing to follow, so nothing to ask for.
+    fn gated(&self) -> bool {
+        false
+    }
+
     fn prompt(&self) {}
 
     fn start(&self, _changed: Box<dyn Fn() + Send + Sync>) {}
@@ -274,11 +285,12 @@ pub enum Observer {
     Same,
 }
 
-/// What the app is told: the permission, and whether the ChatGPT app is installed.
+/// What the app is told: the permission, and whether the door asks for it. The default is what the app starts with,
+/// no door: one that exists is told at start.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Shown {
     pub trusted: bool,
-    pub installed: bool,
+    pub gated: bool,
 }
 
 /// When to observe the ChatGPT window, what to tell the watch, and when ChatGPT came to the front without the
@@ -291,6 +303,7 @@ pub struct ChatgptFollow {
     watching: bool,
     attached: bool,
     trusted: bool,
+    gated: bool,
     installed: bool,
     /// The number of the last start, and whether it observes now.
     start: u64,
@@ -328,6 +341,10 @@ impl ChatgptFollow {
 
     pub fn trusted(&mut self, on: bool) {
         self.trusted = on;
+    }
+
+    pub fn gated(&mut self, on: bool) {
+        self.gated = on;
     }
 
     pub fn installed(&mut self, on: bool) {
@@ -391,7 +408,7 @@ impl ChatgptFollow {
     }
 
     pub fn shown(&self) -> Shown {
-        Shown { trusted: self.trusted, installed: self.installed }
+        Shown { trusted: self.trusted, gated: self.gated }
     }
 }
 

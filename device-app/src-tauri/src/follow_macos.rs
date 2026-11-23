@@ -62,6 +62,10 @@ impl AxTrust for MacFollow {
         unsafe { AXIsProcessTrusted() }
     }
 
+    fn gated(&self) -> bool {
+        true
+    }
+
     fn prompt(&self) {
         // SAFETY: the framework's constant, set before any code runs.
         let key: &CFString = unsafe { kAXTrustedCheckOptionPrompt };

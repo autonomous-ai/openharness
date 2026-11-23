@@ -96,8 +96,8 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
 }
 
 /// The screen the window should show next, in the order they chain: install, sign-in, then Follow ChatGPT, asked
-/// once, while the ChatGPT app is installed without the permission. Off macOS, where nothing gates the title, it is
-/// never due.
+/// once on macOS without the permission, whatever is plugged in or installed. Off macOS, where nothing gates the
+/// title, and with no door, it is never due.
 pub fn due(state: &AppState) -> Option<Screen> {
     if matches!(state.cli, CliState::Installing | CliState::InstallFailed) {
         return Some(Screen::Install);
@@ -106,7 +106,7 @@ pub fn due(state: &AppState) -> Option<Screen> {
         return Some(Screen::SignIn);
     }
     let follow = state.follow;
-    (follow.installed && !follow.trusted && !state.saved.asked_follow).then_some(Screen::Follow)
+    (follow.gated && !follow.trusted && !state.saved.asked_follow).then_some(Screen::Follow)
 }
 
 /// The menu as one log line: its labels joined by ` | `, without separators. A submenu is its label and its checked

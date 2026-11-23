@@ -814,10 +814,10 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
   focuses `Not now`, `Allow` still primary: it opens by itself, where a Return
   typed for another app must not allow. A screen with only `Cancel` focuses
   nothing.
-- Follow ChatGPT asks once, on macOS only: at first launch with the dial
-  plugged in, after Install and Sign in, while the ChatGPT app is installed and
-  Harness lacks Accessibility (or once the app is found later). `Not now` or
-  closing declines for good. The menu has no follow item on any OS.
+- Follow ChatGPT asks once, on macOS only: at the first launch, after Install
+  and Sign in, while Harness lacks Accessibility, whatever is plugged in or
+  installed. `Not now` or closing declines for good. The menu has no follow
+  item on any OS.
 - The menu-bar icon is the Pixel H drawn 8x8 pixels, a template image 18 points
   square (`device-app/src-tauri/icons/tray.png`): black on a light bar, white on
   a dark one. The app icon is the Pixel H, a black H of 7x7 square pixels on the

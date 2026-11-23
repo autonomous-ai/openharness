@@ -39,7 +39,7 @@ pub struct App {
     step: &'static str,
     /// The CLI was found and the account has not answered since: its first answer chooses the first screen.
     awaiting_account: bool,
-    /// The follow state the log said last: None until the ChatGPT app is first known installed.
+    /// The follow state the log said last: None until a door is told.
     follow_said: Option<bool>,
     /// The last time an event told, for the keep-alive.
     now: u64,
@@ -312,15 +312,15 @@ impl App {
                 // Closing the Follow screen is Not now.
                 self.show(None, effects);
             }
-            Event::Follow { trusted, installed } => {
-                // Said once the ChatGPT app is known installed, so a Mac that starts without the permission says so,
-                // then at each change.
-                if (installed || self.follow_said.is_some()) && self.follow_said != Some(trusted) {
+            Event::Follow { trusted, gated } => {
+                // Said at start, so a Mac that starts without the permission says so, then at each change. No door
+                // has nothing to say: it is no missing permission.
+                if (trusted || gated) && self.follow_said != Some(trusted) {
                     let word = if trusted { "on" } else { "off · no permission" };
                     effects.push(Effect::Log(format!("chatgpt: follow {word}")));
                     self.follow_said = Some(trusted);
                 }
-                self.state.follow = FollowState { trusted, installed };
+                self.state.follow = FollowState { trusted, gated };
                 // The permission is what the screen asked for: it closes, and only it.
                 if trusted && self.showing(Screen::Follow) {
                     self.show(None, effects);

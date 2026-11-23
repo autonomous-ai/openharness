@@ -6,10 +6,10 @@ Device.app` beside the desktop app's `Harness.app`, the `Harness Device` folder,
 Windows, where the desktop app owns `Harness`), and the bundle id, binary, release files and update path keep the
 Harness Device name, so installed apps keep updating. It installs the `harness` CLI, keeps the daemon running, shows
 the dial's state in its menu, offers sign-in once and, with the ChatGPT app, follows its window whenever it can:
-on macOS once Harness has Accessibility, asked once at first launch with the dial plugged in (the Follow ChatGPT
-screen, no menu item), always elsewhere, never on GNOME or KDE on Wayland. It also exports the logs (`Export logs`),
-through the CLI. It has no row for Claude Code, Codex or Orca: the devices service sets them up. Rust and Tauri 2 in
-`src-tauri/`; the window's three screens are plain TypeScript in `ui/`.
+on macOS once Harness has Accessibility, asked once at the first launch, whatever is plugged in or installed (the
+Follow ChatGPT screen, no menu item), always elsewhere, never on GNOME or KDE on Wayland. It also exports the logs
+(`Export logs`), through the CLI. It has no row for Claude Code, Codex or Orca: the devices service sets them up. Rust
+and Tauri 2 in `src-tauri/`; the window's three screens are plain TypeScript in `ui/`.
 
 ## Toolchain
 

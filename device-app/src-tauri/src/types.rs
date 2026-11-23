@@ -182,12 +182,13 @@ pub struct AppState {
     pub follow: FollowState,
 }
 
-/// Following the ChatGPT window, as the window shows it: the Follow ChatGPT screen asks for the permission while the
-/// app is installed without it. Off macOS no permission gates the title: always trusted.
+/// Following the ChatGPT window, as the window shows it: the Follow ChatGPT screen asks for the permission where it
+/// gates the title (macOS) and is missing. Off macOS nothing gates it: always trusted. The default is no door (GNOME
+/// or KDE on Wayland): untrusted, and nothing to ask for.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FollowState {
     pub trusted: bool,
-    pub installed: bool,
+    pub gated: bool,
 }
 
 /// AuthorizeUrl holds an `https:` URL only (account.rs lets no other through).
@@ -231,10 +232,11 @@ pub enum Event {
     UpdateInstalled,
     UpdateFailed(UpdateFailure),
     LogsExported(Result<Exported, ExportFailure>),
-    /// Whether Harness may use Accessibility and the ChatGPT app is installed, at each change.
+    /// Whether Harness may follow the ChatGPT window and whether a permission gates it (macOS's Accessibility): at
+    /// start, then at each change. Never told with no door.
     Follow {
         trusted: bool,
-        installed: bool,
+        gated: bool,
     },
 }
 

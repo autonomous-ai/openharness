@@ -162,7 +162,7 @@ enum Step {
     Look,
     /// The permission once more, after macOS's notice.
     Trust,
-    /// The app is told the permission and whether ChatGPT is installed.
+    /// The app is told the permission and whether the door asks for it.
     Shown(Shown),
     /// ChatGPT came to the front without the permission: the log says so.
     Skipped,
@@ -283,9 +283,13 @@ impl Runner {
                 shared.chatgpt.noticed(shared.doors.follow.trusted());
             }
         }));
-        // Once the notice is heard: a change while this reads is read again a moment later.
-        let trusted = shared.doors.follow.trusted();
-        shared.chatgpt.tell(|follow| follow.trusted(trusted));
+        // Once the notice is heard: a change while this reads is read again a moment later. Told to the app at once, so
+        // the first launch asks for the permission with no dial and no ChatGPT app.
+        let (trusted, gated) = (shared.doors.follow.trusted(), shared.doors.follow.gated());
+        shared.chatgpt.tell(|follow| {
+            follow.trusted(trusted);
+            follow.gated(gated);
+        });
         let following = shared.clone();
         thread::spawn(move || following.follow_tabs(every));
         let following = shared.clone();
@@ -598,7 +602,7 @@ impl Shared {
     }
 
     /// The follow thread: each door call that can wait on ChatGPT, one at a time and with no lock held, until the
-    /// runner goes. The app hears only the permission and whether ChatGPT is installed; ChatGPT in front without the
+    /// runner goes. The app hears only the permission and whether the door asks for it; ChatGPT in front without the
     /// permission is a log line of fixed words.
     fn follow_chatgpt(self: Arc<Self>) {
         let door = &self.doors.follow;
@@ -631,7 +635,7 @@ impl Shared {
                 }
                 Step::Shown(shown) => {
                     sent = shown;
-                    self.answer(Event::Follow { trusted: shown.trusted, installed: shown.installed });
+                    self.answer(Event::Follow { trusted: shown.trusted, gated: shown.gated });
                 }
                 Step::Skipped => self.doors.log.line("chatgpt: skipped · no permission"),
             }
