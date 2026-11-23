@@ -488,6 +488,17 @@ class SelectionTests(unittest.TestCase):
                 else:
                     self.assertTrue((root / entry).is_dir() if entry.endswith("/") else (root / entry).is_file())
 
+    def test_the_harness_the_app_eval_files_run_runs_them(self):
+        # What the app eval's Linux files import from the harness (the driver, its apps' steps and what they start): a
+        # change to any of it runs them, or, for the harness every e2e file starts its daemons with, linux-e2e's canary,
+        # which imports it.
+        root = REPOSITORY
+        full_checkout(self, *planner.LINUX_E2E_APP_EVAL_FILES, "cli/e2e/harness")
+        within = ("cli/e2e/harness/",)
+        canary = imports_from(root, [planner.LINUX_E2E_CANARY], within)
+        run = imports_from(root, list(planner.LINUX_E2E_APP_EVAL_FILES), within) - set(planner.LINUX_E2E_APP_EVAL_FILES)
+        self.assertEqual(sorted(path for path in run if not planner.linux_e2e_app_eval_path(path) and path not in canary), [])
+
     def test_the_orca_e2e_files_are_every_linux_one_through_the_stand_in(self):
         root = REPOSITORY
         full_checkout(self, "cli/e2e/harness", "cli/src/cable/hosts")
@@ -2046,6 +2057,7 @@ class FullCheckoutTests(unittest.TestCase):
              "SelectionTests.test_the_dial_host_files_are_the_ones_cli_e2e_leaves_out",
              "SelectionTests.test_the_orca_e2e_files_are_every_linux_one_through_the_stand_in",
              "SelectionTests.test_every_path_the_app_eval_covers_is_in_the_checkout",
+             "SelectionTests.test_the_harness_the_app_eval_files_run_runs_them",
              "SelectionTests.test_every_declared_input_exists",
              "CrossReadTests.test_every_cross_read_in_this_repository_is_declared")
 
