@@ -1256,20 +1256,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // each to it, the fleet's way too (cableHost.ts `outside`).
     sendTurn: (agentId, text) => core.turns.send(agentId, text),
     stopTurn: (agentId) => core.turns.stop(agentId),
-    answer: (agentId, requestId, answers) => {
-      count((usage) => {
-        usage.used()
-        usage.answeredOnDial(questionWait(agentId, requestId))
-      })
-      core.questions.answer(agentId, requestId, answers)
-    },
-    answerReviewed: (answer) => {
-      count((usage) => {
-        usage.used()
-        usage.answeredOnDial(questionWait(answer.agentId, answer.requestId))
-      })
-      return core.questions.answerReviewed(answer)
-    },
+    answer: (agentId, requestId, answers) => core.questions.answer(agentId, requestId, answers),
+    answerReviewed: (answer) => core.questions.answerReviewed(answer),
+    // Told by the host for each answer on the dial, the fleet's route too, which never reaches the doors above.
+    answered: (agentId, requestId) => count((usage) => {
+      usage.used()
+      usage.answeredOnDial(questionWait(agentId, requestId))
+    }),
     recent: (agentId, n) => core.turns.recent(agentId, n),
     recentAsks: (agentId) => core.turns.asks(agentId),
     runtimeProfile: (session) => core.agents.runtimeProfile(session),
