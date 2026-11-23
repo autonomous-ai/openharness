@@ -396,6 +396,17 @@ describe("the devices' dial-usage.json", () => {
     expect(saved(file).days).toEqual({ [TODAY]: { dial_open_ok: 1, dial_voice_delivered: 1 } })
   })
 
+  it('a stop after a failed write writes what it holds', () => {
+    const file = aFile()
+    const { usage } = open(file)
+    mkdirSync(file)
+    usage.add('dial_open_ok')
+    flush()
+    rmSync(file, { recursive: true })
+    usage.close()
+    expect(saved(file).days).toEqual({ [TODAY]: { dial_open_ok: 1 } })
+  })
+
   it('holds fixed names and numbers only', () => {
     const file = aFile()
     writeFileSync(file, JSON.stringify({
