@@ -11,7 +11,7 @@
  * config folder: never the developer's herdr.
  * `ownHerdrsOnly` keeps the daemon's herdr lookup off the developer's herdr, which may run on the Mac the tests run on.
  */
-import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { execFile, execFileSync, spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, readdir, readlink, writeFile } from 'node:fs/promises'
 import { createConnection } from 'node:net'
@@ -23,7 +23,7 @@ import { resolveBinaryOnPath } from '../../src/lib/binaryOnPath.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
 import { writeExecutable } from '../../src/testing/executableFixture.js'
 import { RECORDED_HERDR } from '../../src/testing/recordedHerdr.js'
-import { IsolatedDaemon, until } from './daemon.js'
+import { type IsolatedDaemon, until } from './daemon.js'
 import { dialHost } from './dialHosts.js'
 import { tabUnder, type FakeApp } from './outsideAgent.js'
 import { forgetGroup, leaderGone, watchGroup } from './reaper.js'
@@ -36,6 +36,9 @@ const MAX_OPENS = 16
 
 /** sun_path's room, its last byte the terminator: a longer socket path fails to bind. */
 const SOCKET_ROOM = 103
+
+/** The server's socket, under its [config] folder. */
+const socketIn = (config: string): string => join(config, 'herdr', 'herdr.sock')
 
 const FAKE_AGENT = `#include <stdio.h>
 #include <string.h>
@@ -60,15 +63,62 @@ export const herdrBinary: string | null = dialHost('herdr', (() => {
   return resolveBinaryOnPath('herdr') ?? (existsSync(installed) ? installed : null)
 })())
 
+/** herdr's server, the leader of a process group of its own (ownProcessGroup, or the session its first client starts it
+ *  in): its pid, and how it ended (its code or signal; `gone` for one its client started), undefined while it runs. */
+interface ServerProcess { readonly pid: number; ended(): string | undefined }
+
+/** A terminal's tab running herdr's client: the client's pid, the tab's tty, and the fake iTerm2's process in an iTerm2
+ *  tab (outsideAgent.ts tabUnder). */
+export interface HerdrTab { pid: number; tty: string; appPid?: number; close(): Promise<void> }
+
+/** herdr's client as a person runs it in a terminal: given a size first, which a bare pseudo-terminal lacks and the
+ *  client draws to. */
+const clientArgv = (): string[] => ['/bin/sh', '-c', 'stty rows 40 columns 120 && exec "$0"', herdrBinary!]
+/** The client's environment: the daemon's, [env] beside it, pinned to the server under [config]. */
+const clientEnv = (d: IsolatedDaemon, config: string, env: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv =>
+  ({ ...d.env, ...env, XDG_CONFIG_HOME: config, TERM: 'xterm-256color' })
+
+const gone = (pid: number): boolean => {
+  try { process.kill(pid, 0) } catch { return true }
+  return false
+}
+
+/** [server]'s group killed, unless it ended and another process took its pid. */
+function killGroup(server: ServerProcess): void {
+  if (server.ended() !== undefined && !gone(server.pid)) return
+  try { process.kill(-server.pid, 'SIGKILL') } catch { /* none left */ }
+}
+
+/** [parent]'s child named [name], by pgrep, which prints no other process; undefined while it has none. */
+async function childNamed(parent: number, name: string): Promise<number | undefined> {
+  const { stdout } = await execFileAsync('/usr/bin/pgrep', ['-P', String(parent), '-x', name])
+    .catch((error: { stdout?: string }) => ({ stdout: error.stdout ?? '' }))
+  const [pid] = stdout.split('\n').filter(Boolean)
+  return pid ? Number(pid) : undefined
+}
+
+/** A tab of a fake [app] running [argv] under [env] (tabUnder), with its tty; closed should that not be read. */
+async function ttyTab(d: IsolatedDaemon, app: FakeApp, argv: readonly string[], env: NodeJS.ProcessEnv): Promise<HerdrTab> {
+  const tab = await tabUnder(d, app, argv, env)
+  try {
+    const { stdout } = await execFileAsync('/bin/ps', ['-o', 'tty=', '-p', String(tab.pid)])
+    return { ...tab, tty: `/dev/${stdout.trim()}` }
+  } catch (error) {
+    await tab.close()
+    throw error
+  }
+}
+
 export class PrivateHerdr {
   /** With `lettered`, the root pane of the workspace whose splits are its panes. */
   private lettered?: string
 
-  private constructor(private readonly d: IsolatedDaemon, private readonly server: ChildProcess, private readonly config: string,
-    readonly socket: string) {}
+  /** [tab]: the tab whose client started the server (startIn). */
+  private constructor(private readonly d: IsolatedDaemon, private readonly server: ServerProcess, private readonly config: string,
+    readonly socket: string, readonly tab?: HerdrTab) {}
 
   /** The server's process. */
-  get pid(): number { return this.server.pid! }
+  get pid(): number { return this.server.pid }
 
   /** herdr installed for the daemon, and not running: its config, and the daemon's `herdr` on its PATH, as the devices
    *  look for it at each dial attach. Its config folder. */
@@ -98,29 +148,63 @@ export class PrivateHerdr {
   static async start(d: IsolatedDaemon, { lettered = false, env = {} }: { lettered?: boolean; env?: NodeJS.ProcessEnv } = {}):
     Promise<PrivateHerdr> {
     const config = await PrivateHerdr.install(d)
-    const socket = join(config, 'herdr', 'herdr.sock')
     const server = spawn(herdrBinary!, ['server'], {
       cwd: d.env.HOME, env: { ...d.env, ...env, XDG_CONFIG_HOME: config }, stdio: 'ignore', ...ownProcessGroup(),
     })
     // Ended by the worker's reaper should the worker go before `stop`.
     watchGroup(server.pid!)
-    server.once('exit', () => leaderGone(server.pid!))
-    // A server that exits will never answer: the wait ends at once and says so.
     let exited: string | undefined
-    server.once('exit', (code, signal) => { exited = String(code ?? signal) })
-    const herdr = new PrivateHerdr(d, server, config, socket)
+    server.once('exit', (code, signal) => {
+      leaderGone(server.pid!)
+      exited = String(code ?? signal)
+    })
+    const herdr = new PrivateHerdr(d, { pid: server.pid!, ended: () => exited }, config, socketIn(config))
+    await herdr.ready(lettered)
+    return herdr
+  }
+
+  /**
+   * herdr's server started by its first client, run in a tab of [app] (tabUnder), as a person starts herdr in a terminal:
+   * the server is that client's child (RECORDED_HERDR's client A), so a walk from its panes meets the app before this
+   * worker: under the fake iTerm2, its server and bundle. [env] as start's. Stopped, its tab is closed too.
+   */
+  static async startIn(d: IsolatedDaemon, app: FakeApp, { env = {} }: { env?: NodeJS.ProcessEnv } = {}):
+    Promise<PrivateHerdr & { tab: HerdrTab }> {
+    const config = await PrivateHerdr.install(d)
+    const tab = await ttyTab(d, app, clientArgv(), clientEnv(d, config, env))
+    const pid = await until('the herdr client to start its server', () => childNamed(tab.pid, 'herdr'), 20_000, 100)
+      .catch(async (error: unknown) => {
+        await tab.close()
+        throw error
+      })
+    // Ended by the worker's reaper should the worker go before `stop`: it leads the session its client started it in.
+    watchGroup(pid)
+    const herdr = new PrivateHerdr(d, { pid, ended: () => (gone(pid) ? 'gone' : undefined) }, config, socketIn(config), tab)
+    await herdr.ready(false)
     try {
-      await until('the private herdr to answer',
-        async () => exited !== undefined || (existsSync(socket) && await herdr.rpc('workspace.list')), 20_000, 100)
-      if (exited !== undefined) throw new Error(`the private herdr exited (${exited}) before it answered`)
-      // A plain workspace in front, so that an agent's pane is never the focused one.
-      await herdr.rpc('workspace.create', { focus: true })
-      if (lettered) await herdr.toLetters()
+      await until('the herdr client to attach', async () => await herdr.clientConnections() > 0, 20_000, 100)
     } catch (error) {
       await herdr.stop()
       throw error
     }
-    return herdr
+    return herdr as PrivateHerdr & { tab: HerdrTab }
+  }
+
+  /** Until the server answers, then a plain workspace in front, so that an agent's pane is never the focused one, and
+   *  with [lettered] the lettered workspace (toLetters). Stopped should any of it fail. */
+  private async ready(lettered: boolean): Promise<void> {
+    try {
+      // A server that exits will never answer: the wait ends at once and says so.
+      await until('the private herdr to answer',
+        async () => this.server.ended() !== undefined || (existsSync(this.socket) && await this.rpc('workspace.list')), 20_000, 100)
+      const ended = this.server.ended()
+      if (ended !== undefined) throw new Error(`the private herdr exited (${ended}) before it answered`)
+      await this.rpc('workspace.create', { focus: true })
+      if (lettered) await this.toLetters()
+    } catch (error) {
+      await this.stop()
+      throw error
+    }
   }
 
   /** One connection a request, as herdr takes them: the test's own few lines, not the product's client. */
@@ -189,8 +273,7 @@ export class PrivateHerdr {
   async client<T extends { pid: number; close?(): Promise<void> }>(
     start: (argv: string[], env: NodeJS.ProcessEnv) => Promise<T>): Promise<T> {
     const before = await this.clientConnections()
-    const started = await start(['/bin/sh', '-c', 'stty rows 40 columns 120 && exec "$0"', herdrBinary!],
-      { ...this.d.env, XDG_CONFIG_HOME: this.config, TERM: 'xterm-256color' })
+    const started = await start(clientArgv(), clientEnv(this.d, this.config))
     try {
       await until('the herdr client to attach', async () => await this.clientConnections() > before, 20_000, 100)
     } catch (error) {
@@ -201,15 +284,8 @@ export class PrivateHerdr {
   }
 
   /** herdr's client in a tab of a fake [app]: its pid and its tab's tty. */
-  async tabClient(app: FakeApp): Promise<{ pid: number; tty: string; close(): Promise<void> }> {
-    const tab = await this.client((argv, env) => tabUnder(this.d, app, argv, env))
-    try {
-      const { stdout } = await execFileAsync('/bin/ps', ['-o', 'tty=', '-p', String(tab.pid)])
-      return { pid: tab.pid, tty: `/dev/${stdout.trim()}`, close: () => tab.close() }
-    } catch (error) {
-      await tab.close()
-      throw error
-    }
+  tabClient(app: FakeApp): Promise<HerdrTab> {
+    return this.client((argv, env) => ttyTab(this.d, app, argv, env))
   }
 
   /**
@@ -245,21 +321,37 @@ export class PrivateHerdr {
     return focused[0].pane_id
   }
 
-  /** The suite's fake Claude Code started in a new pane's shell, so its hook runs with herdr's own HERDR_PANE_ID. */
-  async hooked(folder: string): Promise<{ pane: string; sessionId: string; id: string }> {
+  /** The suite's fake Claude Code started in a new pane's shell, so its hook runs with herdr's own HERDR_PANE_ID; with
+   *  [resume], going on in that conversation (`--resume <id>`), as after herdr started again. herdr's detection, and so
+   *  reportSession, does not find a resumed one: herdr reads the agent's name from its title, which carries the fake's
+   *  arguments (fakeEngine.mjs), and `claude --resume <id>` is not `claude`. */
+  async hooked(folder: string, { resume }: { resume?: string } = {}): Promise<{ pane: string; sessionId: string; id: string }> {
     const pane = await this.pane(folder)
     await until(`the shell in ${folder}`, async () => /\S/.test(await this.screen(pane)), 20_000, 100)
     // Its own SessionStart: the first after the log's length before it was typed.
     const from = this.d.hookLog().length
-    await this.type(pane, '"$CLAUDE_PATH"')
-    const sessionId = await until(`${folder}'s SessionStart hook to run`,
-      () => this.d.hookLog().slice(from).match(/claude pid=\d+ SessionStart\(startup\) session=(\S+) ran/)?.[1], 30_000, 100)
+    await this.type(pane, resume === undefined ? '"$CLAUDE_PATH"' : `"$CLAUDE_PATH" --resume ${resume}`)
+    const started = new RegExp(`claude pid=\\d+ SessionStart\\(${resume === undefined ? 'startup' : 'resume'}\\) session=(${resume ?? '\\S+'}) ran`)
+    const sessionId = await until(`${folder}'s SessionStart hook to run`, () => this.d.hookLog().slice(from).match(started)?.[1], 30_000, 100)
     return { pane, sessionId, id: observedAgentId('claude', sessionId) }
   }
 
   /** A line typed into the pane, then Enter. */
   async type(paneId: string, line: string): Promise<void> {
     await this.rpc('pane.send_text', { pane_id: paneId, text: `${line}\n` })
+  }
+
+  /**
+   * herdr's own Claude Code report of the pane's session, as its integration's SessionStart hook sends it
+   * (RECORDED_HERDR.nested.byReport). Sent once herdr has found the pane's agent, as the report only adds to the row its
+   * detection found and that detection lags the hook; resolved once the row names the session.
+   */
+  async reportSession(paneId: string, sessionId: string): Promise<void> {
+    const row = async () => ((await this.rpc('agent.list')).agents as Array<{ pane_id: string; agent_session?: { value?: string } }>)
+      .find((agent) => agent.pane_id === paneId)
+    await until(`herdr to find the agent in ${paneId}`, row, 30_000, 100)
+    await this.rpc('pane.report_agent_session', { pane_id: paneId, source: 'herdr:claude', agent: 'claude', agent_session_id: sessionId })
+    await until(`herdr to list ${paneId} with its session`, async () => (await row())?.agent_session?.value === sessionId, 30_000, 100)
   }
 
   /** Tells herdr the pane holds a `claude` agent in that state. */
@@ -290,17 +382,19 @@ export class PrivateHerdr {
     return (read.read as { text: string }).text
   }
 
+  /** The server stopped through its API, else killed with its group, then the tab whose client started it closed. */
   async stop(): Promise<void> {
     const server = this.server
-    const exited = server.exitCode !== null || server.signalCode !== null
-      ? Promise.resolve()
-      : new Promise<void>((done) => server.once('exit', () => done()))
     await this.rpc('server.stop').catch(() => { /* already gone */ })
-    const timer = setTimeout(() => IsolatedDaemon.killGroup(server), 10_000)
-    await exited
-    clearTimeout(timer)
-    IsolatedDaemon.killGroup(server)
-    forgetGroup(server.pid!)
+    const ended = () => server.ended() !== undefined
+    await until("the private herdr's server to stop", ended, 10_000, 50).catch(async () => {
+      killGroup(server)
+      await until("the private herdr's server to end", ended, 10_000, 50)
+    })
+    // What else its group holds goes with it.
+    killGroup(server)
+    forgetGroup(server.pid)
+    await this.tab?.close()
   }
 }
 
