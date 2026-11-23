@@ -161,6 +161,9 @@ export interface OrcaWorktrees {
 
 const NO_WORKTREES: OrcaWorktrees = { worktreeOf: () => undefined, log: () => {}, switching: () => {} }
 
+/** The line a `worktree activate` that failed says, a terminal's or a chat's (orcaChat.ts): fixed words, no id. */
+export const ORCA_ACTIVATE_FAILED = '[device] orca activate · failed'
+
 function createOrcaActions(deps: OrcaDeps, worktrees: OrcaWorktrees): { send(handle: string, text: string): Promise<boolean>; switchTo(handle: string): Promise<PaneSwitch> } {
   // Per terminal, the switch under way: a second one is that same run. A swipe's rest runs a switch, and a tap 0.4 to 1 s
   // after it was refused as busy: on Linux the dial said Orca did not open the pane it had just shown.
@@ -173,7 +176,7 @@ function createOrcaActions(deps: OrcaDeps, worktrees: OrcaWorktrees): { send(han
   const activate = async (orca: string, worktreeId: string): Promise<void> => {
     const { code } = await deps.run(orca, ['worktree', 'activate', '--worktree', `id:${worktreeId}`, '--json'], RUN_TIMEOUT_MS)
       .catch(() => ({ code: null }))
-    if (code !== 0) worktrees.log('[device] orca activate · failed')
+    if (code !== 0) worktrees.log(ORCA_ACTIVATE_FAILED)
   }
 
   return {
@@ -372,7 +375,7 @@ function tabOrder(listed: unknown, worktrees: Map<string, string>): OrcaTab[] {
 }
 
 /** A worktree id as Orca prints it, or none: outside text that becomes an argument. */
-function worktreeIdOf(value: unknown): string | undefined {
+export function worktreeIdOf(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' && value.length <= MAX_WORKTREE_ID && !CONTROL_CHAR.test(value) ? value : undefined
 }
 

@@ -244,8 +244,9 @@ describe('Orca chat adapter', () => {
     expect(adapter.voiceRefusal(place({ ORCA_AGENT_SESSION_ID: CHAT }))).toBe('Type in Orca for chats.')
     // A chat whose worktree is not known is still a chat.
     expect(adapter.voiceRefusal(place({ ORCA_AGENT_SESSION_ID: OTHER_CHAT }))).toBe('Type in Orca for chats.')
-    for (const hints of [{ ORCA_AGENT_SESSION_ID: CHAT, ORCA_TERMINAL_HANDLE: HANDLE }, {}, { ORCA_AGENT_SESSION_ID: `${CHAT}\n` },
-      { __CFBundleIdentifier: 'com.stablyai.orca' }, { TERM_PROGRAM: 'iTerm.app' }]) {
+    const others: Array<Record<string, string>> = [{ ORCA_AGENT_SESSION_ID: CHAT, ORCA_TERMINAL_HANDLE: HANDLE }, {},
+      { ORCA_AGENT_SESSION_ID: `${CHAT}\n` }, { __CFBundleIdentifier: 'com.stablyai.orca' }, { TERM_PROGRAM: 'iTerm.app' }]
+    for (const hints of others) {
       expect(adapter.voiceRefusal(place(hints)), shown(hints)).toBeUndefined()
     }
   })
