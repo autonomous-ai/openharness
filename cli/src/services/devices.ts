@@ -1001,9 +1001,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     log,
     count: voiced,
   }) : null
-  /** The Claude app's Code sessions, with or without a process, listed from its stores when a file of them changes
-   *  (docs/plans/2026-11-19-dial-claude-app-sessions-design.md). It runs only while a dial is attached, behind the
-   *  observed agents' switch, on macOS, Windows and Linux, where the app runs
+  /** The Claude app's Code sessions, with or without a process, listed from its stores when a file of them changes, in
+   *  the store's order, newest first (docs/plans/2026-11-19-dial-claude-app-sessions-design.md). It runs only while a
+   *  dial is attached, behind the observed agents' switch, on macOS, Windows and Linux, where the app runs
    *  (docs/plans/2026-11-20-dial-app-sessions-win-linux-design.md). A session with a process is the observed source's
    *  copy, which holds its row while it runs (registry.ts). */
   const claudeAppSource = appWake ? new ClaudeAppSource({
@@ -1022,6 +1022,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     show: (localId, agentId) => claudeNoted.show!(claudePane(localId), agentId),
     canLink: (localId) => claude.canLink(claudePane(localId)),
     wake: appWake,
+    rank: (rank) => cableHost.setRank('claude', rank),
     monotonic,
     log,
   }) : null
