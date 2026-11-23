@@ -7,12 +7,14 @@
  *
  * The devices reach it as they reach the person's herdr. Its socket is a fake client (DevicesDeps.herdr), not a socket
  * server: real socket I/O would escape the driver's quiet check. It lists herdr's agents, tells their status to the
- * subscriptions naming their panes as their hooks run, and types: words for a pane are a `typed` delivery to the session
- * whose agent is in it, none for another, which the gate counts. `herdr agent focus`, and the lsof and ps of the lookup
- * of a pane's client (cable/hosts/herdrOuter.ts), are answered from this model through the world's `run`. A server's
- * socket appears as it starts, and every watch on it is told.
+ * subscriptions naming their panes as their hooks run, and takes words as herdr's client does: a `typed` delivery to the
+ * session whose agent is in the pane, only for an idle or done agent of the kind named, and none for a pane with no
+ * agent, which herdr refuses. `herdr agent focus`, and the lsof and ps of the lookup of a pane's client
+ * (cable/hosts/herdrOuter.ts), are answered from this model through the world's `run`. A server's socket appears as it
+ * starts, and every watch on it is told.
  */
-import type { HerdrAnswer, HerdrClient, HerdrSubscriber } from '../../../../cable/hosts/herdrClient.js'
+import { HERDR_KIND, HERDR_PANE, type HerdrAnswer, type HerdrClient, type HerdrSubscriber } from '../../../../cable/hosts/herdrClient.js'
+import { CONTROL, MAX_TEXT } from '../../../../cable/hosts/orca.js'
 import { flagOf, programOf } from '../../argv.js'
 import { tabLabel, type TabRef } from '../../itermRecords.js'
 import { engineOf, type SessionDef, type SessionKey, type StepOf } from '../../types.js'
@@ -218,11 +220,21 @@ export function herdrClient(world: TierAWorld): HerdrClient {
         server?.subscriptions.delete(sub)
       } }
     },
-    prompt: async (paneId, _kind, text) => {
+    // The real client's steps (herdrClient.ts prompt), so tier A types nothing the product would refuse: its form check,
+    // herdr's agent.get of the pane, then herdr's agent.prompt of the text with its control characters as spaces.
+    prompt: async (paneId, kind, text) => {
+      const line = text.replace(CONTROL, ' ')
+      if (!HERDR_PANE.test(paneId) || !HERDR_KIND.test(kind) || text.length > MAX_TEXT || line.trim() === '') {
+        return { outcome: 'failed', fault: 'bad_request' }
+      }
       const server = serverOf(world)
       if (!server) return { outcome: 'failed', fault: 'no_socket' }
       const pane = server.panes.get(paneId)
-      world.deliver({ path: 'typed', target: pane?.status === undefined ? null : pane.key, text })
+      // herdr answers agent_not_found for a pane with no agent (docs/specs/2026-11-16-device-herdr.md).
+      if (pane?.status === undefined) return { outcome: 'failed', fault: 'rejected', code: 'agent_not_found' }
+      if (engineOf(world.session(pane.key)) !== kind) return { outcome: 'failed', fault: 'not_that_agent' }
+      if (pane.status !== 'idle' && pane.status !== 'done') return { outcome: 'busy' }
+      world.deliver({ path: 'typed', target: pane.key, text: line })
       return { outcome: 'sent' }
     },
     // A server that starts again makes another socket: its stamp is the server's pid.
