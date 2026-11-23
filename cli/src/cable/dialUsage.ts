@@ -282,11 +282,11 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
           : agent.page === UNKNOWN_APP ? 'other'
             : 'placed'
       add(`dial_hooked_${engine}_installation_days`)
-      add(`dial_hooked_${engine}_${state}`)
+      countAgent(`dial_hooked_${engine}_${state}`)
       if (state !== 'other') return
       const app = agent.otherApp ?? 'unknown'
       add(`dial_other_app_${app}_installation_days`)
-      add(`dial_other_app_${app}_agents`)
+      countAgent(`dial_other_app_${app}_agents`)
     },
 
     waitOpened(key, agentId) {
