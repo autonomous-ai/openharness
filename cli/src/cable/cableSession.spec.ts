@@ -3210,6 +3210,65 @@ describe('cable session', () => {
     await session.stop()
     expect(host.onDialGone).toHaveBeenCalled()
   })
+
+  /** The agent ids of the first list the dial was pushed. */
+  const firstList = (port: LoopbackPort): string[] => {
+    const begin = port.types().indexOf('agents.begin')
+    const end = port.types().indexOf('agents.end')
+    return port.sent.slice(begin, end).filter((m) => m.t === 'agent').map((m) => m.id as string)
+  }
+
+  // The Claude app's and the ChatGPT app's rows come from sources the attach starts (devices.ts dialAttached): pushed
+  // at once, the greeting's list had none of them, and they showed at the next tick's push, 1-2 s on (the dial eval's C11).
+  it('the greeting\'s push waits for what the attach started, so the first list holds what that read', async () => {
+    const listed = [...AGENTS]
+    let land: (() => void) | undefined
+    const { session, port } = await connect(makeHost({
+      listAgents: async () => listed,
+      agentTotal: () => listed.length,
+      onDialAttached: () => new Promise<void>((resolve) => { land = resolve }),
+    }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(land).toBeDefined())
+      await settle()
+      expect(port.types()).not.toContain('agents.begin')
+      listed.push({ id: 'app-1', name: 'Fix the build', engine: 'claude' })
+      land!()
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      expect(firstList(port)).toEqual(['a1', 'a2', 'app-1'])
+    } finally { await session.stop() }
+  })
+
+  it('an attach whose reads never end holds the greeting\'s push 500 ms, no longer', async () => {
+    let called!: () => void
+    const attached = new Promise<void>((resolve) => { called = resolve })
+    const { session, port } = await connect(makeHost({
+      onDialAttached: () => { called(); return new Promise<void>(() => {}) },
+    }))
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await attached
+      await vi.advanceTimersByTimeAsync(499)
+      expect(port.types()).not.toContain('agents.begin')
+      await vi.advanceTimersByTimeAsync(1)
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      expect(firstList(port)).toEqual(['a1', 'a2'])
+    } finally {
+      vi.useRealTimers()
+      await session.stop()
+    }
+  })
+
+  it('an attach that fails pushes at once', async () => {
+    const { session, port } = await connect(makeHost({ onDialAttached: () => Promise.reject(new Error('no store')) }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      expect(firstList(port)).toEqual(['a1', 'a2'])
+    } finally { await session.stop() }
+  })
 })
 
 describe('speak an answer, then review', () => {

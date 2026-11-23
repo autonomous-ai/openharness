@@ -59,6 +59,12 @@ const read = (sessions: ClaudeAppSession[], over: Partial<StoreRead> = {}): Stor
 })
 /** Lets what the source was answered be taken in. */
 const turn = () => new Promise((resolve) => setImmediate(resolve))
+/** Whether a start's promise has ended, read as the test goes. */
+const ending = (start: Promise<void>) => {
+  const state = { ended: false }
+  void start.then(() => { state.ended = true })
+  return state
+}
 
 type Name = 'folders' | 'files' | 'touch' | 'read' | 'forget'
 interface Call { name: Name; args: unknown[]; resolve(value: unknown): void; reject(error: Error): void }
@@ -789,6 +795,48 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
       await s.land()
       expect(s.calls()).toEqual(['folders', 'forget', 'folders', 'files', 'read'])
       expect(s.source.list().map(({ id }) => id)).toEqual([ID])
+    })
+
+    // The dial's greeting waits for it (devices.ts dialAttached), so its first list holds the store's sessions.
+    it('a start ends once its first pass has landed, its rows listed', async () => {
+      const s = setup()
+      const start = ending(s.source.start())
+      await s.reply(FOLDERS)
+      await s.reply()
+      expect(start.ended).toBe(false)
+      await s.reply(read([session(), nth(1)]))
+      expect(start.ended).toBe(true)
+      expect(s.source.list().map(({ id }) => id)).toEqual([ID, observedAgentId('claude', nth(1).sessionId)])
+    })
+
+    it('a start whose first pass fails ends too', async () => {
+      const s = setup()
+      const start = ending(s.source.start())
+      await s.fail()
+      expect(start.ended).toBe(true)
+    })
+
+    it('a stop ends the start under way at once; the next start ends with its own pass, not the stopped one', async () => {
+      const s = setup()
+      const first = ending(s.source.start())
+      s.source.stop()
+      await turn()
+      expect(first.ended).toBe(true)
+      const second = ending(s.source.start())
+      // The stopped pass lands and takes nothing: the start's own pass runs after it.
+      await s.reply(FOLDERS)
+      expect(second.ended).toBe(false)
+      await s.land()
+      expect(second.ended).toBe(true)
+      expect(s.source.list().map(({ id }) => id)).toEqual([ID])
+    })
+
+    it('a start while it runs ends at once', async () => {
+      const s = setup()
+      s.source.start()
+      const again = ending(s.source.start())
+      await turn()
+      expect(again.ended).toBe(true)
     })
   })
 

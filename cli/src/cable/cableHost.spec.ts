@@ -288,6 +288,12 @@ describe('the cloud lane follows the CABLE, not the selection', () => {
     expect(fleet.select).not.toHaveBeenCalled()
   })
 
+  it('hands the greeting what the attach started, for its first push to wait on', () => {
+    const started = Promise.resolve()
+    const host = new DaemonCableHost(wiring({ watching: () => started }), remoteFleet())
+    expect(host.onDialAttached()).toBe(started)
+  })
+
   it('survives a lane that will not reopen, instead of rejecting into the greeting', async () => {
     const fleet = remoteFleet()
     const host = new DaemonCableHost(wiring(), fleet)

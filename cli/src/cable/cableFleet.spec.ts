@@ -399,6 +399,20 @@ describe('USB dial fleet', () => {
     } finally { await f.fleet.stop() }
   })
 
+  it('the first dial is handed what the host\'s attach started; a second, its sibling attached, nothing to wait on', async () => {
+    const f = fixture()
+    const started = Promise.resolve()
+    vi.mocked(f.host.onDialAttached!).mockReturnValue(started)
+    try {
+      f.fleet.start(); await vi.waitFor(() => expect(f.ports).toHaveLength(2))
+      const [first, second] = [...(f.fleet['entries'] as Map<string, { session: CableSession }>).values()]
+        .map(({ session }) => (session as unknown as { host: CableHost }).host.onDialAttached?.())
+      expect(first).toBe(started)
+      expect(second).toBeUndefined()
+      expect(f.host.onDialAttached).toHaveBeenCalledTimes(1)
+    } finally { await f.fleet.stop() }
+  })
+
   it('preserves healthy sessions when discovery fails and replaces a moved USB path', async () => {
     const f = fixture()
     try {
