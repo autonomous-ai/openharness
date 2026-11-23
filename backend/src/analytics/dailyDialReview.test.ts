@@ -68,7 +68,7 @@ describe('dailyDialReview', () => {
   it('derives the voice buckets and hides them under five', () => {
     const { voice } = dailyDialReview([row(1, 'voice_account_days', 20), row(1, 'voice_account_days_over_1m', 12),
       row(1, 'voice_account_days_over_5m', 5), row(1, 'voice_account_days_over_20m', 2)], [], now)
-    expect(voice.outsideTeam.accountDays.label).toMatch(/all voice on the account, dial and the rest/i)
+    expect(voice.outsideTeam.accountDays.label).toMatch(/all voice through \/api\/voice\/stt on the account, dial and the rest/i)
     const day = Object.fromEntries(['all', 'under1m', 'm1to5', 'm5to20', 'over20m']
       .map(k => [k, (voice.outsideTeam.accountDays as unknown as Record<string, { day: unknown }>)[k].day]))
     expect(day).toEqual({ all: 20, under1m: 8, m1to5: 7, m5to20: '<5', over20m: '<5' })

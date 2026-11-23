@@ -179,7 +179,7 @@ export function dailyDialReview(rows: Row[], breakdowns: Row[], now: Date) {
       audioMinutes: shown(computers, minutes(cells(of(`voice_${surface}_audio_s`)), 60)),
       transcribeMinutes: shown(computers, minutes(cells(of(`voice_${surface}_transcribe_ms`)), 60_000)) })
     return { note: 'Voice from older CLIs counts as the rest until they update.',
-      accountDays: { label: 'All voice on the account, dial and the rest: account-days by audio a day.',
+      accountDays: { label: 'All voice through /api/voice/stt on the account, dial and the rest: account-days by audio a day.',
         all: bucket(accounts), under1m: bucket(less(accounts, over1m)), m1to5: bucket(less(over1m, over5m)),
         m5to20: bucket(less(over5m, over20m)), over20m: bucket(over20m) },
       // The dial's totals by its own computers. The rest's, the phone and older CLIs, by the accounts with voice less the
