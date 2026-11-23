@@ -87,6 +87,17 @@ describe('createDialUsage', () => {
     expect(prefixed('dial_first_use_')).toEqual(['dial_first_use_installations'])
   })
 
+  it('a stop cancels the midnight and the hour\'s timers', () => {
+    const { usage, added } = rig()
+    usage.agentsPresent(true)
+    usage.attached(true)
+    const before = [...added]
+    usage.stop()
+    expect(vi.getTimerCount()).toBe(0)
+    vi.advanceTimersByTime(2 * DAY_MS)
+    expect(added).toEqual(before)
+  })
+
   it('an attach alone is no use', () => {
     const { usage, prefixed } = rig()
     usage.agentsPresent(true)
@@ -373,6 +384,20 @@ describe('createDialUsage', () => {
     expect(count('dial_voice_interrupted_10s')).toBe(1)
   })
 
+  it('at most 16 delivered turns are kept, the oldest dropped first', () => {
+    const ids = Array.from({ length: 17 }, (_, i) => `d${i}`)
+    const { usage, count } = rig(Object.fromEntries(ids.map(id => [id, tmuxClaude])))
+    usage.attached(true)
+    for (const id of ids) {
+      usage.voiceEnded({ outcome: 'sent', agentId: id })
+      usage.turnStarted(id)
+    }
+    usage.turnAborted('d0')
+    expect(count('dial_voice_interrupted_10s')).toBe(0)
+    usage.turnAborted('d1')
+    expect(count('dial_voice_interrupted_10s')).toBe(1)
+  })
+
   it('a turn no voice started, stopped, is no voice interrupted', () => {
     const { usage, count } = rig()
     usage.attached(true)
@@ -437,6 +462,16 @@ describe('createDialUsage', () => {
     expect(count('dial_hooked_claude_placed')).toBe(DIAL_USAGE_AGENTS_MAX)
     expect(count('dial_hooked_codex_other')).toBe(DIAL_USAGE_AGENTS_MAX)
     expect(count('dial_other_app_zed_agents')).toBe(DIAL_USAGE_AGENTS_MAX)
+  })
+
+  it('past 256 agents hooked a day, the day\'s later ones are not looked at', () => {
+    const { usage, count } = rig()
+    usage.attached(true)
+    for (let i = 0; i < 260; i++) usage.hooked(`h${i}`, { ...tmuxClaude, listed: true })
+    expect(count('dial_hooked_claude_installation_days')).toBe(256)
+    vi.advanceTimersByTime(DAY_MS)
+    usage.hooked('h259', { ...tmuxClaude, listed: true })
+    expect(count('dial_hooked_claude_installation_days')).toBe(257)
   })
 
   it('wait buckets at 29 999, 30 000, 120 000, 600 000 ms', () => {
