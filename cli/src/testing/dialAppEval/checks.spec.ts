@@ -1373,6 +1373,14 @@ describe('iTerm2', () => {
     expect(ms(noPane, 'latency')).toBeNull()
   })
 
+  it("a tab row has no pane: a pane select naming it, tmux's or herdr's, is no part of its open nor of its latency", () => {
+    for (const pane of [focus(3600, 'ia'), tmuxPane(3600, 'ia')]) {
+      const results = tapped('ia', { commands: [front(600), pane], streams: [select(700, 'w1.0.0')] })
+      expect(scores(results)).toEqual({ tab: 1, front: 1, latency: 1 })
+      expect(ms(results, 'latency')).toBe(200)
+    }
+  })
+
   it('an iTerm2 row the dial was never sent scores 0 on every part', () => {
     for (const kind of ['tap', 'swipe'] as const) {
       const s = input(kind, 'iz')
