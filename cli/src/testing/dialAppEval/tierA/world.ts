@@ -121,11 +121,12 @@ const CODEX_BIN = '/opt/eval/bin/codex'
 const APP_CODEX_BIN = '/opt/eval/ChatGPT.app/codex'
 const CURSOR_BIN = '/opt/eval/bin/cursor'
 /** The programs whose commands the world answers as the scenario says, by name: macOS's and Linux's openers, the scheme
- *  lookup, the Windows helper, the Linux raise, Orca's CLI (steps/orca.ts), tmux (steps/tmux.ts), and herdr with the
- *  lsof and ps of its client lookup (steps/herdr.ts). Cursor's CLI is answered only as Linux's folder row runs it, on one
- *  folder (cable/hosts/cursorFolder.ts). A command of any other is one tier A does not model. */
-const ANSWERED: ReadonlySet<string> = new Set(['open', 'xdg-open', 'xdg-mime', 'harness-pty', 'raise', 'tmux', 'herdr', 'lsof', 'ps',
-  ...ORCA_PROGRAMS])
+ *  lookup, the Windows helper, the Linux raise and Orca's CLI (steps/orca.ts). Cursor's CLI is answered only as Linux's
+ *  folder row runs it, on one folder (cable/hosts/cursorFolder.ts). A command of any other is one tier A does not model. */
+const ANSWERED: ReadonlySet<string> = new Set(['open', 'xdg-open', 'xdg-mime', 'harness-pty', 'raise', ...ORCA_PROGRAMS])
+/** tmux (steps/tmux.ts), and herdr with the lsof and ps of its client lookup (steps/herdr.ts): answered on an iTerm2
+ *  scenario's machine alone, the one their rules are on (deps). */
+const ITERM_ANSWERED: ReadonlySet<string> = new Set(['tmux', 'herdr', 'lsof', 'ps'])
 /** The programs whose commands name panes by id. */
 const MULTIPLEXERS: ReadonlySet<string> = new Set(['tmux', 'herdr'])
 
@@ -138,8 +139,9 @@ function emptied(folder: string): string {
   return folder
 }
 
-/** Whether the world answers a command (ANSWERED). */
-const answered = (argv: readonly string[]): boolean => ANSWERED.has(programOf(argv))
+/** Whether the world of an [app] scenario answers a command (ANSWERED, ITERM_ANSWERED). */
+const answered = (argv: readonly string[], app: App): boolean => ANSWERED.has(programOf(argv))
+  || (app === 'iterm' && ITERM_ANSWERED.has(programOf(argv)))
   || (argv.length === 2 && argv[0] === CURSOR_BIN && isAbsolute(argv[1]!))
 
 /** Codex's queue's send (cable/hosts/codexQueue.ts): the thread and the words, the thread none unless it reads both. */
@@ -386,7 +388,7 @@ export class World implements TierAWorld {
    * good end, a multiplexer's with its panes named by session. One of a program the world does not answer (`modelled`) is
    * a gap: its answer would be made up.
    */
-  private ran(argv: string[], modelled = answered(argv)): Required<Answer> {
+  private ran(argv: string[], modelled = answered(argv, this.scenario.app)): Required<Answer> {
     if (!modelled) this.gap(`a command tier A does not answer: ${programOf(argv)}`)
     let answer: Answer = { code: 0 }
     for (const rule of this.rules) {
