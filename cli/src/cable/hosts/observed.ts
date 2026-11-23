@@ -962,6 +962,13 @@ export class ObservedSource implements HostSource {
     }
     // A session that comes back after its end (a resume) is a live one again.
     entry.endAt = undefined
+    // And it runs in the process its hook came from: an app that restarts brings its sessions back in new processes, and
+    // the old one's pid would have the next tick remove them (Orca quit and relaunched, its agents dropped off the dial
+    // until the next 30 s scan, dial eval O12, 2026-11-23). The next tick notes the new process's generation.
+    if (e.callerPid !== entry.pid) {
+      entry.pid = e.callerPid
+      entry.generation = undefined
+    }
     if (!nested) this.learnTty(entry, e.callerPid)
     let source: PromptSource | undefined
     switch (e.event) {
