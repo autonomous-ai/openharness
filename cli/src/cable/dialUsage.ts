@@ -83,7 +83,6 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
 
   let attaches = 0
   let stopMidnight: (() => void) | undefined
-  let attachDay: number | undefined
   let present = false
 
   // A UTC day's agents, so each counts once a day; cleared at the day's turn. shownToday holds only agents that
@@ -169,11 +168,11 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
         return
       }
       attaches++
-      add('dial_connected_installation_days')
+      // The day's first connection is the one that sets the day's flag, which the sink keeps: a restart of the devices
+      // is no new first.
+      const dayFirst = add('dial_connected_installation_days')
       if (attaches === 1) midnight()
       const first = sink.firstEver('connected')
-      const dayFirst = attachDay !== day
-      attachDay = day
       if (!first && !dayFirst) return
       // A measurement under way keeps its clock: a dial plugged in again is still the same wait for an agent.
       if (measure) {

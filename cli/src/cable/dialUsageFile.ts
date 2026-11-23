@@ -124,15 +124,16 @@ export class DialUsageFile implements DialUsageSink {
     this.usage = { version: DIAL_USAGE_FILE_VERSION, series: deps.now(), connectedBefore: before, usedBefore: before, days: {} }
   }
 
-  add(metric: DialFileMetric, n = 1): void {
-    if (!this.counting()) return
+  add(metric: DialFileMetric, n = 1): boolean {
+    if (!this.counting()) return false
     const counts = this.usage.days[dayOf(this.deps.now())] ??= {}
     const was = counts[metric] ?? 0
     const next = Math.min(was + n, ceiling(metric))
     // A flag set again, or a count at its cap: nothing to write.
-    if (next === was) return
+    if (next === was) return false
     counts[metric] = next
     this.changed()
+    return true
   }
 
   firstEver(mark: 'connected' | 'used'): boolean {

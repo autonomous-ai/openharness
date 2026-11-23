@@ -105,8 +105,9 @@ export const DIAL_USAGE_MARGIN_METRICS = ['dial_connected_installation_days', 'd
   'dial_used_outside_app_installation_days'] as const satisfies readonly DialUsageMetric[]
 
 export interface DialUsageSink {
-  /** Adds [n] (1) to [metric] on today's UTC day: a flag stays at 1, a count stops at DIAL_USAGE_MAX_COUNT. */
-  add(metric: DialFileMetric, n?: number): void
+  /** Adds [n] (1) to [metric] on today's UTC day: a flag stays at 1, a count stops at DIAL_USAGE_MAX_COUNT. True when that
+   * changed it: a flag set today already, by this run or an earlier one, answers false. */
+  add(metric: DialFileMetric, n?: number): boolean
   /** True the first time this computer ever reaches [mark]; kept in the file past its 35 days. */
   firstEver(mark: 'connected' | 'used'): boolean
 }
