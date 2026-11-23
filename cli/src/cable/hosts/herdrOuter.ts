@@ -19,6 +19,7 @@ import type { OuterLookup } from './outer.js'
 import { readPtyMaker, scannedApps, type ProcessName } from './scannedApp.js'
 import { clientTtyForm } from './tabs.js'
 import { heldAnswers, PID } from './tmux.js'
+import type { Nest } from './types.js'
 
 /** The herdr processes besides the server a lookup asks of at most: the highest pids, the newest. */
 export const HERDR_CLIENTS_A_LOOKUP = 16
@@ -211,6 +212,9 @@ async function clientsOf(deps: ClientDeps, form: RegExp, server: number, rows: r
   if (!left.length) return {}
   // A client inside tmux, Zellij or Herdr's terminal has parents that end at a detached server or holder: no app.
   const apps = await scannedApps(left, { platform: deps.platform, roots: deps.roots, processes: async () => rows, bundleId: deps.bundleId })
+    .catch(() => undefined)
+  // Every other step answers its own word: the app scan's throw is the one left, so a lookup never rejects.
+  if (!apps) return 'app'
   const shown = left.filter((p) => apps.has(p))
   if (!shown.length) {
     const client = await usedLast(deps, form, left, ttyOf)
@@ -228,37 +232,35 @@ async function clientsOf(deps: ClientDeps, form: RegExp, server: number, rows: r
   return tty && form.test(tty) ? { app, tty, pid: client } : { app, pid: client }
 }
 
+/** [place] said by its line: a step not read says its word and answers `{}`. */
+function said(deps: ClientDeps, place: ClientPlace | NotRead): ClientPlace {
+  if (typeof place === 'string') {
+    deps.log(`[device] herdr client · not read · ${place}`)
+    return {}
+  }
+  deps.log(`[device] herdr client · ${place.app ? 'found' : 'none'}`)
+  return place
+}
+
 /** tmux's heldAnswers, each answer said by its line: an lsof or ss that hangs to its timeout costs one timeout, not one
  *  an ask. */
 function saidAnswers(deps: ClientDeps): (key: string, place: () => Promise<ClientPlace | NotRead>) => Promise<ClientPlace> {
   const held = heldAnswers<ClientPlace>(deps.now)
-
-  async function lookUp(place: () => Promise<ClientPlace | NotRead>): Promise<ClientPlace> {
-    // Every other step answers its own word: what is left to throw is the app scan.
-    const said = await place().catch((): NotRead => 'app')
-    if (typeof said === 'string') {
-      deps.log(`[device] herdr client · not read · ${said}`)
-      return {}
-    }
-    deps.log(`[device] herdr client · ${said.app ? 'found' : 'none'}`)
-    return said
-  }
-
-  return (key, place) => held(key, () => lookUp(place))
+  return (key, place) => held(key, async () => said(deps, await place()))
 }
 
 /**
  * Where the person sees an agent in a pane of their own herdr: in the app holding the herdr client they used last, at
  * that client's tty. Nothing at once on Windows, when the hints name no herdr pane in form or the caller is no pid; else
  * the client's place, its process alone when no app holds it, `{}` when no client is found or it runs inside a
- * multiplexer. Never rejects.
+ * multiplexer; with `nest: 'herdr'` once a herdr server made the caller's terminal. Never rejects.
  */
 export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
   // Windows has no `ps` to read a client's tty with, and no form for one.
   const form = clientTtyForm(deps.platform)
   if (!form) return () => undefined
   // By pane and caller, as tmux's.
-  const held = saidAnswers(deps)
+  const held = heldAnswers<ClientPlace & { nest?: Nest }>(deps.now)
   const skipped = new Set<string>()
 
   /** A herdr pane id the lookup cannot take is said, once an id: a lookup that answers nothing otherwise leaves the
@@ -270,18 +272,20 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
     deps.log('[device] herdr client · skipped · pane-id')
   }
 
-  /** `{}` when no herdr server made the caller's terminal; else the place from the server on. */
-  const placeOf = async (pid: number): Promise<ClientPlace | NotRead> => {
+  /** `{}` when no herdr server made the caller's terminal; else the place from the server on, on herdr's page. */
+  const placeOf = async (pid: number): Promise<ClientPlace & { nest?: Nest }> => {
     // One read of the table serves the server's, the clients' and their apps' walks.
     const rows = await deps.processes().catch(() => undefined)
-    if (!rows) return 'processes'
+    if (!rows) return said(deps, 'processes')
     // The server is the herdr that made the caller's terminal, not the nearest among its parents: a terminal started
     // from a herdr pane has that server among its parents too, and keeps the pane's variables, yet its agents are in no
     // herdr client. The table holds no terminal: the caller's and its parents' are read.
     const maker = await readPtyMaker(pid, rows, deps.tty).catch(() => null)
-    if (maker === null) return 'processes'
-    if (maker?.host !== 'herdr') return {}
-    return clientsOf(deps, form, maker.pid, rows)
+    if (maker === null) return said(deps, 'processes')
+    if (maker?.host !== 'herdr') return said(deps, {})
+    // The pane is herdr's whatever the client steps read: found, none or not read, the agent is on herdr's page even
+    // with no app known (Diego, 2026-11-23).
+    return { ...said(deps, await clientsOf(deps, form, maker.pid, rows)), nest: 'herdr' }
   }
 
   return (hints, pid) => {
