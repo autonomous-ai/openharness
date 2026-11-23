@@ -18,10 +18,10 @@
  * frames and the person's own turns (a swipe moves the glass before the daemon hears of it); the commands of the
  * recording open and of the recording Cursor CLI, with their exit, a folder in the daemon's projects written as the
  * catalog's `/work/` one, and the fake Orca's at their own times, each `terminal send` among them a `typed` delivery to
- * the session whose pane it named; the devices' tmux and herdr runs at their own times, each pane named by its session; the
- * selects the watch printed, at their arrival, and the person's tab reports, each tab named by its label; the deliveries
- * and editor streams the app's steps record; the devices' log lines, at their read; and, after `stop`, what the scenario
- * cost (appEvalCost.ts).
+ * the session whose pane it named; in an iTerm2 scenario the devices' tmux and herdr runs at their own times, each pane
+ * named by its session; the selects the watch printed, at their arrival, and the person's tab reports, each tab named by
+ * its label; the deliveries and editor streams the app's steps record; the devices' log lines, at their read; and, after
+ * `stop`, what the scenario cost (appEvalCost.ts).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
@@ -749,9 +749,11 @@ export class World implements TierBWorld {
       this.panes.find((p) => p.handle === handle && p.from <= at && at < p.to)?.key))
   }
 
-  /** The devices' tmux and herdr runs since this world began, read once as it stops, as the fake Orca's are: commands in
-   *  time order with the others, each pane named by the session it holds. */
+  /** An iTerm2 scenario's alone: the devices' tmux and herdr runs since this world began, read once as it stops, as the
+   *  fake Orca's are: commands in time order with the others, each pane named by the session it holds. The core runs
+   *  tmux too, and tier A answers the devices' tmux and herdr for iTerm2 alone: no other app's commands take them. */
   takeMux(): void {
+    if (this.scenario.app !== 'iterm') return
     const runs = [...runLog(this.rig.tmuxRuns), ...runLog(this.rig.herdrRuns)].filter((run) => run.at >= this.began)
     this.commands.push(...muxCommands(runs, (pane) => this.muxPanes.get(pane)))
     this.commands.sort((a, b) => a.at - b.at)
