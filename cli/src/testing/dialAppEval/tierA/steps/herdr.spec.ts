@@ -160,13 +160,16 @@ describe("tier A's herdr", () => {
     // No server, no socket.
     expect(w.client.socketStamp()).toBeUndefined()
     expect(await w.client.request('agent.list', {})).toEqual({ ok: false, fault: 'no_socket' })
-    // A watch on herdr's socket hears of it once, as the server starts.
+    // A watch on herdr's socket hears of it once, as the server starts; one on another program's socket hears nothing.
     const stamps: Array<string | undefined> = []
+    const others: string[] = []
     w.watch(() => { stamps.push(w.client.socketStamp()) })
+    w.watch(() => { others.push('told') }, join(w.root, '.cmuxterm', 'stores'))
     await w.start('a', 'h', 'g')
     await landed()
     expect(stamps).toEqual([w.client.socketStamp()])
     expect(stamps[0]).toBeDefined()
+    expect(others).toEqual([])
     await w.hook('h', 'turn-start')
     const [, h] = w.of.sessions
     // A new pane takes herdr's focus.
@@ -300,7 +303,7 @@ describe("tier A's herdr", () => {
   })
 
   it('herdr.restart ends the server, its clients and agents with no hook, then starts each session again on a new pane with '
-    + 'its start hook and fires every socket watch', async () => {
+    + "its start hook and tells each watch on herdr's socket", async () => {
     const w = fakeWorld()
     await w.start('a', 'h', 'g')
     const before = new Set(machine.processes.keys())
