@@ -1,6 +1,7 @@
 /**
- * An agent in a herdr pane whose client runs in a terminal with no page of its own stays on the Other page, and a tap
- * brings that terminal's window forward (docs/plans/2026-11-21-dial-linux-followups-design.md § 2), on the real daemon:
+ * An agent in a herdr pane whose client runs in a terminal with no page of its own is on herdr's page (Diego,
+ * 2026-11-23: docs/plans/2026-11-23-dial-tmux-herdr-apps-design.md), and a tap brings that terminal's window forward
+ * (docs/plans/2026-11-21-dial-linux-followups-design.md § 2), on the real daemon:
  * herdr's client attached to a herdr server of the test's own (harness/herdrServer.ts) runs in an xterm on an X11
  * desktop of the test's own (harness/x11Desk.ts), another xterm in front of it, and the suite's hooked fake Claude Code
  * in a herdr pane. A fake dial on the desk taps the agent: the raise finds the window by the client's process, and herdr
@@ -50,7 +51,7 @@ describe.skipIf(!herdrBinary || !x11Installed)("herdr's client in an xterm", () 
     daemon = undefined
   })
 
-  it("keeps the agent on the Other page, and a tap raises the client's xterm and focuses the agent's pane", async () => {
+  it("lists the agent on herdr's page, and a tap raises the client's xterm and focuses the agent's pane", async () => {
     const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false' } })
     daemon = d
     ownHerdrsOnly(d)
@@ -81,16 +82,16 @@ describe.skipIf(!herdrBinary || !x11Installed)("herdr's client in an xterm", () 
     await until('the other xterm active', async () => await x.active() === other.window, 20_000, 100)
 
     // 2. The hooked agent in a herdr pane, started once the client is attached, so its first lookup finds it. xterm is
-    // no app the dial lists: the client's place is its process alone, and the agent stays on the Other page, as with no
-    // client: its herdr pane says TERM_PROGRAM=herdr, which names no app, and no app is among its parents (herdr 0.9.5).
+    // no app the dial lists: the client's place is its process alone. herdr made the agent's terminal, so it is herdr's
+    // all the same, on herdr's page whatever holds the client (select.ts pageOf, Diego's decision of 2026-11-23).
     const agent = await server.hooked('api')
     await said(d, '[device] herdr client · none')
     const apps = (m: DialMessage) => m.apps as Array<{ id: string; count: number }>
-    const frame = await until('the Other page holding the agent', () => {
+    const frame = await until("herdr's page holding the agent", () => {
       const last = dial.messages.filter((m) => m.t === 'apps').at(-1)
-      return last && apps(last).some((a) => a.id === 'terminal' && a.count === 1) ? last : undefined
+      return last && apps(last).some((a) => a.id === 'herdr' && a.count === 1) ? last : undefined
     }, 45_000, 100)
-    expect(apps(frame).filter((a) => a.count > 0)).toEqual([expect.objectContaining({ id: 'terminal', count: 1 })])
+    expect(apps(frame).filter((a) => a.count > 0)).toEqual([expect.objectContaining({ id: 'herdr', count: 1 })])
     await dial.next((m) => m.t === 'agent' && m.id === agent.id && m.host === 'herdr', 45_000, 'the agent listed')
     expect(lines(d, '[device] herdr client · found')).toEqual([])
     // herdr focuses only an agent it has seen, and its detection lags the hook by a moment (herdr 0.9.5).
