@@ -105,7 +105,7 @@ No file under `cli/src/core/` changes, `src/architecture.coreFiles.txt` gains no
 
 ## Decided here, where the spec was silent
 
-- **The hook does not change.** `ORCA_AGENT_SESSION_ID` is already sent (`cli/hook/notify.mjs` `HOST_HINTS`). A chat has no multiplexer or tty, so the cap of 10 does not reach it; Task 0 checks the count on Tony's Mac.
+- **The hook changes one order.** `ORCA_AGENT_SESSION_ID` is already sent (`cli/hook/notify.mjs` `HOST_HINTS`). A chat has no multiplexer or tty, so the cap of 10 does not reach it; Task 0 checks the count on Tony's Mac. `ORCA_TERMINAL_HANDLE` moves before it: a session id with no handle reads as a chat, so a terminal's agent past the cap keeps its handle (`hookNotify.spec.ts`).
 - **The scope and rank are composed in `devices.ts`.** `cableHost.setScope` and `setRank` take what they take today; the chat source answers lookups.
 - **The worktree list is read on a miss.** The map `identity.key → id` is read with the next chat read when the plugin names an `identity:` worktree it does not hold, and kept until the dial goes. A worktree created later is a miss and reads it again.
 - **The adapter's id is `orca-chat`**, exported as `ORCA_CHAT_ADAPTER`, the word its log lines say. Its pane id is the Orca session id.
