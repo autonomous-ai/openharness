@@ -404,6 +404,7 @@ import type { FormCommand, FormResult } from './windowForm.js'
 import { deriveLongRecap, extendShortRecap } from '../lib/deviceRecap.js'
 import type { TurnStatsFields } from './turnStats.js'
 import type { Tier } from '../lib/notifyTier.js'
+import type { DialVoiceEnd, DialVoiceFailure } from '../lib/dialUsageContract.js'
 import { APP_IDS, appDisplayName, hostDisplayName } from './hosts/hostDetect.js'
 import { RING_PLACES } from './hosts/select.js'
 import type { AppList, AppPick } from './hosts/types.js'
@@ -500,6 +501,9 @@ export interface CableHost {
   /** The agent this dial shows changed: as its ring last drew it and its id, or null for none. `dial` is the session that
    *  says so, which is how a host tells two dials apart. */
   dialShows?(dial: object, agent: DialAgent | null, agentId: string | null): void
+  /** How a voice turn ended, once a turn, for the dial's usage counts (docs/plans/2026-11-23-dial-usage-counts-design.md):
+   *  sent, failed by code, cancelled, or other (a draft, a form field, a search). */
+  voiceEnded?(end: DialVoiceEnd): void
   focus(agentId: string): void
   /**
    * "Put this one in front of me" — a NOTIFICATION was tapped.
@@ -753,6 +757,9 @@ type VoiceTurn = { agentId?: string; cmd?: string; lang: string; rate: number; b
   draft?: { pin?: DraftPin };
   search?: { command?: SelectionCommand; pin: Promise<SelectionResult> };
   form?: { command?: FormCommand; pin: Promise<FormResult> } }
+
+/** Words for a draft, a question, a field or a search: use of the dial, not voice to an agent's turn (its usage counts). */
+const otherVoice = (turn: VoiceTurn) => !!(turn.draft || turn.question || turn.form || turn.search)
 
 export class CableSession {
   private link: CablePort | null = null
@@ -1029,7 +1036,7 @@ export class CableSession {
   private voiceUploadId = ''
   /** A recording refused at `voice.begin` (its agent has no `v`), said on `voice.end`: today's firmware drops a voice
    *  error that arrives before the person lets go. Any later turn, abort or close moves the generation on and drops it. */
-  private voiceRefusal?: { generation: number; message: string }
+  private voiceRefusal?: { generation: number; message: string; agentId: string }
 
   constructor(
     private readonly host: CableHost,
@@ -1339,6 +1346,7 @@ export class CableSession {
     this.lastAppsKey = ''
     this.lastMachinesKey = ''
     this.resetCapabilities()
+    this.dropRecording()
     this.voice = null
     this.voiceGeneration++
     this.abortVoiceSegments()
@@ -1835,6 +1843,7 @@ export class CableSession {
         if (!id) return
         this.passageCarry.clear(id)
         if (this.voiceCarryId === id) {
+          this.dropRecording()
           this.voiceGeneration++
           this.abortVoiceSegments()
           this.voice = null
@@ -1943,6 +1952,7 @@ export class CableSession {
         if (str('agentId')) this.host.updateAgent(str('agentId')!, str('model'), str('effort'))
         return
       case 'voice.begin': {
+        this.dropRecording()
         this.abortVoiceSegments()
         this.cancelFormVoice()
         this.cancelSearchVoice()
@@ -2014,7 +2024,7 @@ export class CableSession {
         // nothing goes to the transcriber. A form, a search, a draft or a question is not its terminal.
         if (agentId && !formVoice && !searchVoice && !draftVoice && !questionVoice && this.lacks(agentId, 'v')) {
           this.voice = null
-          this.voiceRefusal = { generation: this.voiceGeneration,
+          this.voiceRefusal = { generation: this.voiceGeneration, agentId,
             message: this.host.voiceRefusal?.(agentId, this.asItself)
               ?? `This agent is in ${this.hostName(agentId)}. Talking to it from the device comes in an update.` }
           return
@@ -2065,6 +2075,7 @@ export class CableSession {
         this.cancelSearchVoice()
         if (this.voice?.selectionId && this.voice.agentId) void this.host.selectPassage?.({
           op: 'cancel', agentId: this.voice.agentId, selectionId: this.voice.selectionId })
+        this.dropRecording()
         this.voiceGeneration++
         this.abortVoiceSegments()
         this.voice = null
@@ -2470,6 +2481,8 @@ export class CableSession {
       this.cancelFormVoice()
       this.cancelSearchVoice()
       this.abortVoiceSegments()
+      // Its voice.end is answered "Didn't catch that" with no turn left to say so.
+      this.dropRecording('no_speech')
       this.voice = null
       return
     }
@@ -2482,19 +2495,54 @@ export class CableSession {
     this.voiceSegments = undefined
   }
 
+  /** How a voice turn ended, for the dial's usage counts. A count never changes what the dial does or is told. */
+  private voiceEnded(end: DialVoiceEnd): void {
+    try { this.host.voiceEnded?.(end) } catch (error) { this.log(`cable: voice end not counted · ${errorKind(error)}`) }
+  }
+
+  /** A recording whose voice.end never came ends here, its one end said: a newer recording, an abort, a cancelled
+   *  carry, the port closing or the length cap took it. A voice.end already taken says its own (finishVoice). */
+  private dropRecording(code?: DialVoiceFailure): void {
+    const turn = this.voice
+    const refused = this.voiceRefusal?.generation === this.voiceGeneration ? this.voiceRefusal : undefined
+    if (!turn && !refused) return
+    const agentId = turn?.agentId ?? refused?.agentId
+    this.voiceEnded(turn && otherVoice(turn) ? { outcome: 'other' }
+      : code ? { outcome: 'failed', code, agentId } : { outcome: 'cancelled', agentId })
+  }
+
   private async finishVoice(review = false): Promise<void> {
     // Only a turn's own: with no turn, the field holds a recording an earlier voice.end is still transcribing.
     const segments = this.voice ? this.voiceSegments : undefined
+    // Read before the answer takes them: whether this voice.end ends a turn, and whether its words are for an agent.
+    const turn = this.voice
+    // A voice.end with no turn ends none: its recording's end was said already.
+    let ended = !turn && this.voiceRefusal?.generation !== this.voiceGeneration
+    const other = review || (!!turn && otherVoice(turn))
+    // Said once, as soon as it is decided: the agent's turn the words start may come before the dial is answered.
+    const end = (decided: DialVoiceEnd) => {
+      if (ended) return
+      ended = true
+      this.voiceEnded(other ? { outcome: 'other' } : decided)
+    }
     try {
-      await this.answerVoice(segments, review)
+      await this.answerVoice(segments, review, end)
+    } catch (error) {
+      // This daemon's own error, not the person's cancel.
+      end({ outcome: 'failed', code: 'unlisted', agentId: turn?.agentId })
+      throw error
     } finally {
       // Every way out that did not use the transcript stops the uploads; once finish() has settled this does nothing.
       segments?.abort()
       if (this.voiceSegments === segments) this.voiceSegments = undefined
+      // An exit that decided nothing returned because a newer recording, an abort or the port closing took the turn:
+      // the words reached no agent.
+      end({ outcome: 'cancelled', agentId: turn?.agentId })
     }
   }
 
-  private async answerVoice(segments: VoiceSegments | undefined, review: boolean): Promise<void> {
+  private async answerVoice(segments: VoiceSegments | undefined, review: boolean,
+    decide: (end: DialVoiceEnd) => void): Promise<void> {
     const arrived = performance.now()
     const turn = this.voice
     const generation = this.voiceGeneration
@@ -2506,9 +2554,12 @@ export class CableSession {
       return current() ? this.send({ ...message, ...(uploadId ? { uploadId } : {}) }) : Promise.resolve(false)
     }
     this.voice = null
-    const refusal = this.voiceRefusal?.generation === generation ? this.voiceRefusal.message : undefined
+    const refusal = this.voiceRefusal?.generation === generation ? this.voiceRefusal : undefined
     this.voiceRefusal = undefined
-    if (refusal) { await reply({ t: 'voice.error', message: refusal }); return }
+    if (refusal) {
+      decide({ outcome: 'failed', code: 'refused', agentId: refusal.agentId })
+      await reply({ t: 'voice.error', message: refusal.message }); return
+    }
     if (turn?.draft && (!turn.draft.pin || !this.voiceDraft.current(turn.draft.pin))) {
       await reply({ t: 'voice.error', message: 'That draft changed. Review it again.' }); return
     }
@@ -2518,6 +2569,7 @@ export class CableSession {
       return
     }
     if (turn?.carry && !turn.carry.ok) {
+      decide({ outcome: 'failed', code: 'unlisted', agentId: turn.agentId })
       await reply({ t: 'voice.error', message: turn.carry.error })
       return
     }
@@ -2539,10 +2591,12 @@ export class CableSession {
       op: 'cancel', agentId: turn.agentId, selectionId: turn.selectionId })
     if (!current()) return
     if (selection && (!selection.ok || !selection.text)) {
+      decide({ outcome: 'failed', code: 'unlisted', agentId: turn?.agentId })
       await reply({ t: 'voice.error', message: selection.ok ? 'Choose the text again.' : selection.error })
       return
     }
     if (!turn || turn.bytes === 0 || !segments) {
+      decide({ outcome: 'failed', code: 'no_speech', agentId: turn?.agentId })
       this.cancelFormVoice()
       this.cancelSearchVoice()
       await reply({ t: 'voice.error', message: "Didn't catch that" })
@@ -2568,13 +2622,18 @@ export class CableSession {
       transcript = await finished
     } catch (err) {
       heard('failed')
-      if (current()) { this.cancelFormVoice(); this.cancelSearchVoice() }
+      // An abort stops the uploads as well: that turn ends cancelled, not failed.
+      if (current()) {
+        decide({ outcome: 'failed', code: 'transcribe_failed', agentId: turn.agentId })
+        this.cancelFormVoice(); this.cancelSearchVoice()
+      }
       await reply({ t: 'voice.error', message: (err as Error).message })
       return
     }
     heard(String(transcript.length))
     if (!current()) return
     if (!transcript) {
+      decide({ outcome: 'failed', code: 'no_speech', agentId: turn.agentId })
       this.cancelFormVoice()
       this.cancelSearchVoice()
       await reply({ t: 'voice.error', message: "Didn't catch that" })
@@ -2650,6 +2709,8 @@ export class CableSession {
       const inWindow = this.host.routeInWindow
         ? await this.host.routeInWindow(transcript, turn.cmd)
         : ({ t: 'unavailable' } as const)
+      // Sent whatever happened here meanwhile: an abort or a newer recording does not take back what the window delivered.
+      if (inWindow.t === 'sent') decide({ outcome: 'sent', agentId: inWindow.agentId })
       if (!current()) return
       if (inWindow.t === 'sent') {
         this.log(`cable: the window routed the spoken task → ${inWindow.agentId.slice(0, 8)}`)
@@ -2669,12 +2730,14 @@ export class CableSession {
       if (inWindow.t === 'cancelled') {
         // A person closed the palette. Nothing was sent and nothing should be — but the dial is still
         // showing the sending overlay, so it has to be told, or it sits there until its own watchdog.
+        decide({ outcome: 'cancelled' })
         await reply({ t: 'voice.error', message: 'Cancelled in the window' })
         return
       }
       if (inWindow.t === 'abandoned') {
         // It took the words and went quiet. Routing here now would race a pick that may still be coming,
         // and two turns from one sentence is worse than none — so say where the words went instead.
+        decide({ outcome: 'failed', code: 'window_busy' })
         await reply({ t: 'voice.error', message: 'Still waiting on the window' })
         return
       }
@@ -2685,6 +2748,7 @@ export class CableSession {
         // The router's reason paraphrases the spoken sentence, so the log keeps only the pick and how sure it was.
         this.log(`cable: routed → ${agentId} (confidence ${decision.confidence.toFixed(2)})`)
       } catch (err) {
+        decide({ outcome: 'failed', code: 'route_failed' })
         await reply({ t: 'voice.error', message: (err as Error).message })
         return
       }
@@ -2692,6 +2756,7 @@ export class CableSession {
     agentName = agents.find((a) => a.id === agentId)?.name ?? ''
 
     if (!agentId) {
+      decide({ outcome: 'failed', code: 'no_agent' })
       await reply({ t: 'voice.error', message: 'No harness to send that to' })
       return
     }
@@ -2703,6 +2768,7 @@ export class CableSession {
       const held = (await this.agentSnapshot()).agents
       if (!current()) return
       if (!held.some(a => a.id === agentId)) {
+        decide({ outcome: 'failed', code: 'no_agent', agentId })
         await reply({ t: 'voice.error', message: 'That recipient is no longer available. Choose it again.' })
         return
       }
@@ -2734,15 +2800,18 @@ export class CableSession {
     try {
       const submitted = await this.host.sendTurn(agentId, text)
       if (submitted && !submitted.ok) {
+        decide({ outcome: 'failed', code: 'refused', agentId })
         await reply({ t: 'voice.error', message: submitted.message ?? (carried
           ? 'Could not reach that harness. Your carried text is still here.'
           : 'Could not reach that harness. Check its connection and try again.') }, refusedIn)
         return
       }
     } catch (_) {
+      decide({ outcome: 'failed', code: 'send_failed', agentId })
       await reply({ t: 'voice.error', message: 'Could not send. Check the terminal before trying again.' })
       return
     }
+    decide({ outcome: 'sent', agentId })
     if (carried) {
       this.passageCarry.clear(carried.id)
       this.voiceCarryId = undefined

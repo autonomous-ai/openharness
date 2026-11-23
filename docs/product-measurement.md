@@ -12,7 +12,7 @@ automatically proven improvement. Changes still need review, tests and a deliber
 | Where does a launch stall or fail? | Pending install/model/native waits; observed launch created/failed/cancelled/unconfirmed; fixed failure categories and duration buckets; an `other` failure's code (`launch_failed_code_<code>`); a created launch whose engine then did not start (`launch_late_failed`, by code in `launch_late_failed_code_<code>`) | Polls are not attempts. Missing outcomes, daemon restarts and the 15-minute observation bound reduce coverage. Inspect unknowns alongside failures. Codes are the daemon's own fixed names, lower-cased (`LAUNCH_ERROR_CODES`); `unlisted` is a code not in the list and `none` a failure that named none, so the codes add up to `launch_failed_other`. A late failure (the new-pane watcher's ENGINE_DID_NOT_START, ENGINE_NOT_INSTALLED or START_TIMEOUT, set after the reply said created) is one of the `launch_created`, never a `launch_failed`; the gateway reads it from the agent's own announcement for 15 minutes after the launch was created, and earlier CLI releases counted these only as created (compare releases separately). A create correctly turned down is `launch_refused`, by code in `launch_refused_code_<code>`, and never a `launch_failed`: the refusal set is exactly SESSION_IN_HARNESS, SESSION_OPEN_ELSEWHERE, SESSION_OPEN_IN_TERMINAL, SESSION_BUSY_IN_TERMINAL and INVALID_REQUEST (opening a conversation that is already a harness or is open elsewhere, a cloud agent with no task or repository); earlier releases counted them as `launch_failed_other`. `launch_agent_started`, `_created`, `_failed` and `_refused` count again the launches whose create carried a `startedBy` (an agent started it); the totals keep counting every launch, so a person's own launches are the total less the agent twin. |
 | Which actions break? | Create, resume, restart, model-change, history, fork, close, delete, search, history paging, Store list/install/update/remove, model list/download/start/stop and browser-open requests, fixed outcomes/errors and latency buckets; the code of an `other` create or resume refusal (`create_error_code_<code>`, `resume_error_code_<code>`), and of every delete or restart refusal (`delete_error_code_<code>`, `restart_error_code_<code>`; the phone's again apart, `phone_delete_error_code_<code>`, `phone_restart_error_code_<code>`) | Request acceptance is not task success. Pending/unknown requests are separate from completed replies. A person's message (`request_<source>_message_*`), which nothing answers, is `ok` once its engine took it (its turn began, or it left the composer), `failed` by what the person was told (`not_found`, `unavailable`, `conflict` for a pane busy with a dialog or a full queue, `timeout`, `invalid`, `other`), `unknown` when typed and never confirmed, `cancelled` when stopped; from the CLI release that carries it (an older one counts only `started`), and not yet for cloud agents. Requests are also counted by source: `app`, `tool`, `automatic` (fixed polls, whichever app makes them), `unknown` and `phone` — the phone marks the requests the daemon measures (`usageSurface: 'phone'`, inside the E2EE payload); older phones still count as `app`. Each code family adds up to its `create_error_other` or `resume_error_other`; the delete and restart families add up to `delete_failed` and `restart_failed`, whatever the kind (the phone's 2026-10-19 refusals were `other` and `setup`). |
 | Does work get a response promptly? | First text response buckets; over-one-minute waits; error events; matched ends without text; interruptions | Includes automation. Tool-only turns, interruptions and missing lifecycle events can explain missing text. No message is inspected. |
-| Do installations return to work? | D1/D7/D28 working-day cohorts, consecutive complete-week and calendar-month returns, return after a seven-day gap | Any working day can be a cohort; not new-signup retention. Local date flags produce unlinked totals. Opt-outs, reinstallations, resets and missing uploads affect results. |
+| Do installations return to work? | D1/D7/D28 working-day cohorts, consecutive complete-week and calendar-month returns, return after a seven-day gap | Any working day can be a cohort; not new-signup retention. A D7 or D28 return is counted on the return day, a D1 return on its cohort's day. Local date flags produce unlinked totals. Opt-outs, reinstallations, resets and missing uploads affect results. |
 | Was the task useful? | Optional Completed / Partly completed / Not completed plus five fixed reason choices from clients that offer feedback; current Desktop Settings no longer exposes feedback controls | Voluntary and self-selected; not representative success or satisfaction. There is no free-text input. |
 | Is there usage at all? | Active and working computer counts; app opens; older-client relay totals, the phone's also by release and with debug/simulator builds apart | Background windows can count as active. An open is a surface going from no attached window to one, not each connection (the desktop holds one per machine and redials). Relay events are not distinct people; the populations must not be added together. `relay_mobile_opens` still counts every phone socket open, a reconnect included (on 2026-10-19/20 one simulator left open made 15,104 against 344 the day before). The first phone release after 1.0.8 (71) says its release and whether it is a debug or simulator build on the socket (`release`, `debug`), and each open is counted a second time: `relay_mobile_debug_opens` for a debug or simulator build, otherwise `breakdown:release:phone:<x.y.z>:relay_mobile_opens`, so the two never overlap and together equal the total for those apps. An older app, or any release that is not a plain x.y.z, counts under release `unknown`. A release's margin is shown only where the day has 20 phone collector observations, like the phone's other release margins; an Android emulator running a release build is not told apart. |
 | Why are Desktop frames long, and on how many computers? | One in 60 rendered frames by duration; a sample of 50 ms or more also by its longest phase (`frame_slow_wait`, `frame_slow_build`, `frame_slow_raster`); once per collector day, the first sample over 250 ms (`frame_long_collector`) | Wait is the UI thread busy before the frame could start (on macOS and Linux the platform's main thread: timers, channel and native callbacks, synchronous IO, AppKit or GTK); build is the framework's build, layout and paint; raster is drawing. The phases add up to the samples of 50 ms or more counted beside them. `frame_long_collector` over `collector_days` is the share of collector days with a long sample: many long samples on few such days are a few computers, not a broad problem. Counted only once the computer's CLI has announced them (below), so not before a run's first report answer or behind an older CLI; compare releases separately. |
@@ -132,6 +132,40 @@ Authenticated requests still reach the service; infrastructure request logs and 
 own retention, which the release owner must verify separately. The account preference remains
 linked to the account so the switch works everywhere.
 
+## The dial's counts
+
+The devices component counts the dial's day; the gateway sends it in its signed-in report, under the account's "Share
+product usage data". Voice is counted at the backend's transcription route (`/api/voice/stt`). The names live in
+`cli/src/lib/dialUsageContract.ts`, which the core's process never loads, and its byte-identical backend copy
+(`backend/src/types/dialUsage.ts`). Every count is per UTC day; a computer count (`_installation_days`,
+`_installations`: at most 1 a computer a day) comes first, an event or agent count beside it.
+
+| Question | Signal | Interpretation |
+| --- | --- | --- |
+| Who uses a dial? | `dial_connected_installation_days`, `dial_used_installation_days` (a turn, a stroke, a tap, an answer, an app pick, a voice), `dial_first_use_installations`; `dial_used_week_installations`, `dial_used_28d_installations` | The unit is the computer, not the dial. An attach alone is not use: a dial that greets and restores its focus with no hand on it is connected, never used. The week (from UTC Monday) and fixed 28-day period flags make the review's 7- and 28-day dial-used columns distinct computers, each counted on its first use in the period: a column across two periods can count a computer twice, or miss it when that first use fell before the column; first use fires once ever a computer, so its sums are distinct computers too; connected stays computer-days. A computer that had a dial before this release spends no first use. |
+| Who is outside the app? | The same names with `_outside_app_` (`dial_connected_outside_app_installation_days`, `dial_used_outside_app_installation_days`, `dial_first_use_outside_app_installations`, and the used week and 28-day flags) | Desktop not opened on this computer in the 28 days up to that day, added by the gateway as each day closes. The gateway keeps Desktop's days from this release on, so the twin reads true only 28 days after a computer's update. |
+| Does a new dial work fast? | `dial_first_agent_first_<bucket>_installations` on the first connection ever, `dial_first_agent_day_<bucket>_installations` on each day's first; buckets `under_1m`, `1m_to_3m`, `3m_to_10m`, `over_10m`, `none_1h` | From a dial attached with an agent running (whichever came last) to the first agent on the dial. A measurement survives a detach. A restart of the devices loses the day's; the first connection's is taken again at the next attach, as the first connection is spent only when its measurement ends. |
+| Which engines and hosts? | `dial_engine_<engine>_installation_days`, `_agents`; `dial_host_<host>_installation_days`, `_agents` | The host is the dial's own host id (`harness` for Harness's agents, `other` for the Other page). Distinct agents are counted within a devices' run, so a restart can count one again, at most 16 a name a day. |
+| Does the dial find the agents? | `dial_hooked_<engine>_installation_days`, `dial_hooked_<engine>_<placed\|held\|other\|not_shown>`; `dial_other_app_<app>_installation_days`, `_agents` | Hooked engines only: an agent with no hook is invisible to both sides. Read at each hooked agent's first turn of the day while a dial is attached, at most 16 agents a name a day. `held` is a pane the dial does not type into by design. The Other page's app comes from a fixed list ending in `unlisted` and `unknown`; `unknown` includes terminals whose hook sends no bundle id or `TERM_PROGRAM` (on Linux Alacritty and JetBrains, on Windows JetBrains and Windows Terminal). |
+| Does voice reach the agent? | `dial_voice_installation_days`, `dial_voice_<delivered\|failed\|held\|cancelled>`, `dial_voice_failed_<code>`, each by host (`dial_voice_host_<host>_…`); `dial_open_installation_days`, `dial_open_ok`, `dial_open_failed`, `dial_open_failed_<code>`, by host | Delivered means the agent's turn began within 10 s, so words queued into a busy agent read `no_turn`. A voice that answers a question, or goes to a draft, a form field or a search, is use, not voice (the devices' `other` end). `dial_voice_failed_unlisted` is a code outside the list, or quoted or carried text that was gone. |
+| What does voice cost? | `voice_dial_clips`, `voice_dial_audio_s`, `voice_dial_transcribe_ms` and the same for `voice_rest_`; `voice_account_days`, `voice_account_days_over_1m`, `_over_5m`, `_over_20m` | Per account-day, at the route, which knows the account, not the computer. The dial's clips are told apart by the devices' one fixed header (`x-harness-voice-surface: dial`, no id); the rest is the phone and any older CLI, which sends none, so the dial's share reads low until computers update. The account-day buckets cover all of an account's voice through `/api/voice/stt`, dial and rest together; a Wi-Fi device's voice goes through `/api/device-ws`, outside these counts; audio is in whole seconds, each clip rounded up (an empty clip is 1 s); transcription time is in milliseconds, a total only. A clip Deepgram fails is given back to the quota and can let a later clip cross an edge again. |
+| Does the dial shorten an agent's wait? | `dial_wait_used_day_installation_days`, `dial_wait_used_day_<dial\|elsewhere>_<bucket>`, `dial_wait_used_day_none`; `dial_wait_unused_day_installation_days`, `dial_wait_unused_day_elsewhere_<bucket>`, `dial_wait_unused_day_none`; buckets `under_30s`, `30s_to_2m`, `2m_to_10m`, `over_10m` | A Harness agent's question, a `waiting` or `plain` notice (not `proceeding`), or an outside agent's wait, timed to the person's answer: on the dial (or after a tap on its agent) or elsewhere. Seen only while a dial is attached. The comparison is days a dial was used against days it was connected but not used: a computer with no dial runs no devices component. |
+| Did voice go to the wrong agent? | `dial_voice_redirected_30s`, `dial_voice_interrupted_10s`, each by host | Proxies, not errors: a voice followed within 30 s by a voice to another agent; a delivered voice whose turn the person interrupts within 10 s. The interrupt covers hooked agents only (their `turn-aborted` hook); Harness's own agents' aborted turns look finished. |
+| Do they come back? | `dial_d<1\|7\|28>_returning_installations`, `dial_d<1\|7\|28>_returning_outside_app_installations` | Computers using a dial on day N and again on N+1, N+7, N+28, counted on that later day, the return day; the review rates them against day N's used computers. Mature only after the return day. |
+
+Reading the dial's counts:
+
+- Signed in only: voice needs a sign-in, so the counted computers lean to voice users. Not all dial users.
+- First connection and first use are reliable for computers whose dial attached on CLI 0.4.54 (2026-10-23) or later.
+- Never an id, serial, MAC, account, machine name, window title, path, project, prompt, voice text or transcript;
+  product names only from the fixed lists. No cross products: engine, host and the release and OS margins are separate
+  one-way splits.
+- `dial_file_unreadable_installation_days`: the gateway found the devices' file too large or misshapen, once a day.
+- Each dial computer's day close sends a report for the past day, which adds `health_cli_report_late` once or twice a
+  day for each.
+- Testers and the team stay apart under `testing:` and `staff:` as elsewhere; voice has no channel, so the team's voice
+  is under `staff:` only, and a `testing:` build's dial clips count outside the team.
+
 ## Runtime and storage budget
 
 Desktop/CLI health adds separate marginal totals for the numeric public release and broad OS
@@ -245,6 +279,14 @@ doubles from two minutes to half an hour with each such refusal in a row, and ne
 answer's Retry-After (held to the same half hour); any other answer resets it. Ticks still read the
 choice meanwhile. Unknown or failed preference checks stop collection. Slow or failed reporting can
 lose counts and cannot become a product dependency. A failed disk write also disables collection.
+
+The devices keep the dial's day in `dial-usage.json` (`cli/src/cable/dialUsageFile.ts`), their one writer: fixed
+names and numbers only, at most 35 UTC days and 128 KiB, older days dropped at each write, one write per 5 s at most
+and none while idle or signed out. The gateway stats it at its existing report tick and parses it only when its
+mtime or size changed, after a size check (`cli/src/gateway/dialUsage.ts`); it keeps only names in the vocabulary
+and logs nothing of what it drops. It remembers per day what it sent and the file's series, so a restart of either
+side, or a file made again, sends no flag twice. No new endpoint, sender or timer. The voice counts add to the
+backend's existing totals write once a clip is transcribed, never awaited by the answer.
 
 Stopping the gateway writes the collector's final, clean state synchronously before it returns
 (a temporary file and a rename, at most the 256 KiB queue), and its process stops the gateway before
@@ -405,6 +447,13 @@ Decision: keep | revise | revert | inconclusive
 Next review date:
 ```
 
+The `dial` section reads the dial's counts in day, 7-day and 28-day columns (complete UTC days, today left out),
+outside the team first, the team (`staff:` and `testing:`) apart. Its first lines name its limits: signed in only,
+hooked engines only. Any cell under 5 computers, and the event cells beside it, shows `"<5"`; a row with nothing is
+left out. Voice comes apart: the account-day buckets, labelled all voice on the account, then the dial's and the
+rest's clips and minutes, with the note that older CLIs' voice counts as the rest. The dial-used margins by platform
+and release show only where the day's collector margin is 20 or more.
+
 The `review` output proposes investigations, not code changes or automatic deployments. Its unknown
 launch refusals and its engines that did not start after a create each name their five most frequent
 codes; a large `unlisted` share means a code is missing from `LAUNCH_ERROR_CODES`. Feedback
@@ -443,6 +492,12 @@ route and loses whatever the website sends it, and a backend that does not know 
 refuses the whole report, so a new Hub counter also ships backend first (shared-link counters: backend,
 then the web app's release). Then check that a browser
 with Global Privacy Control and a signed-in reader with sharing off send nothing.
+
+The dial's counts roll out backend first. The gateway sends them in a report of their own: an older backend refuses
+a report of dial names only, which the CLI drops without counting a rejection, and the next report goes. An older
+backend ignores the dial's voice header; an older CLI sends none. "See what's shared" on Desktop and the phone each
+name the dial and voice in one line. Turning sharing off, then on, or another account signing in takes what the file
+held as sent, so nothing counted before it goes.
 
 People counts roll out in this order: deploy the backend without `PRODUCT_USAGE_SUBJECT_KEY` (no marks
 are written); release desktop, phone and CLI with the updated "See what's shared" text; then set the key

@@ -24,6 +24,13 @@ interface Verdict { session?: string; at: number; dial?: true; board?: string }
 
 const keyOf = (port: DialPort) => (port.serialNumber ?? port.path).toUpperCase()
 
+/** Did any board ever greet as a dial on this computer? Its mark is never removed (since CLI 0.4.54), so this says a dial
+ *  was here before any newer record of one. An unreadable file says no. */
+export function greetedAsDial(file: string): boolean {
+  const read = readState(file, 'cache', jsonObject)
+  return read.state === 'ok' && Object.values(read.value).some((v) => (v as Partial<Verdict> | null)?.dial === true)
+}
+
 export class DialVerdicts {
   private readonly foreign = new Map<string, Verdict>()
   /** The file could not be read (EACCES, EMFILE): this run keeps its verdicts in memory and writes nothing over it. */

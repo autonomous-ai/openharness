@@ -3,6 +3,7 @@ import { basename, join } from 'node:path'
 // Types only: the devices process must not load core code.
 import type { ObservedAsked, ObservedEvent, ObservedHookEvent } from '../../core/observedHook.js'
 import { truncateUtf8 } from '../../lib/deviceRecentTrim.js'
+import type { DialOtherApp } from '../../lib/dialUsageContract.js'
 import type { OpenSessions, SessionOwner, SessionRows } from '../../lib/sessionSearch/external.js'
 import { type fileStamp, within } from '../../lib/sessionSearch/externals/support.js'
 import type { ExternalEngine, RunningProcess } from '../../lib/sessionSearch/externals/types.js'
@@ -10,7 +11,7 @@ import { errorKind } from '../../lib/log.js'
 import { roundDrawable } from '../roundGlyphs.js'
 import type { HostAdapter, Outer, Pane, Place } from './adapter.js'
 import { CODEX_THREAD, type CodexQueue, type CodexQueueFailure, type CodexRan } from './codexQueue.js'
-import { agentPlaceName, APP_BUNDLES, detectApp, detectHost, EXTENSION_TAB, ownHints, UNKNOWN_APP } from './hostDetect.js'
+import { agentPlaceName, APP_BUNDLES, detectApp, detectHost, EXTENSION_TAB, otherProduct, ownHints, UNKNOWN_APP } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
 import { answerEngine, type AnswerEngine } from './lastAnswer.js'
 import { bundleOf, type OpenTarget } from './open.js'
@@ -215,6 +216,9 @@ interface Entry {
   pid: number
   /** Its latest event's host hints: none for a session the scan found, until its first. */
   hints: Readonly<Record<string, string>>
+  /** The product its latest event's hints name, for the dial's counts of the Other page: never the hint itself. None for
+   *  a session the scan found, until its first. */
+  otherApp?: DialOtherApp
   /** The process its latest event came from: none for a session the scan found, until its first. */
   caller?: number
   /** The hc terminal a session the scan found runs in, until its first hook, and the app the scan gave it, which a
@@ -877,6 +881,20 @@ export class ObservedSource implements HostSource {
     return this.entries.get(agentId)?.startedIn
   }
 
+  /** Whether every pane it has only holds it (Pane.held): the dial's counts tell a voice refused there as held by
+   *  design, not failed. False for an agent with no pane, which no pane holds, and for one it does not know. */
+  heldOnly(agentId: string): boolean {
+    const panes = this.entries.get(agentId)?.panes ?? []
+    return panes.length > 0 && panes.every(({ pane }) => pane.held)
+  }
+
+  /** The product behind the Other page it is on, from its latest hook's hints (otherProduct); none on a host's page. Read
+   *  at each call, as a walk of its parents or its outer place can move it off that page after the hook. */
+  otherApp(agentId: string): DialOtherApp | undefined {
+    const e = this.entries.get(agentId)
+    return e?.agent.app === UNKNOWN_APP ? e.otherApp : undefined
+  }
+
   /** Takes the event; for a turn's start of a session it lists, answers what started it. */
   ingest(e: ObservedEvent): PromptSource | undefined {
     if (e.event === 'asked') {
@@ -915,6 +933,7 @@ export class ObservedSource implements HostSource {
     delete a.appPending
     // Every event's own: a session resumed elsewhere must not be typed into the terminal it left.
     entry.hints = e.hostHints
+    entry.otherApp = otherProduct(e.hostHints)
     entry.caller = e.callerPid
     this.learnPtyOwner(entry, e.callerPid)
     // Before locate: learnTty returns early for a caller it already read, so nothing places the session again at this

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { APP_BUNDLES, APP_IDS, appDisplayName, detectApp, detectHost, hostDisplayName, inCmux, inHerdr, ownHints, UNKNOWN_APP } from './hostDetect.js'
+import { APP_BUNDLES, APP_IDS, appDisplayName, detectApp, detectHost, hostDisplayName, inCmux, inHerdr, otherProduct, ownHints, UNKNOWN_APP } from './hostDetect.js'
 
 describe('detectHost', () => {
   it.each([
@@ -343,5 +343,49 @@ describe('ownHints', () => {
       expect(ownHints(hints)).toEqual(hints)
       expect(detectApp(hints)).toBe(editor)
     }
+  })
+})
+
+// The dial's counts name the app behind the Other page by product only: a raw hint never leaves otherProduct
+// (docs/plans/2026-11-23-dial-usage-counts-design.md).
+describe('otherProduct', () => {
+  it.each([
+    [{ __CFBundleIdentifier: 'dev.zed.Zed' }, 'zed'],
+    [{ __CFBundleIdentifier: 'dev.zed.Zed-Preview' }, 'zed'],
+    [{ TERM_PROGRAM: 'zed' }, 'zed'],
+    [{ __CFBundleIdentifier: 'org.alacritty' }, 'alacritty'],
+    [{ __CFBundleIdentifier: 'co.zeit.hyper' }, 'hyper'],
+    [{ TERM_PROGRAM: 'Hyper' }, 'hyper'],
+    [{ __CFBundleIdentifier: 'org.tabby' }, 'tabby'],
+    [{ TERM_PROGRAM: 'Tabby' }, 'tabby'],
+    [{ __CFBundleIdentifier: 'com.jetbrains.intellij' }, 'jetbrains'],
+    [{ __CFBundleIdentifier: 'com.jetbrains.pycharm' }, 'jetbrains'],
+    [{ __CFBundleIdentifier: 'com.raphaelamorim.rio' }, 'rio'],
+    [{ TERM_PROGRAM: 'rio' }, 'rio'],
+    [{ __CFBundleIdentifier: 'dev.commandline.waveterm' }, 'wave'],
+    [{ TERM_PROGRAM: 'waveterm' }, 'wave'],
+    [{ __CFBundleIdentifier: 'com.panic.Nova' }, 'nova'],
+    [{ __CFBundleIdentifier: 'com.exafunction.windsurf' }, 'windsurf'],
+  ])("names the Other page's app from its fixed list: %j -> %s", (hints, app) => {
+    expect(otherProduct(hints)).toBe(app)
+  })
+
+  it('the bundle id decides before TERM_PROGRAM', () => {
+    expect(otherProduct({ __CFBundleIdentifier: 'org.alacritty', TERM_PROGRAM: 'zed' })).toBe('alacritty')
+    expect(otherProduct({ __CFBundleIdentifier: 'com.example.term', TERM_PROGRAM: 'zed' })).toBe('unlisted')
+  })
+
+  it('any other value is unlisted, never itself; neither hint is unknown', () => {
+    expect(otherProduct({ __CFBundleIdentifier: 'com.example.term' })).toBe('unlisted')
+    expect(otherProduct({ TERM_PROGRAM: 'someterm' })).toBe('unlisted')
+    expect(otherProduct({ __CFBundleIdentifier: 'com.jetbrains' })).toBe('unlisted')
+    expect(otherProduct({})).toBe('unknown')
+    expect(otherProduct({ ZELLIJ: '0' })).toBe('unknown')
+  })
+
+  it("a hint naming an object's own key is unlisted: hint values are outside text", () => {
+    expect(otherProduct({ __CFBundleIdentifier: 'constructor' })).toBe('unlisted')
+    expect(otherProduct({ TERM_PROGRAM: 'constructor' })).toBe('unlisted')
+    expect(otherProduct({ TERM_PROGRAM: '__proto__' })).toBe('unlisted')
   })
 })

@@ -149,6 +149,17 @@ describe('daily voice quota', () => {
     expect(state.usage?.usedMs).toBe(590_000)
   })
 
+  it('says the account\'s milliseconds before this clip', async () => {
+    // Voice's account-day buckets (lib/voiceUsage.ts) are read off this: the first clip of a day starts at 0.
+    const now = new Date('2026-07-24T12:00:00.000Z')
+    await expect(voiceQuotaService.reserve('machine-1', 'upload-a', 2_500.4, now))
+      .resolves.toMatchObject({ state: 'reserved', usedMsBefore: 0 })
+    await expect(voiceQuotaService.reserve('machine-1', 'upload-b', 1_000, now))
+      .resolves.toMatchObject({ state: 'reserved', usedMsBefore: 2_501 })
+    await expect(voiceQuotaService.reserve('machine-1', 'upload-b', 1_000, now))
+      .resolves.toMatchObject({ state: 'pending', usedMsBefore: 3_501 })
+  })
+
   it('does not charge the same upload twice and commits it once', async () => {
     const now = new Date('2026-07-24T12:00:00.000Z')
     await voiceQuotaService.reserve('machine-1', 'upload-a', 30_000, now)

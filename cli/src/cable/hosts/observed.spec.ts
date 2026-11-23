@@ -570,6 +570,24 @@ describe('ObservedSource codex and open sessions', () => {
     expect(src.list()[0]).toMatchObject({ host: 'iterm', app: 'iterm' })
   })
 
+  it("otherApp from the latest hook on the Other page, none on a host's page", () => {
+    const { src, ev } = setup()
+    src.ingest(ev('session-start', { hostHints: { TERM_PROGRAM: 'zed' } }))
+    const id = src.list()[0].id
+    expect(src.list()[0].app).toBe('terminal')
+    expect(src.otherApp(id)).toBe('zed')
+    src.ingest(ev('turn-start', { hostHints: { __CFBundleIdentifier: 'com.jetbrains.goland' } }))
+    expect(src.otherApp(id)).toBe('jetbrains')
+    src.ingest(ev('turn-start', { hostHints: { __CFBundleIdentifier: 'com.example.term' } }))
+    expect(src.otherApp(id)).toBe('unlisted')
+    src.ingest(ev('turn-start', { hostHints: {} }))
+    expect(src.otherApp(id)).toBe('unknown')
+    src.ingest(ev('turn-start', { hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    expect(src.list()[0].app).toBe('ghostty')
+    expect(src.otherApp(id)).toBeUndefined()
+    expect(src.otherApp('observed:unknown')).toBeUndefined()
+  })
+
   it('scanOpen hands every owner it read to scanned, once a scan', async () => {
     const scanned = vi.fn()
     const { src, open, owners, externals, ev } = setup({ scanned })
@@ -3369,6 +3387,24 @@ describe('ObservedSource and a pane that only holds the agent', () => {
     expect(only.src.capabilities(only.agent())).toMatchObject({ voice: false, focus: true })
     expect(only.src.hasPane(only.agent())).toBe(false)
     expect(await only.src.send(only.agent(), 'next')).toMatchObject({ ok: false })
+  })
+
+  // The dial's counts tell a refused voice to such an agent as held, by design, from one that failed.
+  it('heldOnly: every pane held', () => {
+    const s = holding([fake('h', () => true).adapter, fake('g', () => true).adapter])
+    s.src.ingest(s.ev('session-start', { hostHints: HINTS }))
+    expect(s.src.heldOnly(s.agent().id)).toBe(true)
+  })
+
+  it('heldOnly is false with a pane that types or for an unknown agent', () => {
+    const s = holding([fake('h', () => true).adapter, fake('b', () => false).adapter])
+    s.src.ingest(s.ev('session-start', { hostHints: HINTS }))
+    expect(s.src.heldOnly(s.agent().id)).toBe(false)
+    expect(s.src.heldOnly('observed:unknown')).toBe(false)
+    // No pane at all: nothing holds it, and the dial counts it on its page instead.
+    const none = holding([])
+    none.src.ingest(none.ev('session-start', { hostHints: HINTS }))
+    expect(none.src.heldOnly(none.agent().id)).toBe(false)
   })
 
   // The devices take a held pane for none (paneOf) and place the agent by its folder, as in Neovim's :terminal inside an
