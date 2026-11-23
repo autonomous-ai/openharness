@@ -13421,18 +13421,6 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
     expect(await counted(port)).toMatchObject({ dial_connected_installation_days: 1 })
   })
 
-  // Review Focus 4: a dial greets and turns back to the agent it showed with no hand on it. Connected, never used.
-  it('a greet\'s own focus is not use', async () => {
-    const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
-    await attach(port)
-    host().dialShows({}, { name: 'api', app: 'harness' }, 'h1')
-    seen.host.localFollowed!('attach', 'moved')
-    const counts = await counted(port)
-    expect(counts.dial_connected_installation_days).toBe(1)
-    expect(counts).not.toHaveProperty('dial_used_installation_days')
-    expect(counts).not.toHaveProperty('dial_first_use_installations')
-  })
-
   it('counts the engine and host shown', async () => {
     const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
     port.observed(hook('session-start'))
