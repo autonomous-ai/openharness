@@ -193,6 +193,13 @@ class WindowsSignTests(unittest.TestCase):
                                str(SCRIPT), str(self.release if release is None else release), str(path)],
                               cwd=self.root, env=environment, capture_output=True, text=True, timeout=60)
 
+    def langdll(self, arch):
+        """NSIS's LangDLL.dll in Tauri's copy of the arch's Plugins/x86-unicode, beside the plugin DLLs it signs."""
+        path = self.release / "nsis" / arch / "Plugins" / "x86-unicode" / "LangDLL.dll"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"MZ")
+        return path
+
     def calls(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
 
@@ -204,23 +211,30 @@ class WindowsSignTests(unittest.TestCase):
         self.assertEqual(self.calls(), [])
 
     def test_it_signs_each_file_tauri_hands_it(self):
-        files = [self.release / "harness-device.exe"]
+        # Each plugin DLL with the LangDLL.dll beside it, which Tauri's uninstaller loads and Tauri does not sign; no
+        # other file with it.
+        files = [(self.release / "harness-device.exe", [])]
         for arch in ("x64", "arm64"):
             plugins = self.release / "nsis" / arch / "Plugins" / "x86-unicode"
-            files += [plugins / "NSISdl.dll", plugins / "StartMenu.dll", plugins / "System.dll",
-                      plugins / "nsDialogs.dll", plugins / "additional" / "nsis_tauri_utils.dll"]
+            langdll = self.langdll(arch)
+            files += [(plugins / "NSISdl.dll", [langdll]), (plugins / "StartMenu.dll", [langdll]),
+                      (plugins / "System.dll", [langdll]), (plugins / "nsDialogs.dll", [langdll]),
+                      (plugins / "additional" / "nsis_tauri_utils.dll", [langdll])]
         installers = self.release / "bundle" / "nsis"
-        files += [installers / "Harness Device_0.1.13_x64-setup.exe",
-                  installers / "Harness Device_0.1.13_arm64-setup.exe", self.temp / "nst0.tmp",
-                  self.temp / "nst1A2B.tmp", self.temp / "nstffff.tmp", self.release / "HARNESS-DEVICE.EXE"]
-        for path in files:
+        files += [(path, []) for path in (installers / "Harness Device_0.1.13_x64-setup.exe",
+                                          installers / "Harness Device_0.1.13_arm64-setup.exe", self.temp / "nst0.tmp",
+                                          self.temp / "nst1A2B.tmp", self.temp / "nstffff.tmp",
+                                          self.release / "HARNESS-DEVICE.EXE")]
+        for path, beside in files:
             with self.subTest(path=str(path.relative_to(self.root))):
                 self.signatures({})
                 before = len(self.calls())
                 result = self.sign(path)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertIn(f"windows-sign: signed {path}", result.stdout.splitlines())
-                self.assertEqual([call["Files"] for call in self.calls()[before:]], [str(path)])
+                self.assertEqual([line for line in result.stdout.splitlines() if line.startswith("windows-sign:")],
+                                 [f"windows-sign: signed {file}" for file in (path, *beside)])
+                self.assertEqual([call["Files"] for call in self.calls()[before:]],
+                                 [str(file) for file in (path, *beside)])
 
     def test_the_call_carries_the_actions_settings_and_nothing_else(self):
         result = self.sign(self.release / "harness-device.exe")
@@ -248,11 +262,44 @@ class WindowsSignTests(unittest.TestCase):
 
     def test_twice_signs_once(self):
         path = self.release / "nsis" / "x64" / "Plugins" / "x86-unicode" / "System.dll"
+        langdll = self.langdll("x64")
         first, second = self.sign(path), self.sign(path)
         self.assertEqual((first.returncode, second.returncode), (0, 0), first.stderr + second.stderr)
-        self.assertIn(f"windows-sign: signed {path}", first.stdout.splitlines())
-        self.assertIn(f"windows-sign: already signed {path}", second.stdout.splitlines())
-        self.assertEqual(len(self.calls()), 1)
+        self.assertLessEqual({f"windows-sign: signed {path}", f"windows-sign: signed {langdll}"},
+                             set(first.stdout.splitlines()))
+        self.assertLessEqual({f"windows-sign: already signed {path}", f"windows-sign: already signed {langdll}"},
+                             set(second.stdout.splitlines()))
+        self.assertEqual([call["Files"] for call in self.calls()], [str(path), str(langdll)])
+
+    def test_a_valid_langdll_is_left_as_it_is(self):
+        path = self.release / "nsis" / "x64" / "Plugins" / "x86-unicode" / "System.dll"
+        langdll = self.langdll("x64")
+        self.signatures({str(langdll): {"status": "Valid", "signer": "AUTONOMOUS INC.", "timestamp": True}})
+        result = self.sign(path)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"windows-sign: already signed {langdll}", result.stdout.splitlines())
+        self.assertEqual([call["Files"] for call in self.calls()], [str(path)])
+
+    def test_it_refuses_a_changed_or_missing_langdll_before_it_signs(self):
+        path = self.release / "nsis" / "arm64" / "Plugins" / "x86-unicode" / "additional" / "nsis_tauri_utils.dll"
+        langdll = self.langdll("arm64")
+        for status in ("HashMismatch", "NotTrusted", "UnknownError"):
+            with self.subTest(status=status):
+                self.signatures({str(langdll): {"status": status, "signer": "AUTONOMOUS INC.", "timestamp": True}})
+                self.assert_refused(self.sign(path), str(langdll), status)
+        self.signatures({})
+        langdll.unlink()
+        self.assert_refused(self.sign(path), str(langdll), "no such file")
+
+    def test_it_refuses_a_langdll_that_did_not_come_out_signed(self):
+        path = self.release / "nsis" / "x64" / "Plugins" / "x86-unicode" / "nsDialogs.dll"
+        langdll = self.langdll("x64")
+        self.signatures({str(path): {"status": "Valid", "signer": "AUTONOMOUS INC.", "timestamp": True}})
+        result = self.sign(path, FAKE_SIGNING_OUTCOME="other-signer")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(f"windows-sign: refused {langdll}", result.stderr)
+        self.assertIn("signed by 'Someone Else', not 'AUTONOMOUS INC.'", result.stderr)
+        self.assertEqual([call["Files"] for call in self.calls()], [str(langdll)])
 
     def test_it_refuses_a_file_outside_the_allowlist(self):
         plugins = self.release / "nsis" / "x64" / "Plugins" / "x86-unicode"
@@ -265,6 +312,8 @@ class WindowsSignTests(unittest.TestCase):
             (self.release.parent / "release-old" / "harness-device.exe", self.release, True),
             (self.release / "nsis" / "x86" / "Plugins" / "x86-unicode" / "System.dll", self.release, True),
             (plugins / "Other.dll", self.release, True),
+            # Signed only beside a plugin DLL: Tauri never hands it.
+            (plugins / "LangDLL.dll", self.release, True),
             (plugins / "additional" / "System.dll", self.release, True),
             (installers / "Harness Device_0.1.13_x86-setup.exe", self.release, True),
             (installers / "Harness Device_latest_x64-setup.exe", self.release, True),
