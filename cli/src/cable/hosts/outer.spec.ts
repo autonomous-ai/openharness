@@ -73,4 +73,18 @@ describe('the first lookup that finds an app', () => {
   it('undefined at once when neither is nested', () => {
     expect(firstOuter(lookup(() => undefined), lookup(() => undefined))(hints, 42)).toBeUndefined()
   })
+
+  it('the answer says the multiplexer that made the agent\'s terminal: the first lookup\'s, else the second\'s', async () => {
+    type Place = NonNullable<Awaited<Answer>>
+    const of = (first: Place, second: Place) =>
+      firstOuter(lookup(() => Promise.resolve(first)), lookup(() => Promise.resolve(second)))(hints, 42)
+    // tmux inside a herdr pane: herdr's server made no terminal of the caller's, tmux's did.
+    expect(await of({}, { app: 'iterm', tty: '/dev/ttys002', pid: 4300, nest: 'tmux' })).toEqual({ app: 'iterm', tty: '/dev/ttys002', pid: 4300, nest: 'tmux' })
+    // Detached: no client, still tmux's pane.
+    expect(await of({}, { nest: 'tmux' })).toEqual({ nest: 'tmux' })
+    // herdr inside the person's tmux: herdr's client is in no app, its process alone.
+    expect(await of({ pid: 4400, nest: 'herdr' }, {})).toEqual({ pid: 4400, nest: 'herdr' })
+    // Zellij's answer carries none.
+    expect(await of({}, { app: 'ghostty' })).toEqual({ app: 'ghostty' })
+  })
 })
