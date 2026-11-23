@@ -411,6 +411,13 @@ describe("WezTerm's focused pane (docs/plans/2026-11-23-dial-wezterm-kitty-focus
 
   const withPane = (focused_pane_id: unknown) => answer({ ...recordedClient, focused_pane_id })
   const withIdle = (idle_time: unknown) => answer({ ...recordedClient, idle_time })
+  // Unrecorded: WezTerm's ClientInfo.focused_pane_id is an Option, null for a client with no pane yet (`wezterm connect`).
+  it('a client with no focused pane is passed over; with none other, null', async () => {
+    const idleLeast = { ...recordedClient, focused_pane_id: null, idle_time: { secs: 0, nanos: 0 } }
+    const { adapter } = focusRecorder([answer(idleLeast, recordedClient), withPane(null)])
+    expect(await adapter.focusedPane()).toBe('0')
+    expect(await adapter.focusedPane()).toBeNull()
+  })
   it.each<[string, { code: number | null; stdout: string }]>([
     ['no GUI (exit 1)', { code: clients.noGui.exitCode, stdout: clients.noGui.stdout }],
     ['a timeout (exit null)', { code: null, stdout: '' }],
