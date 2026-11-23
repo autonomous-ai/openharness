@@ -32,12 +32,12 @@ import { hooks as codexHooks } from '../../src/engines/codex/hookContract.js'
 import { readAdoptedHomes } from '../../src/engines/kit/homeAdoption.js'
 import { OUTSIDE_HOME } from '../../src/lib/log.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
-import { endRootProcesses, seenNow } from '../../src/testing/rootProcesses.js'
+import { endRootProcesses, seenNow, stillRunning } from '../../src/testing/rootProcesses.js'
 import { assertSocketPathFits } from '../../src/testing/socketPathRoom.js'
-import { alive } from '../../src/testing/spawnedRuns.js'
+import { alive, startTimes } from '../../src/testing/spawnedRuns.js'
 import { assertNodeAlone } from '../../src/testing/testNode.js'
 import { SYSTEM_FOLDERS } from '../../src/testing/testPath.js'
-import { forgetGroup, forgetTmux, leaderGone, watchGroup, watchTmux } from './reaper.js'
+import { forgetGroup, forgetOwn, forgetTmux, leaderGone, watchGroup, watchOwn, watchTmux } from './reaper.js'
 
 const exec = promisify(execFile)
 const here = dirname(fileURLToPath(import.meta.url))
@@ -350,6 +350,9 @@ export class IsolatedDaemon {
     /** What the test's tree held each time a stop or a kill was about to end this daemon, by start time (see): what the
      *  close's sweep still knows to be the test's once launchd has it. A daemon beside another shares that one's. */
     private readonly seen: Map<number, string>,
+    /** What the harness started for this daemon's test that can leave the test's tree, by its start time (own). A daemon
+     *  beside another shares that one's. */
+    private readonly owned: Map<number, string>,
   ) {}
 
   static async create(options: DaemonOptions = {}): Promise<IsolatedDaemon> {
@@ -567,7 +570,7 @@ esac
       TERMINAL_RECONCILE_INTERVAL_MS: '5000',
     }
     const env = daemonEnvironment(tmux.env, { ...settings, ...options.env })
-    return new IsolatedDaemon(root, tmux, port, env, options, config, opensLog, Object.keys(settings), dirs.bin, beside?.seen ?? new Map())
+    return new IsolatedDaemon(root, tmux, port, env, options, config, opensLog, Object.keys(settings), dirs.bin, beside?.seen ?? new Map(), beside?.owned ?? new Map())
   }
 
   /** What the fake engines noted of every hook they ran (fakeEngine.mjs `hookLog`); kept once the root is gone. */
@@ -617,16 +620,36 @@ esac
    *  test runs on a Node with no name link, so `ps` shows `node` for every one of them. */
   servicePids(name: string): number[] { return loggedServicePids(this.output, name, this.pid, processParents()) }
 
-  /** Where the test's own process tree starts (spawnedRuns.ts processTree): this worker, whose children the daemon's
-   *  masters are, and the root's tmux server, which daemonizes to launchd, by its pid asked of its own socket. */
-  async treeRoots(): Promise<number[]> {
-    const server = Number(await this.tmux.run('display-message', '-p', '#{pid}').catch(() => ''))
-    return [process.pid, ...(server > 1 ? [server] : [])]
+  /**
+   * [pid], a process the harness just started for this daemon's test that can leave the test's tree before anything sees
+   * it (a fake app's tab, the fake iTerm2's server, herdr's server), noted by its start time: the close's sweep and the
+   * worker's reaper end it, and what descends from it, while it runs as itself, though launchd has it by then. Its start
+   * alone, which an exec keeps: a tab's says its pid before it execs, and Linux's name moves as Node starts.
+   */
+  own(pid: number): void {
+    const started = startTimes([pid]).get(pid)
+    // Gone already: nothing of it is left to end.
+    if (started === undefined) return
+    this.owned.set(pid, started)
+    watchOwn(pid, started)
   }
 
-  /** What the test's tree holds now, noted by start time before a stop or a kill ends anything (seenNow). */
+  /** Where the test's own process tree starts (spawnedRuns.ts processTree): this worker, whose children the daemon's
+   *  masters are, the root's tmux server, which daemonizes to launchd, by its pid asked of its own socket, and what the
+   *  harness noted it started (own) that still runs as itself. */
+  async treeRoots(): Promise<number[]> {
+    const server = Number(await this.tmux.run('display-message', '-p', '#{pid}').catch(() => ''))
+    return [process.pid, ...(server > 1 ? [server] : []), ...stillRunning(this.owned)]
+  }
+
+  /** What the test's tree holds now, noted by start time before a stop or a kill ends anything (seenNow). A table that
+   *  cannot be read stops neither: it is said, and the close's sweep goes by what was seen before and what was noted. */
   private async see(): Promise<void> {
-    for (const [pid, started] of seenNow(await this.treeRoots())) this.seen.set(pid, started)
+    try {
+      for (const [pid, started] of seenNow(await this.treeRoots())) this.seen.set(pid, started)
+    } catch (error) {
+      console.error(`[e2e sweep] could not see the test's processes before ending the daemon: ${(error as Error).message}`)
+    }
   }
 
   /** `ready: 'port'` returns as soon as the port answers, the way a client sees a restarting daemon;
@@ -888,9 +911,11 @@ esac
       // The census of 2026-11-14 found 14 fake `codex app-server` pairs outliving their runs: a Codex rate-limit read
       // runs in a process group of its own (lib/codexRateLimits.ts), out of reach of the daemon's groups. Ended before
       // the root is removed, so nothing that names it writes into it as it goes.
-      left = await endRootProcesses(this.root, this.seen)
+      left = await endRootProcesses(this.root, this.seen, this.owned)
       await this.tmux.close()
       forgetTmux(this.tmux.socket)
+      for (const pid of this.owned.keys()) forgetOwn(pid)
+      this.owned.clear()
     }
     if (escaped) throw escaped
     if (left.length) throw new Error(`a daemon under test left processes that would not end (root ${this.root}): ${left.join('; ')}`)

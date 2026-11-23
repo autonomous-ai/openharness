@@ -17,14 +17,14 @@ import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, readdir, readlink, writeFile } from 'node:fs/promises'
 import { createConnection } from 'node:net'
 import { userInfo } from 'node:os'
-import { dirname, isAbsolute, join, relative } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { promisify } from 'node:util'
 import { observedAgentId } from '../../src/cable/hosts/observed.js'
 import { resolveBinaryOnPath } from '../../src/lib/binaryOnPath.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
 import { writeExecutable } from '../../src/testing/executableFixture.js'
 import { RECORDED_HERDR } from '../../src/testing/recordedHerdr.js'
-import { processTable, processTree } from '../../src/testing/spawnedRuns.js'
+import { comms, processTable, processTree } from '../../src/testing/spawnedRuns.js'
 import { type IsolatedDaemon, until } from './daemon.js'
 import { dialHost } from './dialHosts.js'
 import { gone, itermServerPath, tabUnder, type FakeApp } from './outsideAgent.js'
@@ -148,12 +148,12 @@ export function launchLost(screen: string, line: string): boolean {
   return !flat(screen).includes(flat(line))
 }
 
-/** [parent]'s child named [name], by pgrep, which prints no other process; undefined while it has none. */
+/** [parent]'s child named [name]: [parent]'s children from each process's pid and parent, then the path each of them
+ *  alone was started from, by its pid; never pgrep, which reads every process's name. Undefined while it has none. */
 export async function childNamed(parent: number, name: string): Promise<number | undefined> {
-  const { stdout } = await execFileAsync('/usr/bin/pgrep', ['-P', String(parent), '-x', name])
-    .catch((error: { stdout?: string }) => ({ stdout: error.stdout ?? '' }))
-  const [pid] = stdout.split('\n').filter(Boolean)
-  return pid ? Number(pid) : undefined
+  const children = processTable().filter((row) => row.ppid === parent).map((row) => row.pid)
+  const paths = comms(children)
+  return children.find((pid) => basename(paths.get(pid) ?? '') === name)
 }
 
 /** A tab of a fake [app] running [argv] under [env] (tabUnder), with its tty; closed should that not be read. */
@@ -213,8 +213,9 @@ export class PrivateHerdr {
     const server = spawn(herdrBinary!, ['server'], {
       cwd: d.env.HOME, env: { ...d.env, ...env, XDG_CONFIG_HOME: config }, stdio: 'ignore', ...ownProcessGroup(),
     })
-    // Ended by the worker's reaper should the worker go before `stop`.
+    // Ended by the worker's reaper should the worker go before `stop`, and by the daemon's close should it go unstopped.
     watchGroup(server.pid!)
+    d.own(server.pid!)
     let exited: string | undefined
     server.once('exit', (code, signal) => {
       leaderGone(server.pid!)
@@ -240,8 +241,10 @@ export class PrivateHerdr {
         await tab.close()
         throw error
       })
-    // Ended by the worker's reaper should the worker go before `stop`: it leads the session its client started it in.
+    // Ended by the worker's reaper should the worker go before `stop`: it leads the session its client started it in. And
+    // by the daemon's close should it go unstopped: launchd's once its client ends, only the note keeps it the test's.
     watchGroup(pid)
+    d.own(pid)
     // Each read now, while both are this test's: the client has run herdr since it started its server.
     let identities: { server?: string; client?: string }
     try {

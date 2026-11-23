@@ -16,8 +16,8 @@ const editor = await import('../../e2e/harness/appEvalEditor.js' as string) as {
     deliver: (d: { path: string; target: string | null; text: string }, at: number) => void): (printed: Record<string, unknown>, at: number) => void
   editorHints(world: { platform: Platform; scenario: Scenario }, s: SessionDef): Record<string, string>
 }
-/** The parts of a daemon a Cursor agent's start reads. */
-interface CursorDaemon { root: string; projectsDir: string; env: NodeJS.ProcessEnv }
+/** The parts of a daemon a Cursor agent's start uses: its root, projects and home, and its note of what its tab starts (own). */
+interface CursorDaemon { root: string; projectsDir: string; env: NodeJS.ProcessEnv; own(pid: number): void }
 interface CursorAgent { readonly pid: number; readonly shellPid?: number; readonly transcriptPath: string; close(): Promise<void>; killTab(): void }
 const cursor = await import('../../e2e/harness/cursorOutside.js' as string) as {
   hookRun(codexLine: string, env: NodeJS.ProcessEnv, hints: Record<string, string>, event: string,
@@ -162,7 +162,7 @@ describe("tier B's Cursor agents' processes", () => {
   /** A daemon's root, its projects and its home, in a throwaway folder. */
   const daemon = (): CursorDaemon => {
     root = mkdtempSync(join(tmpdir(), 'tier-b-cursor-'))
-    return { root, projectsDir: join(root, 'projects'), env: { HOME: join(root, 'home'), CODEX_HOME: join(root, 'codex'), PATH: process.env.PATH } }
+    return { root, projectsDir: join(root, 'projects'), env: { HOME: join(root, 'home'), CODEX_HOME: join(root, 'codex'), PATH: process.env.PATH }, own: () => {} }
   }
   const gone = (pid: number): boolean => {
     try { process.kill(pid, 0) } catch { return true }

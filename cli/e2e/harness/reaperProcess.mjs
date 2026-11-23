@@ -9,13 +9,16 @@
  * still has registered gets SIGTERM, and SIGKILL for whatever is left after the grace; every tmux server it registered is
  * stopped (tmux daemonizes into a session of its own); then, once its throwaway root is known to be a test's, every process
  * of the worker's tree that still names that root or works in it is ended, and the root is removed, read-only folders and
- * all. The worker's tree is what its groups and its tmux servers held when it went, seen by start time before anything is
- * ended: once they are gone, what they started is launchd's. Of the machine's other processes nothing is read but each
+ * all. The worker's tree is what its groups, its tmux servers and the processes the harness noted it started held when it
+ * went, seen by start time before anything is ended: once they are gone, what they started is launchd's. Each process
+ * the harness noted (IsolatedDaemon.own), launchd's from the moment the worker went if not before, is ended with what
+ * descends from it while it runs as itself, by its start time. Of the machine's other processes nothing is read but each
  * one's pid, parent and group: the person's own run on the same computer (PM, 2026-11-23).
  *
  * The worker's lines on stdin, one JSON object each: {"group":N} a process group to end, {"leaderGone":N} its leader exited,
  * {"forget":N} it was closed; {"tmux":socket,"root":folder} a tmux server to stop, then what still names its root or works
- * in it to end and the root to remove, {"forgetTmux":socket} they were.
+ * in it to end and the root to remove, {"forgetTmux":socket} they were; {"own":N,"started":lstart} a process the harness
+ * started at that time, {"forgetOwn":N} it was closed.
  */
 import { execFileSync, spawnSync } from 'node:child_process'
 import { chmodSync, lstatSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync } from 'node:fs'
@@ -31,6 +34,8 @@ const GRACE_MS = 15_000
 const groups = new Map()
 /** tmux socket → the throwaway root it is in. */
 const tmuxServers = new Map()
+/** pid of a process the harness started → when it started, as `ps -o lstart=` printed it under C's dates. */
+const owned = new Map()
 // Its stderr is the dead worker's: with nobody reading it, a write fails with EPIPE, which must not end the reaping.
 process.stderr.on('error', () => {})
 
@@ -109,6 +114,13 @@ function psOf(pids, field) {
   }))
 }
 
+/** Of [started] (pid → its start time), what still runs as the same process: a pid that started at another time is
+ *  another's (src/testing/rootProcesses.ts stillRunning). */
+function stillRunning(started) {
+  const now = psOf([...started.keys()], 'lstart')
+  return [...started].filter(([pid, at]) => now.get(pid) === at).map(([pid]) => pid)
+}
+
 /** The pid of the tmux server at [socket], asked of that server alone; none when it does not answer. */
 function serverPid(socket) {
   try {
@@ -120,9 +132,9 @@ function serverPid(socket) {
 }
 
 /**
- * Each process the worker's registered groups and tmux servers hold now, by its start time: seen before anything is
- * ended, since once they are gone what they started is launchd's, and only this keeps it the worker's. Empty, and one
- * line logged, when ps cannot run.
+ * Each process the worker's registered groups, its tmux servers and the processes the harness noted it started hold
+ * now, by its start time: seen before anything is ended, since once they are gone what they started is launchd's, and
+ * only this keeps it the worker's. Empty, and one line logged, when ps cannot run.
  */
 function seenNow() {
   let table
@@ -133,8 +145,32 @@ function seenNow() {
     return new Map()
   }
   const left = [...groups.keys()].filter(ours)
-  const roots = [...table.filter((row) => left.includes(row.pgid)).map((row) => row.pid), ...[...tmuxServers.keys()].flatMap(serverPid)]
+  const roots = [...table.filter((row) => left.includes(row.pgid)).map((row) => row.pid), ...[...tmuxServers.keys()].flatMap(serverPid),
+    ...stillRunning(owned)]
   return psOf(processTree(table, roots).map((row) => row.pid), 'lstart')
+}
+
+/**
+ * SIGKILL every process the harness noted it started that still runs as itself, by its start time, and what descends from
+ * it, whatever it names or its parent is now, and wait, at most 5 s, until none is left: launchd's once the worker went,
+ * the fake iTerm2's server before (outsideAgent.ts), herdr's server its client started (herdrServer.ts).
+ */
+async function endOwned() {
+  const still = stillRunning(owned)
+  if (!still.length) return
+  let tree
+  try {
+    tree = processTree(processTable(), still).map((row) => row.pid).filter((pid) => ![process.pid, process.ppid, 1].includes(pid))
+  } catch (error) {
+    console.error(`[e2e reaper] could not list what the worker's own processes started: ${error.code ?? error.message}`)
+    tree = still
+  }
+  console.error(`[e2e reaper] the test worker ended with ${tree.length} processes it started, or theirs, still running: SIGKILL`)
+  for (const pid of tree) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
+  const deadline = Date.now() + 5_000
+  while (tree.some(exists) && Date.now() < deadline) await sleep(100)
+  const left = tree.filter(exists)
+  if (left.length) console.error(`[e2e reaper] pids ${left.join(', ')} the worker started outlived SIGKILL by 5000 ms`)
 }
 
 /**
@@ -186,8 +222,7 @@ function workingFolders(pids) {
  * leads its own group (reaper.ts), so no match's group is this one's.
  */
 async function endRootProcesses(root, seen) {
-  const now = psOf([...seen.keys()], 'lstart')
-  const still = [...seen].filter(([pid, started]) => now.get(pid) === started).map(([pid]) => pid)
+  const still = stillRunning(seen)
   if (!still.length) return
   let tree
   try {
@@ -256,6 +291,7 @@ async function reap() {
     console.error(`[e2e reaper] process group ${pgid} outlived SIGTERM by ${GRACE_MS} ms: SIGKILL`)
     signal(pgid, 'SIGKILL')
   }
+  await endOwned()
   for (const [socket, root] of tmuxServers) {
     // Stopped first, its panes with it, so the sweep meets only what they left, which was seen before. Swept before the
     // removal, so nothing that names the root writes into it as it goes.
@@ -278,5 +314,7 @@ createInterface({ input: process.stdin })
     else if (message.forget) groups.delete(message.forget)
     else if (message.tmux) tmuxServers.set(message.tmux, message.root)
     else if (message.forgetTmux) tmuxServers.delete(message.forgetTmux)
+    else if (message.own && typeof message.started === 'string') owned.set(message.own, message.started)
+    else if (message.forgetOwn) owned.delete(message.forgetOwn)
   })
   .on('close', () => { void reap() })

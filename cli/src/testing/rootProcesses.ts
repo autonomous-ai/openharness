@@ -16,7 +16,10 @@
  * Only the test's own processes are judged, never the person's beside them on the same computer (PM, 2026-11-23): the
  * tree of the worker and the daemon's tmux server (spawnedRuns.ts processTree), seen by start time before the daemon is
  * stopped (seenNow), since once its master and its tmux server are gone what they started is launchd's. Of the
- * machine's other processes nothing is read but each one's pid, parent and group.
+ * machine's other processes nothing is read but each one's pid, parent and group. And what the harness itself starts that
+ * can leave that tree before anything sees it (the fake iTerm2's server, launchd's from its start or once the fake
+ * iTerm2 ends; herdr's server its client started; a fake app's tab) is noted as it starts, by its pid and start time
+ * (IsolatedDaemon.own): it and what descends from it are the test's, whatever they name, while it runs as itself.
  *
  * A match that leads a process group is ended with its whole group: the fake engine renames its own title, so the
  * fake Codex's child (`node …/fakeEngine.mjs app-server`) never names the root and is reached only through its group.
@@ -110,11 +113,12 @@ export function workingFolders(pids: readonly number[], uid: number = process.ge
 }
 
 /**
- * What in [table], rows of the test's own tree, names [root], or works in it by [folders] (pid to working folder), seen
- * from the process [self]: itself, its parent and pid 1 are never matched. A process with no folder in [folders] is
- * judged by its command line.
+ * What in [table], rows of the test's own tree, names [root], or works in it by [folders] (pid to working folder), or is
+ * one of [owned] (what descends from what the harness noted it started), seen from the process [self]: itself, its
+ * parent and pid 1 are never matched. A process with no folder in [folders] is judged by its command line.
  */
-export function rootProcesses(root: string, table: readonly NamedRow[], self: number = process.pid, folders: ReadonlyMap<number, string> = new Map()): RootProcesses {
+export function rootProcesses(root: string, table: readonly NamedRow[], self: number = process.pid,
+  folders: ReadonlyMap<number, string> = new Map(), owned: ReadonlySet<number> = new Set()): RootProcesses {
   // Only isolatedTmux's own folder, unique to its test. A wrong one (empty, `/`, a TMPDIR) would name other runs'
   // processes or every one on the machine, and their whole groups would be SIGKILLed.
   if (!isAbsolute(root) || !basename(root).startsWith('htmux-')) throw notATestRoot(root)
@@ -124,7 +128,7 @@ export function rootProcesses(root: string, table: readonly NamedRow[], self: nu
     const folder = folders.get(row.pid)
     return row.command.includes(`${root}/`) || (folder !== undefined && inside(folder, root))
   }
-  const matches = table.filter((row) => named(row) && !spared.has(row.pid))
+  const matches = table.filter((row) => (owned.has(row.pid) || named(row)) && !spared.has(row.pid))
   // A caller missing from the table leaves its own group unknown: then no group is signalled whole.
   const leads = (row: NamedRow) => caller !== undefined && row.pid === row.pgid && row.pgid !== caller.pgid
   const groups = matches.filter(leads).map((row) => row.pgid)
@@ -133,10 +137,12 @@ export function rootProcesses(root: string, table: readonly NamedRow[], self: nu
   return { groups, pids, all }
 }
 
-/** [roots]'s tree now, and what of it names [root] or works in it (rootProcesses), seen from this process. */
-function matched(root: string, roots: Iterable<number>): RootProcesses & { rows: NamedRow[] } {
+/** [roots]'s tree now, and what of it names [root] or works in it, or descends from [owned] (rootProcesses), seen from
+ *  this process. */
+function matched(root: string, roots: Iterable<number>, owned: readonly number[] = []): RootProcesses & { rows: NamedRow[] } {
   const rows = namedTree(roots)
-  return { rows, ...rootProcesses(root, rows, process.pid, workingFolders(rows.map((row) => row.pid))) }
+  const theirs = new Set(processTree(rows, owned).map((row) => row.pid))
+  return { rows, ...rootProcesses(root, rows, process.pid, workingFolders(rows.map((row) => row.pid)), theirs) }
 }
 
 /** The processes of [roots]'s tree under [root] now, each with its command line: what tier B counts as left running. */
@@ -151,20 +157,24 @@ export function seenNow(roots: Iterable<number>): Map<number, string> {
   return startTimes(processTree(processTable(), roots).map((row) => row.pid))
 }
 
-/** Of what was [seen], what still runs as the same process: a pid that started at another time is another's. */
+/** Of what was [seen], or noted as the harness started it (IsolatedDaemon.own), what still runs as the same process: a
+ *  pid that started at another time is another's. */
 export function stillRunning(seen: ReadonlyMap<number, string>): number[] {
   const now = startTimes([...seen.keys()])
   return [...seen].filter(([pid, started]) => now.get(pid) === started).map(([pid]) => pid)
 }
 
 /**
- * SIGKILL every process of the test's tree that names [root] or works in it, once [root] is known to be a test's, and
- * wait, at most [ms], until none of them is alive: the tree of this worker and of what was [seen] (seenNow) that still
- * runs. Returns those still alive, as `pid <n> <command>`; empty when none is.
+ * SIGKILL every process of the test's tree that names [root] or works in it, and what descends from what the harness
+ * [owned] (IsolatedDaemon.own) whatever it names, once [root] is known to be a test's, and wait, at most [ms], until none
+ * of them is alive: the tree of this worker and of what was [seen] (seenNow) or [owned] that still runs as itself.
+ * Returns those still alive, as `pid <n> <command>`; empty when none is.
  */
-export async function endRootProcesses(root: string, seen: ReadonlyMap<number, string>, ms = 5_000): Promise<string[]> {
+export async function endRootProcesses(root: string, seen: ReadonlyMap<number, string>, owned: ReadonlyMap<number, string> = new Map(),
+  ms = 5_000): Promise<string[]> {
   assertTestRoot(root)
-  const { rows, groups, pids, all } = matched(root, [process.pid, ...stillRunning(seen)])
+  const mine = stillRunning(owned)
+  const { rows, groups, pids, all } = matched(root, [process.pid, ...stillRunning(seen), ...mine], mine)
   for (const pgid of groups) { try { process.kill(-pgid, 'SIGKILL') } catch { /* the group is gone */ } }
   for (const pid of pids) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
   // Waited for asynchronously: a child of this process stays a zombie, alive to a signal, until Node's event loop reaps it.

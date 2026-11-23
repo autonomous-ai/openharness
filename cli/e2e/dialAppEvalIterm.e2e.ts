@@ -11,11 +11,13 @@
  * iTerm2's bundle and its server are in the daemon's throwaway home, herdr's config is in it too, tmux's socket is in its
  * root, and the daemon's table holds no herdr outside this worker's tree or this daemon's own fake iTerm2 server
  * (ownHerdrsOnly). What the harness reads of processes: of its own, by pid, their parent, start time, path (`comm`) and
- * tty, the herdr client's child named herdr (`pgrep -P -x`) and that server's sockets (`lsof -p`); of the whole table,
- * each one's pid, parent and group alone, to tell this worker's tree from the rest (othersNow) and to find the devices
- * again after their restart; and, at every tier B scenario's cost and every daemon's close, the command line and working
- * folder of the processes of the test's own tree alone, by pid, matched against the daemon's root (appEvalCost.ts,
- * testing/rootProcesses.ts). Never another process's environment. The network guard runs in this process and in every
+ * tty, the path of each child of herdr's client, to find its server, and that server's sockets (`lsof -p`); of the
+ * whole table, each one's pid, parent and group alone, to tell this worker's tree from the rest (othersNow), to find the
+ * devices again after their restart and a client's children; and, at every tier B scenario's cost and every daemon's
+ * close, the command line and working folder of the processes of the test's own tree alone, by pid, matched against the
+ * daemon's root (appEvalCost.ts, testing/rootProcesses.ts), that tree reaching what the harness started that launchd has
+ * now, the fake iTerm2's server and herdr's, by the start time noted as each started (IsolatedDaemon.own). Never another
+ * process's environment. The network guard runs in this process and in every
  * process of each daemon.
  */
 import { execFile } from 'node:child_process'

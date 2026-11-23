@@ -171,18 +171,22 @@ export async function openTab(d: IsolatedDaemon, cwd: string, env: NodeJS.Proces
   const appPid = (launchedFrom ?? app) === 'iterm' ? tab.pid : undefined
   tab.stdout!.resume()
   // The tab's child's pid and, with a shell, the engine's line come from two processes, in either order; iTerm2's
-  // server's line too.
-  const { child, engine } = await new Promise<{ child: number; engine?: number }>((resolve, reject) => {
+  // server's too, which it says before it becomes the server and starts what says the child's.
+  const { child, engine, servers } = await new Promise<{ child: number; engine?: number; servers: number[] }>((resolve, reject) => {
     let said = ''
     tab.stderr!.on('data', (chunk: Buffer) => {
       said += chunk.toString('utf8')
       const lines = said.split('\n').slice(0, -1)
       const engine = lines.find((line) => line.startsWith('engine '))
       const child = lines.find((line) => PID_LINE.test(line))
-      if (child && (!shell || engine)) resolve({ child: Number(child), engine: engine ? Number(engine.slice('engine '.length)) : undefined })
+      const servers = lines.flatMap((line) => line.startsWith('server ') ? [Number(line.slice('server '.length))] : [])
+      if (child && (!shell || engine)) resolve({ child: Number(child), engine: engine ? Number(engine.slice('engine '.length)) : undefined, servers })
     })
     tab.once('exit', (code) => reject(new Error(`the terminal tab exited (${code}): ${said}`)))
   })
+  // Noted for the close's sweep and the reaper: the fake iTerm2's server is launchd's once that app ends, and the tab's
+  // own process once the worker does.
+  for (const pid of [tab.pid!, ...servers]) d.own(pid)
   return shell ? { process: tab, pid: engine!, shellPid: child, appPid } : { process: tab, pid: child, appPid }
 }
 
@@ -277,6 +281,9 @@ export async function tabUnder(d: IsolatedDaemon, app: FakeApp, argv: readonly s
     })
     tab.once('exit', (code) => reject(new Error(`the terminal tab exited (${code}): ${said}`)))
   })
+  // Noted for the close's sweep and the reaper: the fake iTerm2's server is launchd's once that app ends (relaunchIterm),
+  // and the app once the worker does.
+  for (const noted of [tab.pid!, ...(server === undefined ? [] : [server])]) d.own(noted)
   return {
     pid,
     ...(iterm ? { appPid: tab.pid } : {}),
@@ -331,6 +338,8 @@ async function tabUnderItermServer(d: IsolatedDaemon, argv: readonly string[], e
     })
     tab.stderr!.once('close', () => reject(new Error(`the terminal tab exited: ${said}`)))
   })
+  // launchd's from its start: only the note keeps it the test's for the close's sweep and the reaper.
+  d.own(server)
   await left
   return {
     pid,
