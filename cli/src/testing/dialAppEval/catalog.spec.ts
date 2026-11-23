@@ -39,13 +39,29 @@ describe('the catalog', () => {
     expect(MAIN.every((s) => !s.heldOut)).toBe(true)
   })
 
-  it('the held out are CH1-CH3, XH1-XH3, VH1-VH4, UH1-UH3 and OH1-OH4: 17 of 108, VS Code 4 of 19, Cursor 3 of 17, Orca 4 of 21', () => {
+  it('the held out are CH1-CH3, XH1-XH3, VH1-VH4, UH1-UH3, OH1-OH4 and IH1-IH5: 22 of 113, VS Code 4 of 19, Cursor 3 of 17, Orca 4 of 21, iTerm2 5 of 26', () => {
     expect(HELD_OUT.map((s) => s.id)).toEqual(['CH1', 'CH2', 'CH3', 'XH1', 'XH2', 'XH3', 'VH1', 'VH2', 'VH3', 'VH4', 'UH1', 'UH2', 'UH3',
-      'OH1', 'OH2', 'OH3', 'OH4'])
+      'OH1', 'OH2', 'OH3', 'OH4', 'IH1', 'IH2', 'IH3', 'IH4', 'IH5'])
     expect(HELD_OUT.every((s) => s.heldOut)).toBe(true)
-    expect(ALL).toHaveLength(108)
+    expect(ALL).toHaveLength(113)
     const of = (app: string) => [HELD_OUT.filter((s) => s.app === app).length, ALL.filter((s) => s.app === app).length]
-    expect([of('vscode'), of('cursor'), of('orca')]).toEqual([[4, 19], [3, 17], [4, 21]])
+    expect([of('vscode'), of('cursor'), of('orca'), of('iterm')]).toEqual([[4, 19], [3, 17], [4, 21], [5, 26]])
+  })
+
+  it('IH1 is D5 alone; IH3 tier A only', () => {
+    expect(byId('IH1').dims.filter((d) => d !== 'D8')).toEqual(['D5'])
+    expect(byId('IH3').tiers).toEqual(['a'])
+  })
+
+  it('IH4\'s herdr row gives no session', () => {
+    const agents = byId('IH4').sessions.filter((d) => !d.ghost)
+    expect(agents.map((d) => [d.key, d.place, d.herdrSession])).toEqual([['c', 'herdr', false]])
+  })
+
+  it('IH5\'s Codex runs in tmux under the daemon\'s CODEX_HOME', () => {
+    // No home of its own: the daemon's, which its transcript and its recap are read from.
+    const agents = byId('IH5').sessions.filter((d) => !d.ghost)
+    expect(agents.map((d) => [d.key, d.engine, d.place, d.codexHome])).toEqual([['b', 'codex', 'tmux', undefined]])
   })
 
   it('VH1 and UH3 are D5 alone, UH1 macOS only', () => {
@@ -247,8 +263,8 @@ describe('the catalog', () => {
     expect(byId('C8').steps.filter((s) => s.kind === 'tap' || s.kind === 'swipe')).toEqual([])
   })
 
-  it('C3, CH1, CH2, XH1, X12, V2 and O16 are tier A only, V12 tier B only, every other scenario (C10, C11, X7, C8, X9, CH3 and XH3 among them) runs in both', () => {
-    const onlyA = ['C3', 'CH1', 'CH2', 'XH1', 'X12', 'V2', 'O16']
+  it('C3, CH1, CH2, XH1, X12, V2, O16 and IH3 are tier A only, V12 tier B only, every other scenario (C10, C11, X7, C8, X9, CH3 and XH3 among them) runs in both', () => {
+    const onlyA = ['C3', 'CH1', 'CH2', 'XH1', 'X12', 'V2', 'O16', 'IH3']
     const onlyB = ['V12']
     for (const s of ALL) expect(s.tiers, s.id).toEqual(onlyA.includes(s.id) ? ['a'] : onlyB.includes(s.id) ? ['b'] : ['a', 'b'])
   })
@@ -347,7 +363,9 @@ describe('the catalog', () => {
     // a and its wait after the echo, I10's and I11's rests after the select, I13's rests after the detach and the attach,
     // I14's time past the devices' next look after herdr starts again, I15's time after the relaunch and its rest after
     // the first tap, I16's long turn, I17's turn, I20's rest on c and I21's rest and its time unplugged; VH1's rest on a,
-    // UH3's voice 200 ms after the prompt, OH1's rest on a and OH2's voice 200 ms after the focus.
+    // UH3's voice 200 ms after the prompt, OH1's rest on a and OH2's voice 200 ms after the focus; IH1's voice 200 ms
+    // after the select, IH2's rests after the attach and each select, its two turns and the pause between them, IH3's
+    // agents a second apart, IH4's turn (turned) and IH5's turn.
     const starts = (id: string, n: number): string[] => Array<string>(n - 1).fill(`${id} 1000`)
     expect(waits('own')).toEqual(['C6 5000', 'C9 1000', 'C9 3500', 'C10 2000', 'C11 1000', 'C11 3000', 'X3 5000', 'X8 2000',
       'X11 300', 'X11 300', ...starts('V1', 4), ...starts('V2', 20), ...starts('V3', 2), ...starts('V4', 2), ...starts('V5', 2),
@@ -366,7 +384,9 @@ describe('the catalog', () => {
       ...starts('I18', 2), ...starts('I19', 2), ...starts('I20', 2), 'I20 1000', ...starts('I21', 3), 'I21 1000', 'I21 3000',
       'CH3 1000', 'XH3 200',
       ...starts('VH1', 2), 'VH1 1000', ...starts('VH3', 3), ...starts('UH3', 2), 'UH3 200',
-      'OH1 1000', 'OH2 200'])
+      'OH1 1000', 'OH2 200',
+      ...starts('IH1', 2), 'IH1 200', ...starts('IH2', 2), 'IH2 1000', 'IH2 1000', 'IH2 2000', 'IH2 1000', 'IH2 1000', 'IH2 2000',
+      ...starts('IH3', 20), 'IH4 2000', 'IH5 2000'])
     expect(new Set(waits('condition').map((w) => w.split(' ')[1]))).toEqual(new Set(['10000']))
     // The person reading the face once the list is there.
     expect(new Set(waits('reading').map((w) => w.split(' ')[1]))).toEqual(new Set(['1000']))
@@ -376,13 +396,13 @@ describe('the catalog', () => {
   it('an input on the dial or the app comes at least 1 s after its listing, and any step at least 1 s after an input', () => {
     // Faster, it lands in the same instant the list arrives, inside the devices' echo window after a push, or inside a
     // swipe's rest, whose open makes the devices drop the next title as its echo: no person does either. X11's switches
-    // 300 ms apart, XH3's voice 200 ms after the follow, OH2's 200 ms after the focus and I9's tab report 500 ms after the
-    // rest are those scenarios' point: only the input right after one of their own short waits is let through. The
-    // person's tab selection and pane moves in iTerm2 are inputs (docs/plans/2026-11-22-dial-eval-iterm2-plan.md,
-    // Decision 11).
+    // 300 ms apart, XH3's voice 200 ms after the follow, OH2's 200 ms after the focus, IH1's 200 ms after the select and
+    // I9's tab report 500 ms after the rest are those scenarios' point: only the input right after one of their own short
+    // waits is let through. The person's tab selection and pane moves in iTerm2 are inputs
+    // (docs/plans/2026-11-22-dial-eval-iterm2-plan.md, Decision 11).
     const inputs = new Set<Step['kind']>(['tap', 'swipe', 'voice', 'attach', 'thread', 'stroke', 'editor.focus', 'orca.focus',
       'iterm.select', 'tmux.selectPane', 'herdr.focus'])
-    const quick = new Set(['X11', 'XH3', 'OH2', 'I9'])
+    const quick = new Set(['X11', 'XH3', 'OH2', 'I9', 'IH1'])
     for (const s of ALL) {
       // Since the last listing, or the last input once there is one. A condition wait may end at once: it counts 0.
       let since: number | null = null
