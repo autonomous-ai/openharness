@@ -1369,4 +1369,53 @@ describe("Orca's commands on Windows", () => {
     expect(child.kill).toHaveBeenCalledWith('SIGTERM')
     expect(endProcessTree).not.toHaveBeenCalled()
   })
+
+  // Orca's installer does not put resources\bin on PATH: with no LOCALAPPDATA in their deps the devices found no CLI, and
+  // the dial's words, taps and focus failed for every Orca agent on Windows.
+  describe('installed only under LOCALAPPDATA', () => {
+    const LOCAL_APP_DATA = 'C:\\Users\\u\\AppData\\Local'
+
+    /** The real Windows deps, with a recording run, no orca on PATH and only the install's orca.exe there. */
+    function installed(over: Partial<OrcaReadDeps> = {}) {
+      vi.stubEnv('LOCALAPPDATA', LOCAL_APP_DATA)
+      const { calls, run } = recordingRun()
+      const deps: OrcaReadDeps = { ...orcaDeps('win32'), run, onPath: () => null, exists: (path) => path === ORCA_EXE, ...over }
+      return { calls, deps }
+    }
+
+    it('the real deps carry LOCALAPPDATA', () => {
+      vi.stubEnv('LOCALAPPDATA', LOCAL_APP_DATA)
+      expect(orcaDeps('win32').localAppData).toBe(LOCAL_APP_DATA)
+    })
+
+    it('the words are typed by its orca.exe', async () => {
+      const { calls, deps } = installed()
+      expect(await createOrcaActions(deps).send(HANDLE, 'hi')).toBe(true)
+      expect(calls.map((call) => call.file)).toEqual([ORCA_EXE])
+    })
+
+    it('a tap activates the worktree and switches by its orca.exe', async () => {
+      const { calls, deps } = installed()
+      const adapter = createOrcaAdapter(deps, { worktreeOf: () => 'w0', log: () => {}, switching: () => {} })
+      expect(await adapter.show({ adapter: 'orca', id: HANDLE }, 'a1')).toBe('ok')
+      expect(calls.map((call) => [call.file, call.args[0]])).toEqual([[ORCA_EXE, 'worktree'], [ORCA_EXE, 'terminal']])
+    })
+
+    it('the reads and the focus watch run its orca.exe', async () => {
+      const spawned: string[] = []
+      const { calls, deps } = installed({
+        mtime: () => ({ realPath: ORCA_EXE, mtimeMs: 1 }),
+        spawn: (file) => {
+          spawned.push(file)
+          return { onData: () => {}, exited: Promise.resolve(), kill: () => {} }
+        },
+      })
+      const orca = createOrcaReads(deps)
+      await orca.orcaWatchesFocus()
+      await orca.orcaTabs()
+      await orca.watchOrcaFocus(() => {}).ended
+      expect(calls.map((call) => call.file)).toEqual([ORCA_EXE, ORCA_EXE])
+      expect(spawned).toEqual([ORCA_EXE])
+    })
+  })
 })

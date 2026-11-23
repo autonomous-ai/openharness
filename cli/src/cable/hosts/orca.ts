@@ -47,6 +47,8 @@ export interface OrcaDeps {
   onPath(name: string, accept?: (path: string) => boolean): string | null
   exists(path: string): boolean
   platform: NodeJS.Platform
+  /** Windows' LOCALAPPDATA, under which Orca installs for one account. */
+  localAppData?: string
 }
 
 /** A long-lived child of a read: stdin ignored, stderr drained and never read. */
@@ -97,6 +99,7 @@ export function orcaDeps(platform: NodeJS.Platform = process.platform): OrcaRead
     onPath: (name, accept) => resolveBinaryOnPath(name, process.env, accept),
     exists: existsSync,
     platform,
+    localAppData: process.env.LOCALAPPDATA,
     spawn: (file, args) => {
       let child: ChildProcess
       try {

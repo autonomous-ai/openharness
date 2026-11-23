@@ -168,7 +168,7 @@ describe("tier A's Orca", () => {
   })
 
   it("the CLI is where each platform's installer puts it, its accept never called: the app's on macOS, orca-ide on Linux's "
-    + "PATH, and on Windows under LOCALAPPDATA, which the devices' Orca deps do not carry", () => {
+    + "PATH, and on Windows under LOCALAPPDATA, which the devices' Orca deps carry", () => {
     const linux = '/opt/eval/orca/resources/bin/orca-ide'
     for (const platform of PLATFORMS) {
       const { deps } = worldOn(platform, layout())
@@ -184,10 +184,8 @@ describe("tier A's Orca", () => {
       // Only Orca's install is there.
       expect([app, linux, exe, '/Applications/Orca.app/Contents/Resources/bin/orca'].filter((path) => deps.orca!.exists(path)), platform)
         .toEqual([installed])
-      // Orca's installer puts nothing on Windows' PATH: the devices' reads find no CLI there. Its homes' read, which
-      // carries LOCALAPPDATA (devices/orcaHomes.ts orcaHomesDeps), finds the install's.
-      expect(orcaBinary(deps.orca!), platform).toBe(platform === 'win32' ? null : installed)
-      expect(orcaBinary({ ...deps.orca!, localAppData: local }), platform).toBe(installed)
+      // Orca's installer puts nothing on Windows' PATH: the devices find its install's by LOCALAPPDATA.
+      expect(orcaBinary(deps.orca!), platform).toBe(installed)
       // The accept reads the real disk: the model's PATH never asks it.
       const accept = vi.fn(() => true)
       for (const name of ['orca', 'orca-ide']) deps.orca!.onPath(name, accept)
