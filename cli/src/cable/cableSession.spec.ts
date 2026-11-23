@@ -3269,6 +3269,40 @@ describe('cable session', () => {
       expect(firstList(port)).toEqual(['a1', 'a2'])
     } finally { await session.stop() }
   })
+
+  // The tick runs on while the greeting waits: its list lacked the app's rows, and with the agent the dial was on before
+  // the replug not on it, it landed the first agent over that record, which the greeting's push then kept.
+  it('no list goes while the greeting waits for what the attach started, so a replug lands on the agent it was on', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    const listed = [...AGENTS]
+    let land: (() => void) | undefined
+    const host = makeHost({
+      listAgentSnapshot: async () => ({ agents: listed, tab: '', total: listed.length, view: 'machine' as const }),
+      onDialAttached: () => new Promise<void>((resolve) => { land = resolve }),
+    })
+    let port!: LoopbackPort
+    const session = new CableSession(host, tmpLog(), async (onData, onClosed) => (port = new LoopbackPort(onData, onClosed)))
+    session.recordFocus('app-1')
+    session.start()
+    try {
+      await vi.waitFor(() => expect(port).toBeDefined())
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(land).toBeDefined())
+      // The session's tick, inside the wait: its ping and machines go, its list does not.
+      await vi.advanceTimersByTimeAsync(1_000)
+      await vi.waitFor(() => expect(port.types()).toContain('machines.end'))
+      for (let i = 0; i < 5; i++) await settle()
+      expect(port.types()).not.toContain('agents.begin')
+      listed.push({ id: 'app-1', name: 'Fix the build', engine: 'claude' })
+      land!()
+      await vi.waitFor(() => expect(port.types()).toContain('focus'))
+      expect(firstList(port)).toEqual(['a1', 'a2', 'app-1'])
+      expect(port.sent.filter((m) => m.t === 'focus').map((m) => m.agentId)).toEqual(['app-1'])
+    } finally {
+      vi.useRealTimers()
+      await session.stop()
+    }
+  })
 })
 
 describe('speak an answer, then review', () => {
