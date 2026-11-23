@@ -240,7 +240,7 @@ describe.skipIf(process.platform !== 'darwin')("an agent in the person's tmux, o
     await until("the agent's pane active in the person's session", async () => (await active(d)) === agent.pane, 30_000, 50)
   })
 
-  it("with Terminal settled in front, selecting the client's tab turns the dial to tmux's page and its agent", async () => {
+  it("selecting the client's tab while Terminal comes to the front, before it settles, turns the dial to tmux's page and its agent", async () => {
     const { d, dial, b, client, agent, run } = await fresh()
     // B is Terminal's own agent, so Terminal has a page to settle on.
     await dial.next((m) => m.t === 'apps' && m.shown === 'terminal-app', 45_000, "Terminal's page")
