@@ -114,7 +114,9 @@ request (Ken, 2026-11-23).
    counts and flags live 35 days; the devices' state file keeps at most 35 days of fixed counts, older days dropped at
    each write. Nothing new to delete on the backend.
 2. Concurrency: the existing totals write path and its busy/retry handling.
-3. Read cost: the review reads 28 days of totals at most.
+3. Read cost: the review reads 28 days of totals at most, except the N+28 returns: 56 days for those 8 names only (the
+   six return names and the two used-day names), on the existing (day, name) index (harness-pm, 2026-11-23). A 28-day
+   read never holds a cohort old enough for its N+28 return to have happened.
 4. Scale: counters join the one daily report per computer; the devices component batches its file writes (one write
    per few seconds at most, not one per turn of the dial), and the gateway reads the file once per report tick.
 5. Compatibility: older CLIs send none; an older backend drops unknown names without refusing the report.
