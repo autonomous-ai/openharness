@@ -1,21 +1,36 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { DIAL_FILE_METRICS, DIAL_USAGE_AGENTS_MAX, type DialFileMetric, type DialUsageSink } from '../lib/dialUsageContract.js'
+import {
+  DIAL_FILE_METRICS, DIAL_FLAG_METRICS, DIAL_USAGE_AGENTS_MAX, type DialFileMetric, type DialUsageSink,
+} from '../lib/dialUsageContract.js'
 import { createDialUsage, dialEngine, dialHost, type DialAgent, type HookedAgent } from './dialUsage.js'
 
 const T0 = Date.parse('2026-11-23T10:00:00Z')
 const DAY_MS = 86_400_000
+const FLAGS = new Set<string>(DIAL_FLAG_METRICS)
 
 const tmuxClaude: DialAgent = { engine: 'claude', host: 'tmux', page: 'tmux', held: false }
 const orcaCodex: DialAgent = { engine: 'codex', host: 'orca', page: 'orca', held: false }
 
-// A sink that records every add, and spends each first-ever mark once, as the devices' file does.
-function rig(agents: Record<string, DialAgent> = { a: tmuxClaude, b: orcaCodex }) {
+// A sink as the devices' file keeps it: it records every add, holds a flag at 1 a UTC day and says whether an add
+// changed it, and spends each first-ever mark once. It outlives the devices' process: a rig handed it is the next run.
+function fileSink() {
   const added: DialFileMetric[] = []
+  const values = new Map<string, number>()
   const spent = new Set<string>()
   const sink: DialUsageSink = {
-    add: (metric, n = 1) => { for (let i = 0; i < n; i++) added.push(metric) },
+    add: (metric, n = 1) => {
+      for (let i = 0; i < n; i++) added.push(metric)
+      const key = `${Math.floor(Date.now() / DAY_MS)}:${metric}`
+      const was = values.get(key) ?? 0
+      values.set(key, FLAGS.has(metric) ? 1 : was + n)
+      return values.get(key) !== was
+    },
     firstEver: mark => !spent.has(mark) && !!spent.add(mark),
   }
+  return { sink, added }
+}
+
+function rig(agents: Record<string, DialAgent> = { a: tmuxClaude, b: orcaCodex }, { sink, added } = fileSink()) {
   const usage = createDialUsage({
     sink,
     now: Date.now,
@@ -136,6 +151,23 @@ describe('createDialUsage', () => {
     usage.attached(true)
     usage.shown('a')
     expect(prefixed('dial_first_agent_').slice(3)).toEqual(['dial_first_agent_day_3m_to_10m_installations'])
+  })
+
+  it('a restart of the devices takes no second first connection of the day', () => {
+    const file = fileSink()
+    const before = rig(undefined, file)
+    before.usage.agentsPresent(true)
+    before.usage.attached(true)
+    vi.advanceTimersByTime(30_000)
+    before.usage.shown('a')
+    before.usage.stop()
+    const after = rig(undefined, file)
+    after.usage.agentsPresent(true)
+    after.usage.attached(true)
+    vi.advanceTimersByTime(120_000)
+    after.usage.shown('a')
+    expect(after.prefixed('dial_first_agent_')).toEqual([
+      'dial_first_agent_first_under_1m_installations', 'dial_first_agent_day_under_1m_installations'])
   })
 
   it('engine and host of each agent shown, an agent once a day, at most 16', () => {
