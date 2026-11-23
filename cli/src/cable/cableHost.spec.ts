@@ -117,7 +117,7 @@ describe('notification read receipts', () => {
     expect(host.listUnread()).toEqual([notice, done])
   })
 
-  // Needs you (docs/plans/2026-11-22-needs-you-notify-design.md): the window's finished turns stay out of the drawer
+  // Needs you (docs/plans/2026-11-16-dial-agent-notify-design.md): the window's finished turns stay out of the drawer
   // unless the devices keep one; its questions and the devices' own rows always stay.
   it('a window\'s finished turn is a row only when the devices keep it', () => {
     const notice = { agentId: 'o1', machineId: 'mine', question: true, text: 'Connect the VPN' }
