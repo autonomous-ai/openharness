@@ -232,7 +232,7 @@ code += function('color')
 code += function('settings_item') + function('settings_count') + function('hit_contains')
 code += function('find')
 code += 'static void notice_expire(uint32_t now);\n'
-for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'host_name', 'face_app', 'agent_allows', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'face_id', 'tab_id_at', 'tabs_open', 'app_index', 'apps_open', 'hold_picks_app', 'apps_switch', 'apps_from_switch', 'hold_open', 'app_pick', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
+for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'activity_text', 'host_name', 'face_app', 'agent_allows', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'face_id', 'tab_id_at', 'tabs_open', 'app_index', 'apps_open', 'hold_picks_app', 'apps_switch', 'apps_from_switch', 'hold_open', 'app_pick', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
     code += function(name)
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
@@ -297,7 +297,6 @@ static void dispatch(action_t a) {
     else if (a.kind == A_INBOX) notice_open();
     else if (a.kind == A_HOME) view(HOME);
     else if (a.kind == A_NOTICE) notice_action(a);
-    else if (a.kind == A_RECAP_DISMISS) dismiss_result(a.id);
     else if (a.kind == A_DESKTOP) desktop_action(a);
     else if (a.kind == A_UP || a.kind == A_DOWN) page_action(a);
     else if (a.kind == A_TABS || a.kind == A_TAB || a.kind == A_TAB_DONE || a.kind == A_APP || a.kind == A_APP_DONE ||
@@ -680,8 +679,9 @@ static bool result_visible(void) {
     reset();
 }
 static void notice_checks(const char *dir) {
-    // Opening a read notification must not present its recap a second time.
-    // Exercise either receipt order, panes outside the current roster, and a
+    // Opening a finished-turn card leaves that turn's recap on the agent face,
+    // so the tap lands on the answer and not on the resting face. Exercise
+    // either receipt order, panes outside the current roster, and a
     // notification restored before that pane's result history has arrived.
     for(int off_tab=0;off_tab<2;off_tab++) for(int cached=0;cached<2;cached++)
     for(int seen_first=0;seen_first<2;seen_first++) {
@@ -708,13 +708,14 @@ static void notice_checks(const char *dir) {
         else ui_notif_seen(id);
         scene_take();
         assert(active() && !strcmp(active()->id,id) && s.view==HOME);
-        assert(s.notice_count==1 && !result_visible() && !starts && !question_sends);
-        // History fills the reader, while the already-read recap stays hidden.
+        // With no result yet there is no recap to show; a cached one is on the face.
+        assert(s.notice_count==1 && result_visible()==cached && !starts && !question_sends);
+        // History that arrives later fills the reader and shows its recap.
         ui_project_restore_event(id,"summary",result,result);
-        scene_take(); assert(!result_visible() && !strcmp(active()->full,result));
+        scene_take(); assert(result_visible() && !strcmp(active()->full,result));
         ui_project_remove(id); ui_project_set_name(id,"Build"); ui_focus_project(id);
         ui_project_restore_event(id,"summary",result,result);
-        scene_take(); assert(!result_visible());
+        scene_take(); assert(result_visible());
         if(!off_tab && cached && !seen_first) portrait(dir,"notification-opened");
         ui_project_emit(id,"session","processing","Working",NULL);
         ui_project_emit(id,"session","done",NULL,NULL);
@@ -728,7 +729,7 @@ static void notice_checks(const char *dir) {
     ui_notif_open(); congestion=true;
     dispatch((action_t){.kind=A_NOTICE,.id="a"});
     assert(!desktop_opens && !s.pending_focus[0] && !s.opening_notice[0] && s.notice_count==1);
-    assert(s.agents[0].recap_ready && !pane_memory("a",false)->dismissed);
+    assert(s.agents[0].recap_ready);
     // Reading a question is never an approval or a completed-result dismissal.
     reset();
     ui_project_emit("a","session","summary","The previous build is ready.","The previous build is ready.");
@@ -737,7 +738,7 @@ static void notice_checks(const char *dir) {
     ui_notif_replace(&pending_question,1); ui_notif_open();
     dispatch((action_t){.kind=A_NOTICE,.id="a"}); ui_notif_seen("a");
     assert(desktop_opens==1 && !question_sends && s.notice_count==1);
-    assert(!pane_memory("a",false)->dismissed);
+    assert(s.agents[0].recap_ready);
     // Desktop navigation without an Open gesture changes the recipient, but
     // keeps the inbox on the card being read, including an off-tab focus.
     reset();
@@ -2424,7 +2425,7 @@ int main(int argc, char **argv) {
     ui_notif_open(); dispatch((action_t){.kind=A_NOTICE,.id="b"});
     assert(!desktop_opens && !s.opening_notice[0] && !notice_unread(NULL));
     assert(switches==1 && s.view==AGENT && !strcmp(active()->id,"b"));
-    scene_take(); assert(result_visible() && !pane_memory("b",false)->dismissed);
+    scene_take(); assert(result_visible());
     portrait(dir,"caps-notice-no-focus");
     // Controls: Stop current turn and Model are off for an agent without V, and a Stop already open stops nothing
     for (int voice = 1; voice >= 0; voice--) {

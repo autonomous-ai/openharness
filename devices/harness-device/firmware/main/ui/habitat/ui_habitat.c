@@ -122,7 +122,6 @@ typedef enum {
     A_STOP_YES,
     A_MODELS,
     A_MODEL,
-    A_RECAP_DISMISS,
     A_DESKTOP,
     A_UP,
     A_DOWN,
@@ -149,7 +148,7 @@ typedef struct {
 typedef struct {
     char id[ID_MAX], session[80], preview[240], full[PANE_RESULT_BYTES], activity[100];
     uint32_t used, busy_ms, last_busy;
-    bool busy, live_summary, dismissed, awaiting_result;
+    bool busy, live_summary, awaiting_result;
 } pane_memory_t;
 typedef struct {
     char id[ID_MAX], name[CABLE_NAME_MAX], engine[12], machine_id[ID_MAX], machine[CABLE_NAME_MAX], model[192],
@@ -506,16 +505,7 @@ static void pane_memory_apply(agent_t *a, pane_memory_t *m)
     a->busy_ms = m->busy_ms;
     a->last_busy = m->last_busy;
     a->has_event = m->preview[0] != 0;
-    a->recap_ready = a->has_event && !m->dismissed && !m->awaiting_result && !m->busy;
-}
-static void dismiss_result(const char *id)
-{
-    pane_memory_t *m = pane_memory(id, true);
-    if (!m) return;
-    m->dismissed = true;
-    int i = find(id);
-    if (i >= 0) s.agents[i].recap_ready = false;
-    change();
+    a->recap_ready = a->has_event && !m->awaiting_result && !m->busy;
 }
 static void activity_text(char *dst, size_t cap, const char *src)
 {
@@ -2444,14 +2434,6 @@ static void dispatch(action_t a)
             if (queue(open)) {
                 ht_visit_close(&visit);
                 COPY(s.opening_notice, a.id);
-                // The outcome was already read on this card. Keep its pane in
-                // presence mode, including panes whose history arrives later.
-                // Opening a question never answers or dismisses that question.
-                for (int i = 0; i < s.notice_count; i++)
-                    if (!strcmp(s.notice[i].agent_id, a.id) && !s.notice[i].question) {
-                        dismiss_result(a.id);
-                        break;
-                    }
             }
             else {
                 COPY(s.title,"Device busy");
@@ -2733,9 +2715,6 @@ static void dispatch(action_t a)
             queue(a);
             view(AGENT);
         }
-        break;
-    case A_RECAP_DISMISS:
-        dismiss_result(a.id);
         break;
     case A_DESKTOP:
         if (s.connected)
@@ -3762,10 +3741,6 @@ static void event(const char *id, const char *session, const char *kind, const c
         // its own live result arrives. Late history cannot resurrect an old recap.
         if (preview[0]) {
             m->awaiting_result = false;
-            // An opened off-tab notification can precede its first history
-            // snapshot. Fill that empty record without showing the same result
-            // twice. Every new live result still becomes visible normally.
-            if (!restore || (m->preview[0] && strcmp(m->preview, preview))) m->dismissed = false;
             COPY(m->preview, preview);
             COPY(m->full, has_text ? text_ : recap);
             if (!restore) m->live_summary = true;
