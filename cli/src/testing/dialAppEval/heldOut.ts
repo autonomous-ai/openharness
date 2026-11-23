@@ -269,7 +269,7 @@ export function heldOut(): Scenario[] {
       // A turn typed through each client in turn: the first tab's, then the second's, the one a tap must select.
       steps: [
         ...started(['a', 'b']),
-        ...listed('iterm', ['a', 'b']),
+        ...listed('iterm', ['a'], ['b']),
         { kind: 'iterm.tab', window: 'w1', tab: 2 },
         { label: 'attach', kind: 'tmux.attach', session: 'b', window: 'w1', tab: 2 },
         { kind: 'wait', ms: 1 * S },
@@ -283,6 +283,7 @@ export function heldOut(): Scenario[] {
         { kind: 'wait', ms: 1 * S },
         { label: 'turn', kind: 'hook', session: 'b', event: 'turn-start' },
         { kind: 'wait', ms: 2 * S },
+        ...listed('tmux', ['b'], ['a']),
         { label: 'tap', kind: 'tap', session: 'b' },
       ],
       checks: [{ id: 'open', kind: 'open', dim: 'D3', session: 'b', link: false, tab: 'w1.2.0', after: 'tap' }],
@@ -297,19 +298,19 @@ export function heldOut(): Scenario[] {
       probes: [withGhost(ih3Ring)],
     }, true),
     scenario({
-      id: 'IH4', app: 'iterm', title: 'A scan-found herdr agent whose herdr row has no session: one row on iTerm2\'s page, and a tap reaches its tab',
+      id: 'IH4', app: 'iterm', title: 'A scan-found herdr agent whose herdr row has no session: one row on herdr\'s page, and a tap reaches its tab',
       dims: ['D1', 'D3'], ...darwin, sessions: [itermSession('c', { place: 'herdr', herdrSession: false }), itermGhost],
       // Its turn puts its conversation on disk, so the scan after the restart finds it (the plan's Decision 13).
       steps: [
         ...started(['c']),
         ...turned(['c']),
-        ...listed('iterm', ['c']),
+        ...listed('herdr', ['c']),
         { label: 'restart', kind: 'devices.restart' },
-        ...listed('iterm', ['c']),
+        ...listed('herdr', ['c']),
         { label: 'tap', kind: 'tap', session: 'c' },
       ],
       checks: [
-        { id: 'ring', kind: 'ring', dim: 'D1', page: 'iterm', expect: ['c'], apart: [], after: 'restart', at: 'tap' },
+        { id: 'ring', kind: 'ring', dim: 'D1', page: 'herdr', expect: ['c'], apart: [], after: 'restart', at: 'tap' },
         { id: 'open', kind: 'open', dim: 'D3', session: 'c', link: false, after: 'tap' },
       ],
       probes: [{ id: 'open', kind: 'open', dim: 'D3', session: 'z', link: false, after: 'tap' }],
@@ -319,7 +320,7 @@ export function heldOut(): Scenario[] {
       dims: ['D4', 'D6'], ...darwin, sessions: [itermSession('b', { place: 'tmux', engine: 'codex' }), itermGhost],
       steps: [
         ...started(['b']),
-        ...listed('iterm', ['b']),
+        ...listed('tmux', ['b']),
         { label: 'turn', kind: 'hook', session: 'b', event: 'turn-start' },
         { kind: 'wait', ms: 2 * S },
         { label: 'stop', kind: 'hook', session: 'b', event: 'turn-stop', lastAnswer: 'Eval codex answer.' },
