@@ -377,12 +377,14 @@ export function itermPlaceOf(s: Pick<SessionDef, 'app' | 'place'> & Pick<Partial
 
 /**
  * The wire's name for the page the session's row is on: an iTerm2 session in tmux or herdr is on that multiplexer's
- * page, as one tmux page and one herdr page count their agents across every terminal app
- * (docs/plans/2026-11-23-dial-tmux-herdr-apps-design.md, decision 1); every other session is on its app's.
+ * page, as one tmux page and one herdr page count their agents across every terminal app, and so is a Claude Code in the
+ * person's tmux in an editor's terminal, while Orca's stays on Orca's (docs/plans/2026-11-23-dial-tmux-herdr-apps-design.md,
+ * decisions 1 and 3); every other session is on its app's.
  */
 export function sessionPage(s: SessionDef): string {
   const place = itermPlaceOf(s)
-  return place === 'tmux' || place === 'herdr' ? place : PAGE[s.app]
+  if (place === 'tmux' || place === 'herdr') return place
+  return s.tmux && s.app !== 'orca' ? 'tmux' : PAGE[s.app]
 }
 
 /** The agent id the daemon's observed sources give this session: its engine's. */
