@@ -263,6 +263,10 @@ macOS and Linux, where Orca's CLI and the devices' listener run. Windows: the pl
 (`devices/listenerPipe.ts`) and `orca.exe` runs through `lib/windows/program.ts`, as today's Orca paths; tested by the
 Windows end to end leg.
 
+Linux, known gap: a tap or a rest on a resting chat brings its worktree up but not Orca's window. Linux raises a
+window by its class, and no Orca class is confirmed (`cable/hosts/frontApp.ts` `WINDOW_CLASSES`; a bare `orca` is
+GNOME's screen reader), or by the agent's process, which a resting chat has none of (eval O20 on Linux).
+
 ## Answered (Tony, 2026-11-23)
 
 1. Decided 1 to 9: as proposed.
