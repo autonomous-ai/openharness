@@ -3903,7 +3903,8 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       const hooked = (sessionId: string, callerPid: number, hostHints: Record<string, string>): ObservedHookEvent =>
         ({ engine: 'claude', sessionId, event: 'session-start', cwd: '/work/api', callerPid, transcriptPath: `/t/${sessionId}.jsonl`, hostHints })
 
-      it.each([['hooked', 'iTerm2'], ['hooked', 'launchd'], ['found by the scan', 'iTerm2'], ['found by the scan', 'launchd']])('the exact case: a plain tab, tmux and two herdr panes in iTerm2 are four rows on iTerm2\'s page, each reached at its own tab and pane (%s, the server under %s)', async (how, parent) => {
+      // Diego, 2026-11-23: each multiplexer has its own page, counting its agents across every terminal app.
+      it.each([['hooked', 'iTerm2'], ['hooked', 'launchd'], ['found by the scan', 'iTerm2'], ['found by the scan', 'launchd']])('the exact case: a plain tab, tmux and two herdr panes in iTerm2 are iTerm2 1, tmux 1, herdr 2, each reached at its own tab and pane (%s, the server under %s)', async (how, parent) => {
         readers.processes.mockResolvedValue(table(parent === 'launchd' ? 1 : 4296))
         // The plain tab's own walk (scannedApp.spec.ts holds the server's row).
         const own = readers.apps.getMockImplementation()!
@@ -3932,7 +3933,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
         const ids = [PLAIN, ID, P1, P2]
         await vi.waitFor(async () => expect((await listed()).map(({ id }) => id).sort()).toEqual([...ids].sort()))
         const apps = (await host().listAgentSnapshot({ apps: true })).apps?.apps ?? []
-        expect(apps.filter(({ count }) => count > 0)).toEqual([expect.objectContaining({ id: 'iterm', count: 4 })])
+        expect(apps.filter(({ count }) => count > 0).map(({ id, count }) => `${id} ${count}`).sort()).toEqual(['herdr 2', 'iterm 1', 'tmux 1'])
         const stream = listener.tabs()
         expect(listener.front('iterm')).toBeUndefined()
         const reached: Array<[unknown, unknown]> = []

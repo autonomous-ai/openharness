@@ -13,8 +13,9 @@ import { type Delivery, Inbox } from './inbox.js'
 import { askedLine, countWord, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps, type PromptSource } from './observed.js'
 import type { OpenTarget } from './open.js'
 import { createOrcaAdapter, MAX_TEXT, type OrcaDeps } from './orca.js'
-import type { Nested, NestedPlace } from './outer.js'
+import type { Nested, NestedPlace, OuterLookup } from './outer.js'
 import type { ProcessName } from './scannedApp.js'
+import { pageOf } from './select.js'
 import { createTabsAdapter, type TabApp } from './tabs.js'
 import { createTmuxAdapter } from './tmux.js'
 import type { HostAgent, PaneSwitch, TypeResult } from './types.js'
@@ -92,6 +93,9 @@ const graced = (): Promise<unknown> => vi.advanceTimersByTimeAsync(STOP_HOOK_GRA
 
 /** Every answer a read was given has reached the source. */
 const flushed = (): Promise<void> => new Promise((resolve) => { setImmediate(resolve) })
+
+/** What an outer lookup answers once it settles (outer.ts OuterLookup). */
+type OuterAnswer = NonNullable<Awaited<ReturnType<OuterLookup>>>
 
 describe('ObservedSource states', () => {
   beforeEach(() => { vi.useFakeTimers() })
@@ -4660,12 +4664,12 @@ describe('ObservedSource outer place', () => {
   const paneAsked = ['tmux', ['display-message', '-p', '-t', '%3', expect.any(String)], expect.any(Number)]
   const selected = ['tmux', ['select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], expect.any(Number)]
 
-  /** A source whose outer places the test answers by hand, in the order they were asked, as the tmux lookup answers an
-   *  event in a tmux pane; an event in no tmux pane is not nested. A tty read answers at once. */
+  /** A source whose outer places the test answers by hand, in the order they were asked, as tmux's and herdr's lookups
+   *  answer an event in their pane; an event in neither is not nested. A tty read answers at once. */
   function nested(over: Partial<Fakes> = {}, adapt = (adapters: readonly HostAdapter[]) => adapters, deps: Partial<ObservedDeps> = {}) {
-    const asks: Array<{ answer(place: { app?: string; tty?: string; pid?: number }): Promise<unknown> }> = []
-    const outer = vi.fn((hints: Readonly<Record<string, string>>, _pid: number) => (hints.TMUX_PANE
-      ? new Promise<{ app?: string; tty?: string; pid?: number }>((resolve) => {
+    const asks: Array<{ answer(place: OuterAnswer): Promise<unknown> }> = []
+    const outer = vi.fn((hints: Readonly<Record<string, string>>, _pid: number) => (hints.TMUX_PANE || hints.HERDR_PANE_ID
+      ? new Promise<OuterAnswer>((resolve) => {
         asks.push({ answer: (place) => { resolve(place); return vi.advanceTimersByTimeAsync(0) } })
       })
       : undefined))
@@ -4999,6 +5003,80 @@ describe('ObservedSource outer place', () => {
     expect(t.actions.tabSelect.mock.calls).toEqual([['terminal-app', '/dev/ttys004', true]])
     expect(t.actions.open.mock.invocationCallOrder[0]).toBeLessThan(t.actions.tabSelect.mock.invocationCallOrder[0])
   })
+
+  // Diego, 2026-11-23: an agent in tmux or herdr is on that multiplexer's page, whatever terminal holds its client. Only
+  // the lookup that confirmed its pane says so (`nest`), never the hints alone.
+  it('a hooked agent in tmux has nest and host tmux once its lookup says tmux: with a client\'s app and detached', async () => {
+    const t = nested()
+    t.src.ingest(t.ev('session-start', inTmux()))
+    expect(t.agent()).not.toHaveProperty('nest')
+    await t.asks[0].answer({ ...CLIENT, pid: 4300, nest: 'tmux' })
+    expect(t.agent()).toMatchObject({ app: 'terminal-app', host: 'tmux', nest: 'tmux' })
+    expect(pageOf(t.agent())).toBe('tmux')
+    // Asked again at its next turn: it keeps its multiplexer until the answer, which finds the person detached.
+    t.src.ingest(t.ev('turn-start', inTmux()))
+    expect(t.agent()).toMatchObject({ host: 'tmux', nest: 'tmux' })
+    await t.asks[1].answer({ nest: 'tmux' })
+    expect(t.agent()).toMatchObject({ app: 'tmux', host: 'tmux', nest: 'tmux' })
+  })
+
+  it('a hooked agent in herdr has nest and host herdr', async () => {
+    const t = nested()
+    t.src.ingest(t.ev('session-start', { hostHints: { HERDR_PANE_ID: 'w1:p2' } }))
+    await t.asks[0].answer({ app: 'iterm', tty: '/dev/ttys005', pid: 4400, nest: 'herdr' })
+    expect(t.agent()).toMatchObject({ app: 'iterm', host: 'herdr', nest: 'herdr' })
+    expect(pageOf(t.agent())).toBe('herdr')
+  })
+
+  // The nearest multiplexer wins: detectHost reads HERDR_PANE_ID first, which a tmux started in a herdr pane inherits.
+  it('tmux inside herdr: the hints name both panes and detectHost says herdr, the lookup says tmux: nest and host tmux', async () => {
+    const t = nested()
+    const both = { hostHints: { HERDR_PANE_ID: 'w1:p1', TMUX_PANE: '%3', TERM_PROGRAM: 'tmux' } }
+    t.src.ingest(t.ev('session-start', both))
+    expect(t.agent().host).toBe('herdr')
+    await t.asks[0].answer({ ...CLIENT, pid: 4300, nest: 'tmux' })
+    expect(t.agent()).toMatchObject({ app: 'terminal-app', host: 'tmux', nest: 'tmux' })
+    // A later answer that confirms no multiplexer: none, and its host is its hints' again.
+    t.src.ingest(t.ev('turn-start', both))
+    await t.asks[1].answer({})
+    expect(t.agent()).not.toHaveProperty('nest')
+    expect(t.agent().host).toBe('herdr')
+  })
+
+  it('herdr inside tmux: nest and host herdr', async () => {
+    const t = nested()
+    t.src.ingest(t.ev('session-start', { hostHints: { TMUX_PANE: '%3', HERDR_PANE_ID: 'w1:p2' } }))
+    await t.asks[0].answer({ app: 'iterm', tty: '/dev/ttys005', pid: 4400, nest: 'herdr' })
+    expect(t.agent()).toMatchObject({ app: 'iterm', host: 'herdr', nest: 'herdr' })
+  })
+
+  it('code . from a tmux pane: its lookup says no multiplexer: no nest, host as its hints name it, app vscode', async () => {
+    const t = nested()
+    t.src.ingest(t.ev('session-start', inTmux({ TERM_PROGRAM: 'vscode', __CFBundleIdentifier: 'com.microsoft.VSCode' })))
+    await t.asks[0].answer({})
+    expect(t.agent()).toMatchObject({ app: 'vscode', host: 'tmux' })
+    expect(t.agent()).not.toHaveProperty('nest')
+    expect(pageOf(t.agent())).toBe('vscode')
+  })
+
+  it('another caller or pane drops nest at once; an earlier ask\'s late answer sets nothing', async () => {
+    for (const moved of [{ callerPid: 101 }, inTmux({ TMUX_PANE: '%4' })]) {
+      const t = nested()
+      t.src.ingest(t.ev('session-start', inTmux()))
+      await t.asks[0].answer({ ...CLIENT, nest: 'tmux' })
+      t.src.ingest(t.ev('needs-input', { ...inTmux(), ...moved }))
+      expect(t.agent(), JSON.stringify(moved)).not.toHaveProperty('nest')
+
+      // It moved while its first ask ran: that answer lands nothing, the latest's does.
+      const late = nested()
+      late.src.ingest(late.ev('session-start', inTmux()))
+      late.src.ingest(late.ev('needs-input', { ...inTmux(), ...moved }))
+      await late.asks[0].answer({ ...CLIENT, nest: 'tmux' })
+      expect(late.agent(), JSON.stringify(moved)).not.toHaveProperty('nest')
+      await late.asks[1].answer({ ...CLIENT, nest: 'tmux' })
+      expect(late.agent().nest, JSON.stringify(moved)).toBe('tmux')
+    }
+  })
 })
 
 // Diego, 2026-11-22: after the devices started again, his idle agents in tmux and in herdr inside iTerm2 sat on Other's
@@ -5289,6 +5367,36 @@ describe('ObservedSource and a nested session the scan found', () => {
     expect(t.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 0 answered · 37 ms · 1 nested placed'])
   })
 
+  // Diego, 2026-11-23: on its multiplexer's page from its listing, so it does not move page when its lookup answers.
+  it('a session on a terminal tmux or herdr made has nest and host at its listing, with and without its lookup naming an app; one paired with a Herdr terminal has none', async () => {
+    const t = scan(new Map([[100, IN_TMUX], [200, IN_HERDR], [300, IN_HERDR]]), { herdrTerminal: (pid) => (pid === 300 ? 't7' : undefined) })
+    t.found('a', 100)
+    t.found('b', 200)
+    t.found('c', 300)
+    const look = t.src.scanOpen()
+    await vi.waitFor(() => expect(t.nested).toHaveBeenCalledTimes(1))
+    expect(t.agent('a')).toMatchObject({ nest: 'tmux', host: 'tmux' })
+    expect(t.agent('b')).toMatchObject({ nest: 'herdr', host: 'herdr' })
+    await t.answer(0, ITERM)
+    await t.answer(1, {})
+    await look
+    expect(t.agent('a')).toMatchObject({ app: 'iterm', nest: 'tmux', host: 'tmux' })
+    expect(t.agent('b')).toMatchObject({ app: 'terminal', appPending: true, nest: 'herdr', host: 'herdr' })
+    expect([pageOf(t.agent('a')), pageOf(t.agent('b'))]).toEqual(['tmux', 'herdr'])
+    expect(t.agent('c')).toMatchObject({ app: 'herdr', host: 'herdr' })
+    expect(t.agent('c')).not.toHaveProperty('nest')
+  })
+
+  it('a Zellij maker gives no nest', async () => {
+    const t = scan(new Map([[100, { host: 'zellij', maker: 80, tty: 'ttys010' }]]))
+    t.found('a', 100)
+    const look = t.src.scanOpen()
+    await t.answer(0, { app: 'ghostty', tty: '/dev/ttys004', pid: 4300 })
+    await look
+    expect(t.agent('a')).toMatchObject({ app: 'ghostty', host: 'terminal' })
+    expect(t.agent('a')).not.toHaveProperty('nest')
+  })
+
   describe('its placed tmux pane, and its first hook', () => {
     /** The pane tmux's lookup by process names for `a`: tmux's pane id, the agent's process and its client's app. */
     const PANE = { adapter: 'tmux', id: '%3:100:iterm' }
@@ -5301,9 +5409,9 @@ describe('ObservedSource and a nested session the scan found', () => {
      *  iTerm2 in front. Its hooks' own outer lookups the test answers by hand, in the order asked, as tmux's and herdr's
      *  answer an event in their pane; an event in neither is not nested. */
     async function placed(fakes: Partial<Fakes> = {}, adapt?: (adapters: readonly HostAdapter[]) => readonly HostAdapter[]) {
-      const hookAsks: Array<(place: { app?: string; tty?: string; pid?: number }) => Promise<void>> = []
+      const hookAsks: Array<(place: OuterAnswer) => Promise<void>> = []
       const outer = vi.fn((hints: Readonly<Record<string, string>>, _pid: number) => (hints.TMUX_PANE || hints.HERDR_PANE_ID
-        ? new Promise<{ app?: string; tty?: string; pid?: number }>((resolve) => {
+        ? new Promise<OuterAnswer>((resolve) => {
           hookAsks.push(async (place) => { resolve(place); await flushed() })
         })
         : undefined))
@@ -5443,6 +5551,28 @@ describe('ObservedSource and a nested session the scan found', () => {
       expect(t.src.shownAt(t.id, 'tmux')).toBe('%4:100:iterm')
       expect(await t.src.focus(t.a())).toBe(true)
       expect(t.actions.open.mock.calls.at(-1)).toEqual([t.id, { bundle: 'com.googlecode.iterm2', pane: { adapter: 'tmux', id: '%4:100:iterm' } }])
+    })
+
+    it('its first nested hook from its own process keeps nest until the hook\'s answer, then the answer\'s', async () => {
+      // Its hints name a herdr pane too, which detectHost reads first: only nest keeps it tmux's meanwhile.
+      const both = { hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', HERDR_PANE_ID: 'w1:p1' } }
+      for (const [answer, nest, host] of [[{ ...ITERM, nest: 'tmux' }, 'tmux', 'tmux'], [{}, undefined, 'herdr']] as const) {
+        const t = await placed()
+        t.src.ingest(t.ev('session-start', { sessionId: 'a', ...both }))
+        expect(t.a(), JSON.stringify(answer)).toMatchObject({ app: 'iterm', nest: 'tmux', host: 'tmux' })
+        await t.hookAsks[0](answer)
+        expect([t.a().nest, t.a().host], JSON.stringify(answer)).toEqual([nest, host])
+      }
+    })
+
+    // Review Focus 3: resumed in a plain tab, it is no longer in tmux, and its page is its app's at once.
+    it('a first hook that is not nested drops nest at once: host and page from its hints', async () => {
+      const t = await placed()
+      expect(t.a()).toMatchObject({ nest: 'tmux', host: 'tmux' })
+      t.src.ingest(t.ev('turn-start', { sessionId: 'a', hostHints: { TERM_PROGRAM: 'ghostty' } }))
+      expect(t.a()).not.toHaveProperty('nest')
+      expect(t.a()).toMatchObject({ app: 'ghostty', host: 'ghostty' })
+      expect(pageOf(t.a())).toBe('ghostty')
     })
   })
 })
