@@ -5,12 +5,16 @@
 // Scored and reported apart, never in the headline score. A function, not a list: the catalog imports it and it uses
 // the catalog's builders, so it is called once the catalog has them.
 import { chatgptGhost, claudeGhost, claudeSession, claudeSessions, cursor, editorGhost, itermGhost, itermSession, keys, listed, orcaGhost,
-  orcaOpening, orcaSession, orcaStarted, panel, S, scenario, started, threads, titleOf, turned, vscode } from './catalog.js'
-import type { Scenario } from './types.js'
+  orcaOpening, orcaSession, orcaStarted, panel, S, scenario, started, threads, titleOf, turned, vscode, withGhost } from './catalog.js'
+import type { Check, Scenario } from './types.js'
 
 export function heldOut(): Scenario[] {
   const s16 = keys('s', 1, 16, 2)
   const s20 = keys('s', 1, 20, 2)
+  // IH3's twenty start s20 first: the ring keeps the sixteen newest in the order they entered, s16 first
+  // (cable/hosts/select.ts DialRing).
+  const ih3Ring: Extract<Check, { kind: 'ring' }> =
+    { id: 'ring', kind: 'ring', dim: 'D1', page: 'iterm', expect: [...s16].reverse(), apart: [] }
   // iTerm2's scenarios run on macOS alone (docs/plans/2026-11-22-dial-eval-iterm2-design.md, decision 2).
   const darwin = { platforms: ['darwin' as const] }
   return [
@@ -289,8 +293,8 @@ export function heldOut(): Scenario[] {
       dims: ['D1'], tiers: ['a'], ...darwin, sessions: [...s20.map((key, i) => itermSession(key, { tab: i })), itermGhost],
       // s01 starts last, the newest.
       steps: [...started([...s20].reverse())],
-      checks: [{ id: 'ring', kind: 'ring', dim: 'D1', page: 'iterm', expect: s16, apart: [] }],
-      probes: [{ id: 'ring', kind: 'ring', dim: 'D1', page: 'iterm', expect: [...s16, 'z'], apart: [] }],
+      checks: [ih3Ring],
+      probes: [withGhost(ih3Ring)],
     }, true),
     scenario({
       id: 'IH4', app: 'iterm', title: 'A scan-found herdr agent whose herdr row has no session: one row on iTerm2\'s page, and a tap reaches its tab',
