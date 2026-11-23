@@ -23,7 +23,7 @@ const driver = await import('../../e2e/harness/appEvalDriver.js' as string) as {
   RAISE_TOOLS: readonly string[]
   World: new (rig: unknown, scenario: Scenario, platform: Platform) => {
     plug(): Promise<void>; read(): void; forgetBefore(cut: number): void; seen(): import('./dialAppEval/types.js').Seen; close(): Promise<void>
-    readonly muxPanes: Map<string, string>; takeMux(): void
+    muxPane(key: string, pane: string | null, at?: number): void; takeMux(): void
   }
   writeRaiseFakes(bin: string): void
   raiseToolsOutside(root: string, env: NodeJS.ProcessEnv): string[]
@@ -408,16 +408,21 @@ describe("tier B's world at its start", () => {
 })
 
 describe("tier B's tmux and herdr runs", () => {
-  it("an iTerm2 world's commands hold its daemon's tmux and herdr runs, each pane named by its session; another app's daemon notes none", async () => {
+  /** A daemon's rig as a world reads it, another app's or, with its tmux and herdr runs' folders, iTerm2's. */
+  const rigs = (): { other: object; iterm: { iterm: { tmuxRuns: string; herdrRuns: string } } } => {
     dir = mkdtempSync(join(tmpdir(), 'tier-b-mux-'))
     const other = { d: { log: () => '' }, runs: join(dir, 'runs.log'), cursorRuns: join(dir, 'cursor-runs.log'), projects: [] }
-    const rig = { ...other, iterm: { tmuxRuns: join(dir, 'tmux-runs'), herdrRuns: join(dir, 'herdr-runs') } }
-    const iterm: Scenario = {
-      id: 'EVAL', app: 'iterm', title: 'Eval tmux', dims: ['D3'], platforms: ['darwin'], tiers: ['b'], heldOut: false,
-      sessions: [{ key: 'a', app: 'iterm', id: '00000000-0000-4000-8e00-00000000000a', title: 'Eval alpha', cwd: '/work/eval-a', ageMs: 0,
-        place: 'tmux', window: 'w1', tab: 1, split: 0 }],
-      steps: [], checks: [], probes: [],
-    }
+    return { other, iterm: { ...other, iterm: { tmuxRuns: join(dir, 'tmux-runs'), herdrRuns: join(dir, 'herdr-runs') } } }
+  }
+  const iterm: Scenario = {
+    id: 'EVAL', app: 'iterm', title: 'Eval tmux', dims: ['D3'], platforms: ['darwin'], tiers: ['b'], heldOut: false,
+    sessions: [{ key: 'a', app: 'iterm', id: '00000000-0000-4000-8e00-00000000000a', title: 'Eval alpha', cwd: '/work/eval-a', ageMs: 0,
+      place: 'tmux', window: 'w1', tab: 1, split: 0 }],
+    steps: [], checks: [], probes: [],
+  }
+
+  it("an iTerm2 world's commands hold its daemon's tmux and herdr runs, each pane named by its session; another app's daemon notes none", async () => {
+    const { other, iterm: rig } = rigs()
     const worlds = [new driver.World(other, byId('V11'), 'darwin'), new driver.World(rig, iterm, 'darwin')]
     try {
       // The devices' runs and the core's, after both worlds began.
@@ -426,7 +431,7 @@ describe("tier B's tmux and herdr runs", () => {
       noteIn(rig.iterm.tmuxRuns, 'run.t2', ['0', 'tmux', 'list-panes', '-a', '-F', '#{pane_id}'], at + 100)
       noteIn(rig.iterm.herdrRuns, 'run.h1', ['0', 'herdr', 'agent', 'focus', 'w1:p2'], at + 200)
       const [vscode, itermWorld] = worlds
-      itermWorld!.muxPanes.set('%3', 'a')
+      itermWorld!.muxPane('a', '%3')
       for (const world of worlds) world.takeMux()
       expect(vscode!.seen().commands).toEqual([])
       expect(itermWorld!.seen().commands.map(({ argv, ok }) => ({ argv, ok }))).toEqual([
@@ -436,6 +441,25 @@ describe("tier B's tmux and herdr runs", () => {
       ])
     } finally {
       for (const world of worlds) await world.close()
+    }
+  })
+
+  it("names a pane id herdr gives again after its restart by the session that held it at each run, and none between", async () => {
+    const { iterm: rig } = rigs()
+    const world = new driver.World(rig, { ...iterm, sessions: [...iterm.sessions, { ...iterm.sessions[0]!, key: 'b', place: 'herdr' }] }, 'darwin')
+    try {
+      const at = Date.now() + 1_000
+      // a's pane, closed as herdr stopped; b's, the same id on the new server.
+      world.muxPane('a', 'w1:p1', at)
+      world.muxPane('a', null, at + 200)
+      world.muxPane('b', 'w1:p1', at + 400)
+      noteIn(rig.iterm.herdrRuns, 'run.h1', ['0', 'herdr', 'agent', 'focus', 'w1:p1'], at + 100)
+      noteIn(rig.iterm.herdrRuns, 'run.h2', ['0', 'herdr', 'agent', 'focus', 'w1:p1'], at + 300)
+      noteIn(rig.iterm.herdrRuns, 'run.h3', ['0', 'herdr', 'agent', 'focus', 'w1:p1'], at + 500)
+      world.takeMux()
+      expect(world.seen().commands.map(({ argv }) => argv[3])).toEqual(['pane:a', 'pane:other', 'pane:b'])
+    } finally {
+      await world.close()
     }
   })
 })
