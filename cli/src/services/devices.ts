@@ -2166,8 +2166,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** Set as a poll stops itself; cleared at the next settle of any app: only a settle starts it again (spec). */
   let paneFocusFailing = false
   /** One read, of the panes the live agents have of their own in that app as it starts: an agent's own pane alone, as a
-   *  held one shows whatever is in front of it. */
-  const readFocus = async (source: ObservedSource, app: PaneFocus['app']): Promise<PaneAnswer | undefined> => {
+   *  held one shows whatever is in front of it. WezTerm's one call is under way at a stop already; [signal] ends kitty's
+   *  read of several there. */
+  const readFocus = async (source: ObservedSource, app: PaneFocus['app'], signal: AbortSignal): Promise<PaneAnswer | undefined> => {
     const moves = dialMoves
     const at = monotonic()
     // Once each: two live agents can share a pane, as an ended session not yet seen as ended beside its successor.
@@ -2181,7 +2182,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // poll's first read, which runs within startFocusPoll, before `paneFocus` holds its poll.
     const lately = new Set(paneFocus?.last?.values())
     const ordered = [...panes.filter((id) => lately.has(id)), ...panes.filter((id) => !lately.has(id))]
-    const focused = await kitty.focusedWindows(ordered.map((id) => ({ adapter: kitty.id, id })))
+    const focused = await kitty.focusedWindows(ordered.map((id) => ({ adapter: kitty.id, id })), signal)
     return focused === undefined ? undefined : { focused, moves, at }
   }
   /** An answer of the poll turns the dials to the agent in the one focused pane whose place changed since the last
@@ -2231,7 +2232,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (wanted === undefined) return
     // Its answers and its own stop run in a part, which logs a throw: the poll swallows one unsaid (focusPoll.ts).
     const polling: PaneFocus = { app: wanted, first: true, poll: startFocusPoll<PaneAnswer>({
-      read: () => readFocus(observed, wanted),
+      read: (signal) => readFocus(observed, wanted, signal),
       answered: (answer) => part.call('pane', () => paneAnswered(observed, polling, answer)),
       failing: () => part.call('pane', () => {
         paneFocus = undefined

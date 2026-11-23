@@ -111,8 +111,9 @@ async function remote(deps: KittyDeps, listenOn: string, args: string[]): Promis
 
 export function createKittyAdapter(deps: KittyDeps): HostAdapter & Required<Pick<HostAdapter, 'type' | 'canType'>> & {
   /** Per socket (`listenOn`), which of [panes] on it is that kitty's focused window (its Pane.id), or null for none of
-   *  them; undefined when any call failed. A refused socket has no entry and is not asked. */
-  focusedWindows(panes: readonly Pane[]): Promise<Map<string, string | null> | undefined>
+   *  them; undefined when any call failed or [signal] was aborted, after which no call starts. A refused socket has no
+   *  entry and is not asked. */
+  focusedWindows(panes: readonly Pane[], signal?: AbortSignal): Promise<Map<string, string | null> | undefined>
 } {
   // Per window, the words being typed: two sends at once would mix in its prompt. Busy queues nothing.
   const sending = new Set<string>()
@@ -145,11 +146,13 @@ export function createKittyAdapter(deps: KittyDeps): HostAdapter & Required<Pick
   // its exit code and, on exit 1, whether kitty found no such window are read. `state:focused` is each kitty's focused
   // window; `state:active` is each tab's active one and `state:focused_os_window` matched in no kitty of two
   // (RECORDED_KITTY.focusedMatch activeOfEveryTab, twoKittys). A call that ran and failed is a refusal; one with less
-  // than FOCUS_CALL_MIN_MS left is not started and marks nothing.
-  const ask = async (file: string, socket: { listenOn: string; path?: string }, expr: string, deadline: number):
+  // than FOCUS_CALL_MIN_MS left, or after the read's signal was aborted (its poll stopped), is not started and marks
+  // nothing.
+  type Read = { deadline: number; signal?: AbortSignal }
+  const ask = async (file: string, socket: { listenOn: string; path?: string }, expr: string, read: Read):
   Promise<'match' | 'none' | 'failed'> => {
-    const left = deadline - deps.now()
-    if (left < FOCUS_CALL_MIN_MS) return 'failed'
+    const left = read.deadline - deps.now()
+    if (left < FOCUS_CALL_MIN_MS || read.signal?.aborted) return 'failed'
     const { code, stderr } = await deps.run(file, ['@', '--to', socket.listenOn, 'get-colors', '--match', expr], left)
     if (code === 0) return 'match'
     if (code === 1 && stderr?.startsWith(NO_MATCH)) return 'none'
@@ -157,10 +160,10 @@ export function createKittyAdapter(deps: KittyDeps): HostAdapter & Required<Pick
     return 'failed'
   }
   /** The first of [ids] asked alone that is the socket's kitty's focused window, in order; null when none is. */
-  const firstFocused = async (file: string, socket: { listenOn: string; path?: string }, ids: readonly string[], deadline: number):
+  const firstFocused = async (file: string, socket: { listenOn: string; path?: string }, ids: readonly string[], read: Read):
   Promise<string | null | undefined> => {
     for (const id of ids) {
-      const one = await ask(file, socket, `id:${id} and state:focused`, deadline)
+      const one = await ask(file, socket, `id:${id} and state:focused`, read)
       if (one !== 'none') return one === 'match' ? id : undefined
     }
     return null
@@ -169,16 +172,16 @@ export function createKittyAdapter(deps: KittyDeps): HostAdapter & Required<Pick
    *  from a third the rest in one `or` (kitty 0.32.2 takes parentheses, focusedMatch.orFocused), and on a match each
    *  alone, the last too: focus may have moved since. So a socket's n windows take n calls at most, and one more from
    *  the third. */
-  const focusedOn = async (file: string, socket: { listenOn: string; path?: string }, ids: readonly string[], deadline: number):
+  const focusedOn = async (file: string, socket: { listenOn: string; path?: string }, ids: readonly string[], read: Read):
   Promise<string | null | undefined> => {
     const [first, ...rest] = ids
-    const firstAsked = await firstFocused(file, socket, [first], deadline)
+    const firstAsked = await firstFocused(file, socket, [first], read)
     if (firstAsked !== null) return firstAsked
     if (rest.length > 1) {
-      const any = await ask(file, socket, `state:focused and (${rest.map((id) => `id:${id}`).join(' or ')})`, deadline)
+      const any = await ask(file, socket, `state:focused and (${rest.map((id) => `id:${id}`).join(' or ')})`, read)
       if (any !== 'match') return any === 'none' ? null : undefined
     }
-    return firstFocused(file, socket, rest, deadline)
+    return firstFocused(file, socket, rest, read)
   }
 
   return {
@@ -226,7 +229,7 @@ export function createKittyAdapter(deps: KittyDeps): HostAdapter & Required<Pick
         sending.delete(pane.id)
       }
     },
-    async focusedWindows(panes) {
+    async focusedWindows(panes, signal) {
       for (const [listenOn, id] of refused) {
         const path = PATH_SOCKET.exec(listenOn)?.[1]
         const restarted = path === undefined ? !panes.some((pane) => windowOf(pane)?.listenOn === listenOn) : deps.socketId(path) !== id
@@ -249,11 +252,11 @@ export function createKittyAdapter(deps: KittyDeps): HostAdapter & Required<Pick
       if (sockets.size === 0) return focused
       const file = await kittenOf(deps)
       if (file === undefined) return undefined
-      const deadline = deps.now() + FOCUS_READ_MS
+      const read = { deadline: deps.now() + FOCUS_READ_MS, signal }
       let failed = false
       // Each socket is asked, a refused one too, so one read finds every kitty that refuses.
       for (const [listenOn, { socket, ids }] of sockets) {
-        const id = await focusedOn(file, socket, ids, deadline)
+        const id = await focusedOn(file, socket, ids, read)
         if (id === undefined) failed = true
         else focused.set(listenOn, id === null ? null : `${id}@${listenOn}`)
       }

@@ -233,7 +233,7 @@ describe('the dial follows the focused pane in WezTerm and kitty', () => {
   const count = (d: IsolatedDaemon, line: string): number => paneLines(d).filter((said) => said === line).length
   const said = (d: IsolatedDaemon, what: string, test: (line: string) => boolean): Promise<string> =>
     until(what, () => paneLines(d).find(test), 30_000, 50)
-  /** The poll's stop, once said: no read is under way after it once no run of the fake is. */
+  /** The poll's stop, once said, and the one call under way at it ended: no call starts after the stop. */
   const stopped = async (d: IsolatedDaemon, fake: FakeApp): Promise<{ line: string; at: number }> => {
     const line = await until('the poll stopped', () => paneLines(d).find((said) => said.startsWith('[device] focus poll · stopped')), 30_000, 50)
     await until("the fake's runs ended", () => !fake.running(), 10_000, 20)

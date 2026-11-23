@@ -22,8 +22,9 @@ export const FOCUS_READ_MS = 2_000
 export const FOCUS_FAILS_MAX = 3
 
 export interface FocusPollDeps<T> {
-  /** One read: its answer, or undefined for one that failed. A rejection is a failed read. */
-  read(): Promise<T | undefined>
+  /** One read: its answer, or undefined for one that failed. A rejection is a failed read. [signal] is aborted at the
+   *  stop, so a read of several calls starts none after it. */
+  read(signal: AbortSignal): Promise<T | undefined>
   /** Each answer of a read that ended before the stop, in order. */
   answered(answer: T): void
   /** Told once, when the poll stopped itself after FOCUS_FAILS_MAX failed reads in a row. */
@@ -44,9 +45,11 @@ export function startFocusPoll<T>(deps: FocusPollDeps<T>): FocusPoll {
   let failed = 0
   let failedInARow = 0
   let cancelWait: (() => void) | undefined
+  const stop = new AbortController()
 
   const end = (failing: boolean): void => {
     stopped = true
+    stop.abort()
     cancelWait?.()
     deps.log(`[device] focus poll · stopped · ${reads} reads, ${failed} failed${failing ? ' · failing' : ''}`)
   }
@@ -54,7 +57,7 @@ export function startFocusPoll<T>(deps: FocusPollDeps<T>): FocusPoll {
   const read = async (): Promise<void> => {
     let answer: T | undefined
     try {
-      answer = await deps.read()
+      answer = await deps.read(stop.signal)
     } catch {
       answer = undefined
     }
