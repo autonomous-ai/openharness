@@ -609,10 +609,9 @@ export class DaemonCableHost implements CableHost {
     const waiting = this.waiting
     if (!waiting) return
     // The window a tap started is here: it is handed the tap, as a window that was open would have been.
-    this.endWaiting()
+    this.endWaiting({ outcome: 'ok' })
     this.wiring.log(`cable: open ${waiting.machineId}/${waiting.agentId} (notification)`)
     this.wiring.opened?.(waiting.machineId, waiting.agentId)
-    this.openEnded(waiting.agentId, { outcome: 'ok' })
   }
 
   /**
@@ -686,9 +685,13 @@ export class DaemonCableHost implements CableHost {
    *  a time: the last tap on any agent wins (openAgent). In memory only. */
   private waiting: { machineId: string; agentId: string; cancel: () => void } | null = null
 
-  private endWaiting(): void {
-    this.waiting?.cancel()
+  /** [end] is how the waiting tap's open ended: every tap says one. */
+  private endWaiting(end: DialOpenEnd): void {
+    const waiting = this.waiting
+    if (!waiting) return
+    waiting.cancel()
     this.waiting = null
+    this.openEnded(waiting.agentId, end)
   }
 
   /** Every agent on this computer, by source; null when the devices have none. Read for the machine list, and on the
@@ -968,7 +971,9 @@ export class DaemonCableHost implements CableHost {
     this.harness.update(flat.map((a) => bound.get(a.id) ? { ...a, sessionId: bound.get(a.id) } : a), local.id,
       await this.viaFleet((r) => r.activityTimes()))
     const waiting = this.waiting
-    if (waiting && !this.harness.list().some((a) => a.id === waiting.agentId)) this.endWaiting()
+    if (waiting && !this.harness.list().some((a) => a.id === waiting.agentId)) {
+      this.endWaiting({ outcome: 'failed', code: 'unknown_agent' })
+    }
     // Read once: each read merges every source's whole list.
     const entries = registry.entries()
     const sourceOf = new Map(entries.map((e) => [e.agent, e.source]))
@@ -1098,7 +1103,7 @@ export class DaemonCableHost implements CableHost {
     // The last tap wins, whatever agent it is on: a tap still waiting for Desktop's window would open its agent over the
     // app this one brings forward. A question screen that came up by itself is no tap.
     if (!reason) {
-      this.endWaiting()
+      this.endWaiting({ outcome: 'failed', code: 'desktop_no_window' })
       this.wiring.tapped?.(agentId)
     }
     const outside = this.outsideEntry(agentId)
@@ -1147,8 +1152,7 @@ export class DaemonCableHost implements CableHost {
     // `open -b` failed or ran out its time: only a tap still waiting failed. A window that came meanwhile has the open,
     // and a later tap answers for itself.
     if (this.waiting !== tap) return
-    this.endWaiting()
-    this.openEnded(agentId, { outcome: 'failed', code: 'desktop_not_started' })
+    this.endWaiting({ outcome: 'failed', code: 'desktop_not_started' })
     return { ok: false, error: `${hostDisplayName('harness')} did not open it.` }
   }
 
