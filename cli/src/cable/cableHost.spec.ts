@@ -2581,6 +2581,38 @@ describe('the dial reaches the fleet through the core\'s port', () => {
     expect(await host.selectMachine('other')).toMatchObject({ ok: false, code: 'UNAVAILABLE' })
   })
 
+  // With the fleet on, an answer goes through the fleet's router to the core, never through the wiring's own `answer`:
+  // the devices hear of it here, for the count of a wait answered on the dial.
+  it('an answer on the dial is told before the fleet\'s router takes it, never for an agent outside Harness', async () => {
+    const told: string[] = []
+    const fleet = port({
+      answer: vi.fn(() => { told.push('fleet answer') }),
+      answerReviewed: vi.fn(async () => { told.push('fleet reviewed'); return { ok: true as const, pending: true } }),
+    })
+    const answered = vi.fn((agentId: string, requestId: string) => { told.push(`answered ${agentId} ${requestId}`) })
+    const host = new DaemonCableHost(wiring({ fleet: () => fleet, answered }))
+    const outside: HostAgent = { id: 'outside-1', engine: 'claude', name: 'scratch', host: 'orca', app: 'orca', state: 'done',
+      lastActivityAt: 0 }
+    host.setRegistry(new HostRegistry([host.harness, { id: 'observed', list: () => [outside],
+      capabilities: () => ({ status: true, voice: false, focus: false, answer: false }) }]))
+    const reviewed = (agentId: string, requestId: string) =>
+      host.answerReviewed({ agentId, requestId, questions: [], answers: {}, selections: {} })
+    host.answer('r1', 'q1', { k: 'v' })
+    expect(await reviewed('r1', 'q2')).toEqual({ ok: true, pending: true })
+    host.answer('outside-1', 'q3', { k: 'v' })
+    await reviewed('outside-1', 'q4')
+    expect(told).toEqual(['answered r1 q1', 'fleet answer', 'answered r1 q2', 'fleet reviewed'])
+  })
+
+  it('an answer told that throws changes nothing the dial does', async () => {
+    const fleet = port()
+    const host = new DaemonCableHost(wiring({ fleet: () => fleet, answered: () => { throw new Error('count failed') } }))
+    host.answer('r1', 'q1', { k: 'v' })
+    expect(fleet.answer).toHaveBeenCalledWith('r1', 'q1', { k: 'v' })
+    expect(await host.answerReviewed({ agentId: 'r1', requestId: 'q2', questions: [], answers: {}, selections: {} }))
+      .toEqual({ ok: true, pending: true })
+  })
+
   it('an agent outside Harness never reaches the core: the fleet\'s router takes an id it does not know for a local agent', async () => {
     const fleet = port()
     const w = wiring({ fleet: () => fleet, recent: vi.fn(() => []), recentAsks: vi.fn(() => []), updateAgent: vi.fn(),
