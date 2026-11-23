@@ -1,4 +1,4 @@
-import type { ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -28,6 +28,13 @@ const outside = await import('../../e2e/harness/outsideAgent.js' as string) as {
   closeTab(tab: Tab, what: string): Promise<void>
   relaunchIterm(tab: { appPid?: number }): Promise<void>
   typeInto(tab: ChildProcess, text: string): void
+}
+
+/** herdr's server as tier B ends it (harness/herdrServer.ts). */
+const herdr = await import('../../e2e/harness/herdrServer.js' as string) as {
+  identityOf(pid: number): string | undefined
+  clientStarted(pid: number, identity: string | undefined): object
+  killGroup(server: object): void
 }
 
 let dir = ''
@@ -83,6 +90,37 @@ describe.skipIf(process.platform !== 'darwin')("tier B's fake iTerm2, relaunched
     } finally {
       await client.close()
       await outside.closeTab(shell, 'the shell tab')
+    }
+  })
+})
+
+describe.skipIf(process.platform === 'win32')("tier B's herdr server its client started, killed with its group", () => {
+  /** A process group of its own, led by a sleep, as herdr's server leads the session its client started it in; and the
+   *  signal it ends by. */
+  const leader = (): { pid: number; ended: Promise<NodeJS.Signals | null>; process: ChildProcess } => {
+    const child = spawn('/bin/sleep', ['60'], { detached: true, stdio: 'ignore' })
+    return { pid: child.pid!, process: child, ended: new Promise((done) => child.once('exit', (_code, signal) => done(signal))) }
+  }
+
+  it('is killed while its pid is its own', async () => {
+    const server = leader()
+    try {
+      herdr.killGroup(herdr.clientStarted(server.pid, herdr.identityOf(server.pid)))
+      expect(await server.ended).toBe('SIGKILL')
+    } finally {
+      server.process.kill('SIGKILL')
+    }
+  })
+
+  it('spares the process that took its pid once it went', async () => {
+    const stranger = leader()
+    try {
+      // A server that had this pid before: started at another time, from another path.
+      herdr.killGroup(herdr.clientStarted(stranger.pid, 'Thu Jan  1 00:00:00 1970     /opt/herdr'))
+      stranger.process.kill('SIGTERM')
+      expect(await stranger.ended).toBe('SIGTERM')
+    } finally {
+      stranger.process.kill('SIGKILL')
     }
   })
 })
