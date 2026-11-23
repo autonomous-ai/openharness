@@ -154,7 +154,7 @@ function killAll(world: TierBWorld, state: State): void {
   }
   if (state.herdr) {
     // Its server leads a process group of its own, with what its panes run.
-    killNow(-state.herdr.server.pid)
+    state.herdr.server.kill()
     killNow(state.herdr.server.tab.pid)
   }
 }

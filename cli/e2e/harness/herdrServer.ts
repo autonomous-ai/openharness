@@ -73,8 +73,9 @@ export const herdrBinary: string | null = dialHost('herdr', (() => {
 })())
 
 /** herdr's server, the leader of a process group of its own (ownProcessGroup, or the session its first client starts it
- *  in): its pid, and how it ended (its code or signal; `gone` for one its client started), undefined while it runs. */
-interface ServerProcess { readonly pid: number; ended(): string | undefined }
+ *  in): its pid; how it ended (its code or signal; `gone` for one its client started), undefined while it runs; and
+ *  whether another process has its pid now. */
+interface ServerProcess { readonly pid: number; ended(): string | undefined; reused(): boolean }
 
 /** A terminal's tab running herdr's client: the client's pid, the tab's tty, and the fake iTerm2's process in an iTerm2
  *  tab (outsideAgent.ts tabUnder). */
@@ -92,9 +93,34 @@ const gone = (pid: number): boolean => {
   return false
 }
 
-/** [server]'s group killed, unless it ended and another process took its pid. */
-function killGroup(server: ServerProcess): void {
-  if (server.ended() !== undefined && !gone(server.pid)) return
+/** What tells [pid]'s process from one given its pid later: when it started and the path it was started from, never its
+ *  argv; undefined once no process has it. */
+export function identityOf(pid: number): string | undefined {
+  try {
+    return execFileSync('/bin/ps', ['-o', 'lstart=,comm=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** herdr's server as its first client started it (startIn), not this worker's child: ended once no process has its pid,
+ *  and that pid another process's once one with another identity than [identity] (identityOf, read as it started) has
+ *  it. */
+export function clientStarted(pid: number, identity: string | undefined): ServerProcess {
+  return {
+    pid,
+    ended: () => (gone(pid) ? 'gone' : undefined),
+    reused: () => {
+      const now = identityOf(pid)
+      return now !== undefined && now !== identity
+    },
+  }
+}
+
+/** [server]'s group killed, unless another process took its pid. One whose leader is gone is still the server's: no
+ *  process is given the pid of a group that is still there. */
+export function killGroup(server: ServerProcess): void {
+  if (server.reused()) return
   try { process.kill(-server.pid, 'SIGKILL') } catch { /* none left */ }
 }
 
@@ -170,7 +196,8 @@ export class PrivateHerdr {
       leaderGone(server.pid!)
       exited = String(code ?? signal)
     })
-    const herdr = new PrivateHerdr(d, { pid: server.pid!, ended: () => exited }, config, socketIn(config))
+    const herdr = new PrivateHerdr(d, { pid: server.pid!, ended: () => exited, reused: () => exited !== undefined && !gone(server.pid!) },
+      config, socketIn(config))
     await herdr.ready(lettered)
     return herdr
   }
@@ -191,7 +218,7 @@ export class PrivateHerdr {
       })
     // Ended by the worker's reaper should the worker go before `stop`: it leads the session its client started it in.
     watchGroup(pid)
-    const herdr = new PrivateHerdr(d, { pid, ended: () => (gone(pid) ? 'gone' : undefined) }, config, socketIn(config), tab)
+    const herdr = new PrivateHerdr(d, clientStarted(pid, identityOf(pid)), config, socketIn(config), tab)
     await herdr.ready(false)
     try {
       await until('the herdr client to attach', async () => await herdr.clientConnections() > 0, 20_000, 100)
@@ -416,6 +443,11 @@ export class PrivateHerdr {
   async screen(paneId: string): Promise<string> {
     const read = await this.rpc('pane.read', { pane_id: paneId, source: 'visible' })
     return (read.read as { text: string }).text
+  }
+
+  /** The server's group killed at once, the driver's last resort: unless another process took its pid (killGroup). */
+  kill(): void {
+    killGroup(this.server)
   }
 
   /** The server stopped through its API, else killed with its group, then the tab whose client started it closed. */
