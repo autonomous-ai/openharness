@@ -24,15 +24,22 @@ export function noteFunction(dir: string): string {
 
 /**
  * A wrapper script: runs [real] as its child and notes the run under [dir] (noteFunction) when its first argument is one
- * of [recorded], exiting with its status; any other run execs [real] as it was.
+ * of [recorded], exiting with its status; any other run execs [real] as it was. A recorded run its caller ends on a
+ * timeout (SIGTERM) ends its child too, and is noted with the child's status.
  */
 export function recordingWrapper(real: string, dir: string, recorded: readonly string[]): string {
   if ([real, dir, ...recorded].some((word) => word.includes("'"))) throw new Error("a recording wrapper's program, folder or command holds a quote")
+  // The child runs in the background, on the wrapper's own input (fd 3: a background job's is /dev/null), as the shell
+  // runs a trap only once its foreground program is over, and `wait` returns at once to one.
   return `#!/bin/sh
 ${noteFunction(dir)}
 case "$1" in
   ${recorded.map((name) => `'${name}'`).join('|')})
-    '${real}' "$@"
+    trap 'kill "$child" 2>/dev/null; wait "$child"; code=$?; note "$code" "\${0##*/}" "$@"; exit "$code"' TERM
+    exec 3<&0
+    '${real}' "$@" <&3 3<&- &
+    child=$!
+    wait "$child"
     code=$?
     note "$code" "\${0##*/}" "$@"
     exit "$code" ;;
