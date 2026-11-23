@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { Worker } from 'node:worker_threads'
@@ -28,8 +28,16 @@ const driver = await import('../../e2e/harness/appEvalDriver.js' as string) as {
   raiseToolsOutside(root: string, env: NodeJS.ProcessEnv): string[]
   faceChange(last: Face | undefined, next: Omit<Face, 'at'>): boolean
   orcaCliInside(env: NodeJS.ProcessEnv, root: string, platform: NodeJS.Platform): string
+  selectOf(line: string): { app: string; tty: string; raise?: boolean } | undefined
+  muxCommands(runs: readonly LoggedRun[], keyOf: (pane: string) => string | undefined): import('./dialAppEval/types.js').Seen['commands']
 }
 type Face = import('./dialAppEval/types.js').Seen['faces'][number]
+type LoggedRun = { argv: string[]; ok: boolean; at: number }
+
+const runLog = await import('../../e2e/harness/runLog.js' as string) as {
+  recordingWrapper(real: string, dir: string, recorded: readonly string[]): string
+  runLog(dir: string): LoggedRun[]
+}
 
 /** The parts of a world the fake Claude app's start reads. */
 interface AppWorld { d: { root: string; env: NodeJS.ProcessEnv }; children: import('node:child_process').ChildProcess[]; onOpen(listener: unknown): void }
@@ -244,6 +252,94 @@ describe("tier B's commands", () => {
     // Only a folder inside the projects: one beside them, or the link of an app, is kept as it is.
     expect(driver.workPaths(['cursor', '/tmp/htmux-eval/projects-other/eval-alpha', 'cursor://file/x'], projects))
       .toEqual(['cursor', '/tmp/htmux-eval/projects-other/eval-alpha', 'cursor://file/x'])
+  })
+
+  it('a tmux run becomes a command with its panes named by key', () => {
+    const keyOf = (pane: string): string | undefined => new Map([['%3', 'b'], ['w1:p2', 'a']]).get(pane)
+    expect(driver.muxCommands([
+      { argv: ['tmux', 'select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], ok: true, at: 1_000 },
+      { argv: ['tmux', 'display-message', '-p', '-t', '%9', '#{pane_pid}|#{session_name}'], ok: false, at: 1_200 },
+      { argv: ['herdr', 'agent', 'focus', 'w1:p2'], ok: true, at: 1_500 },
+    ], keyOf)).toEqual([
+      { at: 1_000, argv: ['tmux', 'select-window', '-t', 'pane:b', ';', 'select-pane', '-t', 'pane:b'], ok: true },
+      { at: 1_200, argv: ['tmux', 'display-message', '-p', '-t', 'pane:other', '#{pane_pid}|#{session_name}'], ok: false },
+      { at: 1_500, argv: ['herdr', 'agent', 'focus', 'pane:a'], ok: true },
+    ])
+  })
+})
+
+describe("tier B's recording wrappers", () => {
+  /** [real] behind a recording wrapper named [name] in the test's folder: its path, and the folder it notes runs in. */
+  function wrapped(name: string, real: string, recorded: readonly string[]): { path: string; runs: string } {
+    const path = join(dir, 'bin', name)
+    const runs = join(dir, `${name}-runs`)
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, runLog.recordingWrapper(real, runs, recorded), { mode: 0o755 })
+    return { path, runs }
+  }
+
+  it("the recording wrapper notes a recorded run's arguments (one with spaces whole) and exit, and exits with the real program's status", () => {
+    dir = mkdtempSync(join(tmpdir(), 'tier-b-wrapper-'))
+    const tmux = wrapped('tmux', '/bin/echo', ['display-message', 'list-panes'])
+    const herdr = wrapped('herdr', '/usr/bin/false', ['agent'])
+    const before = Date.now()
+    const shown = spawnSync(tmux.path, ['display-message', '-p', '-t', '%3', '#{pane_pid} #{session_name}'], { encoding: 'utf8' })
+    expect(spawnSync(herdr.path, ['agent', 'focus', 'w1:p2']).status).toBe(1)
+    const after = Date.now()
+    // The real program's own output, as it ran.
+    expect(shown.status).toBe(0)
+    expect(shown.stdout).toBe('display-message -p -t %3 #{pane_pid} #{session_name}\n')
+    const runs = [...runLog.runLog(tmux.runs), ...runLog.runLog(herdr.runs)]
+    expect(runs.map(({ argv, ok }) => ({ argv, ok }))).toEqual([
+      { argv: ['tmux', 'display-message', '-p', '-t', '%3', '#{pane_pid} #{session_name}'], ok: true },
+      { argv: ['herdr', 'agent', 'focus', 'w1:p2'], ok: false },
+    ])
+    for (const { at } of runs) {
+      expect(at).toBeGreaterThanOrEqual(before - 100)
+      expect(at).toBeLessThanOrEqual(after + 100)
+    }
+  })
+
+  it('a run it does not record execs the real program and notes nothing', () => {
+    dir = mkdtempSync(join(tmpdir(), 'tier-b-wrapper-'))
+    const tmux = wrapped('tmux', '/bin/sh', ['list-panes'])
+    // Exec'd in the wrapper's place: the real program's parent is this worker, not the wrapper.
+    const ran = spawnSync(tmux.path, ['-c', 'echo $PPID'], { encoding: 'utf8' })
+    expect(ran.status).toBe(0)
+    expect(ran.stdout.trim()).toBe(String(process.pid))
+    expect(runLog.runLog(tmux.runs)).toEqual([])
+  })
+
+  it('runLog reads each run at its mtime, and skips a note not yet moved in', () => {
+    dir = mkdtempSync(join(tmpdir(), 'tier-b-runs-'))
+    const notes = join(dir, 'log')
+    mkdirSync(notes)
+    // A note as the wrapper writes one: its exit, the name it was run by, then each argument, one a line.
+    const note = (name: string, lines: string[], at: number): void => {
+      const path = join(notes, name)
+      writeFileSync(path, lines.map((line) => `${line}\n`).join(''))
+      utimesSync(path, new Date(at), new Date(at))
+    }
+    const at = Date.parse('2026-11-23T10:00:00.000Z')
+    note('run.b2Xk9q', ['0', 'tmux', 'select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], at + 2_000)
+    note('run.a7Pq2z', ['1', 'herdr', 'agent', 'focus', 'w1:p2'], at + 1_000)
+    // Still being written aside: it is moved in whole, or not read.
+    note('.c3Rt8w', ['0', 'tmux'], at + 3_000)
+    expect(runLog.runLog(dir)).toEqual([
+      { argv: ['herdr', 'agent', 'focus', 'w1:p2'], ok: false, at: at + 1_000 },
+      { argv: ['tmux', 'select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], ok: true, at: at + 2_000 },
+    ])
+  })
+})
+
+describe("tier B's watch", () => {
+  it('selectOf reads a watch select line, with and without raise, and nothing else', () => {
+    expect(driver.selectOf('{"select":{"app":"iterm","tty":"/dev/ttys012","raise":true}}')).toEqual({ app: 'iterm', tty: '/dev/ttys012', raise: true })
+    expect(driver.selectOf('{"select":{"app":"iterm","tty":"/dev/ttys012"}}')).toEqual({ app: 'iterm', tty: '/dev/ttys012' })
+    for (const line of ['{"front":"com.googlecode.iterm2"}', '{"dial":{"fw":"0.1.0"}}', '{"select":{"app":"iterm"}}',
+      '{"select":{"app":"iterm","tty":"/dev/ttys012","raise":"yes"}}', '{"select":"iterm"}', '{"select":null}', 'null', '{"select', '']) {
+      expect(driver.selectOf(line)).toBeUndefined()
+    }
   })
 })
 
