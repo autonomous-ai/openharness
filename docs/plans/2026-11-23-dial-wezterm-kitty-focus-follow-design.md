@@ -32,11 +32,13 @@ raw output: the plan's first task records them as `cli/src/testing/recorded*.ts`
 - `wezterm cli --no-auto-start list-clients --format json` lists the GUI itself as a client, with `focused_pane_id`: the
   pane keyboard input goes to. It changed with `activate-pane`, with a new tab or window, and with a tab switched by a key
   press in the GUI (`ctrl+Tab`). `split-pane` from the CLI left it as it was. Fields: `username`, `hostname`, `pid`,
-  `connection_elapsed`, `idle_time`, `workspace`, `focused_pane_id`. 3 to 6 ms a call there.
+  `connection_elapsed`, `idle_time`, `workspace`, `focused_pane_id`. 7.2 ms a call there (the mean of 20).
 - `list`'s `is_active` is a pane's place in its own tab only: it cannot say which tab or window has focus.
 - A GUI started as people start it (no `--always-new-process`) publishes its socket (`x11-:99-org.wezfurlong.wezterm`
   under `$XDG_RUNTIME_DIR/wezterm/`), and `wezterm cli` with no `WEZTERM_UNIX_SOCKET` finds it, as the adapter's
-  `activate-pane` already does. With no GUI, the call exits 1.
+  `activate-pane` already does. With no GUI, the call exits 1. With `XDG_RUNTIME_DIR` unset for the call, it looks for
+  the mux server's default socket instead, exits 1 and never reaches the GUI
+  (`RECORDED_WEZTERM.listClients.noRuntimeDir`).
 
 **kitty 0.32.2** (Ubuntu 24.04's package, under Xvfb):
 - No remote-control command subscribes to focus. A watcher (`on_focus_change`) needs `watcher` in `kitty.conf` or a
@@ -44,11 +46,17 @@ raw output: the plan's first task records them as `cli/src/testing/recorded*.ts`
 - `kitten @ ls` prints each window's environment (`env`), so it is never read (the adapter's rule since #4227).
 - `kitten @ --to <socket> get-colors --match 'id:<n> and state:focused'` exits 0 when window `<n>` is the focused one and
   1 with `Error: No matching windows for expression: …` otherwise; its output is kitty's colour table, discarded. It
-  followed `focus-window`, a new tab and a new OS window. 11 ms a call there. `state:active` is no use: it matches the
-  active window of every tab.
+  followed `focus-window`, a new tab and a new OS window. 11.5 ms a call there (the mean of 20). `state:active` is no
+  use: it matches the active window of every tab.
 - Each kitty process has its own focused window ("if no window is focused, the last focused window is matched"): with
   two kitty processes (two sockets) under openbox, window 1 of each matched `state:focused` whichever had the X focus.
   `state:focused_os_window` matched no window at all there, with or without `state:focused`, so it is not used.
+- The `or` form with parentheses works: `get-colors --match 'state:focused and (id:2 or id:1)'` exits 0 when one of
+  them is focused, 1 with `No matching windows` when none is.
+- kitty in `allow_remote_control password` mode, asked with no password (no `remote_control_password`, or one limited
+  to `get-colors`), refused at once: exit 1, `Error: Remote control is disabled. Add allow_remote_control to your
+  kitty.conf`, the same as remote control off. It showed no prompt (`RECORDED_KITTY.focusedMatch.password`,
+  `passwordSet`).
 
 ## Design
 
@@ -143,9 +151,10 @@ Each line is an outcome, never the app's pane id, window id, socket, title or th
   stopped itself), one each per poll, so a poll that only fails is seen. kitty with remote control off never starts
   one: its agents have no pane.
 - `[device] kitty · focus refused`, once per refusal: a kitty socket whose `get-colors` call was refused or timed out
-  (a password kitty may ask the person) answers that read `undefined` and is not asked again until that kitty restarts:
-  a new socket identity (`<dev>:<ino>`) at its path, or, for Linux's abstract socket, a read with no pane on it any
-  more. In memory only, at most 16 sockets; a daemon restart forgets them. So kitty asks the person once a start at most.
+  (a password kitty refuses at once, as recorded) answers that read `undefined` and is not asked again until that
+  kitty restarts: a new socket identity (`<dev>:<ino>`) at its path, or, for Linux's abstract socket, a read with no
+  pane on it any more. In memory only, at most 16 sockets; a daemon restart forgets them. The prompt once a kitty start
+  this guards against did not happen in the recording: kitty refused without asking.
 
 ### Limits and cost
 
@@ -159,7 +168,8 @@ Each line is an outcome, never the app's pane id, window id, socket, title or th
 
 The poll runs `wezterm cli` and `kitten @` as the tap does, so it reaches what the tap reaches and no more:
 - WezTerm's GUI socket is found under `$XDG_RUNTIME_DIR` on Linux; a daemon started with no `XDG_RUNTIME_DIR` in its
-  environment finds none, for the tap as for the poll (the poll then stops itself after 3 failed reads). Not changed
+  environment finds none, for the tap as for the poll: `wezterm cli` exits 1 and never reaches the GUI
+  (`RECORDED_WEZTERM.listClients.noRuntimeDir`), and the poll stops itself after 3 failed reads. Not changed
   here; the final report proposes it.
 - A WezTerm pane of a mux domain (`wezterm connect`) is numbered by the mux server, while `list-clients` on the GUI
   answers the GUI's own: not covered, as the tap's `activate-pane` is not.
@@ -184,8 +194,8 @@ no title, cwd, text or environment. Nothing leaves the computer; the log lines c
 - Recorded values first, each with how it was made (scripts as in the spike): `RECORDED_WEZTERM.listClients` (the GUI's
   `list-clients` before and after a focus change, and with no GUI) and `RECORDED_KITTY.focusedMatch` (exit codes and
   stderr of `get-colors --match` for a single id, the `or` form with parentheses, no match, and kitty started with
-  `allow_remote_control password` and no password given: whether it refuses at once or asks the person; a prompt is
-  accepted, shown once a kitty start).
+  `allow_remote_control password` and no password given: whether it refuses at once or asks the person; it refused at
+  once, no prompt).
 - Red-then-green unit specs: `wezterm.spec.ts` (`focusedPane`, the form checks), `kitty.spec.ts` (`focusedWindows`: the
   order, the `or` match, the narrowing, the bounds, the deadline, `ours`, a refusal or timeout not asked again, asked
   again at a new socket identity or an abstract socket's return, other sockets still asked, the line once), `focusPoll.spec.ts` (interval, no
