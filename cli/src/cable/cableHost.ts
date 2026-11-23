@@ -784,8 +784,11 @@ export class DaemonCableHost implements CableHost {
     return this.onMachine(agentId, opts)?.agent.host
   }
 
+  /** The page the agent is on, which a notice's pick turns the dial to: tmux's or herdr's for an agent nested there
+   *  (Diego, 2026-11-23), else its app's. The name stays `appOf`, as the session asks it. */
   appOf(agentId: string, opts: { apps?: boolean } = {}): string | undefined {
-    return this.onMachine(agentId, opts)?.agent.app
+    const on = this.onMachine(agentId, opts)
+    return on && pageOf(on.agent)
   }
 
   /** A pick from the dial's list of apps. With a window, on the tab another app with agents turns the dial to its ring;
