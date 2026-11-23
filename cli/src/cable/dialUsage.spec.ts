@@ -154,6 +154,30 @@ describe('createDialUsage', () => {
     expect(prefixed('dial_first_agent_').slice(3)).toEqual(['dial_first_agent_day_3m_to_10m_installations'])
   })
 
+  // A sleep stops the timers but not the clock; a clock set back reads as no time at all.
+  it('an agent shown past the hour after a sleep is none_1h; a clock set back is under 1m', () => {
+    const slept = rig()
+    slept.usage.agentsPresent(true)
+    slept.usage.attached(true)
+    vi.setSystemTime(T0 + 2 * 3_600_000)
+    slept.usage.shown('a')
+    expect(slept.prefixed('dial_first_agent_')).toEqual([
+      'dial_first_agent_first_none_1h_installations', 'dial_first_agent_day_none_1h_installations'])
+    slept.usage.stop()
+
+    vi.setSystemTime(T0)
+    const back = rig()
+    back.usage.agentsPresent(true)
+    back.usage.attached(true)
+    back.usage.waitOpened('k', 'a')
+    vi.setSystemTime(T0 - 3 * 3_600_000)
+    back.usage.shown('a')
+    back.usage.waitEnded('k', 'answered')
+    expect(back.prefixed('dial_first_agent_')).toEqual([
+      'dial_first_agent_first_under_1m_installations', 'dial_first_agent_day_under_1m_installations'])
+    expect(back.prefixed('dial_wait_')).toEqual(['dial_wait_elsewhere_under_30s'])
+  })
+
   it('a restart of the devices takes no second first connection of the day', () => {
     const file = fileSink()
     const before = rig(undefined, file)
