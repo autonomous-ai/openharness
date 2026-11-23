@@ -936,11 +936,10 @@ describe('the dial with no window: this computer\'s agents', () => {
     expect(await host.listAgentSnapshot()).toStrictEqual({ agents: [], tab: '', total: 2 })
   })
 
-  // The dial's "In <app>" tap is an open with no reason: the notice desk hears it to end a notice's ring.
-  it('a tap is told before the open, a question screen is not', async () => {
+  // A question screen that came up by itself brings a Harness agent forward and never switches another app: a tap does both.
+  it('a tap opens an agent of any app, a question screen only a Harness one', async () => {
     const told: string[] = []
-    const host = new DaemonCableHost(wiring({ sessions, tapped: (id) => told.push(`tapped ${id}`),
-      opened: (_machine, id) => told.push(`opened ${id}`) }), fleetOf([]))
+    const host = new DaemonCableHost(wiring({ sessions, opened: (_machine, id) => told.push(`opened ${id}`) }), fleetOf([]))
     host.setRegistry(new HostRegistry([host.harness, { ...observed([observedAgent({ id: 'o1', host: 'orca' })]),
       focus: async (agent) => { told.push(`focus ${agent.id}`); return true } }]))
     onTab(host, ['h1'])
@@ -949,7 +948,7 @@ describe('the dial with no window: this computer\'s agents', () => {
       await host.openAgent(id, 'question')
       await host.openAgent(id)
     }
-    expect(told).toEqual(['tapped o1', 'focus o1', 'opened h1', 'tapped h1', 'opened h1', 'tapped ghost'])
+    expect(told).toEqual(['focus o1', 'opened h1', 'opened h1'])
   })
 
   it('an agent no list holds is described by its notice', async () => {

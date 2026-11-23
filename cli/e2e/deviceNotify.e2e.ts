@@ -9,6 +9,8 @@
  * - a decision asked with `--suggest` and `--proceeding`, by a Harness agent or an outside session, rings once on its
  *   own card with the one line the command composed, its turn ends silent, and the answer in its app takes the card
  *   down; a plain finished turn rings no question (docs/plans/2026-11-22-needs-you-notify-design.md);
+ * - a tap on the card of a session in an Orca terminal switches Orca to it and keeps the card, so the dial's face of it
+ *   still asks, until its next prompt; a fake `orca` (harness/fakeOrca.ts) stands in for Orca, which never runs;
  * - it rings with a window open on its tab;
  * - with the dial unplugged, or no dial on this computer, it prints `no dial`, and the second starts nothing;
  * - a pending card comes back after the devices process restarts, as a silent row that opens to its line
@@ -27,6 +29,9 @@ import { CodexOutside } from './harness/codexOutside.js'
 import { IsolatedDaemon, SOURCES_CLI, until } from './harness/daemon.js'
 import { Desk, devicesPids } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
+import { FakeOrca } from './harness/fakeOrca.js'
+import { InOrca } from './harness/inOrca.js'
+import { orcaHostCc } from './harness/orcaHost.js'
 import { Outside } from './harness/outsideAgent.js'
 
 const LINE = 'Connect the VPN so I can run the staging tests'
@@ -69,7 +74,8 @@ describe('harness device notify', () => {
     daemon = undefined
     desk = undefined
   })
-  /** [before]: what is written into the daemon's data folder before it starts. */
+  /** [before] runs once the daemon's folders are made and before it starts: a setting in its data folder, or the fake
+   *  `orca` in its `bin`, goes in then. */
   const fresh = async (env: Record<string, string> = {}, before?: (d: IsolatedDaemon) => void): Promise<{ d: IsolatedDaemon; desk: Desk }> => {
     const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false', ...env } })
     daemon = d
@@ -236,6 +242,41 @@ describe('harness device notify', () => {
     await dial.next((m) => m.t === 'question.close' && m.agentId === engine.id && m.id === question.id, 45_000, 'the card closed', prompted)
     await until('the notice in the daemon\'s log', () => d.log().includes('[device] notify · claude · shown'), 30_000, 50)
     expect(d.log().split('\n').filter((line) => line.includes(ASK[0]) || line.includes(ASK[2]))).toEqual([])
+  })
+
+  // The dial draws its face of an agent as asking while that agent's question is open: a tap that only brought the agent
+  // forward must leave it open, or the face falls back to resting before the person has answered.
+  it.skipIf(!orcaHostCc)('a tap on the card of a session in an Orca terminal switches Orca to it and keeps the card, until its next prompt', async () => {
+    let orca: FakeOrca | undefined
+    const { d, desk } = await fresh({}, (made) => { orca = FakeOrca.install(made) })
+    const dial = await plugged(desk)
+    const handle = `term_${randomUUID()}`
+    const claude = new InOrca(d, 'fix-login', children, { ORCA_TERMINAL_HANDLE: handle, __CFBundleIdentifier: 'com.stablyai.orca' })
+    await claude.hook('SessionStart', { source: 'startup' })
+    await listed(dial, claude.id)
+    const waiting = ['Which cache for the user lookup?', '--suggest', 'in-process LRU', '--waiting']
+    expect(await notify(d, { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: claude.sessionId }, claude.cwd, waiting))
+      .toMatchObject({ code: 0, out: 'shown' })
+    const question = await dial.next((m) => m.t === 'question' && m.agentId === claude.id, 45_000, 'the notice')
+
+    // The person taps "In Orca": Orca switches to its terminal, and the dial turns to its face.
+    let since = dial.messages.length
+    dial.send({ t: 'agent.open', agentId: claude.id })
+    await dial.next((m) => m.t === 'focus' && m.agentId === claude.id, 45_000, 'its face', since)
+    expect(orca!.runs().map((run) => run.args)).toContain(`terminal switch --terminal ${handle} --json`)
+
+    // The list asked after the tap is the barrier: whatever the daemon sent for the tap is sent by the time the list's
+    // drawer is. The card is still one of its question rows, and nothing closed it.
+    since = dial.messages.length
+    dial.send({ t: 'agents.list' })
+    const drawer = await dial.next((m) => m.t === 'notif.replace', 45_000, 'the drawer sent with the list', since)
+    expect(drawer.items).toContainEqual(expect.objectContaining({ agentId: claude.id, question: true }))
+    expect(dial.messages.some((m) => m.t === 'question.close' && m.agentId === claude.id)).toBe(false)
+
+    // The person answers in Orca: its next turn starts, and the card goes.
+    const prompted = dial.messages.length
+    await claude.hook('UserPromptSubmit', { prompt: 'Use Redis' })
+    await dial.next((m) => m.t === 'question.close' && m.agentId === claude.id && m.id === question.id, 45_000, 'the card closed', prompted)
   })
 
   // A guard for the skill's rule: a turn that only finished asks nothing, so the dial gets no question for it.
